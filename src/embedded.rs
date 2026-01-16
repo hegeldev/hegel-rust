@@ -36,7 +36,6 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -91,7 +90,7 @@ const REJECT_MARKER: &str = "HEGEL_REJECT";
 /// ```
 pub fn hegel<F>(test_fn: F)
 where
-    F: Fn() + Send + Sync + 'static,
+    F: FnMut(),
 {
     Hegel::new(test_fn).run();
 }
@@ -123,7 +122,7 @@ pub struct Hegel<F> {
 
 impl<F> Hegel<F>
 where
-    F: Fn() + Send + Sync + 'static,
+    F: FnMut(),
 {
     /// Create a new Hegel test runner with the given test function.
     pub fn new(test_fn: F) -> Self {
@@ -191,9 +190,8 @@ where
             .arg("--verbosity")
             .arg(self.verbosity.as_str());
 
-        if let Some(n) = self.test_cases {
-            cmd.arg("--test-cases").arg(n.to_string());
-        }
+        let test_cases = self.test_cases.unwrap_or(100);
+        cmd.arg("--test-cases").arg(test_cases.to_string());
 
         cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
 
@@ -201,14 +199,14 @@ where
         let mut child = cmd.spawn().expect("Failed to spawn hegel");
 
         // Accept connections until hegel exits
-        let test_fn = Arc::new(self.test_fn);
+        let mut test_fn = self.test_fn;
         let verbosity = self.verbosity;
 
         loop {
             // Try to accept a connection
             match listener.accept() {
                 Ok((stream, _)) => {
-                    handle_connection(stream, test_fn.clone(), verbosity);
+                    handle_connection(stream, &mut test_fn, verbosity);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     // No connection ready, check if hegel exited
@@ -243,7 +241,7 @@ fn handle_exit(status: ExitStatus) {
 }
 
 /// Handle a single connection from hegel (one test case).
-fn handle_connection<F: Fn()>(stream: UnixStream, test_fn: Arc<F>, verbosity: Verbosity) {
+fn handle_connection<F: FnMut()>(stream: UnixStream, test_fn: &mut F, verbosity: Verbosity) {
     // Stream accepted from non-blocking listener may inherit non-blocking mode on macOS.
     // Set it back to blocking for reliable reads.
     stream
