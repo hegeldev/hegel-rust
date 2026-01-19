@@ -1,4 +1,3 @@
-
 use super::{generate_from_schema, group, labels, Generate};
 use serde_json::{json, Value};
 

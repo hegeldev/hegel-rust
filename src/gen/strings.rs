@@ -1,4 +1,3 @@
-
 use super::{generate_from_schema, Generate};
 use serde_json::{json, Value};
 

@@ -3,10 +3,6 @@ use serde_json::{json, Value};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-// ============================================================================
-// Helper Type
-// ============================================================================
-
 pub(crate) struct MappedToValue<T, G> {
     inner: G,
     _phantom: PhantomData<T>,
@@ -25,17 +21,11 @@ impl<T: serde::Serialize, G: Generate<T>> Generate<Value> for MappedToValue<T, G
 unsafe impl<T, G: Send> Send for MappedToValue<T, G> {}
 unsafe impl<T, G: Sync> Sync for MappedToValue<T, G> {}
 
-// ============================================================================
-// FixedDict Builder
-// ============================================================================
-
-/// Builder for fixed-key dictionary generators.
 pub struct FixedDictBuilder<'a> {
     fields: Vec<(String, BoxedGenerator<'a, Value>)>,
 }
 
 impl<'a> FixedDictBuilder<'a> {
-    /// Add a field with a generator.
     pub fn field<T, G>(mut self, name: &str, gen: G) -> Self
     where
         G: Generate<T> + Send + Sync + 'a,
@@ -51,7 +41,6 @@ impl<'a> FixedDictBuilder<'a> {
         self
     }
 
-    /// Build the generator.
     pub fn build(self) -> FixedDictGenerator<'a> {
         FixedDictGenerator {
             fields: self.fields,
@@ -59,11 +48,6 @@ impl<'a> FixedDictBuilder<'a> {
     }
 }
 
-// ============================================================================
-// FixedDict Generator
-// ============================================================================
-
-/// Generator for dictionaries with fixed keys.
 pub struct FixedDictGenerator<'a> {
     fields: Vec<(String, BoxedGenerator<'a, Value>)>,
 }

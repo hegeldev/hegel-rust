@@ -1,4 +1,3 @@
-
 use super::{generate_from_schema, Generate};
 use num::{Bounded, Float as NumFloat, Integer as NumInteger};
 use serde_json::{json, Value};
