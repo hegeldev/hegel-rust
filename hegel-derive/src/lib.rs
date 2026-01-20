@@ -934,14 +934,11 @@ fn generate_variant_generator(enum_name: &syn::Ident, variant: &Variant) -> proc
                     fn schema(&self) -> Option<serde_json::Value> {
                         use hegel::gen::Generate;
 
-                        let items: Vec<serde_json::Value> = vec![#(#schema_items,)*];
+                        let elements: Vec<serde_json::Value> = vec![#(#schema_items,)*];
 
                         let inner_schema = serde_json::json!({
-                            "type": "array",
-                            "prefixItems": items,
-                            "items": false,
-                            "minItems": #num_fields,
-                            "maxItems": #num_fields
+                            "type": "tuple",
+                            "elements": elements
                         });
 
                         let mut outer_properties = serde_json::Map::new();
