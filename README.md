@@ -7,9 +7,8 @@ Hegel rust SDK.
 Add to your `Cargo.toml`:
 
 ```toml
-[dependencies]
+[dev-dependencies]
 hegel = { git = "ssh://git@github.com/antithesishq/hegel-rust" }
-serde = { version = "1.0", features = ["derive"] }
 ```
 
 The SDK automatically installs the Hegel CLI at compile time if not already on PATH.
@@ -228,9 +227,8 @@ For types defined in your crate, use the derive macro:
 ```rust
 use hegel::Generate;
 use hegel::gen::{self, Generate as _};
-use serde::{Deserialize, Serialize};
 
-#[derive(Generate, Debug, Serialize, Deserialize)]
+#[derive(Generate, Debug)]
 struct Person {
     name: String,
     age: u32,
@@ -248,6 +246,37 @@ fn test_person() {
         assert!(person.age <= 120);
     });
 }
+```
+
+### Enum Generation
+
+Enums with data variants require `serde::Deserialize`:
+
+```rust
+use hegel::Generate;
+use serde::Deserialize;
+
+// Unit-only enums: no serde needed
+#[derive(Generate)]
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+// Enums with data: need Deserialize
+#[derive(Generate, Deserialize)]
+enum Message {
+    Text(String),
+    Number(i32),
+}
+```
+
+Add serde to your Cargo.toml only if you use enums with data variants:
+
+```toml
+[dev-dependencies]
+serde = { version = "1.0", features = ["derive"] }
 ```
 
 ### Struct Generation for External Types
@@ -323,9 +352,8 @@ Set `HEGEL_DEBUG=1` to enable debug logging of requests/responses.
 use hegel::gen::{self, Generate};
 use hegel::Generate as DeriveGenerate;
 use hegel::assume;
-use serde::{Deserialize, Serialize};
 
-#[derive(DeriveGenerate, Debug, Serialize, Deserialize)]
+#[derive(DeriveGenerate, Debug)]
 struct Order {
     id: String,
     items: Vec<String>,
