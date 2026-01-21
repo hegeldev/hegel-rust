@@ -31,7 +31,7 @@ use serde_json::{json, Value};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum HegelMode {
     #[default]
-    Standalone,
+    External,
     Embedded,
 }
 
@@ -52,7 +52,7 @@ use std::sync::Arc;
 
 thread_local! {
     /// Current execution mode
-    static MODE: Cell<HegelMode> = const { Cell::new(HegelMode::Standalone) };
+    static MODE: Cell<HegelMode> = const { Cell::new(HegelMode::External) };
     /// Whether this is the last run (for note() output in embedded mode)
     static IS_LAST_RUN: Cell<bool> = const { Cell::new(false) };
 }
@@ -79,11 +79,11 @@ pub(crate) fn set_is_last_run(is_last: bool) {
 
 /// Print a note message.
 ///
-/// In standalone mode, this always prints to stderr.
+/// In external mode, this always prints to stderr.
 /// In embedded mode, this only prints on the last run.
 pub fn note(message: &str) {
     match current_mode() {
-        HegelMode::Standalone => eprintln!("{}", message),
+        HegelMode::External => eprintln!("{}", message),
         HegelMode::Embedded => {
             if is_last_run() {
                 eprintln!("{}", message);
@@ -289,10 +289,10 @@ pub(crate) fn request_from_schema(schema: &Value) -> Value {
 
 /// Generate a value from a schema.
 /// If inside a span, uses the existing connection.
-/// If not inside a span, opens a connection for this single request (standalone mode only).
+/// If not inside a span, opens a connection for this single request (external mode only).
 pub fn generate_from_schema<T: serde::de::DeserializeOwned>(schema: &Value) -> T {
     // In embedded mode, connection is already set - don't try to open/close
-    let need_connection = !is_connected() && current_mode() == HegelMode::Standalone;
+    let need_connection = !is_connected() && current_mode() == HegelMode::External;
     if need_connection {
         open_connection();
     }
@@ -318,12 +318,12 @@ pub fn generate_from_schema<T: serde::de::DeserializeOwned>(schema: &Value) -> T
 
 /// Start a span for grouping related generation.
 ///
-/// Opens a connection if this is the first span (standalone mode only).
+/// Opens a connection if this is the first span (external mode only).
 /// Spans help Hypothesis understand the structure of generated data,
 /// which improves shrinking. Call `stop_span()` when done.
 pub fn start_span(label: u64) {
     // In embedded mode, connection is already set - don't try to open
-    if !is_connected() && current_mode() == HegelMode::Standalone {
+    if !is_connected() && current_mode() == HegelMode::External {
         open_connection();
     }
     increment_span_depth();
@@ -332,15 +332,15 @@ pub fn start_span(label: u64) {
 
 /// Stop the current span.
 ///
-/// Closes the connection if this is the last span (in standalone mode only).
+/// Closes the connection if this is the last span (in external mode only).
 /// If `discard` is true, tells Hypothesis this span's data should be discarded
 /// (e.g., because a filter rejected it).
 pub fn stop_span(discard: bool) {
     decrement_span_depth();
     send_request("stop_span", &json!({"discard": discard}));
-    // Only close connection in standalone mode - in embedded mode, the
+    // Only close connection in external mode - in embedded mode, the
     // connection is managed by the embedded module
-    if get_span_depth() == 0 && current_mode() == HegelMode::Standalone {
+    if get_span_depth() == 0 && current_mode() == HegelMode::External {
         close_connection();
     }
 }

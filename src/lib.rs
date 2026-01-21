@@ -22,7 +22,7 @@ pub fn note(message: &str) {
 pub fn assume(condition: bool) {
     if !condition {
         match gen::current_mode() {
-            HegelMode::Standalone => {
+            HegelMode::External => {
                 let code: i32 = std::env::var("HEGEL_REJECT_CODE")
                     .expect("HEGEL_REJECT_CODE environment variable not set")
                     .parse()
