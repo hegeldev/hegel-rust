@@ -7,9 +7,9 @@ use std::env;
 #[derive(Deserialize)]
 struct Params {
     min_size: usize,
-    max_size: usize,
-    min_value: i32,
-    max_value: i32,
+    max_size: Option<usize>,
+    min_value: Option<i32>,
+    max_value: Option<i32>,
 }
 
 #[derive(Serialize)]
@@ -32,14 +32,20 @@ fn main() {
     });
 
     Hegel::new(move || {
-        let list: Vec<i32> = gen::vecs(
-            gen::integers::<i32>()
-                .with_min(params.min_value)
-                .with_max(params.max_value),
-        )
-        .with_min_size(params.min_size)
-        .with_max_size(params.max_size)
-        .generate();
+        let mut elem_gen = gen::integers::<i32>();
+        if let Some(min) = params.min_value {
+            elem_gen = elem_gen.with_min(min);
+        }
+        if let Some(max) = params.max_value {
+            elem_gen = elem_gen.with_max(max);
+        }
+
+        let mut vec_gen = gen::vecs(elem_gen).with_min_size(params.min_size);
+        if let Some(max) = params.max_size {
+            vec_gen = vec_gen.with_max_size(max);
+        }
+
+        let list: Vec<i32> = vec_gen.generate();
 
         let size = list.len();
         let (min_element, max_element) = if list.is_empty() {

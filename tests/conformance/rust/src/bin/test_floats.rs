@@ -6,8 +6,8 @@ use std::env;
 
 #[derive(Deserialize)]
 struct Params {
-    min_value: f64,
-    max_value: f64,
+    min_value: Option<f64>,
+    max_value: Option<f64>,
     exclude_min: bool,
     exclude_max: bool,
     allow_nan: bool,
@@ -34,10 +34,14 @@ fn main() {
     });
 
     Hegel::new(move || {
-        let mut gen = gen::floats::<f64>()
-            .with_min(params.min_value)
-            .with_max(params.max_value);
+        let mut gen = gen::floats::<f64>();
 
+        if let Some(min) = params.min_value {
+            gen = gen.with_min(min);
+        }
+        if let Some(max) = params.max_value {
+            gen = gen.with_max(max);
+        }
         if params.exclude_min {
             gen = gen.exclude_min();
         }

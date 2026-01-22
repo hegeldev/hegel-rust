@@ -7,7 +7,7 @@ use std::env;
 #[derive(Deserialize)]
 struct Params {
     min_size: usize,
-    max_size: usize,
+    max_size: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -28,10 +28,11 @@ fn main() {
     });
 
     Hegel::new(move || {
-        let value = gen::text()
-            .with_min_size(params.min_size)
-            .with_max_size(params.max_size)
-            .generate();
+        let mut gen = gen::text().with_min_size(params.min_size);
+        if let Some(max) = params.max_size {
+            gen = gen.with_max_size(max);
+        }
+        let value = gen.generate();
         // Report length in Unicode codepoints, not bytes
         let length = value.chars().count();
         write(&Metrics { length });

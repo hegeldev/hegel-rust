@@ -6,8 +6,8 @@ use std::env;
 
 #[derive(Deserialize)]
 struct Params {
-    min_value: i32,
-    max_value: i32,
+    min_value: Option<i32>,
+    max_value: Option<i32>,
 }
 
 #[derive(Serialize)]
@@ -28,10 +28,14 @@ fn main() {
     });
 
     Hegel::new(move || {
-        let value = gen::integers::<i32>()
-            .with_min(params.min_value)
-            .with_max(params.max_value)
-            .generate();
+        let mut gen = gen::integers::<i32>();
+        if let Some(min) = params.min_value {
+            gen = gen.with_min(min);
+        }
+        if let Some(max) = params.max_value {
+            gen = gen.with_max(max);
+        }
+        let value = gen.generate();
         write(&Metrics { value });
     })
     .test_cases(get_test_cases())
