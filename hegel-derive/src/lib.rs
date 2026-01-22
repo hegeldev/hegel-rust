@@ -894,8 +894,6 @@ fn generate_variant_generator(enum_name: &syn::Ident, variant: &Variant) -> proc
                 })
                 .collect();
 
-            let num_fields = field_types.len();
-
             quote! {
                 /// Generated generator for the #variant_name variant of #enum_name.
                 pub struct #variant_generator_name<'a> {

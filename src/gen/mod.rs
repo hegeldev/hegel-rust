@@ -36,6 +36,7 @@ pub(crate) enum HegelMode {
 }
 
 pub(crate) mod exit_codes {
+    #[allow(dead_code)] // Reserved for future use
     pub const TEST_FAILURE: i32 = 1;
     pub const SOCKET_ERROR: i32 = 134;
 }

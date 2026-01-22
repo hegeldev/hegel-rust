@@ -6,6 +6,7 @@ use super::{
 /// Trait for types that have a default generator.
 ///
 /// This is used by derive macros to automatically generate values for fields.
+#[allow(dead_code)] // Used by derive macros in generated code
 pub trait DefaultGenerator: Sized {
     /// The generator type for this type.
     type Generator: super::Generate<Self>;

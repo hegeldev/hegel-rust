@@ -29,14 +29,34 @@
 //! }
 //! ```
 
-use crate::gen::{clear_embedded_connection, set_embedded_connection, set_is_last_run, set_mode, HegelMode};
+use crate::gen::{clear_embedded_connection, is_last_run, set_embedded_connection, set_is_last_run, set_mode, HegelMode};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{self, catch_unwind, AssertUnwindSafe};
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::Once;
 use std::time::Duration;
 use tempfile::TempDir;
+
+static PANIC_HOOK_INIT: Once = Once::new();
+
+// Panic unconditionally prints to stderr, even if it's caught later. This results in
+// messy output during shrinking. To avoid this, we replace the panic hook with our
+// own that suppresses the printing except for the final replay.
+//
+// This is called once per process, the first time any hegel test runs.
+fn init_panic_hook() {
+    PANIC_HOOK_INIT.call_once(|| {
+        let original_hook = panic::take_hook();
+        panic::set_hook(Box::new(move |info| {
+            // Only print panic output on the final replay run
+            if is_last_run() {
+                original_hook(info);
+            }
+        }));
+    });
+}
 
 /// Path to the hegel binary, determined at compile time by build.rs.
 /// This will be either a system hegel found on PATH, or one installed
@@ -162,6 +182,8 @@ where
     /// - Any test case fails (after shrinking)
     /// - Socket communication errors
     pub fn run(self) {
+        init_panic_hook();
+
         // Create temp directory with socket
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
         let socket_path = temp_dir.path().join("hegel.sock");
@@ -188,7 +210,6 @@ where
 
         cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
 
-        // Spawn hegel
         let mut child = cmd.spawn().expect("Failed to spawn hegel");
 
         // Accept connections until hegel exits
@@ -196,7 +217,6 @@ where
         let verbosity = self.verbosity;
 
         loop {
-            // Try to accept a connection
             match listener.accept() {
                 Ok((stream, _)) => {
                     handle_connection(stream, &mut test_fn, verbosity);
