@@ -25,6 +25,10 @@ name = "test_text"
 path = "src/bin/test_text.rs"
 
 [[bin]]
+name = "test_binary"
+path = "src/bin/test_binary.rs"
+
+[[bin]]
 name = "test_lists"
 path = "src/bin/test_lists.rs"
 
