@@ -10,7 +10,7 @@ TESTS = conformance_tests({
     "booleans": BUILD_DIR / "test_booleans",
     "integers": BUILD_DIR / "test_integers",
     "floats": BUILD_DIR / "test_floats",
-    "text": None,  # skipped due to hypothesis-jsonschema bug with Unicode surrogate pairs
+    "text": BUILD_DIR / "test_text",
     "binary": BUILD_DIR / "test_binary",
     "lists": BUILD_DIR / "test_lists",
     "sampled_from": BUILD_DIR / "test_sampled_from",
