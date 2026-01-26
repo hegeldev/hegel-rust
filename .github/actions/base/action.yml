@@ -1,15 +1,13 @@
-name: 'Setup SSH'
-description: 'Configure SSH access for private GitHub repositories'
+name: 'base setup'
 
 inputs:
   ssh-key:
-    description: 'SSH private key for GitHub access'
     required: true
 
 runs:
   using: 'composite'
   steps:
-    - name: Setup SSH
+    - name: setup SSH key
       shell: bash
       run: |
         mkdir -p ~/.ssh
