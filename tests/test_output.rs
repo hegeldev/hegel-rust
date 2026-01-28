@@ -1,6 +1,6 @@
 mod common;
 
-use common::TempRustProject;
+use common::project::TempRustProject;
 use regex::Regex;
 
 #[test]
