@@ -53,8 +53,7 @@ hegel = {{ path = "{}" }}
 
     pub fn run(self) -> RunOutput {
         let mut cmd = Command::new(env!("CARGO"));
-        cmd.args(["run", "--quiet"])
-            .current_dir(&self.project_path);
+        cmd.args(["run", "--quiet"]).current_dir(&self.project_path);
 
         for (key, value) in &self.env_vars {
             cmd.env(key, value);

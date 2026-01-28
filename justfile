@@ -7,6 +7,10 @@ test:
 format:
     cargo fmt
 
+lint:
+    cargo fmt --check
+    cargo clippy --all-features -- -D warnings
+
 coverage:
     # requires:
     # * cargo install cargo-llvm-cov

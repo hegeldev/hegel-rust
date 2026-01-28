@@ -48,7 +48,13 @@ fn format_backtrace(bt: &Backtrace, full: bool) -> String {
         if line.contains("__rust_end_short_backtrace") {
             // Skip past this frame (find the next frame number)
             for (j, next_line) in lines.iter().enumerate().skip(i + 1) {
-                if next_line.trim_start().chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                if next_line
+                    .trim_start()
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
+                {
                     start_idx = j;
                     break;
                 }
@@ -56,8 +62,21 @@ fn format_backtrace(bt: &Backtrace, full: bool) -> String {
         }
         if line.contains("__rust_begin_short_backtrace") {
             // Find the start of this frame (the line with the frame number)
-            for (j, prev_line) in lines.iter().enumerate().take(i + 1).collect::<Vec<_>>().into_iter().rev() {
-                if prev_line.trim_start().chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+            for (j, prev_line) in lines
+                .iter()
+                .enumerate()
+                .take(i + 1)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+            {
+                if prev_line
+                    .trim_start()
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
+                {
                     end_idx = j;
                     break;
                 }
@@ -73,7 +92,12 @@ fn format_backtrace(bt: &Backtrace, full: bool) -> String {
 
     for line in filtered {
         let trimmed = line.trim_start();
-        if trimmed.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        if trimmed
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+        {
             // This is a frame number line like "   8: function_name"
             // Find where the number ends (at the colon)
             if let Some(colon_pos) = trimmed.find(':') {

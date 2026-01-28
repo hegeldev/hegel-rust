@@ -31,7 +31,11 @@ fn test_failing_test_output() {
     ))
     .unwrap();
 
-    assert!(expected.is_match(&output.stderr), "Actual: {}", output.stderr);
+    assert!(
+        expected.is_match(&output.stderr),
+        "Actual: {}",
+        output.stderr
+    );
 }
 
 #[test]
@@ -61,21 +65,25 @@ fn test_failing_test_output_with_backtrace() {
         r"intentional failure: -?\d+\n",
         r"Generated: -?\d+\n",
         r"stack backtrace:\n",
-        r"\s+0: .*\n",                                     // frame 0: panic machinery
+        r"\s+0: .*\n", // frame 0: panic machinery
         r".*",
-        r"\s+1: core::panicking::panic_fmt\n",             // frame 1: panic_fmt
+        r"\s+1: core::panicking::panic_fmt\n", // frame 1: panic_fmt
         r".*",
         r"\s+2: temp_hegel_test::main::\{\{closure\}\}\n", // frame 2: user's closure
         r".*",
-        r"hegel::embedded::",                              // hegel internals appear
+        r"hegel::embedded::", // hegel internals appear
         r".*",
-        r"temp_hegel_test::main\n",                        // user's main (not closure)
+        r"temp_hegel_test::main\n", // user's main (not closure)
         r".*",
         r"note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace\.",
     ))
     .unwrap();
 
-    assert!(expected.is_match(&output.stderr), "Actual: {}", output.stderr);
+    assert!(
+        expected.is_match(&output.stderr),
+        "Actual: {}",
+        output.stderr
+    );
 }
 
 #[test]
@@ -91,17 +99,25 @@ fn test_failing_test_output_with_full_backtrace() {
         r"intentional failure: -?\d+\n",
         r"Generated: -?\d+\n",
         r"stack backtrace:\n",
-        r"\s+0: .*\n",                                     // starts at frame 0
+        r"\s+0: .*\n", // starts at frame 0
         r".*",
-        r"temp_hegel_test::main::\{\{closure\}\}",         // user's closure
+        r"temp_hegel_test::main::\{\{closure\}\}", // user's closure
         r".*",
-        r"hegel::embedded::",                              // hegel internals
+        r"hegel::embedded::", // hegel internals
         r".*",
-        r"temp_hegel_test::main\n",                        // user's main
+        r"temp_hegel_test::main\n", // user's main
         r".*$",
     ))
     .unwrap();
 
-    assert!(expected.is_match(&output.stderr), "Actual: {}", output.stderr );
-    assert!(!output.stderr.contains("Some details are omitted"), "Actual: {}", output.stderr);
+    assert!(
+        expected.is_match(&output.stderr),
+        "Actual: {}",
+        output.stderr
+    );
+    assert!(
+        !output.stderr.contains("Some details are omitted"),
+        "Actual: {}",
+        output.stderr
+    );
 }
