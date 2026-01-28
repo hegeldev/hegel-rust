@@ -85,7 +85,7 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-llvm-cov
-      - run: cargo llvm-cov --all-features --fail-under-lines 30 --show-missing-lines
+      - run: RUST_BACKTRACE=1 cargo llvm-cov --all-features --fail-under-lines 30 --show-missing-lines
 
   conformance:
     name: conformance tests
