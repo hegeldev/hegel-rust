@@ -160,6 +160,65 @@ pub fn read_packet<R: Read>(reader: &mut R) -> std::io::Result<Packet> {
     })
 }
 
+/// Convert a `ciborium::Value` to `serde_json::Value`, wrapping NaN/infinity
+/// floats as `{"$float": "nan"}` / `{"$float": "inf"}` / `{"$float": "-inf"}`
+/// objects so they survive the JSON value model (which cannot represent these).
+fn cbor_to_json(value: ciborium::Value) -> serde_json::Value {
+    match value {
+        ciborium::Value::Null => serde_json::Value::Null,
+        ciborium::Value::Bool(b) => serde_json::Value::Bool(b),
+        ciborium::Value::Float(f) => {
+            if f.is_nan() {
+                serde_json::json!({"$float": "nan"})
+            } else if f.is_infinite() {
+                if f.is_sign_positive() {
+                    serde_json::json!({"$float": "inf"})
+                } else {
+                    serde_json::json!({"$float": "-inf"})
+                }
+            } else {
+                serde_json::Number::from_f64(f)
+                    .map(serde_json::Value::Number)
+                    .unwrap_or(serde_json::Value::Null)
+            }
+        }
+        ciborium::Value::Integer(i) => {
+            let n: i128 = i.into();
+            if let Ok(v) = u64::try_from(n) {
+                serde_json::Value::Number(v.into())
+            } else if let Ok(v) = i64::try_from(n) {
+                serde_json::Value::Number(v.into())
+            } else {
+                // Large integer that doesn't fit in i64/u64 — use $integer wrapper
+                serde_json::json!({"$integer": n.to_string()})
+            }
+        }
+        ciborium::Value::Text(s) => serde_json::Value::String(s),
+        ciborium::Value::Bytes(b) => {
+            // Encode bytes as array of numbers (best-effort for JSON)
+            serde_json::Value::Array(b.into_iter().map(|byte| byte.into()).collect())
+        }
+        ciborium::Value::Array(arr) => {
+            serde_json::Value::Array(arr.into_iter().map(cbor_to_json).collect())
+        }
+        ciborium::Value::Map(map) => {
+            let obj: serde_json::Map<String, serde_json::Value> = map
+                .into_iter()
+                .map(|(k, v)| {
+                    let key = match k {
+                        ciborium::Value::Text(s) => s,
+                        other => format!("{:?}", other),
+                    };
+                    (key, cbor_to_json(v))
+                })
+                .collect();
+            serde_json::Value::Object(obj)
+        }
+        ciborium::Value::Tag(_, inner) => cbor_to_json(*inner),
+        _ => serde_json::Value::Null,
+    }
+}
+
 /// A logical channel on a connection.
 pub struct Channel {
     pub channel_id: u32,
@@ -265,9 +324,11 @@ impl Channel {
         let id = self.send_request(payload)?;
         let response_bytes = self.receive_response(id)?;
 
-        // Deserialize CBOR bytes directly to JSON value using serde
-        let response: serde_json::Value = ciborium::from_reader(&response_bytes[..])
+        // Deserialize CBOR to ciborium::Value first, then convert to JSON
+        // to preserve NaN/infinity floats as $float wrapper objects.
+        let cbor_value: ciborium::Value = ciborium::from_reader(&response_bytes[..])
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let response = cbor_to_json(cbor_value);
 
         // Check for error response
         if let Some(error) = response.get("error") {
@@ -441,5 +502,43 @@ mod tests {
         let back: serde_json::Value = ciborium::from_reader(&cbor_bytes[..]).unwrap();
 
         assert_eq!(json, back);
+    }
+
+    #[test]
+    fn test_cbor_to_json_nan() {
+        let cbor = ciborium::Value::Float(f64::NAN);
+        let json = cbor_to_json(cbor);
+        assert_eq!(json, serde_json::json!({"$float": "nan"}));
+    }
+
+    #[test]
+    fn test_cbor_to_json_infinity() {
+        let cbor = ciborium::Value::Float(f64::INFINITY);
+        let json = cbor_to_json(cbor);
+        assert_eq!(json, serde_json::json!({"$float": "inf"}));
+    }
+
+    #[test]
+    fn test_cbor_to_json_neg_infinity() {
+        let cbor = ciborium::Value::Float(f64::NEG_INFINITY);
+        let json = cbor_to_json(cbor);
+        assert_eq!(json, serde_json::json!({"$float": "-inf"}));
+    }
+
+    #[test]
+    fn test_cbor_to_json_normal_float() {
+        let cbor = ciborium::Value::Float(42.5);
+        let json = cbor_to_json(cbor);
+        assert_eq!(json, serde_json::json!(42.5));
+    }
+
+    #[test]
+    fn test_cbor_to_json_nested_nan() {
+        let cbor = ciborium::Value::Map(vec![(
+            ciborium::Value::Text("result".to_string()),
+            ciborium::Value::Float(f64::NAN),
+        )]);
+        let json = cbor_to_json(cbor);
+        assert_eq!(json, serde_json::json!({"result": {"$float": "nan"}}));
     }
 }
