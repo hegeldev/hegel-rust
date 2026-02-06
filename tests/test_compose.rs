@@ -93,6 +93,26 @@ fn test_compose_inside_one_of() {
 }
 
 #[test]
+fn test_compose_list_with_index() {
+    hegel::hegel(|| {
+        let (list, index) = hegel::compose!({
+            let list = gen::vecs(gen::integers::<i32>())
+                .with_min_size(1)
+                .with_max_size(20)
+                .generate();
+            let index = gen::integers::<usize>()
+                .with_min(0)
+                .with_max(list.len() - 1)
+                .generate();
+            (list, index)
+        })
+        .generate();
+        assert!(!list.is_empty());
+        assert!(index < list.len());
+    });
+}
+
+#[test]
 fn test_compose_string_building() {
     hegel::hegel(|| {
         let s = hegel::compose!({
