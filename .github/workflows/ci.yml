@@ -102,7 +102,7 @@ jobs:
           python-version: '3.13'
       - name: Install hegel
         run: |
-          pip install git+ssh://git@github.com/antithesishq/hegel.git@DRMacIver/new-protocol
+          pip install git+ssh://git@github.com/antithesishq/hegel.git@main
           pip install pytest
       - name: Build conformance binaries
         working-directory: tests/conformance/rust
