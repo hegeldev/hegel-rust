@@ -56,7 +56,7 @@ fn ensure_hegel() -> PathBuf {
         .args([
             "pip",
             "install",
-            "git+ssh://git@github.com/antithesishq/hegel.git@DRMacIver/new-protocol",
+            "git+ssh://git@github.com/antithesishq/hegel.git@main",
         ])
         .arg("--python")
         .arg(venv_path.join("bin").join("python"))

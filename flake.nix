@@ -3,7 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-    hegel.url = "git+ssh://git@github.com/antithesishq/hegel?ref=DRMacIver/new-protocol";
+    hegel.url = "git+ssh://git@github.com/antithesishq/hegel";
   };
 
   outputs =
