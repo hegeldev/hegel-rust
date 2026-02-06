@@ -1,4 +1,4 @@
-use super::{generate_from_schema, group, integers, labels, Generate};
+use super::{generate_from_schema, group, integers, labels, Collection, Generate};
 use crate::cbor_helpers::{cbor_map, map_insert};
 use ciborium::Value;
 use std::collections::{HashMap, HashSet};
@@ -38,17 +38,15 @@ where
             // Use composed schema for single round-trip
             generate_from_schema(&schema)
         } else {
-            // Compositional fallback: generate length, then elements
+            // Compositional fallback: use server-managed collection sizing
             group(labels::LIST, || {
-                let max = self.max_size.unwrap_or(100);
-                let len = integers::<usize>()
-                    .with_min(self.min_size)
-                    .with_max(max)
-                    .generate();
-
-                (0..len)
-                    .map(|_| group(labels::LIST_ELEMENT, || self.elements.generate()))
-                    .collect()
+                let mut collection =
+                    Collection::new("composite_list", self.min_size, self.max_size);
+                let mut result = Vec::new();
+                while collection.more() {
+                    result.push(self.elements.generate());
+                }
+                result
             })
         }
     }

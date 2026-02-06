@@ -38,7 +38,7 @@ pub(crate) use strings::TextGenerator;
 
 use ciborium::Value;
 
-use crate::cbor_helpers::cbor_map;
+use crate::cbor_helpers::{cbor_map, map_insert};
 
 pub(crate) mod exit_codes {
     pub const SOCKET_ERROR: i32 = 134;
@@ -215,6 +215,9 @@ pub(crate) fn send_request(command: &str, payload: &Value) -> Result<Value, Stop
                     if debug {
                         eprintln!("RESPONSE: StopTest/overflow");
                     }
+                    // Mark test as aborted so the runner skips sending mark_complete
+                    // (the server has already moved on from this test case)
+                    TEST_ABORTED.with(|aborted| aborted.set(true));
                     Err(StopTestError)
                 } else {
                     eprintln!("Failed to communicate with Hegel: {}", e);
@@ -226,14 +229,7 @@ pub(crate) fn send_request(command: &str, payload: &Value) -> Result<Value, Stop
 }
 
 pub(crate) fn request_from_schema(schema: &Value) -> Result<Value, StopTestError> {
-    match send_request("generate", &cbor_map! {"schema" => schema.clone()}) {
-        Ok(v) => Ok(v),
-        Err(e) => {
-            // Mark test as aborted - server has closed the channel
-            TEST_ABORTED.with(|aborted| aborted.set(true));
-            Err(e)
-        }
-    }
+    send_request("generate", &cbor_map! {"schema" => schema.clone()})
 }
 
 /// Generate a value from a schema.
@@ -284,6 +280,132 @@ pub fn stop_span(discard: bool) {
     decrement_span_depth();
     // Ignore StopTest errors from stop_span - we're already closing
     let _ = send_request("stop_span", &cbor_map! {"discard" => discard});
+}
+
+// ============================================================================
+// Server-Managed Collections
+// ============================================================================
+
+/// A server-managed collection for controlling element generation.
+///
+/// Collections use the server's sizing logic (Hypothesis's `many` utility)
+/// to determine how many elements to generate, rather than picking a fixed
+/// size upfront. This produces better shrinking behavior.
+///
+/// The server-side `many` object is created lazily on the first call to
+/// [`more()`](Collection::more).
+///
+/// # Example
+///
+/// ```ignore
+/// use hegel::gen::Collection;
+///
+/// let mut coll = Collection::new("my_list", 0, None);
+/// let mut result = Vec::new();
+/// while coll.more() {
+///     result.push(gen::integers::<i32>().generate());
+/// }
+/// ```
+pub struct Collection {
+    base_name: String,
+    min_size: usize,
+    max_size: Option<usize>,
+    server_name: Option<String>,
+    finished: bool,
+}
+
+impl Collection {
+    /// Create a new collection handle.
+    ///
+    /// The server-side `many` object is not created until the first call
+    /// to [`more()`](Collection::more), matching the Python SDK's lazy
+    /// initialization behavior.
+    pub fn new(name: &str, min_size: usize, max_size: Option<usize>) -> Self {
+        Collection {
+            base_name: name.to_string(),
+            min_size,
+            max_size,
+            server_name: None,
+            finished: false,
+        }
+    }
+
+    /// Ensure the server-side collection is initialized, returning the server name.
+    fn ensure_initialized(&mut self) -> &str {
+        if self.server_name.is_none() {
+            let mut payload = cbor_map! {
+                "name" => self.base_name.as_str(),
+                "min_size" => self.min_size as u64
+            };
+            if let Some(max) = self.max_size {
+                map_insert(&mut payload, "max_size", Value::from(max as u64));
+            }
+            let response = match send_request("new_collection", &payload) {
+                Ok(v) => v,
+                Err(StopTestError) => {
+                    crate::assume(false);
+                    unreachable!("assume(false) should not return")
+                }
+            };
+            let name = match response {
+                Value::Text(s) => s,
+                _ => panic!(
+                    "Expected text response from new_collection, got {:?}",
+                    response
+                ),
+            };
+            self.server_name = Some(name);
+        }
+        self.server_name.as_ref().unwrap()
+    }
+
+    /// Check if more elements should be generated.
+    ///
+    /// On the first call, this lazily creates the server-side collection.
+    /// Returns `false` when the collection has reached its target size.
+    pub fn more(&mut self) -> bool {
+        if self.finished {
+            return false;
+        }
+        let server_name = self.ensure_initialized().to_string();
+        let response = match send_request(
+            "collection_more",
+            &cbor_map! { "collection" => server_name.as_str() },
+        ) {
+            Ok(v) => v,
+            Err(StopTestError) => {
+                self.finished = true;
+                crate::assume(false);
+                unreachable!("assume(false) should not return")
+            }
+        };
+        let result = match response {
+            Value::Bool(b) => b,
+            _ => panic!("Expected bool from collection_more, got {:?}", response),
+        };
+        if !result {
+            self.finished = true;
+        }
+        result
+    }
+
+    /// Reject the last element (don't count it towards the size budget).
+    ///
+    /// This is useful for unique collections where a generated element
+    /// turned out to be a duplicate.
+    pub fn reject(&mut self, why: Option<&str>) {
+        if self.finished {
+            return;
+        }
+        let server_name = self.ensure_initialized().to_string();
+        let mut payload = cbor_map! {
+            "collection" => server_name.as_str()
+        };
+        if let Some(reason) = why {
+            map_insert(&mut payload, "why", Value::Text(reason.to_string()));
+        }
+        let _ = send_request("collection_reject", &payload);
+    }
 }
 
 // ============================================================================
