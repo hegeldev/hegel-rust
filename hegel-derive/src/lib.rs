@@ -78,6 +78,28 @@ pub fn derive_generate(input: TokenStream) -> TokenStream {
     }
 }
 
+/// Helper to generate a cbor map expression in proc macro output.
+/// Returns a token stream that creates `ciborium::Value::Map(vec![...])`.
+fn cbor_map_tokens(
+    entries: Vec<(String, proc_macro2::TokenStream)>,
+) -> proc_macro2::TokenStream {
+    let pairs: Vec<proc_macro2::TokenStream> = entries
+        .into_iter()
+        .map(|(key, value)| {
+            quote! {
+                (
+                    ciborium::Value::Text(#key.to_string()),
+                    #value,
+                )
+            }
+        })
+        .collect();
+
+    quote! {
+        ciborium::Value::Map(vec![#(#pairs),*])
+    }
+}
+
 /// Derive Generate for a struct.
 fn derive_struct_generate(input: &DeriveInput, data: &syn::DataStruct) -> TokenStream {
     let name = &input.ident;
@@ -154,12 +176,79 @@ fn derive_struct_generate(input: &DeriveInput, data: &syn::DataStruct) -> TokenS
             }
         });
 
-    // Generate the generate() implementation
+    // Generate the generate() fallback fields
     let generate_fields = field_names.iter().map(|name| {
         quote! {
             #name: self.#name.generate()
         }
     });
+
+    // Generate field name strings for schema
+    let field_name_strings: Vec<String> = field_names.iter().map(|n| n.to_string()).collect();
+
+    // Generate per-field basic variable bindings: let b_field = self.field.as_basic()?;
+    let basic_bindings: Vec<proc_macro2::TokenStream> = field_names
+        .iter()
+        .map(|name| {
+            let basic_name = format_ident!("b_{}", name);
+            quote! { let #basic_name = self.#name.as_basic()?; }
+        })
+        .collect();
+
+    // Generate schema properties entries
+    let schema_properties: Vec<proc_macro2::TokenStream> = field_names
+        .iter()
+        .zip(field_name_strings.iter())
+        .map(|(name, name_str)| {
+            let basic_name = format_ident!("b_{}", name);
+            quote! {
+                (
+                    ciborium::Value::Text(#name_str.to_string()),
+                    #basic_name.schema.clone(),
+                )
+            }
+        })
+        .collect();
+
+    // Generate required entries
+    let schema_required: Vec<proc_macro2::TokenStream> = field_name_strings
+        .iter()
+        .map(|name_str| {
+            quote! { ciborium::Value::Text(#name_str.to_string()) }
+        })
+        .collect();
+
+    // Generate transform captures: let t_field = b_field.transform;
+    let transform_captures: Vec<proc_macro2::TokenStream> = field_names
+        .iter()
+        .map(|name| {
+            let basic_name = format_ident!("b_{}", name);
+            let transform_name = format_ident!("t_{}", name);
+            quote! { let #transform_name = #basic_name.transform; }
+        })
+        .collect();
+
+    // Generate per-field extraction + deserialization in the transform closure
+    let field_extractions: Vec<proc_macro2::TokenStream> = field_names
+        .iter()
+        .zip(field_name_strings.iter())
+        .map(|(name, name_str)| {
+            let transform_name = format_ident!("t_{}", name);
+            quote! {
+                let #name = {
+                    let raw_val = fields.remove(#name_str)
+                        .unwrap_or_else(|| panic!("hegel: missing field '{}' in object", #name_str));
+                    if let Some(ref t) = #transform_name {
+                        t(raw_val)
+                    } else {
+                        hegel::gen::deserialize_value(raw_val)
+                    }
+                };
+            }
+        })
+        .collect();
+
+    let construct_fields: Vec<&syn::Ident> = field_names.clone();
 
     let expanded = quote! {
         /// Generated generator for #name.
@@ -194,13 +283,64 @@ fn derive_struct_generate(input: &DeriveInput, data: &syn::DataStruct) -> TokenS
         impl<'a> hegel::gen::Generate<#name> for #generator_name<'a> {
             fn generate(&self) -> #name {
                 use hegel::gen::Generate;
-                #name {
-                    #(#generate_fields,)*
+                if let Some(basic) = self.as_basic() {
+                    basic.generate_transformed()
+                } else {
+                    hegel::gen::group(hegel::gen::labels::FIXED_DICT, || {
+                        #name {
+                            #(#generate_fields,)*
+                        }
+                    })
                 }
             }
 
-            // Derived struct generators are never basic since we can't
-            // deserialize arbitrary user structs from CBOR
+            fn as_basic(&self) -> Option<hegel::gen::BasicGenerator<#name>> {
+                use hegel::gen::Generate;
+
+                #(#basic_bindings)*
+
+                let schema = ciborium::Value::Map(vec![
+                    (
+                        ciborium::Value::Text("type".to_string()),
+                        ciborium::Value::Text("object".to_string()),
+                    ),
+                    (
+                        ciborium::Value::Text("properties".to_string()),
+                        ciborium::Value::Map(vec![
+                            #(#schema_properties,)*
+                        ]),
+                    ),
+                    (
+                        ciborium::Value::Text("required".to_string()),
+                        ciborium::Value::Array(vec![
+                            #(#schema_required,)*
+                        ]),
+                    ),
+                ]);
+
+                #(#transform_captures)*
+
+                Some(hegel::gen::BasicGenerator::with_transform(schema, move |raw| {
+                    let mut fields: std::collections::HashMap<String, ciborium::Value> = match raw {
+                        ciborium::Value::Map(entries) => {
+                            entries.into_iter().filter_map(|(k, v)| {
+                                if let ciborium::Value::Text(key) = k {
+                                    Some((key, v))
+                                } else {
+                                    None
+                                }
+                            }).collect()
+                        }
+                        _ => panic!("hegel: expected object from struct schema, got {:?}", raw),
+                    };
+
+                    #(#field_extractions)*
+
+                    #name {
+                        #(#construct_fields,)*
+                    }
+                }))
+            }
         }
     };
 
@@ -251,28 +391,6 @@ fn classify_variant(variant: &Variant) -> VariantKind<'_> {
     }
 }
 
-/// Helper to generate a cbor map expression in proc macro output.
-/// Returns a token stream that creates `ciborium::Value::Map(vec![...])`.
-fn cbor_map_tokens(
-    entries: Vec<(String, proc_macro2::TokenStream)>,
-) -> proc_macro2::TokenStream {
-    let pairs: Vec<proc_macro2::TokenStream> = entries
-        .into_iter()
-        .map(|(key, value)| {
-            quote! {
-                (
-                    ciborium::Value::Text(#key.to_string()),
-                    #value,
-                )
-            }
-        })
-        .collect();
-
-    quote! {
-        ciborium::Value::Map(vec![#(#pairs),*])
-    }
-}
-
 /// Derive Generate for an enum.
 fn derive_enum_generate(input: &DeriveInput, data: &syn::DataEnum) -> TokenStream {
     let enum_name = &input.ident;
@@ -281,12 +399,7 @@ fn derive_enum_generate(input: &DeriveInput, data: &syn::DataEnum) -> TokenStrea
     // Collect variant information
     let variants: Vec<_> = data.variants.iter().collect();
 
-    // Separate unit variants from data variants
-    let _unit_variants: Vec<_> = variants
-        .iter()
-        .filter(|v| matches!(classify_variant(v), VariantKind::Unit))
-        .collect();
-
+    // Separate data variants from unit variants
     let data_variants: Vec<_> = variants
         .iter()
         .filter(|v| !matches!(classify_variant(v), VariantKind::Unit))
@@ -513,54 +626,147 @@ fn derive_enum_generate(input: &DeriveInput, data: &syn::DataEnum) -> TokenStrea
         }
     };
 
-    // Generate the generate() implementation - always use compositional approach
-    // Enum generators are never basic since they generate user-defined types
-    let generate_impl = if data_variants.is_empty() {
-        // All unit variants - just sample from names
-        quote! {
-            fn generate(&self) -> #enum_name {
-                let selected: String = hegel::gen::generate_from_schema(
-                    &#sampled_from_schema
-                );
+    // Unit variant match arms for the transform closure (used by as_basic)
+    let unit_variant_match_arms: Vec<proc_macro2::TokenStream> = variants
+        .iter()
+        .filter(|v| matches!(classify_variant(v), VariantKind::Unit))
+        .map(|variant| {
+            let variant_name = &variant.ident;
+            let variant_name_str = variant.ident.to_string();
+            quote! { #variant_name_str => #enum_name::#variant_name }
+        })
+        .collect();
 
-                match selected.as_str() {
-                    #(#generate_match_arms,)*
-                    _ => unreachable!("Unknown variant: {}", selected),
+    let data_variant_names: Vec<_> = data_variants.iter().map(|v| &v.ident).collect();
+    let data_variant_name_strings: Vec<String> = data_variant_names.iter().map(|n| n.to_string()).collect();
+
+    let generate_trait_impl = if data_variants.is_empty() {
+        // All-unit enum: basic with sampled_from schema + transform
+        quote! {
+            impl hegel::gen::Generate<#enum_name> for #generator_name {
+                fn generate(&self) -> #enum_name {
+                    if let Some(basic) = self.as_basic() {
+                        basic.generate_transformed()
+                    } else {
+                        unreachable!("unit-only enum is always basic")
+                    }
+                }
+
+                fn as_basic(&self) -> Option<hegel::gen::BasicGenerator<#enum_name>> {
+                    let schema = #sampled_from_schema;
+
+                    Some(hegel::gen::BasicGenerator::with_transform(schema, |raw| {
+                        let selected: String = hegel::gen::deserialize_value(raw);
+                        match selected.as_str() {
+                            #(#unit_variant_match_arms,)*
+                            _ => unreachable!("Unknown variant: {}", selected),
+                        }
+                    }))
                 }
             }
         }
     } else {
-        quote! {
-            fn generate(&self) -> #enum_name {
-                use hegel::gen::Generate;
+        // Mixed enum: try basic, fall back to compositional
+        // Build one_of schema from unit const schemas + data variant schemas
+        let unit_variant_const_schemas: Vec<proc_macro2::TokenStream> = variants
+            .iter()
+            .filter(|v| matches!(classify_variant(v), VariantKind::Unit))
+            .map(|variant| {
+                let variant_name_str = variant.ident.to_string();
+                quote! {
+                    ciborium::Value::Map(vec![
+                        (
+                            ciborium::Value::Text("const".to_string()),
+                            ciborium::Value::Text(#variant_name_str.to_string()),
+                        ),
+                    ])
+                }
+            })
+            .collect();
 
-                // Compositional: pick a variant, then generate it
-                hegel::gen::group(hegel::gen::labels::ENUM_VARIANT, || {
-                    let selected: String = hegel::gen::generate_from_schema(
-                        &#sampled_from_schema
-                    );
-
-                    match selected.as_str() {
-                        #(#generate_match_arms,)*
-                        _ => unreachable!("Unknown variant: {}", selected),
-                    }
-                })
-            }
-        }
-    };
-
-    let generate_trait_impl = if data_variants.is_empty() {
-        quote! {
-            impl hegel::gen::Generate<#enum_name> for #generator_name {
-                #generate_impl
-                // Unit-only enum generators are never basic
-            }
-        }
-    } else {
         quote! {
             impl<'a> hegel::gen::Generate<#enum_name> for #generator_name<'a> {
-                #generate_impl
-                // Enum generators are never basic since they generate user-defined types
+                fn generate(&self) -> #enum_name {
+                    use hegel::gen::Generate;
+                    if let Some(basic) = self.as_basic() {
+                        basic.generate_transformed()
+                    } else {
+                        hegel::gen::group(hegel::gen::labels::ENUM_VARIANT, || {
+                            let selected: String = hegel::gen::generate_from_schema(
+                                &#sampled_from_schema
+                            );
+
+                            match selected.as_str() {
+                                #(#generate_match_arms,)*
+                                _ => unreachable!("Unknown variant: {}", selected),
+                            }
+                        })
+                    }
+                }
+
+                fn as_basic(&self) -> Option<hegel::gen::BasicGenerator<#enum_name>> {
+                    use hegel::gen::Generate;
+
+                    // Try to get basic generators for all data variants
+                    #(
+                        let #data_variant_names = self.#data_variant_names.as_basic()?;
+                    )*
+
+                    // Build one_of schema: unit variants as const schemas, data variants from as_basic
+                    let mut one_of_schemas: Vec<ciborium::Value> = vec![
+                        #(#unit_variant_const_schemas,)*
+                    ];
+
+                    #(
+                        one_of_schemas.push(#data_variant_names.schema.clone());
+                    )*
+
+                    let schema = ciborium::Value::Map(vec![
+                        (
+                            ciborium::Value::Text("one_of".to_string()),
+                            ciborium::Value::Array(one_of_schemas),
+                        ),
+                    ]);
+
+                    // Capture transforms from data variant generators
+                    #(
+                        let #data_variant_names = #data_variant_names.transform;
+                    )*
+
+                    let data_variant_names: Vec<String> = vec![#(#data_variant_name_strings.to_string()),*];
+
+                    Some(hegel::gen::BasicGenerator::with_transform(schema, move |raw| {
+                        match &raw {
+                            // String -> unit variant
+                            ciborium::Value::Text(s) => {
+                                match s.as_str() {
+                                    #(#unit_variant_match_arms,)*
+                                    _ => panic!("hegel: unknown unit variant: {}", s),
+                                }
+                            }
+                            // Map -> data variant (look at first key)
+                            ciborium::Value::Map(entries) => {
+                                let first_key = entries.first()
+                                    .and_then(|(k, _)| if let ciborium::Value::Text(s) = k { Some(s.as_str()) } else { None })
+                                    .unwrap_or_else(|| panic!("hegel: expected map with string key for data variant"));
+
+                                // Match against data variant names and apply the right transform
+                                #(
+                                    if first_key == #data_variant_name_strings {
+                                        if let Some(ref t) = #data_variant_names {
+                                            return t(raw);
+                                        } else {
+                                            panic!("hegel: data variant transform missing for '{}'", first_key);
+                                        }
+                                    }
+                                )*
+
+                                panic!("hegel: unknown data variant key: {}", first_key);
+                            }
+                            _ => panic!("hegel: expected string or map for enum, got {:?}", raw),
+                        }
+                    }))
+                }
             }
         }
     };
@@ -680,12 +886,123 @@ fn generate_variant_generator(enum_name: &syn::Ident, variant: &Variant) -> proc
                 impl<'a> hegel::gen::Generate<#enum_name> for #variant_generator_name<'a> {
                     fn generate(&self) -> #enum_name {
                         use hegel::gen::Generate;
-                        #enum_name::#variant_name {
-                            #(#field_constructions,)*
+                        if let Some(basic) = self.as_basic() {
+                            basic.generate_transformed()
+                        } else {
+                            #enum_name::#variant_name {
+                                #(#field_constructions,)*
+                            }
                         }
                     }
 
-                    // Variant generators are never basic
+                    fn as_basic(&self) -> Option<hegel::gen::BasicGenerator<#enum_name>> {
+                        use hegel::gen::Generate;
+
+                        let variant_name_str = stringify!(#variant_name);
+                        let field_name_strs: Vec<&str> = vec![#(stringify!(#field_names)),*];
+
+                        // Get basic generators for all fields
+                        #(
+                            let #field_names = self.#field_names.as_basic()?;
+                        )*
+
+                        // Build inner object schema: {type: "object", properties: {field: schema, ...}, required: [...]}
+                        let inner_schema = ciborium::Value::Map(vec![
+                            (
+                                ciborium::Value::Text("type".to_string()),
+                                ciborium::Value::Text("object".to_string()),
+                            ),
+                            (
+                                ciborium::Value::Text("properties".to_string()),
+                                ciborium::Value::Map(vec![
+                                    #((
+                                        ciborium::Value::Text(stringify!(#field_names).to_string()),
+                                        #field_names.schema.clone(),
+                                    ),)*
+                                ]),
+                            ),
+                            (
+                                ciborium::Value::Text("required".to_string()),
+                                ciborium::Value::Array(vec![
+                                    #(ciborium::Value::Text(stringify!(#field_names).to_string()),)*
+                                ]),
+                            ),
+                        ]);
+
+                        // Wrap in outer object: {type: "object", properties: {VariantName: inner}, required: [VariantName]}
+                        let outer_schema = ciborium::Value::Map(vec![
+                            (
+                                ciborium::Value::Text("type".to_string()),
+                                ciborium::Value::Text("object".to_string()),
+                            ),
+                            (
+                                ciborium::Value::Text("properties".to_string()),
+                                ciborium::Value::Map(vec![
+                                    (
+                                        ciborium::Value::Text(variant_name_str.to_string()),
+                                        inner_schema,
+                                    ),
+                                ]),
+                            ),
+                            (
+                                ciborium::Value::Text("required".to_string()),
+                                ciborium::Value::Array(vec![
+                                    ciborium::Value::Text(variant_name_str.to_string()),
+                                ]),
+                            ),
+                        ]);
+
+                        // Capture transforms
+                        #(
+                            let #field_names = #field_names.transform;
+                        )*
+
+                        let field_names_owned: Vec<String> = field_name_strs.iter().map(|s| s.to_string()).collect();
+                        let vname = variant_name_str.to_string();
+
+                        Some(hegel::gen::BasicGenerator::with_transform(outer_schema, move |raw| {
+                            // Unwrap outer map to get inner value
+                            let mut outer_map: std::collections::HashMap<String, ciborium::Value> = match raw {
+                                ciborium::Value::Map(entries) => {
+                                    entries.into_iter().filter_map(|(k, v)| {
+                                        if let ciborium::Value::Text(key) = k { Some((key, v)) } else { None }
+                                    }).collect()
+                                }
+                                _ => panic!("hegel: expected object for enum variant, got {:?}", raw),
+                            };
+
+                            let inner_raw = outer_map.remove(&vname)
+                                .unwrap_or_else(|| panic!("hegel: missing variant key '{}'", vname));
+
+                            // Unwrap inner map to get fields
+                            let mut inner_map: std::collections::HashMap<String, ciborium::Value> = match inner_raw {
+                                ciborium::Value::Map(entries) => {
+                                    entries.into_iter().filter_map(|(k, v)| {
+                                        if let ciborium::Value::Text(key) = k { Some((key, v)) } else { None }
+                                    }).collect()
+                                }
+                                _ => panic!("hegel: expected inner object for variant fields, got {:?}", inner_raw),
+                            };
+
+                            // Extract and transform each field
+                            #(
+                                let #field_names = {
+                                    let fname = stringify!(#field_names);
+                                    let raw_val = inner_map.remove(fname)
+                                        .unwrap_or_else(|| panic!("hegel: missing field '{}'", fname));
+                                    if let Some(ref t) = #field_names {
+                                        t(raw_val)
+                                    } else {
+                                        hegel::gen::deserialize_value(raw_val)
+                                    }
+                                };
+                            )*
+
+                            #enum_name::#variant_name {
+                                #(#field_names,)*
+                            }
+                        }))
+                    }
                 }
             }
         }
@@ -731,10 +1048,68 @@ fn generate_variant_generator(enum_name: &syn::Ident, variant: &Variant) -> proc
                 impl<'a> hegel::gen::Generate<#enum_name> for #variant_generator_name<'a> {
                     fn generate(&self) -> #enum_name {
                         use hegel::gen::Generate;
-                        #enum_name::#variant_name(self.value.generate())
+                        if let Some(basic) = self.as_basic() {
+                            basic.generate_transformed()
+                        } else {
+                            #enum_name::#variant_name(self.value.generate())
+                        }
                     }
 
-                    // Variant generators are never basic
+                    fn as_basic(&self) -> Option<hegel::gen::BasicGenerator<#enum_name>> {
+                        use hegel::gen::Generate;
+
+                        let variant_name_str = stringify!(#variant_name);
+                        let b_value = self.value.as_basic()?;
+
+                        // Outer schema: {type: "object", properties: {VariantName: field_schema}, required: [VariantName]}
+                        let outer_schema = ciborium::Value::Map(vec![
+                            (
+                                ciborium::Value::Text("type".to_string()),
+                                ciborium::Value::Text("object".to_string()),
+                            ),
+                            (
+                                ciborium::Value::Text("properties".to_string()),
+                                ciborium::Value::Map(vec![
+                                    (
+                                        ciborium::Value::Text(variant_name_str.to_string()),
+                                        b_value.schema.clone(),
+                                    ),
+                                ]),
+                            ),
+                            (
+                                ciborium::Value::Text("required".to_string()),
+                                ciborium::Value::Array(vec![
+                                    ciborium::Value::Text(variant_name_str.to_string()),
+                                ]),
+                            ),
+                        ]);
+
+                        let t_value = b_value.transform;
+                        let vname = variant_name_str.to_string();
+
+                        Some(hegel::gen::BasicGenerator::with_transform(outer_schema, move |raw| {
+                            // Unwrap outer map
+                            let mut outer_map: std::collections::HashMap<String, ciborium::Value> = match raw {
+                                ciborium::Value::Map(entries) => {
+                                    entries.into_iter().filter_map(|(k, v)| {
+                                        if let ciborium::Value::Text(key) = k { Some((key, v)) } else { None }
+                                    }).collect()
+                                }
+                                _ => panic!("hegel: expected object for enum variant, got {:?}", raw),
+                            };
+
+                            let field_raw = outer_map.remove(&vname)
+                                .unwrap_or_else(|| panic!("hegel: missing variant key '{}'", vname));
+
+                            let field_val = if let Some(ref t) = t_value {
+                                t(field_raw)
+                            } else {
+                                hegel::gen::deserialize_value(field_raw)
+                            };
+
+                            #enum_name::#variant_name(field_val)
+                        }))
+                    }
                 }
             }
         }
@@ -829,10 +1204,103 @@ fn generate_variant_generator(enum_name: &syn::Ident, variant: &Variant) -> proc
                 impl<'a> hegel::gen::Generate<#enum_name> for #variant_generator_name<'a> {
                     fn generate(&self) -> #enum_name {
                         use hegel::gen::Generate;
-                        #enum_name::#variant_name(#(#field_generates,)*)
+                        if let Some(basic) = self.as_basic() {
+                            basic.generate_transformed()
+                        } else {
+                            #enum_name::#variant_name(#(#field_generates,)*)
+                        }
                     }
 
-                    // Variant generators are never basic
+                    fn as_basic(&self) -> Option<hegel::gen::BasicGenerator<#enum_name>> {
+                        use hegel::gen::Generate;
+
+                        let variant_name_str = stringify!(#variant_name);
+
+                        // Get basic generators for all tuple fields
+                        #(
+                            let #field_indices = self.#field_indices.as_basic()?;
+                        )*
+
+                        // Inner schema: {type: "tuple", elements: [schema0, schema1, ...]}
+                        let inner_schema = ciborium::Value::Map(vec![
+                            (
+                                ciborium::Value::Text("type".to_string()),
+                                ciborium::Value::Text("tuple".to_string()),
+                            ),
+                            (
+                                ciborium::Value::Text("elements".to_string()),
+                                ciborium::Value::Array(vec![
+                                    #(#field_indices.schema.clone(),)*
+                                ]),
+                            ),
+                        ]);
+
+                        // Outer schema: {type: "object", properties: {VariantName: inner}, required: [VariantName]}
+                        let outer_schema = ciborium::Value::Map(vec![
+                            (
+                                ciborium::Value::Text("type".to_string()),
+                                ciborium::Value::Text("object".to_string()),
+                            ),
+                            (
+                                ciborium::Value::Text("properties".to_string()),
+                                ciborium::Value::Map(vec![
+                                    (
+                                        ciborium::Value::Text(variant_name_str.to_string()),
+                                        inner_schema,
+                                    ),
+                                ]),
+                            ),
+                            (
+                                ciborium::Value::Text("required".to_string()),
+                                ciborium::Value::Array(vec![
+                                    ciborium::Value::Text(variant_name_str.to_string()),
+                                ]),
+                            ),
+                        ]);
+
+                        // Capture transforms
+                        #(
+                            let #field_indices = #field_indices.transform;
+                        )*
+
+                        let vname = variant_name_str.to_string();
+
+                        Some(hegel::gen::BasicGenerator::with_transform(outer_schema, move |raw| {
+                            // Unwrap outer map
+                            let mut outer_map: std::collections::HashMap<String, ciborium::Value> = match raw {
+                                ciborium::Value::Map(entries) => {
+                                    entries.into_iter().filter_map(|(k, v)| {
+                                        if let ciborium::Value::Text(key) = k { Some((key, v)) } else { None }
+                                    }).collect()
+                                }
+                                _ => panic!("hegel: expected object for enum variant, got {:?}", raw),
+                            };
+
+                            let tuple_raw = outer_map.remove(&vname)
+                                .unwrap_or_else(|| panic!("hegel: missing variant key '{}'", vname));
+
+                            // Extract array elements
+                            let arr = match tuple_raw {
+                                ciborium::Value::Array(arr) => arr,
+                                _ => panic!("hegel: expected array for tuple variant, got {:?}", tuple_raw),
+                            };
+                            let mut iter = arr.into_iter();
+
+                            #(
+                                let #field_indices = {
+                                    let raw_val = iter.next()
+                                        .unwrap_or_else(|| panic!("hegel: tuple variant missing element"));
+                                    if let Some(ref t) = #field_indices {
+                                        t(raw_val)
+                                    } else {
+                                        hegel::gen::deserialize_value(raw_val)
+                                    }
+                                };
+                            )*
+
+                            #enum_name::#variant_name(#(#field_indices,)*)
+                        }))
+                    }
                 }
             }
         }

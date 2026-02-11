@@ -232,6 +232,20 @@ pub(crate) fn request_from_schema(schema: &Value) -> Result<Value, StopTestError
     send_request("generate", &cbor_map! {"schema" => schema.clone()})
 }
 
+/// Deserialize a raw CBOR value into a Rust type.
+///
+/// This is a public helper for use by derived generators (proc macros)
+/// that need to deserialize individual field values from CBOR.
+pub fn deserialize_value<T: serde::de::DeserializeOwned>(raw: Value) -> T {
+    let hv = value::HegelValue::from(raw.clone());
+    value::from_hegel_value(hv).unwrap_or_else(|e| {
+        panic!(
+            "hegel: failed to deserialize value: {}\nValue: {:?}",
+            e, raw
+        );
+    })
+}
+
 /// Generate a value from a schema.
 pub fn generate_from_schema<T: serde::de::DeserializeOwned>(schema: &Value) -> T {
     let result = match request_from_schema(schema) {
@@ -476,10 +490,10 @@ pub mod labels {
 /// rather than losing the schema, which is the key optimization.
 pub struct BasicGenerator<T> {
     /// The raw schema sent to the server.
-    pub(crate) schema: Value,
+    pub schema: Value,
     /// Optional client-side transform applied to the server-generated value.
     /// When None, the server value is used directly (identity transform).
-    pub(crate) transform: Option<Arc<dyn Fn(Value) -> T + Send + Sync>>,
+    pub transform: Option<Arc<dyn Fn(Value) -> T + Send + Sync>>,
 }
 
 impl<T> Clone for BasicGenerator<T> {
