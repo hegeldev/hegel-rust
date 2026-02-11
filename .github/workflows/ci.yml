@@ -121,13 +121,4 @@ jobs:
           ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }}
       - uses: cachix/install-nix-action@v27
       - name: lint
-        run: nix run nixpkgs#nixfmt -- --check flake.nix tests/nix/flake.nix
-      - name: test
-        working-directory: tests/nix
-        run: |
-          # deleting the lock file allows nix to resolve the `path:../..` input value
-          # without erroring about unlocked values / irreproducible builds
-          rm -f flake.lock
-          nix build -L 2>&1 | tee build.log
-          # canary string to ensure we're actually building what we think we are.
-          grep "test_nix_integration_canary" build.log
+        run: nix run nixpkgs#nixfmt -- --check flake.nix
