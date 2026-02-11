@@ -15,13 +15,15 @@ pub struct Mapped<T, U, F, G> {
 impl<T, U, F, G> Generate<U> for Mapped<T, U, F, G>
 where
     T: serde::de::DeserializeOwned + 'static,
-    U: serde::de::DeserializeOwned + 'static,
+    U: 'static,
     G: Generate<T>,
     F: Fn(T) -> U + Send + Sync + Clone + 'static,
 {
     fn generate(&self) -> U {
         if let Some(basic) = self.as_basic() {
-            basic.generate()
+            // Always has a transform (created via BasicGenerator::map), so
+            // generate_transformed() works even when U isn't DeserializeOwned.
+            basic.generate_transformed()
         } else {
             group(labels::MAPPED, || (self.f)(self.source.generate()))
         }
