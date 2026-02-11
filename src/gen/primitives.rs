@@ -1,5 +1,6 @@
 use super::{BasicGenerator, Generate};
 use crate::cbor_helpers::{cbor_map, cbor_serialize};
+use std::sync::OnceLock;
 
 pub fn unit() -> JustGenerator<()> {
     just(())
@@ -7,6 +8,7 @@ pub fn unit() -> JustGenerator<()> {
 
 pub struct JustGenerator<T> {
     value: T,
+    cached_basic: OnceLock<Option<BasicGenerator<T>>>,
 }
 
 impl<T: Clone + Send + Sync + serde::Serialize + serde::de::DeserializeOwned + 'static> Generate<T>
@@ -17,16 +19,23 @@ impl<T: Clone + Send + Sync + serde::Serialize + serde::de::DeserializeOwned + '
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<T>> {
-        Some(BasicGenerator::new(
-            cbor_map! {"const" => cbor_serialize(&self.value)},
-        ))
+        self.cached_basic
+            .get_or_init(|| {
+                Some(BasicGenerator::new(
+                    cbor_map! {"const" => cbor_serialize(&self.value)},
+                ))
+            })
+            .clone()
     }
 }
 
 pub fn just<T: Clone + Send + Sync + serde::Serialize + serde::de::DeserializeOwned + 'static>(
     value: T,
 ) -> JustGenerator<T> {
-    JustGenerator { value }
+    JustGenerator {
+        value,
+        cached_basic: OnceLock::new(),
+    }
 }
 
 pub struct JustAnyGenerator<T> {
@@ -42,7 +51,9 @@ pub fn just_any<T: Clone + Send + Sync>(value: T) -> JustAnyGenerator<T> {
     JustAnyGenerator { value }
 }
 
-pub struct BoolGenerator;
+pub struct BoolGenerator {
+    cached_basic: OnceLock<Option<BasicGenerator<bool>>>,
+}
 
 impl Generate<bool> for BoolGenerator {
     fn generate(&self) -> bool {
@@ -50,10 +61,14 @@ impl Generate<bool> for BoolGenerator {
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<bool>> {
-        Some(BasicGenerator::new(cbor_map! {"type" => "boolean"}))
+        self.cached_basic
+            .get_or_init(|| Some(BasicGenerator::new(cbor_map! {"type" => "boolean"})))
+            .clone()
     }
 }
 
 pub fn booleans() -> BoolGenerator {
-    BoolGenerator
+    BoolGenerator {
+        cached_basic: OnceLock::new(),
+    }
 }

@@ -1,6 +1,7 @@
 use super::{BasicGenerator, Generate};
 use crate::cbor_helpers::{cbor_map, map_insert};
 use ciborium::Value;
+use std::sync::OnceLock;
 
 #[cfg(test)]
 const BASE64_ALPHABET: &[u8; 64] =
@@ -88,18 +89,21 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, Base64Error> {
 pub struct BinaryGenerator {
     min_size: usize,
     max_size: Option<usize>,
+    cached_basic: OnceLock<Option<BasicGenerator<Vec<u8>>>>,
 }
 
 impl BinaryGenerator {
     /// Set the minimum size in bytes.
     pub fn with_min_size(mut self, min: usize) -> Self {
         self.min_size = min;
+        self.cached_basic = OnceLock::new();
         self
     }
 
     /// Set the maximum size in bytes.
     pub fn with_max_size(mut self, max: usize) -> Self {
         self.max_size = Some(max);
+        self.cached_basic = OnceLock::new();
         self
     }
 }
@@ -110,22 +114,26 @@ impl Generate<Vec<u8>> for BinaryGenerator {
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<Vec<u8>>> {
-        let mut schema = cbor_map! {
-            "type" => "binary",
-            "min_size" => self.min_size as u64
-        };
+        self.cached_basic
+            .get_or_init(|| {
+                let mut schema = cbor_map! {
+                    "type" => "binary",
+                    "min_size" => self.min_size as u64
+                };
 
-        if let Some(max) = self.max_size {
-            map_insert(&mut schema, "max_size", Value::from(max as u64));
-        }
+                if let Some(max) = self.max_size {
+                    map_insert(&mut schema, "max_size", Value::from(max as u64));
+                }
 
-        Some(BasicGenerator::with_transform(schema, |raw| {
-            let b64 = match raw {
-                Value::Text(s) => s,
-                _ => panic!("Expected text (base64) from binary schema, got {:?}", raw),
-            };
-            base64_decode(&b64).expect("invalid base64")
-        }))
+                Some(BasicGenerator::with_transform(schema, |raw| {
+                    let b64 = match raw {
+                        Value::Text(s) => s,
+                        _ => panic!("Expected text (base64) from binary schema, got {:?}", raw),
+                    };
+                    base64_decode(&b64).expect("invalid base64")
+                }))
+            })
+            .clone()
     }
 }
 
@@ -146,6 +154,7 @@ pub fn binary() -> BinaryGenerator {
     BinaryGenerator {
         min_size: 0,
         max_size: None,
+        cached_basic: OnceLock::new(),
     }
 }
 
