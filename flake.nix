@@ -22,42 +22,8 @@
       ];
 
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
-
-      mkHegelRustProject =
-        {
-          pkgs,
-          system ? pkgs.system,
-        }@args:
-        let
-        in
-        pkgs.rustPlatform.buildRustPackage {
-          pname = "hegel";
-          version = "0.1.0";
-          src = ./.;
-          cargoLock.lockFile = ./Cargo.lock;
-
-          # hegel binary on PATH so build.rs finds it
-          nativeBuildInputs = [ hegel.packages.${system}.default ];
-        };
     in
     {
-
-      # Export the builder for users
-      lib = {
-        inherit mkHegelRustProject;
-      };
-
-      packages = forAllSystems (
-        system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
-          lib = pkgs.lib;
-        in
-        {
-          default = mkHegelRustProject { inherit pkgs; };
-        }
-      );
-
       devShells = forAllSystems (
         system:
         let
