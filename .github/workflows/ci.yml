@@ -30,7 +30,7 @@ jobs:
     strategy:
       matrix:
         # keep this in sync with the rust-version in cargo.toml
-        rust: ["1.83", stable]
+        rust: ["1.86", stable]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,7 +62,7 @@ jobs:
     strategy:
       matrix:
         # keep this in sync with the rust-version in cargo.toml
-        rust: ["1.83", stable]
+        rust: ["1.86", stable]
     steps:
       - name: Checkout
         uses: actions/checkout@v4

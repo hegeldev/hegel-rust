@@ -3,7 +3,7 @@ name = "hegel"
 version = "0.1.0"
 edition = "2021"
 # if you bump this, also bump ci.yml and hegel-derive/cargo.toml
-rust-version = "1.83"
+rust-version = "1.86"
 description = "Property-based testing SDK for the Hegel test data generator"
 license = "MIT"
 readme = "README.md"
