@@ -13,8 +13,8 @@ use ciborium::Value;
 /// ```ignore
 /// let schema = cbor_map!{
 ///     "type" => "integer",
-///     "minimum" => 0,
-///     "maximum" => 100
+///     "min_value" => 0,
+///     "max_value" => 100
 /// };
 /// ```
 macro_rules! cbor_map {
@@ -174,10 +174,10 @@ mod tests {
     fn test_cbor_map_macro() {
         let m = cbor_map! {
             "type" => "integer",
-            "minimum" => 0
+            "min_value" => 0
         };
         assert_eq!(as_text(map_get(&m, "type").unwrap()), Some("integer"));
-        assert_eq!(as_u64(map_get(&m, "minimum").unwrap()), Some(0));
+        assert_eq!(as_u64(map_get(&m, "min_value").unwrap()), Some(0));
     }
 
     #[test]

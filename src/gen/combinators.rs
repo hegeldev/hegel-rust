@@ -153,8 +153,8 @@ impl<T: Clone + Send + Sync> Generate<T> for SampledFromGenerator<T> {
 
         let schema = cbor_map! {
             "type" => "integer",
-            "minimum" => 0u64,
-            "maximum" => (self.elements.len() - 1) as u64
+            "min_value" => 0u64,
+            "max_value" => (self.elements.len() - 1) as u64
         };
         let elements = self.elements.clone();
         Some(BasicGenerator::new(schema, move |raw| {

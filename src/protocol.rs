@@ -410,8 +410,8 @@ mod tests {
         // Test that ciborium::Value roundtrips through CBOR
         let value = cbor_map! {
             "type" => "integer",
-            "minimum" => 0,
-            "maximum" => 100
+            "min_value" => 0,
+            "max_value" => 100
         };
 
         // Serialize to CBOR bytes

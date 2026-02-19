@@ -34,8 +34,8 @@ where
 
         cbor_map! {
             "type" => "integer",
-            "minimum" => cbor_serialize(&min),
-            "maximum" => cbor_serialize(&max)
+            "min_value" => cbor_serialize(&min),
+            "max_value" => cbor_serialize(&max)
         }
     }
 }
@@ -149,8 +149,8 @@ where
 
         let mut schema = cbor_map! {
             "type" => "number",
-            "exclude_minimum" => self.exclude_min,
-            "exclude_maximum" => self.exclude_max,
+            "exclude_min" => self.exclude_min,
+            "exclude_max" => self.exclude_max,
             "allow_nan" => allow_nan,
             "allow_infinity" => allow_infinity,
             "width" => width
@@ -158,10 +158,10 @@ where
 
         // Include user-specified bounds
         if let Some(ref min) = self.min {
-            map_insert(&mut schema, "minimum", cbor_serialize(min));
+            map_insert(&mut schema, "min_value", cbor_serialize(min));
         }
         if let Some(ref max) = self.max {
-            map_insert(&mut schema, "maximum", cbor_serialize(max));
+            map_insert(&mut schema, "max_value", cbor_serialize(max));
         }
 
         // When generating finite values without explicit bounds, add type
@@ -169,10 +169,10 @@ where
         // uses f64, so f32 values near MAX can overflow when round-tripped)
         if !allow_nan && !allow_infinity {
             if self.min.is_none() {
-                map_insert(&mut schema, "minimum", cbor_serialize(&T::min_value()));
+                map_insert(&mut schema, "min_value", cbor_serialize(&T::min_value()));
             }
             if self.max.is_none() {
-                map_insert(&mut schema, "maximum", cbor_serialize(&T::max_value()));
+                map_insert(&mut schema, "max_value", cbor_serialize(&T::max_value()));
             }
         }
 
