@@ -41,9 +41,6 @@ use ciborium::Value;
 
 use crate::cbor_helpers::{cbor_map, map_insert};
 
-pub(crate) mod exit_codes {
-    pub const SOCKET_ERROR: i32 = 134;
-}
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::sync::{Arc, LazyLock};
@@ -236,8 +233,7 @@ pub(crate) fn send_request(command: &str, payload: &Value) -> Result<Value, Stop
                     TEST_ABORTED.with(|aborted| aborted.set(true));
                     Err(StopTestError)
                 } else {
-                    eprintln!("Failed to communicate with Hegel: {}", e);
-                    std::process::exit(exit_codes::SOCKET_ERROR);
+                    panic!("Failed to communicate with Hegel: {}", e);
                 }
             }
         }
