@@ -379,7 +379,7 @@ where
             "command" => "run_test",
             "name" => "test",
             "test_cases" => self.test_cases,
-            "seed" => self.seed.map_or(Value::Null, |seed| Value::Integer(seed.into())),
+            "seed" => self.seed.map_or(Value::Null, Value::from),
             "channel_id" => test_channel.channel_id
         };
 
