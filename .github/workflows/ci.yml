@@ -38,8 +38,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --check
-      - run: cargo clippy --all-features --tests -- -D warnings
+      - run: just check-format
+      - run: just lint
 
   test:
     name: tests (${{ matrix.rust }})
@@ -151,7 +151,7 @@ jobs:
         run: cargo install cargo-llvm-cov
 
       - name: Run tests
-        run: RUST_BACKTRACE=1 cargo llvm-cov --all-features --fail-under-lines 30 --show-missing-lines
+        run: RUST_BACKTRACE=1 just check-coverage
 
   conformance:
     name: conformance
@@ -181,8 +181,7 @@ jobs:
         run: cargo build --release
 
       - name: Run conformance tests
-        working-directory: tests/conformance
-        run: pytest test_conformance.py --durations=20 --durations-min=1.0
+        run: just check-conformance
 
   nix:
     name: nix
@@ -196,7 +195,7 @@ jobs:
           ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }}
       - uses: cachix/install-nix-action@v27
       - name: lint
-        run: nix run nixpkgs#nixfmt -- --check flake.nix
+        run: just check-format-nix
 
   release:
     name: release
