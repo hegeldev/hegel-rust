@@ -13,6 +13,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check-release:
+    name: check release
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check release
+        run: python .github/scripts/release.py check "${{ github.base_ref }}"
+
   lint:
     name: lint
     runs-on: ubuntu-latest
@@ -162,7 +173,7 @@ jobs:
 
       - name: Install hegel
         run: |
-          pip install git+ssh://git@github.com/antithesishq/hegel.git@main
+          pip install git+ssh://git@github.com/antithesishq/hegel.git
           pip install pytest
 
       - name: Build conformance binaries
@@ -186,3 +197,43 @@ jobs:
       - uses: cachix/install-nix-action@v27
       - name: lint
         run: nix run nixpkgs#nixfmt -- --check flake.nix
+
+  release:
+    name: release
+    if: github.event_name == 'push' && github.repository == 'antithesishq/hegel-rust'
+    needs: [lint, test, test-all-features, docs, coverage, conformance, nix]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for RELEASE.md
+        id: check
+        run: |
+          if [ ! -f RELEASE.md ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate app token
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ vars.HEGEL_RELEASE_APP_ID }}
+          private-key: ${{ secrets.HEGEL_RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Re-checkout with app token
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Install Rust
+        if: steps.check.outputs.skip != 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Release
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: python .github/scripts/release.py release
