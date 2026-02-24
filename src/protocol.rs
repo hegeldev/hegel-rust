@@ -193,13 +193,13 @@ impl Channel {
     }
 
     /// Send a response to a request.
-    pub fn send_response(&self, message_id: u32, payload: Vec<u8>) -> std::io::Result<()> {
+    pub fn write_reply(&self, message_id: u32, payload: Vec<u8>) -> std::io::Result<()> {
         let packet = Packet::reply(self.channel_id, message_id, payload);
         self.connection.send_packet(&packet)
     }
 
     /// Wait for a response to a previously sent request.
-    pub fn receive_response(&self, message_id: u32) -> std::io::Result<Vec<u8>> {
+    pub fn receive_reply(&self, message_id: u32) -> std::io::Result<Vec<u8>> {
         loop {
             // Check if we already have the response
             {
@@ -264,7 +264,7 @@ impl Channel {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         let id = self.send_request(payload)?;
-        let response_bytes = self.receive_response(id)?;
+        let response_bytes = self.receive_reply(id)?;
 
         let response: Value = ciborium::from_reader(&response_bytes[..])
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;

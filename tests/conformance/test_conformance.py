@@ -55,5 +55,5 @@ def test_conformance(subtests):
             EmptyTestConformance,
             StopTestOnCollectionMoreConformance,
             StopTestOnNewCollectionConformance,
-        ]
+        ],
     )

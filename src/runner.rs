@@ -331,7 +331,7 @@ where
             .send_request(HANDSHAKE_STRING.to_vec())
             .expect("Failed to send version negotiation");
         let response = control
-            .receive_response(req_id)
+            .receive_reply(req_id)
             .expect("Failed to receive version response");
 
         let decoded = String::from_utf8_lossy(&response);
@@ -372,7 +372,7 @@ where
             "command" => "run_test",
             "name" => "test",
             "test_cases" => self.test_cases,
-            "channel" => test_channel.channel_id
+            "channel_id" => test_channel.channel_id
         };
 
         let run_test_id = control
@@ -381,7 +381,7 @@ where
 
         // Wait for run_test response on control channel (just True, verifies no error)
         let run_test_response = control
-            .receive_response(run_test_id)
+            .receive_reply(run_test_id)
             .expect("Failed to receive run_test response");
         let _run_test_result: Value = cbor_decode(&run_test_response);
 
@@ -406,7 +406,7 @@ where
 
             match event_type {
                 Some("test_case") => {
-                    let channel_id = map_get(&event, "channel")
+                    let channel_id = map_get(&event, "channel_id")
                         .and_then(as_u64)
                         .expect("Missing channel id") as u32;
 
@@ -414,7 +414,7 @@ where
 
                     // Ack the test_case event BEFORE running the test (prevents deadlock)
                     test_channel
-                        .send_response(event_id, cbor_encode(&ack_null))
+                        .write_reply(event_id, cbor_encode(&ack_null))
                         .expect("Failed to ack test_case");
 
                     run_test_case(
@@ -430,7 +430,7 @@ where
                     // Ack the test_done event
                     let ack_true = cbor_map! {"result" => true};
                     test_channel
-                        .send_response(event_id, cbor_encode(&ack_true))
+                        .write_reply(event_id, cbor_encode(&ack_true))
                         .expect("Failed to ack test_done");
                     result_data = map_get(&event, "results").cloned().unwrap_or(Value::Null);
                     break;
@@ -438,7 +438,7 @@ where
                 _ => {
                     // Unknown event, just ack it
                     test_channel
-                        .send_response(event_id, cbor_encode(&ack_null))
+                        .write_reply(event_id, cbor_encode(&ack_null))
                         .expect("Failed to ack event");
                 }
             }
@@ -462,7 +462,7 @@ where
             let event_type = map_get(&event, "event").and_then(as_text);
             assert_eq!(event_type, Some("test_case"));
 
-            let channel_id = map_get(&event, "channel")
+            let channel_id = map_get(&event, "channel_id")
                 .and_then(as_u64)
                 .expect("Missing channel id") as u32;
 
@@ -470,7 +470,7 @@ where
 
             // Ack before running
             test_channel
-                .send_response(event_id, cbor_encode(&ack_null))
+                .write_reply(event_id, cbor_encode(&ack_null))
                 .expect("Failed to ack final test_case");
 
             run_test_case(
