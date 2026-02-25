@@ -9,6 +9,7 @@
 
   outputs =
     {
+      self,
       nixpkgs,
       hegel,
       ...
@@ -31,6 +32,7 @@
         in
         {
           default = pkgs.mkShell {
+            inputsFrom = [ hegel.packages.${system}.default ];
             buildInputs = [
               pkgs.cargo
               pkgs.rustc
