@@ -23,19 +23,24 @@ fn test_sampled_from_strings() {
 
 #[test]
 fn test_optional_can_generate_some() {
-    find_any(generators::optional(generators::integers::<i32>()), |v| v.is_some());
+    find_any(generators::optional(generators::integers::<i32>()), |v| {
+        v.is_some()
+    });
 }
 
 #[test]
 fn test_optional_can_generate_none() {
-    find_any(generators::optional(generators::integers::<i32>()), |v| v.is_none());
+    find_any(generators::optional(generators::integers::<i32>()), |v| {
+        v.is_none()
+    });
 }
 
 #[test]
 fn test_optional_respects_inner_generator_bounds() {
     hegel::hegel(|| {
-        let value: Option<i32> =
-            hegel::draw(&generators::optional(generators::integers().with_min(10).with_max(20)));
+        let value: Option<i32> = hegel::draw(&generators::optional(
+            generators::integers().with_min(10).with_max(20),
+        ));
         if let Some(n) = value {
             assert!((10..=20).contains(&n));
         }
@@ -110,7 +115,10 @@ fn test_filter() {
 #[test]
 fn test_boxed_generator_clone() {
     hegel::hegel(|| {
-        let gen1 = generators::integers::<i32>().with_min(0).with_max(10).boxed();
+        let gen1 = generators::integers::<i32>()
+            .with_min(0)
+            .with_max(10)
+            .boxed();
         let gen2 = gen1.clone();
         let v1 = hegel::draw(&gen1);
         let v2 = hegel::draw(&gen2);
@@ -123,7 +131,10 @@ fn test_boxed_generator_clone() {
 fn test_boxed_generator_double_boxed() {
     hegel::hegel(|| {
         // Calling .boxed() on an already-boxed generator should not re-wrap
-        let gen1 = generators::integers::<i32>().with_min(0).with_max(10).boxed();
+        let gen1 = generators::integers::<i32>()
+            .with_min(0)
+            .with_max(10)
+            .boxed();
         let gen2 = gen1.boxed();
         let value = hegel::draw(&gen2);
         assert!((0..=10).contains(&value));

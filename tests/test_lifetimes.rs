@@ -45,7 +45,8 @@ fn test_optional_of_references() {
     hegel::hegel(|| {
         let values = [100, 200, 300];
         let refs: Vec<&i32> = values.iter().collect();
-        let result: Option<&i32> = hegel::draw(&generators::optional(generators::sampled_from(refs)));
+        let result: Option<&i32> =
+            hegel::draw(&generators::optional(generators::sampled_from(refs)));
         if let Some(v) = result {
             assert!(values.contains(v));
         }
@@ -140,7 +141,11 @@ fn test_vec_of_tuples_of_references() {
         let kr: Vec<&i32> = keys.iter().collect();
         let vr: Vec<&&str> = vals.iter().collect();
         let result: Vec<(&i32, &&str)> = hegel::draw(
-            &generators::vecs(generators::tuples(generators::sampled_from(kr), generators::sampled_from(vr))).with_max_size(5),
+            &generators::vecs(generators::tuples(
+                generators::sampled_from(kr),
+                generators::sampled_from(vr),
+            ))
+            .with_max_size(5),
         );
         for (k, v) in &result {
             assert!(keys.contains(k));
@@ -186,12 +191,14 @@ fn test_deeply_nested_reference_composition() {
 
         let result: Vec<i32> = hegel::draw(
             &generators::vecs(
-                generators::optional(generators::tuples(generators::sampled_from(xr), generators::sampled_from(yr))).map(
-                    |opt| match opt {
-                        Some((a, b)) => a + b,
-                        None => 0,
-                    },
-                ),
+                generators::optional(generators::tuples(
+                    generators::sampled_from(xr),
+                    generators::sampled_from(yr),
+                ))
+                .map(|opt| match opt {
+                    Some((a, b)) => a + b,
+                    None => 0,
+                }),
             )
             .with_max_size(5),
         );

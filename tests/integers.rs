@@ -11,7 +11,9 @@ use hegel::generators;
 
 #[test]
 fn test_i8() {
-    assert_all_examples(generators::integers::<i8>(), |&n| n >= i8::MIN && n <= i8::MAX);
+    assert_all_examples(generators::integers::<i8>(), |&n| {
+        n >= i8::MIN && n <= i8::MAX
+    });
     find_any(generators::integers::<i8>(), |&n| n < i8::MIN / 2);
     find_any(generators::integers::<i8>(), |&n| n > i8::MAX / 2);
     find_any(generators::integers::<i8>(), |&n| n == i8::MIN);
@@ -20,7 +22,9 @@ fn test_i8() {
 
 #[test]
 fn test_i16() {
-    assert_all_examples(generators::integers::<i16>(), |&n| n >= i16::MIN && n <= i16::MAX);
+    assert_all_examples(generators::integers::<i16>(), |&n| {
+        n >= i16::MIN && n <= i16::MAX
+    });
     find_any(generators::integers::<i16>(), |&n| n < i16::MIN / 2);
     find_any(generators::integers::<i16>(), |&n| n > i16::MAX / 2);
     find_any(generators::integers::<i16>(), |&n| n == i16::MIN);
@@ -29,7 +33,9 @@ fn test_i16() {
 
 #[test]
 fn test_i32() {
-    assert_all_examples(generators::integers::<i32>(), |&n| n >= i32::MIN && n <= i32::MAX);
+    assert_all_examples(generators::integers::<i32>(), |&n| {
+        n >= i32::MIN && n <= i32::MAX
+    });
     find_any(generators::integers::<i32>(), |&n| n < i32::MIN / 2);
     find_any(generators::integers::<i32>(), |&n| n > i32::MAX / 2);
     find_any(generators::integers::<i32>(), |&n| n == i32::MIN);
@@ -38,7 +44,9 @@ fn test_i32() {
 
 #[test]
 fn test_i64() {
-    assert_all_examples(generators::integers::<i64>(), |&n| n >= i64::MIN && n <= i64::MAX);
+    assert_all_examples(generators::integers::<i64>(), |&n| {
+        n >= i64::MIN && n <= i64::MAX
+    });
     find_any(generators::integers::<i64>(), |&n| n < i64::MIN / 2);
     find_any(generators::integers::<i64>(), |&n| n > i64::MAX / 2);
     find_any(generators::integers::<i64>(), |&n| n == i64::MIN);
@@ -47,7 +55,9 @@ fn test_i64() {
 
 #[test]
 fn test_u8() {
-    assert_all_examples(generators::integers::<u8>(), |&n| n >= u8::MIN && n <= u8::MAX);
+    assert_all_examples(generators::integers::<u8>(), |&n| {
+        n >= u8::MIN && n <= u8::MAX
+    });
     find_any(generators::integers::<u8>(), |&n| n > u8::MAX / 2);
     find_any(generators::integers::<u8>(), |&n| n == u8::MIN);
     find_any(generators::integers::<u8>(), |&n| n == u8::MAX);
@@ -55,7 +65,9 @@ fn test_u8() {
 
 #[test]
 fn test_u16() {
-    assert_all_examples(generators::integers::<u16>(), |&n| n >= u16::MIN && n <= u16::MAX);
+    assert_all_examples(generators::integers::<u16>(), |&n| {
+        n >= u16::MIN && n <= u16::MAX
+    });
     find_any(generators::integers::<u16>(), |&n| n > u16::MAX / 2);
     find_any(generators::integers::<u16>(), |&n| n == u16::MIN);
     find_any(generators::integers::<u16>(), |&n| n == u16::MAX);
@@ -63,7 +75,9 @@ fn test_u16() {
 
 #[test]
 fn test_u32() {
-    assert_all_examples(generators::integers::<u32>(), |&n| n >= u32::MIN && n <= u32::MAX);
+    assert_all_examples(generators::integers::<u32>(), |&n| {
+        n >= u32::MIN && n <= u32::MAX
+    });
     find_any(generators::integers::<u32>(), |&n| n > u32::MAX / 2);
     find_any(generators::integers::<u32>(), |&n| n == u32::MIN);
     find_any(generators::integers::<u32>(), |&n| n == u32::MAX);
@@ -71,7 +85,9 @@ fn test_u32() {
 
 #[test]
 fn test_u64() {
-    assert_all_examples(generators::integers::<u64>(), |&n| n >= u64::MIN && n <= u64::MAX);
+    assert_all_examples(generators::integers::<u64>(), |&n| {
+        n >= u64::MIN && n <= u64::MAX
+    });
     find_any(generators::integers::<u64>(), |&n| n > u64::MAX / 2);
     find_any(generators::integers::<u64>(), |&n| n == u64::MIN);
     find_any(generators::integers::<u64>(), |&n| n == u64::MAX);

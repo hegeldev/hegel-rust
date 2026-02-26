@@ -31,8 +31,10 @@ fn test_compose_dependent_generation() {
 fn test_compose_with_map() {
     hegel::hegel(|| {
         let value = hegel::draw(
-            &hegel::compose!(|draw| { draw(&generators::integers::<i32>().with_min(0).with_max(10)) })
-                .map(|n| n * 2),
+            &hegel::compose!(|draw| {
+                draw(&generators::integers::<i32>().with_min(0).with_max(10))
+            })
+            .map(|n| n * 2),
         );
         assert!(value % 2 == 0);
         assert!((0..=20).contains(&value));
@@ -43,8 +45,10 @@ fn test_compose_with_map() {
 fn test_compose_with_filter() {
     hegel::hegel(|| {
         let value = hegel::draw(
-            &hegel::compose!(|draw| { draw(&generators::integers::<i32>().with_min(0).with_max(100)) })
-                .filter(|n| n % 2 == 0),
+            &hegel::compose!(|draw| {
+                draw(&generators::integers::<i32>().with_min(0).with_max(100))
+            })
+            .filter(|n| n % 2 == 0),
         );
         assert!(value % 2 == 0);
     });
@@ -53,9 +57,10 @@ fn test_compose_with_filter() {
 #[test]
 fn test_compose_with_boxed() {
     hegel::hegel(|| {
-        let gen =
-            hegel::compose!(|draw| { draw(&generators::integers::<i32>().with_min(0).with_max(50)) })
-                .boxed();
+        let gen = hegel::compose!(|draw| {
+            draw(&generators::integers::<i32>().with_min(0).with_max(50))
+        })
+        .boxed();
         let value = hegel::draw(&gen);
         assert!((0..=50).contains(&value));
     });
@@ -77,7 +82,9 @@ fn test_compose_assert_all_examples() {
 fn test_compose_inside_one_of() {
     hegel::hegel(|| {
         let value: i32 = hegel::draw(&hegel::one_of!(
-            hegel::compose!(|draw| { draw(&generators::integers::<i32>().with_min(0).with_max(10)) }),
+            hegel::compose!(|draw| {
+                draw(&generators::integers::<i32>().with_min(0).with_max(10))
+            }),
             generators::integers::<i32>().with_min(100).with_max(110),
         ));
         assert!((0..=10).contains(&value) || (100..=110).contains(&value));
