@@ -1,4 +1,4 @@
-use hegel::gen::{self, Generate};
+use hegel::generators;
 use hegel::Hegel;
 use hegel_conformance::{get_test_cases, write};
 use serde::{Deserialize, Serialize};
@@ -27,7 +27,7 @@ fn main() {
     });
 
     Hegel::new(move || {
-        let value = gen::sampled_from(params.options.clone()).generate();
+        let value = hegel::draw(&generators::sampled_from(params.options.clone()));
         write(&Metrics { value });
     })
     .test_cases(get_test_cases())

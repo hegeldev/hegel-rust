@@ -3,13 +3,15 @@
 
 use std::sync::{Arc, Mutex};
 
-use hegel::gen::Generate;
+use hegel::generators::Generate;
 use hegel::Hegel;
+use std::fmt::Debug;
 
 #[allow(dead_code)]
 pub fn check_can_generate_examples<T, G>(generator: G)
 where
     G: Generate<T> + 'static,
+    T: Debug,
 {
     AssertSimpleProperty::new(generator, |_| true).run();
 }
@@ -18,6 +20,7 @@ pub fn assert_all_examples<T, G, P>(generator: G, predicate: P)
 where
     G: Generate<T> + 'static,
     P: Fn(&T) -> bool + 'static,
+    T: Debug,
 {
     AssertAllExamples::new(generator, predicate).run();
 }
@@ -27,6 +30,7 @@ pub struct AssertAllExamples<T, G, P>
 where
     G: Generate<T> + 'static,
     P: Fn(&T) -> bool + 'static,
+    T: Debug,
 {
     generator: G,
     predicate: P,
@@ -38,6 +42,7 @@ impl<T, G, P> AssertAllExamples<T, G, P>
 where
     G: Generate<T> + 'static,
     P: Fn(&T) -> bool + 'static,
+    T: Debug,
 {
     pub fn new(generator: G, predicate: P) -> Self {
         Self {
@@ -56,7 +61,7 @@ where
 
     pub fn run(self) {
         Hegel::new(move || {
-            let value = self.generator.generate();
+            let value = hegel::draw(&self.generator);
             assert!(
                 (self.predicate)(&value),
                 "Found value that does not match predicate"
@@ -72,6 +77,7 @@ pub fn assert_simple_property<T, G, P>(generator: G, predicate: P)
 where
     G: Generate<T> + 'static,
     P: Fn(&T) -> bool + 'static,
+    T: Debug,
 {
     AssertSimpleProperty::new(generator, predicate).run();
 }
@@ -81,6 +87,7 @@ pub struct AssertSimpleProperty<T, G, P>
 where
     G: Generate<T> + 'static,
     P: Fn(&T) -> bool + 'static,
+    T: Debug,
 {
     inner: AssertAllExamples<T, G, P>,
 }
@@ -89,6 +96,7 @@ impl<T, G, P> AssertSimpleProperty<T, G, P>
 where
     G: Generate<T> + 'static,
     P: Fn(&T) -> bool + 'static,
+    T: Debug,
 {
     pub fn new(generator: G, predicate: P) -> Self {
         Self {
@@ -111,7 +119,7 @@ pub fn find_any<T, G, P>(generator: G, condition: P) -> T
 where
     G: Generate<T> + 'static,
     P: Fn(&T) -> bool + 'static,
-    T: Send + 'static,
+    T: Send + Debug + 'static,
 {
     FindAny::new(generator, condition).run()
 }
@@ -121,7 +129,7 @@ pub struct FindAny<T, G, P>
 where
     G: Generate<T> + 'static,
     P: Fn(&T) -> bool + 'static,
-    T: Send + 'static,
+    T: Send + Debug + 'static,
 {
     generator: G,
     condition: P,
@@ -133,7 +141,7 @@ impl<T, G, P> FindAny<T, G, P>
 where
     G: Generate<T> + 'static,
     P: Fn(&T) -> bool + 'static,
-    T: Send + 'static,
+    T: Send + Debug + 'static,
 {
     pub fn new(generator: G, condition: P) -> Self {
         Self {
@@ -157,7 +165,7 @@ where
 
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Hegel::new(move || {
-                let value = self.generator.generate();
+                let value = hegel::draw(&self.generator);
                 if (self.condition)(&value) {
                     *found_clone.lock().unwrap() = Some(value);
                     panic!("HEGEL_FOUND"); // Early exit marker
@@ -182,6 +190,7 @@ pub fn assert_no_examples<T, G, P>(generator: G, condition: P)
 where
     G: Generate<T> + 'static,
     P: Fn(&T) -> bool + 'static,
+    T: Debug,
 {
     AssertNoExamples::new(generator, condition).run();
 }
@@ -191,6 +200,7 @@ pub struct AssertNoExamples<T, G, P>
 where
     G: Generate<T> + 'static,
     P: Fn(&T) -> bool + 'static,
+    T: Debug,
 {
     generator: G,
     condition: P,
@@ -202,6 +212,7 @@ impl<T, G, P> AssertNoExamples<T, G, P>
 where
     G: Generate<T> + 'static,
     P: Fn(&T) -> bool + 'static,
+    T: Debug,
 {
     pub fn new(generator: G, condition: P) -> Self {
         Self {

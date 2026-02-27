@@ -1,4 +1,4 @@
-use super::{group, integers, labels, BasicGenerator, Collection, Generate};
+use super::{integers, labels, BasicGenerator, Collection, Generate, TestCaseData};
 use crate::cbor_helpers::{cbor_map, map_insert};
 use ciborium::Value;
 use std::collections::{HashMap, HashSet};
@@ -47,17 +47,17 @@ impl<T, G> Generate<Vec<T>> for VecGenerator<G, T>
 where
     G: Generate<T>,
 {
-    fn generate(&self) -> Vec<T> {
+    fn do_draw(&self, data: &TestCaseData) -> Vec<T> {
         if let Some(basic) = self.as_basic() {
-            basic.generate()
+            basic.do_draw(data)
         } else {
             // Compositional fallback: use server-managed collection sizing
-            group(labels::LIST, || {
+            data.span_group(labels::LIST, || {
                 let mut collection =
                     Collection::new("composite_list", self.min_size, self.max_size);
                 let mut result = Vec::new();
-                while collection.more() {
-                    result.push(self.elements.generate());
+                while collection.more(data) {
+                    result.push(self.elements.do_draw(data));
                 }
                 result
             })
@@ -122,22 +122,24 @@ where
     G: Generate<T>,
     T: Eq + Hash,
 {
-    fn generate(&self) -> HashSet<T> {
+    fn do_draw(&self, data: &TestCaseData) -> HashSet<T> {
         if let Some(basic) = self.as_basic() {
-            basic.generate()
+            basic.do_draw(data)
         } else {
             // Compositional fallback
-            group(labels::SET, || {
+            data.span_group(labels::SET, || {
                 let max = self.max_size.unwrap_or(100);
                 let target_len = integers::<usize>()
                     .with_min(self.min_size)
                     .with_max(max)
-                    .generate();
+                    .do_draw(data);
 
                 let mut set = HashSet::new();
                 let mut attempts = 0;
                 while set.len() < target_len && attempts < target_len * 10 {
-                    set.insert(group(labels::SET_ELEMENT, || self.elements.generate()));
+                    set.insert(
+                        data.span_group(labels::SET_ELEMENT, || self.elements.do_draw(data)),
+                    );
                     attempts += 1;
                 }
                 set
@@ -201,25 +203,25 @@ where
     V: Generate<VT>,
     KT: Eq + std::hash::Hash,
 {
-    fn generate(&self) -> HashMap<KT, VT> {
+    fn do_draw(&self, data: &TestCaseData) -> HashMap<KT, VT> {
         if let Some(basic) = self.as_basic() {
-            basic.generate()
+            basic.do_draw(data)
         } else {
             // Compositional fallback
-            group(labels::MAP, || {
+            data.span_group(labels::MAP, || {
                 let max = self.max_size.unwrap_or(100);
                 let len = integers::<usize>()
                     .with_min(self.min_size)
                     .with_max(max)
-                    .generate();
+                    .do_draw(data);
 
                 let mut map = HashMap::new();
                 let max_attempts = len * 10;
                 let mut attempts = 0;
                 while map.len() < len && attempts < max_attempts {
-                    group(labels::MAP_ENTRY, || {
-                        let key = self.keys.generate();
-                        map.entry(key).or_insert_with(|| self.values.generate());
+                    data.span_group(labels::MAP_ENTRY, || {
+                        let key = self.keys.do_draw(data);
+                        map.entry(key).or_insert_with(|| self.values.do_draw(data));
                     });
                     attempts += 1;
                 }
@@ -278,14 +280,14 @@ where
 /// # Example
 ///
 /// ```ignore
-/// use hegel::gen::{hashmaps, integers, text};
+/// use hegel::generators::{hashmaps, integers, text};
 /// use std::collections::HashMap;
 ///
 /// // String keys
-/// let string_keyed: HashMap<String, i32> = hashmaps(text(), integers()).generate();
+/// let string_keyed: HashMap<String, i32> = hegel::draw(&hashmaps(text(), integers()));
 ///
 /// // Integer keys
-/// let int_keyed: HashMap<i32, String> = hashmaps(integers(), text()).generate();
+/// let int_keyed: HashMap<i32, String> = hegel::draw(&hashmaps(integers(), text()));
 /// ```
 pub fn hashmaps<KT, VT, K: Generate<KT>, V: Generate<VT>>(
     keys: K,

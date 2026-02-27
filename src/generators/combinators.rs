@@ -1,6 +1,4 @@
-use super::{
-    discardable_group, generate_from_schema, group, integers, labels, BasicGenerator, Generate,
-};
+use super::{integers, labels, BasicGenerator, Generate, TestCaseData};
 use crate::cbor_helpers::{cbor_array, cbor_map};
 use ciborium::Value;
 use std::marker::PhantomData;
@@ -17,11 +15,11 @@ where
     G: Generate<T>,
     F: Fn(T) -> U + Send + Sync,
 {
-    fn generate(&self) -> U {
+    fn do_draw(&self, data: &TestCaseData) -> U {
         if let Some(basic) = self.as_basic() {
-            basic.generate()
+            basic.do_draw(data)
         } else {
-            group(labels::MAPPED, || (self.f)(self.source.generate()))
+            data.span_group(labels::MAPPED, || (self.f)(self.source.do_draw(data)))
         }
     }
 
@@ -44,11 +42,11 @@ where
     G2: Generate<U>,
     F: Fn(T) -> G2 + Send + Sync,
 {
-    fn generate(&self) -> U {
-        group(labels::FLAT_MAP, || {
-            let intermediate = self.source.generate();
+    fn do_draw(&self, data: &TestCaseData) -> U {
+        data.span_group(labels::FLAT_MAP, || {
+            let intermediate = self.source.do_draw(data);
             let next_gen = (self.f)(intermediate);
-            next_gen.generate()
+            next_gen.do_draw(data)
         })
     }
 }
@@ -64,10 +62,10 @@ where
     G: Generate<T>,
     F: Fn(&T) -> bool + Send + Sync,
 {
-    fn generate(&self) -> T {
+    fn do_draw(&self, data: &TestCaseData) -> T {
         for _ in 0..3 {
-            if let Some(value) = discardable_group(labels::FILTER, || {
-                let value = self.source.generate();
+            if let Some(value) = data.discardable_span_group(labels::FILTER, || {
+                let value = self.source.do_draw(data);
                 if (self.predicate)(&value) {
                     Some(value)
                 } else {
@@ -100,7 +98,7 @@ pub struct BoxedGenerator<'a, T> {
     pub(crate) inner: Arc<dyn Generate<T> + Send + Sync + 'a>,
 }
 
-impl<'a, T> Clone for BoxedGenerator<'a, T> {
+impl<T> Clone for BoxedGenerator<'_, T> {
     fn clone(&self) -> Self {
         BoxedGenerator {
             inner: Arc::clone(&self.inner),
@@ -108,9 +106,9 @@ impl<'a, T> Clone for BoxedGenerator<'a, T> {
     }
 }
 
-impl<'a, T> Generate<T> for BoxedGenerator<'a, T> {
-    fn generate(&self) -> T {
-        self.inner.generate()
+impl<T> Generate<T> for BoxedGenerator<'_, T> {
+    fn do_draw(&self, data: &TestCaseData) -> T {
+        self.inner.do_draw(data)
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
@@ -131,18 +129,18 @@ pub struct SampledFromGenerator<T> {
 }
 
 impl<T: Clone + Send + Sync> Generate<T> for SampledFromGenerator<T> {
-    fn generate(&self) -> T {
+    fn do_draw(&self, data: &TestCaseData) -> T {
         crate::assume(!self.elements.is_empty());
 
         if let Some(basic) = self.as_basic() {
-            return basic.generate();
+            return basic.do_draw(data);
         }
 
         // Generate index and pick
         let idx_gen = integers::<usize>()
             .with_min(0)
             .with_max(self.elements.len() - 1);
-        let idx = idx_gen.generate();
+        let idx = idx_gen.do_draw(data);
         self.elements[idx].clone()
     }
 
@@ -172,20 +170,20 @@ pub struct OneOfGenerator<'a, T> {
     generators: Vec<BoxedGenerator<'a, T>>,
 }
 
-impl<'a, T> Generate<T> for OneOfGenerator<'a, T> {
-    fn generate(&self) -> T {
+impl<T> Generate<T> for OneOfGenerator<'_, T> {
+    fn do_draw(&self, data: &TestCaseData) -> T {
         crate::assume(!self.generators.is_empty());
 
         if let Some(basic) = self.as_basic() {
-            basic.generate()
+            basic.do_draw(data)
         } else {
             // Generate index and delegate
-            group(labels::ONE_OF, || {
+            data.span_group(labels::ONE_OF, || {
                 let idx = integers::<usize>()
                     .with_min(0)
                     .with_max(self.generators.len() - 1)
-                    .generate();
-                self.generators[idx].generate()
+                    .do_draw(data);
+                self.generators[idx].do_draw(data)
             })
         }
     }
@@ -234,7 +232,7 @@ impl<'a, T> Generate<T> for OneOfGenerator<'a, T> {
 /// Choose from multiple generators of the same type.
 ///
 /// For a more convenient syntax, use the `one_of!` macro instead.
-pub fn one_of<'a, T>(generators: Vec<BoxedGenerator<'a, T>>) -> OneOfGenerator<'a, T> {
+pub fn one_of<T>(generators: Vec<BoxedGenerator<'_, T>>) -> OneOfGenerator<'_, T> {
     OneOfGenerator { generators }
 }
 
@@ -246,19 +244,20 @@ pub fn one_of<'a, T>(generators: Vec<BoxedGenerator<'a, T>>) -> OneOfGenerator<'
 /// # Example
 ///
 /// ```no_run
-/// use hegel::gen::{self, Generate};
+/// use hegel::generators;
 ///
-/// let gen = hegel::one_of!(
-///     gen::integers::<i32>().with_min(0).with_max(10),
-///     gen::integers::<i32>().with_min(100).with_max(110),
-/// );
-/// let value = gen.generate();
+/// # hegel::hegel(|| {
+/// let value: i32 = hegel::draw(&hegel::one_of!(
+///     generators::integers::<i32>().with_min(0).with_max(10),
+///     generators::integers::<i32>().with_min(100).with_max(110),
+/// ));
+/// # });
 /// ```
 #[macro_export]
 macro_rules! one_of {
     ($($gen:expr),+ $(,)?) => {
-        $crate::gen::one_of(vec![
-            $($crate::gen::Generate::boxed($gen)),+
+        $crate::generators::one_of(vec![
+            $($crate::generators::Generate::boxed($gen)),+
         ])
     };
 }
@@ -272,15 +271,15 @@ impl<T, G> Generate<Option<T>> for OptionalGenerator<G, T>
 where
     G: Generate<T>,
 {
-    fn generate(&self) -> Option<T> {
+    fn do_draw(&self, data: &TestCaseData) -> Option<T> {
         if let Some(basic) = self.as_basic() {
-            basic.generate()
+            basic.do_draw(data)
         } else {
             // Compositional fallback
-            group(labels::OPTIONAL, || {
-                let is_some: bool = generate_from_schema(&cbor_map! {"type" => "boolean"});
+            data.span_group(labels::OPTIONAL, || {
+                let is_some: bool = data.generate_from_schema(&cbor_map! {"type" => "boolean"});
                 if is_some {
-                    Some(self.inner.generate())
+                    Some(self.inner.do_draw(data))
                 } else {
                     None
                 }

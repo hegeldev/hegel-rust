@@ -1,0 +1,209 @@
+use proc_macro::TokenStream;
+use quote::{format_ident, quote};
+use syn::{DeriveInput, Fields};
+
+use crate::utils::{cbor_text, cbor_map_to_hashmap, default_gen_bounds, object_schema};
+
+/// Derive Generate for a struct.
+pub(crate) fn derive_struct_generate(input: &DeriveInput, data: &syn::DataStruct) -> TokenStream {
+    let name = &input.ident;
+    let generator_name = format_ident!("{}Generator", name);
+
+    let fields = match &data.fields {
+        Fields::Named(fields) => &fields.named,
+        Fields::Unnamed(_) => {
+            return syn::Error::new_spanned(
+                input,
+                "Generate can only be derived for structs with named fields",
+            )
+            .to_compile_error()
+            .into();
+        }
+        Fields::Unit => {
+            return syn::Error::new_spanned(input, "Generate cannot be derived for unit structs")
+                .to_compile_error()
+                .into();
+        }
+    };
+
+    let field_names: Vec<_> = fields
+        .iter()
+        .map(|f| f.ident.as_ref().unwrap())
+        .collect();
+
+    let field_types: Vec<_> = fields.iter().map(|f| &f.ty).collect();
+
+    // Generate the with_* method names
+    let with_methods: Vec<_> = field_names
+        .iter()
+        .map(|name| format_ident!("with_{}", name))
+        .collect();
+
+    // Generate field definitions for the generator struct
+    let generator_fields = field_names.iter().zip(field_types.iter()).map(|(name, ty)| {
+        quote! {
+            #name: hegel::generators::BoxedGenerator<'a, #ty>
+        }
+    });
+
+    // Generate the new() constructor
+    let new_field_inits = field_types.iter().map(|ty| {
+        quote! {
+            <#ty as hegel::generators::DefaultGenerator>::default_generator().boxed()
+        }
+    });
+
+    let new_fields = field_names.iter().zip(new_field_inits).map(|(name, init)| {
+        quote! { #name: #init }
+    });
+
+    // Generate Default trait bounds for new()
+    let default_bounds = default_gen_bounds(&field_types, quote! { 'a });
+
+    // Generate with_* methods
+    let with_method_impls = field_names.iter().zip(field_types.iter()).zip(with_methods.iter())
+        .map(|((field_name, field_type), method_name)| {
+            quote! {
+                /// Set a custom generator for this field.
+                pub fn #method_name<G>(mut self, gen: G) -> Self
+                where
+                    G: hegel::generators::Generate<#field_type> + Send + Sync + 'a,
+                {
+                    self.#field_name = gen.boxed();
+                    self
+                }
+            }
+        });
+
+    // Generate the do_draw() fallback fields
+    let generate_fields = field_names.iter().map(|name| {
+        quote! {
+            #name: self.#name.do_draw(__data)
+        }
+    });
+
+    // Generate field name strings for schema
+    let field_name_strings: Vec<String> = field_names.iter().map(|n| n.to_string()).collect();
+
+    // Generate per-field basic bindings: let basic_field = self.field.as_basic()?;
+    let basic_bindings: Vec<proc_macro2::TokenStream> = field_names
+        .iter()
+        .map(|name| {
+            let basic_name = format_ident!("basic_{}", name);
+            quote! { let #basic_name = self.#name.as_basic()?; }
+        })
+        .collect();
+
+    // Generate schema properties entries from basics
+    let schema_properties: Vec<_> = field_names
+        .iter()
+        .zip(field_name_strings.iter())
+        .map(|(name, name_str)| {
+            let basic_name = format_ident!("basic_{}", name);
+            (cbor_text(name_str), quote! { #basic_name.schema().clone() })
+        })
+        .collect();
+
+    // Generate required entries
+    let schema_required: Vec<_> = field_name_strings.iter().map(|s| cbor_text(s)).collect();
+
+    // Generate per-field extraction in parse closure
+    let field_parse_in_closure: Vec<proc_macro2::TokenStream> = field_names
+        .iter()
+        .zip(field_name_strings.iter())
+        .map(|(name, name_str)| {
+            let basic_name = format_ident!("basic_{}", name);
+            quote! {
+                let #name = {
+                    let raw_val = fields.remove(#name_str)
+                        .unwrap_or_else(|| panic!("hegel: missing field '{}' in object", #name_str));
+                    #basic_name.parse_raw(raw_val)
+                };
+            }
+        })
+        .collect();
+
+    let construct_fields: Vec<&syn::Ident> = field_names.clone();
+
+    // Generate DefaultGenerator bounds (same as new() but with 'static lifetime)
+    let default_generator_bounds = default_gen_bounds(&field_types, quote! { 'static });
+
+    let schema_ts = object_schema(schema_properties, schema_required);
+    let parse_map_ts = cbor_map_to_hashmap("fields", quote! { raw }, "hegel: expected object from struct schema");
+
+    let expanded = quote! {
+        const _: () = {
+            pub struct #generator_name<'a> {
+                #(#generator_fields,)*
+            }
+
+            impl<'a> #generator_name<'a> {
+                pub fn new() -> Self
+                where
+                    #(#default_bounds,)*
+                {
+                    Self {
+                        #(#new_fields,)*
+                    }
+                }
+
+                #(#with_method_impls)*
+            }
+
+            impl<'a> Default for #generator_name<'a>
+            where
+                #(#field_types: hegel::generators::DefaultGenerator,)*
+                #(<#field_types as hegel::generators::DefaultGenerator>::Generator: Send + Sync + 'a,)*
+            {
+                fn default() -> Self {
+                    Self::new()
+                }
+            }
+
+            impl<'a> hegel::generators::Generate<#name> for #generator_name<'a> {
+                fn do_draw(&self, __data: &hegel::generators::TestCaseData) -> #name {
+                    use hegel::generators::Generate;
+                    if let Some(basic) = self.as_basic() {
+                        basic.parse_raw(__data.generate_raw(basic.schema()))
+                    } else {
+                        __data.span_group(hegel::generators::labels::FIXED_DICT, || {
+                            #name {
+                                #(#generate_fields,)*
+                            }
+                        })
+                    }
+                }
+
+                fn as_basic(&self) -> Option<hegel::generators::BasicGenerator<'_, #name>> {
+                    use hegel::generators::Generate;
+
+                    #(#basic_bindings)*
+
+                    let schema = #schema_ts;
+
+                    Some(hegel::generators::BasicGenerator::new(schema, move |raw| {
+                        #parse_map_ts
+
+                        #(#field_parse_in_closure)*
+
+                        #name {
+                            #(#construct_fields,)*
+                        }
+                    }))
+                }
+            }
+
+            impl hegel::generators::DefaultGenerator for #name
+            where
+                #(#default_generator_bounds,)*
+            {
+                type Generator = #generator_name<'static>;
+                fn default_generator() -> Self::Generator {
+                    #generator_name::new()
+                }
+            }
+        };
+    };
+
+    TokenStream::from(expanded)
+}

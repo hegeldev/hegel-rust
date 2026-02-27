@@ -27,10 +27,9 @@ const CLOSE_CHANNEL_PAYLOAD: &[u8] = &[0xFE];
 /// Special message ID used for channel close packets.
 const CLOSE_CHANNEL_MESSAGE_ID: u32 = (1u32 << 31) - 1;
 
-/// Version negotiation message sent by client
-pub const VERSION_NEGOTIATION_MESSAGE: &[u8] = b"Hegel/1.0";
-/// Expected response for successful version negotiation
-pub const VERSION_NEGOTIATION_OK: &[u8] = b"Ok";
+/// Supported hegel-core protocol versions.
+pub const SUPPORTED_PROTOCOL_VERSIONS: (f64, f64) = (0.1, 0.1);
+pub const HANDSHAKE_STRING: &[u8] = b"hegel_handshake_start";
 
 /// A packet in the wire protocol.
 #[derive(Debug, Clone)]
@@ -194,13 +193,13 @@ impl Channel {
     }
 
     /// Send a response to a request.
-    pub fn send_response(&self, message_id: u32, payload: Vec<u8>) -> std::io::Result<()> {
+    pub fn write_reply(&self, message_id: u32, payload: Vec<u8>) -> std::io::Result<()> {
         let packet = Packet::reply(self.channel_id, message_id, payload);
         self.connection.send_packet(&packet)
     }
 
     /// Wait for a response to a previously sent request.
-    pub fn receive_response(&self, message_id: u32) -> std::io::Result<Vec<u8>> {
+    pub fn receive_reply(&self, message_id: u32) -> std::io::Result<Vec<u8>> {
         loop {
             // Check if we already have the response
             {
@@ -265,7 +264,7 @@ impl Channel {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         let id = self.send_request(payload)?;
-        let response_bytes = self.receive_response(id)?;
+        let response_bytes = self.receive_reply(id)?;
 
         let response: Value = ciborium::from_reader(&response_bytes[..])
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;

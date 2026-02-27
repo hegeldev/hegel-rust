@@ -1,4 +1,4 @@
-use super::{group, labels, BasicGenerator, BoxedGenerator, Generate};
+use super::{labels, BasicGenerator, BoxedGenerator, Generate, TestCaseData};
 use crate::cbor_helpers::cbor_map;
 use ciborium::Value;
 use std::marker::PhantomData;
@@ -10,8 +10,8 @@ pub(crate) struct MappedToValue<T, G> {
 }
 
 impl<T: serde::Serialize, G: Generate<T>> Generate<Value> for MappedToValue<T, G> {
-    fn generate(&self) -> Value {
-        crate::cbor_helpers::cbor_serialize(&self.inner.generate())
+    fn do_draw(&self, data: &TestCaseData) -> Value {
+        crate::cbor_helpers::cbor_serialize(&self.inner.do_draw(data))
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, Value>> {
@@ -55,17 +55,17 @@ pub struct FixedDictGenerator<'a> {
     fields: Vec<(String, BoxedGenerator<'a, Value>)>,
 }
 
-impl<'a> Generate<Value> for FixedDictGenerator<'a> {
-    fn generate(&self) -> Value {
+impl Generate<Value> for FixedDictGenerator<'_> {
+    fn do_draw(&self, data: &TestCaseData) -> Value {
         if let Some(basic) = self.as_basic() {
-            basic.generate()
+            basic.do_draw(data)
         } else {
             // Compositional fallback
-            group(labels::FIXED_DICT, || {
+            data.span_group(labels::FIXED_DICT, || {
                 let entries: Vec<(Value, Value)> = self
                     .fields
                     .iter()
-                    .map(|(name, gen)| (Value::Text(name.clone()), gen.generate()))
+                    .map(|(name, gen)| (Value::Text(name.clone()), gen.do_draw(data)))
                     .collect();
                 Value::Map(entries)
             })
@@ -110,11 +110,11 @@ impl<'a> Generate<Value> for FixedDictGenerator<'a> {
 /// # Example
 ///
 /// ```no_run
-/// use hegel::gen::{self, Generate};
+/// use hegel::generators::{self, Generate};
 ///
-/// let gen = gen::fixed_dicts()
-///     .field("name", gen::text())
-///     .field("age", gen::integers::<u32>())
+/// let gen = generators::fixed_dicts()
+///     .field("name", generators::text())
+///     .field("age", generators::integers::<u32>())
 ///     .build();
 /// ```
 pub fn fixed_dicts<'a>() -> FixedDictBuilder<'a> {

@@ -1,8 +1,5 @@
-use crate::gen::{
-    clear_connection, set_connection, set_is_last_run, take_generated_values, CONNECTION,
-    TEST_ABORTED,
-};
-use crate::protocol::{Channel, Connection, VERSION_NEGOTIATION_MESSAGE, VERSION_NEGOTIATION_OK};
+use crate::generators::{TestCaseData, TEST_CASE_DATA};
+use crate::protocol::{Channel, Connection, HANDSHAKE_STRING, SUPPORTED_PROTOCOL_VERSIONS};
 use ciborium::Value;
 
 use crate::cbor_helpers::{as_bool, as_text, as_u64, cbor_map, map_get};
@@ -186,10 +183,10 @@ pub(crate) const ASSUME_FAIL_STRING: &str = "__HEGEL_ASSUME_FAIL";
 /// # Example
 ///
 /// ```no_run
-/// use hegel::gen::{self, Generate};
+/// use hegel::generators;
 ///
 /// hegel::hegel(|| {
-///     let n = gen::integers::<i32>().generate();
+///     let n = hegel::draw(&generators::integers::<i32>());
 ///     assert!(n + 0 == n); // Identity property
 /// });
 /// ```
@@ -208,10 +205,10 @@ where
 /// # Example
 ///
 /// ```no_run
-/// use hegel::{Hegel, Verbosity, gen::{self, Generate}};
+/// use hegel::{Hegel, Verbosity, generators};
 ///
 /// Hegel::new(|| {
-///     let n = gen::integers::<i32>().generate();
+///     let n = hegel::draw(&generators::integers::<i32>());
 ///     assert!(n + 0 == n);
 /// })
 /// .test_cases(500)
@@ -222,6 +219,7 @@ pub struct Hegel<F> {
     test_fn: F,
     test_cases: u64,
     verbosity: Verbosity,
+    seed: Option<u64>,
 }
 
 impl<F> Hegel<F>
@@ -234,6 +232,7 @@ where
             test_fn,
             test_cases: 100,
             verbosity: Verbosity::Normal,
+            seed: None,
         }
     }
 
@@ -246,6 +245,11 @@ where
     /// Set the verbosity level. Default: Normal.
     pub fn verbosity(mut self, verbosity: Verbosity) -> Self {
         self.verbosity = verbosity;
+        self
+    }
+
+    pub fn seed(mut self, seed: Option<u64>) -> Self {
+        self.seed = seed;
         self
     }
 
@@ -325,19 +329,33 @@ where
         let connection = Connection::new(stream);
 
         // Initiate version negotiation (SDK is the client)
+        let (lo, hi) = SUPPORTED_PROTOCOL_VERSIONS;
         let control = connection.control_channel();
         let req_id = control
-            .send_request(VERSION_NEGOTIATION_MESSAGE.to_vec())
+            .send_request(HANDSHAKE_STRING.to_vec())
             .expect("Failed to send version negotiation");
         let response = control
-            .receive_response(req_id)
+            .receive_reply(req_id)
             .expect("Failed to receive version response");
 
-        if response != VERSION_NEGOTIATION_OK {
+        let decoded = String::from_utf8_lossy(&response);
+        let server_version = match decoded.strip_prefix("Hegel/") {
+            Some(v) => v,
+            None => {
+                let _ = child.kill();
+                panic!("Bad handshake response: {decoded:?}");
+            }
+        };
+        let v: f64 = server_version.parse().unwrap_or_else(|_| {
+            let _ = child.kill();
+            panic!("Bad version number: {server_version}");
+        });
+        if !(lo <= v && v <= hi) {
             let _ = child.kill();
             panic!(
-                "Version negotiation failed: {:?}",
-                String::from_utf8_lossy(&response)
+                "hegel-rust supports protocol versions {lo} through {hi}, but \
+                 got server version {v}. Upgrading hegel-rust or downgrading \
+                 your hegel cli might help."
             );
         }
 
@@ -358,7 +376,8 @@ where
             "command" => "run_test",
             "name" => "test",
             "test_cases" => self.test_cases,
-            "channel" => test_channel.channel_id
+            "seed" => self.seed.map_or(Value::Null, Value::from),
+            "channel_id" => test_channel.channel_id
         };
 
         let run_test_id = control
@@ -367,7 +386,7 @@ where
 
         // Wait for run_test response on control channel (just True, verifies no error)
         let run_test_response = control
-            .receive_response(run_test_id)
+            .receive_reply(run_test_id)
             .expect("Failed to receive run_test response");
         let _run_test_result: Value = cbor_decode(&run_test_response);
 
@@ -392,7 +411,7 @@ where
 
             match event_type {
                 Some("test_case") => {
-                    let channel_id = map_get(&event, "channel")
+                    let channel_id = map_get(&event, "channel_id")
                         .and_then(as_u64)
                         .expect("Missing channel id") as u32;
 
@@ -400,7 +419,7 @@ where
 
                     // Ack the test_case event BEFORE running the test (prevents deadlock)
                     test_channel
-                        .send_response(event_id, cbor_encode(&ack_null))
+                        .write_reply(event_id, cbor_encode(&ack_null))
                         .expect("Failed to ack test_case");
 
                     run_test_case(
@@ -416,7 +435,7 @@ where
                     // Ack the test_done event
                     let ack_true = cbor_map! {"result" => true};
                     test_channel
-                        .send_response(event_id, cbor_encode(&ack_true))
+                        .write_reply(event_id, cbor_encode(&ack_true))
                         .expect("Failed to ack test_done");
                     result_data = map_get(&event, "results").cloned().unwrap_or(Value::Null);
                     break;
@@ -424,7 +443,7 @@ where
                 _ => {
                     // Unknown event, just ack it
                     test_channel
-                        .send_response(event_id, cbor_encode(&ack_null))
+                        .write_reply(event_id, cbor_encode(&ack_null))
                         .expect("Failed to ack event");
                 }
             }
@@ -448,7 +467,7 @@ where
             let event_type = map_get(&event, "event").and_then(as_text);
             assert_eq!(event_type, Some("test_case"));
 
-            let channel_id = map_get(&event, "channel")
+            let channel_id = map_get(&event, "channel_id")
                 .and_then(as_u64)
                 .expect("Missing channel id") as u32;
 
@@ -456,7 +475,7 @@ where
 
             // Ack before running
             test_channel
-                .send_response(event_id, cbor_encode(&ack_null))
+                .write_reply(event_id, cbor_encode(&ack_null))
                 .expect("Failed to ack final test_case");
 
             run_test_case(
@@ -497,11 +516,11 @@ fn run_test_case<F: FnMut()>(
     verbosity: Verbosity,
     got_interesting: &Arc<AtomicBool>,
 ) {
-    // Set thread-local state for this test case
+    // Create TestCaseData on the stack and set thread-local pointer.
     // Note: we pass the channel directly (not cloned) so generators and mark_complete
     // share the same message ID sequence.
-    set_is_last_run(is_final);
-    set_connection(Arc::clone(connection), test_channel, verbosity);
+    let data = TestCaseData::new(Arc::clone(connection), test_channel, verbosity, is_final);
+    TEST_CASE_DATA.with(|c| c.set(&data as *const TestCaseData));
 
     // Run test in catch_unwind
     let result = catch_unwind(AssertUnwindSafe(test_fn));
@@ -534,7 +553,7 @@ fn run_test_case<F: FnMut()>(
                     );
                     eprintln!("{}", msg);
 
-                    for value in take_generated_values() {
+                    for value in std::mem::take(&mut *data.output.borrow_mut()) {
                         eprintln!("{}", value);
                     }
 
@@ -560,29 +579,25 @@ fn run_test_case<F: FnMut()>(
 
     // Send mark_complete using the same channel that generators used.
     // Skip if test was aborted (StopTest) - server already closed the channel.
-    let was_aborted = TEST_ABORTED.with(|aborted| aborted.replace(false));
+    let was_aborted = data.test_aborted();
     if !was_aborted {
-        CONNECTION.with(|conn| {
-            if let Some(state) = conn.borrow_mut().as_mut() {
-                let origin_value = match &origin {
-                    Some(s) => Value::Text(s.clone()),
-                    None => Value::Null,
-                };
-                let mark_complete = cbor_map! {
-                    "command" => "mark_complete",
-                    "status" => status.as_str(),
-                    "origin" => origin_value
-                };
-                // Wait for server to acknowledge mark_complete before closing
-                let _ = state.channel.request_cbor(&mark_complete);
-                // Close the test case channel
-                let _ = state.channel.close();
-            }
-        });
+        let origin_value = match &origin {
+            Some(s) => Value::Text(s.clone()),
+            None => Value::Null,
+        };
+        let mark_complete = cbor_map! {
+            "command" => "mark_complete",
+            "status" => status.as_str(),
+            "origin" => origin_value
+        };
+        // Wait for server to acknowledge mark_complete before closing
+        let _ = data.channel().request_cbor(&mark_complete);
+        // Close the test case channel
+        let _ = data.channel().close();
     }
 
-    // Clear connection after mark_complete is sent (or skipped)
-    clear_connection();
+    // Clear thread-local pointer
+    TEST_CASE_DATA.with(|c| c.set(std::ptr::null()));
 }
 
 /// Extract a message from a panic payload.

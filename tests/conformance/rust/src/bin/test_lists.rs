@@ -1,4 +1,4 @@
-use hegel::gen::{self, Generate};
+use hegel::generators;
 use hegel::Hegel;
 use hegel_conformance::{get_test_cases, write};
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,7 @@ fn main() {
     });
 
     Hegel::new(move || {
-        let mut elem_gen = gen::integers::<i32>();
+        let mut elem_gen = generators::integers::<i32>();
         if let Some(min) = params.min_value {
             elem_gen = elem_gen.with_min(min);
         }
@@ -40,12 +40,12 @@ fn main() {
             elem_gen = elem_gen.with_max(max);
         }
 
-        let mut vec_gen = gen::vecs(elem_gen).with_min_size(params.min_size);
+        let mut vec_gen = generators::vecs(elem_gen).with_min_size(params.min_size);
         if let Some(max) = params.max_size {
             vec_gen = vec_gen.with_max_size(max);
         }
 
-        let list: Vec<i32> = vec_gen.generate();
+        let list: Vec<i32> = hegel::draw(&vec_gen);
 
         let size = list.len();
         let (min_element, max_element) = if list.is_empty() {

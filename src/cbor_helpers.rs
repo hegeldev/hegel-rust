@@ -102,61 +102,6 @@ pub fn as_bool(value: &Value) -> Option<bool> {
     }
 }
 
-/// Format a ciborium::Value in a human-readable way (similar to JSON).
-pub fn display_value(value: &Value) -> String {
-    use std::fmt::Write;
-    match value {
-        Value::Integer(i) => {
-            let n: i128 = (*i).into();
-            n.to_string()
-        }
-        Value::Float(f) => {
-            if f.is_nan() {
-                "NaN".to_string()
-            } else if f.is_infinite() {
-                if f.is_sign_positive() {
-                    "Infinity".to_string()
-                } else {
-                    "-Infinity".to_string()
-                }
-            } else if *f == f.trunc() && f.is_finite() {
-                // Display whole floats as "1.0" not "1"
-                format!("{:.1}", f)
-            } else {
-                f.to_string()
-            }
-        }
-        Value::Text(s) => format!("{:?}", s),
-        Value::Bool(b) => b.to_string(),
-        Value::Null => "null".to_string(),
-        Value::Array(arr) => {
-            let mut s = String::from("[");
-            for (i, v) in arr.iter().enumerate() {
-                if i > 0 {
-                    s.push_str(", ");
-                }
-                s.push_str(&display_value(v));
-            }
-            s.push(']');
-            s
-        }
-        Value::Map(entries) => {
-            let mut s = String::from("{");
-            for (i, (k, v)) in entries.iter().enumerate() {
-                if i > 0 {
-                    s.push_str(", ");
-                }
-                let _ = write!(s, "{}: {}", display_value(k), display_value(v));
-            }
-            s.push('}');
-            s
-        }
-        Value::Bytes(b) => format!("<{} bytes>", b.len()),
-        Value::Tag(tag, inner) => format!("tag({})({})", tag, display_value(inner)),
-        _ => format!("{:?}", value),
-    }
-}
-
 /// Convert a ciborium::Value to a serde-compatible value via CBOR round-trip.
 /// This is used for serializing Rust values into ciborium::Value.
 pub fn cbor_serialize<T: serde::Serialize>(value: &T) -> Value {

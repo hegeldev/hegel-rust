@@ -1,4 +1,4 @@
-use hegel::gen::{self, Generate};
+use hegel::generators;
 use hegel::Hegel;
 use hegel_conformance::{get_test_cases, write};
 use serde::{Deserialize, Serialize};
@@ -28,11 +28,11 @@ fn main() {
     });
 
     Hegel::new(move || {
-        let mut gen = gen::binary().with_min_size(params.min_size);
+        let mut gen = generators::binary().with_min_size(params.min_size);
         if let Some(max) = params.max_size {
             gen = gen.with_max_size(max);
         }
-        let value = gen.generate();
+        let value = hegel::draw(&gen);
         write(&Metrics {
             length: value.len(),
         });

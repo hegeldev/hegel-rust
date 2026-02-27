@@ -1,4 +1,4 @@
-use super::{BasicGenerator, Generate};
+use super::{BasicGenerator, Generate, TestCaseData};
 use crate::cbor_helpers::{cbor_map, map_insert};
 use ciborium::Value;
 
@@ -48,8 +48,8 @@ fn parse_binary(raw: Value) -> Vec<u8> {
 }
 
 impl Generate<Vec<u8>> for BinaryGenerator {
-    fn generate(&self) -> Vec<u8> {
-        parse_binary(super::generate_raw(&self.build_schema()))
+    fn do_draw(&self, data: &TestCaseData) -> Vec<u8> {
+        parse_binary(data.generate_raw(&self.build_schema()))
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, Vec<u8>>> {
@@ -62,13 +62,13 @@ impl Generate<Vec<u8>> for BinaryGenerator {
 /// # Example
 ///
 /// ```no_run
-/// use hegel::gen::{self, Generate};
+/// use hegel::generators::{self, Generate};
 ///
 /// // Generate any byte sequence
-/// let gen = gen::binary();
+/// let gen = generators::binary();
 ///
 /// // Generate 16-32 bytes
-/// let gen = gen::binary().with_min_size(16).with_max_size(32);
+/// let gen = generators::binary().with_min_size(16).with_max_size(32);
 /// ```
 pub fn binary() -> BinaryGenerator {
     BinaryGenerator {
@@ -79,12 +79,12 @@ pub fn binary() -> BinaryGenerator {
 
 #[cfg(test)]
 mod tests {
-    use crate::{gen, gen::Generate, Hegel};
+    use crate::{generators, Hegel};
 
     #[test]
     fn test_binary_generation() {
         Hegel::new(|| {
-            let data = gen::binary().with_max_size(50).generate();
+            let data = crate::draw(&generators::binary().with_max_size(50));
             assert!(data.len() <= 50);
         })
         .test_cases(100)

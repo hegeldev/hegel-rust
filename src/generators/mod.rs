@@ -20,7 +20,7 @@ pub use binary::binary;
 pub use collections::{hashmaps, hashsets, vecs, HashMapGenerator};
 pub use combinators::{one_of, optional, sampled_from, BoxedGenerator};
 pub use compose::{fnv1a_hash, ComposedGenerator};
-pub use default::DefaultGenerator;
+pub use default::{from_type, DefaultGenerator};
 pub use fixed_dict::fixed_dicts;
 pub use formats::{dates, datetimes, domains, emails, ip_addresses, times, urls};
 pub use numeric::{floats, integers};
@@ -41,9 +41,6 @@ use ciborium::Value;
 
 use crate::cbor_helpers::{cbor_map, map_insert};
 
-pub(crate) mod exit_codes {
-    pub const SOCKET_ERROR: i32 = 134;
-}
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::sync::{Arc, LazyLock};
@@ -62,161 +59,125 @@ static PROTOCOL_DEBUG: LazyLock<bool> = LazyLock::new(|| {
 });
 
 // ============================================================================
-// State Management (Thread-Local)
+// TestCaseData — per-test-case state
 // ============================================================================
 
-thread_local! {
-    /// Whether this is the last run (for note() output)
-    static IS_LAST_RUN: Cell<bool> = const { Cell::new(false) };
-    /// Buffer for generated values during final replay
-    static GENERATED_VALUES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-    /// Whether the test was aborted due to StopTest (server closed channel)
-    pub(crate) static TEST_ABORTED: Cell<bool> = const { Cell::new(false) };
-}
-
-/// Check if this is the last run.
-pub(crate) fn is_last_run() -> bool {
-    IS_LAST_RUN.with(|r| r.get())
-}
-
-/// Set the is_last_run flag.
-pub(crate) fn set_is_last_run(is_last: bool) {
-    IS_LAST_RUN.with(|r| r.set(is_last));
-}
-
-/// Buffer a generated value for later output
-fn buffer_generated_value(value: &str) {
-    GENERATED_VALUES.with(|v| v.borrow_mut().push(value.to_string()));
-}
-
-/// Take all buffered generated values, clearing the buffer.
-pub(crate) fn take_generated_values() -> Vec<String> {
-    GENERATED_VALUES.with(|v| std::mem::take(&mut *v.borrow_mut()))
-}
-
-/// Print a note message.
+/// Per-test-case state, consolidating all thread-local state into one struct.
 ///
-/// Only prints on the last run (final replay for counterexample output).
-pub fn note(message: &str) {
-    if is_last_run() {
-        eprintln!("{}", message);
-    }
-}
-
-// ============================================================================
-// Socket Communication with Thread-Local Connection
-// ============================================================================
-
-/// Thread-local connection state using the binary protocol.
-pub(crate) struct ConnectionState {
-    /// Keep the connection alive (actual I/O goes through channel)
+/// This is an internal implementation detail. Do not use directly.
+#[doc(hidden)]
+pub struct TestCaseData {
     #[allow(dead_code)]
-    pub(crate) connection: Arc<Connection>,
-    pub(crate) channel: Channel,
-    pub(crate) span_depth: usize,
-    pub(crate) verbosity: Verbosity,
+    connection: Arc<Connection>,
+    channel: Channel,
+    span_depth: Cell<usize>,
+    verbosity: Verbosity,
+    is_last_run: bool,
+    pub(crate) output: RefCell<Vec<String>>,
+    draw_count: Cell<usize>,
+    test_aborted: Cell<bool>,
+    in_composite: Cell<bool>,
 }
 
-thread_local! {
-    pub(crate) static CONNECTION: RefCell<Option<ConnectionState>> = const { RefCell::new(None) };
-}
-
-/// Set the connection for the current test case.
-/// The channel parameter is the test case channel assigned by the server.
-pub(crate) fn set_connection(connection: Arc<Connection>, channel: Channel, verbosity: Verbosity) {
-    CONNECTION.with(|conn| {
-        let mut conn = conn.borrow_mut();
-        assert!(
-            conn.is_none(),
-            "set_connection called while already connected"
-        );
-
-        *conn = Some(ConnectionState {
+impl TestCaseData {
+    pub(crate) fn new(
+        connection: Arc<Connection>,
+        channel: Channel,
+        verbosity: Verbosity,
+        is_last_run: bool,
+    ) -> Self {
+        TestCaseData {
             connection,
             channel,
-            span_depth: 0,
+            span_depth: Cell::new(0),
             verbosity,
-        });
-    });
-}
-
-/// Clear the connection after a test case completes.
-pub(crate) fn clear_connection() {
-    CONNECTION.with(|conn| {
-        *conn.borrow_mut() = None;
-    });
-}
-
-pub(crate) fn increment_span_depth() {
-    CONNECTION.with(|conn| {
-        let mut conn = conn.borrow_mut();
-        let state = conn
-            .as_mut()
-            .expect("start_span called with no active connection");
-        state.span_depth += 1;
-    });
-}
-
-pub(crate) fn decrement_span_depth() {
-    CONNECTION.with(|conn| {
-        let mut conn = conn.borrow_mut();
-        let state = conn
-            .as_mut()
-            .expect("stop_span called with no active connection");
-        assert!(state.span_depth > 0, "stop_span called with no open spans");
-        state.span_depth -= 1;
-    });
-}
-
-/// Custom error for StopTest (overflow) condition.
-#[derive(Debug)]
-pub struct StopTestError;
-
-impl std::fmt::Display for StopTestError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Server ran out of data (StopTest)")
-    }
-}
-
-impl std::error::Error for StopTestError {}
-
-/// Send a request and receive a response over the thread-local connection.
-/// Returns Err(StopTestError) if the server sends an overflow error.
-pub(crate) fn send_request(command: &str, payload: &Value) -> Result<Value, StopTestError> {
-    let debug = *PROTOCOL_DEBUG
-        || CONNECTION.with(|conn| {
-            conn.borrow()
-                .as_ref()
-                .map(|s| s.verbosity == Verbosity::Debug)
-                .unwrap_or(false)
-        });
-
-    // Build the request message by merging command into the payload map
-    let mut entries = vec![(
-        Value::Text("command".to_string()),
-        Value::Text(command.to_string()),
-    )];
-
-    // Merge payload fields into the request
-    if let Value::Map(map) = payload {
-        for (k, v) in map {
-            entries.push((k.clone(), v.clone()));
+            is_last_run,
+            output: RefCell::new(Vec::new()),
+            draw_count: Cell::new(0),
+            test_aborted: Cell::new(false),
+            in_composite: Cell::new(false),
         }
     }
 
-    let request = Value::Map(entries);
-
-    if debug {
-        eprintln!("REQUEST: {:?}", request);
+    pub(crate) fn is_last_run(&self) -> bool {
+        self.is_last_run
     }
 
-    CONNECTION.with(|conn| {
-        let conn = conn.borrow();
-        let state = conn
-            .as_ref()
-            .expect("send_request called without active connection");
+    pub(crate) fn test_aborted(&self) -> bool {
+        self.test_aborted.get()
+    }
 
-        let result = state.channel.request_cbor(&request);
+    pub(crate) fn set_test_aborted(&self, val: bool) {
+        self.test_aborted.set(val);
+    }
+
+    #[doc(hidden)]
+    pub fn in_composite(&self) -> bool {
+        self.in_composite.get()
+    }
+
+    #[doc(hidden)]
+    pub fn set_in_composite(&self, val: bool) {
+        self.in_composite.set(val);
+    }
+
+    fn increment_span_depth(&self) {
+        self.span_depth.set(self.span_depth.get() + 1);
+    }
+
+    fn decrement_span_depth(&self) {
+        let depth = self.span_depth.get();
+        assert!(depth > 0, "stop_span called with no open spans");
+        self.span_depth.set(depth - 1);
+    }
+
+    pub(crate) fn channel(&self) -> &Channel {
+        &self.channel
+    }
+
+    fn verbosity(&self) -> Verbosity {
+        self.verbosity
+    }
+
+    fn start_span(&self, label: u64) {
+        self.increment_span_depth();
+        if let Err(StopTestError) = self.send_request("start_span", &cbor_map! {"label" => label}) {
+            self.decrement_span_depth();
+            crate::assume(false);
+        }
+    }
+
+    fn stop_span(&self, discard: bool) {
+        self.decrement_span_depth();
+        // Ignore StopTest errors from stop_span - we're already closing
+        let _ = self.send_request("stop_span", &cbor_map! {"discard" => discard});
+    }
+
+    /// Send a request and receive a response via the channel.
+    /// Returns Err(StopTestError) if the server sends an overflow error.
+    fn send_request(&self, command: &str, payload: &Value) -> Result<Value, StopTestError> {
+        let debug = *PROTOCOL_DEBUG || self.verbosity() == Verbosity::Debug;
+
+        // Build the request message by merging command into the payload map
+        let mut entries = vec![(
+            Value::Text("command".to_string()),
+            Value::Text(command.to_string()),
+        )];
+
+        // Merge payload fields into the request
+        if let Value::Map(map) = payload {
+            for (k, v) in map {
+                entries.push((k.clone(), v.clone()));
+            }
+        }
+
+        let request = Value::Map(entries);
+
+        if debug {
+            eprintln!("REQUEST: {:?}", request);
+        }
+
+        let result = self.channel().request_cbor(&request);
 
         match result {
             Ok(response) => {
@@ -233,20 +194,100 @@ pub(crate) fn send_request(command: &str, payload: &Value) -> Result<Value, Stop
                     }
                     // Mark test as aborted so the runner skips sending mark_complete
                     // (the server has already moved on from this test case)
-                    TEST_ABORTED.with(|aborted| aborted.set(true));
+                    self.set_test_aborted(true);
                     Err(StopTestError)
                 } else {
-                    eprintln!("Failed to communicate with Hegel: {}", e);
-                    std::process::exit(exit_codes::SOCKET_ERROR);
+                    panic!("Failed to communicate with Hegel: {}", e);
                 }
             }
         }
+    }
+
+    /// Send a schema to the server and return the raw CBOR response.
+    ///
+    /// This is the core generation primitive. It handles StopTest errors
+    /// by calling `assume(false)` to mark the test case as invalid.
+    pub fn generate_raw(&self, schema: &Value) -> Value {
+        match self.send_request("generate", &cbor_map! {"schema" => schema.clone()}) {
+            Ok(v) => v,
+            Err(StopTestError) => {
+                crate::assume(false);
+                unreachable!()
+            }
+        }
+    }
+
+    /// Generate a value from a schema, deserializing the result.
+    pub fn generate_from_schema<T: serde::de::DeserializeOwned>(&self, schema: &Value) -> T {
+        deserialize_value(self.generate_raw(schema))
+    }
+
+    /// Run a function within a labeled span group.
+    ///
+    /// Groups related generation calls together, which helps the testing engine
+    /// understand the structure of generated data and improve shrinking.
+    pub fn span_group<T, F: FnOnce() -> T>(&self, label: u64, f: F) -> T {
+        self.start_span(label);
+        let result = f();
+        self.stop_span(false);
+        result
+    }
+
+    /// Run a function within a labeled span group, discarding if the function returns None.
+    ///
+    /// Useful for filter-like operations where rejected values should be discarded.
+    pub fn discardable_span_group<T, F: FnOnce() -> Option<T>>(
+        &self,
+        label: u64,
+        f: F,
+    ) -> Option<T> {
+        self.start_span(label);
+        let result = f();
+        self.stop_span(result.is_none());
+        result
+    }
+}
+
+thread_local! {
+    pub(crate) static TEST_CASE_DATA: Cell<*const TestCaseData> = const { Cell::new(std::ptr::null()) };
+}
+
+/// Get a reference to the current test case's TestCaseData.
+///
+/// # Panics
+/// Panics if called outside of a test case (no active TestCaseData).
+#[doc(hidden)]
+pub fn test_case_data() -> &'static TestCaseData {
+    TEST_CASE_DATA.with(|c| {
+        let ptr = c.get();
+        assert!(!ptr.is_null(), "no active test case");
+        unsafe { &*ptr }
     })
 }
 
-pub(crate) fn request_from_schema(schema: &Value) -> Result<Value, StopTestError> {
-    send_request("generate", &cbor_map! {"schema" => schema.clone()})
+/// Print a note message for the final failing test case.
+pub fn note(message: &str) {
+    let data = test_case_data();
+    if data.is_last_run() {
+        eprintln!("{}", message);
+    }
 }
+
+// ============================================================================
+// Socket Communication
+// ============================================================================
+
+/// Custom error for StopTest (overflow) condition.
+#[derive(Debug)]
+pub struct StopTestError;
+
+impl std::fmt::Display for StopTestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Server ran out of data (StopTest)")
+    }
+}
+
+impl std::error::Error for StopTestError {}
 
 /// Deserialize a raw CBOR value into a Rust type.
 ///
@@ -260,55 +301,6 @@ pub fn deserialize_value<T: serde::de::DeserializeOwned>(raw: Value) -> T {
             e, raw
         );
     })
-}
-
-/// Send a schema to the server and return the raw CBOR response.
-///
-/// This is the core generation primitive. It handles StopTest errors
-/// and buffers the generated value for last-run display.
-pub fn generate_raw(schema: &Value) -> Value {
-    match request_from_schema(schema) {
-        Ok(v) => {
-            if is_last_run() {
-                buffer_generated_value(&format!(
-                    "Generated: {}",
-                    crate::cbor_helpers::display_value(&v)
-                ));
-            }
-            v
-        }
-        Err(StopTestError) => {
-            crate::assume(false);
-            unreachable!()
-        }
-    }
-}
-
-/// Generate a value from a schema, deserializing the result.
-pub fn generate_from_schema<T: serde::de::DeserializeOwned>(schema: &Value) -> T {
-    deserialize_value(generate_raw(schema))
-}
-
-/// Start a span for grouping related generation.
-///
-/// Spans help Hypothesis understand the structure of generated data,
-/// which improves shrinking. Call `stop_span()` when done.
-pub fn start_span(label: u64) {
-    increment_span_depth();
-    if let Err(StopTestError) = send_request("start_span", &cbor_map! {"label" => label}) {
-        decrement_span_depth();
-        crate::assume(false);
-    }
-}
-
-/// Stop the current span.
-///
-/// If `discard` is true, tells Hypothesis this span's data should be discarded
-/// (e.g., because a filter rejected it).
-pub fn stop_span(discard: bool) {
-    decrement_span_depth();
-    // Ignore StopTest errors from stop_span - we're already closing
-    let _ = send_request("stop_span", &cbor_map! {"discard" => discard});
 }
 
 // ============================================================================
@@ -327,12 +319,13 @@ pub fn stop_span(discard: bool) {
 /// # Example
 ///
 /// ```ignore
-/// use hegel::gen::Collection;
+/// use hegel::generators::Collection;
 ///
+/// let data = hegel::generators::test_case_data();
 /// let mut coll = Collection::new("my_list", 0, None);
 /// let mut result = Vec::new();
-/// while coll.more() {
-///     result.push(gen::integers::<i32>().generate());
+/// while coll.more(data) {
+///     result.push(generators::integers::<i32>().do_draw(data));
 /// }
 /// ```
 pub struct Collection {
@@ -360,7 +353,7 @@ impl Collection {
     }
 
     /// Ensure the server-side collection is initialized, returning the server name.
-    fn ensure_initialized(&mut self) -> &str {
+    fn ensure_initialized(&mut self, data: &TestCaseData) -> &str {
         if self.server_name.is_none() {
             let mut payload = cbor_map! {
                 "name" => self.base_name.as_str(),
@@ -369,7 +362,7 @@ impl Collection {
             if let Some(max) = self.max_size {
                 map_insert(&mut payload, "max_size", Value::from(max as u64));
             }
-            let response = match send_request("new_collection", &payload) {
+            let response = match data.send_request("new_collection", &payload) {
                 Ok(v) => v,
                 Err(StopTestError) => {
                     crate::assume(false);
@@ -392,12 +385,12 @@ impl Collection {
     ///
     /// On the first call, this lazily creates the server-side collection.
     /// Returns `false` when the collection has reached its target size.
-    pub fn more(&mut self) -> bool {
+    pub fn more(&mut self, data: &TestCaseData) -> bool {
         if self.finished {
             return false;
         }
-        let server_name = self.ensure_initialized().to_string();
-        let response = match send_request(
+        let server_name = self.ensure_initialized(data).to_string();
+        let response = match data.send_request(
             "collection_more",
             &cbor_map! { "collection" => server_name.as_str() },
         ) {
@@ -422,52 +415,19 @@ impl Collection {
     ///
     /// This is useful for unique collections where a generated element
     /// turned out to be a duplicate.
-    pub fn reject(&mut self, why: Option<&str>) {
+    pub fn reject(&mut self, data: &TestCaseData, why: Option<&str>) {
         if self.finished {
             return;
         }
-        let server_name = self.ensure_initialized().to_string();
+        let server_name = self.ensure_initialized(data).to_string();
         let mut payload = cbor_map! {
             "collection" => server_name.as_str()
         };
         if let Some(reason) = why {
             map_insert(&mut payload, "why", Value::Text(reason.to_string()));
         }
-        let _ = send_request("collection_reject", &payload);
+        let _ = data.send_request("collection_reject", &payload);
     }
-}
-
-// ============================================================================
-// Grouped Generation Helpers
-// ============================================================================
-
-/// Run a function within a labeled group.
-///
-/// Groups related generation calls together, which helps the testing engine
-/// understand the structure of generated data and improve shrinking.
-///
-/// # Example
-///
-/// ```ignore
-/// group(labels::LIST, || {
-///     // generate list elements here
-/// })
-/// ```
-pub fn group<T, F: FnOnce() -> T>(label: u64, f: F) -> T {
-    start_span(label);
-    let result = f();
-    stop_span(false);
-    result
-}
-
-/// Run a function within a labeled group, discarding if the function returns None.
-///
-/// Useful for filter-like operations where rejected values should be discarded.
-pub fn discardable_group<T, F: FnOnce() -> Option<T>>(label: u64, f: F) -> Option<T> {
-    start_span(label);
-    let result = f();
-    stop_span(result.is_none());
-    result
 }
 
 /// Label constants for spans.
@@ -502,6 +462,7 @@ pub mod labels {
 /// Combinators like `map()` compose BasicGenerators by chaining parse functions
 /// while preserving the schema.
 pub mod basic {
+    use super::TestCaseData;
     use ciborium::Value;
     use std::marker::PhantomData;
 
@@ -537,9 +498,9 @@ pub mod basic {
 
         /// Generate a value by sending the schema to the server and parsing the response.
         ///
-        /// This is a convenience for `self.parse_raw(generate_raw(self.schema()))`.
-        pub fn generate(&self) -> T {
-            self.parse_raw(super::generate_raw(self.schema()))
+        /// This is a convenience for `self.parse_raw(data.generate_raw(self.schema()))`.
+        pub fn do_draw(&self, data: &TestCaseData) -> T {
+            self.parse_raw(data.generate_raw(self.schema()))
         }
 
         /// Transform the output type by composing a function with the parse.
@@ -566,8 +527,8 @@ pub mod basic {
 /// Generators produce values of type `T` and optionally provide a
 /// [`BasicGenerator`] for server-based generation via `as_basic()`.
 pub trait Generate<T>: Send + Sync {
-    /// Generate a value.
-    fn generate(&self) -> T;
+    /// Generate a value. This is an internal method — use [`draw()`] instead.
+    fn do_draw(&self, data: &TestCaseData) -> T;
 
     /// Return a BasicGenerator for schema-based generation, if possible.
     ///
@@ -648,11 +609,44 @@ pub trait Generate<T>: Send + Sync {
 
 // Implement Generate for references to generators
 impl<T, G: Generate<T>> Generate<T> for &G {
-    fn generate(&self) -> T {
-        (*self).generate()
+    fn do_draw(&self, data: &TestCaseData) -> T {
+        (*self).do_draw(data)
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
         (*self).as_basic()
     }
+}
+
+/// Draw a value from a generator, logging it on the final replay.
+///
+/// This is the primary user-facing API for generating values, analogous
+/// to Hypothesis's `data.draw()`. It must not be called inside a
+/// `compose!` block — use the `draw` parameter provided by `compose!` instead.
+///
+/// # Example
+///
+/// ```no_run
+/// use hegel::generators;
+///
+/// # hegel::hegel(|| {
+/// let x: i32 = hegel::draw(&generators::integers::<i32>());
+/// let s: String = hegel::draw(&generators::text());
+/// # });
+/// ```
+pub fn draw<T: std::fmt::Debug>(gen: &impl Generate<T>) -> T {
+    let data = test_case_data();
+    assert!(
+        !data.in_composite(),
+        "cannot call draw() inside compose!(). Use the draw parameter instead."
+    );
+    let value = gen.do_draw(data);
+    if data.is_last_run() {
+        let n = data.draw_count.get() + 1;
+        data.draw_count.set(n);
+        data.output
+            .borrow_mut()
+            .push(format!("Draw {}: {:?}", n, value));
+    }
+    value
 }

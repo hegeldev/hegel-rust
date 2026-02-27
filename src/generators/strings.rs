@@ -1,4 +1,4 @@
-use super::{generate_from_schema, BasicGenerator, Generate};
+use super::{BasicGenerator, Generate, TestCaseData};
 use crate::cbor_helpers::{cbor_map, map_insert};
 use ciborium::Value;
 
@@ -33,8 +33,8 @@ impl TextGenerator {
 }
 
 impl Generate<String> for TextGenerator {
-    fn generate(&self) -> String {
-        generate_from_schema(&self.build_schema())
+    fn do_draw(&self, data: &TestCaseData) -> String {
+        data.generate_from_schema(&self.build_schema())
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
@@ -73,8 +73,8 @@ impl RegexGenerator {
 }
 
 impl Generate<String> for RegexGenerator {
-    fn generate(&self) -> String {
-        generate_from_schema(&self.build_schema())
+    fn do_draw(&self, data: &TestCaseData) -> String {
+        data.generate_from_schema(&self.build_schema())
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {

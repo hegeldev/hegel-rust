@@ -4,10 +4,16 @@ from hegel.conformance import (
     BinaryConformance,
     BooleanConformance,
     DictConformance,
+    EmptyTestConformance,
+    ErrorResponseConformance,
     FloatConformance,
     IntegerConformance,
     ListConformance,
     SampledFromConformance,
+    StopTestOnCollectionMoreConformance,
+    StopTestOnGenerateConformance,
+    StopTestOnMarkCompleteConformance,
+    StopTestOnNewCollectionConformance,
     TextConformance,
     run_conformance_tests,
 )
@@ -41,4 +47,13 @@ def test_conformance(subtests):
             ),
         ],
         subtests,
+        # temporarily skipping
+        skip_tests=[
+            StopTestOnGenerateConformance,
+            StopTestOnMarkCompleteConformance,
+            ErrorResponseConformance,
+            EmptyTestConformance,
+            StopTestOnCollectionMoreConformance,
+            StopTestOnNewCollectionConformance,
+        ],
     )

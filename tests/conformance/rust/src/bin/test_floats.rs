@@ -1,4 +1,4 @@
-use hegel::gen::{self, Generate};
+use hegel::generators;
 use hegel::Hegel;
 use hegel_conformance::{get_test_cases, write};
 use serde::{Deserialize, Serialize};
@@ -34,7 +34,7 @@ fn main() {
     });
 
     Hegel::new(move || {
-        let mut gen = gen::floats::<f64>();
+        let mut gen = generators::floats::<f64>();
 
         if let Some(min) = params.min_value {
             gen = gen.with_min(min);
@@ -55,7 +55,7 @@ fn main() {
             gen = gen.allow_infinity(allow_infinity);
         }
 
-        let value = gen.generate();
+        let value = hegel::draw(&gen);
         write(&Metrics {
             value,
             is_nan: value.is_nan(),
