@@ -90,7 +90,10 @@ def check(base_ref: str) -> None:
         border = " ".join("*" * ((width + 1) // 2))
         empty = "*" + " " * (width - 2) + "*"
         inner = "\n".join("*" + l.center(width - 2) + "*" for l in lines)
-        box = f"\n{border}\n{empty}\n{empty}\n{inner}\n{empty}\n{empty}\n{border}\n"
+        pad = "\t\t"
+        box = f"\n{pad}{border}\n{pad}{empty}\n{pad}{empty}\n"
+        box += "\n".join(f"{pad}" + l for l in inner.split("\n"))
+        box += f"\n{pad}{empty}\n{pad}{empty}\n{pad}{border}\n"
         raise ValueError(box)
 
     # perform validation of RELEASE.md
