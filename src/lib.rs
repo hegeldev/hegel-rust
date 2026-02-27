@@ -223,6 +223,7 @@ pub use ciborium;
 pub use paste;
 
 // re-export public api
+pub use hegel_derive::test;
 pub use hegel_derive::Generate;
 pub use runner::{hegel, Hegel, Verbosity};
 

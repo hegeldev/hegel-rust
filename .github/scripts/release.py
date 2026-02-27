@@ -82,7 +82,19 @@ def check(base_ref: str) -> None:
 
     release_file = ROOT / "RELEASE.md"
     if not release_file.exists():
-        raise ValueError("Source files changed but no RELEASE.md found.")
+        lines = [
+            "Changes to source files require a RELEASE.md file.",
+            "You can find an example in RELEASE-sample.md.",
+        ]
+        width = max(len(l) for l in lines) + 6
+        border = " ".join("*" * ((width + 1) // 2))
+        empty = "*" + " " * (width - 2) + "*"
+        inner = "\n".join("*" + l.center(width - 2) + "*" for l in lines)
+        pad = "\t"
+        box = f"\n{pad}{border}\n{pad}{empty}\n{pad}{empty}\n"
+        box += "\n".join(f"{pad}" + l for l in inner.split("\n"))
+        box += f"\n{pad}{empty}\n{pad}{empty}\n{pad}{border}\n"
+        raise ValueError(box)
 
     # perform validation of RELEASE.md
     parse_release_file(release_file)
