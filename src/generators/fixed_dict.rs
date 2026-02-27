@@ -55,7 +55,7 @@ pub struct FixedDictGenerator<'a> {
     fields: Vec<(String, BoxedGenerator<'a, Value>)>,
 }
 
-impl<'a> Generate<Value> for FixedDictGenerator<'a> {
+impl Generate<Value> for FixedDictGenerator<'_> {
     fn do_draw(&self, data: &TestCaseData) -> Value {
         if let Some(basic) = self.as_basic() {
             basic.do_draw(data)

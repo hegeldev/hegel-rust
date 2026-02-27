@@ -98,7 +98,7 @@ pub struct BoxedGenerator<'a, T> {
     pub(crate) inner: Arc<dyn Generate<T> + Send + Sync + 'a>,
 }
 
-impl<'a, T> Clone for BoxedGenerator<'a, T> {
+impl<T> Clone for BoxedGenerator<'_, T> {
     fn clone(&self) -> Self {
         BoxedGenerator {
             inner: Arc::clone(&self.inner),
@@ -106,7 +106,7 @@ impl<'a, T> Clone for BoxedGenerator<'a, T> {
     }
 }
 
-impl<'a, T> Generate<T> for BoxedGenerator<'a, T> {
+impl<T> Generate<T> for BoxedGenerator<'_, T> {
     fn do_draw(&self, data: &TestCaseData) -> T {
         self.inner.do_draw(data)
     }
@@ -170,7 +170,7 @@ pub struct OneOfGenerator<'a, T> {
     generators: Vec<BoxedGenerator<'a, T>>,
 }
 
-impl<'a, T> Generate<T> for OneOfGenerator<'a, T> {
+impl<T> Generate<T> for OneOfGenerator<'_, T> {
     fn do_draw(&self, data: &TestCaseData) -> T {
         crate::assume(!self.generators.is_empty());
 
@@ -232,7 +232,7 @@ impl<'a, T> Generate<T> for OneOfGenerator<'a, T> {
 /// Choose from multiple generators of the same type.
 ///
 /// For a more convenient syntax, use the `one_of!` macro instead.
-pub fn one_of<'a, T>(generators: Vec<BoxedGenerator<'a, T>>) -> OneOfGenerator<'a, T> {
+pub fn one_of<T>(generators: Vec<BoxedGenerator<'_, T>>) -> OneOfGenerator<'_, T> {
     OneOfGenerator { generators }
 }
 
