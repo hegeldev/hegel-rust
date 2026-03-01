@@ -153,10 +153,9 @@ fn init_panic_hook() {
 /// into the build directory's cache.
 const HEGEL_BINARY_PATH: &str = env!("HEGEL_BINARY_PATH");
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verbosity {
     Quiet,
-    #[default]
     Normal,
     Verbose,
     Debug,
