@@ -71,12 +71,6 @@ pub const fn fnv1a_hash(bytes: &[u8]) -> u64 {
 /// }));
 /// # });
 /// ```
-///
-/// # Shrinking
-///
-/// The body is wrapped in a labeled span derived from a hash of the source code,
-/// which helps the testing engine understand the structure of generated data
-/// and improve shrinking.
 #[macro_export]
 macro_rules! compose {
     (|$draw:ident| { $($body:tt)* }) => {{

@@ -1,5 +1,5 @@
 use super::{
-    arrays::ArrayGenerator, booleans, floats, hashmaps, integers, optional, text, vecs,
+    collections::ArrayGenerator, booleans, floats, hashmaps, integers, optional, text, vecs,
     BoolGenerator, FloatGenerator, HashMapGenerator, IntegerGenerator, OptionalGenerator,
     TextGenerator, VecGenerator,
 };

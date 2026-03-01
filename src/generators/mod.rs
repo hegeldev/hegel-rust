@@ -1,10 +1,8 @@
-mod arrays;
 mod basic;
 mod collection;
 mod collections;
 mod combinators;
 mod compose;
-mod fixed_dict;
 mod formats;
 mod from_type;
 mod numeric;
@@ -16,13 +14,11 @@ mod tuples;
 mod value;
 
 // public api
-pub use arrays::arrays;
 pub use basic::BasicGenerator;
 pub use collection::Collection;
-pub use collections::{hashmaps, hashsets, vecs, HashMapGenerator};
+pub use collections::{hashmaps, hashsets, vecs, HashMapGenerator, arrays, fixed_dicts};
 pub use combinators::{one_of, optional, sampled_from, BoxedGenerator};
 pub use compose::{fnv1a_hash, ComposedGenerator};
-pub use fixed_dict::fixed_dicts;
 pub use formats::{dates, datetimes, domains, emails, ip_addresses, times, urls};
 pub use from_type::{from_type, DefaultGenerator};
 pub use numeric::{floats, integers};
