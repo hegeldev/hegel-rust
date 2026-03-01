@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.10 - 2026-03-01
+
+Refactor some source code layout.
+
+
 ## 0.1.9 - 2026-03-01
 
 Better error message when using `assume()`, `note()`, or `draw()` outside of a Hegel test.

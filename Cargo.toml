@@ -1,6 +1,6 @@
 [package]
 name = "hegel"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2021"
 # if you bump this, also bump ci.yml and hegel-derive/cargo.toml
 rust-version = "1.86"
