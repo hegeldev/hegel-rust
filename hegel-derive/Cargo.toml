@@ -1,6 +1,6 @@
 [package]
 name = "hegel-derive"
-version = "0.1.10"
+version = "0.1.11"
 edition = "2021"
 rust-version = "1.68"
 description = "Derive macros for the Hegel property-based testing SDK"
