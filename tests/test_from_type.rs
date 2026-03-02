@@ -24,6 +24,9 @@ fn test_from_type_ints() {
     check_can_generate_examples(from_type::<u16>());
     check_can_generate_examples(from_type::<u32>());
     check_can_generate_examples(from_type::<u64>());
+    check_can_generate_examples(from_type::<i128>());
+    check_can_generate_examples(from_type::<u128>());
+    check_can_generate_examples(from_type::<isize>());
     check_can_generate_examples(from_type::<usize>());
 }
 

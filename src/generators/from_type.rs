@@ -117,6 +117,27 @@ impl DefaultGenerator for u64 {
     }
 }
 
+impl DefaultGenerator for i128 {
+    type Generator = IntegerGenerator<i128>;
+    fn default_generator() -> Self::Generator {
+        integers()
+    }
+}
+
+impl DefaultGenerator for u128 {
+    type Generator = IntegerGenerator<u128>;
+    fn default_generator() -> Self::Generator {
+        integers()
+    }
+}
+
+impl DefaultGenerator for isize {
+    type Generator = IntegerGenerator<isize>;
+    fn default_generator() -> Self::Generator {
+        integers()
+    }
+}
+
 impl DefaultGenerator for usize {
     type Generator = IntegerGenerator<usize>;
     fn default_generator() -> Self::Generator {

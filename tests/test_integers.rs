@@ -94,7 +94,6 @@ fn test_u64() {
 }
 
 #[test]
-#[ignore]
 fn test_i128() {
     assert_all_examples(generators::integers::<i128>(), |&n| {
         n >= i128::MIN && n <= i128::MAX
@@ -106,7 +105,6 @@ fn test_i128() {
 }
 
 #[test]
-#[ignore]
 fn test_u128() {
     assert_all_examples(generators::integers::<u128>(), |&n| {
         n >= u128::MIN && n <= u128::MAX
@@ -114,4 +112,25 @@ fn test_u128() {
     find_any(generators::integers::<u128>(), |&n| n > u128::MAX / 2);
     find_any(generators::integers::<u128>(), |&n| n == u128::MIN);
     find_any(generators::integers::<u128>(), |&n| n == u128::MAX);
+}
+
+#[test]
+fn test_isize() {
+    assert_all_examples(generators::integers::<isize>(), |&n| {
+        n >= isize::MIN && n <= isize::MAX
+    });
+    find_any(generators::integers::<isize>(), |&n| n < isize::MIN / 2);
+    find_any(generators::integers::<isize>(), |&n| n > isize::MAX / 2);
+    find_any(generators::integers::<isize>(), |&n| n == isize::MIN);
+    find_any(generators::integers::<isize>(), |&n| n == isize::MAX);
+}
+
+#[test]
+fn test_usize() {
+    assert_all_examples(generators::integers::<usize>(), |&n| {
+        n >= usize::MIN && n <= usize::MAX
+    });
+    find_any(generators::integers::<usize>(), |&n| n > usize::MAX / 2);
+    find_any(generators::integers::<usize>(), |&n| n == usize::MIN);
+    find_any(generators::integers::<usize>(), |&n| n == usize::MAX);
 }
