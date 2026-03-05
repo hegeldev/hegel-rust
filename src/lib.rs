@@ -211,6 +211,7 @@
 pub(crate) mod cbor_utils;
 pub mod control;
 pub mod generators;
+pub mod stateful;
 pub(crate) mod protocol;
 pub(crate) mod runner;
 
