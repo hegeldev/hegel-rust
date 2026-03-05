@@ -213,6 +213,7 @@ pub(crate) mod antithesis;
 pub(crate) mod cbor_utils;
 pub(crate) mod control;
 pub mod generators;
+pub mod stateful;
 pub(crate) mod protocol;
 pub(crate) mod runner;
 mod test_case;
