@@ -60,7 +60,7 @@ pub fn map_insert(value: &mut Value, key: &str, val: Value) {
                 }
             }
         }
-        entries.push((Value::Text(key.to_string()), val));
+        entries.push((Value::Text(String::from(key)), val));
     }
 }
 
