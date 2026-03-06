@@ -5,7 +5,6 @@ const PACKET_HEADER_SIZE: usize = 20;
 const PACKET_TERMINATOR: u8 = 0x0A;
 const REPLY_BIT: u32 = 1 << 31;
 
-/// A packet in the wire protocol.
 #[derive(Debug, Clone)]
 pub struct Packet {
     pub channel: u32,
@@ -14,7 +13,6 @@ pub struct Packet {
     pub payload: Vec<u8>,
 }
 
-/// Write a packet to a stream.
 pub fn write_packet<W: Write>(writer: &mut W, packet: &Packet) -> std::io::Result<()> {
     let message_id = if packet.is_reply {
         packet.message_id | REPLY_BIT
@@ -44,9 +42,7 @@ pub fn write_packet<W: Write>(writer: &mut W, packet: &Packet) -> std::io::Resul
     Ok(())
 }
 
-/// Read a packet from a stream.
 pub fn read_packet<R: Read>(reader: &mut R) -> std::io::Result<Packet> {
-    // Read header
     let mut header = [0u8; PACKET_HEADER_SIZE];
     reader.read_exact(&mut header)?;
 
@@ -56,7 +52,6 @@ pub fn read_packet<R: Read>(reader: &mut R) -> std::io::Result<Packet> {
     let message_id_raw = u32::from_be_bytes([header[12], header[13], header[14], header[15]]);
     let length = u32::from_be_bytes([header[16], header[17], header[18], header[19]]);
 
-    // Validate magic
     if magic != PACKET_MAGIC {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -67,15 +62,12 @@ pub fn read_packet<R: Read>(reader: &mut R) -> std::io::Result<Packet> {
         ));
     }
 
-    // Extract reply bit
     let is_reply = message_id_raw & REPLY_BIT != 0;
     let message_id = message_id_raw & !REPLY_BIT;
 
-    // Read payload
     let mut payload = vec![0u8; length as usize];
     reader.read_exact(&mut payload)?;
 
-    // Read terminator
     let mut terminator = [0u8; 1];
     reader.read_exact(&mut terminator)?;
     if terminator[0] != PACKET_TERMINATOR {
@@ -88,9 +80,9 @@ pub fn read_packet<R: Read>(reader: &mut R) -> std::io::Result<Packet> {
         ));
     }
 
-    // Verify checksum
     let mut header_for_check = header;
-    header_for_check[4..8].copy_from_slice(&[0, 0, 0, 0]); // Zero out checksum field
+    // zero out checksum field
+    header_for_check[4..8].copy_from_slice(&[0, 0, 0, 0]);
     let mut hasher = crc32fast::Hasher::new();
     hasher.update(&header_for_check);
     hasher.update(&payload);

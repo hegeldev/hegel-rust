@@ -1,13 +1,6 @@
-//! Ergonomic helpers for working with `ciborium::Value`.
-//!
-//! ciborium::Value::Map is `Vec<(Value, Value)>` (not a HashMap),
-//! so these helpers provide convenient access patterns.
-
 use ciborium::Value;
 
 /// Build a `ciborium::Value::Map` from key-value pairs.
-///
-/// Keys are converted to `Value::Text`, values use `Value::from()`.
 ///
 /// # Example
 /// ```ignore
@@ -21,7 +14,7 @@ macro_rules! cbor_map {
     ($($key:expr => $value:expr),* $(,)?) => {
         ciborium::Value::Map(vec![
             $((
-                ciborium::Value::Text($key.to_string()),
+                ciborium::Value::Text(String::from($key)),
                 ciborium::Value::from($value),
             )),*
         ])
@@ -57,10 +50,8 @@ pub fn map_get<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     None
 }
 
-/// Insert or update a text key in a `Value::Map`.
 pub fn map_insert(value: &mut Value, key: &str, val: Value) {
     if let Value::Map(entries) = value {
-        // Check if key already exists
         for (k, v) in entries.iter_mut() {
             if let Value::Text(s) = k {
                 if s == key {
@@ -69,43 +60,32 @@ pub fn map_insert(value: &mut Value, key: &str, val: Value) {
                 }
             }
         }
-        // Key not found, append
         entries.push((Value::Text(key.to_string()), val));
     }
 }
 
-/// Extract a string from a `Value::Text`.
 pub fn as_text(value: &Value) -> Option<&str> {
-    if let Value::Text(s) = value {
-        Some(s)
-    } else {
-        None
+    match value {
+        Value::Text(s) => Some(s),
+        _ => None,
     }
 }
 
-/// Extract a u64 from a `Value::Integer`.
 pub fn as_u64(value: &Value) -> Option<u64> {
-    if let Value::Integer(i) = value {
-        let n: i128 = (*i).into();
-        u64::try_from(n).ok()
-    } else {
-        None
+    match value {
+        Value::Integer(i) => u64::try_from(i128::from(*i)).ok(),
+        _ => None,
     }
 }
 
-/// Extract a bool from a `Value::Bool`.
 pub fn as_bool(value: &Value) -> Option<bool> {
-    if let Value::Bool(b) = value {
-        Some(*b)
-    } else {
-        None
+    match value {
+        Value::Bool(b) => Some(*b),
+        _ => None,
     }
 }
 
-/// Convert a ciborium::Value to a serde-compatible value via CBOR round-trip.
-/// This is used for serializing Rust values into ciborium::Value.
 pub fn cbor_serialize<T: serde::Serialize>(value: &T) -> Value {
-    // Serialize to CBOR bytes, then deserialize to ciborium::Value
     let mut bytes = Vec::new();
     ciborium::into_writer(value, &mut bytes).expect("CBOR serialization failed");
     ciborium::from_reader(&bytes[..]).expect("CBOR deserialization failed")

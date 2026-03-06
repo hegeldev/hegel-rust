@@ -15,14 +15,15 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 const SUPPORTED_PROTOCOL_VERSIONS: (f64, f64) = (0.1, 0.3);
+const HEGEL_BINARY_PATH: &str = env!("HEGEL_BINARY_PATH");
 static PANIC_HOOK_INIT: Once = Once::new();
 
 thread_local! {
-    /// Stores panic info captured by our panic hook: (thread_name, thread_id, location, backtrace)
+    /// (thread_name, thread_id, location, backtrace)
     static LAST_PANIC_INFO: RefCell<Option<(String, String, String, Backtrace)>> = const { RefCell::new(None) };
 }
 
-/// Get and clear the last panic info (thread_name, thread_id, location, backtrace).
+/// (thread_name, thread_id, location, backtrace).
 fn take_panic_info() -> Option<(String, String, String, Backtrace)> {
     LAST_PANIC_INFO.with(|info| info.borrow_mut().take())
 }
@@ -127,11 +128,10 @@ fn format_backtrace(bt: &Backtrace, full: bool) -> String {
 fn init_panic_hook() {
     PANIC_HOOK_INIT.call_once(|| {
         panic::set_hook(Box::new(|info| {
-            // Capture thread name, ID, and location for later use
-            let current = std::thread::current();
-            let thread_name = current.name().unwrap_or("<unnamed>").to_string();
-            // ThreadId's Debug format is "ThreadId(N)" - extract just the number
-            let thread_id = format!("{:?}", current.id())
+            let thread = std::thread::current();
+            let thread_name = thread.name().unwrap_or("<unnamed>").to_string();
+            // ThreadId's debug output is ThreadId(N)
+            let thread_id = format!("{:?}", thread.id())
                 .trim_start_matches("ThreadId(")
                 .trim_end_matches(')')
                 .to_string();
@@ -140,20 +140,13 @@ fn init_panic_hook() {
                 .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
                 .unwrap_or_else(|| "<unknown>".to_string());
 
-            // Capture backtrace - will have status Disabled if RUST_BACKTRACE not set
             let backtrace = Backtrace::capture();
 
             LAST_PANIC_INFO
                 .with(|l| *l.borrow_mut() = Some((thread_name, thread_id, location, backtrace)));
-            // Don't print anything - we'll format the output ourselves
         }));
     });
 }
-
-/// Path to the hegel binary, determined at compile time by build.rs.
-/// This will be either a system hegel found on PATH, or one installed
-/// into the build directory's cache.
-const HEGEL_BINARY_PATH: &str = env!("HEGEL_BINARY_PATH");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verbosity {
@@ -225,7 +218,6 @@ impl<F> Hegel<F>
 where
     F: FnMut(),
 {
-    /// Create a new Hegel test runner with the given test function.
     pub fn new(test_fn: F) -> Self {
         Self {
             test_fn,
@@ -235,13 +227,11 @@ where
         }
     }
 
-    /// Set the number of test cases to run. Default: 100.
     pub fn test_cases(mut self, n: u64) -> Self {
         self.test_cases = n;
         self
     }
 
-    /// Set the verbosity level. Default: Normal.
     pub fn verbosity(mut self, verbosity: Verbosity) -> Self {
         self.verbosity = verbosity;
         self
@@ -256,21 +246,13 @@ where
     ///
     /// This function:
     /// 1. Creates a Unix socket server
-    /// 2. Spawns the hegeld as a subprocess
-    /// 3. Accepts the connection from hegeld
-    /// 4. Handles test case events from hegeld
+    /// 2. Spawns the hegel server as a subprocess
+    /// 3. Accepts the connection from the hegel server
+    /// 4. Handles test case events from the hegel server
     /// 5. Runs the test function for each test case
-    /// 6. Reports results back to hegeld
+    /// 6. Reports results back to the hegel server
     /// 7. Panics if any test case fails
-    ///
-    /// # Panics
-    ///
-    /// Panics if:
-    /// - Failed to create socket or spawn hegel
-    /// - Any test case fails (after shrinking)
-    /// - Socket communication errors
     pub fn run(self) {
-        // Create temp directory with socket path
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
         let socket_path = temp_dir.path().join("hegel.sock");
 
@@ -282,10 +264,9 @@ where
         cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
 
         if self.verbosity == Verbosity::Debug {
-            eprintln!("Starting hegeld: {:?}", cmd);
+            eprintln!("Starting hegel server: {:?}", cmd);
         }
 
-        // Nonsense warning: string allocation is insignificant next to spawning a process
         #[allow(clippy::expect_fun_call)]
         let mut child = cmd
             .spawn()
@@ -293,27 +274,26 @@ where
 
         init_panic_hook();
 
-        // Wait for hegeld to create the socket and start listening
         let mut attempts = 0;
         let stream = loop {
             if socket_path.exists() {
                 match UnixStream::connect(&socket_path) {
                     Ok(stream) => break stream,
                     Err(_) if attempts < 50 => {
-                        // Socket exists but not yet listening
+                        // socket exists but not yet listening
                         std::thread::sleep(Duration::from_millis(100));
                         attempts += 1;
                         continue;
                     }
                     Err(e) => {
                         let _ = child.kill();
-                        panic!("Failed to connect to hegeld socket: {}", e);
+                        panic!("Failed to connect to hegel server socket: {}", e);
                     }
                 }
             }
             if attempts >= 50 {
                 let _ = child.kill();
-                panic!("Timeout waiting for hegeld to create socket");
+                panic!("Timeout waiting for hegel server to create socket");
             }
             std::thread::sleep(Duration::from_millis(100));
             attempts += 1;
@@ -354,7 +334,7 @@ where
             panic!(
                 "hegel-rust supports protocol versions {lo} through {hi}, but \
                  got server version {v}. Upgrading hegel-rust or downgrading \
-                 your hegel cli might help."
+                 your hegel server might help."
             );
         }
 
@@ -362,18 +342,13 @@ where
             eprintln!("Version negotiation complete");
         }
 
-        // Run the test
         let mut test_fn = self.test_fn;
         let verbosity = self.verbosity;
         let got_interesting = Arc::new(AtomicBool::new(false));
-
-        // Create a test channel for receiving test_case/test_done events
         let test_channel = connection.new_channel();
 
-        // Send run_test request with the test channel ID
         let run_test_msg = cbor_map! {
             "command" => "run_test",
-            "name" => "test",
             "test_cases" => self.test_cases,
             "seed" => self.seed.map_or(Value::Null, Value::from),
             "channel_id" => test_channel.channel_id
@@ -491,13 +466,12 @@ where
             .and_then(as_bool)
             .unwrap_or(true);
 
-        // Close the connection so hegeld can exit gracefully
+        // Close the connection so server process can exit gracefully
         drop(test_channel);
         drop(control);
         let _ = connection.close();
         drop(connection);
 
-        // Wait for hegeld to exit
         let _ = child.wait().expect("Failed to wait for hegel");
 
         if !passed || got_interesting.load(Ordering::SeqCst) {
@@ -521,10 +495,8 @@ fn run_test_case<F: FnMut()>(
     let data = TestCaseData::new(Arc::clone(connection), test_channel, verbosity, is_final);
     set_test_case_data(&data);
 
-    // Run test in catch_unwind
     let result = catch_unwind(AssertUnwindSafe(test_fn));
 
-    // Determine status and origin from result
     let (status, origin) = match &result {
         Ok(()) => ("VALID".to_string(), None),
         Err(e) => {
@@ -568,9 +540,7 @@ fn run_test_case<F: FnMut()>(
                     }
                 }
 
-                // Origin is a string matching Python's _extract_origin format
                 let origin = format!("Panic at {}", location);
-
                 ("INTERESTING".to_string(), Some(origin))
             }
         }
@@ -591,7 +561,6 @@ fn run_test_case<F: FnMut()>(
         };
         // Wait for server to acknowledge mark_complete before closing
         let _ = data.channel().request_cbor(&mark_complete);
-        // Close the test case channel
         let _ = data.channel().close();
     }
 

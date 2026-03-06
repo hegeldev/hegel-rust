@@ -115,7 +115,6 @@ impl Channel {
         self.connection.send_packet(&packet)
     }
 
-    /// Send a CBOR request and wait for a CBOR response.
     pub fn request_cbor(&self, message: &Value) -> std::io::Result<Value> {
         let mut payload = Vec::new();
         ciborium::into_writer(message, &mut payload)
@@ -136,7 +135,6 @@ impl Channel {
             )));
         }
 
-        // Extract result field if present
         if let Some(result) = map_get(&response, "result") {
             return Ok(result.clone());
         }
