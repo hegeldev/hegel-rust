@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.12 - 2026-03-02
+
+Support new hegel protocol versions.
+
+
 ## 0.1.11 - 2026-03-01
 
 `#[hegel::test]` now automatically adds `#[test]`, and errors if used in combination with an explicit `#[test]` macro.
