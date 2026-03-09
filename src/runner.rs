@@ -151,9 +151,6 @@ fn init_panic_hook() {
 }
 
 fn ensure_hegel_installed() -> Result<String, String> {
-    static INSTALL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = INSTALL_LOCK.lock().unwrap();
-
     let venv_dir = format!("{HEGEL_SERVER_DIR}/venv");
     let version_file = format!("{venv_dir}/hegel-version");
     let hegel_bin = format!("{venv_dir}/bin/hegel");
