@@ -5,14 +5,14 @@ use hegel::generators::{self, Generate};
 
 #[hegel::test]
 fn test_sampled_from_returns_element_from_list() {
-    let options = hegel::draw(&generators::vecs(generators::integers::<i32>()));
+    let options = hegel::draw(&generators::vecs(generators::integers::<i32>()).min_size(1));
     let value = hegel::draw(&generators::sampled_from(options.clone()));
     assert!(options.contains(&value));
 }
 
 #[hegel::test]
 fn test_sampled_from_strings() {
-    let options = hegel::draw(&generators::vecs(generators::text()));
+    let options = hegel::draw(&generators::vecs(generators::text()).min_size(1));
     let value = hegel::draw(&generators::sampled_from(options.clone()));
     assert!(options.contains(&value));
 }
