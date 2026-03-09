@@ -201,18 +201,11 @@ jobs:
       - name: lint
         run: just check-format-nix
 
-  release:
-    name: release
-    if: github.event_name == 'push' && github.repository == 'antithesishq/hegel-rust'
-    needs: [lint, test, test-all-features, docs, coverage, conformance, nix]
+  check-release-access:
+    name: check release access
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    permissions: {}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          persist-credentials: false
-
       - name: Generate app token
         uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token
@@ -226,12 +219,33 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: gh api repos/antithesishq/hegel-core/releases/latest --jq '.tag_name'
 
+  release:
+    name: release
+    if: github.event_name == 'push' && github.repository == 'antithesishq/hegel-rust'
+    needs: [lint, test, test-all-features, docs, coverage, conformance, nix, check-release-access]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
       - name: Check for RELEASE.md
         id: check
         run: |
           if [ ! -f RELEASE.md ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Generate app token
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        id: app-token
+        with:
+          app-id: ${{ vars.HEGEL_RELEASE_APP_ID }}
+          private-key: ${{ secrets.HEGEL_RELEASE_APP_PRIVATE_KEY }}
+          repositories: hegel-rust,hegel-core
 
       - name: Re-checkout with app token # zizmor: ignore[artipacked]
         if: steps.check.outputs.skip != 'true'
