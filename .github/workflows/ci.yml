@@ -39,9 +39,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: ./.github/actions/base  # zizmor: ignore[secrets-outside-env]
+      - uses: ./.github/actions/base
         with:
-          ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }}
+          ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }} # zizmor: ignore[secrets-outside-env]
 
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable # zizmor: ignore[superfluous-actions]
         with:
@@ -70,9 +70,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: ./.github/actions/base  # zizmor: ignore[secrets-outside-env]
+      - uses: ./.github/actions/base
         with:
-          ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }}
+          ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }} # zizmor: ignore[secrets-outside-env]
 
       - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master # zizmor: ignore[superfluous-actions]
         with:
@@ -105,9 +105,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: ./.github/actions/base  # zizmor: ignore[secrets-outside-env]
+      - uses: ./.github/actions/base
         with:
-          ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }}
+          ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }} # zizmor: ignore[secrets-outside-env]
 
       - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master # zizmor: ignore[superfluous-actions]
         with:
@@ -137,9 +137,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: ./.github/actions/base  # zizmor: ignore[secrets-outside-env]
+      - uses: ./.github/actions/base
         with:
-          ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }}
+          ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }} # zizmor: ignore[secrets-outside-env]
 
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable # zizmor: ignore[superfluous-actions]
       - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
@@ -159,9 +159,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: ./.github/actions/base  # zizmor: ignore[secrets-outside-env]
+      - uses: ./.github/actions/base
         with:
-          ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }}
+          ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }} # zizmor: ignore[secrets-outside-env]
 
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable # zizmor: ignore[superfluous-actions]
         with:
@@ -191,9 +191,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: ./.github/actions/base  # zizmor: ignore[secrets-outside-env]
+      - uses: ./.github/actions/base
         with:
-          ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }}
+          ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }} # zizmor: ignore[secrets-outside-env]
 
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable # zizmor: ignore[superfluous-actions]
       - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
@@ -216,9 +216,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: ./.github/actions/base  # zizmor: ignore[secrets-outside-env]
+      - uses: ./.github/actions/base
         with:
-          ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }}
+          ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }} # zizmor: ignore[secrets-outside-env]
       - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b # v27
       - name: Install just
         run: sudo apt-get update && sudo apt-get install -y just
