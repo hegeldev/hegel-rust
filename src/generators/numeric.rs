@@ -24,11 +24,12 @@ impl<T> IntegerGenerator<T> {
 
 impl<T> IntegerGenerator<T>
 where
-    T: serde::Serialize + Bounded + Copy,
+    T: serde::Serialize + Bounded + NumInteger + Copy,
 {
     fn build_schema(&self) -> Value {
         let min = self.min.unwrap_or_else(T::min_value);
         let max = self.max.unwrap_or_else(T::max_value);
+        assert!(min <= max, "Cannot have max_value < min_value");
 
         cbor_map! {
             "type" => "integer",
@@ -131,8 +132,19 @@ where
         let has_min = self.min.is_some();
         let has_max = self.max.is_some();
 
+        if let (Some(min), Some(max)) = (self.min, self.max) {
+            assert!(min <= max, "Cannot have max_value < min_value");
+        }
+
         let allow_nan = self.allow_nan.unwrap_or(!has_min && !has_max);
         let allow_infinity = self.allow_infinity.unwrap_or(!has_min || !has_max);
+
+        if allow_nan && (has_min || has_max) {
+            panic!("Cannot have allow_nan=true with min_value or max_value");
+        }
+        if allow_infinity && has_min && has_max {
+            panic!("Cannot have allow_infinity=true with both min_value and max_value");
+        }
 
         let mut schema = cbor_map! {
             "type" => "float",

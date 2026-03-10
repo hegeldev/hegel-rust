@@ -56,6 +56,7 @@ impl<'a, T: 'a> BasicGenerator<'a, T> {
 /// Generators produce values of type `T` and optionally provide a
 /// [`BasicGenerator`] for server-based generation via `as_basic()`.
 pub trait Generate<T>: Send + Sync {
+    #[doc(hidden)]
     fn do_draw(&self, data: &TestCaseData) -> T;
 
     /// Return a BasicGenerator for schema-based generation, if possible.
@@ -65,6 +66,7 @@ pub trait Generate<T>: Send + Sync {
     ///
     /// Returns `None` for generators that cannot be expressed as a schema
     /// (e.g., after `flat_map` or `filter`).
+    #[doc(hidden)]
     fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
         None
     }

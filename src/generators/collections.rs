@@ -36,6 +36,9 @@ where
     G: Generate<T>,
 {
     fn do_draw(&self, data: &TestCaseData) -> Vec<T> {
+        if let Some(max) = self.max_size {
+            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+        }
         if let Some(basic) = self.as_basic() {
             basic.do_draw(data)
         } else {
@@ -52,6 +55,9 @@ where
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, Vec<T>>> {
+        if let Some(max) = self.max_size {
+            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+        }
         let basic = self.elements.as_basic()?;
 
         let mut schema = cbor_map! {
@@ -109,6 +115,9 @@ where
     T: Eq + Hash,
 {
     fn do_draw(&self, data: &TestCaseData) -> HashSet<T> {
+        if let Some(max) = self.max_size {
+            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+        }
         if let Some(basic) = self.as_basic() {
             basic.do_draw(data)
         } else {
@@ -133,6 +142,9 @@ where
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, HashSet<T>>> {
+        if let Some(max) = self.max_size {
+            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+        }
         let basic = self.elements.as_basic()?;
 
         let mut schema = cbor_map! {
@@ -191,6 +203,9 @@ where
     KT: Eq + std::hash::Hash,
 {
     fn do_draw(&self, data: &TestCaseData) -> HashMap<KT, VT> {
+        if let Some(max) = self.max_size {
+            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+        }
         if let Some(basic) = self.as_basic() {
             basic.do_draw(data)
         } else {
@@ -218,6 +233,9 @@ where
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, HashMap<KT, VT>>> {
+        if let Some(max) = self.max_size {
+            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+        }
         let keys_basic = self.keys.as_basic()?;
         let values_basic = self.values.as_basic()?;
 

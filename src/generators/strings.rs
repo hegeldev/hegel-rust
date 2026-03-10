@@ -19,6 +19,10 @@ impl TextGenerator {
     }
 
     fn build_schema(&self) -> Value {
+        if let Some(max) = self.max_size {
+            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+        }
+
         let mut schema = cbor_map! {
             "type" => "string",
             "min_size" => self.min_size as u64
@@ -111,6 +115,10 @@ impl BinaryGenerator {
     }
 
     fn build_schema(&self) -> Value {
+        if let Some(max) = self.max_size {
+            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+        }
+
         let mut schema = cbor_map! {
             "type" => "binary",
             "min_size" => self.min_size as u64
@@ -208,6 +216,8 @@ impl DomainGenerator {
     }
 
     fn build_schema(&self) -> Value {
+        assert!(self.max_length >= 4 && self.max_length <= 255, "max_length must be between 4 and 255");
+
         cbor_map! {
             "type" => "domain",
             "max_length" => self.max_length as u64
