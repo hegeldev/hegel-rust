@@ -13,20 +13,18 @@ mod strings;
 mod tuples;
 mod value;
 
-// public api: Generator<T> and DefaultGenerator are the primary user-facing types.
-// Factory functions (integers(), text(), etc.) return concrete types for builder
-// method chaining, but those concrete types are #[doc(hidden)] — users should
-// use Generator<T> whenever they need a type annotation.
-pub use generators::Generator;
-
-// factory functions
-pub use collections::{arrays, fixed_dicts, hashmaps, hashsets, vecs};
+// public api
+pub use collections::{arrays, fixed_dicts, hashmaps, hashsets, vecs, HashMapGenerator};
 pub use combinators::{one_of, optional, sampled_from};
+pub use compose::{fnv1a_hash, ComposedGenerator};
+pub use data::{deserialize_value, labels, Collection, StopTestError, TestCaseData};
+pub use from_type::{from_type, DefaultGenerator};
+pub use generators::{BasicGenerator, BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};
 pub use misc::{booleans, just, none, unit};
 pub use numeric::{floats, integers};
 #[cfg(feature = "rand")]
 #[cfg_attr(docsrs, doc(cfg(feature = "rand")))]
-pub use random::randoms;
+pub use random::{randoms, HegelRandom, RandomsGenerator};
 pub use strings::{
     binary, dates, datetimes, domains, emails, from_regex, ip_addresses, text, times, urls,
 };
@@ -34,26 +32,6 @@ pub use tuples::{
     tuples10, tuples11, tuples12, tuples2, tuples3, tuples4, tuples5, tuples6, tuples7, tuples8,
     tuples9,
 };
-
-// types users may need to name
-pub use from_type::{from_type, DefaultGenerator};
-#[cfg(feature = "rand")]
-#[cfg_attr(docsrs, doc(cfg(feature = "rand")))]
-pub use random::HegelRandom;
-
-// concrete generator types: public for type system reasons, but hidden from docs.
-// Users should use Generator<T> instead of naming these directly.
-#[doc(hidden)]
-pub use collections::HashMapGenerator;
-#[doc(hidden)]
-pub use compose::{fnv1a_hash, ComposedGenerator};
-#[doc(hidden)]
-pub use data::{deserialize_value, labels, Collection, StopTestError, TestCaseData};
-#[doc(hidden)]
-pub use generators::{BasicGenerator, BoxedGenerator, Filtered, FlatMapped, Mapped};
-#[cfg(feature = "rand")]
-#[doc(hidden)]
-pub use random::RandomsGenerator;
 
 pub(crate) use collections::VecGenerator;
 pub(crate) use combinators::OptionalGenerator;

@@ -235,7 +235,6 @@ where
 ///     generators::integers().min_value(1).boxed()
 /// }
 /// ```
-#[doc(hidden)]
 pub struct BoxedGenerator<T> {
     pub(super) inner: Arc<dyn Generator<T> + Send + Sync>,
 }

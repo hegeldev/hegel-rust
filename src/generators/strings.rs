@@ -88,7 +88,7 @@ impl Generator<String> for RegexGenerator {
     }
 }
 
-/// Generator strings that contain a match for the given regex pattern.
+/// Generate strings that contain a match for the given regex pattern.
 ///
 /// Use `.fullmatch()` to require the entire string to match.
 pub fn from_regex(pattern: &str) -> RegexGenerator {
@@ -149,17 +149,17 @@ impl Generator<Vec<u8>> for BinaryGenerator {
     }
 }
 
-/// Generator binary data.
+/// Generate binary data.
 ///
 /// # Example
 ///
 /// ```no_run
 /// use hegel::generators::{self, Generator};
 ///
-/// // Generator any byte sequence
+/// // Generate any byte sequence
 /// let gen = generators::binary();
 ///
-/// // Generator 16-32 bytes
+/// // Generate 16-32 bytes
 /// let gen = generators::binary().min_size(16).max_size(32);
 /// ```
 pub fn binary() -> BinaryGenerator {
