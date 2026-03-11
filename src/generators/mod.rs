@@ -24,6 +24,9 @@ pub use collections::{arrays, fixed_dicts, hashmaps, hashsets, vecs};
 pub use combinators::{one_of, optional, sampled_from};
 pub use misc::{booleans, just, none, unit};
 pub use numeric::{floats, integers};
+#[cfg(feature = "rand")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rand")))]
+pub use random::randoms;
 pub use strings::{
     binary, dates, datetimes, domains, emails, from_regex, ip_addresses, text, times, urls,
 };
@@ -31,9 +34,6 @@ pub use tuples::{
     tuples10, tuples11, tuples12, tuples2, tuples3, tuples4, tuples5, tuples6, tuples7, tuples8,
     tuples9,
 };
-#[cfg(feature = "rand")]
-#[cfg_attr(docsrs, doc(cfg(feature = "rand")))]
-pub use random::randoms;
 
 // types users may need to name
 pub use from_type::{from_type, DefaultGenerator};

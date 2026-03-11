@@ -1,4 +1,6 @@
-use super::{integers, labels, BasicGenerator, BoxedGenerator, Collection, Generator, TestCaseData};
+use super::{
+    integers, labels, BasicGenerator, BoxedGenerator, Collection, Generator, TestCaseData,
+};
 use crate::cbor_utils::{cbor_map, map_insert};
 use ciborium::Value;
 use std::collections::{HashMap, HashSet};
@@ -436,7 +438,9 @@ pub fn arrays<G: Generator<T> + Send + Sync, T, const N: usize>(
     ArrayGenerator::new(element)
 }
 
-impl<G: Generator<T> + Send + Sync, T, const N: usize> Generator<[T; N]> for ArrayGenerator<G, T, N> {
+impl<G: Generator<T> + Send + Sync, T, const N: usize> Generator<[T; N]>
+    for ArrayGenerator<G, T, N>
+{
     fn do_draw(&self, data: &TestCaseData) -> [T; N] {
         if let Some(basic) = self.as_basic() {
             basic.do_draw(data)
