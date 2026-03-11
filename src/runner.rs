@@ -1,4 +1,6 @@
-use crate::control::{clear_test_case_data, set_test_case_data, ASSUME_FAIL_STRING};
+use crate::control::{
+    clear_test_case_data, currently_in_test_context, set_test_case_data, ASSUME_FAIL_STRING,
+};
 use crate::generators::TestCaseData;
 use crate::protocol::{Channel, Connection, HANDSHAKE_STRING};
 use ciborium::Value;
@@ -131,7 +133,17 @@ fn format_backtrace(bt: &Backtrace, full: bool) -> String {
 // This is called once per process, the first time any hegel test runs.
 fn init_panic_hook() {
     PANIC_HOOK_INIT.call_once(|| {
-        panic::set_hook(Box::new(|info| {
+        let prev_hook = panic::take_hook();
+        panic::set_hook(Box::new(move |info| {
+            if !currently_in_test_context() {
+                // Outside a test case (e.g. setup, version negotiation, final panic) —
+                // use the previous hook so the message is visible.
+                prev_hook(info);
+                return;
+            }
+
+            // Inside a test case — suppress output (we're likely shrinking)
+            // and store the info for later use in run_test_case.
             let thread = std::thread::current();
             let thread_name = thread.name().unwrap_or("<unnamed>").to_string();
             // ThreadId's debug output is ThreadId(N)
