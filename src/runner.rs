@@ -8,11 +8,12 @@ use ciborium::Value;
 use crate::cbor_utils::{as_bool, as_text, as_u64, cbor_map, map_get};
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::cell::RefCell;
+use std::fs::{File, OpenOptions};
 use std::os::unix::net::UnixStream;
 use std::panic::{self, catch_unwind, AssertUnwindSafe};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Once};
+use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -21,6 +22,7 @@ const HEGEL_SERVER_VERSION: &str = "v0.3.6";
 const HEGEL_SERVER_COMMAND_ENV: &str = "HEGEL_SERVER_COMMAND";
 const HEGEL_SERVER_DIR: &str = ".hegel";
 static HEGEL_SERVER_COMMAND: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static SERVER_LOG_FILE: std::sync::OnceLock<Mutex<File>> = std::sync::OnceLock::new();
 
 static PANIC_HOOK_INIT: Once = Once::new();
 
@@ -228,6 +230,22 @@ fn ensure_hegel_installed() -> Result<String, String> {
     Ok(hegel_bin)
 }
 
+fn server_log_file() -> File {
+    let file = SERVER_LOG_FILE.get_or_init(|| {
+        std::fs::create_dir_all(HEGEL_SERVER_DIR).ok();
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(format!("{HEGEL_SERVER_DIR}/server.log"))
+            .expect("Failed to open server log file");
+        Mutex::new(file)
+    });
+    file.lock()
+        .unwrap()
+        .try_clone()
+        .expect("Failed to clone server log file handle")
+}
+
 fn find_hegel() -> String {
     if let Ok(override_path) = std::env::var(HEGEL_SERVER_COMMAND_ENV) {
         return override_path;
@@ -353,7 +371,13 @@ where
             .arg("--verbosity")
             .arg(self.verbosity.as_str());
 
-        cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+        cmd.env("PYTHONUNBUFFERED", "1");
+        let log_file = server_log_file();
+        let log_file2 = log_file
+            .try_clone()
+            .expect("Failed to clone log file handle");
+        cmd.stdout(Stdio::from(log_file));
+        cmd.stderr(Stdio::from(log_file2));
 
         if self.verbosity == Verbosity::Debug {
             eprintln!("Starting hegel server: {:?}", cmd);
