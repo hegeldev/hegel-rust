@@ -1,5 +1,5 @@
 use hegel::generators;
-use hegel::generators::Generate;
+use hegel::generators::Generator;
 
 #[test]
 #[should_panic(expected = "max_value < min_value")]

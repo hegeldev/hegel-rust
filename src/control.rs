@@ -1,4 +1,4 @@
-use crate::generators::{Generate, TestCaseData};
+use crate::generators::{Generator, TestCaseData};
 use std::cell::Cell;
 
 /// The sentinel string used to identify assume-rejection panics.
@@ -115,7 +115,7 @@ pub fn note(message: &str) {
 ///     let s: String = hegel::draw(&generators::text());
 /// }
 /// ```
-pub fn draw<T: std::fmt::Debug>(gen: &impl Generate<T>) -> T {
+pub fn draw<T: std::fmt::Debug>(gen: &impl Generator<T>) -> T {
     let data = test_case_data().expect("draw() cannot be called outside of a Hegel test.");
     assert!(
         !data.in_composite.get(),

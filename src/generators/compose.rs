@@ -1,4 +1,4 @@
-use super::{Generate, TestCaseData};
+use super::{Generator, TestCaseData};
 use std::marker::PhantomData;
 
 pub struct ComposedGenerator<T, F> {
@@ -18,7 +18,7 @@ where
     }
 }
 
-impl<T, F> Generate<T> for ComposedGenerator<T, F>
+impl<T, F> Generator<T> for ComposedGenerator<T, F>
 where
     F: Fn() -> T + Send + Sync,
 {
@@ -73,7 +73,7 @@ macro_rules! compose {
             __data.in_composite.set(true);
             __data.start_span(LABEL);
             let __result = {
-                fn $draw<T>(gen: &impl $crate::generators::Generate<T>) -> T {
+                fn $draw<T>(gen: &impl $crate::generators::Generator<T>) -> T {
                     gen.do_draw($crate::generators::test_case_data().expect(
                         "compose!() cannot be called outside of a Hegel test."
                     ))

@@ -1,7 +1,7 @@
 mod common;
 
 use common::utils::find_any;
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn test_array_of_integers() {

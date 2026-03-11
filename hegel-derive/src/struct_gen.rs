@@ -42,7 +42,7 @@ pub(crate) fn derive_struct_generate(input: &DeriveInput, data: &syn::DataStruct
     // Generate field definitions for the generator struct
     let generator_fields = field_names.iter().zip(field_types.iter()).map(|(name, ty)| {
         quote! {
-            #name: hegel::generators::BoxedGenerator<'a, #ty>
+            #name: hegel::generators::BoxedGenerator< #ty>
         }
     });
 
@@ -58,7 +58,7 @@ pub(crate) fn derive_struct_generate(input: &DeriveInput, data: &syn::DataStruct
     });
 
     // Generate Default trait bounds for new()
-    let default_bounds = default_gen_bounds(&field_types, quote! { 'a });
+    let default_bounds = default_gen_bounds(&field_types, quote! { 'static });
 
     // Generate with_* methods
     let with_method_impls = field_names.iter().zip(field_types.iter()).zip(with_methods.iter())
@@ -67,7 +67,7 @@ pub(crate) fn derive_struct_generate(input: &DeriveInput, data: &syn::DataStruct
                 /// Set a custom generator for this field.
                 pub fn #method_name<G>(mut self, gen: G) -> Self
                 where
-                    G: hegel::generators::Generate<#field_type> + Send + Sync + 'a,
+                    G: hegel::generators::Generator<#field_type> + Send + Sync + 'static,
                 {
                     self.#field_name = gen.boxed();
                     self
@@ -123,11 +123,11 @@ pub(crate) fn derive_struct_generate(input: &DeriveInput, data: &syn::DataStruct
 
     let expanded = quote! {
         const _: () = {
-            pub struct #generator_name<'a> {
+            pub struct #generator_name {
                 #(#generator_fields,)*
             }
 
-            impl<'a> #generator_name<'a> {
+            impl #generator_name {
                 pub fn new() -> Self
                 where
                     #(#default_bounds,)*
@@ -140,19 +140,19 @@ pub(crate) fn derive_struct_generate(input: &DeriveInput, data: &syn::DataStruct
                 #(#with_method_impls)*
             }
 
-            impl<'a> Default for #generator_name<'a>
+            impl Default for #generator_name
             where
                 #(#field_types: hegel::generators::DefaultGenerator,)*
-                #(<#field_types as hegel::generators::DefaultGenerator>::Generator: Send + Sync + 'a,)*
+                #(<#field_types as hegel::generators::DefaultGenerator>::Generator: Send + Sync + 'static,)*
             {
                 fn default() -> Self {
                     Self::new()
                 }
             }
 
-            impl<'a> hegel::generators::Generate<#name> for #generator_name<'a> {
+            impl hegel::generators::Generator<#name> for #generator_name {
                 fn do_draw(&self, __data: &hegel::generators::TestCaseData) -> #name {
-                    use hegel::generators::Generate;
+                    use hegel::generators::Generator;
                     if let Some(basic) = self.as_basic() {
                         basic.parse_raw(__data.generate_raw(basic.schema()))
                     } else {
@@ -166,7 +166,7 @@ pub(crate) fn derive_struct_generate(input: &DeriveInput, data: &syn::DataStruct
                 }
 
                 fn as_basic(&self) -> Option<hegel::generators::BasicGenerator<'_, #name>> {
-                    use hegel::generators::Generate;
+                    use hegel::generators::Generator;
 
                     #(#basic_bindings)*
 
@@ -188,7 +188,7 @@ pub(crate) fn derive_struct_generate(input: &DeriveInput, data: &syn::DataStruct
             where
                 #(#default_generator_bounds,)*
             {
-                type Generator = #generator_name<'static>;
+                type Generator = #generator_name;
                 fn default_generator() -> Self::Generator {
                     #generator_name::new()
                 }

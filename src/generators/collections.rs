@@ -1,4 +1,4 @@
-use super::{integers, labels, BasicGenerator, BoxedGenerator, Collection, Generate, TestCaseData};
+use super::{integers, labels, BasicGenerator, BoxedGenerator, Collection, Generator, TestCaseData};
 use crate::cbor_utils::{cbor_map, map_insert};
 use ciborium::Value;
 use std::collections::{HashMap, HashSet};
@@ -31,9 +31,9 @@ impl<G, T> VecGenerator<G, T> {
     }
 }
 
-impl<T, G> Generate<Vec<T>> for VecGenerator<G, T>
+impl<T, G> Generator<Vec<T>> for VecGenerator<G, T>
 where
-    G: Generate<T>,
+    G: Generator<T>,
 {
     fn do_draw(&self, data: &TestCaseData) -> Vec<T> {
         if let Some(max) = self.max_size {
@@ -80,7 +80,7 @@ where
     }
 }
 
-pub fn vecs<T, G: Generate<T>>(elements: G) -> VecGenerator<G, T> {
+pub fn vecs<T, G: Generator<T>>(elements: G) -> VecGenerator<G, T> {
     VecGenerator {
         elements,
         min_size: 0,
@@ -109,9 +109,9 @@ impl<G, T> HashSetGenerator<G, T> {
     }
 }
 
-impl<T, G> Generate<HashSet<T>> for HashSetGenerator<G, T>
+impl<T, G> Generator<HashSet<T>> for HashSetGenerator<G, T>
 where
-    G: Generate<T>,
+    G: Generator<T>,
     T: Eq + Hash,
 {
     fn do_draw(&self, data: &TestCaseData) -> HashSet<T> {
@@ -167,7 +167,7 @@ where
     }
 }
 
-pub fn hashsets<T, G: Generate<T>>(elements: G) -> HashSetGenerator<G, T> {
+pub fn hashsets<T, G: Generator<T>>(elements: G) -> HashSetGenerator<G, T> {
     HashSetGenerator {
         elements,
         min_size: 0,
@@ -196,10 +196,10 @@ impl<K, V, KT, VT> HashMapGenerator<K, V, KT, VT> {
     }
 }
 
-impl<K, V, KT, VT> Generate<HashMap<KT, VT>> for HashMapGenerator<K, V, KT, VT>
+impl<K, V, KT, VT> Generator<HashMap<KT, VT>> for HashMapGenerator<K, V, KT, VT>
 where
-    K: Generate<KT>,
-    V: Generate<VT>,
+    K: Generator<KT>,
+    V: Generator<VT>,
     KT: Eq + std::hash::Hash,
 {
     fn do_draw(&self, data: &TestCaseData) -> HashMap<KT, VT> {
@@ -287,7 +287,7 @@ where
 ///
 /// let map: HashMap<i32, String> = hegel::draw(&hashmaps(integers(), text()));
 /// ```
-pub fn hashmaps<KT, VT, K: Generate<KT>, V: Generate<VT>>(
+pub fn hashmaps<KT, VT, K: Generator<KT>, V: Generator<VT>>(
     keys: K,
     values: V,
 ) -> HashMapGenerator<K, V, KT, VT> {
@@ -305,7 +305,7 @@ pub(crate) struct MappedToValue<T, G> {
     _phantom: PhantomData<fn() -> T>,
 }
 
-impl<T: serde::Serialize, G: Generate<T>> Generate<Value> for MappedToValue<T, G> {
+impl<T: serde::Serialize, G: Generator<T>> Generator<Value> for MappedToValue<T, G> {
     fn do_draw(&self, data: &TestCaseData) -> Value {
         crate::cbor_utils::cbor_serialize(&self.inner.do_draw(data))
     }
@@ -320,15 +320,15 @@ impl<T: serde::Serialize, G: Generate<T>> Generate<Value> for MappedToValue<T, G
     }
 }
 
-pub struct FixedDictBuilder<'a> {
-    fields: Vec<(String, BoxedGenerator<'a, Value>)>,
+pub struct FixedDictBuilder {
+    fields: Vec<(String, BoxedGenerator<Value>)>,
 }
 
-impl<'a> FixedDictBuilder<'a> {
+impl FixedDictBuilder {
     pub fn field<T, G>(mut self, name: &str, gen: G) -> Self
     where
-        G: Generate<T> + Send + Sync + 'a,
-        T: serde::Serialize + 'a,
+        G: Generator<T> + Send + Sync + 'static,
+        T: serde::Serialize + 'static,
     {
         let boxed = BoxedGenerator {
             inner: Arc::new(MappedToValue {
@@ -340,18 +340,18 @@ impl<'a> FixedDictBuilder<'a> {
         self
     }
 
-    pub fn build(self) -> FixedDictGenerator<'a> {
+    pub fn build(self) -> FixedDictGenerator {
         FixedDictGenerator {
             fields: self.fields,
         }
     }
 }
 
-pub struct FixedDictGenerator<'a> {
-    fields: Vec<(String, BoxedGenerator<'a, Value>)>,
+pub struct FixedDictGenerator {
+    fields: Vec<(String, BoxedGenerator<Value>)>,
 }
 
-impl Generate<Value> for FixedDictGenerator<'_> {
+impl Generator<Value> for FixedDictGenerator {
     fn do_draw(&self, data: &TestCaseData) -> Value {
         if let Some(basic) = self.as_basic() {
             basic.do_draw(data)
@@ -405,14 +405,14 @@ impl Generate<Value> for FixedDictGenerator<'_> {
 /// # Example
 ///
 /// ```no_run
-/// use hegel::generators::{self, Generate};
+/// use hegel::generators::{self, Generator};
 ///
 /// let gen = generators::fixed_dicts()
 ///     .field("name", generators::text())
 ///     .field("age", generators::integers::<u32>())
 ///     .build();
 /// ```
-pub fn fixed_dicts<'a>() -> FixedDictBuilder<'a> {
+pub fn fixed_dicts() -> FixedDictBuilder {
     FixedDictBuilder { fields: Vec::new() }
 }
 
@@ -430,13 +430,13 @@ impl<G, T, const N: usize> ArrayGenerator<G, T, N> {
     }
 }
 
-pub fn arrays<G: Generate<T> + Send + Sync, T, const N: usize>(
+pub fn arrays<G: Generator<T> + Send + Sync, T, const N: usize>(
     element: G,
 ) -> ArrayGenerator<G, T, N> {
     ArrayGenerator::new(element)
 }
 
-impl<G: Generate<T> + Send + Sync, T, const N: usize> Generate<[T; N]> for ArrayGenerator<G, T, N> {
+impl<G: Generator<T> + Send + Sync, T, const N: usize> Generator<[T; N]> for ArrayGenerator<G, T, N> {
     fn do_draw(&self, data: &TestCaseData) -> [T; N] {
         if let Some(basic) = self.as_basic() {
             basic.do_draw(data)

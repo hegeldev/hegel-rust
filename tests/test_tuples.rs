@@ -1,7 +1,7 @@
 mod common;
 
 use common::utils::{assert_all_examples, find_any};
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 // tuples2
 
