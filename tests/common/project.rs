@@ -9,6 +9,7 @@ pub struct TempRustProject {
     _temp_dir: TempDir,
     project_path: PathBuf,
     env_vars: Vec<(String, String)>,
+    test_files: Vec<(String, String)>,
 }
 
 pub struct RunOutput {
@@ -56,6 +57,7 @@ hegel = {{ path = "{}" }}
             _temp_dir: temp_dir,
             project_path,
             env_vars: Vec::new(),
+            test_files: Vec::new(),
         }
     }
 
@@ -64,9 +66,27 @@ hegel = {{ path = "{}" }}
         self
     }
 
-    pub fn run(self) -> RunOutput {
+    pub fn test_file(mut self, name: &str, content: &str) -> Self {
+        self.test_files
+            .push((name.to_string(), content.to_string()));
+        self
+    }
+
+    fn write_test_files(&self) {
+        if self.test_files.is_empty() {
+            return;
+        }
+        let tests_dir = self.project_path.join("tests");
+        std::fs::create_dir_all(&tests_dir).expect("Failed to create tests directory");
+        for (name, content) in &self.test_files {
+            std::fs::write(tests_dir.join(name), content).expect("Failed to write test file");
+        }
+    }
+
+    fn cargo(&self, args: &[&str]) -> RunOutput {
+        self.write_test_files();
         let mut cmd = Command::new(env!("CARGO"));
-        cmd.args(["run", "--quiet"]).current_dir(&self.project_path);
+        cmd.args(args).current_dir(&self.project_path);
 
         for (key, value) in &self.env_vars {
             cmd.env(key, value);
@@ -79,5 +99,17 @@ hegel = {{ path = "{}" }}
             stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
         }
+    }
+
+    pub fn cargo_run(&self, args: &[&str]) -> RunOutput {
+        let mut all = vec!["run", "--quiet"];
+        all.extend(args);
+        self.cargo(&all)
+    }
+
+    pub fn cargo_test(&self, args: &[&str]) -> RunOutput {
+        let mut all = vec!["test", "--quiet"];
+        all.extend(args);
+        self.cargo(&all)
     }
 }

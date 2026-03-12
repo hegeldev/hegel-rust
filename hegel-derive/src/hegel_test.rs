@@ -70,6 +70,7 @@ pub fn expand_test(
     }
 
     let body = &func.block;
+    let test_name = func.sig.ident.to_string();
 
     let settings_chain: Vec<TokenStream> = settings_args
         .settings
@@ -85,6 +86,7 @@ pub fn expand_test(
         {
             hegel::Hegel::new(|| #body)
             #(#settings_chain)*
+            .__database_key(format!("{}::{}", module_path!(), #test_name))
             .run();
         }
     };

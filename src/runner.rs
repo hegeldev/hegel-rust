@@ -316,6 +316,7 @@ pub struct Hegel<F> {
     test_cases: u64,
     verbosity: Verbosity,
     seed: Option<u64>,
+    database_key: Option<String>,
 }
 
 impl<F> Hegel<F>
@@ -328,6 +329,7 @@ where
             test_cases: 100,
             verbosity: Verbosity::Normal,
             seed: None,
+            database_key: None,
         }
     }
 
@@ -343,6 +345,12 @@ where
 
     pub fn seed(mut self, seed: Option<u64>) -> Self {
         self.seed = seed;
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn __database_key(mut self, key: String) -> Self {
+        self.database_key = Some(key);
         self
     }
 
@@ -454,11 +462,15 @@ where
         let got_interesting = Arc::new(AtomicBool::new(false));
         let test_channel = connection.new_channel();
 
+        let database_key_bytes = self
+            .database_key
+            .map_or(Value::Null, |k| Value::Bytes(k.into_bytes()));
         let run_test_msg = cbor_map! {
             "command" => "run_test",
             "test_cases" => self.test_cases,
             "seed" => self.seed.map_or(Value::Null, Value::from),
-            "channel_id" => test_channel.channel_id
+            "channel_id" => test_channel.channel_id,
+            "database_key" => database_key_bytes
         };
 
         let run_test_id = control

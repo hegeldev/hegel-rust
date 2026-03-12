@@ -17,7 +17,7 @@ fn main() {
 #[test]
 fn test_failing_test_output() {
     let project = TempRustProject::new(FAILING_TEST_CODE);
-    let output = project.run();
+    let output = project.cargo_run(&[]);
     assert!(!output.status.success());
 
     // For example:
@@ -43,7 +43,7 @@ fn test_failing_test_output() {
 fn test_failing_test_output_with_backtrace() {
     let output = TempRustProject::new(FAILING_TEST_CODE)
         .env("RUST_BACKTRACE", "1")
-        .run();
+        .cargo_run(&[]);
     assert!(!output.status.success());
 
     // For example:
@@ -91,7 +91,7 @@ fn test_failing_test_output_with_backtrace() {
 fn test_failing_test_output_with_full_backtrace() {
     let output = TempRustProject::new(FAILING_TEST_CODE)
         .env("RUST_BACKTRACE", "full")
-        .run();
+        .cargo_run(&[]);
     assert!(!output.status.success());
 
     let expected = Regex::new(concat!(

@@ -40,7 +40,7 @@ use hegel::generators;
 #[test]
 fn main() {}
 "#;
-    let output = TempRustProject::new(code).run();
+    let output = TempRustProject::new(code).cargo_run(&[]);
     assert!(!output.status.success());
     assert!(
         output.stderr.contains("Remove the #[test] attribute"),
@@ -59,7 +59,7 @@ fn main(x: bool) {
     let _ = x;
 }
 "#;
-    let output = TempRustProject::new(code).run();
+    let output = TempRustProject::new(code).cargo_run(&[]);
     assert!(!output.status.success());
     assert!(
         output.stderr.contains("must not have parameters"),
