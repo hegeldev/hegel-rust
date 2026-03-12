@@ -38,7 +38,7 @@ coverage:
 update-hegel-core-version:
     #!/usr/bin/env bash
     set -euo pipefail
-    tag=$(gh api repos/antithesishq/hegel-core/releases/latest --jq '.tag_name')
+    tag=$(gh api repos/hegeldev/hegel-core/releases/latest --jq '.tag_name')
     sed -i '' "s/^const HEGEL_SERVER_VERSION: &str = \".*\"/const HEGEL_SERVER_VERSION: \&str = \"${tag}\"/" src/runner.rs
     sed -i '' "s/refs\/tags\/.*\";/refs\/tags\/${tag}\";/" nix/flake.nix
     nix --extra-experimental-features "nix-command flakes" flake lock ./nix
@@ -50,5 +50,5 @@ build-conformance:
     cargo build --release --manifest-path tests/conformance/rust/Cargo.toml
 
 conformance: build-conformance
-    uv run --with "hegel @ git+ssh://git@github.com/antithesishq/hegel-core.git" \
+    uv run --with "hegel @ https://github.com/antithesishq/hegel-core.git" \
         --with pytest --with hypothesis pytest tests/conformance/test_conformance.py

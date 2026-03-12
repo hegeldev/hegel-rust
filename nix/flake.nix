@@ -3,7 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-    hegel.url = "git+ssh://git@github.com/antithesishq/hegel-core?dir=nix&ref=refs/tags/v0.4.0";
+    hegel.url = "git+https://github.com/hegeldev/hegel-core?dir=nix&ref=refs/tags/v0.4.0"; # git+https instead of github so that we can use the ref parameter
     flake-compat.url = "https://flakehub.com/f/edolstra/flake-compat/1.tar.gz";
   };
 

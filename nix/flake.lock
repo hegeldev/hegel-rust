@@ -44,13 +44,13 @@
         "rev": "3485130c83d314febf439fb1cb0ca895f90c7030",
         "revCount": 346,
         "type": "git",
-        "url": "ssh://git@github.com/antithesishq/hegel-core"
+        "url": "https://github.com/hegeldev/hegel-core"
       },
       "original": {
         "dir": "nix",
         "ref": "refs/tags/v0.4.0",
         "type": "git",
-        "url": "ssh://git@github.com/antithesishq/hegel-core"
+        "url": "https://github.com/hegeldev/hegel-core"
       }
     },
     "nixpkgs": {

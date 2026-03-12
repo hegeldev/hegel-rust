@@ -7,7 +7,7 @@ rust-version = "1.86"
 description = "Property-based testing SDK for the Hegel test data generator"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/antithesishq/hegel-rust"
+repository = "https://github.com/hegeldev/hegel-rust"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

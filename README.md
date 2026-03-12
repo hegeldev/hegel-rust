@@ -1,6 +1,6 @@
 # hegel-rust
 
-A Rust SDK for [Hegel](https://github.com/antithesishq/hegel-core) — universal
+A Rust SDK for [Hegel](https://github.com/hegeldev/hegel-core) — universal
 property-based testing powered by [Hypothesis](https://hypothesis.works/).
 
 Hegel generates random inputs for your tests, finds failures, and automatically
