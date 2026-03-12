@@ -200,9 +200,7 @@ fn ensure_hegel_installed() -> Result<String, String> {
             "install",
             "--python",
             &python_path,
-            &format!(
-                "hegel @ https://github.com/hegeldev/hegel-core@{HEGEL_SERVER_VERSION}"
-            ),
+            &format!("hegel @ https://github.com/hegeldev/hegel-core@{HEGEL_SERVER_VERSION}"),
         ])
         .stderr(log_file.try_clone().unwrap())
         .stdout(log_file)
