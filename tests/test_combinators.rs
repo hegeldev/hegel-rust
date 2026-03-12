@@ -152,6 +152,18 @@ fn test_optional_mapped(tc: TestCase) {
     }
 }
 
+#[hegel::test]
+fn test_draw_silent_non_debug(tc: TestCase) {
+    // Closure is not Debug, so this can only work with draw_silent
+    let f = tc.draw_silent(
+        &generators::integers::<i32>()
+            .min_value(0)
+            .max_value(1000)
+            .map(|n| move |x: i32| x + n),
+    );
+    assert_eq!(f(10), 10 + f(0));
+}
+
 #[test]
 fn test_optional_mapped_find_any() {
     find_any(
