@@ -1,4 +1,4 @@
-use super::{BasicGenerator, Generate, TestCase};
+use super::{BasicGenerator, Generator, TestCase};
 use crate::cbor_utils::{cbor_array, cbor_map, map_insert};
 use ciborium::Value;
 
@@ -36,7 +36,7 @@ impl TextGenerator {
     }
 }
 
-impl Generate<String> for TextGenerator {
+impl Generator<String> for TextGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc,&self.build_schema())
     }
@@ -76,7 +76,7 @@ impl RegexGenerator {
     }
 }
 
-impl Generate<String> for RegexGenerator {
+impl Generator<String> for RegexGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc,&self.build_schema())
     }
@@ -139,7 +139,7 @@ fn parse_binary(raw: Value) -> Vec<u8> {
     }
 }
 
-impl Generate<Vec<u8>> for BinaryGenerator {
+impl Generator<Vec<u8>> for BinaryGenerator {
     fn do_draw(&self, tc: &TestCase) -> Vec<u8> {
         parse_binary(super::generate_raw(tc, &self.build_schema()))
     }
@@ -154,12 +154,12 @@ impl Generate<Vec<u8>> for BinaryGenerator {
 /// # Example
 ///
 /// ```no_run
-/// use hegel::generators::{self, Generate};
+/// use hegel::generators::{self, Generator};
 ///
 /// // Generate any byte sequence
 /// let gen = generators::binary();
 ///
-/// // Generate 16-32 bytes
+/// // Generator 16-32 bytes
 /// let gen = generators::binary().min_size(16).max_size(32);
 /// ```
 pub fn binary() -> BinaryGenerator {
@@ -171,7 +171,7 @@ pub fn binary() -> BinaryGenerator {
 
 pub struct EmailGenerator;
 
-impl Generate<String> for EmailGenerator {
+impl Generator<String> for EmailGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc,&cbor_map! {"type" => "email"})
     }
@@ -189,7 +189,7 @@ pub fn emails() -> EmailGenerator {
 
 pub struct UrlGenerator;
 
-impl Generate<String> for UrlGenerator {
+impl Generator<String> for UrlGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc,&cbor_map! {"type" => "url"})
     }
@@ -228,7 +228,7 @@ impl DomainGenerator {
     }
 }
 
-impl Generate<String> for DomainGenerator {
+impl Generator<String> for DomainGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc,&self.build_schema())
     }
@@ -279,7 +279,7 @@ impl IpAddressGenerator {
     }
 }
 
-impl Generate<String> for IpAddressGenerator {
+impl Generator<String> for IpAddressGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc,&self.build_schema())
     }
@@ -297,7 +297,7 @@ pub fn ip_addresses() -> IpAddressGenerator {
 
 pub struct DateGenerator;
 
-impl Generate<String> for DateGenerator {
+impl Generator<String> for DateGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc,&cbor_map! {"type" => "date"})
     }
@@ -315,7 +315,7 @@ pub fn dates() -> DateGenerator {
 
 pub struct TimeGenerator;
 
-impl Generate<String> for TimeGenerator {
+impl Generator<String> for TimeGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc,&cbor_map! {"type" => "time"})
     }
@@ -333,7 +333,7 @@ pub fn times() -> TimeGenerator {
 
 pub struct DateTimeGenerator;
 
-impl Generate<String> for DateTimeGenerator {
+impl Generator<String> for DateTimeGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc,&cbor_map! {"type" => "datetime"})
     }

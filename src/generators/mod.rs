@@ -21,7 +21,7 @@ pub use crate::test_case::{
     TestCase,
 };
 pub use from_type::{from_type, DefaultGenerator};
-pub use generators::{BasicGenerator, BoxedGenerator, Filtered, FlatMapped, Generate, Mapped};
+pub use generators::{BasicGenerator, BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};
 pub use misc::{booleans, just, none, unit};
 pub use numeric::{floats, integers};
 #[cfg(feature = "rand")]

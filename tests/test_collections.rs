@@ -1,4 +1,4 @@
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 use hegel::TestCase;
 use std::collections::{HashMap, HashSet};
 

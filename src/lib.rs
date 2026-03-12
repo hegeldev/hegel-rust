@@ -30,7 +30,7 @@
 //!
 //! # Generators
 //!
-//! All generators implement [`generators::Generate<T>`] and are created via factory functions
+//! All generators implement [`generators::Generator<T>`] and are created via factory functions
 //! in the [`generators`] module.
 //!
 //! ## Primitives
@@ -126,7 +126,7 @@
 //! ## Transformations
 //!
 //! ```no_run
-//! use hegel::generators::{self, Generate};
+//! use hegel::generators::{self, Generator};
 //!
 //! #[hegel::test]
 //! fn my_test(tc: hegel::TestCase) {
@@ -150,14 +150,14 @@
 //!
 //! # Deriving Generators
 //!
-//! Use `#[derive(Generate)]` to automatically create generators for structs and enums,
+//! Use `#[derive(Generator)]` to automatically create generators for structs and enums,
 //! then use [`generators::from_type`] to get a generator:
 //!
 //! ```no_run
-//! use hegel::Generate;
+//! use hegel::Generator;
 //! use hegel::generators;
 //!
-//! #[derive(Generate, Debug)]
+//! #[derive(Generator, Debug)]
 //! struct Person {
 //!     name: String,
 //!     age: u32,
@@ -217,7 +217,7 @@ pub(crate) mod runner;
 mod test_case;
 
 pub use control::currently_in_test_context;
-pub use generators::Generate;
+pub use generators::Generator;
 pub use test_case::TestCase;
 
 // re-export for macro use
@@ -230,5 +230,5 @@ pub use test_case::{generate_from_schema, generate_raw};
 
 // re-export public api
 pub use hegel_derive::test;
-pub use hegel_derive::Generate;
+pub use hegel_derive::Generator;
 pub use runner::{hegel, Hegel, Verbosity};

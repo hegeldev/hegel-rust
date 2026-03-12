@@ -1,4 +1,4 @@
-use super::{Generate, TestCase};
+use super::{Generator, TestCase};
 use std::marker::PhantomData;
 
 pub struct ComposedGenerator<T, F> {
@@ -18,7 +18,7 @@ where
     }
 }
 
-impl<T, F> Generate<T> for ComposedGenerator<T, F>
+impl<T, F> Generator<T> for ComposedGenerator<T, F>
 where
     F: Fn(TestCase) -> T + Send + Sync,
 {

@@ -21,10 +21,10 @@ use syn::{parse_macro_input, Data, DeriveInput};
 /// # Struct Example
 ///
 /// ```ignore
-/// use hegel::Generate;
-/// use hegel::generators::{self, Generate as _};
+/// use hegel::Generator;
+/// use hegel::generators::{self, DefaultGenerator, Generator as _};
 ///
-/// #[derive(Generate)]
+/// #[derive(Generator)]
 /// struct Person {
 ///     name: String,
 ///     age: u32,
@@ -41,10 +41,10 @@ use syn::{parse_macro_input, Data, DeriveInput};
 /// # Enum Example
 ///
 /// ```ignore
-/// use hegel::Generate;
-/// use hegel::generators::{self, Generate as _};
+/// use hegel::Generator;
+/// use hegel::generators::{self, DefaultGenerator, Generator as _};
 ///
-/// #[derive(Generate)]
+/// #[derive(Generator)]
 /// enum Status {
 ///     Pending,
 ///     Active { since: String },
@@ -62,14 +62,14 @@ use syn::{parse_macro_input, Data, DeriveInput};
 ///     let status: Status = tc.draw(&gen);
 /// }
 /// ```
-#[proc_macro_derive(Generate)]
+#[proc_macro_derive(Generator)]
 pub fn derive_generate(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     match &input.data {
         Data::Struct(data) => struct_gen::derive_struct_generate(&input, data),
         Data::Enum(data) => enum_gen::derive_enum_generate(&input, data),
-        Data::Union(_) => syn::Error::new_spanned(&input, "Generate cannot be derived for unions")
+        Data::Union(_) => syn::Error::new_spanned(&input, "Generator cannot be derived for unions")
             .to_compile_error()
             .into(),
     }

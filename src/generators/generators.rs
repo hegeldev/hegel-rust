@@ -50,7 +50,7 @@ impl<'a, T: 'a> BasicGenerator<'a, T> {
 ///
 /// Generators produce values of type `T` and optionally provide a
 /// [`BasicGenerator`] for server-based generation via `as_basic()`.
-pub trait Generate<T>: Send + Sync {
+pub trait Generator<T>: Send + Sync {
     #[doc(hidden)]
     fn do_draw(&self, tc: &TestCase) -> T;
 
@@ -77,7 +77,7 @@ pub trait Generate<T>: Send + Sync {
     fn flat_map<U, G, F>(self, f: F) -> FlatMapped<T, U, G, F, Self>
     where
         Self: Sized,
-        G: Generate<U>,
+        G: Generator<U>,
         F: Fn(T) -> G + Send + Sync,
     {
         FlatMapped {
@@ -110,7 +110,7 @@ pub trait Generate<T>: Send + Sync {
     }
 }
 
-impl<T, G: Generate<T>> Generate<T> for &G {
+impl<T, G: Generator<T>> Generator<T> for &G {
     fn do_draw(&self, tc: &TestCase) -> T {
         (*self).do_draw(tc)
     }
@@ -126,9 +126,9 @@ pub struct Mapped<T, U, F, G> {
     _phantom: PhantomData<fn(T) -> U>,
 }
 
-impl<T, U, F, G> Generate<U> for Mapped<T, U, F, G>
+impl<T, U, F, G> Generator<U> for Mapped<T, U, F, G>
 where
-    G: Generate<T>,
+    G: Generator<T>,
     F: Fn(T) -> U + Send + Sync,
 {
     fn do_draw(&self, tc: &TestCase) -> U {
@@ -155,10 +155,10 @@ pub struct FlatMapped<T, U, G2, F, G1> {
     _phantom: PhantomData<fn(T) -> (U, G2)>,
 }
 
-impl<T, U, G2, F, G1> Generate<U> for FlatMapped<T, U, G2, F, G1>
+impl<T, U, G2, F, G1> Generator<U> for FlatMapped<T, U, G2, F, G1>
 where
-    G1: Generate<T>,
-    G2: Generate<U>,
+    G1: Generator<T>,
+    G2: Generator<U>,
     F: Fn(T) -> G2 + Send + Sync,
 {
     fn do_draw(&self, tc: &TestCase) -> U {
@@ -177,9 +177,9 @@ pub struct Filtered<T, F, G> {
     _phantom: PhantomData<fn() -> T>,
 }
 
-impl<T, F, G> Generate<T> for Filtered<T, F, G>
+impl<T, F, G> Generator<T> for Filtered<T, F, G>
 where
-    G: Generate<T>,
+    G: Generator<T>,
     F: Fn(&T) -> bool + Send + Sync,
 {
     fn do_draw(&self, tc: &TestCase) -> T {
@@ -199,7 +199,7 @@ where
 
 /// A type-erased generator with a lifetime parameter.
 pub struct BoxedGenerator<'a, T> {
-    pub(super) inner: Arc<dyn Generate<T> + Send + Sync + 'a>,
+    pub(super) inner: Arc<dyn Generator<T> + Send + Sync + 'a>,
 }
 
 impl<T> Clone for BoxedGenerator<'_, T> {
@@ -210,7 +210,7 @@ impl<T> Clone for BoxedGenerator<'_, T> {
     }
 }
 
-impl<T> Generate<T> for BoxedGenerator<'_, T> {
+impl<T> Generator<T> for BoxedGenerator<'_, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
         self.inner.do_draw(tc)
     }

@@ -14,7 +14,7 @@ The SDK requires [`uv`](https://github.com/astral-sh/uv) installed and on your P
 ## Write your first test
 
 ```rust
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn test_integers(tc: hegel::TestCase) {
@@ -32,7 +32,7 @@ the inputs to a minimal counterexample.
 By default Hegel runs **100 test cases**. Use the builder API to override this:
 
 ```rust
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 #[hegel::test(test_cases = 500)]
 fn test_integers_many(tc: hegel::TestCase) {
@@ -46,7 +46,7 @@ fn test_integers_many(tc: hegel::TestCase) {
 Hegel tests use `#[hegel::test]` in place of `#[test]`:
 
 ```rust
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn test_bounded_integers(tc: hegel::TestCase) {
@@ -64,7 +64,7 @@ When the test fails, Hegel finds the smallest counterexample — in this case,
 Call `tc.draw()` multiple times to produce multiple values in a single test:
 
 ```rust
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn test_multiple_values(tc: hegel::TestCase) {
@@ -83,7 +83,7 @@ including conditionally or inside loops.
 Use `.filter()` for simple conditions on a generator:
 
 ```rust
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn test_even_integers(tc: hegel::TestCase) {
@@ -97,7 +97,7 @@ When the constraint spans multiple values, use `tc.assume()` inside the
 test body:
 
 ```rust
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn test_division(tc: hegel::TestCase) {
@@ -119,7 +119,7 @@ because they avoid generating values that will be rejected.
 Use `.map()` to transform values after generation:
 
 ```rust
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn test_string_integers(tc: hegel::TestCase) {
@@ -136,7 +136,7 @@ Because generation is imperative in Hegel, you can use earlier results to
 configure later generators directly:
 
 ```rust
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn test_list_with_valid_index(tc: hegel::TestCase) {
@@ -154,7 +154,7 @@ You can also use `.flat_map()` for dependent generation within a single
 generator expression:
 
 ```rust
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn test_flatmap_example(tc: hegel::TestCase) {
@@ -174,7 +174,7 @@ fn test_flatmap_example(tc: hegel::TestCase) {
 ### Primitive types
 
 ```rust
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn my_test(tc: hegel::TestCase) {
@@ -193,7 +193,7 @@ support `.exclude_min()`, `.exclude_max()`, `.allow_nan(bool)`, and
 ### Constants and choices
 
 ```rust
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn my_test(tc: hegel::TestCase) {
@@ -205,7 +205,7 @@ fn my_test(tc: hegel::TestCase) {
 ### Collections
 
 ```rust
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 use std::collections::{HashSet, HashMap};
 
 #[hegel::test]
@@ -223,7 +223,7 @@ fn my_test(tc: hegel::TestCase) {
 ### Combinators
 
 ```rust
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn my_test(tc: hegel::TestCase) {
@@ -247,7 +247,7 @@ fn my_test(tc: hegel::TestCase) {
 ### Formats and patterns
 
 ```rust
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn my_test(tc: hegel::TestCase) {
@@ -265,14 +265,14 @@ fn my_test(tc: hegel::TestCase) {
 
 ## Type-directed derivation
 
-`#[derive(Generate)]` creates a builder struct named `<Type>Generator` with
+`#[derive(Generator)]` creates a builder struct named `<Type>Generator` with
 `.new()` and `.with_<field>()` methods:
 
 ```rust
-use hegel::Generate;
-use hegel::generators::{self, Generate as _};
+use hegel::Generator;
+use hegel::generators::{self, Generator as _};
 
-#[derive(Generate, Debug)]
+#[derive(Generator, Debug)]
 struct User { name: String, age: u32, active: bool }
 
 #[hegel::test]
@@ -288,7 +288,7 @@ For external types, use `derive_generator!` to generate the same builder:
 
 ```rust
 use hegel::{derive_generator};
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 struct Point { x: f64, y: f64 }
 derive_generator!(Point { x: f64, y: f64 });
@@ -301,7 +301,7 @@ Use `tc.note()` to attach debug information. Notes only appear when Hegel
 replays the minimal failing example:
 
 ```rust
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn test_with_notes(tc: hegel::TestCase) {
@@ -323,4 +323,4 @@ fn test_with_notes(tc: hegel::TestCase) {
 
 - Run `just docs` to build and browse the full API documentation locally.
 - Look at `tests/` for more usage patterns.
-- Combine `#[derive(Generate)]` with `.with_<field>()` to generate realistic domain objects.
+- Combine `#[derive(Generator)]` with `.with_<field>()` to generate realistic domain objects.

@@ -47,7 +47,7 @@ pub(crate) fn cbor_to_iter(
 
 // --- Bounds generation ---
 
-/// Generate DefaultGenerator + Send + Sync bounds for a set of types.
+/// Generator DefaultGenerator + Send + Sync bounds for a set of types.
 pub(crate) fn default_gen_bounds(
     types: &[&syn::Type],
     lifetime: proc_macro2::TokenStream,

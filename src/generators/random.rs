@@ -1,7 +1,7 @@
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
 
-use super::{binary, integers, Generate, TestCase};
+use super::{binary, integers, Generator, TestCase};
 
 pub struct RandomsGenerator {
     use_true_random: bool,
@@ -21,7 +21,7 @@ impl RandomsGenerator {
     }
 }
 
-impl Generate<HegelRandom> for RandomsGenerator {
+impl Generator<HegelRandom> for RandomsGenerator {
     fn do_draw(&self, tc: &TestCase) -> HegelRandom {
         if self.use_true_random {
             let seed: u64 = integers().do_draw(tc);

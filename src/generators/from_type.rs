@@ -10,22 +10,22 @@ use std::hash::Hash;
 ///
 /// This is used by derive macros to automatically generate values for fields.
 pub trait DefaultGenerator: Sized {
-    type Generator: super::Generate<Self>;
+    type Generator: super::Generator<Self>;
     fn default_generator() -> Self::Generator;
 }
 
 /// Create a generator for a type using its default generator.
 ///
 /// This is the primary way to get a generator for types that implement
-/// [`DefaultGenerator`], including types with `#[derive(Generate)]`.
+/// [`DefaultGenerator`], including types with `#[derive(Generator)]`.
 ///
 /// # Example
 ///
 /// ```no_run
-/// use hegel::generators;
-/// use hegel::Generate;
+/// use hegel::generators::{self, DefaultGenerator};
+/// use hegel::Generator;
 ///
-/// #[derive(Generate, Debug)]
+/// #[derive(Generator, Debug)]
 /// struct Person {
 ///     name: String,
 ///     age: u32,
@@ -216,7 +216,7 @@ where
 ///
 /// // In your tests:
 /// use hegel::derive_generator;
-/// use hegel::generators::{self, Generate};
+/// use hegel::generators::{self, DefaultGenerator, Generator};
 /// use production_crate::Person;
 ///
 /// derive_generator!(Person {
@@ -248,7 +248,7 @@ macro_rules! derive_generator {
                         $($field_type: $crate::generators::DefaultGenerator,)*
                         $(<$field_type as $crate::generators::DefaultGenerator>::Generator: Send + Sync + 'a,)*
                     {
-                        use $crate::generators::{DefaultGenerator, Generate};
+                        use $crate::generators::{DefaultGenerator, Generator};
                         Self {
                             $($field_name: <$field_type as DefaultGenerator>::default_generator().boxed(),)*
                         }
@@ -257,9 +257,9 @@ macro_rules! derive_generator {
                     $(
                         pub fn [<with_ $field_name>]<G>(mut self, gen: G) -> Self
                         where
-                            G: $crate::generators::Generate<$field_type> + Send + Sync + 'a,
+                            G: $crate::generators::Generator<$field_type> + Send + Sync + 'a,
                         {
-                            use $crate::generators::Generate;
+                            use $crate::generators::Generator;
                             self.$field_name = gen.boxed();
                             self
                         }
@@ -276,9 +276,9 @@ macro_rules! derive_generator {
                     }
                 }
 
-                impl<'a> $crate::generators::Generate<$struct_name> for [<$struct_name Generator>]<'a> {
+                impl<'a> $crate::generators::Generator<$struct_name> for [<$struct_name Generator>]<'a> {
                     fn do_draw(&self, __data: &$crate::TestCase) -> $struct_name {
-                        use $crate::generators::Generate;
+                        use $crate::generators::Generator;
                         $struct_name {
                             $($field_name: self.$field_name.do_draw(__data),)*
                         }

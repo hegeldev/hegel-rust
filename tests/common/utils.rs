@@ -3,14 +3,14 @@
 
 use std::sync::{Arc, Mutex};
 
-use hegel::generators::Generate;
+use hegel::generators::Generator;
 use hegel::Hegel;
 use std::fmt::Debug;
 
 #[allow(dead_code)]
 pub fn check_can_generate_examples<T, G>(generator: G)
 where
-    G: Generate<T> + 'static,
+    G: Generator<T> + 'static,
     T: Debug,
 {
     AssertSimpleProperty::new(generator, |_| true).run();
@@ -18,7 +18,7 @@ where
 
 pub fn assert_all_examples<T, G, P>(generator: G, predicate: P)
 where
-    G: Generate<T> + 'static,
+    G: Generator<T> + 'static,
     P: Fn(&T) -> bool + 'static,
     T: Debug,
 {
@@ -28,7 +28,7 @@ where
 #[allow(dead_code)]
 pub struct AssertAllExamples<T, G, P>
 where
-    G: Generate<T> + 'static,
+    G: Generator<T> + 'static,
     P: Fn(&T) -> bool + 'static,
     T: Debug,
 {
@@ -40,7 +40,7 @@ where
 
 impl<T, G, P> AssertAllExamples<T, G, P>
 where
-    G: Generate<T> + 'static,
+    G: Generator<T> + 'static,
     P: Fn(&T) -> bool + 'static,
     T: Debug,
 {
@@ -75,7 +75,7 @@ where
 #[allow(dead_code)]
 pub fn assert_simple_property<T, G, P>(generator: G, predicate: P)
 where
-    G: Generate<T> + 'static,
+    G: Generator<T> + 'static,
     P: Fn(&T) -> bool + 'static,
     T: Debug,
 {
@@ -85,7 +85,7 @@ where
 #[allow(dead_code)]
 pub struct AssertSimpleProperty<T, G, P>
 where
-    G: Generate<T> + 'static,
+    G: Generator<T> + 'static,
     P: Fn(&T) -> bool + 'static,
     T: Debug,
 {
@@ -94,7 +94,7 @@ where
 
 impl<T, G, P> AssertSimpleProperty<T, G, P>
 where
-    G: Generate<T> + 'static,
+    G: Generator<T> + 'static,
     P: Fn(&T) -> bool + 'static,
     T: Debug,
 {
@@ -117,7 +117,7 @@ where
 
 pub fn find_any<T, G, P>(generator: G, condition: P) -> T
 where
-    G: Generate<T> + 'static,
+    G: Generator<T> + 'static,
     P: Fn(&T) -> bool + 'static,
     T: Send + Debug + 'static,
 {
@@ -127,7 +127,7 @@ where
 #[allow(dead_code)]
 pub struct FindAny<T, G, P>
 where
-    G: Generate<T> + 'static,
+    G: Generator<T> + 'static,
     P: Fn(&T) -> bool + 'static,
     T: Send + Debug + 'static,
 {
@@ -139,7 +139,7 @@ where
 
 impl<T, G, P> FindAny<T, G, P>
 where
-    G: Generate<T> + 'static,
+    G: Generator<T> + 'static,
     P: Fn(&T) -> bool + 'static,
     T: Send + Debug + 'static,
 {
@@ -188,7 +188,7 @@ where
 #[allow(dead_code)]
 pub fn assert_no_examples<T, G, P>(generator: G, condition: P)
 where
-    G: Generate<T> + 'static,
+    G: Generator<T> + 'static,
     P: Fn(&T) -> bool + 'static,
     T: Debug,
 {
@@ -198,7 +198,7 @@ where
 #[allow(dead_code)]
 pub struct AssertNoExamples<T, G, P>
 where
-    G: Generate<T> + 'static,
+    G: Generator<T> + 'static,
     P: Fn(&T) -> bool + 'static,
     T: Debug,
 {
@@ -210,7 +210,7 @@ where
 
 impl<T, G, P> AssertNoExamples<T, G, P>
 where
-    G: Generate<T> + 'static,
+    G: Generator<T> + 'static,
     P: Fn(&T) -> bool + 'static,
     T: Debug,
 {

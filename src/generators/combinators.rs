@@ -1,4 +1,4 @@
-use super::{integers, labels, BasicGenerator, BoxedGenerator, Generate, TestCase};
+use super::{integers, labels, BasicGenerator, BoxedGenerator, Generator, TestCase};
 use crate::cbor_utils::{cbor_array, cbor_map};
 use ciborium::Value;
 use std::marker::PhantomData;
@@ -7,7 +7,7 @@ pub struct SampledFromGenerator<T> {
     elements: Vec<T>,
 }
 
-impl<T: Clone + Send + Sync> Generate<T> for SampledFromGenerator<T> {
+impl<T: Clone + Send + Sync> Generator<T> for SampledFromGenerator<T> {
     fn do_draw(&self, tc: &TestCase) -> T {
         if let Some(basic) = self.as_basic() {
             return basic.do_draw(tc);
@@ -50,7 +50,7 @@ pub struct OneOfGenerator<'a, T> {
     generators: Vec<BoxedGenerator<'a, T>>,
 }
 
-impl<T> Generate<T> for OneOfGenerator<'_, T> {
+impl<T> Generator<T> for OneOfGenerator<'_, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
         if let Some(basic) = self.as_basic() {
             basic.do_draw(tc)
@@ -140,7 +140,7 @@ pub fn one_of<T>(generators: Vec<BoxedGenerator<'_, T>>) -> OneOfGenerator<'_, T
 macro_rules! one_of {
     ($($gen:expr),+ $(,)?) => {
         $crate::generators::one_of(vec![
-            $($crate::generators::Generate::boxed($gen)),+
+            $($crate::generators::Generator::boxed($gen)),+
         ])
     };
 }
@@ -150,9 +150,9 @@ pub struct OptionalGenerator<G, T> {
     _phantom: PhantomData<fn(T)>,
 }
 
-impl<T, G> Generate<Option<T>> for OptionalGenerator<G, T>
+impl<T, G> Generator<Option<T>> for OptionalGenerator<G, T>
 where
-    G: Generate<T>,
+    G: Generator<T>,
 {
     fn do_draw(&self, tc: &TestCase) -> Option<T> {
         if let Some(basic) = self.as_basic() {
@@ -214,7 +214,7 @@ where
     }
 }
 
-pub fn optional<T, G: Generate<T>>(inner: G) -> OptionalGenerator<G, T> {
+pub fn optional<T, G: Generator<T>>(inner: G) -> OptionalGenerator<G, T> {
     OptionalGenerator {
         inner,
         _phantom: PhantomData,
