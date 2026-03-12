@@ -37,17 +37,20 @@
         "uv2nix": "uv2nix"
       },
       "locked": {
-        "lastModified": 1771952440,
-        "narHash": "sha256-eDkTJUw9fU5a30/suv4e22wlZQG0jatXO2MxInebdYs=",
-        "ref": "refs/heads/main",
-        "rev": "08425ee272fe69c0bbcac1bf90ee4aa3bf610295",
-        "revCount": 248,
+        "dir": "nix",
+        "lastModified": 1773245569,
+        "narHash": "sha256-/FKhR0uZr7409zccbGf5e5RZu/9KQRu3BZqa714h370=",
+        "ref": "refs/tags/v0.4.0",
+        "rev": "3485130c83d314febf439fb1cb0ca895f90c7030",
+        "revCount": 346,
         "type": "git",
-        "url": "ssh://git@github.com/antithesishq/hegel"
+        "url": "ssh://git@github.com/antithesishq/hegel-core"
       },
       "original": {
+        "dir": "nix",
+        "ref": "refs/tags/v0.4.0",
         "type": "git",
-        "url": "ssh://git@github.com/antithesishq/hegel"
+        "url": "ssh://git@github.com/antithesishq/hegel-core"
       }
     },
     "nixpkgs": {
