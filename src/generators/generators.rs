@@ -122,9 +122,13 @@ pub trait Generator<T>: Send + Sync {
     ///
     /// This is useful when you need to store generators of different concrete
     /// types in a collection or struct field.
-    fn boxed(self) -> BoxedGenerator<T>
+    ///
+    /// The lifetime parameter is inferred from the generator being boxed.
+    /// For generators that own all their data, this will be `'static`.
+    /// For generators that borrow data, the lifetime will match the borrow.
+    fn boxed<'a>(self) -> BoxedGenerator<'a, T>
     where
-        Self: Sized + 'static,
+        Self: Sized + Send + Sync + 'a,
     {
         BoxedGenerator {
             inner: Arc::new(self),
@@ -219,27 +223,21 @@ where
     }
 }
 
-/// A type-erased generator.
+/// A type-erased generator with a lifetime parameter.
 ///
 /// This is useful for storing generators of different concrete types
 /// in collections or struct fields.
 ///
 /// Create a `BoxedGenerator` by calling `.boxed()` on any generator.
 ///
-/// # Example
-///
-/// ```no_run
-/// use hegel::generators::{self, Generator, BoxedGenerator};
-///
-/// fn positive_integers() -> BoxedGenerator<i32> {
-///     generators::integers().min_value(1).boxed()
-/// }
-/// ```
-pub struct BoxedGenerator<T> {
-    pub(super) inner: Arc<dyn Generator<T> + Send + Sync>,
+/// The lifetime `'a` represents the minimum lifetime of any borrowed data
+/// in the generator. Use `'static` for generators that own all their data.
+/// For generators that borrow data, the lifetime will match the borrow.
+pub struct BoxedGenerator<'a, T> {
+    pub(super) inner: Arc<dyn Generator<T> + Send + Sync + 'a>,
 }
 
-impl<T> Clone for BoxedGenerator<T> {
+impl<T> Clone for BoxedGenerator<'_, T> {
     fn clone(&self) -> Self {
         BoxedGenerator {
             inner: Arc::clone(&self.inner),
@@ -247,7 +245,7 @@ impl<T> Clone for BoxedGenerator<T> {
     }
 }
 
-impl<T> Generator<T> for BoxedGenerator<T> {
+impl<T> Generator<T> for BoxedGenerator<'_, T> {
     fn do_draw(&self, data: &TestCaseData) -> T {
         self.inner.do_draw(data)
     }
@@ -257,10 +255,10 @@ impl<T> Generator<T> for BoxedGenerator<T> {
     }
 
     /// Returns self without re-wrapping.
-    fn boxed(self) -> BoxedGenerator<T>
+    fn boxed<'b>(self) -> BoxedGenerator<'b, T>
     where
-        Self: Sized + 'static,
+        Self: Sized + Send + Sync + 'b,
     {
-        self
+        BoxedGenerator { inner: self.inner }
     }
 }

@@ -46,11 +46,11 @@ pub fn sampled_from<T: Clone + Send + Sync>(elements: Vec<T>) -> SampledFromGene
     SampledFromGenerator { elements }
 }
 
-pub struct OneOfGenerator<T> {
-    generators: Vec<BoxedGenerator<T>>,
+pub struct OneOfGenerator<'a, T> {
+    generators: Vec<BoxedGenerator<'a, T>>,
 }
 
-impl<T> Generator<T> for OneOfGenerator<T> {
+impl<T> Generator<T> for OneOfGenerator<'_, T> {
     fn do_draw(&self, data: &TestCaseData) -> T {
         if let Some(basic) = self.as_basic() {
             basic.do_draw(data)
@@ -110,7 +110,7 @@ impl<T> Generator<T> for OneOfGenerator<T> {
 /// Choose from multiple generators of the same type.
 ///
 /// For a more convenient syntax, use the `one_of!` macro instead.
-pub fn one_of<T>(generators: Vec<BoxedGenerator<T>>) -> OneOfGenerator<T> {
+pub fn one_of<T>(generators: Vec<BoxedGenerator<'_, T>>) -> OneOfGenerator<'_, T> {
     assert!(
         !generators.is_empty(),
         "one_of requires at least one generator"

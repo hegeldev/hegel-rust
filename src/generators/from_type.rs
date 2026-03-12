@@ -236,17 +236,17 @@ macro_rules! derive_generator {
     ($struct_name:ident { $($field_name:ident : $field_type:ty),* $(,)? }) => {
         const _: () = {
             $crate::paste::paste! {
-                pub struct [<$struct_name Generator>] {
+                pub struct [<$struct_name Generator>]<'a> {
                     $(
-                        $field_name: $crate::generators::BoxedGenerator<$field_type>,
+                        $field_name: $crate::generators::BoxedGenerator<'a, $field_type>,
                     )*
                 }
 
-                impl [<$struct_name Generator>] {
+                impl<'a> [<$struct_name Generator>]<'a> {
                     pub fn new() -> Self
                     where
                         $($field_type: $crate::generators::DefaultGenerator,)*
-                        $(<$field_type as $crate::generators::DefaultGenerator>::Generator: Send + Sync + 'static,)*
+                        $(<$field_type as $crate::generators::DefaultGenerator>::Generator: Send + Sync + 'a,)*
                     {
                         use $crate::generators::{DefaultGenerator, Generator};
                         Self {
@@ -257,7 +257,7 @@ macro_rules! derive_generator {
                     $(
                         pub fn [<with_ $field_name>]<G>(mut self, gen: G) -> Self
                         where
-                            G: $crate::generators::Generator<$field_type> + Send + Sync + 'static,
+                            G: $crate::generators::Generator<$field_type> + Send + Sync + 'a,
                         {
                             use $crate::generators::Generator;
                             self.$field_name = gen.boxed();
@@ -266,17 +266,17 @@ macro_rules! derive_generator {
                     )*
                 }
 
-                impl Default for [<$struct_name Generator>]
+                impl<'a> Default for [<$struct_name Generator>]<'a>
                 where
                     $($field_type: $crate::generators::DefaultGenerator,)*
-                    $(<$field_type as $crate::generators::DefaultGenerator>::Generator: Send + Sync + 'static,)*
+                    $(<$field_type as $crate::generators::DefaultGenerator>::Generator: Send + Sync + 'a,)*
                 {
                     fn default() -> Self {
                         Self::new()
                     }
                 }
 
-                impl $crate::generators::Generator<$struct_name> for [<$struct_name Generator>] {
+                impl<'a> $crate::generators::Generator<$struct_name> for [<$struct_name Generator>]<'a> {
                     fn do_draw(&self, __data: &$crate::generators::TestCaseData) -> $struct_name {
                         use $crate::generators::Generator;
                         $struct_name {
@@ -290,7 +290,7 @@ macro_rules! derive_generator {
                     $($field_type: $crate::generators::DefaultGenerator,)*
                     $(<$field_type as $crate::generators::DefaultGenerator>::Generator: Send + Sync + 'static,)*
                 {
-                    type Generator = [<$struct_name Generator>];
+                    type Generator = [<$struct_name Generator>]<'static>;
                     fn default_generator() -> Self::Generator {
                         [<$struct_name Generator>]::new()
                     }

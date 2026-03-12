@@ -322,15 +322,15 @@ impl<T: serde::Serialize, G: Generator<T>> Generator<Value> for MappedToValue<T,
     }
 }
 
-pub struct FixedDictBuilder {
-    fields: Vec<(String, BoxedGenerator<Value>)>,
+pub struct FixedDictBuilder<'a> {
+    fields: Vec<(String, BoxedGenerator<'a, Value>)>,
 }
 
-impl FixedDictBuilder {
+impl<'a> FixedDictBuilder<'a> {
     pub fn field<T, G>(mut self, name: &str, gen: G) -> Self
     where
-        G: Generator<T> + Send + Sync + 'static,
-        T: serde::Serialize + 'static,
+        G: Generator<T> + Send + Sync + 'a,
+        T: serde::Serialize + 'a,
     {
         let boxed = BoxedGenerator {
             inner: Arc::new(MappedToValue {
@@ -342,18 +342,18 @@ impl FixedDictBuilder {
         self
     }
 
-    pub fn build(self) -> FixedDictGenerator {
+    pub fn build(self) -> FixedDictGenerator<'a> {
         FixedDictGenerator {
             fields: self.fields,
         }
     }
 }
 
-pub struct FixedDictGenerator {
-    fields: Vec<(String, BoxedGenerator<Value>)>,
+pub struct FixedDictGenerator<'a> {
+    fields: Vec<(String, BoxedGenerator<'a, Value>)>,
 }
 
-impl Generator<Value> for FixedDictGenerator {
+impl Generator<Value> for FixedDictGenerator<'_> {
     fn do_draw(&self, data: &TestCaseData) -> Value {
         if let Some(basic) = self.as_basic() {
             basic.do_draw(data)
@@ -414,7 +414,7 @@ impl Generator<Value> for FixedDictGenerator {
 ///     .field("age", generators::integers::<u32>())
 ///     .build();
 /// ```
-pub fn fixed_dicts() -> FixedDictBuilder {
+pub fn fixed_dicts() -> FixedDictBuilder<'static> {
     FixedDictBuilder { fields: Vec::new() }
 }
 

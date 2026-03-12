@@ -45,6 +45,19 @@ fn test_optional_of_references() {
 }
 
 #[hegel::test]
+fn test_one_of_with_references() {
+    let small = [1, 2, 3];
+    let big = [100, 200, 300];
+    let small_refs: Vec<&i32> = small.iter().collect();
+    let big_refs: Vec<&i32> = big.iter().collect();
+    let value: &i32 = hegel::draw(&hegel::one_of!(
+        generators::sampled_from(small_refs),
+        generators::sampled_from(big_refs),
+    ));
+    assert!(small.contains(value) || big.contains(value));
+}
+
+#[hegel::test]
 fn test_vec_of_references() {
     let options = [10, 20, 30];
     let refs: Vec<&i32> = options.iter().collect();
@@ -118,6 +131,28 @@ fn test_vec_of_tuples_of_references() {
         assert!(keys.contains(k));
         assert!(vals.contains(v));
     }
+}
+
+#[hegel::test]
+fn test_one_of_mapped_references() {
+    let positives = [1, 2, 3];
+    let negatives = [-1, -2, -3];
+    let pos_refs: Vec<&i32> = positives.iter().collect();
+    let neg_refs: Vec<&i32> = negatives.iter().collect();
+    let description: String = hegel::draw(&hegel::one_of!(
+        generators::sampled_from(pos_refs).map(|r| format!("positive: {}", r)),
+        generators::sampled_from(neg_refs).map(|r| format!("negative: {}", r)),
+    ));
+    assert!(description.starts_with("positive:") || description.starts_with("negative:"));
+}
+
+#[hegel::test]
+fn test_boxed_generator_with_references() {
+    let options = [10, 20, 30];
+    let refs: Vec<&i32> = options.iter().collect();
+    let gen = generators::sampled_from(refs).boxed();
+    let value: &i32 = hegel::draw(&gen);
+    assert!(options.contains(value));
 }
 
 #[hegel::test]
