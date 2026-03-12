@@ -20,7 +20,7 @@ Hegel requires [`uv`](https://docs.astral.sh/uv/), and automatically installs th
 ## Quick Start
 
 ```rust
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn test_addition_commutative() {

@@ -14,13 +14,13 @@ pub(crate) fn derive_struct_generate(input: &DeriveInput, data: &syn::DataStruct
         Fields::Unnamed(_) => {
             return syn::Error::new_spanned(
                 input,
-                "Generate can only be derived for structs with named fields",
+                "Generator can only be derived for structs with named fields",
             )
             .to_compile_error()
             .into();
         }
         Fields::Unit => {
-            return syn::Error::new_spanned(input, "Generate cannot be derived for unit structs")
+            return syn::Error::new_spanned(input, "Generator cannot be derived for unit structs")
                 .to_compile_error()
                 .into();
         }
