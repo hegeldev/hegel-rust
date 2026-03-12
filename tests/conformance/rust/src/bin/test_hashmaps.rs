@@ -37,7 +37,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    Hegel::new(move || {
+    Hegel::new(move |tc| {
         let size: usize;
         let min_key: Option<i32>;
         let max_key: Option<i32>;
@@ -57,7 +57,7 @@ fn main() {
                 .min_size(params.min_size)
                 .max_size(params.max_size);
 
-                let map = hegel::draw(&hashmap_gen);
+                let map = tc.draw(hashmap_gen);
                 size = map.len();
                 if map.is_empty() {
                     min_key = None;
@@ -81,7 +81,7 @@ fn main() {
                 .min_size(params.min_size)
                 .max_size(params.max_size);
 
-                let map = hegel::draw(&hashmap_gen);
+                let map = tc.draw(hashmap_gen);
                 size = map.len();
                 min_key = None;
                 max_key = None;

@@ -1,13 +1,14 @@
 mod common;
 
 use common::utils::{assert_all_examples, find_any};
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
+use hegel::TestCase;
 
 // tuples2
 
 #[hegel::test]
-fn test_tuple2_basic() {
-    let (a, b): (i32, bool) = hegel::draw(&generators::tuples2(
+fn test_tuple2_basic(tc: TestCase) {
+    let (a, b): (i32, bool) = tc.draw(generators::tuples2(
         generators::integers(),
         generators::booleans(),
     ));
@@ -15,8 +16,8 @@ fn test_tuple2_basic() {
 }
 
 #[hegel::test]
-fn test_tuple2_respects_bounds() {
-    let (a, b): (i32, i32) = hegel::draw(&generators::tuples2(
+fn test_tuple2_respects_bounds(tc: TestCase) {
+    let (a, b): (i32, i32) = tc.draw(generators::tuples2(
         generators::integers().min_value(0).max_value(10),
         generators::integers().min_value(100).max_value(200),
     ));
@@ -27,8 +28,8 @@ fn test_tuple2_respects_bounds() {
 // tuples3
 
 #[hegel::test]
-fn test_tuple3_basic() {
-    let (a, b, c): (i32, String, bool) = hegel::draw(&generators::tuples3(
+fn test_tuple3_basic(tc: TestCase) {
+    let (a, b, c): (i32, String, bool) = tc.draw(generators::tuples3(
         generators::integers(),
         generators::text(),
         generators::booleans(),
@@ -37,8 +38,8 @@ fn test_tuple3_basic() {
 }
 
 #[hegel::test]
-fn test_tuple3_respects_bounds() {
-    let (a, b, c): (i32, i32, i32) = hegel::draw(&generators::tuples3(
+fn test_tuple3_respects_bounds(tc: TestCase) {
+    let (a, b, c): (i32, i32, i32) = tc.draw(generators::tuples3(
         generators::integers().min_value(0).max_value(10),
         generators::integers().min_value(20).max_value(30),
         generators::integers().min_value(40).max_value(50),
@@ -51,8 +52,8 @@ fn test_tuple3_respects_bounds() {
 // tuples4
 
 #[hegel::test]
-fn test_tuple4_basic() {
-    let (a, b, c, d): (i32, i32, i32, i32) = hegel::draw(&generators::tuples4(
+fn test_tuple4_basic(tc: TestCase) {
+    let (a, b, c, d): (i32, i32, i32, i32) = tc.draw(generators::tuples4(
         generators::integers().min_value(0).max_value(10),
         generators::integers().min_value(0).max_value(10),
         generators::integers().min_value(0).max_value(10),
@@ -67,8 +68,8 @@ fn test_tuple4_basic() {
 // tuples5
 
 #[hegel::test]
-fn test_tuple5_basic() {
-    let t: (i32, i32, i32, i32, i32) = hegel::draw(&generators::tuples5(
+fn test_tuple5_basic(tc: TestCase) {
+    let t: (i32, i32, i32, i32, i32) = tc.draw(generators::tuples5(
         generators::integers(),
         generators::integers(),
         generators::integers(),
@@ -81,8 +82,8 @@ fn test_tuple5_basic() {
 // larger arities compile and run
 
 #[hegel::test]
-fn test_tuple6() {
-    let _: (i32, i32, i32, i32, i32, i32) = hegel::draw(&generators::tuples6(
+fn test_tuple6(tc: TestCase) {
+    let _: (i32, i32, i32, i32, i32, i32) = tc.draw(generators::tuples6(
         generators::integers(),
         generators::integers(),
         generators::integers(),
@@ -93,22 +94,8 @@ fn test_tuple6() {
 }
 
 #[hegel::test]
-fn test_tuple7() {
-    let _: (i32, i32, i32, i32, i32, i32, i32) = hegel::draw(&generators::tuples7(
-        generators::integers(),
-        generators::integers(),
-        generators::integers(),
-        generators::integers(),
-        generators::integers(),
-        generators::integers(),
-        generators::integers(),
-    ));
-}
-
-#[hegel::test]
-fn test_tuple8() {
-    let _: (i32, i32, i32, i32, i32, i32, i32, i32) = hegel::draw(&generators::tuples8(
-        generators::integers(),
+fn test_tuple7(tc: TestCase) {
+    let _: (i32, i32, i32, i32, i32, i32, i32) = tc.draw(generators::tuples7(
         generators::integers(),
         generators::integers(),
         generators::integers(),
@@ -120,9 +107,8 @@ fn test_tuple8() {
 }
 
 #[hegel::test]
-fn test_tuple9() {
-    let _: (i32, i32, i32, i32, i32, i32, i32, i32, i32) = hegel::draw(&generators::tuples9(
-        generators::integers(),
+fn test_tuple8(tc: TestCase) {
+    let _: (i32, i32, i32, i32, i32, i32, i32, i32) = tc.draw(generators::tuples8(
         generators::integers(),
         generators::integers(),
         generators::integers(),
@@ -135,9 +121,8 @@ fn test_tuple9() {
 }
 
 #[hegel::test]
-fn test_tuple10() {
-    let _: (i32, i32, i32, i32, i32, i32, i32, i32, i32, i32) = hegel::draw(&generators::tuples10(
-        generators::integers(),
+fn test_tuple9(tc: TestCase) {
+    let _: (i32, i32, i32, i32, i32, i32, i32, i32, i32) = tc.draw(generators::tuples9(
         generators::integers(),
         generators::integers(),
         generators::integers(),
@@ -151,27 +136,42 @@ fn test_tuple10() {
 }
 
 #[hegel::test]
-fn test_tuple11() {
-    let _: (i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32) =
-        hegel::draw(&generators::tuples11(
-            generators::integers(),
-            generators::integers(),
-            generators::integers(),
-            generators::integers(),
-            generators::integers(),
-            generators::integers(),
-            generators::integers(),
-            generators::integers(),
-            generators::integers(),
-            generators::integers(),
-            generators::integers(),
-        ));
+fn test_tuple10(tc: TestCase) {
+    let _: (i32, i32, i32, i32, i32, i32, i32, i32, i32, i32) = tc.draw(generators::tuples10(
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+    ));
 }
 
 #[hegel::test]
-fn test_tuple12() {
+fn test_tuple11(tc: TestCase) {
+    let _: (i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32) = tc.draw(generators::tuples11(
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+        generators::integers(),
+    ));
+}
+
+#[hegel::test]
+fn test_tuple12(tc: TestCase) {
     let _: (i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32) =
-        hegel::draw(&generators::tuples12(
+        tc.draw(generators::tuples12(
             generators::integers(),
             generators::integers(),
             generators::integers(),
@@ -190,8 +190,8 @@ fn test_tuple12() {
 // mapped tuples
 
 #[hegel::test]
-fn test_tuple2_with_mapped_elements() {
-    let (a, b): (i32, i32) = hegel::draw(&generators::tuples2(
+fn test_tuple2_with_mapped_elements(tc: TestCase) {
+    let (a, b): (i32, i32) = tc.draw(generators::tuples2(
         generators::integers::<i32>()
             .min_value(i32::MIN / 2)
             .max_value(i32::MAX / 2)
@@ -208,8 +208,8 @@ fn test_tuple2_with_mapped_elements() {
 // mixed types
 
 #[hegel::test]
-fn test_tuple_mixed_types() {
-    let (n, s, b, f): (i32, String, bool, f64) = hegel::draw(&generators::tuples4(
+fn test_tuple_mixed_types(tc: TestCase) {
+    let (n, s, b, f): (i32, String, bool, f64) = tc.draw(generators::tuples4(
         generators::integers().min_value(0).max_value(100),
         generators::text().max_size(10),
         generators::booleans(),
@@ -223,9 +223,9 @@ fn test_tuple_mixed_types() {
 // tuples in collections
 
 #[hegel::test]
-fn test_vec_of_tuples() {
-    let vec: Vec<(i32, bool)> = hegel::draw(
-        &generators::vecs(generators::tuples2(
+fn test_vec_of_tuples(tc: TestCase) {
+    let vec: Vec<(i32, bool)> = tc.draw(
+        generators::vecs(generators::tuples2(
             generators::integers::<i32>().min_value(0).max_value(100),
             generators::booleans(),
         ))

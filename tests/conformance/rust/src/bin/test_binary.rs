@@ -27,12 +27,12 @@ fn main() {
         std::process::exit(1);
     });
 
-    Hegel::new(move || {
+    Hegel::new(move |tc| {
         let mut gen = generators::binary().min_size(params.min_size);
         if let Some(max) = params.max_size {
             gen = gen.max_size(max);
         }
-        let value = hegel::draw(&gen);
+        let value = tc.draw(gen);
         write(&Metrics {
             length: value.len(),
         });

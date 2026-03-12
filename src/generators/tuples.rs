@@ -1,4 +1,4 @@
-use super::{labels, BasicGenerator, DefaultGenerator, Generate, TestCaseData};
+use super::{labels, BasicGenerator, DefaultGenerator, Generator, TestCase};
 use crate::cbor_utils::{cbor_array, cbor_map};
 use ciborium::Value;
 use std::marker::PhantomData;
@@ -10,17 +10,17 @@ macro_rules! impl_tuple {
             _phantom: PhantomData<fn($($T,)+)>,
         }
 
-        impl<$($T,)+ $($G,)+> Generate<($($T,)+)> for $name<$($G,)+ $($T,)+>
+        impl<$($T,)+ $($G,)+> Generator<($($T,)+)> for $name<$($G,)+ $($T,)+>
         where
-            $($G: Generate<$T>,)+
+            $($G: Generator<$T>,)+
         {
-            fn do_draw(&self, data: &TestCaseData) -> ($($T,)+) {
+            fn do_draw(&self, tc: &TestCase) -> ($($T,)+) {
                 if let Some(basic) = self.as_basic() {
-                    basic.do_draw(data)
+                    basic.do_draw(tc)
                 } else {
-                    data.start_span(labels::TUPLE);
-                    let result = ($(self.$field.do_draw(data),)+);
-                    data.stop_span(false);
+                    tc.start_span(labels::TUPLE);
+                    let result = ($(self.$field.do_draw(tc),)+);
+                    tc.stop_span(false);
                     result
                 }
             }
@@ -46,7 +46,7 @@ macro_rules! impl_tuple {
         }
 
         #[allow(clippy::too_many_arguments)]
-        pub fn $fn_name<$($T,)+ $($G: Generate<$T>,)+>(
+        pub fn $fn_name<$($T,)+ $($G: Generator<$T>,)+>(
             $($field: $G,)+
         ) -> $name<$($G,)+ $($T,)+> {
             $name {

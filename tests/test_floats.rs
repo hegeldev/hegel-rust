@@ -1,8 +1,8 @@
 mod common;
 
 use common::utils::{assert_all_examples, find_any};
-use hegel::assume;
 use hegel::generators;
+use hegel::TestCase;
 
 macro_rules! float_tests {
     ($t:ty) => {
@@ -17,85 +17,85 @@ macro_rules! float_tests {
         }
 
         #[hegel::test]
-        fn with_min() {
-            let min = hegel::draw(
+        fn with_min(tc: TestCase) {
+            let min = tc.draw(
                 &generators::floats::<$t>()
                     .allow_nan(false)
                     .allow_infinity(false),
             );
-            let n = hegel::draw(&generators::floats::<$t>().min_value(min));
+            let n = tc.draw(generators::floats::<$t>().min_value(min));
             assert!(n >= min, "{n} should be >= {min}");
         }
 
         #[hegel::test]
-        fn with_max() {
-            let max = hegel::draw(
+        fn with_max(tc: TestCase) {
+            let max = tc.draw(
                 &generators::floats::<$t>()
                     .allow_nan(false)
                     .allow_infinity(false),
             );
-            let n = hegel::draw(&generators::floats::<$t>().max_value(max));
+            let n = tc.draw(generators::floats::<$t>().max_value(max));
             assert!(n <= max, "{n} should be <= {max}");
         }
 
         #[hegel::test]
-        fn with_min_and_max() {
-            let a = hegel::draw(
+        fn with_min_and_max(tc: TestCase) {
+            let a = tc.draw(
                 &generators::floats::<$t>()
                     .allow_nan(false)
                     .allow_infinity(false),
             );
-            let b = hegel::draw(
+            let b = tc.draw(
                 &generators::floats::<$t>()
                     .allow_nan(false)
                     .allow_infinity(false),
             );
             let min = a.min(b);
             let max = a.max(b);
-            let n = hegel::draw(&generators::floats::<$t>().min_value(min).max_value(max));
+            let n = tc.draw(generators::floats::<$t>().min_value(min).max_value(max));
             assert!(n >= min && n <= max, "{n} should be in [{min}, {max}]");
         }
 
         #[hegel::test]
-        fn exclude_min() {
-            let min = hegel::draw(
+        fn exclude_min(tc: TestCase) {
+            let min = tc.draw(
                 &generators::floats::<$t>()
                     .allow_nan(false)
                     .allow_infinity(false),
             );
-            assume(min.next_up().is_finite());
-            let n = hegel::draw(&generators::floats::<$t>().min_value(min).exclude_min());
+            tc.assume(min.next_up().is_finite());
+            let n = tc.draw(generators::floats::<$t>().min_value(min).exclude_min());
             assert!(n > min, "{n} should be > {min}");
         }
 
         #[hegel::test]
-        fn exclude_max() {
-            let max = hegel::draw(
+        fn exclude_max(tc: TestCase) {
+            let max = tc.draw(
                 &generators::floats::<$t>()
                     .allow_nan(false)
                     .allow_infinity(false),
             );
-            assume(max.next_down().is_finite());
-            let n = hegel::draw(&generators::floats::<$t>().max_value(max).exclude_max());
+            tc.assume(max.next_down().is_finite());
+            let n = tc.draw(generators::floats::<$t>().max_value(max).exclude_max());
             assert!(n < max, "{n} should be < {max}");
         }
 
         #[hegel::test]
-        fn exclude_min_and_max() {
-            let a = hegel::draw(
+        fn exclude_min_and_max(tc: TestCase) {
+            let a = tc.draw(
                 &generators::floats::<$t>()
                     .allow_nan(false)
                     .allow_infinity(false),
             );
-            let b = hegel::draw(
+            let b = tc.draw(
                 &generators::floats::<$t>()
                     .allow_nan(false)
                     .allow_infinity(false),
             );
             let min = a.min(b);
             let max = a.max(b);
-            assume(min.next_up() < max);
-            let n = hegel::draw(
+            tc.assume(min.next_up() < max);
+            let n = tc.draw(
                 &generators::floats::<$t>()
                     .min_value(min)
                     .max_value(max)
@@ -126,14 +126,14 @@ macro_rules! float_tests {
         }
 
         #[hegel::test]
-        fn fuzz_floats_bounds() {
+        fn fuzz_floats_bounds(tc: TestCase) {
             let bound_gen = generators::optional(
                 generators::floats::<$t>()
                     .allow_nan(false)
                     .allow_infinity(false),
             );
-            let mut low: Option<$t> = hegel::draw(&bound_gen);
-            let mut high: Option<$t> = hegel::draw(&bound_gen);
+            let mut low: Option<$t> = tc.draw(&bound_gen);
+            let mut high: Option<$t> = tc.draw(&bound_gen);
 
             if let (Some(lo), Some(hi)) = (low, high) {
                 if lo > hi {
@@ -142,13 +142,13 @@ macro_rules! float_tests {
                 }
             }
 
-            let exmin = low.is_some() && hegel::draw(&generators::booleans());
-            let exmax = high.is_some() && hegel::draw(&generators::booleans());
+            let exmin = low.is_some() && tc.draw(generators::booleans());
+            let exmax = high.is_some() && tc.draw(generators::booleans());
 
             if let (Some(lo), Some(hi)) = (low, high) {
                 let effective_lo = if exmin { lo.next_up() } else { lo };
                 let effective_hi = if exmax { hi.next_down() } else { hi };
-                assume(effective_lo <= effective_hi);
+                tc.assume(effective_lo <= effective_hi);
             }
 
             let mut g = generators::floats::<$t>();
@@ -165,7 +165,7 @@ macro_rules! float_tests {
                 g = g.exclude_max();
             }
 
-            let val = hegel::draw(&g);
+            let val = tc.draw(g);
 
             if val.is_finite() {
                 if let Some(lo) = low {

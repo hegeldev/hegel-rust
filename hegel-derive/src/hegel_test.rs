@@ -1,7 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{Expr, Ident, ItemFn, Token};
+use syn::{Expr, FnArg, Ident, ItemFn, Token};
 
 /// A single setting in a `#[hegel::test(...)]` expression.
 struct Setting {
@@ -50,13 +50,27 @@ pub fn expand_test(
         Err(e) => return e.to_compile_error(),
     };
 
-    if !func.sig.inputs.is_empty() {
+    if func.sig.inputs.len() != 1 {
         return syn::Error::new_spanned(
-            &func.sig.inputs,
-            "#[hegel::test] functions must not have parameters.",
+            &func.sig,
+            "#[hegel::test] functions must take exactly one parameter of type hegel::TestCase.",
         )
         .to_compile_error();
     }
+
+    let param = &func.sig.inputs[0];
+    let param_typed = match param {
+        FnArg::Typed(pat_type) => pat_type,
+        FnArg::Receiver(_) => {
+            return syn::Error::new_spanned(
+                param,
+                "#[hegel::test] functions cannot have a self parameter.",
+            )
+            .to_compile_error();
+        }
+    };
+    let param_pat = &param_typed.pat;
+    let param_ty = &param_typed.ty;
 
     for attr in &func.attrs {
         if attr.path().is_ident("test") {
@@ -84,7 +98,7 @@ pub fn expand_test(
 
     let new_body: TokenStream = quote! {
         {
-            hegel::Hegel::new(|| #body)
+            hegel::Hegel::new(|#param_pat: #param_ty| #body)
             #(#settings_chain)*
             .test_location(hegel::TestLocation {
                 function: #fn_name_str.to_string(),
@@ -99,8 +113,8 @@ pub fn expand_test(
     let new_block: syn::Block = syn::parse2(new_body).expect("failed to parse generated body");
 
     let mut func = func;
+    func.sig.inputs.clear();
     func.block = Box::new(new_block);
-
 
     quote! {
         #[test]

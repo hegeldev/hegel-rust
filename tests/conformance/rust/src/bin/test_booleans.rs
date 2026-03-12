@@ -11,8 +11,8 @@ struct Metrics {
 fn main() {
     // booleans takes no params, so we ignore argv[1]
 
-    Hegel::new(|| {
-        let value = hegel::draw(&generators::booleans());
+    Hegel::new(|tc| {
+        let value = tc.draw(generators::booleans());
         write(&Metrics { value });
     })
     .test_cases(get_test_cases())

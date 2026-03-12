@@ -1,4 +1,4 @@
-use super::{integers, labels, BasicGenerator, BoxedGenerator, Collection, Generate, TestCaseData};
+use super::{integers, labels, BasicGenerator, BoxedGenerator, Collection, Generator, TestCase};
 use crate::cbor_utils::{cbor_map, map_insert};
 use ciborium::Value;
 use std::collections::{HashMap, HashSet};
@@ -31,25 +31,25 @@ impl<G, T> VecGenerator<G, T> {
     }
 }
 
-impl<T, G> Generate<Vec<T>> for VecGenerator<G, T>
+impl<T, G> Generator<Vec<T>> for VecGenerator<G, T>
 where
-    G: Generate<T>,
+    G: Generator<T>,
 {
-    fn do_draw(&self, data: &TestCaseData) -> Vec<T> {
+    fn do_draw(&self, tc: &TestCase) -> Vec<T> {
         if let Some(max) = self.max_size {
             assert!(self.min_size <= max, "Cannot have max_size < min_size");
         }
         if let Some(basic) = self.as_basic() {
-            basic.do_draw(data)
+            basic.do_draw(tc)
         } else {
-            data.start_span(labels::LIST);
+            tc.start_span(labels::LIST);
             let mut collection =
-                Collection::new(data, "composite_list", self.min_size, self.max_size);
+                Collection::new(tc, "composite_list", self.min_size, self.max_size);
             let mut result = Vec::new();
             while collection.more() {
-                result.push(self.elements.do_draw(data));
+                result.push(self.elements.do_draw(tc));
             }
-            data.stop_span(false);
+            tc.stop_span(false);
             result
         }
     }
@@ -80,7 +80,7 @@ where
     }
 }
 
-pub fn vecs<T, G: Generate<T>>(elements: G) -> VecGenerator<G, T> {
+pub fn vecs<T, G: Generator<T>>(elements: G) -> VecGenerator<G, T> {
     VecGenerator {
         elements,
         min_size: 0,
@@ -109,34 +109,34 @@ impl<G, T> HashSetGenerator<G, T> {
     }
 }
 
-impl<T, G> Generate<HashSet<T>> for HashSetGenerator<G, T>
+impl<T, G> Generator<HashSet<T>> for HashSetGenerator<G, T>
 where
-    G: Generate<T>,
+    G: Generator<T>,
     T: Eq + Hash,
 {
-    fn do_draw(&self, data: &TestCaseData) -> HashSet<T> {
+    fn do_draw(&self, tc: &TestCase) -> HashSet<T> {
         if let Some(max) = self.max_size {
             assert!(self.min_size <= max, "Cannot have max_size < min_size");
         }
         if let Some(basic) = self.as_basic() {
-            basic.do_draw(data)
+            basic.do_draw(tc)
         } else {
-            data.start_span(labels::SET);
+            tc.start_span(labels::SET);
             let max = self.max_size.unwrap_or(100);
             let target_len = integers::<usize>()
                 .min_value(self.min_size)
                 .max_value(max)
-                .do_draw(data);
+                .do_draw(tc);
 
             let mut set = HashSet::new();
             let mut attempts = 0;
             while set.len() < target_len && attempts < target_len * 10 {
-                data.start_span(labels::SET_ELEMENT);
-                set.insert(self.elements.do_draw(data));
-                data.stop_span(false);
+                tc.start_span(labels::SET_ELEMENT);
+                set.insert(self.elements.do_draw(tc));
+                tc.stop_span(false);
                 attempts += 1;
             }
-            data.stop_span(false);
+            tc.stop_span(false);
             set
         }
     }
@@ -167,7 +167,7 @@ where
     }
 }
 
-pub fn hashsets<T, G: Generate<T>>(elements: G) -> HashSetGenerator<G, T> {
+pub fn hashsets<T, G: Generator<T>>(elements: G) -> HashSetGenerator<G, T> {
     HashSetGenerator {
         elements,
         min_size: 0,
@@ -196,38 +196,38 @@ impl<K, V, KT, VT> HashMapGenerator<K, V, KT, VT> {
     }
 }
 
-impl<K, V, KT, VT> Generate<HashMap<KT, VT>> for HashMapGenerator<K, V, KT, VT>
+impl<K, V, KT, VT> Generator<HashMap<KT, VT>> for HashMapGenerator<K, V, KT, VT>
 where
-    K: Generate<KT>,
-    V: Generate<VT>,
+    K: Generator<KT>,
+    V: Generator<VT>,
     KT: Eq + std::hash::Hash,
 {
-    fn do_draw(&self, data: &TestCaseData) -> HashMap<KT, VT> {
+    fn do_draw(&self, tc: &TestCase) -> HashMap<KT, VT> {
         if let Some(max) = self.max_size {
             assert!(self.min_size <= max, "Cannot have max_size < min_size");
         }
         if let Some(basic) = self.as_basic() {
-            basic.do_draw(data)
+            basic.do_draw(tc)
         } else {
-            data.start_span(labels::MAP);
+            tc.start_span(labels::MAP);
             let max = self.max_size.unwrap_or(100);
             let len = integers::<usize>()
                 .min_value(self.min_size)
                 .max_value(max)
-                .do_draw(data);
+                .do_draw(tc);
 
             let mut map = HashMap::new();
             let max_attempts = len * 10;
             let mut attempts = 0;
             while map.len() < len && attempts < max_attempts {
-                data.start_span(labels::MAP_ENTRY);
-                let key = self.keys.do_draw(data);
-                map.entry(key).or_insert_with(|| self.values.do_draw(data));
-                data.stop_span(false);
+                tc.start_span(labels::MAP_ENTRY);
+                let key = self.keys.do_draw(tc);
+                map.entry(key).or_insert_with(|| self.values.do_draw(tc));
+                tc.stop_span(false);
                 attempts += 1;
             }
-            crate::assume(map.len() >= self.min_size);
-            data.stop_span(false);
+            tc.assume(map.len() >= self.min_size);
+            tc.stop_span(false);
             map
         }
     }
@@ -285,9 +285,9 @@ where
 /// use hegel::generators::{hashmaps, integers, text};
 /// use std::collections::HashMap;
 ///
-/// let map: HashMap<i32, String> = hegel::draw(&hashmaps(integers(), text()));
+/// let map: HashMap<i32, String> = tc.draw(hashmaps(integers(), text()));
 /// ```
-pub fn hashmaps<KT, VT, K: Generate<KT>, V: Generate<VT>>(
+pub fn hashmaps<KT, VT, K: Generator<KT>, V: Generator<VT>>(
     keys: K,
     values: V,
 ) -> HashMapGenerator<K, V, KT, VT> {
@@ -305,9 +305,9 @@ pub(crate) struct MappedToValue<T, G> {
     _phantom: PhantomData<fn() -> T>,
 }
 
-impl<T: serde::Serialize, G: Generate<T>> Generate<Value> for MappedToValue<T, G> {
-    fn do_draw(&self, data: &TestCaseData) -> Value {
-        crate::cbor_utils::cbor_serialize(&self.inner.do_draw(data))
+impl<T: serde::Serialize, G: Generator<T>> Generator<Value> for MappedToValue<T, G> {
+    fn do_draw(&self, tc: &TestCase) -> Value {
+        crate::cbor_utils::cbor_serialize(&self.inner.do_draw(tc))
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, Value>> {
@@ -327,7 +327,7 @@ pub struct FixedDictBuilder<'a> {
 impl<'a> FixedDictBuilder<'a> {
     pub fn field<T, G>(mut self, name: &str, gen: G) -> Self
     where
-        G: Generate<T> + Send + Sync + 'a,
+        G: Generator<T> + Send + Sync + 'a,
         T: serde::Serialize + 'a,
     {
         let boxed = BoxedGenerator {
@@ -351,18 +351,18 @@ pub struct FixedDictGenerator<'a> {
     fields: Vec<(String, BoxedGenerator<'a, Value>)>,
 }
 
-impl Generate<Value> for FixedDictGenerator<'_> {
-    fn do_draw(&self, data: &TestCaseData) -> Value {
+impl Generator<Value> for FixedDictGenerator<'_> {
+    fn do_draw(&self, tc: &TestCase) -> Value {
         if let Some(basic) = self.as_basic() {
-            basic.do_draw(data)
+            basic.do_draw(tc)
         } else {
-            data.start_span(labels::FIXED_DICT);
+            tc.start_span(labels::FIXED_DICT);
             let entries: Vec<(Value, Value)> = self
                 .fields
                 .iter()
-                .map(|(name, gen)| (Value::Text(name.clone()), gen.do_draw(data)))
+                .map(|(name, gen)| (Value::Text(name.clone()), gen.do_draw(tc)))
                 .collect();
-            data.stop_span(false);
+            tc.stop_span(false);
             Value::Map(entries)
         }
     }
@@ -405,7 +405,7 @@ impl Generate<Value> for FixedDictGenerator<'_> {
 /// # Example
 ///
 /// ```no_run
-/// use hegel::generators::{self, Generate};
+/// use hegel::generators::{self, Generator};
 ///
 /// let gen = generators::fixed_dicts()
 ///     .field("name", generators::text())
@@ -430,20 +430,22 @@ impl<G, T, const N: usize> ArrayGenerator<G, T, N> {
     }
 }
 
-pub fn arrays<G: Generate<T> + Send + Sync, T, const N: usize>(
+pub fn arrays<G: Generator<T> + Send + Sync, T, const N: usize>(
     element: G,
 ) -> ArrayGenerator<G, T, N> {
     ArrayGenerator::new(element)
 }
 
-impl<G: Generate<T> + Send + Sync, T, const N: usize> Generate<[T; N]> for ArrayGenerator<G, T, N> {
-    fn do_draw(&self, data: &TestCaseData) -> [T; N] {
+impl<G: Generator<T> + Send + Sync, T, const N: usize> Generator<[T; N]>
+    for ArrayGenerator<G, T, N>
+{
+    fn do_draw(&self, tc: &TestCase) -> [T; N] {
         if let Some(basic) = self.as_basic() {
-            basic.do_draw(data)
+            basic.do_draw(tc)
         } else {
-            data.start_span(labels::TUPLE);
-            let result = std::array::from_fn(|_| self.element.do_draw(data));
-            data.stop_span(false);
+            tc.start_span(labels::TUPLE);
+            let result = std::array::from_fn(|_| self.element.do_draw(tc));
+            tc.stop_span(false);
             result
         }
     }

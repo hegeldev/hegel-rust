@@ -26,8 +26,8 @@ fn main() {
         std::process::exit(1);
     });
 
-    Hegel::new(move || {
-        let value = hegel::draw(&generators::sampled_from(params.options.clone()));
+    Hegel::new(move |tc| {
+        let value = tc.draw(generators::sampled_from(params.options.clone()));
         write(&Metrics { value });
     })
     .test_cases(get_test_cases())

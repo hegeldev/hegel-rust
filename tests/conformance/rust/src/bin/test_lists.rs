@@ -31,7 +31,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    Hegel::new(move || {
+    Hegel::new(move |tc| {
         let mut elem_gen = generators::integers::<i32>();
         if let Some(min) = params.min_value {
             elem_gen = elem_gen.min_value(min);
@@ -45,7 +45,7 @@ fn main() {
             vec_gen = vec_gen.max_size(max);
         }
 
-        let list = hegel::draw(&vec_gen);
+        let list = tc.draw(vec_gen);
 
         let size = list.len();
         let (min_element, max_element) = if list.is_empty() {

@@ -2,33 +2,16 @@ mod common;
 
 use common::project::TempRustProject;
 use hegel::generators;
+use hegel::TestCase;
 
 #[hegel::test]
-fn test_basic_usage() {
-    let _ = hegel::draw(&generators::booleans());
+fn test_basic_usage(tc: TestCase) {
+    let _ = tc.draw(generators::booleans());
 }
 
 #[hegel::test(test_cases = 10)]
-fn test_with_settings() {
-    let _ = hegel::draw(&generators::booleans());
-}
-
-#[test]
-#[should_panic(expected = "draw() cannot be called outside of a Hegel test")]
-fn test_draw_outside_test_panics() {
-    hegel::draw(&generators::booleans());
-}
-
-#[test]
-#[should_panic(expected = "assume() cannot be called outside of a Hegel test")]
-fn test_assume_outside_test_panics() {
-    hegel::assume(true);
-}
-
-#[test]
-#[should_panic(expected = "note() cannot be called outside of a Hegel test")]
-fn test_note_outside_test_panics() {
-    hegel::note("a note");
+fn test_with_settings(tc: TestCase) {
+    let _ = tc.draw(generators::booleans());
 }
 
 #[test]
@@ -38,7 +21,7 @@ use hegel::generators;
 
 #[hegel::test]
 #[test]
-fn main() {}
+fn main(tc: hegel::TestCase) {}
 "#;
     let output = TempRustProject::new(code).run();
     assert!(!output.status.success());
@@ -51,19 +34,40 @@ fn main() {}
 
 #[test]
 fn test_params_compile_error() {
-    let code = r#"
+    // Zero parameters should be rejected
+    let code_zero = r#"
 use hegel::generators;
 
 #[hegel::test]
-fn main(x: bool) {
-    let _ = x;
+fn main() {
 }
 "#;
-    let output = TempRustProject::new(code).run();
+    let output = TempRustProject::new(code_zero).run();
     assert!(!output.status.success());
     assert!(
-        output.stderr.contains("must not have parameters"),
-        "Expected parameter error, got: {}",
+        output
+            .stderr
+            .contains("must take exactly one parameter of type hegel::TestCase"),
+        "Expected parameter error for zero params, got: {}",
+        output.stderr
+    );
+
+    // Two parameters should be rejected
+    let code_two = r#"
+use hegel::generators;
+
+#[hegel::test]
+fn main(tc: hegel::TestCase, x: bool) {
+    let _ = (tc, x);
+}
+"#;
+    let output = TempRustProject::new(code_two).run();
+    assert!(!output.status.success());
+    assert!(
+        output
+            .stderr
+            .contains("must take exactly one parameter of type hegel::TestCase"),
+        "Expected parameter error for two params, got: {}",
         output.stderr
     );
 }

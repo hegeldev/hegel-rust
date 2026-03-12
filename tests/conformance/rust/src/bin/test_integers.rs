@@ -27,7 +27,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    Hegel::new(move || {
+    Hegel::new(move |tc| {
         let mut gen = generators::integers::<i32>();
         if let Some(min) = params.min_value {
             gen = gen.min_value(min);
@@ -35,7 +35,7 @@ fn main() {
         if let Some(max) = params.max_value {
             gen = gen.max_value(max);
         }
-        let value = hegel::draw(&gen);
+        let value = tc.draw(gen);
         write(&Metrics { value });
     })
     .test_cases(get_test_cases())

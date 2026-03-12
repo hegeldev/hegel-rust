@@ -12,7 +12,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dev-dependencies]
-hegel = { git = "ssh://git@github.com/antithesishq/hegel-rust" }
+hegel = { git = "https://github.com/hegeldev/hegel-rust" }
 ```
 
 Hegel requires [`uv`](https://docs.astral.sh/uv/), and automatically installs the hegel server on first use. To override the hegel binary, set the `HEGEL_SERVER_CMD` environment variable.
@@ -20,13 +20,12 @@ Hegel requires [`uv`](https://docs.astral.sh/uv/), and automatically installs th
 ## Quick Start
 
 ```rust
-use hegel::generators::integers;
-use hegel::draw;
+use hegel::generators;
 
 #[hegel::test]
-fn test_addition_commutative() {
-    let x = draw(&integers::<i32>());
-    let y = draw(&integers::<i32>());
+fn test_addition_commutative(tc: hegel::TestCase) {
+    let x = tc.draw(generators::integers::<i32>());
+    let y = tc.draw(generators::integers::<i32>());
     assert_eq!(x + y, y + x);
 }
 ```

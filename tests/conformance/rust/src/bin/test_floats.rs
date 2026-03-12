@@ -33,7 +33,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    Hegel::new(move || {
+    Hegel::new(move |tc| {
         let mut gen = generators::floats::<f64>();
 
         if let Some(min) = params.min_value {
@@ -55,7 +55,7 @@ fn main() {
             gen = gen.allow_infinity(allow_infinity);
         }
 
-        let value = hegel::draw(&gen);
+        let value = tc.draw(gen);
         write(&Metrics {
             value,
             is_nan: value.is_nan(),

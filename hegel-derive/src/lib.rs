@@ -21,51 +21,55 @@ use syn::{parse_macro_input, Data, DeriveInput};
 /// # Struct Example
 ///
 /// ```ignore
-/// use hegel::Generate;
-/// use hegel::generators::{self, Generate as _};
+/// use hegel::Generator;
+/// use hegel::generators::{self, DefaultGenerator, Generator as _};
 ///
-/// #[derive(Generate)]
+/// #[derive(Generator)]
 /// struct Person {
 ///     name: String,
 ///     age: u32,
 /// }
 ///
-/// let gen = generators::from_type::<Person>()
-///     .with_age(generators::integers::<u32>().min_value(0).max_value(120));
-///
-/// let person: Person = hegel::draw(&gen);
+/// #[hegel::test]
+/// fn generates_people(tc: hegel::TestCase) {
+///     let gen = generators::from_type::<Person>()
+///         .with_age(generators::integers::<u32>().min_value(0).max_value(120));
+///     let person: Person = tc.draw(gen);
+/// }
 /// ```
 ///
 /// # Enum Example
 ///
 /// ```ignore
-/// use hegel::Generate;
-/// use hegel::generators::{self, Generate as _};
+/// use hegel::Generator;
+/// use hegel::generators::{self, DefaultGenerator, Generator as _};
 ///
-/// #[derive(Generate)]
+/// #[derive(Generator)]
 /// enum Status {
 ///     Pending,
 ///     Active { since: String },
 ///     Error { code: i32, message: String },
 /// }
 ///
-/// let gen = generators::from_type::<Status>()
-///     .with_Active(
-///         generators::from_type::<Status>()
-///             .default_Active()
-///             .with_since(generators::text().max_size(20))
-///     );
-///
-/// let status: Status = hegel::draw(&gen);
+/// #[hegel::test]
+/// fn generates_statuses(tc: hegel::TestCase) {
+///     let gen = generators::from_type::<Status>()
+///         .with_Active(
+///             generators::from_type::<Status>()
+///                 .default_Active()
+///                 .with_since(generators::text().max_size(20))
+///         );
+///     let status: Status = tc.draw(gen);
+/// }
 /// ```
-#[proc_macro_derive(Generate)]
+#[proc_macro_derive(Generator)]
 pub fn derive_generate(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     match &input.data {
         Data::Struct(data) => struct_gen::derive_struct_generate(&input, data),
         Data::Enum(data) => enum_gen::derive_enum_generate(&input, data),
-        Data::Union(_) => syn::Error::new_spanned(&input, "Generate cannot be derived for unions")
+        Data::Union(_) => syn::Error::new_spanned(&input, "Generator cannot be derived for unions")
             .to_compile_error()
             .into(),
     }
@@ -73,23 +77,23 @@ pub fn derive_generate(input: TokenStream) -> TokenStream {
 
 /// Mark a test function as a Hegel property-based test.
 ///
-/// Wraps the function body in `Hegel::new(|| { ... }).run()`. Use `hegel::draw()`
-/// inside the body to generate values.
+/// Wraps the function body in `Hegel::new(|tc: TestCase| { ... }).run()`. The function
+/// must take exactly one parameter of type `hegel::TestCase`, and use `tc.draw()` to
+/// generate values. The `#[test]` attribute is added automatically and must not be
+/// present on the function.
 ///
 /// Optionally accepts settings as `key = value` pairs:
 ///
 /// ```ignore
 /// #[hegel::test]
-/// #[test]
-/// fn my_test() {
-///     let x: i32 = hegel::draw(&generators::integers());
+/// fn my_test(tc: hegel::TestCase) {
+///     let x: i32 = tc.draw(generators::integers());
 ///     assert!(x + 0 == x);
 /// }
 ///
 /// #[hegel::test(test_cases = 500)]
-/// #[test]
-/// fn my_configured_test() {
-///     let x: i32 = hegel::draw(&generators::integers());
+/// fn my_configured_test(tc: hegel::TestCase) {
+///     let x: i32 = tc.draw(generators::integers());
 ///     assert!(x + 0 == x);
 /// }
 /// ```

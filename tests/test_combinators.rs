@@ -1,19 +1,20 @@
 mod common;
 
 use common::utils::find_any;
-use hegel::generators::{self, Generate};
+use hegel::generators::{self, Generator};
+use hegel::TestCase;
 
 #[hegel::test]
-fn test_sampled_from_returns_element_from_list() {
-    let options = hegel::draw(&generators::vecs(generators::integers::<i32>()).min_size(1));
-    let value = hegel::draw(&generators::sampled_from(options.clone()));
+fn test_sampled_from_returns_element_from_list(tc: TestCase) {
+    let options = tc.draw(generators::vecs(generators::integers::<i32>()).min_size(1));
+    let value = tc.draw(generators::sampled_from(options.clone()));
     assert!(options.contains(&value));
 }
 
 #[hegel::test]
-fn test_sampled_from_strings() {
-    let options = hegel::draw(&generators::vecs(generators::text()).min_size(1));
-    let value = hegel::draw(&generators::sampled_from(options.clone()));
+fn test_sampled_from_strings(tc: TestCase) {
+    let options = tc.draw(generators::vecs(generators::text()).min_size(1));
+    let value = tc.draw(generators::sampled_from(options.clone()));
     assert!(options.contains(&value));
 }
 
@@ -32,8 +33,8 @@ fn test_optional_can_generate_none() {
 }
 
 #[hegel::test]
-fn test_optional_respects_inner_generator_bounds() {
-    let value = hegel::draw(&generators::optional(
+fn test_optional_respects_inner_generator_bounds(tc: TestCase) {
+    let value = tc.draw(generators::optional(
         generators::integers().min_value(10).max_value(20),
     ));
     if let Some(n) = value {
@@ -42,8 +43,8 @@ fn test_optional_respects_inner_generator_bounds() {
 }
 
 #[hegel::test]
-fn test_one_of_returns_value_from_one_generator() {
-    let value = hegel::draw(&hegel::one_of!(
+fn test_one_of_returns_value_from_one_generator(tc: TestCase) {
+    let value = tc.draw(hegel::one_of!(
         generators::integers().min_value(0).max_value(10),
         generators::integers().min_value(100).max_value(110),
     ));
@@ -51,8 +52,8 @@ fn test_one_of_returns_value_from_one_generator() {
 }
 
 #[hegel::test]
-fn test_one_of_with_different_types_via_map() {
-    let value = hegel::draw(&hegel::one_of!(
+fn test_one_of_with_different_types_via_map(tc: TestCase) {
+    let value = tc.draw(hegel::one_of!(
         generators::integers::<i32>()
             .min_value(0)
             .max_value(100)
@@ -66,16 +67,16 @@ fn test_one_of_with_different_types_via_map() {
 }
 
 #[hegel::test]
-fn test_one_of_many() {
+fn test_one_of_many(tc: TestCase) {
     let generators = (0..10).map(|i| generators::just(i).boxed()).collect();
-    let value = hegel::draw(&generators::one_of(generators));
+    let value = tc.draw(generators::one_of(generators));
     assert!((0..10).contains(&value));
 }
 
 #[hegel::test]
-fn test_flat_map() {
-    let value = hegel::draw(
-        &generators::integers::<usize>()
+fn test_flat_map(tc: TestCase) {
+    let value = tc.draw(
+        generators::integers::<usize>()
             .min_value(1)
             .max_value(5)
             .flat_map(|len| generators::text().min_size(len).max_size(len)),
@@ -85,9 +86,9 @@ fn test_flat_map() {
 }
 
 #[hegel::test]
-fn test_filter() {
-    let value = hegel::draw(
-        &generators::integers::<i32>()
+fn test_filter(tc: TestCase) {
+    let value = tc.draw(
+        generators::integers::<i32>()
             .min_value(0)
             .max_value(100)
             .filter(|n| n % 2 == 0),
@@ -97,32 +98,32 @@ fn test_filter() {
 }
 
 #[hegel::test]
-fn test_boxed_generator_clone() {
+fn test_boxed_generator_clone(tc: TestCase) {
     let gen1 = generators::integers::<i32>()
         .min_value(0)
         .max_value(10)
         .boxed();
     let gen2 = gen1.clone();
-    let v1 = hegel::draw(&gen1);
-    let v2 = hegel::draw(&gen2);
+    let v1 = tc.draw(gen1);
+    let v2 = tc.draw(gen2);
     assert!((0..=10).contains(&v1));
     assert!((0..=10).contains(&v2));
 }
 
 #[hegel::test]
-fn test_boxed_generator_double_boxed() {
+fn test_boxed_generator_double_boxed(tc: TestCase) {
     // Calling .boxed() on an already-boxed generator should not re-wrap
     let gen1 = generators::integers::<i32>()
         .min_value(0)
         .max_value(10)
         .boxed();
     let gen2 = gen1.boxed();
-    let value = hegel::draw(&gen2);
+    let value = tc.draw(gen2);
     assert!((0..=10).contains(&value));
 }
 
 #[hegel::test]
-fn test_sampled_from_non_primitive() {
+fn test_sampled_from_non_primitive(tc: TestCase) {
     #[derive(Clone, Debug, PartialEq, serde::Serialize)]
     struct Point {
         x: i32,
@@ -134,13 +135,13 @@ fn test_sampled_from_non_primitive() {
         Point { x: 3, y: 4 },
         Point { x: 5, y: 6 },
     ];
-    let value = hegel::draw(&generators::sampled_from(options.clone()));
+    let value = tc.draw(generators::sampled_from(options.clone()));
     assert!(options.contains(&value));
 }
 
 #[hegel::test]
-fn test_optional_mapped() {
-    let value = hegel::draw(&generators::optional(
+fn test_optional_mapped(tc: TestCase) {
+    let value = tc.draw(generators::optional(
         generators::integers::<i32>()
             .min_value(0)
             .max_value(100)
@@ -149,6 +150,18 @@ fn test_optional_mapped() {
     if let Some(s) = value {
         assert!(s.starts_with("value: "));
     }
+}
+
+#[hegel::test]
+fn test_draw_silent_non_debug(tc: TestCase) {
+    // Closure is not Debug, so this can only work with draw_silent
+    let f = tc.draw_silent(
+        generators::integers::<i32>()
+            .min_value(0)
+            .max_value(1000)
+            .map(|n| move |x: i32| x + n),
+    );
+    assert_eq!(f(10), 10 + f(0));
 }
 
 #[test]

@@ -225,7 +225,7 @@ jobs:
         with:
           app-id: ${{ vars.HEGEL_RELEASE_APP_ID }}
           private-key: ${{ secrets.HEGEL_RELEASE_APP_PRIVATE_KEY }}
-          repositories: hegel-rust,hegel-core
+          repositories: hegel-rust
 
       - name: Re-checkout with app token # zizmor: ignore[artipacked]
         if: steps.check.outputs.skip != 'true'
