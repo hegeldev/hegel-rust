@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0 - 2026-03-12
+
+This release bumps the Hegel core version to 0.4.0.
+
 ## 0.2.5 - 2026-03-11
 
 Set `HEGEL_SERVER_COMMAND` in nix install.
