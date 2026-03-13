@@ -14,44 +14,22 @@ The SDK requires [`uv`](https://github.com/astral-sh/uv) installed and on your P
 ## Write your first test
 
 ```rust
-use hegel::generators::{self, Generator};
+use hegel::TestCase;
+use hegel::generators::integers;
 
 #[hegel::test]
-fn test_integers(tc: hegel::TestCase) {
-    let n = tc.draw(generators::integers::<i64>());
-    println!("called with {n}");
-    assert_eq!(n, n); // integers are always equal to themselves
+fn test_integer_self_equality(tc: TestCase) {
+    let n = tc.draw(integers::<i32>());
+    assert_eq!(n, n); // integers should always be equal to themselves
 }
 ```
 
-`#[hegel::test]` runs your test many times with different generated inputs.
-The function takes a `hegel::TestCase` parameter, which provides methods for
-drawing values and making assumptions. If any assertion fails, Hegel shrinks
-the inputs to a minimal counterexample.
-
-By default Hegel runs **100 test cases**. Use the builder API to override this:
+`#[hegel::test]` runs your test many times with different generated inputs. The function takes a `hegel::TestCase` parameter, which provides a method `draw` for drawing values. If any assertion fails, Hegel shrinks the inputs to a minimal counterexample.
 
 ```rust
-use hegel::generators::{self, Generator};
-
-#[hegel::test(test_cases = 500)]
-fn test_integers_many(tc: hegel::TestCase) {
-    let n = tc.draw(generators::integers::<i64>());
-    assert_eq!(n, n);
-}
-```
-
-## Running in a test suite
-
-Hegel tests use `#[hegel::test]` in place of `#[test]`:
-
-```rust
-use hegel::generators::{self, Generator};
-
 #[hegel::test]
-fn test_bounded_integers(tc: hegel::TestCase) {
-    let n = tc.draw(generators::integers::<i32>()
-        .min_value(0).max_value(200));
+fn test_integers_always_below_50(tc: TestCase) {
+    let n = tc.draw(integers::<i32>());
     assert!(n < 50); // this will fail!
 }
 ```
@@ -59,24 +37,15 @@ fn test_bounded_integers(tc: hegel::TestCase) {
 When the test fails, Hegel finds the smallest counterexample — in this case,
 `n = 50`.
 
-## Generating multiple values
-
-Call `tc.draw()` multiple times to produce multiple values in a single test:
-
 ```rust
-use hegel::generators::{self, Generator};
-
 #[hegel::test]
-fn test_multiple_values(tc: hegel::TestCase) {
-    let n = tc.draw(generators::integers::<i64>());
-    let s = tc.draw(generators::text());
-    assert_eq!(n, n);
-    assert!(s.len() >= 0);
+fn test_bounded_integers_always_below_50(tc: TestCase) {
+    let n = tc.draw(integers::<i32>()
+        .min_value(0)
+        .max_value(49));
+    assert!(n < 50); // this will fail!
 }
 ```
-
-Because generation is imperative, you can generate values at any point —
-including conditionally or inside loops.
 
 ## Filtering
 
@@ -311,6 +280,20 @@ fn test_with_notes(tc: hegel::TestCase) {
     assert_eq!(x + y, y + x); // commutativity -- always true
 }
 ```
+
+## Controlling the number of test cases
+By default Hegel runs 100 test cases. Use the builder API to override this:
+
+```rust
+use hegel::generators::{self, Generator};
+
+#[hegel::test(test_cases = 500)]
+fn test_integers_many(tc: hegel::TestCase) {
+    let n = tc.draw(generators::integers::<i64>());
+    assert_eq!(n, n);
+}
+```
+
 
 ## Guiding generation with target()
 
