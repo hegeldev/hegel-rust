@@ -42,9 +42,10 @@ update-hegel-core-version:
     sed -i '' "s/^const HEGEL_SERVER_VERSION: &str = \".*\"/const HEGEL_SERVER_VERSION: \&str = \"${tag}\"/" src/runner.rs
     sed -i '' "s/refs\/tags\/.*\";/refs\/tags\/${tag}\";/" nix/flake.nix
     nix --extra-experimental-features "nix-command flakes" flake lock ./nix
+    curl -fsSL https://raw.githubusercontent.com/hegeldev/hegel-installer/main/install-hegel.sh \
+        -o scripts/install-hegel.sh
+    chmod +x scripts/install-hegel.sh
     echo "Updated HEGEL_SERVER_VERSION to ${tag}"
-    # Clear cached install so the next test run picks up the new version
-    rm -rf .hegel/venv
 
 build-conformance:
     cargo build --release --manifest-path tests/conformance/rust/Cargo.toml
