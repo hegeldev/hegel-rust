@@ -482,7 +482,9 @@ where
                 .expect("Failed to receive event");
 
             let event: Value = cbor_decode(&event_payload);
-            let event_type = map_get(&event, "event").and_then(as_text).expect("Expected event in payload");
+            let event_type = map_get(&event, "event")
+                .and_then(as_text)
+                .expect("Expected event in payload");
 
             if verbosity == Verbosity::Debug {
                 eprintln!("Received event: {:?}", event);
