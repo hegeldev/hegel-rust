@@ -19,6 +19,7 @@ const SUPPORTED_PROTOCOL_VERSIONS: (f64, f64) = (0.1, 0.4);
 const HEGEL_SERVER_VERSION: &str = "v0.4.0";
 const HEGEL_SERVER_COMMAND_ENV: &str = "HEGEL_SERVER_COMMAND";
 const HEGEL_SERVER_DIR: &str = ".hegel";
+const INSTALL_SCRIPT: &str = include_str!("../scripts/install-hegel.sh");
 static HEGEL_SERVER_COMMAND: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static SERVER_LOG_FILE: std::sync::OnceLock<Mutex<File>> = std::sync::OnceLock::new();
 
@@ -162,63 +163,31 @@ fn init_panic_hook() {
 }
 
 fn ensure_hegel_installed() -> Result<String, String> {
-    let venv_dir = format!("{HEGEL_SERVER_DIR}/venv");
-    let version_file = format!("{venv_dir}/hegel-version");
-    let hegel_bin = format!("{venv_dir}/bin/hegel");
     let install_log = format!("{HEGEL_SERVER_DIR}/install.log");
 
-    // Check cached version
-    if let Ok(cached) = std::fs::read_to_string(&version_file) {
-        if cached.trim() == HEGEL_SERVER_VERSION && std::path::Path::new(&hegel_bin).is_file() {
-            return Ok(hegel_bin);
-        }
-    }
+    let output = Command::new("bash")
+        .args(["-c", INSTALL_SCRIPT])
+        .env("HEGEL_VERSION", HEGEL_SERVER_VERSION)
+        .output()
+        .map_err(|e| format!("Failed to run install script: {e}"))?;
 
-    std::fs::create_dir_all(HEGEL_SERVER_DIR)
-        .map_err(|e| format!("Failed to create {HEGEL_SERVER_DIR}: {e}"))?;
+    // Write stderr to install log for debugging
+    std::fs::create_dir_all(HEGEL_SERVER_DIR).ok();
+    std::fs::write(&install_log, &output.stderr).ok();
 
-    let log_file = std::fs::File::create(&install_log)
-        .map_err(|e| format!("Failed to create install log: {e}"))?;
-
-    let status = std::process::Command::new("uv")
-        .args(["venv", "--clear", &venv_dir])
-        .stderr(log_file.try_clone().unwrap())
-        .stdout(log_file.try_clone().unwrap())
-        .status()
-        .map_err(|e| format!("Failed to run uv venv: {e}"))?;
-    if !status.success() {
-        let log = std::fs::read_to_string(&install_log).unwrap_or_default();
-        return Err(format!("uv venv failed. Install log:\n{log}"));
-    }
-
-    let python_path = format!("{venv_dir}/bin/python");
-    let status = std::process::Command::new("uv")
-        .args([
-            "pip",
-            "install",
-            "--python",
-            &python_path,
-            &format!("hegel @ git+https://github.com/hegeldev/hegel-core@{HEGEL_SERVER_VERSION}"),
-        ])
-        .stderr(log_file.try_clone().unwrap())
-        .stdout(log_file)
-        .status()
-        .map_err(|e| format!("Failed to run uv pip install: {e}"))?;
-    if !status.success() {
-        let log = std::fs::read_to_string(&install_log).unwrap_or_default();
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
             "Failed to install hegel (version: {HEGEL_SERVER_VERSION}). \
              Set {HEGEL_SERVER_COMMAND_ENV} to a hegel binary path to skip installation.\n\
-             Install log:\n{log}"
+             Install log:\n{stderr}"
         ));
     }
 
-    if !std::path::Path::new(&hegel_bin).is_file() {
-        return Err(format!("hegel not found at {hegel_bin} after installation"));
+    let hegel_bin = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if hegel_bin.is_empty() {
+        return Err("Install script produced no output".to_string());
     }
-
-    std::fs::write(&version_file, HEGEL_SERVER_VERSION)
-        .map_err(|e| format!("Failed to write version file: {e}"))?;
 
     Ok(hegel_bin)
 }

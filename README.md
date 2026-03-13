@@ -16,7 +16,7 @@ hegel = { git = "https://github.com/hegeldev/hegel-rust" }
 
 Hegel requires either:
 
-* [`uv`](https://docs.astral.sh/uv/) on your system,
+* [`uv`](https://docs.astral.sh/uv/) on your system (hegel-core is cached in a shared per-user directory),
 * or `HEGEL_SERVER_COMMAND` set to the path of a hegel-core binary.
 
 ## Quick Start
