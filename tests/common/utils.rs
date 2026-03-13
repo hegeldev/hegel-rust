@@ -3,8 +3,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use hegel::generators::Generator;
 use hegel::Hegel;
+use hegel::generators::Generator;
 use std::fmt::Debug;
 
 #[allow(dead_code)]

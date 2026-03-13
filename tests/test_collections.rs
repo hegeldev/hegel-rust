@@ -1,5 +1,5 @@
-use hegel::generators::{self, Generator};
 use hegel::TestCase;
+use hegel::generators::{self, Generator};
 use std::collections::{HashMap, HashSet};
 
 #[hegel::test]

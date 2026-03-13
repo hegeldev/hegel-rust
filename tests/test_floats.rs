@@ -1,8 +1,8 @@
 mod common;
 
 use common::utils::{assert_all_examples, find_any};
-use hegel::generators;
 use hegel::TestCase;
+use hegel::generators;
 
 macro_rules! float_tests {
     ($t:ty) => {

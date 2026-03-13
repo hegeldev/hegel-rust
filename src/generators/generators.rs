@@ -1,4 +1,4 @@
-use crate::test_case::{labels, TestCase};
+use crate::test_case::{TestCase, labels};
 use ciborium::Value;
 use std::marker::PhantomData;
 use std::sync::Arc;

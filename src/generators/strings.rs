@@ -157,10 +157,10 @@ impl Generator<Vec<u8>> for BinaryGenerator {
 /// use hegel::generators::{self, Generator};
 ///
 /// // Generate any byte sequence
-/// let gen = generators::binary();
+/// let generator = generators::binary();
 ///
 /// // Generator 16-32 bytes
-/// let gen = generators::binary().min_size(16).max_size(32);
+/// let generator = generators::binary().min_size(16).max_size(32);
 /// ```
 pub fn binary() -> BinaryGenerator {
     BinaryGenerator {

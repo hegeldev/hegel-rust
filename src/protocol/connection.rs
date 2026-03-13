@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::channel::Channel;
-use super::packet::{read_packet, write_packet, Packet};
+use super::packet::{Packet, read_packet, write_packet};
 
 pub struct Connection {
     stream: Mutex<UnixStream>,

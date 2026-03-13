@@ -1,4 +1,4 @@
-use super::{integers, labels, BasicGenerator, BoxedGenerator, Collection, Generator, TestCase};
+use super::{BasicGenerator, BoxedGenerator, Collection, Generator, TestCase, integers, labels};
 use crate::cbor_utils::{cbor_map, map_insert};
 use ciborium::Value;
 use std::collections::{HashMap, HashSet};
@@ -325,14 +325,14 @@ pub struct FixedDictBuilder<'a> {
 }
 
 impl<'a> FixedDictBuilder<'a> {
-    pub fn field<T, G>(mut self, name: &str, gen: G) -> Self
+    pub fn field<T, G>(mut self, name: &str, generator: G) -> Self
     where
         G: Generator<T> + Send + Sync + 'a,
         T: serde::Serialize + 'a,
     {
         let boxed = BoxedGenerator {
             inner: Arc::new(MappedToValue {
-                inner: gen,
+                inner: generator,
                 _phantom: PhantomData,
             }),
         };
@@ -360,7 +360,7 @@ impl Generator<Value> for FixedDictGenerator<'_> {
             let entries: Vec<(Value, Value)> = self
                 .fields
                 .iter()
-                .map(|(name, gen)| (Value::Text(name.clone()), gen.do_draw(tc)))
+                .map(|(name, generator)| (Value::Text(name.clone()), generator.do_draw(tc)))
                 .collect();
             tc.stop_span(false);
             Value::Map(entries)
@@ -371,7 +371,7 @@ impl Generator<Value> for FixedDictGenerator<'_> {
         let basics: Vec<BasicGenerator<'_, Value>> = self
             .fields
             .iter()
-            .map(|(_, gen)| gen.as_basic())
+            .map(|(_, generator)| generator.as_basic())
             .collect::<Option<Vec<_>>>()?;
 
         let schemas: Vec<Value> = basics.iter().map(|b| b.schema().clone()).collect();
@@ -407,7 +407,7 @@ impl Generator<Value> for FixedDictGenerator<'_> {
 /// ```no_run
 /// use hegel::generators::{self, Generator};
 ///
-/// let gen = generators::fixed_dicts()
+/// let generator = generators::fixed_dicts()
 ///     .field("name", generators::text())
 ///     .field("age", generators::integers::<u32>())
 ///     .build();

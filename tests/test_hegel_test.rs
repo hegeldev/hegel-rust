@@ -1,8 +1,8 @@
 mod common;
 
 use common::project::TempRustProject;
-use hegel::generators;
 use hegel::TestCase;
+use hegel::generators;
 
 #[hegel::test]
 fn test_basic_usage(tc: TestCase) {

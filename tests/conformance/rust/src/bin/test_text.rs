@@ -28,11 +28,11 @@ fn main() {
     });
 
     Hegel::new(move |tc| {
-        let mut gen = generators::text().min_size(params.min_size);
+        let mut generator = generators::text().min_size(params.min_size);
         if let Some(max) = params.max_size {
-            gen = gen.max_size(max);
+            generator = generator.max_size(max);
         }
-        let value = tc.draw(gen);
+        let value = tc.draw(generator);
         // Report length in Unicode codepoints, not bytes
         let length = value.chars().count();
         write(&Metrics { length });

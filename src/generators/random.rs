@@ -1,7 +1,7 @@
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
 
-use super::{binary, integers, Generator, TestCase};
+use super::{Generator, TestCase, binary, integers};
 
 pub struct RandomsGenerator {
     use_true_random: bool,

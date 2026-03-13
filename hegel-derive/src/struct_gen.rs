@@ -65,11 +65,11 @@ pub(crate) fn derive_struct_generate(input: &DeriveInput, data: &syn::DataStruct
         .map(|((field_name, field_type), method_name)| {
             quote! {
                 /// Set a custom generator for this field.
-                pub fn #method_name<G>(mut self, gen: G) -> Self
+                pub fn #method_name<G>(mut self, generator: G) -> Self
                 where
                     G: hegel::generators::Generator<#field_type> + Send + Sync + 'a,
                 {
-                    self.#field_name = gen.boxed();
+                    self.#field_name = generator.boxed();
                     self
                 }
             }

@@ -1,5 +1,5 @@
-use hegel::generators::{self};
 use hegel::TestCase;
+use hegel::generators::{self};
 use std::sync::atomic::{AtomicI32, Ordering};
 
 static GLOBAL_COUNTER: AtomicI32 = AtomicI32::new(0);

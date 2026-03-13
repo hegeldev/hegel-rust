@@ -1,8 +1,8 @@
 mod common;
 
 use common::utils::check_can_generate_examples;
-use hegel::generators::default;
 use hegel::TestCase;
+use hegel::generators::default;
 use std::collections::HashMap;
 
 #[test]

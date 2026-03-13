@@ -1,8 +1,8 @@
 mod common;
 
 use common::utils::assert_all_examples;
-use hegel::generators::{self, Generator};
 use hegel::TestCase;
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn test_compose_basic(tc: TestCase) {
@@ -47,10 +47,10 @@ fn test_compose_with_filter(tc: TestCase) {
 
 #[hegel::test]
 fn test_compose_with_boxed(tc: TestCase) {
-    let gen =
+    let generator =
         hegel::compose!(|tc| { tc.draw(generators::integers::<i32>().min_value(0).max_value(50)) })
             .boxed();
-    let value = tc.draw(gen);
+    let value = tc.draw(generator);
     assert!((0..=50).contains(&value));
 }
 

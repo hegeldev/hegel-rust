@@ -66,10 +66,10 @@ where
 /// use hegel::generators::{self, Generator};
 ///
 /// // Generate any i32 (uses i32::MIN to i32::MAX)
-/// let gen = generators::integers::<i32>();
+/// let generator = generators::integers::<i32>();
 ///
 /// // Generate u8 in range 0-100
-/// let gen = generators::integers::<u8>().min_value(0).max_value(100);
+/// let generator = generators::integers::<u8>().min_value(0).max_value(100);
 /// ```
 pub fn integers<T>() -> IntegerGenerator<T>
 where

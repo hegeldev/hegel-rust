@@ -1,7 +1,7 @@
 use super::{
-    booleans, collections::ArrayGenerator, floats, hashmaps, integers, optional, text, vecs,
     BoolGenerator, BoxedGenerator, FloatGenerator, Generator, HashMapGenerator, IntegerGenerator,
-    OptionalGenerator, TextGenerator, VecGenerator,
+    OptionalGenerator, TextGenerator, VecGenerator, booleans, collections::ArrayGenerator, floats,
+    hashmaps, integers, optional, text, vecs,
 };
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -226,11 +226,11 @@ where
 /// });
 ///
 /// // default now supports Person:
-/// let gen = generators::default::<Person>()
+/// let generator = generators::default::<Person>()
 ///     .with_name(generators::from_regex("[A-Z][a-z]+"))
 ///     .with_age(generators::integers::<u32>().min_value(0).max_value(120));
 ///
-/// let person: Person = tc.draw(gen);
+/// let person: Person = tc.draw(generator);
 /// ```
 #[macro_export]
 macro_rules! derive_generator {
@@ -256,12 +256,12 @@ macro_rules! derive_generator {
                     }
 
                     $(
-                        pub fn [<with_ $field_name>]<G>(mut self, gen: G) -> Self
+                        pub fn [<with_ $field_name>]<G>(mut self, generator: G) -> Self
                         where
                             G: $crate::generators::Generator<$field_type> + Send + Sync + 'a,
                         {
                             use $crate::generators::Generator;
-                            self.$field_name = gen.boxed();
+                            self.$field_name = generator.boxed();
                             self
                         }
                     )*

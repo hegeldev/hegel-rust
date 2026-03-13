@@ -1,8 +1,8 @@
 mod common;
 
 use common::utils::find_any;
-use hegel::generators::{self, Generator};
 use hegel::TestCase;
+use hegel::generators::{self, Generator};
 
 #[hegel::test]
 fn test_array_of_integers(tc: TestCase) {

@@ -96,8 +96,8 @@ impl TestCase {
     ///     let s: String = tc.draw(generators::text());
     /// }
     /// ```
-    pub fn draw<T: std::fmt::Debug>(&self, gen: impl Generator<T>) -> T {
-        let value = gen.do_draw(self);
+    pub fn draw<T: std::fmt::Debug>(&self, generator: impl Generator<T>) -> T {
+        let value = generator.do_draw(self);
         if self.inner.borrow().span_depth == 0 {
             self.record_draw(&value);
         }
@@ -108,8 +108,8 @@ impl TestCase {
     ///
     /// Unlike [`draw`](Self::draw), this does not require `T: Debug` and
     /// will never print the value in the failing-test summary.
-    pub fn draw_silent<T>(&self, gen: impl Generator<T>) -> T {
-        gen.do_draw(self)
+    pub fn draw_silent<T>(&self, generator: impl Generator<T>) -> T {
+        generator.do_draw(self)
     }
 
     /// Assume a condition is true. If false, reject the current test input.

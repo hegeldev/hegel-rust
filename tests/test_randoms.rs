@@ -1,9 +1,9 @@
 #![cfg(feature = "rand")]
 
-use hegel::generators::{integers, randoms, vecs};
 use hegel::TestCase;
-use rand::prelude::{IndexedRandom, SliceRandom};
+use hegel::generators::{integers, randoms, vecs};
 use rand::Rng;
+use rand::prelude::{IndexedRandom, SliceRandom};
 
 #[hegel::test]
 fn test_randoms_generate(tc: TestCase) {

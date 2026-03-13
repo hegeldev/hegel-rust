@@ -151,11 +151,11 @@ pub(crate) fn derive_enum_generate(input: &DeriveInput, data: &syn::DataEnum) ->
 
             quote! {
                 /// Set a custom generator for the #variant_name variant.
-                pub fn #with_method_name<G>(mut self, gen: G) -> Self
+                pub fn #with_method_name<G>(mut self, generator: G) -> Self
                 where
                     G: hegel::generators::Generator<#enum_name> + Send + Sync + 'a,
                 {
-                    self.#variant_name = gen.boxed();
+                    self.#variant_name = generator.boxed();
                     self
                 }
             }
@@ -491,11 +491,11 @@ fn generate_variant_generator(
                     let with_method_name = format_ident!("with_{}", field_name);
                     quote! {
                         /// Set a custom generator for this field.
-                        pub fn #with_method_name<G>(mut self, gen: G) -> Self
+                        pub fn #with_method_name<G>(mut self, generator: G) -> Self
                         where
                             G: hegel::generators::Generator<#field_type> + Send + Sync + 'a,
                         {
-                            self.#field_name = gen.boxed();
+                            self.#field_name = generator.boxed();
                             self
                         }
                     }
@@ -648,11 +648,11 @@ fn generate_variant_generator(
                     }
 
                     /// Set a custom generator for the value.
-                    pub fn with_value<G>(mut self, gen: G) -> Self
+                    pub fn with_value<G>(mut self, generator: G) -> Self
                     where
                         G: hegel::generators::Generator<#field_type> + Send + Sync + 'a,
                     {
-                        self.value = gen.boxed();
+                        self.value = generator.boxed();
                         self
                     }
                 }
@@ -703,11 +703,11 @@ fn generate_variant_generator(
                     let with_method_name = format_ident!("with{}", field_idx);
                     quote! {
                         /// Set a custom generator for this field.
-                        pub fn #with_method_name<G>(mut self, gen: G) -> Self
+                        pub fn #with_method_name<G>(mut self, generator: G) -> Self
                         where
                             G: hegel::generators::Generator<#field_type> + Send + Sync + 'a,
                         {
-                            self.#field_idx = gen.boxed();
+                            self.#field_idx = generator.boxed();
                             self
                         }
                     }
