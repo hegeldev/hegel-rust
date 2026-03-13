@@ -55,7 +55,7 @@ macro_rules! impl_tuple {
             }
         }
 
-        impl<$($T: DefaultGenerator,)+> DefaultGenerator for ($($T,)+)
+        impl<$($T: DefaultGenerator + 'static,)+> DefaultGenerator for ($($T,)+)
         where
             $(<$T as DefaultGenerator>::Generator: Send + Sync,)+
         {
