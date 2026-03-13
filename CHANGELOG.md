@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0 - 2026-03-13
+
+* Renames `from_type` to `default` (to be used as `generators::default`)
+* Makes `default::<T>` always return a `BoxedGenerator<T>`. This means you can no longer do things like `default::<i32>.min_value(0)`, but also means that the `T` parameter can be reliably inferred so `default()` will work without having to be `default::<T>()` in many more cases.
+
 ## 0.4.0 - 2026-03-12
 
 This does a big rationalization of the API to what I hope will be close to the final one we release with.

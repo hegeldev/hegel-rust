@@ -1,7 +1,7 @@
 mod collections;
 mod combinators;
 mod compose;
-mod from_type;
+mod default;
 #[allow(clippy::module_inception)]
 mod generators;
 mod misc;
@@ -20,7 +20,7 @@ pub use crate::test_case::{
 pub use collections::{arrays, fixed_dicts, hashmaps, hashsets, vecs, HashMapGenerator};
 pub use combinators::{one_of, optional, sampled_from};
 pub use compose::{fnv1a_hash, ComposedGenerator};
-pub use from_type::{from_type, DefaultGenerator};
+pub use default::{default, DefaultGenerator};
 pub use generators::{BasicGenerator, BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};
 pub use misc::{booleans, just, none, unit};
 pub use numeric::{floats, integers};

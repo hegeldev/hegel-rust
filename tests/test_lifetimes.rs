@@ -186,3 +186,20 @@ fn test_deeply_nested_reference_composition(tc: TestCase) {
         );
     }
 }
+
+#[hegel::test]
+fn test_boxed_generator_with_local_lifetime(tc: TestCase) {
+    // This tests that we can created boxed generators boxed
+    // generators whose lifetimes may not outlive the test.
+    let x = ["foo", "bar", "baz"];
+
+    let ix = generators::integers().min_value(0).max_value(2);
+
+    // Generator for a reference into x, which necessarily
+    // means that `refs` may not outlive `x`.
+    let refs = ix.map(|i| &x[i]).boxed();
+
+    let t = tc.draw(refs);
+
+    assert!(t.len() == 3);
+}

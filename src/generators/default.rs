@@ -1,7 +1,7 @@
 use super::{
     booleans, collections::ArrayGenerator, floats, hashmaps, integers, optional, text, vecs,
-    BoolGenerator, FloatGenerator, HashMapGenerator, IntegerGenerator, OptionalGenerator,
-    TextGenerator, VecGenerator,
+    BoolGenerator, BoxedGenerator, FloatGenerator, Generator, HashMapGenerator, IntegerGenerator,
+    OptionalGenerator, TextGenerator, VecGenerator,
 };
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -10,7 +10,7 @@ use std::hash::Hash;
 ///
 /// This is used by derive macros to automatically generate values for fields.
 pub trait DefaultGenerator: Sized {
-    type Generator: super::Generator<Self>;
+    type Generator: super::Generator<Self> + 'static;
     fn default_generator() -> Self::Generator;
 }
 
@@ -34,15 +34,15 @@ pub trait DefaultGenerator: Sized {
 /// #[hegel::test]
 /// fn my_test(tc: hegel::TestCase) {
 ///     // Generate with defaults
-///     let person: Person = tc.draw(generators::from_type::<Person>());
+///     let person: Person = tc.draw(generators::default::<Person>());
 ///
 ///     // Customize field generators
-///     let person: Person = tc.draw(generators::from_type::<Person>()
+///     let person: Person = tc.draw(generators::default::<Person>()
 ///         .with_age(generators::integers().min_value(0).max_value(120)));
 /// }
 /// ```
-pub fn from_type<T: DefaultGenerator>() -> T::Generator {
-    T::default_generator()
+pub fn default<T: DefaultGenerator>() -> BoxedGenerator<'static, T> {
+    T::default_generator().boxed()
 }
 
 impl DefaultGenerator for bool {
@@ -157,7 +157,7 @@ impl DefaultGenerator for f64 {
     }
 }
 
-impl<T: DefaultGenerator> DefaultGenerator for Option<T>
+impl<T: DefaultGenerator + 'static> DefaultGenerator for Option<T>
 where
     T::Generator: Send + Sync,
 {
@@ -167,7 +167,7 @@ where
     }
 }
 
-impl<T: DefaultGenerator> DefaultGenerator for Vec<T>
+impl<T: DefaultGenerator + 'static> DefaultGenerator for Vec<T>
 where
     T::Generator: Send + Sync,
 {
@@ -177,7 +177,7 @@ where
     }
 }
 
-impl<T: DefaultGenerator, const N: usize> DefaultGenerator for [T; N]
+impl<T: DefaultGenerator + 'static, const N: usize> DefaultGenerator for [T; N]
 where
     T::Generator: Send + Sync,
 {
@@ -187,7 +187,8 @@ where
     }
 }
 
-impl<K: DefaultGenerator, V: DefaultGenerator> DefaultGenerator for HashMap<K, V>
+impl<K: DefaultGenerator + 'static, V: DefaultGenerator + 'static> DefaultGenerator
+    for HashMap<K, V>
 where
     K: Eq + Hash,
     K::Generator: Send + Sync,
@@ -203,7 +204,7 @@ where
 ///
 /// This macro creates a hidden generator struct with builder methods for each field,
 /// and implements [`DefaultGenerator`](crate::generators::DefaultGenerator) for the type
-/// so it can be used with [`from_type`](crate::generators::from_type).
+/// so it can be used with [`default`](crate::generators::default).
 ///
 /// # Example
 ///
@@ -224,8 +225,8 @@ where
 ///     age: u32,
 /// });
 ///
-/// // from_type now supports Person:
-/// let generator = generators::from_type::<Person>()
+/// // default now supports Person:
+/// let generator = generators::default::<Person>()
 ///     .with_name(generators::from_regex("[A-Z][a-z]+"))
 ///     .with_age(generators::integers::<u32>().min_value(0).max_value(120));
 ///

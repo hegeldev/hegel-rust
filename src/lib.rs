@@ -151,7 +151,7 @@
 //! # Deriving Generators
 //!
 //! Use `#[derive(Generator)]` to automatically create generators for structs and enums,
-//! then use [`generators::from_type`] to get a generator:
+//! then use [`generators::default`] to get a generator:
 //!
 //! ```no_run
 //! use hegel::Generator;
@@ -166,10 +166,10 @@
 //! #[hegel::test]
 //! fn my_test(tc: hegel::TestCase) {
 //!     // Generate with defaults
-//!     let person: Person = tc.draw(generators::from_type::<Person>());
+//!     let person: Person = tc.draw(generators::default::<Person>());
 //!
 //!     // Customize field generators
-//!     let person: Person = tc.draw(generators::from_type::<Person>()
+//!     let person: Person = tc.draw(generators::default::<Person>()
 //!         .with_age(generators::integers().min_value(0).max_value(120)));
 //! }
 //! ```
@@ -182,7 +182,7 @@
 //!
 //! derive_generator!(Point { x: f64, y: f64 });
 //!
-//! let point: Point = tc.draw(generators::from_type::<Point>());
+//! let point: Point = tc.draw(generators::default::<Point>());
 //! ```
 //!
 //! # Assumptions

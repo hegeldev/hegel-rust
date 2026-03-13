@@ -1,21 +1,23 @@
-# hegel-rust
+# Hegel for Rust
 
-A Rust SDK for [Hegel](https://github.com/hegeldev/hegel-core) — universal
-property-based testing powered by [Hypothesis](https://hypothesis.works/).
-
-Hegel generates random inputs for your tests, finds failures, and automatically
-shrinks them to minimal counterexamples.
+> [!IMPORTANT]
+> If you've found this repository, congratulations! You're getting a sneak peek at an upcoming property-based testing library from [Antithesis](https://antithesis.com/), built on [Hypothesis](https://hypothesis.works/).
+>
+> We are still making rapid changes and progress.  Feel free to experiment, but don't expect stability from Hegel just yet!
 
 ## Installation
 
-Add to your `Cargo.toml`:
+In your `Cargo.toml`:
 
 ```toml
 [dev-dependencies]
 hegel = { git = "https://github.com/hegeldev/hegel-rust" }
 ```
 
-Hegel requires [`uv`](https://docs.astral.sh/uv/), and automatically installs the hegel server on first use. To override the hegel binary, set the `HEGEL_SERVER_CMD` environment variable.
+Hegel requires either:
+
+* [`uv`](https://docs.astral.sh/uv/) on your system,
+* or `HEGEL_SERVER_COMMAND` set to the path of a hegel-core binary.
 
 ## Quick Start
 
@@ -30,15 +32,11 @@ fn test_addition_commutative(tc: hegel::TestCase) {
 }
 ```
 
-Run with `cargo test` as normal. Hegel generates 100 random input pairs and
-reports the minimal counterexample if it finds one.
-
-For a full walkthrough, see [docs/getting-started.md](docs/getting-started.md).
+See [docs/getting-started.md](docs/getting-started.md) for more.
 
 ## Development
 
 ```bash
-just check       # Full CI: lint + docs + tests
-just test        # Run tests only
-just conformance # Run cross-language conformance tests
+just test        # run tests
+just check       # run PR checks: lint + tests + docs
 ```

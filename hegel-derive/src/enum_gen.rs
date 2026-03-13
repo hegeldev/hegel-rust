@@ -101,7 +101,7 @@ pub(crate) fn derive_enum_generate(input: &DeriveInput, data: &syn::DataEnum) ->
         })
         .collect();
 
-    // Generate default_VariantName() methods (take &self so they're accessible via from_type)
+    // Generate default_VariantName() methods (take &self so they're accessible via default())
     let default_methods: Vec<_> = data_variants
         .iter()
         .map(|variant| {
