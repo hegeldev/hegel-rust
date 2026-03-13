@@ -6,6 +6,11 @@ mod utils;
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, Data, DeriveInput};
 
+use quote::quote;
+use syn::{ItemFn, FnArg, Pat};
+use syn::ReturnType;
+
+
 /// Derive a generator for a struct or enum.
 ///
 /// This implements [`DefaultGenerator`](hegel::generators::DefaultGenerator) for the type,
@@ -100,4 +105,62 @@ pub fn derive_generate(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
     hegel_test::expand_test(attr.into(), item.into()).into()
+}
+
+#[proc_macro_attribute]
+pub fn composite(_attr: TokenStream, item: TokenStream) -> TokenStream {
+
+    let input = parse_macro_input!(item as ItemFn);
+    let name = &input.sig.ident;
+    let name_string = name.to_string();
+    let visibility = &input.vis;
+    let body = &input.block;
+
+    // There should be exactly one parameter of type `TestCase`.
+    let test_case_identifier = input.sig.inputs.iter().find_map(|arg| {
+        if let FnArg::Typed(pat_type) = arg {
+            if let Pat::Ident(pat_ident) = pat_type.pat.as_ref() {
+                return Some(pat_ident.ident.clone());
+            }
+        }
+        None
+    });
+
+    let test_case_identifier = match test_case_identifier {
+        Some(ident) => ident,
+        None => {
+            return syn::Error::new_spanned(
+                &input.sig,
+                "#[hegel::composite] functions must have exactly one `TestCase` parameter",
+            )
+                .to_compile_error()
+                .into();
+            }
+    };
+
+    let output_type = match &input.sig.output {
+        ReturnType::Type(_, ty) => quote! { #ty },
+        ReturnType::Default => {
+            return syn::Error::new_spanned(
+                &input.sig,
+                "#[hegel::composite] functions must have an explicit return type",
+            )
+                .to_compile_error()
+                .into();
+            }
+    };
+
+    let expanded = quote! {
+        #visibility fn #name() -> impl ::hegel::Generator<#output_type> {
+            const LABEL: u64 = ::hegel::generators::fnv1a_hash(#name_string.as_bytes());
+            ::hegel::generators::ComposedGenerator::new(move |#test_case_identifier: ::hegel::TestCase| {
+                #test_case_identifier.start_span(LABEL);
+                let __result = { #body };
+                #test_case_identifier.stop_span(false);
+                __result
+            })
+        }
+    };
+
+    expanded.into()
 }
