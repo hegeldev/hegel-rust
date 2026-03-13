@@ -37,6 +37,8 @@
             buildInputs = [
               pkgs.cargo
               pkgs.rustc
+              pkgs.rustfmt
+              pkgs.clippy
               pkgs.just
               hegel.packages.${system}.default
             ];
