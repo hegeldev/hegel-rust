@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions: {}
+
+jobs:
+  check-release:
+    name: check release
+    if: "!contains(github.event.pull_request.labels.*.name, 'skip release')"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check release
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: python .github/scripts/release.py check "$BASE_REF"
