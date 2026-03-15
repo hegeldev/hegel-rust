@@ -213,9 +213,9 @@ pub(crate) mod antithesis;
 pub(crate) mod cbor_utils;
 pub(crate) mod control;
 pub mod generators;
-pub mod stateful;
 pub(crate) mod protocol;
 pub(crate) mod runner;
+pub mod stateful;
 mod test_case;
 
 pub use control::currently_in_test_context;
@@ -236,4 +236,5 @@ pub use antithesis::TestLocation;
 pub use hegel_macros::Generator;
 pub use hegel_macros::composite;
 pub use hegel_macros::test;
+pub use hegel_macros::state_machine;
 pub use runner::{HealthCheck, Hegel, Settings, Verbosity, hegel};
