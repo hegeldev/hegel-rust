@@ -1,17 +1,23 @@
-# Getting Started with Hegel for Rust
+# Getting started with Hegel for Rust
+
+This guide walks you through the basics of installing Hegel and writing your first tests.
+
+## Prerequisites
+
+You will need [`uv`](https://github.com/astral-sh/uv) installed and on your PATH.
 
 ## Install Hegel
 
-Add Hegel to your `Cargo.toml` as a dev dependency:
+Add `hegel-rust` to your `Cargo.toml` as a dev dependency:
 
 ```toml
 [dev-dependencies]
 hegeltest = "0.1.0"
 ```
 
-The library requires [`uv`](https://github.com/astral-sh/uv) installed and on your PATH.
-
 ## Write your first test
+
+You're now ready to write your first test. Add the following to your tests:
 
 ```rust
 use hegel::TestCase;
@@ -24,7 +30,11 @@ fn test_integer_self_equality(tc: TestCase) {
 }
 ```
 
-`#[hegel::test]` runs your test many times with different generated inputs. The function takes a `hegel::TestCase` parameter, which provides a method `draw` for drawing values. If any assertion fails, Hegel shrinks the inputs to a minimal counterexample.
+Now run your tests. You should see that the test passes.
+
+Let's look at what's happening in more detail. The `#[hegel::test]` attribute runs your test many times (100, by default). The `test_integer_self_equality` function takes a `hegel::TestCase` parameter, which provides a `draw` method for drawing different values. For each test case, the function then asserts that an integer value should be equal to itself.
+
+Next, try a test that fails:
 
 ```rust
 #[hegel::test]
@@ -34,7 +44,9 @@ fn test_integers_always_below_50(tc: TestCase) {
 }
 ```
 
-When the test fails, Hegel finds the smallest counterexample — in this case, `n = 50`.
+This test asserts that any integer is less than 50, which is obviously incorrect. Hegel will find a test case that makes this assertion fail, and then shrink it to find the smallest counterexample — in this case, `n = 50`.
+
+To fix this test, we'll constrain the integers we generate with the `min_value` and `max_value` functions:
 
 ```rust
 #[hegel::test]
@@ -46,9 +58,34 @@ fn test_bounded_integers_always_below_50(tc: TestCase) {
 }
 ```
 
-## Preset combinators
+Run the test again. It should now pass.
+```rust
 
-The `vecs` generator is an example of a combinator: a generator that combines other generators.
+## Define your own generators
+
+Hegel provides some generators that you can use out of the box.
+
+For example, say we have a `Person` structure that we want to generate:
+```rust
+struct Person {
+    age: i32,
+    name: string,
+}
+```
+
+We can define a custom generator with `compose`:
+
+
+```rust
+fn generate_person() {
+    hegel::compose!(|tc| {
+        Person {
+            age: tc.draw(integers::<i32>()),
+            name: tc.draw(strings()),
+        }
+    })
+}
+```
 
 ```rust
 fn test_sort_preserves_length(tc: TestCase) {
@@ -60,7 +97,6 @@ fn test_sort_preserves_length(tc: TestCase) {
 }
 ```
 
-## Writing your own combinators
 
 ```rust
 fn test_generator_composition(tc: TestCase) {
