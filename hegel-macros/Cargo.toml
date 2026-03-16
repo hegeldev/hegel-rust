@@ -1,12 +1,16 @@
 [package]
-name = "hegel-derive"
+name = "hegeltest-macros"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.68"
-description = "Derive macros for the Hegel property-based testing library"
 license = "MIT"
+readme = "README.md"
+repository = "https://github.com/hegeldev/hegel-rust"
+homepage = "http://hegel.dev"
+description = "Procedural macros for Hegel."
 
 [lib]
+name = "hegel_macros"
 proc-macro = true
 
 [dependencies]

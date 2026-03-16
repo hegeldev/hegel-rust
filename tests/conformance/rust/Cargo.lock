@@ -151,25 +151,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "hegel-derive"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "hegeltest"
 version = "0.1.0"
 dependencies = [
  "ciborium",
  "crc32fast",
- "hegel-derive",
+ "hegeltest-macros",
  "num",
  "paste",
  "serde",
  "tempfile",
+]
+
+[[package]]
+name = "hegeltest-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

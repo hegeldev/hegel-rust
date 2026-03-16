@@ -229,6 +229,6 @@ pub use paste;
 pub use test_case::{generate_from_schema, generate_raw};
 
 // re-export public api
-pub use hegel_derive::test;
-pub use hegel_derive::Generator;
+pub use hegel_macros::test;
+pub use hegel_macros::Generator;
 pub use runner::{hegel, Hegel, Verbosity};

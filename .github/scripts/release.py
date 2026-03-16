@@ -4,7 +4,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-SOURCE_DIRS = ["src/", "hegel-derive/"]
+SOURCE_DIRS = ["src/", "hegel-macros/"]
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 
@@ -55,6 +55,17 @@ def set_version(cargo_toml: Path, new_version: str) -> None:
         text,
         count=1,
         flags=re.MULTILINE,
+    )
+    cargo_toml.write_text(new_text)
+
+
+def set_macros_dep_version(cargo_toml: Path, new_version: str) -> None:
+    text = cargo_toml.read_text()
+    new_text = re.sub(
+        r'hegeltest-macros = \{ version = "=[^"]+"',
+        f'hegeltest-macros = {{ version = "={new_version}"',
+        text,
+        count=1,
     )
     cargo_toml.write_text(new_text)
 
@@ -124,7 +135,8 @@ def release() -> None:
     new_version = bump_version(m.group(1), release_type)
 
     set_version(ROOT / "Cargo.toml", new_version)
-    set_version(ROOT / "hegel-derive" / "Cargo.toml", new_version)
+    set_version(ROOT / "hegel-macros" / "Cargo.toml", new_version)
+    set_macros_dep_version(ROOT / "Cargo.toml", new_version)
 
     # regenerate lockfile after version bump
     subprocess.run(["cargo", "generate-lockfile"], check=True, cwd=ROOT)
@@ -137,7 +149,7 @@ def release() -> None:
         "add",
         "Cargo.toml",
         "Cargo.lock",
-        "hegel-derive/Cargo.toml",
+        "hegel-macros/Cargo.toml",
         "CHANGELOG.md",
         cwd=ROOT,
     )
