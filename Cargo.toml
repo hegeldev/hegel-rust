@@ -11,7 +11,7 @@ homepage = "http://hegel.dev"
 description = "Property-based testing for Rust, built on Hypothesis"
 # Ideally we would replace "property testing" with "property based testing",
 # but crates.io enforces that keywords be less than 20 characters.
-keywords = ["testing", "fuzzing", "property testing"]
+keywords = ["testing", "fuzzing", "property-testing"]
 categories = ["development-tools::testing"]
 
 [lib]
