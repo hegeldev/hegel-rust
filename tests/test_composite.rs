@@ -4,7 +4,6 @@ use common::project::TempRustProject;
 use hegel::generators::integers;
 use hegel::TestCase;
 
-const MISSING_TEST_CASE_PARAMETER: &str = "Functions marked with #[hegel::composite] must have a TestCase parameter as their first argument.";
 const MISSING_COMPOSITE_RETURN_TYPE: &str =
     "Functions marked with #[hegel::composite] must have an explicit return type.";
 
@@ -24,29 +23,6 @@ fn main() {}
 
     let output = TempRustProject::new(code).run();
     assert!(output.status.success());
-}
-
-#[test]
-fn test_missing_test_case_parameter() {
-    let code = r#"
-use hegel::generators::integers;
-use hegel::TestCase;
-
-#[hegel::composite]
-fn composite_integer_generator(n: i32) -> i32 {
-    tc.draw(integers::<i32>()) + n
-}
-
-fn main() {}
-"#;
-
-    let output = TempRustProject::new(code).run();
-    assert!(!output.status.success());
-    assert!(
-        output.stderr.contains(MISSING_TEST_CASE_PARAMETER),
-        "Expected missing test case parameter error, got: {}",
-        output.stderr
-    );
 }
 
 #[test]

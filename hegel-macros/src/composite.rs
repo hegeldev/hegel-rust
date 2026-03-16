@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{parse2, FnArg, ItemFn, ReturnType, Type};
+use syn::{parse2, FnArg, ItemFn, ReturnType};
 use syn::token::Comma;
 use syn::punctuated::Punctuated;
 
@@ -31,18 +31,6 @@ pub fn expand_composite(
         panic!("{}", MISSING_TEST_CASE_PARAMETER)
     };
     let tc_pattern = &tc_arg.pat;
-    let tc_type = &tc_arg.ty;
-
-    // Check if the type path for the first parameter ends with a "TestCase" identifier. As far as
-    // I can tell, there's no good way of checking at macro expansion time whether this actually
-    // resolves to the right type.
-    let Type::Path(path) = tc_type.as_ref() else {
-        panic!("{}", MISSING_TEST_CASE_PARAMETER)
-    };
-    match path.path.segments.last() {
-        Some(last) if last.ident == "TestCase" => (),
-        _ => panic!("{}", MISSING_TEST_CASE_PARAMETER),
-    };
 
     let ReturnType::Type(_, return_type) = &f.sig.output else {
         panic!("{}", MISSING_COMPOSITE_RETURN_TYPE)
