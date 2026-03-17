@@ -1,8 +1,8 @@
 mod common;
 
 use common::project::TempRustProject;
-use hegel::generators::integers;
 use hegel::TestCase;
+use hegel::generators::integers;
 
 const MISSING_COMPOSITE_RETURN_TYPE: &str =
     "Functions marked with #[hegel::composite] must have an explicit return type.";

@@ -1,12 +1,11 @@
+mod composite;
 mod enum_gen;
 mod hegel_test;
-mod composite;
 mod struct_gen;
 mod utils;
 
 use proc_macro::TokenStream;
-use syn::{Data, DeriveInput, parse_macro_input, ItemFn};
-
+use syn::{Data, DeriveInput, ItemFn, parse_macro_input};
 
 /// Derive a generator for a struct or enum.
 ///
