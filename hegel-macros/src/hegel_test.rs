@@ -30,10 +30,7 @@ impl Parse for SettingsArgs {
     }
 }
 
-pub fn expand_test(
-    attr: proc_macro2::TokenStream,
-    item: proc_macro2::TokenStream,
-) -> TokenStream {
+pub fn expand_test(attr: proc_macro2::TokenStream, item: proc_macro2::TokenStream) -> TokenStream {
     let settings_args: SettingsArgs = if attr.is_empty() {
         SettingsArgs {
             settings: Vec::new(),
