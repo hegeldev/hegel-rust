@@ -4,7 +4,7 @@ mod struct_gen;
 mod utils;
 
 use proc_macro::TokenStream;
-use syn::{parse_macro_input, Data, DeriveInput};
+use syn::{Data, DeriveInput, parse_macro_input};
 
 /// Derive a generator for a struct or enum.
 ///

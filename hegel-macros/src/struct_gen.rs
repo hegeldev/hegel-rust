@@ -26,10 +26,7 @@ pub(crate) fn derive_struct_generate(input: &DeriveInput, data: &syn::DataStruct
         }
     };
 
-    let field_names: Vec<_> = fields
-        .iter()
-        .map(|f| f.ident.as_ref().unwrap())
-        .collect();
+    let field_names: Vec<_> = fields.iter().map(|f| f.ident.as_ref().unwrap()).collect();
 
     let field_types: Vec<_> = fields.iter().map(|f| &f.ty).collect();
 
@@ -40,11 +37,14 @@ pub(crate) fn derive_struct_generate(input: &DeriveInput, data: &syn::DataStruct
         .collect();
 
     // Generate field definitions for the generator struct
-    let generator_fields = field_names.iter().zip(field_types.iter()).map(|(name, ty)| {
-        quote! {
-            #name: hegel::generators::BoxedGenerator<'a, #ty>
-        }
-    });
+    let generator_fields = field_names
+        .iter()
+        .zip(field_types.iter())
+        .map(|(name, ty)| {
+            quote! {
+                #name: hegel::generators::BoxedGenerator<'a, #ty>
+            }
+        });
 
     // Generate the new() constructor
     let new_field_inits = field_types.iter().map(|ty| {
@@ -61,7 +61,10 @@ pub(crate) fn derive_struct_generate(input: &DeriveInput, data: &syn::DataStruct
     let default_bounds = default_gen_bounds(&field_types, quote! { 'a });
 
     // Generate with_* methods
-    let with_method_impls = field_names.iter().zip(field_types.iter()).zip(with_methods.iter())
+    let with_method_impls = field_names
+        .iter()
+        .zip(field_types.iter())
+        .zip(with_methods.iter())
         .map(|((field_name, field_type), method_name)| {
             quote! {
                 /// Set a custom generator for this field.

@@ -1,3 +1,9 @@
+# Don't include this as part of our top-level workspace.
+# Our conformance tests are run separately and it's worth keeping them
+# isolated for eg version pinning. It's a bit unfortunate we lose `cargo fmt`
+# working over this automatically, but we can just adjust CI to include it.
+[workspace]
+
 [package]
 name = "hegel-conformance"
 version = "0.1.0"
