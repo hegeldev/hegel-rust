@@ -2,11 +2,11 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
-use syn::{FnArg, ItemFn, ReturnType, parse2};
+use syn::{FnArg, ItemFn, ReturnType, parse2, parse_quote};
 
-const MISSING_TEST_CASE_PARAMETER: &str = "Functions marked with #[hegel::composite] must have a TestCase parameter as their first argument.";
+const MISSING_TEST_CASE_PARAMETER: &str = "Functions marked with #[composite] must have a first parameter of type TestCase.";
 const MISSING_COMPOSITE_RETURN_TYPE: &str =
-    "Functions marked with #[hegel::composite] must have an explicit return type.";
+    "Functions marked with #[composite] must have an explicit return type.";
 
 // Our goal is to expand this
 //
@@ -21,7 +21,7 @@ const MISSING_COMPOSITE_RETURN_TYPE: &str =
 //     compose!(|tc| { body })
 // }
 
-pub fn expand_composite(f: ItemFn) -> TokenStream {
+pub fn expand_composite(mut f: ItemFn) -> TokenStream {
     // Clone the input parameters into a vector, so we can pull the first one out.
     let input_parameters: Vec<FnArg> = f.sig.inputs.iter().cloned().collect();
 
@@ -29,6 +29,7 @@ pub fn expand_composite(f: ItemFn) -> TokenStream {
         panic!("{}", MISSING_TEST_CASE_PARAMETER)
     };
     let tc_pattern = &tc_arg.pat;
+    let tc_type = &tc_arg.ty;
 
     let ReturnType::Type(_, return_type) = &f.sig.output else {
         panic!("{}", MISSING_COMPOSITE_RETURN_TYPE)
@@ -44,6 +45,10 @@ pub fn expand_composite(f: ItemFn) -> TokenStream {
         .iter()
         .cloned()
         .collect::<Punctuated<FnArg, Comma>>();
+
+    f.block.stmts.insert(0, parse_quote! {
+        ::hegel::__assert_is_test_case::< #tc_type >();
+    });
 
     let body = &f.block;
     let attributes = &f.attrs;

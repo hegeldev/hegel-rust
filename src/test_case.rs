@@ -9,6 +9,14 @@ use std::sync::{Arc, LazyLock};
 
 use crate::generators::value;
 
+// This is used only as a mechanism for printing a nice error message when the user forgets the
+// test case parameter.
+#[diagnostic::on_unimplemented(
+    message = "Functions marked with #[composite] must have a first parameter of type TestCase.",
+    label = "This type does not match `TestCase`.",
+)]
+pub trait __IsTestCase {}
+
 static PROTOCOL_DEBUG: LazyLock<bool> = LazyLock::new(|| {
     matches!(
         std::env::var("HEGEL_PROTOCOL_DEBUG")
@@ -253,6 +261,10 @@ impl TestCase {
         let _ = inner.channel.close();
     }
 }
+
+impl __IsTestCase for TestCase {}
+
+pub fn __assert_is_test_case<T: __IsTestCase>() {}
 
 /// Send a schema to the server and return the raw CBOR response.
 #[doc(hidden)]

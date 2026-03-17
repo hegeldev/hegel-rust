@@ -219,6 +219,7 @@ mod test_case;
 pub use control::currently_in_test_context;
 pub use generators::Generator;
 pub use test_case::TestCase;
+pub use test_case::{__IsTestCase, __assert_is_test_case};
 
 // re-export for macro use
 #[doc(hidden)]
