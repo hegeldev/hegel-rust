@@ -1,5 +1,9 @@
 [workspace]
 members = [".", "hegel-macros"]
+# our conformance tests are run separately and it's worth keeping them
+# isolated for eg version pinning. It's a bit unfortunate we lose `cargo fmt`
+# working over this automatically, but we can just adjust CI to include it.
+exclude = ["tests/conformance/rust"]
 
 [package]
 name = "hegeltest"
