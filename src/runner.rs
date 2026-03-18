@@ -527,6 +527,18 @@ where
             eprintln!("Version negotiation complete");
         }
 
+        if is_running_in_antithesis() {
+            // if we're running inside of antithesis, but the user hasn't opted in
+            // to the antithesis feature, loudly inform them.
+            #[cfg(not(feature = "antithesis"))]
+            panic!(
+                "When Hegel is run inside of Antithesis, it requires the `antithesis` feature. \
+                You can add it with {{ features = [\"antithesis\"] }}."
+            );
+            #[cfg(feature = "antithesis")]
+            crate::antithesis::emit_setup_complete();
+        }
+
         let mut test_fn = self.test_fn;
         let verbosity = self.verbosity;
         let got_interesting = Arc::new(AtomicBool::new(false));
@@ -657,6 +669,7 @@ where
         }
 
         // Process final replay test cases (one per interesting example)
+        let mut all_failing_inputs = Vec::new();
         for _ in 0..n_interesting {
             let (event_id, event_payload) = test_channel
                 .receive_request()
@@ -676,7 +689,7 @@ where
                 .write_reply(event_id, cbor_encode(&ack_null))
                 .expect("Failed to ack final test_case");
 
-            run_test_case(
+            let failing_inputs = run_test_case(
                 &connection,
                 test_case_channel,
                 &mut test_fn,
@@ -684,12 +697,14 @@ where
                 verbosity,
                 &got_interesting,
             );
+            all_failing_inputs.extend(failing_inputs);
         }
 
         let passed = map_get(&result_data, "passed")
             .and_then(as_bool)
             .unwrap_or(true);
 
+        eprintln!("{:?}", result_data);
         // clean up so the server can exit gracefully
         drop(test_channel);
         drop(control);
@@ -701,17 +716,10 @@ where
         let test_failed = !passed || got_interesting.load(Ordering::SeqCst);
 
         if is_running_in_antithesis() {
-            // if we're running inside of antithesis, but the user hasn't opted in
-            // to the antithesis feature, loudly inform them.
-            #[cfg(not(feature = "antithesis"))]
-            panic!(
-                "When Hegel is run inside of Antithesis, it requires the `antithesis` feature. \
-                You can add it with {{ features = [\"antithesis\"] }}."
-            );
-
             #[cfg(feature = "antithesis")]
             if let Some(ref loc) = self.test_location {
-                crate::antithesis::emit_assertion(loc, !test_failed);
+                let seed = map_get(&result_data, "seed").and_then(as_text).unwrap();
+                crate::antithesis::emit_assertion(loc, !test_failed, &all_failing_inputs, seed);
             }
         }
 
@@ -721,7 +729,8 @@ where
     }
 }
 
-/// Run a single test case.
+/// Run a single test case. Returns the drawn value descriptions when the test
+/// is a final replay of a failing case.
 fn run_test_case<F: FnMut(TestCase)>(
     connection: &Arc<Connection>,
     test_channel: Channel,
@@ -729,13 +738,15 @@ fn run_test_case<F: FnMut(TestCase)>(
     is_final: bool,
     verbosity: Verbosity,
     got_interesting: &Arc<AtomicBool>,
-) {
+) -> Vec<String> {
     // Create TestCase. The test function gets a clone (cheap Rc bump),
     // so we retain access to the same underlying TestCaseData after the test runs.
     let tc = TestCase::new(Arc::clone(connection), test_channel, verbosity, is_final);
     set_in_test_context(true);
 
     let result = catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone())));
+
+    let mut failing_inputs = Vec::new();
 
     let (status, origin) = match &result {
         Ok(()) => ("VALID".to_string(), None),
@@ -764,7 +775,8 @@ fn run_test_case<F: FnMut(TestCase)>(
                     );
                     eprintln!("{}", msg);
 
-                    for value in tc.take_output() {
+                    failing_inputs = tc.take_output();
+                    for value in &failing_inputs {
                         eprintln!("{}", value);
                     }
 
@@ -804,6 +816,7 @@ fn run_test_case<F: FnMut(TestCase)>(
     }
 
     set_in_test_context(false);
+    failing_inputs
 }
 
 /// Extract a message from a panic payload.
