@@ -48,14 +48,15 @@ This test asserts that any integer is less than 50, which is obviously incorrect
 
 To fix this test, we'll constrain the integers we generate with the `min_value` and `max_value` functions:
 
-```rust
-#[hegel::test]
-fn test_bounded_integers_always_below_50(tc: TestCase) {
-    let n = tc.draw(integers::<i32>()
-        .min_value(0)
-        .max_value(49));
-    assert!(n < 50);
-}
+```diff
+ #[hegel::test]
+ fn test_bounded_integers_always_below_50(tc: TestCase) {
+-    let n = tc.draw(integers::<i32>();
++    let n = tc.draw(integers::<i32>()
++        .min_value(0)
++        .max_value(49));
+     assert!(n < 50);
+ }
 ```
 
 Run the test again. It should now pass.
@@ -68,16 +69,16 @@ Hegel provides some generators that you can use out of the box, such as `integer
 
 You can also define custom generators with the `compose` macro.
 
-For example, say we have a `Person` structure that we want to generate:
+For example, say we have a `Person` struct that we want to generate:
+
 ```rust
 struct Person {
     age: i32,
-    name: string,
+    name: String,
 }
 ```
 
-You can use `compose` to create a `Person` generator:
-
+You can use `compose` to create a `Person` generator from this struct:
 
 ```rust
 fn generate_person() {
@@ -89,23 +90,31 @@ fn generate_person() {
 }
 ```
 
-You can make calls to `draw` in sequence that use the results of previous `draw`s:
+To make more complex custom generators, you can make calls to `draw` in sequence that use the results of previous `draw`s. For example, say that you extend the `Person` struct to include a `driving_license` boolean field:
 
-<!-- TODO: find + diff style. include the struct -->
+```diff
+ struct Person {
+     age: i32,
+     name: String,
++    driving_license: bool,
+ }
+```
 
-```rust
-fn generate_person() {
-    hegel::compose!(|tc: TestCase| {
-        let age = tc.draw(integers::<i32>());
-        let name = tc.draw(strings()); 
-        let driving_license = if (age >= 18) {
-            tc.draw(booleans())
-        } else {
-            false
-        };
-        Person { age, name, driving_license };
-    })
-}
+You can then draw values for `driving_license` that depend on the `age` field:
+
+```diff
+ fn generate_person() {
+     hegel::compose!(|tc: TestCase| {
+         let age = tc.draw(integers::<i32>());
+         let name = tc.draw(strings()); 
++        let driving_license = if (age >= 18) {
++            tc.draw(booleans())
++        } else {
++             false
++         };
++         Person { age, name, driving_license };
+     })
+ }
 ```
 
 ## Automatically building generators for types
