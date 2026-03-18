@@ -15,8 +15,8 @@ use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 use tempfile::TempDir;
 
-const SUPPORTED_PROTOCOL_VERSIONS: (f64, f64) = (0.1, 0.5);
-const HEGEL_SERVER_VERSION: &str = "0.2.0";
+const SUPPORTED_PROTOCOL_VERSIONS: (f64, f64) = (0.1, 0.6);
+const HEGEL_SERVER_VERSION: &str = "0.2.1";
 const HEGEL_SERVER_COMMAND_ENV: &str = "HEGEL_SERVER_COMMAND";
 const HEGEL_SERVER_DIR: &str = ".hegel";
 static HEGEL_SERVER_COMMAND: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -628,6 +628,16 @@ where
             drop(connection);
             let _ = child.wait().expect("Failed to wait for hegel server");
             panic!("Health check failure:\n{}", failure_msg);
+        }
+
+        // Check for flaky test detection
+        if let Some(flaky_msg) = map_get(&result_data, "flaky").and_then(as_text) {
+            drop(test_channel);
+            drop(control);
+            let _ = connection.close();
+            drop(connection);
+            let _ = child.wait().expect("Failed to wait for hegel server");
+            panic!("Flaky test detected: {}", flaky_msg);
         }
 
         let n_interesting = map_get(&result_data, "interesting_test_cases")
