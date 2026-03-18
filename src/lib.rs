@@ -235,6 +235,6 @@ pub use test_case::{__IsTestCase, __assert_is_test_case, generate_from_schema, g
 pub use antithesis::TestLocation;
 pub use hegel_macros::Generator;
 pub use hegel_macros::composite;
-pub use hegel_macros::test;
 pub use hegel_macros::state_machine;
+pub use hegel_macros::test;
 pub use runner::{HealthCheck, Hegel, Settings, Verbosity, hegel};

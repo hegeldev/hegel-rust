@@ -1,6 +1,6 @@
-use syn::{ItemImpl, Attribute, ImplItem};
-use quote::quote;
 use proc_macro2::TokenStream;
+use quote::quote;
+use syn::{Attribute, ImplItem, ItemImpl};
 
 fn is_rule(a: &Attribute) -> bool {
     a.path().is_ident("rule")
@@ -11,10 +11,9 @@ fn is_invariant(a: &Attribute) -> bool {
 }
 
 pub fn expand_state_machine(mut block: ItemImpl) -> TokenStream {
-
     let mut rule_names = Vec::new();
     let mut invariant_names = Vec::new();
- 
+
     for item in &mut block.items {
         if let ImplItem::Fn(method) = item {
             if method.attrs.iter().any(&is_rule) {

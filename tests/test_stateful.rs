@@ -1,4 +1,6 @@
 use hegel::TestCase;
+use hegel::generators::integers;
+use hegel::stateful::{Variables, variables};
 use std::cmp::min;
 
 struct DieHard {
@@ -58,5 +60,32 @@ impl DieHard {
 #[hegel::test(test_cases = 1)]
 fn test_die_hard(tc: TestCase) {
     let m = DieHard { small: 0, big: 0 };
+    hegel::stateful::run(m, tc);
+}
+
+struct VariableMachine {
+    numbers: Variables<i32>,
+}
+
+#[hegel::state_machine]
+impl VariableMachine {
+    #[rule]
+    fn generate(&mut self, tc: &TestCase) {
+        let i = tc.draw(integers::<i32>());
+        self.numbers.add(i);
+        assert!(!self.numbers.empty());
+    }
+
+    #[rule]
+    fn add(&mut self, _tc: &TestCase) {
+        let _ = self.numbers.draw();
+    }
+}
+
+#[hegel::test(test_cases = 1000)]
+fn test_variables(tc: TestCase) {
+    let m = VariableMachine {
+        numbers: variables(&tc),
+    };
     hegel::stateful::run(m, tc);
 }

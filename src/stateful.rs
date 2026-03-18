@@ -1,8 +1,76 @@
+use crate::TestCase;
+use crate::cbor_utils::cbor_map;
 use crate::generators::{integers, sampled_from};
 use crate::test_case::ASSUME_FAIL_STRING;
-use crate::TestCase;
+use ciborium::Value;
 use std::cmp::min;
-use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
+use std::collections::HashMap;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
+pub type Rule = Box<dyn FnMut()>;
+
+pub struct Variables<T> {
+    pool_id: i128,
+    tc: TestCase,
+    values: HashMap<i128, T>,
+}
+
+impl<T> Variables<T> {
+    fn pool_generate(&self, consume: bool) -> i128 {
+        match self.tc.send_request(
+            "pool_generate",
+            &cbor_map! {
+                "pool_id" => self.pool_id,
+                "consume" => consume,
+            },
+        ) {
+            Ok(Value::Integer(i)) => i.into(),
+            _ => panic!("Expected integer response for variable id."),
+        }
+    }
+
+    pub fn empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    pub fn add(&mut self, v: T) {
+        let variable_id: i128 = match self
+            .tc
+            .send_request("pool_add", &cbor_map! {"pool_id" => self.pool_id})
+        {
+            Ok(Value::Integer(i)) => i.into(),
+            _ => panic!("Expected integer response for variable id."),
+        };
+        if self.values.get(&variable_id).is_some() {
+            panic!("unexpected variable id in map");
+        }
+        self.values.insert(variable_id, v);
+    }
+
+    pub fn draw(&self) -> &T {
+        self.tc.assume(!self.empty());
+        let variable_id = self.pool_generate(false);
+        self.values.get(&variable_id).unwrap()
+    }
+
+    pub fn consume(&mut self) -> T {
+        self.tc.assume(!self.empty());
+        let variable_id = self.pool_generate(true);
+        self.values.remove(&variable_id).unwrap()
+    }
+}
+
+pub fn variables<T>(tc: &TestCase) -> Variables<T> {
+    let pool_id = match tc.send_request("new_pool", &cbor_map! {}) {
+        Ok(Value::Integer(i)) => i.into(),
+        _ => panic!("Expected integer response for pool id."),
+    };
+    Variables {
+        pool_id,
+        tc: tc.clone(),
+        values: HashMap::new(),
+    }
+}
 
 pub trait StateMachine {
     fn rules(&self) -> Vec<fn(&mut Self, &TestCase)>;
