@@ -64,7 +64,7 @@ Run the test again. It should now pass.
 
 Hegel provides a rich library of generators that you can use out of the box. There are primitive generators, such as `integers`, `floats`, and `strings`, and combinators that allow you to make generators out of other generators, such as `vecs` and `tuples`. 
 
-For example, here's how you might generate a list of integers:
+For example, you can use `vecs` to generate a vector of integers:
 
 ```rust
 use hegel::generators::vecs;
@@ -77,9 +77,8 @@ fn test_append_increases_length(tc: TestCase) {
     assert!(vector.len() > initial_length);
 }
 ```
-<!-- TODO: more words -->
 
-
+The test then generates more integers and pushes them to the vector, then tests that the resulting vector is longer than the initial one.
 
 You can also define custom generators with the `composite` macro.
 
@@ -133,6 +132,7 @@ fn generate_person(tc: TestCase) -> Person {
     Person { age, name, driving_license }
 ```
 
+<!-- TODO: fix this section -->
 <!-- ## Automatically build generators for types
 
 If you want a generator with no custom logic, as in the first `Person` example above, you can use the `derive` attribute to create a generator automatically:
