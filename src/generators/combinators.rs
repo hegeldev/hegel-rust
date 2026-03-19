@@ -138,9 +138,9 @@ pub fn one_of<T>(generators: Vec<BoxedGenerator<'_, T>>) -> OneOfGenerator<'_, T
 /// ```
 #[macro_export]
 macro_rules! one_of {
-    ($($gen:expr),+ $(,)?) => {
+    ($($generator:expr),+ $(,)?) => {
         $crate::generators::one_of(vec![
-            $($crate::generators::Generator::boxed($gen)),+
+            $($crate::generators::Generator::boxed($generator)),+
         ])
     };
 }

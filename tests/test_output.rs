@@ -16,8 +16,7 @@ fn main() {
 
 #[test]
 fn test_failing_test_output() {
-    let project = TempRustProject::new(FAILING_TEST_CODE);
-    let output = project.cargo_run(&[]);
+    let output = TempRustProject::new().main_file(FAILING_TEST_CODE).cargo_run(&[]);
     assert!(!output.status.success());
 
     // For example:
@@ -41,7 +40,8 @@ fn test_failing_test_output() {
 
 #[test]
 fn test_failing_test_output_with_backtrace() {
-    let output = TempRustProject::new(FAILING_TEST_CODE)
+    let output = TempRustProject::new()
+        .main_file(FAILING_TEST_CODE)
         .env("RUST_BACKTRACE", "1")
         .cargo_run(&[]);
     assert!(!output.status.success());
@@ -89,7 +89,8 @@ fn test_failing_test_output_with_backtrace() {
 
 #[test]
 fn test_failing_test_output_with_full_backtrace() {
-    let output = TempRustProject::new(FAILING_TEST_CODE)
+    let output = TempRustProject::new()
+        .main_file(FAILING_TEST_CODE)
         .env("RUST_BACKTRACE", "full")
         .cargo_run(&[]);
     assert!(!output.status.success());

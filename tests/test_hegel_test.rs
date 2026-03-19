@@ -67,7 +67,7 @@ use hegel::generators;
 #[test]
 fn main(tc: hegel::TestCase) {}
 "#;
-    let output = TempRustProject::new(code).cargo_run(&[]);
+    let output = TempRustProject::new().main_file(code).cargo_run(&[]);
     assert!(!output.status.success());
     assert!(
         output.stderr.contains("Remove the #[test] attribute"),
@@ -86,7 +86,7 @@ use hegel::generators;
 fn main() {
 }
 "#;
-    let output = TempRustProject::new(code_zero).cargo_run(&[]);
+    let output = TempRustProject::new().main_file(code_zero).cargo_run(&[]);
     assert!(!output.status.success());
     assert!(
         output
@@ -105,7 +105,7 @@ fn main(tc: hegel::TestCase, x: bool) {
     let _ = (tc, x);
 }
 "#;
-    let output = TempRustProject::new(code_two).cargo_run(&[]);
+    let output = TempRustProject::new().main_file(code_two).cargo_run(&[]);
     assert!(!output.status.success());
     assert!(
         output

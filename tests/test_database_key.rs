@@ -51,7 +51,7 @@ fn test_2() {{
 
     let values_path = temp_dir.path().join("values");
     std::fs::create_dir_all(&values_path).unwrap();
-    let project = TempRustProject::new("fn main() {}")
+    let project = TempRustProject::new()
         .test_file("integration.rs", &test_code)
         .env("VALUES_DIR", values_path.to_str().unwrap());
 

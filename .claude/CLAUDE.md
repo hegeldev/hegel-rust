@@ -93,6 +93,7 @@ For enums, it also creates `<Enum><Variant>Generator` for each data variant. Imp
 
 - Place tests in `tests/` as integration tests, not as inline `#[cfg(test)] mod tests` in source files.
 - When a test needs a throwaway generator, prefer `generators::booleans()` as the simplest option (unless the test needs a larger value space).
+- In test code, prefer `.unwrap()` over `.expect("static message")`. A static expect message rarely adds information beyond what the panic already provides (error type + source location). Only use `.expect()` when the message includes a formatted value that aids debugging (e.g., `.expect(&format!("failed to open {}", path))`).
 
 ### Conformance Tests
 

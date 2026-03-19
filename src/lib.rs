@@ -209,6 +209,7 @@
 //!
 //! Set verbosity to [`Verbosity::Debug`] to enable debug logging of requests/responses.
 
+pub(crate) mod antithesis;
 pub(crate) mod cbor_utils;
 pub(crate) mod control;
 pub mod generators;
@@ -229,6 +230,8 @@ pub use paste;
 pub use test_case::{__IsTestCase, __assert_is_test_case, generate_from_schema, generate_raw};
 
 // re-export public api
+#[doc(hidden)]
+pub use antithesis::TestLocation;
 pub use hegel_macros::Generator;
 pub use hegel_macros::composite;
 pub use hegel_macros::test;

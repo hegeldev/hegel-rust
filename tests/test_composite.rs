@@ -18,7 +18,7 @@ fn composite_integer_generator(tc: TestCase, n: i32) -> i32 {
 fn main() {}
 "#;
 
-    let output = TempRustProject::new(code).cargo_run(&[]);
+    let output = TempRustProject::new().main_file(code).cargo_run(&[]);
     assert!(output.status.success());
 }
 
@@ -36,7 +36,7 @@ fn composite_integer_generator(tc: TestCase, n: i32) {
 fn main() {}
 "#;
 
-    let output = TempRustProject::new(code).cargo_run(&[]);
+    let output = TempRustProject::new().main_file(code).cargo_run(&[]);
     assert!(!output.status.success());
     assert!(
         output
@@ -58,7 +58,7 @@ fn composite_integer_generator() -> i32 {
 fn main() {}
 "#;
 
-    let output = TempRustProject::new(code).cargo_run(&[]);
+    let output = TempRustProject::new().main_file(code).cargo_run(&[]);
     assert!(!output.status.success());
     assert!(
         output
@@ -80,7 +80,7 @@ fn composite_integer_generator(n: i32) -> i32 {
 fn main() {}
 "#;
 
-    let output = TempRustProject::new(code).cargo_run(&[]);
+    let output = TempRustProject::new().main_file(code).cargo_run(&[]);
     assert!(!output.status.success());
     assert!(
         output.stderr.contains("must have type TestCase"),

@@ -13,37 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check-dependency:
-    name: check-dependency
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      has_dependency: ${{ steps.parse.outputs.has_dependency }}
-      core_branch: ${{ steps.parse.outputs.core_branch }}
-      core_pr_number: ${{ steps.parse.outputs.core_pr_number }}
-    steps:
-      - name: Parse PR body for hegel-core dependency
-        id: parse
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          MATCH=$(echo "$PR_BODY" | grep -oP 'Depends on https://github\.com/hegeldev/hegel-core/pull/\K[0-9]+' || true)
-          if [ -n "$MATCH" ]; then
-            echo "has_dependency=true" >> "$GITHUB_OUTPUT"
-            echo "core_pr_number=$MATCH" >> "$GITHUB_OUTPUT"
-            # Fetch the PR branch name
-            BRANCH=$(gh api "repos/hegeldev/hegel-core/pulls/$MATCH" --jq '.head.ref')
-            echo "core_branch=$BRANCH" >> "$GITHUB_OUTPUT"
-            echo "Found hegel-core dependency: PR #$MATCH (branch: $BRANCH)"
-          else
-            echo "has_dependency=false" >> "$GITHUB_OUTPUT"
-            echo "No hegel-core dependency found"
-          fi
-
   lint:
     name: lint
     runs-on: ubuntu-latest
@@ -73,8 +42,6 @@ jobs:
 
   test:
     name: test (${{ matrix.rust }})
-    needs: [check-dependency]
-    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -95,23 +62,12 @@ jobs:
       - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
 
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
-
-      - name: Install hegel-core from PR branch
-        if: needs.check-dependency.outputs.has_dependency == 'true'
-        env:
-          CORE_BRANCH: ${{ needs.check-dependency.outputs.core_branch }}
-        run: |
-          uv venv .hegel/venv
-          uv pip install --python .hegel/venv/bin/python "hegel-core @ git+https://github.com/hegeldev/hegel-core.git@${CORE_BRANCH}"
-          echo "HEGEL_SERVER_COMMAND=$PWD/.hegel/venv/bin/hegel" >> "$GITHUB_ENV"
 
       - name: Run tests
         run: RUST_BACKTRACE=1 cargo test
 
   test-all-features:
     name: test-all-features (${{ matrix.rust }})
-    needs: [check-dependency]
-    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -132,15 +88,6 @@ jobs:
       - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
 
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
-
-      - name: Install hegel-core from PR branch
-        if: needs.check-dependency.outputs.has_dependency == 'true'
-        env:
-          CORE_BRANCH: ${{ needs.check-dependency.outputs.core_branch }}
-        run: |
-          uv venv .hegel/venv
-          uv pip install --python .hegel/venv/bin/python "hegel-core @ git+https://github.com/hegeldev/hegel-core.git@${CORE_BRANCH}"
-          echo "HEGEL_SERVER_COMMAND=$PWD/.hegel/venv/bin/hegel" >> "$GITHUB_ENV"
 
       - name: Run tests with all features
         run: RUST_BACKTRACE=1 cargo test --all-features
@@ -168,8 +115,6 @@ jobs:
 
   coverage:
     name: coverage
-    needs: [check-dependency]
-    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -193,22 +138,11 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y just
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
 
-      - name: Install hegel-core from PR branch
-        if: needs.check-dependency.outputs.has_dependency == 'true'
-        env:
-          CORE_BRANCH: ${{ needs.check-dependency.outputs.core_branch }}
-        run: |
-          uv venv .hegel/venv
-          uv pip install --python .hegel/venv/bin/python "hegel-core @ git+https://github.com/hegeldev/hegel-core.git@${CORE_BRANCH}"
-          echo "HEGEL_SERVER_COMMAND=$PWD/.hegel/venv/bin/hegel" >> "$GITHUB_ENV"
-
       - name: Run coverage
         run: RUST_BACKTRACE=1 just coverage
 
   conformance:
     name: conformance
-    needs: [check-dependency]
-    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -226,15 +160,6 @@ jobs:
       - name: Install just
         run: sudo apt-get update && sudo apt-get install -y just
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
-
-      - name: Install hegel-core from PR branch
-        if: needs.check-dependency.outputs.has_dependency == 'true'
-        env:
-          CORE_BRANCH: ${{ needs.check-dependency.outputs.core_branch }}
-        run: |
-          uv venv .hegel/venv
-          uv pip install --python .hegel/venv/bin/python "hegel-core @ git+https://github.com/hegeldev/hegel-core.git@${CORE_BRANCH}"
-          echo "HEGEL_SERVER_COMMAND=$PWD/.hegel/venv/bin/hegel" >> "$GITHUB_ENV"
 
       - name: Run conformance tests
         run: just conformance
@@ -257,26 +182,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y just
       - name: lint
         run: just check-format-nix
-
-  dependency-merged:
-    name: dependency-merged
-    needs: [check-dependency]
-    if: github.event_name == 'pull_request' && needs.check-dependency.outputs.has_dependency == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Check that linked hegel-core PR is merged
-        env:
-          CORE_PR_NUMBER: ${{ needs.check-dependency.outputs.core_pr_number }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          MERGED=$(gh api "repos/hegeldev/hegel-core/pulls/${CORE_PR_NUMBER}" --jq '.merged')
-          if [ "$MERGED" != "true" ]; then
-            echo "::warning::Linked hegel-core PR #${CORE_PR_NUMBER} has not been merged yet. Merge it before merging this PR."
-          else
-            echo "Linked hegel-core PR #${CORE_PR_NUMBER} is merged."
-          fi
 
   release:
     name: release

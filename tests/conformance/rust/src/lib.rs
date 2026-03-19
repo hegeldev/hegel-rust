@@ -30,8 +30,8 @@ pub fn write<T: Serialize>(metrics: &T) {
         // Clone the file handle to get a mutable reference
         let mut file = file
             .try_clone()
-            .expect("Failed to clone metrics file handle");
-        let json = serde_json::to_string(metrics).expect("Failed to serialize metrics");
-        writeln!(file, "{}", json).expect("Failed to write metrics");
+            .unwrap();
+        let json = serde_json::to_string(metrics).unwrap();
+        writeln!(file, "{}", json).unwrap();
     }
 }

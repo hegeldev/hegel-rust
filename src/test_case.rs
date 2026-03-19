@@ -246,6 +246,13 @@ impl TestCase {
                     }
                     self.inner.borrow_mut().test_aborted = true;
                     Err(StopTestError)
+                } else if error_msg.contains("FlakyStrategyDefinition")
+                    || error_msg.contains("FlakyReplay")
+                {
+                    // Abort the test case; the server will report the flaky
+                    // error in the test_done results, which runner.rs handles.
+                    self.inner.borrow_mut().test_aborted = true;
+                    Err(StopTestError)
                 } else {
                     panic!("Failed to communicate with Hegel: {}", e);
                 }

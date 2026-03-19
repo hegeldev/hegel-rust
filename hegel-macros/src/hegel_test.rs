@@ -134,6 +134,12 @@ pub fn expand_test(attr: proc_macro2::TokenStream, item: proc_macro2::TokenStrea
             hegel::Hegel::new(|#param_pat: #param_ty| #body)
             .settings(#settings_expr)
             .__database_key(format!("{}::{}", module_path!(), #test_name))
+            .test_location(hegel::TestLocation {
+                function: #test_name.to_string(),
+                file: file!().to_string(),
+                class: module_path!().to_string(),
+                begin_line: line!(),
+            })
             .run();
         }
     };

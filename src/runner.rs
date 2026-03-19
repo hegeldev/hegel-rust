@@ -1,3 +1,4 @@
+use crate::antithesis::{TestLocation, is_running_in_antithesis};
 use crate::control::{currently_in_test_context, set_in_test_context};
 use crate::protocol::{Channel, Connection, HANDSHAKE_STRING};
 use crate::test_case::{ASSUME_FAIL_STRING, TestCase};
@@ -16,7 +17,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 const SUPPORTED_PROTOCOL_VERSIONS: (f64, f64) = (0.1, 0.7);
-const HEGEL_SERVER_VERSION: &str = "0.1.0";
+const HEGEL_SERVER_VERSION: &str = "0.2.1";
 const HEGEL_SERVER_COMMAND_ENV: &str = "HEGEL_SERVER_COMMAND";
 const HEGEL_SERVER_DIR: &str = ".hegel";
 static HEGEL_SERVER_COMMAND: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -473,6 +474,7 @@ impl Default for Settings {
 pub struct Hegel<F> {
     test_fn: F,
     database_key: Option<String>,
+    test_location: Option<TestLocation>,
     settings: Settings,
 }
 
@@ -485,6 +487,7 @@ where
             test_fn,
             database_key: None,
             settings: Settings::new(),
+            test_location: None,
         }
     }
 
@@ -496,6 +499,12 @@ where
     #[doc(hidden)]
     pub fn __database_key(mut self, key: String) -> Self {
         self.database_key = Some(key);
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn test_location(mut self, location: TestLocation) -> Self {
+        self.test_location = Some(location);
         self
     }
 
@@ -730,6 +739,16 @@ where
             panic!("Health check failure:\n{}", failure_msg);
         }
 
+        // Check for flaky test detection
+        if let Some(flaky_msg) = map_get(&result_data, "flaky").and_then(as_text) {
+            drop(test_channel);
+            drop(control);
+            let _ = connection.close();
+            drop(connection);
+            let _ = child.wait().expect("Failed to wait for hegel server");
+            panic!("Flaky test detected: {}", flaky_msg);
+        }
+
         let n_interesting = map_get(&result_data, "interesting_test_cases")
             .and_then(as_u64)
             .unwrap_or(0);
@@ -780,7 +799,24 @@ where
 
         let _ = child.wait().expect("Failed to wait for hegel server");
 
-        if !passed || got_interesting.load(Ordering::SeqCst) {
+        let test_failed = !passed || got_interesting.load(Ordering::SeqCst);
+
+        if is_running_in_antithesis() {
+            // if we're running inside of antithesis, but the user hasn't opted in
+            // to the antithesis feature, loudly inform them.
+            #[cfg(not(feature = "antithesis"))]
+            panic!(
+                "When Hegel is run inside of Antithesis, it requires the `antithesis` feature. \
+                You can add it with {{ features = [\"antithesis\"] }}."
+            );
+
+            #[cfg(feature = "antithesis")]
+            if let Some(ref loc) = self.test_location {
+                crate::antithesis::emit_assertion(loc, !test_failed);
+            }
+        }
+
+        if test_failed {
             panic!("Property test failed");
         }
     }

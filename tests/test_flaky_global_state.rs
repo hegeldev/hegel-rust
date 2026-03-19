@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 static GLOBAL_COUNTER: AtomicI32 = AtomicI32::new(0);
 
 #[hegel::test]
-#[should_panic(expected = "Property test failed")]
+#[should_panic(expected = "Your data generation is non-deterministic")]
 fn test_flaky_global_state(tc: TestCase) {
     let _x =
         tc.draw(generators::integers::<i32>().min_value(GLOBAL_COUNTER.load(Ordering::SeqCst)));
