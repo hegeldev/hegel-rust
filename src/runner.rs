@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 use tempfile::TempDir;
 
-const SUPPORTED_PROTOCOL_VERSIONS: (f64, f64) = (0.1, 0.6);
+const SUPPORTED_PROTOCOL_VERSIONS: (f64, f64) = (0.6, 0.6);
 const HEGEL_SERVER_VERSION: &str = "0.2.1";
 const HEGEL_SERVER_COMMAND_ENV: &str = "HEGEL_SERVER_COMMAND";
 const HEGEL_SERVER_DIR: &str = ".hegel";
