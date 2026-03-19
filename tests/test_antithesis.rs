@@ -120,7 +120,10 @@ fn my_test(tc: hegel::TestCase) {
     let evaluation: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
     let details = &evaluation["antithesis_assert"]["details"];
 
-    assert!(!details.is_null(), "Expected details to be present on failing test");
+    assert!(
+        !details.is_null(),
+        "Expected details to be present on failing test"
+    );
 
     let failing_inputs = details["failing_inputs"].as_array().unwrap();
     assert_eq!(

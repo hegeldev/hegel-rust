@@ -21,7 +21,12 @@ pub(crate) fn is_running_in_antithesis() -> bool {
 }
 
 #[cfg(feature = "antithesis")]
-pub(crate) fn emit_assertion(location: &TestLocation, passed: bool, failing_inputs: &[String], seed: &str) {
+pub(crate) fn emit_assertion(
+    location: &TestLocation,
+    passed: bool,
+    failing_inputs: &[String],
+    seed: &str,
+) {
     use std::fs::OpenOptions;
     use std::io::Write;
 
