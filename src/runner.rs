@@ -527,18 +527,6 @@ where
             eprintln!("Version negotiation complete");
         }
 
-        if is_running_in_antithesis() {
-            // if we're running inside of antithesis, but the user hasn't opted in
-            // to the antithesis feature, loudly inform them.
-            #[cfg(not(feature = "antithesis"))]
-            panic!(
-                "When Hegel is run inside of Antithesis, it requires the `antithesis` feature. \
-                You can add it with {{ features = [\"antithesis\"] }}."
-            );
-            #[cfg(feature = "antithesis")]
-            crate::antithesis::emit_setup_complete();
-        }
-
         let mut test_fn = self.test_fn;
         let verbosity = self.verbosity;
         let got_interesting = Arc::new(AtomicBool::new(false));
@@ -704,7 +692,6 @@ where
             .and_then(as_bool)
             .unwrap_or(true);
 
-        eprintln!("{:?}", result_data);
         // clean up so the server can exit gracefully
         drop(test_channel);
         drop(control);
@@ -716,6 +703,11 @@ where
         let test_failed = !passed || got_interesting.load(Ordering::SeqCst);
 
         if is_running_in_antithesis() {
+            #[cfg(not(feature = "antithesis"))]
+            panic!(
+                "When Hegel is run inside of Antithesis, it requires the `antithesis` feature. \
+                You can add it with {{ features = [\"antithesis\"] }}."
+            );
             #[cfg(feature = "antithesis")]
             if let Some(ref loc) = self.test_location {
                 let seed = map_get(&result_data, "seed").and_then(as_text).unwrap();

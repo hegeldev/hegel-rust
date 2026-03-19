@@ -34,11 +34,10 @@ fn my_test(tc: hegel::TestCase) {
 
     let contents = std::fs::read_to_string(&jsonl_path).unwrap();
     let lines: Vec<&str> = contents.lines().collect();
-    assert_eq!(lines.len(), 3, "Got {} lines", lines.len());
+    assert_eq!(lines.len(), 2, "Got {} lines", lines.len());
 
-    let setup: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
-    let declaration: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
-    let evaluation: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
+    let declaration: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    let evaluation: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
 
     let expected_id = "test::my_test passes properties";
     let expected_location = serde_json::json!({
@@ -48,18 +47,6 @@ fn my_test(tc: hegel::TestCase) {
         "begin_line": 4,
         "begin_column": 0,
     });
-
-    assert_eq!(
-        setup,
-        serde_json::json!({
-            "antithesis_setup": {
-                "status": "complete",
-                "details": {
-                    "message" : "Set up complete - ready for testing!"
-                }
-            }
-        })
-    );
 
     assert_eq!(
         declaration,
@@ -128,9 +115,9 @@ fn my_test(tc: hegel::TestCase) {
 
     let contents = std::fs::read_to_string(&jsonl_path).unwrap();
     let lines: Vec<&str> = contents.lines().collect();
-    assert_eq!(lines.len(), 3, "Got {} lines", lines.len());
+    assert_eq!(lines.len(), 2, "Got {} lines", lines.len());
 
-    let evaluation: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
+    let evaluation: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
     let details = &evaluation["antithesis_assert"]["details"];
 
     assert!(!details.is_null(), "Expected details to be present on failing test");
