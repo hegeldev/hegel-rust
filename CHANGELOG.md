@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.7 - 2026-03-18
+
+This patch adds support for outputting Hegel events as Antithesis SDK events.
+
 ## 0.1.6 - 2026-03-18
 
 This release adds client-side support for reporting flaky test errors to the end user.
