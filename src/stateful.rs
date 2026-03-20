@@ -1,7 +1,7 @@
 use crate::TestCase;
 use crate::cbor_utils::cbor_map;
 use crate::generators::{integers, sampled_from};
-use crate::test_case::ASSUME_FAIL_STRING;
+use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING};
 use ciborium::Value;
 use std::cmp::min;
 use std::collections::HashMap;
@@ -25,7 +25,10 @@ impl<T> Variables<T> {
             },
         ) {
             Ok(Value::Integer(i)) => i.into(),
-            _ => panic!("Expected integer response for variable id."),
+            Err(_) => {
+                panic!("{}", STOP_TEST_STRING);
+            }
+            Ok(other) => panic!("Expected integer response for variable id, got {:?}", other),
         }
     }
 
@@ -39,9 +42,12 @@ impl<T> Variables<T> {
             .send_request("pool_add", &cbor_map! {"pool_id" => self.pool_id})
         {
             Ok(Value::Integer(i)) => i.into(),
-            _ => panic!("Expected integer response for variable id."),
+            Err(_) => {
+                panic!("{}", STOP_TEST_STRING);
+            }
+            Ok(other) => panic!("Expected integer response for variable id, got {:?}", other),
         };
-        if self.values.get(&variable_id).is_some() {
+        if self.values.contains_key(&variable_id) {
             panic!("unexpected variable id in map");
         }
         self.values.insert(variable_id, v);
@@ -63,7 +69,10 @@ impl<T> Variables<T> {
 pub fn variables<T>(tc: &TestCase) -> Variables<T> {
     let pool_id = match tc.send_request("new_pool", &cbor_map! {}) {
         Ok(Value::Integer(i)) => i.into(),
-        _ => panic!("Expected integer response for pool id."),
+        Err(_) => {
+            panic!("{}", STOP_TEST_STRING);
+        }
+        Ok(other) => panic!("Expected integer response for pool id, got {:?}", other),
     };
     Variables {
         pool_id,
@@ -131,7 +140,11 @@ pub fn run(mut m: impl StateMachine, tc: TestCase) {
                 check_invariants(&m, &tc);
             }
             Err(e) => {
-                if panic_message(&e) != ASSUME_FAIL_STRING {
+                let msg = panic_message(&e);
+                if msg == STOP_TEST_STRING {
+                    // Server ran out of data — this test case is done.
+                    break;
+                } else if msg != ASSUME_FAIL_STRING {
                     resume_unwind(e);
                 }
             }

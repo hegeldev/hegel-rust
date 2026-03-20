@@ -1,7 +1,7 @@
 use crate::antithesis::{TestLocation, is_running_in_antithesis};
 use crate::control::{currently_in_test_context, set_in_test_context};
 use crate::protocol::{Channel, Connection, HANDSHAKE_STRING, SERVER_CRASHED_MESSAGE};
-use crate::test_case::{ASSUME_FAIL_STRING, TestCase};
+use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING, TestCase};
 use ciborium::Value;
 
 use crate::cbor_utils::{as_bool, as_text, as_u64, cbor_map, map_get};
@@ -890,7 +890,7 @@ fn run_test_case<F: FnMut(TestCase)>(
         Ok(()) => ("VALID".to_string(), None),
         Err(e) => {
             let msg = panic_message(e);
-            if msg == ASSUME_FAIL_STRING {
+            if msg == ASSUME_FAIL_STRING || msg == STOP_TEST_STRING {
                 ("INVALID".to_string(), None)
             } else {
                 got_interesting.store(true, Ordering::SeqCst);
