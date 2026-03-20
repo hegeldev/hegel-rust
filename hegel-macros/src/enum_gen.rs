@@ -142,16 +142,16 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         .flat_map(|variant| default_gen_bounds(&variant_field_types(variant), quote! { 'a }))
         .collect();
 
-    // Generate with_VariantName() builder methods
+    // Generate VariantName() builder methods
     let with_methods: Vec<_> = data_variants
         .iter()
         .map(|variant| {
             let variant_name = &variant.ident;
-            let with_method_name = format_ident!("with_{}", variant_name);
 
             quote! {
                 /// Set a custom generator for the #variant_name variant.
-                pub fn #with_method_name<G>(mut self, generator: G) -> Self
+                #[allow(non_snake_case)]
+                pub fn #variant_name<G>(mut self, generator: G) -> Self
                 where
                     G: hegel::generators::Generator<#enum_name> + Send + Sync + 'a,
                 {
@@ -363,7 +363,6 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         quote! {
             impl<'a> hegel::generators::Generator<#enum_name> for #generator_name<'a> {
                 fn do_draw(&self, __data: &hegel::TestCase) -> #enum_name {
-                    use hegel::generators::Generator;
                     if let Some(basic) = self.as_basic() {
                         basic.parse_raw(hegel::generate_raw(__data, basic.schema()))
                     } else {
@@ -382,8 +381,6 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                 }
 
                 fn as_basic(&self) -> Option<hegel::generators::BasicGenerator<'_, #enum_name>> {
-                    use hegel::generators::Generator;
-
                     #(#data_variant_basic_bindings)*
 
                     let mut one_of_schemas: Vec<hegel::ciborium::Value> = vec![
@@ -459,6 +456,8 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
 
     let expanded = quote! {
         const _: () = {
+            use hegel::generators::Generator as _;
+
             #(#variant_generators)*
 
             #generator_struct
@@ -489,15 +488,14 @@ fn generate_variant_generator(
             field_names,
             field_types,
         } => {
-            // Generate with_field methods
-            let with_methods: Vec<_> = field_names
+            // Generate field builder methods (same name as field, no prefix)
+            let builder_methods: Vec<_> = field_names
                 .iter()
                 .zip(field_types.iter())
                 .map(|(field_name, field_type)| {
-                    let with_method_name = format_ident!("with_{}", field_name);
                     quote! {
                         /// Set a custom generator for this field.
-                        pub fn #with_method_name<G>(mut self, generator: G) -> Self
+                        pub fn #field_name<G>(mut self, generator: G) -> Self
                         where
                             G: hegel::generators::Generator<#field_type> + Send + Sync + 'a,
                         {
@@ -591,7 +589,7 @@ fn generate_variant_generator(
                         }
                     }
 
-                    #(#with_methods)*
+                    #(#builder_methods)*
                 }
 
                 impl<'a> Default for #variant_generator_name<'a>
@@ -605,7 +603,7 @@ fn generate_variant_generator(
 
                 impl<'a> hegel::generators::Generator<#enum_name> for #variant_generator_name<'a> {
                     fn do_draw(&self, __data: &hegel::TestCase) -> #enum_name {
-                        use hegel::generators::Generator;
+
                         if let Some(basic) = self.as_basic() {
                             basic.parse_raw(hegel::generate_raw(__data, basic.schema()))
                         } else {
@@ -616,8 +614,6 @@ fn generate_variant_generator(
                     }
 
                     fn as_basic(&self) -> Option<hegel::generators::BasicGenerator<'_, #enum_name>> {
-                        use hegel::generators::Generator;
-
                         #(#basic_bindings)*
 
                         let schema = #schema_ts;
@@ -655,7 +651,7 @@ fn generate_variant_generator(
                     }
 
                     /// Set a custom generator for the value.
-                    pub fn with_value<G>(mut self, generator: G) -> Self
+                    pub fn value<G>(mut self, generator: G) -> Self
                     where
                         G: hegel::generators::Generator<#field_type> + Send + Sync + 'a,
                     {
@@ -676,7 +672,7 @@ fn generate_variant_generator(
 
                 impl<'a> hegel::generators::Generator<#enum_name> for #variant_generator_name<'a> {
                     fn do_draw(&self, __data: &hegel::TestCase) -> #enum_name {
-                        use hegel::generators::Generator;
+
                         if let Some(basic) = self.as_basic() {
                             basic.parse_raw(hegel::generate_raw(__data, basic.schema()))
                         } else {
@@ -685,8 +681,6 @@ fn generate_variant_generator(
                     }
 
                     fn as_basic(&self) -> Option<hegel::generators::BasicGenerator<'_, #enum_name>> {
-                        use hegel::generators::Generator;
-
                         let value_basic = self.value.as_basic()?;
                         let schema = value_basic.schema().clone();
 
@@ -703,14 +697,13 @@ fn generate_variant_generator(
                 .map(|i| format_ident!("_{}", i))
                 .collect();
 
-            let with_methods: Vec<_> = field_indices
+            let builder_methods: Vec<_> = field_indices
                 .iter()
                 .zip(field_types.iter())
                 .map(|(field_idx, field_type)| {
-                    let with_method_name = format_ident!("with{}", field_idx);
                     quote! {
                         /// Set a custom generator for this field.
-                        pub fn #with_method_name<G>(mut self, generator: G) -> Self
+                        pub fn #field_idx<G>(mut self, generator: G) -> Self
                         where
                             G: hegel::generators::Generator<#field_type> + Send + Sync + 'a,
                         {
@@ -799,7 +792,7 @@ fn generate_variant_generator(
                         }
                     }
 
-                    #(#with_methods)*
+                    #(#builder_methods)*
                 }
 
                 impl<'a> Default for #variant_generator_name<'a>
@@ -813,7 +806,7 @@ fn generate_variant_generator(
 
                 impl<'a> hegel::generators::Generator<#enum_name> for #variant_generator_name<'a> {
                     fn do_draw(&self, __data: &hegel::TestCase) -> #enum_name {
-                        use hegel::generators::Generator;
+
                         if let Some(basic) = self.as_basic() {
                             basic.parse_raw(hegel::generate_raw(__data, basic.schema()))
                         } else {
@@ -822,8 +815,6 @@ fn generate_variant_generator(
                     }
 
                     fn as_basic(&self) -> Option<hegel::generators::BasicGenerator<'_, #enum_name>> {
-                        use hegel::generators::Generator;
-
                         #(#basic_bindings)*
 
                         let schema = #schema_ts;

@@ -265,14 +265,14 @@ fn my_test(tc: hegel::TestCase) {
 
 ## Type-directed derivation
 
-`#[derive(Generator)]` creates a builder struct named `<Type>Generator` with
+`#[derive(DefaultGenerator)]` creates a builder struct named `<Type>Generator` with
 `.new()` and `.with_<field>()` methods:
 
 ```rust
-use hegel::Generator;
+use hegel::DefaultGenerator;
 use hegel::generators::{self, Generator as _};
 
-#[derive(Generator, Debug)]
+#[derive(DefaultGenerator, Debug)]
 struct User { name: String, age: u32, active: bool }
 
 #[hegel::test]
@@ -323,4 +323,4 @@ fn test_with_notes(tc: hegel::TestCase) {
 
 - Run `just docs` to build and browse the full API documentation locally.
 - Look at `tests/` for more usage patterns.
-- Combine `#[derive(Generator)]` with `.with_<field>()` to generate realistic domain objects.
+- Combine `#[derive(DefaultGenerator)]` with `.with_<field>()` to generate realistic domain objects.
