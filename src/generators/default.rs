@@ -17,15 +17,15 @@ pub trait DefaultGenerator: Sized {
 /// Create a generator for a type using its default generator.
 ///
 /// This is the primary way to get a generator for types that implement
-/// [`DefaultGenerator`], including types with `#[derive(Generator)]`.
+/// [`DefaultGenerator`], including types with `#[derive(DefaultGenerator)]`.
 ///
 /// # Example
 ///
 /// ```no_run
 /// use hegel::generators::{self, DefaultGenerator};
-/// use hegel::Generator;
+/// use hegel::DefaultGenerator;
 ///
-/// #[derive(Generator, Debug)]
+/// #[derive(DefaultGenerator, Debug)]
 /// struct Person {
 ///     name: String,
 ///     age: u32,
@@ -38,7 +38,7 @@ pub trait DefaultGenerator: Sized {
 ///
 ///     // Customize field generators
 ///     let person: Person = tc.draw(generators::default::<Person>()
-///         .with_age(generators::integers().min_value(0).max_value(120)));
+///         .age(generators::integers().min_value(0).max_value(120)));
 /// }
 /// ```
 pub fn default<T: DefaultGenerator>() -> BoxedGenerator<'static, T> {
@@ -227,8 +227,8 @@ where
 ///
 /// // default now supports Person:
 /// let generator = generators::default::<Person>()
-///     .with_name(generators::from_regex("[A-Z][a-z]+"))
-///     .with_age(generators::integers::<u32>().min_value(0).max_value(120));
+///     .name(generators::from_regex("[A-Z][a-z]+"))
+///     .age(generators::integers::<u32>().min_value(0).max_value(120));
 ///
 /// let person: Person = tc.draw(generator);
 /// ```
@@ -256,7 +256,7 @@ macro_rules! derive_generator {
                     }
 
                     $(
-                        pub fn [<with_ $field_name>]<G>(mut self, generator: G) -> Self
+                        pub fn $field_name<G>(mut self, generator: G) -> Self
                         where
                             G: $crate::generators::Generator<$field_type> + Send + Sync + 'a,
                         {

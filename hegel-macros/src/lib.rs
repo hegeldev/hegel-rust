@@ -13,19 +13,19 @@ use syn::{Data, DeriveInput, ItemFn, parse_macro_input};
 /// allowing it to be used with [`default`](hegel::generators::default) via `default::<T>()`.
 ///
 /// For structs, the generated generator has:
-/// - `with_<field>(generator)` - builder method to customize each field's generator
+/// - `<field>(generator)` - builder method to customize each field's generator
 ///
 /// For enums, the generated generator has:
 /// - `default_<VariantName>()` - methods returning default variant generators
-/// - `with_<VariantName>(generator)` - builder methods to customize variant generation
+/// - `<VariantName>(generator)` - builder methods to customize variant generation
 ///
 /// # Struct Example
 ///
 /// ```ignore
-/// use hegel::Generator;
-/// use hegel::generators::{self, DefaultGenerator, Generator as _};
+/// use hegel::DefaultGenerator;
+/// use hegel::generators::{self, DefaultGenerator as _, Generator as _};
 ///
-/// #[derive(Generator)]
+/// #[derive(DefaultGenerator)]
 /// struct Person {
 ///     name: String,
 ///     age: u32,
@@ -34,7 +34,7 @@ use syn::{Data, DeriveInput, ItemFn, parse_macro_input};
 /// #[hegel::test]
 /// fn generates_people(tc: hegel::TestCase) {
 ///     let generator = generators::default::<Person>()
-///         .with_age(generators::integers::<u32>().min_value(0).max_value(120));
+///         .age(generators::integers::<u32>().min_value(0).max_value(120));
 ///     let person: Person = tc.draw(generator);
 /// }
 /// ```
@@ -42,10 +42,10 @@ use syn::{Data, DeriveInput, ItemFn, parse_macro_input};
 /// # Enum Example
 ///
 /// ```ignore
-/// use hegel::Generator;
-/// use hegel::generators::{self, DefaultGenerator, Generator as _};
+/// use hegel::DefaultGenerator;
+/// use hegel::generators::{self, DefaultGenerator as _, Generator as _};
 ///
-/// #[derive(Generator)]
+/// #[derive(DefaultGenerator)]
 /// enum Status {
 ///     Pending,
 ///     Active { since: String },
@@ -55,15 +55,15 @@ use syn::{Data, DeriveInput, ItemFn, parse_macro_input};
 /// #[hegel::test]
 /// fn generates_statuses(tc: hegel::TestCase) {
 ///     let generator = generators::default::<Status>()
-///         .with_Active(
+///         .Active(
 ///             generators::default::<Status>()
 ///                 .default_Active()
-///                 .with_since(generators::text().max_size(20))
+///                 .since(generators::text().max_size(20))
 ///         );
 ///     let status: Status = tc.draw(generator);
 /// }
 /// ```
-#[proc_macro_derive(Generator)]
+#[proc_macro_derive(DefaultGenerator)]
 pub fn derive_generator(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
