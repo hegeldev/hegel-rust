@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.12 - 2026-03-20
+
+This release improves derived default generators:
+
+* Makes the derive method DefaultGenerator, not Generator, as that's what's actually derived.
+* Brings the builder methods for derived generators in line with the standard convention, removing the with_ prefix from them.
+* Fixes a bug where if you did not have `hegel::Generator` imported, DefaultGenerator would fail to derive.
+
 ## 0.1.11 - 2026-03-20
 
 This improves error messages when uv is not installed.
