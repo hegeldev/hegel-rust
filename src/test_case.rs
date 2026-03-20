@@ -38,6 +38,11 @@ static PROTOCOL_DEBUG: LazyLock<bool> = LazyLock::new(|| {
 /// The sentinel string used to identify assume-rejection panics.
 pub(crate) const ASSUME_FAIL_STRING: &str = "__HEGEL_ASSUME_FAIL";
 
+/// The sentinel string used to identify overflow/StopTest panics.
+/// Distinct from ASSUME_FAIL_STRING so callers can tell user-initiated
+/// assumption failures apart from server-initiated data exhaustion.
+pub(crate) const STOP_TEST_STRING: &str = "__HEGEL_STOP_TEST";
+
 pub(crate) struct TestCaseData {
     #[allow(dead_code)]
     connection: Arc<Connection>,
@@ -188,7 +193,7 @@ impl TestCase {
             assert!(inner.span_depth > 0);
             inner.span_depth -= 1;
             drop(inner);
-            self.assume(false);
+            panic!("{}", STOP_TEST_STRING);
         }
     }
 
@@ -209,6 +214,14 @@ impl TestCase {
         payload: &Value,
     ) -> Result<Value, StopTestError> {
         let inner = self.inner.borrow();
+
+        // If a previous request already triggered overflow/StopTest, the server
+        // has closed this channel. Don't send another request—it would block.
+        // (The channel-level closed check is also enforced, but this gives a
+        // clean StopTestError instead of an io::Error.)
+        if inner.test_aborted {
+            return Err(StopTestError);
+        }
         let debug = *PROTOCOL_DEBUG || inner.verbosity == Verbosity::Debug;
 
         let mut entries = vec![(
@@ -240,18 +253,27 @@ impl TestCase {
             }
             Err(e) => {
                 let error_msg = e.to_string();
-                if error_msg.contains("overflow") || error_msg.contains("StopTest") {
+                if error_msg.contains("overflow")
+                    || error_msg.contains("StopTest")
+                    || error_msg.contains("channel is closed")
+                {
                     if debug {
                         eprintln!("RESPONSE: StopTest/overflow");
                     }
-                    self.inner.borrow_mut().test_aborted = true;
+                    let mut inner = self.inner.borrow_mut();
+                    inner.channel.mark_closed();
+                    inner.test_aborted = true;
+                    drop(inner);
                     Err(StopTestError)
                 } else if error_msg.contains("FlakyStrategyDefinition")
                     || error_msg.contains("FlakyReplay")
                 {
                     // Abort the test case; the server will report the flaky
                     // error in the test_done results, which runner.rs handles.
-                    self.inner.borrow_mut().test_aborted = true;
+                    let mut inner = self.inner.borrow_mut();
+                    inner.channel.mark_closed();
+                    inner.test_aborted = true;
+                    drop(inner);
                     Err(StopTestError)
                 } else if self.inner.borrow().connection.server_has_exited() {
                     panic!("{}", SERVER_CRASHED_MESSAGE);
@@ -285,8 +307,7 @@ pub fn generate_raw(tc: &TestCase, schema: &Value) -> Value {
     match tc.send_request("generate", &cbor_map! {"schema" => schema.clone()}) {
         Ok(v) => v,
         Err(StopTestError) => {
-            tc.assume(false);
-            unreachable!()
+            panic!("{}", STOP_TEST_STRING);
         }
     }
 }
@@ -356,8 +377,7 @@ impl<'a> Collection<'a> {
             let response = match self.tc.send_request("new_collection", &payload) {
                 Ok(v) => v,
                 Err(StopTestError) => {
-                    self.tc.assume(false);
-                    unreachable!()
+                    panic!("{}", STOP_TEST_STRING);
                 }
             };
             let name = match response {
@@ -384,8 +404,7 @@ impl<'a> Collection<'a> {
             Ok(v) => v,
             Err(StopTestError) => {
                 self.finished = true;
-                self.tc.assume(false);
-                unreachable!()
+                panic!("{}", STOP_TEST_STRING);
             }
         };
         let result = match response {

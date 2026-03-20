@@ -1,11 +1,12 @@
 mod composite;
 mod enum_gen;
 mod hegel_test;
+mod stateful;
 mod struct_gen;
 mod utils;
 
 use proc_macro::TokenStream;
-use syn::{Data, DeriveInput, ItemFn, parse_macro_input};
+use syn::{Data, DeriveInput, ItemFn, ItemImpl, parse_macro_input};
 
 /// Derive a generator for a struct or enum.
 ///
@@ -107,4 +108,10 @@ pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn composite(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemFn);
     composite::expand_composite(input).into()
+}
+
+#[proc_macro_attribute]
+pub fn state_machine(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let block = parse_macro_input!(item as ItemImpl);
+    stateful::expand_state_machine(block).into()
 }

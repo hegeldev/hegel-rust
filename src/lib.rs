@@ -215,6 +215,7 @@ pub(crate) mod control;
 pub mod generators;
 pub(crate) mod protocol;
 pub(crate) mod runner;
+pub mod stateful;
 mod test_case;
 
 pub use control::currently_in_test_context;
@@ -234,5 +235,6 @@ pub use test_case::{__IsTestCase, __assert_is_test_case, generate_from_schema, g
 pub use antithesis::TestLocation;
 pub use hegel_macros::DefaultGenerator;
 pub use hegel_macros::composite;
+pub use hegel_macros::state_machine;
 pub use hegel_macros::test;
 pub use runner::{HealthCheck, Hegel, Settings, Verbosity, hegel};
