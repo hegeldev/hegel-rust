@@ -106,12 +106,44 @@ jobs:
         with:
           ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }}
 
+      - name: Install Rust
+        run: rustup toolchain install nightly --profile minimal && rustup default nightly
       - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
 
+      - name: Install cargo-docs-rs
+        run: cargo install cargo-docs-rs
       - name: Build docs
         env:
           RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --all-features --no-deps
+        run: cargo docs-rs
+
+  # test with the minimal versions of all our dependencies
+  test-minimal-versions:
+    name: test-minimal-versions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/base
+        with:
+          ssh-key: ${{ secrets.HEGEL_DEPLOY_KEY }}
+
+      - name: Install Rust
+        run: rustup toolchain install nightly --profile minimal && rustup default nightly
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+
+      - name: Generate minimal versions lockfile
+        run: cargo generate-lockfile -Z minimal-versions
+      - name: Run tests
+        # --locked tells cargo not to update the lockfile. this makes sure we use the lockfile we just generated
+        # and don't regenerate it for non-minimal versions.
+        run: RUST_BACKTRACE=1 cargo test --locked --all-features
 
   coverage:
     name: coverage
@@ -186,7 +218,7 @@ jobs:
   release:
     name: release
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust'
-    needs: [lint, test, test-all-features, docs, coverage, conformance, nix]
+    needs: [lint, test, test-all-features, test-minimal-versions, docs, coverage, conformance, nix]
     runs-on: ubuntu-latest
     permissions:
       contents: write

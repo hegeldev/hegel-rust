@@ -41,10 +41,11 @@ pub fn map_get<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
         panic!("expected Value::Map, got {value:?}");
     };
     for (k, v) in entries {
-        if let Value::Text(s) = k {
-            if s == key {
-                return Some(v);
-            }
+        let Value::Text(s) = k else {
+            panic!("expected Value::Text, got {k:?}");
+        };
+        if s == key {
+            return Some(v);
         }
     }
     None
@@ -56,11 +57,12 @@ pub fn map_insert(value: &mut Value, key: &str, val: impl Into<Value>) {
     };
     let val = val.into();
     for (k, v) in entries.iter_mut() {
-        if let Value::Text(s) = k {
-            if s == key {
-                *v = val;
-                return;
-            }
+        let Value::Text(s) = k else {
+            panic!("expected Value::Text, got {k:?}");
+        };
+        if s == key {
+            *v = val;
+            return;
         }
     }
     entries.push((Value::Text(String::from(key)), val));

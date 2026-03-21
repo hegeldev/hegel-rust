@@ -1,8 +1,40 @@
 use super::{BasicGenerator, Generator, TestCase};
 use crate::cbor_utils::{cbor_map, cbor_serialize, map_insert};
 use ciborium::Value;
-use num::{Bounded, Float as NumFloat, Integer as NumInteger};
 use std::marker::PhantomData;
+
+pub trait Integer: Copy + Ord {
+    const MIN: Self;
+    const MAX: Self;
+}
+
+macro_rules! impl_integer_type {
+    ($($t:ty),*) => { $(
+        impl Integer for $t {
+            const MIN: Self = <$t>::MIN;
+            const MAX: Self = <$t>::MAX;
+        }
+    )* };
+}
+
+impl_integer_type!(
+    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
+);
+
+pub trait Float: Copy + PartialOrd {
+    const MIN: Self;
+    const MAX: Self;
+}
+
+impl Float for f32 {
+    const MIN: Self = f32::MIN;
+    const MAX: Self = f32::MAX;
+}
+
+impl Float for f64 {
+    const MIN: Self = f64::MIN;
+    const MAX: Self = f64::MAX;
+}
 
 pub struct IntegerGenerator<T> {
     min: Option<T>,
@@ -22,13 +54,10 @@ impl<T> IntegerGenerator<T> {
     }
 }
 
-impl<T> IntegerGenerator<T>
-where
-    T: serde::Serialize + Bounded + NumInteger + Copy,
-{
+impl<T: Integer + serde::Serialize> IntegerGenerator<T> {
     fn build_schema(&self) -> Value {
-        let min = self.min.unwrap_or_else(T::min_value);
-        let max = self.max.unwrap_or_else(T::max_value);
+        let min = self.min.unwrap_or(T::MIN);
+        let max = self.max.unwrap_or(T::MAX);
         assert!(min <= max, "Cannot have max_value < min_value");
 
         cbor_map! {
@@ -39,9 +68,8 @@ where
     }
 }
 
-impl<T> Generator<T> for IntegerGenerator<T>
-where
-    T: serde::de::DeserializeOwned + serde::Serialize + Bounded + NumInteger + Send + Sync + Copy,
+impl<T: Integer + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static>
+    Generator<T> for IntegerGenerator<T>
 {
     fn do_draw(&self, tc: &TestCase) -> T {
         super::generate_from_schema(tc, &self.build_schema())
@@ -71,10 +99,9 @@ where
 /// // Generate u8 in range 0-100
 /// let generator = generators::integers::<u8>().min_value(0).max_value(100);
 /// ```
-pub fn integers<T>() -> IntegerGenerator<T>
-where
-    T: serde::de::DeserializeOwned + serde::Serialize + Bounded + NumInteger + Send + Sync + Copy,
-{
+pub fn integers<
+    T: Integer + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static,
+>() -> IntegerGenerator<T> {
     IntegerGenerator {
         min: None,
         max: None,
@@ -123,10 +150,7 @@ impl<T> FloatGenerator<T> {
     }
 }
 
-impl<T> FloatGenerator<T>
-where
-    T: serde::Serialize + NumFloat,
-{
+impl<T: Float + serde::Serialize> FloatGenerator<T> {
     fn build_schema(&self) -> Value {
         let width = (std::mem::size_of::<T>() * 8) as u64;
         let has_min = self.min.is_some();
@@ -167,10 +191,10 @@ where
         // uses f64, so f32 values near MAX can overflow when round-tripped)
         if !allow_nan && !allow_infinity {
             if self.min.is_none() {
-                map_insert(&mut schema, "min_value", cbor_serialize(&T::min_value()));
+                map_insert(&mut schema, "min_value", cbor_serialize(&T::MIN));
             }
             if self.max.is_none() {
-                map_insert(&mut schema, "max_value", cbor_serialize(&T::max_value()));
+                map_insert(&mut schema, "max_value", cbor_serialize(&T::MAX));
             }
         }
 
@@ -178,9 +202,8 @@ where
     }
 }
 
-impl<T> Generator<T> for FloatGenerator<T>
-where
-    T: serde::de::DeserializeOwned + serde::Serialize + NumFloat + Send + Sync,
+impl<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static> Generator<T>
+    for FloatGenerator<T>
 {
     fn do_draw(&self, tc: &TestCase) -> T {
         super::generate_from_schema(tc, &self.build_schema())
@@ -197,10 +220,8 @@ where
 ///
 /// By default, allows NaN and infinity values. Use `.allow_nan(false)` and
 /// `.allow_infinity(false)` to restrict to finite values.
-pub fn floats<T>() -> FloatGenerator<T>
-where
-    T: NumFloat,
-{
+pub fn floats<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static>()
+-> FloatGenerator<T> {
     FloatGenerator {
         min: None,
         max: None,

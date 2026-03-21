@@ -21,21 +21,20 @@ categories = ["development-tools::testing"]
 name = "hegel"
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-num = "0.4"
+serde = { version = "1.0.103", features = ["derive"] }
 paste = "1.0"
-hegeltest-macros = { version = "=0.1.12", path = "hegel-macros" }
 tempfile = "3.0"
-ciborium = "0.2"
+ciborium = "0.2.2"
 crc32fast = "1.4"
+hegeltest-macros = { version = "=0.1.12", path = "hegel-macros" }
 # optional feature dependencies
 rand = { version = "0.9", optional = true }
-serde_json = { version = "1.0", optional = true }
+serde_json = { version = "1.0.61", optional = true }
 
 [dev-dependencies]
 regex = "1.0"
 rand = "0.9"
-serde_json = "1.0"
+serde_json = "1.0.61"
 
 [features]
 default = []

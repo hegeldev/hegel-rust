@@ -23,7 +23,7 @@ pub use compose::{ComposedGenerator, fnv1a_hash};
 pub use default::{DefaultGenerator, default};
 pub use generators::{BasicGenerator, BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};
 pub use misc::{booleans, just, none, unit};
-pub use numeric::{floats, integers};
+pub use numeric::{Float, Integer, floats, integers};
 #[cfg(feature = "rand")]
 #[cfg_attr(docsrs, doc(cfg(feature = "rand")))]
 pub use random::{HegelRandom, RandomsGenerator, randoms};

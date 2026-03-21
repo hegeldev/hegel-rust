@@ -209,6 +209,9 @@
 //!
 //! Set verbosity to [`Verbosity::Debug`] to enable debug logging of requests/responses.
 
+#![forbid(future_incompatible)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 pub(crate) mod antithesis;
 pub(crate) mod cbor_utils;
 pub(crate) mod control;

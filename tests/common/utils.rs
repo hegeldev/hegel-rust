@@ -9,6 +9,15 @@ use hegel::{Hegel, Settings};
 use regex::Regex;
 use std::fmt::Debug;
 
+// some of our tests differ in behavior in our nightly rust job.
+pub fn is_nightly() -> bool {
+    let output = std::process::Command::new("rustc")
+        .arg("--version")
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout).contains("nightly")
+}
+
 pub fn assert_matches_regex(text: &str, pattern: &str) {
     let re = Regex::new(pattern).unwrap_or_else(|e| panic!("invalid regex {pattern:?}: {e}"));
     assert!(
