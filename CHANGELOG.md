@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.15 - 2026-03-23
+
+Add `#[hegel::state_machine]` for defining stateful tests.
+
 ## 0.1.14 - 2026-03-23
 
 Drop our dependency on the `num` crate.
