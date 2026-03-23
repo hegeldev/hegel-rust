@@ -141,6 +141,7 @@ def release() -> None:
 
     # regenerate lockfile after version bump
     subprocess.run(["cargo", "generate-lockfile"], check=True, cwd=ROOT)
+    subprocess.run(["cargo", "generate-lockfile"], check=True, cwd=(ROOT / "tests" / "conformance")) # to pick up new crate versions
 
     add_changelog(ROOT / "CHANGELOG.md", version=new_version, content=content)
 
