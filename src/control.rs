@@ -1,15 +1,13 @@
-use std::cell::RefCell;
-
-use crate::test_case::TestCase;
+use std::cell::Cell;
 
 thread_local! {
-    static CURRENT_TEST_CONTEXT: RefCell<Option<TestCase>> = const { RefCell::new(None) };
+    static IN_TEST_CONTEXT: Cell<bool> = const { Cell::new(false) };
 }
 
-pub(crate) fn with_test_context<R>(tc: &TestCase, f: impl FnOnce() -> R) -> R {
-    CURRENT_TEST_CONTEXT.with(|c| c.borrow_mut().replace(tc.clone()));
+pub(crate) fn with_test_context<R>(f: impl FnOnce() -> R) -> R {
+    IN_TEST_CONTEXT.set(true);
     let result = f();
-    CURRENT_TEST_CONTEXT.with(|c| *c.borrow_mut() = None);
+    IN_TEST_CONTEXT.set(false);
     result
 }
 
@@ -26,5 +24,5 @@ pub(crate) fn with_test_context<R>(tc: &TestCase, f: impl FnOnce() -> R) -> R {
 /// }
 /// ```
 pub fn currently_in_test_context() -> bool {
-    CURRENT_TEST_CONTEXT.with(|c| c.borrow().is_some())
+    IN_TEST_CONTEXT.get()
 }
