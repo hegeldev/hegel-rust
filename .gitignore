@@ -2,6 +2,8 @@
 **/*.rs.bk
 .idea/
 .vscode/
+.direnv/
+.envrc
 *.swp
 *.swo
 .hypothesis/
