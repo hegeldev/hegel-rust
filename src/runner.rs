@@ -478,10 +478,8 @@ impl Default for Settings {
     }
 }
 
-/// Builder for running property-based tests with Hegel.
-///
-/// Use [`Hegel::new`] to create a builder, then call [`run`](Hegel::run) to
-/// execute the tests.
+// internal use only
+#[doc(hidden)]
 pub struct Hegel<F> {
     test_fn: F,
     database_key: Option<String>,
