@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.18 - 2026-03-24
+
+More updates and fixes to documentation.
+
 ## 0.1.17 - 2026-03-24
 
 Add comprehensive API documentation, and hide various bits that shouldn't appear in the public docs.
