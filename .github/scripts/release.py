@@ -71,6 +71,17 @@ def set_macros_dep_version(cargo_toml: Path, new_version: str) -> None:
     cargo_toml.write_text(new_text)
 
 
+def set_lib_doc_version(lib_rs: Path, new_version: str) -> None:
+    text = lib_rs.read_text()
+    new_text = re.sub(
+        r'//! hegeltest = "[^"]+"',
+        f'//! hegeltest = "{new_version}"',
+        text,
+        count=1,
+    )
+    lib_rs.write_text(new_text)
+
+
 def add_changelog(path: Path, *, version: str, content: str) -> None:
     date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     entry = f"## {version} - {date}\n\n{content}"
@@ -147,6 +158,7 @@ def release() -> None:
         cwd=(ROOT / "tests" / "conformance" / "rust"),
     )
 
+    set_lib_doc_version(ROOT / "src" / "lib.rs", new_version)
     add_changelog(ROOT / "CHANGELOG.md", version=new_version, content=content)
 
     app_slug = os.environ["HEGEL_RELEASE_APP_SLUG"]
@@ -166,6 +178,7 @@ def release() -> None:
         "Cargo.lock",
         "hegel-macros/Cargo.toml",
         "tests/conformance/rust/Cargo.lock",
+        "src/lib.rs",
         "CHANGELOG.md",
         cwd=ROOT,
     )

@@ -14,7 +14,7 @@
 //!
 //! ```toml
 //! [dev-dependencies]
-//! hegeltest = "0.1.0"
+//! hegeltest = "0.2.0"
 //! ```
 //!
 //! ## Write your first test
