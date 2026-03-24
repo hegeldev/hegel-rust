@@ -4,7 +4,7 @@ This guide walks you through the basics of installing Hegel and writing your fir
 
 ## Prerequisites
 
-You will need [`uv`](https://github.com/astral-sh/uv) installed and on your PATH.
+You will need [`uv`](https://docs.astral.sh/uv/) installed and on your PATH.
 
 ## Install Hegel
 
@@ -62,7 +62,7 @@ Run the test again. It should now pass.
 
 ## Use generators
 
-Hegel provides a rich library of generators that you can use out of the box. There are primitive generators, such as `integers`, `floats`, and `strings`, and combinators that allow you to make generators out of other generators, such as `vecs` and `tuples`. 
+Hegel provides a rich library of generators that you can use out of the box. There are primitive generators, such as `integers`, `floats`, and `strings`, and combinators that allow you to make generators out of other generators, such as `vecs` and `tuples`.
 
 For example, you can use `vecs` to generate a vector of integers:
 
@@ -134,7 +134,7 @@ fn generate_person(tc: TestCase) -> Person {
 
 ## Debug your failing test cases
 
-Use the `note` method to attach debug information: 
+Use the `note` method to attach debug information:
 
 ```rust
 #[hegel::test]

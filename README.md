@@ -16,6 +16,8 @@
 
 To install: `cargo add --dev hegeltest`.
 
+Hegel requires [uv](https://docs.astral.sh/uv/) on your PATH, which we use to install the required [hegel-core](https://github.com/hegeldev/hegel-core) server component. See https://hegel.dev/reference/installation for details.
+
 ## Quickstart
 
 Here's a quick example of how to write a Hegel test:

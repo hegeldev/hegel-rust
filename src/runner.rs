@@ -27,7 +27,7 @@ hegel-core, but could not find uv on the PATH.
 Hegel uses a Python server component called `hegel-core` to share core property-based \
 testing functionality across languages. There are two ways for Hegel to get hegel-core:
 
-* By default, Hegel looks for uv (https://github.com/astral-sh/uv) on the PATH, and \
+* By default, Hegel looks for uv (https://docs.astral.sh/uv/) on the PATH, and \
   uses uv to install hegel-core to a local `.hegel/venv` directory. We recommend this \
   option. To continue, install uv: https://docs.astral.sh/uv/getting-started/installation/.
 * Alternatively, you can manage the installation of hegel-core yourself. After installing, \
