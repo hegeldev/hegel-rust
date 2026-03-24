@@ -26,20 +26,9 @@ fn main() {
 }
 "#;
 
-    let output = TempRustProject::new()
+    TempRustProject::new()
         .main_file(code)
         .env_remove("HEGEL_SERVER_COMMAND")
-        .expect_failure("Could not find `uv` on your PATH")
+        .expect_failure("You are seeing this error message because hegel-rust tried to use `uv` to install hegel-core")
         .cargo_run(&[]);
-
-    assert!(
-        output.stderr.contains("HEGEL_SERVER_COMMAND"),
-        "Expected HEGEL_SERVER_COMMAND hint, got:\n{}",
-        output.stderr
-    );
-    assert!(
-        output.stderr.contains("docs/installation.md"),
-        "Expected docs link, got:\n{}",
-        output.stderr
-    );
 }

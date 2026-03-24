@@ -20,6 +20,21 @@ const SUPPORTED_PROTOCOL_VERSIONS: (f64, f64) = (0.6, 0.7);
 const HEGEL_SERVER_VERSION: &str = "0.2.2";
 const HEGEL_SERVER_COMMAND_ENV: &str = "HEGEL_SERVER_COMMAND";
 const HEGEL_SERVER_DIR: &str = ".hegel";
+const UV_NOT_FOUND_MESSAGE: &str = "\
+You are seeing this error message because hegel-rust tried to use `uv` to install \
+hegel-core, but could not find uv on the PATH.
+
+Hegel uses a Python server component called `hegel-core` to share core property-based \
+testing functionality across languages. There are two ways for Hegel to get hegel-core:
+
+* By default, Hegel looks for uv (https://docs.astral.sh/uv/) on the PATH, and \
+  uses uv to install hegel-core to a local `.hegel/venv` directory. We recommend this \
+  option. To continue, install uv: https://docs.astral.sh/uv/getting-started/installation/.
+* Alternatively, you can manage the installation of hegel-core yourself. After installing, \
+  setting the HEGEL_SERVER_COMMAND environment variable to your hegel-core binary path tells \
+  hegel-rust to use that hegel-core instead.
+
+See https://hegel.dev/reference/installation for more details.";
 static HEGEL_SERVER_COMMAND: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static SERVER_LOG_FILE: std::sync::OnceLock<Mutex<File>> = std::sync::OnceLock::new();
 
@@ -188,14 +203,7 @@ fn ensure_hegel_installed() -> Result<String, String> {
         .status();
     match &status {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!(
-                "Could not find `uv` on your PATH. Hegel requires uv to \
-                 automatically install its server component.\n\n\
-                 To fix this, either:\n\
-                 - Install uv: https://docs.astral.sh/uv/getting-started/installation/\n\
-                 - Or set {HEGEL_SERVER_COMMAND_ENV} to a hegel-core binary path\n\n\
-                 For more details, see: https://github.com/hegeldev/hegel-rust/blob/main/docs/installation.md"
-            ));
+            return Err(UV_NOT_FOUND_MESSAGE.to_string());
         }
         Err(e) => {
             return Err(format!("Failed to run `uv venv`: {e}"));
@@ -260,9 +268,7 @@ fn find_hegel() -> String {
         return override_path;
     }
     HEGEL_SERVER_COMMAND
-        .get_or_init(|| {
-            ensure_hegel_installed().unwrap_or_else(|e| panic!("Failed to ensure hegel: {e}"))
-        })
+        .get_or_init(|| ensure_hegel_installed().unwrap_or_else(|e| panic!("{e}")))
         .clone()
 }
 
