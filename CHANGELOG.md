@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 - 2026-03-24
+
+This patch improves the documentation for stateful testing.
+
 ## 0.2.0 - 2026-03-24
 
 This release makes a bunch of last-minute cleanups to places where our API obviously needed fixing that emerged during docs review.
