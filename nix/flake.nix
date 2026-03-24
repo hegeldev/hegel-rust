@@ -31,6 +31,7 @@
               pkgs.rustc
               pkgs.rustfmt
               pkgs.clippy
+              pkgs.rust-analyzer
               pkgs.just
             ];
             HEGEL_SERVER_COMMAND = pkgs.lib.getExe hegel.packages.${system}.default;
