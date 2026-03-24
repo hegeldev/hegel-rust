@@ -1,7 +1,64 @@
 //! Stateful (model-based) testing support.
 //!
-//! Define a state machine with [`StateMachine`], then test it with
-//! `#[hegel::state_machine]` or by calling [`run()`] directly.
+//! State machines are defined using the [`state_machine`](crate::state_machine) attribute macro.
+//! Methods annotated with `#[rule]` become rules (actions applied to the state machine) and
+//! methods annotated with `#[invariant]` become invariants (checked after each successful rule
+//! application). Rules must have signature `fn(&mut self, tc: TestCase)` and invariants must have
+//! signature `fn(&self, tc: TestCase)`.
+//!
+//! To run a state machine, call [`run()`] inside a Hegel test.
+//!
+//! Example:
+//! ```rust
+//! use hegel::TestCase;
+//! use hegel::generators::integers;
+//!
+//! struct IntegerStack {
+//!     stack: Vec<i32>,
+//! }
+//!
+//! #[hegel::state_machine]
+//! impl IntegerStack {
+//!     #[rule]
+//!     fn push(&mut self, tc: TestCase) {
+//!         let integers = integers::<i32>;
+//!         let element = tc.draw(integers());
+//!         self.stack.push(element);
+//!     }
+//!
+//!     #[rule]
+//!     fn pop(&mut self, _: TestCase) {
+//!         self.stack.pop();
+//!     }
+//!
+//!     #[rule]
+//!     fn pop_push(&mut self, tc: TestCase) {
+//!         let integers = integers::<i32>;
+//!         let element = tc.draw(integers());
+//!         let initial = self.stack.clone();
+//!         self.stack.push(element);
+//!         let popped = self.stack.pop().unwrap();
+//!         assert_eq!(popped, element);
+//!         assert_eq!(self.stack, initial);
+//!     }
+//!
+//!     #[rule]
+//!     fn push_pop(&mut self, tc: TestCase) {
+//!         let initial = self.stack.clone();
+//!         let element = self.stack.pop();
+//!         tc.assume(element.is_some());
+//!         let element = element.unwrap();
+//!         self.stack.push(element);
+//!         assert_eq!(self.stack, initial);
+//!     }
+//! }
+//!
+//! #[hegel::test]
+//! fn test_integer_stack(tc: TestCase) {
+//!     let stack = IntegerStack { stack: Vec::new() };
+//!     hegel::stateful::run(stack, tc);
+//! }
+//! ```
 
 use crate::TestCase;
 use crate::cbor_utils::cbor_map;
@@ -44,10 +101,7 @@ impl<M> Invariant<M> {
     }
 }
 
-/// A pool of named variables for stateful tests.
-///
-/// Variables can be added during rule execution and later drawn or consumed
-/// by other rules, enabling tests that build up and tear down state.
+/// A pool of previously generated values.
 pub struct Variables<T> {
     pool_id: i128,
     tc: TestCase,

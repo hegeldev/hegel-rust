@@ -212,6 +212,10 @@ pub use test_case::{__IsTestCase, __assert_is_test_case, generate_from_schema, g
 pub use antithesis::TestLocation;
 pub use hegel_macros::DefaultGenerator;
 pub use hegel_macros::composite;
+
+/// Derive a [`StateMachine`](crate::stateful::StateMachine) implementation from an `impl` block.
+///
+/// See the [`stateful`] module docs for more information.
 pub use hegel_macros::state_machine;
 pub use hegel_macros::test;
 #[doc(hidden)]
