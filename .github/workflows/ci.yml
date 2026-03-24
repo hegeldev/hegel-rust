@@ -226,6 +226,9 @@ jobs:
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust'
     needs: [lint, test, test-all-features, test-minimal-versions, docs, coverage, conformance, nix]
     runs-on: ubuntu-latest
+    # Only allow one release to be cut at a time (https://github.com/hegeldev/hegel-rust/issues/110)
+    concurrency:
+      group: release
     permissions:
       contents: write
       # id-token: "enables the workflow to request and use an OIDC token from GitHub's OIDC provider".
