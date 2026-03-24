@@ -217,4 +217,4 @@ pub use hegel_macros::state_machine;
 pub use hegel_macros::test;
 #[doc(hidden)]
 pub use runner::hegel;
-pub use runner::{HealthCheck, Hegel, Settings, Verbosity};
+pub use runner::{HealthCheck, Hegel, Settings, Verbosity2};

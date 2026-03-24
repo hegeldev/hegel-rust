@@ -1,7 +1,7 @@
 use crate::cbor_utils::{cbor_map, map_insert};
 use crate::generators::Generator;
 use crate::protocol::{Channel, Connection, SERVER_CRASHED_MESSAGE};
-use crate::runner::Verbosity;
+use crate::runner::Verbosity2;
 use ciborium::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -56,7 +56,7 @@ pub(crate) struct TestCaseGlobalData {
     #[allow(dead_code)]
     connection: Arc<Connection>,
     channel: Channel,
-    verbosity: Verbosity,
+    verbosity: Verbosity2,
     is_last_run: bool,
     test_aborted: bool,
 }
@@ -110,7 +110,7 @@ impl TestCase {
     pub(crate) fn new(
         connection: Arc<Connection>,
         channel: Channel,
-        verbosity: Verbosity,
+        verbosity: Verbosity2,
         is_last_run: bool,
     ) -> Self {
         let on_draw: Rc<dyn Fn(&str)> = if is_last_run {
@@ -269,7 +269,7 @@ impl TestCase {
         if global.test_aborted {
             return Err(StopTestError);
         }
-        let debug = *PROTOCOL_DEBUG || global.verbosity == Verbosity::Debug;
+        let debug = *PROTOCOL_DEBUG || global.verbosity == Verbosity2::Debug;
 
         let mut entries = vec![(
             Value::Text("command".to_string()),

@@ -322,7 +322,7 @@ impl HealthCheck {
 
 /// Controls how much output Hegel produces during test runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Verbosity {
+pub enum Verbosity2 {
     /// Suppress all output.
     Quiet,
     /// Default output level.
@@ -333,13 +333,13 @@ pub enum Verbosity {
     Debug,
 }
 
-impl Verbosity {
+impl Verbosity2 {
     fn as_str(&self) -> &'static str {
         match self {
-            Verbosity::Quiet => "quiet",
-            Verbosity::Normal => "normal",
-            Verbosity::Verbose => "verbose",
-            Verbosity::Debug => "debug",
+            Verbosity2::Quiet => "quiet",
+            Verbosity2::Normal => "normal",
+            Verbosity2::Verbose => "verbose",
+            Verbosity2::Debug => "debug",
         }
     }
 }
@@ -391,7 +391,7 @@ enum Database {
 #[derive(Debug, Clone)]
 pub struct Settings {
     test_cases: u64,
-    verbosity: Verbosity,
+    verbosity: Verbosity2,
     seed: Option<u64>,
     derandomize: bool,
     database: Database,
@@ -404,7 +404,7 @@ impl Settings {
         let in_ci = is_in_ci();
         Self {
             test_cases: 100,
-            verbosity: Verbosity::Normal,
+            verbosity: Verbosity2::Normal,
             seed: None,
             derandomize: in_ci,
             database: if in_ci {
@@ -423,7 +423,7 @@ impl Settings {
     }
 
     /// Set the verbosity level.
-    pub fn verbosity(mut self, verbosity: Verbosity) -> Self {
+    pub fn verbosity(mut self, verbosity: Verbosity2) -> Self {
         self.verbosity = verbosity;
         self
     }
@@ -547,7 +547,7 @@ where
         cmd.stdout(Stdio::from(log_file));
         cmd.stderr(Stdio::from(log_file2));
 
-        if self.settings.verbosity == Verbosity::Debug {
+        if self.settings.verbosity == Verbosity2::Debug {
             eprintln!("Starting hegel server: {:?}", cmd);
         }
 
@@ -633,7 +633,7 @@ where
             );
         }
 
-        if self.settings.verbosity == Verbosity::Debug {
+        if self.settings.verbosity == Verbosity2::Debug {
             eprintln!("Version negotiation complete");
         }
 
@@ -698,7 +698,7 @@ where
             .expect("Failed to receive run_test response");
         let _run_test_result: Value = cbor_decode(&run_test_response);
 
-        if verbosity == Verbosity::Debug {
+        if verbosity == Verbosity2::Debug {
             eprintln!("run_test response received");
         }
 
@@ -714,7 +714,7 @@ where
                 .and_then(as_text)
                 .expect("Expected event in payload");
 
-            if verbosity == Verbosity::Debug {
+            if verbosity == Verbosity2::Debug {
                 eprintln!("Received event: {:?}", event);
             }
 
@@ -792,7 +792,7 @@ where
             .and_then(as_u64)
             .unwrap_or(0);
 
-        if verbosity == Verbosity::Debug {
+        if verbosity == Verbosity2::Debug {
             eprintln!("Test done. interesting_test_cases={}", n_interesting);
         }
 
@@ -872,7 +872,7 @@ fn run_test_case<F: FnMut(TestCase)>(
     test_channel: Channel,
     test_fn: &mut F,
     is_final: bool,
-    verbosity: Verbosity,
+    verbosity: Verbosity2,
     got_interesting: &Arc<AtomicBool>,
 ) {
     // Create TestCase. The test function gets a clone (cheap Rc bump),
