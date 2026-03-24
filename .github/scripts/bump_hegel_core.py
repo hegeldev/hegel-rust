@@ -29,7 +29,9 @@ def get_releases_in_range(from_version: str, to_version: str) -> list[dict[str, 
         cwd=ROOT,
     )
     # --jq ".[]" with --paginate outputs one JSON object per line
-    releases = [json.loads(line) for line in result.stdout.strip().splitlines() if line.strip()]
+    releases = [
+        json.loads(line) for line in result.stdout.strip().splitlines() if line.strip()
+    ]
 
     from_parts = [int(x) for x in from_version.split(".")]
     to_parts = [int(x) for x in to_version.split(".")]
@@ -71,7 +73,14 @@ def bump(version: str) -> None:
     flake.write_text(text)
 
     subprocess.run(
-        ["nix", "--extra-experimental-features", "nix-command flakes", "flake", "lock", "./nix"],
+        [
+            "nix",
+            "--extra-experimental-features",
+            "nix-command flakes",
+            "flake",
+            "lock",
+            "./nix",
+        ],
         check=True,
         cwd=ROOT,
     )
@@ -82,7 +91,9 @@ def bump(version: str) -> None:
     changelog_sections = []
     for r in releases:
         url = f"https://github.com/{CORE_REPO}/releases/tag/v{r['version']}"
-        quoted = "\n".join(f"> {line}" if line else ">" for line in r["body"].splitlines())
+        quoted = "\n".join(
+            f"> {line}" if line else ">" for line in r["body"].splitlines()
+        )
         changelog_sections.append(f"{quoted}\n>\n> — [v{r['version']}]({url})")
 
     changes_text = "\n\n".join(changelog_sections)
@@ -108,7 +119,17 @@ def bump(version: str) -> None:
     # Only create a PR if one doesn't already exist for this branch.
     # If one exists, the force-push above already updated it.
     result = subprocess.run(
-        ["gh", "pr", "list", "--head", "ci/bump-hegel-core", "--state", "open", "--json", "number"],
+        [
+            "gh",
+            "pr",
+            "list",
+            "--head",
+            "ci/bump-hegel-core",
+            "--state",
+            "open",
+            "--json",
+            "number",
+        ],
         capture_output=True,
         text=True,
         cwd=ROOT,
@@ -117,7 +138,9 @@ def bump(version: str) -> None:
 
     title = f"Bump pinned `hegel-core` to `{version}`"
     bump_url = "https://github.com/hegeldev/hegel-rust/blob/main/.github/workflows/bump-hegel-core.yml"
-    core_url = "https://github.com/hegeldev/hegel-core/blob/main/.github/workflows/ci.yml"
+    core_url = (
+        "https://github.com/hegeldev/hegel-core/blob/main/.github/workflows/ci.yml"
+    )
     body = (
         f"This PR bumps our pinned `hegel-core` version to `v{version}`.\n"
         "\n"
@@ -128,7 +151,16 @@ def bump(version: str) -> None:
     )
     if has_open_pr:
         subprocess.run(
-            ["gh", "pr", "edit", "ci/bump-hegel-core", "--title", title, "--body", body],
+            [
+                "gh",
+                "pr",
+                "edit",
+                "ci/bump-hegel-core",
+                "--title",
+                title,
+                "--body",
+                body,
+            ],
             check=True,
             cwd=ROOT,
         )
