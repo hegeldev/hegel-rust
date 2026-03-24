@@ -258,16 +258,19 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
 
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+
+      - name: Install cargo-semver-checks
+        run: cargo install --locked cargo-semver-checks
+
       - name: Release
         if: steps.check.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           HEGEL_RELEASE_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: python .github/scripts/release.py release
-
-      - name: Install Rust
-        if: steps.check.outputs.skip != 'true'
-        run: rustup toolchain install stable --profile minimal
 
       - name: Authenticate with crates.io
         if: steps.check.outputs.skip != 'true'

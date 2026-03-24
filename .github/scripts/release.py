@@ -121,7 +121,16 @@ def check(base_ref: str) -> None:
         raise ValueError(box)
 
     # perform validation of RELEASE.md
-    parse_release_file(release_file)
+    release_type, _ = parse_release_file(release_file)
+
+    process = subprocess.run(
+        ["cargo", "semver-checks", "--workspace", "--release-type", release_type],
+        cwd=ROOT,
+    )
+    if process.returncode != 0:
+        raise ValueError(
+            f"`cargo-semver-checks` failed! Are you sure your release type ({release_type}) is correct?"
+        )
 
 
 def release() -> None:
@@ -176,6 +185,7 @@ def release() -> None:
         f"Bump to version {new_version} and update changelog\n\n[skip ci]",
         cwd=ROOT,
     )
+    subprocess.run(["cargo", "semver-checks", "--workspace"], check=True, cwd=ROOT)
     git("tag", f"v{new_version}", cwd=ROOT)
     git("push", "origin", "main", "--tags", cwd=ROOT)
 

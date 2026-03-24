@@ -19,6 +19,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+
+      - name: Install cargo-semver-checks
+        run: cargo install --locked cargo-semver-checks
+
       - name: Check release
         env:
           BASE_REF: ${{ github.base_ref }}
