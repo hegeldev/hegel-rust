@@ -42,7 +42,7 @@ jobs:
       - name: Check `cargo package`
         # creates a .crate for distribution and verifies it can build in isolation
         # see https://doc.rust-lang.org/cargo/commands/cargo-package.html
-        run: cargo package
+        run: cargo package --workspace
 
   test:
     name: test (${{ matrix.rust }})
