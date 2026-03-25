@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2 - 2026-03-25
+
+This is a no-op release that fixes some publishing problems and has no user-visible changes.
+
 ## 0.2.1 - 2026-03-24
 
 This patch improves the documentation for stateful testing.
