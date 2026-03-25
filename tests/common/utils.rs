@@ -211,6 +211,98 @@ where
     }
 }
 
+/// Find the minimal example from a generator that satisfies the given condition.
+///
+/// This runs a property test where any value satisfying `condition` causes a failure,
+/// then lets Hegel shrink the failing case to find the minimal counterexample.
+/// Analogous to Hypothesis's `minimal()` test helper.
+#[allow(dead_code)]
+pub fn minimal<T, G, P>(generator: G, condition: P) -> T
+where
+    G: Generator<T> + 'static,
+    P: Fn(&T) -> bool + 'static,
+    T: Send + Debug + 'static,
+{
+    Minimal::new(generator, condition).run()
+}
+
+#[allow(dead_code)]
+pub struct Minimal<T, G, P>
+where
+    G: Generator<T> + 'static,
+    P: Fn(&T) -> bool + 'static,
+    T: Send + Debug + 'static,
+{
+    generator: G,
+    condition: P,
+    test_cases: u64,
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl<T, G, P> Minimal<T, G, P>
+where
+    G: Generator<T> + 'static,
+    P: Fn(&T) -> bool + 'static,
+    T: Send + Debug + 'static,
+{
+    pub fn new(generator: G, condition: P) -> Self {
+        Self {
+            generator,
+            condition,
+            test_cases: 500,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn test_cases(mut self, n: u64) -> Self {
+        self.test_cases = n;
+        self
+    }
+
+    pub fn run(self) -> T {
+        let found: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
+        let found_clone = Arc::clone(&found);
+        let test_cases = self.test_cases;
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Hegel::new(move |tc| {
+                let value = tc.draw(&self.generator);
+                if (self.condition)(&value) {
+                    *found_clone.lock().unwrap() = Some(value);
+                    panic!("HEGEL_MINIMAL_FOUND");
+                }
+            })
+            .settings(
+                Settings::new()
+                    .test_cases(test_cases)
+                    .database(None)
+                    .derandomize(true),
+            )
+            .run();
+        }));
+
+        if let Err(payload) = result {
+            let msg = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(|s| s.as_str()));
+            let is_expected = msg.is_some_and(|s| s == "Property test failed: HEGEL_MINIMAL_FOUND");
+            if !is_expected {
+                std::panic::resume_unwind(payload);
+            }
+        }
+
+        let result = found.lock().unwrap().take();
+        result.unwrap_or_else(|| {
+            panic!(
+                "Could not find any examples satisfying the condition after {} attempts",
+                test_cases
+            )
+        })
+    }
+}
+
 #[allow(dead_code)]
 pub fn assert_no_examples<T, G, P>(generator: G, condition: P)
 where

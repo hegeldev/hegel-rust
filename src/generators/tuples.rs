@@ -3,12 +3,18 @@ use crate::cbor_utils::{cbor_array, cbor_map};
 use ciborium::Value;
 use std::marker::PhantomData;
 
-/// Creates a tuple generator from 2–12 component generators.
+/// Creates a tuple generator from 0–12 component generators.
 ///
 /// # Examples
 ///
 /// ```no_run
 /// use hegel::generators::{tuples, integers, booleans, text};
+///
+/// // 0-tuple (unit)
+/// let gen0 = tuples!();
+///
+/// // 1-tuple
+/// let gen1 = tuples!(integers::<i32>());
 ///
 /// // 2-tuple
 /// let gen2 = tuples!(integers::<i32>(), booleans());
@@ -18,6 +24,12 @@ use std::marker::PhantomData;
 /// ```
 #[macro_export]
 macro_rules! tuples {
+    () => {
+        $crate::generators::tuples0()
+    };
+    ($g1:expr $(,)?) => {
+        $crate::generators::tuples1($g1)
+    };
     ($g1:expr, $g2:expr $(,)?) => {
         $crate::generators::tuples2($g1, $g2)
     };
@@ -120,6 +132,26 @@ macro_rules! impl_tuple {
     };
 }
 
+/// Generator for the unit type `()`. Created by [`tuples0()`].
+pub struct Tuple0Generator;
+
+impl Generator<()> for Tuple0Generator {
+    fn do_draw(&self, _tc: &TestCase) {}
+}
+
+#[doc(hidden)]
+pub fn tuples0() -> Tuple0Generator {
+    Tuple0Generator
+}
+
+impl DefaultGenerator for () {
+    type Generator = Tuple0Generator;
+    fn default_generator() -> Self::Generator {
+        tuples0()
+    }
+}
+
+impl_tuple!(Tuple1Generator, tuples1, (0, gen1, G1, T1));
 impl_tuple!(
     Tuple2Generator,
     tuples2,

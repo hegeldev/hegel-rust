@@ -4,6 +4,39 @@ use common::utils::{assert_all_examples, find_any};
 use hegel::TestCase;
 use hegel::generators::{self, Generator};
 
+// tuples0 (unit)
+
+#[hegel::test]
+fn test_tuple0_basic(tc: TestCase) {
+    let _: () = tc.draw(generators::tuples!());
+}
+
+#[test]
+fn test_tuple0_all_examples() {
+    assert_all_examples(generators::tuples!(), |_| true);
+}
+
+#[test]
+fn test_tuple0_default_generator() {
+    assert_all_examples(generators::default::<()>(), |_| true);
+}
+
+// tuples1
+
+#[hegel::test]
+fn test_tuple1_basic(tc: TestCase) {
+    let (a,): (i32,) = tc.draw(generators::tuples!(generators::integers(),));
+    let _ = a;
+}
+
+#[hegel::test]
+fn test_tuple1_respects_bounds(tc: TestCase) {
+    let (a,): (i32,) = tc.draw(generators::tuples!(
+        generators::integers().min_value(0).max_value(10),
+    ));
+    assert!((0..=10).contains(&a));
+}
+
 // tuples2
 
 #[hegel::test]

@@ -54,8 +54,8 @@ pub use strings::{
 };
 #[doc(hidden)]
 pub use tuples::{
-    tuples2, tuples3, tuples4, tuples5, tuples6, tuples7, tuples8, tuples9, tuples10, tuples11,
-    tuples12,
+    tuples0, tuples1, tuples2, tuples3, tuples4, tuples5, tuples6, tuples7, tuples8, tuples9,
+    tuples10, tuples11, tuples12,
 };
 
 #[cfg(feature = "rand")]
