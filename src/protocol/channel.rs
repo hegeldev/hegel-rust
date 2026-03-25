@@ -1,12 +1,12 @@
-use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::mpsc::Receiver;
 
 use ciborium::Value;
 
 use super::connection::Connection;
 use super::packet::Packet;
 use crate::cbor_utils::{as_text, map_get};
+use std::sync::Arc;
 
 const CLOSE_CHANNEL_PAYLOAD: &[u8] = &[0xFE];
 const CLOSE_CHANNEL_MESSAGE_ID: u32 = (1u32 << 31) - 1;
@@ -14,33 +14,39 @@ const CLOSE_CHANNEL_MESSAGE_ID: u32 = (1u32 << 31) - 1;
 pub struct Channel {
     pub channel_id: u32,
     connection: Arc<Connection>,
-    next_message_id: AtomicU32,
-    responses: Mutex<HashMap<u32, Vec<u8>>>,
-    requests: Mutex<VecDeque<Packet>>,
-    closed: AtomicBool,
+    next_message_id: u32,
+    responses: HashMap<u32, Vec<u8>>,
+    requests: Vec<Packet>,
+    receiver: Receiver<Packet>,
+    closed: bool,
 }
 
 impl Channel {
-    pub(super) fn new(channel_id: u32, connection: Arc<Connection>) -> Self {
+    pub(super) fn new(
+        channel_id: u32,
+        connection: Arc<Connection>,
+        receiver: Receiver<Packet>,
+    ) -> Self {
         Self {
             channel_id,
             connection,
-            next_message_id: AtomicU32::new(1),
-            responses: Mutex::new(HashMap::new()),
-            requests: Mutex::new(VecDeque::new()),
-            closed: AtomicBool::new(false),
+            next_message_id: 1,
+            responses: HashMap::new(),
+            requests: Vec::new(),
+            receiver,
+            closed: false,
         }
     }
 
     /// Mark this channel as closed without sending a close packet.
     ///
     /// Used when the server has already closed its end (e.g. after overflow).
-    pub fn mark_closed(&self) {
-        self.closed.store(true, Ordering::SeqCst);
+    pub fn mark_closed(&mut self) {
+        self.closed = true;
     }
 
     fn check_closed(&self) -> std::io::Result<()> {
-        if self.closed.load(Ordering::SeqCst) {
+        if self.closed {
             Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "channel is closed",
@@ -51,9 +57,10 @@ impl Channel {
     }
 
     /// Send a request and return the message ID.
-    pub fn send_request(&self, payload: Vec<u8>) -> std::io::Result<u32> {
+    pub fn send_request(&mut self, payload: Vec<u8>) -> std::io::Result<u32> {
         self.check_closed()?;
-        let message_id = self.next_message_id.fetch_add(1, Ordering::SeqCst);
+        let message_id = self.next_message_id;
+        self.next_message_id += 1;
         let packet = Packet {
             channel: self.channel_id,
             message_id,
@@ -76,56 +83,53 @@ impl Channel {
     }
 
     /// Wait for a response to a previously sent request.
-    pub fn receive_reply(&self, message_id: u32) -> std::io::Result<Vec<u8>> {
+    pub fn receive_reply(&mut self, message_id: u32) -> std::io::Result<Vec<u8>> {
         loop {
-            // Check if we already have the response
-            {
-                let mut responses = self.responses.lock().unwrap();
-                if let Some(payload) = responses.remove(&message_id) {
-                    return Ok(payload);
-                }
+            if let Some(payload) = self.responses.remove(&message_id) {
+                return Ok(payload);
             }
 
             self.check_closed()?;
-
-            // Process one message from the connection
-            self.process_one_message()?;
+            self.receive_one_packet()?;
         }
     }
 
-    pub fn receive_request(&self) -> std::io::Result<(u32, Vec<u8>)> {
+    pub fn receive_request(&mut self) -> std::io::Result<(u32, Vec<u8>)> {
         loop {
-            {
-                let mut requests = self.requests.lock().unwrap();
-                if let Some(packet) = requests.pop_front() {
-                    return Ok((packet.message_id, packet.payload));
-                }
+            if !self.requests.is_empty() {
+                let packet = self.requests.remove(0);
+                return Ok((packet.message_id, packet.payload));
             }
 
             self.check_closed()?;
-
-            self.process_one_message()?;
+            self.receive_one_packet()?;
         }
     }
 
-    fn process_one_message(&self) -> std::io::Result<()> {
-        let packet = self
-            .connection
-            .receive_packet_for_channel(self.channel_id)?;
+    fn receive_one_packet(&mut self) -> std::io::Result<()> {
+        let packet = self.receiver.recv().map_err(|_| {
+            if self.connection.server_has_exited() {
+                std::io::Error::new(
+                    std::io::ErrorKind::ConnectionAborted,
+                    super::SERVER_CRASHED_MESSAGE,
+                )
+            } else {
+                std::io::Error::new(std::io::ErrorKind::ConnectionReset, "channel disconnected")
+            }
+        })?;
 
         if packet.is_reply {
-            let mut responses = self.responses.lock().unwrap();
-            responses.insert(packet.message_id, packet.payload);
+            self.responses.insert(packet.message_id, packet.payload);
         } else {
-            let mut requests = self.requests.lock().unwrap();
-            requests.push_back(packet);
+            self.requests.push(packet);
         }
 
         Ok(())
     }
 
-    pub fn close(&self) -> std::io::Result<()> {
+    pub fn close(&mut self) -> std::io::Result<()> {
         self.mark_closed();
+        self.connection.unregister_channel(self.channel_id);
         let packet = Packet {
             channel: self.channel_id,
             message_id: CLOSE_CHANNEL_MESSAGE_ID,
@@ -135,7 +139,7 @@ impl Channel {
         self.connection.send_packet(&packet)
     }
 
-    pub fn request_cbor(&self, message: &Value) -> std::io::Result<Value> {
+    pub fn request_cbor(&mut self, message: &Value) -> std::io::Result<Value> {
         let mut payload = Vec::new();
         ciborium::into_writer(message, &mut payload)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -160,5 +164,11 @@ impl Channel {
         }
 
         Ok(response)
+    }
+}
+
+impl Drop for Channel {
+    fn drop(&mut self) {
+        self.connection.unregister_channel(self.channel_id);
     }
 }

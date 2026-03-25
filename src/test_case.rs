@@ -260,7 +260,7 @@ impl TestCase {
         command: &str,
         payload: &Value,
     ) -> Result<Value, StopTestError> {
-        let global = self.global.borrow();
+        let mut global = self.global.borrow_mut();
 
         // If a previous request already triggered overflow/StopTest, the server
         // has closed this channel. Don't send another request—it would block.
@@ -338,7 +338,7 @@ impl TestCase {
     }
 
     pub(crate) fn send_mark_complete(&self, mark_complete: &Value) {
-        let global = self.global.borrow();
+        let mut global = self.global.borrow_mut();
         let _ = global.channel.request_cbor(mark_complete);
         let _ = global.channel.close();
     }
