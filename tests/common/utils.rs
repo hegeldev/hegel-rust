@@ -265,7 +265,7 @@ where
         let found_clone = Arc::clone(&found);
         let test_cases = self.test_cases;
 
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Hegel::new(move |tc| {
                 let value = tc.draw(&self.generator);
                 if (self.condition)(&value) {
@@ -281,6 +281,18 @@ where
             )
             .run();
         }));
+
+        if let Err(payload) = result {
+            let msg = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(|s| s.as_str()));
+            let is_expected = msg
+                .is_some_and(|s| s == "Property test failed: HEGEL_MINIMAL_FOUND");
+            if !is_expected {
+                std::panic::resume_unwind(payload);
+            }
+        }
 
         let result = found.lock().unwrap().take();
         result.unwrap_or_else(|| {

@@ -749,6 +749,7 @@ where
         }
 
         // Process final replay test cases (one per interesting example)
+        let mut final_panic_message: Option<String> = None;
         for _ in 0..n_interesting {
             let (event_id, event_payload) = test_channel
                 .receive_request()
@@ -768,7 +769,7 @@ where
                 .write_reply(event_id, cbor_encode(&ack_null))
                 .expect("Failed to ack final test_case");
 
-            run_test_case(
+            let msg = run_test_case(
                 connection,
                 test_case_channel,
                 &mut test_fn,
@@ -776,6 +777,10 @@ where
                 verbosity,
                 &got_interesting,
             );
+
+            if let Some(m) = msg {
+                final_panic_message = Some(m);
+            }
 
             if connection.server_has_exited() {
                 panic!("{}", SERVER_CRASHED_MESSAGE);
@@ -802,12 +807,15 @@ where
         }
 
         if test_failed {
-            panic!("Property test failed");
+            panic!(
+                "Property test failed: {}",
+                final_panic_message.as_deref().unwrap_or("unknown")
+            );
         }
     }
 }
 
-/// Run a single test case.
+/// Run a single test case. Returns the panic message if the test was interesting.
 fn run_test_case<F: FnMut(TestCase)>(
     connection: &Arc<Connection>,
     test_channel: Channel,
@@ -815,19 +823,19 @@ fn run_test_case<F: FnMut(TestCase)>(
     is_final: bool,
     verbosity: Verbosity,
     got_interesting: &Arc<AtomicBool>,
-) {
+) -> Option<String> {
     // Create TestCase. The test function gets a clone (cheap Rc bump),
     // so we retain access to the same underlying TestCaseData after the test runs.
     let tc = TestCase::new(Arc::clone(connection), test_channel, verbosity, is_final);
 
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
 
-    let (status, origin) = match &result {
-        Ok(()) => ("VALID".to_string(), None),
+    let (status, origin, interesting_msg) = match &result {
+        Ok(()) => ("VALID".to_string(), None, None),
         Err(e) => {
             let msg = panic_message(e);
             if msg == ASSUME_FAIL_STRING || msg == STOP_TEST_STRING {
-                ("INVALID".to_string(), None)
+                ("INVALID".to_string(), None, None)
             } else {
                 got_interesting.store(true, Ordering::SeqCst);
 
@@ -864,7 +872,7 @@ fn run_test_case<F: FnMut(TestCase)>(
                 }
 
                 let origin = format!("Panic at {}", location);
-                ("INTERESTING".to_string(), Some(origin))
+                ("INTERESTING".to_string(), Some(origin), Some(msg))
             }
         }
     };
@@ -883,6 +891,8 @@ fn run_test_case<F: FnMut(TestCase)>(
         };
         tc.send_mark_complete(&mark_complete);
     }
+
+    interesting_msg
 }
 
 /// Extract a message from a panic payload.
