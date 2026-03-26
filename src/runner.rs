@@ -93,19 +93,14 @@ impl HegelSession {
         let decoded = String::from_utf8_lossy(&response);
         let server_version = match decoded.strip_prefix("Hegel/") {
             Some(v) => v,
-            None => {
-                let _ = child.kill();
-                unreachable!("Bad handshake response: {decoded:?}");
-            }
+            None => unreachable!("Bad handshake response: {decoded:?}"),
         };
-        let version: f64 = server_version.parse().unwrap_or_else(|_| {
-            let _ = child.kill();
-            unreachable!("Bad version number: {server_version}");
-        });
+        let version: f64 = server_version
+            .parse()
+            .unwrap_or_else(|_| unreachable!("Bad version number: {server_version}"));
 
         let (lo, hi) = SUPPORTED_PROTOCOL_VERSIONS;
         if !(lo <= version && version <= hi) {
-            let _ = child.kill();
             unreachable!(
                 "hegel-rust supports protocol versions {lo} through {hi}, but \
                  the connected server is using protocol version {version}. Upgrading \
@@ -145,11 +140,17 @@ fn take_panic_info() -> Option<(String, String, String, Backtrace)> {
 /// Frame numbers are renumbered to start at 0.
 fn format_backtrace(bt: &Backtrace, full: bool) -> String {
     let backtrace_str = format!("{}", bt);
-
     if full {
         return backtrace_str;
     }
+    filter_backtrace(&backtrace_str)
+}
 
+/// Filter a backtrace string to "short" format.
+///
+/// Keeps only frames between `__rust_end_short_backtrace` and
+/// `__rust_begin_short_backtrace` markers, renumbering from 0.
+fn filter_backtrace(backtrace_str: &str) -> String {
     // Filter to short backtrace: keep lines between the markers
     // Frame groups look like:
     //    N: function::name
@@ -950,6 +951,21 @@ mod tests {
     }
 
     #[test]
+    fn test_is_in_ci_detects_ci_env() {
+        // Save and set CI var to trigger the CI path
+        let original = std::env::var("CI").ok();
+        // SAFETY: test runs single-threaded via --test-threads=1 or is the only
+        // test that touches CI env var.
+        unsafe { std::env::set_var("CI", "1") };
+        assert!(is_in_ci());
+        // Restore
+        match original {
+            Some(v) => unsafe { std::env::set_var("CI", v) },
+            None => unsafe { std::env::remove_var("CI") },
+        }
+    }
+
+    #[test]
     fn test_format_backtrace_full_returns_unmodified() {
         let bt = Backtrace::force_capture();
         let full = format_backtrace(&bt, true);
@@ -967,6 +983,66 @@ mod tests {
             "short backtrace should start at frame 0:\n{}",
             short
         );
+    }
+
+    #[test]
+    fn test_filter_backtrace_with_markers() {
+        let input = "\
+   0: std::backtrace_rs::backtrace::trace
+             at /rustlib/src/lib.rs:117:9
+   1: std::sys::backtrace::__rust_end_short_backtrace
+             at /rustlib/src/lib.rs:174:18
+   2: my_crate::my_function
+             at /src/main.rs:42:5
+   3: my_crate::another_function
+             at /src/main.rs:88:13
+   4: std::sys::backtrace::__rust_begin_short_backtrace
+             at /rustlib/src/lib.rs:155:18
+   5: core::ops::function::FnOnce::call_once
+             at /core/src/ops/function.rs:250:5";
+
+        let result = filter_backtrace(input);
+        // Should contain renumbered frames 2-3, starting at 0
+        assert!(result.contains("   0: my_crate::my_function"));
+        assert!(result.contains("   1: my_crate::another_function"));
+        // Should NOT contain the marker frames
+        assert!(!result.contains("__rust_end_short_backtrace"));
+        assert!(!result.contains("__rust_begin_short_backtrace"));
+    }
+
+    #[test]
+    fn test_filter_backtrace_no_markers() {
+        let input = "\
+   0: my_func
+             at /src/lib.rs:10:5
+   1: other_func
+             at /src/lib.rs:20:5";
+
+        let result = filter_backtrace(input);
+        // With no markers, returns all frames renumbered
+        assert!(result.contains("   0: my_func"));
+        assert!(result.contains("   1: other_func"));
+    }
+
+    #[test]
+    fn test_filter_backtrace_preserves_non_frame_lines() {
+        let input = "\
+   0: my_func
+             at /src/lib.rs:10:5
+note: some detail here";
+
+        let result = filter_backtrace(input);
+        assert!(result.contains("note: some detail here"));
+    }
+
+    #[test]
+    fn test_filter_backtrace_handles_line_without_colon() {
+        // A frame number line without a colon (unusual but handled)
+        let input = "   0 my_func_no_colon\n   1: normal_frame";
+
+        let result = filter_backtrace(input);
+        // The line without colon should be preserved as-is
+        assert!(result.contains("my_func_no_colon"));
     }
 
     #[test]
