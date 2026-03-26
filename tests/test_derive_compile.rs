@@ -41,6 +41,23 @@ fn my_test(tc: hegel::TestCase) {
 }
 
 #[test]
+fn test_hegel_test_rejects_invalid_attribute_args() {
+    TempRustProject::new()
+        .test_file(
+            "bad_attr.rs",
+            r#"
+#[hegel::test(not a = valid expression here)]
+fn my_test(tc: hegel::TestCase) {
+    let _ = tc.draw(hegel::generators::booleans());
+}
+"#,
+        )
+        .main_file("fn main() {}")
+        .expect_failure("expected")
+        .cargo_test(&[]);
+}
+
+#[test]
 fn test_derive_rejects_tuple_struct() {
     TempRustProject::new()
         .main_file(
