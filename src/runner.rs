@@ -95,18 +95,18 @@ impl HegelSession {
             Some(v) => v,
             None => {
                 let _ = child.kill();
-                panic!("Bad handshake response: {decoded:?}");
+                unreachable!("Bad handshake response: {decoded:?}");
             }
         };
         let version: f64 = server_version.parse().unwrap_or_else(|_| {
             let _ = child.kill();
-            panic!("Bad version number: {server_version}");
+            unreachable!("Bad version number: {server_version}");
         });
 
         let (lo, hi) = SUPPORTED_PROTOCOL_VERSIONS;
         if !(lo <= version && version <= hi) {
             let _ = child.kill();
-            panic!(
+            unreachable!(
                 "hegel-rust supports protocol versions {lo} through {hi}, but \
                  the connected server is using protocol version {version}. Upgrading \
                  hegel-rust or downgrading hegel-core might help."
@@ -720,7 +720,7 @@ where
                     break;
                 }
                 _ => {
-                    panic!("unknown event: {}", event_type);
+                    unreachable!("unknown event: {}", event_type);
                 }
             }
         }
@@ -930,4 +930,60 @@ fn cbor_encode(value: &Value) -> Vec<u8> {
 /// Decode CBOR bytes to a ciborium::Value.
 fn cbor_decode(bytes: &[u8]) -> Value {
     ciborium::from_reader(bytes).expect("CBOR decoding failed")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_settings_default_matches_new() {
+        let default_settings = Settings::default();
+        let new_settings = Settings::new();
+        assert_eq!(default_settings.test_cases, new_settings.test_cases);
+    }
+
+    #[test]
+    fn test_settings_verbosity_setter() {
+        let s = Settings::new().verbosity(Verbosity::Debug);
+        assert_eq!(s.verbosity, Verbosity::Debug);
+    }
+
+    #[test]
+    fn test_format_backtrace_full_returns_unmodified() {
+        let bt = Backtrace::force_capture();
+        let full = format_backtrace(&bt, true);
+        let expected = format!("{}", bt);
+        assert_eq!(full, expected);
+    }
+
+    #[test]
+    fn test_format_backtrace_short_renumbers_frames() {
+        let bt = Backtrace::force_capture();
+        let short = format_backtrace(&bt, false);
+        // The short format should start with frame 0
+        assert!(
+            short.contains("   0:"),
+            "short backtrace should start at frame 0:\n{}",
+            short
+        );
+    }
+
+    #[test]
+    fn test_panic_message_from_str() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new("test-panic-msg");
+        assert_eq!(panic_message(&payload), "test-panic-msg");
+    }
+
+    #[test]
+    fn test_panic_message_from_string() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(String::from("string-panic-42"));
+        assert_eq!(panic_message(&payload), "string-panic-42");
+    }
+
+    #[test]
+    fn test_panic_message_unknown_type() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(42i32);
+        assert_eq!(panic_message(&payload), "Unknown panic");
+    }
 }

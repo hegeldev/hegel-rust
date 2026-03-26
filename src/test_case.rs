@@ -367,7 +367,7 @@ pub fn generate_from_schema<T: serde::de::DeserializeOwned>(tc: &TestCase, schem
 pub fn deserialize_value<T: serde::de::DeserializeOwned>(raw: Value) -> T {
     let hv = value::HegelValue::from(raw.clone());
     value::from_hegel_value(hv).unwrap_or_else(|e| {
-        panic!("Failed to deserialize value: {}\nValue: {:?}", e, raw);
+        unreachable!("Failed to deserialize value: {}\nValue: {:?}", e, raw);
     })
 }
 
@@ -414,7 +414,7 @@ impl<'a> Collection<'a> {
             };
             let name = match response {
                 Value::Text(s) => s,
-                _ => panic!(
+                _ => unreachable!(
                     "Expected text response from new_collection, got {:?}",
                     response
                 ),
@@ -442,7 +442,7 @@ impl<'a> Collection<'a> {
         };
         let result = match response {
             Value::Bool(b) => b,
-            _ => panic!("Expected bool from collection_more, got {:?}", response),
+            _ => unreachable!("Expected bool from collection_more, got {:?}", response),
         };
         if !result {
             self.finished = true;
