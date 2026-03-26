@@ -1,0 +1,23 @@
+name: Install tools
+inputs:
+  tools:
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: parse
+      env:
+        TOOLS: ${{ inputs.tools }}
+      run: |
+        for tool in $TOOLS; do
+          case "$tool" in
+            just|uv) echo "$tool=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Unknown tool: $tool"; exit 1 ;;
+          esac
+        done
+      shell: bash
+    - if: steps.parse.outputs.just == 'true'
+      run: sudo apt-get update && sudo apt-get install -y just
+      shell: bash
+    - if: steps.parse.outputs.uv == 'true'
+      uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6

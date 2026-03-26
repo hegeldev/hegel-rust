@@ -1,43 +1,57 @@
-# don't print bash comments as output during `just` invocation
+# `just` prints bash comments in stdout by default. this suppresses that
 set ignore-comments := true
 
-check: lint docs test test-all-features
-
-docs:
-    cargo clean --doc && cargo doc --open --all-features --no-deps
-
-test:
+check-tests:
     RUST_BACKTRACE=1 cargo test
 
-test-all-features:
+check-tests-all-features:
     RUST_BACKTRACE=1 cargo test --all-features
+
+check-tests-minimal-versions:
+    # This is an annoyingly specific check and feels like it overly couples CI concerns and check
+    # concerns. I don't have a better proposal right now.
+
+    # --locked tells cargo not to update the lockfile. this makes sure we use the lockfile we just generated
+    # and don't regenerate it for non-minimal versions.
+    HEGEL_RUNNING_TESTS_WITH_RUST_NIGHTLY=1 RUST_BACKTRACE=1 cargo test --locked --all-features
 
 format:
     cargo fmt
     # also run format-nix if we have nix installed
     @which nix && just format-nix || true
 
-check-format:
-    cargo fmt --check
-
 format-nix:
     nix run nixpkgs#nixfmt -- nix/flake.nix
+
+check-format:
+    cargo fmt --check
 
 check-format-nix:
     nix run nixpkgs#nixfmt -- --check nix/flake.nix
 
-lint:
-    cargo fmt --check
+check-clippy:
     cargo clippy --all-features --tests -- -D warnings
-    RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
 
-coverage:
+check-docs:
+    cargo +nightly docs-rs
+
+docs:
+    cargo +nightly docs-rs --open
+
+check-lint: check-format check-clippy check-docs
+
+check-coverage:
     # requires cargo-llvm-cov and llvm-tools-preview
     RUST_BACKTRACE=1 cargo llvm-cov --all-features --fail-under-lines 30 --show-missing-lines
 
-build-conformance:
-    cargo build --release --manifest-path tests/conformance/rust/Cargo.toml
+check-conformance:
+    cargo build --manifest-path tests/conformance/rust/Cargo.toml
+    uv run --with hegel-core --with pytest --with hypothesis \
+        pytest tests/conformance/test_conformance.py
 
-conformance: build-conformance
-    uv run --with hegel-core \
-        --with pytest --with hypothesis pytest tests/conformance/test_conformance.py
+# these aliases are provided as ux improvements for local developers. CI should use the longer
+# forms.
+test: check-tests
+coverage: check-coverage
+lint: check-lint
+check: check-lint check-tests check-tests-all-features

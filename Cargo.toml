@@ -49,4 +49,6 @@ antithesis = ["dep:serde_json"]
 
 [package.metadata.docs.rs]
 all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
+# -D warnings means "deny warnings", which actually means "turn warnings into errors". Have
+# we mentioned naming things is hard?
+rustdoc-args = ["--cfg", "docsrs", "-D", "warnings"]
