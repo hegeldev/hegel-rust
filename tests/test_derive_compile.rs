@@ -41,6 +41,23 @@ fn my_test(tc: hegel::TestCase) {
 }
 
 #[test]
+fn test_hegel_test_on_non_function() {
+    TempRustProject::new()
+        .test_file(
+            "not_fn.rs",
+            r#"
+#[hegel::test]
+struct NotAFunction {
+    x: i32,
+}
+"#,
+        )
+        .main_file("fn main() {}")
+        .expect_failure("expected")
+        .cargo_test(&[]);
+}
+
+#[test]
 fn test_hegel_test_rejects_invalid_attribute_args() {
     TempRustProject::new()
         .test_file(

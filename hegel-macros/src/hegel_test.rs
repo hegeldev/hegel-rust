@@ -26,13 +26,6 @@ impl Parse for TestArgs {
         let mut settings = None;
         let mut settings_args = Vec::new();
 
-        if input.is_empty() {
-            return Ok(TestArgs {
-                settings,
-                settings_args,
-            });
-        }
-
         // check if the first arg is a settings expression or a named settingArg
         let is_named_arg = input.peek(Ident) && input.peek2(Token![=]);
         if !is_named_arg {
