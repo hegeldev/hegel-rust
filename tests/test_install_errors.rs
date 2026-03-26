@@ -17,18 +17,19 @@ fn main() {
         .join(":");
     std::env::set_var("PATH", &filtered);
 
-    // Also remove any cached install so it actually tries uv
-    let _ = std::fs::remove_dir_all(".hegel");
-
     hegel::hegel(|tc| {
         let _ = tc.draw(hegel::generators::booleans());
     });
 }
 "#;
 
+    // Point XDG_CACHE_HOME at an empty temp dir so no cached install is found.
+    let empty_cache = tempfile::tempdir().unwrap();
+
     TempRustProject::new()
         .main_file(code)
         .env_remove("HEGEL_SERVER_COMMAND")
+        .env("XDG_CACHE_HOME", empty_cache.path().to_str().unwrap())
         .expect_failure("You are seeing this error message because hegel-rust tried to use `uv` to install hegel-core")
         .cargo_run(&[]);
 }

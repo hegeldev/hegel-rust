@@ -1496,10 +1496,7 @@ mod tests {
         let old_xdg = std::env::var("XDG_CACHE_HOME").ok();
         unsafe { set_env("XDG_CACHE_HOME", dir.path()) };
 
-        let version_dir = dir
-            .path()
-            .join("hegel/versions")
-            .join(HEGEL_SERVER_VERSION);
+        let version_dir = dir.path().join("hegel/versions").join(HEGEL_SERVER_VERSION);
         let venv_dir = version_dir.join("venv");
         std::fs::create_dir_all(venv_dir.join("bin")).unwrap();
         std::fs::write(venv_dir.join("bin/hegel"), "fake").unwrap();
@@ -1531,10 +1528,7 @@ mod tests {
 
         // It should fail (no uv) but the version directory should have been created.
         assert!(result.is_err());
-        let version_dir = dir
-            .path()
-            .join("hegel/versions")
-            .join(HEGEL_SERVER_VERSION);
+        let version_dir = dir.path().join("hegel/versions").join(HEGEL_SERVER_VERSION);
         assert!(version_dir.is_dir());
     }
 
