@@ -181,6 +181,24 @@ fn test_binary_with_max_size(tc: TestCase) {
 }
 
 #[hegel::test]
+fn test_vec_with_non_basic_elements(tc: TestCase) {
+    // flat_map produces a generator without as_basic(), forcing Vec through the
+    // Collection-based fallback path (new_collection / collection_more protocol)
+    let vec: Vec<String> = tc.draw(
+        generators::vecs(
+            generators::integers::<usize>()
+                .min_value(1)
+                .max_value(3)
+                .flat_map(|n| generators::text().min_size(n).max_size(n)),
+        )
+        .min_size(1)
+        .max_size(5),
+    );
+    assert!(!vec.is_empty());
+    assert!(vec.len() <= 5);
+}
+
+#[hegel::test]
 fn test_hashset_with_non_basic_elements(tc: TestCase) {
     // flat_map produces a generator without as_basic(), forcing the HashSet fallback path
     let set: HashSet<String> = tc.draw(
@@ -229,6 +247,27 @@ fn test_fixed_dicts_basic(tc: TestCase) {
     // dict is a ciborium::Value::Map
     if let ciborium::Value::Map(entries) = dict {
         assert_eq!(entries.len(), 2);
+    } else {
+        panic!("expected Value::Map, got {:?}", dict);
+    }
+}
+
+#[hegel::test]
+fn test_fixed_dicts_with_non_basic_field(tc: TestCase) {
+    // Use flat_map to force the FixedDict non-basic fallback path
+    let dict = tc.draw(
+        generators::fixed_dicts()
+            .field(
+                "dynamic_text",
+                generators::integers::<usize>()
+                    .min_value(1)
+                    .max_value(3)
+                    .flat_map(|n| generators::text().min_size(n).max_size(n)),
+            )
+            .build(),
+    );
+    if let ciborium::Value::Map(entries) = dict {
+        assert_eq!(entries.len(), 1);
     } else {
         panic!("expected Value::Map, got {:?}", dict);
     }

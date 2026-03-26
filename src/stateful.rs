@@ -218,7 +218,7 @@ fn check_invariants(m: &impl StateMachine, tc: &TestCase) {
 pub fn run(mut m: impl StateMachine, tc: TestCase) {
     let rules = m.rules();
     if rules.is_empty() {
-        panic!("Cannot run a machine with no rules.");
+        unreachable!("Cannot run a machine with no rules.");
     }
 
     let rule_index = integers::<usize>().min_value(0).max_value(rules.len() - 1);
