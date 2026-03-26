@@ -233,6 +233,94 @@ fn test_hashmap_with_non_basic_keys(tc: TestCase) {
     assert!(map.len() <= 5);
 }
 
+// Non-basic collection tests with small domains to stress min_size enforcement
+// and duplicate rejection through the Collection protocol.
+
+#[hegel::test]
+fn test_vec_non_basic_min_size_respected(tc: TestCase) {
+    // Small domain (0..4) via flat_map to force non-basic path
+    let vec: Vec<i32> = tc.draw(
+        generators::vecs(
+            generators::integers::<i32>()
+                .min_value(0)
+                .max_value(3)
+                .flat_map(|n| generators::integers::<i32>().min_value(n).max_value(n)),
+        )
+        .min_size(3)
+        .max_size(8),
+    );
+    assert!(
+        vec.len() >= 3,
+        "min_size 3 not respected: got {}",
+        vec.len()
+    );
+    assert!(vec.len() <= 8);
+}
+
+#[hegel::test]
+fn test_hashset_non_basic_small_domain_min_size(tc: TestCase) {
+    // Elements from domain {0,1,2,3,4} via flat_map, min_size=3
+    // This forces many duplicate rejections through collection_reject
+    let set: HashSet<i32> = tc.draw(
+        generators::hashsets(
+            generators::integers::<i32>()
+                .min_value(0)
+                .max_value(4)
+                .flat_map(|n| generators::integers::<i32>().min_value(n).max_value(n)),
+        )
+        .min_size(3)
+        .max_size(5),
+    );
+    assert!(
+        set.len() >= 3,
+        "min_size 3 not respected: got {} elements: {:?}",
+        set.len(),
+        set
+    );
+    assert!(set.len() <= 5);
+    assert!(set.iter().all(|&v| (0..=4).contains(&v)));
+}
+
+#[hegel::test]
+fn test_hashmap_non_basic_small_domain_min_size(tc: TestCase) {
+    // Keys from domain {0,1,2,3,4} via flat_map, min_size=3
+    let map: HashMap<i32, bool> = tc.draw(
+        generators::hashmaps(
+            generators::integers::<i32>()
+                .min_value(0)
+                .max_value(4)
+                .flat_map(|n| generators::integers::<i32>().min_value(n).max_value(n)),
+            generators::booleans(),
+        )
+        .min_size(3)
+        .max_size(5),
+    );
+    assert!(
+        map.len() >= 3,
+        "min_size 3 not respected: got {} entries: {:?}",
+        map.len(),
+        map
+    );
+    assert!(map.len() <= 5);
+    assert!(map.keys().all(|&k| (0..=4).contains(&k)));
+}
+
+#[hegel::test]
+fn test_hashset_non_basic_exact_domain_equals_min_size(tc: TestCase) {
+    // Domain has exactly 3 values, min_size=3 — must produce all 3
+    let set: HashSet<i32> = tc.draw(
+        generators::hashsets(
+            generators::integers::<i32>()
+                .min_value(0)
+                .max_value(2)
+                .flat_map(|n| generators::integers::<i32>().min_value(n).max_value(n)),
+        )
+        .min_size(3),
+    );
+    assert_eq!(set.len(), 3);
+    assert!(set.contains(&0) && set.contains(&1) && set.contains(&2));
+}
+
 #[hegel::test]
 fn test_fixed_dicts_basic(tc: TestCase) {
     let dict = tc.draw(
