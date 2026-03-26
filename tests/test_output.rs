@@ -2,7 +2,7 @@ mod common;
 
 use common::project::TempRustProject;
 use common::utils::assert_matches_regex;
-use hegel::generators;
+use hegel::generators::{self, Generator};
 use hegel::{Hegel, Settings};
 
 const FAILING_TEST_CODE: &str = r#"
@@ -185,20 +185,24 @@ fn test_in_process_failure_with_debug_verbosity() {
     .run();
 }
 
-/// Force the StopTest/overflow path by drawing heavily from nested generators
-/// in a property that fails. During shrinking, the server will truncate data,
-/// causing StopTest errors in start_span and collection operations.
+/// Force the StopTest/overflow path by drawing heavily from span-based
+/// generators (flat_map) in a property that fails. During shrinking, the
+/// server will truncate data, causing StopTest errors in start_span and
+/// collection operations.
 #[test]
 #[should_panic(expected = "Property test failed")]
 fn test_overflow_exercises_stop_test_paths() {
     Hegel::new(|tc| {
-        // Draw many nested values to consume server data budget
-        for _ in 0..20 {
-            let inner: Vec<Vec<i32>> = tc.draw(
+        // Use flat_map to force span-based generation (not schema-based).
+        // This means start_span/stop_span are called, and during shrinking
+        // the server may exhaust data mid-span, triggering StopTest.
+        for _ in 0..10 {
+            let inner: Vec<String> = tc.draw(
                 generators::vecs(
-                    generators::vecs(generators::integers::<i32>())
-                        .min_size(1)
-                        .max_size(5),
+                    generators::integers::<usize>()
+                        .min_value(1)
+                        .max_value(5)
+                        .flat_map(|n| generators::text().min_size(n).max_size(n)),
                 )
                 .min_size(1)
                 .max_size(5),
