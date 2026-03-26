@@ -12,6 +12,17 @@ pub(crate) fn with_test_context<R>(f: impl FnOnce() -> R) -> R {
     result
 }
 
+/// Extract a message from a panic payload.
+pub(crate) fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "Unknown panic".to_string()
+    }
+}
+
 /// Returns `true` if we are currently inside a Hegel test context.
 ///
 /// This can be used to conditionally execute code that depends on a

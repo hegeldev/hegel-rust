@@ -62,6 +62,7 @@
 
 use crate::TestCase;
 use crate::cbor_utils::cbor_map;
+use crate::control::panic_message;
 use crate::generators::integers;
 use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING};
 use ciborium::Value;
@@ -193,17 +194,6 @@ pub trait StateMachine {
     fn rules(&self) -> Vec<Rule<Self>>;
     /// Invariants checked after each successful rule application.
     fn invariants(&self) -> Vec<Invariant<Self>>;
-}
-
-// TODO: factor out (shared with runner.rs)
-fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(s) = payload.downcast_ref::<&str>() {
-        s.to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "Unknown panic".to_string()
-    }
 }
 
 fn check_invariants(m: &impl StateMachine, tc: &TestCase) {

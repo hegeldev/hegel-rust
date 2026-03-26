@@ -2,6 +2,8 @@ mod common;
 
 use common::project::TempRustProject;
 use common::utils::assert_matches_regex;
+use hegel::generators;
+use hegel::{Hegel, Settings};
 
 const FAILING_TEST_CODE: &str = r#"
 use hegel::generators;
@@ -122,4 +124,34 @@ fn test_failing_test_output_with_full_backtrace() {
         "Actual: {}",
         output.stderr
     );
+}
+
+/// Exercise the in-process failure path to cover the backtrace output,
+/// panic info capture, and test result handling in run_test_case.
+#[test]
+#[should_panic(expected = "Property test failed")]
+fn test_in_process_failure_exercises_backtrace_path() {
+    Hegel::new(|tc| {
+        let x: i32 = tc.draw(generators::integers());
+        panic!("intentional-test-failure-42: {}", x);
+    })
+    .settings(Settings::new().test_cases(10).derandomize(true))
+    .run();
+}
+
+/// Exercise the verbosity debug path
+#[test]
+#[should_panic(expected = "Property test failed")]
+fn test_in_process_failure_with_debug_verbosity() {
+    Hegel::new(|tc| {
+        let _: bool = tc.draw(generators::booleans());
+        panic!("debug-verbosity-test-failure");
+    })
+    .settings(
+        Settings::new()
+            .test_cases(5)
+            .derandomize(true)
+            .verbosity(hegel::Verbosity::Debug),
+    )
+    .run();
 }

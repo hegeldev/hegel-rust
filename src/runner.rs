@@ -1,5 +1,5 @@
 use crate::antithesis::{TestLocation, is_running_in_antithesis};
-use crate::control::{currently_in_test_context, with_test_context};
+use crate::control::{currently_in_test_context, panic_message, with_test_context};
 use crate::protocol::{Channel, Connection, HANDSHAKE_STRING, SERVER_CRASHED_MESSAGE};
 use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING, TestCase};
 use ciborium::Value;
@@ -917,17 +917,6 @@ fn run_test_case<F: FnMut(TestCase)>(
     tc_result
 }
 
-/// Extract a message from a panic payload.
-fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(s) = payload.downcast_ref::<&str>() {
-        s.to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "Unknown panic".to_string()
-    }
-}
-
 /// Encode a ciborium::Value to CBOR bytes.
 fn cbor_encode(value: &Value) -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -944,6 +933,7 @@ fn cbor_decode(bytes: &[u8]) -> Value {
 mod tests {
     use super::*;
     use crate::ENV_TEST_MUTEX;
+    use crate::control::panic_message;
 
     #[test]
     fn test_settings_default_matches_new() {
@@ -976,8 +966,53 @@ mod tests {
     }
 
     #[test]
+    fn test_install_hegel_server_successful_install() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        let server_dir = dir.path().to_str().unwrap();
+
+        // Create a mock uv that creates a venv with a fake hegel binary
+        let mock_dir = tempfile::TempDir::new().unwrap();
+        let mock_uv = mock_dir.path().join("uv");
+        // The mock creates the venv dir and places a fake hegel binary
+        std::fs::write(
+            &mock_uv,
+            "#!/bin/sh\ncase \"$1\" in\n  venv) mkdir -p \"$3/bin\"; touch \"$3/bin/hegel\"; chmod +x \"$3/bin/hegel\";;\nesac\nexit 0\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&mock_uv, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        unsafe {
+            std::env::set_var(
+                "PATH",
+                format!("{}:{}", mock_dir.path().display(), original_path),
+            )
+        };
+
+        let result = install_hegel_server(server_dir, "42.0.0");
+
+        unsafe { std::env::set_var("PATH", &original_path) };
+
+        assert!(result.is_ok());
+        let bin_path = result.unwrap();
+        assert!(bin_path.ends_with("/bin/hegel"));
+
+        // Verify version file was written
+        let version_file = format!("{server_dir}/venv/hegel-version");
+        assert_eq!(
+            std::fs::read_to_string(&version_file).unwrap().trim(),
+            "42.0.0"
+        );
+    }
+
+    #[test]
     fn test_install_hegel_server_uv_not_found() {
-        let _guard = ENV_TEST_MUTEX.lock().unwrap();
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::TempDir::new().unwrap();
         let server_dir = dir.path().to_str().unwrap();
 
@@ -998,7 +1033,7 @@ mod tests {
 
     #[test]
     fn test_install_hegel_server_uv_venv_fails() {
-        let _guard = ENV_TEST_MUTEX.lock().unwrap();
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::TempDir::new().unwrap();
         let server_dir = dir.path().to_str().unwrap();
 
@@ -1031,7 +1066,7 @@ mod tests {
 
     #[test]
     fn test_install_hegel_server_pip_install_fails() {
-        let _guard = ENV_TEST_MUTEX.lock().unwrap();
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::TempDir::new().unwrap();
         let server_dir = dir.path().to_str().unwrap();
 
@@ -1068,7 +1103,7 @@ mod tests {
 
     #[test]
     fn test_install_hegel_server_binary_missing_after_install() {
-        let _guard = ENV_TEST_MUTEX.lock().unwrap();
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::TempDir::new().unwrap();
         let server_dir = dir.path().to_str().unwrap();
 
@@ -1104,12 +1139,17 @@ mod tests {
     }
 
     #[test]
-    fn test_is_in_ci_detects_ci_env() {
-        let _guard = ENV_TEST_MUTEX.lock().unwrap();
+    fn test_is_in_ci_detects_ci_env_and_disables_database() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let original = std::env::var("CI").ok();
         // SAFETY: serialized by ENV_TEST_MUTEX
         unsafe { std::env::set_var("CI", "1") };
         assert!(is_in_ci());
+
+        // Settings::new() while CI is set should use Database::Disabled
+        let settings = Settings::new();
+        assert!(settings.derandomize);
+
         // Restore
         match original {
             Some(v) => unsafe { std::env::set_var("CI", v) },
