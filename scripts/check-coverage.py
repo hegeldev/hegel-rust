@@ -167,6 +167,17 @@ class UncoveredLine:
         return False
 
 
+def get_target_triple() -> str:
+    """Get the current Rust target triple."""
+    result = subprocess.run(
+        ["rustc", "-vV"], capture_output=True, text=True,
+    )
+    for line in result.stdout.splitlines():
+        if line.startswith("host:"):
+            return line.split(":")[1].strip()
+    return "unknown"
+
+
 def run_coverage() -> Path:
     """Run coverage analysis and generate LCOV report."""
     print("Running coverage analysis...")
@@ -184,13 +195,10 @@ def run_coverage() -> Path:
         print("ERROR: Failed to clean coverage data", file=sys.stderr)
         sys.exit(1)
 
-    # Run tests with coverage and generate LCOV report
+    # Phase 1: Run tests and collect profraw data (no report yet)
     print("  Running tests with coverage...")
     result = subprocess.run(
-        [
-            "cargo", "llvm-cov", "--all-features",
-            "--lcov", f"--output-path={lcov_path}",
-        ],
+        ["cargo", "llvm-cov", "--no-report", "--all-features"],
         capture_output=True, text=True,
     )
     if result.stdout:
@@ -200,8 +208,94 @@ def run_coverage() -> Path:
             print(result.stderr, file=sys.stderr)
         print("ERROR: Coverage run failed", file=sys.stderr)
         sys.exit(1)
-
     print("  Tests passed")
+
+    # Phase 2: Generate LCOV report.
+    # First try with subprocess binaries included (for TempRustProject coverage).
+    # If that fails, fall back to standard report.
+    llvm_cov_target = Path("target/llvm-cov-target")
+    subprocess_bins = sorted(
+        p for p in llvm_cov_target.glob("debug/temp_hegel_test_*")
+        if p.is_file() and not p.suffix  # exclude .d, .pdb etc
+    )
+    print(f"  Generating report ({len(subprocess_bins)} subprocess binaries)...")
+
+    if subprocess_bins:
+        # Use raw llvm tools to include subprocess binaries.
+        # Find llvm tools from the Rust toolchain.
+        toolchain_result = subprocess.run(
+            ["rustc", "--print", "sysroot"], capture_output=True, text=True,
+        )
+        sysroot = toolchain_result.stdout.strip()
+        llvm_bin = Path(sysroot) / "lib/rustlib" / get_target_triple() / "bin"
+        llvm_profdata = llvm_bin / "llvm-profdata"
+        llvm_cov_bin = llvm_bin / "llvm-cov"
+
+        if llvm_profdata.exists() and llvm_cov_bin.exists():
+            # Merge all profraw files
+            profraw_files = list(llvm_cov_target.glob("*.profraw"))
+            merged_profdata = llvm_cov_target / "merged.profdata"
+            result = subprocess.run(
+                [str(llvm_profdata), "merge", "-sparse"]
+                + [str(f) for f in profraw_files]
+                + ["-o", str(merged_profdata)],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                print(f"WARNING: profdata merge failed, using standard report", file=sys.stderr)
+            else:
+                # Find all instrumented binaries (main test binaries + subprocess binaries)
+                main_bins = sorted(
+                    p for p in llvm_cov_target.glob("debug/deps/hegel-*")
+                    if p.is_file() and not p.suffix
+                )
+                all_bins = main_bins + subprocess_bins
+                # Also include integration test binaries
+                test_bins = sorted(
+                    p for p in llvm_cov_target.glob("debug/deps/test_*")
+                    if p.is_file() and not p.suffix
+                )
+                all_bins.extend(test_bins)
+
+                if all_bins:
+                    # Generate LCOV with all objects
+                    cmd = [
+                        str(llvm_cov_bin), "export", "-format=lcov",
+                        f"-instr-profile={merged_profdata}",
+                    ]
+                    # First binary is positional, rest are --object
+                    cmd.append(str(all_bins[0]))
+                    for b in all_bins[1:]:
+                        cmd.extend(["-object", str(b)])
+                    # Only report on project source files
+                    cmd.extend([
+                        "-ignore-filename-regex=\\.cargo/registry",
+                        "-ignore-filename-regex=/rustc/",
+                        "-ignore-filename-regex=/rustlib/",
+                        "-ignore-filename-regex=/tmp/",
+                        "-ignore-filename-regex=/var/folders/",
+                        "-ignore-filename-regex=tests/",
+                    ])
+
+                    result = subprocess.run(cmd, capture_output=True, text=True)
+                    if result.returncode == 0 and result.stdout:
+                        lcov_path.write_text(result.stdout)
+                        return lcov_path
+                    else:
+                        print(f"WARNING: llvm-cov export failed, using standard report", file=sys.stderr)
+                        if result.stderr:
+                            print(result.stderr[:500], file=sys.stderr)
+
+    # Fallback: standard cargo llvm-cov report
+    result = subprocess.run(
+        ["cargo", "llvm-cov", "report", "--lcov", f"--output-path={lcov_path}"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+        print("ERROR: Coverage report generation failed", file=sys.stderr)
+        sys.exit(1)
 
     if not lcov_path.exists():
         print("ERROR: lcov.info was not generated", file=sys.stderr)
