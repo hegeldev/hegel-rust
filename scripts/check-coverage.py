@@ -89,9 +89,16 @@ class UncoveredLine:
         Matches standalone unreachable!() and match-arm unreachable!():
             unreachable!("msg")
             _ => unreachable!("msg"),
+            unreachable!(            // multi-line start
         """
         stripped = self.content.strip()
-        return bool(re.search(r'unreachable!\s*\([^)]*\)\s*[;,]?\s*$', stripped))
+        # Single-line: unreachable!("msg");
+        if re.search(r'unreachable!\s*\([^)]*\)\s*[;,]?\s*$', stripped):
+            return True
+        # Multi-line start: unreachable!( without closing paren
+        if re.search(r'unreachable!\s*\(\s*$', stripped):
+            return True
+        return False
 
     def is_test_code(self) -> bool:
         """
