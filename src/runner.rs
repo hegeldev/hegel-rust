@@ -943,6 +943,7 @@ fn cbor_decode(bytes: &[u8]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ENV_TEST_MUTEX;
 
     #[test]
     fn test_settings_default_matches_new() {
@@ -976,6 +977,7 @@ mod tests {
 
     #[test]
     fn test_install_hegel_server_uv_not_found() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap();
         let dir = tempfile::TempDir::new().unwrap();
         let server_dir = dir.path().to_str().unwrap();
 
@@ -996,6 +998,7 @@ mod tests {
 
     #[test]
     fn test_install_hegel_server_uv_venv_fails() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap();
         let dir = tempfile::TempDir::new().unwrap();
         let server_dir = dir.path().to_str().unwrap();
 
@@ -1028,6 +1031,7 @@ mod tests {
 
     #[test]
     fn test_install_hegel_server_pip_install_fails() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap();
         let dir = tempfile::TempDir::new().unwrap();
         let server_dir = dir.path().to_str().unwrap();
 
@@ -1064,6 +1068,7 @@ mod tests {
 
     #[test]
     fn test_install_hegel_server_binary_missing_after_install() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap();
         let dir = tempfile::TempDir::new().unwrap();
         let server_dir = dir.path().to_str().unwrap();
 
@@ -1100,10 +1105,9 @@ mod tests {
 
     #[test]
     fn test_is_in_ci_detects_ci_env() {
-        // Save and set CI var to trigger the CI path
+        let _guard = ENV_TEST_MUTEX.lock().unwrap();
         let original = std::env::var("CI").ok();
-        // SAFETY: test runs single-threaded via --test-threads=1 or is the only
-        // test that touches CI env var.
+        // SAFETY: serialized by ENV_TEST_MUTEX
         unsafe { std::env::set_var("CI", "1") };
         assert!(is_in_ci());
         // Restore

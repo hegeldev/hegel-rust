@@ -86,14 +86,11 @@ pub(crate) fn emit_assertion(location: &TestLocation, passed: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    // Serialize tests that touch environment variables
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::ENV_TEST_MUTEX;
 
     #[test]
     fn test_is_running_in_antithesis_with_valid_dir() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_TEST_MUTEX.lock().unwrap();
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().to_str().unwrap().to_string();
         let original = std::env::var("ANTITHESIS_OUTPUT_DIR").ok();
@@ -108,7 +105,7 @@ mod tests {
 
     #[test]
     fn test_is_running_in_antithesis_without_env() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_TEST_MUTEX.lock().unwrap();
         let original = std::env::var("ANTITHESIS_OUTPUT_DIR").ok();
         if original.is_some() {
             unsafe { std::env::remove_var("ANTITHESIS_OUTPUT_DIR") };
@@ -122,7 +119,7 @@ mod tests {
     #[cfg(feature = "antithesis")]
     #[test]
     fn test_emit_assertion_writes_jsonl() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_TEST_MUTEX.lock().unwrap();
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().to_str().unwrap().to_string();
         let original = std::env::var("ANTITHESIS_OUTPUT_DIR").ok();

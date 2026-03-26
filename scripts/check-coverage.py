@@ -177,14 +177,12 @@ def run_coverage() -> Path:
         print("ERROR: Failed to clean coverage data", file=sys.stderr)
         sys.exit(1)
 
-    # Run tests with coverage and generate LCOV report.
-    # Single-threaded to avoid env var races in unit tests that mock PATH/CI/etc.
+    # Run tests with coverage and generate LCOV report
     print("  Running tests with coverage...")
     result = subprocess.run(
         [
             "cargo", "llvm-cov", "--all-features",
             "--lcov", f"--output-path={lcov_path}",
-            "--", "--test-threads=1",
         ],
         capture_output=True, text=True,
     )

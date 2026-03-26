@@ -1,4 +1,4 @@
-use super::{BasicGenerator, BoxedGenerator, Collection, Generator, TestCase, integers, labels};
+use super::{BasicGenerator, BoxedGenerator, Collection, Generator, TestCase, labels};
 use crate::cbor_utils::{cbor_map, map_insert};
 use ciborium::Value;
 use std::collections::{HashMap, HashSet};
@@ -130,19 +130,13 @@ where
             basic.do_draw(tc)
         } else {
             tc.start_span(labels::SET);
-            let max = self.max_size.unwrap_or(100);
-            let target_len = integers::<usize>()
-                .min_value(self.min_size)
-                .max_value(max)
-                .do_draw(tc);
-
+            let mut collection = Collection::new(tc, "composite_set", self.min_size, self.max_size);
             let mut set = HashSet::new();
-            let mut attempts = 0;
-            while set.len() < target_len && attempts < target_len * 10 {
-                tc.start_span(labels::SET_ELEMENT);
-                set.insert(self.elements.do_draw(tc));
-                tc.stop_span(false);
-                attempts += 1;
+            while collection.more() {
+                let element = self.elements.do_draw(tc);
+                if !set.insert(element) {
+                    collection.reject(Some("duplicate element"));
+                }
             }
             tc.stop_span(false);
             set
@@ -222,23 +216,20 @@ where
             basic.do_draw(tc)
         } else {
             tc.start_span(labels::MAP);
-            let max = self.max_size.unwrap_or(100);
-            let len = integers::<usize>()
-                .min_value(self.min_size)
-                .max_value(max)
-                .do_draw(tc);
-
+            let mut collection = Collection::new(tc, "composite_map", self.min_size, self.max_size);
             let mut map = HashMap::new();
-            let max_attempts = len * 10;
-            let mut attempts = 0;
-            while map.len() < len && attempts < max_attempts {
-                tc.start_span(labels::MAP_ENTRY);
+            while collection.more() {
                 let key = self.keys.do_draw(tc);
-                map.entry(key).or_insert_with(|| self.values.do_draw(tc));
-                tc.stop_span(false);
-                attempts += 1;
+                match map.entry(key) {
+                    std::collections::hash_map::Entry::Occupied(_) => {
+                        collection.reject(Some("duplicate key"));
+                    }
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        let value = self.values.do_draw(tc);
+                        entry.insert(value);
+                    }
+                }
             }
-            assert!(map.len() >= self.min_size);
             tc.stop_span(false);
             map
         }
