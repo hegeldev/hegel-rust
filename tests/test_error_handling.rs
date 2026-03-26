@@ -169,7 +169,6 @@ fn test_flaky_replay() {
 }
 
 #[test]
-#[ignore] // Server crash with os._exit doesn't reliably break stdio pipes on macOS
 fn test_server_crash() {
     error_test("server_crash")
         .main_file(SIMPLE_TEST)

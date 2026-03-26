@@ -44,6 +44,9 @@ impl Connection {
                     Err(_) => {
                         // Stream closed or error — mark server as exited and stop.
                         conn_for_reader.server_exited.store(true, Ordering::SeqCst);
+                        // Drop all channel senders so that any blocked recv() calls
+                        // will return RecvError, unblocking waiting threads.
+                        conn_for_reader.channel_senders.lock().unwrap().clear();
                         break;
                     }
                 }
