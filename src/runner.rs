@@ -708,7 +708,7 @@ where
                 Err(_) if connection.server_has_exited() => {
                     panic!("{}", SERVER_CRASHED_MESSAGE);
                 }
-                Err(e) => panic!("Failed to receive event: {}", e),
+                Err(e) => unreachable!("Failed to receive event (server still running): {}", e),
             };
 
             let event: Value = cbor_decode(&event_payload);
