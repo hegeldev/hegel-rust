@@ -8,6 +8,14 @@ mod common;
 
 use common::project::TempRustProject;
 
+/// Get the path to the local hegel binary with new test modes.
+/// Falls back to the system hegel if not available.
+fn local_hegel_binary() -> String {
+    // Use the hegel-core from the parent project's venv
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    format!("{manifest_dir}/.hegel/venv/bin/hegel")
+}
+
 const SIMPLE_TEST: &str = r#"
 fn main() {
     hegel::hegel(|tc| {
@@ -35,6 +43,7 @@ fn main() {
 fn test_stop_test_on_start_span_handled() {
     TempRustProject::new()
         .main_file(SPAN_TEST)
+        .env("HEGEL_SERVER_COMMAND", &local_hegel_binary())
         .env("HEGEL_PROTOCOL_TEST_MODE", "stop_test_on_start_span")
         .cargo_run(&[]);
 }
@@ -43,6 +52,7 @@ fn test_stop_test_on_start_span_handled() {
 fn test_health_check_failure_reported() {
     TempRustProject::new()
         .main_file(SIMPLE_TEST)
+        .env("HEGEL_SERVER_COMMAND", &local_hegel_binary())
         .env("HEGEL_PROTOCOL_TEST_MODE", "health_check_failure")
         .expect_failure("Health check failure")
         .cargo_run(&[]);
@@ -52,6 +62,7 @@ fn test_health_check_failure_reported() {
 fn test_server_error_in_results_reported() {
     TempRustProject::new()
         .main_file(SIMPLE_TEST)
+        .env("HEGEL_SERVER_COMMAND", &local_hegel_binary())
         .env("HEGEL_PROTOCOL_TEST_MODE", "server_error_in_results")
         .expect_failure("Server error")
         .cargo_run(&[]);
@@ -59,9 +70,9 @@ fn test_server_error_in_results_reported() {
 
 #[test]
 fn test_flaky_replay_handled() {
-    // FlakyReplay on generate — client should handle gracefully
     TempRustProject::new()
         .main_file(SIMPLE_TEST)
+        .env("HEGEL_SERVER_COMMAND", &local_hegel_binary())
         .env("HEGEL_PROTOCOL_TEST_MODE", "flaky_replay")
         .cargo_run(&[]);
 }

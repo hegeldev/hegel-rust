@@ -50,6 +50,8 @@ struct HegelSession {
     /// brief run_test send/receive; test execution runs concurrently on
     /// per-test channels.
     control: Mutex<Channel>,
+    /// Server child process PID, used by atexit handler to kill on exit.
+    child_pid: std::sync::atomic::AtomicU32,
 }
 
 impl HegelSession {
@@ -108,6 +110,8 @@ impl HegelSession {
             );
         }
 
+        let child_pid = child.id();
+
         // Monitor thread: detects server crash. The pipe close from
         // the child exiting will unblock any pending reads.
         let conn_for_monitor = Arc::clone(&connection);
@@ -116,9 +120,28 @@ impl HegelSession {
             conn_for_monitor.mark_server_exited();
         });
 
+        // Register an atexit handler to kill the server subprocess.
+        // Static OnceLock values aren't dropped on process exit, so without
+        // this, the server's pipes stay open and it becomes orphaned.
+        extern "C" fn kill_server() {
+            if let Some(session) = SESSION.get() {
+                let pid = session.child_pid.load(Ordering::SeqCst);
+                if pid != 0 {
+                    let _ = std::process::Command::new("kill")
+                        .args(["-9", &pid.to_string()])
+                        .status();
+                }
+            }
+        }
+        unsafe extern "C" {
+            safe fn atexit(func: extern "C" fn()) -> std::ffi::c_int;
+        }
+        atexit(kill_server);
+
         HegelSession {
             connection,
             control: Mutex::new(control),
+            child_pid: std::sync::atomic::AtomicU32::new(child_pid),
         }
     }
 }
