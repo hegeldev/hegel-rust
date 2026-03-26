@@ -296,6 +296,20 @@ fn test_tuple2_all_examples_in_bounds() {
     );
 }
 
+#[hegel::test]
+fn test_tuple2_with_non_basic_element(tc: TestCase) {
+    // flat_map removes as_basic(), forcing the tuple non-basic fallback path
+    let (a, b) = tc.draw(generators::tuples!(
+        generators::integers::<i32>().min_value(0).max_value(10),
+        generators::integers::<usize>()
+            .min_value(1)
+            .max_value(3)
+            .flat_map(|n| generators::text().min_size(n).max_size(n)),
+    ));
+    assert!((0..=10).contains(&a));
+    assert!((1..=3).contains(&b.chars().count()));
+}
+
 #[test]
 fn test_tuple3_all_examples_in_bounds() {
     assert_all_examples(
