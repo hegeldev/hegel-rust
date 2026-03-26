@@ -1,3 +1,15 @@
 RELEASE_TYPE: minor
 
-This revision removes the type-level restriction on invariants mutating machine state.
+This release changes `self` in `#[invariant]` from an immutable reference to a mutable reference:
+
+```rust
+# before
+#[invariant]
+fn my_invariant(&self, ...) {} 
+
+# after
+#[invariant]
+fn my_invariant(&mut self, ...) {}
+```
+
+This will require updating your invariant signatures, but should be strictly more expressive.
