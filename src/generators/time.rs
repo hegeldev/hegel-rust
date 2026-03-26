@@ -79,15 +79,16 @@ pub fn durations() -> DurationGenerator {
 
 /// Generator for [`Instant`] values. Created by [`instants()`].
 ///
-/// Generates instants by adding a random [`Duration`] offset to the current
-/// time (`Instant::now()`). Since `Instant` values are inherently tied to the
-/// monotonic clock, each test run produces different absolute values.
+/// Generates instants by adding a random [`Duration`] offset to a fixed base
+/// instant captured when the generator is created. The offsets are deterministic
+/// (controlled by the test engine), while the base varies between runs.
 pub struct InstantGenerator {
+    base: Instant,
     max_offset_nanos: u64,
 }
 
 impl InstantGenerator {
-    /// Set the maximum offset from `Instant::now()` (inclusive).
+    /// Set the maximum offset from the base instant (inclusive).
     pub fn max_offset(mut self, max: Duration) -> Self {
         self.max_offset_nanos = duration_to_nanos(max);
         self
@@ -102,18 +103,19 @@ impl Generator<Instant> for InstantGenerator {
             "max_value" => self.max_offset_nanos
         };
         let nanos: u64 = super::generate_from_schema(tc, &schema);
-        Instant::now() + Duration::from_nanos(nanos)
+        self.base + Duration::from_nanos(nanos)
     }
 }
 
 /// Generate [`Instant`] values.
 ///
-/// Produces instants offset from `Instant::now()` by a random duration.
-/// The default maximum offset is one hour. Use `max_offset` to change it.
+/// Produces instants offset from a fixed base (`Instant::now()` at call time)
+/// by a random duration. The default maximum offset is one hour. Use
+/// `max_offset` to change it.
 ///
-/// Since `Instant` is tied to the monotonic clock, generated values differ
-/// between test runs. This generator is most useful for testing code that
-/// computes differences between instants.
+/// The base is captured once when `instants()` is called, so all generated
+/// values within a test share the same reference point. The offsets are
+/// deterministic and shrinkable.
 ///
 /// # Example
 ///
@@ -128,6 +130,7 @@ impl Generator<Instant> for InstantGenerator {
 /// ```
 pub fn instants() -> InstantGenerator {
     InstantGenerator {
+        base: Instant::now(),
         max_offset_nanos: 3_600_000_000_000,
     }
 }
