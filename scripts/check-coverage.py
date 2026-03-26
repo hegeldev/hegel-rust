@@ -92,11 +92,11 @@ class UncoveredLine:
             unreachable!(            // multi-line start
         """
         stripped = self.content.strip()
-        # Single-line: unreachable!("msg");
-        if re.search(r'unreachable!\s*\([^)]*\)\s*[;,]?\s*$', stripped):
+        # Single-line: unreachable!("msg"); — use greedy match for nested parens
+        if re.search(r'unreachable!\s*\(.*\)\s*[;,]?\s*$', stripped):
             return True
         # Multi-line start: unreachable!( without closing paren
-        if re.search(r'unreachable!\s*\(\s*$', stripped):
+        if re.search(r'unreachable!\s*\(', stripped) and not stripped.rstrip(';').rstrip().endswith(')'):
             return True
         return False
 
