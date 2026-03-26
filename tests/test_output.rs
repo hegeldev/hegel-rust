@@ -126,13 +126,14 @@ fn test_failing_test_output_with_full_backtrace() {
     );
 }
 
-/// Exercise the in-process failure path to cover panic info capture
-/// and test result handling in run_test_case.
+/// Exercise the in-process failure path to cover panic info capture,
+/// test result handling, and note() output during final replay.
 #[test]
 #[should_panic(expected = "Property test failed")]
 fn test_in_process_failure_exercises_panic_path() {
     Hegel::new(|tc| {
         let x: i32 = tc.draw(generators::integers());
+        tc.note(&format!("testing note output: x={}", x));
         panic!("intentional-test-failure-42: {}", x);
     })
     .settings(Settings::new().test_cases(10).derandomize(true))
@@ -181,5 +182,33 @@ fn test_in_process_failure_with_debug_verbosity() {
             .derandomize(true)
             .verbosity(hegel::Verbosity::Debug),
     )
+    .run();
+}
+
+/// Force the StopTest/overflow path by drawing heavily from nested generators
+/// in a property that fails. During shrinking, the server will truncate data,
+/// causing StopTest errors in start_span and collection operations.
+#[test]
+#[should_panic(expected = "Property test failed")]
+fn test_overflow_exercises_stop_test_paths() {
+    Hegel::new(|tc| {
+        // Draw many nested values to consume server data budget
+        for _ in 0..20 {
+            let inner: Vec<Vec<i32>> = tc.draw(
+                generators::vecs(
+                    generators::vecs(generators::integers::<i32>())
+                        .min_size(1)
+                        .max_size(5),
+                )
+                .min_size(1)
+                .max_size(5),
+            );
+            // Fail unconditionally — forces shrinking which triggers StopTest
+            if !inner.is_empty() {
+                panic!("overflow-stop-test-coverage-77");
+            }
+        }
+    })
+    .settings(Settings::new().test_cases(20).derandomize(true))
     .run();
 }
