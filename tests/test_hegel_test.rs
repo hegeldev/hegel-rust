@@ -10,6 +10,11 @@ fn test_basic_usage(tc: TestCase) {
     tc.draw(generators::booleans());
 }
 
+#[hegel::test()]
+fn test_with_empty_parens(tc: TestCase) {
+    tc.draw(generators::booleans());
+}
+
 #[hegel::test(test_cases = 10)]
 fn test_with_named_arg(tc: TestCase) {
     tc.draw(generators::booleans());
@@ -33,6 +38,31 @@ fn test_with_multiple_named_args(tc: TestCase) {
 #[hegel::test(seed = Some(42))]
 fn test_with_seed(tc: TestCase) {
     tc.draw(generators::booleans());
+}
+
+#[test]
+fn test_hegel_server_command_env_override() {
+    // Exercise the HEGEL_SERVER_COMMAND env var override path in find_hegel()
+    let _guard = hegel::ENV_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    // Use the installed hegel binary from the local venv
+    let hegel_path = format!("{}/{}", env!("CARGO_MANIFEST_DIR"), ".hegel/venv/bin/hegel");
+    let original = std::env::var("HEGEL_SERVER_COMMAND").ok();
+    unsafe { std::env::set_var("HEGEL_SERVER_COMMAND", hegel_path) };
+
+    // Run a simple test — find_hegel() should use the env var override
+    hegel::Hegel::new(|tc| {
+        let _: bool = tc.draw(generators::booleans());
+    })
+    .settings(hegel::Settings::new().test_cases(5).derandomize(true))
+    .run();
+
+    match original {
+        Some(v) => unsafe { std::env::set_var("HEGEL_SERVER_COMMAND", v) },
+        None => unsafe { std::env::remove_var("HEGEL_SERVER_COMMAND") },
+    }
 }
 
 #[test]

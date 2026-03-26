@@ -5,7 +5,7 @@ use crate::runner::Verbosity;
 use ciborium::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use crate::generators::value;
 
@@ -35,7 +35,7 @@ impl std::fmt::Display for StopTestError {
 }
 impl std::error::Error for StopTestError {}
 
-static PROTOCOL_DEBUG: LazyLock<bool> = LazyLock::new(|| {
+fn protocol_debug() -> bool {
     matches!(
         std::env::var("HEGEL_PROTOCOL_DEBUG")
             .unwrap_or_default()
@@ -43,7 +43,7 @@ static PROTOCOL_DEBUG: LazyLock<bool> = LazyLock::new(|| {
             .as_str(),
         "1" | "true"
     )
-});
+}
 
 pub(crate) const ASSUME_FAIL_STRING: &str = "__HEGEL_ASSUME_FAIL";
 
@@ -269,7 +269,7 @@ impl TestCase {
         if global.test_aborted {
             return Err(StopTestError);
         }
-        let debug = *PROTOCOL_DEBUG || global.verbosity == Verbosity::Debug;
+        let debug = protocol_debug() || global.verbosity == Verbosity::Debug;
 
         let mut entries = vec![(
             Value::Text("command".to_string()),
