@@ -82,3 +82,88 @@ pub(crate) fn emit_assertion(location: &TestLocation, passed: bool) {
     writeln!(file, "{}", serde_json::to_string(&declaration).unwrap()).unwrap();
     writeln!(file, "{}", serde_json::to_string(&evaluation).unwrap()).unwrap();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ENV_TEST_MUTEX;
+
+    #[test]
+    fn test_is_running_in_antithesis_with_valid_dir() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().to_str().unwrap().to_string();
+        let original = std::env::var("ANTITHESIS_OUTPUT_DIR").ok();
+        // SAFETY: serialized by ENV_LOCK
+        unsafe { std::env::set_var("ANTITHESIS_OUTPUT_DIR", &path) };
+        assert!(is_running_in_antithesis());
+        match original {
+            Some(v) => unsafe { std::env::set_var("ANTITHESIS_OUTPUT_DIR", v) },
+            None => unsafe { std::env::remove_var("ANTITHESIS_OUTPUT_DIR") },
+        }
+    }
+
+    #[test]
+    fn test_is_running_in_antithesis_without_env() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let original = std::env::var("ANTITHESIS_OUTPUT_DIR").ok();
+        if original.is_some() {
+            unsafe { std::env::remove_var("ANTITHESIS_OUTPUT_DIR") };
+        }
+        assert!(!is_running_in_antithesis());
+        if let Some(v) = original {
+            unsafe { std::env::set_var("ANTITHESIS_OUTPUT_DIR", v) };
+        }
+    }
+
+    #[cfg(feature = "antithesis")]
+    #[test]
+    fn test_emit_assertion_writes_jsonl() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().to_str().unwrap().to_string();
+        let original = std::env::var("ANTITHESIS_OUTPUT_DIR").ok();
+        // SAFETY: serialized by ENV_LOCK
+        unsafe { std::env::set_var("ANTITHESIS_OUTPUT_DIR", &path) };
+
+        let loc = TestLocation {
+            function: "test_func_42".into(),
+            file: "test_file.rs".into(),
+            class: "test_module".into(),
+            begin_line: 99,
+        };
+        emit_assertion(&loc, true);
+
+        match original {
+            Some(v) => unsafe { std::env::set_var("ANTITHESIS_OUTPUT_DIR", v) },
+            None => unsafe { std::env::remove_var("ANTITHESIS_OUTPUT_DIR") },
+        }
+
+        let jsonl_path = dir.path().join("sdk.jsonl");
+        assert!(jsonl_path.exists());
+        let contents = std::fs::read_to_string(&jsonl_path).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(contents.contains("test_func_42"));
+        assert!(contents.contains("test_module"));
+    }
+
+    #[test]
+    #[should_panic(expected = "Expected ANTITHESIS_OUTPUT_DIR")]
+    fn test_is_running_in_antithesis_with_nonexistent_dir() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let original = std::env::var("ANTITHESIS_OUTPUT_DIR").ok();
+        unsafe {
+            std::env::set_var(
+                "ANTITHESIS_OUTPUT_DIR",
+                "/nonexistent/path/for/coverage/test",
+            )
+        };
+        let _result = is_running_in_antithesis();
+        // Restore (won't reach here due to panic, but keep for completeness)
+        match original {
+            Some(v) => unsafe { std::env::set_var("ANTITHESIS_OUTPUT_DIR", v) },
+            None => unsafe { std::env::remove_var("ANTITHESIS_OUTPUT_DIR") },
+        }
+    }
+}

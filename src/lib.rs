@@ -221,3 +221,8 @@ pub use hegel_macros::test;
 #[doc(hidden)]
 pub use runner::hegel;
 pub use runner::{HealthCheck, Hegel, Settings, Verbosity};
+
+/// Mutex for serializing tests that modify environment variables.
+/// Used across runner, antithesis, and integration test modules to prevent races.
+#[doc(hidden)]
+pub static ENV_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());

@@ -102,3 +102,64 @@ impl Connection {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixStream;
+
+    fn test_connection() -> Arc<Connection> {
+        let (client, server) = UnixStream::pair().unwrap();
+        Connection::new(Box::new(server.try_clone().unwrap()), Box::new(client))
+    }
+
+    #[test]
+    fn test_mark_server_exited() {
+        let conn = test_connection();
+        assert!(!conn.server_has_exited());
+        conn.mark_server_exited();
+        assert!(conn.server_has_exited());
+    }
+
+    #[test]
+    fn test_send_packet_returns_server_crashed_when_exited() {
+        // Use a writer that will fail (closed pipe)
+        let (read_end, write_end) = UnixStream::pair().unwrap();
+        drop(read_end); // close the read end so writes fail
+        let conn = Connection::new(Box::new(std::io::empty()), Box::new(write_end));
+        conn.mark_server_exited();
+
+        let packet = Packet {
+            channel: 0,
+            message_id: 1,
+            is_reply: false,
+            payload: vec![0x42],
+        };
+        let err = conn.send_packet(&packet).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::ConnectionAborted);
+        assert!(err.to_string().contains("hegel server process exited"));
+    }
+
+    #[test]
+    fn test_send_packet_returns_error_when_pipe_broken() {
+        let (read_end, write_end) = UnixStream::pair().unwrap();
+        drop(read_end);
+        let conn = Connection::new(Box::new(std::io::empty()), Box::new(write_end));
+
+        let packet = Packet {
+            channel: 0,
+            message_id: 1,
+            is_reply: false,
+            payload: vec![0x42],
+        };
+        let err = conn.send_packet(&packet).unwrap_err();
+        // May be BrokenPipe (write fails first) or ConnectionAborted
+        // (background reader detects server exit first) depending on timing
+        assert!(
+            err.kind() == std::io::ErrorKind::BrokenPipe
+                || err.kind() == std::io::ErrorKind::ConnectionAborted,
+            "expected BrokenPipe or ConnectionAborted, got {:?}",
+            err.kind()
+        );
+    }
+}

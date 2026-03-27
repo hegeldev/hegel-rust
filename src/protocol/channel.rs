@@ -172,3 +172,86 @@ impl Drop for Channel {
         self.connection.unregister_channel(self.channel_id);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    fn dummy_connection() -> Arc<Connection> {
+        use std::os::unix::net::UnixStream;
+        let (client, server) = UnixStream::pair().unwrap();
+        Connection::new(Box::new(server.try_clone().unwrap()), Box::new(client))
+    }
+
+    #[test]
+    fn test_send_request_fails_when_closed() {
+        let conn = dummy_connection();
+        let (_tx, rx) = mpsc::channel();
+        let mut ch = Channel::new(42, conn, rx);
+        ch.mark_closed();
+
+        let err = ch.send_request(vec![0x01]).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+        assert!(err.to_string().contains("channel is closed"));
+    }
+
+    #[test]
+    fn test_receive_reply_fails_when_closed() {
+        let conn = dummy_connection();
+        let (_tx, rx) = mpsc::channel();
+        let mut ch = Channel::new(42, conn, rx);
+        ch.mark_closed();
+
+        let err = ch.receive_reply(1).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn test_receive_one_packet_server_exited() {
+        let conn = dummy_connection();
+        let (tx, rx) = mpsc::channel();
+        let mut ch = Channel::new(42, Arc::clone(&conn), rx);
+        conn.mark_server_exited();
+        drop(tx); // close sender to make recv fail
+
+        let err = ch.receive_request().unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::ConnectionAborted);
+        assert!(err.to_string().contains("hegel server process exited"));
+    }
+
+    #[test]
+    fn test_receive_one_packet_channel_disconnected() {
+        let conn = dummy_connection();
+        let (tx, rx) = mpsc::channel();
+        let mut ch = Channel::new(42, conn, rx);
+        drop(tx); // close sender but server NOT marked as exited
+
+        let err = ch.receive_request().unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::ConnectionReset);
+        assert!(err.to_string().contains("channel disconnected"));
+    }
+
+    #[test]
+    fn test_request_cbor_returns_response_without_result_key() {
+        let conn = dummy_connection();
+        let (tx, rx) = mpsc::channel();
+        let mut ch = Channel::new(42, conn, rx);
+
+        // Simulate a response that has neither "error" nor "result" keys
+        let response = crate::cbor_utils::cbor_map! { "status" => "ok" };
+        let mut response_bytes = Vec::new();
+        ciborium::into_writer(&response, &mut response_bytes).unwrap();
+        tx.send(Packet {
+            channel: 42,
+            message_id: 1,
+            is_reply: true,
+            payload: response_bytes,
+        })
+        .unwrap();
+
+        let result = ch.request_cbor(&crate::cbor_utils::cbor_map! { "cmd" => "test" });
+        let val = result.unwrap();
+        assert_eq!(map_get(&val, "status").and_then(as_text), Some("ok"));
+    }
+}
