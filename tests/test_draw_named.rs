@@ -2,8 +2,8 @@ mod common;
 
 use common::project::TempRustProject;
 use common::utils::{assert_matches_regex, expect_panic};
-use hegel::generators;
 use hegel::TestCase;
+use hegel::generators;
 
 // ============================================================
 // draw_named runtime behavior
@@ -170,7 +170,10 @@ fn test_macro_closure_is_repeatable(tc: TestCase) {
 fn test_macro_non_assignment_draw_not_rewritten(tc: TestCase) {
     // draw calls not in `let x = tc.draw(...)` form stay as draw(),
     // which delegates to draw_named("draw", true) — repeatable, so no panic.
-    let _ = vec![tc.draw(generators::booleans()), tc.draw(generators::booleans())];
+    let _ = vec![
+        tc.draw(generators::booleans()),
+        tc.draw(generators::booleans()),
+    ];
 }
 
 #[hegel::test(test_cases = 1)]
