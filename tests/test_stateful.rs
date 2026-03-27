@@ -93,6 +93,34 @@ fn test_consume(tc: TestCase) {
     hegel::stateful::run(m, tc);
 }
 
+// Test that invariants are checked after each rule application
+struct CounterMachine {
+    count: i32,
+}
+
+impl hegel::stateful::StateMachine for CounterMachine {
+    fn rules(&self) -> Vec<hegel::stateful::Rule<Self>> {
+        vec![hegel::stateful::Rule::new("increment", |m, _tc| {
+            m.count += 1;
+        })]
+    }
+
+    fn invariants(&self) -> Vec<hegel::stateful::Rule<Self>> {
+        vec![hegel::stateful::Rule::new(
+            "count_is_non_negative",
+            |m, _tc| {
+                assert!(m.count >= 0, "count went negative: {}", m.count);
+            },
+        )]
+    }
+}
+
+#[hegel::test]
+fn test_state_machine_with_invariants(tc: TestCase) {
+    let m = CounterMachine { count: 0 };
+    hegel::stateful::run(m, tc);
+}
+
 // Drawing an element from a bundle should always yield an element that was previously added.
 struct TestDrawDomainMachine {
     domain: Vec<i32>,

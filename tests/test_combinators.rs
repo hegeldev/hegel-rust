@@ -152,6 +152,26 @@ fn test_draw_silent_non_debug(tc: TestCase) {
     assert_eq!(f(10), 10 + f(0));
 }
 
+#[hegel::test]
+fn test_unit_generator(tc: TestCase) {
+    tc.draw(generators::unit());
+}
+
+#[hegel::test]
+fn test_optional_with_non_basic_inner(tc: TestCase) {
+    // flat_map produces a generator without as_basic(), forcing the optional fallback path
+    let opt_gen = generators::optional(
+        generators::integers::<usize>()
+            .min_value(1)
+            .max_value(3)
+            .flat_map(|n| generators::text().min_size(n).max_size(n)),
+    );
+    let value = tc.draw(opt_gen);
+    if let Some(s) = value {
+        assert!((1..=3).contains(&s.chars().count()));
+    }
+}
+
 #[test]
 fn test_optional_mapped_find_any() {
     find_any(

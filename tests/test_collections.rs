@@ -170,3 +170,184 @@ fn test_binary_with_max_size(tc: TestCase) {
     let data = tc.draw(gs::binary().max_size(50));
     assert!(data.len() <= 50);
 }
+
+#[hegel::test]
+fn test_vec_with_non_basic_elements(tc: TestCase) {
+    // flat_map produces a generator without as_basic(), forcing Vec through the
+    // Collection-based fallback path (new_collection / collection_more protocol)
+    let vec: Vec<String> = tc.draw(
+        generators::vecs(
+            generators::integers::<usize>()
+                .min_value(1)
+                .max_value(3)
+                .flat_map(|n| generators::text().min_size(n).max_size(n)),
+        )
+        .min_size(1)
+        .max_size(5),
+    );
+    assert!(!vec.is_empty());
+    assert!(vec.len() <= 5);
+}
+
+#[hegel::test]
+fn test_hashset_with_non_basic_elements(tc: TestCase) {
+    // flat_map produces a generator without as_basic(), forcing the HashSet fallback path
+    let set: HashSet<String> = tc.draw(
+        generators::hashsets(
+            generators::integers::<usize>()
+                .min_value(1)
+                .max_value(3)
+                .flat_map(|n| generators::text().min_size(n).max_size(n)),
+        )
+        .min_size(1)
+        .max_size(5),
+    );
+    assert!(!set.is_empty());
+    assert!(set.len() <= 5);
+}
+
+#[hegel::test]
+fn test_hashmap_with_non_basic_keys(tc: TestCase) {
+    // flat_map on keys produces a generator without as_basic(), forcing HashMap fallback
+    let map: HashMap<String, i32> = tc.draw(
+        generators::hashmaps(
+            generators::integers::<usize>()
+                .min_value(1)
+                .max_value(5)
+                .flat_map(|n| generators::text().min_size(n).max_size(n)),
+            generators::integers::<i32>(),
+        )
+        .min_size(1)
+        .max_size(5),
+    );
+    assert!(!map.is_empty());
+    assert!(map.len() <= 5);
+}
+
+// Non-basic collection tests with small domains to stress min_size enforcement
+// and duplicate rejection through the Collection protocol.
+
+#[hegel::test]
+fn test_vec_non_basic_min_size_respected(tc: TestCase) {
+    // Small domain (0..4) via flat_map to force non-basic path
+    let vec: Vec<i32> = tc.draw(
+        generators::vecs(
+            generators::integers::<i32>()
+                .min_value(0)
+                .max_value(3)
+                .flat_map(|n| generators::integers::<i32>().min_value(n).max_value(n)),
+        )
+        .min_size(3)
+        .max_size(8),
+    );
+    assert!(
+        vec.len() >= 3,
+        "min_size 3 not respected: got {}",
+        vec.len()
+    );
+    assert!(vec.len() <= 8);
+}
+
+#[hegel::test]
+fn test_hashset_non_basic_small_domain_min_size(tc: TestCase) {
+    // Elements from domain {0,1,2,3,4} via flat_map, min_size=3
+    // This forces many duplicate rejections through collection_reject
+    let set: HashSet<i32> = tc.draw(
+        generators::hashsets(
+            generators::integers::<i32>()
+                .min_value(0)
+                .max_value(4)
+                .flat_map(|n| generators::integers::<i32>().min_value(n).max_value(n)),
+        )
+        .min_size(3)
+        .max_size(5),
+    );
+    assert!(
+        set.len() >= 3,
+        "min_size 3 not respected: got {} elements: {:?}",
+        set.len(),
+        set
+    );
+    assert!(set.len() <= 5);
+    assert!(set.iter().all(|&v| (0..=4).contains(&v)));
+}
+
+#[hegel::test]
+fn test_hashmap_non_basic_small_domain_min_size(tc: TestCase) {
+    // Keys from domain {0,1,2,3,4} via flat_map, min_size=3
+    let map: HashMap<i32, bool> = tc.draw(
+        generators::hashmaps(
+            generators::integers::<i32>()
+                .min_value(0)
+                .max_value(4)
+                .flat_map(|n| generators::integers::<i32>().min_value(n).max_value(n)),
+            generators::booleans(),
+        )
+        .min_size(3)
+        .max_size(5),
+    );
+    assert!(
+        map.len() >= 3,
+        "min_size 3 not respected: got {} entries: {:?}",
+        map.len(),
+        map
+    );
+    assert!(map.len() <= 5);
+    assert!(map.keys().all(|&k| (0..=4).contains(&k)));
+}
+
+#[hegel::test]
+fn test_hashset_non_basic_exact_domain_equals_min_size(tc: TestCase) {
+    // Domain has exactly 3 values, min_size=3 — must produce all 3
+    let set: HashSet<i32> = tc.draw(
+        generators::hashsets(
+            generators::integers::<i32>()
+                .min_value(0)
+                .max_value(2)
+                .flat_map(|n| generators::integers::<i32>().min_value(n).max_value(n)),
+        )
+        .min_size(3),
+    );
+    assert_eq!(set.len(), 3);
+    assert!(set.contains(&0) && set.contains(&1) && set.contains(&2));
+}
+
+#[hegel::test]
+fn test_fixed_dicts_basic(tc: TestCase) {
+    let dict = tc.draw(
+        generators::fixed_dicts()
+            .field("name", generators::text().min_size(1).max_size(10))
+            .field(
+                "age",
+                generators::integers::<i32>().min_value(0).max_value(120),
+            )
+            .build(),
+    );
+    // dict is a ciborium::Value::Map
+    if let ciborium::Value::Map(entries) = dict {
+        assert_eq!(entries.len(), 2);
+    } else {
+        panic!("expected Value::Map, got {:?}", dict);
+    }
+}
+
+#[hegel::test]
+fn test_fixed_dicts_with_non_basic_field(tc: TestCase) {
+    // Use flat_map to force the FixedDict non-basic fallback path
+    let dict = tc.draw(
+        generators::fixed_dicts()
+            .field(
+                "dynamic_text",
+                generators::integers::<usize>()
+                    .min_value(1)
+                    .max_value(3)
+                    .flat_map(|n| generators::text().min_size(n).max_size(n)),
+            )
+            .build(),
+    );
+    if let ciborium::Value::Map(entries) = dict {
+        assert_eq!(entries.len(), 1);
+    } else {
+        panic!("expected Value::Map, got {:?}", dict);
+    }
+}

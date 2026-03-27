@@ -77,7 +77,7 @@ where
 
         Some(BasicGenerator::new(schema, move |raw| {
             let Value::Array(arr) = raw else {
-                panic!("Expected array, got {:?}", raw)
+                unreachable!("Expected array, got {:?}", raw)
             };
             arr.into_iter().map(|v| basic.parse_raw(v)).collect()
         }))
@@ -163,7 +163,7 @@ where
 
         Some(BasicGenerator::new(schema, move |raw| {
             let Value::Array(arr) = raw else {
-                panic!("Expected array, got {:?}", raw)
+                unreachable!("Expected array, got {:?}", raw)
             };
             arr.into_iter().map(|v| basic.parse_raw(v)).collect()
         }))
@@ -231,7 +231,6 @@ where
                     }
                 }
             }
-            assert!(map.len() >= self.min_size);
             tc.stop_span(false);
             map
         }
@@ -259,14 +258,14 @@ where
             // schema expects format [[key, value], ...]
             let values = match raw {
                 Value::Array(arr) => arr,
-                _ => panic!("Expected array, got {:?}", raw),
+                _ => unreachable!("Expected array, got {:?}", raw),
             };
 
             let mut map = HashMap::new();
             for value_raw in values {
                 let value = match value_raw {
                     Value::Array(arr) => arr,
-                    _ => panic!("Expected array, got {:?}", value_raw),
+                    _ => unreachable!("Expected array, got {:?}", value_raw),
                 };
                 let mut iter = value.into_iter();
                 let raw_k = iter.next().unwrap();
@@ -398,7 +397,7 @@ impl Generator<Value> for FixedDictGenerator<'_> {
         Some(BasicGenerator::new(schema, move |raw| {
             let arr = match raw {
                 Value::Array(arr) => arr,
-                _ => panic!("Expected array from tuple schema, got {:?}", raw),
+                _ => unreachable!("Expected array from tuple schema, got {:?}", raw),
             };
 
             let entries: Vec<(Value, Value)> = field_names
@@ -477,7 +476,7 @@ impl<G: Generator<T> + Send + Sync, T, const N: usize> Generator<[T; N]>
         Some(BasicGenerator::new(schema, move |raw| {
             let arr = match raw {
                 Value::Array(arr) => arr,
-                _ => panic!("Expected array from tuple schema, got {:?}", raw),
+                _ => unreachable!("Expected array from tuple schema, got {:?}", raw),
             };
             assert_eq!(arr.len(), N);
             let mut iter = arr.into_iter();
