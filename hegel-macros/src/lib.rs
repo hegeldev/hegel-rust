@@ -48,6 +48,19 @@ pub fn composite(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///     // ...
 /// }
 /// ```
+///
+/// Arguments correspond to the names they would be printed with in a failing
+/// test case, so need suffixing if they're repeated. For example:
+///
+/// ```ignore
+/// #[hegel::test]
+/// #[hegel::explicit_test_case(x_1 = 1, x_2 = 2, x_3 = 4 )]
+/// fn my_test(tc: hegel::TestCase) {
+///     for _ in 0..3 {
+///         let x: i32 = tc.draw(hegel::generators::integers());
+///     }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn explicit_test_case(attr: TokenStream, item: TokenStream) -> TokenStream {
     explicit_test_case::expand_explicit_test_case(attr.into(), item.into()).into()
