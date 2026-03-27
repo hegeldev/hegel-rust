@@ -21,3 +21,4 @@ result
 .claude/*.local.json
 .claude/*.local
 .claude-reliability/
+lcov.info
