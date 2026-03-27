@@ -1,7 +1,7 @@
 mod common;
 
 use common::project::TempRustProject;
-use common::utils::{assert_matches_regex, is_nightly};
+use common::utils::assert_matches_regex;
 
 const FAILING_TEST_CODE: &str = r#"
 use hegel::generators;
@@ -44,11 +44,8 @@ fn test_failing_test_output_with_backtrace() {
         .expect_failure("intentional failure")
         .cargo_run(&[]);
 
-    let closure_name = if is_nightly() {
-        r"\{closure#0\}"
-    } else {
-        r"\{\{closure\}\}"
-    };
+    // Rust >= 1.92 uses {closure#0}, older stable uses {{closure}}
+    let closure_name = r"(\{closure#0\}|\{\{closure\}\})";
     // For example:
     //   Draw 1: 0
     //   thread 'main' (1) panicked at src/main.rs:7:9:
@@ -97,11 +94,8 @@ fn test_failing_test_output_with_full_backtrace() {
         .expect_failure("intentional failure")
         .cargo_run(&[]);
 
-    let closure_name = if is_nightly() {
-        r"\{closure#0\}"
-    } else {
-        r"\{\{closure\}\}"
-    };
+    // Rust >= 1.92 uses {closure#0}, older stable uses {{closure}}
+    let closure_name = r"(\{closure#0\}|\{\{closure\}\})";
     assert_matches_regex(
         &output.stderr,
         &format!(

@@ -8,12 +8,21 @@ use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::TempDir;
 
-// cache build output from TempRustProject across tests. Compilation time is substantial
-// (10+ seconds) and this lets us only incur that cost on the first test.
+// Cache build output from TempRustProject across tests within the same process.
 //
-// We clear the dir at the start to ensure a fresh environment on each test run.
+// Under coverage (CARGO_LLVM_COV=1), we reuse the main project's llvm-cov target
+// dir so that subprocess builds share the same instrumented artifacts. This lets
+// cargo-llvm-cov's report phase map subprocess profraw data back to source files.
+// Cargo's internal file locks prevent corruption from concurrent access.
+//
+// Outside coverage, each test binary gets its own target dir (via PID) to avoid
+// heavy lock contention when multiple test binaries build in parallel.
 static SHARED_TARGET_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    let path = std::env::temp_dir().join("hegel-test-cargo-target");
+    if std::env::var("CARGO_LLVM_COV").is_ok() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/llvm-cov-target");
+        return path;
+    }
+    let path = std::env::temp_dir().join(format!("hegel-test-cargo-target-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).unwrap();
     path
