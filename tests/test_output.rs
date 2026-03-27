@@ -22,14 +22,14 @@ fn test_failing_test_output() {
         .cargo_run(&[]);
 
     // For example:
-    //   Draw 1: 0
+    //   let unnamed_1 = 0;
     //   thread 'main' (1) panicked at src/main.rs:7:9:
     //   intentional failure: 0
     //   note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
     assert_matches_regex(
         &output.stderr,
         concat!(
-            r"Draw 1: -?\d+\n",
+            r"let unnamed_1 = -?\d+;\n",
             r"thread '.*' \(\d+\) panicked at src/main\.rs:\d+:\d+:\n",
             r"intentional failure: -?\d+",
         ),
@@ -48,7 +48,7 @@ fn test_failing_test_output_with_backtrace() {
     // macOS stable (the exact conditions aren't fully understood). Accept both.
     let closure_name = r"(?:\{closure#0\}|\{\{closure\}\})";
     // For example:
-    //   Draw 1: 0
+    //   let unnamed_1 = 0;
     //   thread 'main' (1) panicked at src/main.rs:7:9:
     //   intentional failure: 0
     //   stack backtrace:
@@ -66,7 +66,7 @@ fn test_failing_test_output_with_backtrace() {
         &format!(
             concat!(
                 r"(?s)",
-                r"Draw 1: -?\d+\n",
+                r"let unnamed_1 = -?\d+;\n",
                 r"thread 'main' \(\d+\) panicked at src/main\.rs:\d+:\d+:\n",
                 r"intentional failure: -?\d+\n",
                 r"stack backtrace:\n",
@@ -103,7 +103,7 @@ fn test_failing_test_output_with_full_backtrace() {
         &format!(
             concat!(
                 r"(?s)",
-                r"Draw 1: -?\d+\n",
+                r"let unnamed_1 = -?\d+;\n",
                 r"thread 'main' \(\d+\) panicked at src/main\.rs:\d+:\d+:\n",
                 r"intentional failure: -?\d+\n",
                 r"stack backtrace:\n",

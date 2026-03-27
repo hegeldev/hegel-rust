@@ -25,33 +25,34 @@ See https://hegel.dev/reference/installation for details.
 Here's a quick example of how to write a Hegel test:
 
 ```rust
-use hegel::generators as gs;
+use hegel::generators::integers;
 use hegel::TestCase;
 
-fn my_sort(ls: &[i32]) -> Vec<i32> {                                                                 
-    let mut result: Vec<i32> = ls.to_vec(); 
-    result.sort();                         
-    result.dedup();
-    result                                                                                           
-}
-
 #[hegel::test]
-fn test_matches_builtin(tc: TestCase) {
-    let mut vec1 = tc.draw(gs::vecs(gs::integers::<i32>()));
-    let vec2 = my_sort(&vec1);
-    vec1.sort();
-    assert_eq!(vec1, vec2);
+fn test_addition_commutative(tc: TestCase) {
+    let x = tc.draw(integers::<i32>());
+    let y = tc.draw(integers::<i32>());
+    assert_eq!(x + y, y + x);
 }
 ```
 
-This test will fail when run with `cargo test`! Hegel will produce a minimal failing test case for us:
+This test will fail! Integer addition panics on overflow. Hegel will produce a minimal failing test case for us:
 
 ```
-Draw 1: [0, 0]
-thread 'test_matches_builtin' (2) panicked at src/main.rs:15:5:
-assertion `left == right` failed
-  left: [0, 0]
- right: [0]
+let x = 1;
+let y = 2147483647;
+thread 'test_addition_commutative' (2) panicked at examples/readme.rs:8:16:
+attempt to add with overflow
 ```
 
-Hegel reports the minimal example showing that our sort is incorrectly dropping duplicates. If we remove `result.dedup()` from `my_sort()`, this test will then pass (because it's just comparing the standard sort against itself). 
+For a passing test, try:
+
+```rust
+#[hegel::test]
+fn test_wrapping_addition_commutative(tc: TestCase) {
+    let add = i32::wrapping_add;
+    let x = tc.draw(integers::<i32>());
+    let y = tc.draw(integers::<i32>());
+    assert_eq!(add(x, y), add(y, x));
+}
+```
