@@ -176,6 +176,105 @@ impl VisitMut for DrawRewriter {
     }
 }
 
+/// A parsed explicit test case: a list of (name, expression_source) pairs.
+struct ParsedExplicitTestCase {
+    entries: Vec<(String, String)>, // (name, expr_source)
+}
+
+/// Check if an attribute path matches `hegel::explicit_test_case`.
+fn is_explicit_test_case_attr(attr: &syn::Attribute) -> bool {
+    let segments: Vec<_> = attr.path().segments.iter().collect();
+    segments.len() == 2 && segments[0].ident == "hegel" && segments[1].ident == "explicit_test_case"
+}
+
+/// Extract `#[hegel::explicit_test_case(...)]` attributes directly from `func.attrs`.
+/// Returns the parsed test cases and removes the attributes from the list.
+/// Returns `Err` with a compile error if any attribute is malformed.
+fn extract_explicit_test_cases(
+    attrs: &mut Vec<syn::Attribute>,
+) -> Result<Vec<ParsedExplicitTestCase>, TokenStream> {
+    let mut cases = Vec::new();
+    let mut error = None;
+    attrs.retain(|attr| {
+        if !is_explicit_test_case_attr(attr) {
+            return true;
+        }
+
+        let syn::Meta::List(list) = &attr.meta else {
+            error = Some(
+                syn::Error::new_spanned(
+                    attr,
+                    "#[hegel::explicit_test_case] requires arguments.\n\
+                     Usage: #[hegel::explicit_test_case(name = value, ...)]",
+                )
+                .to_compile_error(),
+            );
+            return false;
+        };
+
+        let parsed: syn::Result<ExplicitTestCaseAttrArgs> = syn::parse2(list.tokens.clone());
+        match parsed {
+            Ok(args) if args.entries.is_empty() => {
+                error = Some(
+                    syn::Error::new_spanned(
+                        attr,
+                        "#[hegel::explicit_test_case] requires at least one name = value pair.\n\
+                         Usage: #[hegel::explicit_test_case(name = value, ...)]",
+                    )
+                    .to_compile_error(),
+                );
+            }
+            Ok(args) => {
+                let entries = args
+                    .entries
+                    .iter()
+                    .map(|arg| {
+                        let name = arg.name.to_string();
+                        let expr = &arg.value;
+                        let expr_source = quote::quote!(#expr).to_string();
+                        (name, expr_source)
+                    })
+                    .collect();
+                cases.push(ParsedExplicitTestCase { entries });
+            }
+            Err(e) => {
+                error = Some(e.to_compile_error());
+            }
+        }
+        false // remove this attr
+    });
+    if let Some(err) = error {
+        return Err(err);
+    }
+    Ok(cases)
+}
+
+/// Parsed arguments for a single `#[hegel::explicit_test_case(name = expr, ...)]`.
+struct ExplicitTestCaseAttrArgs {
+    entries: Vec<ExplicitTestCaseEntry>,
+}
+
+struct ExplicitTestCaseEntry {
+    name: Ident,
+    value: Expr,
+}
+
+impl syn::parse::Parse for ExplicitTestCaseAttrArgs {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let mut entries = Vec::new();
+        while !input.is_empty() {
+            let name: Ident = input.parse()?;
+            let _eq: Token![=] = input.parse()?;
+            let value: Expr = input.parse()?;
+            entries.push(ExplicitTestCaseEntry { name, value });
+            if !input.is_empty() {
+                let _comma: Token![,] = input.parse()?;
+            }
+        }
+        Ok(ExplicitTestCaseAttrArgs { entries })
+    }
+}
+
 pub fn expand_test(attr: proc_macro2::TokenStream, item: proc_macro2::TokenStream) -> TokenStream {
     let test_args: TestArgs = if attr.is_empty() {
         TestArgs {
@@ -189,7 +288,7 @@ pub fn expand_test(attr: proc_macro2::TokenStream, item: proc_macro2::TokenStrea
         }
     };
 
-    let func: ItemFn = match syn::parse2(item) {
+    let mut func: ItemFn = match syn::parse2(item) {
         Ok(f) => f,
         Err(e) => return e.to_compile_error(),
     };
@@ -226,6 +325,13 @@ pub fn expand_test(attr: proc_macro2::TokenStream, item: proc_macro2::TokenStrea
             .to_compile_error();
         }
     }
+
+    // Extract #[hegel::explicit_test_case(...)] attributes (they haven't been
+    // processed yet because #[hegel::test] runs first as the outermost attribute).
+    let explicit_cases = match extract_explicit_test_cases(&mut func.attrs) {
+        Ok(cases) => cases,
+        Err(err) => return err,
+    };
 
     // Rewrite `let x = tc.draw(gen)` -> `let x = tc.draw_named(gen, "x", repeatable)`
     //
@@ -279,8 +385,38 @@ pub fn expand_test(attr: proc_macro2::TokenStream, item: proc_macro2::TokenStrea
         None => quote! { hegel::Settings::new() #(#settings_args_chain)* },
     };
 
+    // Generate explicit test case blocks (run before the property test).
+    let explicit_blocks: Vec<TokenStream> = explicit_cases
+        .iter()
+        .map(|case| {
+            let with_value_calls: Vec<TokenStream> = case
+                .entries
+                .iter()
+                .map(|(name, expr_source)| {
+                    let expr: syn::Expr = syn::parse_str(expr_source).unwrap_or_else(|e| {
+                        panic!("Failed to parse explicit_test_case expression: {}", e)
+                    });
+                    let source_lit = syn::LitStr::new(expr_source, proc_macro2::Span::call_site());
+                    quote! {
+                        .with_value(#name, #source_lit, #expr)
+                    }
+                })
+                .collect();
+
+            quote! {
+                {
+                    let __hegel_etc = hegel::ExplicitTestCase::new()
+                        #(#with_value_calls)*;
+                    __hegel_etc.run(|#param_pat: &hegel::ExplicitTestCase| #body);
+                }
+            }
+        })
+        .collect();
+
     let new_body: TokenStream = quote! {
         {
+            #(#explicit_blocks)*
+
             hegel::Hegel::new(|#param_pat: #param_ty| #body)
             .settings(#settings_expr)
             .__database_key(format!("{}::{}", module_path!(), #test_name))
