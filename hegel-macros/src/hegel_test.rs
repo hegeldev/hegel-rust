@@ -72,7 +72,7 @@ fn extract_ident_from_pat(pat: &Pat) -> Option<String> {
 }
 
 /// Check if a `let` binding is of the form `let <ident> = <tc_ident>.draw(<one_arg>)`.
-fn is_tc_draw_binding<'a>(node: &'a syn::Local, tc_ident: &str) -> Option<String> {
+fn is_tc_draw_binding(node: &syn::Local, tc_ident: &str) -> Option<String> {
     let var_name = extract_ident_from_pat(&node.pat)?;
 
     let init = node.init.as_ref()?;

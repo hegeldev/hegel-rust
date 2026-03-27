@@ -154,11 +154,11 @@ impl TestCase {
     ///     let x: i32 = tc.draw(gs::integers());
     ///     let s: String = tc.draw(gs::text());
     /// }
-    ///
-    /// NOTE: When run inside a #[hegel::test], draw() will typically be
-    /// rewritten to draw_named() with an appropriate variable name
-    /// in order to give better test output.
     /// ```
+    ///
+    /// Note: when run inside a `#[hegel::test]`, `draw()` will typically be
+    /// rewritten to `draw_named()` with an appropriate variable name
+    /// in order to give better test output.
     pub fn draw<T: std::fmt::Debug>(&self, generator: impl Generator<T>) -> T {
         self.draw_named(generator, "unnamed", true)
     }
@@ -174,9 +174,9 @@ impl TestCase {
     /// - `let name = value;` (when not repeatable)
     /// - `let name_N = value;` (when repeatable)
     ///
-    /// NOTE: Although this is public API and you are welcome to use it
-    /// it's not really intended for direct use, but is instead a target
-    /// that we rewrite draw calls to where appropriate.
+    /// Note: although this is public API and you are welcome to use it,
+    /// it's not really intended for direct use. It is the target that
+    /// `#[hegel::test]` rewrites `draw()` calls to where appropriate.
     pub fn draw_named<T: std::fmt::Debug>(
         &self,
         generator: impl Generator<T>,
