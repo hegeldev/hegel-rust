@@ -144,7 +144,7 @@ impl BinaryGenerator {
 fn parse_binary(raw: Value) -> Vec<u8> {
     match raw {
         Value::Bytes(bytes) => bytes,
-        _ => panic!("expected Value::Bytes, got {:?}", raw),
+        _ => unreachable!("expected Value::Bytes, got {:?}", raw),
     }
 }
 

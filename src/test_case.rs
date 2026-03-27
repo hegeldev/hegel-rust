@@ -427,7 +427,7 @@ impl<'a> Collection<'a> {
     /// Ask the server whether to produce another element.
     pub fn more(&mut self) -> bool {
         if self.finished {
-            return false;
+            unreachable!("Collection::more() called after collection already finished");
         }
         let server_name = self.ensure_initialized().to_string();
         let response = match self.tc.send_request(
@@ -453,7 +453,7 @@ impl<'a> Collection<'a> {
     /// Reject the last element (don't count it towards the size budget).
     pub fn reject(&mut self, why: Option<&str>) {
         if self.finished {
-            return;
+            unreachable!("Collection::reject() called after collection already finished");
         }
         let server_name = self.ensure_initialized().to_string();
         let mut payload = cbor_map! {

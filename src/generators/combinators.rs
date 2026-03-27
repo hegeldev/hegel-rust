@@ -14,16 +14,12 @@ impl<T: Clone + Send + Sync> Generator<T> for SampledFromGenerator<T> {
             return basic.do_draw(tc);
         }
 
-        let indices = integers::<usize>()
-            .min_value(0)
-            .max_value(self.elements.len() - 1);
-        let index = indices.do_draw(tc);
-        self.elements[index].clone()
+        unreachable!("sampled_from always has as_basic since elements is guaranteed non-empty")
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
         if self.elements.is_empty() {
-            return None;
+            unreachable!("sampled_from constructor asserts non-empty");
         }
 
         let schema = cbor_map! {
@@ -97,14 +93,14 @@ impl<T> Generator<T> for OneOfGenerator<'_, T> {
         Some(BasicGenerator::new(schema, move |raw| {
             let arr = match raw {
                 Value::Array(arr) => arr,
-                _ => panic!("Expected array from tagged tuple, got {:?}", raw),
+                _ => unreachable!("Expected array from tagged tuple, got {:?}", raw),
             };
             let tag = match &arr[0] {
                 Value::Integer(i) => {
                     let val: i128 = (*i).into();
                     val as usize
                 }
-                _ => panic!("Expected integer tag, got {:?}", arr[0]),
+                _ => unreachable!("Expected integer tag, got {:?}", arr[0]),
             };
             let value = arr.into_iter().nth(1).unwrap();
             basics[tag].parse_raw(value)
@@ -200,14 +196,14 @@ where
         Some(BasicGenerator::new(schema, move |raw| {
             let arr = match raw {
                 Value::Array(arr) => arr,
-                _ => panic!("Expected array from tagged tuple, got {:?}", raw),
+                _ => unreachable!("Expected array from tagged tuple, got {:?}", raw),
             };
             let tag = match &arr[0] {
                 Value::Integer(i) => {
                     let val: i128 = (*i).into();
                     val as usize
                 }
-                _ => panic!("Expected integer tag, got {:?}", arr[0]),
+                _ => unreachable!("Expected integer tag, got {:?}", arr[0]),
             };
 
             if tag == 0 {

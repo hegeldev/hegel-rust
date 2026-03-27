@@ -100,7 +100,7 @@ macro_rules! impl_tuple {
                 Some(BasicGenerator::new(schema, move |raw| {
                     let arr = match raw {
                         Value::Array(arr) => arr,
-                        _ => panic!("Expected array from tuple schema, got {:?}", raw),
+                        _ => unreachable!("Expected array from tuple schema, got {:?}", raw),
                     };
                     let mut iter = arr.into_iter();
 

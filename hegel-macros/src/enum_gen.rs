@@ -60,7 +60,7 @@ fn variant_field_types(variant: &Variant) -> Vec<&syn::Type> {
             field_types
         }
         VariantKind::TupleSingle { field_type } => vec![field_type],
-        VariantKind::Unit => vec![],
+        VariantKind::Unit => unreachable!("variant_field_types is only called on data variants"),
     }
 }
 
@@ -476,8 +476,7 @@ fn generate_variant_generator(
 
     match classify_variant(variant) {
         VariantKind::Unit => {
-            // Unit variants don't get their own generator
-            quote! {}
+            unreachable!("generate_variant_generator is only called on data variants")
         }
         VariantKind::Named {
             field_names,

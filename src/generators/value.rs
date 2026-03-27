@@ -84,7 +84,7 @@ impl From<ciborium::Value> for HegelValue {
             ciborium::Value::Tag(tag, _) => {
                 panic!("Unexpected CBOR tag {tag} in protocol value")
             }
-            other => panic!("Unexpected CBOR value type: {:?}", other),
+            other => unreachable!("Unexpected CBOR value type: {:?}", other),
         }
     }
 }
