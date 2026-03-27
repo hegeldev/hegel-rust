@@ -9,14 +9,72 @@ use std::backtrace::{Backtrace, BacktraceStatus};
 use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Once};
+use std::time::{Duration, Instant};
 
 const SUPPORTED_PROTOCOL_VERSIONS: (f64, f64) = (0.6, 0.7);
 const HEGEL_SERVER_VERSION: &str = "0.2.3";
 const HEGEL_SERVER_COMMAND_ENV: &str = "HEGEL_SERVER_COMMAND";
-const HEGEL_SERVER_DIR: &str = ".hegel";
+const FILE_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
+const FILE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Returns the cache directory for hegel installations.
+///
+/// Resolution order:
+/// 1. `$XDG_CACHE_HOME/hegel` if `XDG_CACHE_HOME` is set
+/// 2. `~/Library/Caches/hegel` on macOS
+/// 3. `~/.cache/hegel` on other platforms
+fn hegel_cache_dir() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
+        return PathBuf::from(xdg).join("hegel");
+    }
+    let home = std::env::var("HOME").expect(
+        "Could not determine home directory: HOME is not set. \
+         Set XDG_CACHE_HOME or HEGEL_SERVER_COMMAND to work around this.",
+    );
+    if cfg!(target_os = "macos") {
+        PathBuf::from(home).join("Library/Caches/hegel")
+    } else {
+        PathBuf::from(home).join(".cache/hegel")
+    }
+}
+
+/// Returns the versioned directory for the current hegel-core version.
+/// e.g. `<cache>/versions/0.2.3`
+fn hegel_version_dir() -> PathBuf {
+    hegel_cache_dir()
+        .join("versions")
+        .join(HEGEL_SERVER_VERSION)
+}
+
+/// Acquire a cross-process file lock using mkdir (atomic on all platforms).
+fn acquire_file_lock(lock_dir: &std::path::Path) -> Result<(), String> {
+    let deadline = Instant::now() + FILE_LOCK_TIMEOUT;
+    loop {
+        match std::fs::create_dir(lock_dir) {
+            Ok(()) => return Ok(()),
+            Err(_) if Instant::now() < deadline => {
+                std::thread::sleep(FILE_LOCK_POLL_INTERVAL);
+            }
+            Err(_) => {
+                return Err(format!(
+                    "hegel: timed out waiting for install lock at {} \
+                     (another process may be installing; remove manually if stale)",
+                    lock_dir.display()
+                ));
+            }
+        }
+    }
+}
+
+/// Release the cross-process file lock.
+fn release_file_lock(lock_dir: &std::path::Path) {
+    std::fs::remove_dir(lock_dir).expect("Failed to release install lock");
+}
+
 const UV_NOT_FOUND_MESSAGE: &str = "\
 You are seeing this error message because hegel-rust tried to use `uv` to install \
 hegel-core, but could not find uv on the PATH.
@@ -25,7 +83,7 @@ Hegel uses a Python server component called `hegel-core` to share core property-
 testing functionality across languages. There are two ways for Hegel to get hegel-core:
 
 * By default, Hegel looks for uv (https://docs.astral.sh/uv/) on the PATH, and \
-  uses uv to install hegel-core to a local `.hegel/venv` directory. We recommend this \
+  uses uv to install hegel-core into a cache directory. We recommend this \
   option. To continue, install uv: https://docs.astral.sh/uv/getting-started/installation/.
 * Alternatively, you can manage the installation of hegel-core yourself. After installing, \
   setting the HEGEL_SERVER_COMMAND environment variable to your hegel-core binary path tells \
@@ -266,26 +324,55 @@ fn init_panic_hook() {
 }
 
 fn ensure_hegel_installed() -> Result<String, String> {
-    let venv_dir = format!("{HEGEL_SERVER_DIR}/venv");
-    let version_file = format!("{venv_dir}/hegel-version");
-    let hegel_bin = format!("{venv_dir}/bin/hegel");
-    let install_log = format!("{HEGEL_SERVER_DIR}/install.log");
+    let version_dir = hegel_version_dir();
+    let venv_dir = version_dir.join("venv");
+    let version_file = venv_dir.join("hegel-version");
+    let hegel_bin = venv_dir.join("bin/hegel");
+    let install_log = version_dir.join("install.log");
 
-    // Check cached version
-    if let Ok(cached) = std::fs::read_to_string(&version_file) {
-        if cached.trim() == HEGEL_SERVER_VERSION && std::path::Path::new(&hegel_bin).is_file() {
-            return Ok(hegel_bin);
-        }
+    // Fast path (no locks): check cached version.
+    if is_installed(&version_file, &hegel_bin) {
+        return Ok(hegel_bin.to_string_lossy().into_owned());
     }
 
-    std::fs::create_dir_all(HEGEL_SERVER_DIR)
-        .map_err(|e| format!("Failed to create {HEGEL_SERVER_DIR}: {e}"))?;
+    // Create the version directory (needed for the file lock).
+    std::fs::create_dir_all(&version_dir)
+        .map_err(|e| format!("Failed to create {}: {e}", version_dir.display()))?;
 
-    let log_file = std::fs::File::create(&install_log)
+    // Acquire cross-process file lock.
+    let lock_dir = version_dir.join(".install-lock");
+    acquire_file_lock(&lock_dir)?;
+    let result = do_install(&venv_dir, &version_file, &hegel_bin, &install_log);
+    release_file_lock(&lock_dir);
+    result
+}
+
+fn is_installed(version_file: &std::path::Path, hegel_bin: &std::path::Path) -> bool {
+    if let Ok(cached) = std::fs::read_to_string(version_file) {
+        cached.trim() == HEGEL_SERVER_VERSION && hegel_bin.is_file()
+    } else {
+        false
+    }
+}
+
+fn do_install(
+    venv_dir: &std::path::Path,
+    version_file: &std::path::Path,
+    hegel_bin: &std::path::Path,
+    install_log: &std::path::Path,
+) -> Result<String, String> {
+    // Re-check after acquiring lock (another process may have installed).
+    if is_installed(version_file, hegel_bin) {
+        return Ok(hegel_bin.to_string_lossy().into_owned());
+    }
+
+    let venv_str = venv_dir.to_string_lossy();
+
+    let log_file = std::fs::File::create(install_log)
         .map_err(|e| format!("Failed to create install log: {e}"))?;
 
     let status = std::process::Command::new("uv")
-        .args(["venv", "--clear", &venv_dir])
+        .args(["venv", "--clear", &venv_str])
         .stderr(log_file.try_clone().unwrap())
         .stdout(log_file.try_clone().unwrap())
         .status();
@@ -297,19 +384,20 @@ fn ensure_hegel_installed() -> Result<String, String> {
             return Err(format!("Failed to run `uv venv`: {e}"));
         }
         Ok(s) if !s.success() => {
-            let log = std::fs::read_to_string(&install_log).unwrap_or_default();
+            let log = std::fs::read_to_string(install_log).unwrap_or_default();
             return Err(format!("uv venv failed. Install log:\n{log}"));
         }
         Ok(_) => {}
     }
 
-    let python_path = format!("{venv_dir}/bin/python");
+    let python_path = venv_dir.join("bin/python");
+    let python_str = python_path.to_string_lossy();
     let status = std::process::Command::new("uv")
         .args([
             "pip",
             "install",
             "--python",
-            &python_path,
+            &python_str,
             &format!("hegel-core=={HEGEL_SERVER_VERSION}"),
         ])
         .stderr(log_file.try_clone().unwrap())
@@ -317,7 +405,7 @@ fn ensure_hegel_installed() -> Result<String, String> {
         .status()
         .map_err(|e| format!("Failed to run `uv pip install`: {e}"))?;
     if !status.success() {
-        let log = std::fs::read_to_string(&install_log).unwrap_or_default();
+        let log = std::fs::read_to_string(install_log).unwrap_or_default();
         return Err(format!(
             "Failed to install hegel-core (version: {HEGEL_SERVER_VERSION}). \
              Set {HEGEL_SERVER_COMMAND_ENV} to a hegel binary path to skip installation.\n\
@@ -325,23 +413,26 @@ fn ensure_hegel_installed() -> Result<String, String> {
         ));
     }
 
-    if !std::path::Path::new(&hegel_bin).is_file() {
-        return Err(format!("hegel not found at {hegel_bin} after installation"));
+    if !hegel_bin.is_file() {
+        return Err(format!(
+            "hegel not found at {} after installation",
+            hegel_bin.display()
+        ));
     }
 
-    std::fs::write(&version_file, HEGEL_SERVER_VERSION)
+    std::fs::write(version_file, HEGEL_SERVER_VERSION)
         .map_err(|e| format!("Failed to write version file: {e}"))?;
 
-    Ok(hegel_bin)
+    Ok(hegel_bin.to_string_lossy().into_owned())
 }
 
 fn server_log_file() -> File {
     let file = SERVER_LOG_FILE.get_or_init(|| {
-        std::fs::create_dir_all(HEGEL_SERVER_DIR).ok();
+        std::fs::create_dir_all(".hegel").ok();
         let file = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(format!("{HEGEL_SERVER_DIR}/server.log"))
+            .open(".hegel/server.log")
             .expect("Failed to open server log file");
         Mutex::new(file)
     });
@@ -932,4 +1023,557 @@ fn cbor_encode(value: &Value) -> Vec<u8> {
 /// Decode CBOR bytes to a ciborium::Value.
 fn cbor_decode(bytes: &[u8]) -> Value {
     ciborium::from_reader(bytes).expect("CBOR decoding failed")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex as StdMutex;
+    use tempfile::TempDir;
+
+    // Environment variable tests must run serially since env vars are process-global.
+    // Use into_ok() to recover from poison (the should_panic test poisons the mutex).
+    static ENV_LOCK: StdMutex<()> = StdMutex::new(());
+
+    fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    // SAFETY: All env var mutations are serialized by ENV_LOCK, so no other
+    // threads are reading these variables concurrently.
+
+    unsafe fn set_env(key: &str, val: impl AsRef<std::ffi::OsStr>) {
+        unsafe { std::env::set_var(key, val) }
+    }
+
+    unsafe fn remove_env(key: &str) {
+        unsafe { std::env::remove_var(key) }
+    }
+
+    unsafe fn restore_env(key: &str, old: Option<String>) {
+        match old {
+            Some(v) => unsafe { set_env(key, v) },
+            None => unsafe { remove_env(key) },
+        }
+    }
+
+    // -- hegel_cache_dir tests --
+
+    #[test]
+    fn cache_dir_respects_xdg_cache_home() {
+        let _guard = lock_env();
+        let old_xdg = std::env::var("XDG_CACHE_HOME").ok();
+        unsafe { set_env("XDG_CACHE_HOME", "/tmp/test-xdg-cache") };
+        let result = hegel_cache_dir();
+        unsafe { restore_env("XDG_CACHE_HOME", old_xdg) };
+        assert_eq!(result, PathBuf::from("/tmp/test-xdg-cache/hegel"));
+    }
+
+    #[test]
+    fn cache_dir_falls_back_to_home_when_xdg_unset() {
+        let _guard = lock_env();
+        let old_xdg = std::env::var("XDG_CACHE_HOME").ok();
+        let old_home = std::env::var("HOME").ok();
+        unsafe { remove_env("XDG_CACHE_HOME") };
+        unsafe { set_env("HOME", "/Users/testuser") };
+        let result = hegel_cache_dir();
+        unsafe { restore_env("XDG_CACHE_HOME", old_xdg) };
+        unsafe { restore_env("HOME", old_home) };
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                result,
+                PathBuf::from("/Users/testuser/Library/Caches/hegel")
+            );
+        } else {
+            assert_eq!(result, PathBuf::from("/Users/testuser/.cache/hegel"));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Could not determine home directory")]
+    fn cache_dir_panics_when_home_unset_and_no_xdg() {
+        let _guard = lock_env();
+        let old_xdg = std::env::var("XDG_CACHE_HOME").ok();
+        let old_home = std::env::var("HOME").ok();
+        unsafe { remove_env("XDG_CACHE_HOME") };
+        unsafe { remove_env("HOME") };
+        let _cleanup = defer(move || unsafe {
+            restore_env("XDG_CACHE_HOME", old_xdg);
+            restore_env("HOME", old_home);
+        });
+        hegel_cache_dir();
+    }
+
+    #[test]
+    fn cache_dir_xdg_takes_priority_over_platform_default() {
+        let _guard = lock_env();
+        let old_xdg = std::env::var("XDG_CACHE_HOME").ok();
+        unsafe { set_env("XDG_CACHE_HOME", "/custom/cache") };
+        let result = hegel_cache_dir();
+        unsafe { restore_env("XDG_CACHE_HOME", old_xdg) };
+        // Even on macOS, XDG_CACHE_HOME should take priority
+        assert_eq!(result, PathBuf::from("/custom/cache/hegel"));
+    }
+
+    // -- hegel_version_dir tests --
+
+    #[test]
+    fn version_dir_includes_version_number() {
+        let _guard = lock_env();
+        let old_xdg = std::env::var("XDG_CACHE_HOME").ok();
+        unsafe { set_env("XDG_CACHE_HOME", "/tmp/test-cache") };
+        let result = hegel_version_dir();
+        unsafe { restore_env("XDG_CACHE_HOME", old_xdg) };
+        assert_eq!(
+            result,
+            PathBuf::from(format!(
+                "/tmp/test-cache/hegel/versions/{}",
+                HEGEL_SERVER_VERSION
+            ))
+        );
+    }
+
+    // -- is_installed tests --
+
+    #[test]
+    fn is_installed_false_when_version_file_missing() {
+        let dir = TempDir::new().unwrap();
+        let version_file = dir.path().join("hegel-version");
+        let hegel_bin = dir.path().join("bin/hegel");
+        assert!(!is_installed(&version_file, &hegel_bin));
+    }
+
+    #[test]
+    fn is_installed_false_when_version_mismatch() {
+        let dir = TempDir::new().unwrap();
+        let version_file = dir.path().join("hegel-version");
+        let hegel_bin = dir.path().join("bin/hegel");
+        std::fs::create_dir_all(dir.path().join("bin")).unwrap();
+        std::fs::write(&hegel_bin, "fake").unwrap();
+        std::fs::write(&version_file, "0.0.0").unwrap();
+        assert!(!is_installed(&version_file, &hegel_bin));
+    }
+
+    #[test]
+    fn is_installed_false_when_binary_missing() {
+        let dir = TempDir::new().unwrap();
+        let version_file = dir.path().join("hegel-version");
+        let hegel_bin = dir.path().join("bin/hegel");
+        std::fs::write(&version_file, HEGEL_SERVER_VERSION).unwrap();
+        assert!(!is_installed(&version_file, &hegel_bin));
+    }
+
+    #[test]
+    fn is_installed_true_when_version_matches_and_binary_exists() {
+        let dir = TempDir::new().unwrap();
+        let version_file = dir.path().join("hegel-version");
+        let hegel_bin = dir.path().join("bin/hegel");
+        std::fs::create_dir_all(dir.path().join("bin")).unwrap();
+        std::fs::write(&hegel_bin, "fake").unwrap();
+        std::fs::write(&version_file, HEGEL_SERVER_VERSION).unwrap();
+        assert!(is_installed(&version_file, &hegel_bin));
+    }
+
+    #[test]
+    fn is_installed_trims_whitespace_from_version_file() {
+        let dir = TempDir::new().unwrap();
+        let version_file = dir.path().join("hegel-version");
+        let hegel_bin = dir.path().join("bin/hegel");
+        std::fs::create_dir_all(dir.path().join("bin")).unwrap();
+        std::fs::write(&hegel_bin, "fake").unwrap();
+        std::fs::write(&version_file, format!("  {HEGEL_SERVER_VERSION}\n")).unwrap();
+        assert!(is_installed(&version_file, &hegel_bin));
+    }
+
+    #[test]
+    fn is_installed_false_when_version_file_is_empty() {
+        let dir = TempDir::new().unwrap();
+        let version_file = dir.path().join("hegel-version");
+        let hegel_bin = dir.path().join("bin/hegel");
+        std::fs::create_dir_all(dir.path().join("bin")).unwrap();
+        std::fs::write(&hegel_bin, "fake").unwrap();
+        std::fs::write(&version_file, "").unwrap();
+        assert!(!is_installed(&version_file, &hegel_bin));
+    }
+
+    #[test]
+    fn is_installed_false_when_binary_is_directory() {
+        let dir = TempDir::new().unwrap();
+        let version_file = dir.path().join("hegel-version");
+        let hegel_bin = dir.path().join("bin/hegel");
+        // Create hegel as a directory, not a file
+        std::fs::create_dir_all(&hegel_bin).unwrap();
+        std::fs::write(&version_file, HEGEL_SERVER_VERSION).unwrap();
+        assert!(!is_installed(&version_file, &hegel_bin));
+    }
+
+    // -- acquire_file_lock / release_file_lock tests --
+
+    #[test]
+    fn file_lock_acquire_creates_directory() {
+        let dir = TempDir::new().unwrap();
+        let lock_dir = dir.path().join(".install-lock");
+        assert!(!lock_dir.exists());
+        acquire_file_lock(&lock_dir).unwrap();
+        assert!(lock_dir.exists());
+        assert!(lock_dir.is_dir());
+        release_file_lock(&lock_dir);
+    }
+
+    #[test]
+    fn file_lock_release_removes_directory() {
+        let dir = TempDir::new().unwrap();
+        let lock_dir = dir.path().join(".install-lock");
+        acquire_file_lock(&lock_dir).unwrap();
+        assert!(lock_dir.exists());
+        release_file_lock(&lock_dir);
+        assert!(!lock_dir.exists());
+    }
+
+    #[test]
+    #[should_panic(expected = "Failed to release install lock")]
+    fn file_lock_release_panics_when_not_held() {
+        let dir = TempDir::new().unwrap();
+        let lock_dir = dir.path().join(".install-lock");
+        release_file_lock(&lock_dir);
+    }
+
+    #[test]
+    fn file_lock_cannot_acquire_twice() {
+        let dir = TempDir::new().unwrap();
+        let lock_dir = dir.path().join(".install-lock");
+        acquire_file_lock(&lock_dir).unwrap();
+        // Second acquire from same thread would block forever;
+        // verify the lock dir exists (which is what blocks acquisition).
+        assert!(std::fs::create_dir(&lock_dir).is_err());
+        release_file_lock(&lock_dir);
+    }
+
+    #[test]
+    fn file_lock_acquire_succeeds_after_release_from_another_thread() {
+        let dir = TempDir::new().unwrap();
+        let lock_dir = dir.path().join(".install-lock");
+
+        // Thread 1: hold the lock for a short time, then release.
+        let lock_dir_clone = lock_dir.clone();
+        let holder = std::thread::spawn(move || {
+            acquire_file_lock(&lock_dir_clone).unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+            release_file_lock(&lock_dir_clone);
+        });
+
+        // Give thread 1 time to acquire the lock.
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Thread 2 (this thread): should block then succeed.
+        let start = Instant::now();
+        acquire_file_lock(&lock_dir).unwrap();
+        let elapsed = start.elapsed();
+
+        // It should have waited at least ~100ms (holder had ~150ms left).
+        assert!(
+            elapsed >= Duration::from_millis(50),
+            "expected to wait for lock, but elapsed was {:?}",
+            elapsed
+        );
+        release_file_lock(&lock_dir);
+        holder.join().unwrap();
+    }
+
+    #[test]
+    fn file_lock_concurrent_threads_serialize() {
+        let dir = TempDir::new().unwrap();
+        let lock_dir = dir.path().join(".install-lock");
+        let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let max_concurrent = Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+        let mut handles = vec![];
+        for _ in 0..5 {
+            let ld = lock_dir.clone();
+            let ctr = Arc::clone(&counter);
+            let max = Arc::clone(&max_concurrent);
+            handles.push(std::thread::spawn(move || {
+                acquire_file_lock(&ld).unwrap();
+                let current = ctr.fetch_add(1, Ordering::SeqCst) + 1;
+                // Track the maximum number of concurrent holders.
+                max.fetch_max(current, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(10));
+                ctr.fetch_sub(1, Ordering::SeqCst);
+                release_file_lock(&ld);
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        // At most one thread should have held the lock at a time.
+        assert_eq!(max_concurrent.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn file_lock_fails_when_parent_directory_does_not_exist() {
+        let lock_dir = PathBuf::from("/nonexistent/path/.install-lock");
+        // mkdir on a nonexistent parent should fail immediately and keep failing
+        // until timeout. We can't wait 5 minutes, so just verify the underlying
+        // mkdir fails.
+        let result = std::fs::create_dir(&lock_dir);
+        assert!(result.is_err());
+    }
+
+    // -- do_install tests --
+
+    #[test]
+    fn do_install_returns_early_if_already_installed() {
+        let dir = TempDir::new().unwrap();
+        let venv_dir = dir.path().join("venv");
+        let version_file = venv_dir.join("hegel-version");
+        let hegel_bin = venv_dir.join("bin/hegel");
+        let install_log = dir.path().join("install.log");
+
+        // Set up a "pre-installed" state.
+        std::fs::create_dir_all(venv_dir.join("bin")).unwrap();
+        std::fs::write(&hegel_bin, "fake-binary").unwrap();
+        std::fs::write(&version_file, HEGEL_SERVER_VERSION).unwrap();
+
+        // do_install should return immediately without running uv.
+        let result = do_install(&venv_dir, &version_file, &hegel_bin, &install_log);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), hegel_bin.to_string_lossy());
+    }
+
+    #[test]
+    fn do_install_fails_when_uv_not_found() {
+        let dir = TempDir::new().unwrap();
+        let venv_dir = dir.path().join("venv");
+        let version_file = venv_dir.join("hegel-version");
+        let hegel_bin = venv_dir.join("bin/hegel");
+        let install_log = dir.path().join("install.log");
+
+        // Ensure uv won't be found by setting PATH to empty.
+        let _guard = lock_env();
+        let old_path = std::env::var("PATH").ok();
+        unsafe { set_env("PATH", "") };
+        let result = do_install(&venv_dir, &version_file, &hegel_bin, &install_log);
+        unsafe { restore_env("PATH", old_path) };
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("uv") && (err.contains("not found") || err.contains("PATH")),
+            "expected uv-not-found error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn do_install_fails_when_uv_venv_fails() {
+        let dir = TempDir::new().unwrap();
+        let venv_dir = dir.path().join("venv");
+        let version_file = venv_dir.join("hegel-version");
+        let hegel_bin = venv_dir.join("bin/hegel");
+        let install_log = dir.path().join("install.log");
+
+        // Create a script that pretends to be uv but fails on "venv".
+        let fake_bin = dir.path().join("fake-bin");
+        std::fs::create_dir_all(&fake_bin).unwrap();
+        let fake_uv = fake_bin.join("uv");
+        std::fs::write(&fake_uv, "#!/bin/sh\nexit 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake_uv, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let _guard = lock_env();
+        let old_path = std::env::var("PATH").ok();
+        unsafe { set_env("PATH", fake_bin.to_string_lossy().as_ref()) };
+        let result = do_install(&venv_dir, &version_file, &hegel_bin, &install_log);
+        unsafe { restore_env("PATH", old_path) };
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("uv venv failed"),
+            "expected venv failure, got: {err}"
+        );
+    }
+
+    #[test]
+    fn do_install_fails_when_pip_install_fails() {
+        let dir = TempDir::new().unwrap();
+        let venv_dir = dir.path().join("venv");
+        let version_file = venv_dir.join("hegel-version");
+        let hegel_bin = venv_dir.join("bin/hegel");
+        let install_log = dir.path().join("install.log");
+
+        // Create a fake uv that succeeds on "venv" (creates the dir) but fails on "pip".
+        let fake_bin = dir.path().join("fake-bin");
+        std::fs::create_dir_all(&fake_bin).unwrap();
+        let fake_uv = fake_bin.join("uv");
+        let venv_str = venv_dir.to_string_lossy().to_string();
+        std::fs::write(
+            &fake_uv,
+            format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"venv\" ]; then\n\
+                   mkdir -p \"{venv_str}/bin\"\n\
+                   touch \"{venv_str}/bin/python\"\n\
+                   exit 0\n\
+                 fi\n\
+                 exit 1\n"
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake_uv, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let _guard = lock_env();
+        let old_path = std::env::var("PATH").ok();
+        unsafe { set_env("PATH", fake_bin.to_string_lossy().as_ref()) };
+        let result = do_install(&venv_dir, &version_file, &hegel_bin, &install_log);
+        unsafe { restore_env("PATH", old_path) };
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("Failed to install hegel-core"),
+            "expected pip install failure, got: {err}"
+        );
+    }
+
+    #[test]
+    fn do_install_fails_when_binary_missing_after_install() {
+        let dir = TempDir::new().unwrap();
+        let venv_dir = dir.path().join("venv");
+        let version_file = venv_dir.join("hegel-version");
+        let hegel_bin = venv_dir.join("bin/hegel");
+        let install_log = dir.path().join("install.log");
+
+        // Fake uv that succeeds for both commands but doesn't create the hegel binary.
+        let fake_bin = dir.path().join("fake-bin");
+        std::fs::create_dir_all(&fake_bin).unwrap();
+        let fake_uv = fake_bin.join("uv");
+        let venv_str = venv_dir.to_string_lossy().to_string();
+        std::fs::write(
+            &fake_uv,
+            format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"venv\" ]; then\n\
+                   mkdir -p \"{venv_str}/bin\"\n\
+                   touch \"{venv_str}/bin/python\"\n\
+                 fi\n\
+                 exit 0\n"
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake_uv, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let _guard = lock_env();
+        let old_path = std::env::var("PATH").ok();
+        unsafe { set_env("PATH", fake_bin.to_string_lossy().as_ref()) };
+        let result = do_install(&venv_dir, &version_file, &hegel_bin, &install_log);
+        unsafe { restore_env("PATH", old_path) };
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("not found at") && err.contains("after installation"),
+            "expected binary-missing error, got: {err}"
+        );
+    }
+
+    // -- ensure_hegel_installed tests --
+
+    #[test]
+    fn ensure_hegel_installed_fast_path_when_already_installed() {
+        let _guard = lock_env();
+
+        // Point XDG_CACHE_HOME at a temp dir and pre-populate it.
+        let dir = TempDir::new().unwrap();
+        let old_xdg = std::env::var("XDG_CACHE_HOME").ok();
+        unsafe { set_env("XDG_CACHE_HOME", dir.path()) };
+
+        let version_dir = dir.path().join("hegel/versions").join(HEGEL_SERVER_VERSION);
+        let venv_dir = version_dir.join("venv");
+        std::fs::create_dir_all(venv_dir.join("bin")).unwrap();
+        std::fs::write(venv_dir.join("bin/hegel"), "fake").unwrap();
+        std::fs::write(venv_dir.join("hegel-version"), HEGEL_SERVER_VERSION).unwrap();
+
+        let result = ensure_hegel_installed();
+        unsafe { restore_env("XDG_CACHE_HOME", old_xdg) };
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains(HEGEL_SERVER_VERSION));
+    }
+
+    #[test]
+    fn ensure_hegel_installed_creates_version_directory() {
+        let _guard = lock_env();
+
+        let dir = TempDir::new().unwrap();
+        let old_xdg = std::env::var("XDG_CACHE_HOME").ok();
+        let old_path = std::env::var("PATH").ok();
+        unsafe { set_env("XDG_CACHE_HOME", dir.path()) };
+        // Empty PATH so uv won't be found — we just want to verify
+        // directory creation happens before the uv error.
+        unsafe { set_env("PATH", "") };
+
+        let result = ensure_hegel_installed();
+
+        unsafe { restore_env("XDG_CACHE_HOME", old_xdg) };
+        unsafe { restore_env("PATH", old_path) };
+
+        // It should fail (no uv) but the version directory should have been created.
+        assert!(result.is_err());
+        let version_dir = dir.path().join("hegel/versions").join(HEGEL_SERVER_VERSION);
+        assert!(version_dir.is_dir());
+    }
+
+    #[test]
+    fn ensure_hegel_installed_cleans_up_lock_on_failure() {
+        let _guard = lock_env();
+
+        let dir = TempDir::new().unwrap();
+        let old_xdg = std::env::var("XDG_CACHE_HOME").ok();
+        let old_path = std::env::var("PATH").ok();
+        unsafe { set_env("XDG_CACHE_HOME", dir.path()) };
+        unsafe { set_env("PATH", "") };
+
+        let _ = ensure_hegel_installed();
+
+        unsafe { restore_env("XDG_CACHE_HOME", old_xdg) };
+        unsafe { restore_env("PATH", old_path) };
+
+        // The lock directory should have been cleaned up even though install failed.
+        let lock_dir = dir
+            .path()
+            .join("hegel/versions")
+            .join(HEGEL_SERVER_VERSION)
+            .join(".install-lock");
+        assert!(
+            !lock_dir.exists(),
+            "lock directory should be cleaned up after failed install"
+        );
+    }
+
+    // -- Helper for cleanup in panicking tests --
+
+    struct Defer<F: FnOnce()>(Option<F>);
+
+    impl<F: FnOnce()> Drop for Defer<F> {
+        fn drop(&mut self) {
+            if let Some(f) = self.0.take() {
+                f();
+            }
+        }
+    }
+
+    fn defer<F: FnOnce()>(f: F) -> Defer<F> {
+        Defer(Some(f))
+    }
 }
