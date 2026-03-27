@@ -1,5 +1,5 @@
 use crate::antithesis::{TestLocation, is_running_in_antithesis};
-use crate::control::{currently_in_test_context, with_test_context};
+use crate::control::{currently_in_test_context, panic_message, with_test_context};
 use crate::protocol::{Channel, Connection, HANDSHAKE_STRING, SERVER_CRASHED_MESSAGE};
 use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING, TestCase};
 use ciborium::Value;
@@ -50,6 +50,8 @@ struct HegelSession {
     /// brief run_test send/receive; test execution runs concurrently on
     /// per-test channels.
     control: Mutex<Channel>,
+    /// Server child process PID, used by atexit handler to kill on exit.
+    child_pid: std::sync::atomic::AtomicU32,
 }
 
 impl HegelSession {
@@ -93,25 +95,22 @@ impl HegelSession {
         let decoded = String::from_utf8_lossy(&response);
         let server_version = match decoded.strip_prefix("Hegel/") {
             Some(v) => v,
-            None => {
-                let _ = child.kill();
-                panic!("Bad handshake response: {decoded:?}");
-            }
+            None => unreachable!("Bad handshake response: {decoded:?}"),
         };
-        let version: f64 = server_version.parse().unwrap_or_else(|_| {
-            let _ = child.kill();
-            panic!("Bad version number: {server_version}");
-        });
+        let version: f64 = server_version
+            .parse()
+            .unwrap_or_else(|_| unreachable!("Bad version number: {server_version}"));
 
         let (lo, hi) = SUPPORTED_PROTOCOL_VERSIONS;
         if !(lo <= version && version <= hi) {
-            let _ = child.kill();
-            panic!(
+            unreachable!(
                 "hegel-rust supports protocol versions {lo} through {hi}, but \
                  the connected server is using protocol version {version}. Upgrading \
                  hegel-rust or downgrading hegel-core might help."
             );
         }
+
+        let child_pid = child.id();
 
         // Monitor thread: detects server crash. The pipe close from
         // the child exiting will unblock any pending reads.
@@ -121,9 +120,28 @@ impl HegelSession {
             conn_for_monitor.mark_server_exited();
         });
 
+        // Register an atexit handler to kill the server subprocess.
+        // Static OnceLock values aren't dropped on process exit, so without
+        // this, the server's pipes stay open and it becomes orphaned.
+        extern "C" fn kill_server() {
+            if let Some(session) = SESSION.get() {
+                let pid = session.child_pid.load(Ordering::SeqCst);
+                if pid != 0 {
+                    let _ = std::process::Command::new("kill")
+                        .args(["-9", &pid.to_string()])
+                        .status();
+                }
+            }
+        }
+        unsafe extern "C" {
+            safe fn atexit(func: extern "C" fn()) -> std::ffi::c_int;
+        }
+        atexit(kill_server);
+
         HegelSession {
             connection,
             control: Mutex::new(control),
+            child_pid: std::sync::atomic::AtomicU32::new(child_pid),
         }
     }
 }
@@ -145,11 +163,17 @@ fn take_panic_info() -> Option<(String, String, String, Backtrace)> {
 /// Frame numbers are renumbered to start at 0.
 fn format_backtrace(bt: &Backtrace, full: bool) -> String {
     let backtrace_str = format!("{}", bt);
-
     if full {
         return backtrace_str;
     }
+    filter_backtrace(&backtrace_str)
+}
 
+/// Filter a backtrace string to "short" format.
+///
+/// Keeps only frames between `__rust_end_short_backtrace` and
+/// `__rust_begin_short_backtrace` markers, renumbering from 0.
+fn filter_backtrace(backtrace_str: &str) -> String {
     // Filter to short backtrace: keep lines between the markers
     // Frame groups look like:
     //    N: function::name
@@ -266,20 +290,27 @@ fn init_panic_hook() {
 }
 
 fn ensure_hegel_installed() -> Result<String, String> {
-    let venv_dir = format!("{HEGEL_SERVER_DIR}/venv");
+    install_hegel_server(HEGEL_SERVER_DIR, HEGEL_SERVER_VERSION)
+}
+
+/// Install the hegel server into a directory using `uv`.
+///
+/// Returns the path to the installed `hegel` binary on success.
+fn install_hegel_server(server_dir: &str, version: &str) -> Result<String, String> {
+    let venv_dir = format!("{server_dir}/venv");
     let version_file = format!("{venv_dir}/hegel-version");
     let hegel_bin = format!("{venv_dir}/bin/hegel");
-    let install_log = format!("{HEGEL_SERVER_DIR}/install.log");
+    let install_log = format!("{server_dir}/install.log");
 
     // Check cached version
     if let Ok(cached) = std::fs::read_to_string(&version_file) {
-        if cached.trim() == HEGEL_SERVER_VERSION && std::path::Path::new(&hegel_bin).is_file() {
+        if cached.trim() == version && std::path::Path::new(&hegel_bin).is_file() {
             return Ok(hegel_bin);
         }
     }
 
-    std::fs::create_dir_all(HEGEL_SERVER_DIR)
-        .map_err(|e| format!("Failed to create {HEGEL_SERVER_DIR}: {e}"))?;
+    std::fs::create_dir_all(server_dir)
+        .map_err(|e| format!("Failed to create {server_dir}: {e}"))?;
 
     let log_file = std::fs::File::create(&install_log)
         .map_err(|e| format!("Failed to create install log: {e}"))?;
@@ -310,7 +341,7 @@ fn ensure_hegel_installed() -> Result<String, String> {
             "install",
             "--python",
             &python_path,
-            &format!("hegel-core=={HEGEL_SERVER_VERSION}"),
+            &format!("hegel-core=={version}"),
         ])
         .stderr(log_file.try_clone().unwrap())
         .stdout(log_file)
@@ -319,7 +350,7 @@ fn ensure_hegel_installed() -> Result<String, String> {
     if !status.success() {
         let log = std::fs::read_to_string(&install_log).unwrap_or_default();
         return Err(format!(
-            "Failed to install hegel-core (version: {HEGEL_SERVER_VERSION}). \
+            "Failed to install hegel-core (version: {version}). \
              Set {HEGEL_SERVER_COMMAND_ENV} to a hegel binary path to skip installation.\n\
              Install log:\n{log}"
         ));
@@ -329,7 +360,7 @@ fn ensure_hegel_installed() -> Result<String, String> {
         return Err(format!("hegel not found at {hegel_bin} after installation"));
     }
 
-    std::fs::write(&version_file, HEGEL_SERVER_VERSION)
+    std::fs::write(&version_file, version)
         .map_err(|e| format!("Failed to write version file: {e}"))?;
 
     Ok(hegel_bin)
@@ -672,9 +703,13 @@ where
         let result_data: Value;
         let ack_null = cbor_map! {"result" => Value::Null};
         loop {
-            let (event_id, event_payload) = test_channel
-                .receive_request()
-                .expect("Failed to receive event");
+            let (event_id, event_payload) = match test_channel.receive_request() {
+                Ok(event) => event,
+                Err(_) if connection.server_has_exited() => {
+                    panic!("{}", SERVER_CRASHED_MESSAGE);
+                }
+                Err(e) => unreachable!("Failed to receive event (server still running): {}", e),
+            };
 
             let event: Value = cbor_decode(&event_payload);
             let event_type = map_get(&event, "event")
@@ -706,10 +741,6 @@ where
                         verbosity,
                         &got_interesting,
                     );
-
-                    if connection.server_has_exited() {
-                        panic!("{}", SERVER_CRASHED_MESSAGE);
-                    }
                 }
                 "test_done" => {
                     let ack_true = cbor_map! {"result" => true};
@@ -781,10 +812,6 @@ where
             if matches!(&tc_result, TestCaseResult::Interesting { .. }) {
                 final_result = Some(tc_result);
             }
-
-            if connection.server_has_exited() {
-                panic!("{}", SERVER_CRASHED_MESSAGE);
-            }
         }
 
         let passed = map_get(&result_data, "passed")
@@ -793,18 +820,7 @@ where
 
         let test_failed = !passed || got_interesting.load(Ordering::SeqCst);
 
-        if is_running_in_antithesis() {
-            #[cfg(not(feature = "antithesis"))]
-            panic!(
-                "When Hegel is run inside of Antithesis, it requires the `antithesis` feature. \
-                You can add it with {{ features = [\"antithesis\"] }}."
-            );
-
-            #[cfg(feature = "antithesis")]
-            if let Some(ref loc) = self.test_location {
-                crate::antithesis::emit_assertion(loc, !test_failed);
-            }
-        }
+        handle_antithesis_reporting(self.test_location.as_ref(), test_failed);
 
         if test_failed {
             let msg = match &final_result {
@@ -848,12 +864,7 @@ fn run_test_case<F: FnMut(TestCase)>(
                 // Take panic info - we need location for origin, and print details on final
                 let (thread_name, thread_id, location, backtrace) = take_panic_info()
                     .unwrap_or_else(|| {
-                        (
-                            "<unknown>".to_string(),
-                            "?".to_string(),
-                            "<unknown>".to_string(),
-                            Backtrace::disabled(),
-                        )
+                        unreachable!("panic hook should always capture info before we reach here")
                     });
 
                 if is_final {
@@ -909,14 +920,19 @@ fn run_test_case<F: FnMut(TestCase)>(
     tc_result
 }
 
-/// Extract a message from a panic payload.
-fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(s) = payload.downcast_ref::<&str>() {
-        s.to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "Unknown panic".to_string()
+/// Report test results to Antithesis if running in that environment.
+fn handle_antithesis_reporting(test_location: Option<&TestLocation>, test_failed: bool) {
+    if is_running_in_antithesis() {
+        #[cfg(not(feature = "antithesis"))]
+        panic!(
+            "When Hegel is run inside of Antithesis, it requires the `antithesis` feature. \
+            You can add it with {{ features = [\"antithesis\"] }}."
+        );
+
+        #[cfg(feature = "antithesis")]
+        if let Some(loc) = test_location {
+            crate::antithesis::emit_assertion(loc, !test_failed);
+        }
     }
 }
 
@@ -930,4 +946,402 @@ fn cbor_encode(value: &Value) -> Vec<u8> {
 /// Decode CBOR bytes to a ciborium::Value.
 fn cbor_decode(bytes: &[u8]) -> Value {
     ciborium::from_reader(bytes).expect("CBOR decoding failed")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ENV_TEST_MUTEX;
+    use crate::control::panic_message;
+
+    #[test]
+    fn test_settings_default_matches_new() {
+        let default_settings = Settings::default();
+        let new_settings = Settings::new();
+        assert_eq!(default_settings.test_cases, new_settings.test_cases);
+    }
+
+    #[cfg(feature = "antithesis")]
+    #[test]
+    fn test_antithesis_reporting_emits_on_failure() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().to_str().unwrap().to_string();
+        let original = std::env::var("ANTITHESIS_OUTPUT_DIR").ok();
+        unsafe { std::env::set_var("ANTITHESIS_OUTPUT_DIR", &path) };
+
+        let loc = TestLocation {
+            function: "test_antithesis_report".into(),
+            file: "test.rs".into(),
+            class: "test_mod".into(),
+            begin_line: 42,
+        };
+        handle_antithesis_reporting(Some(&loc), true);
+
+        match original {
+            Some(v) => unsafe { std::env::set_var("ANTITHESIS_OUTPUT_DIR", v) },
+            None => unsafe { std::env::remove_var("ANTITHESIS_OUTPUT_DIR") },
+        }
+
+        let jsonl = dir.path().join("sdk.jsonl");
+        assert!(jsonl.exists());
+    }
+
+    #[test]
+    fn test_antithesis_reporting_noop_without_env() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let original = std::env::var("ANTITHESIS_OUTPUT_DIR").ok();
+        if original.is_some() {
+            unsafe { std::env::remove_var("ANTITHESIS_OUTPUT_DIR") };
+        }
+        // Should not panic when not in antithesis
+        handle_antithesis_reporting(None, false);
+        if let Some(v) = original {
+            unsafe { std::env::set_var("ANTITHESIS_OUTPUT_DIR", v) };
+        }
+    }
+
+    #[test]
+    fn test_settings_verbosity_setter() {
+        let s = Settings::new().verbosity(Verbosity::Debug);
+        assert_eq!(s.verbosity, Verbosity::Debug);
+    }
+
+    #[test]
+    fn test_install_hegel_server_uses_cache_when_version_matches() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let server_dir = dir.path().to_str().unwrap();
+
+        // Create fake cached install
+        let venv_dir = format!("{server_dir}/venv");
+        let bin_dir = format!("{venv_dir}/bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(format!("{venv_dir}/hegel-version"), "1.2.3").unwrap();
+        std::fs::write(format!("{bin_dir}/hegel"), "fake-binary").unwrap();
+
+        let result = install_hegel_server(server_dir, "1.2.3");
+        assert!(result.is_ok());
+        assert!(result.unwrap().ends_with("/bin/hegel"));
+    }
+
+    #[test]
+    fn test_install_hegel_server_successful_install() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        let server_dir = dir.path().to_str().unwrap();
+
+        // Create a mock uv that creates a venv with a fake hegel binary
+        let mock_dir = tempfile::TempDir::new().unwrap();
+        let mock_uv = mock_dir.path().join("uv");
+        // The mock creates the venv dir and places a fake hegel binary
+        std::fs::write(
+            &mock_uv,
+            "#!/bin/sh\ncase \"$1\" in\n  venv) mkdir -p \"$3/bin\"; touch \"$3/bin/hegel\"; chmod +x \"$3/bin/hegel\";;\nesac\nexit 0\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&mock_uv, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        unsafe {
+            std::env::set_var(
+                "PATH",
+                format!("{}:{}", mock_dir.path().display(), original_path),
+            )
+        };
+
+        let result = install_hegel_server(server_dir, "42.0.0");
+
+        unsafe { std::env::set_var("PATH", &original_path) };
+
+        assert!(result.is_ok());
+        let bin_path = result.unwrap();
+        assert!(bin_path.ends_with("/bin/hegel"));
+
+        // Verify version file was written
+        let version_file = format!("{server_dir}/venv/hegel-version");
+        assert_eq!(
+            std::fs::read_to_string(&version_file).unwrap().trim(),
+            "42.0.0"
+        );
+    }
+
+    #[test]
+    fn test_install_hegel_server_uv_not_found() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        let server_dir = dir.path().to_str().unwrap();
+
+        // Save and replace PATH with empty dir so uv can't be found
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        let empty_dir = tempfile::TempDir::new().unwrap();
+        // SAFETY: test-specific env manipulation
+        unsafe { std::env::set_var("PATH", empty_dir.path()) };
+
+        let result = install_hegel_server(server_dir, "99.99.99");
+
+        unsafe { std::env::set_var("PATH", &original_path) };
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("uv"), "error should mention uv: {}", err);
+    }
+
+    #[test]
+    fn test_install_hegel_server_uv_venv_fails() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        let server_dir = dir.path().to_str().unwrap();
+
+        // Create a fake uv script that exits with failure
+        let mock_dir = tempfile::TempDir::new().unwrap();
+        let mock_uv = mock_dir.path().join("uv");
+        std::fs::write(&mock_uv, "#!/bin/sh\nexit 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&mock_uv, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        // SAFETY: test-specific env manipulation
+        unsafe {
+            std::env::set_var(
+                "PATH",
+                format!("{}:{}", mock_dir.path().display(), original_path),
+            )
+        };
+
+        let result = install_hegel_server(server_dir, "99.99.99");
+
+        unsafe { std::env::set_var("PATH", &original_path) };
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("uv venv failed"),);
+    }
+
+    #[test]
+    fn test_install_hegel_server_pip_install_fails() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        let server_dir = dir.path().to_str().unwrap();
+
+        // Create a fake uv that succeeds for venv but fails for pip install
+        let mock_dir = tempfile::TempDir::new().unwrap();
+        let mock_uv = mock_dir.path().join("uv");
+        std::fs::write(
+            &mock_uv,
+            "#!/bin/sh\nif [ \"$1\" = \"venv\" ]; then mkdir -p \"$3\"; exit 0; fi\nexit 1\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&mock_uv, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        // SAFETY: test-specific env manipulation
+        unsafe {
+            std::env::set_var(
+                "PATH",
+                format!("{}:{}", mock_dir.path().display(), original_path),
+            )
+        };
+
+        let result = install_hegel_server(server_dir, "99.99.99");
+
+        unsafe { std::env::set_var("PATH", &original_path) };
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Failed to install hegel-core"),);
+    }
+
+    #[test]
+    fn test_install_hegel_server_binary_missing_after_install() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        let server_dir = dir.path().to_str().unwrap();
+
+        // Create a fake uv that succeeds for both commands but doesn't create the binary
+        let mock_dir = tempfile::TempDir::new().unwrap();
+        let mock_uv = mock_dir.path().join("uv");
+        std::fs::write(
+            &mock_uv,
+            "#!/bin/sh\nif [ \"$1\" = \"venv\" ]; then mkdir -p \"$3\"; fi\nexit 0\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&mock_uv, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        // SAFETY: test-specific env manipulation
+        unsafe {
+            std::env::set_var(
+                "PATH",
+                format!("{}:{}", mock_dir.path().display(), original_path),
+            )
+        };
+
+        let result = install_hegel_server(server_dir, "99.99.99");
+
+        unsafe { std::env::set_var("PATH", &original_path) };
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("hegel not found at"),);
+    }
+
+    #[test]
+    fn test_install_hegel_server_uv_exec_error() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        let server_dir = dir.path().to_str().unwrap();
+
+        // Create a directory named "uv" — trying to exec a directory gives
+        // an IO error that is NOT NotFound (it's PermissionDenied or similar)
+        let mock_dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(mock_dir.path().join("uv")).unwrap();
+
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        // Set PATH to ONLY the mock dir (so real uv can't be found)
+        unsafe {
+            std::env::set_var("PATH", mock_dir.path());
+        };
+
+        let result = install_hegel_server(server_dir, "99.99.99");
+
+        unsafe { std::env::set_var("PATH", &original_path) };
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        // Should be "Failed to run `uv venv`" (not the UV_NOT_FOUND message)
+        assert!(
+            err.contains("Failed to run `uv venv`"),
+            "expected uv exec error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_is_in_ci_detects_ci_env_and_disables_database() {
+        let _guard = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let original = std::env::var("CI").ok();
+        // SAFETY: serialized by ENV_TEST_MUTEX
+        unsafe { std::env::set_var("CI", "1") };
+        assert!(is_in_ci());
+
+        // Settings::new() while CI is set should use Database::Disabled
+        let settings = Settings::new();
+        assert!(settings.derandomize);
+
+        // Restore
+        match original {
+            Some(v) => unsafe { std::env::set_var("CI", v) },
+            None => unsafe { std::env::remove_var("CI") },
+        }
+    }
+
+    #[test]
+    fn test_format_backtrace_full_returns_unmodified() {
+        let bt = Backtrace::force_capture();
+        let full = format_backtrace(&bt, true);
+        let expected = format!("{}", bt);
+        assert_eq!(full, expected);
+    }
+
+    #[test]
+    fn test_format_backtrace_short_renumbers_frames() {
+        let bt = Backtrace::force_capture();
+        let short = format_backtrace(&bt, false);
+        // The short format should start with frame 0
+        assert!(
+            short.contains("   0:"),
+            "short backtrace should start at frame 0:\n{}",
+            short
+        );
+    }
+
+    #[test]
+    fn test_filter_backtrace_with_markers() {
+        let input = "\
+   0: std::backtrace_rs::backtrace::trace
+             at /rustlib/src/lib.rs:117:9
+   1: std::sys::backtrace::__rust_end_short_backtrace
+             at /rustlib/src/lib.rs:174:18
+   2: my_crate::my_function
+             at /src/main.rs:42:5
+   3: my_crate::another_function
+             at /src/main.rs:88:13
+   4: std::sys::backtrace::__rust_begin_short_backtrace
+             at /rustlib/src/lib.rs:155:18
+   5: core::ops::function::FnOnce::call_once
+             at /core/src/ops/function.rs:250:5";
+
+        let result = filter_backtrace(input);
+        // Should contain renumbered frames 2-3, starting at 0
+        assert!(result.contains("   0: my_crate::my_function"));
+        assert!(result.contains("   1: my_crate::another_function"));
+        // Should NOT contain the marker frames
+        assert!(!result.contains("__rust_end_short_backtrace"));
+        assert!(!result.contains("__rust_begin_short_backtrace"));
+    }
+
+    #[test]
+    fn test_filter_backtrace_no_markers() {
+        let input = "\
+   0: my_func
+             at /src/lib.rs:10:5
+   1: other_func
+             at /src/lib.rs:20:5";
+
+        let result = filter_backtrace(input);
+        // With no markers, returns all frames renumbered
+        assert!(result.contains("   0: my_func"));
+        assert!(result.contains("   1: other_func"));
+    }
+
+    #[test]
+    fn test_filter_backtrace_preserves_non_frame_lines() {
+        let input = "\
+   0: my_func
+             at /src/lib.rs:10:5
+note: some detail here";
+
+        let result = filter_backtrace(input);
+        assert!(result.contains("note: some detail here"));
+    }
+
+    #[test]
+    fn test_filter_backtrace_handles_line_without_colon() {
+        // A frame number line without a colon (unusual but handled)
+        let input = "   0 my_func_no_colon\n   1: normal_frame";
+
+        let result = filter_backtrace(input);
+        // The line without colon should be preserved as-is
+        assert!(result.contains("my_func_no_colon"));
+    }
+
+    #[test]
+    fn test_panic_message_from_str() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new("test-panic-msg");
+        assert_eq!(panic_message(&payload), "test-panic-msg");
+    }
+
+    #[test]
+    fn test_panic_message_from_string() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(String::from("string-panic-42"));
+        assert_eq!(panic_message(&payload), "string-panic-42");
+    }
+
+    #[test]
+    fn test_panic_message_unknown_type() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(42i32);
+        assert_eq!(panic_message(&payload), "Unknown panic");
+    }
 }

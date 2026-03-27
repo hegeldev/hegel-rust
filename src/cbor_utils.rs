@@ -142,4 +142,43 @@ mod tests {
         let v = cbor_serialize(&"hello");
         assert_eq!(as_text(&v), Some("hello"));
     }
+
+    #[test]
+    fn test_as_text_returns_none_for_non_text() {
+        assert_eq!(as_text(&Value::from(42)), None);
+        assert_eq!(as_text(&Value::Bool(true)), None);
+    }
+
+    #[test]
+    fn test_as_u64_returns_none_for_non_integer() {
+        assert_eq!(as_u64(&Value::Text("hello".into())), None);
+        assert_eq!(as_u64(&Value::Bool(false)), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "expected Value::Map")]
+    fn test_map_get_panics_on_non_map() {
+        map_get(&Value::from(42), "key");
+    }
+
+    #[test]
+    #[should_panic(expected = "expected Value::Text")]
+    fn test_map_get_panics_on_non_text_key() {
+        let bad_map = Value::Map(vec![(Value::from(42), Value::from("val"))]);
+        map_get(&bad_map, "key");
+    }
+
+    #[test]
+    #[should_panic(expected = "expected Value::Map")]
+    fn test_map_insert_panics_on_non_map() {
+        let mut val = Value::from(42);
+        map_insert(&mut val, "key", "value");
+    }
+
+    #[test]
+    #[should_panic(expected = "expected Value::Text")]
+    fn test_map_insert_panics_on_non_text_key() {
+        let mut bad_map = Value::Map(vec![(Value::from(42), Value::from("val"))]);
+        map_insert(&mut bad_map, "key", "value");
+    }
 }

@@ -77,3 +77,27 @@ macro_rules! compose {
         })
     }};
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fnv1a_hash_deterministic() {
+        let hash1 = fnv1a_hash(b"test-input-alpha");
+        let hash2 = fnv1a_hash(b"test-input-alpha");
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_fnv1a_hash_differs_for_different_inputs() {
+        let h1 = fnv1a_hash(b"hello-world");
+        let h2 = fnv1a_hash(b"goodbye-world");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_fnv1a_hash_empty_returns_offset_basis() {
+        assert_eq!(fnv1a_hash(b""), 0xcbf29ce484222325);
+    }
+}
