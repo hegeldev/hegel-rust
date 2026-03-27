@@ -27,14 +27,16 @@ jobs:
         run: rustup toolchain install stable --profile minimal -c rustfmt -c clippy
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
-      - name: Check formatting
-        run: cargo fmt --check
-      - name: Clippy
-        run: cargo clippy --all-features --tests -- -D warnings
-      - name: Install zizmor
-        run: pipx install zizmor==1.23.1
-      - name: Run zizmor
-        run: zizmor --format plain .github/
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just
+
+      - name: Check lint
+        run: just check-lint
+      - name: Check Zizmor
+        run: |
+          pipx install zizmor==1.23.1
+          zizmor --format plain .github/
       - name: Check `cargo package`
         # creates a .crate for distribution and verifies it can build in isolation
         # see https://doc.rust-lang.org/cargo/commands/cargo-package.html
@@ -57,10 +59,12 @@ jobs:
         run: rustup toolchain install ${{ matrix.rust }} --profile minimal && rustup default ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just uv
 
       - name: Run tests
-        run: RUST_BACKTRACE=1 cargo test
+        run: just check-tests
 
   test-all-features:
     name: test-all-features (${{ matrix.rust }})
@@ -79,10 +83,12 @@ jobs:
         run: rustup toolchain install ${{ matrix.rust }} --profile minimal && rustup default ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just uv
 
       - name: Run tests with all features
-        run: RUST_BACKTRACE=1 cargo test --all-features
+        run: just check-tests-all-features
 
   docs:
     name: docs
@@ -93,17 +99,19 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
       - name: Install Rust
         run: rustup toolchain install nightly --profile minimal && rustup default nightly
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just
+
       - name: Install cargo-docs-rs
         run: cargo install --locked cargo-docs-rs
-      - name: Build docs
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-        run: cargo docs-rs
+
+      - name: Check docs
+        run: just check-docs
 
   # test with the minimal versions of all our dependencies
   test-minimal-versions:
@@ -115,19 +123,17 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
       - name: Install Rust
         run: rustup toolchain install nightly --profile minimal && rustup default nightly
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just uv
 
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-
-      - name: Generate minimal versions lockfile
+      - name: Generate lockfile
         run: cargo generate-lockfile -Z minimal-versions
       - name: Run tests
-        # --locked tells cargo not to update the lockfile. this makes sure we use the lockfile we just generated
-        # and don't regenerate it for non-minimal versions.
-        run: HEGEL_RUNNING_TESTS_WITH_RUST_NIGHTLY=1 RUST_BACKTRACE=1 cargo test --locked --all-features
+        run: just check-tests-minimal-versions
 
   compile-examples:
     name: compile-examples (${{ matrix.rust }})
@@ -164,12 +170,12 @@ jobs:
       - name: Install cargo-llvm-cov
         run: cargo install --locked cargo-llvm-cov
 
-      - name: Install just
-        run: sudo apt-get update && sudo apt-get install -y just
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just uv
 
       - name: Run coverage
-        run: RUST_BACKTRACE=1 just coverage
+        run: just check-coverage
 
   conformance:
     name: conformance
@@ -185,12 +191,12 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
-      - name: Install just
-        run: sudo apt-get update && sudo apt-get install -y just
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just uv
 
       - name: Run conformance tests
-        run: just conformance
+        run: just check-conformance
 
   nix:
     name: nix
@@ -203,8 +209,9 @@ jobs:
           persist-credentials: false
 
       - uses: cachix/install-nix-action@1ca7d21a94afc7c957383a2d217460d980de4934 # v31.10.1
-      - name: Install just
-        run: sudo apt-get update && sudo apt-get install -y just
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just
       - name: lint
         run: just check-format-nix
 
