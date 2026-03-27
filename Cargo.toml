@@ -27,7 +27,7 @@ categories = ["development-tools::testing"]
 name = "hegel"
 
 [dependencies]
-serde = { version = "1.0.103", features = ["derive"] }
+serde = { version = "1.0.203", features = ["derive"] }
 paste = "1.0"
 tempfile = "3.0"
 ciborium = "0.2.2"
