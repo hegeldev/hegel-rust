@@ -200,4 +200,58 @@ mod tests {
         let back: Value = ciborium::from_reader(&bytes[..]).unwrap();
         assert_eq!(back, Value::Float(f64::NEG_INFINITY));
     }
+
+    fn build_raw_packet(magic: u32, payload: &[u8], terminator: u8) -> Vec<u8> {
+        let mut header = [0u8; PACKET_HEADER_SIZE];
+        header[0..4].copy_from_slice(&magic.to_be_bytes());
+        // channel=1, message_id=1, length
+        header[8..12].copy_from_slice(&1u32.to_be_bytes());
+        header[12..16].copy_from_slice(&1u32.to_be_bytes());
+        header[16..20].copy_from_slice(&(payload.len() as u32).to_be_bytes());
+        // compute checksum with zeroed checksum field
+        let mut hasher = crc32fast::Hasher::new();
+        hasher.update(&header);
+        hasher.update(payload);
+        let checksum = hasher.finalize();
+        header[4..8].copy_from_slice(&checksum.to_be_bytes());
+
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&header);
+        buf.extend_from_slice(payload);
+        buf.push(terminator);
+        buf
+    }
+
+    #[test]
+    fn test_read_packet_rejects_invalid_magic() {
+        let mut data = build_raw_packet(0xDEADBEEF, b"test-payload", PACKET_TERMINATOR);
+        // Overwrite magic with bad value (checksum was computed with correct magic, but
+        // the magic check happens first)
+        data[0..4].copy_from_slice(&0xDEADBEEFu32.to_be_bytes());
+
+        let err = read_packet(&mut &data[..]).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("Invalid magic number"));
+    }
+
+    #[test]
+    fn test_read_packet_rejects_invalid_terminator() {
+        let data = build_raw_packet(PACKET_MAGIC, b"test-payload", 0xFF);
+
+        let err = read_packet(&mut &data[..]).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("Invalid terminator"));
+    }
+
+    #[test]
+    fn test_read_packet_rejects_checksum_mismatch() {
+        let mut data = build_raw_packet(PACKET_MAGIC, b"test-payload", PACKET_TERMINATOR);
+        // Corrupt a payload byte to invalidate the checksum
+        let payload_start = PACKET_HEADER_SIZE;
+        data[payload_start] ^= 0xFF;
+
+        let err = read_packet(&mut &data[..]).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("Checksum mismatch"));
+    }
 }

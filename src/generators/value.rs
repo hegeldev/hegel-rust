@@ -348,4 +348,129 @@ mod tests {
         assert!(result.value.is_nan());
         assert_eq!(result.name, "test");
     }
+
+    #[test]
+    fn test_from_ciborium_null() {
+        let hegel = HegelValue::from(ciborium::Value::Null);
+        assert!(matches!(hegel, HegelValue::Null));
+    }
+
+    #[test]
+    fn test_from_ciborium_bytes() {
+        let hegel = HegelValue::from(ciborium::Value::Bytes(vec![0xCA, 0xFE]));
+        if let HegelValue::Array(arr) = hegel {
+            assert_eq!(arr.len(), 2);
+        } else {
+            panic!("expected Array");
+        }
+    }
+
+    #[test]
+    fn test_from_ciborium_map() {
+        let cbor = ciborium::Value::Map(vec![
+            (
+                ciborium::Value::Text("key-alpha".into()),
+                ciborium::Value::Integer(42.into()),
+            ),
+            (
+                ciborium::Value::Integer(99.into()),
+                ciborium::Value::Text("non-text-key".into()),
+            ),
+        ]);
+        let hegel = HegelValue::from(cbor);
+        if let HegelValue::Object(map) = hegel {
+            assert_eq!(map.len(), 2);
+            assert!(map.contains_key("key-alpha"));
+        } else {
+            panic!("expected Object");
+        }
+    }
+
+    #[test]
+    fn test_from_ciborium_positive_bignum_tag() {
+        // Tag 2 = positive bignum: value 256 encoded as 2 bytes
+        let cbor = ciborium::Value::Tag(2, Box::new(ciborium::Value::Bytes(vec![0x01, 0x00])));
+        let hegel = HegelValue::from(cbor);
+        if let HegelValue::BigInt(s) = hegel {
+            assert_eq!(s, "256");
+        } else {
+            panic!("expected BigInt");
+        }
+    }
+
+    #[test]
+    fn test_from_ciborium_negative_bignum_tag() {
+        // Tag 3 = negative bignum: value is -1 - n, where n = 255
+        let cbor = ciborium::Value::Tag(3, Box::new(ciborium::Value::Bytes(vec![0xFF])));
+        let hegel = HegelValue::from(cbor);
+        if let HegelValue::BigInt(s) = hegel {
+            assert_eq!(s, "-256");
+        } else {
+            panic!("expected BigInt");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Expected Bytes inside bignum tag 2")]
+    fn test_from_ciborium_positive_bignum_non_bytes_panics() {
+        let cbor = ciborium::Value::Tag(2, Box::new(ciborium::Value::Text("bad".into())));
+        let _ = HegelValue::from(cbor);
+    }
+
+    #[test]
+    #[should_panic(expected = "Expected Bytes inside bignum tag 3")]
+    fn test_from_ciborium_negative_bignum_non_bytes_panics() {
+        let cbor = ciborium::Value::Tag(3, Box::new(ciborium::Value::Text("bad".into())));
+        let _ = HegelValue::from(cbor);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unexpected CBOR tag 99")]
+    fn test_from_ciborium_unknown_tag_panics() {
+        let cbor = ciborium::Value::Tag(99, Box::new(ciborium::Value::Null));
+        let _ = HegelValue::from(cbor);
+    }
+
+    #[test]
+    fn test_hegel_value_error_display() {
+        let err = HegelValueError("test-error-message".to_string());
+        assert_eq!(format!("{err}"), "test-error-message");
+        // Also test the Error trait
+        let _: &dyn std::error::Error = &err;
+    }
+
+    #[test]
+    fn test_hegel_value_error_custom() {
+        let err = <HegelValueError as serde::de::Error>::custom("custom-err-42");
+        assert_eq!(format!("{err}"), "custom-err-42");
+    }
+
+    #[test]
+    fn test_deserialize_null_as_unit() {
+        from_hegel_value::<()>(HegelValue::Null).unwrap();
+    }
+
+    #[test]
+    fn test_deserialize_null_as_option_none() {
+        let result: Option<i32> = from_hegel_value(HegelValue::Null).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_deserialize_value_as_option_some() {
+        let result: Option<i32> = from_hegel_value(HegelValue::Number(42.0)).unwrap();
+        assert_eq!(result, Some(42));
+    }
+
+    #[test]
+    fn test_deserialize_invalid_bigint() {
+        let result: Result<i128, _> = from_hegel_value(HegelValue::BigInt("not-a-number".into()));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid big integer")
+        );
+    }
 }
