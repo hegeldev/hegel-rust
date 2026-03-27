@@ -1,5 +1,5 @@
 use crate::antithesis::{TestLocation, is_running_in_antithesis};
-use crate::control::{currently_in_test_context, with_test_context};
+use crate::control::{currently_in_test_context, panic_message, with_test_context};
 use crate::protocol::{Channel, Connection, HANDSHAKE_STRING, SERVER_CRASHED_MESSAGE};
 use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING, TestCase};
 use ciborium::Value;
@@ -145,11 +145,17 @@ fn take_panic_info() -> Option<(String, String, String, Backtrace)> {
 /// Frame numbers are renumbered to start at 0.
 fn format_backtrace(bt: &Backtrace, full: bool) -> String {
     let backtrace_str = format!("{}", bt);
-
     if full {
         return backtrace_str;
     }
+    filter_backtrace(&backtrace_str)
+}
 
+/// Filter a backtrace string to "short" format.
+///
+/// Keeps only frames between `__rust_end_short_backtrace` and
+/// `__rust_begin_short_backtrace` markers, renumbering from 0.
+fn filter_backtrace(backtrace_str: &str) -> String {
     // Filter to short backtrace: keep lines between the markers
     // Frame groups look like:
     //    N: function::name
@@ -266,20 +272,27 @@ fn init_panic_hook() {
 }
 
 fn ensure_hegel_installed() -> Result<String, String> {
-    let venv_dir = format!("{HEGEL_SERVER_DIR}/venv");
+    install_hegel_server(HEGEL_SERVER_DIR, HEGEL_SERVER_VERSION)
+}
+
+/// Install the hegel server into a directory using `uv`.
+///
+/// Returns the path to the installed `hegel` binary on success.
+fn install_hegel_server(server_dir: &str, version: &str) -> Result<String, String> {
+    let venv_dir = format!("{server_dir}/venv");
     let version_file = format!("{venv_dir}/hegel-version");
     let hegel_bin = format!("{venv_dir}/bin/hegel");
-    let install_log = format!("{HEGEL_SERVER_DIR}/install.log");
+    let install_log = format!("{server_dir}/install.log");
 
     // Check cached version
     if let Ok(cached) = std::fs::read_to_string(&version_file) {
-        if cached.trim() == HEGEL_SERVER_VERSION && std::path::Path::new(&hegel_bin).is_file() {
+        if cached.trim() == version && std::path::Path::new(&hegel_bin).is_file() {
             return Ok(hegel_bin);
         }
     }
 
-    std::fs::create_dir_all(HEGEL_SERVER_DIR)
-        .map_err(|e| format!("Failed to create {HEGEL_SERVER_DIR}: {e}"))?;
+    std::fs::create_dir_all(server_dir)
+        .map_err(|e| format!("Failed to create {server_dir}: {e}"))?;
 
     let log_file = std::fs::File::create(&install_log)
         .map_err(|e| format!("Failed to create install log: {e}"))?;
@@ -310,7 +323,7 @@ fn ensure_hegel_installed() -> Result<String, String> {
             "install",
             "--python",
             &python_path,
-            &format!("hegel-core=={HEGEL_SERVER_VERSION}"),
+            &format!("hegel-core=={version}"),
         ])
         .stderr(log_file.try_clone().unwrap())
         .stdout(log_file)
@@ -319,7 +332,7 @@ fn ensure_hegel_installed() -> Result<String, String> {
     if !status.success() {
         let log = std::fs::read_to_string(&install_log).unwrap_or_default();
         return Err(format!(
-            "Failed to install hegel-core (version: {HEGEL_SERVER_VERSION}). \
+            "Failed to install hegel-core (version: {version}). \
              Set {HEGEL_SERVER_COMMAND_ENV} to a hegel binary path to skip installation.\n\
              Install log:\n{log}"
         ));
@@ -329,7 +342,7 @@ fn ensure_hegel_installed() -> Result<String, String> {
         return Err(format!("hegel not found at {hegel_bin} after installation"));
     }
 
-    std::fs::write(&version_file, HEGEL_SERVER_VERSION)
+    std::fs::write(&version_file, version)
         .map_err(|e| format!("Failed to write version file: {e}"))?;
 
     Ok(hegel_bin)
@@ -793,18 +806,7 @@ where
 
         let test_failed = !passed || got_interesting.load(Ordering::SeqCst);
 
-        if is_running_in_antithesis() {
-            #[cfg(not(feature = "antithesis"))]
-            panic!(
-                "When Hegel is run inside of Antithesis, it requires the `antithesis` feature. \
-                You can add it with {{ features = [\"antithesis\"] }}."
-            );
-
-            #[cfg(feature = "antithesis")]
-            if let Some(ref loc) = self.test_location {
-                crate::antithesis::emit_assertion(loc, !test_failed);
-            }
-        }
+        handle_antithesis_reporting(self.test_location.as_ref(), test_failed);
 
         if test_failed {
             let msg = match &final_result {
@@ -909,14 +911,19 @@ fn run_test_case<F: FnMut(TestCase)>(
     tc_result
 }
 
-/// Extract a message from a panic payload.
-fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(s) = payload.downcast_ref::<&str>() {
-        s.to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "Unknown panic".to_string()
+/// Report test results to Antithesis if running in that environment.
+fn handle_antithesis_reporting(test_location: Option<&TestLocation>, test_failed: bool) {
+    if is_running_in_antithesis() {
+        #[cfg(not(feature = "antithesis"))]
+        panic!(
+            "When Hegel is run inside of Antithesis, it requires the `antithesis` feature. \
+            You can add it with {{ features = [\"antithesis\"] }}."
+        );
+
+        #[cfg(feature = "antithesis")]
+        if let Some(loc) = test_location {
+            crate::antithesis::emit_assertion(loc, !test_failed);
+        }
     }
 }
 

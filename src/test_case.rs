@@ -5,7 +5,7 @@ use crate::runner::Verbosity;
 use ciborium::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use crate::generators::value;
 
@@ -35,7 +35,7 @@ impl std::fmt::Display for StopTestError {
 }
 impl std::error::Error for StopTestError {}
 
-static PROTOCOL_DEBUG: LazyLock<bool> = LazyLock::new(|| {
+fn protocol_debug() -> bool {
     matches!(
         std::env::var("HEGEL_PROTOCOL_DEBUG")
             .unwrap_or_default()
@@ -43,7 +43,30 @@ static PROTOCOL_DEBUG: LazyLock<bool> = LazyLock::new(|| {
             .as_str(),
         "1" | "true"
     )
-});
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum RequestErrorKind {
+    StopTest,
+    FlakyReplay,
+    ServerCrashed,
+    CommunicationError,
+}
+
+pub(crate) fn classify_request_error(error_msg: &str, server_exited: bool) -> RequestErrorKind {
+    if error_msg.contains("overflow")
+        || error_msg.contains("StopTest")
+        || error_msg.contains("channel is closed")
+    {
+        RequestErrorKind::StopTest
+    } else if error_msg.contains("FlakyStrategyDefinition") || error_msg.contains("FlakyReplay") {
+        RequestErrorKind::FlakyReplay
+    } else if server_exited {
+        RequestErrorKind::ServerCrashed
+    } else {
+        RequestErrorKind::CommunicationError
+    }
+}
 
 pub(crate) const ASSUME_FAIL_STRING: &str = "__HEGEL_ASSUME_FAIL";
 
@@ -269,7 +292,7 @@ impl TestCase {
         if global.test_aborted {
             return Err(StopTestError);
         }
-        let debug = *PROTOCOL_DEBUG || global.verbosity == Verbosity::Debug;
+        let debug = protocol_debug() || global.verbosity == Verbosity::Debug;
 
         let mut entries = vec![(
             Value::Text("command".to_string()),
@@ -300,32 +323,31 @@ impl TestCase {
             }
             Err(e) => {
                 let error_msg = e.to_string();
-                if error_msg.contains("overflow")
-                    || error_msg.contains("StopTest")
-                    || error_msg.contains("channel is closed")
-                {
-                    if debug {
-                        eprintln!("RESPONSE: StopTest/overflow");
+                let server_exited = self.global.borrow().connection.server_has_exited();
+                match classify_request_error(&error_msg, server_exited) {
+                    RequestErrorKind::StopTest => {
+                        if debug {
+                            eprintln!("RESPONSE: StopTest/overflow");
+                        }
+                        let mut global = self.global.borrow_mut();
+                        global.channel.mark_closed();
+                        global.test_aborted = true;
+                        drop(global);
+                        Err(StopTestError)
                     }
-                    let mut global = self.global.borrow_mut();
-                    global.channel.mark_closed();
-                    global.test_aborted = true;
-                    drop(global);
-                    Err(StopTestError)
-                } else if error_msg.contains("FlakyStrategyDefinition")
-                    || error_msg.contains("FlakyReplay")
-                {
-                    // Abort the test case; the server will report the flaky
-                    // error in the test_done results, which runner.rs handles.
-                    let mut global = self.global.borrow_mut();
-                    global.channel.mark_closed();
-                    global.test_aborted = true;
-                    drop(global);
-                    Err(StopTestError)
-                } else if self.global.borrow().connection.server_has_exited() {
-                    panic!("{}", SERVER_CRASHED_MESSAGE);
-                } else {
-                    panic!("Failed to communicate with Hegel: {}", e);
+                    RequestErrorKind::FlakyReplay => {
+                        let mut global = self.global.borrow_mut();
+                        global.channel.mark_closed();
+                        global.test_aborted = true;
+                        drop(global);
+                        Err(StopTestError)
+                    }
+                    RequestErrorKind::ServerCrashed => {
+                        panic!("{}", SERVER_CRASHED_MESSAGE);
+                    }
+                    RequestErrorKind::CommunicationError => {
+                        panic!("Failed to communicate with Hegel: {}", e);
+                    }
                 }
             }
         }
