@@ -83,12 +83,18 @@ impl HegelSession {
         let mut control = connection.control_channel();
 
         // Handshake
-        let req_id = control
+        let handshake_result = control
             .send_request(HANDSHAKE_STRING.to_vec())
-            .expect("Failed to send version negotiation");
-        let response = control
-            .receive_reply(req_id)
-            .expect("Failed to receive version response");
+            .and_then(|req_id| control.receive_reply(req_id));
+
+        let response = match handshake_result {
+            Ok(r) => r,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("{}", startup_error_message(&hegel_binary_path));
+            }
+        };
 
         let decoded = String::from_utf8_lossy(&response);
         let server_version = match decoded.strip_prefix("Hegel/") {
@@ -349,6 +355,36 @@ fn server_log_file() -> File {
         .unwrap()
         .try_clone()
         .expect("Failed to clone server log file handle")
+}
+
+fn startup_error_message(binary_path: &str) -> String {
+    // Try to detect if this is a hegel binary and what version it is
+    if let Ok(output) = Command::new(binary_path).arg("--version").output() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Some(version) = parse_hegel_version(&stdout) {
+            return format!(
+                "The hegel server process exited unexpectedly during startup. \
+                 Possibly wrong hegel-core version: expected {}, got {}. \
+                 See .hegel/server.log for diagnostic information.",
+                HEGEL_SERVER_VERSION, version
+            );
+        }
+    }
+
+    format!(
+        "The hegel server command '{}' failed to start. \
+         Ensure {HEGEL_SERVER_COMMAND_ENV} points to a valid hegel-core binary \
+         (expected version {}). \
+         See .hegel/server.log for diagnostic information.",
+        binary_path, HEGEL_SERVER_VERSION
+    )
+}
+
+fn parse_hegel_version(output: &str) -> Option<&str> {
+    // Parse "hegel (version X.Y.Z)" format
+    let trimmed = output.trim();
+    let after = trimmed.strip_prefix("hegel (version ")?;
+    after.strip_suffix(')')
 }
 
 fn find_hegel() -> String {
