@@ -48,9 +48,10 @@ pub use generators::{BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};
 pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit};
 pub use numeric::{Float, FloatGenerator, Integer, IntegerGenerator, floats, integers};
 pub use strings::{
-    BinaryGenerator, DateGenerator, DateTimeGenerator, DomainGenerator, EmailGenerator,
-    IpAddressGenerator, RegexGenerator, TextGenerator, TimeGenerator, UrlGenerator, binary, dates,
-    datetimes, domains, emails, from_regex, ip_addresses, text, times, urls,
+    BinaryGenerator, CharactersGenerator, DateGenerator, DateTimeGenerator, DomainGenerator,
+    EmailGenerator, IpAddressGenerator, RegexGenerator, TextGenerator, TimeGenerator, UrlGenerator,
+    binary, characters, dates, datetimes, domains, emails, from_regex, ip_addresses, text, times,
+    urls,
 };
 #[doc(hidden)]
 pub use tuples::{

@@ -58,6 +58,28 @@ impl From<ciborium::Value> for HegelValue {
                     })
                     .collect(),
             ),
+            ciborium::Value::Tag(6, inner) => {
+                // The hegel protocol transports strings as tag 6. This is to support
+                // surrogate code points for languages where that is a possibility.
+                // Rust strings are always utf-8, and can never represent surrogate
+                // code points, so we just decode this payload as a standard utf8 string.
+                //
+                // If the payload contains a surrogate code point, this will error. Hegel-rust
+                // guarantees this will never happen in our interactions with the protocol.
+                // If a user can get hegel-rust to generate surrogate code points, this is a bug
+                // that we will fix in hegel-rust.
+                let ciborium::Value::Bytes(bytes) = *inner else {
+                    panic!("Expected Bytes inside string tag 6, got {:?}", inner)
+                };
+                let s = String::from_utf8(bytes).unwrap_or_else(|e| {
+                    panic!(
+                        "Expected valid UTF-8 string: {e}. This is probably because the Hegel server \
+                        generated a surrogate code point, which should never happen with hegel-rust. \
+                        Please open an issue for this."
+                    )
+                });
+                HegelValue::String(s)
+            }
             ciborium::Value::Tag(2, inner) => {
                 // CBOR tag 2: positive bignum, encoded as big-endian bytes
                 let ciborium::Value::Bytes(bytes) = *inner else {
