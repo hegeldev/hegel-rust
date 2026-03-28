@@ -37,8 +37,8 @@ fn test_addition_commutative(tc: TestCase) {
 This test will fail when run with `cargo test`! Integer addition panics on overflow in the `test` profile. Hegel will produce a minimal failing test case for us:
 
 ```
-Draw 1: 1
-Draw 2: 2147483647
+let x = 1;
+let y = 2147483647;
 thread 'test_addition_commutative' (2) panicked at examples/readme.rs:8:16:
 attempt to add with overflow
 ```
