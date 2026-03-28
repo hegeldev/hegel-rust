@@ -88,3 +88,24 @@ fn test_sampled_from_empty() {
 fn test_one_of_empty() {
     let _g = gs::one_of::<i32>(vec![]);
 }
+
+#[test]
+#[should_panic(expected = "Cannot combine .alphabet() with character methods")]
+fn test_text_alphabet_with_codec() {
+    let g = gs::text().alphabet("abc").codec("ascii");
+    g.as_basic();
+}
+
+#[test]
+#[should_panic(expected = "Cannot combine .alphabet() with character methods")]
+fn test_text_codec_with_alphabet() {
+    let g = gs::text().codec("ascii").alphabet("abc");
+    g.as_basic();
+}
+
+#[test]
+#[should_panic(expected = "Cannot combine .alphabet() with character methods")]
+fn test_text_alphabet_with_categories() {
+    let g = gs::text().alphabet("abc").categories(&["Lu"]);
+    g.as_basic();
+}
