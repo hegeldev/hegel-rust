@@ -129,7 +129,6 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
 
                     quote! {
                         /// Set a custom generator for the #variant_name variant.
-                        #[allow(non_snake_case)]
                         pub fn #field_name<F>(mut self, configure: F) -> Self
                         where
                             F: FnOnce(#variant_generator_name<'a>) -> #variant_generator_name<'a>,
@@ -163,7 +162,6 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
 
                     quote! {
                         /// Set custom generators for the #variant_name variant.
-                        #[allow(non_snake_case)]
                         pub fn #field_name<#(#gen_type_params),*>(
                             mut self,
                             #(#gen_param_names: #gen_type_params),*
@@ -220,13 +218,11 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
 
     let generator_struct = quote! {
         /// Generated generator for #enum_name.
-        #[allow(non_snake_case)]
         pub struct #generator_name<'a> {
             #(#generator_fields,)*
             _phantom: std::marker::PhantomData<&'a ()>,
         }
 
-        #[allow(non_snake_case)]
         impl<'a> #generator_name<'a> {
             /// Create a new generator with default generators for all variants.
             pub fn new() -> Self
@@ -399,6 +395,11 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
     };
 
     let expanded = quote! {
+        // if a user has non-camel-case types that conflict, we will generate warning-emitting variable and type
+        // names here. We want to suppress these warnings, because the user already had to suppress these same warnings
+        // when they constructed their type, and they have no way to reach down into this block to locally-supress them
+        // and would have to suppress on their entire module, which is onerous.
+        #[allow(non_camel_case_types, non_snake_case)]
         const _: () = {
             use hegel::generators::Generator as _;
 
