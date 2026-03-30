@@ -424,12 +424,12 @@ impl<'a> Collection<'a> {
             };
             let name = match response {
                 Value::Text(s) => s,
+                // nocov start
                 _ => panic!(
-                    // nocov
-                    // nocov
                     "Expected text response from new_collection, got {:?}",
                     response
                 ),
+                // nocov end
             };
             self.server_name = Some(name);
         }

@@ -104,15 +104,15 @@ impl HegelSession {
         });
 
         let (lo, hi) = SUPPORTED_PROTOCOL_VERSIONS;
+        // nocov start
         if !(lo <= version && version <= hi) {
-            let _ = child.kill(); // nocov
+            let _ = child.kill();
             panic!(
-                // nocov
-                // nocov
                 "hegel-rust supports protocol versions {lo} through {hi}, but \
                  the connected server is using protocol version {version}. Upgrading \
                  hegel-rust or downgrading hegel-core might help."
             );
+            // nocov end
         }
 
         // Monitor thread: detects server crash. The pipe close from
