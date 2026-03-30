@@ -221,11 +221,10 @@ class UncoveredLine:
           - Inline: code(); // nocov
           - Block:  inside a // nocov start ... // nocov end region
         """
-        # Inline annotation (but not start/end markers themselves)
+        # Any line containing // nocov (inline, start, or end marker)
         if re.search(r"//\s*nocov\b", self.content):
-            if not re.search(r"//\s*nocov\s+(start|end)\b", self.content):
-                return True
-        # Block annotation
+            return True
+        # Inside a block annotation
         return self.line_number in get_nocov_block_lines(self.file)
 
     def is_test_code(self) -> bool:
