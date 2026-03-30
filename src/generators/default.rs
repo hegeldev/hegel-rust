@@ -1,10 +1,11 @@
 use super::{
-    BoolGenerator, BoxedGenerator, FloatGenerator, Generator, HashMapGenerator, IntegerGenerator,
-    OptionalGenerator, TextGenerator, VecGenerator, booleans, collections::ArrayGenerator, floats,
-    hashmaps, integers, optional, text, vecs,
+    BoolGenerator, BoxedGenerator, DurationGenerator, FloatGenerator, Generator, HashMapGenerator,
+    IntegerGenerator, OptionalGenerator, TextGenerator, VecGenerator, booleans,
+    collections::ArrayGenerator, durations, floats, hashmaps, integers, optional, text, vecs,
 };
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::time::Duration;
 
 /// Trait for types that have a default generator.
 ///
@@ -184,6 +185,13 @@ where
     type Generator = ArrayGenerator<T::Generator, T, N>;
     fn default_generator() -> Self::Generator {
         ArrayGenerator::new(T::default_generator())
+    }
+}
+
+impl DefaultGenerator for Duration {
+    type Generator = DurationGenerator;
+    fn default_generator() -> Self::Generator {
+        durations()
     }
 }
 
