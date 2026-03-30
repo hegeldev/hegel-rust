@@ -57,8 +57,8 @@ pub fn read_packet<R: Read + ?Sized>(reader: &mut R) -> std::io::Result<Packet> 
             std::io::ErrorKind::InvalidData, // nocov
             format!(
                 "Invalid magic number: expected 0x{:08X}, got 0x{:08X}", // nocov
-                PACKET_MAGIC,
-                magic // nocov
+                PACKET_MAGIC,                                            // nocov
+                magic                                                    // nocov
             ),
         ));
     }
@@ -76,8 +76,8 @@ pub fn read_packet<R: Read + ?Sized>(reader: &mut R) -> std::io::Result<Packet> 
             std::io::ErrorKind::InvalidData, // nocov
             format!(
                 "Invalid terminator: expected 0x{:02X}, got 0x{:02X}", // nocov
-                PACKET_TERMINATOR,
-                terminator[0] // nocov
+                PACKET_TERMINATOR,                                     // nocov
+                terminator[0]                                          // nocov
             ),
         ));
     }
@@ -94,8 +94,8 @@ pub fn read_packet<R: Read + ?Sized>(reader: &mut R) -> std::io::Result<Packet> 
             std::io::ErrorKind::InvalidData, // nocov
             format!(
                 "Checksum mismatch: expected 0x{:08X}, got 0x{:08X}", // nocov
-                checksum,
-                computed_checksum // nocov
+                checksum,                                             // nocov
+                computed_checksum                                     // nocov
             ),
         ));
     }
