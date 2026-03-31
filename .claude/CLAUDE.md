@@ -89,6 +89,24 @@ Server-managed collections use `new_collection`/`collection_more`/`collection_re
 
 For enums, it also creates `<Enum><Variant>Generator` for each data variant. Implementation is split across `struct_gen.rs`, `enum_gen.rs`, and `utils.rs`.
 
+### Coverage Annotations and Ratchet
+
+**CRITICAL: You MUST NOT increase the numbers in `.github/coverage-ratchet.json` without first asking for and then receiving explicit human permission to do so.** This applies even if you believe the annotation is justified. The ratchet numbers can only decrease; any increase requires human approval. Do not work around this by restructuring code to avoid coverage instead of writing tests. Do NOT blindly add `// nocov` -- each annotation must be justified, and your first instinct should be to write a test instead.
+
+This project enforces 100% code coverage. When code is genuinely untestable, use these annotations:
+
+- `// nocov` at the end of a line -- excludes that line from line coverage.
+- `// nocov start` / `// nocov end` on their own lines -- excludes a block from line coverage.
+
+The coverage check script (`scripts/check-coverage.py`) automatically removes `// nocov` annotations from lines that turn out to be covered. The ratchet file tracks the total count of excluded lines and prevents the count from increasing.
+
+The following patterns are **automatically excluded** and do NOT need `// nocov`:
+- Structural syntax (closing braces, punctuation-only lines)
+- `#[cfg(test)]` modules
+- `todo!()` and `unreachable!()` calls
+- Continuation lines inside multi-line `unreachable!()`/`todo!()` calls
+- `#[ignore]`d test bodies
+
 ### Testing Conventions
 
 - Place tests in `tests/` as integration tests, not as inline `#[cfg(test)] mod tests` in source files.

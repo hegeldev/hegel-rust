@@ -77,7 +77,7 @@ where
 
         Some(BasicGenerator::new(schema, move |raw| {
             let Value::Array(arr) = raw else {
-                panic!("Expected array, got {:?}", raw)
+                panic!("Expected array, got {:?}", raw) // nocov
             };
             arr.into_iter().map(|v| basic.parse_raw(v)).collect()
         }))
@@ -129,6 +129,7 @@ where
         if let Some(basic) = self.as_basic() {
             basic.do_draw(tc)
         } else {
+            // nocov start
             tc.start_span(labels::SET);
             let mut collection = Collection::new(tc, "composite_set", self.min_size, self.max_size);
             let mut set = HashSet::new();
@@ -136,11 +137,14 @@ where
                 let element = self.elements.do_draw(tc);
                 if !set.insert(element) {
                     collection.reject(Some("duplicate element"));
+                    // nocov end
                 }
             }
+            // nocov start
             assert!(set.len() >= self.min_size);
             tc.stop_span(false);
             set
+            // nocov end
         }
     }
 
@@ -163,7 +167,7 @@ where
 
         Some(BasicGenerator::new(schema, move |raw| {
             let Value::Array(arr) = raw else {
-                panic!("Expected array, got {:?}", raw)
+                panic!("Expected array, got {:?}", raw) // nocov
             };
             arr.into_iter().map(|v| basic.parse_raw(v)).collect()
         }))
@@ -216,6 +220,7 @@ where
         if let Some(basic) = self.as_basic() {
             basic.do_draw(tc)
         } else {
+            // nocov start
             tc.start_span(labels::MAP);
             let mut collection = Collection::new(tc, "composite_map", self.min_size, self.max_size);
             let mut map = HashMap::new();
@@ -228,12 +233,15 @@ where
                     std::collections::hash_map::Entry::Vacant(entry) => {
                         let value = self.values.do_draw(tc);
                         entry.insert(value);
+                        // nocov end
                     }
                 }
             }
+            // nocov start
             assert!(map.len() >= self.min_size);
             tc.stop_span(false);
             map
+            // nocov end
         }
     }
 
@@ -259,14 +267,14 @@ where
             // schema expects format [[key, value], ...]
             let values = match raw {
                 Value::Array(arr) => arr,
-                _ => panic!("Expected array, got {:?}", raw),
+                _ => panic!("Expected array, got {:?}", raw), // nocov
             };
 
             let mut map = HashMap::new();
             for value_raw in values {
                 let value = match value_raw {
                     Value::Array(arr) => arr,
-                    _ => panic!("Expected array, got {:?}", value_raw),
+                    _ => panic!("Expected array, got {:?}", value_raw), // nocov
                 };
                 let mut iter = value.into_iter();
                 let raw_k = iter.next().unwrap();
@@ -311,16 +319,20 @@ pub(crate) struct MappedToValue<T, G> {
 }
 
 impl<T: serde::Serialize, G: Generator<T>> Generator<Value> for MappedToValue<T, G> {
+    // nocov start
     fn do_draw(&self, tc: &TestCase) -> Value {
         crate::cbor_utils::cbor_serialize(&self.inner.do_draw(tc))
+        // nocov end
     }
 
+    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, Value>> {
         let inner_basic = self.inner.as_basic()?;
         let schema = inner_basic.schema().clone();
         Some(BasicGenerator::new(schema, move |raw| {
             let t_val = inner_basic.parse_raw(raw);
             crate::cbor_utils::cbor_serialize(&t_val)
+            // nocov end
         }))
     }
 }
@@ -335,25 +347,31 @@ pub struct FixedDictBuilder<'a> {
 
 impl<'a> FixedDictBuilder<'a> {
     /// Add a field with a name and generator.
+    // nocov start
     pub fn field<T, G>(mut self, name: &str, generator: G) -> Self
     where
         G: Generator<T> + Send + Sync + 'a,
         T: serde::Serialize + 'a,
+        // nocov end
     {
+        // nocov start
         let boxed = BoxedGenerator {
             inner: Arc::new(MappedToValue {
                 inner: generator,
                 _phantom: PhantomData,
+                // nocov end
             }),
         };
-        self.fields.push((name.to_string(), boxed));
-        self
+        self.fields.push((name.to_string(), boxed)); // nocov
+        self // nocov
     }
 
     /// Build the generator.
+    // nocov start
     pub fn build(self) -> FixedDictGenerator<'a> {
         FixedDictGenerator {
             fields: self.fields,
+            // nocov end
         }
     }
 }
@@ -364,6 +382,7 @@ pub struct FixedDictGenerator<'a> {
 }
 
 impl Generator<Value> for FixedDictGenerator<'_> {
+    // nocov start
     fn do_draw(&self, tc: &TestCase) -> Value {
         if let Some(basic) = self.as_basic() {
             basic.do_draw(tc)
@@ -376,9 +395,11 @@ impl Generator<Value> for FixedDictGenerator<'_> {
                 .collect();
             tc.stop_span(false);
             Value::Map(entries)
+            // nocov end
         }
     }
 
+    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, Value>> {
         let basics: Vec<BasicGenerator<'_, Value>> = self
             .fields
@@ -391,16 +412,20 @@ impl Generator<Value> for FixedDictGenerator<'_> {
         let schema = cbor_map! {
             "type" => "tuple",
             "elements" => Value::Array(schemas)
+        // nocov end
         };
 
-        let field_names: Vec<String> = self.fields.iter().map(|(name, _)| name.clone()).collect();
+        let field_names: Vec<String> = self.fields.iter().map(|(name, _)| name.clone()).collect(); // nocov
 
+        // nocov start
         Some(BasicGenerator::new(schema, move |raw| {
             let arr = match raw {
                 Value::Array(arr) => arr,
                 _ => panic!("Expected array from tuple schema, got {:?}", raw),
+                // nocov end
             };
 
+            // nocov start
             let entries: Vec<(Value, Value)> = field_names
                 .iter()
                 .zip(basics.iter())
@@ -408,6 +433,7 @@ impl Generator<Value> for FixedDictGenerator<'_> {
                 .map(|((name, basic), val)| (Value::Text(name.clone()), basic.parse_raw(val)))
                 .collect();
             Value::Map(entries)
+            // nocov end
         }))
     }
 }
@@ -424,8 +450,10 @@ impl Generator<Value> for FixedDictGenerator<'_> {
 ///     .field("age", gs::integers::<u32>())
 ///     .build();
 /// ```
+// nocov start
 pub fn fixed_dicts<'a>() -> FixedDictBuilder<'a> {
     FixedDictBuilder { fields: Vec::new() }
+    // nocov end
 }
 
 /// Generator for fixed-size arrays `[T; N]`. Created by [`arrays()`].
@@ -477,7 +505,7 @@ impl<G: Generator<T> + Send + Sync, T, const N: usize> Generator<[T; N]>
         Some(BasicGenerator::new(schema, move |raw| {
             let arr = match raw {
                 Value::Array(arr) => arr,
-                _ => panic!("Expected array from tuple schema, got {:?}", raw),
+                _ => panic!("Expected array from tuple schema, got {:?}", raw), // nocov
             };
             assert_eq!(arr.len(), N);
             let mut iter = arr.into_iter();

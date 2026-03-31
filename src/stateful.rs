@@ -105,7 +105,7 @@ impl<T> Variables<T> {
             Err(_) => {
                 panic!("{}", STOP_TEST_STRING);
             }
-            Ok(other) => panic!("Expected integer response for variable id, got {:?}", other),
+            Ok(other) => panic!("Expected integer response for variable id, got {:?}", other), // nocov
         }
     }
 
@@ -122,12 +122,12 @@ impl<T> Variables<T> {
         {
             Ok(Value::Integer(i)) => i.into(),
             Err(_) => {
-                panic!("{}", STOP_TEST_STRING);
+                panic!("{}", STOP_TEST_STRING); // nocov
             }
-            Ok(other) => panic!("Expected integer response for variable id, got {:?}", other),
+            Ok(other) => panic!("Expected integer response for variable id, got {:?}", other), // nocov
         };
         if self.values.contains_key(&variable_id) {
-            panic!("unexpected variable id in map");
+            panic!("unexpected variable id in map"); // nocov
         }
         self.values.insert(variable_id, v);
     }
@@ -156,9 +156,9 @@ pub fn variables<T>(tc: &TestCase) -> Variables<T> {
     let pool_id = match tc.send_request("new_pool", &cbor_map! {}) {
         Ok(Value::Integer(i)) => i.into(),
         Err(_) => {
-            panic!("{}", STOP_TEST_STRING);
+            panic!("{}", STOP_TEST_STRING); // nocov
         }
-        Ok(other) => panic!("Expected integer response for pool id, got {:?}", other),
+        Ok(other) => panic!("Expected integer response for pool id, got {:?}", other), // nocov
     };
     Variables {
         pool_id,
@@ -182,19 +182,19 @@ pub trait StateMachine {
 // TODO: factor out (shared with runner.rs)
 fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
-        s.to_string()
+        s.to_string() // nocov
     } else if let Some(s) = payload.downcast_ref::<String>() {
         s.clone()
     } else {
-        "Unknown panic".to_string()
+        "Unknown panic".to_string() // nocov
     }
 }
 
 fn check_invariants(m: &mut impl StateMachine, tc: &TestCase) {
     let invariants = m.invariants();
     for invariant in invariants {
-        let inv_tc = tc.child(2);
-        (invariant.apply)(m, inv_tc);
+        let inv_tc = tc.child(2); // nocov
+        (invariant.apply)(m, inv_tc); // nocov
     }
 }
 
@@ -202,7 +202,7 @@ fn check_invariants(m: &mut impl StateMachine, tc: &TestCase) {
 pub fn run(mut m: impl StateMachine, tc: TestCase) {
     let rules = m.rules();
     if rules.is_empty() {
-        panic!("Cannot run a machine with no rules.");
+        panic!("Cannot run a machine with no rules."); // nocov
     }
 
     let rule_index = integers::<usize>().min_value(0).max_value(rules.len() - 1);

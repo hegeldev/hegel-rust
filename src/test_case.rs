@@ -29,14 +29,18 @@ pub fn __assert_is_test_case<T: __IsTestCase>() {}
 #[derive(Debug)]
 pub struct StopTestError;
 impl std::fmt::Display for StopTestError {
+    // nocov start
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Server ran out of data (StopTest)")
+        // nocov end
     }
 }
 impl std::error::Error for StopTestError {}
 
 static PROTOCOL_DEBUG: LazyLock<bool> = LazyLock::new(|| {
+    // nocov start
     matches!(
+        // nocov end
         std::env::var("HEGEL_PROTOCOL_DEBUG")
             .unwrap_or_default()
             .to_lowercase()
@@ -200,8 +204,8 @@ impl TestCase {
     /// ```
     pub fn note(&self, message: &str) {
         if self.global.borrow().is_last_run {
-            let indent = self.local.borrow().indent;
-            eprintln!("{:indent$}{}", "", message, indent = indent);
+            let indent = self.local.borrow().indent; // nocov
+            eprintln!("{:indent$}{}", "", message, indent = indent); // nocov
         }
     }
 
@@ -236,11 +240,13 @@ impl TestCase {
     pub fn start_span(&self, label: u64) {
         self.local.borrow_mut().span_depth += 1;
         if let Err(StopTestError) = self.send_request("start_span", &cbor_map! {"label" => label}) {
+            // nocov start
             let mut local = self.local.borrow_mut();
             assert!(local.span_depth > 0);
             local.span_depth -= 1;
             drop(local);
             panic!("{}", STOP_TEST_STRING);
+            // nocov end
         }
     }
 
@@ -267,7 +273,7 @@ impl TestCase {
         // (The channel-level closed check is also enforced, but this gives a
         // clean StopTestError instead of an io::Error.)
         if global.test_aborted {
-            return Err(StopTestError);
+            return Err(StopTestError); // nocov
         }
         let debug = *PROTOCOL_DEBUG || global.verbosity == Verbosity::Debug;
 
@@ -285,7 +291,7 @@ impl TestCase {
         let request = Value::Map(entries);
 
         if debug {
-            eprintln!("REQUEST: {:?}", request);
+            eprintln!("REQUEST: {:?}", request); // nocov
         }
 
         let result = global.channel.request_cbor(&request);
@@ -294,7 +300,7 @@ impl TestCase {
         match result {
             Ok(response) => {
                 if debug {
-                    eprintln!("RESPONSE: {:?}", response);
+                    eprintln!("RESPONSE: {:?}", response); // nocov
                 }
                 Ok(response)
             }
@@ -305,7 +311,7 @@ impl TestCase {
                     || error_msg.contains("channel is closed")
                 {
                     if debug {
-                        eprintln!("RESPONSE: StopTest/overflow");
+                        eprintln!("RESPONSE: StopTest/overflow"); // nocov
                     }
                     let mut global = self.global.borrow_mut();
                     global.channel.mark_closed();
@@ -313,7 +319,9 @@ impl TestCase {
                     drop(global);
                     Err(StopTestError)
                 } else if error_msg.contains("FlakyStrategyDefinition")
+                    // nocov start
                     || error_msg.contains("FlakyReplay")
+                // nocov end
                 {
                     // Abort the test case; the server will report the flaky
                     // error in the test_done results, which runner.rs handles.
@@ -322,10 +330,12 @@ impl TestCase {
                     global.test_aborted = true;
                     drop(global);
                     Err(StopTestError)
+                // nocov start
                 } else if self.global.borrow().connection.server_has_exited() {
                     panic!("{}", SERVER_CRASHED_MESSAGE);
+                    // nocov end
                 } else {
-                    panic!("Failed to communicate with Hegel: {}", e);
+                    panic!("Failed to communicate with Hegel: {}", e); // nocov
                 }
             }
         }
@@ -367,7 +377,7 @@ pub fn generate_from_schema<T: serde::de::DeserializeOwned>(tc: &TestCase, schem
 pub fn deserialize_value<T: serde::de::DeserializeOwned>(raw: Value) -> T {
     let hv = value::HegelValue::from(raw.clone());
     value::from_hegel_value(hv).unwrap_or_else(|e| {
-        panic!("Failed to deserialize value: {}\nValue: {:?}", e, raw);
+        panic!("Failed to deserialize value: {}\nValue: {:?}", e, raw); // nocov
     })
 }
 
@@ -404,20 +414,22 @@ impl<'a> Collection<'a> {
                 "min_size" => self.min_size as u64
             };
             if let Some(max) = self.max_size {
-                map_insert(&mut payload, "max_size", max as u64);
+                map_insert(&mut payload, "max_size", max as u64); // nocov
             }
             let response = match self.tc.send_request("new_collection", &payload) {
                 Ok(v) => v,
                 Err(StopTestError) => {
-                    panic!("{}", STOP_TEST_STRING);
+                    panic!("{}", STOP_TEST_STRING); // nocov
                 }
             };
             let name = match response {
                 Value::Text(s) => s,
+                // nocov start
                 _ => panic!(
                     "Expected text response from new_collection, got {:?}",
                     response
                 ),
+                // nocov end
             };
             self.server_name = Some(name);
         }
@@ -427,7 +439,7 @@ impl<'a> Collection<'a> {
     /// Ask the server whether to produce another element.
     pub fn more(&mut self) -> bool {
         if self.finished {
-            return false;
+            return false; // nocov
         }
         let server_name = self.ensure_initialized().to_string();
         let response = match self.tc.send_request(
@@ -442,7 +454,7 @@ impl<'a> Collection<'a> {
         };
         let result = match response {
             Value::Bool(b) => b,
-            _ => panic!("Expected bool from collection_more, got {:?}", response),
+            _ => panic!("Expected bool from collection_more, got {:?}", response), // nocov
         };
         if !result {
             self.finished = true;
@@ -451,6 +463,7 @@ impl<'a> Collection<'a> {
     }
 
     /// Reject the last element (don't count it towards the size budget).
+    // nocov start
     pub fn reject(&mut self, why: Option<&str>) {
         if self.finished {
             return;
@@ -458,11 +471,14 @@ impl<'a> Collection<'a> {
         let server_name = self.ensure_initialized().to_string();
         let mut payload = cbor_map! {
             "collection" => server_name.as_str()
+            // nocov end
         };
+        // nocov start
         if let Some(reason) = why {
             map_insert(&mut payload, "why", reason.to_string());
+            // nocov end
         }
-        let _ = self.tc.send_request("collection_reject", &payload);
+        let _ = self.tc.send_request("collection_reject", &payload); // nocov
     }
 }
 
