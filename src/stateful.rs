@@ -229,7 +229,7 @@ pub fn run(mut m: impl StateMachine, tc: TestCase) {
             Err(e) => {
                 let msg = panic_message(&e);
                 if msg == STOP_TEST_STRING {
-                    // Server ran out of data — this test case is done.
+                    // Backend ran out of data — this test case is done.
                     break;
                 } else if msg != ASSUME_FAIL_STRING {
                     tc.note("Rule stopped early due to violated assumption.");

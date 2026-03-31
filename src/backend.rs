@@ -1,12 +1,12 @@
-use crate::runner::Settings;
+use crate::Settings;
 use ciborium::Value;
 
-/// Error indicating the server ran out of data for this test case.
+/// Error indicating the backend ran out of data for this test case.
 #[derive(Debug)]
 pub struct StopTestError;
 impl std::fmt::Display for StopTestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Server ran out of data (StopTest)")
+        write!(f, "Backend ran out of data for this test case (StopTest)")
     }
 }
 impl std::error::Error for StopTestError {}
@@ -28,7 +28,7 @@ pub trait Backend {
     /// End the current span. If `discard` is true, the span's choices are discarded.
     fn stop_span(&self, discard: bool) -> Result<(), StopTestError>;
 
-    /// Create a new server-managed collection. Returns an opaque handle.
+    /// Create a new collection. Returns an opaque handle.
     fn new_collection(
         &self,
         name: &str,
@@ -60,6 +60,7 @@ pub trait Backend {
 }
 
 /// Result of running a single test case.
+#[derive(Debug)]
 pub enum TestCaseResult {
     /// Test case passed normally.
     Valid,
@@ -73,6 +74,7 @@ pub enum TestCaseResult {
 }
 
 /// Result of a full test run.
+#[derive(Debug)]
 pub struct TestRunResult {
     /// Whether all test cases passed.
     pub passed: bool,

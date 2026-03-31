@@ -26,7 +26,7 @@ pub(crate) const ASSUME_FAIL_STRING: &str = "__HEGEL_ASSUME_FAIL";
 
 /// The sentinel string used to identify overflow/StopTest panics.
 /// Distinct from ASSUME_FAIL_STRING so callers can tell user-initiated
-/// assumption failures apart from server-initiated data exhaustion.
+/// assumption failures apart from backend-initiated data exhaustion.
 pub(crate) const STOP_TEST_STRING: &str = "__HEGEL_STOP_TEST";
 
 pub(crate) struct TestCaseGlobalData {
@@ -227,7 +227,7 @@ impl TestCase {
     }
 }
 
-/// Send a schema to the server and return the raw CBOR response.
+/// Send a schema to the backend and return the raw CBOR response.
 #[doc(hidden)]
 pub fn generate_raw(tc: &TestCase, schema: &Value) -> Value {
     match tc.backend().generate(schema) {
@@ -263,25 +263,25 @@ pub struct Collection<'a> {
     base_name: String,
     min_size: usize,
     max_size: Option<usize>,
-    server_name: Option<String>,
+    handle: Option<String>,
     finished: bool,
 }
 
 impl<'a> Collection<'a> {
-    /// Create a new server-managed collection.
+    /// Create a new backend-managed collection.
     pub fn new(tc: &'a TestCase, name: &str, min_size: usize, max_size: Option<usize>) -> Self {
         Collection {
             tc,
             base_name: name.to_string(),
             min_size,
             max_size,
-            server_name: None,
+            handle: None,
             finished: false,
         }
     }
 
     fn ensure_initialized(&mut self) -> &str {
-        if self.server_name.is_none() {
+        if self.handle.is_none() {
             let name = match self.tc.backend().new_collection(
                 &self.base_name,
                 self.min_size as u64,
@@ -292,9 +292,9 @@ impl<'a> Collection<'a> {
                     panic!("{}", STOP_TEST_STRING); // nocov
                 }
             };
-            self.server_name = Some(name);
+            self.handle = Some(name);
         }
-        self.server_name.as_ref().unwrap()
+        self.handle.as_ref().unwrap()
     }
 
     /// Ask the backend whether to produce another element.
@@ -302,8 +302,8 @@ impl<'a> Collection<'a> {
         if self.finished {
             return false; // nocov
         }
-        let server_name = self.ensure_initialized().to_string();
-        let result = match self.tc.backend().collection_more(&server_name) {
+        let handle = self.ensure_initialized().to_string();
+        let result = match self.tc.backend().collection_more(&handle) {
             Ok(b) => b,
             Err(StopTestError) => {
                 self.finished = true;
@@ -322,8 +322,8 @@ impl<'a> Collection<'a> {
         if self.finished {
             return;
         }
-        let server_name = self.ensure_initialized().to_string();
-        let _ = self.tc.backend().collection_reject(&server_name, why);
+        let handle = self.ensure_initialized().to_string();
+        let _ = self.tc.backend().collection_reject(&handle, why);
     }
     // nocov end
 }

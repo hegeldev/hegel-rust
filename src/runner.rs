@@ -868,8 +868,6 @@ pub enum Verbosity {
     Debug,
 }
 
-impl Verbosity {}
-
 /// Configuration for a Hegel test run.
 ///
 /// Use builder methods to customize, then pass to [`Hegel::settings`] or
@@ -1049,8 +1047,6 @@ where
 
     /// Run the property-based tests.
     ///
-    /// Connects to the shared hegel server (spawning it on first use),
-    /// sends a `run_test` command, processes test cases, and reports results.
     /// Panics if any test case fails.
     pub fn run(self) {
         init_panic_hook();
@@ -1152,8 +1148,8 @@ fn run_test_case(
         }
     };
 
-    // Send mark_complete using the same stream that generators used.
-    // Skip if test was aborted (StopTest) - server already closed the stream.
+    // Send mark_complete via the backend.
+    // Skip if test was aborted (StopTest) - the backend already closed.
     if !tc.backend().test_aborted() {
         let status = match &tc_result {
             TestCaseResult::Valid => "VALID",
