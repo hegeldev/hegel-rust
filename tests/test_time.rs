@@ -18,3 +18,19 @@ fn test_durations_bounded() {
         move |d| *d >= min && *d <= max,
     );
 }
+
+#[test]
+fn test_durations_in_vec() {
+    let max = Duration::from_secs(60);
+    assert_all_examples(
+        generators::vecs(generators::durations().max_value(max)).max_size(5),
+        move |v| v.iter().all(|d| *d <= max),
+    );
+}
+
+#[test]
+fn test_duration_default_generator() {
+    assert_all_examples(generators::default::<Duration>(), |d| {
+        *d >= Duration::ZERO
+    });
+}
