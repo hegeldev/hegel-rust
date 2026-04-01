@@ -162,7 +162,7 @@ impl TestCase {
     /// rewritten to `draw_named()` with an appropriate variable name
     /// in order to give better test output.
     pub fn draw<T: std::fmt::Debug>(&self, generator: impl Generator<T>) -> T {
-        self.draw_named(generator, "unnamed", true)
+        self.draw_named(generator, "draw", true)
     }
 
     /// Draw a value from a generator with a specific name for output.
