@@ -4,6 +4,12 @@ use common::project::TempRustProject;
 use common::utils::FindAny;
 use hegel::generators as gs;
 
+/// format_log_excerpt should return "(empty)" for empty input.
+#[test]
+fn format_log_excerpt_empty_content() {
+    assert_eq!(hegel::format_log_excerpt(""), "(empty)");
+}
+
 /// format_log_excerpt should return all content when there are fewer than
 /// MAX_UNINDENTED (5) unindented lines.
 #[test]

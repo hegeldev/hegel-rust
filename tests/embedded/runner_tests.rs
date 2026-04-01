@@ -231,3 +231,68 @@ fn test_protocol_debug_true_when_env_set() {
         std::env::remove_var("HEGEL_PROTOCOL_DEBUG");
     }
 }
+
+// Serialize tests that read/write .hegel/server.log to prevent interference
+// between parallel test threads.
+static LOG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn write_server_log(content: &str) {
+    std::fs::create_dir_all(HEGEL_SERVER_DIR).ok();
+    std::fs::write(format!("{HEGEL_SERVER_DIR}/server.log"), content).ok();
+}
+
+fn remove_server_log() {
+    std::fs::remove_file(format!("{HEGEL_SERVER_DIR}/server.log")).ok();
+}
+
+#[test]
+fn server_log_excerpt_no_file() {
+    let _guard = LOG_TEST_LOCK.lock().unwrap();
+    remove_server_log();
+    assert!(server_log_excerpt().is_none());
+}
+
+#[test]
+fn server_log_excerpt_empty_file() {
+    let _guard = LOG_TEST_LOCK.lock().unwrap();
+    write_server_log("");
+    assert!(server_log_excerpt().is_none());
+    remove_server_log();
+}
+
+#[test]
+fn server_log_excerpt_non_empty_file() {
+    let _guard = LOG_TEST_LOCK.lock().unwrap();
+    write_server_log("Error: test crash\n");
+    assert!(server_log_excerpt().is_some());
+    remove_server_log();
+}
+
+#[test]
+fn server_crash_message_includes_log_excerpt() {
+    let _guard = LOG_TEST_LOCK.lock().unwrap();
+    write_server_log("Error: test crash\n");
+    let msg = server_crash_message();
+    assert!(msg.contains("Error: test crash"), "got: {msg}");
+    remove_server_log();
+}
+
+#[test]
+fn handle_channel_error_connection_aborted() {
+    let _guard = LOG_TEST_LOCK.lock().unwrap();
+    remove_server_log();
+    let err = std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "test");
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        handle_channel_error(err);
+    }));
+    let panic_val = result.expect_err("handle_channel_error should have panicked");
+    let msg = panic_val
+        .downcast_ref::<String>()
+        .map(|s| s.as_str())
+        .or_else(|| panic_val.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(
+        msg.contains("hegel server process exited unexpectedly"),
+        "unexpected panic message: {msg}"
+    );
+}
