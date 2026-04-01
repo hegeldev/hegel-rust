@@ -333,6 +333,8 @@ pub use hegel_macros::state_machine;
 pub use hegel_macros::test;
 
 #[doc(hidden)]
+pub use runner::__test_kill_server;
+#[doc(hidden)]
 pub use runner::format_log_excerpt;
 #[doc(hidden)]
 pub use runner::hegel;

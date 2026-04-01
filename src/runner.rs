@@ -21,7 +21,7 @@ const HEGEL_SERVER_COMMAND_ENV: &str = "HEGEL_SERVER_COMMAND";
 const HEGEL_SERVER_DIR: &str = ".hegel";
 static SERVER_LOG_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static LOG_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
-static SESSION: std::sync::OnceLock<HegelSession> = std::sync::OnceLock::new();
+static SESSION: Mutex<Option<Arc<HegelSession>>> = Mutex::new(None);
 
 static PANIC_HOOK_INIT: Once = Once::new();
 
@@ -265,8 +265,8 @@ fn parse_version(s: &str) -> (u32, u32) {
 
 /// A persistent connection to the hegel server subprocess.
 ///
-/// Created once per process on first use. The subprocess and connection
-/// are reused across all `Hegel::run()` calls. The Python server supports
+/// A new session is created on first use and whenever the previous server
+/// process has exited (crash or explicit kill). The Python server supports
 /// multiple sequential `run_test` commands over a single connection.
 struct HegelSession {
     connection: Arc<Connection>,
@@ -275,11 +275,25 @@ struct HegelSession {
     /// brief run_test send/receive; test execution runs concurrently on
     /// per-test streams.
     control: Mutex<Stream>,
+    /// PID of the server subprocess. Exposed via `__test_kill_server` for
+    /// testing server restart behaviour.
+    server_pid: u32,
 }
 
 impl HegelSession {
-    fn get() -> &'static HegelSession {
-        SESSION.get_or_init(HegelSession::init)
+    /// Return the current live session, or create a new one if the server has
+    /// exited (either crashed or been killed since the last call).
+    fn get() -> Arc<HegelSession> {
+        let mut guard = SESSION.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(ref s) = *guard {
+            if !s.connection.server_has_exited() {
+                return Arc::clone(s);
+            }
+        }
+        init_panic_hook();
+        let session = Arc::new(HegelSession::init());
+        *guard = Some(Arc::clone(&session));
+        session
     }
 
     fn init() -> HegelSession {
@@ -337,6 +351,8 @@ impl HegelSession {
             // nocov end
         }
 
+        let server_pid = child.id();
+
         // Monitor thread: detects server crash. The pipe close from
         // the child exiting will unblock any pending reads.
         let conn_for_monitor = Arc::clone(&connection);
@@ -348,6 +364,7 @@ impl HegelSession {
         HegelSession {
             connection,
             control: Mutex::new(control),
+            server_pid,
         }
     }
 }
@@ -409,17 +426,15 @@ impl TestRunner for ServerTestRunner {
         // The control stream is behind a Mutex because Stream requires &mut self.
         // This only serializes the brief run_test send/receive — actual test
         // execution happens on per-test streams without holding this lock.
-        {
-            let mut control = session.control.lock().unwrap();
-            let run_test_id = control
-                .send_request(cbor_encode(&run_test_msg))
-                .expect("Failed to send run_test");
-
-            let run_test_response = control
-                .receive_reply(run_test_id)
-                .expect("Failed to receive run_test response");
-            let _run_test_result: Value = cbor_decode(&run_test_response);
+        // The lock is released before any error handling so the mutex is never
+        // poisoned by a server crash on one thread affecting other threads.
+        let run_test_response = {
+            let mut control = session.control.lock().unwrap_or_else(|e| e.into_inner());
+            let send_id = control.send_request(cbor_encode(&run_test_msg));
+            send_id.and_then(|id| control.receive_reply(id))
         }
+        .unwrap_or_else(|e| handle_channel_error(e));
+        let _run_test_result: Value = cbor_decode(&run_test_response);
 
         if verbosity == Verbosity::Debug {
             eprintln!("run_test response received");
@@ -952,6 +967,25 @@ fn handle_channel_error(e: std::io::Error) -> ! {
         panic!("{}", server_crash_message());
     }
     unreachable!("unexpected channel error: {e}")
+}
+
+/// Kill the hegel server process and wait until the connection detects that it
+/// has exited.  Only for use in tests — not part of the public API.
+#[doc(hidden)]
+pub fn __test_kill_server() {
+    let guard = SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(session) = guard.as_ref() else {
+        return;
+    }; // nocov
+    let pid = session.server_pid;
+    let conn = Arc::clone(&session.connection);
+    drop(guard);
+    let _ = std::process::Command::new("kill")
+        .arg(pid.to_string())
+        .status();
+    while !conn.server_has_exited() {
+        std::thread::yield_now();
+    }
 }
 
 // ─── Public types ───────────────────────────────────────────────────────────
