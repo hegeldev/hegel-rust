@@ -181,7 +181,7 @@ Error paths that are hard to trigger.
 // Bad: Can't test the error branch without IO errors — parsing is entangled with IO
 fn read_and_parse(path: &Path) -> Result<Data> {
     let content = std::fs::read_to_string(path)?;
-    parse(&content)
+    // ... parsing code inlined here, can't be tested without triggering IO
 }
 
 // Good: Separate IO from parsing
