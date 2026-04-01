@@ -1,6 +1,6 @@
 use crate::antithesis::{TestLocation, is_running_in_antithesis};
 use crate::control::{currently_in_test_context, with_test_context};
-use crate::protocol::{Connection, HANDSHAKE_STRING, SERVER_CRASHED_MESSAGE, Stream};
+use crate::protocol::{Connection, HANDSHAKE_STRING, Stream};
 use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING, TestCase};
 use ciborium::Value;
 
@@ -408,6 +408,116 @@ fn resolve_hegel_path(path: &str) -> String {
     );
 }
 
+/// Format a server log excerpt for inclusion in error messages.
+///
+/// Returns the last 5 unindented lines and the content between them. Runs of
+/// more than 10 consecutive indented lines are truncated with a summary.
+pub fn format_log_excerpt(content: &str) -> String {
+    const MAX_UNINDENTED: usize = 5;
+    const INDENT_THRESHOLD: usize = 10;
+    const INDENT_CONTEXT: usize = 3;
+
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        return "(empty)".to_string();
+    }
+
+    // Find start: walk backwards until we've seen MAX_UNINDENTED unindented lines
+    let mut unindented_seen = 0;
+    let mut start_idx = 0;
+    for (i, line) in lines.iter().enumerate().rev() {
+        if is_log_unindented(line) {
+            unindented_seen += 1;
+            if unindented_seen >= MAX_UNINDENTED {
+                start_idx = i;
+                break;
+            }
+        }
+    }
+
+    // Process the relevant section, truncating long indented runs
+    let relevant = &lines[start_idx..];
+    let mut output: Vec<String> = Vec::new();
+    let mut indent_run: Vec<&str> = Vec::new();
+
+    for &line in relevant {
+        if is_log_unindented(line) {
+            flush_log_indent_run(
+                &mut indent_run,
+                &mut output,
+                INDENT_THRESHOLD,
+                INDENT_CONTEXT,
+            );
+            output.push(line.to_string());
+        } else {
+            indent_run.push(line);
+        }
+    }
+    flush_log_indent_run(
+        &mut indent_run,
+        &mut output,
+        INDENT_THRESHOLD,
+        INDENT_CONTEXT,
+    );
+
+    output.join("\n")
+}
+
+fn is_log_unindented(line: &str) -> bool {
+    !line.is_empty() && !line.starts_with(' ') && !line.starts_with('\t')
+}
+
+fn flush_log_indent_run(
+    run: &mut Vec<&str>,
+    output: &mut Vec<String>,
+    threshold: usize,
+    context: usize,
+) {
+    if run.is_empty() {
+        return;
+    }
+    if run.len() > threshold {
+        let keep = context.min(run.len() / 2);
+        for &line in &run[..keep] {
+            output.push(line.to_string());
+        }
+        let hidden = run.len() - 2 * keep;
+        output.push(format!("  [...{hidden} lines...]"));
+        for &line in &run[run.len() - keep..] {
+            output.push(line.to_string());
+        }
+    } else {
+        for &line in run.iter() {
+            output.push(line.to_string());
+        }
+    }
+    run.clear();
+}
+
+fn server_log_excerpt() -> Option<String> {
+    let log_path = format!("{HEGEL_SERVER_DIR}/server.log");
+    let content = std::fs::read_to_string(&log_path).ok()?;
+    if content.trim().is_empty() {
+        return None;
+    }
+    Some(format_log_excerpt(&content))
+}
+
+fn server_crash_message() -> String {
+    const BASE: &str = "The hegel server process exited unexpectedly.";
+    match server_log_excerpt() {
+        Some(excerpt) => format!("{BASE}\n\nLast server log entries:\n{excerpt}"),
+        None => format!("{BASE}\n\n(No entries found in .hegel/server.log)"),
+    }
+}
+
+fn handle_channel_error(e: std::io::Error) -> ! {
+    if e.kind() == std::io::ErrorKind::ConnectionAborted {
+        panic!("{}", server_crash_message());
+    }
+    unreachable!("unexpected channel error: {e}")
+}
+
 /// Health checks that can be suppressed during test execution.
 ///
 /// Health checks detect common issues with test configuration that would
@@ -703,17 +813,15 @@ where
         // The control stream is behind a Mutex because Stream requires &mut self.
         // This only serializes the brief run_test send/receive — actual test
         // execution happens on per-test streams without holding this lock.
-        {
-            let mut control = session.control.lock().unwrap();
-            let run_test_id = control
-                .send_request(cbor_encode(&run_test_msg))
-                .expect("Failed to send run_test");
-
-            let run_test_response = control
-                .receive_reply(run_test_id)
-                .expect("Failed to receive run_test response");
-            let _run_test_result: Value = cbor_decode(&run_test_response);
+        // The lock is released before any error handling so the mutex is never
+        // poisoned by a server crash on one thread affecting other threads.
+        let run_test_response = {
+            let mut control = session.control.lock().unwrap_or_else(|e| e.into_inner());
+            let send_id = control.send_request(cbor_encode(&run_test_msg));
+            send_id.and_then(|id| control.receive_reply(id))
         }
+        .unwrap_or_else(|e| handle_channel_error(e));
+        let _run_test_result: Value = cbor_decode(&run_test_response);
 
         if verbosity == Verbosity::Debug {
             eprintln!("run_test response received"); // nocov
@@ -728,7 +836,7 @@ where
                 Ok(event) => event,
                 // nocov start
                 Err(_) if connection.server_has_exited() => {
-                    panic!("{}", SERVER_CRASHED_MESSAGE);
+                    panic!("{}", server_crash_message());
                     // nocov end
                 }
                 Err(e) => unreachable!("Failed to receive event (server still running): {}", e),
@@ -837,7 +945,7 @@ where
             }
 
             if connection.server_has_exited() {
-                panic!("{}", SERVER_CRASHED_MESSAGE); // nocov
+                panic!("{}", server_crash_message()); // nocov
             }
         }
 
