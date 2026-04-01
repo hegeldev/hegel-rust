@@ -192,6 +192,7 @@ pub mod generators;
 pub(crate) mod protocol;
 pub(crate) mod runner;
 pub mod stateful;
+mod uv;
 mod test_case;
 
 #[doc(hidden)]

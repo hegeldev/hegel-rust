@@ -16,7 +16,9 @@
 
 To install: `cargo add --dev hegeltest`.
 
-Hegel requires [uv](https://docs.astral.sh/uv/) on your PATH, which we use to install the required [hegel-core](https://github.com/hegeldev/hegel-core) server component. See https://hegel.dev/reference/installation for details.
+Hegel will use [uv](https://docs.astral.sh/uv/) to install the required [hegel-core](https://github.com/hegeldev/hegel-core) server component.
+If `uv` is already on your path, it will use that, otherwise it will download a private copy of it to ~/.cache/hegel and not put it on your path.
+See https://hegel.dev/reference/installation for details.
 
 ## Quickstart
 
