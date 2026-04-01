@@ -145,6 +145,69 @@ fn test_explicit_draw_unnamed() {
 }
 
 #[test]
+fn test_explicit_note() {
+    let etc = hegel::ExplicitTestCase::new().with_value("x", "true", true);
+    etc.run(|tc: &hegel::ExplicitTestCase| {
+        let _: bool = tc.draw_named(generators::booleans(), "x", false);
+        tc.note("some note");
+    });
+}
+
+#[test]
+fn test_explicit_notes_printed_on_panic_inline() {
+    expect_panic(
+        || {
+            let etc = hegel::ExplicitTestCase::new().with_value("x", "42", 42i32);
+            etc.run(|tc: &hegel::ExplicitTestCase| {
+                let _: i32 = tc.draw_named(generators::integers(), "x", false);
+                tc.note("a note");
+                panic!("intentional");
+            });
+        },
+        "intentional",
+    );
+}
+
+#[test]
+fn test_explicit_assume_passes() {
+    let etc = hegel::ExplicitTestCase::new();
+    etc.assume(true);
+}
+
+#[test]
+fn test_explicit_assume_panics() {
+    expect_panic(
+        || {
+            let etc = hegel::ExplicitTestCase::new();
+            etc.assume(false);
+        },
+        "__HEGEL_ASSUME_FAIL",
+    );
+}
+
+#[test]
+fn test_explicit_start_span_panics() {
+    expect_panic(
+        || {
+            let etc = hegel::ExplicitTestCase::new();
+            etc.start_span(0);
+        },
+        "start_span is not supported in explicit test cases",
+    );
+}
+
+#[test]
+fn test_explicit_stop_span_panics() {
+    expect_panic(
+        || {
+            let etc = hegel::ExplicitTestCase::new();
+            etc.stop_span(false);
+        },
+        "stop_span is not supported in explicit test cases",
+    );
+}
+
+#[test]
 fn test_explicit_draw_silent_panics() {
     expect_panic(
         || {
