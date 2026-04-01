@@ -169,7 +169,7 @@ pkt = read_packet()
 if pkt is None:
     sys.exit(1)
 channel, message_id, _ = pkt
-write_packet(channel, message_id, b"Hegel/0.6")
+write_packet(channel, message_id, b"Hegel/0.8")
 
 # Exit immediately — client's run_test receive_reply will fail with ConnectionAborted
 sys.exit(1)
@@ -225,7 +225,7 @@ pkt = read_packet()
 if pkt is None:
     sys.exit(1)
 channel, message_id, _ = pkt
-write_packet(channel, message_id, b"Hegel/0.6")
+write_packet(channel, message_id, b"Hegel/0.8")
 
 # Exit immediately — client's run_test receive_reply will fail with ConnectionAborted
 sys.exit(1)
