@@ -136,6 +136,15 @@ fn test_explicit_case_type_annotated_draw_uses_name(tc: TestCase) {
 // ============================================================
 
 #[test]
+fn test_explicit_draw_unnamed() {
+    let etc = hegel::ExplicitTestCase::new().with_value("unnamed", "42", 42i32);
+    etc.run(|tc: &hegel::ExplicitTestCase| {
+        let x: i32 = tc.draw(generators::integers());
+        assert_eq!(x, 42);
+    });
+}
+
+#[test]
 fn test_explicit_draw_silent_panics() {
     expect_panic(
         || {
