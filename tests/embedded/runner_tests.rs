@@ -61,24 +61,14 @@ fn test_startup_error_message_no_binary_path() {
 
 #[test]
 fn test_startup_error_message_includes_server_log() {
-    let dir = std::env::temp_dir().join("hegel_test_unit_log");
-    std::fs::create_dir_all(&dir).unwrap();
-    let log_file = dir.join("server.log");
-    std::fs::write(
-        &log_file,
-        "Error: startup failed\nDetail 1\nDetail 2\nDetail 3\n",
-    )
-    .unwrap();
-    let log_path_str = log_file.to_string_lossy().to_string();
-    let _ = SERVER_LOG_PATH.set(log_path_str.clone());
+    let _guard = LOG_TEST_LOCK.lock().unwrap();
+    write_server_log("Error: startup failed\nDetail 1\nDetail 2\nDetail 3\n");
 
     let exit_status = Command::new("false").status().unwrap();
     let msg = startup_error_message(Some("false"), exit_status);
-    // Only assert if we successfully set the path (OnceLock may already be set)
-    if SERVER_LOG_PATH.get() == Some(&log_path_str) {
-        assert!(msg.contains("Server log"), "Message: {msg}");
-        assert!(msg.contains("for full output"), "Message: {msg}");
-    }
+    assert!(msg.contains("Server log"), "Message: {msg}");
+    assert!(msg.contains("for full output"), "Message: {msg}");
+    remove_server_log();
 }
 
 #[test]
