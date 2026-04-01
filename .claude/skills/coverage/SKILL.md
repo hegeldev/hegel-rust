@@ -5,7 +5,9 @@ description: "How to approach code coverage in this project. Use when coverage C
 
 # Code Coverage
 
-This project requires 100% line coverage for new code.
+This project requires 100% line coverage for new code, with explicit nocov annotations only allowed under rare circumstances and with human permission.
+
+This is implemented as a ratchet which counts the number of lines annotated as not requiring coverage. If the number of excluded lines exceeds the ratchet value, or if there are any uncovered lines without a `// nocov` annotation, the coverage check fails.
 
 ## The ratchet is not a budget
 
@@ -17,9 +19,8 @@ You may not add `// nocov` annotations without explicit human permission. If you
 
 Tests should catch real bugs, not mirror the implementation.
 
-- **Validate against external reality**: if your code maps to external identifiers (URLs, file names, API paths), hardcode the real external data in the test and validate against it. Don't just assert that each match arm produces a specific string — that's duplicating the code.
-- **Test behavior, not structure**: a test that would still pass after introducing a bug is not testing anything.
-- **Avoid network in unit tests**: use `file://` URLs with curl, create local tar.gz fixtures, use `tempfile::tempdir()` for isolation. Keep exactly one integration test that verifies the real network path works end-to-end.
+- **Validate against independent sources**: if you can obtain the correct answer some other way - e.g. checking it against an externally defined source, or calculating it through some simpler more expensive method - then you should validate against that in the test.
+- **Think in terms of what could go wrong**: a test that would still pass after introducing a bug is not testing anything. Figure out ways in which the code could genuinely be wrong and write tests that would catch that if it were.
 
 ## Diagnosing coverage failures
 
@@ -27,10 +28,9 @@ When CI coverage fails:
 
 1. Read the failure output — it lists each uncovered file:line and content.
 2. Categorize each uncovered line:
-   - **Thin wrapper**: a 1-2 line function that just delegates to a parameterized version. Is it called by any test (including integration tests via TempRustProject)? If subprocess coverage isn't picking it up, you may need a unit test that calls the wrapper directly.
-   - **Platform-specific code**: refactor to take platform as a parameter (see `references/patterns.md`).
-   - **Error handling**: can you trigger the error in a test? (Bad file path, bad URL, invalid input.) If the error path is inside a panic/assert format string, the coverage checker excludes those continuation lines automatically.
-   - **Dead code**: if it's truly unreachable, delete it.
+   - **Just needs testing**: most code that has not been covered just needs a test written for it. Your default assumption should be that it is straightforwardly testable and you just need to write a normal test.
+   - **Needs refactoring**: some code cannot easily be tested in its current form and needs refactoring to make it testable. See `references/patterns.md` for information on how to do that.
+   - **Dead code**: if it's truly unreachable, delete it, or replace it with an `unreachable!` annotation.
 3. Run `just check-coverage` locally if `cargo-llvm-cov` is available to iterate faster than CI.
 
 For details on how the coverage script works and what it auto-excludes, see `references/internals.md`.

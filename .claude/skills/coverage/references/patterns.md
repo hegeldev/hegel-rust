@@ -2,7 +2,7 @@
 
 Detailed patterns for achieving 100% test coverage through better code design.
 
-## Category A: Genuinely Unreachable Code
+## Genuinely Unreachable Code
 
 Code that should never execute under any circumstances.
 
@@ -30,38 +30,7 @@ fn process(state: State) -> Result<()> {
 
 The `unreachable!()` macro documents intent and will panic if your assumption is wrong.
 
-## Category B: Defensive Code That Swallows Errors
-
-Code that catches errors "just in case" but hides problems.
-
-**Fix**: Let errors propagate.
-
-```rust
-// Bad: Silently swallow errors
-fn load_config() -> Config {
-    match std::fs::read_to_string("config.toml") {
-        Ok(s) => parse_config(&s),
-        Err(_) => Config::default(), // Hides file permission errors, etc.
-    }
-}
-
-// Good: Propagate errors
-fn load_config() -> Result<Config> {
-    let s = std::fs::read_to_string("config.toml")?;
-    Ok(parse_config(&s))
-}
-
-// Or if default is intentional, be explicit about which errors
-fn load_config() -> Result<Config> {
-    match std::fs::read_to_string("config.toml") {
-        Ok(s) => Ok(parse_config(&s)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Config::default()),
-        Err(e) => Err(e.into()), // Propagate unexpected errors
-    }
-}
-```
-
-## Category C: Hard-to-Test Dependencies
+## Hard-to-Test Dependencies
 
 Code that interacts with external systems (filesystem, network, time, environment).
 
@@ -139,7 +108,7 @@ mod tests {
 
 ### Parameterize Over Environment
 
-For functions that read env vars or global state, extract the logic into a parameterized version and leave a thin wrapper:
+For functions that read env vars, platform information, or global state, extract the logic into a parameterized version and leave a thin wrapper:
 
 ```rust
 // Hard to test — reads env vars directly
@@ -161,26 +130,6 @@ fn cache_dir_from(xdg: Option<String>, home: Option<PathBuf>) -> PathBuf {
 // Thin wrapper calls the testable version
 fn cache_dir() -> PathBuf {
     cache_dir_from(std::env::var("XDG_CACHE_HOME").ok(), std::env::home_dir())
-}
-```
-
-### Platform-Specific Match Arms
-
-Take arch/os as parameters so all branches are testable from any platform:
-
-```rust
-// Can only test the current platform's branch
-fn platform_archive_name() -> Result<String, String> {
-    archive_name_for(std::env::consts::ARCH, std::env::consts::OS)
-}
-
-// All branches testable
-fn archive_name_for(arch: &str, os: &str) -> Result<String, String> {
-    match (arch, os) {
-        ("aarch64", "macos") => Ok(...),
-        ("x86_64", "linux") => Ok(...),
-        _ => Err(...),
-    }
 }
 ```
 
@@ -222,14 +171,14 @@ mod tests {
 }
 ```
 
-## Category D: Error Handling Branches
+## Error Handling Branches
 
 Error paths that are hard to trigger.
 
 **Fix**: Design for testability.
 
 ```rust
-// Bad: Can't test the error branch without IO errors
+// Bad: Can't test the error branch without IO errors — parsing is entangled with IO
 fn read_and_parse(path: &Path) -> Result<Data> {
     let content = std::fs::read_to_string(path)?;
     parse(&content)
@@ -254,54 +203,20 @@ mod tests {
 }
 ```
 
-## Refactoring Patterns
-
-### The "Extract and Test" Pattern
-
-1. Identify the hard-to-test code
-2. Extract the logic into a pure function
-3. Test the pure function directly
-4. Leave minimal untestable glue code
-
-### The "Trait Object" Pattern
-
-1. Define a trait for the dependency
-2. Create a real implementation for production
-3. Create a mock implementation for tests
-4. Inject via generics or trait objects
-
-### The "Test Helper" Pattern
-
-Create utilities in `#[cfg(test)]` modules:
-
-```rust
-#[cfg(test)]
-mod test_helpers {
-    pub fn create_mock_config() -> Config { ... }
-    pub fn setup_test_environment() -> TempDir { ... }
-    pub fn assert_output_matches(expected: &str, actual: &str) { ... }
-}
-```
-
 ## Common Anti-Patterns to Avoid
 
 ### Don't: Suppress with Annotations
 
 ```rust
 // Bad: Hiding the problem
-#[cfg_attr(coverage_nightly, coverage(off))]
-fn some_function() { ... }
-```
-
-### Don't: Add Unreachable Tests
-
-```rust
-// Bad: Testing nothing
-#[test]
-fn test_unreachable() {
-    // This test exists only to hit a line
+fn some_function() {
+    if(error_condition()){
+        return ...; // nocov
+    }
 }
 ```
+
+Either figure out how to trigger the error condition in tests, or if the error is genuinely impossible to trigger, mark it unreachable.
 
 ### Don't: Mock Everything
 

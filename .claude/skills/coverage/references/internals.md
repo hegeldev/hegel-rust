@@ -1,6 +1,10 @@
 # Coverage Script Internals
 
-## How `scripts/check-coverage.py` works
+This file describes how "100% coverage" is actually measured. It should be, but may not have been, kept up to date.
+
+The canonical source of truth for the behaviour is `scripts/check-coverage.py`, and if you notice discrepancies between what you see here and what is happening, check the script and, if necessary, update this file with any changes.
+
+## How the coverage script works
 
 1. Runs `cargo llvm-cov --no-report --all-features` to collect coverage data.
 2. Generates an LCOV report. Tries to include TempRustProject subprocess binaries (found as `temp_hegel_test_*` in the target directory), though this depends on the binaries being compiled with coverage instrumentation.
