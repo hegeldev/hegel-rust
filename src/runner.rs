@@ -946,8 +946,8 @@ fn flush_log_indent_run(
 }
 
 fn server_log_excerpt() -> Option<String> {
-    let log_path = format!("{HEGEL_SERVER_DIR}/server.log");
-    let content = std::fs::read_to_string(&log_path).ok()?;
+    let log_path = SERVER_LOG_PATH.get()?;
+    let content = std::fs::read_to_string(log_path).ok()?;
     if content.trim().is_empty() {
         return None;
     }
@@ -956,9 +956,13 @@ fn server_log_excerpt() -> Option<String> {
 
 fn server_crash_message() -> String {
     const BASE: &str = "The hegel server process exited unexpectedly.";
+    let log_path = SERVER_LOG_PATH
+        .get()
+        .map(|s| s.as_str())
+        .unwrap_or(".hegel/server.log");
     match server_log_excerpt() {
         Some(excerpt) => format!("{BASE}\n\nLast server log entries:\n{excerpt}"),
-        None => format!("{BASE}\n\n(No entries found in .hegel/server.log)"),
+        None => format!("{BASE}\n\n(No entries found in {log_path})"),
     }
 }
 

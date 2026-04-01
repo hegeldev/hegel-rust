@@ -232,17 +232,24 @@ fn test_protocol_debug_true_when_env_set() {
     }
 }
 
-// Serialize tests that read/write .hegel/server.log to prevent interference
+// Serialize tests that read/write the server log to prevent interference
 // between parallel test threads.
 static LOG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Return the path that `server_log_excerpt()` reads from, ensuring
+/// `SERVER_LOG_PATH` is initialised.
+fn log_path() -> &'static String {
+    let _ = SERVER_LOG_PATH.set(format!("{HEGEL_SERVER_DIR}/server.test.log"));
+    SERVER_LOG_PATH.get().unwrap()
+}
+
 fn write_server_log(content: &str) {
     std::fs::create_dir_all(HEGEL_SERVER_DIR).ok();
-    std::fs::write(format!("{HEGEL_SERVER_DIR}/server.log"), content).ok();
+    std::fs::write(log_path(), content).ok();
 }
 
 fn remove_server_log() {
-    std::fs::remove_file(format!("{HEGEL_SERVER_DIR}/server.log")).ok();
+    std::fs::remove_file(log_path()).ok();
 }
 
 #[test]
