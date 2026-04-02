@@ -186,6 +186,55 @@ fn test_big_rationals_finds_negative() {
 }
 
 // ---------------------------------------------------------------------------
+// BigInt as_basic (via map combinator)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_big_integers_map_uses_basic() {
+    use hegel::generators::Generator;
+    let generator = gs::big_integers()
+        .min_value(BigInt::from(0))
+        .max_value(BigInt::from(100))
+        .map(|n| n + BigInt::one());
+    assert_all_examples(generator, move |n| {
+        *n >= BigInt::one() && *n <= BigInt::from(101)
+    });
+}
+
+// ---------------------------------------------------------------------------
+// BigUint as_basic (via map combinator)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_big_uintegers_map_uses_basic() {
+    use hegel::generators::Generator;
+    let generator = gs::big_uintegers()
+        .min_value(BigUint::from(0u32))
+        .max_value(BigUint::from(100u32))
+        .map(|n| n + BigUint::one());
+    assert_all_examples(generator, move |n| {
+        *n >= BigUint::one() && *n <= BigUint::from(101u32)
+    });
+}
+
+// ---------------------------------------------------------------------------
+// DefaultGenerator for BigInt / BigUint
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_default_bigint() {
+    let lower = -(BigInt::one() << 128u32);
+    let upper = (BigInt::one() << 128u32) - BigInt::one();
+    assert_all_examples(gs::default::<BigInt>(), move |n| *n >= lower && *n <= upper);
+}
+
+#[test]
+fn test_default_biguint() {
+    let upper = (BigUint::one() << 128u32) - BigUint::one();
+    assert_all_examples(gs::default::<BigUint>(), move |n| *n <= upper);
+}
+
+// ---------------------------------------------------------------------------
 // Complex
 // ---------------------------------------------------------------------------
 
