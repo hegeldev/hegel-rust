@@ -220,7 +220,7 @@ mod tests {
     fn test_bignum_tags_preserved() {
         let big_bytes = {
             let mut b = vec![1u8];
-            b.extend(std::iter::repeat(0u8).take(16));
+            b.extend(std::iter::repeat_n(0u8, 16));
             b
         };
         let v = Value::Tag(2, Box::new(Value::Bytes(big_bytes.clone())));
@@ -232,10 +232,10 @@ mod tests {
 
     #[test]
     fn test_floats() {
-        let v = Value::Float(3.14);
+        let v = Value::Float(std::f64::consts::PI);
         let parsed = roundtrip(&v);
         if let Value::Float(f) = parsed {
-            assert!((f - 3.14).abs() < 1e-10);
+            assert_eq!(f, std::f64::consts::PI);
         } else {
             panic!("expected float");
         }

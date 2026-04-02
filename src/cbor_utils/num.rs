@@ -49,3 +49,27 @@ pub fn cbor_to_biguint(v: Value) -> BigUint {
     let n = cbor_to_bigint(v);
     n.try_into().unwrap()
 }
+
+#[cfg(test)]
+
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "Expected Bytes inside bignum tag 2, got Integer(Integer(5))")]
+    fn test_invalid_tag_2() {
+        cbor_to_bigint(ciborium::Value::Tag(2, Box::new(ciborium::Value::from(5 as i64))));
+    }
+
+    #[test]
+    #[should_panic(expected = "Expected Bytes inside bignum tag 3, got Integer(Integer(5))")]
+    fn test_invalid_tag_3() {
+        cbor_to_bigint(ciborium::Value::Tag(3, Box::new(ciborium::Value::from(5 as i64))));
+    }
+
+    #[test]
+    #[should_panic(expected = "Expected integer or bignum tag, got Tag(4, Integer(Integer(5)))")]
+    fn test_invalid_tag() {
+        cbor_to_bigint(ciborium::Value::Tag(4, Box::new(ciborium::Value::from(5 as i64))));
+    }
+}
