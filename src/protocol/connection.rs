@@ -4,15 +4,15 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 
-use super::channel::Channel;
 use super::packet::{Packet, read_packet, write_packet};
+use super::stream::Stream;
 
 pub struct Connection {
     writer: Mutex<Box<dyn Write + Send>>,
-    /// Per-channel packet senders. The background reader thread dispatches
-    /// incoming packets to the appropriate channel's sender.
-    channel_senders: Mutex<HashMap<u32, Sender<Packet>>>,
-    next_channel_id: AtomicU32,
+    /// Per-stream packet senders. The background reader thread dispatches
+    /// incoming packets to the appropriate stream's sender.
+    stream_senders: Mutex<HashMap<u32, Sender<Packet>>>,
+    next_stream_id: AtomicU32,
     server_exited: AtomicBool,
 }
 
@@ -20,33 +20,33 @@ impl Connection {
     pub fn new(mut reader: Box<dyn Read + Send>, writer: Box<dyn Write + Send>) -> Arc<Self> {
         let conn = Arc::new(Self {
             writer: Mutex::new(writer),
-            channel_senders: Mutex::new(HashMap::new()),
-            // channel 0 is reserved for the control channel
-            next_channel_id: AtomicU32::new(1),
+            stream_senders: Mutex::new(HashMap::new()),
+            // stream 0 is reserved for the control stream
+            next_stream_id: AtomicU32::new(1),
             server_exited: AtomicBool::new(false),
         });
 
         // Background reader thread: reads all packets from the stream and
-        // dispatches them to the appropriate channel's receiver queue.
+        // dispatches them to the appropriate stream's receiver queue.
         let conn_for_reader = Arc::clone(&conn);
         std::thread::spawn(move || {
             loop {
                 match read_packet(&mut reader) {
                     Ok(packet) => {
-                        let senders = conn_for_reader.channel_senders.lock().unwrap();
-                        if let Some(sender) = senders.get(&packet.channel) {
+                        let senders = conn_for_reader.stream_senders.lock().unwrap();
+                        if let Some(sender) = senders.get(&packet.stream) {
                             // If the receiver is dropped, the send fails — that's fine,
-                            // the channel was closed.
+                            // the stream was closed.
                             let _ = sender.send(packet);
                         }
-                        // Packets for unknown channels are silently dropped.
+                        // Packets for unknown streams are silently dropped.
                     }
                     Err(_) => {
                         // Stream closed or error — mark server as exited and stop.
                         conn_for_reader.server_exited.store(true, Ordering::SeqCst);
-                        // Drop all senders so any thread blocked on channel.recv()
+                        // Drop all senders so any thread blocked on stream.recv()
                         // unblocks with RecvError instead of hanging forever.
-                        conn_for_reader.channel_senders.lock().unwrap().clear();
+                        conn_for_reader.stream_senders.lock().unwrap().clear();
                         break;
                     }
                 }
@@ -56,38 +56,38 @@ impl Connection {
         conn
     }
 
-    pub fn control_channel(self: &Arc<Self>) -> Channel {
-        self.register_channel(0)
+    pub fn control_stream(self: &Arc<Self>) -> Stream {
+        self.register_stream(0)
     }
 
-    pub fn new_channel(self: &Arc<Self>) -> Channel {
-        let next = self.next_channel_id.fetch_add(1, Ordering::SeqCst);
-        // client channels use odd ids
-        let channel_id = (next << 1) | 1;
-        self.register_channel(channel_id)
+    pub fn new_stream(self: &Arc<Self>) -> Stream {
+        let next = self.next_stream_id.fetch_add(1, Ordering::SeqCst);
+        // client streams use odd ids
+        let stream_id = (next << 1) | 1;
+        self.register_stream(stream_id)
     }
 
-    pub fn connect_channel(self: &Arc<Self>, channel_id: u32) -> Channel {
-        self.register_channel(channel_id)
+    pub fn connect_stream(self: &Arc<Self>, stream_id: u32) -> Stream {
+        self.register_stream(stream_id)
     }
 
-    fn register_channel(self: &Arc<Self>, channel_id: u32) -> Channel {
+    fn register_stream(self: &Arc<Self>, stream_id: u32) -> Stream {
         let (tx, rx) = mpsc::channel();
-        let mut senders = self.channel_senders.lock().unwrap();
-        senders.insert(channel_id, tx);
+        let mut senders = self.stream_senders.lock().unwrap();
+        senders.insert(stream_id, tx);
         // If the server already exited, the background reader's clear() either
         // already ran (so our insert is orphaned) or is blocked on this lock
         // (and will clear it). Remove the sender now so recv() unblocks
         // immediately with RecvError.
         if self.server_has_exited() {
-            senders.remove(&channel_id);
+            senders.remove(&stream_id);
         }
         drop(senders);
-        Channel::new(channel_id, Arc::clone(self), rx)
+        Stream::new(stream_id, Arc::clone(self), rx)
     }
 
-    pub fn unregister_channel(&self, channel_id: u32) {
-        self.channel_senders.lock().unwrap().remove(&channel_id);
+    pub fn unregister_stream(&self, stream_id: u32) {
+        self.stream_senders.lock().unwrap().remove(&stream_id);
     }
 
     // nocov start
@@ -125,9 +125,9 @@ mod tests {
     use std::os::unix::net::UnixStream;
 
     /// Verify that when the reader stream closes (simulating server crash),
-    /// channels unblock promptly instead of hanging forever.
+    /// streams unblock promptly instead of hanging forever.
     #[test]
-    fn test_channel_unblocks_on_reader_close() {
+    fn test_stream_unblocks_on_reader_close() {
         // Create a connection whose reader returns EOF immediately.
         // This simulates the server process dying.
         let (_, write_end) = UnixStream::pair().unwrap();
@@ -138,10 +138,10 @@ mod tests {
             std::thread::yield_now();
         }
 
-        // Channel created AFTER server exit must still unblock, not hang.
-        let mut channel = conn.new_channel();
+        // Stream created AFTER server exit must still unblock, not hang.
+        let mut stream = conn.new_stream();
 
-        let result = channel.receive_request();
+        let result = stream.receive_request();
         assert!(result.is_err());
     }
 }

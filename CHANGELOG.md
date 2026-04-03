@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.3 - 2026-04-03
+
+This patch updates our pinned hegel-core to [0.3.0](https://github.com/hegeldev/hegel-core/releases/tag/v0.3.0), with no user-visible changes.
+
 ## 0.4.2 - 2026-04-01
 
 Tests would hang if you were using an old version of hegel-core that didn't support the --stdio flag. This fixes that and adds some comprehensive debugging messages when the server start doesn't work.

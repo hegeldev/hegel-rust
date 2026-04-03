@@ -42,7 +42,7 @@ fn test_wrong_version_hegel_gives_informative_error() {
         .main_file(HEGEL_CODE)
         .env("HEGEL_SERVER_COMMAND", script_path.to_str().unwrap())
         .expect_failure(
-            "(?s)failed during startup.*Version mismatch.*expected 'hegel \\(version 0\\.2\\.\\d+\\)'.*got 'hegel \\(version 0\\.1\\.0\\)'",
+            "(?s)failed during startup.*Version mismatch.*expected 'hegel \\(version 0\\.3\\.\\d+\\)'.*got 'hegel \\(version 0\\.1\\.0\\)'",
         )
         .cargo_run(&[]);
 }
