@@ -22,7 +22,7 @@ impl<T: Clone + Send + Sync> Generator<T> for JustGenerator<T> {
     fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
         let value = self.value.clone();
         Some(BasicGenerator::new(
-            cbor_map! {"const" => Value::Null},
+            cbor_map! {"type" => "constant", "value" => Value::Null},
             move |_| value.clone(),
         ))
     }
