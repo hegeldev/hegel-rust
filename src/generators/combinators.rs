@@ -14,16 +14,18 @@ impl<T: Clone + Send + Sync> Generator<T> for SampledFromGenerator<T> {
             return basic.do_draw(tc);
         }
 
+        // nocov start
         let indices = integers::<usize>()
             .min_value(0)
             .max_value(self.elements.len() - 1);
         let index = indices.do_draw(tc);
         self.elements[index].clone()
+        // nocov end
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
         if self.elements.is_empty() {
-            return None;
+            return None; // nocov
         }
 
         let schema = cbor_map! {
@@ -97,14 +99,14 @@ impl<T> Generator<T> for OneOfGenerator<'_, T> {
         Some(BasicGenerator::new(schema, move |raw| {
             let arr = match raw {
                 Value::Array(arr) => arr,
-                _ => panic!("Expected array from tagged tuple, got {:?}", raw),
+                _ => panic!("Expected array from tagged tuple, got {:?}", raw), // nocov
             };
             let tag = match &arr[0] {
                 Value::Integer(i) => {
                     let val: i128 = (*i).into();
                     val as usize
                 }
-                _ => panic!("Expected integer tag, got {:?}", arr[0]),
+                _ => panic!("Expected integer tag, got {:?}", arr[0]), // nocov
             };
             let value = arr.into_iter().nth(1).unwrap();
             basics[tag].parse_raw(value)
@@ -164,6 +166,7 @@ where
         if let Some(basic) = self.as_basic() {
             basic.do_draw(tc)
         } else {
+            // nocov start
             tc.start_span(labels::OPTIONAL);
             let is_some: bool = super::generate_from_schema(tc, &cbor_map! {"type" => "boolean"});
             let result = if is_some {
@@ -173,6 +176,7 @@ where
             };
             tc.stop_span(false);
             result
+            // nocov end
         }
     }
 
@@ -200,14 +204,14 @@ where
         Some(BasicGenerator::new(schema, move |raw| {
             let arr = match raw {
                 Value::Array(arr) => arr,
-                _ => panic!("Expected array from tagged tuple, got {:?}", raw),
+                _ => panic!("Expected array from tagged tuple, got {:?}", raw), // nocov
             };
             let tag = match &arr[0] {
                 Value::Integer(i) => {
                     let val: i128 = (*i).into();
                     val as usize
                 }
-                _ => panic!("Expected integer tag, got {:?}", arr[0]),
+                _ => panic!("Expected integer tag, got {:?}", arr[0]), // nocov
             };
 
             if tag == 0 {

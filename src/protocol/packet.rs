@@ -52,6 +52,7 @@ pub fn read_packet<R: Read + ?Sized>(reader: &mut R) -> std::io::Result<Packet> 
     let message_id_raw = u32::from_be_bytes([header[12], header[13], header[14], header[15]]);
     let length = u32::from_be_bytes([header[16], header[17], header[18], header[19]]);
 
+    // nocov start
     if magic != PACKET_MAGIC {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -61,6 +62,7 @@ pub fn read_packet<R: Read + ?Sized>(reader: &mut R) -> std::io::Result<Packet> 
             ),
         ));
     }
+    // nocov end
 
     let is_reply = message_id_raw & REPLY_BIT != 0;
     let message_id = message_id_raw & !REPLY_BIT;
@@ -70,6 +72,7 @@ pub fn read_packet<R: Read + ?Sized>(reader: &mut R) -> std::io::Result<Packet> 
 
     let mut terminator = [0u8; 1];
     reader.read_exact(&mut terminator)?;
+    // nocov start
     if terminator[0] != PACKET_TERMINATOR {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -79,6 +82,7 @@ pub fn read_packet<R: Read + ?Sized>(reader: &mut R) -> std::io::Result<Packet> 
             ),
         ));
     }
+    // nocov end
 
     let mut header_for_check = header;
     // zero out checksum field
@@ -87,6 +91,7 @@ pub fn read_packet<R: Read + ?Sized>(reader: &mut R) -> std::io::Result<Packet> 
     hasher.update(&header_for_check);
     hasher.update(&payload);
     let computed_checksum = hasher.finalize();
+    // nocov start
     if computed_checksum != checksum {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -96,6 +101,7 @@ pub fn read_packet<R: Read + ?Sized>(reader: &mut R) -> std::io::Result<Packet> 
             ),
         ));
     }
+    // nocov end
 
     Ok(Packet {
         channel,
@@ -179,7 +185,7 @@ mod tests {
         if let Value::Float(f) = back {
             assert!(f.is_nan());
         } else {
-            panic!("expected Float");
+            panic!("expected Float"); // nocov
         }
     }
 

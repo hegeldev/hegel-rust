@@ -10,17 +10,15 @@
 .hegel
 __pycache__
 target/
-**/.claude/
 result
 .claude-reliability/
 .claude/reliability-config.yml
 
 lcov.info
 
-# claude-reliability managed
 .claude/bin/
 .claude/*.local.md
 .claude/*.local.json
 .claude/*.local
-.claude-reliability/
-lcov.info
+
+docs/superpowers

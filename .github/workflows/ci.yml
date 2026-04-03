@@ -33,7 +33,7 @@ jobs:
 
       - name: Check lint
         run: just check-lint
-      - name: Check Zizmor
+      - name: Check zizmor
         run: |
           pipx install zizmor==1.23.1
           zizmor --format plain .github/
@@ -157,9 +157,18 @@ jobs:
     name: coverage
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write  # needed for ratchet auto-update
+      pull-requests: write  # needed for creating PRs on main
     steps:
+      # persist-credentials needed for git push in the auto-update step below
+      # For fork PRs, head_ref points to a branch that doesn't exist on the base repo,
+      # so we fall back to the default ref (the merge commit).
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 # zizmor: ignore[artipacked]
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        with:
+          ref: ${{ github.head_ref || github.ref }}
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         with:
           persist-credentials: false
 
@@ -176,6 +185,40 @@ jobs:
 
       - name: Run coverage
         run: just check-coverage
+
+      - name: Auto-update coverage annotations and ratchet
+        if: success() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet; then
+            echo "No coverage annotation changes needed"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -u
+          git add .github/coverage-ratchet.json
+
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git commit -m "Auto-update coverage annotations and ratchet"
+            git push
+          else
+            BRANCH="auto/coverage-ratchet-update"
+            git checkout -b "$BRANCH"
+            git commit -m "Auto-update coverage annotations and ratchet"
+            git push -f origin "$BRANCH"
+            gh pr create \
+              --title "Auto-update coverage ratchet" \
+              --body "The coverage ratchet has tightened on main. This PR updates the ratchet file and removes unnecessary annotations." \
+              --base main \
+              --head "$BRANCH" || true
+          fi
 
   conformance:
     name: conformance

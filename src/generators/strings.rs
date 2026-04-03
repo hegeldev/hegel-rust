@@ -290,9 +290,11 @@ pub struct RegexGenerator {
 
 impl RegexGenerator {
     /// Set whether the entire string must match the pattern, not just contain a match.
+    // nocov start
     pub fn fullmatch(mut self, fullmatch: bool) -> Self {
         self.fullmatch = fullmatch;
         self
+        // nocov end
     }
 
     /// Constrain which characters may appear in generated strings.
@@ -301,11 +303,13 @@ impl RegexGenerator {
         self
     }
 
+    // nocov start
     fn build_schema(&self) -> Value {
         let mut schema = cbor_map! {
             "type" => "regex",
             "pattern" => self.pattern.as_str(),
             "fullmatch" => self.fullmatch
+        // nocov end
         };
 
         if let Some(ref alphabet) = self.alphabet {
@@ -317,24 +321,30 @@ impl RegexGenerator {
 }
 
 impl Generator<String> for RegexGenerator {
+    // nocov start
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc, &self.build_schema())
+        // nocov end
     }
 
+    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(
             self.build_schema(),
             super::deserialize_value,
+            // nocov end
         ))
     }
 }
 
 /// Generate strings matching a regex pattern.
+// nocov start
 pub fn from_regex(pattern: &str) -> RegexGenerator {
     RegexGenerator {
         pattern: pattern.to_string(),
         fullmatch: false,
         alphabet: None,
+        // nocov end
     }
 }
 
@@ -378,7 +388,7 @@ impl BinaryGenerator {
 fn parse_binary(raw: Value) -> Vec<u8> {
     match raw {
         Value::Bytes(bytes) => bytes,
-        _ => panic!("expected Value::Bytes, got {:?}", raw),
+        _ => panic!("expected Value::Bytes, got {:?}", raw), // nocov
     }
 }
 
@@ -404,40 +414,52 @@ pub fn binary() -> BinaryGenerator {
 pub struct EmailGenerator;
 
 impl Generator<String> for EmailGenerator {
+    // nocov start
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc, &cbor_map! {"type" => "email"})
+        // nocov end
     }
 
+    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(cbor_map! {"type" => "email"}, |raw| {
             super::deserialize_value(raw)
+            // nocov end
         }))
     }
 }
 
 /// Generate email address strings.
+// nocov start
 pub fn emails() -> EmailGenerator {
     EmailGenerator
+    // nocov end
 }
 
 /// Generator for URL strings. Created by [`urls()`].
 pub struct UrlGenerator;
 
 impl Generator<String> for UrlGenerator {
+    // nocov start
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc, &cbor_map! {"type" => "url"})
+        // nocov end
     }
 
+    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(cbor_map! {"type" => "url"}, |raw| {
             super::deserialize_value(raw)
+            // nocov end
         }))
     }
 }
 
 /// Generate URL strings.
+// nocov start
 pub fn urls() -> UrlGenerator {
     UrlGenerator
+    // nocov end
 }
 
 /// Generator for domain name strings. Created by [`domains()`].
@@ -458,21 +480,23 @@ impl DomainGenerator {
             "max_length must be between 4 and 255"
         );
 
-        cbor_map! {
+        cbor_map! { // nocov
             "type" => "domain",
-            "max_length" => self.max_length as u64
+            "max_length" => self.max_length as u64 // nocov
         }
     }
 }
 
 impl Generator<String> for DomainGenerator {
+    // nocov start
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc, &self.build_schema())
+        // nocov end
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(self.build_schema(), |raw| {
-            super::deserialize_value(raw)
+            super::deserialize_value(raw) // nocov
         }))
     }
 }
@@ -497,17 +521,22 @@ pub struct IpAddressGenerator {
 
 impl IpAddressGenerator {
     /// Only generate IPv4 addresses.
+    // nocov start
     pub fn v4(mut self) -> Self {
         self.version = Some(IpVersion::V4);
         self
+        // nocov end
     }
 
     /// Only generate IPv6 addresses.
+    // nocov start
     pub fn v6(mut self) -> Self {
         self.version = Some(IpVersion::V6);
         self
+        // nocov end
     }
 
+    // nocov start
     fn build_schema(&self) -> Value {
         match self.version {
             Some(IpVersion::V4) => cbor_map! {"type" => "ipv4"},
@@ -516,6 +545,7 @@ impl IpAddressGenerator {
                 "one_of" => cbor_array![
                     cbor_map!{"type" => "ipv4"},
                     cbor_map!{"type" => "ipv6"}
+            // nocov end
                 ]
             },
         }
@@ -523,79 +553,103 @@ impl IpAddressGenerator {
 }
 
 impl Generator<String> for IpAddressGenerator {
+    // nocov start
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc, &self.build_schema())
+        // nocov end
     }
 
+    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(self.build_schema(), |raw| {
             super::deserialize_value(raw)
+            // nocov end
         }))
     }
 }
 
 /// Generate IP address strings (IPv4 or IPv6).
+// nocov start
 pub fn ip_addresses() -> IpAddressGenerator {
     IpAddressGenerator { version: None }
+    // nocov end
 }
 
 /// Generator for date strings in YYYY-MM-DD format. Created by [`dates()`].
 pub struct DateGenerator;
 
 impl Generator<String> for DateGenerator {
+    // nocov start
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc, &cbor_map! {"type" => "date"})
+        // nocov end
     }
 
+    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(cbor_map! {"type" => "date"}, |raw| {
             super::deserialize_value(raw)
+            // nocov end
         }))
     }
 }
 
 /// Generate date strings in YYYY-MM-DD format.
+// nocov start
 pub fn dates() -> DateGenerator {
     DateGenerator
+    // nocov end
 }
 
 /// Generator for time strings in HH:MM:SS format. Created by [`times()`].
 pub struct TimeGenerator;
 
 impl Generator<String> for TimeGenerator {
+    // nocov start
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc, &cbor_map! {"type" => "time"})
+        // nocov end
     }
 
+    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(cbor_map! {"type" => "time"}, |raw| {
             super::deserialize_value(raw)
+            // nocov end
         }))
     }
 }
 
 /// Generate time strings in HH:MM:SS format.
+// nocov start
 pub fn times() -> TimeGenerator {
     TimeGenerator
+    // nocov end
 }
 
 /// Generator for ISO 8601 datetime strings. Created by [`datetimes()`].
 pub struct DateTimeGenerator;
 
 impl Generator<String> for DateTimeGenerator {
+    // nocov start
     fn do_draw(&self, tc: &TestCase) -> String {
         super::generate_from_schema(tc, &cbor_map! {"type" => "datetime"})
+        // nocov end
     }
 
+    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(
             cbor_map! {"type" => "datetime"},
             super::deserialize_value,
+            // nocov end
         ))
     }
 }
 
 /// Generate ISO 8601 datetime strings.
+// nocov start
 pub fn datetimes() -> DateTimeGenerator {
     DateTimeGenerator
+    // nocov end
 }

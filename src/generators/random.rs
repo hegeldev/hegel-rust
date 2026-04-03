@@ -1,5 +1,9 @@
+use std::convert::Infallible;
+
+use rand::Rng;
+use rand::SeedableRng;
+use rand::rand_core::TryRng;
 use rand::rngs::StdRng;
-use rand::{RngCore, SeedableRng};
 
 use super::{Generator, TestCase, binary, integers};
 
@@ -35,7 +39,7 @@ impl Generator<HegelRandom> for RandomsGenerator {
 
 /// A random number generator produced by [`randoms()`].
 ///
-/// Implements [`RngCore`] from the `rand` crate.
+/// Implements [`Rng`] from the `rand` crate.
 #[derive(Debug)]
 pub enum HegelRandom {
     /// Backed by test case data. Shrinkable.
@@ -44,22 +48,24 @@ pub enum HegelRandom {
     TrueRandom(Box<StdRng>),
 }
 
-impl RngCore for HegelRandom {
-    fn next_u32(&mut self) -> u32 {
-        match self {
+impl TryRng for HegelRandom {
+    type Error = Infallible;
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok(match self {
             Self::ArtificialRandom(tc) => integers().do_draw(tc),
             Self::TrueRandom(rng) => rng.next_u32(),
-        }
+        })
     }
 
-    fn next_u64(&mut self) -> u64 {
-        match self {
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok(match self {
             Self::ArtificialRandom(tc) => integers().do_draw(tc),
             Self::TrueRandom(rng) => rng.next_u64(),
-        }
+        })
     }
 
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
         match self {
             Self::ArtificialRandom(tc) => {
                 let bytes: Vec<u8> = binary()
@@ -70,6 +76,7 @@ impl RngCore for HegelRandom {
             }
             Self::TrueRandom(rng) => rng.fill_bytes(dest),
         }
+        Ok(())
     }
 }
 
@@ -77,7 +84,7 @@ impl RngCore for HegelRandom {
 ///
 /// ```no_run
 /// use hegel::generators as gs;
-/// use rand::Rng;
+/// use rand::RngExt;
 /// use rand::prelude::{IndexedRandom, SliceRandom};
 ///
 /// #[hegel::test]

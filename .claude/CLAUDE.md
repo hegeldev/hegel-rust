@@ -95,6 +95,20 @@ For enums, it also creates `<Enum><Variant>Generator` for each data variant. Imp
 - When a test needs a throwaway generator, prefer `generators::booleans()` as the simplest option (unless the test needs a larger value space).
 - In test code, prefer `.unwrap()` over `.expect("static message")`. A static expect message rarely adds information beyond what the panic already provides (error type + source location). Only use `.expect()` when the message includes a formatted value that aids debugging (e.g., `.expect(&format!("failed to open {}", path))`).
 
+### Code Coverage
+
+This project enforces 100% line coverage for new code. You may not add `// nocov` annotations without explicit human permission. See the `coverage` skill for full details on the coverage philosophy, ratchet mechanism, and how to make code testable.
+
+**CRITICAL: You MUST NOT increase the numbers in `.github/coverage-ratchet.json` without first asking for and then receiving explicit human permission to do so.**
+
 ### Conformance Tests
 
 Located in `tests/conformance/`. Rust test binaries in `tests/conformance/rust/src/bin/` are invoked by a Python test runner (`tests/conformance/test_conformance.py`) that validates generators produce values matching their declared constraints.
+
+### Creating Pull Requests
+
+Use the `create-pr` skill, which handles rebasing, RELEASE.md, draft creation, and CI watching. Run the `self-review` skill first.
+
+### Writing Changelog Entries
+
+When writing a `RELEASE.md`, read `.claude/skills/create-pr/references/changelog-guidance.md` for detailed style guidance.

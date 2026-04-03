@@ -47,9 +47,11 @@ impl Channel {
 
     fn check_closed(&self) -> std::io::Result<()> {
         if self.closed {
+            // nocov start
             Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "channel is closed",
+                // nocov end
             ))
         } else {
             Ok(())
@@ -114,7 +116,7 @@ impl Channel {
                     super::SERVER_CRASHED_MESSAGE,
                 )
             } else {
-                std::io::Error::new(std::io::ErrorKind::ConnectionReset, "channel disconnected")
+                std::io::Error::new(std::io::ErrorKind::ConnectionReset, "channel disconnected") // nocov
             }
         })?;
 
@@ -163,7 +165,7 @@ impl Channel {
             return Ok(result.clone());
         }
 
-        Ok(response)
+        Ok(response) // nocov
     }
 }
 

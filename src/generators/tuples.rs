@@ -83,10 +83,12 @@ macro_rules! impl_tuple {
                 if let Some(basic) = self.as_basic() {
                     basic.do_draw(tc)
                 } else {
+                    // nocov start
                     tc.start_span(labels::TUPLE);
                     let result = ($(self.$field.do_draw(tc),)+);
                     tc.stop_span(false);
                     result
+                    // nocov end
                 }
             }
 
@@ -101,7 +103,7 @@ macro_rules! impl_tuple {
                 Some(BasicGenerator::new(schema, move |raw| {
                     let arr = match raw {
                         Value::Array(arr) => arr,
-                        _ => panic!("Expected array from tuple schema, got {:?}", raw),
+                        _ => panic!("Expected array from tuple schema, got {:?}", raw), // nocov
                     };
                     let mut iter = arr.into_iter();
 

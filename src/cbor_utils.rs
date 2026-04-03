@@ -36,11 +36,11 @@ pub(crate) use cbor_map;
 
 pub fn map_get<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     let Value::Map(entries) = value else {
-        panic!("expected Value::Map, got {value:?}");
+        panic!("expected Value::Map, got {value:?}"); // nocov
     };
     for (k, v) in entries {
         let Value::Text(s) = k else {
-            panic!("expected Value::Text, got {k:?}");
+            panic!("expected Value::Text, got {k:?}"); // nocov
         };
         if s == key {
             return Some(v);
@@ -51,12 +51,12 @@ pub fn map_get<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
 
 pub fn map_insert(value: &mut Value, key: &str, val: impl Into<Value>) {
     let Value::Map(entries) = value else {
-        panic!("expected Value::Map, got {value:?}");
+        panic!("expected Value::Map, got {value:?}"); // nocov
     };
     let val = val.into();
     for (k, v) in entries.iter_mut() {
         let Value::Text(s) = k else {
-            panic!("expected Value::Text, got {k:?}");
+            panic!("expected Value::Text, got {k:?}"); // nocov
         };
         if s == key {
             *v = val;
@@ -69,14 +69,14 @@ pub fn map_insert(value: &mut Value, key: &str, val: impl Into<Value>) {
 pub fn as_text(value: &Value) -> Option<&str> {
     match value {
         Value::Text(s) => Some(s),
-        _ => None,
+        _ => None, // nocov
     }
 }
 
 pub fn as_u64(value: &Value) -> Option<u64> {
     match value {
         Value::Integer(i) => u64::try_from(i128::from(*i)).ok(),
-        _ => None,
+        _ => None, // nocov
     }
 }
 
@@ -113,7 +113,7 @@ mod tests {
         if let Value::Array(items) = &a {
             assert_eq!(items.len(), 2);
         } else {
-            panic!("expected array");
+            panic!("expected array"); // nocov
         }
     }
 

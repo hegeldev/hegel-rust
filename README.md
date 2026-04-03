@@ -16,7 +16,9 @@
 
 To install: `cargo add --dev hegeltest`.
 
-Hegel requires [uv](https://docs.astral.sh/uv/) on your PATH, which we use to install the required [hegel-core](https://github.com/hegeldev/hegel-core) server component. See https://hegel.dev/reference/installation for details.
+Hegel will use [uv](https://docs.astral.sh/uv/) to install the required [hegel-core](https://github.com/hegeldev/hegel-core) server component.
+If `uv` is already on your path, it will use that, otherwise it will download a private copy of it to ~/.cache/hegel and not put it on your path.
+See https://hegel.dev/reference/installation for details.
 
 ## Quickstart
 
@@ -26,31 +28,30 @@ Here's a quick example of how to write a Hegel test:
 use hegel::generators as gs;
 use hegel::TestCase;
 
+fn my_sort(ls: &[i32]) -> Vec<i32> {                                                                 
+    let mut result: Vec<i32> = ls.to_vec(); 
+    result.sort();                         
+    result.dedup();
+    result                                                                                           
+}
+
 #[hegel::test]
-fn test_addition_commutative(tc: TestCase) {
-    let x = tc.draw(gs::integers::<i32>());
-    let y = tc.draw(gs::integers::<i32>());
-    assert_eq!(x + y, y + x);
+fn test_matches_builtin(tc: TestCase) {
+    let mut vec1 = tc.draw(gs::vecs(gs::integers::<i32>()));
+    let vec2 = my_sort(&vec1);
+    vec1.sort();
+    assert_eq!(vec1, vec2);
 }
 ```
 
-This test will fail when run with `cargo test`! Integer addition panics on overflow in the `test` profile. Hegel will produce a minimal failing test case for us:
+This test will fail when run with `cargo test`! Hegel will produce a minimal failing test case for us:
 
 ```
-Draw 1: 1
-Draw 2: 2147483647
-thread 'test_addition_commutative' (2) panicked at examples/readme.rs:8:16:
-attempt to add with overflow
+Draw 1: [0, 0]
+thread 'test_matches_builtin' (2) panicked at src/main.rs:15:5:
+assertion `left == right` failed
+  left: [0, 0]
+ right: [0]
 ```
 
-For a passing test, try:
-
-```rust
-#[hegel::test]
-fn test_wrapping_addition_commutative(tc: TestCase) {
-    let add = i32::wrapping_add;
-    let x = tc.draw(gs::integers::<i32>());
-    let y = tc.draw(gs::integers::<i32>());
-    assert_eq!(add(x, y), add(y, x));
-}
-```
+Hegel reports the minimal example showing that our sort is incorrectly dropping duplicates. If we remove `result.dedup()` from `my_sort()`, this test will then pass (because it's just comparing the standard sort against itself). 

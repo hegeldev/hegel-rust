@@ -38,11 +38,14 @@ check-docs:
 docs:
     cargo +nightly docs-rs --open
 
-check-lint: check-format check-clippy
+check-nocov-style:
+    scripts/check-nocov-style.py
+
+check-lint: check-format check-clippy check-nocov-style
 
 check-coverage:
     # requires cargo-llvm-cov and llvm-tools-preview
-    RUST_BACKTRACE=1 cargo llvm-cov --all-features --fail-under-lines 30 --show-missing-lines
+    scripts/check-coverage.py
 
 check-conformance:
     cargo build --release --manifest-path tests/conformance/rust/Cargo.toml

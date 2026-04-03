@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.4.2 - 2026-04-01
+
+Tests would hang if you were using an old version of hegel-core that didn't support the --stdio flag. This fixes that and adds some comprehensive debugging messages when the server start doesn't work.
+
+## 0.4.1 - 2026-04-01
+
+This patch upgrades [`rand`](https://crates.io/crates/rand) to `0.10` in our `rand` feature.
+
+Thanks to Benjamin Brittain for this patch!
+
+## 0.4.0 - 2026-04-01
+
+This release changes how hegel-core is installed and run:
+
+* Instead of creating a local `.hegel/venv` and pip-installing into it, hegel now uses `uv tool run` to run hegel-core directly. This fixes https://github.com/hegeldev/hegel-rust/issues/108
+* If `uv` isn't on your PATH, hegel will automatically download a private copy to `~/.cache/hegel/uv` — so although `uv` is still used under the hood, there's no longer a hard requirement on having uv pre-installed.
+
+## 0.3.7 - 2026-03-30
+
+Add generator for Duration
+
+## 0.3.6 - 2026-03-30
+
+This patch fixes `#[state_machine]` not forwarding attributes on `#[rule]` and `#[invariant]` ([#151](https://github.com/hegeldev/hegel-rust/issues/151)). For example, the following rule is now correctly conditional on the `tokio1` feature:
+
+```rust
+#[hegel::state_machine]
+impl A {
+    #[cfg(feature = "tokio1")]
+    #[rule]
+    fn f(&mut self, _tc: TestCase) {}
+}
+```
+
+## 0.3.5 - 2026-03-30
+
+This patch fixes being unable to define `#[hegel::state_machine]` with explicit lifetime or type parameters ([#156](https://github.com/hegeldev/hegel-rust/issues/156)).
+
 ## 0.3.4 - 2026-03-27
 
 This patch improves documentation and adds scraped examples to the docs.

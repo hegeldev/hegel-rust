@@ -2,7 +2,7 @@
 
 use hegel::TestCase;
 use hegel::generators as gs;
-use rand::Rng;
+use rand::RngExt;
 use rand::prelude::{IndexedRandom, SliceRandom};
 
 #[hegel::test]
