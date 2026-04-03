@@ -1,9 +1,9 @@
-mod channel;
 mod connection;
 mod packet;
+mod stream;
 
-pub use channel::Channel;
 pub use connection::Connection;
+pub use stream::Stream;
 
 pub const HANDSHAKE_STRING: &[u8] = b"hegel_handshake_start";
 

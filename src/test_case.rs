@@ -1,6 +1,6 @@
 use crate::cbor_utils::{cbor_map, map_insert};
 use crate::generators::Generator;
-use crate::protocol::{Channel, Connection, SERVER_CRASHED_MESSAGE};
+use crate::protocol::{Connection, SERVER_CRASHED_MESSAGE, Stream};
 use crate::runner::Verbosity;
 use ciborium::Value;
 use std::cell::RefCell;
@@ -59,7 +59,7 @@ pub(crate) const STOP_TEST_STRING: &str = "__HEGEL_STOP_TEST";
 pub(crate) struct TestCaseGlobalData {
     #[allow(dead_code)]
     connection: Arc<Connection>,
-    channel: Channel,
+    stream: Stream,
     verbosity: Verbosity,
     is_last_run: bool,
     test_aborted: bool,
@@ -113,7 +113,7 @@ impl std::fmt::Debug for TestCase {
 impl TestCase {
     pub(crate) fn new(
         connection: Arc<Connection>,
-        channel: Channel,
+        stream: Stream,
         verbosity: Verbosity,
         is_last_run: bool,
     ) -> Self {
@@ -125,7 +125,7 @@ impl TestCase {
         TestCase {
             global: Rc::new(RefCell::new(TestCaseGlobalData {
                 connection,
-                channel,
+                stream,
                 verbosity,
                 is_last_run,
                 test_aborted: false,
@@ -269,8 +269,8 @@ impl TestCase {
         let mut global = self.global.borrow_mut();
 
         // If a previous request already triggered overflow/StopTest, the server
-        // has closed this channel. Don't send another request—it would block.
-        // (The channel-level closed check is also enforced, but this gives a
+        // has closed this stream. Don't send another request—it would block.
+        // (The stream-level closed check is also enforced, but this gives a
         // clean StopTestError instead of an io::Error.)
         if global.test_aborted {
             return Err(StopTestError); // nocov
@@ -294,7 +294,7 @@ impl TestCase {
             eprintln!("REQUEST: {:?}", request); // nocov
         }
 
-        let result = global.channel.request_cbor(&request);
+        let result = global.stream.request_cbor(&request);
         drop(global);
 
         match result {
@@ -308,13 +308,13 @@ impl TestCase {
                 let error_msg = e.to_string();
                 if error_msg.contains("overflow")
                     || error_msg.contains("StopTest")
-                    || error_msg.contains("channel is closed")
+                    || error_msg.contains("stream is closed")
                 {
                     if debug {
                         eprintln!("RESPONSE: StopTest/overflow"); // nocov
                     }
                     let mut global = self.global.borrow_mut();
-                    global.channel.mark_closed();
+                    global.stream.mark_closed();
                     global.test_aborted = true;
                     drop(global);
                     Err(StopTestError)
@@ -326,7 +326,7 @@ impl TestCase {
                     // Abort the test case; the server will report the flaky
                     // error in the test_done results, which runner.rs handles.
                     let mut global = self.global.borrow_mut();
-                    global.channel.mark_closed();
+                    global.stream.mark_closed();
                     global.test_aborted = true;
                     drop(global);
                     Err(StopTestError)
@@ -349,8 +349,8 @@ impl TestCase {
 
     pub(crate) fn send_mark_complete(&self, mark_complete: &Value) {
         let mut global = self.global.borrow_mut();
-        let _ = global.channel.request_cbor(mark_complete);
-        let _ = global.channel.close();
+        let _ = global.stream.request_cbor(mark_complete);
+        let _ = global.stream.close();
     }
 }
 
@@ -387,30 +387,27 @@ pub fn deserialize_value<T: serde::de::DeserializeOwned>(raw: Value) -> T {
 /// [`more()`](Collection::more).
 pub struct Collection<'a> {
     tc: &'a TestCase,
-    base_name: String,
     min_size: usize,
     max_size: Option<usize>,
-    server_name: Option<String>,
+    collection_id: Option<i64>,
     finished: bool,
 }
 
 impl<'a> Collection<'a> {
     /// Create a new server-managed collection.
-    pub fn new(tc: &'a TestCase, name: &str, min_size: usize, max_size: Option<usize>) -> Self {
+    pub fn new(tc: &'a TestCase, min_size: usize, max_size: Option<usize>) -> Self {
         Collection {
             tc,
-            base_name: name.to_string(),
             min_size,
             max_size,
-            server_name: None,
+            collection_id: None,
             finished: false,
         }
     }
 
-    fn ensure_initialized(&mut self) -> &str {
-        if self.server_name.is_none() {
+    fn ensure_initialized(&mut self) -> i64 {
+        if self.collection_id.is_none() {
             let mut payload = cbor_map! {
-                "name" => self.base_name.as_str(),
                 "min_size" => self.min_size as u64
             };
             if let Some(max) = self.max_size {
@@ -422,18 +419,21 @@ impl<'a> Collection<'a> {
                     panic!("{}", STOP_TEST_STRING); // nocov
                 }
             };
-            let name = match response {
-                Value::Text(s) => s,
+            let id = match response {
+                Value::Integer(i) => {
+                    let n: i128 = i.into();
+                    n as i64
+                }
                 // nocov start
                 _ => panic!(
-                    "Expected text response from new_collection, got {:?}",
+                    "Expected integer response from new_collection, got {:?}",
                     response
                 ),
                 // nocov end
             };
-            self.server_name = Some(name);
+            self.collection_id = Some(id);
         }
-        self.server_name.as_ref().unwrap()
+        self.collection_id.unwrap()
     }
 
     /// Ask the server whether to produce another element.
@@ -441,10 +441,10 @@ impl<'a> Collection<'a> {
         if self.finished {
             return false; // nocov
         }
-        let server_name = self.ensure_initialized().to_string();
+        let collection_id = self.ensure_initialized();
         let response = match self.tc.send_request(
             "collection_more",
-            &cbor_map! { "collection" => server_name.as_str() },
+            &cbor_map! { "collection_id" => collection_id },
         ) {
             Ok(v) => v,
             Err(StopTestError) => {
@@ -468,9 +468,9 @@ impl<'a> Collection<'a> {
         if self.finished {
             return;
         }
-        let server_name = self.ensure_initialized().to_string();
+        let collection_id = self.ensure_initialized();
         let mut payload = cbor_map! {
-            "collection" => server_name.as_str()
+            "collection_id" => collection_id
             // nocov end
         };
         // nocov start

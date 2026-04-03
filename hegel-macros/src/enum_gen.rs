@@ -166,7 +166,10 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
             .iter()
             .map(|name| cbor_text(name))
             .collect();
-        cbor_map(vec![(cbor_text("sampled_from"), cbor_array(values))])
+        cbor_map(vec![
+            (cbor_text("type"), cbor_text("sampled_from")),
+            (cbor_text("values"), cbor_array(values)),
+        ])
     };
 
     // Generate match arms for generate() compositional fallback
@@ -288,8 +291,14 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
             .map(|(i, variant)| {
                 let variant_name_str = variant.ident.to_string();
                 tuple_schema(vec![
-                    cbor_map(vec![(cbor_text("const"), cbor_int(quote! { #i as i64 }))]),
-                    cbor_map(vec![(cbor_text("const"), cbor_text(&variant_name_str))]),
+                    cbor_map(vec![
+                        (cbor_text("type"), cbor_text("constant")),
+                        (cbor_text("value"), cbor_int(quote! { #i as i64 })),
+                    ]),
+                    cbor_map(vec![
+                        (cbor_text("type"), cbor_text("constant")),
+                        (cbor_text("value"), cbor_text(&variant_name_str)),
+                    ]),
                 ])
             })
             .collect();
@@ -320,10 +329,10 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                 let basic_name = format_ident!("basic_{}", variant_name);
                 let tag_idx = num_unit_variants + i;
                 let tagged = tuple_schema(vec![
-                    cbor_map(vec![(
-                        cbor_text("const"),
-                        cbor_int(quote! { #tag_idx as i64 }),
-                    )]),
+                    cbor_map(vec![
+                        (cbor_text("type"), cbor_text("constant")),
+                        (cbor_text("value"), cbor_int(quote! { #tag_idx as i64 })),
+                    ]),
                     quote! { #basic_name.schema().clone() },
                 ]);
                 quote! { one_of_schemas.push(#tagged); }
@@ -386,7 +395,11 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
 
                     let schema = hegel::ciborium::Value::Map(vec![
                         (
+                            hegel::ciborium::Value::Text("type".to_string()),
                             hegel::ciborium::Value::Text("one_of".to_string()),
+                        ),
+                        (
+                            hegel::ciborium::Value::Text("generators".to_string()),
                             hegel::ciborium::Value::Array(one_of_schemas),
                         ),
                     ]);
