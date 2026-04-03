@@ -24,7 +24,7 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 ## Crate Structure
 
 - `src/lib.rs` — Public API: `hegel()`, `Hegel` builder, `draw()`, `assume()`, `note()`
-- `src/protocol.rs` — Binary protocol: packet encoding/decoding, channel multiplexing
+- `src/protocol.rs` — Binary protocol: packet encoding/decoding, stream multiplexing
 - `src/cbor_helpers.rs` — Macros and helpers for `ciborium::Value` (`cbor_map!`, `cbor_array!`, `map_get`, etc.)
 - `src/runner.rs` — Spawns hegel CLI, manages socket server
 - `src/generators/` — All generator implementations (`mod.rs` has the `Generate` trait + `TestCaseData`)
@@ -43,10 +43,10 @@ The library creates a Unix socket path and spawns the `hegel` CLI as a subproces
 
 ### Protocol
 
-CBOR-encoded binary protocol over multiplexed channels. For each test:
-1. Client sends `run_test` request on control channel (channel 0)
-2. Server sends `test_case` events with channel IDs for each test case
-3. Client runs the test function, sending `generate`/`start_span`/`stop_span` requests on the test channel
+CBOR-encoded binary protocol over multiplexed streams. For each test:
+1. Client sends `run_test` request on control stream (stream 0)
+2. Server sends `test_case` events with stream IDs for each test case
+3. Client runs the test function, sending `generate`/`start_span`/`stop_span` requests on the test stream
 4. Client sends `mark_complete` with status (VALID, INVALID, or INTERESTING)
 5. After all test cases, server sends `test_done` with results
 
@@ -62,7 +62,7 @@ Key insight: `map()` on a `BasicGenerator` preserves the schema by composing the
 
 ### Thread-Local State
 
-`TestCaseData` is stored in thread-local `TEST_CASE_DATA` and holds the socket connection, channel, and span depth. `IS_LAST_RUN` tracks whether this is the final replay for counterexample output.
+`TestCaseData` is stored in thread-local `TEST_CASE_DATA` and holds the socket connection, stream, and span depth. `IS_LAST_RUN` tracks whether this is the final replay for counterexample output.
 
 ### Span System
 

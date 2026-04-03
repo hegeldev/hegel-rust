@@ -87,14 +87,14 @@ impl<T> Generator<T> for OneOfGenerator<'_, T> {
                 cbor_map! {
                     "type" => "tuple",
                     "elements" => cbor_array![
-                        cbor_map!{"const" => Value::Integer(ciborium::value::Integer::from(i as i64))},
+                        cbor_map!{"type" => "constant", "value" => Value::Integer(ciborium::value::Integer::from(i as i64))},
                         b.schema().clone()
                     ]
                 }
             })
             .collect();
 
-        let schema = cbor_map! {"one_of" => Value::Array(tagged_schemas)};
+        let schema = cbor_map! {"type" => "one_of", "generators" => Value::Array(tagged_schemas)};
 
         Some(BasicGenerator::new(schema, move |raw| {
             let arr = match raw {
@@ -187,19 +187,20 @@ where
         let null_schema = cbor_map! {
             "type" => "tuple",
             "elements" => cbor_array![
-                cbor_map!{"const" => Value::Integer(0.into())},
+                cbor_map!{"type" => "constant", "value" => Value::Integer(0.into())},
                 cbor_map!{"type" => "null"}
             ]
         };
         let value_schema = cbor_map! {
             "type" => "tuple",
             "elements" => cbor_array![
-                cbor_map!{"const" => Value::Integer(1.into())},
+                cbor_map!{"type" => "constant", "value" => Value::Integer(1.into())},
                 inner_schema
             ]
         };
 
-        let schema = cbor_map! {"one_of" => cbor_array![null_schema, value_schema]};
+        let schema =
+            cbor_map! {"type" => "one_of", "generators" => cbor_array![null_schema, value_schema]};
 
         Some(BasicGenerator::new(schema, move |raw| {
             let arr = match raw {
