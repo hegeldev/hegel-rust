@@ -107,8 +107,35 @@ Located in `tests/conformance/`. Rust test binaries in `tests/conformance/rust/s
 
 ### Creating Pull Requests
 
-Use the `create-pr` skill, which handles rebasing, RELEASE.md, draft creation, and CI watching. Run the `self-review` skill first.
+Run the `self-review` skill before creating PRs. Ensure a `RELEASE.md` exists if source code changed (see `RELEASE-sample.md` for format and style guidance).
 
-### Writing Changelog Entries
+# Orrery
 
-When writing a `RELEASE.md`, read `.claude/skills/create-pr/references/changelog-guidance.md` for detailed style guidance.
+This worktree is managed by Orrery (cell id: 9ffbbdbd-15e6-4a3b-9742-6db81f72b809).
+
+## When asked to push and/or create a PR:
+
+1. Choose a descriptive branch name based on your changes (e.g. `fix-timeout-handling`, `add-retry-logic`)
+2. Rename the current branch: `git branch -m <new-name>`
+3. Notify Orrery about the branch rename:
+   curl -s -X POST http://localhost:8000/hooks/cells/9ffbbdbd-15e6-4a3b-9742-6db81f72b809/branch-updated -H 'Content-Type: application/json' -d '{"branch": "<new-name>"}'
+4. Push: `git push -u origin <new-name>`
+5. Create the PR: `gh pr create --title "..." --body "..."`
+   Your PR description should be only a summary of the changes, without a `## Summary`
+   header. Do not include a "Test plan" section. Wrap the description in a details tag:
+   ```
+   <details><summary>Claude-written description</summary>
+
+   {description}
+
+   </details>
+   ```
+6. Notify Orrery about the PR:
+   curl -s -X POST http://localhost:8000/hooks/cells/9ffbbdbd-15e6-4a3b-9742-6db81f72b809/pr-created -H 'Content-Type: application/json' -d '{"pr_url": "<url>", "pr_number": <number>}'
+
+Always notify Orrery after renaming the branch and after creating the PR.
+
+## Creating new cells
+If the user asks you to create a new cell, create one via:
+  curl -s -X POST http://localhost:8000/hooks/create-cell -H 'Content-Type: application/json' -d '{"repo": "<repo_id>"}'
+This returns JSON with a `url` field — share that URL with the user so they can navigate to the new cell.

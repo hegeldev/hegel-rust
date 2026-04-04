@@ -17,8 +17,10 @@ result
 lcov.info
 
 .claude/bin/
+.claude/local/
 .claude/*.local.md
 .claude/*.local.json
 .claude/*.local
+CLAUDE.local.md
 
 docs/superpowers
