@@ -11,6 +11,12 @@ pub fn which(name: &str) -> Option<String> {
     None
 }
 
+const HEGEL_CRATE_DIR: &str = env!("CARGO_MANIFEST_DIR");
+
+pub fn is_hegel_file(file_path: &str) -> bool {
+    std::path::Path::new(file_path).starts_with(HEGEL_CRATE_DIR)
+}
+
 /// Panic if `path` exists but is not executable.
 pub fn validate_executable(path: &str) {
     #[cfg(unix)]
@@ -25,5 +31,24 @@ pub fn validate_executable(path: &str) {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_hegel_file() {
+        // returns true
+        assert!(is_hegel_file(&format!("{}/src/runner.rs", HEGEL_CRATE_DIR)));
+
+        // returns false
+        assert!(!is_hegel_file("/tmp/user_project/src/main.rs"));
+        // doesn't return true on a dir that happens to share a prefix
+        assert!(!is_hegel_file(&format!(
+            "{}-extra/src/lib.rs",
+            HEGEL_CRATE_DIR
+        )));
     }
 }
