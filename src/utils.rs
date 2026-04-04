@@ -14,7 +14,15 @@ pub fn which(name: &str) -> Option<String> {
 const HEGEL_CRATE_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
 pub fn is_hegel_file(file_path: &str) -> bool {
-    std::path::Path::new(file_path).starts_with(HEGEL_CRATE_DIR)
+    let path = std::path::Path::new(file_path);
+    if path.is_absolute() {
+        path.starts_with(HEGEL_CRATE_DIR)
+    } else {
+        // When running inside hegel's own test binary, panic locations use
+        // paths relative to the crate root. Resolve against CARGO_MANIFEST_DIR
+        // and check whether the file exists there.
+        std::path::Path::new(HEGEL_CRATE_DIR).join(path).is_file()
+    }
 }
 
 /// Panic if `path` exists but is not executable.
@@ -40,15 +48,23 @@ mod tests {
 
     #[test]
     fn test_is_hegel_file() {
-        // returns true
+        // absolute path within hegel crate returns true
         assert!(is_hegel_file(&format!("{}/src/runner.rs", HEGEL_CRATE_DIR)));
 
-        // returns false
+        // relative path that exists under the crate root returns true
+        assert!(is_hegel_file("src/runner.rs"));
+        assert!(is_hegel_file("src/utils.rs"));
+
+        // absolute path outside hegel crate returns false
         assert!(!is_hegel_file("/tmp/user_project/src/main.rs"));
         // doesn't return true on a dir that happens to share a prefix
         assert!(!is_hegel_file(&format!(
             "{}-extra/src/lib.rs",
             HEGEL_CRATE_DIR
         )));
+
+        // relative path that doesn't exist under the crate root returns false
+        assert!(!is_hegel_file("src/nonexistent_file.rs"));
+        assert!(!is_hegel_file("user_code/main.rs"));
     }
 }
