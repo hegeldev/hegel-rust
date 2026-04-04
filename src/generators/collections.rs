@@ -47,7 +47,7 @@ where
             basic.do_draw(tc)
         } else {
             tc.start_span(labels::LIST);
-            let mut collection = Collection::new(tc, self.min_size, self.max_size);
+            let mut collection = Collection::new(tc, "list", self.min_size, self.max_size);
             let mut result = Vec::new();
             while collection.more() {
                 result.push(self.elements.do_draw(tc));
@@ -130,7 +130,7 @@ where
         } else {
             // nocov start
             tc.start_span(labels::SET);
-            let mut collection = Collection::new(tc, self.min_size, self.max_size);
+            let mut collection = Collection::new(tc, "set", self.min_size, self.max_size);
             let mut set = HashSet::new();
             while collection.more() {
                 let element = self.elements.do_draw(tc);
@@ -221,7 +221,7 @@ where
         } else {
             // nocov start
             tc.start_span(labels::MAP);
-            let mut collection = Collection::new(tc, self.min_size, self.max_size);
+            let mut collection = Collection::new(tc, "map", self.min_size, self.max_size);
             let mut map = HashMap::new();
             while collection.more() {
                 let key = self.keys.do_draw(tc);

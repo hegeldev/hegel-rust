@@ -162,9 +162,13 @@ impl DataSource for ServerBackend {
         let response = self.send_request("new_collection", &payload)?;
         match response {
             Value::Text(s) => Ok(s),
+            Value::Integer(i) => {
+                let n: i128 = i.into();
+                Ok(n.to_string())
+            }
             // nocov start
             _ => panic!(
-                "Expected text response from new_collection, got {:?}",
+                "Expected text or integer response from new_collection, got {:?}",
                 response
             ),
             // nocov end
@@ -172,8 +176,11 @@ impl DataSource for ServerBackend {
     }
 
     fn collection_more(&self, collection: &str) -> Result<bool, DataSourceError> {
-        let response =
-            self.send_request("collection_more", &cbor_map! { "collection" => collection })?;
+        let collection_id: i64 = collection.parse().unwrap();
+        let response = self.send_request(
+            "collection_more",
+            &cbor_map! { "collection_id" => collection_id },
+        )?;
         match response {
             Value::Bool(b) => Ok(b),
             _ => panic!("Expected bool from collection_more, got {:?}", response), // nocov
@@ -186,8 +193,9 @@ impl DataSource for ServerBackend {
         collection: &str,
         why: Option<&str>,
     ) -> Result<(), DataSourceError> {
+        let collection_id: i64 = collection.parse().unwrap();
         let mut payload = cbor_map! {
-            "collection" => collection
+            "collection_id" => collection_id
         };
         if let Some(reason) = why {
             map_insert(&mut payload, "why", reason.to_string());
