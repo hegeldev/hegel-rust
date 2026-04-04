@@ -103,5 +103,8 @@ mod tests {
 
         // paths with ".." that resolve to tests/ are NOT hegel-internal
         assert!(!is_hegel_file("tests/test_find_quality/../common/utils.rs"));
+
+        // paths with "./" current-dir component are normalized correctly
+        assert!(is_hegel_file("./src/runner.rs"));
     }
 }

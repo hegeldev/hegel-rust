@@ -164,7 +164,7 @@ fn test_internal_error_output_with_backtrace() {
                 r".*",
                 r"IntegerGenerator.*>::do_draw\n", // do_draw
                 r".*",
-                r"TestCase.*::draw\n", // draw
+                r"TestCase[^\n]*::draw[^\n]*\n", // draw
                 r".*",
                 r"temp_hegel_test_\d+::main::{closure_name}\n", // user's closure
                 r".*",

@@ -13,6 +13,7 @@ struct Params {
 #[derive(Serialize)]
 struct Metrics {
     length: usize,
+    codepoints: Vec<u32>,
 }
 
 fn main() {
@@ -33,9 +34,10 @@ fn main() {
             g = g.max_size(max);
         }
         let value = tc.draw(g);
-        // Report length in Unicode codepoints, not bytes
-        let length = value.chars().count();
-        write(&Metrics { length });
+        // Report length and codepoints for conformance validation
+        let codepoints: Vec<u32> = value.chars().map(|c| c as u32).collect();
+        let length = codepoints.len();
+        write(&Metrics { length, codepoints });
     })
     .settings(Settings::new().test_cases(get_test_cases()))
     .run();
