@@ -11,3 +11,36 @@ fn test_default_runs_100_test_cases() {
 
     assert_eq!(count, 100);
 }
+
+#[test]
+fn test_settings_default_trait() {
+    let settings = hegel::Settings::default();
+    let mut count = 0;
+
+    hegel::Hegel::new(|tc| {
+        let _ = tc.draw(gs::integers::<i32>());
+        count += 1;
+    })
+    .settings(settings)
+    .run();
+
+    assert_eq!(count, 100);
+}
+
+#[test]
+fn test_settings_verbosity() {
+    let mut count = 0;
+
+    hegel::Hegel::new(|tc| {
+        let _ = tc.draw(gs::integers::<i32>());
+        count += 1;
+    })
+    .settings(
+        hegel::Settings::new()
+            .verbosity(hegel::Verbosity::Quiet)
+            .test_cases(10),
+    )
+    .run();
+
+    assert_eq!(count, 10);
+}

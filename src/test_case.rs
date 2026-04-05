@@ -1,11 +1,8 @@
-use crate::cbor_utils::{cbor_map, map_insert};
+pub use crate::backend::{DataSource, DataSourceError};
 use crate::generators::Generator;
-use crate::protocol::{Connection, SERVER_CRASHED_MESSAGE, Stream};
-use crate::runner::Verbosity;
 use ciborium::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::{Arc, LazyLock};
 
 use crate::generators::value;
 
@@ -25,44 +22,24 @@ pub trait __IsTestCase {}
 impl __IsTestCase for TestCase {}
 pub fn __assert_is_test_case<T: __IsTestCase>() {}
 
-/// Error indicating the server ran out of data for this test case.
-#[derive(Debug)]
-pub struct StopTestError;
-impl std::fmt::Display for StopTestError {
-    // nocov start
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Server ran out of data (StopTest)")
-        // nocov end
-    }
-}
-impl std::error::Error for StopTestError {}
-
-static PROTOCOL_DEBUG: LazyLock<bool> = LazyLock::new(|| {
-    // nocov start
-    matches!(
-        // nocov end
-        std::env::var("HEGEL_PROTOCOL_DEBUG")
-            .unwrap_or_default()
-            .to_lowercase()
-            .as_str(),
-        "1" | "true"
-    )
-});
-
 pub(crate) const ASSUME_FAIL_STRING: &str = "__HEGEL_ASSUME_FAIL";
 
 /// The sentinel string used to identify overflow/StopTest panics.
 /// Distinct from ASSUME_FAIL_STRING so callers can tell user-initiated
-/// assumption failures apart from server-initiated data exhaustion.
+/// assumption failures apart from backend-initiated data exhaustion.
 pub(crate) const STOP_TEST_STRING: &str = "__HEGEL_STOP_TEST";
 
+/// Panic with the appropriate sentinel for the given data source error.
+fn panic_on_data_source_error(e: DataSourceError) -> ! {
+    match e {
+        DataSourceError::StopTest => panic!("{}", STOP_TEST_STRING),
+        DataSourceError::Assume => panic!("{}", ASSUME_FAIL_STRING), // nocov
+    }
+}
+
 pub(crate) struct TestCaseGlobalData {
-    #[allow(dead_code)]
-    connection: Arc<Connection>,
-    stream: Stream,
-    verbosity: Verbosity,
+    data_source: Box<dyn DataSource>,
     is_last_run: bool,
-    test_aborted: bool,
 }
 
 #[derive(Clone)]
@@ -91,7 +68,7 @@ pub(crate) struct TestCaseLocalData {
 /// }
 /// ```
 pub struct TestCase {
-    global: Rc<RefCell<TestCaseGlobalData>>,
+    global: Rc<TestCaseGlobalData>,
     local: RefCell<TestCaseLocalData>,
 }
 
@@ -111,25 +88,17 @@ impl std::fmt::Debug for TestCase {
 }
 
 impl TestCase {
-    pub(crate) fn new(
-        connection: Arc<Connection>,
-        stream: Stream,
-        verbosity: Verbosity,
-        is_last_run: bool,
-    ) -> Self {
+    pub(crate) fn new(data_source: Box<dyn DataSource>, is_last_run: bool) -> Self {
         let on_draw: Rc<dyn Fn(&str)> = if is_last_run {
             Rc::new(|msg| eprintln!("{}", msg))
         } else {
             Rc::new(|_| {})
         };
         TestCase {
-            global: Rc::new(RefCell::new(TestCaseGlobalData {
-                connection,
-                stream,
-                verbosity,
+            global: Rc::new(TestCaseGlobalData {
+                data_source,
                 is_last_run,
-                test_aborted: false,
-            })),
+            }),
             local: RefCell::new(TestCaseLocalData {
                 span_depth: 0,
                 draw_count: 0,
@@ -203,7 +172,7 @@ impl TestCase {
     /// }
     /// ```
     pub fn note(&self, message: &str) {
-        if self.global.borrow().is_last_run {
+        if self.global.is_last_run {
             let indent = self.local.borrow().indent; // nocov
             eprintln!("{:indent$}{}", "", message, indent = indent); // nocov
         }
@@ -236,16 +205,21 @@ impl TestCase {
         ));
     }
 
+    /// Access the data source for this test case.
+    pub(crate) fn data_source(&self) -> &dyn DataSource {
+        self.global.data_source.as_ref()
+    }
+
     #[doc(hidden)]
     pub fn start_span(&self, label: u64) {
         self.local.borrow_mut().span_depth += 1;
-        if let Err(StopTestError) = self.send_request("start_span", &cbor_map! {"label" => label}) {
+        if let Err(e) = self.data_source().start_span(label) {
             // nocov start
             let mut local = self.local.borrow_mut();
             assert!(local.span_depth > 0);
             local.span_depth -= 1;
             drop(local);
-            panic!("{}", STOP_TEST_STRING);
+            panic_on_data_source_error(e);
             // nocov end
         }
     }
@@ -257,111 +231,16 @@ impl TestCase {
             assert!(local.span_depth > 0);
             local.span_depth -= 1;
         }
-        let _ = self.send_request("stop_span", &cbor_map! {"discard" => discard});
-    }
-
-    /// Returns Err(StopTestError) if the server sends an overflow error.
-    pub(crate) fn send_request(
-        &self,
-        command: &str,
-        payload: &Value,
-    ) -> Result<Value, StopTestError> {
-        let mut global = self.global.borrow_mut();
-
-        // If a previous request already triggered overflow/StopTest, the server
-        // has closed this stream. Don't send another request—it would block.
-        // (The stream-level closed check is also enforced, but this gives a
-        // clean StopTestError instead of an io::Error.)
-        if global.test_aborted {
-            return Err(StopTestError); // nocov
-        }
-        let debug = *PROTOCOL_DEBUG || global.verbosity == Verbosity::Debug;
-
-        let mut entries = vec![(
-            Value::Text("command".to_string()),
-            Value::Text(command.to_string()),
-        )];
-
-        if let Value::Map(map) = payload {
-            for (k, v) in map {
-                entries.push((k.clone(), v.clone()));
-            }
-        }
-
-        let request = Value::Map(entries);
-
-        if debug {
-            eprintln!("REQUEST: {:?}", request); // nocov
-        }
-
-        let result = global.stream.request_cbor(&request);
-        drop(global);
-
-        match result {
-            Ok(response) => {
-                if debug {
-                    eprintln!("RESPONSE: {:?}", response); // nocov
-                }
-                Ok(response)
-            }
-            Err(e) => {
-                let error_msg = e.to_string();
-                if error_msg.contains("overflow")
-                    || error_msg.contains("StopTest")
-                    || error_msg.contains("stream is closed")
-                {
-                    if debug {
-                        eprintln!("RESPONSE: StopTest/overflow"); // nocov
-                    }
-                    let mut global = self.global.borrow_mut();
-                    global.stream.mark_closed();
-                    global.test_aborted = true;
-                    drop(global);
-                    Err(StopTestError)
-                } else if error_msg.contains("FlakyStrategyDefinition")
-                    // nocov start
-                    || error_msg.contains("FlakyReplay")
-                // nocov end
-                {
-                    // Abort the test case; the server will report the flaky
-                    // error in the test_done results, which runner.rs handles.
-                    let mut global = self.global.borrow_mut();
-                    global.stream.mark_closed();
-                    global.test_aborted = true;
-                    drop(global);
-                    Err(StopTestError)
-                // nocov start
-                } else if self.global.borrow().connection.server_has_exited() {
-                    panic!("{}", SERVER_CRASHED_MESSAGE);
-                    // nocov end
-                } else {
-                    panic!("Failed to communicate with Hegel: {}", e); // nocov
-                }
-            }
-        }
-    }
-
-    // --- Methods for runner access ---
-
-    pub(crate) fn test_aborted(&self) -> bool {
-        self.global.borrow().test_aborted
-    }
-
-    pub(crate) fn send_mark_complete(&self, mark_complete: &Value) {
-        let mut global = self.global.borrow_mut();
-        let _ = global.stream.request_cbor(mark_complete);
-        let _ = global.stream.close();
+        let _ = self.data_source().stop_span(discard);
     }
 }
 
-/// Send a schema to the server and return the raw CBOR response.
+/// Send a schema to the backend and return the raw CBOR response.
 #[doc(hidden)]
 pub fn generate_raw(tc: &TestCase, schema: &Value) -> Value {
-    match tc.send_request("generate", &cbor_map! {"schema" => schema.clone()}) {
+    match tc.data_source().generate(schema) {
         Ok(v) => v,
-        Err(StopTestError) => {
-            panic!("{}", STOP_TEST_STRING);
-        }
+        Err(e) => panic_on_data_source_error(e),
     }
 }
 
@@ -381,80 +260,59 @@ pub fn deserialize_value<T: serde::de::DeserializeOwned>(raw: Value) -> T {
     })
 }
 
-/// Uses the hegel server to determine collection sizing.
+/// Uses the backend to determine collection sizing.
 ///
-/// The server-side `many` object is created lazily on the first call to
+/// The backend-side collection object is created lazily on the first call to
 /// [`more()`](Collection::more).
 pub struct Collection<'a> {
     tc: &'a TestCase,
+    base_name: String,
     min_size: usize,
     max_size: Option<usize>,
-    collection_id: Option<i64>,
+    handle: Option<String>,
     finished: bool,
 }
 
 impl<'a> Collection<'a> {
-    /// Create a new server-managed collection.
-    pub fn new(tc: &'a TestCase, min_size: usize, max_size: Option<usize>) -> Self {
+    /// Create a new backend-managed collection.
+    pub fn new(tc: &'a TestCase, name: &str, min_size: usize, max_size: Option<usize>) -> Self {
         Collection {
             tc,
+            base_name: name.to_string(),
             min_size,
             max_size,
-            collection_id: None,
+            handle: None,
             finished: false,
         }
     }
 
-    fn ensure_initialized(&mut self) -> i64 {
-        if self.collection_id.is_none() {
-            let mut payload = cbor_map! {
-                "min_size" => self.min_size as u64
+    fn ensure_initialized(&mut self) -> &str {
+        if self.handle.is_none() {
+            let name = match self.tc.data_source().new_collection(
+                Some(&self.base_name),
+                self.min_size as u64,
+                self.max_size.map(|m| m as u64),
+            ) {
+                Ok(name) => name,
+                Err(e) => panic_on_data_source_error(e), // nocov
             };
-            if let Some(max) = self.max_size {
-                map_insert(&mut payload, "max_size", max as u64); // nocov
-            }
-            let response = match self.tc.send_request("new_collection", &payload) {
-                Ok(v) => v,
-                Err(StopTestError) => {
-                    panic!("{}", STOP_TEST_STRING); // nocov
-                }
-            };
-            let id = match response {
-                Value::Integer(i) => {
-                    let n: i128 = i.into();
-                    n as i64
-                }
-                // nocov start
-                _ => panic!(
-                    "Expected integer response from new_collection, got {:?}",
-                    response
-                ),
-                // nocov end
-            };
-            self.collection_id = Some(id);
+            self.handle = Some(name);
         }
-        self.collection_id.unwrap()
+        self.handle.as_ref().unwrap()
     }
 
-    /// Ask the server whether to produce another element.
+    /// Ask the backend whether to produce another element.
     pub fn more(&mut self) -> bool {
         if self.finished {
             return false; // nocov
         }
-        let collection_id = self.ensure_initialized();
-        let response = match self.tc.send_request(
-            "collection_more",
-            &cbor_map! { "collection_id" => collection_id },
-        ) {
-            Ok(v) => v,
-            Err(StopTestError) => {
+        let handle = self.ensure_initialized().to_string();
+        let result = match self.tc.data_source().collection_more(&handle) {
+            Ok(b) => b,
+            Err(e) => {
                 self.finished = true;
-                panic!("{}", STOP_TEST_STRING);
+                panic_on_data_source_error(e);
             }
-        };
-        let result = match response {
-            Value::Bool(b) => b,
-            _ => panic!("Expected bool from collection_more, got {:?}", response), // nocov
         };
         if !result {
             self.finished = true;
@@ -468,18 +326,10 @@ impl<'a> Collection<'a> {
         if self.finished {
             return;
         }
-        let collection_id = self.ensure_initialized();
-        let mut payload = cbor_map! {
-            "collection_id" => collection_id
-            // nocov end
-        };
-        // nocov start
-        if let Some(reason) = why {
-            map_insert(&mut payload, "why", reason.to_string());
-            // nocov end
-        }
-        let _ = self.tc.send_request("collection_reject", &payload); // nocov
+        let handle = self.ensure_initialized().to_string();
+        let _ = self.tc.data_source().collection_reject(&handle, why);
     }
+    // nocov end
 }
 
 #[doc(hidden)]
