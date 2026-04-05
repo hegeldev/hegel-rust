@@ -119,8 +119,6 @@ impl TextGenerator {
     /// Exclude characters from these Unicode general categories.
     ///
     /// Mutually exclusive with [`categories`](Self::categories).
-    /// Note: `"Cs"` (surrogates) is always excluded since Rust strings cannot
-    /// contain surrogate codepoints.
     pub fn exclude_categories(mut self, exclude_categories: &[&str]) -> Self {
         self.chars.exclude_categories =
             Some(exclude_categories.iter().map(|s| s.to_string()).collect());
@@ -180,9 +178,6 @@ pub fn text() -> TextGenerator {
 }
 
 /// Generator for single Unicode characters. Created by [`characters()`].
-///
-/// This is a convenience for `text().min_size(1).max_size(1)` that generates
-/// a `char` instead of a `String`.
 pub struct CharactersGenerator {
     chars: CharacterFields,
 }
@@ -217,8 +212,6 @@ impl CharactersGenerator {
     /// Exclude characters from these Unicode general categories.
     ///
     /// Mutually exclusive with [`categories`](Self::categories).
-    /// Note: `"Cs"` (surrogates) is always excluded since Rust strings cannot
-    /// contain surrogate codepoints.
     pub fn exclude_categories(mut self, exclude_categories: &[&str]) -> Self {
         self.chars.exclude_categories =
             Some(exclude_categories.iter().map(|s| s.to_string()).collect());
@@ -272,10 +265,6 @@ impl Generator<char> for CharactersGenerator {
 }
 
 /// Generate single Unicode characters.
-///
-/// This is a convenience for `text().min_size(1).max_size(1)` that returns
-/// a `char` instead of a `String`. It accepts the same character filtering
-/// parameters as [`text()`].
 pub fn characters() -> CharactersGenerator {
     CharactersGenerator {
         chars: CharacterFields::new(),

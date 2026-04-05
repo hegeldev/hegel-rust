@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
-const SUPPORTED_PROTOCOL_VERSIONS: (f64, f64) = (0.8, 0.9);
+const SUPPORTED_PROTOCOL_VERSIONS: (f64, f64) = (0.9, 0.9);
 const HEGEL_SERVER_VERSION: &str = "0.3.2";
 const HEGEL_SERVER_COMMAND_ENV: &str = "HEGEL_SERVER_COMMAND";
 const HEGEL_SERVER_DIR: &str = ".hegel";
