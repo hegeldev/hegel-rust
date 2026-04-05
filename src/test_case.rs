@@ -4,6 +4,7 @@ use crate::protocol::{Connection, SERVER_CRASHED_MESSAGE, Stream};
 use crate::runner::Verbosity;
 use ciborium::Value;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
@@ -63,12 +64,13 @@ pub(crate) struct TestCaseGlobalData {
     verbosity: Verbosity,
     is_last_run: bool,
     test_aborted: bool,
+    named_draw_counts: HashMap<String, usize>,
+    named_draw_repeatable: HashMap<String, bool>,
 }
 
 #[derive(Clone)]
 pub(crate) struct TestCaseLocalData {
     span_depth: usize,
-    draw_count: usize,
     indent: usize,
     on_draw: Rc<dyn Fn(&str)>,
 }
@@ -129,10 +131,11 @@ impl TestCase {
                 verbosity,
                 is_last_run,
                 test_aborted: false,
+                named_draw_counts: HashMap::new(),
+                named_draw_repeatable: HashMap::new(),
             })),
             local: RefCell::new(TestCaseLocalData {
                 span_depth: 0,
-                draw_count: 0,
                 indent: 0,
                 on_draw,
             }),
@@ -152,10 +155,37 @@ impl TestCase {
     ///     let s: String = tc.draw(gs::text());
     /// }
     /// ```
+    ///
+    /// Note: when run inside a `#[hegel::test]`, `draw()` will typically be
+    /// rewritten to `draw_named()` with an appropriate variable name
+    /// in order to give better test output.
     pub fn draw<T: std::fmt::Debug>(&self, generator: impl Generator<T>) -> T {
+        self.draw_named(generator, "unnamed", true)
+    }
+
+    /// Draw a value from a generator with a specific name for output.
+    ///
+    /// When `repeatable` is true, a counter suffix is appended (e.g. `x_1`, `x_2`).
+    /// When `repeatable` is false, reusing the same name panics.
+    ///
+    /// Using the same name with different values of `repeatable` is an error.
+    ///
+    /// On the final replay of a failing test case, this prints:
+    /// - `let name = value;` (when not repeatable)
+    /// - `let name_N = value;` (when repeatable)
+    ///
+    /// Note: although this is public API and you are welcome to use it,
+    /// it's not really intended for direct use. It is the target that
+    /// `#[hegel::test]` rewrites `draw()` calls to where appropriate.
+    pub fn draw_named<T: std::fmt::Debug>(
+        &self,
+        generator: impl Generator<T>,
+        name: &str,
+        repeatable: bool,
+    ) -> T {
         let value = generator.do_draw(self);
         if self.local.borrow().span_depth == 0 {
-            self.record_draw(&value);
+            self.record_named_draw(&value, name, repeatable);
         }
         value
     }
@@ -215,22 +245,57 @@ impl TestCase {
             global: self.global.clone(),
             local: RefCell::new(TestCaseLocalData {
                 span_depth: 0,
-                draw_count: 0,
                 indent: local.indent + extra_indent,
                 on_draw: local.on_draw.clone(),
             }),
         }
     }
 
-    fn record_draw<T: std::fmt::Debug>(&self, value: &T) {
-        let mut local = self.local.borrow_mut();
-        local.draw_count += 1;
-        let count = local.draw_count;
+    fn record_named_draw<T: std::fmt::Debug>(&self, value: &T, name: &str, repeatable: bool) {
+        let mut global = self.global.borrow_mut();
+
+        match global.named_draw_repeatable.get(name) {
+            Some(&prev) if prev != repeatable => {
+                panic!(
+                    "draw_named: name {:?} used with inconsistent repeatable flag (was {}, now {})",
+                    name, prev, repeatable
+                );
+            }
+            _ => {
+                global
+                    .named_draw_repeatable
+                    .insert(name.to_string(), repeatable);
+            }
+        }
+
+        let count = global
+            .named_draw_counts
+            .entry(name.to_string())
+            .or_insert(0);
+        *count += 1;
+        let current_count = *count;
+        drop(global);
+
+        if !repeatable && current_count > 1 {
+            panic!(
+                "draw_named: name {:?} used more than once but repeatable is false",
+                name
+            );
+        }
+
+        let local = self.local.borrow();
         let indent = local.indent;
+
+        let display_name = if repeatable {
+            format!("{}_{}", name, current_count)
+        } else {
+            name.to_string()
+        };
+
         (local.on_draw)(&format!(
-            "{:indent$}Draw {}: {:?}",
+            "{:indent$}let {} = {:?};",
             "",
-            count,
+            display_name,
             value,
             indent = indent
         ));
