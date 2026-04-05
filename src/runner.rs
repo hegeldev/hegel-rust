@@ -994,5 +994,5 @@ fn cbor_decode(bytes: &[u8]) -> Value {
 }
 
 #[cfg(test)]
-#[path = "runner_tests.rs"]
+#[path = "../tests/embedded/runner_tests.rs"]
 mod tests;
