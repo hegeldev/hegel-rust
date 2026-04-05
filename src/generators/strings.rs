@@ -42,8 +42,15 @@ impl CharactersGenerator {
 
     /// Exclude characters from these Unicode categories.
     /// Mutually exclusive with [`categories`](Self::categories).
+    ///
+    /// The `Cs` (surrogate) category is always excluded because Rust strings
+    /// must be valid UTF-8 and cannot represent surrogate code points.
     pub fn exclude_categories(mut self, cats: &[&str]) -> Self {
-        self.exclude_categories = Some(cats.iter().map(|s| s.to_string()).collect());
+        let mut all: Vec<String> = cats.iter().map(|s| s.to_string()).collect();
+        if !all.iter().any(|c| c == "Cs") {
+            all.push("Cs".to_string());
+        }
+        self.exclude_categories = Some(all);
         self.categories = None;
         self
     }

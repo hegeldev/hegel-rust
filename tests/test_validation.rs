@@ -1,6 +1,12 @@
 use hegel::generators::{self as gs, Generator};
 
 #[test]
+fn test_characters_as_basic() {
+    let g = gs::characters();
+    assert!(g.as_basic().is_some());
+}
+
+#[test]
 #[should_panic(expected = "max_value < min_value")]
 fn test_integers_min_greater_than_max() {
     let g = gs::integers::<i32>().min_value(10).max_value(5);

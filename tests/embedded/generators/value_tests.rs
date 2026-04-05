@@ -95,6 +95,31 @@ fn test_from_ciborium_array_with_nan() {
 }
 
 #[test]
+fn test_from_ciborium_text() {
+    let cbor = ciborium::Value::Text("hello".to_string());
+    let hegel = HegelValue::from(cbor);
+    if let HegelValue::String(s) = hegel {
+        assert_eq!(s, "hello");
+    } else {
+        panic!("expected String");
+    }
+}
+
+#[test]
+#[should_panic(expected = "Expected Bytes inside string tag 6")]
+fn test_from_ciborium_tag6_non_bytes() {
+    let cbor = ciborium::Value::Tag(6, Box::new(ciborium::Value::Text("not bytes".to_string())));
+    let _ = HegelValue::from(cbor);
+}
+
+#[test]
+#[should_panic(expected = "Expected valid UTF-8 string")]
+fn test_from_ciborium_tag6_invalid_utf8() {
+    let cbor = ciborium::Value::Tag(6, Box::new(ciborium::Value::Bytes(vec![0xFF])));
+    let _ = HegelValue::from(cbor);
+}
+
+#[test]
 fn test_deserialize_struct() {
     #[derive(serde::Deserialize, Debug)]
     struct TestStruct {

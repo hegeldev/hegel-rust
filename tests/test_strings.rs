@@ -105,6 +105,25 @@ fn test_text_categories() {
     });
 }
 
+#[test]
+fn test_text_exclude_categories() {
+    assert_all_examples(
+        gs::text().exclude_categories(&["Lu"]).max_size(20),
+        |s: &String| s.chars().all(|c| !c.is_uppercase()),
+    );
+}
+
+#[test]
+fn test_text_include_characters() {
+    assert_all_examples(
+        gs::text()
+            .categories(&[])
+            .include_characters("xyz")
+            .max_size(20),
+        |s: &String| s.chars().all(|c| "xyz".contains(c)),
+    );
+}
+
 #[hegel::test]
 fn test_text_exclude_characters(tc: hegel::TestCase) {
     let exclude = tc.draw(gs::text().codec("ascii"));
