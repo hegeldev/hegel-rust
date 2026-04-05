@@ -16,6 +16,11 @@ fn test_default_string() {
 }
 
 #[test]
+fn test_default_char() {
+    check_can_generate_examples(gs::default::<char>());
+}
+
+#[test]
 fn test_default_ints() {
     check_can_generate_examples(gs::default::<i8>());
     check_can_generate_examples(gs::default::<i16>());

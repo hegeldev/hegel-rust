@@ -39,6 +39,77 @@ fn test_text_min_greater_than_max() {
 }
 
 #[test]
+fn test_text_character_params_build_schema() {
+    let g = gs::text().codec("ascii");
+    assert!(g.as_basic().is_some());
+
+    let g = gs::text().min_codepoint(0x20).max_codepoint(0x7E);
+    assert!(g.as_basic().is_some());
+
+    let g = gs::text().categories(&["L", "Nd"]);
+    assert!(g.as_basic().is_some());
+
+    let g = gs::text().exclude_categories(&["Cc"]);
+    assert!(g.as_basic().is_some());
+
+    let g = gs::text().include_characters("abc");
+    assert!(g.as_basic().is_some());
+
+    let g = gs::text().exclude_characters("xyz");
+    assert!(g.as_basic().is_some());
+}
+
+#[test]
+#[should_panic(expected = "\"Cs\" includes surrogate codepoints")]
+fn test_text_categories_including_cs_panics() {
+    let g = gs::text().categories(&["L", "Cs"]);
+    g.as_basic();
+}
+
+#[test]
+#[should_panic(expected = "\"C\" includes surrogate codepoints")]
+fn test_text_categories_including_cs_supercat_panics() {
+    // "C" is the supercategory that includes Cs
+    let g = gs::text().categories(&["C"]);
+    g.as_basic();
+}
+
+#[test]
+fn test_characters_params_build_schema() {
+    let g = gs::characters().codec("ascii");
+    assert!(g.as_basic().is_some());
+
+    let g = gs::characters().min_codepoint(0x20).max_codepoint(0x7E);
+    assert!(g.as_basic().is_some());
+
+    let g = gs::characters().categories(&["L", "Nd"]);
+    assert!(g.as_basic().is_some());
+
+    let g = gs::characters().exclude_categories(&["Cc"]);
+    assert!(g.as_basic().is_some());
+
+    let g = gs::characters().include_characters("abc");
+    assert!(g.as_basic().is_some());
+
+    let g = gs::characters().exclude_characters("xyz");
+    assert!(g.as_basic().is_some());
+}
+
+#[test]
+#[should_panic(expected = "\"Cs\" includes surrogate codepoints")]
+fn test_characters_categories_including_cs_panics() {
+    let g = gs::characters().categories(&["Cs"]);
+    g.as_basic();
+}
+
+#[test]
+#[should_panic(expected = "\"C\" includes surrogate codepoints")]
+fn test_characters_categories_including_cs_supercat_panics() {
+    let g = gs::characters().categories(&["C"]);
+    g.as_basic();
+}
+
+#[test]
 #[should_panic(expected = "max_size < min_size")]
 fn test_binary_min_greater_than_max() {
     let g = gs::binary().min_size(5).max_size(3);
