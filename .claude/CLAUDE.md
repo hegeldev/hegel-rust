@@ -91,7 +91,7 @@ For enums, it also creates `<Enum><Variant>Generator` for each data variant. Imp
 
 ### Testing Conventions
 
-- Place tests in `tests/` as integration tests, not as inline `#[cfg(test)] mod tests` in source files.
+- All tests go in `tests/`, never inline in source files. Tests that don't need access to private functions go directly in `tests/` as integration tests. Tests that need access to private functions go in `tests/embedded/`, mirroring the `src/` directory structure (e.g. `src/protocol/packet.rs` → `tests/embedded/protocol/packet_tests.rs`). Embedded tests are included as child modules of their source file via `#[cfg(test)] #[path = "..."] mod tests;`, which gives them access to private items through `use super::*`. This keeps test code out of source files while preserving access to internals that Rust would otherwise forbid.
 - When a test needs a throwaway generator, prefer `generators::booleans()` as the simplest option (unless the test needs a larger value space).
 - In test code, prefer `.unwrap()` over `.expect("static message")`. A static expect message rarely adds information beyond what the panic already provides (error type + source location). Only use `.expect()` when the message includes a formatted value that aids debugging (e.g., `.expect(&format!("failed to open {}", path))`).
 
