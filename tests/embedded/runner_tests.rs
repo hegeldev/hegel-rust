@@ -122,7 +122,10 @@ fn test_resolve_hegel_path_nonexistent_absolute() {
 #[should_panic(expected = "failed during startup")]
 fn test_handle_handshake_failure_child_exited() {
     let mut child = Command::new("false").spawn().unwrap();
-    std::thread::sleep(Duration::from_millis(50));
+    // Wait for the child to fully exit. Without this, there's a race condition:
+    // wait_for_exit inside handle_handshake_failure might not see the exit in
+    // its 100ms window, hitting the "child still running" branch instead.
+    let _ = child.wait();
     handle_handshake_failure(&mut child, Some("false"), "test error");
 }
 
