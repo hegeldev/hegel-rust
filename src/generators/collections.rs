@@ -1,5 +1,5 @@
 use super::{BasicGenerator, BoxedGenerator, Collection, Generator, TestCase, labels};
-use crate::cbor_utils::{cbor_map, map_insert};
+use crate::utils::cbor_utils::{cbor_map, map_insert};
 use ciborium::Value;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -320,8 +320,7 @@ pub(crate) struct MappedToValue<T, G> {
 impl<T: serde::Serialize, G: Generator<T>> Generator<Value> for MappedToValue<T, G> {
     // nocov start
     fn do_draw(&self, tc: &TestCase) -> Value {
-        crate::cbor_utils::cbor_serialize(&self.inner.do_draw(tc))
-        // nocov end
+        crate::utils::cbor_utils::cbor_serialize(&self.inner.do_draw(tc))
     }
 
     // nocov start
@@ -330,8 +329,7 @@ impl<T: serde::Serialize, G: Generator<T>> Generator<Value> for MappedToValue<T,
         let schema = inner_basic.schema().clone();
         Some(BasicGenerator::new(schema, move |raw| {
             let t_val = inner_basic.parse_raw(raw);
-            crate::cbor_utils::cbor_serialize(&t_val)
-            // nocov end
+            crate::utils::cbor_utils::cbor_serialize(&t_val)
         }))
     }
 }

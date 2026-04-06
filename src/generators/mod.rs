@@ -18,6 +18,8 @@ mod strings;
 mod time;
 mod tuples;
 
+#[cfg(feature = "num")]
+mod num;
 #[cfg(feature = "rand")]
 mod random;
 
@@ -60,5 +62,10 @@ pub use tuples::{
     tuples10, tuples11, tuples12,
 };
 
+#[cfg(feature = "num")]
+pub use self::num::{
+    BigIntGenerator, BigUintGenerator, ComplexGenerator, RationalGenerator, big_integers,
+    big_rationals, big_uintegers, complex, rationals,
+};
 #[cfg(feature = "rand")]
 pub use random::{HegelRandom, RandomsGenerator, randoms};

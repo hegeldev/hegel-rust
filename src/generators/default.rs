@@ -208,6 +208,22 @@ where
     }
 }
 
+#[cfg(feature = "num")]
+impl DefaultGenerator for num_bigint::BigInt {
+    type Generator = super::BigIntGenerator;
+    fn default_generator() -> Self::Generator {
+        super::big_integers()
+    }
+}
+
+#[cfg(feature = "num")]
+impl DefaultGenerator for num_bigint::BigUint {
+    type Generator = super::BigUintGenerator;
+    fn default_generator() -> Self::Generator {
+        super::big_uintegers()
+    }
+}
+
 /// Derive a generator for a struct type defined externally.
 ///
 /// This macro creates a hidden generator struct with builder methods for each field,

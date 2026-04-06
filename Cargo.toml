@@ -39,21 +39,33 @@ serde = { version = "1.0.103", features = ["derive"] }
 paste = "1.0"
 tempfile = "3.0"
 ciborium = "0.2.2"
+half = "2.7"
 crc32fast = "1.4"
 hegeltest-macros = { version = "=0.4.3", path = "hegel-macros" }
 # optional feature dependencies
 rand = { version = "0.10", optional = true }
 serde_json = { version = "1.0.61", optional = true }
+num-bigint = { version = "0.4.4", optional = true }
+num-rational = { version = "0.4", optional = true }
+num-complex = { version = "0.4", optional = true }
+num-traits = { version = "0.2", optional = true }
+num-integer = { version = "0.1", optional = true }
 
 [dev-dependencies]
 regex = "1.0"
 rand = "0.10"
 serde_json = "1.0.61"
+num-bigint = "0.4.4"
+num-rational = "0.4"
+num-complex = "0.4"
+num-traits = "0.2"
+num-integer = "0.1"
 
 [features]
 default = []
 rand = ["dep:rand"]
 antithesis = ["dep:serde_json"]
+num = ["dep:num-bigint", "dep:num-rational", "dep:num-complex", "dep:num-traits", "dep:num-integer"]
 
 [package.metadata.docs.rs]
 all-features = true

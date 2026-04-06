@@ -1,5 +1,5 @@
 use super::{BasicGenerator, Generator, TestCase};
-use crate::cbor_utils::{cbor_array, cbor_map, map_insert};
+use crate::utils::cbor_utils::{cbor_array, cbor_map, map_insert};
 use ciborium::Value;
 
 /// Generator for Unicode text strings. Created by [`text()`].

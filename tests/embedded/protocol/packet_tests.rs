@@ -43,7 +43,7 @@ fn test_reply_packet() {
 
 #[test]
 fn test_cbor_value_roundtrip() {
-    use crate::cbor_utils::cbor_map;
+    use crate::utils::cbor_utils::cbor_map;
     // Test that ciborium::Value roundtrips through CBOR
     let value = cbor_map! {
         "type" => "integer",

@@ -1,7 +1,7 @@
-use crate::cbor_utils::{cbor_map, map_insert};
 use crate::generators::Generator;
 use crate::protocol::{Connection, SERVER_CRASHED_MESSAGE, Stream};
 use crate::runner::Verbosity;
+use crate::utils::cbor_utils::{cbor_map, map_insert};
 use ciborium::Value;
 use std::cell::RefCell;
 use std::rc::Rc;

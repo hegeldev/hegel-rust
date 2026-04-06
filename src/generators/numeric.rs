@@ -1,5 +1,5 @@
 use super::{BasicGenerator, Generator, TestCase};
-use crate::cbor_utils::{cbor_map, cbor_serialize, map_insert};
+use crate::utils::cbor_utils::{cbor_map, cbor_serialize, map_insert};
 use ciborium::Value;
 use std::marker::PhantomData;
 

@@ -1,5 +1,5 @@
 use super::{BasicGenerator, Generator, TestCase};
-use crate::cbor_utils::cbor_map;
+use crate::utils::cbor_utils::cbor_map;
 use std::time::Duration;
 
 /// Generator for [`Duration`] values. Created by [`durations()`].

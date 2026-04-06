@@ -5,7 +5,7 @@ use ciborium::Value;
 
 use super::connection::Connection;
 use super::packet::Packet;
-use crate::cbor_utils::{as_text, map_get};
+use crate::utils::cbor_utils::{as_text, map_get};
 use std::sync::Arc;
 
 const CLOSE_STREAM_PAYLOAD: &[u8] = &[0xFE];
@@ -147,8 +147,7 @@ impl Stream {
         let id = self.send_request(payload)?;
         let response_bytes = self.receive_reply(id)?;
 
-        let response: Value = ciborium::from_reader(&response_bytes[..])
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let response: Value = crate::utils::cbor_utils::read_value(&mut &response_bytes[..])?;
 
         // Check for error response
         if let Some(error) = map_get(&response, "error") {
