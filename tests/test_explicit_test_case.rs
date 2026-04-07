@@ -124,9 +124,9 @@ fn test_explicit_case_with_property_test(tc: TestCase) {
 #[hegel::test(test_cases = 1)]
 #[hegel::explicit_test_case(x = 42u32)]
 fn test_explicit_case_type_annotated_draw_uses_name(tc: TestCase) {
-    // This verifies the draw is rewritten to draw_named("x", ...) even with
-    // a type annotation. If it fell back to "unnamed", the explicit test case
-    // would panic with "no value provided for unnamed".
+    // This verifies the draw is rewritten to __draw_named("x", ...) even with
+    // a type annotation. If it fell back to "draw", the explicit test case
+    // would panic with "no value provided for draw".
     let x: u32 = tc.draw(generators::integers());
     let _ = x;
 }
@@ -137,7 +137,7 @@ fn test_explicit_case_type_annotated_draw_uses_name(tc: TestCase) {
 
 #[test]
 fn test_explicit_draw_unnamed() {
-    let etc = hegel::ExplicitTestCase::new().with_value("unnamed", "42", 42i32);
+    let etc = hegel::ExplicitTestCase::new().with_value("draw", "42", 42i32);
     etc.run(|tc: &hegel::ExplicitTestCase| {
         let x: i32 = tc.draw(generators::integers());
         assert_eq!(x, 42);
@@ -148,7 +148,7 @@ fn test_explicit_draw_unnamed() {
 fn test_explicit_note() {
     let etc = hegel::ExplicitTestCase::new().with_value("x", "true", true);
     etc.run(|tc: &hegel::ExplicitTestCase| {
-        let _: bool = tc.draw_named(generators::booleans(), "x", false);
+        let _: bool = tc.__draw_named(generators::booleans(), "x", false);
         tc.note("some note");
     });
 }
@@ -159,7 +159,7 @@ fn test_explicit_notes_printed_on_panic_inline() {
         || {
             let etc = hegel::ExplicitTestCase::new().with_value("x", "42", 42i32);
             etc.run(|tc: &hegel::ExplicitTestCase| {
-                let _: i32 = tc.draw_named(generators::integers(), "x", false);
+                let _: i32 = tc.__draw_named(generators::integers(), "x", false);
                 tc.note("a note");
                 panic!("intentional");
             });
@@ -227,7 +227,7 @@ fn test_explicit_type_mismatch_panics() {
             let etc = hegel::ExplicitTestCase::new().with_value("x", "42", 42i32);
             etc.run(|tc: &hegel::ExplicitTestCase| {
                 // Try to draw as String instead of i32
-                let _: String = tc.draw_named(generators::text(), "x", false);
+                let _: String = tc.__draw_named(generators::text(), "x", false);
             });
         },
         "type mismatch",
@@ -242,7 +242,7 @@ fn test_explicit_unused_values_panics() {
                 .with_value("x", "true", true)
                 .with_value("y", "false", false);
             etc.run(|tc: &hegel::ExplicitTestCase| {
-                let _: bool = tc.draw_named(generators::booleans(), "x", false);
+                let _: bool = tc.__draw_named(generators::booleans(), "x", false);
                 // y is never drawn
             });
         },
@@ -256,7 +256,7 @@ fn test_explicit_unknown_name_panics() {
         || {
             let etc = hegel::ExplicitTestCase::new().with_value("x", "true", true);
             etc.run(|tc: &hegel::ExplicitTestCase| {
-                let _: bool = tc.draw_named(generators::booleans(), "nonexistent", false);
+                let _: bool = tc.__draw_named(generators::booleans(), "nonexistent", false);
             });
         },
         "no value provided for.*nonexistent",
@@ -269,8 +269,8 @@ fn test_explicit_double_consume_panics() {
         || {
             let etc = hegel::ExplicitTestCase::new().with_value("x", "true", true);
             etc.run(|tc: &hegel::ExplicitTestCase| {
-                let _: bool = tc.draw_named(generators::booleans(), "x", false);
-                let _: bool = tc.draw_named(generators::booleans(), "x", false);
+                let _: bool = tc.__draw_named(generators::booleans(), "x", false);
+                let _: bool = tc.__draw_named(generators::booleans(), "x", false);
             });
         },
         "already consumed",
@@ -288,7 +288,7 @@ fn main() {
     let etc = hegel::ExplicitTestCase::new()
         .with_value("x", "compute()", 42i32);
     etc.run(|tc: &hegel::ExplicitTestCase| {
-        let _: i32 = tc.draw_named(hegel::generators::integers(), "x", false);
+        let _: i32 = tc.__draw_named(hegel::generators::integers(), "x", false);
         panic!("intentional");
     });
 }
@@ -309,7 +309,7 @@ fn main() {
     let etc = hegel::ExplicitTestCase::new()
         .with_value("x", "42", 42i32);
     etc.run(|tc: &hegel::ExplicitTestCase| {
-        let _: i32 = tc.draw_named(hegel::generators::integers(), "x", false);
+        let _: i32 = tc.__draw_named(hegel::generators::integers(), "x", false);
         panic!("intentional");
     });
 }
@@ -335,7 +335,7 @@ fn main() {
     let etc = hegel::ExplicitTestCase::new()
         .with_value("x", "42", 42i32);
     etc.run(|tc: &hegel::ExplicitTestCase| {
-        let _: i32 = tc.draw_named(hegel::generators::integers(), "x", false);
+        let _: i32 = tc.__draw_named(hegel::generators::integers(), "x", false);
         tc.note("important debug info");
         panic!("intentional");
     });

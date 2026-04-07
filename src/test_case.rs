@@ -4,7 +4,7 @@ use crate::protocol::{Connection, SERVER_CRASHED_MESSAGE, Stream};
 use crate::runner::Verbosity;
 use ciborium::Value;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
@@ -66,6 +66,7 @@ pub(crate) struct TestCaseGlobalData {
     test_aborted: bool,
     named_draw_counts: HashMap<String, usize>,
     named_draw_repeatable: HashMap<String, bool>,
+    allocated_display_names: HashSet<String>,
 }
 
 #[derive(Clone)]
@@ -133,6 +134,7 @@ impl TestCase {
                 test_aborted: false,
                 named_draw_counts: HashMap::new(),
                 named_draw_repeatable: HashMap::new(),
+                allocated_display_names: HashSet::new(),
             })),
             local: RefCell::new(TestCaseLocalData {
                 span_depth: 0,
@@ -157,10 +159,10 @@ impl TestCase {
     /// ```
     ///
     /// Note: when run inside a `#[hegel::test]`, `draw()` will typically be
-    /// rewritten to `draw_named()` with an appropriate variable name
+    /// rewritten to `__draw_named()` with an appropriate variable name
     /// in order to give better test output.
     pub fn draw<T: std::fmt::Debug>(&self, generator: impl Generator<T>) -> T {
-        self.draw_named(generator, "unnamed", true)
+        self.__draw_named(generator, "draw", true)
     }
 
     /// Draw a value from a generator with a specific name for output.
@@ -174,10 +176,9 @@ impl TestCase {
     /// - `let name = value;` (when not repeatable)
     /// - `let name_N = value;` (when repeatable)
     ///
-    /// Note: although this is public API and you are welcome to use it,
-    /// it's not really intended for direct use. It is the target that
-    /// `#[hegel::test]` rewrites `draw()` calls to where appropriate.
-    pub fn draw_named<T: std::fmt::Debug>(
+    /// Not intended for direct use. This is the target that `#[hegel::test]` rewrites `draw()`
+    /// calls to where appropriate.
+    pub fn __draw_named<T: std::fmt::Debug>(
         &self,
         generator: impl Generator<T>,
         name: &str,
@@ -257,7 +258,9 @@ impl TestCase {
         match global.named_draw_repeatable.get(name) {
             Some(&prev) if prev != repeatable => {
                 panic!(
-                    "draw_named: name {:?} used with inconsistent repeatable flag (was {}, now {})",
+                    "__draw_named: name {:?} used with inconsistent repeatable flag (was {}, now {}). \
+                    If you have not called __draw_named deliberately yourself, this is likely a bug in \
+                    hegel. Please file a bug report at https://github.com/hegeldev/hegel-rust/issues",
                     name, prev, repeatable
                 );
             }
@@ -274,23 +277,33 @@ impl TestCase {
             .or_insert(0);
         *count += 1;
         let current_count = *count;
-        drop(global);
 
         if !repeatable && current_count > 1 {
             panic!(
-                "draw_named: name {:?} used more than once but repeatable is false",
+                "__draw_named: name {:?} used more than once but repeatable is false. \
+                This is almost certainly a bug in hegel - please report it at https://github.com/hegeldev/hegel-rust/issues",
                 name
             );
         }
 
+        let display_name = if repeatable {
+            let mut candidate = current_count;
+            loop {
+                let name = format!("{}_{}", name, candidate);
+                if global.allocated_display_names.insert(name.clone()) {
+                    break name;
+                }
+                candidate += 1;
+            }
+        } else {
+            let name = name.to_string();
+            global.allocated_display_names.insert(name.clone());
+            name
+        };
+        drop(global);
+
         let local = self.local.borrow();
         let indent = local.indent;
-
-        let display_name = if repeatable {
-            format!("{}_{}", name, current_count)
-        } else {
-            name.to_string()
-        };
 
         (local.on_draw)(&format!(
             "{:indent$}let {} = {:?};",
