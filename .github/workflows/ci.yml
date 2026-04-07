@@ -160,17 +160,27 @@ jobs:
       contents: write  # needed for ratchet auto-update
       pull-requests: write  # needed for creating PRs on main
     steps:
-      # persist-credentials needed for git push in the auto-update step below
       # For fork PRs, head_ref points to a branch that doesn't exist on the base repo,
       # so we fall back to the default ref (the merge commit).
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 # zizmor: ignore[artipacked]
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-        with:
-          ref: ${{ github.head_ref || github.ref }}
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         with:
           persist-credentials: false
+
+      # use an app token so that the commit re-triggers CI. GITHUB_TOKEN pushes don't trigger CI
+      - name: Generate app token
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        id: app-token
+        with:
+          app-id: ${{ vars.HEGEL_RELEASE_APP_ID }}
+          private-key: ${{ secrets.HEGEL_RELEASE_APP_PRIVATE_KEY }}
+          repositories: hegel-rust
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 # zizmor: ignore[artipacked]
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal -c llvm-tools-preview
@@ -189,7 +199,7 @@ jobs:
       - name: Auto-update coverage annotations and ratchet
         if: success() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           if git diff --quiet; then
             echo "No coverage annotation changes needed"
@@ -199,7 +209,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -u
-          git add .github/coverage-ratchet.json
 
           if git diff --cached --quiet; then
             exit 0

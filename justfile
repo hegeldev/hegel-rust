@@ -17,6 +17,7 @@ check-tests-minimal-versions:
 
 format:
     cargo fmt
+    cargo fmt --manifest-path tests/conformance/rust/Cargo.toml
     # also run format-nix if we have nix installed
     @which nix && just format-nix || true
 
@@ -25,12 +26,14 @@ format-nix:
 
 check-format:
     cargo fmt --check
+    cargo fmt --manifest-path tests/conformance/rust/Cargo.toml --check
 
 check-format-nix:
     nix run nixpkgs#nixfmt -- --check nix/flake.nix
 
 check-clippy:
     cargo clippy --all-features --tests -- -D warnings
+    cargo clippy --manifest-path tests/conformance/rust/Cargo.toml -- -D warnings
 
 check-docs:
     cargo +nightly docs-rs
@@ -49,7 +52,7 @@ check-coverage:
 
 check-conformance:
     cargo build --release --manifest-path tests/conformance/rust/Cargo.toml
-    uv run --with 'hegel-core==0.3.0' --with pytest --with hypothesis \
+    uv run --with 'hegel-core==0.3.2' --with pytest --with hypothesis \
         pytest tests/conformance/test_conformance.py
 
 # these aliases are provided as ux improvements for local developers. CI should use the longer

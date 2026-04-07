@@ -2,7 +2,6 @@ use hegel::generators as gs;
 use hegel::{Hegel, Settings};
 use hegel_conformance::{get_test_cases, write};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::env;
 
 #[derive(Deserialize)]

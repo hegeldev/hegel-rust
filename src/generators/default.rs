@@ -1,7 +1,8 @@
 use super::{
-    BoolGenerator, BoxedGenerator, DurationGenerator, FloatGenerator, Generator, HashMapGenerator,
-    IntegerGenerator, OptionalGenerator, TextGenerator, VecGenerator, booleans,
-    collections::ArrayGenerator, durations, floats, hashmaps, integers, optional, text, vecs,
+    BoolGenerator, BoxedGenerator, CharactersGenerator, DurationGenerator, FloatGenerator,
+    Generator, HashMapGenerator, IntegerGenerator, OptionalGenerator, TextGenerator, VecGenerator,
+    booleans, characters, collections::ArrayGenerator, durations, floats, hashmaps, integers,
+    optional, text, vecs,
 };
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -57,6 +58,13 @@ impl DefaultGenerator for String {
     type Generator = TextGenerator;
     fn default_generator() -> Self::Generator {
         text()
+    }
+}
+
+impl DefaultGenerator for char {
+    type Generator = CharactersGenerator;
+    fn default_generator() -> Self::Generator {
+        characters()
     }
 }
 

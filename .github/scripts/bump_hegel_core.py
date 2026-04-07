@@ -46,7 +46,7 @@ def get_releases_in_range(from_version: str, to_version: str) -> list[dict[str, 
     return in_range
 
 
-def bump(version: str) -> None:
+def bump(version: str, protocol_version: str) -> None:
     current_version = get_current_version()
 
     runner = ROOT / "src" / "runner.rs"
@@ -54,6 +54,13 @@ def bump(version: str) -> None:
     text = re.sub(
         r'^const HEGEL_SERVER_VERSION: &str = "[^"]+";',
         f'const HEGEL_SERVER_VERSION: &str = "{version}";',
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    text = re.sub(
+        r"^(const SUPPORTED_PROTOCOL_VERSIONS: \(f64, f64\) = \([^,]+), [^)]+\);",
+        rf"\1, {protocol_version});",
         text,
         count=1,
         flags=re.MULTILINE,
@@ -141,4 +148,4 @@ def bump(version: str) -> None:
 
 
 if __name__ == "__main__":
-    bump(os.environ["NEW_VERSION"])
+    bump(os.environ["NEW_VERSION"], os.environ["NEW_PROTOCOL_VERSION"])

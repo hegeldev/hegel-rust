@@ -66,6 +66,20 @@ pub fn map_insert(value: &mut Value, key: &str, val: impl Into<Value>) {
     entries.push((Value::Text(String::from(key)), val));
 }
 
+// merge the keys of two maps. If both `target` and `source` contain the same key,
+// prefer `source`.
+pub fn map_extend(target: &mut Value, source: Value) {
+    let Value::Map(source_entries) = source else {
+        panic!("expected Value::Map, got {source:?}");
+    };
+    for (k, v) in source_entries {
+        let Value::Text(ref key) = k else {
+            panic!("expected Value::Text, got {k:?}");
+        };
+        map_insert(target, key, v);
+    }
+}
+
 pub fn as_text(value: &Value) -> Option<&str> {
     match value {
         Value::Text(s) => Some(s),

@@ -32,7 +32,7 @@ def test_conformance(subtests):
                 BUILD_DIR / "test_integers", min_value=INT32_MIN, max_value=INT32_MAX
             ),
             FloatConformance(BUILD_DIR / "test_floats"),
-            TextConformance(BUILD_DIR / "test_text"),
+            TextConformance(BUILD_DIR / "test_text", no_surrogates=True),
             BinaryConformance(BUILD_DIR / "test_binary"),
             ListConformance(
                 BUILD_DIR / "test_lists", min_value=INT32_MIN, max_value=INT32_MAX

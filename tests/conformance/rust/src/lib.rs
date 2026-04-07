@@ -28,9 +28,7 @@ pub fn write<T: Serialize>(metrics: &T) {
     // We need interior mutability for the file handle
     if let Some(ref file) = *get_metrics_file() {
         // Clone the file handle to get a mutable reference
-        let mut file = file
-            .try_clone()
-            .unwrap();
+        let mut file = file.try_clone().unwrap();
         let json = serde_json::to_string(metrics).unwrap();
         writeln!(file, "{}", json).unwrap();
     }

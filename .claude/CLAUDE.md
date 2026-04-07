@@ -9,14 +9,14 @@ This is the Rust library for Hegel, a universal property-based testing framework
 ## Build & Test Commands
 
 ```bash
-just check                          # Full CI: check-format + lint + check-test + check-docs
-just test                           # cargo test --all-features
-just lint                           # cargo clippy --all-features --tests -- -D warnings
-just format                         # cargo fmt
-just docs                           # cargo doc --open --all-features --no-deps
-just check-conformance              # pytest conformance tests (requires Python environment)
-just check-coverage                 # cargo llvm-cov --fail-under-lines 30 (requires cargo-llvm-cov + llvm-tools-preview)
-cargo test test_name                # Run single test
+just check                          # run full CI checks
+just test                           # run tests
+just lint                           # run clipy
+just format                         # format
+just docs                           # build and open docs
+just check-conformance              # run python conformance tests
+just check-coverage                 # check coverage (requires cargo-llvm-cov + llvm-tools-preview)
+cargo test test_name                # run a single test
 ```
 
 MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml` and `hegel-derive/Cargo.toml`.
@@ -92,8 +92,10 @@ For enums, it also creates `<Enum><Variant>Generator` for each data variant. Imp
 ### Testing Conventions
 
 - All tests go in `tests/`, never inline in source files. Tests that don't need access to private functions go directly in `tests/` as integration tests. Tests that need access to private functions go in `tests/embedded/`, mirroring the `src/` directory structure (e.g. `src/protocol/packet.rs` → `tests/embedded/protocol/packet_tests.rs`). Embedded tests are included as child modules of their source file via `#[cfg(test)] #[path = "..."] mod tests;`, which gives them access to private items through `use super::*`. This keeps test code out of source files while preserving access to internals that Rust would otherwise forbid.
-- When a test needs a throwaway generator, prefer `generators::booleans()` as the simplest option (unless the test needs a larger value space).
+- Always import generators as `use hegel::generators as gs;` (or `use hegel::generators::{self as gs, Generator};` when the `Generator` trait is needed). Use `gs::` in all generator calls, e.g. `gs::booleans()`, `gs::integers::<i32>()`. This applies to code inside string literals (e.g. `TempRustProject` snippets) as well.
+- When a test needs a throwaway generator, prefer `gs::booleans()` as the simplest option (unless the test needs a larger value space).
 - In test code, prefer `.unwrap()` over `.expect("static message")`. A static expect message rarely adds information beyond what the panic already provides (error type + source location). Only use `.expect()` when the message includes a formatted value that aids debugging (e.g., `.expect(&format!("failed to open {}", path))`).
+- When a return value isn't used, don't bind it to `_` — just call the function as a bare statement. Only use `let _ =` when needed to suppress a `#[must_use]` warning.
 
 ### Code Coverage
 

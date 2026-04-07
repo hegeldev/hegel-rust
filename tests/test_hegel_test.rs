@@ -5,9 +5,28 @@ use common::utils::expect_panic;
 use hegel::TestCase;
 use hegel::generators as gs;
 
+#[test]
+fn test_text_invalid_codec_panics() {
+    expect_panic(
+        || {
+            hegel::Hegel::new(|tc: hegel::TestCase| {
+                tc.draw(gs::text().codec("not-a-real-codec"));
+            })
+            .run();
+        },
+        "not-a-real-codec",
+    );
+}
+
 #[hegel::test]
 fn test_basic_usage(tc: TestCase) {
     tc.draw(gs::booleans());
+}
+
+#[hegel::test]
+fn test_characters(tc: TestCase) {
+    let c: char = tc.draw(gs::characters());
+    assert!(c.len_utf8() > 0);
 }
 
 #[hegel::test(test_cases = 10)]

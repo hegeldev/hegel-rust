@@ -38,6 +38,31 @@ fn test_as_bool() {
 }
 
 #[test]
+fn test_map_extend() {
+    let mut target = cbor_map! { "a" => 1, "b" => 2 };
+    let source = cbor_map! { "b" => 20, "c" => 3 };
+    map_extend(&mut target, source);
+    assert_eq!(as_u64(map_get(&target, "a").unwrap()), Some(1));
+    assert_eq!(as_u64(map_get(&target, "b").unwrap()), Some(20));
+    assert_eq!(as_u64(map_get(&target, "c").unwrap()), Some(3));
+}
+
+#[test]
+#[should_panic(expected = "expected Value::Map")]
+fn test_map_extend_non_map_source() {
+    let mut target = cbor_map! { "a" => 1 };
+    map_extend(&mut target, Value::from(42));
+}
+
+#[test]
+#[should_panic(expected = "expected Value::Text")]
+fn test_map_extend_non_text_key() {
+    let mut target = cbor_map! { "a" => 1 };
+    let source = Value::Map(vec![(Value::from(42), Value::from("val"))]);
+    map_extend(&mut target, source);
+}
+
+#[test]
 fn test_cbor_serialize() {
     let v = cbor_serialize(&42i32);
     assert_eq!(as_u64(&v), Some(42));

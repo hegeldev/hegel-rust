@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{Expr, FnArg, Ident, ItemFn, Token};
+use syn::visit_mut::VisitMut;
+use syn::{Expr, FnArg, Ident, ItemFn, Pat, Token};
 
 /// A single named argument in a `#[hegel::test(...)]` expression.
 struct SettingArg {
@@ -59,6 +62,124 @@ impl Parse for TestArgs {
     }
 }
 
+/// Extract a simple identifier from a pattern, handling type annotations.
+///
+/// - tc -> Some("tc")
+/// - tc: TestCase -> Some("tc")
+/// - (a, b) -> None
+fn extract_ident_from_pat(pat: &Pat) -> Option<String> {
+    match pat {
+        Pat::Ident(pat_ident) => Some(pat_ident.ident.to_string()),
+        Pat::Type(pat_type) => extract_ident_from_pat(&pat_type.pat),
+        _ => None,
+    }
+}
+
+/// Check if a `let` binding is of the form `let <ident> = <test_case_ident>.draw(<one_arg>)`.
+fn is_test_case_draw_binding(node: &syn::Local, test_case_ident: &str) -> Option<String> {
+    let var_name = extract_ident_from_pat(&node.pat)?;
+
+    let init = node.init.as_ref()?;
+    let method_call = match &*init.expr {
+        Expr::MethodCall(mc) => mc,
+        _ => return None,
+    };
+
+    if method_call.method != "draw" || method_call.args.len() != 1 {
+        return None;
+    }
+
+    let is_tc = match &*method_call.receiver {
+        Expr::Path(path) => path.path.is_ident(test_case_ident),
+        _ => false,
+    };
+    if !is_tc {
+        return None;
+    }
+
+    Some(var_name)
+}
+
+/// Pass 1: Collect all draw variable names and determine per-name repeatable flags.
+///
+/// If any use of a name appears in a repeatable context (nested block, closure),
+/// ALL uses of that name become repeatable. This ensures the runtime never sees
+/// inconsistent repeatable flags for the same name.
+struct DrawNameCollector {
+    test_case_ident: String,
+    block_depth: usize,
+    name_flags: HashMap<String, bool>,
+}
+
+impl VisitMut for DrawNameCollector {
+    fn visit_block_mut(&mut self, node: &mut syn::Block) {
+        self.block_depth += 1;
+        syn::visit_mut::visit_block_mut(self, node);
+        self.block_depth -= 1;
+    }
+
+    fn visit_expr_closure_mut(&mut self, node: &mut syn::ExprClosure) {
+        self.block_depth += 1;
+        syn::visit_mut::visit_expr_closure_mut(self, node);
+        self.block_depth -= 1;
+    }
+
+    fn visit_item_fn_mut(&mut self, _node: &mut syn::ItemFn) {}
+
+    fn visit_local_mut(&mut self, node: &mut syn::Local) {
+        syn::visit_mut::visit_local_mut(self, node);
+
+        if let Some(var_name) = is_test_case_draw_binding(node, &self.test_case_ident) {
+            let repeatable = self.block_depth > 0 || self.name_flags.contains_key(&var_name);
+            let entry = self.name_flags.entry(var_name).or_insert(false);
+            if repeatable {
+                *entry = true;
+            }
+        }
+    }
+}
+
+/// Pass 2: Rewrite `let x = tc.draw(gen)` to `let x = tc.__draw_named(gen, "x", repeatable)`.
+///
+/// Uses the pre-computed name_flags from DrawNameCollector so that every use of
+/// a given name gets the same repeatable flag.
+struct DrawRewriter {
+    test_case_ident: String,
+    name_flags: HashMap<String, bool>,
+}
+
+impl VisitMut for DrawRewriter {
+    fn visit_item_fn_mut(&mut self, _node: &mut syn::ItemFn) {}
+
+    fn visit_local_mut(&mut self, node: &mut syn::Local) {
+        syn::visit_mut::visit_local_mut(self, node);
+
+        let var_name = match is_test_case_draw_binding(node, &self.test_case_ident) {
+            Some(name) => name,
+            None => return,
+        };
+
+        let repeatable = self.name_flags.get(&var_name).copied().unwrap_or(false);
+
+        let init = node.init.as_mut().unwrap();
+        let method_call = match &mut *init.expr {
+            Expr::MethodCall(mc) => mc,
+            _ => unreachable!(),
+        };
+
+        let span = method_call.method.span();
+        method_call.method = Ident::new("__draw_named", span);
+        method_call.args.push(Expr::Lit(syn::ExprLit {
+            attrs: vec![],
+            lit: syn::Lit::Str(syn::LitStr::new(&var_name, span)),
+        }));
+        method_call.args.push(Expr::Lit(syn::ExprLit {
+            attrs: vec![],
+            lit: syn::Lit::Bool(syn::LitBool::new(repeatable, span)),
+        }));
+    }
+}
+
 pub fn expand_test(attr: proc_macro2::TokenStream, item: proc_macro2::TokenStream) -> TokenStream {
     let test_args: TestArgs = if attr.is_empty() {
         TestArgs {
@@ -110,7 +231,40 @@ pub fn expand_test(attr: proc_macro2::TokenStream, item: proc_macro2::TokenStrea
         }
     }
 
-    let body = &func.block;
+    // Rewrite `let x = tc.draw(gen)` -> `let x = tc.__draw_named(gen, "x", repeatable)`
+    //
+    // Two-pass approach:
+    //   1. Collect all draw variable names and determine per-name repeatable flags.
+    //      If any use of a name is in a nested block/closure, all uses are repeatable.
+    //   2. Rewrite draws using the computed flags.
+    //
+    // We visit the function body's statements directly (not the block itself) so that
+    // the outermost block doesn't count as a nesting level.
+    let body = {
+        let mut body = (*func.block).clone();
+        if let Some(test_case_name) = extract_ident_from_pat(param_pat) {
+            // Pass 1: collect names
+            let mut collector = DrawNameCollector {
+                test_case_ident: test_case_name.clone(),
+                block_depth: 0,
+                name_flags: HashMap::new(),
+            };
+            for stmt in &mut body.stmts {
+                collector.visit_stmt_mut(stmt);
+            }
+
+            // Pass 2: rewrite
+            let mut rewriter = DrawRewriter {
+                test_case_ident: test_case_name,
+                name_flags: collector.name_flags,
+            };
+            for stmt in &mut body.stmts {
+                rewriter.visit_stmt_mut(stmt);
+            }
+        }
+        body
+    };
+
     let test_name = func.sig.ident.to_string();
 
     let settings_args_chain: Vec<TokenStream> = test_args

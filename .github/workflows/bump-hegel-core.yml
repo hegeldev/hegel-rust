@@ -32,5 +32,6 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           NEW_VERSION: ${{ github.event.client_payload.version }}
+          NEW_PROTOCOL_VERSION: ${{ github.event.client_payload.protocol_version }}
           HEGEL_RELEASE_APP_ID: ${{ vars.HEGEL_RELEASE_APP_ID }}
         run: python .github/scripts/bump_hegel_core.py
