@@ -52,7 +52,7 @@ check-coverage:
 
 check-conformance:
     cargo build --release --manifest-path tests/conformance/rust/Cargo.toml
-    uv run --with 'hegel-core==0.3.0' --with pytest --with hypothesis \
+    uv run --with 'hegel-core==0.3.2' --with pytest --with hypothesis \
         pytest tests/conformance/test_conformance.py
 
 # these aliases are provided as ux improvements for local developers. CI should use the longer
