@@ -90,6 +90,42 @@ jobs:
       - name: Run tests with all features
         run: just check-tests-all-features
 
+  test-min-protocol:
+    name: test-min-protocol
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just uv
+
+      - id: min-version
+        run: |
+          MIN_PROTOCOL=$(grep -oE 'SUPPORTED_PROTOCOL_VERSIONS.*\(([0-9.]+)' src/runner.rs | grep -oE '[0-9.]+$')
+
+          VERSIONS_JSON=$(curl -sf https://hegel.dev/api/versions.json)
+
+          MIN_CORE=$(echo "$VERSIONS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['$MIN_PROTOCOL'])")
+          echo "Minimum supported protocol version: $MIN_PROTOCOL"
+          echo "Minimum hegel-core version: $MIN_CORE"
+          echo "min_core=$MIN_CORE" >> "$GITHUB_OUTPUT"
+
+      - name: Run tests with minimum protocol version
+        env:
+          MIN_CORE: ${{ steps.min-version.outputs.min_core }}
+        run: |
+          uv tool install "hegel-core==$MIN_CORE"
+          HEGEL_SERVER_COMMAND=$(which hegel) just check-tests
+
   docs:
     name: docs
     runs-on: ubuntu-latest
