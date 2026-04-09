@@ -95,8 +95,8 @@ impl<T: Integer + serde::de::DeserializeOwned + serde::Serialize + Send + Sync +
 
 /// Generate integers of type `T`.
 ///
-/// Bounds default to the full range of `T`. Use `min_value` and `max_value`
-/// to constrain them.
+/// Bounds default to the full range of `T`. See [`IntegerGenerator`] for
+/// builder methods.
 pub fn integers<
     T: Integer + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static,
 >() -> IntegerGenerator<T> {
@@ -226,8 +226,8 @@ impl<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + '
 
 /// Generate floating-point values of type `T`.
 ///
-/// By default, may produce NaN and infinity. Use `min_value`, `max_value`,
-/// `allow_nan`, and `allow_infinity` to constrain the output.
+/// By default, may produce NaN and infinity. See [`FloatGenerator`] for
+/// builder methods.
 pub fn floats<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static>()
 -> FloatGenerator<T> {
     FloatGenerator {

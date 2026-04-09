@@ -6,7 +6,6 @@ use std::time::Duration;
 ///
 /// Internally generates nanoseconds as a `u64`, so the maximum representable
 /// duration is approximately 584 years (`u64::MAX` nanoseconds).
-/// Use `min_value` and `max_value` to constrain the range.
 pub struct DurationGenerator {
     min_nanos: u64,
     max_nanos: u64,
@@ -54,9 +53,7 @@ impl Generator<Duration> for DurationGenerator {
 
 /// Generate [`Duration`] values.
 ///
-/// By default, generates durations from zero up to `u64::MAX` nanoseconds
-/// (approximately 584 years). Use `min_value` and `max_value` to constrain
-/// the range.
+/// See [`DurationGenerator`] for builder methods.
 ///
 /// # Example
 ///

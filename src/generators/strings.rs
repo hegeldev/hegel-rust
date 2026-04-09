@@ -204,6 +204,8 @@ impl Generator<String> for TextGenerator {
 }
 
 /// Generate arbitrary Unicode text strings.
+///
+/// See [`TextGenerator`] for builder methods.
 pub fn text() -> TextGenerator {
     TextGenerator {
         min_size: 0,
@@ -307,6 +309,8 @@ impl Generator<char> for CharactersGenerator {
 }
 
 /// Generate single Unicode characters ([`char`]).
+///
+/// See [`CharactersGenerator`] for builder methods.
 pub fn characters() -> CharactersGenerator {
     CharactersGenerator {
         char_fields: CharacterFields::new(),
@@ -371,6 +375,8 @@ impl Generator<String> for RegexGenerator {
 }
 
 /// Generate strings matching a regex pattern.
+///
+/// See [`RegexGenerator`] for builder methods.
 // nocov start
 pub fn from_regex(pattern: &str) -> RegexGenerator {
     RegexGenerator {
@@ -436,6 +442,8 @@ impl Generator<Vec<u8>> for BinaryGenerator {
 }
 
 /// Generate arbitrary byte sequences (`Vec<u8>`).
+///
+/// See [`BinaryGenerator`] for builder methods.
 pub fn binary() -> BinaryGenerator {
     BinaryGenerator {
         min_size: 0,
@@ -535,6 +543,8 @@ impl Generator<String> for DomainGenerator {
 }
 
 /// Generate domain name strings.
+///
+/// See [`DomainGenerator`] for builder methods.
 pub fn domains() -> DomainGenerator {
     DomainGenerator { max_length: 255 }
 }
@@ -602,6 +612,8 @@ impl Generator<String> for IpAddressGenerator {
 }
 
 /// Generate IP address strings (IPv4 or IPv6).
+///
+/// See [`IpAddressGenerator`] for builder methods.
 // nocov start
 pub fn ip_addresses() -> IpAddressGenerator {
     IpAddressGenerator { version: None }

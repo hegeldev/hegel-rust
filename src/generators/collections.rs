@@ -84,6 +84,8 @@ where
 }
 
 /// Generate vectors with elements from the given generator.
+///
+/// See [`VecGenerator`] for builder methods.
 pub fn vecs<T, G: Generator<T>>(elements: G) -> VecGenerator<G, T> {
     VecGenerator {
         elements,
@@ -174,6 +176,8 @@ where
 }
 
 /// Generate hash sets with elements from the given generator.
+///
+/// See [`HashSetGenerator`] for builder methods.
 pub fn hashsets<T, G: Generator<T>>(elements: G) -> HashSetGenerator<G, T> {
     HashSetGenerator {
         elements,
@@ -290,6 +294,8 @@ where
 }
 
 /// Generate hash maps.
+///
+/// See [`HashMapGenerator`] for builder methods.
 ///
 /// # Example
 ///
@@ -438,6 +444,8 @@ impl Generator<Value> for FixedDictGenerator<'_> {
 }
 
 /// Create a generator for dictionaries with fixed keys.
+///
+/// See [`FixedDictBuilder`] for builder methods.
 ///
 /// # Example
 ///
