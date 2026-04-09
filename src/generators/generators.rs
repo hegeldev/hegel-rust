@@ -123,7 +123,7 @@ pub trait Generator<T>: Send + Sync {
     /// ```no_run
     /// use hegel::generators::{self as gs, Generator};
     ///
-    /// // Generate only odd integers
+    /// // Generate integers, then filter out the even ones
     /// let odds = gs::integers::<i32>().filter(|n| n % 2 != 0);
     /// ```
     fn filter<F>(self, predicate: F) -> Filtered<T, F, Self>
