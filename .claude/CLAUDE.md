@@ -19,7 +19,7 @@ just check-coverage                 # check coverage (requires cargo-llvm-cov + 
 cargo test test_name                # run a single test
 ```
 
-MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml` and `hegel-derive/Cargo.toml`.
+MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml` and `hegel-macros/Cargo.toml`.
 
 ## Crate Structure
 
@@ -28,7 +28,7 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 - `src/cbor_helpers.rs` — Macros and helpers for `ciborium::Value` (`cbor_map!`, `cbor_array!`, `map_get`, etc.)
 - `src/runner.rs` — Spawns hegel CLI, manages socket server
 - `src/generators/` — All generator implementations (`mod.rs` has the `Generate` trait + `TestCaseData`)
-- `hegel-derive/` — Proc macro crate for `#[derive(Generate)]` (sub-crate with its own `Cargo.toml`)
+- `hegel-macros/` — Proc macro crate for `#[derive(Generate)]` (sub-crate with its own `Cargo.toml`)
 - `build.rs` — Locates `hegel` binary on PATH, exports `HEGEL_BINARY_PATH` env var (falls back to `"hegel"`)
 
 ### Feature Flags
@@ -83,9 +83,9 @@ Server-managed collections use `new_collection`/`collection_more`/`collection_re
 
 ### Derive Macro
 
-`#[derive(Generate)]` (in `hegel-derive/`) creates a `<Type>Generator` struct with:
+`#[derive(Generate)]` (in `hegel-macros/`) creates a `<Type>Generator` struct with:
 - `new()`: Uses `DefaultGenerator` for all fields
-- `with_<field>(gen)`: Builder methods to customize field generators
+- `<field>(gen)`: Builder methods to customize field generators
 
 For enums, it also creates `<Enum><Variant>Generator` for each data variant. Implementation is split across `struct_gen.rs`, `enum_gen.rs`, and `utils.rs`.
 
@@ -106,11 +106,3 @@ This project enforces 100% line coverage for new code. You may not add `// nocov
 ### Conformance Tests
 
 Located in `tests/conformance/`. Rust test binaries in `tests/conformance/rust/src/bin/` are invoked by a Python test runner (`tests/conformance/test_conformance.py`) that validates generators produce values matching their declared constraints.
-
-### Creating Pull Requests
-
-Use the `create-pr` skill, which handles rebasing, RELEASE.md, draft creation, and CI watching. Run the `self-review` skill first.
-
-### Writing Changelog Entries
-
-When writing a `RELEASE.md`, read `.claude/skills/create-pr/references/changelog-guidance.md` for detailed style guidance.

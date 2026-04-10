@@ -1,3 +1,8 @@
+---
+name: changelog
+description: "Changelog style guide for writing RELEASE.md files. Use when creating or reviewing RELEASE.md, writing changelog entries, or preparing a PR that needs release notes."
+---
+
 # Changelog Style Guide
 
 This guide describes the style for writing `RELEASE.md` files for hegel-rust. The style is modeled on the [Hypothesis changelog](https://hypothesis.readthedocs.io/en/latest/changes.html).
