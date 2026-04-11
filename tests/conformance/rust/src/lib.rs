@@ -1,5 +1,6 @@
 //! Metrics utilities for conformance tests.
 
+use hegel::generators::{BoxedGenerator, Generator};
 use serde::Serialize;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -21,6 +22,14 @@ pub fn get_test_cases() -> u64 {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(50)
+}
+
+/// Wrap a generator in a trivial composite so `as_basic()` returns `None`,
+/// forcing the compositional fallback path.
+pub fn make_non_basic<T: std::fmt::Debug + 'static>(
+    generator: impl Generator<T> + 'static,
+) -> BoxedGenerator<'static, T> {
+    hegel::compose!(|tc| { tc.draw(&generator) }).boxed()
 }
 
 /// Write metrics as a JSON line to the metrics file.

@@ -1,6 +1,6 @@
 use hegel::generators as gs;
 use hegel::{Hegel, Settings};
-use hegel_conformance::{get_test_cases, write};
+use hegel_conformance::{get_test_cases, make_non_basic, write};
 use serde::{Deserialize, Serialize};
 use std::env;
 
@@ -8,6 +8,8 @@ use std::env;
 struct Params {
     min_size: usize,
     max_size: Option<usize>,
+    #[serde(default)]
+    mode: String,
 }
 
 #[derive(Serialize)]
@@ -32,7 +34,11 @@ fn main() {
         if let Some(max) = params.max_size {
             g = g.max_size(max);
         }
-        let value = tc.draw(g);
+        let value = if params.mode == "non_basic" {
+            tc.draw(make_non_basic(g))
+        } else {
+            tc.draw(g)
+        };
         write(&Metrics {
             length: value.len(),
         });
