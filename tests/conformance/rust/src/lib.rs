@@ -27,7 +27,7 @@ pub fn get_test_cases() -> u64 {
 /// Wrap a generator in a trivial composite so `as_basic()` returns `None`,
 /// forcing the compositional fallback path.
 pub fn make_non_basic<T: std::fmt::Debug + 'static>(
-    generator: impl Generator<T> + Send + Sync + 'static,
+    generator: impl Generator<T> + 'static,
 ) -> BoxedGenerator<'static, T> {
     hegel::compose!(|tc| { tc.draw(&generator) }).boxed()
 }
