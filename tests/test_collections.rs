@@ -56,6 +56,51 @@ fn test_vec_unique_with_min_size(tc: TestCase) {
     assert_eq!(set.len(), vec.len());
 }
 
+#[hegel::composite]
+fn composite_integer(tc: TestCase) -> i32 {
+    tc.draw(gs::integers())
+}
+
+#[hegel::test]
+fn test_vec_unique_composite(tc: TestCase) {
+    let max_size: usize = tc.draw(gs::integers().min_value(0).max_value(50));
+    let vec: Vec<i32> = tc.draw(
+        gs::vecs(composite_integer())
+            .max_size(max_size)
+            .unique(true),
+    );
+
+    let set: HashSet<_> = vec.iter().collect();
+    assert_eq!(set.len(), vec.len());
+}
+
+#[hegel::test]
+fn test_vec_unique_false(tc: TestCase) {
+    // Verify that .unique(false) unsets uniqueness (e.g. after .unique(true))
+    let vec: Vec<bool> = tc.draw(
+        gs::vecs(gs::booleans())
+            .min_size(2)
+            .unique(true)
+            .unique(false),
+    );
+    assert!(vec.len() >= 2);
+}
+
+#[hegel::test]
+fn test_vec_unique_composite_with_min_size(tc: TestCase) {
+    let min_size: usize = tc.draw(gs::integers().min_value(0).max_value(20));
+    let vec: Vec<i32> = tc.draw(
+        gs::vecs(composite_integer())
+            .min_size(min_size)
+            .unique(true),
+    );
+
+    assert!(vec.len() >= min_size);
+
+    let set: HashSet<_> = vec.iter().collect();
+    assert_eq!(set.len(), vec.len());
+}
+
 #[hegel::test]
 fn test_vec_with_mapped_elements(tc: TestCase) {
     let vec: Vec<i32> = tc.draw(
