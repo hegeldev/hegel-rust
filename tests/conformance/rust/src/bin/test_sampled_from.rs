@@ -1,14 +1,12 @@
 use hegel::generators as gs;
 use hegel::{Hegel, Settings};
-use hegel_conformance::{get_test_cases, make_non_basic, write};
+use hegel_conformance::{get_test_cases, write};
 use serde::{Deserialize, Serialize};
 use std::env;
 
 #[derive(Deserialize)]
 struct Params {
     options: Vec<i32>,
-    #[serde(default)]
-    mode: String,
 }
 
 #[derive(Serialize)]
@@ -30,11 +28,7 @@ fn main() {
 
     Hegel::new(move |tc| {
         let g = gs::sampled_from(params.options.clone());
-        let value = if params.mode == "non_basic" {
-            tc.draw(make_non_basic(g))
-        } else {
-            tc.draw(g)
-        };
+        let value = tc.draw(g);
         write(&Metrics { value });
     })
     .settings(Settings::new().test_cases(get_test_cases()))

@@ -1,6 +1,6 @@
 use hegel::generators as gs;
 use hegel::{Hegel, Settings};
-use hegel_conformance::{get_test_cases, make_non_basic, write};
+use hegel_conformance::{get_test_cases, write};
 use serde::{Deserialize, Serialize};
 use std::env;
 
@@ -15,8 +15,6 @@ struct Params {
     exclude_categories: Option<Vec<String>>,
     include_characters: Option<String>,
     exclude_characters: Option<String>,
-    #[serde(default)]
-    mode: String,
 }
 
 #[derive(Serialize)]
@@ -64,11 +62,7 @@ fn main() {
         if let Some(ref chars) = params.exclude_characters {
             g = g.exclude_characters(chars);
         }
-        let value = if params.mode == "non_basic" {
-            tc.draw(make_non_basic(g))
-        } else {
-            tc.draw(g)
-        };
+        let value = tc.draw(g);
         let codepoints: Vec<u32> = value.chars().map(|c| c as u32).collect();
         write(&Metrics { codepoints });
     })
