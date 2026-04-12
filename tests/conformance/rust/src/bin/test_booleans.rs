@@ -9,8 +9,6 @@ struct Metrics {
 }
 
 fn main() {
-    // booleans takes no params, so we ignore argv[1]
-
     Hegel::new(|tc| {
         let value = tc.draw(gs::booleans());
         write(&Metrics { value });

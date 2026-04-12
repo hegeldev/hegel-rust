@@ -1,6 +1,6 @@
 use hegel::generators as gs;
 use hegel::{Hegel, Settings};
-use hegel_conformance::{get_test_cases, write};
+use hegel_conformance::{get_test_cases, maybe_non_basic, write};
 use serde::{Deserialize, Serialize};
 use std::env;
 
@@ -13,6 +13,7 @@ struct Params {
     max_key: i32,
     min_value: i32,
     max_value: i32,
+    mode: String,
 }
 
 #[derive(Serialize)]
@@ -46,12 +47,18 @@ fn main() {
         match params.key_type.as_str() {
             "integer" => {
                 let hashmap_gen = gs::hashmaps(
-                    gs::integers::<i32>()
-                        .min_value(params.min_key)
-                        .max_value(params.max_key),
-                    gs::integers::<i32>()
-                        .min_value(params.min_value)
-                        .max_value(params.max_value),
+                    maybe_non_basic(
+                        gs::integers::<i32>()
+                            .min_value(params.min_key)
+                            .max_value(params.max_key),
+                        &params.mode,
+                    ),
+                    maybe_non_basic(
+                        gs::integers::<i32>()
+                            .min_value(params.min_value)
+                            .max_value(params.max_value),
+                        &params.mode,
+                    ),
                 )
                 .min_size(params.min_size)
                 .max_size(params.max_size);
@@ -72,10 +79,13 @@ fn main() {
             }
             "string" => {
                 let hashmap_gen = gs::hashmaps(
-                    gs::text(),
-                    gs::integers::<i32>()
-                        .min_value(params.min_value)
-                        .max_value(params.max_value),
+                    maybe_non_basic(gs::text(), &params.mode),
+                    maybe_non_basic(
+                        gs::integers::<i32>()
+                            .min_value(params.min_value)
+                            .max_value(params.max_value),
+                        &params.mode,
+                    ),
                 )
                 .min_size(params.min_size)
                 .max_size(params.max_size);
