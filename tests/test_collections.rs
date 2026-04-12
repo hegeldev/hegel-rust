@@ -79,6 +79,18 @@ fn composite_integer(tc: TestCase) -> i32 {
     tc.draw(gs::integers())
 }
 
+// explicit regression test for https://github.com/hegeldev/hegel-rust/issues/179
+#[hegel::composite]
+fn composite_u8(tc: TestCase) -> u8 {
+    tc.draw(gs::integers())
+}
+
+#[hegel::test]
+fn test_vec_unique_composite_u8(tc: TestCase) {
+    let vec: Vec<u8> = tc.draw(gs::vecs(composite_u8()).unique(true));
+    assert_all_unique(&vec);
+}
+
 #[hegel::test]
 fn test_vec_unique_composite(tc: TestCase) {
     let max_size: usize = tc.draw(gs::integers());
