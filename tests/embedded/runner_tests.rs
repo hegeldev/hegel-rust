@@ -6,6 +6,48 @@ fn test_settings_verbosity() {
 }
 
 #[test]
+fn test_is_in_ci_some_expected_variant() {
+    // Removing "CI" (a None-type entry) forces the iterator to continue and
+    // evaluate the Some("true") entries such as TF_BUILD and GITHUB_ACTIONS,
+    // exercising the `Some(expected)` match arm in is_in_ci().
+    let ci = std::env::var_os("CI");
+    unsafe {
+        std::env::remove_var("CI");
+        std::env::set_var("TF_BUILD", "true");
+    }
+    let result = is_in_ci();
+    unsafe {
+        std::env::remove_var("TF_BUILD");
+        if let Some(val) = ci {
+            std::env::set_var("CI", val);
+        }
+    }
+    assert!(
+        result,
+        "TF_BUILD=true should be detected as a CI environment"
+    );
+}
+
+#[test]
+fn test_settings_new_in_ci_disables_database() {
+    // Temporarily set a CI env var so is_in_ci() returns true.
+    // Using TEAMCITY_VERSION (checked with None, i.e. any value suffices).
+    let key = "TEAMCITY_VERSION";
+    let had_key = std::env::var_os(key).is_some();
+    unsafe {
+        std::env::set_var(key, "1");
+    }
+    let settings = Settings::new();
+    if !had_key {
+        unsafe {
+            std::env::remove_var(key);
+        }
+    }
+    assert_eq!(settings.database, Database::Disabled);
+    assert!(settings.derandomize);
+}
+
+#[test]
 fn test_wait_for_exit_child_exits() {
     let mut child = Command::new("true").spawn().unwrap();
     let result = wait_for_exit(&mut child, Duration::from_secs(5));
@@ -173,4 +215,19 @@ fn test_parse_version_non_numeric_minor() {
 #[should_panic(expected = "expected 'major.minor' format")]
 fn test_parse_version_empty_string() {
     parse_version("");
+}
+
+#[test]
+fn test_protocol_debug_true_when_env_set() {
+    // Set the env var BEFORE the LazyLock is first accessed in this binary.
+    // No other test in the lib binary touches PROTOCOL_DEBUG, so this is the
+    // first access and the closure evaluates with the env var present.
+    // This exercises the "1" | "true" arm of the matches! macro.
+    unsafe {
+        std::env::set_var("HEGEL_PROTOCOL_DEBUG", "true");
+    }
+    assert!(*PROTOCOL_DEBUG);
+    unsafe {
+        std::env::remove_var("HEGEL_PROTOCOL_DEBUG");
+    }
 }
