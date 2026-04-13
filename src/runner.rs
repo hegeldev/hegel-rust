@@ -394,7 +394,7 @@ impl TestRunner for ServerTestRunner {
             "derandomize" => settings.derandomize
         };
         let db_value = match &settings.database {
-            Database::Unset => Option::None,
+            Database::Unset => Option::None, // nocov
             Database::Disabled => Some(Value::Null),
             Database::Path(s) => Some(Value::Text(s.clone())),
         };
@@ -942,7 +942,7 @@ impl Settings {
             database: if in_ci {
                 Database::Disabled
             } else {
-                Database::Unset
+                Database::Unset // nocov
             },
             suppress_health_check: Vec::new(),
         }
