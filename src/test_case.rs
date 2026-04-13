@@ -35,6 +35,7 @@ fn panic_on_data_source_error(e: DataSourceError) -> ! {
     match e {
         DataSourceError::StopTest => panic!("{}", STOP_TEST_STRING),
         DataSourceError::Assume => panic!("{}", ASSUME_FAIL_STRING), // nocov
+        DataSourceError::ServerError(msg) => panic!("{}", msg),
     }
 }
 

@@ -1,3 +1,4 @@
+use hegel::TestCase;
 use hegel::generators::{self as gs, Generator};
 
 #[test]
@@ -184,4 +185,14 @@ fn test_sampled_from_empty() {
 #[should_panic(expected = "one_of requires at least one generator")]
 fn test_one_of_empty() {
     let _g = gs::one_of::<i32>(vec![]);
+}
+
+// --- server-side error handling ---
+
+#[hegel::test]
+#[should_panic(expected = "InvalidArgument")]
+fn test_server_invalid_argument_is_reported(tc: TestCase) {
+    // The surrogate codepoint range (0xD800..=0xDFFF) has no valid characters.
+    // The client doesn't catch this, but the server returns InvalidArgument.
+    let _: char = tc.draw(gs::characters().min_codepoint(0xD800).max_codepoint(0xD800));
 }

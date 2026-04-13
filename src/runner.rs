@@ -115,13 +115,11 @@ impl ServerBackend {
                     self.stream.borrow_mut().mark_closed();
                     self.aborted.set(true);
                     Err(DataSourceError::StopTest)
-                // nocov start
                 } else if self.connection.server_has_exited() {
-                    panic!("{}", SERVER_CRASHED_MESSAGE);
+                    panic!("{}", SERVER_CRASHED_MESSAGE); // nocov
                 } else {
-                    panic!("Failed to communicate with Hegel: {}", e);
+                    Err(DataSourceError::ServerError(e.to_string()))
                 }
-                // nocov end
             }
         }
     }

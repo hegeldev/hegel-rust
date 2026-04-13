@@ -9,6 +9,8 @@ pub enum DataSourceError {
     /// The backend rejected the current draw (e.g. a generated float could
     /// not be represented at the requested width).
     Assume,
+    /// The backend returned an error (e.g. invalid arguments, internal error).
+    ServerError(String),
 }
 
 impl std::fmt::Display for DataSourceError {
@@ -18,6 +20,7 @@ impl std::fmt::Display for DataSourceError {
                 write!(f, "Backend ran out of data for this test case (StopTest)")
             }
             DataSourceError::Assume => write!(f, "Backend rejected the current draw (Assume)"),
+            DataSourceError::ServerError(msg) => write!(f, "{}", msg),
         }
     }
 }
