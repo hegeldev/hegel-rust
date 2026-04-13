@@ -140,9 +140,9 @@ def release() -> None:
     set_macros_dep_version(ROOT / "Cargo.toml", new_version)
 
     # regenerate lockfiles after version bump
-    subprocess.run(["cargo", "generate-lockfile"], check=True, cwd=ROOT)
+    subprocess.run(["cargo", "update", "--workspace"], check=True, cwd=ROOT)
     subprocess.run(
-        ["cargo", "generate-lockfile"],
+        ["cargo", "update", "--workspace"],
         check=True,
         cwd=(ROOT / "tests" / "conformance" / "rust"),
     )

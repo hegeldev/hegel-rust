@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
-const SUPPORTED_PROTOCOL_VERSIONS: (f64, f64) = (0.9, 0.9);
-const HEGEL_SERVER_VERSION: &str = "0.3.2";
+const SUPPORTED_PROTOCOL_VERSIONS: (&str, &str) = ("0.10", "0.10");
+const HEGEL_SERVER_VERSION: &str = "0.4.0";
 const HEGEL_SERVER_COMMAND_ENV: &str = "HEGEL_SERVER_COMMAND";
 const HEGEL_SERVER_DIR: &str = ".hegel";
 static SERVER_LOG_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -23,6 +23,21 @@ static LOG_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static SESSION: std::sync::OnceLock<HegelSession> = std::sync::OnceLock::new();
 
 static PANIC_HOOK_INIT: Once = Once::new();
+
+/// Parse a "major.minor" version string into a comparable tuple.
+fn parse_version(s: &str) -> (u32, u32) {
+    let parts: Vec<&str> = s.split('.').collect();
+    if parts.len() != 2 {
+        panic!("invalid version string '{s}': expected 'major.minor' format");
+    }
+    let major = parts[0]
+        .parse()
+        .unwrap_or_else(|_| panic!("invalid major version in '{s}'"));
+    let minor = parts[1]
+        .parse()
+        .unwrap_or_else(|_| panic!("invalid minor version in '{s}'"));
+    (major, minor)
+}
 
 /// A persistent connection to the hegel server subprocess.
 ///
@@ -88,18 +103,14 @@ impl HegelSession {
                 panic!("Bad handshake response: {decoded:?}"); // nocov
             }
         };
-        let version: f64 = server_version.parse().unwrap_or_else(|_| {
-            let _ = child.kill(); // nocov
-            panic!("Bad version number: {server_version}"); // nocov
-        });
-
         let (lo, hi) = SUPPORTED_PROTOCOL_VERSIONS;
         // nocov start
-        if !(lo <= version && version <= hi) {
+        let version = parse_version(server_version);
+        if version < parse_version(lo) || version > parse_version(hi) {
             let _ = child.kill();
             panic!(
                 "hegel-rust supports protocol versions {lo} through {hi}, but \
-                 the connected server is using protocol version {version}. Upgrading \
+                 the connected server is using protocol version {server_version}. Upgrading \
                  hegel-rust or downgrading hegel-core might help."
             );
             // nocov end

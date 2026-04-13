@@ -86,17 +86,17 @@ impl From<ciborium::Value> for HegelValue {
                 let result = -1i128 - n as i128;
                 HegelValue::BigInt(result.to_string())
             }
-            ciborium::Value::Tag(6, inner) => {
-                // Hegel encodes strings as tag 6, encoded as raw UTF-8 bytes.
+            ciborium::Value::Tag(91, inner) => {
+                // Hegel encodes strings as tag 91, encoded as raw UTF-8 bytes.
                 // The exception is Hegel allows surrogate code points over the wire.
                 //
                 // However, hegel-rust will never request a payload that can contain
                 // surrogate code points, so this will only throw if we have messed up.
                 let ciborium::Value::Bytes(bytes) = *inner else {
-                    panic!("Expected Bytes inside string tag 6, got {:?}", inner) // nocov
+                    panic!("Expected Bytes inside string tag 91, got {:?}", inner) // nocov
                 };
                 HegelValue::String(
-                    String::from_utf8(bytes).expect("tag 6 payload is not valid UTF-8"),
+                    String::from_utf8(bytes).expect("tag 91 payload is not valid UTF-8"),
                 )
             }
             // nocov start

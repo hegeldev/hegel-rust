@@ -59,8 +59,8 @@ def bump(version: str, protocol_version: str) -> None:
         flags=re.MULTILINE,
     )
     text = re.sub(
-        r"^(const SUPPORTED_PROTOCOL_VERSIONS: \(f64, f64\) = \([^,]+), [^)]+\);",
-        rf"\1, {protocol_version});",
+        r'^(const SUPPORTED_PROTOCOL_VERSIONS: \(&str, &str\) = \("[^"]+"), "[^"]+"\);',
+        rf'\1, "{protocol_version}");',
         text,
         count=1,
         flags=re.MULTILINE,

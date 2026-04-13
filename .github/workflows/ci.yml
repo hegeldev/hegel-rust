@@ -110,7 +110,7 @@ jobs:
 
       - id: min-version
         run: |
-          MIN_PROTOCOL=$(grep -oE 'SUPPORTED_PROTOCOL_VERSIONS.*\(([0-9.]+)' src/runner.rs | grep -oE '[0-9.]+$')
+          MIN_PROTOCOL=$(grep -oE 'SUPPORTED_PROTOCOL_VERSIONS.*"[0-9.]+"' src/runner.rs | grep -oE '"[0-9.]+"' | head -1 | tr -d '"')
 
           VERSIONS_JSON=$(curl -sf https://hegel.dev/api/versions.json)
 
