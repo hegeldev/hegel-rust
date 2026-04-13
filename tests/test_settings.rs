@@ -44,3 +44,23 @@ fn test_settings_verbosity() {
 
     assert_eq!(count, 10);
 }
+
+#[test]
+fn test_settings_verbosity_debug() {
+    // Exercises the debug-mode eprintln paths in ServerBackend::send_request
+    // and ServerTestRunner::run (REQUEST, RESPONSE, run_test response, events, test done).
+    let mut count = 0;
+
+    hegel::Hegel::new(|tc| {
+        let _ = tc.draw(gs::booleans());
+        count += 1;
+    })
+    .settings(
+        hegel::Settings::new()
+            .verbosity(hegel::Verbosity::Debug)
+            .test_cases(1),
+    )
+    .run();
+
+    assert_eq!(count, 1);
+}

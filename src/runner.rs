@@ -28,9 +28,7 @@ static PANIC_HOOK_INIT: Once = Once::new();
 // ─── ServerBackend ──────────────────────────────────────────────────────────
 
 static PROTOCOL_DEBUG: LazyLock<bool> = LazyLock::new(|| {
-    // nocov start
     matches!(
-        // nocov end
         std::env::var("HEGEL_PROTOCOL_DEBUG")
             .unwrap_or_default()
             .to_lowercase()
@@ -60,7 +58,7 @@ impl ServerBackend {
 
     fn send_request(&self, command: &str, payload: &Value) -> Result<Value, DataSourceError> {
         if self.aborted.get() {
-            return Err(DataSourceError::StopTest); // nocov
+            return Err(DataSourceError::StopTest);
         }
         let debug = *PROTOCOL_DEBUG || self.verbosity == Verbosity::Debug;
 
@@ -78,7 +76,7 @@ impl ServerBackend {
         let request = Value::Map(entries);
 
         if debug {
-            eprintln!("REQUEST: {:?}", request); // nocov
+            eprintln!("REQUEST: {:?}", request);
         }
 
         let result = self.stream.borrow_mut().request_cbor(&request);
@@ -86,7 +84,7 @@ impl ServerBackend {
         match result {
             Ok(response) => {
                 if debug {
-                    eprintln!("RESPONSE: {:?}", response); // nocov
+                    eprintln!("RESPONSE: {:?}", response);
                 }
                 Ok(response)
             }
@@ -157,7 +155,7 @@ impl DataSource for ServerBackend {
             map_insert(&mut payload, "name", n);
         }
         if let Some(max) = max_size {
-            map_insert(&mut payload, "max_size", max); // nocov
+            map_insert(&mut payload, "max_size", max);
         }
         let response = self.send_request("new_collection", &payload)?;
         match response {
@@ -396,7 +394,7 @@ impl TestRunner for ServerTestRunner {
             "derandomize" => settings.derandomize
         };
         let db_value = match &settings.database {
-            Database::Unset => Option::None, // nocov
+            Database::Unset => Option::None,
             Database::Disabled => Some(Value::Null),
             Database::Path(s) => Some(Value::Text(s.clone())),
         };
@@ -430,7 +428,7 @@ impl TestRunner for ServerTestRunner {
         }
 
         if verbosity == Verbosity::Debug {
-            eprintln!("run_test response received"); // nocov
+            eprintln!("run_test response received");
         }
 
         let result_data: Value;
@@ -454,7 +452,7 @@ impl TestRunner for ServerTestRunner {
                 .expect("Expected event in payload");
 
             if verbosity == Verbosity::Debug {
-                eprintln!("Received event: {:?}", event); // nocov
+                eprintln!("Received event: {:?}", event);
             }
 
             match event_type {
@@ -511,7 +509,7 @@ impl TestRunner for ServerTestRunner {
             .unwrap_or(0);
 
         if verbosity == Verbosity::Debug {
-            eprintln!("Test done. interesting_test_cases={}", n_interesting); // nocov
+            eprintln!("Test done. interesting_test_cases={}", n_interesting);
         }
 
         // Process final replay test cases (one per interesting example)
@@ -944,7 +942,7 @@ impl Settings {
             database: if in_ci {
                 Database::Disabled
             } else {
-                Database::Unset // nocov
+                Database::Unset
             },
             suppress_health_check: Vec::new(),
         }
@@ -1047,7 +1045,7 @@ fn is_in_ci() -> bool {
 
     CI_VARS.iter().any(|(key, value)| match value {
         None => std::env::var_os(key).is_some(),
-        Some(expected) => std::env::var(key).ok().as_deref() == Some(expected), // nocov
+        Some(expected) => std::env::var(key).ok().as_deref() == Some(expected),
     })
 }
 
