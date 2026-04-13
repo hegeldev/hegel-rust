@@ -977,17 +977,16 @@ fn handle_channel_error(e: std::io::Error) -> ! {
 #[doc(hidden)]
 pub fn __test_kill_server() {
     let guard = SESSION.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(session) = guard.as_ref() else {
-        return; // nocov
-    };
-    let pid = session.server_pid;
-    let conn = Arc::clone(&session.connection);
-    drop(guard);
-    let _ = std::process::Command::new("kill")
-        .arg(pid.to_string())
-        .status();
-    while !conn.server_has_exited() {
-        std::thread::yield_now();
+    if let Some(session) = guard.as_ref() {
+        let pid = session.server_pid;
+        let conn = Arc::clone(&session.connection);
+        drop(guard);
+        let _ = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .status();
+        while !conn.server_has_exited() {
+            std::thread::yield_now();
+        }
     }
 }
 
