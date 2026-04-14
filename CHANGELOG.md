@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 - 2026-04-13
+
+This release consists entirely of internal refactoring within Hegel to
+provide better abstractions over the hegel-core server. It should have
+no user visible effect.
+
 ## 0.5.0 - 2026-04-12
 
 Fix `vecs(...).unique(true)` not actually enforcing element uniqueness in some cases.
