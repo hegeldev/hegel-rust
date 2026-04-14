@@ -61,7 +61,7 @@ pub enum Verbosity {
 
 impl Verbosity {}
 
-fn is_in_ci() -> bool {
+pub(crate) fn is_in_ci() -> bool {
     const CI_VARS: &[(&str, Option<&str>)] = &[
         ("CI", None),
         ("TF_BUILD", Some("true")),
