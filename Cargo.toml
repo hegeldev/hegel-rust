@@ -57,6 +57,7 @@ ctor = "0.2"
 default = []
 rand = ["dep:rand"]
 antithesis = ["dep:serde_json"]
+native = ["dep:rand"]
 
 [package.metadata.docs.rs]
 all-features = true
