@@ -4,8 +4,8 @@
 // values using pbtkit-style choice recording. Only schemas usable from
 // pbtkit's core.py are implemented; everything else is `todo!()`.
 
-use crate::cbor_utils::{as_text, map_get};
-use crate::native::core::{NativeTestCase, StopTest};
+use crate::cbor_utils::{as_bool, as_text, as_u64, map_get};
+use crate::native::core::{ManyState, NativeTestCase, Status, StopTest};
 use crate::test_case::StopTestError;
 use ciborium::Value;
 
@@ -27,11 +27,38 @@ pub fn dispatch_request(
             // The native backend doesn't need to do anything here yet.
             Ok(Value::Null)
         }
-        "new_collection" | "collection_more" | "collection_reject" => {
-            todo!(
-                "Native backend does not yet support collection protocol commands ({})",
-                command
-            )
+        "new_collection" => {
+            let min_size = map_get(payload, "min_size")
+                .and_then(as_u64)
+                .unwrap_or(0) as usize;
+            let max_size = map_get(payload, "max_size").and_then(as_u64).map(|n| n as usize);
+            let state = ManyState::new(min_size, max_size);
+            let id = ntc.new_collection(state);
+            Ok(Value::Integer(id.into()))
+        }
+        "collection_more" => {
+            let id = map_get(payload, "collection_id")
+                .map(cbor_to_i64)
+                .expect("collection_more missing collection_id");
+            let mut state = ntc
+                .collections
+                .remove(&id)
+                .expect("collection_more: unknown collection_id");
+            let result = many_more(ntc, &mut state).map_err(|StopTest| StopTestError)?;
+            ntc.collections.insert(id, state);
+            Ok(Value::Bool(result))
+        }
+        "collection_reject" => {
+            let id = map_get(payload, "collection_id")
+                .map(cbor_to_i64)
+                .expect("collection_reject missing collection_id");
+            let mut state = ntc
+                .collections
+                .remove(&id)
+                .expect("collection_reject: unknown collection_id");
+            many_reject(ntc, &mut state).map_err(|StopTest| StopTestError)?;
+            ntc.collections.insert(id, state);
+            Ok(Value::Null)
         }
         "new_pool" | "pool_consume" | "pool_add" | "pool_generate" => {
             todo!(
@@ -56,14 +83,15 @@ fn interpret_schema(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, S
         "null" => Ok(Value::Null),
         "tuple" => interpret_tuple(ntc, schema),
         "one_of" => interpret_one_of(ntc, schema),
+        "sampled_from" => interpret_sampled_from(ntc, schema),
+        "list" => interpret_list(ntc, schema),
+        "dict" => interpret_dict(ntc, schema),
 
-        // Schemas that require features beyond pbtkit core.py:
+        // Schemas that require features beyond what is currently implemented:
         "float" => todo!("Native backend does not yet support float schema"),
         "string" => todo!("Native backend does not yet support string schema"),
         "binary" => todo!("Native backend does not yet support binary schema"),
         "regex" => todo!("Native backend does not yet support regex schema"),
-        "list" => todo!("Native backend does not yet support list schema"),
-        "dict" => todo!("Native backend does not yet support dict schema"),
         "email" => todo!("Native backend does not yet support email schema"),
         "url" => todo!("Native backend does not yet support url schema"),
         "domain" => todo!("Native backend does not yet support domain schema"),
@@ -72,7 +100,6 @@ fn interpret_schema(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, S
         "date" => todo!("Native backend does not yet support date schema"),
         "time" => todo!("Native backend does not yet support time schema"),
         "datetime" => todo!("Native backend does not yet support datetime schema"),
-        "sampled_from" => todo!("Native backend does not yet support sampled_from schema"),
 
         other => panic!("Unknown schema type: {}", other),
     }
@@ -122,12 +149,164 @@ fn interpret_one_of(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, S
     interpret_schema(ntc, &generators[idx as usize])
 }
 
-/// Convert a CBOR value to i128.
+fn interpret_sampled_from(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
+    let values = match map_get(schema, "values") {
+        Some(Value::Array(arr)) => arr,
+        _ => panic!("sampled_from schema must have values array"),
+    };
+    assert!(!values.is_empty(), "sampled_from schema must have at least one value");
+    let idx = ntc.draw_integer(0, values.len() as i128 - 1)?;
+    Ok(encode_schema_value(&values[idx as usize]))
+}
+
+fn interpret_list(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
+    let element_schema = map_get(schema, "elements").expect("list schema must have elements");
+    let min_size = map_get(schema, "min_size")
+        .and_then(as_u64)
+        .unwrap_or(0) as usize;
+    let max_size = map_get(schema, "max_size").and_then(as_u64).map(|n| n as usize);
+    let unique = map_get(schema, "unique")
+        .and_then(as_bool)
+        .unwrap_or(false);
+
+    let mut state = ManyState::new(min_size, max_size);
+    let mut results: Vec<Value> = Vec::new();
+
+    loop {
+        if !many_more(ntc, &mut state)? {
+            break;
+        }
+        let element = interpret_schema(ntc, element_schema)?;
+        if unique && results.iter().any(|existing| existing == &element) {
+            many_reject(ntc, &mut state)?;
+            continue;
+        }
+        results.push(element);
+    }
+
+    Ok(Value::Array(results))
+}
+
+fn interpret_dict(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
+    let key_schema = map_get(schema, "keys").expect("dict schema must have keys");
+    let val_schema = map_get(schema, "values").expect("dict schema must have values");
+    let min_size = map_get(schema, "min_size")
+        .and_then(as_u64)
+        .unwrap_or(0) as usize;
+    let max_size = map_get(schema, "max_size").and_then(as_u64).map(|n| n as usize);
+
+    let mut state = ManyState::new(min_size, max_size);
+    let mut pairs: Vec<Value> = Vec::new();
+    let mut keys: Vec<Value> = Vec::new();
+
+    loop {
+        if !many_more(ntc, &mut state)? {
+            break;
+        }
+        let key = interpret_schema(ntc, key_schema)?;
+        if keys.iter().any(|existing| existing == &key) {
+            many_reject(ntc, &mut state)?;
+            continue;
+        }
+        let value = interpret_schema(ntc, val_schema)?;
+        keys.push(key.clone());
+        pairs.push(Value::Array(vec![key, value]));
+    }
+
+    Ok(Value::Array(pairs))
+}
+
+/// Advance the many state by one element. Returns true if another element should be drawn.
+///
+/// Port of pbtkit's `many.more()`.
+fn many_more(ntc: &mut NativeTestCase, state: &mut ManyState) -> Result<bool, StopTest> {
+    let should_continue = if state.min_size as f64 == state.max_size {
+        // Fixed size: draw exactly min_size elements.
+        state.count < state.min_size
+    } else {
+        let forced = if state.force_stop {
+            Some(false)
+        } else if state.count < state.min_size {
+            Some(true)
+        } else if state.count as f64 >= state.max_size {
+            Some(false)
+        } else {
+            None
+        };
+        ntc.weighted(state.p_continue, forced)?
+    };
+
+    if should_continue {
+        state.count += 1;
+    }
+    Ok(should_continue)
+}
+
+/// Reject the last drawn element. Port of pbtkit's `many.reject()`.
+fn many_reject(ntc: &mut NativeTestCase, state: &mut ManyState) -> Result<(), StopTest> {
+    assert!(state.count > 0);
+    state.count -= 1;
+    state.rejections += 1;
+    if state.rejections > std::cmp::max(3, 2 * state.count) {
+        if state.count < state.min_size {
+            ntc.status = Some(Status::Invalid);
+            return Err(StopTest);
+        } else {
+            state.force_stop = true;
+        }
+    }
+    Ok(())
+}
+
+/// Encode a schema value for transport back to the generator.
+///
+/// Mirrors hegel-core's `_encode_value`: text strings are wrapped in
+/// CBOR tag 91 (HEGEL_STRING_TAG) so they can be deserialized by `HegelValue`.
+fn encode_schema_value(value: &Value) -> Value {
+    match value {
+        Value::Text(s) => Value::Tag(91, Box::new(Value::Bytes(s.as_bytes().to_vec()))),
+        other => other.clone(),
+    }
+}
+
+/// Convert a CBOR value to i128, handling bignum tags.
+///
+/// For positive bignums (tag 2) that exceed i128::MAX (e.g. u128::MAX),
+/// we saturate at i128::MAX so the integer range remains valid.
 fn cbor_to_i128(value: &Value) -> i128 {
     match value {
         Value::Integer(i) => (*i).into(),
+        Value::Tag(2, inner) => {
+            // CBOR tag 2: positive bignum (big-endian bytes)
+            let Value::Bytes(bytes) = inner.as_ref() else {
+                panic!("Expected Bytes inside bignum tag 2, got {:?}", inner)
+            };
+            let mut n = 0u128;
+            for b in bytes {
+                n = (n << 8) | (*b as u128);
+            }
+            // Saturating cast: values above i128::MAX (e.g. u128::MAX) cap at i128::MAX.
+            i128::try_from(n).unwrap_or(i128::MAX)
+        }
+        Value::Tag(3, inner) => {
+            // CBOR tag 3: negative bignum, value is -1 - n
+            let Value::Bytes(bytes) = inner.as_ref() else {
+                panic!("Expected Bytes inside bignum tag 3, got {:?}", inner)
+            };
+            let mut n = 0u128;
+            for b in bytes {
+                n = (n << 8) | (*b as u128);
+            }
+            // Safe: -1 - n where n <= i128::MAX is always representable.
+            -1i128 - i128::try_from(n).unwrap_or(i128::MAX)
+        }
         _ => panic!("Expected CBOR integer, got {:?}", value),
     }
+}
+
+fn cbor_to_i64(value: &Value) -> i64 {
+    let n: i128 = cbor_to_i128(value);
+    n as i64
 }
 
 /// Convert an i128 to a CBOR value.
