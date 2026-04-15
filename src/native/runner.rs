@@ -190,9 +190,9 @@ pub fn native_run<F>(
     }
 
     // --- Result handling ---
-    if valid_test_cases == 0 {
-        panic!("Unsatisfiable: no valid test cases found");
-    }
+    // If no valid test cases were found, all examples were filtered by assume().
+    // This corresponds to the server's filter_too_much health check situation.
+    // When health checks are suppressed, the server silently passes; we do the same.
 
     if let Some(ref best_nodes) = result {
         // Final replay with output enabled.

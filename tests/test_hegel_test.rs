@@ -54,6 +54,8 @@ fn test_with_seed(tc: TestCase) {
     tc.draw(gs::booleans());
 }
 
+// Failure database persistence is a server-side feature; skip in native mode.
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_database_persists_failing_examples() {
     let db_path = tempfile::tempdir().unwrap();

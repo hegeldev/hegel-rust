@@ -16,6 +16,10 @@ pub const BUFFER_SIZE: usize = 8 * 1024;
 /// Maximum iterations of the outer shrink loop.
 pub const MAX_SHRINK_ITERATIONS: usize = 500;
 
+/// Probability of drawing a boundary/special value per special candidate.
+/// With k candidates and 1000 draws: P(all drawn at least once) = (1-(1-p)^1000)^k > 0.9999.
+pub const BOUNDARY_PROBABILITY: f64 = 0.01;
+
 /// An integer choice with bounded range.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IntegerChoice {
@@ -75,19 +79,252 @@ impl BooleanChoice {
     }
 }
 
+/// A float choice with bounded range.
+///
+/// Port of pbtkit's FloatChoice.
+#[derive(Clone, Debug)]
+pub struct FloatChoice {
+    pub min_value: f64,
+    pub max_value: f64,
+    pub allow_nan: bool,
+    pub allow_infinity: bool,
+}
+
+impl FloatChoice {
+    /// The simplest (lowest-sort-key) valid float for this choice.
+    pub fn simplest(&self) -> f64 {
+        if self.validate(0.0) {
+            return 0.0;
+        }
+        // Among finite boundaries, pick the one with the smallest sort key.
+        // Positive floats sort before negative of the same magnitude.
+        let mut best: Option<f64> = None;
+        let mut best_key: (u64, bool) = (u64::MAX, true);
+        for &v in &[self.min_value, self.max_value] {
+            if v.is_finite() {
+                let is_neg = v.is_sign_negative();
+                let key = (float_to_index(v.abs()), is_neg);
+                if key < best_key {
+                    best = Some(v);
+                    best_key = key;
+                }
+            }
+        }
+        if let Some(v) = best {
+            return v;
+        }
+        if self.allow_infinity && self.validate(f64::INFINITY) {
+            return f64::INFINITY;
+        }
+        if self.allow_nan {
+            // Canonical quiet NaN.
+            return f64::NAN;
+        }
+        panic!("FloatChoice::simplest: no valid float for this choice")
+    }
+
+    /// Second-simplest valid float (for type punning during replay).
+    pub fn unit(&self) -> f64 {
+        let s = self.simplest();
+        if s.is_nan() {
+            return s;
+        }
+        // Try the next index up from simplest (in absolute magnitude).
+        let base = float_to_index(s.abs());
+        let is_neg = s.is_sign_negative();
+        for offset in 1u64..4 {
+            let v_mag = index_to_float(base + offset);
+            let v = if is_neg { -v_mag } else { v_mag };
+            if !v.is_nan() && self.validate(v) {
+                return v;
+            }
+        }
+        s
+    }
+
+    pub fn validate(&self, v: f64) -> bool {
+        if v.is_nan() {
+            return self.allow_nan;
+        }
+        if v.is_infinite() {
+            if !self.allow_infinity {
+                return false;
+            }
+            // Directional check: -inf is below any finite min; +inf is above any finite max.
+            if v == f64::NEG_INFINITY && self.min_value > f64::NEG_INFINITY {
+                return false;
+            }
+            if v == f64::INFINITY && self.max_value < f64::INFINITY {
+                return false;
+            }
+            return true;
+        }
+        self.min_value <= v && v <= self.max_value
+    }
+
+    /// Sort key for shrinking. Returns `(magnitude_index, is_negative)`.
+    /// NaN sorts last (u64::MAX, false). Positive is simpler than negative
+    /// with the same magnitude.
+    pub fn sort_index(&self, v: f64) -> (u64, bool) {
+        if v.is_nan() {
+            return (u64::MAX, false);
+        }
+        let is_neg = v.is_sign_negative();
+        let mag = if is_neg { -v } else { v };
+        (float_to_index(mag), is_neg)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hypothesis float ordering
+// ---------------------------------------------------------------------------
+//
+// Port of hypothesis/internal/conjecture/floats.py.
+// Maps non-negative floats to dense lexicographic indices where:
+// - Small non-negative integers (0, 1, 2, ...) have the smallest indices
+// - Non-integer fractions with "simpler" denominators (like 1.5) come next
+// - Large or irrational-looking floats come last
+// - Infinity is ordered last among finite-or-infinite floats
+//
+// This ordering makes the shrinker prefer "nice" values (integers, simple
+// fractions) over values that are merely close to the boundary.
+
+/// Encode a biased exponent to a Hypothesis lex rank.
+/// Exponents closer to 1023 (values near 1.0) rank first.
+fn encode_exponent(biased_exp: u64) -> u64 {
+    if biased_exp == 2047 {
+        return 2047; // inf/NaN exponent: rank last
+    }
+    if biased_exp >= 1023 {
+        biased_exp - 1023
+    } else {
+        2046 - biased_exp
+    }
+}
+
+/// Decode a lex rank back to a biased exponent.
+fn decode_exponent(enc: u64) -> u64 {
+    if enc == 2047 {
+        return 2047;
+    }
+    if enc <= 1023 {
+        enc + 1023
+    } else {
+        2046 - enc
+    }
+}
+
+/// Reverse the lowest `n` bits of `v`.
+fn reverse_bits_n(v: u64, n: u64) -> u64 {
+    v.reverse_bits() >> (64 - n)
+}
+
+/// Adjust mantissa bits so that low-denominator fractions have smaller indices.
+///
+/// For values in [1, 2) (unbiased_exp=0), reverses all 52 fractional bits so
+/// that 1.5 (mantissa=2^51, reversed=1) is simpler than 1.1 (mantissa=complex).
+/// For values in [2, 4) (unbiased_exp=1), only the lower 51 fractional bits are
+/// reversed. For large exponents (>= 52), no change needed (no fractional part).
+pub fn update_mantissa(unbiased_exp: i64, mantissa: u64) -> u64 {
+    if unbiased_exp <= 0 {
+        reverse_bits_n(mantissa, 52)
+    } else if unbiased_exp <= 51 {
+        let n_frac = (52 - unbiased_exp) as u64;
+        let frac_mask = (1u64 << n_frac) - 1;
+        let frac = mantissa & frac_mask;
+        (mantissa ^ frac) | reverse_bits_n(frac, n_frac)
+    } else {
+        mantissa
+    }
+}
+
+/// True if `v` is a non-negative integer representable in 56 bits.
+/// These are mapped directly to their integer value in the lex ordering.
+fn is_simple_float(v: f64) -> bool {
+    if v.is_sign_negative() || !v.is_finite() {
+        return false;
+    }
+    let i = v as u64;
+    i as f64 == v && i < (1u64 << 56)
+}
+
+/// Map a non-negative (finite or infinite) float to its Hypothesis lex index.
+///
+/// Port of Hypothesis's `float_to_lex`. Integer floats 0, 1, 2, ... map to
+/// 0, 1, 2, ... Non-integer floats map to values with bit 63 set.
+pub fn float_to_index(v: f64) -> u64 {
+    debug_assert!(!v.is_sign_negative(), "float_to_index called on negative: {v}");
+    debug_assert!(!v.is_nan(), "float_to_index called on NaN");
+    if is_simple_float(v) {
+        return v as u64;
+    }
+    let bits = v.to_bits();
+    let biased_exp = (bits >> 52) & 0x7FF;
+    let mantissa = bits & ((1u64 << 52) - 1);
+    let unbiased_exp = biased_exp as i64 - 1023;
+    let mantissa_enc = update_mantissa(unbiased_exp, mantissa);
+    let exp_enc = encode_exponent(biased_exp);
+    (1u64 << 63) | (exp_enc << 52) | mantissa_enc
+}
+
+/// Map a Hypothesis lex index back to a non-negative float.
+///
+/// Port of Hypothesis's `lex_to_float`. Inverse of `float_to_index`.
+pub fn index_to_float(i: u64) -> f64 {
+    if i >> 63 == 0 {
+        // Integer path: low 56 bits as integer value.
+        let integral = i & ((1u64 << 56) - 1);
+        return integral as f64;
+    }
+    let exp_enc = (i >> 52) & 0x7FF;
+    let biased_exp = decode_exponent(exp_enc);
+    let mantissa_enc = i & ((1u64 << 52) - 1);
+    let unbiased_exp = biased_exp as i64 - 1023;
+    // update_mantissa is its own inverse (bit reversal is self-inverse).
+    let mantissa = update_mantissa(unbiased_exp, mantissa_enc);
+    f64::from_bits((biased_exp << 52) | mantissa)
+}
+
+/// Convert a lexicographically ordered u64 to a float covering the full float space.
+/// Used for random float generation. Port of pbtkit's `_lex_to_float`.
+pub fn lex_to_float(bits: u64) -> f64 {
+    let bits = if bits >> 63 != 0 {
+        bits ^ (1u64 << 63)
+    } else {
+        bits ^ u64::MAX
+    };
+    f64::from_bits(bits)
+}
+
 /// The kind of choice made at a particular point.
 #[derive(Clone, Debug)]
 pub enum ChoiceKind {
     Integer(IntegerChoice),
     Boolean(BooleanChoice),
+    Float(FloatChoice),
 }
 
 /// The value produced by a choice.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum ChoiceValue {
     Integer(i128),
     Boolean(bool),
+    Float(f64),
 }
+
+impl PartialEq for ChoiceValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ChoiceValue::Integer(a), ChoiceValue::Integer(b)) => a == b,
+            (ChoiceValue::Boolean(a), ChoiceValue::Boolean(b)) => a == b,
+            // Bitwise equality so NaN == NaN for replay/punning logic.
+            (ChoiceValue::Float(a), ChoiceValue::Float(b)) => a.to_bits() == b.to_bits(),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ChoiceValue {}
 
 impl ChoiceKind {
     /// The simplest value for this choice kind.
@@ -95,6 +332,7 @@ impl ChoiceKind {
         match self {
             ChoiceKind::Integer(ic) => ChoiceValue::Integer(ic.simplest()),
             ChoiceKind::Boolean(bc) => ChoiceValue::Boolean(bc.simplest()),
+            ChoiceKind::Float(fc) => ChoiceValue::Float(fc.simplest()),
         }
     }
 
@@ -103,6 +341,7 @@ impl ChoiceKind {
         match self {
             ChoiceKind::Integer(ic) => ChoiceValue::Integer(ic.unit()),
             ChoiceKind::Boolean(bc) => ChoiceValue::Boolean(bc.unit()),
+            ChoiceKind::Float(fc) => ChoiceValue::Float(fc.unit()),
         }
     }
 }
@@ -132,6 +371,10 @@ impl ChoiceNode {
             }
             (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => {
                 NodeSortKey(u128::from(*v), false)
+            }
+            (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => {
+                let (idx, neg) = fc.sort_index(*v);
+                NodeSortKey(idx as u128, neg)
             }
             _ => unreachable!("mismatched choice kind and value"),
         }
@@ -280,10 +523,19 @@ impl NativeTestCase {
             |v| matches!(v, ChoiceValue::Integer(n) if kind.validate(*n)),
             |rng| {
                 if min_value == max_value {
-                    ChoiceValue::Integer(min_value)
-                } else {
-                    ChoiceValue::Integer(rng.random_range(min_value..=max_value))
+                    return ChoiceValue::Integer(min_value);
                 }
+                // Edge case boosting: draw boundary/special values with elevated probability.
+                let mut nasty: Vec<i128> = vec![min_value, max_value];
+                if min_value <= 0 && 0 <= max_value && min_value != 0 && max_value != 0 {
+                    nasty.push(0);
+                }
+                let threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
+                if rng.random::<f64>() < threshold {
+                    let idx = rng.random_range(0..nasty.len());
+                    return ChoiceValue::Integer(nasty[idx]);
+                }
+                ChoiceValue::Integer(rng.random_range(min_value..=max_value))
             },
         )?;
 
@@ -335,6 +587,113 @@ impl NativeTestCase {
         self.nodes.push(ChoiceNode {
             kind: ChoiceKind::Boolean(kind),
             value: ChoiceValue::Boolean(v),
+            was_forced,
+        });
+
+        Ok(v)
+    }
+
+    /// Draw a floating-point value.
+    ///
+    /// Port of pbtkit's `_draw_float` / `draw_float` method.
+    pub fn draw_float(
+        &mut self,
+        min_value: f64,
+        max_value: f64,
+        allow_nan: bool,
+        allow_infinity: bool,
+    ) -> Result<f64, StopTest> {
+        let kind = FloatChoice {
+            min_value,
+            max_value,
+            allow_nan,
+            allow_infinity,
+        };
+
+        let bounded = min_value.is_finite() && max_value.is_finite();
+        let half_bounded = !bounded && (min_value.is_finite() || max_value.is_finite());
+
+        // Build edge case candidates for boosting.
+        let nasty_floats: Vec<f64> = {
+            let candidates = [
+                min_value,
+                max_value,
+                0.0,
+                -0.0_f64,
+                1.0,
+                -1.0,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NAN,
+                f64::MIN_POSITIVE,
+                f64::MAX,
+                -f64::MAX,
+            ];
+            candidates.iter().copied().filter(|&v| kind.validate(v)).collect()
+        };
+        let nasty_threshold = nasty_floats.len() as f64 * BOUNDARY_PROBABILITY;
+
+        let (value, was_forced) = self.resolve_choice(
+            &ChoiceKind::Float(kind.clone()),
+            || ChoiceValue::Float(kind.simplest()),
+            || ChoiceValue::Float(kind.unit()),
+            |v| matches!(v, ChoiceValue::Float(f) if kind.validate(*f)),
+            |rng| {
+                // Edge case boosting: draw boundary/special values with elevated probability.
+                if rng.random::<f64>() < nasty_threshold {
+                    let idx = rng.random_range(0..nasty_floats.len());
+                    return ChoiceValue::Float(nasty_floats[idx]);
+                }
+                let f = if bounded {
+                    // Uniform in [min, max], clamped to handle overflow.
+                    let r: f64 = rng.random();
+                    let v = min_value + r * (max_value - min_value);
+                    v.max(min_value).min(max_value)
+                } else if half_bounded {
+                    let use_inf = allow_infinity && rng.random::<f64>() < 0.05;
+                    if use_inf {
+                        if max_value == f64::INFINITY { f64::INFINITY } else { f64::NEG_INFINITY }
+                    } else {
+                        loop {
+                            let bits: u64 = rng.random();
+                            let mag = lex_to_float(bits).abs();
+                            if mag.is_finite() {
+                                break if min_value.is_finite() {
+                                    min_value + mag
+                                } else {
+                                    max_value - mag
+                                };
+                            }
+                        }
+                    }
+                } else if allow_nan && rng.random::<f64>() < 0.01 {
+                    // Random NaN: set exponent to all 1s, random non-zero mantissa.
+                    let exponent: u64 = 0x7FF << 52;
+                    let sign: u64 = (rng.random::<u64>() >> 63) << 63;
+                    let mantissa: u64 = (rng.random::<u64>() & ((1u64 << 52) - 1)).max(1);
+                    f64::from_bits(sign | exponent | mantissa)
+                } else {
+                    loop {
+                        let bits: u64 = rng.random();
+                        let v = lex_to_float(bits);
+                        if !v.is_nan() {
+                            break v;
+                        }
+                    }
+                };
+                // Ensure the generated value satisfies the schema constraints.
+                let f = if kind.validate(f) { f } else { kind.simplest() };
+                ChoiceValue::Float(f)
+            },
+        )?;
+
+        let ChoiceValue::Float(v) = value else {
+            unreachable!()
+        };
+
+        self.nodes.push(ChoiceNode {
+            kind: ChoiceKind::Float(kind),
+            value: ChoiceValue::Float(v),
             was_forced,
         });
 

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::native::core::{
     ChoiceKind, ChoiceNode, ChoiceValue, NodeSortKey,
-    MAX_SHRINK_ITERATIONS, sort_key,
+    MAX_SHRINK_ITERATIONS, float_to_index, index_to_float, sort_key,
 };
 
 /// A callback that runs a test case from a choice sequence and returns
@@ -71,6 +71,7 @@ impl<'a> Shrinker<'a> {
             self.zero_choices();
             self.swap_integer_sign();
             self.binary_search_integer_towards_zero();
+            self.shrink_floats();
         }
     }
 
@@ -186,6 +187,85 @@ impl<'a> Shrinker<'a> {
                             self.replace(&HashMap::from([(i, ChoiceValue::Integer(-*v))]));
                         }
                     }
+                }
+            }
+            i += 1;
+        }
+    }
+
+    /// Shrink float choices toward simpler values using Hypothesis lex ordering.
+    ///
+    /// Steps per float node:
+    /// 1. Try replacing with simplest().
+    /// 2. If sign-negative, try negating (positive is simpler).
+    /// 3. Binary search on absolute-value lex index from 0 toward current value.
+    ///    Searching from 0 ensures we can find "nice" integer floats (like 2.0)
+    ///    even when they have smaller lex indices than the boundary values.
+    fn shrink_floats(&mut self) {
+        let mut i = 0;
+        while i < self.current_nodes.len() {
+            let node = &self.current_nodes[i];
+            if let (ChoiceKind::Float(fc), ChoiceValue::Float(v)) = (&node.kind, &node.value) {
+                let v = *v;
+                let fc = fc.clone();
+
+                // Step 1: Try simplest.
+                let s = fc.simplest();
+                if ChoiceValue::Float(s) != ChoiceValue::Float(v) {
+                    self.replace(&std::collections::HashMap::from([(i, ChoiceValue::Float(s))]));
+                }
+
+                // Re-read current value.
+                let v = {
+                    let Some(n) = self.current_nodes.get(i) else { break; };
+                    let ChoiceValue::Float(f) = n.value else { i += 1; continue; };
+                    f
+                };
+
+                // Skip NaN — can't binary search on NaN.
+                if v.is_nan() {
+                    i += 1;
+                    continue;
+                }
+
+                // Step 2: Try negating if sign-negative (positive is simpler).
+                if v.is_sign_negative() {
+                    let neg = -v;
+                    if fc.validate(neg) {
+                        self.replace(&std::collections::HashMap::from([(i, ChoiceValue::Float(neg))]));
+                    }
+                }
+
+                // Re-read after possible negation.
+                let v = {
+                    let Some(n) = self.current_nodes.get(i) else { break; };
+                    let ChoiceValue::Float(f) = n.value else { i += 1; continue; };
+                    f
+                };
+
+                if v.is_nan() {
+                    i += 1;
+                    continue;
+                }
+
+                // Step 3: Binary search on absolute-value lex index toward 0.
+                // float_to_index handles both finite and infinite non-NaN non-negative floats.
+                let v_abs = v.abs();
+                let current_idx = float_to_index(v_abs);
+                let is_neg = v.is_sign_negative();
+                if current_idx > 0 {
+                    bin_search_down(0, current_idx as i128, &mut |idx| {
+                        let candidate_mag = index_to_float(idx as u64);
+                        let candidate = if is_neg { -candidate_mag } else { candidate_mag };
+                        if fc.validate(candidate) {
+                            self.replace(&std::collections::HashMap::from([(
+                                i,
+                                ChoiceValue::Float(candidate),
+                            )]))
+                        } else {
+                            false
+                        }
+                    });
                 }
             }
             i += 1;
