@@ -54,6 +54,7 @@ serde_json = "1.0.61"
 default = []
 rand = ["dep:rand"]
 antithesis = ["dep:serde_json"]
+native = ["dep:rand"]
 
 [package.metadata.docs.rs]
 all-features = true
