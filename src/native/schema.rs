@@ -86,11 +86,11 @@ fn interpret_schema(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, S
         "sampled_from" => interpret_sampled_from(ntc, schema),
         "list" => interpret_list(ntc, schema),
         "dict" => interpret_dict(ntc, schema),
+        "string" => interpret_string(ntc, schema),
+        "binary" => interpret_binary(ntc, schema),
 
         // Schemas that require features beyond what is currently implemented:
         "float" => todo!("Native backend does not yet support float schema"),
-        "string" => todo!("Native backend does not yet support string schema"),
-        "binary" => todo!("Native backend does not yet support binary schema"),
         "regex" => todo!("Native backend does not yet support regex schema"),
         "email" => todo!("Native backend does not yet support email schema"),
         "url" => todo!("Native backend does not yet support url schema"),
@@ -214,6 +214,285 @@ fn interpret_dict(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, Sto
     }
 
     Ok(Value::Array(pairs))
+}
+
+fn interpret_string(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
+    let min_size = map_get(schema, "min_size")
+        .and_then(as_u64)
+        .unwrap_or(0) as usize;
+    let max_size = map_get(schema, "max_size").and_then(as_u64).map(|n| n as usize);
+
+    let alphabet = build_string_alphabet(schema);
+    assert!(
+        alphabet.len() > 0,
+        "No valid codepoints for string generation"
+    );
+
+    let mut state = ManyState::new(min_size, max_size);
+    let mut result = String::new();
+    let n = alphabet.len() as i128;
+
+    loop {
+        if !many_more(ntc, &mut state)? {
+            break;
+        }
+        let idx = ntc.draw_integer(0, n - 1)?;
+        result.push(alphabet.char_at(idx as usize));
+    }
+
+    Ok(Value::Tag(91, Box::new(Value::Bytes(result.into_bytes()))))
+}
+
+/// Alphabet for string generation.
+enum StringAlphabet {
+    /// Contiguous codepoint range [min, max] with surrogates excluded.
+    Range { min: u32, max: u32 },
+    /// Explicit list of valid characters.
+    Explicit(Vec<char>),
+}
+
+impl StringAlphabet {
+    fn len(&self) -> usize {
+        match self {
+            StringAlphabet::Range { min, max } => {
+                count_valid_codepoints(*min, *max) as usize
+            }
+            StringAlphabet::Explicit(v) => v.len(),
+        }
+    }
+
+    fn char_at(&self, idx: usize) -> char {
+        match self {
+            StringAlphabet::Range { min, max } => {
+                codepoint_at_index(*min, *max, idx as u32)
+            }
+            StringAlphabet::Explicit(v) => v[idx],
+        }
+    }
+}
+
+/// Build the effective character alphabet for a string schema.
+fn build_string_alphabet(schema: &Value) -> StringAlphabet {
+    // Determine codepoint range from codec + min/max codepoint.
+    let codec = map_get(schema, "codec").and_then(as_text);
+    let (mut cp_min, mut cp_max): (u32, u32) = match codec {
+        Some("ascii") => (0, 127),
+        Some("latin-1") | Some("iso-8859-1") => (0, 255),
+        Some("utf-8") | None => (0, 0x10FFFF),
+        Some(other) => panic!("Invalid codec: {}", other),
+    };
+
+    if let Some(min_cp) = map_get(schema, "min_codepoint").and_then(as_u64) {
+        cp_min = cp_min.max(min_cp as u32);
+    }
+    if let Some(max_cp) = map_get(schema, "max_codepoint").and_then(as_u64) {
+        cp_max = cp_max.min(max_cp as u32);
+    }
+
+    // Parse category/character constraints.
+    let categories: Option<Vec<String>> = extract_string_array(schema, "categories");
+    let exclude_categories: Option<Vec<String>> = extract_string_array(schema, "exclude_categories");
+    let include_chars: Option<Vec<char>> =
+        map_get(schema, "include_characters")
+            .and_then(as_text)
+            .map(|s| s.chars().collect());
+    let exclude_chars: Option<Vec<char>> =
+        map_get(schema, "exclude_characters")
+            .and_then(as_text)
+            .map(|s| s.chars().collect());
+
+    // If categories is empty AND include_characters is set: explicit alphabet from include list.
+    if let Some(ref cats) = categories {
+        if cats.is_empty() {
+            let base: Vec<char> = include_chars.unwrap_or_default();
+            let filtered: Vec<char> = base
+                .into_iter()
+                .filter(|c| {
+                    let cp = *c as u32;
+                    cp >= cp_min
+                        && cp <= cp_max
+                        && !is_surrogate(*c)
+                        && !exclude_chars
+                            .as_ref()
+                            .map(|ec| ec.contains(c))
+                            .unwrap_or(false)
+                })
+                .collect();
+            return StringAlphabet::Explicit(filtered);
+        }
+    }
+
+    // Detect "only excludes surrogates" — treat as simple range.
+    let needs_category_filter = categories.is_some()
+        || exclude_categories
+            .as_ref()
+            .map(|ec| !ec.iter().all(|c| c == "Cs"))
+            .unwrap_or(false);
+    let needs_char_filter = include_chars.is_some() || exclude_chars.is_some();
+
+    if !needs_category_filter && !needs_char_filter {
+        // Fast path: just use the codepoint range.
+        return StringAlphabet::Range {
+            min: cp_min,
+            max: cp_max,
+        };
+    }
+
+    // Build explicit alphabet by iterating the effective range.
+    // Limit to BMP (0xFFFF) when doing category filtering for performance.
+    let scan_max = if needs_category_filter {
+        cp_max.min(0xFFFF)
+    } else {
+        cp_max
+    };
+
+    let mut alphabet: Vec<char> = Vec::new();
+
+    for cp in cp_min..=scan_max {
+        if is_surrogate_cp(cp) {
+            continue;
+        }
+        let c = match char::from_u32(cp) {
+            Some(c) => c,
+            None => continue,
+        };
+
+        // Apply category filters.
+        if let Some(ref cats) = categories {
+            if !cats.iter().any(|cat| char_in_category(c, cat)) {
+                continue;
+            }
+        } else if let Some(ref excl_cats) = exclude_categories {
+            if excl_cats.iter().any(|cat| cat != "Cs" && char_in_category(c, cat)) {
+                continue;
+            }
+        }
+
+        // Apply explicit exclude_chars filter.
+        if let Some(ref excl) = exclude_chars {
+            if excl.contains(&c) {
+                continue;
+            }
+        }
+
+        alphabet.push(c);
+    }
+
+    // Add include_characters (if not already present).
+    if let Some(incl) = include_chars {
+        for c in incl {
+            let cp = c as u32;
+            if cp >= cp_min && cp <= cp_max && !is_surrogate(c) && !alphabet.contains(&c) {
+                alphabet.push(c);
+            }
+        }
+    }
+
+    StringAlphabet::Explicit(alphabet)
+}
+
+fn interpret_binary(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
+    let min_size = map_get(schema, "min_size")
+        .and_then(as_u64)
+        .unwrap_or(0) as usize;
+    let max_size = map_get(schema, "max_size").and_then(as_u64).map(|n| n as usize);
+
+    let mut state = ManyState::new(min_size, max_size);
+    let mut bytes = Vec::new();
+
+    loop {
+        if !many_more(ntc, &mut state)? {
+            break;
+        }
+        let byte = ntc.draw_integer(0, 255)?;
+        bytes.push(byte as u8);
+    }
+
+    Ok(Value::Bytes(bytes))
+}
+
+/// Extract an array of strings from a schema field.
+fn extract_string_array(schema: &Value, key: &str) -> Option<Vec<String>> {
+    map_get(schema, key).and_then(|v| {
+        if let Value::Array(arr) = v {
+            Some(
+                arr.iter()
+                    .filter_map(as_text)
+                    .map(String::from)
+                    .collect(),
+            )
+        } else {
+            None
+        }
+    })
+}
+
+/// Count valid (non-surrogate) codepoints in the range [min, max].
+fn count_valid_codepoints(min: u32, max: u32) -> u32 {
+    if min > max {
+        return 0;
+    }
+    let total = max - min + 1;
+    let overlap_lo = 0xD800u32.max(min);
+    let overlap_hi = 0xDFFFu32.min(max);
+    if overlap_lo <= overlap_hi {
+        total - (overlap_hi - overlap_lo + 1)
+    } else {
+        total
+    }
+}
+
+/// Map a 0-based index to a codepoint in [min, max] excluding surrogates.
+fn codepoint_at_index(min: u32, max: u32, idx: u32) -> char {
+    // Count codepoints in [min, min(max, 0xD7FF)] (before surrogates).
+    let pre_max = 0xD7FFu32.min(max);
+    let pre_count = if min <= pre_max { pre_max - min + 1 } else { 0 };
+
+    let cp = if idx < pre_count {
+        min + idx
+    } else {
+        let post_start = 0xE000u32.max(min);
+        post_start + (idx - pre_count)
+    };
+
+    char::from_u32(cp)
+        .unwrap_or_else(|| panic!("codepoint_at_index produced invalid codepoint {:#x}", cp))
+}
+
+fn is_surrogate(c: char) -> bool {
+    let cp = c as u32;
+    is_surrogate_cp(cp)
+}
+
+fn is_surrogate_cp(cp: u32) -> bool {
+    (0xD800..=0xDFFF).contains(&cp)
+}
+
+/// Check if a character belongs to a Unicode general category.
+///
+/// Uses Rust's built-in char methods as approximations for common categories.
+fn char_in_category(c: char, category: &str) -> bool {
+    match category {
+        "Lu" => c.is_alphabetic() && c.is_uppercase(),
+        "Ll" => c.is_alphabetic() && c.is_lowercase(),
+        "Lt" => c.is_alphabetic() && c.is_uppercase(), // Title case approximation
+        "L" | "LC" => c.is_alphabetic(),
+        "Lm" | "Lo" => c.is_alphabetic() && !c.is_uppercase() && !c.is_lowercase(),
+        "Nd" => c.is_ascii_digit(),
+        "No" | "Nl" | "N" => c.is_numeric(),
+        "Zs" => c == ' ',
+        "Z" => c.is_whitespace(),
+        "Pc" => c == '_',
+        "Pd" => c == '-',
+        "P" | "Po" | "Pe" | "Pf" | "Pi" | "Ps" => c.is_ascii_punctuation(),
+        "Sm" => matches!(c, '+' | '<' | '=' | '>' | '|' | '~'),
+        "S" | "Sc" | "Sk" | "So" => {
+            !c.is_alphanumeric() && !c.is_whitespace() && !c.is_control()
+        }
+        "Cc" | "C" => c.is_control(),
+        "Cs" => false, // Surrogates never appear in Rust strings
+        _ => false,    // Unknown category
+    }
 }
 
 /// Advance the many state by one element. Returns true if another element should be drawn.
