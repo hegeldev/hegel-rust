@@ -225,11 +225,16 @@ pub(crate) mod cli;
 pub(crate) mod control;
 pub mod explicit_test_case;
 pub mod generators;
+#[cfg(feature = "native")]
+pub(crate) mod native;
+#[cfg(not(feature = "native"))]
 pub(crate) mod protocol;
 pub(crate) mod runner;
 pub mod stateful;
 mod test_case;
+#[cfg(not(feature = "native"))]
 pub(crate) mod utils;
+#[cfg(not(feature = "native"))]
 mod uv;
 
 #[doc(hidden)]
