@@ -89,8 +89,7 @@ fn interpret_schema(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, S
         "string" => interpret_string(ntc, schema),
         "binary" => interpret_binary(ntc, schema),
 
-        // Schemas that require features beyond what is currently implemented:
-        "float" => todo!("Native backend does not yet support float schema"),
+        "float" => interpret_float(ntc, schema),
         "regex" => todo!("Native backend does not yet support regex schema"),
         "email" => todo!("Native backend does not yet support email schema"),
         "url" => todo!("Native backend does not yet support url schema"),
@@ -106,12 +105,28 @@ fn interpret_schema(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, S
 }
 
 fn interpret_integer(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
-    let min_value = map_get(schema, "min_value")
-        .map(cbor_to_i128)
-        .expect("integer schema must have min_value");
-    let max_value = map_get(schema, "max_value")
-        .map(cbor_to_i128)
-        .expect("integer schema must have max_value");
+    let min_cbor = map_get(schema, "min_value").expect("integer schema must have min_value");
+    let max_cbor = map_get(schema, "max_value").expect("integer schema must have max_value");
+    let min_value = cbor_to_i128(min_cbor);
+    let max_value = cbor_to_i128(max_cbor);
+
+    // If max saturated because it exceeded i128::MAX (e.g. u128::MAX), draw using
+    // a selector + two 64-bit halves to cover the full u128 range.
+    if bignum_overflows_i128(max_cbor) {
+        // Selector: 0 = u128::MIN, 1 = u128::MAX, else = random two-halves.
+        // Edge case boosting on the selector naturally produces the min (0) often.
+        // Selector = 1 gives u128::MAX with ~1% probability.
+        let selector = ntc.draw_integer(0, 99)?;
+        match selector {
+            0 => return Ok(u128_to_cbor(0u128)),
+            1 => return Ok(u128_to_cbor(u128::MAX)),
+            _ => {}
+        }
+        let hi = ntc.draw_integer(0, u64::MAX as i128)?;
+        let lo = ntc.draw_integer(0, u64::MAX as i128)?;
+        let v = ((hi as u128) << 64) | (lo as u128);
+        return Ok(u128_to_cbor(v));
+    }
 
     let v = ntc.draw_integer(min_value, max_value)?;
     Ok(i128_to_cbor(v))
@@ -537,6 +552,62 @@ fn many_reject(ntc: &mut NativeTestCase, state: &mut ManyState) -> Result<(), St
     Ok(())
 }
 
+fn interpret_float(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
+    let width: u64 = map_get(schema, "width").and_then(as_u64).unwrap_or(64);
+    let min_value = map_get(schema, "min_value")
+        .map(cbor_to_f64)
+        .unwrap_or(f64::NEG_INFINITY);
+    let max_value = map_get(schema, "max_value")
+        .map(cbor_to_f64)
+        .unwrap_or(f64::INFINITY);
+    let allow_nan = map_get(schema, "allow_nan")
+        .and_then(as_bool)
+        .unwrap_or(true);
+    let allow_infinity = map_get(schema, "allow_infinity")
+        .and_then(as_bool)
+        .unwrap_or(true);
+    let exclude_min = map_get(schema, "exclude_min")
+        .and_then(as_bool)
+        .unwrap_or(false);
+    let exclude_max = map_get(schema, "exclude_max")
+        .and_then(as_bool)
+        .unwrap_or(false);
+
+    // Adjust bounds by one ULP for exclusive boundaries.
+    // For f32 schemas (width=32), use f32-precision next_up/next_down so that
+    // the adjusted bound is representable as f32 (preventing round-to-boundary bugs).
+    let min_value = if exclude_min && min_value.is_finite() {
+        if width == 32 {
+            (min_value as f32).next_up() as f64
+        } else {
+            min_value.next_up()
+        }
+    } else {
+        min_value
+    };
+    let max_value = if exclude_max && max_value.is_finite() {
+        if width == 32 {
+            (max_value as f32).next_down() as f64
+        } else {
+            max_value.next_down()
+        }
+    } else {
+        max_value
+    };
+
+    let v = ntc.draw_float(min_value, max_value, allow_nan, allow_infinity)?;
+    Ok(Value::Float(v))
+}
+
+/// Extract an f64 from a CBOR value (Float or Integer).
+fn cbor_to_f64(value: &Value) -> f64 {
+    match value {
+        Value::Float(f) => *f,
+        Value::Integer(i) => i128::from(*i) as f64,
+        _ => panic!("Expected CBOR float/integer, got {:?}", value),
+    }
+}
+
 /// Encode a schema value for transport back to the generator.
 ///
 /// Mirrors hegel-core's `_encode_value`: text strings are wrapped in
@@ -586,6 +657,45 @@ fn cbor_to_i128(value: &Value) -> i128 {
 fn cbor_to_i64(value: &Value) -> i64 {
     let n: i128 = cbor_to_i128(value);
     n as i64
+}
+
+/// Return true if the CBOR value is a positive bignum (tag 2) whose value exceeds i128::MAX.
+fn bignum_overflows_i128(value: &Value) -> bool {
+    match value {
+        Value::Tag(2, inner) => {
+            let Value::Bytes(bytes) = inner.as_ref() else {
+                return false;
+            };
+            // Value overflows i128 if it needs more than 16 bytes, or if the high bit
+            // of a 16-byte value is set (i.e. > i128::MAX).
+            if bytes.len() > 16 {
+                return true;
+            }
+            if bytes.len() == 16 && bytes[0] >= 0x80 {
+                return true;
+            }
+            // Also check: if any byte beyond what i128 can hold is non-zero.
+            let mut n = 0u128;
+            for b in bytes {
+                n = (n << 8) | (*b as u128);
+            }
+            n > i128::MAX as u128
+        }
+        _ => false,
+    }
+}
+
+/// Encode a u128 value as CBOR. Values up to u64::MAX use normal integer encoding;
+/// larger values use CBOR positive bignum tag 2 with big-endian bytes.
+fn u128_to_cbor(v: u128) -> Value {
+    if let Ok(n) = u64::try_from(v) {
+        return Value::Integer(n.into());
+    }
+    // Encode as CBOR tag 2 (positive bignum), big-endian, minimal encoding.
+    let bytes = v.to_be_bytes();
+    // Strip leading zero bytes for minimal encoding.
+    let first_nonzero = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len() - 1);
+    Value::Tag(2, Box::new(Value::Bytes(bytes[first_nonzero..].to_vec())))
 }
 
 /// Convert an i128 to a CBOR value.
