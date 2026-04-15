@@ -4,6 +4,8 @@
 // (https://github.com/DRMacIver/pbtkit), specifically core.py.
 // It implements choice-based test case generation with integrated shrinking.
 
+use std::collections::HashMap;
+
 use rand::RngExt;
 use rand::rngs::SmallRng;
 
@@ -162,6 +164,50 @@ pub enum Status {
 /// Raised when a test case should stop executing.
 pub struct StopTest;
 
+/// State for a variable-length collection (port of pbtkit's `many` class).
+///
+/// Tracks count, rejections, and continuation probability so that
+/// `new_collection`/`collection_more`/`collection_reject` protocol commands
+/// can be handled statelessly from the choice sequence.
+pub struct ManyState {
+    pub min_size: usize,
+    pub max_size: f64,
+    pub p_continue: f64,
+    pub count: usize,
+    pub rejections: usize,
+    pub force_stop: bool,
+}
+
+impl ManyState {
+    pub fn new(min_size: usize, max_size: Option<usize>) -> Self {
+        let max_f = max_size.map_or(f64::INFINITY, |n| n as f64);
+        let min_f = min_size as f64;
+        let average = f64::min(
+            f64::max(min_f * 2.0, min_f + 5.0),
+            0.5 * (min_f + max_f),
+        );
+        let desired_extra = average - min_f;
+        let max_extra = max_f - min_f;
+
+        let p_continue = if desired_extra >= max_extra {
+            0.99
+        } else if max_f.is_infinite() {
+            1.0 - 1.0 / (1.0 + desired_extra)
+        } else {
+            1.0 - 1.0 / (2.0 + desired_extra)
+        };
+
+        ManyState {
+            min_size,
+            max_size: max_f,
+            p_continue,
+            count: 0,
+            rejections: 0,
+            force_stop: false,
+        }
+    }
+}
+
 /// A test case backed by a sequence of typed choices.
 ///
 /// During random generation, choices are drawn from the RNG.
@@ -173,6 +219,9 @@ pub struct NativeTestCase {
     max_size: usize,
     pub nodes: Vec<ChoiceNode>,
     pub status: Option<Status>,
+    /// Active collection states keyed by collection ID.
+    pub collections: HashMap<i64, ManyState>,
+    next_collection_id: i64,
 }
 
 impl NativeTestCase {
@@ -185,6 +234,8 @@ impl NativeTestCase {
             max_size: BUFFER_SIZE,
             nodes: Vec::new(),
             status: None,
+            collections: HashMap::new(),
+            next_collection_id: 0,
         }
     }
 
@@ -197,7 +248,17 @@ impl NativeTestCase {
             max_size: choices.len(),
             nodes: Vec::new(),
             status: None,
+            collections: HashMap::new(),
+            next_collection_id: 0,
         }
+    }
+
+    /// Allocate a new collection ID and store the given state.
+    pub fn new_collection(&mut self, state: ManyState) -> i64 {
+        let id = self.next_collection_id;
+        self.next_collection_id += 1;
+        self.collections.insert(id, state);
+        id
     }
 
     /// Draw a random integer in [min_value, max_value].
