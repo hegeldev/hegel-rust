@@ -84,3 +84,41 @@ fn test_large_base_example_suppressed(tc: TestCase) {
         let _: Vec<i32> = tc.draw(gs::vecs(gs::integers()).min_size(50).max_size(50));
     }
 }
+
+/// When a test case takes longer than the TooSlow threshold, the health check fires.
+#[cfg(feature = "native")]
+#[test]
+fn native_too_slow_detected() {
+    let result = std::panic::catch_unwind(|| {
+        hegel::Hegel::new(|_tc: hegel::TestCase| {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        })
+        .run();
+    });
+    let payload = result.unwrap_err();
+    let msg = payload
+        .downcast_ref::<String>()
+        .map(|s| s.as_str())
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(
+        msg.contains("TooSlow") || msg.contains("too long"),
+        "expected TooSlow health check error, got: {msg}"
+    );
+}
+
+/// TooSlow detection is suppressed when HealthCheck::TooSlow is in suppress_health_check.
+#[cfg(feature = "native")]
+#[test]
+fn native_too_slow_suppressed() {
+    // test_cases = 1 to avoid a 30-second test (300ms * 100 examples).
+    hegel::Hegel::new(|_tc: hegel::TestCase| {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    })
+    .settings(
+        hegel::Settings::new()
+            .test_cases(1)
+            .suppress_health_check([HealthCheck::TooSlow]),
+    )
+    .run();
+}
