@@ -235,6 +235,22 @@ fn native_regex_bytes_class_empty_after_filter() {
     .run();
 }
 
+/// Regression test: FloatChoice::simplest() must return -∞ (not panic) when
+/// the effective max is -∞. This is triggered by max_value(f64::MIN) with
+/// exclude_max=true, where f64::MIN.next_down() = f64::NEG_INFINITY.
+/// The only valid float in that range is -∞, so every draw must return -∞.
+#[test]
+fn native_float_neg_inf_boundary_simplest() {
+    // max_value(f64::MIN).exclude_max(true) → effective max = f64::MIN.next_down() = -∞
+    // allow_nan defaults to false (because max is set), allow_infinity defaults to true.
+    // The only valid value is -∞; simplest() must return it without panicking.
+    hegel::Hegel::new(|tc: hegel::TestCase| {
+        let v: f64 = tc.draw(gs::floats::<f64>().max_value(f64::MIN).exclude_max(true));
+        assert_eq!(v, f64::NEG_INFINITY);
+    })
+    .run();
+}
+
 /// interpret_string with a surrogate-only range (e.g. [0xD800, 0xDFFF]) should
 /// mark the test case as Invalid instead of panicking, so it is filtered out.
 #[test]
