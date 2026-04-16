@@ -55,7 +55,8 @@ fn test_2(tc: hegel::TestCase) {{
     let project = TempRustProject::new()
         .test_file("integration.rs", &test_code)
         .env("VALUES_DIR", values_path.to_str().unwrap())
-        .expect_failure("Property test failed");
+        // "FAILED" appears in cargo test output for both native and server backends.
+        .expect_failure("FAILED");
 
     // run test_1. Database now has a failing entry for test_1
     project.cargo_test(&["test_1"]);
