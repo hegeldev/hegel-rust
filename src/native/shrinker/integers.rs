@@ -78,10 +78,8 @@ impl<'a> Shrinker<'a> {
                     } else {
                         8
                     };
-                    let cur_v = if let ChoiceValue::Integer(cv) = self.current_nodes[i].value {
-                        cv
-                    } else {
-                        v
+                    let ChoiceValue::Integer(cur_v) = self.current_nodes[i].value else {
+                        unreachable!()
                     };
                     for c in lo..lo.saturating_add(scan_count).min(cur_v) {
                         if !self.replace(&HashMap::from([(i, ChoiceValue::Integer(c))])) {
@@ -90,10 +88,8 @@ impl<'a> Shrinker<'a> {
                     }
                     // Also try negative values with smaller absolute value (simpler).
                     if ic.min_value < 0 {
-                        let cur_v = if let ChoiceValue::Integer(cv) = self.current_nodes[i].value {
-                            cv
-                        } else {
-                            v
+                        let ChoiceValue::Integer(cur_v) = self.current_nodes[i].value else {
+                            unreachable!()
                         };
                         if cur_v > 0 {
                             let upper = (cur_v - 1).min(-ic.min_value);
@@ -118,10 +114,8 @@ impl<'a> Shrinker<'a> {
                     }
                     // Also try positive values with smaller absolute value (simpler).
                     if ic.max_value > 0 {
-                        let cur_v = if let ChoiceValue::Integer(cv) = self.current_nodes[i].value {
-                            cv
-                        } else {
-                            v
+                        let ChoiceValue::Integer(cur_v) = self.current_nodes[i].value else {
+                            unreachable!()
                         };
                         if cur_v < 0 {
                             let upper = (-cur_v - 1).min(ic.max_value);
@@ -200,26 +194,17 @@ impl<'a> Shrinker<'a> {
                 let i = current_ints[pair_idx];
                 let j = current_ints[pair_idx + gap];
 
-                let (prev_i, prev_j) = {
-                    let ni = &self.current_nodes[i];
-                    let nj = &self.current_nodes[j];
-                    match (&ni.value, &nj.value) {
-                        (ChoiceValue::Integer(a), ChoiceValue::Integer(b)) => (*a, *b),
-                        _ => {
-                            if pair_idx == 0 {
-                                break;
-                            }
-                            pair_idx -= 1;
-                            continue;
-                        }
-                    }
+                let ChoiceValue::Integer(prev_i) = self.current_nodes[i].value else {
+                    unreachable!()
+                };
+                let ChoiceValue::Integer(prev_j) = self.current_nodes[j].value else {
+                    unreachable!()
                 };
 
-                let simplest_i = if let ChoiceKind::Integer(ic) = &self.current_nodes[i].kind {
-                    ic.simplest()
-                } else {
-                    0
+                let ChoiceKind::Integer(ic_i) = &self.current_nodes[i].kind else {
+                    unreachable!()
                 };
+                let simplest_i = ic_i.simplest();
 
                 if prev_i != simplest_i {
                     if prev_i > 0 {
@@ -283,11 +268,10 @@ impl<'a> Shrinker<'a> {
                 continue;
             }
 
-            let ic = if let ChoiceKind::Integer(ic) = &self.current_nodes[valid[0]].kind {
-                ic.clone()
-            } else {
-                continue;
+            let ChoiceKind::Integer(ic) = &self.current_nodes[valid[0]].kind else {
+                unreachable!()
             };
+            let ic = ic.clone();
 
             // Try setting all to simplest simultaneously.
             let simplest = ic.simplest();
@@ -300,10 +284,8 @@ impl<'a> Shrinker<'a> {
             }
 
             // Re-read current value after possible replacement.
-            let cur_value = if let ChoiceValue::Integer(v) = self.current_nodes[valid[0]].value {
-                v
-            } else {
-                continue;
+            let ChoiceValue::Integer(cur_value) = self.current_nodes[valid[0]].value else {
+                unreachable!()
             };
 
             // Binary search all simultaneously toward zero.
