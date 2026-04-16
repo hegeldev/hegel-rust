@@ -96,20 +96,68 @@ impl FloatChoice {
         if self.validate(0.0) {
             return 0.0;
         }
-        // Among finite boundaries, pick the one with the smallest sort key.
-        // Positive floats sort before negative of the same magnitude.
+
         let mut best: Option<f64> = None;
         let mut best_key: (u64, bool) = (u64::MAX, true);
-        for &v in &[self.min_value, self.max_value] {
-            if v.is_finite() {
-                let is_neg = v.is_sign_negative();
-                let key = (float_to_index(v.abs()), is_neg);
-                if key < best_key {
-                    best = Some(v);
-                    best_key = key;
+
+        // Update best if v is valid and has a smaller sort key.
+        macro_rules! try_candidate {
+            ($v:expr) => {{
+                let v: f64 = $v;
+                if !v.is_nan() && self.validate(v) {
+                    let is_neg = v.is_sign_negative();
+                    let mag = if is_neg { -v } else { v };
+                    let key = (float_to_index(mag), is_neg);
+                    if key < best_key {
+                        best = Some(v);
+                        best_key = key;
+                    }
                 }
+            }};
+        }
+
+        // Check boundaries first.
+        if self.min_value.is_finite() {
+            try_candidate!(self.min_value);
+        }
+        if self.max_value.is_finite() {
+            try_candidate!(self.max_value);
+        }
+
+        // Check the smallest valid positive integer in range.
+        // In our ordering, positive integer n has sort_key (n, false) — very small.
+        if self.max_value >= 0.0 {
+            let lo_int = self.min_value.max(0.0).ceil() as i64;
+            try_candidate!(lo_int as f64);
+        }
+        // Also the largest valid negative integer (closest to zero), which has
+        // sort_key (n, true) slightly worse than positive but still small.
+        if self.min_value <= 0.0 {
+            let hi_int = self.max_value.min(0.0).floor() as i64;
+            try_candidate!(hi_int as f64);
+        }
+
+        // Check simple non-integer fractions at each exponent level.
+        // In our ordering, non-integer floats have indices starting at (1<<63),
+        // and small mantissa_enc values correspond to simple fractions (1.5, 1.25, ...).
+        // For each exponent range, try the first few mantissa_enc values.
+        for exp_enc in 0u64..64 {
+            let base_idx = (1u64 << 63) | (exp_enc << 52);
+            // If base_idx is already larger than our best, no improvement possible.
+            if (base_idx, false) >= best_key {
+                break;
+            }
+            for mantissa_enc in 0u64..8 {
+                let idx = base_idx | mantissa_enc;
+                if (idx, false) >= best_key {
+                    break;
+                }
+                let v = index_to_float(idx);
+                try_candidate!(v);
+                try_candidate!(-v);
             }
         }
+
         if let Some(v) = best {
             return v;
         }
@@ -501,6 +549,22 @@ impl NativeVariables {
     }
 }
 
+/// A span within the choice sequence, labelled by schema type.
+///
+/// Recorded by `interpret_schema` to enable span-mutation exploration:
+/// finding two spans with the same label and replacing both with identical
+/// choices makes structures (like two strings) structurally identical,
+/// which is how `test_long_duplicates_strings`-style tests are found.
+#[derive(Clone, Debug)]
+pub struct Span {
+    /// Index of the first choice node in this span.
+    pub start: usize,
+    /// Index one past the last choice node in this span (exclusive).
+    pub end: usize,
+    /// Schema type name (e.g. "string", "integer").
+    pub label: String,
+}
+
 /// A test case backed by a sequence of typed choices.
 ///
 /// During random generation, choices are drawn from the RNG.
@@ -517,6 +581,8 @@ pub struct NativeTestCase {
     next_collection_id: i64,
     /// Variable pools for stateful testing.
     pub variable_pools: Vec<NativeVariables>,
+    /// Spans recorded by `interpret_schema` for span-mutation exploration.
+    pub spans: Vec<Span>,
 }
 
 impl NativeTestCase {
@@ -532,6 +598,7 @@ impl NativeTestCase {
             collections: HashMap::new(),
             next_collection_id: 0,
             variable_pools: Vec::new(),
+            spans: Vec::new(),
         }
     }
 
@@ -547,6 +614,17 @@ impl NativeTestCase {
             collections: HashMap::new(),
             next_collection_id: 0,
             variable_pools: Vec::new(),
+            spans: Vec::new(),
+        }
+    }
+
+    /// Record a span covering choice nodes [start, end) with the given label.
+    ///
+    /// Only non-empty spans (where `end > start`) are recorded, since empty
+    /// spans cannot be used for span-mutation exploration.
+    pub fn record_span(&mut self, start: usize, end: usize, label: String) {
+        if end > start {
+            self.spans.push(Span { start, end, label });
         }
     }
 
