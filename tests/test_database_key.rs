@@ -16,7 +16,8 @@ fn test_database_key_replays_failure() {
     let temp_dir = tempfile::TempDir::new().unwrap();
     let db_path = temp_dir.path().join("database");
     std::fs::create_dir_all(&db_path).unwrap();
-    let db_str = db_path.to_str().unwrap();
+    // Use forward slashes to avoid invalid escape sequences in generated Rust string literals
+    let db_str = db_path.to_str().unwrap().replace('\\', "/");
 
     let test_code = format!(
         r#"
