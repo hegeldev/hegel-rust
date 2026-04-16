@@ -10,6 +10,8 @@ pub mod float_index;
 mod state;
 
 pub use choices::{ChoiceKind, ChoiceNode, ChoiceValue, NodeSortKey, Status, StopTest, sort_key};
+#[cfg(test)]
+pub use choices::{BooleanChoice, IntegerChoice};
 pub use float_index::{float_to_index, index_to_float};
 pub use state::{ManyState, NativeTestCase, NativeVariables, Span};
 

@@ -13,3 +13,4 @@ pub mod database;
 pub mod runner;
 pub mod schema;
 pub mod shrinker;
+pub mod tree;

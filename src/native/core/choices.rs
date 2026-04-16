@@ -44,7 +44,7 @@ impl IntegerChoice {
 }
 
 /// A boolean choice. Simplest value is `false`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BooleanChoice;
 
 impl BooleanChoice {
@@ -67,6 +67,17 @@ pub struct FloatChoice {
     pub allow_nan: bool,
     pub allow_infinity: bool,
 }
+
+impl PartialEq for FloatChoice {
+    fn eq(&self, other: &Self) -> bool {
+        self.min_value.to_bits() == other.min_value.to_bits()
+            && self.max_value.to_bits() == other.max_value.to_bits()
+            && self.allow_nan == other.allow_nan
+            && self.allow_infinity == other.allow_infinity
+    }
+}
+
+impl Eq for FloatChoice {}
 
 impl FloatChoice {
     /// The simplest (lowest-sort-key) valid float for this choice.
@@ -200,7 +211,7 @@ impl FloatChoice {
 }
 
 /// The kind of choice made at a particular point.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChoiceKind {
     Integer(IntegerChoice),
     Boolean(BooleanChoice),
