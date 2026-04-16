@@ -1,3 +1,4 @@
 RELEASE_TYPE: patch
 
-This patch adds a Windows CI workflow and gates Unix-only protocol tests so they compile on Windows.
+This patch adds windows support for hegel-rust. It is somewhat experimental, but the full 
+feature set should work.
