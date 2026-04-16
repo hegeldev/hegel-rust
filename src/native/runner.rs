@@ -351,9 +351,16 @@ fn run_one_test_case_full<F: FnMut(TestCase)>(
                             }
                         }
                     }
-                    // Store the payload so native_run can re-raise it via
-                    // resume_unwind (avoids a second panic message on stderr).
-                    LAST_PANIC_PAYLOAD.with(|p| *p.borrow_mut() = Some(e));
+                    // Wrap the message to match the server backend's format
+                    // ("Property test failed: <original>"), then store it so
+                    // native_run can re-raise via resume_unwind.  Wrapping lets
+                    // existing test helpers that check for "Property test
+                    // failed" work identically in both backends.  Using
+                    // resume_unwind avoids calling the panic hook a second time
+                    // (no duplicate stderr message).
+                    let wrapped: Box<dyn std::any::Any + Send> =
+                        Box::new(format!("Property test failed: {msg}"));
+                    LAST_PANIC_PAYLOAD.with(|p| *p.borrow_mut() = Some(wrapped));
                 }
                 (Status::Interesting, Some(msg))
             }
