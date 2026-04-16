@@ -11,10 +11,10 @@ use rand::rngs::SmallRng;
 
 use crate::antithesis::TestLocation;
 use crate::native::core::{ChoiceNode, ChoiceValue, NativeTestCase, Span, Status, sort_key};
+use crate::native::database::NativeDatabase;
 use crate::native::shrinker::Shrinker;
 use crate::native::tree::CachedTestFunction;
 use crate::runner::{Database, HealthCheck, Settings, Verbosity};
-use crate::native::database::NativeDatabase;
 use crate::test_case::TestCase;
 
 static NATIVE_PANIC_HOOK_INIT: Once = Once::new();
@@ -118,8 +118,7 @@ pub(crate) fn store_final_panic_info(msg: &str) {
     // failed" work identically in both backends.  Using
     // resume_unwind avoids calling the panic hook a second time
     // (no duplicate stderr message).
-    let wrapped: Box<dyn std::any::Any + Send> =
-        Box::new(format!("Property test failed: {msg}"));
+    let wrapped: Box<dyn std::any::Any + Send> = Box::new(format!("Property test failed: {msg}"));
     LAST_PANIC_PAYLOAD.with(|p| *p.borrow_mut() = Some(wrapped));
 }
 
@@ -258,8 +257,7 @@ pub fn native_run<F>(
                 }
             } else if status == Status::Valid {
                 // Try span mutations on this valid test case to find interesting ones.
-                let mutation_result =
-                    try_span_mutation(&nodes, &spans, &mut rng, &mut ctf);
+                let mutation_result = try_span_mutation(&nodes, &spans, &mut rng, &mut ctf);
                 calls += SPAN_MUTATION_ATTEMPTS as u64;
                 if let Some(mut_nodes) = mutation_result {
                     if result.is_none() || sort_key(&mut_nodes) < sort_key(result.as_ref().unwrap())
@@ -333,11 +331,9 @@ pub fn native_run<F>(
         );
 
         #[cfg(feature = "antithesis")]
-        // nocov start
         if let Some(loc) = test_location {
             crate::antithesis::emit_assertion(loc, !test_failed);
         }
-        // nocov end
     }
     // Suppress unused-variable warnings for the non-antithesis-feature build: both
     // variables are only consumed inside the is_running_in_antithesis() block above.
