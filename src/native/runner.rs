@@ -17,7 +17,7 @@ use crate::native::core::{
 };
 use crate::native::database::NativeDatabase;
 use crate::native::shrinker::Shrinker;
-use crate::runner::{Database, Settings, Verbosity};
+use crate::runner::{Database, HealthCheck, Settings, Verbosity};
 use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING, TestCase};
 
 static NATIVE_PANIC_HOOK_INIT: Once = Once::new();
@@ -93,6 +93,11 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 const RANDOM_GENERATION_BATCH: u64 = 10;
 const SPAN_MUTATION_ATTEMPTS: usize = 5;
 
+/// Maximum number of consecutive filtered (assume()-failed) test cases before
+/// FilterTooMuch is reported.  Mirrors Hypothesis's `max_invalid_draws` setting,
+/// but scaled up slightly to be less sensitive to mild filtering.
+const FILTER_TOO_MUCH_THRESHOLD: u64 = 200;
+
 /// Entry point for native-backend test execution.
 ///
 /// Called from `Hegel::run()` when the `native` feature is enabled.
@@ -120,6 +125,7 @@ pub fn native_run<F>(
     let mut valid_test_cases: u64 = 0;
     let mut calls: u64 = 0;
     let mut test_is_trivial = false;
+    let mut invalid_calls: u64 = 0;
 
     // --- Database replay phase ---
     // If a stored counterexample exists for this key, try it before random
@@ -162,6 +168,29 @@ pub fn native_run<F>(
             }
             if status >= Status::Valid {
                 valid_test_cases += 1;
+            }
+            if status == Status::Invalid {
+                invalid_calls += 1;
+                // FilterTooMuch health check: if a large number of consecutive test
+                // cases are all filtered out (via assume()) before any valid example
+                // is found, report a health check failure.
+                if invalid_calls >= FILTER_TOO_MUCH_THRESHOLD
+                    && valid_test_cases == 0
+                    && !settings
+                        .suppress_health_check
+                        .contains(&HealthCheck::FilterTooMuch)
+                {
+                    panic!(
+                        "FailedHealthCheck: FilterTooMuch — it looks like this \
+                         test is filtering out too many inputs. \
+                         {invalid_calls} inputs were filtered out by assume() \
+                         before any valid input was generated. \
+                         If this is expected, suppress the check with \
+                         suppress_health_check = [HealthCheck::FilterTooMuch]."
+                    );
+                }
+            } else {
+                invalid_calls = 0;
             }
             if status == Status::Interesting {
                 if result.is_none() || sort_key(&nodes) < sort_key(result.as_ref().unwrap()) {
@@ -254,8 +283,9 @@ pub fn native_run<F>(
             if let Some(payload) = take_panic_payload() {
                 std::panic::resume_unwind(payload);
             }
-            // Fallback (shouldn't happen in practice).
-            panic!("Property test failed");
+            // This branch should be unreachable: if the final replay is
+            // Interesting, the panic hook must have stored a payload.
+            panic!("BUG: final replay was Interesting but no panic payload was stored; this is a bug in the native runner");
         } else {
             // The replay passed even though we had a shrunk counterexample.
             // This means the test outcome depends on external state — it is
