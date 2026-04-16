@@ -67,21 +67,15 @@ pub(super) fn interpret_binary(
     schema: &Value,
 ) -> Result<Value, StopTest> {
     let min_size = map_get(schema, "min_size").and_then(as_u64).unwrap_or(0) as usize;
+    // If max_size is unbounded in the schema, fall back to a generous cap.
+    // pbtkit and the server backend both truncate generation at some finite
+    // ceiling; matching that keeps shrinker and cache behavior sensible.
     let max_size = map_get(schema, "max_size")
         .and_then(as_u64)
-        .map(|n| n as usize);
+        .map(|n| n as usize)
+        .unwrap_or(100);
 
-    let mut state = ManyState::new(min_size, max_size);
-    let mut bytes = Vec::new();
-
-    loop {
-        if !many_more(ntc, &mut state)? {
-            break;
-        }
-        let byte = ntc.draw_integer(0, 255)?;
-        bytes.push(byte as u8);
-    }
-
+    let bytes = ntc.draw_bytes(min_size, max_size)?;
     Ok(Value::Bytes(bytes))
 }
 

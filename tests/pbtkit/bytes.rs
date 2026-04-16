@@ -64,15 +64,15 @@ fn test_shrinks_bytes_to_simplest() {
 
 #[test]
 fn test_bytes_from_index_out_of_range() {
-    // TODO: BytesChoice and its `from_index`/`max_index` API are pbtkit
-    // engine internals with no public hegel-rust equivalent.
+    // TODO: hegel-rust's BytesChoice doesn't expose from_index/max_index
+    // (pbtkit's shortlex index API). Could be added if indexing-based shrink
+    // passes are ever ported; not blocking any current functionality.
     todo!()
 }
 
 #[test]
 fn test_bytes_from_index_past_end() {
-    // TODO: BytesChoice and its `from_index`/`max_index` API are pbtkit
-    // engine internals with no public hegel-rust equivalent.
+    // TODO: see test_bytes_from_index_out_of_range.
     todo!()
 }
 
@@ -84,14 +84,13 @@ fn test_targeting_with_bytes() {
 
 #[test]
 fn test_bytes_choice_unit() {
-    // TODO: BytesChoice.unit is a pbtkit engine internal with no public
-    // hegel-rust equivalent.
-    todo!()
+    // BytesChoice::unit is ported as embedded tests in
+    // tests/embedded/native/choices_tests.rs (bytes_choice_unit_*).
 }
 
 #[test]
 fn test_bytes_sort_key_type_mismatch() {
-    // TODO: BytesChoice.sort_key is a pbtkit engine internal with no
-    // public hegel-rust equivalent.
-    todo!()
+    // TODO: hegel-rust's sort_key is strongly typed on BytesChoice, so there
+    // is no dynamic-typing path to exercise (the equivalent test is trivially
+    // satisfied by the type system).
 }
