@@ -160,13 +160,21 @@ impl TempRustProject {
             std::fs::copy(&lock_src, project_path.join("Cargo.lock")).unwrap();
         }
 
+        // When the outer test suite is compiled with --features native, automatically
+        // enable the native feature in all TempRustProject subprocesses so they exercise
+        // the same backend rather than silently falling back to the server path.
+        #[cfg_attr(not(feature = "native"), allow(unused_mut))]
+        let mut features = Vec::new();
+        #[cfg(feature = "native")]
+        features.push("native".to_string());
+
         Self {
             _temp_dir: temp_dir,
             project_path,
             crate_name,
             env_vars: Vec::new(),
             env_removes: Vec::new(),
-            features: Vec::new(),
+            features,
             expect_failure: None,
         }
     }
