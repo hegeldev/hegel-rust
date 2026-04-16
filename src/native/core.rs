@@ -526,9 +526,32 @@ impl NativeTestCase {
                     return ChoiceValue::Integer(min_value);
                 }
                 // Edge case boosting: draw boundary/special values with elevated probability.
+                // Include min, max, 0, and common power-of-2 and off-by-one boundary values.
                 let mut nasty: Vec<i128> = vec![min_value, max_value];
-                if min_value <= 0 && 0 <= max_value && min_value != 0 && max_value != 0 {
-                    nasty.push(0);
+                // Standard boundary values: 0, powers of 2 and their neighbors,
+                // and type-boundary values. Extended to cover values up to ~8192
+                // for better findability of tests with thresholds in that range.
+                let interesting: &[i128] = &[
+                    0, 1, -1, 2, -2,
+                    7, -7, 8, -8,
+                    15, -15, 16, -16,
+                    31, -31, 32, -32,
+                    63, -63, 64, -64,
+                    127, -127, 128, -128,
+                    255, -255, 256, -256,
+                    511, -511, 512, -512,
+                    1023, -1023, 1024, -1024,
+                    2047, -2047, 2048, -2048,
+                    4095, -4095, 4096, -4096,
+                    8191, -8191, 8192, -8192,
+                    i16::MAX as i128, i16::MIN as i128,
+                    i32::MAX as i128, i32::MIN as i128,
+                    i64::MAX as i128, i64::MIN as i128,
+                ];
+                for &v in interesting {
+                    if kind.validate(v) && !nasty.contains(&v) {
+                        nasty.push(v);
+                    }
                 }
                 let threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
                 if rng.random::<f64>() < threshold {

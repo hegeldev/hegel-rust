@@ -262,8 +262,21 @@ fn interpret_string(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, S
 enum StringAlphabet {
     /// Contiguous codepoint range [min, max] with surrogates excluded.
     Range { min: u32, max: u32 },
-    /// Explicit list of valid characters.
+    /// Explicit list of valid characters, ordered by `codepoint_key`.
     Explicit(Vec<char>),
+}
+
+/// Sort key for codepoints: maps '0' (48) to 0, '1' to 1, ..., and
+/// reorders low 128 codepoints so '0' is simplest.
+/// Non-ASCII codepoints keep their natural order (key = codepoint).
+///
+/// Port of pbtkit's `_codepoint_key`.
+fn codepoint_sort_key(c: u32) -> u32 {
+    if c < 128 {
+        (c + 80) % 128  // = (c - 48 + 128) % 128
+    } else {
+        c
+    }
 }
 
 impl StringAlphabet {
@@ -276,13 +289,52 @@ impl StringAlphabet {
         }
     }
 
+    /// Return the character at position `idx` in `codepoint_sort_key` order.
+    ///
+    /// Index 0 returns '0' (codepoint 48) for alphabets that contain it,
+    /// matching pbtkit's shrinking behavior where '0' is the simplest char.
     fn char_at(&self, idx: usize) -> char {
         match self {
             StringAlphabet::Range { min, max } => {
-                codepoint_at_index(*min, *max, idx as u32)
+                keyed_codepoint_at_index(*min, *max, idx)
             }
             StringAlphabet::Explicit(v) => v[idx],
         }
+    }
+}
+
+/// Return the character at `idx` in codepoint_sort_key order within [min, max].
+///
+/// ASCII chars (0-127) come first, sorted by codepoint_sort_key.
+/// Non-ASCII chars (128+) come after, in natural codepoint order.
+fn keyed_codepoint_at_index(min: u32, max: u32, idx: usize) -> char {
+    // Count ASCII chars in the range.
+    let ascii_end = max.min(127);
+    let ascii_start = min.min(128);
+    let ascii_count = if ascii_start <= ascii_end {
+        count_valid_codepoints(ascii_start, ascii_end) as usize
+    } else {
+        0
+    };
+
+    if idx < ascii_count {
+        // Find the idx-th ASCII char in codepoint_sort_key order.
+        // Iterate all 128 key values; key ki corresponds to codepoint (ki+48)%128.
+        let mut found = 0usize;
+        for ki in 0u32..128 {
+            let c = (ki + 48) % 128;  // key_to_codepoint
+            if c >= ascii_start && c <= ascii_end {
+                if found == idx {
+                    return char::from_u32(c).unwrap();
+                }
+                found += 1;
+            }
+        }
+        panic!("keyed_codepoint_at_index: ASCII index out of range");
+    } else {
+        // Non-ASCII chars: natural order, skipping surrogates.
+        let non_ascii_start = min.max(128);
+        codepoint_at_index(non_ascii_start, max, (idx - ascii_count) as u32)
     }
 }
 
@@ -320,7 +372,7 @@ fn build_string_alphabet(schema: &Value) -> StringAlphabet {
     if let Some(ref cats) = categories {
         if cats.is_empty() {
             let base: Vec<char> = include_chars.unwrap_or_default();
-            let filtered: Vec<char> = base
+            let mut filtered: Vec<char> = base
                 .into_iter()
                 .filter(|c| {
                     let cp = *c as u32;
@@ -333,6 +385,7 @@ fn build_string_alphabet(schema: &Value) -> StringAlphabet {
                             .unwrap_or(false)
                 })
                 .collect();
+            filtered.sort_by_key(|c| codepoint_sort_key(*c as u32));
             return StringAlphabet::Explicit(filtered);
         }
     }
@@ -402,6 +455,9 @@ fn build_string_alphabet(schema: &Value) -> StringAlphabet {
             }
         }
     }
+
+    // Sort by codepoint_sort_key so index 0 → '0' (simplest under shrinking).
+    alphabet.sort_by_key(|c| codepoint_sort_key(*c as u32));
 
     StringAlphabet::Explicit(alphabet)
 }
