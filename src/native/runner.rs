@@ -167,14 +167,8 @@ pub fn native_run<F>(
                 let (status, new_nodes) = run_one_test_case(ntc, &mut test_fn, verbosity, false);
                 calls += 1;
 
-                if status == Status::Interesting {
-                    if sort_key(&new_nodes) < sort_key(candidate_nodes) {
-                        // The shrinker's consider() handles updating current_nodes
-                    }
-                    true
-                } else {
-                    false
-                }
+                let is_interesting = status == Status::Interesting;
+                (is_interesting, new_nodes.len())
             }),
             best_nodes.clone(),
         );
