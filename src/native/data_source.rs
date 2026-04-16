@@ -98,10 +98,13 @@ impl DataSource for NativeDataSource {
                 let n: i128 = i.into();
                 Ok(n.to_string())
             }
-            _ => { panic!("CANARY:src/native/data_source.rs:100"); panic!(
-                "Expected integer response from new_collection, got {:?}",
-                response
-            ) },
+            _ => {
+                panic!("CANARY:src/native/data_source.rs:100");
+                panic!(
+                    "Expected integer response from new_collection, got {:?}",
+                    response
+                )
+            }
         }
     }
 
@@ -114,7 +117,10 @@ impl DataSource for NativeDataSource {
         )?;
         match response {
             Value::Bool(b) => Ok(b),
-            _ => { panic!("CANARY:src/native/data_source.rs:116"); panic!("Expected bool from collection_more, got {:?}", response) },
+            _ => {
+                panic!("CANARY:src/native/data_source.rs:116");
+                panic!("Expected bool from collection_more, got {:?}", response)
+            }
         }
     }
 
@@ -138,7 +144,10 @@ impl DataSource for NativeDataSource {
         let response = self.dispatch("new_pool", &cbor_map! {})?;
         match response {
             Value::Integer(i) => Ok(i.into()),
-            other => { panic!("CANARY:src/native/data_source.rs:140"); panic!("Expected integer for pool id, got {:?}", other) },
+            other => {
+                panic!("CANARY:src/native/data_source.rs:140");
+                panic!("Expected integer for pool id, got {:?}", other)
+            }
         }
     }
 
@@ -147,7 +156,10 @@ impl DataSource for NativeDataSource {
         let response = self.dispatch("pool_add", &cbor_map! {"pool_id" => pool_id})?;
         match response {
             Value::Integer(i) => Ok(i.into()),
-            other => { panic!("CANARY:src/native/data_source.rs:149"); panic!("Expected integer for variable id, got {:?}", other) },
+            other => {
+                panic!("CANARY:src/native/data_source.rs:149");
+                panic!("Expected integer for variable id, got {:?}", other)
+            }
         }
     }
 
@@ -163,7 +175,10 @@ impl DataSource for NativeDataSource {
         )?;
         match response {
             Value::Integer(i) => Ok(i.into()),
-            other => { panic!("CANARY:src/native/data_source.rs:164"); panic!("Expected integer for variable id, got {:?}", other) },
+            other => {
+                panic!("CANARY:src/native/data_source.rs:164");
+                panic!("Expected integer for variable id, got {:?}", other)
+            }
         }
     }
 
