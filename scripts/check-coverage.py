@@ -65,6 +65,9 @@ from pathlib import Path
 
 RATCHET_FILE = Path(".github/coverage-ratchet.json")
 SOURCE_DIRS = [Path("src"), Path("hegel-macros/src")]
+# Directories where // nocov is banned outright. The native backend has no
+# legitimate reason for nocov — everything there is testable.
+NOCOV_BANNED_DIRS = [Path("src/native")]
 
 # ──────────────────────────────────────────────────────────────────────
 # nocov block cache
@@ -652,6 +655,48 @@ def write_ratchet(nocov: int, key: str = "nocov") -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Banned directories
+# ──────────────────────────────────────────────────────────────────────
+
+
+def check_banned_nocov() -> int:
+    """Check that no // nocov annotations exist in banned directories.
+
+    Returns 0 if clean, 1 if violations found.
+    """
+    nocov_pattern = re.compile(r"//\s*nocov\b")
+    violations: list[tuple[Path, int, str]] = []
+
+    for banned_dir in NOCOV_BANNED_DIRS:
+        if not banned_dir.exists():
+            continue
+        for rs_file in sorted(banned_dir.rglob("*.rs")):
+            try:
+                with rs_file.open() as f:
+                    for i, line in enumerate(f, 1):
+                        if nocov_pattern.search(line):
+                            violations.append((rs_file, i, line.rstrip("\n")))
+            except (OSError, IOError):
+                continue
+
+    if not violations:
+        return 0
+
+    print("\n// nocov is BANNED in the following directories:")
+    for d in NOCOV_BANNED_DIRS:
+        print(f"  {d}/")
+    print(f"\nFound {len(violations)} violation(s):")
+    for file_path, line_num, content in violations:
+        try:
+            rel = file_path.relative_to(Path.cwd())
+        except ValueError:
+            rel = file_path
+        print(f"  {rel}:{line_num}: {content.strip()}")
+    print("\nRemove the // nocov annotations and add tests instead.")
+    return 1
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Analysis
 # ──────────────────────────────────────────────────────────────────────
 
@@ -729,6 +774,10 @@ def main() -> int:
     args = parser.parse_args()
     native_mode: bool = args.native
     ratchet_key = "nocov_native" if native_mode else "nocov"
+
+    # 0. Check for banned nocov annotations (fast, no compilation needed)
+    if check_banned_nocov() != 0:
+        return 1
 
     # 1. Generate coverage
     lcov_path = run_coverage(native_mode=native_mode)
