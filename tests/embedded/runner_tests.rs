@@ -74,7 +74,10 @@ fn test_wait_for_exit_timeout() {
     #[cfg(unix)]
     let mut child = Command::new("sleep").arg("100").spawn().unwrap();
     #[cfg(windows)]
-    let mut child = Command::new("cmd").args(["/C", "ping -n 100 127.0.0.1 >nul"]).spawn().unwrap();
+    let mut child = Command::new("cmd")
+        .args(["/C", "ping -n 100 127.0.0.1 >nul"])
+        .spawn()
+        .unwrap();
     let result = wait_for_exit(&mut child, Duration::from_millis(50));
     assert!(result.is_none());
     let _ = child.kill();
@@ -224,7 +227,10 @@ fn test_handle_handshake_failure_child_hangs() {
     #[cfg(unix)]
     let mut child = Command::new("sleep").arg("100").spawn().unwrap();
     #[cfg(windows)]
-    let mut child = Command::new("cmd").args(["/C", "ping -n 100 127.0.0.1 >nul"]).spawn().unwrap();
+    let mut child = Command::new("cmd")
+        .args(["/C", "ping -n 100 127.0.0.1 >nul"])
+        .spawn()
+        .unwrap();
     handle_handshake_failure(&mut child, None, "test error");
 }
 
