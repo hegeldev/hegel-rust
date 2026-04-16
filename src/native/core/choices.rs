@@ -26,7 +26,8 @@ impl IntegerChoice {
         if self.validate(s + 1) {
             s + 1
         } else if self.validate(s - 1) {
-            panic!("CANARY:src/native/core/choices.rs:29"); s - 1
+            panic!("CANARY:src/native/core/choices.rs:29");
+            s - 1
         } else {
             s
         }
@@ -214,12 +215,56 @@ impl FloatChoice {
     }
 }
 
+/// A bytes choice with bounded length.
+///
+/// Port of pbtkit's BytesChoice. Ordered by shortlex (shorter is simpler,
+/// then lexicographic on the bytes themselves).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BytesChoice {
+    pub min_size: usize,
+    pub max_size: usize,
+}
+
+impl BytesChoice {
+    /// The simplest (most "shrunk") value: `min_size` zero bytes.
+    pub fn simplest(&self) -> Vec<u8> {
+        vec![0u8; self.min_size]
+    }
+
+    /// The second-simplest value, used for punning when types change.
+    ///
+    /// If `min_size > 0`: the simplest except the last byte is 1.
+    /// Else if `max_size > 0`: a single 0x01 byte.
+    /// Else: the simplest (empty).
+    pub fn unit(&self) -> Vec<u8> {
+        if self.min_size > 0 {
+            let mut v = vec![0u8; self.min_size];
+            *v.last_mut().unwrap() = 1;
+            v
+        } else if self.max_size > 0 {
+            vec![1u8]
+        } else {
+            self.simplest()
+        }
+    }
+
+    pub fn validate(&self, value: &[u8]) -> bool {
+        self.min_size <= value.len() && value.len() <= self.max_size
+    }
+
+    /// Shortlex sort key: (length, bytes).
+    pub fn sort_key(&self, value: &[u8]) -> (usize, Vec<u8>) {
+        (value.len(), value.to_vec())
+    }
+}
+
 /// The kind of choice made at a particular point.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChoiceKind {
     Integer(IntegerChoice),
     Boolean(BooleanChoice),
     Float(FloatChoice),
+    Bytes(BytesChoice),
 }
 
 /// The value produced by a choice.
@@ -228,6 +273,7 @@ pub enum ChoiceValue {
     Integer(i128),
     Boolean(bool),
     Float(f64),
+    Bytes(Vec<u8>),
 }
 
 impl PartialEq for ChoiceValue {
@@ -237,7 +283,11 @@ impl PartialEq for ChoiceValue {
             (ChoiceValue::Boolean(a), ChoiceValue::Boolean(b)) => a == b,
             // Bitwise equality so NaN == NaN for replay/punning logic.
             (ChoiceValue::Float(a), ChoiceValue::Float(b)) => a.to_bits() == b.to_bits(),
-            _ => { panic!("CANARY:src/native/core/choices.rs:236"); false }
+            (ChoiceValue::Bytes(a), ChoiceValue::Bytes(b)) => a == b,
+            _ => {
+                panic!("CANARY:src/native/core/choices.rs:236");
+                false
+            }
         }
     }
 }
@@ -251,6 +301,7 @@ impl ChoiceKind {
             ChoiceKind::Integer(ic) => ChoiceValue::Integer(ic.simplest()),
             ChoiceKind::Boolean(bc) => ChoiceValue::Boolean(bc.simplest()),
             ChoiceKind::Float(fc) => ChoiceValue::Float(fc.simplest()),
+            ChoiceKind::Bytes(bc) => ChoiceValue::Bytes(bc.simplest()),
         }
     }
 }
@@ -276,12 +327,18 @@ impl ChoiceNode {
         match (&self.kind, &self.value) {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
                 let (abs, neg) = ic.sort_key(*v);
-                NodeSortKey(abs, neg)
+                NodeSortKey::Scalar(abs, neg)
             }
-            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => NodeSortKey(u128::from(*v), false),
+            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => {
+                NodeSortKey::Scalar(u128::from(*v), false)
+            }
             (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => {
                 let (idx, neg) = fc.sort_index(*v);
-                NodeSortKey(idx as u128, neg)
+                NodeSortKey::Scalar(idx as u128, neg)
+            }
+            (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => {
+                let (len, bytes) = bc.sort_key(v);
+                NodeSortKey::Sequence(len, bytes)
             }
             _ => unreachable!("mismatched choice kind and value"),
         }
@@ -289,8 +346,16 @@ impl ChoiceNode {
 }
 
 /// Comparable key for ordering choice nodes during shrinking.
+///
+/// Scalar kinds (integer, boolean, float) use a fixed (magnitude, sign) pair;
+/// sequence kinds (bytes, string) use a shortlex (length, values) pair.
+/// Comparison across variants is well-defined by enum discriminant order but
+/// never happens in practice — a given node position always has one kind.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct NodeSortKey(pub u128, pub bool);
+pub enum NodeSortKey {
+    Scalar(u128, bool),
+    Sequence(usize, Vec<u8>),
+}
 
 /// Shortlex sort key for a sequence of choice nodes.
 /// Shorter sequences are simpler; among equal lengths, smaller values win.

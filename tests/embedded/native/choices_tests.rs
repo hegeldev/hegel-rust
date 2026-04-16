@@ -333,3 +333,79 @@ fn float_choice_unit_negative_range() {
     assert_eq!(fc.simplest(), -5.0);
     assert_eq!(fc.unit(), -6.0);
 }
+
+// ── BytesChoice ───────────────────────────────────────────────────────────
+//
+// Ports of pbtkit/tests/test_bytes.py::test_bytes_choice_unit and related.
+
+#[test]
+fn bytes_choice_simplest_empty_min() {
+    let bc = BytesChoice {
+        min_size: 0,
+        max_size: 10,
+    };
+    assert_eq!(bc.simplest(), Vec::<u8>::new());
+}
+
+#[test]
+fn bytes_choice_simplest_nonempty_min() {
+    let bc = BytesChoice {
+        min_size: 3,
+        max_size: 10,
+    };
+    assert_eq!(bc.simplest(), vec![0u8; 3]);
+}
+
+#[test]
+fn bytes_choice_unit_empty_min_positive_max() {
+    let bc = BytesChoice {
+        min_size: 0,
+        max_size: 10,
+    };
+    assert_eq!(bc.unit(), vec![1u8]);
+}
+
+#[test]
+fn bytes_choice_unit_empty_min_zero_max() {
+    let bc = BytesChoice {
+        min_size: 0,
+        max_size: 0,
+    };
+    assert_eq!(bc.unit(), Vec::<u8>::new());
+}
+
+#[test]
+fn bytes_choice_unit_nonempty_min() {
+    let bc = BytesChoice {
+        min_size: 3,
+        max_size: 10,
+    };
+    // simplest except last byte is 1
+    assert_eq!(bc.unit(), vec![0u8, 0u8, 1u8]);
+}
+
+#[test]
+fn bytes_choice_validate() {
+    let bc = BytesChoice {
+        min_size: 2,
+        max_size: 4,
+    };
+    assert!(bc.validate(&[0, 0]));
+    assert!(bc.validate(&[0xff, 0xff, 0xff, 0xff]));
+    assert!(!bc.validate(&[]));
+    assert!(!bc.validate(&[0]));
+    assert!(!bc.validate(&[0u8; 5]));
+}
+
+#[test]
+fn bytes_choice_sort_key_shortlex() {
+    let bc = BytesChoice {
+        min_size: 0,
+        max_size: 10,
+    };
+    // Shorter sorts before longer.
+    assert!(bc.sort_key(&[]) < bc.sort_key(&[0]));
+    // At equal length, lexicographic order.
+    assert!(bc.sort_key(&[0, 0]) < bc.sort_key(&[0, 1]));
+    assert!(bc.sort_key(&[0, 0xff]) < bc.sort_key(&[1, 0]));
+}

@@ -6,7 +6,10 @@ use hegel::generators as gs;
 #[test]
 fn test_floats_bounded() {
     assert_all_examples(
-        gs::floats::<f64>().min_value(0.0).max_value(1.0).allow_nan(false),
+        gs::floats::<f64>()
+            .min_value(0.0)
+            .max_value(1.0)
+            .allow_nan(false),
         |f: &f64| (0.0..=1.0).contains(f),
     );
 }
@@ -30,7 +33,10 @@ fn test_floats_shrinks_to_zero() {
 fn test_floats_bounded_shrinks() {
     // Any float >= 5.0 in [1.0, 10.0] should shrink to exactly 5.0.
     let result = minimal(
-        gs::floats::<f64>().min_value(1.0).max_value(10.0).allow_nan(false),
+        gs::floats::<f64>()
+            .min_value(1.0)
+            .max_value(10.0)
+            .allow_nan(false),
         |f: &f64| *f >= 5.0,
     );
     assert!((1.0..=10.0).contains(&result));
@@ -53,7 +59,10 @@ fn test_floats_no_infinity() {
 #[test]
 fn test_floats_negative_range() {
     assert_all_examples(
-        gs::floats::<f64>().min_value(-10.0).max_value(-1.0).allow_nan(false),
+        gs::floats::<f64>()
+            .min_value(-10.0)
+            .max_value(-1.0)
+            .allow_nan(false),
         |f: &f64| (-10.0..=-1.0).contains(f),
     );
 }
@@ -62,7 +71,10 @@ fn test_floats_negative_range() {
 fn test_floats_shrinks_negative() {
     // Floats in a negative-only range shrink toward the bound closest to 0.
     let result = minimal(
-        gs::floats::<f64>().min_value(-10.0).max_value(-1.0).allow_nan(false),
+        gs::floats::<f64>()
+            .min_value(-10.0)
+            .max_value(-1.0)
+            .allow_nan(false),
         |f: &f64| *f > -5.0,
     );
     assert!((-10.0..=-1.0).contains(&result));
@@ -73,7 +85,10 @@ fn test_floats_shrinks_negative() {
 fn test_floats_shrinks_truncates() {
     // Float shrinker tries to remove fractional parts.
     let result = minimal(
-        gs::floats::<f64>().min_value(0.0).max_value(100.0).allow_nan(false),
+        gs::floats::<f64>()
+            .min_value(0.0)
+            .max_value(100.0)
+            .allow_nan(false),
         |f: &f64| *f > 1.0,
     );
     assert!((0.0..=100.0).contains(&result));
@@ -116,7 +131,9 @@ fn test_floats_database_round_trip() {
 #[test]
 fn test_floats_shrinks_large_or_nan() {
     // Floats with extreme values shrink toward simpler ones.
-    let result = minimal(gs::floats::<f64>(), |f: &f64| f.is_nan() || f.abs() >= 1e300);
+    let result = minimal(gs::floats::<f64>(), |f: &f64| {
+        f.is_nan() || f.abs() >= 1e300
+    });
     // The shrinker should land on a "simple" extreme: either a single NaN,
     // an infinity, or a large finite value.
     assert!(result.is_nan() || result.abs() >= 1e300);
@@ -162,7 +179,9 @@ fn test_floats_half_bounded_max() {
 #[test]
 fn test_floats_half_bounded_with_infinity() {
     // Half-bounded range can generate infinity.
-    let inf = find_any(gs::floats::<f64>().min_value(0.0), |f: &f64| f.is_infinite());
+    let inf = find_any(gs::floats::<f64>().min_value(0.0), |f: &f64| {
+        f.is_infinite()
+    });
     assert!(inf.is_infinite());
 }
 
@@ -170,7 +189,10 @@ fn test_floats_half_bounded_with_infinity() {
 fn test_floats_shrinks_non_canonical() {
     // Any non-zero float in [0.0, 10.0] should shrink to a small value.
     let result = minimal(
-        gs::floats::<f64>().min_value(0.0).max_value(10.0).allow_nan(false),
+        gs::floats::<f64>()
+            .min_value(0.0)
+            .max_value(10.0)
+            .allow_nan(false),
         |f: &f64| *f != 0.0,
     );
     assert!((0.0..=10.0).contains(&result));
@@ -219,9 +241,7 @@ fn test_floats_shrinks_neg_inf_to_finite() {
 #[test]
 fn test_floats_shrinks_inf_to_finite() {
     // Predicate: f > 1e300. Result should be a finite large positive.
-    let result = minimal(gs::floats::<f64>().allow_nan(false), |f: &f64| {
-        *f > 1e300
-    });
+    let result = minimal(gs::floats::<f64>().allow_nan(false), |f: &f64| *f > 1e300);
     assert!(result.is_finite());
     assert!(result > 1e300);
 }
@@ -236,9 +256,7 @@ fn test_floats_deserialize_truncated() {
 #[test]
 fn test_floats_shrinks_large_exponent() {
     // Predicate: f >= 1e15. minimal should find a finite value >= 1e15.
-    let result = minimal(gs::floats::<f64>().allow_nan(false), |f: &f64| {
-        *f >= 1e15
-    });
+    let result = minimal(gs::floats::<f64>().allow_nan(false), |f: &f64| *f >= 1e15);
     assert!(result >= 1e15);
 }
 
@@ -264,7 +282,10 @@ fn test_float_sort_key_type_mismatch() {
 fn test_floats_shrinks_small_positive() {
     // Predicate: 0.01 < f < 0.5 in [0, 1].
     let result = minimal(
-        gs::floats::<f64>().min_value(0.0).max_value(1.0).allow_nan(false),
+        gs::floats::<f64>()
+            .min_value(0.0)
+            .max_value(1.0)
+            .allow_nan(false),
         |f: &f64| *f > 0.01 && *f < 0.5,
     );
     assert!(result > 0.01 && result < 0.5);
@@ -274,7 +295,10 @@ fn test_floats_shrinks_small_positive() {
 fn test_shrinks_float_with_large_fractional() {
     // Predicate: 0.001 < f < 0.5 in [0, 0.5].
     let result = minimal(
-        gs::floats::<f64>().min_value(0.0).max_value(0.5).allow_nan(false),
+        gs::floats::<f64>()
+            .min_value(0.0)
+            .max_value(0.5)
+            .allow_nan(false),
         |f: &f64| *f > 0.001 && *f < 0.5,
     );
     assert!(result > 0.001 && result < 0.5);

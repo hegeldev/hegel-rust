@@ -152,8 +152,7 @@ fn test_many_with_small_max() {
     // collection-building API); instead we use `gs::vecs(...).max_size(...)`
     // which exercises the same geometric-distribution path internally.
     Hegel::new(|tc| {
-        let ls =
-            tc.draw(gs::vecs(gs::integers::<i64>().min_value(0).max_value(10)).max_size(2));
+        let ls = tc.draw(gs::vecs(gs::integers::<i64>().min_value(0).max_value(10)).max_size(2));
         assert!(ls.len() <= 2);
     })
     .settings(Settings::new().test_cases(200).database(None))

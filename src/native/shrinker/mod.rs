@@ -9,7 +9,9 @@
 //                redistribute_integers, shrink_duplicates
 //   sequence   — sort_values, swap_adjacent_blocks
 //   floats     — shrink_floats
+//   bytes      — shrink_bytes
 
+mod bytes;
 mod deletion;
 mod floats;
 mod integers;
@@ -85,6 +87,7 @@ impl<'a> Shrinker<'a> {
             self.sort_values();
             self.swap_adjacent_blocks();
             self.shrink_floats();
+            self.shrink_bytes();
         }
     }
 }

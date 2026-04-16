@@ -13,9 +13,10 @@ fn test_text_basic() {
 
 #[test]
 fn test_text_ascii() {
-    assert_all_examples(gs::text().min_codepoint(32).max_codepoint(126), |s: &String| {
-        s.chars().all(|c| (32..=126).contains(&(c as u32)))
-    });
+    assert_all_examples(
+        gs::text().min_codepoint(32).max_codepoint(126),
+        |s: &String| s.chars().all(|c| (32..=126).contains(&(c as u32))),
+    );
 }
 
 #[test]
@@ -30,7 +31,9 @@ fn test_text_no_surrogates() {
 fn test_text_shrinks_to_short() {
     // Any non-empty string with chars a..z should shrink to "a".
     let result = minimal(
-        gs::text().min_codepoint(b'a' as u32).max_codepoint(b'z' as u32),
+        gs::text()
+            .min_codepoint(b'a' as u32)
+            .max_codepoint(b'z' as u32),
         |s: &String| !s.is_empty(),
     );
     assert_eq!(result, "a");
@@ -73,7 +76,10 @@ fn test_text_unicode_shrinks() {
 fn test_text_shrinks_to_simplest() {
     // Any condition that matches everything should shrink to the empty string.
     let result = minimal(
-        gs::text().min_codepoint(b'a' as u32).max_codepoint(b'z' as u32).max_size(5),
+        gs::text()
+            .min_codepoint(b'a' as u32)
+            .max_codepoint(b'z' as u32)
+            .max_size(5),
         |_: &String| true,
     );
     assert_eq!(result, "");
