@@ -41,9 +41,11 @@ fn test_wrong_version_hegel_gives_informative_error() {
     #[cfg(windows)]
     let script_path = {
         let p = script_dir.join("fake_hegel.bat");
+        // Avoid nesting echo inside if-block parentheses — the ) in the
+        // version string would close the if-block prematurely.
         std::fs::write(
             &p,
-            "@echo off\r\nif \"%1\"==\"--version\" (\r\n  echo hegel (version 0.1.0)\r\n  exit /b 0\r\n)\r\nexit /b 1\r\n",
+            "@echo off\r\nif not \"%1\"==\"--version\" exit /b 1\r\necho hegel (version 0.1.0)\r\nexit /b 0\r\n",
         )
         .unwrap();
         p
