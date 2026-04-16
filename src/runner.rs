@@ -1040,6 +1040,7 @@ impl HealthCheck {
         ]
     }
 
+    #[cfg(not(feature = "native"))]
     fn as_str(&self) -> &'static str {
         match self {
             HealthCheck::FilterTooMuch => "filter_too_much",
