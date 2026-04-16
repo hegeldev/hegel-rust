@@ -3,19 +3,17 @@
 /// On Windows, also tries appending extensions from `PATHEXT` (e.g. `.EXE`, `.CMD`).
 pub fn which(name: &str) -> Option<String> {
     let path_var = std::env::var("PATH").ok()?;
-    let extensions = executable_extensions();
     for dir in std::env::split_paths(&path_var) {
         let candidate = dir.join(name);
         if candidate.is_file() {
             return Some(candidate.to_string_lossy().to_string());
         }
-        for ext in &extensions {
-            // nocov start -- Windows-only: executable_extensions() returns empty Vec on Unix
+        #[cfg(windows)]
+        for ext in executable_extensions() {
             let with_ext = dir.join(format!("{name}{ext}"));
             if with_ext.is_file() {
                 return Some(with_ext.to_string_lossy().to_string());
             }
-            // nocov end
         }
     }
     None
@@ -28,11 +26,6 @@ pub(crate) fn executable_extensions() -> Vec<String> {
         .split(';')
         .map(|s| s.to_string())
         .collect()
-}
-
-#[cfg(not(windows))]
-pub(crate) fn executable_extensions() -> Vec<String> {
-    Vec::new()
 }
 
 /// Panic if `path` exists but is not executable.

@@ -95,19 +95,17 @@ fn install_uv_with_sh(cache: &Path, sh: &str) {
 
 fn find_in_path(name: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
-    let extensions = crate::utils::executable_extensions();
     for dir in std::env::split_paths(&path_var) {
         let candidate = dir.join(name);
         if candidate.is_file() {
             return Some(candidate);
         }
-        for ext in &extensions {
-            // nocov start -- Windows-only: executable_extensions() returns empty Vec on Unix
+        #[cfg(windows)]
+        for ext in crate::utils::executable_extensions() {
             let with_ext = dir.join(format!("{name}{ext}"));
             if with_ext.is_file() {
                 return Some(with_ext);
             }
-            // nocov end
         }
     }
     None
