@@ -451,6 +451,56 @@ impl ManyState {
     }
 }
 
+/// A pool of variable IDs for stateful testing.
+///
+/// Port of hegel-core's `Variables` class from server.py.
+pub struct NativeVariables {
+    last_id: i128,
+    /// All variable IDs that have ever been added, in order.
+    variables: Vec<i128>,
+    /// Set of variable IDs that have been consumed.
+    removed: std::collections::HashSet<i128>,
+}
+
+impl NativeVariables {
+    pub fn new() -> Self {
+        NativeVariables {
+            last_id: 0,
+            variables: Vec::new(),
+            removed: std::collections::HashSet::new(),
+        }
+    }
+
+    /// Add a new variable and return its ID.
+    pub fn next(&mut self) -> i128 {
+        self.last_id += 1;
+        self.variables.push(self.last_id);
+        self.last_id
+    }
+
+    /// Return the IDs of variables that have not been consumed, in order.
+    pub fn active(&self) -> Vec<i128> {
+        self.variables
+            .iter()
+            .filter(|id| !self.removed.contains(*id))
+            .copied()
+            .collect()
+    }
+
+    /// Mark a variable as consumed and trim trailing consumed variables.
+    pub fn consume(&mut self, variable_id: i128) {
+        self.removed.insert(variable_id);
+        while let Some(&last) = self.variables.last() {
+            if self.removed.contains(&last) {
+                self.variables.pop();
+                self.removed.remove(&last);
+            } else {
+                break;
+            }
+        }
+    }
+}
+
 /// A test case backed by a sequence of typed choices.
 ///
 /// During random generation, choices are drawn from the RNG.
@@ -465,6 +515,8 @@ pub struct NativeTestCase {
     /// Active collection states keyed by collection ID.
     pub collections: HashMap<i64, ManyState>,
     next_collection_id: i64,
+    /// Variable pools for stateful testing.
+    pub variable_pools: Vec<NativeVariables>,
 }
 
 impl NativeTestCase {
@@ -479,6 +531,7 @@ impl NativeTestCase {
             status: None,
             collections: HashMap::new(),
             next_collection_id: 0,
+            variable_pools: Vec::new(),
         }
     }
 
@@ -493,6 +546,7 @@ impl NativeTestCase {
             status: None,
             collections: HashMap::new(),
             next_collection_id: 0,
+            variable_pools: Vec::new(),
         }
     }
 
