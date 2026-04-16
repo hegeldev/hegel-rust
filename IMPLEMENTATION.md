@@ -4,12 +4,17 @@ The original 11-phase plan is now complete.
 This document describes the remaining quality gaps between the native backend and the
 server backend, and the work required to close them. All tasks use a strict TDD protocol.
 
-## Current failing tests under `--features native`
+## Completed (previously failing tests, now fixed)
 
-These two tests are the active failing markers that drive Priority 1 and Priority 2:
-
-- `test_database_key::test_database_key_replays_failure` — database not yet implemented
-- `test_output::test_failing_test_output_with_backtrace` — double panic output
+- `test_database_key::test_database_key_replays_failure` — **DONE**: NativeDatabase
+  implemented with binary serialization; replay-before-generate and save-after-shrink.
+- `test_output::test_failing_test_output_with_backtrace` — **DONE**: format_backtrace_native
+  filters to short-backtrace range; manual print avoids default-handler blank-line separator.
+- `test_output::native_single_panic_on_failure` — **DONE**: replaced
+  `panic!("Property test failed: ...")` with `resume_unwind` so only one panic message
+  appears on stderr. Simple flaky detection added (replay passes → flaky warning).
+- `test_health_check::native_filter_too_much_detected` — **DONE**: FilterTooMuch health
+  check triggers after 200 consecutive invalid examples with no valid examples found.
 
 ## Reference Repositories (local checkouts)
 
@@ -103,93 +108,47 @@ Once the feature works, remove `#[cfg(not(feature = "native"))]` from
 
 ## Priority 1 (Critical): Flaky Test Detection
 
+**Partial — simple form done, Hypothesis-specific form remains gated.**
+
 The server backend re-runs the shrunk counterexample after shrinking. If the replay passes,
-the test is reported as flaky rather than as a genuine failure. This prevents non-deterministic
-code from causing false CI red.
+the test is reported as flaky rather than as a genuine failure. The native backend now
+implements this: if the final replay is non-interesting (passes), it panics with
+"Flaky test detected: Your test produced different outcomes...".
 
-### Current state
+### What is still gated
 
-`tests/test_flaky_global_state.rs` is entirely gated `#[cfg(not(feature = "native"))]` with
-the comment "Non-determinism detection is a server-side feature; skip in native mode". This
-gate must be replaced by a working implementation.
+`tests/test_flaky_global_state.rs::test_flaky_global_state` remains gated
+`#[cfg(not(feature = "native"))]`. This test uses a global atomic counter to change the
+`min_value` of a generator on every invocation. It expects "Your data generation is
+non-deterministic" — which Hypothesis detects via its **datatree** mechanism:
 
-### TDD steps
+The datatree tracks the transition at each choice node. If the same choice byte sequence
+previously led to one value but now (due to changed global state) leads to a different
+value or outcome, Hypothesis raises `FlakyStrategyDefinition` ("Your data generation
+is non-deterministic").
 
-The existing tests in `test_flaky_global_state.rs` are the target tests. Before implementing,
-remove the file-level gate and run:
+**pbtkit does not implement the datatree mechanism** (confirmed: `test_flaky_global_state`
+relies exclusively on Hypothesis internals). This test is intentionally left gated because
+implementing a full datatree in the native backend would be a major undertaking and is
+not required for feature parity with the *pbtkit* reference implementation.
 
-```
-cargo test --features native 2>&1 | grep -E "flaky|FAILED"
-```
-
-This should show the tests failing. Confirm they pass without `--features native`.
-
-If the tests need structural adjustment for native (e.g. because they rely on server-specific
-output format), keep the logic and adjust the output assertions.
-
-### Implementation approach
-
-Study Hypothesis for the flaky path:
-- `hypothesis-python/src/hypothesis/core.py` — search for `Flaky`. After shrinking, Hypothesis
-  re-runs the test with the shrunk choices. If the second run does not fail, it raises `Flaky`.
-
-For native in `src/native/runner.rs`:
-1. After shrinking is complete and a `counterexample` is found, run the test function again
-   with those exact choices in replay mode.
-2. If the replay **passes** (no panic): print a flaky warning and do not report a failure.
-   The current test run should be considered unsatisfying (call it a warning, not an error).
-3. If the replay **fails**: proceed with normal failure reporting.
-
-The current code near the end of `native_run()` already has a replay step — extend it to
-distinguish the two outcomes.
-
-### Un-gate the existing tests
-
-Once implemented, remove `#![cfg(not(feature = "native"))]` from
-`tests/test_flaky_global_state.rs` and verify all tests there pass under `--features native`.
+If this specific detection is needed in future, the approach would be: during replay,
+track which choices were made with which schema (min/max values), and compare them to the
+original; if the schema changes at the same position, report non-determinism.
 
 ---
 
-## Priority 2: Fix Double Panic Output
+## Priority 2: Fix Double Panic Output — **DONE**
 
-When a property test fails, the native runner currently panics twice: once from the test
-body (caught by the panic hook, which prints the message) and once from
-`panic!("Property test failed: {}", msg)` at the end of `native_run()`. This produces
-duplicate panic output that is confusing to users.
+Replaced `panic!("Property test failed: ...")` with `resume_unwind(payload)` using a
+thread-local (`LAST_PANIC_PAYLOAD`) to thread the `Box<dyn Any + Send>` payload from the
+catch_unwind site to the call site. `resume_unwind` bypasses the panic hook so there is
+no second "thread '...' panicked" line on stderr.
 
-### TDD steps
+Simple flaky detection was added at the same time: if the final replay is non-interesting
+(passes), the native runner panics with "Flaky test detected: ..." instead of re-raising.
 
-Add a test in `tests/test_output.rs` (gated `#[cfg(feature = "native")]`) that compiles
-a subprocess with `.feature("native")` and asserts the failure message appears exactly once:
-
-```rust
-#[cfg(feature = "native")]
-#[test]
-fn native_single_panic_on_failure() {
-    let code = r#"
-        use hegel::generators as gs;
-        #[hegel::test]
-        fn always_fails(tc: hegel::TestCase) {
-            let _x: bool = tc.draw(gs::booleans());
-            panic!("deliberate failure");
-        }
-    "#;
-    let output = TempRustProject::new().feature("native").main_file(code).cargo_test_output(&[]);
-    let count = output.matches("deliberate failure").count();
-    assert_eq!(count, 1, "expected exactly one occurrence of failure message, got:\n{output}");
-}
-```
-
-Verify it fails (count > 1) before fixing.
-
-### Implementation
-
-In `src/native/runner.rs`, find the final `panic!("Property test failed: ...")` call.
-Replace it with `std::panic::resume_unwind(payload)` where `payload` is the original
-`Box<dyn Any + Send>` captured by `catch_unwind`. This re-raises the original panic
-object without creating a second panic message.
-
-Make sure the original panic payload is threaded through to the re-raise site.
+Regression test: `test_output::native_single_panic_on_failure`.
 
 ---
 
@@ -259,43 +218,26 @@ For each new `_native` variant:
 
 ## Priority 3: Health Checks
 
-The server backend reports `FilterTooMuch` when more than ~90% of drawn examples are
-filtered by `assume()`, and `TooSlow` when test execution exceeds a time budget.
-The native backend has no such checks, which means runaway assumptions silently hang.
+### FilterTooMuch — **DONE**
 
-### TDD for FilterTooMuch
+After 200 consecutive invalid (assume()-filtered) test cases with no valid examples yet
+found, native_run panics with "FailedHealthCheck: FilterTooMuch". Suppressed when
+`HealthCheck::FilterTooMuch` is in `suppress_health_check`.
 
-Write a test that exercises heavy filtering and asserts a `FilterTooMuch`-style error:
+Tests: `native_filter_too_much_detected` and `native_filter_too_much_suppressed` in
+`tests/test_health_check.rs`.
 
-```rust
-#[cfg(feature = "native")]
-#[test]
-fn native_filter_too_much_detected() {
-    let result = std::panic::catch_unwind(|| {
-        hegel::Hegel::new(|tc: hegel::TestCase| {
-            let x: u64 = tc.draw(hegel::generators::integers::<u64>()
-                .min_value(0).max_value(1_000_000));
-            tc.assume(x == 42); // almost always filtered
-        })
-        .run();
-    });
-    let payload = result.unwrap_err();
-    let msg = payload.downcast_ref::<String>().map(|s| s.as_str())
-        .or_else(|| payload.downcast_ref::<&str>().copied())
-        .unwrap_or("");
-    assert!(
-        msg.contains("FilterTooMuch") || msg.contains("filter") || msg.contains("assume"),
-        "expected FilterTooMuch error, got: {msg}"
-    );
-}
-```
+### TooSlow — not yet implemented
 
-Reference: `hypothesis-python/src/hypothesis/core.py` — search for `filter_too_much`.
-The threshold is approximately 200 filtered attempts without a valid case.
+The server backend reports TooSlow when test execution exceeds a time budget. The native
+backend does not implement this. To add it:
+1. Track wall-clock time per test case
+2. If a test case exceeds a threshold (e.g., 200ms), panic with FailedHealthCheck: TooSlow
+3. Suppress when HealthCheck::TooSlow is in suppress_health_check
 
-Also look at the existing `tests/test_health_check.rs` to understand the expected behavior
-the server already tests. For tests in that file that are currently gated out of native
-mode, un-gate them one by one as each health check is implemented.
+The existing `test_health_check.rs` tests use `suppress_health_check = [HealthCheck::TooSlow]`
+which currently work because native silently ignores TooSlow. Un-gating TooSlow detection
+would require those tests to actually be fast enough.
 
 ---
 
