@@ -163,10 +163,11 @@ impl TempRustProject {
         // When the outer test suite is compiled with --features native, automatically
         // enable the native feature in all TempRustProject subprocesses so they exercise
         // the same backend rather than silently falling back to the server path.
-        #[cfg_attr(not(feature = "native"), allow(unused_mut))]
-        let mut features = Vec::new();
-        #[cfg(feature = "native")]
-        features.push("native".to_string());
+        let features = if cfg!(feature = "native") {
+            vec!["native".to_string()]
+        } else {
+            Vec::new()
+        };
 
         Self {
             _temp_dir: temp_dir,

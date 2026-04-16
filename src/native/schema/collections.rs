@@ -1,15 +1,12 @@
 // Collection schema interpreters: list, dict, tuple, one_of, sampled_from.
 
-use crate::native::core::{ManyState, NativeTestCase, StopTest};
 use crate::cbor_utils::{as_bool, as_u64, map_get};
+use crate::native::core::{ManyState, NativeTestCase, StopTest};
 use ciborium::Value;
 
 use super::{interpret_schema, many_more, many_reject};
 
-pub(super) fn interpret_tuple(
-    ntc: &mut NativeTestCase,
-    schema: &Value,
-) -> Result<Value, StopTest> {
+pub(super) fn interpret_tuple(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
     let elements = match map_get(schema, "elements") {
         Some(Value::Array(arr)) => arr,
         _ => panic!("tuple schema must have elements array"),
@@ -29,7 +26,10 @@ pub(super) fn interpret_one_of(
         Some(Value::Array(arr)) => arr,
         _ => panic!("one_of schema must have generators array"),
     };
-    assert!(!generators.is_empty(), "one_of schema must have at least one generator");
+    assert!(
+        !generators.is_empty(),
+        "one_of schema must have at least one generator"
+    );
     let idx = ntc.draw_integer(0, generators.len() as i128 - 1)?;
     interpret_schema(ntc, &generators[idx as usize])
 }
@@ -42,23 +42,21 @@ pub(super) fn interpret_sampled_from(
         Some(Value::Array(arr)) => arr,
         _ => panic!("sampled_from schema must have values array"),
     };
-    assert!(!values.is_empty(), "sampled_from schema must have at least one value");
+    assert!(
+        !values.is_empty(),
+        "sampled_from schema must have at least one value"
+    );
     let idx = ntc.draw_integer(0, values.len() as i128 - 1)?;
     Ok(encode_schema_value(&values[idx as usize]))
 }
 
-pub(super) fn interpret_list(
-    ntc: &mut NativeTestCase,
-    schema: &Value,
-) -> Result<Value, StopTest> {
+pub(super) fn interpret_list(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
     let element_schema = map_get(schema, "elements").expect("list schema must have elements");
-    let min_size = map_get(schema, "min_size")
+    let min_size = map_get(schema, "min_size").and_then(as_u64).unwrap_or(0) as usize;
+    let max_size = map_get(schema, "max_size")
         .and_then(as_u64)
-        .unwrap_or(0) as usize;
-    let max_size = map_get(schema, "max_size").and_then(as_u64).map(|n| n as usize);
-    let unique = map_get(schema, "unique")
-        .and_then(as_bool)
-        .unwrap_or(false);
+        .map(|n| n as usize);
+    let unique = map_get(schema, "unique").and_then(as_bool).unwrap_or(false);
 
     let mut state = ManyState::new(min_size, max_size);
     let mut results: Vec<Value> = Vec::new();
@@ -78,16 +76,13 @@ pub(super) fn interpret_list(
     Ok(Value::Array(results))
 }
 
-pub(super) fn interpret_dict(
-    ntc: &mut NativeTestCase,
-    schema: &Value,
-) -> Result<Value, StopTest> {
+pub(super) fn interpret_dict(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
     let key_schema = map_get(schema, "keys").expect("dict schema must have keys");
     let val_schema = map_get(schema, "values").expect("dict schema must have values");
-    let min_size = map_get(schema, "min_size")
+    let min_size = map_get(schema, "min_size").and_then(as_u64).unwrap_or(0) as usize;
+    let max_size = map_get(schema, "max_size")
         .and_then(as_u64)
-        .unwrap_or(0) as usize;
-    let max_size = map_get(schema, "max_size").and_then(as_u64).map(|n| n as usize);
+        .map(|n| n as usize);
 
     let mut state = ManyState::new(min_size, max_size);
     let mut pairs: Vec<Value> = Vec::new();

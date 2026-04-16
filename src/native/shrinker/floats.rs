@@ -31,8 +31,13 @@ impl<'a> Shrinker<'a> {
 
                 // Re-read current value.
                 let v = {
-                    let Some(n) = self.current_nodes.get(i) else { break; };
-                    let ChoiceValue::Float(f) = n.value else { i += 1; continue; };
+                    let Some(n) = self.current_nodes.get(i) else {
+                        break;
+                    };
+                    let ChoiceValue::Float(f) = n.value else {
+                        i += 1;
+                        continue;
+                    };
                     f
                 };
 
@@ -52,8 +57,13 @@ impl<'a> Shrinker<'a> {
 
                 // Re-read after possible negation.
                 let v = {
-                    let Some(n) = self.current_nodes.get(i) else { break; };
-                    let ChoiceValue::Float(f) = n.value else { i += 1; continue; };
+                    let Some(n) = self.current_nodes.get(i) else {
+                        break;
+                    };
+                    let ChoiceValue::Float(f) = n.value else {
+                        i += 1;
+                        continue;
+                    };
                     f
                 };
 
@@ -97,8 +107,11 @@ impl<'a> Shrinker<'a> {
                         let is_neg_capture = is_neg;
                         let fc_capture = fc.clone();
                         bin_search_down(int_lo, int_hi, &mut |n| {
-                            let candidate =
-                                if is_neg_capture { -(n as f64) } else { n as f64 };
+                            let candidate = if is_neg_capture {
+                                -(n as f64)
+                            } else {
+                                n as f64
+                            };
                             if fc_capture.validate(candidate) {
                                 self.replace(&HashMap::from([(
                                     i_capture,
@@ -113,8 +126,13 @@ impl<'a> Shrinker<'a> {
 
                 // Re-read current value after possible integer replacement.
                 let v = {
-                    let Some(n) = self.current_nodes.get(i) else { break; };
-                    let ChoiceValue::Float(f) = n.value else { i += 1; continue; };
+                    let Some(n) = self.current_nodes.get(i) else {
+                        break;
+                    };
+                    let ChoiceValue::Float(f) = n.value else {
+                        i += 1;
+                        continue;
+                    };
                     f
                 };
                 if v.is_nan() {
@@ -130,12 +148,13 @@ impl<'a> Shrinker<'a> {
                 if current_idx > 0 {
                     bin_search_down(0, current_idx as i128, &mut |idx| {
                         let candidate_mag = index_to_float(idx as u64);
-                        let candidate = if is_neg { -candidate_mag } else { candidate_mag };
+                        let candidate = if is_neg {
+                            -candidate_mag
+                        } else {
+                            candidate_mag
+                        };
                         if fc.validate(candidate) {
-                            self.replace(&HashMap::from([(
-                                i,
-                                ChoiceValue::Float(candidate),
-                            )]))
+                            self.replace(&HashMap::from([(i, ChoiceValue::Float(candidate))]))
                         } else {
                             false
                         }

@@ -263,9 +263,7 @@ impl ChoiceNode {
                 let (abs, neg) = ic.sort_key(*v);
                 NodeSortKey(abs, neg)
             }
-            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => {
-                NodeSortKey(u128::from(*v), false)
-            }
+            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => NodeSortKey(u128::from(*v), false),
             (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => {
                 let (idx, neg) = fc.sort_index(*v);
                 NodeSortKey(idx as u128, neg)

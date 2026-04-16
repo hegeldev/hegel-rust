@@ -169,7 +169,7 @@ fn test_times_format() {
         let min: u32 = parts[1].parse().unwrap_or(99);
         // Second field may have a fractional part: "SS" or "SS.ffffff"
         let sec: u32 = parts[2]
-            .splitn(2, '.')
+            .split('.')
             .next()
             .unwrap_or("99")
             .parse()
@@ -205,7 +205,7 @@ fn test_datetimes_format() {
         let hour: u32 = time_parts[0].parse().unwrap_or(99);
         let min: u32 = time_parts[1].parse().unwrap_or(99);
         let sec: u32 = time_parts[2]
-            .splitn(2, '.')
+            .split('.')
             .next()
             .unwrap_or("99")
             .parse()
@@ -272,11 +272,9 @@ fn test_domains_format() {
         // Server generates mixed case (e.g. "A.COM"), so accept uppercase too.
         let parts: Vec<&str> = s.split('.').collect();
         parts.len() >= 2
-            && parts.iter().all(|p| {
-                !p.is_empty()
-                    && p.chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '-')
-            })
+            && parts
+                .iter()
+                .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
             && s.len() <= 255
     });
 }
@@ -314,7 +312,6 @@ fn test_emails_format() {
 #[test]
 fn test_urls_format() {
     assert_all_examples(gs::urls(), |s: &String| {
-        (s.starts_with("http://") || s.starts_with("https://"))
-            && s.len() > 7
+        (s.starts_with("http://") || s.starts_with("https://")) && s.len() > 7
     });
 }

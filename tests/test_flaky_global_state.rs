@@ -1,3 +1,6 @@
+// Non-determinism detection is a server-side feature; skip in native mode.
+#![cfg(not(feature = "native"))]
+
 mod common;
 
 use hegel::TestCase;
@@ -6,8 +9,6 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 static GLOBAL_COUNTER: AtomicI32 = AtomicI32::new(0);
 
-// Non-determinism detection is a server-side feature; skip in native mode.
-#[cfg(not(feature = "native"))]
 #[hegel::test]
 #[should_panic(expected = "Your data generation is non-deterministic")]
 fn test_flaky_global_state(tc: TestCase) {

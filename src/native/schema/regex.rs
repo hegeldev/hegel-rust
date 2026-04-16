@@ -1,16 +1,13 @@
 // Regex schema interpreter.
 
-use crate::native::core::{ManyState, NativeTestCase, Status, StopTest};
 use crate::cbor_utils::{as_bool, as_text, map_get};
+use crate::native::core::{ManyState, NativeTestCase, Status, StopTest};
 use ciborium::Value;
 
 use super::many_more;
 use super::text::{StringAlphabet, build_string_alphabet, is_surrogate_cp};
 
-pub(super) fn interpret_regex(
-    ntc: &mut NativeTestCase,
-    schema: &Value,
-) -> Result<Value, StopTest> {
+pub(super) fn interpret_regex(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
     let pattern = map_get(schema, "pattern")
         .and_then(as_text)
         .expect("regex schema must have pattern");
@@ -67,8 +64,7 @@ fn generate_hir_string(
             // Nothing to generate.
         }
         HirKind::Literal(lit) => {
-            let s = std::str::from_utf8(&lit.0)
-                .expect("regex literal should be valid UTF-8");
+            let s = std::str::from_utf8(&lit.0).expect("regex literal should be valid UTF-8");
             for c in s.chars() {
                 if !regex_alphabet_allows(alphabet, c) {
                     ntc.status = Some(Status::Invalid);

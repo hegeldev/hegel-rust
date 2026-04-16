@@ -1,3 +1,4 @@
+#![cfg(not(feature = "native"))]
 mod common;
 
 /// After a server crash, Hegel should transparently restart the server for the

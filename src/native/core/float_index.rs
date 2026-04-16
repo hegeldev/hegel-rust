@@ -25,11 +25,7 @@ pub fn decode_exponent(enc: u64) -> u64 {
     if enc == 2047 {
         return 2047;
     }
-    if enc <= 1023 {
-        enc + 1023
-    } else {
-        2046 - enc
-    }
+    if enc <= 1023 { enc + 1023 } else { 2046 - enc }
 }
 
 /// Reverse the lowest `n` bits of `v`.
@@ -71,7 +67,10 @@ fn is_simple_float(v: f64) -> bool {
 /// Port of Hypothesis's `float_to_lex`. Integer floats 0, 1, 2, ... map to
 /// 0, 1, 2, ... Non-integer floats map to values with bit 63 set.
 pub fn float_to_index(v: f64) -> u64 {
-    debug_assert!(!v.is_sign_negative(), "float_to_index called on negative: {v}");
+    debug_assert!(
+        !v.is_sign_negative(),
+        "float_to_index called on negative: {v}"
+    );
     debug_assert!(!v.is_nan(), "float_to_index called on NaN");
     if is_simple_float(v) {
         return v as u64;

@@ -12,9 +12,8 @@ use rand::rngs::SmallRng;
 
 use crate::antithesis::TestLocation;
 use crate::control::with_test_context;
-use crate::native::core::{
-    ChoiceNode, ChoiceValue, NativeTestCase, Span, Status, sort_key,
-};
+use crate::native::core::{ChoiceNode, ChoiceValue, NativeTestCase, Span, Status, sort_key};
+use crate::native::data_source::NativeDataSource;
 use crate::native::database::NativeDatabase;
 use crate::native::shrinker::Shrinker;
 use crate::runner::{Database, HealthCheck, Settings, Verbosity};
@@ -222,7 +221,8 @@ pub fn native_run<F>(
                 let mutation_result = try_span_mutation(&nodes, &spans, &mut rng, &mut test_fn);
                 calls += SPAN_MUTATION_ATTEMPTS as u64;
                 if let Some(mut_nodes) = mutation_result {
-                    if result.is_none() || sort_key(&mut_nodes) < sort_key(result.as_ref().unwrap()) {
+                    if result.is_none() || sort_key(&mut_nodes) < sort_key(result.as_ref().unwrap())
+                    {
                         result = Some(mut_nodes);
                     }
                 }
@@ -241,10 +241,8 @@ pub fn native_run<F>(
 
         // Verify the result is still interesting.
         let choices: Vec<ChoiceValue> = best_nodes.iter().map(|n| n.value.clone()).collect();
-        let verify_ntc =
-            NativeTestCase::for_choices(&choices, Some(best_nodes));
-        let (verify_status, verify_nodes) =
-            run_one_test_case(verify_ntc, &mut test_fn, false);
+        let verify_ntc = NativeTestCase::for_choices(&choices, Some(best_nodes));
+        let (verify_status, verify_nodes) = run_one_test_case(verify_ntc, &mut test_fn, false);
         assert_eq!(
             verify_status,
             Status::Interesting,
@@ -256,8 +254,7 @@ pub fn native_run<F>(
             Box::new(|candidate_nodes: &[ChoiceNode]| {
                 let choices: Vec<ChoiceValue> =
                     candidate_nodes.iter().map(|n| n.value.clone()).collect();
-                let ntc =
-                    NativeTestCase::for_choices(&choices, Some(candidate_nodes));
+                let ntc = NativeTestCase::for_choices(&choices, Some(candidate_nodes));
                 let (status, new_nodes) = run_one_test_case(ntc, &mut test_fn, false);
                 calls += 1;
 
@@ -329,7 +326,9 @@ pub fn native_run<F>(
             }
             // This branch should be unreachable: if the final replay is
             // Interesting, the panic hook must have stored a payload.
-            panic!("BUG: final replay was Interesting but no panic payload was stored; this is a bug in the native runner");
+            panic!(
+                "BUG: final replay was Interesting but no panic payload was stored; this is a bug in the native runner"
+            );
         } else {
             // The replay passed even though we had a shrunk counterexample.
             // This means the test outcome depends on external state — it is
@@ -361,7 +360,8 @@ fn run_one_test_case_full<F: FnMut(TestCase)>(
     test_fn: &mut F,
     is_final: bool,
 ) -> (Status, Vec<ChoiceNode>, Vec<Span>, Option<String>) {
-    let tc = TestCase::new_native(ntc, is_final);
+    let (data_source, ntc_handle) = NativeDataSource::new(ntc);
+    let tc = TestCase::new(Box::new(data_source), is_final);
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
 
     let (status, panic_msg) = match result {
@@ -411,8 +411,8 @@ fn run_one_test_case_full<F: FnMut(TestCase)>(
         }
     };
 
-    let nodes = tc.take_native_nodes();
-    let spans = tc.take_native_spans();
+    let nodes = NativeDataSource::take_nodes(&ntc_handle);
+    let spans = NativeDataSource::take_spans(&ntc_handle);
     (status, nodes, spans, panic_msg)
 }
 
@@ -518,9 +518,7 @@ fn try_span_mutation<F: FnMut(TestCase)>(
         by_label.entry(span.label.as_str()).or_default().push(i);
     }
     // Only keep labels that have at least 2 spans (needed to make two equal).
-    let multi: Vec<Vec<usize>> = by_label.into_values()
-        .filter(|v| v.len() >= 2)
-        .collect();
+    let multi: Vec<Vec<usize>> = by_label.into_values().filter(|v| v.len() >= 2).collect();
     if multi.is_empty() {
         return None;
     }

@@ -17,10 +17,7 @@ mod sequence;
 
 use std::collections::HashMap;
 
-use crate::native::core::{
-    ChoiceNode, ChoiceValue, NodeSortKey,
-    MAX_SHRINK_ITERATIONS, sort_key,
-};
+use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINK_ITERATIONS, NodeSortKey, sort_key};
 
 /// A callback that runs a test case from a choice sequence.
 /// Returns `(is_interesting, actual_nodes_consumed)`.
@@ -34,10 +31,7 @@ pub struct Shrinker<'a> {
 }
 
 impl<'a> Shrinker<'a> {
-    pub fn new(
-        test_fn: Box<TestFn<'a>>,
-        initial_nodes: Vec<ChoiceNode>,
-    ) -> Self {
+    pub fn new(test_fn: Box<TestFn<'a>>, initial_nodes: Vec<ChoiceNode>) -> Self {
         Shrinker {
             test_fn,
             current_nodes: initial_nodes,

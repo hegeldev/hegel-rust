@@ -53,7 +53,7 @@ fn test_roundtrip_mixed() {
     let choices = vec![
         ChoiceValue::Integer(42),
         ChoiceValue::Boolean(true),
-        ChoiceValue::Float(3.14),
+        ChoiceValue::Float(3.125),
         ChoiceValue::Integer(-999),
         ChoiceValue::Boolean(false),
     ];
@@ -124,10 +124,7 @@ fn test_database_load_missing_key_returns_none() {
 fn test_database_save_and_load_roundtrip() {
     let dir = tempfile::TempDir::new().unwrap();
     let db = NativeDatabase::new(dir.path().to_str().unwrap());
-    let choices = vec![
-        ChoiceValue::Integer(1_000_000),
-        ChoiceValue::Boolean(false),
-    ];
+    let choices = vec![ChoiceValue::Integer(1_000_000), ChoiceValue::Boolean(false)];
     db.save("my-test", &choices);
     let loaded = db.load("my-test").unwrap();
     assert_eq!(loaded, choices);
