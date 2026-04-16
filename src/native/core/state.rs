@@ -283,6 +283,7 @@ impl NativeTestCase {
         let forced_value = forced.or(if p <= 0.0 {
             Some(false)
         } else if p >= 1.0 {
+            panic!("CANARY:src/native/core/state.rs:286");
             Some(true)
         } else {
             None
@@ -427,6 +428,7 @@ impl NativeTestCase {
     }
 
     fn pre_choice(&mut self) -> Result<(), StopTest> {
+        panic!("CANARY:src/native/core/state.rs:431");
         if self.status.is_some() {
             panic!("Frozen: attempted choice on completed test case");
         }
