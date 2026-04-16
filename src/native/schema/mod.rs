@@ -1,8 +1,7 @@
 // Schema interpreter for the native backend.
 //
 // Translates CBOR schemas (as sent by hegel generators) into concrete
-// values using pbtkit-style choice recording. Only schemas usable from
-// pbtkit's core.py are implemented; everything else is `todo!()`.
+// values using pbtkit-style choice recording.
 //
 // Split into submodules:
 //   numeric     — interpret_integer, interpret_boolean, interpret_constant
@@ -10,11 +9,13 @@
 //   text        — interpret_string, interpret_binary, StringAlphabet helpers
 //   regex       — interpret_regex, generate_hir_string
 //   collections — interpret_list, interpret_dict, interpret_tuple, interpret_one_of, interpret_sampled_from
+//   special     — date, time, datetime, ipv4, ipv6, domain, email, url
 
 mod collections;
 mod float;
 mod numeric;
 mod regex;
+mod special;
 mod text;
 
 use crate::cbor_utils::{as_bool, as_u64, map_get};
@@ -158,14 +159,14 @@ fn interpret_schema(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, S
 
         "float" => float::interpret_float(ntc, schema),
         "regex" => regex::interpret_regex(ntc, schema),
-        "email" => todo!("Native backend does not yet support email schema"),
-        "url" => todo!("Native backend does not yet support url schema"),
-        "domain" => todo!("Native backend does not yet support domain schema"),
-        "ipv4" => todo!("Native backend does not yet support ipv4 schema"),
-        "ipv6" => todo!("Native backend does not yet support ipv6 schema"),
-        "date" => todo!("Native backend does not yet support date schema"),
-        "time" => todo!("Native backend does not yet support time schema"),
-        "datetime" => todo!("Native backend does not yet support datetime schema"),
+        "email" => special::interpret_email(ntc),
+        "url" => special::interpret_url(ntc),
+        "domain" => special::interpret_domain(ntc, schema),
+        "ipv4" => special::interpret_ipv4(ntc),
+        "ipv6" => special::interpret_ipv6(ntc),
+        "date" => special::interpret_date(ntc),
+        "time" => special::interpret_time(ntc),
+        "datetime" => special::interpret_datetime(ntc),
 
         other => panic!("Unknown schema type: {}", other),
     };

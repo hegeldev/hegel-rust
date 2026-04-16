@@ -585,9 +585,10 @@ impl IpAddressGenerator {
             Some(IpVersion::V4) => cbor_map! {"type" => "ip_address", "version" => 4u64},
             Some(IpVersion::V6) => cbor_map! {"type" => "ip_address", "version" => 6u64},
             None => cbor_map! {
-                "type" => "one_of", "generators" => cbor_array![
-                    cbor_map!{"type" => "ip_address", "version" => 4u64},
-                    cbor_map!{"type" => "ip_address", "version" => 6u64}
+                "type" => "one_of",
+                "generators" => cbor_array![
+                    cbor_map!{"type" => "ipv4"},
+                    cbor_map!{"type" => "ipv6"}
             // nocov end
                 ]
             },
