@@ -60,11 +60,51 @@ pub fn dispatch_request(
             ntc.collections.insert(id, state);
             Ok(Value::Null)
         }
-        "new_pool" | "pool_consume" | "pool_add" | "pool_generate" => {
-            todo!(
-                "Native backend does not yet support variable pool commands ({})",
-                command
-            )
+        "new_pool" => {
+            let pool_id = ntc.variable_pools.len() as i64;
+            ntc.variable_pools.push(crate::native::core::NativeVariables::new());
+            Ok(Value::Integer(pool_id.into()))
+        }
+        "pool_add" => {
+            let pool_id = map_get(payload, "pool_id")
+                .map(cbor_to_i64)
+                .expect("pool_add missing pool_id") as usize;
+            let variable_id = ntc.variable_pools[pool_id].next() as i64;
+            Ok(Value::Integer(variable_id.into()))
+        }
+        "pool_consume" => {
+            let pool_id = map_get(payload, "pool_id")
+                .map(cbor_to_i64)
+                .expect("pool_consume missing pool_id") as usize;
+            let variable_id = map_get(payload, "variable_id")
+                .map(cbor_to_i64)
+                .expect("pool_consume missing variable_id") as i128;
+            ntc.variable_pools[pool_id].consume(variable_id);
+            Ok(Value::Null)
+        }
+        "pool_generate" => {
+            let pool_id = map_get(payload, "pool_id")
+                .map(cbor_to_i64)
+                .expect("pool_generate missing pool_id") as usize;
+            let consume = map_get(payload, "consume")
+                .and_then(as_bool)
+                .unwrap_or(false);
+
+            let active = ntc.variable_pools[pool_id].active();
+            if active.is_empty() {
+                // No variables available: mark test case as invalid.
+                return Err(StopTestError);
+            }
+            let n = active.len() as i128;
+            // Draw index from [0, n-1]. Shrink towards n-1 (last added = most recent)
+            // by drawing k from [0, n-1] and using index = n-1-k.
+            let k = ntc.draw_integer(0, n - 1).map_err(|StopTest| StopTestError)?;
+            let idx = (n - 1 - k) as usize;
+            let variable_id = active[idx] as i64;
+            if consume {
+                ntc.variable_pools[pool_id].consume(variable_id as i128);
+            }
+            Ok(Value::Integer(variable_id.into()))
         }
         _ => panic!("Unknown native command: {}", command),
     }
