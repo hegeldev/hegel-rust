@@ -35,7 +35,12 @@ ALLOWED UNCOVERED PATTERNS:
    LLVM-cov marks the body of #[ignore]d tests as uncovered because
    the test framework compiles them but never runs them.
 
-6. // nocov Annotations
+6. #[cfg(windows)] blocks
+   Code gated behind #[cfg(windows)] is not compiled on Linux where
+   coverage runs. Any // nocov annotations inside these blocks do not
+   count against the ratchet.
+
+7. // nocov Annotations
    Lines marked with // nocov are manually excluded from line coverage.
    Block exclusions with // nocov start ... // nocov end are also supported.
    These are tracked by a ratchet mechanism -- the count can only decrease.
@@ -95,6 +100,57 @@ def get_nocov_block_lines(file_path: Path) -> set[int]:
         pass
 
     _nocov_block_cache[resolved] = excluded
+    return excluded
+
+
+# ──────────────────────────────────────────────────────────────────────
+# #[cfg(windows)] block cache
+# ──────────────────────────────────────────────────────────────────────
+
+_cfg_windows_cache: dict[Path, set[int]] = {}
+
+
+def get_cfg_windows_lines(file_path: Path) -> set[int]:
+    """Return the set of line numbers inside #[cfg(windows)] blocks.
+
+    Detects both:
+    - #[cfg(windows)] followed by a braced block { ... }
+    - #[cfg(windows)] followed by a single item (fn, const, static, etc.)
+    """
+    resolved = file_path.resolve()
+    if resolved in _cfg_windows_cache:
+        return _cfg_windows_cache[resolved]
+
+    excluded: set[int] = set()
+    try:
+        with file_path.open() as f:
+            lines = f.readlines()
+    except (OSError, IOError):
+        _cfg_windows_cache[resolved] = excluded
+        return excluded
+
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped == "#[cfg(windows)]":
+            # Find the braced scope that follows
+            brace_depth = 0
+            started = False
+            for j in range(i + 1, len(lines)):
+                for ch in lines[j]:
+                    if ch == "{":
+                        brace_depth += 1
+                        started = True
+                    elif ch == "}":
+                        brace_depth -= 1
+                # line j+1 is inside the block (1-indexed)
+                if started:
+                    excluded.add(j + 1)
+                if started and brace_depth == 0:
+                    break
+        i += 1
+
+    _cfg_windows_cache[resolved] = excluded
     return excluded
 
 
@@ -233,6 +289,10 @@ class UncoveredLine:
                         return True
                 brace_depth = 0
         return False
+
+    def is_windows_only(self) -> bool:
+        """Check if this line is inside a #[cfg(windows)] block."""
+        return self.line_number in get_cfg_windows_lines(self.file)
 
     def is_ignored_test_body(self) -> bool:
         """
@@ -569,6 +629,9 @@ def count_annotations() -> int:
 
     Returns the total number of nocov-excluded lines: line-level // nocov
     annotations plus lines inside // nocov start ... // nocov end blocks.
+
+    Lines inside #[cfg(windows)] blocks are excluded from the count since
+    they are not compiled on Linux where coverage runs.
     """
     nocov_inline_pattern = re.compile(r"//\s*nocov\b")
     nocov_start_pattern = re.compile(r"//\s*nocov\s+start\b")
@@ -581,20 +644,21 @@ def count_annotations() -> int:
             continue
         for rs_file in sorted(src_dir.rglob("*.rs")):
             try:
+                windows_lines = get_cfg_windows_lines(rs_file)
                 in_nocov_block = False
                 with rs_file.open() as f:
-                    for line in f:
+                    for line_num, line in enumerate(f, 1):
                         if nocov_start_pattern.search(line):
                             in_nocov_block = True
                             continue
                         if nocov_end_pattern.search(line):
                             in_nocov_block = False
                             continue
+                        if line_num in windows_lines:
+                            continue
                         if in_nocov_block:
-                            # Count each line inside a block
                             nocov_count += 1
                         elif nocov_inline_pattern.search(line):
-                            # Count inline // nocov annotations
                             nocov_count += 1
             except (OSError, IOError):
                 continue
@@ -645,6 +709,7 @@ def check_uncovered_lines(uncovered: list[UncoveredLine]) -> int:
     macro_continuations: list[UncoveredLine] = []
     nocov: list[UncoveredLine] = []
     ignored_tests: list[UncoveredLine] = []
+    windows_only: list[UncoveredLine] = []
     actual: list[UncoveredLine] = []
 
     for line in uncovered:
@@ -660,6 +725,8 @@ def check_uncovered_lines(uncovered: list[UncoveredLine]) -> int:
             nocov.append(line)
         elif line.is_ignored_test_body():
             ignored_tests.append(line)
+        elif line.is_windows_only():
+            windows_only.append(line)
         else:
             actual.append(line)
 
@@ -672,6 +739,7 @@ def check_uncovered_lines(uncovered: list[UncoveredLine]) -> int:
     print(f"Uncovered todo!/unreachable! (allowed):        {len(placeholders)}")
     print(f"Uncovered macro continuations (allowed):      {len(macro_continuations)}")
     print(f"Uncovered #[ignore]d test bodies (allowed):   {len(ignored_tests)}")
+    print(f"Uncovered #[cfg(windows)] code (allowed):     {len(windows_only)}")
     print(f"Uncovered // nocov lines (allowed):           {len(nocov)}")
     print(f"Uncovered code lines:                         {len(actual)}")
     print()
