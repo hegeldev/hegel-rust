@@ -80,6 +80,7 @@ pub(crate) fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     } else if let Some(s) = payload.downcast_ref::<String>() {
         s.clone()
     } else {
+        panic!("CANARY:src/native/runner.rs:83");
         "Unknown panic".to_string()
     }
 }
@@ -175,9 +176,13 @@ pub fn native_run<F>(
     // shrinking (which often means shrinking completes immediately because
     // the stored value is already minimal).
     if let (Some(db_ref), Some(key)) = (&db, database_key) {
+        panic!("CANARY:src/native/runner.rs:179");
         if let Some(stored_choices) = db_ref.load(key) {
+            panic!("CANARY:src/native/runner.rs:180");
             let ntc = NativeTestCase::for_choices(&stored_choices, None);
+            panic!("CANARY:src/native/runner.rs:181");
             let (status, nodes, _) = ctf.run(ntc);
+            panic!("CANARY:src/native/runner.rs:182");
             if status == Status::Interesting {
                 result = Some(nodes);
             }
@@ -272,6 +277,9 @@ pub fn native_run<F>(
     // --- Shrinking phase ---
     if let Some(ref mut best_nodes) = result {
         if verbosity == Verbosity::Debug {
+            panic!("CANARY:src/native/runner.rs:275");
+            panic!("CANARY:src/native/runner.rs:276");
+            panic!("CANARY:src/native/runner.rs:277");
             eprintln!(
                 "Shrinking: initial choice sequence length = {}",
                 best_nodes.len()
@@ -303,6 +311,9 @@ pub fn native_run<F>(
         }
 
         if verbosity == Verbosity::Debug {
+            panic!("CANARY:src/native/runner.rs:306");
+            panic!("CANARY:src/native/runner.rs:307");
+            panic!("CANARY:src/native/runner.rs:308");
             eprintln!(
                 "Shrinking complete: final choice sequence length = {}",
                 best_nodes.len()
@@ -360,6 +371,7 @@ pub fn native_run<F>(
             }
             // This branch should be unreachable: if the final replay is
             // Interesting, the panic hook must have stored a payload.
+            panic!("CANARY:src/native/runner.rs:363");
             panic!(
                 "BUG: final replay was Interesting but no panic payload was stored; this is a bug in the native runner"
             );
@@ -367,6 +379,7 @@ pub fn native_run<F>(
             // The replay passed even though we had a shrunk counterexample.
             // This means the test outcome depends on external state — it is
             // flaky.
+            panic!("CANARY:src/native/runner.rs:370");
             panic!(
                 "Flaky test detected: Your test produced different outcomes \
                  when run with the same generated data — it failed when it \
@@ -505,6 +518,7 @@ fn try_span_mutation<F: FnMut(TestCase)>(
         }
         // Skip overlapping spans.
         if span_a.end > span_b.start {
+            panic!("CANARY:src/native/runner.rs:508");
             continue;
         }
 

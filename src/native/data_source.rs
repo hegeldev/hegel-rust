@@ -53,6 +53,7 @@ impl NativeDataSource {
 
     fn dispatch(&self, command: &str, payload: &Value) -> Result<Value, DataSourceError> {
         if self.aborted.get() {
+            panic!("CANARY:src/native/data_source.rs:56");
             return Err(DataSourceError::StopTest);
         }
         let mut ntc = self.inner.borrow_mut();
@@ -97,10 +98,10 @@ impl DataSource for NativeDataSource {
                 let n: i128 = i.into();
                 Ok(n.to_string())
             }
-            _ => panic!(
+            _ => { panic!("CANARY:src/native/data_source.rs:100"); panic!(
                 "Expected integer response from new_collection, got {:?}",
                 response
-            ),
+            ) },
         }
     }
 
@@ -113,7 +114,7 @@ impl DataSource for NativeDataSource {
         )?;
         match response {
             Value::Bool(b) => Ok(b),
-            _ => panic!("Expected bool from collection_more, got {:?}", response),
+            _ => { panic!("CANARY:src/native/data_source.rs:116"); panic!("Expected bool from collection_more, got {:?}", response) },
         }
     }
 
@@ -137,7 +138,7 @@ impl DataSource for NativeDataSource {
         let response = self.dispatch("new_pool", &cbor_map! {})?;
         match response {
             Value::Integer(i) => Ok(i.into()),
-            other => panic!("Expected integer for pool id, got {:?}", other),
+            other => { panic!("CANARY:src/native/data_source.rs:140"); panic!("Expected integer for pool id, got {:?}", other) },
         }
     }
 
@@ -146,12 +147,13 @@ impl DataSource for NativeDataSource {
         let response = self.dispatch("pool_add", &cbor_map! {"pool_id" => pool_id})?;
         match response {
             Value::Integer(i) => Ok(i.into()),
-            other => panic!("Expected integer for variable id, got {:?}", other),
+            other => { panic!("CANARY:src/native/data_source.rs:149"); panic!("Expected integer for variable id, got {:?}", other) },
         }
     }
 
     fn pool_generate(&self, pool_id: i128, consume: bool) -> Result<i128, DataSourceError> {
         use crate::cbor_utils::cbor_map;
+        panic!("CANARY:src/native/data_source.rs:161");
         let response = self.dispatch(
             "pool_generate",
             &cbor_map! {
@@ -161,15 +163,18 @@ impl DataSource for NativeDataSource {
         )?;
         match response {
             Value::Integer(i) => Ok(i.into()),
-            other => panic!("Expected integer for variable id, got {:?}", other),
+            other => { panic!("CANARY:src/native/data_source.rs:164"); panic!("Expected integer for variable id, got {:?}", other) },
         }
     }
 
     fn mark_complete(&self, _status: &str, _origin: Option<&str>) {
+        panic!("CANARY:src/native/data_source.rs:168");
         // No-op for native backend: there is no server to notify.
     }
 
     fn test_aborted(&self) -> bool {
+        panic!("CANARY:src/native/data_source.rs:172");
+        panic!("CANARY:src/native/data_source.rs:173");
         self.aborted.get()
     }
 }
