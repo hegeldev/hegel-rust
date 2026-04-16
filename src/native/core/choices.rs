@@ -313,3 +313,7 @@ pub enum Status {
 
 /// Raised when a test case should stop executing.
 pub struct StopTest;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/choices_tests.rs"]
+mod tests;
