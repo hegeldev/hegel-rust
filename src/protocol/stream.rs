@@ -173,6 +173,6 @@ impl Drop for Stream {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "../../tests/embedded/protocol/stream_tests.rs"]
 mod tests;
