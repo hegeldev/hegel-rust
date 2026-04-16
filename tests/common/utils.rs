@@ -93,7 +93,7 @@ where
                 "Found value that does not match predicate"
             );
         })
-        .settings(Settings::new().test_cases(self.test_cases))
+        .settings(Settings::new().test_cases(self.test_cases).database(None))
         .run();
     }
 }
