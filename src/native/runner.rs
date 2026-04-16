@@ -98,6 +98,10 @@ const SPAN_MUTATION_ATTEMPTS: usize = 5;
 /// but scaled up slightly to be less sensitive to mild filtering.
 const FILTER_TOO_MUCH_THRESHOLD: u64 = 200;
 
+/// Wall-clock threshold for a single test case before TooSlow fires.
+/// Matches Hypothesis's default `deriving_timeout` of 200 ms.
+const TOO_SLOW_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(200);
+
 /// Entry point for native-backend test execution.
 ///
 /// Called from `Hegel::run()` when the `native` feature is enabled.
@@ -160,8 +164,25 @@ pub fn native_run<F>(
 
             let batch_rng = SmallRng::from_rng(&mut rng);
             let ntc = NativeTestCase::new_random(batch_rng);
+            let tc_start = std::time::Instant::now();
             let (status, nodes, spans, _) = run_one_test_case_full(ntc, &mut test_fn, false);
+            let tc_elapsed = tc_start.elapsed();
             calls += 1;
+
+            // TooSlow health check: if a single test case takes too long, report it.
+            if tc_elapsed > TOO_SLOW_THRESHOLD
+                && !settings
+                    .suppress_health_check
+                    .contains(&HealthCheck::TooSlow)
+            {
+                panic!(
+                    "FailedHealthCheck: TooSlow — this test case took {:?}, which is \
+                     over the {:?} threshold. Slow test cases make property testing much \
+                     less effective. If this is expected, suppress the check with \
+                     suppress_health_check = [HealthCheck::TooSlow].",
+                    tc_elapsed, TOO_SLOW_THRESHOLD
+                );
+            }
 
             if nodes.is_empty() && status >= Status::Invalid {
                 test_is_trivial = true;
