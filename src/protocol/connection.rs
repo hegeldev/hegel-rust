@@ -119,6 +119,6 @@ impl Connection {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "../../tests/embedded/protocol/connection_tests.rs"]
 mod tests;

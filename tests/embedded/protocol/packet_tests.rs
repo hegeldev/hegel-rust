@@ -1,10 +1,11 @@
 use super::*;
-use std::os::unix::net::UnixStream;
 
 use ciborium::Value;
 
+#[cfg(unix)]
 #[test]
 fn test_packet_roundtrip() {
+    use std::os::unix::net::UnixStream;
     let (mut client, mut server) = UnixStream::pair().unwrap();
 
     let packet = Packet {
@@ -22,8 +23,10 @@ fn test_packet_roundtrip() {
     assert_eq!(received.payload, b"hello world");
 }
 
+#[cfg(unix)]
 #[test]
 fn test_reply_packet() {
+    use std::os::unix::net::UnixStream;
     let (mut client, mut server) = UnixStream::pair().unwrap();
 
     let packet = Packet {
