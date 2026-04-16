@@ -3,7 +3,6 @@
 // Implements the PbtkitState equivalent: random generation, shrinking,
 // and final replay of failing examples.
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Once;
 
 use rand::RngExt;
@@ -11,13 +10,12 @@ use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
 use crate::antithesis::TestLocation;
-use crate::control::with_test_context;
 use crate::native::core::{ChoiceNode, ChoiceValue, NativeTestCase, Span, Status, sort_key};
-use crate::native::data_source::NativeDataSource;
-use crate::native::database::NativeDatabase;
 use crate::native::shrinker::Shrinker;
+use crate::native::tree::CachedTestFunction;
 use crate::runner::{Database, HealthCheck, Settings, Verbosity};
-use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING, TestCase};
+use crate::native::database::NativeDatabase;
+use crate::test_case::TestCase;
 
 static NATIVE_PANIC_HOOK_INIT: Once = Once::new();
 
@@ -71,15 +69,12 @@ thread_local! {
     static LAST_PANIC_PAYLOAD: RefCell<Option<Box<dyn std::any::Any + Send>>> = const { RefCell::new(None) };
 }
 
-fn take_panic_info() -> Option<(String, String, String, Backtrace)> {
-    LAST_PANIC_INFO.with(|info| info.borrow_mut().take())
-}
-
 fn take_panic_payload() -> Option<Box<dyn std::any::Any + Send>> {
     LAST_PANIC_PAYLOAD.with(|p| p.borrow_mut().take())
 }
 
-fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+/// Extract a string message from a panic payload.
+pub(crate) fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         s.to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {
@@ -87,6 +82,45 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     } else {
         "Unknown panic".to_string()
     }
+}
+
+/// Print the panic details for the final replay, then store the wrapped
+/// payload for re-raising via `resume_unwind`.
+///
+/// Called from `CachedTestFunction::execute` when `is_final` is true.
+pub(crate) fn store_final_panic_info(msg: &str) {
+    if let Some((thread_name, thread_id, location, backtrace)) =
+        LAST_PANIC_INFO.with(|l| l.borrow_mut().take())
+    {
+        eprintln!(
+            "thread '{}' ({}) panicked at {}:",
+            thread_name, thread_id, location
+        );
+        eprintln!("{}", msg);
+
+        if backtrace.status() == std::backtrace::BacktraceStatus::Captured {
+            let is_full = std::env::var("RUST_BACKTRACE")
+                .map(|v| v == "full")
+                .unwrap_or(false);
+            let formatted = format_backtrace_native(&backtrace, is_full);
+            eprintln!("stack backtrace:\n{}", formatted);
+            if !is_full {
+                eprintln!(
+                    "note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace."
+                );
+            }
+        }
+    }
+    // Wrap the message to match the server backend's format
+    // ("Property test failed: <original>"), then store it so
+    // native_run can re-raise via resume_unwind.  Wrapping lets
+    // existing test helpers that check for "Property test
+    // failed" work identically in both backends.  Using
+    // resume_unwind avoids calling the panic hook a second time
+    // (no duplicate stderr message).
+    let wrapped: Box<dyn std::any::Any + Send> =
+        Box::new(format!("Property test failed: {msg}"));
+    LAST_PANIC_PAYLOAD.with(|p| *p.borrow_mut() = Some(wrapped));
 }
 
 const RANDOM_GENERATION_BATCH: u64 = 10;
@@ -105,7 +139,7 @@ const TOO_SLOW_THRESHOLD: std::time::Duration = std::time::Duration::from_millis
 ///
 /// Called from `Hegel::run()` when the `native` feature is enabled.
 pub fn native_run<F>(
-    mut test_fn: F,
+    test_fn: F,
     settings: &Settings,
     database_key: Option<&str>,
     test_location: Option<&TestLocation>,
@@ -124,6 +158,12 @@ pub fn native_run<F>(
         _ => None,
     };
 
+    // The CachedTestFunction wraps the user's test function. All test
+    // execution goes through it, which ensures every run is recorded in
+    // the data tree (for non-determinism detection) and, during shrinking,
+    // checked against the result cache.
+    let mut ctf = CachedTestFunction::new(test_fn);
+
     let mut result: Option<Vec<ChoiceNode>> = None;
     let mut valid_test_cases: u64 = 0;
     let mut calls: u64 = 0;
@@ -138,7 +178,7 @@ pub fn native_run<F>(
     if let (Some(db_ref), Some(key)) = (&db, database_key) {
         if let Some(stored_choices) = db_ref.load(key) {
             let ntc = NativeTestCase::for_choices(&stored_choices, None);
-            let (status, nodes, _, _) = run_one_test_case_full(ntc, &mut test_fn, false);
+            let (status, nodes, _) = ctf.run(ntc);
             if status == Status::Interesting {
                 result = Some(nodes);
             }
@@ -164,7 +204,7 @@ pub fn native_run<F>(
             let batch_rng = SmallRng::from_rng(&mut rng);
             let ntc = NativeTestCase::new_random(batch_rng);
             let tc_start = std::time::Instant::now();
-            let (status, nodes, spans, _) = run_one_test_case_full(ntc, &mut test_fn, false);
+            let (status, nodes, spans) = ctf.run(ntc);
             let tc_elapsed = tc_start.elapsed();
             calls += 1;
 
@@ -218,7 +258,8 @@ pub fn native_run<F>(
                 }
             } else if status == Status::Valid {
                 // Try span mutations on this valid test case to find interesting ones.
-                let mutation_result = try_span_mutation(&nodes, &spans, &mut rng, &mut test_fn);
+                let mutation_result =
+                    try_span_mutation(&nodes, &spans, &mut rng, &mut ctf);
                 calls += SPAN_MUTATION_ATTEMPTS as u64;
                 if let Some(mut_nodes) = mutation_result {
                     if result.is_none() || sort_key(&mut_nodes) < sort_key(result.as_ref().unwrap())
@@ -242,7 +283,7 @@ pub fn native_run<F>(
         // Verify the result is still interesting.
         let choices: Vec<ChoiceValue> = best_nodes.iter().map(|n| n.value.clone()).collect();
         let verify_ntc = NativeTestCase::for_choices(&choices, Some(best_nodes));
-        let (verify_status, verify_nodes) = run_one_test_case(verify_ntc, &mut test_fn, false);
+        let (verify_status, verify_nodes, _) = ctf.run(verify_ntc);
         assert_eq!(
             verify_status,
             Status::Interesting,
@@ -250,21 +291,18 @@ pub fn native_run<F>(
         );
         *best_nodes = verify_nodes;
 
-        let mut shrinker = Shrinker::new(
-            Box::new(|candidate_nodes: &[ChoiceNode]| {
-                let choices: Vec<ChoiceValue> =
-                    candidate_nodes.iter().map(|n| n.value.clone()).collect();
-                let ntc = NativeTestCase::for_choices(&choices, Some(candidate_nodes));
-                let (status, new_nodes) = run_one_test_case(ntc, &mut test_fn, false);
-                calls += 1;
-
-                let is_interesting = status == Status::Interesting;
-                (is_interesting, new_nodes.len())
-            }),
-            best_nodes.clone(),
-        );
-        shrinker.shrink();
-        *best_nodes = shrinker.current_nodes;
+        {
+            let mut shrinker = Shrinker::new(
+                Box::new(|candidate_nodes: &[ChoiceNode]| {
+                    let result = ctf.run_shrink(candidate_nodes);
+                    calls += 1;
+                    result
+                }),
+                best_nodes.clone(),
+            );
+            shrinker.shrink();
+            *best_nodes = shrinker.current_nodes;
+        }
 
         if verbosity == Verbosity::Debug {
             eprintln!(
@@ -314,7 +352,7 @@ pub fn native_run<F>(
         // Final replay with output enabled: prints draw labels and panic info.
         let choices: Vec<ChoiceValue> = best_nodes.iter().map(|n| n.value.clone()).collect();
         let ntc = NativeTestCase::for_choices(&choices, Some(best_nodes));
-        let (status, _, _, _) = run_one_test_case_full(ntc, &mut test_fn, true);
+        let (status, _, _) = ctf.run_final(ntc);
 
         if status == Status::Interesting {
             // Re-raise the original panic payload.  resume_unwind bypasses the
@@ -342,78 +380,6 @@ pub fn native_run<F>(
             );
         }
     }
-}
-
-/// Run a single test case and return (status, recorded nodes).
-fn run_one_test_case<F: FnMut(TestCase)>(
-    ntc: NativeTestCase,
-    test_fn: &mut F,
-    is_final: bool,
-) -> (Status, Vec<ChoiceNode>) {
-    let (status, nodes, _, _) = run_one_test_case_full(ntc, test_fn, is_final);
-    (status, nodes)
-}
-
-/// Run a single test case, returning (status, nodes, spans, optional panic message).
-fn run_one_test_case_full<F: FnMut(TestCase)>(
-    ntc: NativeTestCase,
-    test_fn: &mut F,
-    is_final: bool,
-) -> (Status, Vec<ChoiceNode>, Vec<Span>, Option<String>) {
-    let (data_source, ntc_handle) = NativeDataSource::new(ntc);
-    let tc = TestCase::new(Box::new(data_source), is_final);
-    let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
-
-    let (status, panic_msg) = match result {
-        Ok(()) => (Status::Valid, None),
-        Err(e) => {
-            let msg = panic_message(&e);
-            if msg == ASSUME_FAIL_STRING || msg == STOP_TEST_STRING {
-                (Status::Invalid, None)
-            } else {
-                if is_final {
-                    // Print the panic details for the final replay, manually
-                    // so there is no blank-line separator (which Rust's default
-                    // panic handler adds before "thread '...' panicked").
-                    if let Some((thread_name, thread_id, location, backtrace)) = take_panic_info() {
-                        eprintln!(
-                            "thread '{}' ({}) panicked at {}:",
-                            thread_name, thread_id, location
-                        );
-                        eprintln!("{}", msg);
-
-                        if backtrace.status() == std::backtrace::BacktraceStatus::Captured {
-                            let is_full = std::env::var("RUST_BACKTRACE")
-                                .map(|v| v == "full")
-                                .unwrap_or(false);
-                            let formatted = format_backtrace_native(&backtrace, is_full);
-                            eprintln!("stack backtrace:\n{}", formatted);
-                            if !is_full {
-                                eprintln!(
-                                    "note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace."
-                                );
-                            }
-                        }
-                    }
-                    // Wrap the message to match the server backend's format
-                    // ("Property test failed: <original>"), then store it so
-                    // native_run can re-raise via resume_unwind.  Wrapping lets
-                    // existing test helpers that check for "Property test
-                    // failed" work identically in both backends.  Using
-                    // resume_unwind avoids calling the panic hook a second time
-                    // (no duplicate stderr message).
-                    let wrapped: Box<dyn std::any::Any + Send> =
-                        Box::new(format!("Property test failed: {msg}"));
-                    LAST_PANIC_PAYLOAD.with(|p| *p.borrow_mut() = Some(wrapped));
-                }
-                (Status::Interesting, Some(msg))
-            }
-        }
-    };
-
-    let nodes = NativeDataSource::take_nodes(&ntc_handle);
-    let spans = NativeDataSource::take_spans(&ntc_handle);
-    (status, nodes, spans, panic_msg)
 }
 
 /// Format a backtrace captured from inside the panic hook, optionally filtering
@@ -508,7 +474,7 @@ fn try_span_mutation<F: FnMut(TestCase)>(
     nodes: &[ChoiceNode],
     spans: &[Span],
     rng: &mut SmallRng,
-    test_fn: &mut F,
+    ctf: &mut CachedTestFunction<F>,
 ) -> Option<Vec<ChoiceNode>> {
     use std::collections::HashMap;
 
@@ -560,7 +526,7 @@ fn try_span_mutation<F: FnMut(TestCase)>(
         attempt.extend_from_slice(&values[span_b.end..]);
 
         let ntc = NativeTestCase::for_choices(&attempt, None);
-        let (status, new_nodes, _, _) = run_one_test_case_full(ntc, test_fn, false);
+        let (status, new_nodes, _) = ctf.run(ntc);
 
         if status == Status::Interesting {
             return Some(new_nodes);

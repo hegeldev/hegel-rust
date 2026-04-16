@@ -10,7 +10,9 @@ fn test_can_produce_zero() {
 
 #[test]
 fn test_can_produce_large_magnitude_integers() {
-    find_any(gs::integers::<i64>(), |&x| x.abs() > 1000);
+    find_any(gs::integers::<i64>(), |&x| {
+        x.checked_abs().is_some_and(|a| a > 1000)
+    });
 }
 
 #[test]
@@ -35,12 +37,16 @@ fn test_integers_are_sometimes_zero() {
 
 #[test]
 fn test_integers_are_often_small() {
-    find_any(gs::integers::<i64>(), |&x| x.abs() <= 100);
+    find_any(gs::integers::<i64>(), |&x| {
+        x.checked_abs().is_some_and(|a| a <= 100)
+    });
 }
 
 #[test]
 fn test_integers_are_often_small_but_not_that_small() {
-    find_any(gs::integers::<i64>(), |&x| (50..=255).contains(&x.abs()));
+    find_any(gs::integers::<i64>(), |&x| {
+        x.checked_abs().is_some_and(|a| (50..=255).contains(&a))
+    });
 }
 
 #[test]
