@@ -7,4 +7,5 @@ mod bytes;
 mod collections;
 mod core;
 mod floats;
+mod generators;
 mod text;
