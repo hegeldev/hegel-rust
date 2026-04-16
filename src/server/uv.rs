@@ -101,7 +101,7 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
             return Some(candidate);
         }
         #[cfg(windows)]
-        for ext in crate::utils::executable_extensions() {
+        for ext in super::utils::executable_extensions() {
             let with_ext = dir.join(format!("{name}{ext}"));
             if with_ext.is_file() {
                 return Some(with_ext);
