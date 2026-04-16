@@ -425,12 +425,12 @@ pub use hegel_macros::standalone_function;
 pub use cli::CliOutcome;
 #[doc(hidden)]
 pub use cli::apply_cli_args as __apply_cli_args;
+#[doc(hidden)]
+pub use runner::hegel;
+pub use runner::{HealthCheck, Hegel, Settings, Verbosity};
 #[cfg(not(feature = "native"))]
 #[doc(hidden)]
 pub use server::process::__test_kill_server;
 #[cfg(not(feature = "native"))]
 #[doc(hidden)]
 pub use server::process::format_log_excerpt;
-#[doc(hidden)]
-pub use runner::hegel;
-pub use runner::{HealthCheck, Hegel, Settings, Verbosity};

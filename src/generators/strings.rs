@@ -579,7 +579,6 @@ impl IpAddressGenerator {
         // nocov end
     }
 
-    // nocov start
     fn build_schema(&self) -> Value {
         match self.version {
             Some(IpVersion::V4) => cbor_map! {"type" => "ipv4"},
@@ -589,7 +588,6 @@ impl IpAddressGenerator {
                 "generators" => cbor_array![
                     cbor_map!{"type" => "ipv4"},
                     cbor_map!{"type" => "ipv6"}
-            // nocov end
                 ]
             },
         }

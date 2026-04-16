@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use super::data_source::ServerDataSource;
 use super::process::{
-    handle_channel_error, handle_handshake_failure, hegel_command, server_crash_message,
-    server_log_file, HEGEL_SERVER_COMMAND_ENV,
+    HEGEL_SERVER_COMMAND_ENV, handle_channel_error, handle_handshake_failure, hegel_command,
+    server_crash_message, server_log_file,
 };
 use super::runner::{cbor_decode, cbor_encode};
 

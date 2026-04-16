@@ -88,10 +88,7 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
     /// Records the resulting nodes in the data tree (checking for
     /// non-determinism) but does not use the cache (random generation
     /// produces unique sequences, so caching would just waste memory).
-    pub fn run(
-        &mut self,
-        ntc: NativeTestCase,
-    ) -> (Status, Vec<ChoiceNode>, Vec<Span>) {
+    pub fn run(&mut self, ntc: NativeTestCase) -> (Status, Vec<ChoiceNode>, Vec<Span>) {
         let (status, nodes, spans, _) = self.execute(ntc, false);
         self.record(&nodes);
         (status, nodes, spans)
@@ -107,8 +104,7 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
             return cached;
         }
 
-        let choices: Vec<ChoiceValue> =
-            candidate_nodes.iter().map(|n| n.value.clone()).collect();
+        let choices: Vec<ChoiceValue> = candidate_nodes.iter().map(|n| n.value.clone()).collect();
         let ntc = NativeTestCase::for_choices(&choices, Some(candidate_nodes));
         let (status, new_nodes, _, _) = self.execute(ntc, false);
         self.record(&new_nodes);
@@ -122,10 +118,7 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
     ///
     /// Does not use the cache or record in the tree — the test is about
     /// to fail and we need the actual panic payload for re-raising.
-    pub fn run_final(
-        &mut self,
-        ntc: NativeTestCase,
-    ) -> (Status, Vec<ChoiceNode>, Vec<Span>) {
+    pub fn run_final(&mut self, ntc: NativeTestCase) -> (Status, Vec<ChoiceNode>, Vec<Span>) {
         let (status, nodes, spans, _) = self.execute(ntc, true);
         (status, nodes, spans)
     }
@@ -184,14 +177,18 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
     }
 
     fn cache_lookup(&self, nodes: &[ChoiceNode]) -> Option<(bool, usize)> {
-        let key: Vec<ChoiceValueKey> =
-            nodes.iter().map(|n| ChoiceValueKey::from(&n.value)).collect();
+        let key: Vec<ChoiceValueKey> = nodes
+            .iter()
+            .map(|n| ChoiceValueKey::from(&n.value))
+            .collect();
         self.cache.get(&key).copied()
     }
 
     fn cache_store(&mut self, nodes: &[ChoiceNode], result: (bool, usize)) {
-        let key: Vec<ChoiceValueKey> =
-            nodes.iter().map(|n| ChoiceValueKey::from(&n.value)).collect();
+        let key: Vec<ChoiceValueKey> = nodes
+            .iter()
+            .map(|n| ChoiceValueKey::from(&n.value))
+            .collect();
         self.cache.insert(key, result);
     }
 }

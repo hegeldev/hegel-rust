@@ -272,17 +272,13 @@ pub fn server_run<F>(
     let mut test_fn = test_fn;
     let got_interesting = AtomicBool::new(false);
 
-    let result = runner.run(
-        settings,
-        database_key,
-        &mut |backend, is_final| {
-            let tc_result = run_test_case(backend, &mut test_fn, is_final);
-            if matches!(&tc_result, TestCaseResult::Interesting { .. }) {
-                got_interesting.store(true, Ordering::SeqCst);
-            }
-            tc_result
-        },
-    );
+    let result = runner.run(settings, database_key, &mut |backend, is_final| {
+        let tc_result = run_test_case(backend, &mut test_fn, is_final);
+        if matches!(&tc_result, TestCaseResult::Interesting { .. }) {
+            got_interesting.store(true, Ordering::SeqCst);
+        }
+        tc_result
+    });
 
     let test_failed = !result.passed || got_interesting.load(Ordering::SeqCst);
 

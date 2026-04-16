@@ -13,7 +13,7 @@ def git(*args: str) -> None:
 
 
 def get_current_version() -> str:
-    text = (ROOT / "src" / "runner.rs").read_text()
+    text = (ROOT / "src" / "server" / "session.rs").read_text()
     m = re.search(r'^const HEGEL_SERVER_VERSION: &str = "([^"]+)";', text, re.MULTILINE)
     assert m is not None
     return m.group(1)
@@ -49,8 +49,8 @@ def get_releases_in_range(from_version: str, to_version: str) -> list[dict[str, 
 def bump(version: str, protocol_version: str) -> None:
     current_version = get_current_version()
 
-    runner = ROOT / "src" / "runner.rs"
-    text = runner.read_text()
+    session = ROOT / "src" / "server" / "session.rs"
+    text = session.read_text()
     text = re.sub(
         r'^const HEGEL_SERVER_VERSION: &str = "[^"]+";',
         f'const HEGEL_SERVER_VERSION: &str = "{version}";',
@@ -65,7 +65,7 @@ def bump(version: str, protocol_version: str) -> None:
         count=1,
         flags=re.MULTILINE,
     )
-    runner.write_text(text)
+    session.write_text(text)
 
     flake = ROOT / "nix" / "flake.nix"
     text = flake.read_text()
@@ -108,7 +108,7 @@ def bump(version: str, protocol_version: str) -> None:
     git("config", "user.email", f"{app_id}+hegel-release[bot]@users.noreply.github.com")
 
     git("checkout", "-b", "ci/bump-hegel-core")
-    git("add", "src/runner.rs", "nix/flake.nix", "nix/flake.lock", "RELEASE.md")
+    git("add", "src/server/session.rs", "nix/flake.nix", "nix/flake.lock", "RELEASE.md")
     git("commit", "-m", f"Bump hegel-core to {version}")
     git("push", "--force", "origin", "ci/bump-hegel-core")
 
