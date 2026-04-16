@@ -6,4 +6,5 @@ mod common;
 mod bytes;
 mod collections;
 mod core;
+mod floats;
 mod text;

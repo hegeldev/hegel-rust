@@ -94,3 +94,242 @@ fn integer_choice_unit_single_value_range() {
         5
     );
 }
+
+// ── FloatChoice::simplest ───────────────────────────────────────────────────
+//
+// Ports of pbtkit/tests/test_floats.py::test_floats_simplest_positive_range,
+// test_float_simplest_with_inf_bounds, test_float_simplest_tiny_range,
+// test_float_simplest_subnormal_range, test_float_simplest_finds_power_of_two,
+// test_float_negative_zero_simplest.
+
+#[test]
+fn float_choice_simplest_positive_range() {
+    assert_eq!(
+        FloatChoice {
+            min_value: 1.0,
+            max_value: 10.0,
+            allow_nan: false,
+            allow_infinity: true,
+        }
+        .simplest(),
+        1.0
+    );
+}
+
+#[test]
+fn float_choice_simplest_negative_range() {
+    assert_eq!(
+        FloatChoice {
+            min_value: -10.0,
+            max_value: -1.0,
+            allow_nan: false,
+            allow_infinity: true,
+        }
+        .simplest(),
+        -1.0
+    );
+}
+
+#[test]
+fn float_choice_simplest_spans_zero() {
+    assert_eq!(
+        FloatChoice {
+            min_value: -1.0,
+            max_value: 1.0,
+            allow_nan: false,
+            allow_infinity: true,
+        }
+        .simplest(),
+        0.0
+    );
+}
+
+#[test]
+fn float_choice_simplest_with_inf_bounds() {
+    let fc = FloatChoice {
+        min_value: f64::NEG_INFINITY,
+        max_value: f64::INFINITY,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    assert_eq!(fc.simplest(), 0.0);
+    let fc2 = FloatChoice {
+        min_value: 1.0,
+        max_value: f64::INFINITY,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    assert_eq!(fc2.simplest(), 1.0);
+    let fc3 = FloatChoice {
+        min_value: f64::NEG_INFINITY,
+        max_value: -1.0,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    assert_eq!(fc3.simplest(), -1.0);
+}
+
+#[test]
+fn float_choice_simplest_tiny_range() {
+    // Tiny range where no power of 2 is in range.
+    let fc = FloatChoice {
+        min_value: 1.5,
+        max_value: 1.75,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    assert_eq!(fc.simplest(), 1.5);
+}
+
+#[test]
+fn float_choice_simplest_subnormal_range() {
+    // Subnormal-only range — simplest must be a valid subnormal in the range.
+    // The Rust ordering uses update_mantissa's bit-reversal, so the "simpler"
+    // subnormal in this tiny range is 2e-323 rather than the lower boundary.
+    let fc = FloatChoice {
+        min_value: 1e-323,
+        max_value: 2e-323,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    let s = fc.simplest();
+    assert!(fc.validate(s));
+    assert!(s == 1e-323 || s == 2e-323);
+}
+
+#[test]
+fn float_choice_simplest_finds_power_of_two() {
+    // Range [0.5, 2.0] — simplest is 1.0, found by the integer search.
+    let fc = FloatChoice {
+        min_value: 0.5,
+        max_value: 2.0,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    assert_eq!(fc.simplest(), 1.0);
+}
+
+#[test]
+fn float_choice_simplest_negative_zero_range() {
+    // Range containing 0.0 yields 0.0 directly.
+    let fc = FloatChoice {
+        min_value: -1.0,
+        max_value: 0.0,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    assert_eq!(fc.simplest(), 0.0);
+}
+
+// ── FloatChoice::validate ───────────────────────────────────────────────────
+//
+// Port of pbtkit/tests/test_floats.py::test_floats_validate_edge_cases.
+
+#[test]
+fn float_choice_validate_edge_cases() {
+    let kind = FloatChoice {
+        min_value: f64::NEG_INFINITY,
+        max_value: f64::INFINITY,
+        allow_nan: true,
+        allow_infinity: true,
+    };
+    assert!(kind.validate(f64::NAN));
+    assert!(kind.validate(f64::INFINITY));
+    assert!(kind.validate(f64::NEG_INFINITY));
+    assert!(kind.validate(0.0));
+
+    let no_nan = FloatChoice {
+        min_value: f64::NEG_INFINITY,
+        max_value: f64::INFINITY,
+        allow_nan: false,
+        allow_infinity: true,
+    };
+    assert!(!no_nan.validate(f64::NAN));
+
+    let no_inf = FloatChoice {
+        min_value: f64::NEG_INFINITY,
+        max_value: f64::INFINITY,
+        allow_nan: true,
+        allow_infinity: false,
+    };
+    assert!(!no_inf.validate(f64::INFINITY));
+    assert!(!no_inf.validate(f64::NEG_INFINITY));
+
+    let bounded = FloatChoice {
+        min_value: 0.0,
+        max_value: 1.0,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    assert!(!bounded.validate(2.0));
+    assert!(bounded.validate(0.5));
+}
+
+// ── FloatChoice::sort_index ─────────────────────────────────────────────────
+//
+// Port of pbtkit/tests/test_floats.py::test_floats_sort_key_ordering. Rust's
+// FloatChoice::sort_index returns `(magnitude_index, is_negative)`, which
+// orders values as: smallest non-negative finite < larger non-negative finite
+// < +inf < -inf < NaN. Simpler positive finites sort before more complex ones.
+
+#[test]
+fn float_choice_sort_index_ordering() {
+    let kind = FloatChoice {
+        min_value: f64::NEG_INFINITY,
+        max_value: f64::INFINITY,
+        allow_nan: true,
+        allow_infinity: true,
+    };
+    // Finite < inf < -inf < NaN
+    assert!(kind.sort_index(0.0) < kind.sort_index(f64::INFINITY));
+    assert!(kind.sort_index(f64::INFINITY) < kind.sort_index(f64::NEG_INFINITY));
+    assert!(kind.sort_index(f64::NEG_INFINITY) < kind.sort_index(f64::NAN));
+    // Simpler finite values sort earlier.
+    assert!(kind.sort_index(1.0) < kind.sort_index(2.0));
+    assert!(kind.sort_index(1.0) < kind.sort_index(1.5));
+    assert!(kind.sort_index(1.0) < kind.sort_index(-1.0));
+}
+
+// ── FloatChoice::unit ───────────────────────────────────────────────────────
+//
+// Port of pbtkit/tests/test_floats.py::test_float_choice_unit, adapted to the
+// Rust implementation's (index, is_negative) ordering (the Python version
+// uses (exponent_rank, mantissa, sign)).
+
+#[test]
+fn float_choice_unit_spans_zero() {
+    // Rust ordering: simplest is 0.0 (index 0); offset 1 maps to 1.0.
+    let fc = FloatChoice {
+        min_value: -10.0,
+        max_value: 10.0,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    assert_eq!(fc.unit(), 1.0);
+}
+
+#[test]
+fn float_choice_unit_single_value_range() {
+    // Single-value range — unit falls back to simplest.
+    let fc = FloatChoice {
+        min_value: 5.0,
+        max_value: 5.0,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    assert_eq!(fc.unit(), 5.0);
+}
+
+#[test]
+fn float_choice_unit_negative_range() {
+    // Rust ordering: simplest is -5.0 (index 5, is_neg=true); offset 1 maps
+    // to index_to_float(6) = 6.0, negated is -6.0 which is valid in [-10, -5].
+    let fc = FloatChoice {
+        min_value: -10.0,
+        max_value: -5.0,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    assert_eq!(fc.simplest(), -5.0);
+    assert_eq!(fc.unit(), -6.0);
+}
