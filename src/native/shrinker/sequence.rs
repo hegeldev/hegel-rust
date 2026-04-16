@@ -43,15 +43,13 @@ impl<'a> Shrinker<'a> {
             .collect();
         let mut sorted = values.clone();
         sorted.sort_by(|a, b| {
-            let key_a = match a {
-                ChoiceValue::Integer(v) => v.unsigned_abs(),
-                _ => u128::MAX,
+            let ChoiceValue::Integer(va) = a else {
+                unreachable!()
             };
-            let key_b = match b {
-                ChoiceValue::Integer(v) => v.unsigned_abs(),
-                _ => u128::MAX,
+            let ChoiceValue::Integer(vb) = b else {
+                unreachable!()
             };
-            key_a.cmp(&key_b)
+            va.unsigned_abs().cmp(&vb.unsigned_abs())
         });
 
         if sorted != values {
@@ -89,15 +87,13 @@ impl<'a> Shrinker<'a> {
         let mut sorted = values.clone();
         // Sort: false (0) before true (1).
         sorted.sort_by(|a, b| {
-            let key_a = match a {
-                ChoiceValue::Boolean(v) => u8::from(*v),
-                _ => u8::MAX,
+            let ChoiceValue::Boolean(va) = a else {
+                unreachable!()
             };
-            let key_b = match b {
-                ChoiceValue::Boolean(v) => u8::from(*v),
-                _ => u8::MAX,
+            let ChoiceValue::Boolean(vb) = b else {
+                unreachable!()
             };
-            key_a.cmp(&key_b)
+            u8::from(*va).cmp(&u8::from(*vb))
         });
 
         if sorted != values {
