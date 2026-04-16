@@ -138,6 +138,9 @@ impl FloatChoice {
         if self.allow_infinity && self.validate(f64::INFINITY) {
             return f64::INFINITY;
         }
+        if self.allow_infinity && self.validate(f64::NEG_INFINITY) {
+            return f64::NEG_INFINITY;
+        }
         if self.allow_nan {
             return f64::NAN;
         }
