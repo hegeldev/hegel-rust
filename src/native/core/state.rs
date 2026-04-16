@@ -6,8 +6,8 @@ use rand::RngExt;
 use rand::rngs::SmallRng;
 
 use super::choices::{
-    BooleanChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice, Status,
-    StopTest,
+    BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice,
+    Status, StopTest,
 };
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
 
@@ -421,6 +421,63 @@ impl NativeTestCase {
         self.nodes.push(ChoiceNode {
             kind: ChoiceKind::Float(kind),
             value: ChoiceValue::Float(v),
+            was_forced,
+        });
+
+        Ok(v)
+    }
+
+    /// Draw a bytes value with length in `[min_size, max_size]`.
+    ///
+    /// Port of pbtkit's `_draw_bytes` / `draw_bytes` method.
+    pub fn draw_bytes(&mut self, min_size: usize, max_size: usize) -> Result<Vec<u8>, StopTest> {
+        assert!(
+            min_size <= max_size,
+            "min_size ({min_size}) must be <= max_size ({max_size})"
+        );
+        let kind = BytesChoice { min_size, max_size };
+
+        // Edge-case-boosting candidates: simplest, empty, all-zeros single,
+        // all-0xff single — any of which land on common counterexample shapes.
+        let nasty: Vec<Vec<u8>> = {
+            let mut v = vec![kind.simplest()];
+            if min_size == 0 && max_size > 0 {
+                v.push(vec![0u8]);
+            }
+            if min_size <= 1 && max_size >= 1 {
+                v.push(vec![0xffu8]);
+            }
+            v
+        };
+        let nasty_threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
+
+        let (value, was_forced) = self.resolve_choice(
+            &ChoiceKind::Bytes(kind.clone()),
+            || ChoiceValue::Bytes(kind.simplest()),
+            || ChoiceValue::Bytes(kind.unit()),
+            |v| matches!(v, ChoiceValue::Bytes(b) if kind.validate(b)),
+            |rng| {
+                if rng.random::<f64>() < nasty_threshold {
+                    let idx = rng.random_range(0..nasty.len());
+                    return ChoiceValue::Bytes(nasty[idx].clone());
+                }
+                let len = if min_size == max_size {
+                    min_size
+                } else {
+                    rng.random_range(min_size..=max_size)
+                };
+                let bytes: Vec<u8> = (0..len).map(|_| rng.random::<u8>()).collect();
+                ChoiceValue::Bytes(bytes)
+            },
+        )?;
+
+        let ChoiceValue::Bytes(v) = value else {
+            unreachable!()
+        };
+
+        self.nodes.push(ChoiceNode {
+            kind: ChoiceKind::Bytes(kind),
+            value: ChoiceValue::Bytes(v.clone()),
             was_forced,
         });
 
