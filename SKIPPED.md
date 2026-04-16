@@ -1,0 +1,34 @@
+# Skipped upstream test files
+
+Upstream test files that have been deliberately *not* ported, with a one-line
+rationale each. The Stop hook's unported-gate (`list-unported.py`) reads this
+file and treats listed files as "done".
+
+## pbtkit (`/tmp/pbtkit/tests/`)
+
+- `test_targeting.py` — uses `tc.target(score)`; hegel-rust has no targeting
+  API yet.
+- `test_features.py` — tests Python-specific module-system shims
+  (`sys.modules`, dunder access) with no Rust counterpart.
+- `test_spans.py` — relies on pbtkit-internal span introspection
+  (`tc.spans`, `tc.nodes`, `PbtkitState`, `_span_mutation_hook`) not
+  exposed by hegel-rust.
+- `test_exercise_shrink_paths.py` — exercises each `SHRINK_PASSES` pass via
+  `PbtkitState`, pure pbtkit engine internals.
+- `test_findability_comparison.py` — compares pbtkit vs Hypothesis by
+  running both engines in the same process; neither oracle is available in
+  hegel-rust.
+- `test_hypothesis.py` — raw pbtkit API stress tests (`tc.weighted`,
+  `tc.choice`, `tc.mark_status`) that don't map to the generator-based
+  public API.
+- `test_pbtsmith.py` — generates random Python programs via pbtkit's code
+  generator and execs them; no `hegelsmith` equivalent yet.
+- `test_shrink_comparison.py` — compares shrinker quality via
+  `ConjectureRunner`/`ConjectureData`/`ChoiceNode`, pure engine internals.
+- `test_choice_index.py` — tests pbtkit's `to_index`/`from_index` shortlex
+  enumeration; hegel-rust doesn't implement an index-based shrink pass.
+
+## hypothesis (`/tmp/hypothesis/hypothesis-python/tests/cover/`)
+
+(none yet — entries appear here as agents decide that a file genuinely
+can't port and record the reason)
