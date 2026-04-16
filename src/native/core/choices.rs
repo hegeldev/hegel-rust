@@ -26,7 +26,7 @@ impl IntegerChoice {
         if self.validate(s + 1) {
             s + 1
         } else if self.validate(s - 1) {
-            s - 1
+            panic!("CANARY:src/native/core/choices.rs:29"); s - 1
         } else {
             s
         }
@@ -153,8 +153,11 @@ impl FloatChoice {
             return f64::NEG_INFINITY;
         }
         if self.allow_nan {
+            panic!("CANARY:src/native/core/choices.rs:155");
+            panic!("CANARY:src/native/core/choices.rs:156");
             return f64::NAN;
         }
+        panic!("CANARY:src/native/core/choices.rs:158");
         panic!("FloatChoice::simplest: no valid float for this choice")
     }
 
@@ -164,6 +167,7 @@ impl FloatChoice {
 
         let s = self.simplest();
         if s.is_nan() {
+            panic!("CANARY:src/native/core/choices.rs:167");
             return s;
         }
         let base = float_to_index(s.abs());
@@ -233,7 +237,7 @@ impl PartialEq for ChoiceValue {
             (ChoiceValue::Boolean(a), ChoiceValue::Boolean(b)) => a == b,
             // Bitwise equality so NaN == NaN for replay/punning logic.
             (ChoiceValue::Float(a), ChoiceValue::Float(b)) => a.to_bits() == b.to_bits(),
-            _ => false,
+            _ => { panic!("CANARY:src/native/core/choices.rs:236"); false }
         }
     }
 }
