@@ -2,8 +2,10 @@ use crate::antithesis::{TestLocation, is_running_in_antithesis};
 use crate::backend::{DataSource, DataSourceError, TestCaseResult, TestRunResult, TestRunner};
 use crate::cbor_utils::{as_bool, as_text, as_u64, cbor_map, map_get, map_insert};
 use crate::control::{currently_in_test_context, with_test_context};
-use crate::protocol::{Connection, HANDSHAKE_STRING, Stream};
-use crate::test_case::{ASSUME_FAIL_STRING, LOOP_DONE_STRING, STOP_TEST_STRING, TestCase};
+#[cfg(not(feature = "native"))]
+use crate::server::protocol::{Connection, HANDSHAKE_STRING, Stream};
+#[cfg(not(feature = "native"))]
+use crate::test_case::{ASSUME_FAIL_STRING, LOOP_DONE_STRING, STOP_TEST_STRING};
 use ciborium::Value;
 
 use std::backtrace::{Backtrace, BacktraceStatus};
@@ -824,7 +826,7 @@ fn hegel_command() -> Command {
     if let Ok(override_path) = std::env::var(HEGEL_SERVER_COMMAND_ENV) {
         return Command::new(resolve_hegel_path(&override_path)); // nocov
     }
-    let uv_path = crate::uv::find_uv();
+    let uv_path = crate::server::uv::find_uv();
     let mut cmd = Command::new(uv_path);
     cmd.args([
         "tool",
@@ -945,14 +947,14 @@ fn startup_error_message(
 fn resolve_hegel_path(path: &str) -> String {
     let p = std::path::Path::new(path);
     if p.exists() {
-        crate::utils::validate_executable(path);
+        crate::server::utils::validate_executable(path);
         return path.to_string();
     }
 
     // Bare name (no path separator) — try PATH lookup
     if !path.chars().any(std::path::is_separator) {
-        if let Some(resolved) = crate::utils::which(path) {
-            crate::utils::validate_executable(&resolved);
+        if let Some(resolved) = crate::server::utils::which(path) {
+            crate::server::utils::validate_executable(&resolved);
             return resolved;
         }
         panic!(

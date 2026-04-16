@@ -120,5 +120,5 @@ fn cache_dir_from(xdg_cache_home: Option<String>, home_dir: Option<PathBuf>) -> 
 }
 
 #[cfg(test)]
-#[path = "../tests/embedded/uv_tests.rs"]
+#[path = "../../tests/embedded/server/uv_tests.rs"]
 mod tests;

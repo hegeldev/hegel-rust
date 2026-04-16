@@ -221,12 +221,11 @@ pub(crate) mod cli;
 pub(crate) mod control;
 pub mod explicit_test_case;
 pub mod generators;
-pub(crate) mod protocol;
 pub(crate) mod runner;
+#[cfg(not(feature = "native"))]
+pub(crate) mod server;
 pub mod stateful;
 mod test_case;
-pub(crate) mod utils;
-mod uv;
 
 #[doc(hidden)]
 pub use control::currently_in_test_context;

@@ -170,7 +170,7 @@ fn test_validate_executable_panics_for_non_executable() {
     std::fs::write(&path, "").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-    crate::utils::validate_executable(path.to_str().unwrap());
+    crate::server::utils::validate_executable(path.to_str().unwrap());
 }
 
 #[test]
