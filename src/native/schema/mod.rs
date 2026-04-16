@@ -20,21 +20,20 @@ mod text;
 
 use crate::cbor_utils::{as_bool, as_u64, map_get};
 use crate::native::core::{ManyState, NativeTestCase, Status, StopTest};
-use crate::test_case::StopTestError;
 use ciborium::Value;
 
 /// Top-level dispatcher for native request handling.
 ///
-/// Called from TestCase::send_request when the native backend is active.
+/// Called from NativeDataSource when the native backend is active.
 pub fn dispatch_request(
     ntc: &mut NativeTestCase,
     command: &str,
     payload: &Value,
-) -> Result<Value, StopTestError> {
+) -> Result<Value, StopTest> {
     match command {
         "generate" => {
             let schema = map_get(payload, "schema").expect("generate command missing schema");
-            interpret_schema(ntc, schema).map_err(|StopTest| StopTestError)
+            interpret_schema(ntc, schema)
         }
         "start_span" | "stop_span" => {
             // Spans are tracked locally by TestCase for output purposes.
@@ -42,10 +41,10 @@ pub fn dispatch_request(
             Ok(Value::Null)
         }
         "new_collection" => {
-            let min_size = map_get(payload, "min_size")
+            let min_size = map_get(payload, "min_size").and_then(as_u64).unwrap_or(0) as usize;
+            let max_size = map_get(payload, "max_size")
                 .and_then(as_u64)
-                .unwrap_or(0) as usize;
-            let max_size = map_get(payload, "max_size").and_then(as_u64).map(|n| n as usize);
+                .map(|n| n as usize);
             let state = ManyState::new(min_size, max_size);
             let id = ntc.new_collection(state);
             Ok(Value::Integer(id.into()))
@@ -58,7 +57,7 @@ pub fn dispatch_request(
                 .collections
                 .remove(&id)
                 .expect("collection_more: unknown collection_id");
-            let result = many_more(ntc, &mut state).map_err(|StopTest| StopTestError)?;
+            let result = many_more(ntc, &mut state).map_err(|StopTest| StopTest)?;
             ntc.collections.insert(id, state);
             Ok(Value::Bool(result))
         }
@@ -70,13 +69,14 @@ pub fn dispatch_request(
                 .collections
                 .remove(&id)
                 .expect("collection_reject: unknown collection_id");
-            many_reject(ntc, &mut state).map_err(|StopTest| StopTestError)?;
+            many_reject(ntc, &mut state).map_err(|StopTest| StopTest)?;
             ntc.collections.insert(id, state);
             Ok(Value::Null)
         }
         "new_pool" => {
             let pool_id = ntc.variable_pools.len() as i64;
-            ntc.variable_pools.push(crate::native::core::NativeVariables::new());
+            ntc.variable_pools
+                .push(crate::native::core::NativeVariables::new());
             Ok(Value::Integer(pool_id.into()))
         }
         "pool_add" => {
@@ -107,12 +107,12 @@ pub fn dispatch_request(
             let active = ntc.variable_pools[pool_id].active();
             if active.is_empty() {
                 // No variables available: mark test case as invalid.
-                return Err(StopTestError);
+                return Err(StopTest);
             }
             let n = active.len() as i128;
             // Draw index from [0, n-1]. Shrink towards n-1 (last added = most recent)
             // by drawing k from [0, n-1] and using index = n-1-k.
-            let k = ntc.draw_integer(0, n - 1).map_err(|StopTest| StopTestError)?;
+            let k = ntc.draw_integer(0, n - 1).map_err(|StopTest| StopTest)?;
             let idx = (n - 1 - k) as usize;
             let variable_id = active[idx] as i64;
             if consume {
@@ -293,7 +293,10 @@ fn u128_to_cbor(v: u128) -> Value {
     // Encode as CBOR tag 2 (positive bignum), big-endian, minimal encoding.
     let bytes = v.to_be_bytes();
     // Strip leading zero bytes for minimal encoding.
-    let first_nonzero = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len() - 1);
+    let first_nonzero = bytes
+        .iter()
+        .position(|&b| b != 0)
+        .unwrap_or(bytes.len() - 1);
     Value::Tag(2, Box::new(Value::Bytes(bytes[first_nonzero..].to_vec())))
 }
 
