@@ -15,7 +15,8 @@ fn native_integer_in_range(tc: hegel::TestCase) {
 fn native_boolean_is_bool(tc: hegel::TestCase) {
     let b = tc.draw(gs::booleans());
     // Tautology: just exercises the boolean generation path.
-    assert!(b || !b);
+    // Use black_box to prevent clippy from optimizing out the tautology check.
+    assert!(b || !std::hint::black_box(b));
 }
 
 #[hegel::test]
@@ -39,7 +40,12 @@ fn native_assume_filters(tc: hegel::TestCase) {
 
 #[hegel::test]
 fn native_mapped_generator(tc: hegel::TestCase) {
-    let n = tc.draw(gs::integers::<i32>().min_value(0).max_value(100).map(|x| x * 2));
+    let n = tc.draw(
+        gs::integers::<i32>()
+            .min_value(0)
+            .max_value(100)
+            .map(|x| x * 2),
+    );
     assert!(n >= 0);
     assert!(n <= 200);
     assert!(n % 2 == 0);
@@ -102,46 +108,41 @@ fn native_multiple_draws(tc: hegel::TestCase) {
 /// HirKind::Empty: an empty capture group generates an empty string.
 #[test]
 fn native_regex_empty_hir() {
-    assert_all_examples(
-        gs::from_regex("()").fullmatch(true),
-        |s: &String| s.is_empty(),
-    );
+    assert_all_examples(gs::from_regex("()").fullmatch(true), |s: &String| {
+        s.is_empty()
+    });
 }
 
 /// HirKind::Literal: a literal pattern generates exactly that string.
 #[test]
 fn native_regex_literal() {
-    assert_all_examples(
-        gs::from_regex("abc").fullmatch(true),
-        |s: &String| s == "abc",
-    );
+    assert_all_examples(gs::from_regex("abc").fullmatch(true), |s: &String| {
+        s == "abc"
+    });
 }
 
 /// HirKind::Concat: an anchor + literal + anchor uses Concat and Look nodes.
 #[test]
 fn native_regex_concat_and_look() {
-    assert_all_examples(
-        gs::from_regex("^abc$").fullmatch(true),
-        |s: &String| s == "abc",
-    );
+    assert_all_examples(gs::from_regex("^abc$").fullmatch(true), |s: &String| {
+        s == "abc"
+    });
 }
 
 /// HirKind::Alternation: a|b generates "a" or "b".
 #[test]
 fn native_regex_alternation() {
-    assert_all_examples(
-        gs::from_regex("a|b").fullmatch(true),
-        |s: &String| s == "a" || s == "b",
-    );
+    assert_all_examples(gs::from_regex("a|b").fullmatch(true), |s: &String| {
+        s == "a" || s == "b"
+    });
 }
 
 /// HirKind::Capture: a capture group generates the contained pattern.
 #[test]
 fn native_regex_capture() {
-    assert_all_examples(
-        gs::from_regex("(abc)").fullmatch(true),
-        |s: &String| s == "abc",
-    );
+    assert_all_examples(gs::from_regex("(abc)").fullmatch(true), |s: &String| {
+        s == "abc"
+    });
 }
 
 /// HirKind::Class::Bytes: byte-mode character class generates matching chars.
@@ -167,10 +168,9 @@ fn native_regex_unicode_class_explicit_alphabet() {
 /// regex_alphabet_allows None: no alphabet means all chars pass.
 #[test]
 fn native_regex_no_alphabet() {
-    assert_all_examples(
-        gs::from_regex("[a-z]+").fullmatch(true),
-        |s: &String| !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase()),
-    );
+    assert_all_examples(gs::from_regex("[a-z]+").fullmatch(true), |s: &String| {
+        !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase())
+    });
 }
 
 /// fullmatch=false: generates a string containing a match with possible surrounding text.
@@ -178,10 +178,9 @@ fn native_regex_no_alphabet() {
 fn native_regex_partial_match() {
     // The partial match path generates prefix + match + suffix.
     // We can't know the full string, but the overall string must contain something.
-    assert_all_examples(
-        gs::from_regex("[a-z]+"),
-        |s: &String| s.chars().all(|c| c.is_ascii() || c.is_alphabetic()),
-    );
+    assert_all_examples(gs::from_regex("[a-z]+"), |s: &String| {
+        s.chars().all(|c| c.is_ascii() || c.is_alphabetic())
+    });
 }
 
 /// HirKind::Literal blocked by alphabet triggers Invalid.
@@ -252,8 +251,9 @@ fn native_float_neg_inf_boundary_simplest() {
 }
 
 /// interpret_string with a surrogate-only range (e.g. [0xD800, 0xDFFF]) should
-/// mark the test case as Invalid instead of panicking, so it is filtered out.
+/// report InvalidArgument, matching the server backend's behavior.
 #[test]
+#[should_panic(expected = "InvalidArgument")]
 fn native_string_empty_alphabet_is_invalid() {
     hegel::Hegel::new(|tc: hegel::TestCase| {
         let _c = tc.draw(gs::characters().min_codepoint(0xD800).max_codepoint(0xDFFF));

@@ -1,13 +1,10 @@
 // Float schema interpreter.
 
-use crate::native::core::{NativeTestCase, StopTest};
 use crate::cbor_utils::{as_bool, as_u64, map_get};
+use crate::native::core::{NativeTestCase, StopTest};
 use ciborium::Value;
 
-pub(super) fn interpret_float(
-    ntc: &mut NativeTestCase,
-    schema: &Value,
-) -> Result<Value, StopTest> {
+pub(super) fn interpret_float(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
     let width: u64 = map_get(schema, "width").and_then(as_u64).unwrap_or(64);
     let min_value = map_get(schema, "min_value")
         .map(cbor_to_f64)

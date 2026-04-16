@@ -263,7 +263,6 @@ where
                 self.database_key.as_deref(),
                 self.test_location.as_ref(),
             );
-            return;
         }
 
         #[cfg(not(feature = "native"))]

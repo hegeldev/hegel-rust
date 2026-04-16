@@ -1,7 +1,7 @@
 // String and binary schema interpreters, plus StringAlphabet helpers.
 
-use crate::native::core::{ManyState, NativeTestCase, Status, StopTest};
 use crate::cbor_utils::{as_text, as_u64, map_get};
+use crate::native::core::{ManyState, NativeTestCase, StopTest};
 use ciborium::Value;
 
 use super::many_more;
@@ -10,17 +10,20 @@ pub(super) fn interpret_string(
     ntc: &mut NativeTestCase,
     schema: &Value,
 ) -> Result<Value, StopTest> {
-    let min_size = map_get(schema, "min_size")
+    let min_size = map_get(schema, "min_size").and_then(as_u64).unwrap_or(0) as usize;
+    let max_size = map_get(schema, "max_size")
         .and_then(as_u64)
-        .unwrap_or(0) as usize;
-    let max_size = map_get(schema, "max_size").and_then(as_u64).map(|n| n as usize);
+        .map(|n| n as usize);
 
     let alphabet = build_string_alphabet(schema);
     if alphabet.len() == 0 {
         // No valid codepoints in this range (e.g., surrogate-only range like [0xD800, 0xDFFF]).
-        // Mark the test case as invalid so it is filtered out, rather than panicking.
-        ntc.status = Some(Status::Invalid);
-        return Err(StopTest);
+        // This is a schema-level error, not a per-test-case filter.
+        panic!(
+            "InvalidArgument: No valid characters in the specified range. \
+             The codepoint range contains only surrogate codepoints (U+D800..U+DFFF), \
+             which are not valid Unicode characters."
+        );
     }
 
     let n = alphabet.len() as i128;
@@ -63,10 +66,10 @@ pub(super) fn interpret_binary(
     ntc: &mut NativeTestCase,
     schema: &Value,
 ) -> Result<Value, StopTest> {
-    let min_size = map_get(schema, "min_size")
+    let min_size = map_get(schema, "min_size").and_then(as_u64).unwrap_or(0) as usize;
+    let max_size = map_get(schema, "max_size")
         .and_then(as_u64)
-        .unwrap_or(0) as usize;
-    let max_size = map_get(schema, "max_size").and_then(as_u64).map(|n| n as usize);
+        .map(|n| n as usize);
 
     let mut state = ManyState::new(min_size, max_size);
     let mut bytes = Vec::new();
@@ -93,9 +96,7 @@ pub(super) enum StringAlphabet {
 impl StringAlphabet {
     pub(super) fn len(&self) -> usize {
         match self {
-            StringAlphabet::Range { min, max } => {
-                count_valid_codepoints(*min, *max) as usize
-            }
+            StringAlphabet::Range { min, max } => count_valid_codepoints(*min, *max) as usize,
             StringAlphabet::Explicit(v) => v.len(),
         }
     }
@@ -128,9 +129,7 @@ impl StringAlphabet {
     /// matching pbtkit's shrinking behavior where '0' is the simplest char.
     pub(super) fn char_at(&self, idx: usize) -> char {
         match self {
-            StringAlphabet::Range { min, max } => {
-                keyed_codepoint_at_index(*min, *max, idx)
-            }
+            StringAlphabet::Range { min, max } => keyed_codepoint_at_index(*min, *max, idx),
             StringAlphabet::Explicit(v) => v[idx],
         }
     }
@@ -156,15 +155,14 @@ pub(super) fn build_string_alphabet(schema: &Value) -> StringAlphabet {
 
     // Parse category/character constraints.
     let categories: Option<Vec<String>> = extract_string_array(schema, "categories");
-    let exclude_categories: Option<Vec<String>> = extract_string_array(schema, "exclude_categories");
-    let include_chars: Option<Vec<char>> =
-        map_get(schema, "include_characters")
-            .and_then(as_text)
-            .map(|s| s.chars().collect());
-    let exclude_chars: Option<Vec<char>> =
-        map_get(schema, "exclude_characters")
-            .and_then(as_text)
-            .map(|s| s.chars().collect());
+    let exclude_categories: Option<Vec<String>> =
+        extract_string_array(schema, "exclude_categories");
+    let include_chars: Option<Vec<char>> = map_get(schema, "include_characters")
+        .and_then(as_text)
+        .map(|s| s.chars().collect());
+    let exclude_chars: Option<Vec<char>> = map_get(schema, "exclude_characters")
+        .and_then(as_text)
+        .map(|s| s.chars().collect());
 
     // If categories is empty AND include_characters is set: explicit alphabet from include list.
     if let Some(ref cats) = categories {
@@ -229,7 +227,10 @@ pub(super) fn build_string_alphabet(schema: &Value) -> StringAlphabet {
                 continue;
             }
         } else if let Some(ref excl_cats) = exclude_categories {
-            if excl_cats.iter().any(|cat| cat != "Cs" && char_in_category(c, cat)) {
+            if excl_cats
+                .iter()
+                .any(|cat| cat != "Cs" && char_in_category(c, cat))
+            {
                 continue;
             }
         }
@@ -267,7 +268,7 @@ pub(super) fn build_string_alphabet(schema: &Value) -> StringAlphabet {
 /// Port of pbtkit's `_codepoint_key`.
 fn codepoint_sort_key(c: u32) -> u32 {
     if c < 128 {
-        (c + 80) % 128  // = (c - 48 + 128) % 128
+        (c + 80) % 128 // = (c - 48 + 128) % 128
     } else {
         c
     }
@@ -292,7 +293,7 @@ fn keyed_codepoint_at_index(min: u32, max: u32, idx: usize) -> char {
         // Iterate all 128 key values; key ki corresponds to codepoint (ki+48)%128.
         let mut found = 0usize;
         for ki in 0u32..128 {
-            let c = (ki + 48) % 128;  // key_to_codepoint
+            let c = (ki + 48) % 128; // key_to_codepoint
             if c >= ascii_start && c <= ascii_end {
                 if found == idx {
                     return char::from_u32(c).unwrap();
@@ -312,12 +313,7 @@ fn keyed_codepoint_at_index(min: u32, max: u32, idx: usize) -> char {
 fn extract_string_array(schema: &Value, key: &str) -> Option<Vec<String>> {
     map_get(schema, key).and_then(|v| {
         if let Value::Array(arr) = v {
-            Some(
-                arr.iter()
-                    .filter_map(as_text)
-                    .map(String::from)
-                    .collect(),
-            )
+            Some(arr.iter().filter_map(as_text).map(String::from).collect())
         } else {
             None
         }
@@ -383,9 +379,7 @@ fn char_in_category(c: char, category: &str) -> bool {
         "Pd" => c == '-',
         "P" | "Po" | "Pe" | "Pf" | "Pi" | "Ps" => c.is_ascii_punctuation(),
         "Sm" => matches!(c, '+' | '<' | '=' | '>' | '|' | '~'),
-        "S" | "Sc" | "Sk" | "So" => {
-            !c.is_alphanumeric() && !c.is_whitespace() && !c.is_control()
-        }
+        "S" | "Sc" | "Sk" | "So" => !c.is_alphanumeric() && !c.is_whitespace() && !c.is_control(),
         "Cc" | "C" => c.is_control(),
         "Cs" => false, // Surrogates never appear in Rust strings
         _ => false,    // Unknown category
