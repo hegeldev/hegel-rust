@@ -189,7 +189,7 @@ where
         let found_clone = Arc::clone(&found);
         let max_attempts = self.max_attempts;
 
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let hegel_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Hegel::new(move |tc| {
                 let value = tc.draw(&self.generator);
                 if (self.condition)(&value) {
@@ -200,6 +200,14 @@ where
             .settings(Settings::new().test_cases(max_attempts))
             .run();
         }));
+
+        if let Err(e) = hegel_result {
+            // If found is None, this panic is not from HEGEL_FOUND — re-propagate
+            // the real error (e.g. server crash) instead of swallowing it.
+            if found.lock().unwrap().is_none() {
+                std::panic::resume_unwind(e);
+            }
+        }
 
         let result = found.lock().unwrap().take();
         result.unwrap_or_else(|| {

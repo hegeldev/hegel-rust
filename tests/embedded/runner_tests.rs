@@ -103,24 +103,14 @@ fn test_startup_error_message_no_binary_path() {
 
 #[test]
 fn test_startup_error_message_includes_server_log() {
-    let dir = std::env::temp_dir().join("hegel_test_unit_log");
-    std::fs::create_dir_all(&dir).unwrap();
-    let log_file = dir.join("server.log");
-    std::fs::write(
-        &log_file,
-        "Error: startup failed\nDetail 1\nDetail 2\nDetail 3\n",
-    )
-    .unwrap();
-    let log_path_str = log_file.to_string_lossy().to_string();
-    let _ = SERVER_LOG_PATH.set(log_path_str.clone());
+    let _guard = LOG_TEST_LOCK.lock().unwrap();
+    write_server_log("Error: startup failed\nDetail 1\nDetail 2\nDetail 3\n");
 
     let exit_status = Command::new("false").status().unwrap();
     let msg = startup_error_message(Some("false"), exit_status);
-    // Only assert if we successfully set the path (OnceLock may already be set)
-    if SERVER_LOG_PATH.get() == Some(&log_path_str) {
-        assert!(msg.contains("Server log"), "Message: {msg}");
-        assert!(msg.contains("for full output"), "Message: {msg}");
-    }
+    assert!(msg.contains("Server log"), "Message: {msg}");
+    assert!(msg.contains("for full output"), "Message: {msg}");
+    remove_server_log();
 }
 
 #[test]
@@ -230,4 +220,77 @@ fn test_protocol_debug_true_when_env_set() {
     unsafe {
         std::env::remove_var("HEGEL_PROTOCOL_DEBUG");
     }
+}
+
+// Serialize tests that read/write the server log to prevent interference
+// between parallel test threads.
+static LOG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Return the path that `server_log_excerpt()` reads from, updating
+/// `SERVER_LOG_PATH` to point at a test-specific log file.
+fn log_path() -> String {
+    let path = format!("{HEGEL_SERVER_DIR}/server.test.log");
+    *SERVER_LOG_PATH.lock().unwrap() = Some(path.clone());
+    path
+}
+
+fn write_server_log(content: &str) {
+    std::fs::create_dir_all(HEGEL_SERVER_DIR).ok();
+    std::fs::write(log_path(), content).ok();
+}
+
+fn remove_server_log() {
+    std::fs::remove_file(log_path()).ok();
+}
+
+#[test]
+fn server_log_excerpt_no_file() {
+    let _guard = LOG_TEST_LOCK.lock().unwrap();
+    remove_server_log();
+    assert!(server_log_excerpt().is_none());
+}
+
+#[test]
+fn server_log_excerpt_empty_file() {
+    let _guard = LOG_TEST_LOCK.lock().unwrap();
+    write_server_log("");
+    assert!(server_log_excerpt().is_none());
+    remove_server_log();
+}
+
+#[test]
+fn server_log_excerpt_non_empty_file() {
+    let _guard = LOG_TEST_LOCK.lock().unwrap();
+    write_server_log("Error: test crash\n");
+    assert!(server_log_excerpt().is_some());
+    remove_server_log();
+}
+
+#[test]
+fn server_crash_message_includes_log_excerpt() {
+    let _guard = LOG_TEST_LOCK.lock().unwrap();
+    write_server_log("Error: test crash\n");
+    let msg = server_crash_message();
+    assert!(msg.contains("Error: test crash"), "got: {msg}");
+    remove_server_log();
+}
+
+#[test]
+fn handle_channel_error_connection_aborted() {
+    let _guard = LOG_TEST_LOCK.lock().unwrap();
+    remove_server_log();
+    let err = std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "test");
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        handle_channel_error(err);
+    }));
+    let panic_val = result.expect_err("handle_channel_error should have panicked");
+    let msg = panic_val
+        .downcast_ref::<String>()
+        .map(|s| s.as_str())
+        .or_else(|| panic_val.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(
+        msg.contains("hegel server process exited unexpectedly"),
+        "unexpected panic message: {msg}"
+    );
 }
