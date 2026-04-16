@@ -105,7 +105,7 @@ pub fn native_run<F>(
     mut test_fn: F,
     settings: &Settings,
     database_key: Option<&str>,
-    _test_location: Option<&TestLocation>,
+    test_location: Option<&TestLocation>,
 ) where
     F: FnMut(TestCase),
 {
@@ -263,6 +263,29 @@ pub fn native_run<F>(
         let choices: Vec<ChoiceValue> = best_nodes.iter().map(|n| n.value.clone()).collect();
         db_ref.save(key, &choices);
     }
+
+    // --- Antithesis integration ---
+    // Mirror the server backend: if ANTITHESIS_OUTPUT_DIR is set, either panic
+    // (no antithesis feature) or emit declaration + evaluation to sdk.jsonl.
+    let test_failed = result.is_some();
+    use crate::antithesis::is_running_in_antithesis;
+    if is_running_in_antithesis() {
+        #[cfg(not(feature = "antithesis"))]
+        panic!(
+            "When Hegel is run inside of Antithesis, it requires the `antithesis` feature. \
+            You can add it with {{ features = [\"antithesis\"] }}."
+        );
+
+        #[cfg(feature = "antithesis")]
+        // nocov start
+        if let Some(loc) = test_location {
+            crate::antithesis::emit_assertion(loc, !test_failed);
+        }
+        // nocov end
+    }
+    // Suppress unused-variable warnings for the non-antithesis-feature build: both
+    // variables are only consumed inside the is_running_in_antithesis() block above.
+    let _ = (test_location, test_failed);
 
     // --- Result handling ---
     // If no valid test cases were found, all examples were filtered by assume().
