@@ -24,19 +24,30 @@ fn test_wrong_version_hegel_gives_informative_error() {
     // Create a script that pretends to be an old hegel version
     let script_dir = std::env::temp_dir().join("hegel_test_fake_binary");
     std::fs::create_dir_all(&script_dir).unwrap();
-    let script_path = script_dir.join("fake_hegel");
-
-    std::fs::write(
-        &script_path,
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'hegel (version 0.1.0)'; exit 0; fi\nexit 1\n",
-    )
-    .unwrap();
 
     #[cfg(unix)]
-    {
+    let script_path = {
+        let p = script_dir.join("fake_hegel");
+        std::fs::write(
+            &p,
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'hegel (version 0.1.0)'; exit 0; fi\nexit 1\n",
+        )
+        .unwrap();
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    };
+
+    #[cfg(windows)]
+    let script_path = {
+        let p = script_dir.join("fake_hegel.bat");
+        std::fs::write(
+            &p,
+            "@echo off\r\nif \"%1\"==\"--version\" (\r\n  echo hegel (version 0.1.0)\r\n  exit /b 0\r\n)\r\nexit /b 1\r\n",
+        )
+        .unwrap();
+        p
+    };
 
     TempRustProject::new()
         .main_file(HEGEL_CODE)
