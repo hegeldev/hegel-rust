@@ -109,3 +109,7 @@ pub(super) fn bin_search_down(lo: i128, hi: i128, f: &mut impl FnMut(i128) -> bo
     }
     hi
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_tests.rs"]
+mod tests;
