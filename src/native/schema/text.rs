@@ -11,7 +11,7 @@ pub(super) fn interpret_string(
     schema: &Value,
 ) -> Result<Value, StopTest> {
     let min_size = map_get(schema, "min_size").and_then(as_u64).unwrap_or(0) as usize;
-    let max_size = map_get(schema, "max_size")
+    let max_size_opt = map_get(schema, "max_size")
         .and_then(as_u64)
         .map(|n| n as usize);
 
@@ -26,6 +26,19 @@ pub(super) fn interpret_string(
         );
     }
 
+    // Fast path: for a simple contiguous codepoint-range alphabet, emit a
+    // single StringChoice node instead of decomposing the string into an
+    // alphabet-building phase and one integer-per-char. This makes strings
+    // much cheaper to shrink and record.
+    if let StringAlphabet::Range { min, max } = alphabet {
+        let max_size = max_size_opt.unwrap_or(min_size.max(100));
+        let s = ntc.draw_string(min, max, min_size, max_size)?;
+        return Ok(Value::Tag(91, Box::new(Value::Bytes(s.into_bytes()))));
+    }
+
+    // Filtered alphabets (categories, include/exclude lists, explicit codec):
+    // fall back to the decomposed path that loops through individual integer
+    // draws per char.
     let n = alphabet.len() as i128;
     let n_ascii = alphabet.ascii_count() as i128;
 
@@ -47,7 +60,7 @@ pub(super) fn interpret_string(
         sub_alpha.push(idx);
     }
 
-    let mut state = ManyState::new(min_size, max_size);
+    let mut state = ManyState::new(min_size, max_size_opt);
     let mut result = String::new();
 
     loop {

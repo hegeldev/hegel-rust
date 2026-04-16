@@ -10,12 +10,14 @@
 //   sequence   — sort_values, swap_adjacent_blocks
 //   floats     — shrink_floats
 //   bytes      — shrink_bytes
+//   strings    — shrink_strings
 
 mod bytes;
 mod deletion;
 mod floats;
 mod integers;
 mod sequence;
+mod strings;
 
 use std::collections::HashMap;
 
@@ -88,6 +90,7 @@ impl<'a> Shrinker<'a> {
             self.swap_adjacent_blocks();
             self.shrink_floats();
             self.shrink_bytes();
+            self.shrink_strings();
         }
     }
 }
