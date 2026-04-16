@@ -68,12 +68,13 @@ fn fnv_hex(s: &str) -> String {
 /// Format:
 /// - 4-byte little-endian u32: number of choices
 /// - For each choice:
-///   - 1-byte type tag: 0=Integer, 1=Boolean, 2=Float, 3=Bytes
+///   - 1-byte type tag: 0=Integer, 1=Boolean, 2=Float, 3=Bytes, 4=String
 ///   - Value bytes:
 ///     - Integer: 16 bytes (i128 little-endian)
 ///     - Boolean: 1 byte (0 or 1)
 ///     - Float: 8 bytes (u64 bit representation, little-endian)
 ///     - Bytes: 4-byte le u32 length, then that many raw bytes
+///     - String: 4-byte le u32 byte-length, then that many UTF-8 bytes
 fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + choices.len() * 17);
     let count = choices.len() as u32;
@@ -97,6 +98,13 @@ fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
                 let len = v.len() as u32;
                 buf.extend_from_slice(&len.to_le_bytes());
                 buf.extend_from_slice(v);
+            }
+            ChoiceValue::String(v) => {
+                buf.push(4);
+                let bytes = v.as_bytes();
+                let len = bytes.len() as u32;
+                buf.extend_from_slice(&len.to_le_bytes());
+                buf.extend_from_slice(bytes);
             }
         }
     }
@@ -156,6 +164,22 @@ fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
                     return None;
                 }
                 choices.push(ChoiceValue::Bytes(bytes[pos..pos + len].to_vec()));
+                pos += len;
+            }
+            4 => {
+                pos += 1;
+                if pos + 4 > bytes.len() {
+                    return None;
+                }
+                let len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+                if pos + len > bytes.len() {
+                    return None;
+                }
+                let s = std::str::from_utf8(&bytes[pos..pos + len])
+                    .ok()?
+                    .to_string();
+                choices.push(ChoiceValue::String(s));
                 pos += len;
             }
             _ => return None,
