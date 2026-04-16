@@ -7,7 +7,7 @@ use rand::rngs::SmallRng;
 
 use super::choices::{
     BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice,
-    Status, StopTest,
+    Status, StopTest, StringChoice,
 };
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
 
@@ -478,6 +478,99 @@ impl NativeTestCase {
         self.nodes.push(ChoiceNode {
             kind: ChoiceKind::Bytes(kind),
             value: ChoiceValue::Bytes(v.clone()),
+            was_forced,
+        });
+
+        Ok(v)
+    }
+
+    /// Draw a string value with codepoint range `[min_codepoint, max_codepoint]`
+    /// (surrogates automatically excluded) and length in `[min_size, max_size]`.
+    ///
+    /// Port of pbtkit's `_draw_string` / `draw_string` method. Only covers the
+    /// "simple codepoint range" alphabet shape; filtered alphabets (categories,
+    /// explicit include/exclude lists) continue to go through the decomposed
+    /// integer-per-char path in `interpret_string`.
+    pub fn draw_string(
+        &mut self,
+        min_codepoint: u32,
+        max_codepoint: u32,
+        min_size: usize,
+        max_size: usize,
+    ) -> Result<String, StopTest> {
+        assert!(min_codepoint <= max_codepoint);
+        assert!(min_size <= max_size);
+
+        let kind = StringChoice {
+            min_codepoint,
+            max_codepoint,
+            min_size,
+            max_size,
+        };
+
+        // Edge-case-boosting: simplest, empty (if allowed), single simplest
+        // codepoint (if allowed), two simplest codepoints (for duplicate-char
+        // counterexamples).
+        let nasty: Vec<String> = {
+            let simplest = kind.simplest();
+            let simplest_char = simplest.chars().next().unwrap_or('\u{0}');
+            let mut v = vec![simplest.clone()];
+            if min_size == 0 && max_size > 0 {
+                v.push(String::new());
+            }
+            if min_size <= 1 && max_size >= 1 {
+                v.push(simplest_char.to_string());
+            }
+            if min_size <= 2 && max_size >= 2 {
+                v.push(simplest_char.to_string().repeat(2));
+            }
+            v
+        };
+        let nasty_threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
+
+        let kind_rand = kind.clone();
+        let (value, was_forced) = self.resolve_choice(
+            &ChoiceKind::String(kind.clone()),
+            || ChoiceValue::String(kind.simplest()),
+            || ChoiceValue::String(kind.unit()),
+            |v| matches!(v, ChoiceValue::String(s) if kind.validate(s)),
+            |rng| {
+                if rng.random::<f64>() < nasty_threshold {
+                    let idx = rng.random_range(0..nasty.len());
+                    return ChoiceValue::String(nasty[idx].clone());
+                }
+                // Build a small sub-alphabet of valid codepoints (1..=10).
+                let alpha_size = rng.random_range(1..=10);
+                let mut alphabet: Vec<char> = Vec::with_capacity(alpha_size);
+                while alphabet.len() < alpha_size {
+                    // Rejection-sample a valid (non-surrogate) codepoint.
+                    let cp = rng.random_range(kind_rand.min_codepoint..=kind_rand.max_codepoint);
+                    if (0xD800..=0xDFFF).contains(&cp) {
+                        continue;
+                    }
+                    if let Some(c) = char::from_u32(cp) {
+                        alphabet.push(c);
+                    }
+                }
+                let len = if kind_rand.min_size == kind_rand.max_size {
+                    kind_rand.min_size
+                } else {
+                    rng.random_range(kind_rand.min_size..=kind_rand.max_size)
+                };
+                let s: String = (0..len)
+                    .map(|_| alphabet[rng.random_range(0..alphabet.len())])
+                    .collect();
+                ChoiceValue::String(s)
+            },
+        )?;
+
+        let ChoiceValue::String(v) = value else {
+            unreachable!()
+        };
+
+        self.nodes.push(ChoiceNode {
+            kind: ChoiceKind::String(kind),
+            value: ChoiceValue::String(v.clone()),
             was_forced,
         });
 

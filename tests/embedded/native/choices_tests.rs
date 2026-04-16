@@ -409,3 +409,140 @@ fn bytes_choice_sort_key_shortlex() {
     assert!(bc.sort_key(&[0, 0]) < bc.sort_key(&[0, 1]));
     assert!(bc.sort_key(&[0, 0xff]) < bc.sort_key(&[1, 0]));
 }
+
+// ── StringChoice ──────────────────────────────────────────────────────────
+//
+// Ports of pbtkit/tests/test_text.py::test_string_* and related.
+
+#[test]
+fn string_choice_simplest_ascii_range() {
+    let sc = StringChoice {
+        min_codepoint: 0x20,
+        max_codepoint: 0x7e,
+        min_size: 3,
+        max_size: 10,
+    };
+    // Under codepoint_key ordering, '0' (48) is the simplest codepoint.
+    assert_eq!(sc.simplest(), "000");
+}
+
+#[test]
+fn string_choice_simplest_no_ascii_overlap() {
+    let sc = StringChoice {
+        min_codepoint: 0x2000,
+        max_codepoint: 0x200f,
+        min_size: 2,
+        max_size: 5,
+    };
+    // No ASCII overlap: simplest codepoint is min_codepoint.
+    let s = sc.simplest();
+    assert_eq!(s.chars().count(), 2);
+    for c in s.chars() {
+        assert_eq!(c as u32, 0x2000);
+    }
+}
+
+#[test]
+fn string_choice_simplest_partial_ascii_overlap() {
+    // Range [50..200]: the ASCII portion is [50..127], digit '0' (48) is NOT
+    // in range, so the simplest is whichever of [50..127] has the smallest
+    // codepoint_key. Keys for 50..127 are {(50-48)%128, (51-48)%128, ...} =
+    // {2, 3, 4, ..., 79}. So codepoint 50 ('2') has the smallest key.
+    let sc = StringChoice {
+        min_codepoint: 50,
+        max_codepoint: 200,
+        min_size: 1,
+        max_size: 5,
+    };
+    assert_eq!(sc.simplest(), "2");
+}
+
+#[test]
+fn string_choice_simplest_empty_min() {
+    let sc = StringChoice {
+        min_codepoint: 0x20,
+        max_codepoint: 0x7e,
+        min_size: 0,
+        max_size: 10,
+    };
+    assert_eq!(sc.simplest(), "");
+}
+
+#[test]
+fn string_choice_unit_positive_min_size() {
+    // With ASCII range and min_size=3, simplest is "000" and unit is "001".
+    let sc = StringChoice {
+        min_codepoint: 0x20,
+        max_codepoint: 0x7e,
+        min_size: 3,
+        max_size: 10,
+    };
+    assert_eq!(sc.unit(), "001");
+}
+
+#[test]
+fn string_choice_unit_zero_min_size() {
+    // With ASCII range and min_size=0, unit is "1" (second-simplest codepoint,
+    // single char since min_size was 0 and max_size >= 1).
+    let sc = StringChoice {
+        min_codepoint: 0x20,
+        max_codepoint: 0x7e,
+        min_size: 0,
+        max_size: 10,
+    };
+    assert_eq!(sc.unit(), "1");
+}
+
+#[test]
+fn string_choice_validate() {
+    let sc = StringChoice {
+        min_codepoint: b'a' as u32,
+        max_codepoint: b'z' as u32,
+        min_size: 2,
+        max_size: 4,
+    };
+    assert!(sc.validate("aa"));
+    assert!(sc.validate("zzzz"));
+    assert!(!sc.validate(""));
+    assert!(!sc.validate("a"));
+    assert!(!sc.validate("aaaaa"));
+    assert!(!sc.validate("aA")); // 'A' out of range
+}
+
+#[test]
+fn string_choice_validate_rejects_surrogates() {
+    // Even if the surrogate range overlaps the codepoint bounds, the value
+    // itself can't contain surrogates (Rust strings are UTF-8 so this is
+    // mostly a moot assertion; we exercise the explicit check via a string
+    // that spans the surrogate gap).
+    let sc = StringChoice {
+        min_codepoint: 0xD000,
+        max_codepoint: 0xE000,
+        min_size: 0,
+        max_size: 4,
+    };
+    // \u{D800} is an unpaired surrogate and can't exist in a Rust String,
+    // so we can't directly construct a value containing one. Verify the
+    // empty string is valid and non-surrogate codepoints in range pass.
+    assert!(sc.validate(""));
+    let ok = String::from('\u{D000}');
+    assert!(sc.validate(&ok));
+}
+
+#[test]
+fn string_choice_sort_key_shortlex_on_codepoint_keys() {
+    let sc = StringChoice {
+        min_codepoint: 0x20,
+        max_codepoint: 0x7e,
+        min_size: 0,
+        max_size: 10,
+    };
+    // Shorter is always simpler.
+    assert!(sc.sort_key("") < sc.sort_key("0"));
+    // '0' has key 0, '1' has key 1, so "0" < "1".
+    assert!(sc.sort_key("0") < sc.sort_key("1"));
+    // '0' < 'A' (key 17, since (65-48)%128 = 17).
+    assert!(sc.sort_key("0") < sc.sort_key("A"));
+    // Digits simpler than space (key (32-48)%128 = 112).
+    assert!(sc.sort_key("0") < sc.sort_key(" "));
+}

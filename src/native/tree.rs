@@ -30,6 +30,7 @@ enum ChoiceValueKey {
     Boolean(bool),
     Float(u64), // f64::to_bits()
     Bytes(Vec<u8>),
+    String(String),
 }
 
 impl From<&ChoiceValue> for ChoiceValueKey {
@@ -39,6 +40,7 @@ impl From<&ChoiceValue> for ChoiceValueKey {
             ChoiceValue::Boolean(b) => ChoiceValueKey::Boolean(*b),
             ChoiceValue::Float(f) => ChoiceValueKey::Float(f.to_bits()),
             ChoiceValue::Bytes(b) => ChoiceValueKey::Bytes(b.clone()),
+            ChoiceValue::String(s) => ChoiceValueKey::String(s.clone()),
         }
     }
 }
