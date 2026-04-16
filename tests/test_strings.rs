@@ -17,6 +17,9 @@ fn test_characters_ascii() {
 fn test_characters_codepoint_range(tc: hegel::TestCase) {
     let lo = tc.draw(gs::integers::<u32>().min_value(0).max_value(0x10FFFF));
     let hi = tc.draw(gs::integers::<u32>().min_value(lo).max_value(0x10FFFF));
+    // Skip ranges that fall entirely within the surrogate block (0xD800-0xDFFF);
+    // those have no valid Unicode scalar values.
+    tc.assume(!(lo >= 0xD800 && hi <= 0xDFFF));
     let c: char = tc.draw(gs::characters().min_codepoint(lo).max_codepoint(hi));
     let cp = c as u32;
     assert!(cp >= lo && cp <= hi);
@@ -82,6 +85,9 @@ fn test_text_codec_ascii() {
 fn test_text_codepoint_range(tc: hegel::TestCase) {
     let lo = tc.draw(gs::integers::<u32>().min_value(0).max_value(0x10FFFF));
     let hi = tc.draw(gs::integers::<u32>().min_value(lo).max_value(0x10FFFF));
+    // Skip ranges that fall entirely within the surrogate block (0xD800-0xDFFF);
+    // those have no valid Unicode scalar values.
+    tc.assume(!(lo >= 0xD800 && hi <= 0xDFFF));
     let s: String = tc.draw(gs::text().min_codepoint(lo).max_codepoint(hi));
     assert!(s.chars().all(|c| {
         let cp = c as u32;
@@ -130,4 +136,142 @@ fn test_regex_with_alphabet() {
             .alphabet(gs::characters().max_codepoint(0x7F)),
         |s: &String| !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase()),
     );
+}
+
+// --- Special schema generators ---
+
+#[test]
+fn test_dates_format() {
+    assert_all_examples(gs::dates(), |s: &String| {
+        // Must match YYYY-MM-DD. Accept any year (server generates pre-1970 dates).
+        let parts: Vec<&str> = s.split('-').collect();
+        if parts.len() != 3 || parts[0].len() != 4 {
+            return false;
+        }
+        let month: u32 = parts[1].parse().unwrap_or(0);
+        let day: u32 = parts[2].parse().unwrap_or(0);
+        parts[0].chars().all(|c| c.is_ascii_digit())
+            && (1..=12).contains(&month)
+            && (1..=31).contains(&day)
+    });
+}
+
+#[test]
+fn test_times_format() {
+    assert_all_examples(gs::times(), |s: &String| {
+        // HH:MM:SS with optional fractional seconds (server may produce microseconds).
+        let parts: Vec<&str> = s.splitn(3, ':').collect();
+        if parts.len() != 3 {
+            return false;
+        }
+        let hour: u32 = parts[0].parse().unwrap_or(99);
+        let min: u32 = parts[1].parse().unwrap_or(99);
+        // Second field may have a fractional part: "SS" or "SS.ffffff"
+        let sec: u32 = parts[2]
+            .splitn(2, '.')
+            .next()
+            .unwrap_or("99")
+            .parse()
+            .unwrap_or(99);
+        hour <= 23 && min <= 59 && sec <= 59
+    });
+}
+
+#[test]
+fn test_datetimes_format() {
+    assert_all_examples(gs::datetimes(), |s: &String| {
+        // YYYY-MM-DDTHH:MM:SS with optional fractional seconds. Accept any year.
+        let parts: Vec<&str> = s.splitn(2, 'T').collect();
+        if parts.len() != 2 {
+            return false;
+        }
+        let date_parts: Vec<&str> = parts[0].split('-').collect();
+        if date_parts.len() != 3 || date_parts[0].len() != 4 {
+            return false;
+        }
+        let month: u32 = date_parts[1].parse().unwrap_or(0);
+        let day: u32 = date_parts[2].parse().unwrap_or(0);
+        if !(date_parts[0].chars().all(|c| c.is_ascii_digit())
+            && (1..=12).contains(&month)
+            && (1..=31).contains(&day))
+        {
+            return false;
+        }
+        let time_parts: Vec<&str> = parts[1].splitn(3, ':').collect();
+        if time_parts.len() != 3 {
+            return false;
+        }
+        let hour: u32 = time_parts[0].parse().unwrap_or(99);
+        let min: u32 = time_parts[1].parse().unwrap_or(99);
+        let sec: u32 = time_parts[2]
+            .splitn(2, '.')
+            .next()
+            .unwrap_or("99")
+            .parse()
+            .unwrap_or(99);
+        hour <= 23 && min <= 59 && sec <= 59
+    });
+}
+
+#[test]
+fn test_ip_addresses_format() {
+    assert_all_examples(gs::ip_addresses(), |s: &String| {
+        // Accept any valid IPv4 or IPv6 address string (including compressed IPv6).
+        s.parse::<std::net::IpAddr>().is_ok()
+    });
+}
+
+#[test]
+fn test_ip_addresses_v4_only() {
+    assert_all_examples(gs::ip_addresses().v4(), |s: &String| {
+        let parts: Vec<&str> = s.split('.').collect();
+        parts.len() == 4 && parts.iter().all(|p| p.parse::<u32>().is_ok_and(|n| n <= 255))
+    });
+}
+
+#[test]
+fn test_ip_addresses_v6_only() {
+    assert_all_examples(gs::ip_addresses().v6(), |s: &String| {
+        // Accept any valid IPv6 address string (including compressed form like "::").
+        s.parse::<std::net::Ipv6Addr>().is_ok()
+    });
+}
+
+#[test]
+fn test_domains_format() {
+    assert_all_examples(gs::domains(), |s: &String| {
+        // At least two dot-separated labels, each non-empty with valid hostname chars.
+        // Server generates mixed case (e.g. "A.COM"), so accept uppercase too.
+        let parts: Vec<&str> = s.split('.').collect();
+        parts.len() >= 2
+            && parts.iter().all(|p| {
+                !p.is_empty()
+                    && p.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-')
+            })
+            && s.len() <= 255
+    });
+}
+
+#[test]
+fn test_emails_format() {
+    assert_all_examples(gs::emails(), |s: &String| {
+        // Must contain exactly one '@' with non-empty user and domain containing a dot.
+        // Server generates mixed case and digits, so only check structure.
+        let parts: Vec<&str> = s.splitn(2, '@').collect();
+        if parts.len() != 2 {
+            return false;
+        }
+        let user = parts[0];
+        let domain = parts[1];
+        !user.is_empty() && !domain.is_empty() && domain.contains('.')
+    });
+}
+
+#[test]
+fn test_urls_format() {
+    assert_all_examples(gs::urls(), |s: &String| {
+        (s.starts_with("http://") || s.starts_with("https://"))
+            && s.len() > 7
+    });
 }
