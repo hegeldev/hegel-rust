@@ -429,8 +429,10 @@ pub use hegel_macros::standalone_function;
 pub use cli::CliOutcome;
 #[doc(hidden)]
 pub use cli::apply_cli_args as __apply_cli_args;
+#[cfg(not(feature = "native"))]
 #[doc(hidden)]
 pub use runner::__test_kill_server;
+#[cfg(not(feature = "native"))]
 #[doc(hidden)]
 pub use runner::format_log_excerpt;
 #[doc(hidden)]

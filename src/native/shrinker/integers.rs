@@ -73,8 +73,16 @@ impl<'a> Shrinker<'a> {
                     });
                     // Linear scan small values for non-monotonic functions.
                     let range_size = ic.max_value.saturating_sub(ic.min_value).saturating_add(1);
-                    let scan_count = if range_size <= 128 { range_size.min(32) } else { 8 };
-                    let cur_v = if let ChoiceValue::Integer(cv) = self.current_nodes[i].value { cv } else { v };
+                    let scan_count = if range_size <= 128 {
+                        range_size.min(32)
+                    } else {
+                        8
+                    };
+                    let cur_v = if let ChoiceValue::Integer(cv) = self.current_nodes[i].value {
+                        cv
+                    } else {
+                        v
+                    };
                     for c in lo..lo.saturating_add(scan_count).min(cur_v) {
                         if !self.replace(&HashMap::from([(i, ChoiceValue::Integer(c))])) {
                             // Continue scanning even if not successful
@@ -82,7 +90,11 @@ impl<'a> Shrinker<'a> {
                     }
                     // Also try negative values with smaller absolute value (simpler).
                     if ic.min_value < 0 {
-                        let cur_v = if let ChoiceValue::Integer(cv) = self.current_nodes[i].value { cv } else { v };
+                        let cur_v = if let ChoiceValue::Integer(cv) = self.current_nodes[i].value {
+                            cv
+                        } else {
+                            v
+                        };
                         if cur_v > 0 {
                             let upper = (cur_v - 1).min(-ic.min_value);
                             if upper >= 1 {
@@ -106,7 +118,11 @@ impl<'a> Shrinker<'a> {
                     }
                     // Also try positive values with smaller absolute value (simpler).
                     if ic.max_value > 0 {
-                        let cur_v = if let ChoiceValue::Integer(cv) = self.current_nodes[i].value { cv } else { v };
+                        let cur_v = if let ChoiceValue::Integer(cv) = self.current_nodes[i].value {
+                            cv
+                        } else {
+                            v
+                        };
                         if cur_v < 0 {
                             let upper = (-cur_v - 1).min(ic.max_value);
                             if upper >= 1 {
@@ -116,7 +132,11 @@ impl<'a> Shrinker<'a> {
                                     self.replace(&HashMap::from([(i, ChoiceValue::Integer(c))]))
                                 });
                                 // Linear scan positive values.
-                                let scan_count = if range_size <= 128 { range_size.min(32) } else { 8 };
+                                let scan_count = if range_size <= 128 {
+                                    range_size.min(32)
+                                } else {
+                                    8
+                                };
                                 for c in lo_pos..lo_pos.saturating_add(scan_count).min(upper + 1) {
                                     self.replace(&HashMap::from([(i, ChoiceValue::Integer(c))]));
                                 }

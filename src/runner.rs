@@ -1,32 +1,58 @@
-use crate::antithesis::{TestLocation, is_running_in_antithesis};
+use crate::antithesis::TestLocation;
+#[cfg(not(feature = "native"))]
+use crate::antithesis::is_running_in_antithesis;
+use crate::test_case::TestCase;
+
+#[cfg(not(feature = "native"))]
 use crate::backend::{DataSource, DataSourceError, TestCaseResult, TestRunResult, TestRunner};
+#[cfg(not(feature = "native"))]
 use crate::cbor_utils::{as_bool, as_text, as_u64, cbor_map, map_get, map_insert};
+#[cfg(not(feature = "native"))]
 use crate::control::{currently_in_test_context, with_test_context};
+#[cfg(not(feature = "native"))]
 use crate::protocol::{Connection, HANDSHAKE_STRING, Stream};
-use crate::test_case::{ASSUME_FAIL_STRING, LOOP_DONE_STRING, STOP_TEST_STRING, TestCase};
+#[cfg(not(feature = "native"))]
+use crate::test_case::{ASSUME_FAIL_STRING, LOOP_DONE_STRING, STOP_TEST_STRING};
 use ciborium::Value;
 
+#[cfg(not(feature = "native"))]
 use std::backtrace::{Backtrace, BacktraceStatus};
+#[cfg(not(feature = "native"))]
 use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
+#[cfg(not(feature = "native"))]
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
+#[cfg(not(feature = "native"))]
 use std::process::{Command, Stdio};
+#[cfg(not(feature = "native"))]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(not(feature = "native"))]
 use std::sync::{Arc, LazyLock, Mutex, Once};
+#[cfg(not(feature = "native"))]
 use std::time::{Duration, Instant};
 
+// ─── Server-only code ──────────────────────────────────────────────────────
+#[cfg(not(feature = "native"))]
 const SUPPORTED_PROTOCOL_VERSIONS: (&str, &str) = ("0.10", "0.10");
+#[cfg(not(feature = "native"))]
 const HEGEL_SERVER_VERSION: &str = "0.4.6";
+#[cfg(not(feature = "native"))]
 const HEGEL_SERVER_COMMAND_ENV: &str = "HEGEL_SERVER_COMMAND";
+#[cfg(not(feature = "native"))]
 const HEGEL_SERVER_DIR: &str = ".hegel";
+#[cfg(not(feature = "native"))]
 static SERVER_LOG_PATH: Mutex<Option<String>> = Mutex::new(None);
+#[cfg(not(feature = "native"))]
 static LOG_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+#[cfg(not(feature = "native"))]
 static SESSION: Mutex<Option<Arc<HegelSession>>> = Mutex::new(None);
 
+#[cfg(not(feature = "native"))]
 static PANIC_HOOK_INIT: Once = Once::new();
 
 // ─── ServerDataSource ──────────────────────────────────────────────────────────
 
+#[cfg(not(feature = "native"))]
 static PROTOCOL_DEBUG: LazyLock<bool> = LazyLock::new(|| {
     matches!(
         std::env::var("HEGEL_PROTOCOL_DEBUG")
@@ -37,6 +63,7 @@ static PROTOCOL_DEBUG: LazyLock<bool> = LazyLock::new(|| {
     )
 });
 
+#[cfg(not(feature = "native"))]
 /// Backend implementation that communicates with the hegel-core server
 /// over a multiplexed stream.
 pub(crate) struct ServerDataSource {
@@ -46,6 +73,7 @@ pub(crate) struct ServerDataSource {
     verbosity: Verbosity,
 }
 
+#[cfg(not(feature = "native"))]
 impl ServerDataSource {
     pub(crate) fn new(connection: Arc<Connection>, stream: Stream, verbosity: Verbosity) -> Self {
         ServerDataSource {
@@ -135,6 +163,7 @@ impl ServerDataSource {
     }
 }
 
+#[cfg(not(feature = "native"))]
 impl DataSource for ServerDataSource {
     fn generate(&self, schema: &Value) -> Result<Value, DataSourceError> {
         self.send_request("generate", &cbor_map! {"schema" => schema.clone()})
@@ -258,6 +287,7 @@ impl DataSource for ServerDataSource {
 
 // ─── HegelSession ───────────────────────────────────────────────────────────
 
+#[cfg(not(feature = "native"))]
 /// Parse a "major.minor" version string into a comparable tuple.
 fn parse_version(s: &str) -> (u32, u32) {
     let parts: Vec<&str> = s.split('.').collect();
@@ -273,6 +303,7 @@ fn parse_version(s: &str) -> (u32, u32) {
     (major, minor)
 }
 
+#[cfg(not(feature = "native"))]
 /// A persistent connection to the hegel server subprocess.
 ///
 /// A new session is created on first use and whenever the previous server
@@ -291,6 +322,7 @@ struct HegelSession {
     child: Arc<Mutex<std::process::Child>>,
 }
 
+#[cfg(not(feature = "native"))]
 impl HegelSession {
     /// Return the current live session, or create a new one if the server has
     /// exited (either crashed or been killed since the last call).
@@ -393,9 +425,11 @@ impl HegelSession {
 
 // ─── ServerTestRunner ───────────────────────────────────────────────────────
 
+#[cfg(not(feature = "native"))]
 /// Test runner that communicates with the hegel-core server.
 pub(crate) struct ServerTestRunner;
 
+#[cfg(not(feature = "native"))]
 impl TestRunner for ServerTestRunner {
     fn run(
         &self,
@@ -593,11 +627,13 @@ impl TestRunner for ServerTestRunner {
 
 // ─── Panic hook and backtrace ───────────────────────────────────────────────
 
+#[cfg(not(feature = "native"))]
 thread_local! {
     /// (thread_name, thread_id, location, backtrace)
     static LAST_PANIC_INFO: RefCell<Option<(String, String, String, Backtrace)>> = const { RefCell::new(None) };
 }
 
+#[cfg(not(feature = "native"))]
 /// (thread_name, thread_id, location, backtrace).
 fn take_panic_info() -> Option<(String, String, String, Backtrace)> {
     LAST_PANIC_INFO.with(|info| info.borrow_mut().take())
@@ -609,6 +645,7 @@ fn take_panic_info() -> Option<(String, String, String, Backtrace)> {
 /// `__rust_begin_short_backtrace` markers, matching the default Rust panic handler.
 /// Frame numbers are renumbered to start at 0.
 // nocov start
+#[cfg(not(feature = "native"))]
 fn format_backtrace(bt: &Backtrace, full: bool) -> String {
     let backtrace_str = format!("{}", bt);
 
@@ -702,6 +739,7 @@ fn format_backtrace(bt: &Backtrace, full: bool) -> String {
 // own that suppresses the printing except for the final replay.
 //
 // This is called once per process, the first time any hegel test runs.
+#[cfg(not(feature = "native"))]
 fn init_panic_hook() {
     PANIC_HOOK_INIT.call_once(|| {
         let prev_hook = panic::take_hook();
@@ -732,6 +770,7 @@ fn init_panic_hook() {
     });
 }
 
+#[cfg(not(feature = "native"))]
 fn hegel_command() -> Command {
     if let Ok(override_path) = std::env::var(HEGEL_SERVER_COMMAND_ENV) {
         return Command::new(resolve_hegel_path(&override_path)); // nocov
@@ -748,6 +787,7 @@ fn hegel_command() -> Command {
     cmd
 }
 
+#[cfg(not(feature = "native"))]
 fn server_log_file() -> File {
     std::fs::create_dir_all(HEGEL_SERVER_DIR).ok();
     let pid = std::process::id();
@@ -761,6 +801,7 @@ fn server_log_file() -> File {
         .expect("Failed to open server log file")
 }
 
+#[cfg(not(feature = "native"))]
 fn wait_for_exit(
     child: &mut std::process::Child,
     timeout: Duration,
@@ -777,6 +818,7 @@ fn wait_for_exit(
     }
 }
 
+#[cfg(not(feature = "native"))]
 fn handle_handshake_failure(
     child: &mut std::process::Child,
     binary_path: Option<&str>,
@@ -798,6 +840,7 @@ fn handle_handshake_failure(
     );
 }
 
+#[cfg(not(feature = "native"))]
 fn startup_error_message(
     binary_path: Option<&str>,
     exit_status: std::process::ExitStatus,
@@ -854,6 +897,7 @@ fn startup_error_message(
     parts.join("\n\n")
 }
 
+#[cfg(not(feature = "native"))]
 fn resolve_hegel_path(path: &str) -> String {
     let p = std::path::Path::new(path);
     if p.exists() {
@@ -881,6 +925,7 @@ fn resolve_hegel_path(path: &str) -> String {
     );
 }
 
+#[cfg(not(feature = "native"))]
 /// Format a server log excerpt for inclusion in error messages.
 ///
 /// Returns the last 5 unindented lines and the content between them. Runs of
@@ -936,10 +981,12 @@ pub fn format_log_excerpt(content: &str) -> String {
     output.join("\n")
 }
 
+#[cfg(not(feature = "native"))]
 fn is_log_unindented(line: &str) -> bool {
     !line.is_empty() && !line.starts_with(' ') && !line.starts_with('\t')
 }
 
+#[cfg(not(feature = "native"))]
 fn flush_log_indent_run(
     run: &mut Vec<&str>,
     output: &mut Vec<String>,
@@ -967,6 +1014,7 @@ fn flush_log_indent_run(
     run.clear();
 }
 
+#[cfg(not(feature = "native"))]
 fn server_log_excerpt() -> Option<String> {
     let log_path = SERVER_LOG_PATH.lock().unwrap().clone()?;
     let content = std::fs::read_to_string(log_path).ok()?;
@@ -977,6 +1025,7 @@ fn server_log_excerpt() -> Option<String> {
     Some(format_log_excerpt(trimmed))
 }
 
+#[cfg(not(feature = "native"))]
 fn server_crash_message() -> String {
     const BASE: &str = "The hegel server process exited unexpectedly.";
     let log_path_owned = SERVER_LOG_PATH.lock().unwrap().clone();
@@ -987,6 +1036,7 @@ fn server_crash_message() -> String {
     }
 }
 
+#[cfg(not(feature = "native"))]
 fn handle_channel_error(e: std::io::Error) -> ! {
     if e.kind() == std::io::ErrorKind::ConnectionAborted {
         panic!("{}", server_crash_message());
@@ -994,6 +1044,7 @@ fn handle_channel_error(e: std::io::Error) -> ! {
     unreachable!("unexpected channel error: {e}")
 }
 
+#[cfg(not(feature = "native"))]
 /// Kill the hegel server process and wait until the connection detects that it
 /// has exited.  Only for use in tests — not part of the public API.
 #[doc(hidden)]
@@ -1263,54 +1314,56 @@ where
                 self.database_key.as_deref(),
                 self.test_location.as_ref(),
             );
-            return;
         }
 
         #[cfg(not(feature = "native"))]
-        init_panic_hook();
+        {
+            init_panic_hook();
 
-        let runner = ServerTestRunner;
-        let mut test_fn = self.test_fn;
-        let got_interesting = AtomicBool::new(false);
+            let runner = ServerTestRunner;
+            let mut test_fn = self.test_fn;
+            let got_interesting = AtomicBool::new(false);
 
-        let result = runner.run(
-            &self.settings,
-            self.database_key.as_deref(),
-            &mut |backend, is_final| {
-                let tc_result = run_test_case(backend, &mut test_fn, is_final);
-                if matches!(&tc_result, TestCaseResult::Interesting { .. }) {
-                    got_interesting.store(true, Ordering::SeqCst);
-                }
-                tc_result
-            },
-        );
-
-        let test_failed = !result.passed || got_interesting.load(Ordering::SeqCst);
-
-        if is_running_in_antithesis() {
-            #[cfg(not(feature = "antithesis"))]
-            panic!(
-                "When Hegel is run inside of Antithesis, it requires the `antithesis` feature. \
-                You can add it with {{ features = [\"antithesis\"] }}."
+            let result = runner.run(
+                &self.settings,
+                self.database_key.as_deref(),
+                &mut |backend, is_final| {
+                    let tc_result = run_test_case(backend, &mut test_fn, is_final);
+                    if matches!(&tc_result, TestCaseResult::Interesting { .. }) {
+                        got_interesting.store(true, Ordering::SeqCst);
+                    }
+                    tc_result
+                },
             );
 
-            #[cfg(feature = "antithesis")]
-            // nocov start
-            if let Some(ref loc) = self.test_location {
-                crate::antithesis::emit_assertion(loc, !test_failed);
-                // nocov end
-            }
-        }
+            let test_failed = !result.passed || got_interesting.load(Ordering::SeqCst);
 
-        if test_failed {
-            let msg = result.failure_message.as_deref().unwrap_or("unknown");
-            panic!("Property test failed: {}", msg);
+            if is_running_in_antithesis() {
+                #[cfg(not(feature = "antithesis"))]
+                panic!(
+                    "When Hegel is run inside of Antithesis, it requires the `antithesis` feature. \
+                    You can add it with {{ features = [\"antithesis\"] }}."
+                );
+
+                #[cfg(feature = "antithesis")]
+                // nocov start
+                if let Some(ref loc) = self.test_location {
+                    crate::antithesis::emit_assertion(loc, !test_failed);
+                    // nocov end
+                }
+            }
+
+            if test_failed {
+                let msg = result.failure_message.as_deref().unwrap_or("unknown");
+                panic!("Property test failed: {}", msg);
+            }
         }
     }
 }
 
 // ─── Generic test case execution ────────────────────────────────────────────
 
+#[cfg(not(feature = "native"))]
 fn run_test_case(
     data_source: Box<dyn DataSource>,
     test_fn: &mut dyn FnMut(TestCase),
@@ -1393,6 +1446,7 @@ fn run_test_case(
     tc_result
 }
 
+#[cfg(not(feature = "native"))]
 /// Extract a message from a panic payload.
 fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
@@ -1404,6 +1458,7 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
+#[cfg(not(feature = "native"))]
 /// Encode a ciborium::Value to CBOR bytes.
 fn cbor_encode(value: &Value) -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -1411,11 +1466,12 @@ fn cbor_encode(value: &Value) -> Vec<u8> {
     bytes
 }
 
+#[cfg(not(feature = "native"))]
 /// Decode CBOR bytes to a ciborium::Value.
 fn cbor_decode(bytes: &[u8]) -> Value {
     ciborium::from_reader(bytes).expect("CBOR decoding failed")
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "native")))]
 #[path = "../tests/embedded/runner_tests.rs"]
 mod tests;

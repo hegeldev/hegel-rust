@@ -9,8 +9,11 @@ use hegel::generators as gs;
 fn native_filter_too_much_detected() {
     let result = std::panic::catch_unwind(|| {
         hegel::Hegel::new(|tc: hegel::TestCase| {
-            let x: u64 = tc.draw(hegel::generators::integers::<u64>()
-                .min_value(0).max_value(1_000_000));
+            let x: u64 = tc.draw(
+                hegel::generators::integers::<u64>()
+                    .min_value(0)
+                    .max_value(1_000_000),
+            );
             tc.assume(x == 42); // almost always filtered out
         })
         .run();
@@ -33,8 +36,11 @@ fn native_filter_too_much_detected() {
 fn native_filter_too_much_suppressed() {
     // Should complete without panicking.
     hegel::Hegel::new(|tc: hegel::TestCase| {
-        let x: u64 = tc.draw(hegel::generators::integers::<u64>()
-            .min_value(0).max_value(1_000_000));
+        let x: u64 = tc.draw(
+            hegel::generators::integers::<u64>()
+                .min_value(0)
+                .max_value(1_000_000),
+        );
         tc.assume(x == 42);
     })
     .settings(hegel::Settings::new().suppress_health_check([HealthCheck::FilterTooMuch]))
