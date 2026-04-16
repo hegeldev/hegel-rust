@@ -8,6 +8,7 @@
 // Based on https://github.com/DRMacIver/pbtkit (core.py).
 
 pub mod core;
+pub mod database;
 pub mod runner;
 pub mod schema;
 pub mod shrinker;
