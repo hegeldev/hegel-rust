@@ -121,7 +121,7 @@ pub fn native_run<F>(
 
             let batch_rng = SmallRng::from_rng(&mut rng);
             let ntc = NativeTestCase::new_random(batch_rng);
-            let (status, nodes, spans, _) = run_one_test_case_full(ntc, &mut test_fn, verbosity, false);
+            let (status, nodes, spans, _) = run_one_test_case_full(ntc, &mut test_fn, false);
             calls += 1;
 
             if nodes.is_empty() && status >= Status::Invalid {
@@ -136,7 +136,7 @@ pub fn native_run<F>(
                 }
             } else if status == Status::Valid {
                 // Try span mutations on this valid test case to find interesting ones.
-                let mutation_result = try_span_mutation(&nodes, &spans, &mut rng, &mut test_fn, verbosity);
+                let mutation_result = try_span_mutation(&nodes, &spans, &mut rng, &mut test_fn);
                 calls += SPAN_MUTATION_ATTEMPTS as u64;
                 if let Some(mut_nodes) = mutation_result {
                     if result.is_none() || sort_key(&mut_nodes) < sort_key(result.as_ref().unwrap()) {
@@ -161,7 +161,7 @@ pub fn native_run<F>(
         let verify_ntc =
             NativeTestCase::for_choices(&choices, Some(best_nodes));
         let (verify_status, verify_nodes) =
-            run_one_test_case(verify_ntc, &mut test_fn, verbosity, false);
+            run_one_test_case(verify_ntc, &mut test_fn, false);
         assert_eq!(
             verify_status,
             Status::Interesting,
@@ -175,7 +175,7 @@ pub fn native_run<F>(
                     candidate_nodes.iter().map(|n| n.value.clone()).collect();
                 let ntc =
                     NativeTestCase::for_choices(&choices, Some(candidate_nodes));
-                let (status, new_nodes) = run_one_test_case(ntc, &mut test_fn, verbosity, false);
+                let (status, new_nodes) = run_one_test_case(ntc, &mut test_fn, false);
                 calls += 1;
 
                 let is_interesting = status == Status::Interesting;
@@ -203,7 +203,7 @@ pub fn native_run<F>(
         // Final replay with output enabled.
         let choices: Vec<ChoiceValue> = best_nodes.iter().map(|n| n.value.clone()).collect();
         let ntc = NativeTestCase::for_choices(&choices, Some(best_nodes));
-        let (_, _, _, panic_msg) = run_one_test_case_full(ntc, &mut test_fn, verbosity, true);
+        let (_, _, _, panic_msg) = run_one_test_case_full(ntc, &mut test_fn, true);
 
         let msg = panic_msg.unwrap_or_else(|| "unknown".to_string());
         panic!("Property test failed: {}", msg);
@@ -214,10 +214,9 @@ pub fn native_run<F>(
 fn run_one_test_case<F: FnMut(TestCase)>(
     ntc: NativeTestCase,
     test_fn: &mut F,
-    verbosity: Verbosity,
     is_final: bool,
 ) -> (Status, Vec<ChoiceNode>) {
-    let (status, nodes, _, _) = run_one_test_case_full(ntc, test_fn, verbosity, is_final);
+    let (status, nodes, _, _) = run_one_test_case_full(ntc, test_fn, is_final);
     (status, nodes)
 }
 
@@ -225,10 +224,9 @@ fn run_one_test_case<F: FnMut(TestCase)>(
 fn run_one_test_case_full<F: FnMut(TestCase)>(
     ntc: NativeTestCase,
     test_fn: &mut F,
-    verbosity: Verbosity,
     is_final: bool,
 ) -> (Status, Vec<ChoiceNode>, Vec<Span>, Option<String>) {
-    let tc = TestCase::new_native(ntc, verbosity, is_final);
+    let tc = TestCase::new_native(ntc, is_final);
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
 
     let (status, panic_msg) = match result {
@@ -276,7 +274,6 @@ fn try_span_mutation<F: FnMut(TestCase)>(
     spans: &[Span],
     rng: &mut SmallRng,
     test_fn: &mut F,
-    verbosity: Verbosity,
 ) -> Option<Vec<ChoiceNode>> {
     use std::collections::HashMap;
 
@@ -330,7 +327,7 @@ fn try_span_mutation<F: FnMut(TestCase)>(
         attempt.extend_from_slice(&values[span_b.end..]);
 
         let ntc = NativeTestCase::for_choices(&attempt, None);
-        let (status, new_nodes, _, _) = run_one_test_case_full(ntc, test_fn, verbosity, false);
+        let (status, new_nodes, _, _) = run_one_test_case_full(ntc, test_fn, false);
 
         if status == Status::Interesting {
             return Some(new_nodes);
