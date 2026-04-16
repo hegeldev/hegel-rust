@@ -15,17 +15,21 @@ use crate::control::with_test_context;
 use crate::native::core::{
     ChoiceNode, ChoiceValue, NativeTestCase, Span, Status, sort_key,
 };
+use crate::native::database::NativeDatabase;
 use crate::native::shrinker::Shrinker;
-use crate::runner::{Settings, Verbosity};
+use crate::runner::{Database, Settings, Verbosity};
 use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING, TestCase};
 
 static NATIVE_PANIC_HOOK_INIT: Once = Once::new();
 
 /// Initialise the panic hook (once per process).
 ///
-/// This reuses the same suppression strategy as the server runner:
-/// capture panic info in a thread-local so it can be replayed on the
-/// final failing example instead of printing during shrinking.
+/// Suppresses panic output while a test case is running (i.e. while in test
+/// context). Panics during generation and shrinking are caught by catch_unwind
+/// and must not print to stderr. Instead, the panic info (thread name, location,
+/// and backtrace) is stored in a thread-local for the final replay to print
+/// manually. Manual printing avoids the blank-line separator that Rust's default
+/// handler inserts before each "thread 'main' panicked" message.
 fn init_native_panic_hook() {
     use crate::control::currently_in_test_context;
     use std::backtrace::Backtrace;
@@ -98,10 +102,31 @@ pub fn native_run<F>(
     let max_examples = settings.test_cases;
     let verbosity = settings.verbosity;
 
+    // Build database handle if configured.
+    let db: Option<NativeDatabase> = match &settings.database {
+        Database::Path(p) => Some(NativeDatabase::new(p)),
+        _ => None,
+    };
+
     let mut result: Option<Vec<ChoiceNode>> = None;
     let mut valid_test_cases: u64 = 0;
     let mut calls: u64 = 0;
     let mut test_is_trivial = false;
+
+    // --- Database replay phase ---
+    // If a stored counterexample exists for this key, try it before random
+    // generation. If it still fails, use it as the starting point for
+    // shrinking (which often means shrinking completes immediately because
+    // the stored value is already minimal).
+    if let (Some(db_ref), Some(key)) = (&db, database_key) {
+        if let Some(stored_choices) = db_ref.load(key) {
+            let ntc = NativeTestCase::for_choices(&stored_choices, None);
+            let (status, nodes, _, _) = run_one_test_case_full(ntc, &mut test_fn, false);
+            if status == Status::Interesting {
+                result = Some(nodes);
+            }
+        }
+    }
 
     // --- Generation phase ---
     while !test_is_trivial
@@ -194,13 +219,21 @@ pub fn native_run<F>(
         }
     }
 
+    // --- Save to database ---
+    // Persist the shrunk counterexample so subsequent runs can replay it
+    // immediately without repeating generation + shrinking.
+    if let (Some(db_ref), Some(key), Some(best_nodes)) = (&db, database_key, &result) {
+        let choices: Vec<ChoiceValue> = best_nodes.iter().map(|n| n.value.clone()).collect();
+        db_ref.save(key, &choices);
+    }
+
     // --- Result handling ---
     // If no valid test cases were found, all examples were filtered by assume().
     // This corresponds to the server's filter_too_much health check situation.
     // When health checks are suppressed, the server silently passes; we do the same.
 
     if let Some(ref best_nodes) = result {
-        // Final replay with output enabled.
+        // Final replay with output enabled: prints draw labels and panic info.
         let choices: Vec<ChoiceValue> = best_nodes.iter().map(|n| n.value.clone()).collect();
         let ntc = NativeTestCase::for_choices(&choices, Some(best_nodes));
         let (_, _, _, panic_msg) = run_one_test_case_full(ntc, &mut test_fn, true);
@@ -237,18 +270,26 @@ fn run_one_test_case_full<F: FnMut(TestCase)>(
                 (Status::Invalid, None)
             } else {
                 if is_final {
-                    // Print the panic details on the final replay.
+                    // Print the panic details for the final replay, manually
+                    // so there is no blank-line separator (which Rust's default
+                    // panic handler adds before "thread '...' panicked").
                     if let Some((thread_name, thread_id, location, backtrace)) = take_panic_info() {
-                        eprintln!("thread '{}' ({}) panicked at {}:", thread_name, thread_id, location);
+                        eprintln!(
+                            "thread '{}' ({}) panicked at {}:",
+                            thread_name, thread_id, location
+                        );
                         eprintln!("{}", msg);
 
                         if backtrace.status() == std::backtrace::BacktraceStatus::Captured {
                             let is_full = std::env::var("RUST_BACKTRACE")
                                 .map(|v| v == "full")
                                 .unwrap_or(false);
-                            // Use a simple format for the native runner.
-                            if is_full {
-                                eprintln!("stack backtrace:\n{}", backtrace);
+                            let formatted = format_backtrace_native(&backtrace, is_full);
+                            eprintln!("stack backtrace:\n{}", formatted);
+                            if !is_full {
+                                eprintln!(
+                                    "note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace."
+                                );
                             }
                         }
                     }
@@ -261,6 +302,88 @@ fn run_one_test_case_full<F: FnMut(TestCase)>(
     let nodes = tc.take_native_nodes();
     let spans = tc.take_native_spans();
     (status, nodes, spans, panic_msg)
+}
+
+/// Format a backtrace captured from inside the panic hook, optionally filtering
+/// to the "short" format used by Rust's default panic handler.
+///
+/// Short format shows only the frames between `__rust_end_short_backtrace` and
+/// `__rust_begin_short_backtrace` markers (the user-visible range), then
+/// renumbers them starting from 0.  This produces the same frame layout as
+/// Rust's own short backtrace, ensuring frame 2 is the user's test closure.
+fn format_backtrace_native(bt: &Backtrace, full: bool) -> String {
+    let backtrace_str = format!("{}", bt);
+
+    if full {
+        return backtrace_str;
+    }
+
+    let lines: Vec<&str> = backtrace_str.lines().collect();
+    let mut start_idx = 0;
+    let mut end_idx = lines.len();
+
+    for (i, line) in lines.iter().enumerate() {
+        if line.contains("__rust_end_short_backtrace") {
+            for (j, next_line) in lines.iter().enumerate().skip(i + 1) {
+                if next_line
+                    .trim_start()
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
+                {
+                    start_idx = j;
+                    break;
+                }
+            }
+        }
+        if line.contains("__rust_begin_short_backtrace") {
+            for (j, prev_line) in lines
+                .iter()
+                .enumerate()
+                .take(i + 1)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+            {
+                if prev_line
+                    .trim_start()
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
+                {
+                    end_idx = j;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
+    let filtered: Vec<&str> = lines[start_idx..end_idx].to_vec();
+    let mut new_frame_num = 0usize;
+    let mut result = Vec::new();
+    for line in filtered {
+        let trimmed = line.trim_start();
+        if trimmed
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+        {
+            if let Some(colon_pos) = trimmed.find(':') {
+                let rest = &trimmed[colon_pos..];
+                result.push(format!("{:>4}{}", new_frame_num, rest));
+                new_frame_num += 1;
+            } else {
+                result.push(line.to_string());
+            }
+        } else {
+            result.push(line.to_string());
+        }
+    }
+    result.join("\n")
 }
 
 /// Try span mutation: find two spans with the same label and replace both with
