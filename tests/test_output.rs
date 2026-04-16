@@ -123,3 +123,31 @@ fn test_failing_test_output_with_full_backtrace() {
         output.stderr
     );
 }
+
+/// When a property test fails, the failure message should appear exactly once
+/// in stderr — not duplicated by a secondary "Property test failed: ..." panic.
+#[cfg(feature = "native")]
+#[test]
+fn native_single_panic_on_failure() {
+    const CODE: &str = r#"
+use hegel::generators as gs;
+
+fn main() {
+    hegel::hegel(|tc| {
+        let _x: bool = tc.draw(gs::booleans());
+        panic!("deliberate failure");
+    });
+}
+"#;
+    let output = TempRustProject::new()
+        .main_file(CODE)
+        .expect_failure("deliberate failure")
+        .cargo_run(&[]);
+
+    let count = output.stderr.matches("deliberate failure").count();
+    assert_eq!(
+        count, 1,
+        "expected exactly one occurrence of 'deliberate failure' in stderr, got {count}:\n{}",
+        output.stderr
+    );
+}
