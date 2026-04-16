@@ -1,10 +1,8 @@
-# Native Backend Implementation Plan
+# Native Backend: Remaining Implementation Tasks
 
-## Context
-
-The `native` feature flag enables a pbtkit-style test runner that replaces the Python server.
-Currently 249 tests fail in native mode (309 pass). This document is the execution plan for
-making all tests pass, one failing test at a time.
+The original 11-phase plan is now complete — all 558 tests pass under `--features native`.
+This document describes the remaining quality gaps between the native backend and the
+server backend, and the work required to close them. All tasks use a strict TDD protocol.
 
 ## Reference Repositories (local checkouts)
 
@@ -12,282 +10,345 @@ making all tests pass, one failing test at a time.
 - **hegel-core** (schema format): `/tmp/hegel-core/src/hegel/schema.py`
 - **Hypothesis** (complex internals): `/tmp/hypothesis/hypothesis-python/src/hypothesis/`
 
-Prefer pbtkit as it is simpler and more modularised. Use Hypothesis only when pbtkit
-doesn't cover the needed functionality (e.g. for `from_regex`).
-
-## Execution Strategy (ralph-loop)
-
-Each iteration of the loop:
-
-1. **Run the tests**: `cargo test --features native --no-fail-fast 2>&1 > /tmp/native-test-run.txt`
-2. **If all tests pass, stop.**
-3. **Pick one failing test** — aim for the easiest / most impactful (unblocks the most other tests).
-4. **Study the failure** — determine which `todo!()` or missing feature causes it.
-5. **Implement the fix** by studying pbtkit (or Hypothesis if necessary).
-6. **Verify** the fix passes and no other tests regressed: `cargo test --features native --no-fail-fast`
-7. **Commit** the work.
-8. **Stop** (the next loop iteration picks up from step 1).
-
-## Tests to Skip in Native Mode
-
-These tests are entirely about server management and should be skipped (gated with
-`#[cfg(not(feature = "native"))]` or similar):
-
-- `tests/test_bad_server_command.rs` — all 7 tests (server binary validation)
-- `tests/test_install_errors.rs` — all 2 tests (uv installation)
-- `tests/embedded/runner_tests.rs` — already gated (server runner internals)
-- `tests/embedded/uv_tests.rs` — uv binary management
-- `tests/embedded/protocol/` — all protocol tests (connection, packet, stream)
-- `tests/test_flaky_global_state.rs` — tests server-side flaky detection
-- `tests/test_database_key.rs` — tests server-side database replay
-- `tests/test_hegel_test.rs::test_database_persists_failing_examples` — server database
-
-Additionally:
-- `tests/test_health_check.rs` — health checks are a server-side feature. Suppress tests
-  that depend on server health check behaviour. Individual tests here that don't depend on
-  server features (like `test_does_not_hang_on_assume_false` from test_hang.rs) need native
-  fixes instead.
-
-No other tests should be skipped. If a test exercises a generator feature, implement the
-feature natively.
-
-## Failure Categories and Implementation Order
-
-### Phase 1: Fix integer edge-case discovery (unblocks ~10 tests)
-
-**Problem**: `find_any` tests like `test_i32`, `test_u32`, `test_i64`, `test_u64` fail because
-uniform random generation over the full range rarely hits specific boundary regions (e.g. values
-above 2^31 for u32). The server uses Hypothesis's edge-case boosting.
-
-**Fix**: Port pbtkit's `edge_case_boosting.py`. When drawing integers, with probability
-`BOUNDARY_PROBABILITY = 0.01` per special value, return a boundary value (min, max, 0).
-
-**Reference**: `/tmp/pbtkit/src/pbtkit/edge_case_boosting.py` and the boosting logic in
-`/tmp/pbtkit/src/pbtkit/core.py` lines 395-413.
-
-**Files**: `src/native/core.rs` (modify `draw_integer`)
-
-**Also fix**: `cbor_to_i128` must handle CBOR BigNum tags (Tag 2 = positive bignum,
-Tag 3 = negative bignum) for i128/u128 support.
-
-**Files**: `src/native/schema.rs` (modify `cbor_to_i128`)
-
-### Phase 2: Implement `float` schema (unblocks ~50 tests)
-
-**Problem**: All float tests hit `todo!("float schema")`.
-
-**Fix**: Port pbtkit's `floats.py`. Key concepts:
-- `FloatChoice` with IEEE 754 bit-level generation
-- Bounded floats: uniform in range
-- Unbounded: random bit patterns covering full f64/f32 space
-- Special values: NaN, +/-Infinity, +/-0.0
-- Float shrinking: sign flip, magnitude reduction, exponent reduction, mantissa reduction
-
-**Reference**: `/tmp/pbtkit/src/pbtkit/floats.py`
-
-**Schema fields** (from hegel-core `schema.py`):
-- `width`: 32 or 64
-- `min_value`, `max_value`: optional bounds
-- `allow_nan`, `allow_infinity`: bool flags
-- `exclude_min`, `exclude_max`: bool flags
-
-**Files**: `src/native/schema.rs` (add `interpret_float`), `src/native/core.rs` (add
-`FloatChoice`, `draw_float`), `src/native/shrinker.rs` (add float shrink passes)
-
-### Phase 3: Implement `list` schema (unblocks ~80 tests)
-
-**Problem**: All collection tests (vecs, hashsets, flatmap, compose with vecs) hit
-`todo!("list schema")`. This is the single biggest blocker.
-
-**Fix**: Port pbtkit's `collections.py` `many` class. The `list` schema needs:
-1. Determine length using geometric distribution (like pbtkit's `many.more()`)
-2. Generate each element recursively via `interpret_schema`
-3. Handle `unique: true` by rejecting duplicates
-4. Respect `min_size` / `max_size`
-
-**Reference**: `/tmp/pbtkit/src/pbtkit/collections.py` (the `many` class)
-
-**Schema fields** (from hegel-core `schema.py`):
-- `elements`: sub-schema for each element
-- `min_size`, `max_size`: size bounds
-- `unique`: boolean
-
-**Also implement**: The `new_collection` / `collection_more` / `collection_reject` protocol
-commands, used by generators whose `as_basic()` returns `None` (e.g. after `map`/`filter`).
-These use the same `many` logic.
-
-**Files**: `src/native/schema.rs` (add `interpret_list`, collection command handling),
-`src/native/core.rs` (may need `many` equivalent)
-
-### Phase 4: Implement `dict` schema (unblocks ~15 tests)
-
-**Problem**: HashMap tests hit `todo!("dict schema")`.
-
-**Fix**: Similar to list but generates key-value pairs. Reject duplicate keys.
-
-**Schema fields**: `keys`, `values` (sub-schemas), `min_size`, `max_size`
-
-**Reference**: `/tmp/pbtkit/src/pbtkit/generators.py` `dictionaries` function,
-`/tmp/hegel-core/src/hegel/schema.py` lines 106-112
-
-**Files**: `src/native/schema.rs` (add `interpret_dict`)
-
-### Phase 5: Implement `string` schema (unblocks ~40 tests)
-
-**Problem**: All text/character tests hit `todo!("string schema")`.
-
-**Fix**: Port pbtkit's `text.py`. Key concepts:
-- `StringChoice` with codepoint range and length bounds
-- Alphabet construction from codepoint ranges, categories, include/exclude lists
-- Surrogate filtering (0xD800-0xDFFF excluded for Rust)
-- hegel-core's HEGEL_STRING_TAG (CBOR tag 91) encoding for the response
-
-**Reference**: `/tmp/pbtkit/src/pbtkit/text.py`
-
-**Schema fields** (from hegel-core `schema.py`):
-- `min_size`, `max_size`
-- `codec` (ascii, utf-8, latin-1)
-- `min_codepoint`, `max_codepoint`
-- `categories`, `exclude_categories` (Unicode general categories)
-- `include_characters`, `exclude_characters`
-
-**Unicode categories**: Need a lookup table or crate (e.g. `unicode-general-category`) to
-filter codepoints by Unicode general category (L, N, P, S, Z, C, and sub-categories like
-Lu, Ll, Nd, etc.).
-
-**Files**: `src/native/schema.rs` (add `interpret_string`), `src/native/core.rs` (add
-`StringChoice`, `draw_string`), possibly new dependency for Unicode categories
-
-### Phase 6: Implement `binary` schema (unblocks ~5 tests)
-
-**Problem**: Binary/bytes tests hit `todo!("binary schema")`.
-
-**Fix**: Port pbtkit's `bytes.py`. Generate random byte sequences of random length.
-
-**Reference**: `/tmp/pbtkit/src/pbtkit/bytes.py`
-
-**Schema fields**: `min_size`, `max_size`
-
-**Files**: `src/native/schema.rs` (add `interpret_binary`), `src/native/core.rs` (add
-`BytesChoice`, `draw_bytes`)
-
-### Phase 7: Implement `regex` schema (unblocks ~2 tests)
-
-**Problem**: `from_regex` tests hit `todo!("regex schema")`.
-
-**Fix**: This is the most complex schema. Requires:
-1. **Port Python's `re._parser`** to Rust using a suitable parser library. The parser
-   converts regex strings into an AST.
-   - Reference: `/tmp/hypothesis/hypothesis-python/src/hypothesis/strategies/_internal/regex.py`
-   - Also: `https://github.com/python/cpython/blob/main/Lib/re/_parser.py`
-2. **Convert the AST to generators** following Hypothesis's `regex.py` strategy, which
-   maps regex AST nodes to generators (character classes, repetitions, alternations, etc.)
-3. This can be implemented entirely in terms of existing native draw operations (draw_integer
-   for character selection, weighted for optionals, etc.)
-
-**Alternative**: Use the `regex-syntax` crate (already a transitive dependency via `regex`)
-to parse regex into an AST, then walk the AST to generate matching strings.
-
-**Files**: `src/native/regex.rs` (new), `src/native/schema.rs` (add `interpret_regex`)
-
-### Phase 8: Implement remaining simple schemas (unblocks ~5 tests)
-
-These schemas are used by derived generators with string/special fields:
-
-- `email` — generate RFC 5322 email addresses (can use string generators + fixed templates)
-- `url` — generate URLs (similar template approach)
-- `domain` — generate domain names with max_length constraint
-- `ipv4` / `ipv6` — generate IP addresses as strings
-- `date` / `time` / `datetime` — generate ISO 8601 date/time strings
-
-**Reference**: `/tmp/hegel-core/src/hegel/schema.py` shows these all delegate to Hypothesis
-strategies. For native mode, implement simple generators using draw_integer for components.
-
-**Files**: `src/native/schema.rs` (add handlers for each)
-
-### Phase 9: Implement stateful testing support (unblocks ~3 tests)
-
-**Problem**: State machine tests use `new_pool` / `pool_add` / `pool_generate` / `pool_consume`
-protocol commands.
-
-**Fix**: Implement variable pools in the native backend. A pool is a list of variable IDs
-that can be added to, drawn from (via draw_integer), and consumed.
-
-**Reference**: `/tmp/hegel-core/src/hegel/server.py` `Variables` class (lines 93-138)
-
-**Files**: `src/native/schema.rs` (add pool command handling)
-
-### Phase 10: Fix test infrastructure issues
-
-Several tests need native-specific fixes unrelated to schemas:
-
-- **`test_does_not_hang_on_assume_false`** (test_hang.rs): The native runner panics with
-  "Unsatisfiable" when all test cases are invalid. The test expects this to be a health
-  check failure, not a hard panic. Need to match the server's health check behavior or
-  adjust the test expectation.
-
-- **`test_flaky_global_state`**: Uses global state to detect flakiness — a server-side
-  feature. Should be skipped in native mode.
-
-- **`test_database_persists_failing_examples`**: Tests failure database replay — a server
-  feature. Should be skipped in native mode.
-
-- **`test_text_invalid_codec_panics`**: Tests that an invalid codec name produces a
-  specific error message. Will work once string schema is implemented.
-
-- **Output tests** (`test_output.rs`): These test the final replay output format. Should
-  mostly work once schemas are implemented, but may need minor adjustments to match
-  expected output.
-
-### Phase 11: Shrinking quality
-
-After all schemas are implemented, many shrink quality tests may still fail because the
-native shrinker is simpler than Hypothesis's. Progressively port additional shrink passes
-from pbtkit:
-
-- `/tmp/pbtkit/src/pbtkit/shrinking/sorting.py` — sort and swap passes
-- `/tmp/pbtkit/src/pbtkit/shrinking/bind_deletion.py` — bind-point deletion
-- `/tmp/pbtkit/src/pbtkit/shrinking/duplication_passes.py` — duplicate shrinking
-- `/tmp/pbtkit/src/pbtkit/shrinking/mutation.py` — random mutation to escape local optima
-- `/tmp/pbtkit/src/pbtkit/shrinking/sequence.py` — sequence-specific shrinking
-- `/tmp/pbtkit/src/pbtkit/shrinking/advanced_integer_passes.py` — integer redistribution
-- `/tmp/pbtkit/src/pbtkit/shrinking/index_passes.py` — generic index-based passes
-
-Also consider porting:
-- `/tmp/pbtkit/src/pbtkit/caching.py` — choice tree caching for shrink performance
-- `/tmp/pbtkit/src/pbtkit/span_mutation.py` — structural mutation generation
-
-## Dependency Graph
-
-```
-Phase 1 (integer edge cases + bignum) ← no deps, unblocks integer tests
-Phase 2 (float) ← no deps, unblocks all float tests  
-Phase 3 (list) ← no deps, unblocks most collection/flatmap/shrink tests
-Phase 4 (dict) ← after Phase 3 (reuses collection logic)
-Phase 5 (string) ← no deps, unblocks all text tests
-Phase 6 (binary) ← no deps, unblocks binary tests
-Phase 7 (regex) ← after Phase 5 (uses string generation)
-Phase 8 (email/url/etc.) ← after Phase 5 (uses string generation)
-Phase 9 (stateful) ← after Phase 3 (uses collections)
-Phase 10 (infra fixes) ← can be done anytime
-Phase 11 (shrink quality) ← after Phases 1-9
+## TDD Protocol (mandatory for all tasks)
+
+For each feature:
+1. Write a test that exercises the feature
+2. Run `cargo test --features native <test_name>` — it must **fail**
+3. Run `cargo test <test_name>` (no native) — it must **pass** (or be gated, see below)
+4. Commit the failing test on its own
+5. Implement the feature
+6. Run both again to verify correct behaviour in both modes
+7. Commit the implementation
+
+---
+
+## Priority 1 (Critical): Failure Database
+
+The server backend stores shrunk counterexamples keyed by `database_key` and replays them
+on subsequent runs, giving fast feedback for known failures. The native backend has no
+persistence — every run starts from scratch. This is the most important missing feature.
+
+### Current state
+
+`tests/test_hegel_test.rs::test_database_persists_failing_examples` is gated with
+`#[cfg(not(feature = "native"))]`. The gate is the placeholder; the feature must be built.
+
+### TDD steps
+
+Write a new test in `tests/test_hegel_test.rs` (using `TempRustProject::new().feature("native")`):
+
+```rust
+#[cfg(feature = "native")]
+#[test]
+fn native_database_persists_failing_examples() {
+    let code = r#"
+        use hegel::generators as gs;
+        #[hegel::test]
+        fn find_large(tc: hegel::TestCase) {
+            let x: u64 = tc.draw(gs::integers::<u64>().min_value(0).max_value(1000));
+            assert!(x < 900, "x = {x}");
+        }
+    "#;
+    let project = TempRustProject::new().feature("native");
+    // First run: finds and stores the counterexample
+    let first = project.main_file(code).cargo_test_output(&[]);
+    assert!(first.contains("FAILED") || first.contains("assertion"),
+        "expected failure on first run, got: {first}");
+    // Second run: replays the stored counterexample immediately (should still fail)
+    let second = project.cargo_test_output(&[]);
+    assert!(second.contains("FAILED") || second.contains("assertion"),
+        "expected failure on second run (replay), got: {second}");
+}
 ```
 
-Phases 1, 2, 3, 5, 6 are independent and can be tackled in any order. Phase 3 (list)
-is the highest-impact single item (unblocks ~80 tests). Phase 2 (float) is next (~50).
+Verify `cargo test --features native native_database_persists_failing_examples` fails before
+implementing.
 
-## Verification
+### Implementation approach
 
-After each phase, run:
+Study how Hypothesis stores choices:
+- `hypothesis-python/src/hypothesis/database.py` — `DirectoryBasedExampleDatabase` uses a
+  content-addressed directory layout. The key is a hash of the database key; the value is
+  a serialized byte sequence.
+- `hypothesis-python/src/hypothesis/core.py` — search for `database` to see where it is
+  written (after shrinking) and read (before new generation begins).
+
+For native:
+1. After a counterexample is found and shrunk in `native_run()`, serialize the
+   `Vec<ChoiceValue>` (e.g. as JSON or CBOR) to a file under
+   `$HEGEL_DATABASE_DIR/<key_hash>/<choice_hash>` (matching hegel's existing convention).
+2. At the start of `native_run()`, if stored choices exist for the current `database_key`,
+   try replaying them first before running any random cases.
+3. Add a `NativeDatabase` struct in `src/native/database.rs`.
+4. Respect `HEGEL_DATABASE_DIR` env var (same as server backend).
+
+### Un-gate the existing test
+
+Once the feature works, remove `#[cfg(not(feature = "native"))]` from
+`test_database_persists_failing_examples` and verify both modes pass.
+
+---
+
+## Priority 1 (Critical): Flaky Test Detection
+
+The server backend re-runs the shrunk counterexample after shrinking. If the replay passes,
+the test is reported as flaky rather than as a genuine failure. This prevents non-deterministic
+code from causing false CI red.
+
+### Current state
+
+`tests/test_flaky_global_state.rs` is entirely gated `#[cfg(not(feature = "native"))]` with
+the comment "Non-determinism detection is a server-side feature; skip in native mode". This
+gate must be replaced by a working implementation.
+
+### TDD steps
+
+The existing tests in `test_flaky_global_state.rs` are the target tests. Before implementing,
+remove the file-level gate and run:
+
+```
+cargo test --features native 2>&1 | grep -E "flaky|FAILED"
+```
+
+This should show the tests failing. Confirm they pass without `--features native`.
+
+If the tests need structural adjustment for native (e.g. because they rely on server-specific
+output format), keep the logic and adjust the output assertions.
+
+### Implementation approach
+
+Study Hypothesis for the flaky path:
+- `hypothesis-python/src/hypothesis/core.py` — search for `Flaky`. After shrinking, Hypothesis
+  re-runs the test with the shrunk choices. If the second run does not fail, it raises `Flaky`.
+
+For native in `src/native/runner.rs`:
+1. After shrinking is complete and a `counterexample` is found, run the test function again
+   with those exact choices in replay mode.
+2. If the replay **passes** (no panic): print a flaky warning and do not report a failure.
+   The current test run should be considered unsatisfying (call it a warning, not an error).
+3. If the replay **fails**: proceed with normal failure reporting.
+
+The current code near the end of `native_run()` already has a replay step — extend it to
+distinguish the two outcomes.
+
+### Un-gate the existing tests
+
+Once implemented, remove `#![cfg(not(feature = "native"))]` from
+`tests/test_flaky_global_state.rs` and verify all tests there pass under `--features native`.
+
+---
+
+## Priority 2: Fix Double Panic Output
+
+When a property test fails, the native runner currently panics twice: once from the test
+body (caught by the panic hook, which prints the message) and once from
+`panic!("Property test failed: {}", msg)` at the end of `native_run()`. This produces
+duplicate panic output that is confusing to users.
+
+### TDD steps
+
+Add a test in `tests/test_output.rs` (gated `#[cfg(feature = "native")]`) that compiles
+a subprocess with `.feature("native")` and asserts the failure message appears exactly once:
+
+```rust
+#[cfg(feature = "native")]
+#[test]
+fn native_single_panic_on_failure() {
+    let code = r#"
+        use hegel::generators as gs;
+        #[hegel::test]
+        fn always_fails(tc: hegel::TestCase) {
+            let _x: bool = tc.draw(gs::booleans());
+            panic!("deliberate failure");
+        }
+    "#;
+    let output = TempRustProject::new().feature("native").main_file(code).cargo_test_output(&[]);
+    let count = output.matches("deliberate failure").count();
+    assert_eq!(count, 1, "expected exactly one occurrence of failure message, got:\n{output}");
+}
+```
+
+Verify it fails (count > 1) before fixing.
+
+### Implementation
+
+In `src/native/runner.rs`, find the final `panic!("Property test failed: ...")` call.
+Replace it with `std::panic::resume_unwind(payload)` where `payload` is the original
+`Box<dyn Any + Send>` captured by `catch_unwind`. This re-raises the original panic
+object without creating a second panic message.
+
+Make sure the original panic payload is threaded through to the re-raise site.
+
+---
+
+## Priority 2: Gate Remaining Server-Only Tests
+
+Several test files test server infrastructure that is entirely irrelevant to the native
+backend. They should be gated so they are excluded when `--features native` is active,
+rather than silently succeeding because the subprocess they compile doesn't use native either.
+
+### Files to gate entirely
+
+Add `#![cfg(not(feature = "native"))]` at the top of:
+
+- `tests/test_bad_server_command.rs` — tests spawning of the hegel CLI binary
+- `tests/test_install_errors.rs` — tests install/binary detection
+
+### Verify
+
+Run `cargo test --features native` and confirm the gated test binaries are no longer compiled
+or run. Run `cargo test` (no native) to confirm they still run normally.
+
+---
+
+## Priority 3: TempRustProject Native Coverage
+
+`TempRustProject` compiles subprocess test binaries **without** `--features native` by
+default. This means most integration tests that use it test the server backend even when
+the outer test suite runs with `--features native`. Most "passing" integration tests do not
+actually test native code paths.
+
+### Principle
+
+For every observable behavior the native backend is supposed to share with the server
+backend (output format, assertion messages, draw labels, etc.), there should be a
+`TempRustProject::new().feature("native")` variant that exercises the native path.
+
+### Audit approach
+
+Go through these files and for each `TempRustProject::new()` call, assess whether the test
+exercises native behavior:
+
+- `tests/test_output.rs`
+- `tests/test_stateful.rs`
+- `tests/test_hegel_test.rs` (non-database tests)
+
+For behavioral tests (output format, draw labels, failure messages), add a `_native`
+variant gated `#[cfg(feature = "native")]` that calls `.feature("native")`. For server-
+infrastructure tests (database key, install errors), the gate from Priority 2 is sufficient.
+
+### TDD protocol
+
+For each new `_native` variant:
+1. Write the test.
+2. Run it — if the native backend has a behavioral gap it should fail.
+3. Fix the gap first (don't just make the test pass by weakening assertions).
+4. Commit both test and fix together.
+
+---
+
+## Priority 3: Health Checks
+
+The server backend reports `FilterTooMuch` when more than ~90% of drawn examples are
+filtered by `assume()`, and `TooSlow` when test execution exceeds a time budget.
+The native backend has no such checks, which means runaway assumptions silently hang.
+
+### TDD for FilterTooMuch
+
+Write a test that exercises heavy filtering and asserts a `FilterTooMuch`-style error:
+
+```rust
+#[cfg(feature = "native")]
+#[test]
+fn native_filter_too_much_detected() {
+    let result = std::panic::catch_unwind(|| {
+        hegel::Hegel::new(|tc: hegel::TestCase| {
+            let x: u64 = tc.draw(hegel::generators::integers::<u64>()
+                .min_value(0).max_value(1_000_000));
+            tc.assume(x == 42); // almost always filtered
+        })
+        .run();
+    });
+    let payload = result.unwrap_err();
+    let msg = payload.downcast_ref::<String>().map(|s| s.as_str())
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(
+        msg.contains("FilterTooMuch") || msg.contains("filter") || msg.contains("assume"),
+        "expected FilterTooMuch error, got: {msg}"
+    );
+}
+```
+
+Reference: `hypothesis-python/src/hypothesis/core.py` — search for `filter_too_much`.
+The threshold is approximately 200 filtered attempts without a valid case.
+
+Also look at the existing `tests/test_health_check.rs` to understand the expected behavior
+the server already tests. For tests in that file that are currently gated out of native
+mode, un-gate them one by one as each health check is implemented.
+
+---
+
+## Priority 4: Shrink Quality
+
+The native shrinker is substantially simpler than Hypothesis's. The shrink quality tests
+that currently pass may be accepting suboptimal minimal counterexamples.
+
+### Where to look
+
+The current shrink quality tests were written for the server backend and may not reflect
+what a good native shrinker should achieve. Rather than treating the current tests as the
+bar, look at the reference implementations:
+
+- **pbtkit shrink tests**: `/tmp/pbtkit/tests/` — look for tests that assert a specific
+  minimal counterexample (e.g., "finds 0", "finds []", "finds empty string").
+- **Hypothesis shrink tests**: `/tmp/hypothesis/hypothesis-python/tests/` — especially
+  `test_shrink_quality.py` and `test_minimization.py`.
+
+Port representative shrink quality tests from these suites into `tests/test_native.rs` or
+a new `tests/test_shrink_quality_native.rs`. For each:
+
+1. Write the test.
+2. Run `cargo test --features native` — if the native shrinker is suboptimal, it fails.
+3. Identify which shrink pass is missing by comparing to pbtkit's shrinker.
+4. Port the missing pass from pbtkit's `shrinking/` directory.
+
+Key shrink passes to evaluate (in `/tmp/pbtkit/src/pbtkit/shrinking/`):
+- `sorting.py` — sort and swap passes
+- `bind_deletion.py` — bind-point deletion (high impact for collections)
+- `duplication_passes.py` — duplicate value shrinking
+- `advanced_integer_passes.py` — integer redistribution
+- `index_passes.py` — generic index-based passes
+
+---
+
+## Priority 5: Unimplemented Special Schemas
+
+Check whether the following schemas panic or produce wrong results under `--features native`:
+
+- `email()` — RFC 5322 email addresses
+- `domain()` — DNS domain names
+- `url()` — URLs
+- `ip_addresses()` with `v=4` or `v=6`
+- `dates()`, `times()`, `datetimes()` — if exposed through the public API
+
+For each:
+1. Write a test that draws from the generator and checks basic structural constraints
+   (email contains `@`, domain is non-empty, IPv4 is parseable, etc.).
+2. Verify it fails under `--features native`.
+3. Implement the schema handler in `src/native/schema/`.
+
+Reference: `/tmp/hegel-core/src/hegel/schema.py` for the schema field names.
+
+---
+
+## Tracking Progress
+
+After each task, run:
+
 ```bash
 cargo test --features native --no-fail-fast 2>&1 > /tmp/native-test-run.txt
-grep "FAILED\|^test result:" /tmp/native-test-run.txt
+grep -E "FAILED|^test result:" /tmp/native-test-run.txt
 ```
 
-The total failure count should decrease monotonically. Final target: 0 failures
-(excluding properly skipped server-management tests).
+And verify the non-native suite is not broken:
 
-Also verify non-native mode is not broken:
 ```bash
-cargo check --tests
+cargo test --no-fail-fast 2>&1 | grep -E "FAILED|^test result:"
 ```
+
+The goal is:
+1. No tests failing under `--features native` (zero `FAILED` lines).
+2. All server-infrastructure tests still running and passing under `cargo test` (no native).
+3. Both backends tested by `TempRustProject` variants where behavior is shared.
