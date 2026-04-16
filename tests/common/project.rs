@@ -12,10 +12,18 @@ use tempfile::TempDir;
 // Compilation time is substantial (10+ seconds) and this lets us only incur that
 // cost on the first test in each binary.
 //
-// We use a per-process directory to avoid concurrent test binaries (which cargo
-// runs in parallel) destroying each other's in-progress compilations.
+// Each test binary gets its own directory (keyed by executable path hash) so
+// concurrent binaries don't destroy each other's build artifacts. The directory
+// is cleaned on startup to remove stale artifacts from previous runs.
 static SHARED_TARGET_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    let path = std::env::temp_dir().join(format!("hegel-test-cargo-target-{}", std::process::id()));
+    let exe = std::env::current_exe().unwrap_or_default();
+    let hash = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        exe.hash(&mut h);
+        h.finish()
+    };
+    let path = std::env::temp_dir().join(format!("hegel-test-cargo-target-{:016x}", hash));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).unwrap();
     path
