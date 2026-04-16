@@ -6,13 +6,14 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Once;
 
+use rand::RngExt;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
 use crate::antithesis::TestLocation;
 use crate::control::with_test_context;
 use crate::native::core::{
-    ChoiceNode, ChoiceValue, NativeTestCase, Status, sort_key,
+    ChoiceNode, ChoiceValue, NativeTestCase, Span, Status, sort_key,
 };
 use crate::native::shrinker::Shrinker;
 use crate::runner::{Settings, Verbosity};
@@ -78,6 +79,7 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 }
 
 const RANDOM_GENERATION_BATCH: u64 = 10;
+const SPAN_MUTATION_ATTEMPTS: usize = 5;
 
 /// Entry point for native-backend test execution.
 ///
@@ -119,7 +121,7 @@ pub fn native_run<F>(
 
             let batch_rng = SmallRng::from_rng(&mut rng);
             let ntc = NativeTestCase::new_random(batch_rng);
-            let (status, nodes) = run_one_test_case(ntc, &mut test_fn, verbosity, false);
+            let (status, nodes, spans, _) = run_one_test_case_full(ntc, &mut test_fn, verbosity, false);
             calls += 1;
 
             if nodes.is_empty() && status >= Status::Invalid {
@@ -131,6 +133,15 @@ pub fn native_run<F>(
             if status == Status::Interesting {
                 if result.is_none() || sort_key(&nodes) < sort_key(result.as_ref().unwrap()) {
                     result = Some(nodes);
+                }
+            } else if status == Status::Valid {
+                // Try span mutations on this valid test case to find interesting ones.
+                let mutation_result = try_span_mutation(&nodes, &spans, &mut rng, &mut test_fn, verbosity);
+                calls += SPAN_MUTATION_ATTEMPTS as u64;
+                if let Some(mut_nodes) = mutation_result {
+                    if result.is_none() || sort_key(&mut_nodes) < sort_key(result.as_ref().unwrap()) {
+                        result = Some(mut_nodes);
+                    }
                 }
             }
         }
@@ -192,7 +203,7 @@ pub fn native_run<F>(
         // Final replay with output enabled.
         let choices: Vec<ChoiceValue> = best_nodes.iter().map(|n| n.value.clone()).collect();
         let ntc = NativeTestCase::for_choices(&choices, Some(best_nodes));
-        let (_, _, panic_msg) = run_one_test_case_full(ntc, &mut test_fn, verbosity, true);
+        let (_, _, _, panic_msg) = run_one_test_case_full(ntc, &mut test_fn, verbosity, true);
 
         let msg = panic_msg.unwrap_or_else(|| "unknown".to_string());
         panic!("Property test failed: {}", msg);
@@ -206,17 +217,17 @@ fn run_one_test_case<F: FnMut(TestCase)>(
     verbosity: Verbosity,
     is_final: bool,
 ) -> (Status, Vec<ChoiceNode>) {
-    let (status, nodes, _) = run_one_test_case_full(ntc, test_fn, verbosity, is_final);
+    let (status, nodes, _, _) = run_one_test_case_full(ntc, test_fn, verbosity, is_final);
     (status, nodes)
 }
 
-/// Run a single test case, returning (status, nodes, optional panic message).
+/// Run a single test case, returning (status, nodes, spans, optional panic message).
 fn run_one_test_case_full<F: FnMut(TestCase)>(
     ntc: NativeTestCase,
     test_fn: &mut F,
     verbosity: Verbosity,
     is_final: bool,
-) -> (Status, Vec<ChoiceNode>, Option<String>) {
+) -> (Status, Vec<ChoiceNode>, Vec<Span>, Option<String>) {
     let tc = TestCase::new_native(ntc, verbosity, is_final);
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
 
@@ -250,7 +261,83 @@ fn run_one_test_case_full<F: FnMut(TestCase)>(
     };
 
     let nodes = tc.take_native_nodes();
-    (status, nodes, panic_msg)
+    let spans = tc.take_native_spans();
+    (status, nodes, spans, panic_msg)
+}
+
+/// Try span mutation: find two spans with the same label and replace both with
+/// identical choices from one donor. This makes two independently-generated
+/// structures (like two strings in a tuple) identical, which is how
+/// `test_long_duplicates_strings`-style tests are found.
+///
+/// Port of pbtkit's `span_mutation.py`.
+fn try_span_mutation<F: FnMut(TestCase)>(
+    nodes: &[ChoiceNode],
+    spans: &[Span],
+    rng: &mut SmallRng,
+    test_fn: &mut F,
+    verbosity: Verbosity,
+) -> Option<Vec<ChoiceNode>> {
+    use std::collections::HashMap;
+
+    // Group span indices by label.
+    let mut by_label: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, span) in spans.iter().enumerate() {
+        by_label.entry(span.label.as_str()).or_default().push(i);
+    }
+    // Only keep labels that have at least 2 spans (needed to make two equal).
+    let multi: Vec<Vec<usize>> = by_label.into_values()
+        .filter(|v| v.len() >= 2)
+        .collect();
+    if multi.is_empty() {
+        return None;
+    }
+
+    let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+
+    for _ in 0..SPAN_MUTATION_ATTEMPTS {
+        let group = &multi[rng.random_range(0..multi.len())];
+
+        // Pick two distinct span indices from this group.
+        let i_a = rng.random_range(0..group.len());
+        let mut i_b = rng.random_range(0..group.len() - 1);
+        if i_b >= i_a {
+            i_b += 1;
+        }
+
+        let mut span_a = &spans[group[i_a]];
+        let mut span_b = &spans[group[i_b]];
+        // Ensure span_a comes before span_b in the choice sequence.
+        if span_a.start > span_b.start {
+            std::mem::swap(&mut span_a, &mut span_b);
+        }
+        // Skip overlapping spans.
+        if span_a.end > span_b.start {
+            continue;
+        }
+
+        // Pick one of a/b as donor; replace both with donor's choices.
+        let donor = if rng.random::<bool>() { span_a } else { span_b };
+        let replacement: Vec<ChoiceValue> = values[donor.start..donor.end].to_vec();
+
+        // Build the mutated choice sequence:
+        // values[:a.start] + replacement + values[a.end..b.start] + replacement + values[b.end..]
+        let mut attempt: Vec<ChoiceValue> = Vec::new();
+        attempt.extend_from_slice(&values[..span_a.start]);
+        attempt.extend(replacement.iter().cloned());
+        attempt.extend_from_slice(&values[span_a.end..span_b.start]);
+        attempt.extend(replacement.iter().cloned());
+        attempt.extend_from_slice(&values[span_b.end..]);
+
+        let ntc = NativeTestCase::for_choices(&attempt, None);
+        let (status, new_nodes, _, _) = run_one_test_case_full(ntc, test_fn, verbosity, false);
+
+        if status == Status::Interesting {
+            return Some(new_nodes);
+        }
+    }
+
+    None
 }
 
 fn create_rng(settings: &Settings, database_key: Option<&str>) -> SmallRng {
