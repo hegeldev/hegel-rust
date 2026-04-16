@@ -1,6 +1,9 @@
 // Antithesis only supports Linux.
 #![cfg(not(windows))]
-
+// Antithesis integration (JSONL output and the panic-without-feature guard) is currently
+// only wired through the server backend path. These tests are gated until Antithesis
+// support is added to the native backend.
+#![cfg(not(feature = "native"))]
 mod common;
 
 use common::project::TempRustProject;
