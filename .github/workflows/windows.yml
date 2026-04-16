@@ -1,0 +1,70 @@
+name: Windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.rust }})
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        rust: ["1.86", stable]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install ${{ matrix.rust }} --profile minimal && rustup default ${{ matrix.rust }}
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+      - name: Install hegel
+        run: uv tool install hegel-core
+
+      - name: Run tests
+        env:
+          RUST_BACKTRACE: "1"
+        run: cargo test
+
+  test-all-features:
+    name: test-all-features (${{ matrix.rust }})
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        rust: ["1.86", stable]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install ${{ matrix.rust }} --profile minimal && rustup default ${{ matrix.rust }}
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+      - name: Install hegel
+        run: uv tool install hegel-core
+
+      - name: Run tests with all features
+        env:
+          RUST_BACKTRACE: "1"
+        run: cargo test --all-features
