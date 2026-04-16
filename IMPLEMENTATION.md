@@ -1,8 +1,15 @@
 # Native Backend: Remaining Implementation Tasks
 
-The original 11-phase plan is now complete — all 558 tests pass under `--features native`.
+The original 11-phase plan is now complete.
 This document describes the remaining quality gaps between the native backend and the
 server backend, and the work required to close them. All tasks use a strict TDD protocol.
+
+## Current failing tests under `--features native`
+
+These two tests are the active failing markers that drive Priority 1 and Priority 2:
+
+- `test_database_key::test_database_key_replays_failure` — database not yet implemented
+- `test_output::test_failing_test_output_with_backtrace` — double panic output
 
 ## Reference Repositories (local checkouts)
 
@@ -67,12 +74,16 @@ implementing.
 
 ### Implementation approach
 
-Study how Hypothesis stores choices:
-- `hypothesis-python/src/hypothesis/database.py` — `DirectoryBasedExampleDatabase` uses a
-  content-addressed directory layout. The key is a hash of the database key; the value is
-  a serialized byte sequence.
-- `hypothesis-python/src/hypothesis/core.py` — search for `database` to see where it is
-  written (after shrinking) and read (before new generation begins).
+Start with pbtkit, then cross-reference Hypothesis for the storage format:
+
+- **pbtkit**: `/tmp/pbtkit/src/pbtkit/` — look for database or storage related modules
+  (e.g. `database.py` or similar). pbtkit's implementation is simpler and a better starting
+  point than Hypothesis's.
+- **Hypothesis**: `hypothesis-python/src/hypothesis/database.py` — `DirectoryBasedExampleDatabase`
+  uses a content-addressed directory layout. The key is a hash of the database key; the
+  value is a serialized byte sequence.
+- **Hypothesis**: `hypothesis-python/src/hypothesis/core.py` — search for `database` to see
+  where it is written (after shrinking) and read (before new generation begins).
 
 For native:
 1. After a counterexample is found and shrunk in `native_run()`, serialize the
@@ -184,36 +195,44 @@ Make sure the original panic payload is threaded through to the re-raise site.
 
 ## Priority 2: Gate Remaining Server-Only Tests
 
-Several test files test server infrastructure that is entirely irrelevant to the native
-backend. They should be gated so they are excluded when `--features native` is active,
-rather than silently succeeding because the subprocess they compile doesn't use native either.
+**Already done** for `test_bad_server_command.rs`, `test_install_errors.rs`, and
+`test_antithesis.rs`. The remaining gating work is described below.
 
-### Files to gate entirely
+### test_antithesis.rs
 
-Add `#![cfg(not(feature = "native"))]` at the top of:
+`tests/test_antithesis.rs` is gated `#![cfg(not(feature = "native"))]` because:
+1. `test_antithesis_jsonl_written_when_env_set` — the native backend does not wire
+   through the Antithesis JSONL assertions.
+2. `test_antithesis_panics_without_feature` — the server backend panics when
+   `ANTITHESIS_OUTPUT_DIR` is set without the `antithesis` feature; the native backend
+   does not have this guard.
 
-- `tests/test_bad_server_command.rs` — tests spawning of the hegel CLI binary
-- `tests/test_install_errors.rs` — tests install/binary detection
+Both gaps should be fixed as part of Antithesis native support (see Priority 5 below).
 
-### Verify
+### Any remaining server-only tests
 
-Run `cargo test --features native` and confirm the gated test binaries are no longer compiled
-or run. Run `cargo test` (no native) to confirm they still run normally.
+Run `cargo test --features native` after each task and investigate any newly exposed failures.
+Gate tests that test server infrastructure (binary spawning, socket connections, protocol).
+Leave tests that expose behavioral gaps unfixed until those gaps are implemented.
 
 ---
 
 ## Priority 3: TempRustProject Native Coverage
 
-`TempRustProject` compiles subprocess test binaries **without** `--features native` by
-default. This means most integration tests that use it test the server backend even when
-the outer test suite runs with `--features native`. Most "passing" integration tests do not
-actually test native code paths.
+**Structural fix already done**: `TempRustProject::new()` now automatically adds the
+`native` feature to subprocesses when the outer test suite is compiled with
+`--features native`. This means all existing `TempRustProject` tests now exercise the
+native code path automatically, and new failures will surface as the subprocesses actually
+run native code.
 
-### Principle
+The two currently failing tests (`test_database_key`, `test_output`) are the direct result
+of this structural fix exposing genuine gaps.
+
+### Remaining coverage work
 
 For every observable behavior the native backend is supposed to share with the server
 backend (output format, assertion messages, draw labels, etc.), there should be a
-`TempRustProject::new().feature("native")` variant that exercises the native path.
+`TempRustProject::new()` test that now runs in native mode under `--features native`.
 
 ### Audit approach
 
@@ -323,13 +342,46 @@ Check whether the following schemas panic or produce wrong results under `--feat
 - `ip_addresses()` with `v=4` or `v=6`
 - `dates()`, `times()`, `datetimes()` — if exposed through the public API
 
-For each:
-1. Write a test that draws from the generator and checks basic structural constraints
-   (email contains `@`, domain is non-empty, IPv4 is parseable, etc.).
-2. Verify it fails under `--features native`.
+### TDD approach
+
+For each schema, **port the corresponding Hypothesis tests first** — do not write new tests
+from scratch. The Hypothesis test suite has extensive property-based tests for each of these
+generators that cover edge cases and structural invariants:
+
+- `hypothesis-python/tests/` — search for `test_email`, `test_urls`, `test_ip`, `test_dates`,
+  etc. Port the ones that assert structural properties (valid format, parseable, within bounds)
+  into a new `tests/test_special_schemas_native.rs`.
+- Focus on tests that check _what the generator can produce_ rather than Hypothesis-internal
+  plumbing.
+
+Then for each ported test:
+1. Run it — it must fail under `--features native`.
+2. Verify it passes without `--features native`.
 3. Implement the schema handler in `src/native/schema/`.
+4. Confirm both modes pass.
 
 Reference: `/tmp/hegel-core/src/hegel/schema.py` for the schema field names.
+
+---
+
+## Priority 5: Antithesis Native Support
+
+Two tests in `tests/test_antithesis.rs` are gated because the native backend does not
+support the Antithesis SDK integration:
+
+1. **JSONL output**: When compiled with `--features antithesis`, the native backend must
+   write assertion declarations and evaluations to `$ANTITHESIS_OUTPUT_DIR/sdk.jsonl`.
+   Study how the server path triggers these writes (likely in `src/antithesis.rs` or via
+   the `HealthCheck` mechanism) and wire the same calls into `native_run()`.
+
+2. **Guard without feature**: When `ANTITHESIS_OUTPUT_DIR` is set but the `antithesis`
+   feature is not compiled in, the backend should panic with an informative error. Add
+   this check to the native startup path (currently only the server path has it).
+
+### TDD steps
+
+Remove `#![cfg(not(feature = "native"))]` from `tests/test_antithesis.rs`. Run
+`cargo test --features native` — both tests should fail. Implement, then remove the gate.
 
 ---
 
