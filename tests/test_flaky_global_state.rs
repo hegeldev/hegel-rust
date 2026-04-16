@@ -1,5 +1,3 @@
-// Non-determinism detection is a server-side feature; skip in native mode.
-#[cfg(not(feature = "native"))]
 mod flaky_tests {
     use hegel::TestCase;
     use hegel::generators as gs;
