@@ -111,12 +111,25 @@ pub fn dispatch_request(
 }
 
 /// Interpret a CBOR schema and produce a value using the native test case.
+///
+/// For leaf schemas (those that don't call `interpret_schema` recursively),
+/// records a span in `ntc.spans` so that span-mutation exploration can find
+/// structurally-duplicate values (e.g. two equal strings in a tuple).
+/// Only leaf schemas are tracked to avoid overlapping spans from nested schemas.
 fn interpret_schema(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
     let schema_type = map_get(schema, "type")
         .and_then(as_text)
         .expect("Schema must have a \"type\" field");
 
-    match schema_type {
+    // Record spans only for leaf schemas (no recursive interpret_schema calls).
+    // This avoids overlapping spans that would corrupt span-mutation results.
+    let is_leaf = matches!(
+        schema_type,
+        "integer" | "boolean" | "float" | "string" | "binary" | "sampled_from"
+    );
+    let span_start = if is_leaf { ntc.nodes.len() } else { 0 };
+
+    let result = match schema_type {
         "integer" => interpret_integer(ntc, schema),
         "boolean" => interpret_boolean(ntc),
         "constant" => interpret_constant(schema),
@@ -130,7 +143,7 @@ fn interpret_schema(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, S
         "binary" => interpret_binary(ntc, schema),
 
         "float" => interpret_float(ntc, schema),
-        "regex" => todo!("Native backend does not yet support regex schema"),
+        "regex" => interpret_regex(ntc, schema),
         "email" => todo!("Native backend does not yet support email schema"),
         "url" => todo!("Native backend does not yet support url schema"),
         "domain" => todo!("Native backend does not yet support domain schema"),
@@ -141,7 +154,11 @@ fn interpret_schema(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, S
         "datetime" => todo!("Native backend does not yet support datetime schema"),
 
         other => panic!("Unknown schema type: {}", other),
+    };
+    if is_leaf && result.is_ok() {
+        ntc.record_span(span_start, ntc.nodes.len(), schema_type.to_string());
     }
+    result
 }
 
 fn interpret_integer(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
@@ -278,21 +295,44 @@ fn interpret_string(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, S
     let max_size = map_get(schema, "max_size").and_then(as_u64).map(|n| n as usize);
 
     let alphabet = build_string_alphabet(schema);
-    assert!(
-        alphabet.len() > 0,
-        "No valid codepoints for string generation"
-    );
+    if alphabet.len() == 0 {
+        // No valid codepoints in this range (e.g., surrogate-only range like [0xD800, 0xDFFF]).
+        // Mark the test case as invalid so it is filtered out, rather than panicking.
+        ntc.status = Some(Status::Invalid);
+        return Err(StopTest);
+    }
+
+    let n = alphabet.len() as i128;
+    let n_ascii = alphabet.ascii_count() as i128;
+
+    // Build a small sub-alphabet (1–10 characters) following pbtkit's approach.
+    // This boosts the probability of generating structurally interesting strings
+    // (e.g. containing '\n', duplicate characters) by concentrating choices.
+    // Each slot has a 20% chance of being drawn from the ASCII sub-range (if any
+    // ASCII characters exist in the alphabet), matching pbtkit's `_draw_string`.
+    let alpha_size = ntc.draw_integer(1, 10)?;
+    let mut sub_alpha: Vec<i128> = Vec::with_capacity(alpha_size as usize);
+    for _ in 0..alpha_size {
+        // weighted(0.2): simplest() = false, so shrinker converges to no-ASCII bias.
+        let use_ascii = n_ascii > 0 && ntc.weighted(0.2, None)?;
+        let idx = if use_ascii {
+            ntc.draw_integer(0, n_ascii - 1)?
+        } else {
+            ntc.draw_integer(0, n - 1)?
+        };
+        sub_alpha.push(idx);
+    }
 
     let mut state = ManyState::new(min_size, max_size);
     let mut result = String::new();
-    let n = alphabet.len() as i128;
 
     loop {
         if !many_more(ntc, &mut state)? {
             break;
         }
-        let idx = ntc.draw_integer(0, n - 1)?;
-        result.push(alphabet.char_at(idx as usize));
+        let sub_idx = ntc.draw_integer(0, alpha_size - 1)?;
+        let char_idx = sub_alpha[sub_idx as usize] as usize;
+        result.push(alphabet.char_at(char_idx));
     }
 
     Ok(Value::Tag(91, Box::new(Value::Bytes(result.into_bytes()))))
@@ -326,6 +366,28 @@ impl StringAlphabet {
                 count_valid_codepoints(*min, *max) as usize
             }
             StringAlphabet::Explicit(v) => v.len(),
+        }
+    }
+
+    /// Count how many characters in this alphabet are ASCII (codepoint < 128).
+    ///
+    /// These correspond to indices [0, ascii_count) in `char_at` order,
+    /// since both `keyed_codepoint_at_index` and the explicit alphabet's
+    /// `codepoint_sort_key` ordering put ASCII characters first.
+    fn ascii_count(&self) -> usize {
+        match self {
+            StringAlphabet::Range { min, max } => {
+                if *min > 127 {
+                    0
+                } else {
+                    ((*max).min(127) - *min + 1) as usize
+                }
+            }
+            StringAlphabet::Explicit(v) => {
+                // Alphabet is sorted by codepoint_sort_key; ASCII chars (key < 128)
+                // always precede non-ASCII chars (key == codepoint >= 128).
+                v.iter().take_while(|c| (**c as u32) < 128).count()
+            }
         }
     }
 
@@ -646,6 +708,145 @@ fn many_reject(ntc: &mut NativeTestCase, state: &mut ManyState) -> Result<(), St
         }
     }
     Ok(())
+}
+
+fn interpret_regex(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
+    let pattern = map_get(schema, "pattern")
+        .and_then(as_text)
+        .expect("regex schema must have pattern");
+    let fullmatch = map_get(schema, "fullmatch")
+        .and_then(as_bool)
+        .unwrap_or(false);
+    let alphabet_schema = map_get(schema, "alphabet");
+
+    // Parse the regex to HIR using regex-syntax.
+    let hir = regex_syntax::Parser::new()
+        .parse(pattern)
+        .unwrap_or_else(|e| panic!("invalid regex pattern {:?}: {}", pattern, e));
+
+    // Build the alphabet constraint (if any) from the alphabet sub-schema.
+    let alphabet_filter = alphabet_schema.map(build_string_alphabet);
+
+    let mut result = String::new();
+
+    if fullmatch {
+        generate_hir_string(ntc, &hir, &alphabet_filter, &mut result)?;
+    } else {
+        // For partial match, wrap the pattern in an arbitrary string on either side.
+        // Generate prefix (arbitrary ASCII text), then the pattern, then suffix.
+        let prefix_len = ntc.draw_integer(0, 10)?;
+        for _ in 0..prefix_len {
+            let c = ntc.draw_integer(32, 126)?;
+            result.push(char::from_u32(c as u32).expect("valid ASCII"));
+        }
+        generate_hir_string(ntc, &hir, &alphabet_filter, &mut result)?;
+        let suffix_len = ntc.draw_integer(0, 10)?;
+        for _ in 0..suffix_len {
+            let c = ntc.draw_integer(32, 126)?;
+            result.push(char::from_u32(c as u32).expect("valid ASCII"));
+        }
+    }
+
+    Ok(Value::Tag(91, Box::new(Value::Bytes(result.into_bytes()))))
+}
+
+/// Recursively generate a string from a regex HIR node, appending to `result`.
+///
+/// Characters are filtered through `alphabet` (if Some); if a required
+/// character is not in the alphabet, the test case is marked invalid.
+fn generate_hir_string(
+    ntc: &mut NativeTestCase,
+    hir: &regex_syntax::hir::Hir,
+    alphabet: &Option<StringAlphabet>,
+    result: &mut String,
+) -> Result<(), StopTest> {
+    use regex_syntax::hir::{Class, HirKind};
+
+    match hir.kind() {
+        HirKind::Empty => {
+            // Nothing to generate.
+        }
+        HirKind::Literal(lit) => {
+            let s = std::str::from_utf8(&lit.0)
+                .expect("regex literal should be valid UTF-8");
+            for c in s.chars() {
+                if !regex_alphabet_allows(alphabet, c) {
+                    ntc.status = Some(Status::Invalid);
+                    return Err(StopTest);
+                }
+                result.push(c);
+            }
+        }
+        HirKind::Class(Class::Unicode(cls)) => {
+            let chars: Vec<char> = cls
+                .iter()
+                .flat_map(|r| {
+                    let start = r.start() as u32;
+                    let end = r.end() as u32;
+                    (start..=end).filter_map(char::from_u32)
+                })
+                .filter(|c| regex_alphabet_allows(alphabet, *c))
+                .collect();
+            if chars.is_empty() {
+                ntc.status = Some(Status::Invalid);
+                return Err(StopTest);
+            }
+            let idx = ntc.draw_integer(0, chars.len() as i128 - 1)?;
+            result.push(chars[idx as usize]);
+        }
+        HirKind::Class(Class::Bytes(cls)) => {
+            let chars: Vec<char> = cls
+                .iter()
+                .flat_map(|r| (r.start()..=r.end()).map(|b| b as char))
+                .filter(|c| regex_alphabet_allows(alphabet, *c))
+                .collect();
+            if chars.is_empty() {
+                ntc.status = Some(Status::Invalid);
+                return Err(StopTest);
+            }
+            let idx = ntc.draw_integer(0, chars.len() as i128 - 1)?;
+            result.push(chars[idx as usize]);
+        }
+        HirKind::Look(_) => {
+            // Anchors and word boundaries don't consume characters during generation.
+        }
+        HirKind::Repetition(rep) => {
+            let min = rep.min as usize;
+            let max = rep.max.map(|m| m as usize);
+            let mut state = ManyState::new(min, max);
+            loop {
+                if !many_more(ntc, &mut state)? {
+                    break;
+                }
+                generate_hir_string(ntc, &rep.sub, alphabet, result)?;
+            }
+        }
+        HirKind::Capture(cap) => {
+            generate_hir_string(ntc, &cap.sub, alphabet, result)?;
+        }
+        HirKind::Concat(hirs) => {
+            for sub in hirs {
+                generate_hir_string(ntc, sub, alphabet, result)?;
+            }
+        }
+        HirKind::Alternation(hirs) => {
+            let idx = ntc.draw_integer(0, hirs.len() as i128 - 1)?;
+            generate_hir_string(ntc, &hirs[idx as usize], alphabet, result)?;
+        }
+    }
+    Ok(())
+}
+
+/// Check whether a character is permitted by the optional alphabet constraint.
+fn regex_alphabet_allows(alphabet: &Option<StringAlphabet>, c: char) -> bool {
+    match alphabet {
+        None => true,
+        Some(StringAlphabet::Range { min, max }) => {
+            let cp = c as u32;
+            cp >= *min && cp <= *max && !is_surrogate_cp(cp)
+        }
+        Some(StringAlphabet::Explicit(chars)) => chars.contains(&c),
+    }
 }
 
 fn interpret_float(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {

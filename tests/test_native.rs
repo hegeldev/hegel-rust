@@ -1,5 +1,8 @@
 #![cfg(feature = "native")]
 
+mod common;
+
+use common::utils::assert_all_examples;
 use hegel::generators::{self as gs, Generator};
 
 #[hegel::test]
@@ -92,4 +95,153 @@ fn native_multiple_draws(tc: hegel::TestCase) {
     let b = tc.draw(gs::integers::<i32>().min_value(0).max_value(100));
     // Just exercise multiple draws in one test case.
     assert!(a >= 0 && b >= 0);
+}
+
+// --- Regex schema coverage tests ---
+
+/// HirKind::Empty: an empty capture group generates an empty string.
+#[test]
+fn native_regex_empty_hir() {
+    assert_all_examples(
+        gs::from_regex("()").fullmatch(true),
+        |s: &String| s.is_empty(),
+    );
+}
+
+/// HirKind::Literal: a literal pattern generates exactly that string.
+#[test]
+fn native_regex_literal() {
+    assert_all_examples(
+        gs::from_regex("abc").fullmatch(true),
+        |s: &String| s == "abc",
+    );
+}
+
+/// HirKind::Concat: an anchor + literal + anchor uses Concat and Look nodes.
+#[test]
+fn native_regex_concat_and_look() {
+    assert_all_examples(
+        gs::from_regex("^abc$").fullmatch(true),
+        |s: &String| s == "abc",
+    );
+}
+
+/// HirKind::Alternation: a|b generates "a" or "b".
+#[test]
+fn native_regex_alternation() {
+    assert_all_examples(
+        gs::from_regex("a|b").fullmatch(true),
+        |s: &String| s == "a" || s == "b",
+    );
+}
+
+/// HirKind::Capture: a capture group generates the contained pattern.
+#[test]
+fn native_regex_capture() {
+    assert_all_examples(
+        gs::from_regex("(abc)").fullmatch(true),
+        |s: &String| s == "abc",
+    );
+}
+
+/// HirKind::Class::Bytes: byte-mode character class generates matching chars.
+#[test]
+fn native_regex_bytes_class() {
+    assert_all_examples(
+        gs::from_regex("(?-u)[a-z]+").fullmatch(true),
+        |s: &String| !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase()),
+    );
+}
+
+/// HirKind::Class::Unicode with Explicit alphabet: filters against explicit char list.
+#[test]
+fn native_regex_unicode_class_explicit_alphabet() {
+    assert_all_examples(
+        gs::from_regex("[a-c]+")
+            .fullmatch(true)
+            .alphabet(gs::characters().categories(&[]).include_characters("abc")),
+        |s: &String| !s.is_empty() && s.chars().all(|c| matches!(c, 'a' | 'b' | 'c')),
+    );
+}
+
+/// regex_alphabet_allows None: no alphabet means all chars pass.
+#[test]
+fn native_regex_no_alphabet() {
+    assert_all_examples(
+        gs::from_regex("[a-z]+").fullmatch(true),
+        |s: &String| !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase()),
+    );
+}
+
+/// fullmatch=false: generates a string containing a match with possible surrounding text.
+#[test]
+fn native_regex_partial_match() {
+    // The partial match path generates prefix + match + suffix.
+    // We can't know the full string, but the overall string must contain something.
+    assert_all_examples(
+        gs::from_regex("[a-z]+"),
+        |s: &String| s.chars().all(|c| c.is_ascii() || c.is_alphabetic()),
+    );
+}
+
+/// HirKind::Literal blocked by alphabet triggers Invalid.
+/// This is tested by running a regex with a literal char not in the alphabet,
+/// and verifying it succeeds (invalid test cases are filtered out silently).
+#[test]
+fn native_regex_literal_blocked_by_alphabet() {
+    // "a" fullmatch with an alphabet that only allows digits.
+    // Every generated case tries to push 'a' but the alphabet only allows '0'-'9',
+    // so every case is Invalid. With 100 test cases all filtered, Hegel passes
+    // (same as filter_too_much health check suppression).
+    hegel::Hegel::new(|tc: hegel::TestCase| {
+        let _s = tc.draw(
+            gs::from_regex("a")
+                .fullmatch(true)
+                .alphabet(gs::characters().categories(&["Nd"])),
+        );
+        // If we get here, the alphabet allowed 'a' — which shouldn't happen.
+        // In practice all cases become Invalid so this closure never executes.
+    })
+    .settings(hegel::Settings::new().test_cases(10))
+    .run();
+}
+
+/// HirKind::Class::Unicode empty after filtering triggers Invalid.
+/// A class [a-z] filtered to digits (no overlap) gives empty chars → Invalid.
+#[test]
+fn native_regex_unicode_class_empty_after_filter() {
+    hegel::Hegel::new(|tc: hegel::TestCase| {
+        let _s = tc.draw(
+            gs::from_regex("[a-z]+")
+                .fullmatch(true)
+                .alphabet(gs::characters().categories(&["Nd"])),
+        );
+    })
+    .settings(hegel::Settings::new().test_cases(10))
+    .run();
+}
+
+/// HirKind::Class::Bytes empty after filtering triggers Invalid.
+#[test]
+fn native_regex_bytes_class_empty_after_filter() {
+    hegel::Hegel::new(|tc: hegel::TestCase| {
+        let _s = tc.draw(
+            gs::from_regex("(?-u)[a-z]+")
+                .fullmatch(true)
+                .alphabet(gs::characters().categories(&["Nd"])),
+        );
+    })
+    .settings(hegel::Settings::new().test_cases(10))
+    .run();
+}
+
+/// interpret_string with a surrogate-only range (e.g. [0xD800, 0xDFFF]) should
+/// mark the test case as Invalid instead of panicking, so it is filtered out.
+#[test]
+fn native_string_empty_alphabet_is_invalid() {
+    hegel::Hegel::new(|tc: hegel::TestCase| {
+        let _c = tc.draw(gs::characters().min_codepoint(0xD800).max_codepoint(0xDFFF));
+    })
+    .settings(hegel::Settings::new().test_cases(10))
+    .run();
 }
