@@ -66,10 +66,18 @@ use std::cell::RefCell;
 
 thread_local! {
     static LAST_PANIC_INFO: RefCell<Option<(String, String, String, Backtrace)>> = const { RefCell::new(None) };
+    /// Payload from the most recent interesting panic captured during the final
+    /// replay.  Used by `native_run` to re-raise the original panic via
+    /// `resume_unwind` (which avoids producing a second panic message on stderr).
+    static LAST_PANIC_PAYLOAD: RefCell<Option<Box<dyn std::any::Any + Send>>> = const { RefCell::new(None) };
 }
 
 fn take_panic_info() -> Option<(String, String, String, Backtrace)> {
     LAST_PANIC_INFO.with(|info| info.borrow_mut().take())
+}
+
+fn take_panic_payload() -> Option<Box<dyn std::any::Any + Send>> {
+    LAST_PANIC_PAYLOAD.with(|p| p.borrow_mut().take())
 }
 
 fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
@@ -236,10 +244,30 @@ pub fn native_run<F>(
         // Final replay with output enabled: prints draw labels and panic info.
         let choices: Vec<ChoiceValue> = best_nodes.iter().map(|n| n.value.clone()).collect();
         let ntc = NativeTestCase::for_choices(&choices, Some(best_nodes));
-        let (_, _, _, panic_msg) = run_one_test_case_full(ntc, &mut test_fn, true);
+        let (status, _, _, _) = run_one_test_case_full(ntc, &mut test_fn, true);
 
-        let msg = panic_msg.unwrap_or_else(|| "unknown".to_string());
-        panic!("Property test failed: {}", msg);
+        if status == Status::Interesting {
+            // Re-raise the original panic payload.  resume_unwind bypasses the
+            // panic hook so there is no second "thread '...' panicked" line on
+            // stderr — only the manually-printed output from the is_final block
+            // above is visible.
+            if let Some(payload) = take_panic_payload() {
+                std::panic::resume_unwind(payload);
+            }
+            // Fallback (shouldn't happen in practice).
+            panic!("Property test failed");
+        } else {
+            // The replay passed even though we had a shrunk counterexample.
+            // This means the test outcome depends on external state — it is
+            // flaky.
+            panic!(
+                "Flaky test detected: Your test produced different outcomes \
+                 when run with the same generated data — it failed when it \
+                 previously succeeded, or succeeded when it previously failed. \
+                 This usually means your test depends on external state such as \
+                 global variables, system time, or external random number generators."
+            );
+        }
     }
 }
 
@@ -293,6 +321,9 @@ fn run_one_test_case_full<F: FnMut(TestCase)>(
                             }
                         }
                     }
+                    // Store the payload so native_run can re-raise it via
+                    // resume_unwind (avoids a second panic message on stderr).
+                    LAST_PANIC_PAYLOAD.with(|p| *p.borrow_mut() = Some(e));
                 }
                 (Status::Interesting, Some(msg))
             }
