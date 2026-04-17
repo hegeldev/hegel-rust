@@ -95,8 +95,8 @@ impl<T: Integer + serde::de::DeserializeOwned + serde::Serialize + Send + Sync +
 
 /// Generate integers of type `T`.
 ///
-/// Bounds default to the full range of `T`. Use the builder methods `min_value` 
-/// and `max_value` to constrain the range. See [`IntegerGenerator`] for more 
+/// Bounds default to the full range of `T`. Use the builder methods `min_value`
+/// and `max_value` to constrain the range. See [`IntegerGenerator`] for more
 /// details.
 pub fn integers<
     T: Integer + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static,
