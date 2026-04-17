@@ -3,6 +3,7 @@ use crate::backend::{DataSource, DataSourceError, TestCaseResult, TestRunResult,
 use crate::cbor_utils::{as_bool, as_text, as_u64, cbor_map, map_get, map_insert};
 use crate::control::{currently_in_test_context, with_test_context};
 use crate::protocol::{Connection, HANDSHAKE_STRING, Stream};
+use crate::settings::{Database, Settings, Verbosity};
 use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING, TestCase};
 use ciborium::Value;
 
@@ -583,13 +584,28 @@ impl TestRunner for ServerTestRunner {
 
 // ─── Panic hook and backtrace ───────────────────────────────────────────────
 
-thread_local! {
-    /// (thread_name, thread_id, location, backtrace)
-    static LAST_PANIC_INFO: RefCell<Option<(String, String, String, Backtrace)>> = const { RefCell::new(None) };
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct PanicInfo {
+    pub thread_name: String,
+    pub thread_id: String,
+    pub file: String,
+    pub line: u32,
+    pub column: u32,
+    pub backtrace: Backtrace,
 }
 
-/// (thread_name, thread_id, location, backtrace).
-fn take_panic_info() -> Option<(String, String, String, Backtrace)> {
+impl PanicInfo {
+    pub(crate) fn location(&self) -> String {
+        format!("{}:{}:{}", self.file, self.line, self.column)
+    }
+}
+
+thread_local! {
+    static LAST_PANIC_INFO: RefCell<Option<PanicInfo>> = const { RefCell::new(None) };
+}
+
+fn take_panic_info() -> Option<PanicInfo> {
     LAST_PANIC_INFO.with(|info| info.borrow_mut().take())
 }
 
@@ -709,15 +725,24 @@ fn init_panic_hook() {
                 .trim_start_matches("ThreadId(")
                 .trim_end_matches(')')
                 .to_string();
-            let location = info
-                .location()
-                .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
-                .unwrap_or_else(|| "<unknown>".to_string());
-
+            let loc = info.location().expect(
+                "PanicHookInfo.location() returned None. This should never happen - please open an issue!"
+            );
+            let file = loc.file().to_string();
+            let line = loc.line();
+            let column = loc.column();
             let backtrace = Backtrace::capture();
 
-            LAST_PANIC_INFO
-                .with(|l| *l.borrow_mut() = Some((thread_name, thread_id, location, backtrace)));
+            LAST_PANIC_INFO.with(|l| {
+                *l.borrow_mut() = Some(PanicInfo {
+                    thread_name,
+                    thread_id,
+                    file,
+                    line,
+                    column,
+                    backtrace,
+                })
+            });
         }));
     });
 }
@@ -1000,173 +1025,6 @@ pub fn __test_kill_server() {
     }
 }
 
-// ─── Public types ───────────────────────────────────────────────────────────
-
-/// Health checks that can be suppressed during test execution.
-///
-/// Health checks detect common issues with test configuration that would
-/// otherwise cause tests to run inefficiently or not at all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HealthCheck {
-    /// Too many test cases are being filtered out via `assume()`.
-    FilterTooMuch,
-    /// Test execution is too slow.
-    TooSlow,
-    /// Generated test cases are too large.
-    TestCasesTooLarge,
-    /// The smallest natural input is very large.
-    LargeInitialTestCase,
-}
-
-impl HealthCheck {
-    /// Returns all health check variants.
-    ///
-    /// Useful for suppressing all health checks at once:
-    ///
-    /// ```no_run
-    /// use hegel::HealthCheck;
-    ///
-    /// #[hegel::test(suppress_health_check = HealthCheck::all())]
-    /// fn my_test(tc: hegel::TestCase) {
-    ///     // ...
-    /// }
-    /// ```
-    pub const fn all() -> [HealthCheck; 4] {
-        [
-            HealthCheck::FilterTooMuch,
-            HealthCheck::TooSlow,
-            HealthCheck::TestCasesTooLarge,
-            HealthCheck::LargeInitialTestCase,
-        ]
-    }
-
-    fn as_str(&self) -> &'static str {
-        match self {
-            HealthCheck::FilterTooMuch => "filter_too_much",
-            HealthCheck::TooSlow => "too_slow",
-            HealthCheck::TestCasesTooLarge => "test_cases_too_large",
-            HealthCheck::LargeInitialTestCase => "large_initial_test_case",
-        }
-    }
-}
-
-/// Controls how much output Hegel produces during test runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Verbosity {
-    /// Suppress all output.
-    Quiet,
-    /// Default output level.
-    Normal,
-    /// Show more detail about the test run.
-    Verbose,
-    /// Show protocol-level debug information.
-    Debug,
-}
-
-/// Configuration for a Hegel test run.
-///
-/// Use builder methods to customize, then pass to [`Hegel::settings`] or
-/// the `settings` parameter of `#[hegel::test]`.
-///
-/// In CI environments (detected automatically), the database is disabled
-/// and tests are derandomized by default.
-#[derive(Debug, Clone)]
-pub struct Settings {
-    pub(crate) test_cases: u64,
-    pub(crate) verbosity: Verbosity,
-    pub(crate) seed: Option<u64>,
-    pub(crate) derandomize: bool,
-    pub(crate) database: Database,
-    pub(crate) suppress_health_check: Vec<HealthCheck>,
-}
-
-impl Settings {
-    /// Create settings with defaults. Detects CI environments automatically.
-    pub fn new() -> Self {
-        let in_ci = is_in_ci();
-        Self {
-            test_cases: 100,
-            verbosity: Verbosity::Normal,
-            seed: None,
-            derandomize: in_ci,
-            database: if in_ci {
-                Database::Disabled
-            } else {
-                Database::Unset // nocov
-            },
-            suppress_health_check: Vec::new(),
-        }
-    }
-
-    /// Set the number of test cases to run (default: 100).
-    pub fn test_cases(mut self, n: u64) -> Self {
-        self.test_cases = n;
-        self
-    }
-
-    /// Set the verbosity level.
-    pub fn verbosity(mut self, verbosity: Verbosity) -> Self {
-        self.verbosity = verbosity;
-        self
-    }
-
-    /// Set a fixed seed for reproducibility, or `None` for random.
-    pub fn seed(mut self, seed: Option<u64>) -> Self {
-        self.seed = seed;
-        self
-    }
-
-    /// When true, use a fixed seed derived from the test name. Enabled by default in CI.
-    pub fn derandomize(mut self, derandomize: bool) -> Self {
-        self.derandomize = derandomize;
-        self
-    }
-
-    /// Set the database path for storing failing examples, or `None` to disable.
-    pub fn database(mut self, database: Option<String>) -> Self {
-        self.database = match database {
-            None => Database::Disabled,
-            Some(path) => Database::Path(path),
-        };
-        self
-    }
-
-    /// Suppress one or more health checks so they do not cause test failure.
-    ///
-    /// Health checks detect common issues like excessive filtering or slow
-    /// tests. Use this to suppress specific checks when they are expected.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use hegel::{HealthCheck, Verbosity};
-    /// use hegel::generators as gs;
-    ///
-    /// #[hegel::test(suppress_health_check = [HealthCheck::FilterTooMuch, HealthCheck::TooSlow])]
-    /// fn my_test(tc: hegel::TestCase) {
-    ///     let n: i32 = tc.draw(gs::integers());
-    ///     tc.assume(n > 0);
-    /// }
-    /// ```
-    pub fn suppress_health_check(mut self, checks: impl IntoIterator<Item = HealthCheck>) -> Self {
-        self.suppress_health_check.extend(checks);
-        self
-    }
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Database {
-    Unset,
-    Disabled,
-    Path(String),
-}
-
 // ─── Hegel test builder ─────────────────────────────────────────────────────
 
 // internal use only
@@ -1176,27 +1034,6 @@ where
     F: FnMut(TestCase),
 {
     Hegel::new(test_fn).run();
-}
-
-fn is_in_ci() -> bool {
-    const CI_VARS: &[(&str, Option<&str>)] = &[
-        ("CI", None),
-        ("TF_BUILD", Some("true")),
-        ("BUILDKITE", Some("true")),
-        ("CIRCLECI", Some("true")),
-        ("CIRRUS_CI", Some("true")),
-        ("CODEBUILD_BUILD_ID", None),
-        ("GITHUB_ACTIONS", Some("true")),
-        ("GITLAB_CI", None),
-        ("HEROKU_TEST_RUN_ID", None),
-        ("TEAMCITY_VERSION", None),
-        ("bamboo.buildKey", None),
-    ];
-
-    CI_VARS.iter().any(|(key, value)| match value {
-        None => std::env::var_os(key).is_some(),
-        Some(expected) => std::env::var(key).ok().as_deref() == Some(expected),
-    })
 }
 
 // internal use only
@@ -1255,6 +1092,27 @@ where
             self.database_key.as_deref(),
             &mut |backend, is_final| {
                 let tc_result = run_test_case(backend, &mut test_fn, is_final);
+                if let TestCaseResult::InternalError {
+                    panic_message,
+                    panic_info,
+                } = &tc_result
+                {
+                    let mut msg = format!(
+                        "hegel internal error at {}:\n{}\n",
+                        panic_info.location(),
+                        panic_message,
+                    );
+                    if panic_info.backtrace.status() == BacktraceStatus::Captured {
+                        let is_full = std::env::var("RUST_BACKTRACE")
+                            .map(|v| v == "full")
+                            .unwrap_or(false);
+                        msg.push_str(&format!(
+                            "\noriginal backtrace:\n{}\n",
+                            format_backtrace(&panic_info.backtrace, is_full),
+                        ));
+                    }
+                    panic!("{}", msg);
+                }
                 if matches!(&tc_result, TestCaseResult::Interesting { .. }) {
                     got_interesting.store(true, Ordering::SeqCst);
                 }
@@ -1306,32 +1164,36 @@ fn run_test_case(
             } else if msg == STOP_TEST_STRING {
                 (TestCaseResult::Overrun, None)
             } else {
-                // Take panic info - we need location for origin, and print details on final
-                let (thread_name, thread_id, location, backtrace) = take_panic_info()
-                    .unwrap_or_else(|| {
-                        // nocov start
-                        (
-                            "<unknown>".to_string(),
-                            "?".to_string(),
-                            "<unknown>".to_string(),
-                            Backtrace::disabled(),
-                        )
-                        // nocov end
-                    });
+                let panic_info = take_panic_info()
+                    // nocov start
+                    .expect(
+                        "Expected panic info, but got None. This should never happen - please open an issue!"
+                    );
+                // nocov end
+
+                // immediately propagate internal errors
+                if crate::utils::is_hegel_file(&panic_info.file) {
+                    return TestCaseResult::InternalError {
+                        panic_message: msg,
+                        panic_info,
+                    };
+                }
 
                 if is_final {
                     eprintln!(
                         "thread '{}' ({}) panicked at {}:",
-                        thread_name, thread_id, location
+                        panic_info.thread_name,
+                        panic_info.thread_id,
+                        panic_info.location()
                     );
                     eprintln!("{}", msg);
 
                     // nocov start
-                    if backtrace.status() == BacktraceStatus::Captured {
+                    if panic_info.backtrace.status() == BacktraceStatus::Captured {
                         let is_full = std::env::var("RUST_BACKTRACE")
                             .map(|v| v == "full")
                             .unwrap_or(false);
-                        let formatted = format_backtrace(&backtrace, is_full);
+                        let formatted = format_backtrace(&panic_info.backtrace, is_full);
                         eprintln!("stack backtrace:\n{}", formatted);
                         if !is_full {
                             eprintln!(
@@ -1342,7 +1204,7 @@ fn run_test_case(
                     // nocov end
                 }
 
-                let origin = format!("Panic at {}", location);
+                let origin = format!("Panic at {}", panic_info.location());
                 (
                     TestCaseResult::Interesting { panic_message: msg },
                     Some(origin),
@@ -1358,6 +1220,7 @@ fn run_test_case(
             TestCaseResult::Valid => "VALID",
             TestCaseResult::Invalid | TestCaseResult::Overrun => "INVALID",
             TestCaseResult::Interesting { .. } => "INTERESTING",
+            TestCaseResult::InternalError { .. } => unreachable!(),
         };
         tc.data_source().mark_complete(status, origin.as_deref());
     }

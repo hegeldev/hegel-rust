@@ -15,7 +15,7 @@ fn test_is_in_ci_some_expected_variant() {
         std::env::remove_var("CI");
         std::env::set_var("TF_BUILD", "true");
     }
-    let result = is_in_ci();
+    let result = crate::settings::is_in_ci();
     unsafe {
         std::env::remove_var("TF_BUILD");
         if let Some(val) = ci {
