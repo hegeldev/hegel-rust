@@ -578,7 +578,6 @@ impl NativeTestCase {
     }
 
     fn pre_choice(&mut self) -> Result<(), StopTest> {
-        panic!("CANARY:src/native/core/state.rs:431");
         if self.status.is_some() {
             panic!("Frozen: attempted choice on completed test case");
         }
