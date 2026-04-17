@@ -22,18 +22,15 @@ pub struct TestLocation {
 pub(crate) fn is_running_in_antithesis() -> bool {
     // Antithesis only supports Linux; skip the check entirely on Windows.
     #[cfg(not(windows))]
-    match std::env::var("ANTITHESIS_OUTPUT_DIR") {
-        // nocov start
-        Ok(output_dir) => {
-            assert!(
-                Path::new(&output_dir).exists(),
-                "Expected ANTITHESIS_OUTPUT_DIR={output_dir} to exist when running inside of Antithesis"
-            );
-            return true;
-        }
-        // nocov end
-        Err(_) => {}
+    // nocov start
+    if let Ok(output_dir) = std::env::var("ANTITHESIS_OUTPUT_DIR") {
+        assert!(
+            Path::new(&output_dir).exists(),
+            "Expected ANTITHESIS_OUTPUT_DIR={output_dir} to exist when running inside of Antithesis"
+        );
+        return true;
     }
+    // nocov end
     false
 }
 
