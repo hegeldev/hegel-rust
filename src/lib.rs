@@ -264,11 +264,7 @@ pub use antithesis::TestLocation;
 /// #[hegel::test]
 /// fn generates_statuses(tc: hegel::TestCase) {
 ///     let generator = gs::default::<Status>()
-///         .Active(
-///             gs::default::<Status>()
-///                 .default_Active()
-///                 .since(gs::text().max_size(20))
-///         );
+///         .active(|g| g.since(gs::text().max_size(20)));
 ///     let status: Status = tc.draw(generator);
 /// }
 /// ```
