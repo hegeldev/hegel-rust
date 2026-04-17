@@ -121,12 +121,6 @@ impl<T, G: Generator<T>> Generator<T> for &G {
     fn do_draw(&self, tc: &TestCase) -> T {
         (*self).do_draw(tc)
     }
-
-    // nocov start
-    fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
-        (*self).as_basic()
-        // nocov end
-    }
 }
 
 /// Result of [`Generator::map`]. Preserves the schema when possible.

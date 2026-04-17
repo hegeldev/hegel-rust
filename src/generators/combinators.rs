@@ -10,24 +10,13 @@ pub struct SampledFromGenerator<T> {
 
 impl<T: Clone + Send + Sync> Generator<T> for SampledFromGenerator<T> {
     fn do_draw(&self, tc: &TestCase) -> T {
-        if let Some(basic) = self.as_basic() {
-            return basic.do_draw(tc);
-        }
-
-        // nocov start
-        let indices = integers::<usize>()
-            .min_value(0)
-            .max_value(self.elements.len() - 1);
-        let index = indices.do_draw(tc);
-        self.elements[index].clone()
-        // nocov end
+        let Some(basic) = self.as_basic() else {
+            unreachable!("SampledFromGenerator is always basic")
+        };
+        basic.do_draw(tc)
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
-        if self.elements.is_empty() {
-            return None; // nocov
-        }
-
         let schema = cbor_map! {
             "type" => "integer",
             "min_value" => 0u64,
