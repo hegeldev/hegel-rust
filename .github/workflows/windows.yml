@@ -49,8 +49,8 @@ jobs:
           HEGEL_SERVER_COMMAND: ${{ steps.hegel.outputs.path }}
         run: cargo test
 
-  test-all-features:
-    name: test-all-features (${{ matrix.rust }})
+  test-extra-features:
+    name: test-extra-features (${{ matrix.rust }})
     runs-on: windows-latest
     permissions:
       contents: read
@@ -79,8 +79,10 @@ jobs:
           $hegelPath = (Get-Command hegel).Source
           echo "path=$hegelPath" >> $env:GITHUB_OUTPUT
 
-      - name: Run tests with all features
+      # Use --features rand instead of --all-features because the antithesis
+      # feature is not supported on Windows (compile_error!).
+      - name: Run tests with extra features
         env:
           RUST_BACKTRACE: "1"
           HEGEL_SERVER_COMMAND: ${{ steps.hegel.outputs.path }}
-        run: cargo test --all-features
+        run: cargo test --features rand
