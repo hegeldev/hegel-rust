@@ -12,4 +12,8 @@ finish them and move them to the Completed section.
 
 ## Pending
 
+- [ ] **E2E orchestrator marker test**: Create a file `E2E_MARKER.md` at the repo root containing the single line `e2e merge test marker`.
+
+  Acceptance: `test -f E2E_MARKER.md && grep -qx 'e2e merge test marker' E2E_MARKER.md`
+
 ## Completed
