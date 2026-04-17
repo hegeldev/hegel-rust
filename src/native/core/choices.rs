@@ -153,11 +153,8 @@ impl FloatChoice {
             return f64::NEG_INFINITY;
         }
         if self.allow_nan {
-            panic!("CANARY:src/native/core/choices.rs:155");
-            panic!("CANARY:src/native/core/choices.rs:156");
             return f64::NAN;
         }
-        panic!("CANARY:src/native/core/choices.rs:158");
         panic!("FloatChoice::simplest: no valid float for this choice")
     }
 
@@ -167,7 +164,6 @@ impl FloatChoice {
 
         let s = self.simplest();
         if s.is_nan() {
-            panic!("CANARY:src/native/core/choices.rs:167");
             return s;
         }
         let base = float_to_index(s.abs());
@@ -291,12 +287,18 @@ pub struct StringChoice {
 
 impl StringChoice {
     /// Return the simplest codepoint in [min_codepoint, min(max_codepoint, 127)]
-    /// under [`codepoint_key`] ordering, or `min_codepoint` if the range has
-    /// no ASCII overlap.
+    /// under [`codepoint_key`] ordering, or the smallest non-surrogate codepoint
+    /// at or above `min_codepoint` (clamped to `max_codepoint`) if the range has
+    /// no ASCII overlap. Guaranteed to be a valid non-surrogate scalar value.
     fn simplest_codepoint(&self) -> u32 {
         let upper = self.max_codepoint.min(127);
         if self.min_codepoint > upper {
-            return self.min_codepoint;
+            // No ASCII in range; pick the smallest non-surrogate codepoint.
+            if self.min_codepoint < 0xD800 || self.min_codepoint > 0xDFFF {
+                return self.min_codepoint;
+            }
+            // min_codepoint falls inside the surrogate block; step past it.
+            return 0xE000u32.min(self.max_codepoint);
         }
         let mut best = self.min_codepoint;
         let mut best_key = codepoint_key(best);
@@ -310,35 +312,44 @@ impl StringChoice {
         best
     }
 
+    /// The simplest codepoint in range, as a `char`. Guaranteed valid because
+    /// `simplest_codepoint` never returns a surrogate.
+    pub(crate) fn simplest_char(&self) -> char {
+        char::from_u32(self.simplest_codepoint())
+            .expect("simplest_codepoint returns a valid scalar value")
+    }
+
     /// The simplest string of length `min_size`, built from repeated
     /// [`simplest_codepoint`].
     pub fn simplest(&self) -> String {
-        let cp = self.simplest_codepoint();
-        let ch = char::from_u32(cp).unwrap_or('\u{0}');
-        ch.to_string().repeat(self.min_size)
+        self.simplest_char().to_string().repeat(self.min_size)
     }
 
     /// Second-simplest string, used for type-punning during replay.
     pub fn unit(&self) -> String {
-        let second_cp = {
-            let candidate = key_to_codepoint(1);
-            if self.min_codepoint <= candidate && candidate <= self.max_codepoint {
-                candidate
-            } else {
-                self.min_codepoint
-            }
+        // Pick the "second-simplest" codepoint under codepoint_key ordering,
+        // falling back to the simplest codepoint if that lies outside the range
+        // or inside the surrogate block.
+        let candidate = key_to_codepoint(1);
+        let second_cp = if self.min_codepoint <= candidate
+            && candidate <= self.max_codepoint
+            && !(0xD800..=0xDFFF).contains(&candidate)
+        {
+            candidate
+        } else {
+            self.simplest_codepoint()
         };
+        let second_ch =
+            char::from_u32(second_cp).expect("second_cp is a validated non-surrogate scalar value");
 
         // Single-codepoint alphabet → lengthen if possible, else simplest.
-        if second_cp == key_to_codepoint(0) && self.min_codepoint == self.max_codepoint {
+        if second_cp == self.simplest_codepoint() {
             if self.min_size < self.max_size {
-                let ch = char::from_u32(self.min_codepoint).unwrap_or('\u{0}');
-                return ch.to_string().repeat(self.min_size + 1);
+                return self.simplest_char().to_string().repeat(self.min_size + 1);
             }
             return self.simplest();
         }
 
-        let second_ch = char::from_u32(second_cp).unwrap_or('\u{0}');
         if self.min_size > 0 {
             let mut s = self.simplest();
             // Replace the last char with the second-simplest codepoint.
@@ -400,10 +411,7 @@ impl PartialEq for ChoiceValue {
             (ChoiceValue::Float(a), ChoiceValue::Float(b)) => a.to_bits() == b.to_bits(),
             (ChoiceValue::Bytes(a), ChoiceValue::Bytes(b)) => a == b,
             (ChoiceValue::String(a), ChoiceValue::String(b)) => a == b,
-            _ => {
-                panic!("CANARY:src/native/core/choices.rs:236");
-                false
-            }
+            _ => false,
         }
     }
 }

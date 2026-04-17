@@ -283,7 +283,6 @@ impl NativeTestCase {
         let forced_value = forced.or(if p <= 0.0 {
             Some(false)
         } else if p >= 1.0 {
-            panic!("CANARY:src/native/core/state.rs:286");
             Some(true)
         } else {
             None
@@ -513,7 +512,7 @@ impl NativeTestCase {
         // counterexamples).
         let nasty: Vec<String> = {
             let simplest = kind.simplest();
-            let simplest_char = simplest.chars().next().unwrap_or('\u{0}');
+            let simplest_char = kind.simplest_char();
             let mut v = vec![simplest.clone()];
             if min_size == 0 && max_size > 0 {
                 v.push(String::new());
