@@ -62,8 +62,7 @@ fn test_one_of_with_different_types_via_map(tc: TestCase) {
 
 #[hegel::test]
 fn test_one_of_many(tc: TestCase) {
-    let generators = (0..10).map(|i| gs::just(i).boxed()).collect();
-    let value = tc.draw(gs::one_of(generators));
+    let value = tc.draw(gs::one_of((0..10).map(|i| gs::just(i).boxed())));
     assert!((0..10).contains(&value));
 }
 
@@ -108,6 +107,22 @@ fn test_boxed_generator_double_boxed(tc: TestCase) {
     let gen2 = gen1.boxed();
     let value = tc.draw(gen2);
     assert!((0..=10).contains(&value));
+}
+
+#[hegel::test]
+fn test_sampled_from_accepts_slice(tc: TestCase) {
+    // Pass a borrowed slice directly — no `.to_vec()` or `.iter().collect()` needed.
+    const NAMES: &[&str] = &["alice", "bob", "carol"];
+    let value = tc.draw(gs::sampled_from(NAMES));
+    assert!(NAMES.contains(&value));
+}
+
+#[hegel::test]
+fn test_sampled_from_accepts_array(tc: TestCase) {
+    // Pass a borrowed fixed-size array — coerces to &[T].
+    let options = [1i32, 2, 3, 4, 5];
+    let value = tc.draw(gs::sampled_from(&options));
+    assert!(options.contains(&value));
 }
 
 #[hegel::test]

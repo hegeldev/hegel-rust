@@ -178,13 +178,13 @@ fn test_domains_max_length_too_small() {
 #[test]
 #[should_panic(expected = "sampled_from cannot be empty")]
 fn test_sampled_from_empty() {
-    let _g = gs::sampled_from::<i32>(vec![]);
+    let _g = gs::sampled_from(Vec::<i32>::new());
 }
 
 #[test]
 #[should_panic(expected = "one_of requires at least one generator")]
 fn test_one_of_empty() {
-    let _g = gs::one_of::<i32>(vec![]);
+    let _g = gs::one_of(Vec::<hegel::generators::BoxedGenerator<'_, i32>>::new());
 }
 
 // --- server-side error handling ---
