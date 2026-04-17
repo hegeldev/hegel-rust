@@ -26,7 +26,6 @@ impl IntegerChoice {
         if self.validate(s + 1) {
             s + 1
         } else if self.validate(s - 1) {
-            panic!("CANARY:src/native/core/choices.rs:29");
             s - 1
         } else {
             s
