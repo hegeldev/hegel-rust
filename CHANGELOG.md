@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1 - 2026-04-17
+
+Added more code examples in the documentation.
+
 ## 0.6.0 - 2026-04-17
 
 This release loosens the argument types of `sampled_from()` and `one_of()` so callers don't have to pre-materialize a `Vec`.

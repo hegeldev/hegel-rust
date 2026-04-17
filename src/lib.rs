@@ -78,7 +78,7 @@
 //! primitive generators, such as [`integers`](generators::integers),
 //! [`floats`](generators::floats), and [`text`](generators::text), and combinators that allow
 //! you to make generators out of other generators, such as [`vecs`](generators::vecs) and
-//! `tuples`.
+//! [`tuples`].
 //!
 //! For example, you can use [`vecs`](generators::vecs) to generate a vector of integers:
 //!

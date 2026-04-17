@@ -225,7 +225,7 @@ where
 /// # Example
 ///
 /// ```ignore
-/// // In your crate:
+/// // Externally defined
 /// pub struct Person {
 ///     pub name: String,
 ///     pub age: u32,
