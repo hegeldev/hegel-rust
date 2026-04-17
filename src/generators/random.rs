@@ -82,6 +82,8 @@ impl TryRng for HegelRandom {
 
 /// Creates a generator for random number generators.
 ///
+/// See [`RandomsGenerator`] for builder methods.
+///
 /// ```no_run
 /// use hegel::generators as gs;
 /// use rand::RngExt;

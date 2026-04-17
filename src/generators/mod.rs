@@ -1,10 +1,10 @@
 //! Generators for producing test data.
 //!
-//! Each generator is created via a factory function (e.g. [`integers()`], [`text()`])
-//! that returns a builder struct. Most builders have methods for constraining the
-//! output (e.g. `min_value`, `max_size`). All builders implement [`Generator<T>`],
-//! which provides combinators like [`map`](Generator::map), [`filter`](Generator::filter),
-//! and [`flat_map`](Generator::flat_map).
+//! Start with the [factory functions below](#functions) — each one returns a builder.
+//! Most builders have methods for constraining the output (e.g. `.min_value()`, `.max_size()`).
+//! All generators implement [`Generator<T>`], which provides combinators like
+//! [`map`](Generator::map), [`filter`](Generator::filter), and
+//! [`flat_map`](Generator::flat_map).
 
 mod collections;
 mod combinators;

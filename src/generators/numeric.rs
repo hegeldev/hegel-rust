@@ -95,8 +95,9 @@ impl<T: Integer + serde::de::DeserializeOwned + serde::Serialize + Send + Sync +
 
 /// Generate integers of type `T`.
 ///
-/// Bounds default to the full range of `T`. Use `min_value` and `max_value`
-/// to constrain them.
+/// Bounds default to the full range of `T`. Use the builder methods `min_value`
+/// and `max_value` to constrain the range. See [`IntegerGenerator`] for more
+/// details.
 pub fn integers<
     T: Integer + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static,
 >() -> IntegerGenerator<T> {
@@ -225,9 +226,23 @@ impl<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + '
 }
 
 /// Generate floating-point values of type `T`.
+/// Use the builder methods `min_value`, `max_value`, `allow_nan`, and
+/// `allow_infinity` to constrain the output. By default, may produce NaN and
+/// infinity. See [`FloatGenerator`] for more details.
 ///
-/// By default, may produce NaN and infinity. Use `min_value`, `max_value`,
-/// `allow_nan`, and `allow_infinity` to constrain the output.
+/// # Example
+///
+/// ```no_run
+/// use hegel::generators as gs;
+///
+/// #[hegel::test]
+/// fn my_test(tc: hegel::TestCase) {
+///     let x: f64 = tc.draw(gs::floats()
+///         .min_value(0.0)
+///         .max_value(1.0));
+///     assert!((0.0..=1.0).contains(&x));
+/// }
+/// ```
 pub fn floats<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static>()
 -> FloatGenerator<T> {
     FloatGenerator {

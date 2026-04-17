@@ -65,6 +65,15 @@ pub trait Generator<T>: Send + Sync {
     ///
     /// When the source generator has a schema (i.e. `as_basic()` returns `Some`),
     /// the schema is preserved and the function is composed into the parse step.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators::{self as gs, Generator};
+    ///
+    /// // Generate even integers by doubling
+    /// let evens = gs::integers::<i32>().map(|n| n * 2);
+    /// ```
     fn map<U, F>(self, f: F) -> Mapped<T, U, F, Self>
     where
         Self: Sized,
@@ -78,6 +87,20 @@ pub trait Generator<T>: Send + Sync {
     }
 
     /// Generate a value, then use it to choose or configure another generator.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators::{self as gs, Generator};
+    ///
+    /// // Generate a length, then a vec of exactly that length
+    /// let generator = gs::integers::<usize>()
+    ///     .min_value(1)
+    ///     .max_value(10)
+    ///     .flat_map(|len| gs::vecs(gs::integers::<i32>())
+    ///         .min_size(len)
+    ///         .max_size(len));
+    /// ```
     fn flat_map<U, G, F>(self, f: F) -> FlatMapped<T, U, G, F, Self>
     where
         Self: Sized,
@@ -94,6 +117,15 @@ pub trait Generator<T>: Send + Sync {
     /// Only keep generated values that satisfy the predicate.
     ///
     /// Retries up to 3 times, then calls `assume(false)` to reject the test case.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators::{self as gs, Generator};
+    ///
+    /// // Generate integers, then filter out the even ones
+    /// let odds = gs::integers::<i32>().filter(|n| n % 2 != 0);
+    /// ```
     fn filter<F>(self, predicate: F) -> Filtered<T, F, Self>
     where
         Self: Sized,
@@ -107,6 +139,24 @@ pub trait Generator<T>: Send + Sync {
     }
 
     /// Convert this generator into a type-erased boxed generator.
+    ///
+    /// This is needed when you have generators of different concrete types
+    /// but the same output type and need to store them together, e.g. in a
+    /// `Vec` or when passing to [`one_of()`](super::one_of).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators::{self as gs, Generator};
+    ///
+    /// // Different generator types producing the same output type —
+    /// // boxing lets them be stored in a vec and passed to one_of
+    /// let generator = vec![
+    ///     gs::integers::<i32>().min_value(0).max_value(10).boxed(),
+    ///     gs::integers::<i32>().map(|n| n * 100).boxed(),
+    ///     gs::sampled_from(vec![1, 2, 3]).boxed(),
+    /// ];
+    /// ```
     fn boxed<'a>(self) -> BoxedGenerator<'a, T>
     where
         Self: Sized + Send + Sync + 'a,
