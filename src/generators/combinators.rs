@@ -1,14 +1,15 @@
 use super::{BasicGenerator, BoxedGenerator, Generator, TestCase, integers, labels};
 use crate::cbor_utils::{cbor_array, cbor_map};
 use ciborium::Value;
+use std::borrow::Cow;
 use std::marker::PhantomData;
 
 /// Generator that picks from a fixed list of values. Created by [`sampled_from()`].
-pub struct SampledFromGenerator<T> {
-    elements: Vec<T>,
+pub struct SampledFromGenerator<'a, T: Clone> {
+    elements: Cow<'a, [T]>,
 }
 
-impl<T: Clone + Send + Sync> Generator<T> for SampledFromGenerator<T> {
+impl<'a, T: Clone + Send + Sync + 'a> Generator<T> for SampledFromGenerator<'a, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
         if let Some(basic) = self.as_basic() {
             return basic.do_draw(tc);
@@ -33,7 +34,7 @@ impl<T: Clone + Send + Sync> Generator<T> for SampledFromGenerator<T> {
             "min_value" => 0u64,
             "max_value" => (self.elements.len() - 1) as u64
         };
-        let elements = self.elements.clone();
+        let elements: &[T] = &self.elements;
         Some(BasicGenerator::new(schema, move |raw| {
             let index: usize = super::deserialize_value(raw);
             elements[index].clone()
@@ -43,8 +44,18 @@ impl<T: Clone + Send + Sync> Generator<T> for SampledFromGenerator<T> {
 
 /// Pick uniformly from a fixed list of values.
 ///
+/// Accepts anything convertible into `Cow<[T]>`, including:
+/// - `Vec<T>` (consumed without re-allocation)
+/// - `&[T]` where `T: Clone` (borrowed, zero allocation)
+/// - `&Vec<T>` or `&[T; N]` (via coercion to `&[T]`)
+///
 /// Panics if `elements` is empty.
-pub fn sampled_from<T: Clone + Send + Sync>(elements: Vec<T>) -> SampledFromGenerator<T> {
+pub fn sampled_from<'a, T, S>(elements: S) -> SampledFromGenerator<'a, T>
+where
+    T: Clone + Send + Sync,
+    S: Into<Cow<'a, [T]>>,
+{
+    let elements = elements.into();
     assert!(
         !elements.is_empty(),
         "Collection passed to sampled_from cannot be empty"
@@ -116,8 +127,14 @@ impl<T> Generator<T> for OneOfGenerator<'_, T> {
 
 /// Choose from multiple generators of the same type.
 ///
-/// For a more convenient syntax, use the `one_of!` macro instead.
-pub fn one_of<T>(generators: Vec<BoxedGenerator<'_, T>>) -> OneOfGenerator<'_, T> {
+/// Accepts any iterable of boxed generators (e.g. `Vec<BoxedGenerator<T>>`
+/// or an iterator chain). For a more convenient syntax, use the `one_of!`
+/// macro instead.
+pub fn one_of<'a, T, I>(generators: I) -> OneOfGenerator<'a, T>
+where
+    I: IntoIterator<Item = BoxedGenerator<'a, T>>,
+{
+    let generators: Vec<BoxedGenerator<'a, T>> = generators.into_iter().collect();
     assert!(
         !generators.is_empty(),
         "one_of requires at least one generator"
