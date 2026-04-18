@@ -7,4 +7,5 @@ mod common;
 mod findability_arithmetic;
 mod generators;
 mod shrink_quality_strings;
+mod spans;
 mod text;

@@ -7,36 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Port pbtkit/test_spans.py (native-gated span introspection)
-  details: |
-    Previously skipped for relying on engine-internal span APIs
-    (`tc.spans`, `tc.nodes`, `PbtkitState`, `_span_mutation_hook`).
-    The current skip policy (`.claude/skills/porting-tests/SKILL.md`)
-    says engine-internal gaps are the reason to PORT, not the reason
-    to skip — native-gate the test and, if any bits are missing under
-    `src/native/`, stub them with `todo!(...)`.
-
-    Hegel-rust's native engine already has:
-    - span tracking (`Span` list on `state`, see `src/native/core/state.rs`
-      and `src/native/tree.rs`),
-    - `TestCase::for_choices` equivalents (check `src/native/core/state.rs`),
-    - `try_span_mutation` (see `src/native/runner.rs`), which mirrors
-      pbtkit's `_span_mutation_hook`.
-
-    Destination: `tests/pbtkit/spans.rs` with `#![cfg(feature = "native")]`
-    at the top (all six tests are engine-internal). Reach for the
-    embedded-test pattern (`tests/embedded/native/...`) only if you need
-    access to private internals — span values on a `TestCase` should be
-    reachable through whatever native-mode API mirrors `tc.spans` /
-    `tc.nodes`; if that API is `pub(crate)`, use the embedded pattern.
-
-    Acceptance:
-    - `cargo test --features native --test pbtkit spans` builds and either
-      passes or fails with a `todo!()` from `src/native/...`. No `todo!()`
-      in the test body.
-    - `SKIPPED.md` entry for `test_spans.py` has already been removed;
-      don't re-add it.
-
 - title: Port pbtkit/test_choice_index.py (native-gated to_index/from_index)
   details: |
     Previously skipped on "hegel-rust doesn't implement an index-based
