@@ -587,3 +587,7 @@ fn hash_string(s: &str) -> u64 {
     }
     hash
 }
+
+#[cfg(test)]
+#[path = "../../tests/embedded/native/runner_tests.rs"]
+mod tests;
