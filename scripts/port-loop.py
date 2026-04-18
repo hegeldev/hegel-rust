@@ -277,8 +277,8 @@ def main() -> int:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=None,
-        help="Per-claude-call timeout in seconds (default: unlimited).",
+        default=600,
+        help="Per-claude-call timeout in seconds (default: 600s = 10 minutes).",
     )
     args = parser.parse_args()
 
