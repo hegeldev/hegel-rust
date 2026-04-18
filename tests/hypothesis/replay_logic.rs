@@ -34,7 +34,7 @@ fn test_does_not_shrink_on_replay() {
         run_expecting_failure(std::panic::AssertUnwindSafe(move || {
             Hegel::new(move |tc: TestCase| {
                 let ls: Vec<i64> =
-                    tc.draw(&gs::vecs(gs::integers::<i64>()).min_size(3).unique(true));
+                    tc.draw(gs::vecs(gs::integers::<i64>()).min_size(3).unique(true));
                 {
                     let mut first = is_first.lock().unwrap();
                     let mut last = last.lock().unwrap();
@@ -83,7 +83,7 @@ fn test_will_always_shrink_if_previous_example_does_not_replay() {
         let db_path_cl = db_path.clone();
         run_expecting_failure(std::panic::AssertUnwindSafe(move || {
             Hegel::new(move |tc: TestCase| {
-                let n: i64 = tc.draw(&gs::integers::<i64>().min_value(0));
+                let n: i64 = tc.draw(gs::integers::<i64>().min_value(0));
                 if !good_cl.lock().unwrap().contains(&n) {
                     *last_cl.lock().unwrap() = Some(n);
                     panic!("boom");
@@ -117,10 +117,10 @@ fn test_will_shrink_if_the_previous_example_does_not_look_right() {
         let db_path = db_path.clone();
         run_expecting_failure(std::panic::AssertUnwindSafe(move || {
             Hegel::new(move |tc: TestCase| {
-                let m: i64 = tc.draw(&gs::integers::<i64>());
+                let m: i64 = tc.draw(gs::integers::<i64>());
                 *last.lock().unwrap() = Some(m);
                 if *first_test.lock().unwrap() {
-                    tc.draw(&gs::integers::<i64>());
+                    tc.draw(gs::integers::<i64>());
                     assert!(m < 10000);
                 } else {
                     panic!("boom");
