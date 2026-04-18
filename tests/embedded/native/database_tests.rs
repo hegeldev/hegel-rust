@@ -489,3 +489,126 @@ fn test_in_memory_move_uses_default_trait_impl() {
     assert!(db.fetch(b"src").is_empty());
     assert_eq!(db.fetch(b"dst"), vec![b"v".to_vec()]);
 }
+
+// ── ReadOnlyNativeDatabase ─────────────────────────────────────────────────
+//
+// Mirrors `test_readonly_db_is_not_writable` in Hypothesis's
+// `test_database_backend.py`.
+
+#[test]
+fn test_readonly_db_is_not_writable() {
+    let inner = std::sync::Arc::new(InMemoryNativeDatabase::new());
+    inner.save(b"key", b"value");
+    inner.save(b"key", b"value2");
+    let wrapped = ReadOnlyNativeDatabase::new(inner.clone());
+    wrapped.delete(b"key", b"value");
+    wrapped.move_value(b"key", b"key2", b"value2");
+    wrapped.save(b"key", b"value3");
+    let mut got = wrapped.fetch(b"key");
+    got.sort();
+    assert_eq!(got, vec![b"value".to_vec(), b"value2".to_vec()]);
+    assert!(wrapped.fetch(b"key2").is_empty());
+    // Inner database is unchanged by the wrapper's writes.
+    let mut got = inner.fetch(b"key");
+    got.sort();
+    assert_eq!(got, vec![b"value".to_vec(), b"value2".to_vec()]);
+    assert!(inner.fetch(b"key2").is_empty());
+}
+
+#[test]
+fn test_readonly_db_forwards_fetch() {
+    let inner = InMemoryNativeDatabase::new();
+    inner.save(b"k", b"v");
+    let wrapped = ReadOnlyNativeDatabase::new(inner);
+    assert_eq!(wrapped.fetch(b"k"), vec![b"v".to_vec()]);
+}
+
+// ── MultiplexedNativeDatabase ──────────────────────────────────────────────
+//
+// Mirrors `test_multiplexed_dbs_read_and_write_all`.
+
+#[test]
+fn test_multiplexed_dbs_read_and_write_all() {
+    use std::sync::Arc;
+    let a = Arc::new(InMemoryNativeDatabase::new());
+    let b = Arc::new(InMemoryNativeDatabase::new());
+    let multi = MultiplexedNativeDatabase::new(vec![
+        a.clone() as Arc<dyn ExampleDatabase>,
+        b.clone() as Arc<dyn ExampleDatabase>,
+    ]);
+    a.save(b"a", b"aa");
+    b.save(b"b", b"bb");
+    multi.save(b"c", b"cc");
+    multi.move_value(b"a", b"b", b"aa");
+    let dbs: [&dyn ExampleDatabase; 3] = [a.as_ref(), b.as_ref(), &multi];
+    for db in &dbs {
+        assert!(db.fetch(b"a").is_empty());
+        assert_eq!(db.fetch(b"c"), vec![b"cc".to_vec()]);
+    }
+    let got = multi.fetch(b"b");
+    assert_eq!(got.len(), 2);
+    let mut got_sorted = got.clone();
+    got_sorted.sort();
+    assert_eq!(got_sorted, vec![b"aa".to_vec(), b"bb".to_vec()]);
+    multi.delete(b"c", b"cc");
+    for db in &dbs {
+        assert!(db.fetch(b"c").is_empty());
+    }
+}
+
+#[test]
+fn test_multiplexed_fetch_deduplicates_across_dbs() {
+    use std::sync::Arc;
+    let a = Arc::new(InMemoryNativeDatabase::new());
+    let b = Arc::new(InMemoryNativeDatabase::new());
+    a.save(b"k", b"v");
+    b.save(b"k", b"v");
+    let multi = MultiplexedNativeDatabase::new(vec![
+        a.clone() as Arc<dyn ExampleDatabase>,
+        b.clone() as Arc<dyn ExampleDatabase>,
+    ]);
+    assert_eq!(multi.fetch(b"k"), vec![b"v".to_vec()]);
+}
+
+// ── BackgroundWriteNativeDatabase ──────────────────────────────────────────
+//
+// Mirrors `test_background_write_database`.
+
+#[test]
+fn test_background_write_database() {
+    let db = BackgroundWriteNativeDatabase::new(InMemoryNativeDatabase::new());
+    db.save(b"a", b"b");
+    db.save(b"a", b"c");
+    db.save(b"a", b"d");
+    let mut got = db.fetch(b"a");
+    got.sort();
+    assert_eq!(got, vec![b"b".to_vec(), b"c".to_vec(), b"d".to_vec()]);
+
+    db.move_value(b"a", b"a2", b"b");
+    let mut got = db.fetch(b"a");
+    got.sort();
+    assert_eq!(got, vec![b"c".to_vec(), b"d".to_vec()]);
+    assert_eq!(db.fetch(b"a2"), vec![b"b".to_vec()]);
+
+    db.delete(b"a", b"c");
+    assert_eq!(db.fetch(b"a"), vec![b"d".to_vec()]);
+}
+
+#[test]
+fn test_background_write_flushes_on_drop() {
+    // Ensure that enqueued writes are flushed to the inner database
+    // before the wrapper is dropped. Using an `Arc<InMemoryNativeDatabase>`
+    // as the backing store lets us inspect state after the wrapper goes
+    // away.
+    use std::sync::Arc;
+    let inner = Arc::new(InMemoryNativeDatabase::new());
+    {
+        let bg = BackgroundWriteNativeDatabase::new(inner.clone());
+        bg.save(b"k", b"v1");
+        bg.save(b"k", b"v2");
+        // Do not call fetch — rely on Drop to flush.
+    }
+    let mut got = inner.fetch(b"k");
+    got.sort();
+    assert_eq!(got, vec![b"v1".to_vec(), b"v2".to_vec()]);
+}
