@@ -39,3 +39,9 @@ file and treats listed files as "done".
 - `test_posonly_args_py38.py` — tests Python 3.8 positional-only arg
   syntax (`/`) on `@st.composite` and `st.builds()`; both are
   Python-syntax / Python-API specific with no Rust counterpart.
+- `test_lookup_py38.py` — tests `from_type()` resolution of Python typing
+  constructs (`typing.Final`, `typing.Literal`, `typing.TypedDict`,
+  `typing.Protocol`), Python positional-only/keyword-only arg syntax,
+  and Python reflection helpers (`convert_positional_arguments`,
+  `get_pretty_function_description`); all Python-API specific with no
+  Rust counterpart.
