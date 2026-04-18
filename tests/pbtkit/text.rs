@@ -1,25 +1,24 @@
 //! Ported from resources/pbtkit/tests/test_text.py.
 //!
-//! Individually omitted:
-//! - `test_string_single_codepoint_unit`, `test_string_validate`: already
-//!   ported as embedded tests in tests/embedded/native/choices_tests.rs.
-//! - `test_string_from_index_out_of_range`, `test_string_from_index_past_end`,
-//!   `test_string_codepoint_rank_with_surrogates`: exercise pbtkit's
-//!   index-based shortlex enumeration (`to_index`/`from_index`/
-//!   `_codepoint_rank`), which hegel-rust deliberately does not implement
-//!   (see SKIPPED.md for test_choice_index.py).
-//! - `test_string_sort_key_type_mismatch`: exercises Python's dynamically-typed
-//!   `sort_key(non-string)`; Rust's `sort_key` is type-safe.
-//! - `test_truncated_string_database_entry`: tests pbtkit's
-//!   `SerializationTag.STRING` byte layout; hegel-rust's database format
-//!   differs.
-//! - `test_draw_string_invalid_range`: exercises the Python `TC.for_choices`
-//!   zero-draw harness, which has no hegel-rust counterpart.
-//! - `test_text_database_round_trip`: the native round-trip is covered by the
-//!   existing tests/test_database_key.rs pattern; not re-ported here.
+//! A handful of upstream tests are ported elsewhere rather than duplicated here:
+//! - Tests on `StringChoice` internals (`test_string_single_codepoint_unit`,
+//!   `test_string_validate`, `test_string_from_index_out_of_range`,
+//!   `test_string_from_index_past_end`, `test_string_codepoint_rank_with_surrogates`)
+//!   are embedded tests in `tests/embedded/native/choices_tests.rs`, where the
+//!   crate-internal `StringChoice` type is accessible.
+//! - Tests on the database byte layout (`test_truncated_string_database_entry`)
+//!   are covered by `tests/embedded/native/database_tests.rs`
+//!   (`test_deserialize_truncated_string_length_returns_none`,
+//!   `test_deserialize_truncated_string_payload_returns_none`,
+//!   `test_database_load_corrupt_file_returns_none`).
+//! - `test_text_database_round_trip` is covered by `tests/test_database_key.rs`.
+//!
+//! `test_string_sort_key_type_mismatch` is listed in `SKIPPED.md`: Rust's typed
+//! `sort_key(&str)` makes the "non-string argument" case unrepresentable.
 
-use crate::common::utils::{assert_all_examples, minimal};
+use crate::common::utils::{assert_all_examples, expect_panic, minimal};
 use hegel::generators as gs;
+use hegel::{Hegel, Settings};
 
 #[test]
 fn test_text_basic() {
@@ -151,4 +150,22 @@ fn test_text_redistributes_pair() {
     );
     assert!(!s1.is_empty());
     assert!(!s2.is_empty());
+}
+
+#[test]
+fn test_draw_string_invalid_range() {
+    // Python: `tc.draw_string(min_codepoint=200, max_codepoint=100)` raises
+    // ValueError. In hegel-rust drawing from such a generator panics: the
+    // server returns an InvalidArgument error, and the native backend panics
+    // with a similar message from `schema::text::interpret_string`.
+    expect_panic(
+        || {
+            Hegel::new(|tc| {
+                let _: String = tc.draw(gs::text().min_codepoint(200).max_codepoint(100));
+            })
+            .settings(Settings::new().test_cases(1).database(None))
+            .run();
+        },
+        "InvalidArgument",
+    );
 }
