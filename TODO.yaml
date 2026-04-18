@@ -7,6 +7,69 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
+- title: Revisit tests/pbtkit/text.rs skip list under the tightened skip policy
+  details: |
+    `tests/pbtkit/text.rs` was ported under an older, laxer interpretation
+    of the skip policy and its module docstring lists several upstream
+    tests as "individually omitted" for reasons that are no longer valid
+    under the current policy (see `.claude/skills/porting-tests/SKILL.md`
+    and the system prompt in `scripts/port-loop.py`). Go through the
+    upstream file `resources/pbtkit/tests/test_text.py`, cross-reference
+    against the skip list at the top of `tests/pbtkit/text.rs`, and
+    restore each test that was dropped for an invalid reason.
+
+    Specific entries to revisit (non-exhaustive — re-read the whole
+    module docstring against the current policy):
+
+    - `test_string_single_codepoint_unit`, `test_string_validate`:
+      "already ported as embedded tests in tests/embedded/native/
+      choices_tests.rs". Redundancy is fine; restore these in text.rs.
+
+    - `test_string_from_index_out_of_range`,
+      `test_string_from_index_past_end`,
+      `test_string_codepoint_rank_with_surrogates`: "exercise pbtkit's
+      index-based shortlex enumeration (`to_index`/`from_index`/
+      `_codepoint_rank`), which hegel-rust deliberately does not
+      implement". This is an internal API — it's the native-gated-
+      plus-source-stub case. Port the tests with
+      `#[cfg(feature = "native")]`, and add `to_index`/`from_index`/
+      `codepoint_rank` under `src/native/` (stubbed with `todo!()`
+      if implementing them here is too large — follow-up TODOs are
+      fine).
+
+    - `test_truncated_string_database_entry`: "tests pbtkit's
+      `SerializationTag.STRING` byte layout; hegel-rust's database
+      format differs". Internal API; port it against hegel-rust's
+      native serialization format instead of skipping.
+
+    - `test_draw_string_invalid_range`: "exercises the Python
+      `TC.for_choices` zero-draw harness, which has no hegel-rust
+      counterpart". Internal API; native-gate and port, stubbing any
+      missing harness pieces under `src/native/` with `todo!()`.
+
+    - `test_text_database_round_trip`: "the native round-trip is
+      covered by the existing tests/test_database_key.rs pattern; not
+      re-ported here". Redundancy rationalisation — port it.
+
+    - `test_string_sort_key_type_mismatch`: "exercises Python's
+      dynamically-typed `sort_key(non-string)`; Rust's `sort_key` is
+      type-safe". This one is likely a legitimate skip (Python-
+      specific behaviour that Rust's type system rules out at compile
+      time). Move it to `SKIPPED.md` with a one-line rationale under
+      the pbtkit section rather than leaving it in the module
+      docstring.
+
+    Acceptance:
+    - Restored tests compile and pass (server-mode; native-mode where
+      native features exist, or native-gated with `todo!()` source
+      stubs where they don't).
+    - `tests/pbtkit/text.rs`'s module docstring is accurate: no
+      entries remain that are skipped for now-invalid reasons.
+    - Any genuinely-skipped entries are listed in `SKIPPED.md` with a
+      rationale, not in the module docstring.
+    - If this spawns native-source stubs (`todo!()`), add follow-up
+      TODO.yaml entries for implementing them, one per focused area.
+
 - title: Switch native StringChoice to a codepoint-indexed text representation
   details: |
     `ChoiceValue::String` in `src/native/core/choices.rs:397` currently stores

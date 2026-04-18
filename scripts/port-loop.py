@@ -938,7 +938,18 @@ def main() -> None:
             "looping over random unported picks."
         ),
     )
+    parser.add_argument(
+        "--todo-only",
+        action="store_true",
+        help=(
+            "Only drain TODO.yaml: repair, then pop one entry, then repeat "
+            "until TODO.yaml is empty. Does not advance to porting random "
+            "unported files. Exits 0 once the queue is empty."
+        ),
+    )
     args = parser.parse_args()
+    if args.port is not None and args.todo_only:
+        parser.error("--port and --todo-only are mutually exclusive.")
     state = IterCounter(args.max_iterations, args.timeout)
 
     if args.port is not None:
@@ -953,6 +964,16 @@ def main() -> None:
         repair(state)
         print(f"\n[port-loop] --port done after {state.n} iteration(s).")
         return
+
+    if args.todo_only:
+        while True:
+            repair(state)
+            if not drive_todos(state):
+                print(
+                    f"\n[port-loop] --todo-only: TODO.yaml empty; done after "
+                    f"{state.n} iteration(s)."
+                )
+                return
 
     while True:
         repair(state)
