@@ -13,9 +13,13 @@ destination. Port only that file in this commit — do not batch.
 
 ## Structure
 
-All ported tests live inside a single integration-test binary per upstream
-source, whose entry point is `tests/pbtkit/main.rs` or `tests/hypothesis/main.rs`.
-That main.rs declares submodules:
+All ported tests live inside one of two integration-test binaries,
+already wired up in `Cargo.toml`:
+
+- `tests/pbtkit/main.rs` — `cargo test --test pbtkit`
+- `tests/hypothesis/main.rs` — `cargo test --test hypothesis`
+
+Each `main.rs` exists as an empty harness and declares submodules:
 
 ```rust
 //! Tests ported from pbtkit/tests/
@@ -28,35 +32,28 @@ mod collections;
 // ... one `mod foo;` per ported file, alphabetical
 ```
 
-Your file goes in `tests/pbtkit/<name>.rs` (or `tests/hypothesis/<name>.rs`) as
-a submodule. Use the original Python filename minus the `test_` prefix and
-`.py` extension.
+Your file goes in `tests/pbtkit/<name>.rs` (or `tests/hypothesis/<name>.rs`)
+as a submodule. Use the original Python filename minus the `test_` prefix
+and `.py` extension.
 
 Examples:
-- `pbtkit/tests/test_text.py` → `tests/pbtkit/text.rs` (module name: `text`)
-- `pbtkit/tests/test_core.py` → `tests/pbtkit/core.rs`
-- `hypothesis-python/tests/cover/test_floats.py` → `tests/hypothesis/floats.rs`
+- `resources/pbtkit/tests/test_text.py` → `tests/pbtkit/text.rs` (module `text`)
+- `resources/pbtkit/tests/test_core.py` → `tests/pbtkit/core.rs`
+- `resources/hypothesis/hypothesis-python/tests/cover/test_floats.py` → `tests/hypothesis/floats.rs`
 
-For subdirectories in the source (e.g. `pbtkit/tests/findability/test_types.py`),
-flatten to a prefix: `tests/pbtkit/findability_types.rs`.
+For subdirectories in the source (e.g.
+`resources/pbtkit/tests/findability/test_types.py`), flatten to a prefix:
+`tests/pbtkit/findability_types.rs`.
 
 ### Wiring in
 
-After writing `tests/pbtkit/<name>.rs`, add `mod <name>;` to `tests/pbtkit/main.rs`
-(alphabetically). Create `tests/pbtkit/main.rs` from this template if it
-doesn't exist:
+After writing `tests/pbtkit/<name>.rs`, add `mod <name>;` to
+`tests/pbtkit/main.rs` (alphabetically). Do NOT touch the `[[test]]`
+declarations in `Cargo.toml` — they're already set up.
 
-```rust
-//! Tests ported from pbtkit/tests/
-
-#[path = "../common/mod.rs"]
-mod common;
-
-mod <your_module>;
-```
-
-**Do NOT declare `mod common;` inside your submodule file** — it's declared by
-`main.rs`. Your file accesses helpers via `use crate::common::utils::...`.
+**Do NOT declare `mod common;` inside your submodule file** — it's
+declared by `main.rs`. Your file accesses helpers via
+`use crate::common::utils::...`.
 
 ## File template
 
@@ -217,8 +214,10 @@ at the top, following the native-gated-plus-source-stub rules above.
 Before you finish:
 
 1. Write the file.
-2. Update `tests/pbtkit/main.rs` (or `tests/hypothesis/main.rs`) to include
-   your new module. Create the main.rs if it doesn't exist.
+2. Update `tests/pbtkit/main.rs` (or `tests/hypothesis/main.rs`) to
+   include your new module via `mod <name>;`. Both `main.rs` files and
+   the matching `[[test]]` declarations in `Cargo.toml` already exist —
+   do not add or modify them.
 3. Run `cargo test --test pbtkit --no-run` (or `--test hypothesis`). The
    suite MUST compile.
 4. Run `cargo test --test pbtkit <your_module>` (server mode). Every test

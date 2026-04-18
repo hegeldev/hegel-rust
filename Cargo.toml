@@ -34,6 +34,19 @@ name = "hegel"
 name = "stack"
 doc-scrape-examples = true
 
+# Integration-test binaries that collect ported tests from Python upstreams.
+# Each subdirectory groups one upstream source (resources/pbtkit/tests/,
+# resources/hypothesis/hypothesis-python/tests/cover/). Cargo does not
+# auto-discover test binaries that live in subdirectories, so these entries
+# are required for `cargo test --test pbtkit` / `--test hypothesis` to work.
+[[test]]
+name = "pbtkit"
+path = "tests/pbtkit/main.rs"
+
+[[test]]
+name = "hypothesis"
+path = "tests/hypothesis/main.rs"
+
 [dependencies]
 serde = { version = "1.0.103", features = ["derive"] }
 paste = "1.0"
