@@ -168,8 +168,7 @@ hegeltest = {{ path = "{path}"{features} }}
         // directory under `target/`. `CARGO_TARGET_TMPDIR` is provided
         // by cargo for integration tests and lives inside the outer
         // workspace's `target/`, so `cargo clean` still sweeps it.
-        let shared_target =
-            PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("hegel-shared-target");
+        let shared_target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("hegel-shared-target");
         cmd.env("CARGO_TARGET_DIR", &shared_target);
 
         for key in &self.env_removes {
