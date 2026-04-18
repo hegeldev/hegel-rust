@@ -36,3 +36,6 @@ file and treats listed files as "done".
 - `test_caching.py` — tests Python object identity (`st.text() is
   st.text()`) of Hypothesis's strategy cache; Rust generators are
   builder structs with no `is`-style identity equivalent.
+- `test_posonly_args_py38.py` — tests Python 3.8 positional-only arg
+  syntax (`/`) on `@st.composite` and `st.builds()`; both are
+  Python-syntax / Python-API specific with no Rust counterpart.
