@@ -375,36 +375,95 @@ def cargo_clean() -> None:
     run_gate(["cargo", "clean"])
 
 
+# ---- gate cache -------------------------------------------------------------
+#
+# Each gate records the HEAD SHA at which it last succeeded, but only when the
+# working tree was clean at that moment (so the SHA fully captures the state).
+# On the next run, if the tree is clean AND the cached SHA matches the current
+# HEAD, we skip the gate. Any commit or uncommitted change invalidates the
+# cache naturally. Failures are NOT cached — re-running them produces fresh
+# output to hand to the fixer agent.
+
+GATE_CACHE_PATH = REPO_ROOT / ".port-loop-cache.json"
+
+
+def _load_gate_cache() -> dict[str, str]:
+    if not GATE_CACHE_PATH.exists():
+        return {}
+    try:
+        data = json.loads(GATE_CACHE_PATH.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_gate_cache(cache: dict[str, str]) -> None:
+    GATE_CACHE_PATH.write_text(json.dumps(cache, indent=2, sort_keys=True))
+
+
+def _gate_cached(key: str) -> bool:
+    """True if this gate already succeeded at the current HEAD on a clean tree."""
+    if not is_tree_clean():
+        return False
+    return _load_gate_cache().get(key) == git_head()
+
+
+def _record_gate_success(key: str) -> None:
+    """Pin a gate's success to the current HEAD, but only if the tree is clean."""
+    if not is_tree_clean():
+        return
+    cache = _load_gate_cache()
+    cache[key] = git_head()
+    _save_gate_cache(cache)
+
+
+def _run_cached_gate(
+    key: str, cmd: list[str], *, env: dict[str, str] | None = None
+) -> tuple[bool, str]:
+    if _gate_cached(key):
+        print(f"\n[port-loop] gate cache hit: `{key}` @ HEAD; skipping.")
+        return True, ""
+    code, out = run_gate(cmd, env=env)
+    ok = code == 0
+    if ok:
+        _record_gate_success(key)
+    return ok, out
+
+
 def gate_lint() -> tuple[bool, str]:
-    code, out = run_gate(["just", "lint"])
-    return code == 0, out
+    return _run_cached_gate("just lint", ["just", "lint"])
 
 
 def gate_server_tests() -> tuple[bool, str]:
-    code, out = run_gate(["cargo", "test"])
-    return code == 0, out
+    return _run_cached_gate("cargo test", ["cargo", "test"])
 
 
 def gate_native_tests() -> tuple[bool, str]:
     env = os.environ.copy()
     env["HEGEL_SERVER_COMMAND"] = "/bin/false"
-    code, out = run_gate(["cargo", "test", "--features", "native"], env=env)
-    return code == 0, out
+    return _run_cached_gate(
+        "HEGEL_SERVER_COMMAND=/bin/false cargo test --features native",
+        ["cargo", "test", "--features", "native"],
+        env=env,
+    )
 
 
 def gate_module_server(kind: str, module: str) -> tuple[bool, str]:
-    code, out = run_gate(["cargo", "test", "--test", kind, module])
-    return code == 0, out
+    return _run_cached_gate(
+        f"cargo test --test {kind} {module}",
+        ["cargo", "test", "--test", kind, module],
+    )
 
 
 def gate_module_native(kind: str, module: str) -> tuple[bool, str]:
     env = os.environ.copy()
     env["HEGEL_SERVER_COMMAND"] = "/bin/false"
-    code, out = run_gate(
+    return _run_cached_gate(
+        f"HEGEL_SERVER_COMMAND=/bin/false cargo test --features native "
+        f"--test {kind} {module}",
         ["cargo", "test", "--features", "native", "--test", kind, module],
         env=env,
     )
-    return code == 0, out
 
 
 def destination_has_tests(dest: Path) -> bool:
