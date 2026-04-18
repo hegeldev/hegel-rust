@@ -388,6 +388,11 @@ def maybe_hot_reload() -> None:
     is discarded on re-exec — that's intentional: a new version of the
     script starts clean.
 
+    Only reloads when the on-disk script matches HEAD — i.e. the change
+    has been committed. Uncommitted edits (work-in-progress by a human
+    or by the port-loop's own agents) are ignored so we don't re-exec
+    into a half-saved version.
+
     Uses the shebang's `uv run --script` line via `os.execv` on the
     script path, so PEP 723 deps get re-resolved if they changed.
     """
@@ -397,10 +402,19 @@ def maybe_hot_reload() -> None:
         return
     if current == SCRIPT_MTIME_AT_STARTUP:
         return
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--", str(SCRIPT_PATH)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if status.returncode != 0 or status.stdout.strip():
+        # Uncommitted changes (or we couldn't ask git): don't reload yet.
+        return
     print(
         f"\n[port-loop] {SCRIPT_PATH.name} changed on disk "
-        f"(mtime {SCRIPT_MTIME_AT_STARTUP:.0f} → {current:.0f}); "
-        f"re-exec'ing with argv {ORIGINAL_ARGV!r}.",
+        f"(mtime {SCRIPT_MTIME_AT_STARTUP:.0f} → {current:.0f}) "
+        f"and matches HEAD; re-exec'ing with argv {ORIGINAL_ARGV!r}.",
         flush=True,
     )
     os.execv(str(SCRIPT_PATH), ORIGINAL_ARGV)
@@ -903,6 +917,7 @@ def dispatch_claude(
     *,
     gate_output: str | None,
     timeout: float | None,
+    model: str,
     resume_session: str | None = None,
 ) -> tuple[str | None, int]:
     """Spawn claude -p (or resume an existing session), stream events live.
@@ -930,7 +945,7 @@ def dispatch_claude(
         "-p",
         "--dangerously-skip-permissions",
         "--model",
-        "opus",
+        model,
         "--output-format",
         "stream-json",
         "--verbose",
@@ -1012,10 +1027,13 @@ class IterCounter:
     fresh agent that would have to re-derive the diff.
     """
 
-    def __init__(self, max_iterations: int, timeout: float | None) -> None:
+    def __init__(
+        self, max_iterations: int, timeout: float | None, model: str
+    ) -> None:
         self.n = 0
         self.max = max_iterations
         self.timeout = timeout
+        self.model = model
         self.last_session_id: str | None = None
         # Per-TODO-title attempt counter. Used by drive_todos() to escalate
         # to a recovery agent when the same entry stays in TODO.yaml after
@@ -1034,7 +1052,10 @@ class IterCounter:
         self.n += 1
         print(f"\n{'#' * 72}\n# iteration {self.n}\n{'#' * 72}")
         sid, _code = dispatch_claude(
-            prompt, gate_output=gate_output, timeout=self.timeout
+            prompt,
+            gate_output=gate_output,
+            timeout=self.timeout,
+            model=self.model,
         )
         # Even if exit code was non-zero, a captured sid still means a
         # valid session exists that we can try to resume later.
@@ -1067,6 +1088,7 @@ class IterCounter:
             prompt,
             gate_output=gate_output,
             timeout=self.timeout,
+            model=self.model,
             resume_session=previous,
         )
         if code != 0:
@@ -1358,10 +1380,19 @@ def main() -> None:
             "unported files. Exits 0 once the queue is empty."
         ),
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="sonnet",
+        help=(
+            "Model alias passed to `claude -p --model` for every dispatch "
+            "(default: sonnet)."
+        ),
+    )
     args = parser.parse_args()
     if args.port is not None and args.todo_only:
         parser.error("--port and --todo-only are mutually exclusive.")
-    state = IterCounter(args.max_iterations, args.timeout)
+    state = IterCounter(args.max_iterations, args.timeout, args.model)
 
     if args.port is not None:
         picked = resolve_port_arg(args.port)
