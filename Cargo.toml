@@ -59,6 +59,8 @@ hegeltest-macros = { version = "=0.7.5", path = "hegel-macros" }
 rand = { version = "0.10", optional = true }
 serde_json = { version = "1.0.61", optional = true }
 regex-syntax = { version = "0.8", optional = true }
+num-bigint = { version = "0.4", optional = true }
+num-traits = { version = "0.2", optional = true }
 
 [dev-dependencies]
 regex = "1.0"
@@ -70,7 +72,7 @@ insta = "1.47.2"
 default = []
 rand = ["dep:rand"]
 antithesis = ["dep:serde_json"]
-native = ["dep:rand", "dep:regex-syntax"]
+native = ["dep:rand", "dep:regex-syntax", "dep:num-bigint", "dep:num-traits"]
 
 [package.metadata.docs.rs]
 all-features = true

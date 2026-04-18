@@ -1,4 +1,5 @@
 use super::*;
+use crate::native::bignum::BigUint;
 
 // ── IntegerChoice::simplest ─────────────────────────────────────────────────
 //
@@ -605,7 +606,10 @@ fn string_choice_from_index_out_of_range() {
         min_size: 0,
         max_size: 2,
     };
-    assert!(sc.from_index(sc.max_index() + 1).is_none());
+    assert!(
+        sc.from_index(sc.max_index() + BigUint::from(1u32))
+            .is_none()
+    );
 }
 
 #[test]
@@ -619,8 +623,8 @@ fn string_choice_from_index_past_end() {
         max_size: 2,
     };
     assert_eq!(sc.alpha_size(), 95);
-    assert_eq!(sc.max_index(), 9120);
-    assert!(sc.from_index(9121).is_none());
+    assert_eq!(sc.max_index(), BigUint::from(9120u32));
+    assert!(sc.from_index(BigUint::from(9121u32)).is_none());
 }
 
 #[test]
@@ -655,6 +659,31 @@ fn string_choice_to_index_from_index_roundtrip_ascii() {
         let idx = sc.to_index(&v);
         assert_eq!(sc.from_index(idx), Some(v), "round-trip failed for {s:?}");
     }
+}
+
+#[test]
+fn string_choice_max_index_exceeds_u128() {
+    // Regression: alpha ≈ 1,112,064 (all of Unicode minus surrogates) and
+    // max_size = 16 yields max_index ≈ 10^97, which vastly overflows u128
+    // (~3.4·10^38). The bignum port must return this without panicking,
+    // and a round-trip at the top of the final length bucket must preserve
+    // the value.
+    let sc = StringChoice {
+        min_codepoint: 0,
+        max_codepoint: 0x10FFFF,
+        min_size: 0,
+        max_size: 16,
+    };
+    let idx = sc.max_index();
+    assert!(idx > BigUint::from(u128::MAX));
+
+    // A value of length max_size should sit near the top of the bucket
+    // (strictly less than max_index, but beyond anything u128 could hold).
+    let v = vec![0x10FFFDu32; 16];
+    let v_idx = sc.to_index(&v);
+    assert!(v_idx > BigUint::from(u128::MAX));
+    assert!(v_idx <= idx);
+    assert_eq!(sc.from_index(v_idx), Some(v));
 }
 
 #[test]
