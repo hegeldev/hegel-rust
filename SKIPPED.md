@@ -30,5 +30,6 @@ file and treats listed files as "done".
 
 ## hypothesis (`/tmp/hypothesis/hypothesis-python/tests/cover/`)
 
-(none yet — entries appear here as agents decide that a file genuinely
-can't port and record the reason)
+- `test_constants_ast.py` — tests Hypothesis's Python-AST constant
+  extractor (`ConstantVisitor`, `constants_from_module`); parses Python
+  source code, no Rust counterpart.
