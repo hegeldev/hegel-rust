@@ -260,6 +260,7 @@ pub use antithesis::TestLocation;
 pub mod __native_test_internals {
     pub use crate::native::bignum::BigUint;
     pub use crate::native::core::StringChoice;
+    pub use crate::native::unicodedata;
 }
 
 /// Derive a generator for a struct or enum.

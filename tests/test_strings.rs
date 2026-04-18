@@ -3,6 +3,24 @@ mod common;
 use common::utils::{assert_all_examples, find_any};
 use hegel::generators as gs;
 
+// Check whether `c` is in the given Unicode General Category, using the same
+// Unicode tables the generator uses. Rust's `char::is_uppercase` et al. use a
+// newer Unicode version than our vendored Python 3.13 / UCD 15.1.0 tables, so
+// `is_uppercase` is not a reliable proxy for "category Lu" at codepoints newly
+// assigned in Unicode 16+ (e.g. U+A7CB).
+#[cfg(feature = "native")]
+fn is_in_unicode_category(c: char, cat: &str) -> bool {
+    hegel::__native_test_internals::unicodedata::is_in_group(c as u32, cat)
+}
+
+#[cfg(not(feature = "native"))]
+fn is_in_unicode_category(c: char, cat: &str) -> bool {
+    match cat {
+        "Lu" => c.is_uppercase(),
+        _ => unimplemented!("category {cat} check not available without native feature"),
+    }
+}
+
 #[test]
 fn test_characters_single_char() {
     assert_all_examples(gs::characters(), |c: &char| c.len_utf8() > 0);
@@ -35,7 +53,7 @@ fn test_characters_lu() {
 #[test]
 fn test_characters_exclude_categories() {
     assert_all_examples(gs::characters().exclude_categories(&["Lu"]), |c: &char| {
-        !c.is_uppercase()
+        !is_in_unicode_category(*c, "Lu")
     });
 }
 
@@ -106,7 +124,7 @@ fn test_text_categories() {
 fn test_text_exclude_categories() {
     assert_all_examples(
         gs::text().exclude_categories(&["Lu"]).max_size(20),
-        |s: &String| s.chars().all(|c| !c.is_uppercase()),
+        |s: &String| s.chars().all(|c| !is_in_unicode_category(c, "Lu")),
     );
 }
 
