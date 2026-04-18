@@ -7,49 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Switch native StringChoice to a codepoint-indexed text representation
-  details: |
-    `ChoiceValue::String` in `src/native/core/choices.rs:397` currently stores
-    text values as a Rust `String` (UTF-8 bytes). Every engine operation on
-    it — `StringChoice::validate` (:367), `::sort_key` (:379), the shrinker
-    in `src/native/shrinker/strings.rs`, and the state machinery in
-    `src/native/core/state.rs` — has to re-decode UTF-8 into codepoints
-    before doing anything useful, because the engine's model of a string is
-    a sequence of Unicode codepoints (shortlex-ordered by
-    `codepoint_key(cp)`), not a sequence of bytes.
-
-    The desired representation is `Vec<u32>` (a vector of raw Unicode
-    codepoints in `0..=0x10FFFF`), so that len/index/sort_key are
-    O(1)/O(n) in the codepoint count rather than O(n) UTF-8 decodes, and
-    so that the type signature honestly reflects what the engine is
-    doing. `Vec<char>` is NOT the right type: Rust's `char` is a Unicode
-    scalar value and disallows surrogates (`U+D800..=U+DFFF`), but the
-    engine needs to be able to reason internally about any codepoint
-    including surrogates — the no-surrogate filter belongs at the
-    boundary where the engine hands a `String` back to the user, not in
-    the core representation.
-
-    Scope:
-    - Change `ChoiceValue::String(String)` to `ChoiceValue::String(Vec<u32>)`
-      (name TBD — `Text`/`Codepoints` also reasonable).
-    - Update all construction/read sites under `src/native/` to work in
-      `&[u32]` / `Vec<u32>` directly rather than round-tripping through
-      `String`.
-    - Public API boundaries (the `TextGenerator`-facing parts) still hand
-      the user a `String`; the `u32 -> char -> String` conversion happens
-      at that boundary, with the surrogate filter applied there (not in
-      the engine core).
-    - Update embedded tests under `tests/embedded/native/` that currently
-      assert on `String` values.
-    - Leave the SERVER path (`src/generators/strings.rs` schema plumbing)
-      untouched; this is a native-engine representation change only.
-
-    Acceptance:
-    - `cargo test` passes.
-    - `HEGEL_SERVER_COMMAND=/bin/false cargo test --features native` passes.
-    - No `String` field remains on `StringChoice`-associated types in the
-      native engine's internal data model.
-
 - title: Adopt num-bigint for arbitrary-precision integers in the native engine
   details: |
     Both pbtkit and Hypothesis lean on Python's bignum int type in
