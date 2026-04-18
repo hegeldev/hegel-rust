@@ -174,7 +174,7 @@ mod string_choice_internals {
     //! `--features native`. Values are codepoint sequences (`Vec<u32>`) —
     //! the engine's internal text model — so assertions use codepoint
     //! vectors rather than `&str` literals.
-    use hegel::__native_test_internals::StringChoice;
+    use hegel::__native_test_internals::{BigUint, StringChoice};
 
     fn cps(s: &str) -> Vec<u32> {
         s.chars().map(|c| c as u32).collect()
@@ -239,7 +239,10 @@ mod string_choice_internals {
             min_size: 0,
             max_size: 2,
         };
-        assert!(sc.from_index(sc.max_index() + 1).is_none());
+        assert!(
+            sc.from_index(sc.max_index() + BigUint::from(1u32))
+                .is_none()
+        );
     }
 
     #[test]
@@ -253,8 +256,28 @@ mod string_choice_internals {
             max_size: 2,
         };
         assert_eq!(sc.alpha_size(), 95);
-        assert_eq!(sc.max_index(), 9120);
-        assert!(sc.from_index(9121).is_none());
+        assert_eq!(sc.max_index(), BigUint::from(9120u32));
+        assert!(sc.from_index(BigUint::from(9121u32)).is_none());
+    }
+
+    #[test]
+    fn test_string_max_index_exceeds_u128() {
+        // Regression: with the full Unicode range and max_size=16, max_index
+        // is ~10^97, far above u128::MAX. The bignum-backed index arithmetic
+        // must handle it without overflowing.
+        let sc = StringChoice {
+            min_codepoint: 0,
+            max_codepoint: 0x10FFFF,
+            min_size: 0,
+            max_size: 16,
+        };
+        let idx = sc.max_index();
+        assert!(idx > BigUint::from(u128::MAX));
+        let v = vec![0x10FFFDu32; 16];
+        let v_idx = sc.to_index(&v);
+        assert!(v_idx > BigUint::from(u128::MAX));
+        assert!(v_idx <= idx);
+        assert_eq!(sc.from_index(v_idx), Some(v));
     }
 
     #[test]
