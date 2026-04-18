@@ -134,6 +134,15 @@ Individually-skipped tests (rest of the file is ported):
   and Hypothesis settings absent from hegel-rust (`Phase.explicit`,
   `report_multiple_bugs`, `deadline`). The core explicit-test-case behaviour
   already has thorough coverage in `tests/test_explicit_test_case.rs`.
+- `test_reflection.py` — all tests exercise Python-specific reflection utilities:
+  `convert_keyword_arguments`/`convert_positional_arguments`/`define_function_signature`
+  (Python `inspect.Signature`/`Parameter` manipulation), `function_digest`/`repr_call`/
+  `get_pretty_function_description`/`source_exec_as_module`/`proxies`/`is_mock`/
+  `is_first_param_referenced_in_function`/`is_identity_function`/`required_args`
+  (Hypothesis internal Python reflection helpers), `lambda_sources._function_key`/
+  `_normalize_code`/`_clean_source` (Python bytecode and source-code manipulation),
+  `LazyStrategy.__repr__` warnings, `unittest.mock` objects, `sys.path`, and
+  `functools.partial/wraps`. None of these have Rust counterparts.
 - `test_database_backend.py` — this file mixes portable public-API tests
   (multi-value `save`/`fetch`/`delete`/`move` semantics, listener API,
   wrappers) with Python-specific ones. Only the latter are skipped here;
