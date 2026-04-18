@@ -716,31 +716,52 @@ def _print_event(evt: dict) -> None:
 
 
 def dispatch_claude(
-    prompt: str, *, gate_output: str | None, timeout: float | None
-) -> None:
+    prompt: str,
+    *,
+    gate_output: str | None,
+    timeout: float | None,
+    resume_session: str | None = None,
+) -> str | None:
+    """Spawn claude -p (or resume an existing session), stream events live.
+
+    Returns the session_id reported in the `system/init` event so the
+    caller can later `--resume` that session. Returns None if the event
+    stream never produced an init (e.g., process failed before
+    handshake).
+    """
     full_prompt = prompt
     if gate_output is not None:
         full_prompt += f"\n\nGate output:\n{gate_output}"
     print("\n" + "=" * 72)
-    print("Dispatching claude with prompt:")
+    if resume_session is not None:
+        print(f"Resuming claude session {resume_session[:12]}… with prompt:")
+    else:
+        print("Dispatching claude with prompt:")
     print("-" * 72)
     print(full_prompt)
     print("=" * 72, flush=True)
 
+    cmd = [
+        "claude",
+        "-p",
+        "--dangerously-skip-permissions",
+        "--model",
+        "opus",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+    ]
+    if resume_session is not None:
+        # Resuming carries forward the original session's system prompt
+        # and history, so don't re-append. The follow-up task goes in as
+        # the final positional prompt argument.
+        cmd += ["--resume", resume_session]
+    else:
+        cmd += ["--append-system-prompt", COMMON_SYSTEM_PROMPT]
+    cmd.append(full_prompt)
+
     proc = subprocess.Popen(
-        [
-            "claude",
-            "-p",
-            "--dangerously-skip-permissions",
-            "--model",
-            "opus",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--append-system-prompt",
-            COMMON_SYSTEM_PROMPT,
-            full_prompt,
-        ],
+        cmd,
         cwd=REPO_ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -765,6 +786,7 @@ def dispatch_claude(
         timer.daemon = True
         timer.start()
 
+    session_id: str | None = None
     assert proc.stdout is not None
     try:
         for raw in proc.stdout:
@@ -776,6 +798,10 @@ def dispatch_claude(
             except json.JSONDecodeError:
                 print(f"[claude:raw] {line}", flush=True)
                 continue
+            if evt.get("type") == "system" and evt.get("subtype") == "init":
+                sid = evt.get("session_id")
+                if isinstance(sid, str):
+                    session_id = sid
             try:
                 _print_event(evt)
             except Exception as e:
@@ -787,28 +813,69 @@ def dispatch_claude(
         if timed_out:
             print(f"\n[port-loop] claude timed out after {timeout}s; continuing.")
 
+    return session_id
+
 
 # ---- main loop ---------------------------------------------------------------
 
 
 class IterCounter:
-    """Tracks and caps total claude dispatches across outer and sub-loops."""
+    """Tracks and caps total claude dispatches across outer and sub-loops.
+
+    Also remembers the session_id of the most recent dispatch so that
+    follow-up prompts ("commit the dirty tree you just produced") can
+    `--resume` that same session instead of spawning a context-free
+    fresh agent that would have to re-derive the diff.
+    """
 
     def __init__(self, max_iterations: int, timeout: float | None) -> None:
         self.n = 0
         self.max = max_iterations
         self.timeout = timeout
+        self.last_session_id: str | None = None
+
+    def _check_cap(self) -> None:
+        if self.max > 0 and self.n >= self.max:
+            print(f"\n[port-loop] hit --max-iterations={self.max}; stopping.")
+            sys.exit(0)
 
     def dispatch(self, prompt: str, *, gate_output: str | None = None) -> None:
-        """Dispatch claude, or exit 0 if the iteration cap is already hit."""
-        if self.max > 0 and self.n >= self.max:
-            print(
-                f"\n[port-loop] hit --max-iterations={self.max}; stopping."
-            )
-            sys.exit(0)
+        """Dispatch a fresh claude session, or exit 0 if the cap is hit."""
+        self._check_cap()
         self.n += 1
         print(f"\n{'#' * 72}\n# iteration {self.n}\n{'#' * 72}")
-        dispatch_claude(prompt, gate_output=gate_output, timeout=self.timeout)
+        sid = dispatch_claude(
+            prompt, gate_output=gate_output, timeout=self.timeout
+        )
+        self.last_session_id = sid
+
+    def resume_last(
+        self, prompt: str, *, gate_output: str | None = None
+    ) -> None:
+        """Resume the most recent dispatched session with a follow-up.
+
+        If there is no prior session to resume (fresh script run with a
+        pre-existing dirty tree), falls back to a fresh dispatch —
+        that agent has no context either way and will have to figure
+        it out from the diff.
+        """
+        if self.last_session_id is None:
+            self.dispatch(prompt, gate_output=gate_output)
+            return
+        self._check_cap()
+        self.n += 1
+        print(
+            f"\n{'#' * 72}\n# iteration {self.n} "
+            f"(resume {self.last_session_id[:12]}…)\n{'#' * 72}"
+        )
+        sid = dispatch_claude(
+            prompt,
+            gate_output=gate_output,
+            timeout=self.timeout,
+            resume_session=self.last_session_id,
+        )
+        if sid is not None:
+            self.last_session_id = sid
 
 
 def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
@@ -839,7 +906,7 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
                 )
                 return
             else:
-                state.dispatch(
+                state.resume_last(
                     PORT_COMMIT_PROMPT.format(**fmt_args), gate_output=out
                 )
                 continue
@@ -875,7 +942,7 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
         # Step 5: tree must be clean.
         ok, out = gate_clean_tree()
         if not ok:
-            state.dispatch(
+            state.resume_last(
                 PORT_COMMIT_PROMPT.format(**fmt_args), gate_output=out
             )
             any_dispatched = True
@@ -944,7 +1011,7 @@ def repair(state: IterCounter, run_server_tests: bool = False) -> None:
             continue
         ok, out = gate_clean_tree()
         if not ok:
-            state.dispatch(COMMIT_PROMPT, gate_output=out)
+            state.resume_last(COMMIT_PROMPT, gate_output=out)
             any_failures = True
 
 
