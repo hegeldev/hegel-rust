@@ -170,19 +170,27 @@ fn test_draw_string_invalid_range() {
 
 #[cfg(feature = "native")]
 mod string_choice_internals {
+    //! These exercise engine internals that are only reachable under
+    //! `--features native`. Values are codepoint sequences (`Vec<u32>`) —
+    //! the engine's internal text model — so assertions use codepoint
+    //! vectors rather than `&str` literals.
     use hegel::__native_test_internals::StringChoice;
+
+    fn cps(s: &str) -> Vec<u32> {
+        s.chars().map(|c| c as u32).collect()
+    }
 
     #[test]
     fn test_string_single_codepoint_unit_variable_length() {
-        // Single codepoint '0', variable length: unit lengthens by one char.
+        // Single codepoint '0', variable length: unit lengthens by one codepoint.
         let kind = StringChoice {
             min_codepoint: 48,
             max_codepoint: 48,
             min_size: 0,
             max_size: 5,
         };
-        assert_eq!(kind.unit(), "0");
-        assert_eq!(kind.simplest(), "");
+        assert_eq!(kind.unit(), cps("0"));
+        assert_eq!(kind.simplest(), Vec::<u32>::new());
     }
 
     #[test]
@@ -206,7 +214,7 @@ mod string_choice_internals {
             min_size: 0,
             max_size: 5,
         };
-        assert_eq!(kind.unit(), "A");
+        assert_eq!(kind.unit(), cps("A"));
     }
 
     #[test]
@@ -217,9 +225,9 @@ mod string_choice_internals {
             min_size: 1,
             max_size: 5,
         };
-        assert!(kind.validate("abc"));
-        assert!(!kind.validate("")); // too short
-        assert!(!kind.validate("abcdef")); // too long
+        assert!(kind.validate(&cps("abc")));
+        assert!(!kind.validate(&cps(""))); // too short
+        assert!(!kind.validate(&cps("abcdef"))); // too long
     }
 
     #[test]
@@ -262,9 +270,9 @@ mod string_choice_internals {
         let rank = sc.codepoint_rank(0xE000);
         assert!(rank > 0);
         // Round-trip through to_index/from_index.
-        let s = char::from_u32(0xE000).unwrap().to_string();
-        let idx = sc.to_index(&s);
-        assert_eq!(sc.from_index(idx).as_deref(), Some(s.as_str()));
+        let v = vec![0xE000u32];
+        let idx = sc.to_index(&v);
+        assert_eq!(sc.from_index(idx), Some(v));
     }
 }
 
@@ -350,8 +358,9 @@ fn test_truncated_string_database_entry() {
     // test still runs instead of crashing. Mirrors the Python test that
     // seeds a database dict with a truncated `SerializationTag.STRING`
     // record; the hegel-rust native serialization uses type-tag 4 for
-    // strings followed by a 4-byte little-endian length and UTF-8 payload
-    // (see `src/native/database.rs::serialize_choices`).
+    // strings followed by a 4-byte little-endian codepoint count and N*4
+    // bytes of little-endian u32 codepoints (see
+    // `src/native/database.rs::serialize_choices`).
     use crate::common::project::TempRustProject;
 
     let temp_dir = tempfile::TempDir::new().unwrap();
