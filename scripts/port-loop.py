@@ -477,21 +477,20 @@ class IterCounter:
         self.max = max_iterations
         self.timeout = timeout
 
-    def dispatch(self, prompt: str, *, gate_output: str | None = None) -> bool:
-        """Dispatch claude. Return True to continue, False once cap hit."""
+    def dispatch(self, prompt: str, *, gate_output: str | None = None) -> None:
+        """Dispatch claude, or exit 0 if the iteration cap is already hit."""
         if self.max > 0 and self.n >= self.max:
             print(
                 f"\n[port-loop] hit --max-iterations={self.max}; stopping."
             )
-            return False
+            sys.exit(0)
         self.n += 1
         print(f"\n{'#' * 72}\n# iteration {self.n}\n{'#' * 72}")
         dispatch_claude(prompt, gate_output=gate_output, timeout=self.timeout)
-        return True
 
 
-def drive_port(picked: Path, destination: Path, state: IterCounter) -> bool:
-    """Sub-loop driving one port. Returns False iff iteration cap was hit."""
+def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
+    """Sub-loop driving one port; exits via `state.dispatch` if the cap is hit."""
     kind = "pbtkit" if picked.is_relative_to(PBTKIT_DIR) else "hypothesis"
     module = destination.stem
     fmt_args = dict(
@@ -508,58 +507,82 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> bool:
     while True:
         # Exit A: upstream is now in SKIPPED.md.
         if picked.name in read_skipped(kind):
-            print(
-                f"\n[port-loop] {picked.name} is in SKIPPED.md; sub-loop done."
-            )
-            return True
+            # Step 5: tree must be clean.
+            ok, out = gate_clean_tree()
+            if ok:
+                print(
+                    f"\n[port-loop] {picked.name} is in SKIPPED.md; sub-loop done."
+                )
+                return
+            else:
+                state.dispatch(
+                    PORT_COMMIT_PROMPT.format(**fmt_args), gate_output=out
+                )
+                continue
 
         # Step 1: destination must exist.
         if not destination.exists():
-            if not state.dispatch(PORT_PROMPT.format(**fmt_args)):
-                return False
-            continue
+            state.dispatch(PORT_PROMPT.format(**fmt_args))
 
         # Step 2: destination must contain at least one #[test].
         if not destination_has_tests(destination):
-            if not state.dispatch(PORT_MISSING_TESTS_PROMPT.format(**fmt_args)):
-                return False
-            continue
+            state.dispatch(PORT_MISSING_TESTS_PROMPT.format(**fmt_args))
 
         # Step 3: module's server-mode tests must pass.
         ok, out = gate_module_server(kind, module)
         if not ok:
-            if not state.dispatch(
+            state.dispatch(
                 PORT_TEST_FIX_SERVER_PROMPT.format(**fmt_args), gate_output=out
-            ):
-                return False
-            continue
+            )
 
         # Step 4: module's native-mode tests must pass.
         ok, out = gate_module_native(kind, module)
         if not ok:
-            if not state.dispatch(
+            state.dispatch(
                 PORT_TEST_FIX_NATIVE_PROMPT.format(**fmt_args), gate_output=out
-            ):
-                return False
-            continue
+            )
 
         # Step 5: tree must be clean.
         ok, out = gate_clean_tree()
         if not ok:
-            if not state.dispatch(
+            state.dispatch(
                 PORT_COMMIT_PROMPT.format(**fmt_args), gate_output=out
-            ):
-                return False
-            continue
+            )
 
         # Exit B: destination exists, filtered tests pass, tree clean.
         print(
             f"\n[port-loop] {destination} ported and green; sub-loop done."
         )
-        return True
+        break
 
 
-def main() -> int:
+def repair(state: IterCounter) -> None:
+    any_failures = True
+    while any_failures:
+        any_failures = False
+        ok, out = gate_lint()
+        if not ok:
+            any_failures = True
+            state.dispatch(LINT_FIX_PROMPT, gate_output=out)
+
+        ok, out = gate_server_tests()
+        if not ok:
+            state.dispatch(SERVER_TEST_FIX_PROMPT, gate_output=out)
+            any_failures = True
+
+        ok, out = gate_native_tests()
+        if not ok:
+            state.dispatch(NATIVE_TEST_FIX_PROMPT, gate_output=out)
+            any_failures = True
+        if any_failures:
+            continue
+        ok, out = gate_clean_tree()
+        if not ok:
+            state.dispatch(COMMIT_PROMPT, gate_output=out)
+            any_failures = True
+
+
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--max-iterations",
@@ -576,38 +599,19 @@ def main() -> int:
     args = parser.parse_args()
     state = IterCounter(args.max_iterations, args.timeout)
 
+    iters = 0
     while True:
-        ok, out = gate_lint()
-        if not ok:
-            if not state.dispatch(LINT_FIX_PROMPT, gate_output=out):
-                return 1
-            continue
-
-        ok, out = gate_server_tests()
-        if not ok:
-            if not state.dispatch(SERVER_TEST_FIX_PROMPT, gate_output=out):
-                return 1
-            continue
-
-        ok, out = gate_native_tests()
-        if not ok:
-            if not state.dispatch(NATIVE_TEST_FIX_PROMPT, gate_output=out):
-                return 1
-            continue
-
-        ok, out = gate_clean_tree()
-        if not ok:
-            if not state.dispatch(COMMIT_PROMPT, gate_output=out):
-                return 1
-            continue
+        if iters % 10 == 0:
+            repair(state)
+        iters += 1
 
         pool = unported_pool()
         if not pool:
             print(
-                f"\n[port-loop] all gates pass and every upstream file is "
-                f"ported or skipped. Exiting after {state.n} iteration(s)."
+                f"\n[port-loop] every upstream file is ported or skipped; "
+                f"running final repair after {state.n} iteration(s)."
             )
-            return 0
+            break
 
         picked = random.choice(pool)
         destination = destination_for(picked)
@@ -615,9 +619,10 @@ def main() -> int:
             f"\n[port-loop] {len(pool)} files remain; picked {picked} "
             f"→ {destination} (random)."
         )
-        if not drive_port(picked, destination, state):
-            return 1
+        drive_port(picked, destination, state)
+    repair(state)
+    print(f"\n[port-loop] done after {state.n} iteration(s).")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
