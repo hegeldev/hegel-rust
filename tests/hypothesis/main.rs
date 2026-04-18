@@ -5,3 +5,4 @@
 mod common;
 
 mod composite;
+mod float_nastiness;
