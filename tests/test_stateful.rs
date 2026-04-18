@@ -150,6 +150,11 @@ impl TestDrawDomainMachine {
         let x = self.variables.draw();
         assert!(self.domain.contains(x));
     }
+
+    #[invariant]
+    fn len_matches_domain(&mut self, _tc: TestCase) {
+        assert_eq!(self.variables.len(), self.domain.len());
+    }
 }
 
 #[hegel::test]
