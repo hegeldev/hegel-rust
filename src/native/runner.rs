@@ -11,7 +11,7 @@ use rand::rngs::SmallRng;
 
 use crate::antithesis::TestLocation;
 use crate::native::core::{ChoiceNode, ChoiceValue, NativeTestCase, Span, Status, sort_key};
-use crate::native::database::NativeDatabase;
+use crate::native::database::{NativeDatabase, deserialize_choices, serialize_choices};
 use crate::native::shrinker::Shrinker;
 use crate::native::tree::CachedTestFunction;
 use crate::runner::{Database, HealthCheck, Settings, Verbosity};
@@ -176,18 +176,30 @@ pub fn native_run<F>(
     let mut replay_aligned = false;
 
     // --- Database replay phase ---
-    // If a stored counterexample exists for this key, try it before random
-    // generation. If it still fails, use it as the starting point for
-    // shrinking (which often means shrinking completes immediately because
-    // the stored value is already minimal).
+    // Fetch every stored value for this key, sort shortlex (shortest
+    // first, then lex on bytes — see `shortlex` in
+    // `conjecture/engine.py`), and try them in order. The first
+    // still-interesting value is reused as the starting point for
+    // shrinking; values that are corrupt or no longer interesting are
+    // evicted from the database. Mirrors Hypothesis's
+    // `reuse_existing_examples`.
     if let (Some(db_ref), Some(key)) = (&db, database_key) {
-        if let Some(stored_choices) = db_ref.load(key) {
+        let key_bytes = key.as_bytes();
+        let mut values = db_ref.fetch(key_bytes);
+        values.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+        for raw in values {
+            let Some(stored_choices) = deserialize_choices(&raw) else {
+                db_ref.delete(key_bytes, &raw);
+                continue;
+            };
             let ntc = NativeTestCase::for_choices(&stored_choices, None);
             let (status, nodes, _) = ctf.run(ntc);
             if status == Status::Interesting {
                 replay_aligned = nodes.len() == stored_choices.len();
                 result = Some(nodes);
+                break;
             }
+            db_ref.delete(key_bytes, &raw);
         }
     }
 
@@ -328,10 +340,13 @@ pub fn native_run<F>(
 
     // --- Save to database ---
     // Persist the shrunk counterexample so subsequent runs can replay it
-    // immediately without repeating generation + shrinking.
+    // immediately without repeating generation + shrinking. Multiple
+    // distinct shrunk counterexamples may accumulate under the same
+    // key across runs (e.g. if the test was altered); the replay loop
+    // above evicts values that no longer interest the test.
     if let (Some(db_ref), Some(key), Some(best_nodes)) = (&db, database_key, &result) {
         let choices: Vec<ChoiceValue> = best_nodes.iter().map(|n| n.value.clone()).collect();
-        db_ref.save(key, &choices);
+        db_ref.save(key.as_bytes(), &serialize_choices(&choices));
     }
 
     // --- Antithesis integration ---
