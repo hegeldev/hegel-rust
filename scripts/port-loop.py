@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
 """Self-driving loop that runs gates, then picks an upstream test file to port.
 
-Each iteration:
+Outer loop, each iteration:
   1. `just lint`
   2. `cargo test`
   3. `HEGEL_SERVER_COMMAND=/bin/false cargo test --features native`
   4. working tree clean (`git status --porcelain` empty)
-  5. if all pass, pick a random unported upstream file and dispatch claude to port it
+  5. if all pass, pick a random unported upstream file and enter the port sub-loop
 
-On the first failing gate, claude is invoked with a short fix prompt and the
-loop restarts. When every upstream file is accounted for (ported or in
-SKIPPED.md) and the gates all pass, the loop exits 0.
+Port sub-loop (one pick; the outer gates are skipped while this runs):
+  a. upstream file in SKIPPED.md → sub-loop done
+  b. destination file exists with at least one `#[test]`
+  c. `cargo test --test {kind} {module}` passes
+  d. `HEGEL_SERVER_COMMAND=/bin/false cargo test --features native
+       --test {kind} {module}` passes
+  e. working tree clean → sub-loop done
+
+On the first failing check (outer or inner), claude is invoked with a focused
+prompt and the same loop restarts at the top. When every upstream file is
+accounted for (ported or in SKIPPED.md) and the outer gates all pass, the
+loop exits 0.
 """
 
 from __future__ import annotations
@@ -70,11 +79,51 @@ COMMIT_PROMPT = (
 
 PORT_PROMPT = """\
 Port the upstream test file {path} to {destination} per the porting-tests
-skill.
+skill. You will be invoked repeatedly until either the tests in
+{destination} pass in both server and native mode with a clean tree, OR
+`{name}` appears in SKIPPED.md. Make whatever focused commit makes
+progress toward one of those outcomes.
 
 If the file has no tests that can be ported to hegel-rust, instead add
 `{name}` to SKIPPED.md under the appropriate section with a one-line
-rationale. Either way, commit the result.
+rationale and commit.
+"""
+
+PORT_TEST_FIX_SERVER_PROMPT = """\
+Continuing port {path} → {destination}. The module's server-mode tests
+are failing: `cargo test --test {kind} {module}`. Full output below —
+work from it instead of rerunning the command. Fix the failing tests
+(or the test module) and commit.
+
+If the port can't be completed cleanly (e.g. an unavailable hegel-rust
+API), add `{name}` to SKIPPED.md with a one-line rationale and commit.
+"""
+
+PORT_TEST_FIX_NATIVE_PROMPT = """\
+Continuing port {path} → {destination}. The module's native-mode tests
+are failing: `HEGEL_SERVER_COMMAND=/bin/false cargo test --features
+native --test {kind} {module}`. Full output below — work from it
+instead of rerunning the command. Fix the failing tests (or the test
+module) and commit.
+
+If this reveals a missing native-mode feature that can't be added in
+one focused change, add `{name}` to SKIPPED.md with a one-line
+rationale and commit.
+"""
+
+PORT_COMMIT_PROMPT = """\
+Continuing port {path} → {destination}. Filtered tests pass in both
+server and native mode, but the working tree is dirty. `git status
+--porcelain` output below. Make a focused commit.
+"""
+
+PORT_MISSING_TESTS_PROMPT = """\
+Continuing port {path} → {destination}. The destination file exists
+but contains no `#[test]` attribute — either the port is incomplete
+or stubbed out. Add the ported tests and commit.
+
+If the file truly has nothing portable, delete {destination}, add
+`{name}` to SKIPPED.md with a one-line rationale, and commit.
 """
 
 
@@ -125,6 +174,30 @@ def gate_native_tests() -> tuple[bool, str]:
     env["HEGEL_SERVER_COMMAND"] = "/bin/false"
     code, out = run_gate(["cargo", "test", "--features", "native"], env=env)
     return code == 0, out
+
+
+def gate_module_server(kind: str, module: str) -> tuple[bool, str]:
+    code, out = run_gate(["cargo", "test", "--test", kind, module])
+    return code == 0, out
+
+
+def gate_module_native(kind: str, module: str) -> tuple[bool, str]:
+    env = os.environ.copy()
+    env["HEGEL_SERVER_COMMAND"] = "/bin/false"
+    code, out = run_gate(
+        ["cargo", "test", "--features", "native", "--test", kind, module],
+        env=env,
+    )
+    return code == 0, out
+
+
+def destination_has_tests(dest: Path) -> bool:
+    if not dest.exists():
+        return False
+    try:
+        return "#[test]" in dest.read_text()
+    except OSError:
+        return False
 
 
 def gate_clean_tree() -> tuple[bool, str]:
@@ -396,6 +469,96 @@ def dispatch_claude(
 # ---- main loop ---------------------------------------------------------------
 
 
+class IterCounter:
+    """Tracks and caps total claude dispatches across outer and sub-loops."""
+
+    def __init__(self, max_iterations: int, timeout: float | None) -> None:
+        self.n = 0
+        self.max = max_iterations
+        self.timeout = timeout
+
+    def dispatch(self, prompt: str, *, gate_output: str | None = None) -> bool:
+        """Dispatch claude. Return True to continue, False once cap hit."""
+        if self.max > 0 and self.n >= self.max:
+            print(
+                f"\n[port-loop] hit --max-iterations={self.max}; stopping."
+            )
+            return False
+        self.n += 1
+        print(f"\n{'#' * 72}\n# iteration {self.n}\n{'#' * 72}")
+        dispatch_claude(prompt, gate_output=gate_output, timeout=self.timeout)
+        return True
+
+
+def drive_port(picked: Path, destination: Path, state: IterCounter) -> bool:
+    """Sub-loop driving one port. Returns False iff iteration cap was hit."""
+    kind = "pbtkit" if picked.is_relative_to(PBTKIT_DIR) else "hypothesis"
+    module = destination.stem
+    fmt_args = dict(
+        path=picked,
+        destination=destination,
+        name=picked.name,
+        kind=kind,
+        module=module,
+    )
+    print(
+        f"\n[port-loop] entering sub-loop for {picked} → {destination} "
+        f"(module '{module}' in test binary '{kind}')."
+    )
+    while True:
+        # Exit A: upstream is now in SKIPPED.md.
+        if picked.name in read_skipped(kind):
+            print(
+                f"\n[port-loop] {picked.name} is in SKIPPED.md; sub-loop done."
+            )
+            return True
+
+        # Step 1: destination must exist.
+        if not destination.exists():
+            if not state.dispatch(PORT_PROMPT.format(**fmt_args)):
+                return False
+            continue
+
+        # Step 2: destination must contain at least one #[test].
+        if not destination_has_tests(destination):
+            if not state.dispatch(PORT_MISSING_TESTS_PROMPT.format(**fmt_args)):
+                return False
+            continue
+
+        # Step 3: module's server-mode tests must pass.
+        ok, out = gate_module_server(kind, module)
+        if not ok:
+            if not state.dispatch(
+                PORT_TEST_FIX_SERVER_PROMPT.format(**fmt_args), gate_output=out
+            ):
+                return False
+            continue
+
+        # Step 4: module's native-mode tests must pass.
+        ok, out = gate_module_native(kind, module)
+        if not ok:
+            if not state.dispatch(
+                PORT_TEST_FIX_NATIVE_PROMPT.format(**fmt_args), gate_output=out
+            ):
+                return False
+            continue
+
+        # Step 5: tree must be clean.
+        ok, out = gate_clean_tree()
+        if not ok:
+            if not state.dispatch(
+                PORT_COMMIT_PROMPT.format(**fmt_args), gate_output=out
+            ):
+                return False
+            continue
+
+        # Exit B: destination exists, filtered tests pass, tree clean.
+        print(
+            f"\n[port-loop] {destination} ported and green; sub-loop done."
+        )
+        return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -411,46 +574,38 @@ def main() -> int:
         help="Per-claude-call timeout in seconds (default: 600s = 10 minutes).",
     )
     args = parser.parse_args()
+    state = IterCounter(args.max_iterations, args.timeout)
 
-    iteration = 0
     while True:
-        iteration += 1
-        if args.max_iterations > 0 and iteration > args.max_iterations:
-            print(
-                f"\n[port-loop] hit --max-iterations={args.max_iterations}; stopping."
-            )
-            return 1
-        print(f"\n{'#' * 72}\n# iteration {iteration}\n{'#' * 72}")
-
         ok, out = gate_lint()
         if not ok:
-            dispatch_claude(LINT_FIX_PROMPT, gate_output=out, timeout=args.timeout)
+            if not state.dispatch(LINT_FIX_PROMPT, gate_output=out):
+                return 1
             continue
 
         ok, out = gate_server_tests()
         if not ok:
-            dispatch_claude(
-                SERVER_TEST_FIX_PROMPT, gate_output=out, timeout=args.timeout
-            )
+            if not state.dispatch(SERVER_TEST_FIX_PROMPT, gate_output=out):
+                return 1
             continue
 
         ok, out = gate_native_tests()
         if not ok:
-            dispatch_claude(
-                NATIVE_TEST_FIX_PROMPT, gate_output=out, timeout=args.timeout
-            )
+            if not state.dispatch(NATIVE_TEST_FIX_PROMPT, gate_output=out):
+                return 1
             continue
 
         ok, out = gate_clean_tree()
         if not ok:
-            dispatch_claude(COMMIT_PROMPT, gate_output=out, timeout=args.timeout)
+            if not state.dispatch(COMMIT_PROMPT, gate_output=out):
+                return 1
             continue
 
         pool = unported_pool()
         if not pool:
             print(
-                f"\n[port-loop] all gates pass and every upstream file is ported "
-                f"or skipped. Exiting after {iteration} iteration(s)."
+                f"\n[port-loop] all gates pass and every upstream file is "
+                f"ported or skipped. Exiting after {state.n} iteration(s)."
             )
             return 0
 
@@ -460,10 +615,8 @@ def main() -> int:
             f"\n[port-loop] {len(pool)} files remain; picked {picked} "
             f"→ {destination} (random)."
         )
-        prompt = PORT_PROMPT.format(
-            path=picked, destination=destination, name=picked.name
-        )
-        dispatch_claude(prompt, gate_output=None, timeout=args.timeout)
+        if not drive_port(picked, destination, state):
+            return 1
 
 
 if __name__ == "__main__":
