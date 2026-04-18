@@ -33,6 +33,24 @@ Individually-skipped tests (rest of the file is ported):
 - `test_text.py::test_string_sort_key_type_mismatch` — exercises Python's
   dynamically-typed `sort_key(non-string)`; Rust's `sort_key(&str)` signature
   makes the "non-string argument" case unrepresentable at compile time.
+- `test_generators.py::test_cannot_witness_nothing` — uses `gs.nothing()`;
+  hegel-rust has no empty-generator public API.
+- `test_generators.py::test_target_and_reduce` — uses `tc.target(score)`;
+  no targeting API in hegel-rust (already covered by the whole-file skip
+  of `test_targeting.py`).
+- `test_generators.py::test_impossible_weighted`,
+  `test_generators.py::test_guaranteed_weighted` — both use
+  `tc.weighted(p)`; hegel-rust has no public weighted-boolean API.
+- `test_generators.py::test_many_reject`,
+  `test_generators.py::test_many_reject_unsatisfiable` — exercise
+  pbtkit's free-function `many()` helper and its Unsatisfiable-on-reject
+  semantics; hegel-rust's `Collection` is re-exported but the
+  force-stop/Unsatisfiable surface isn't shaped the same way.
+- `test_generators.py::test_unique_by` — uses `unique_by=key_fn`;
+  hegel-rust's `VecGenerator` only exposes `.unique(bool)`, no
+  `.unique_by(key_fn)` setter.
+- `test_generators.py::test_generator_repr` — tests Python `repr()`
+  output; no analog in hegel-rust.
 
 ## hypothesis (`/tmp/hypothesis/hypothesis-python/tests/cover/`)
 
