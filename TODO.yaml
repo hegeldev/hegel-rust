@@ -1,0 +1,46 @@
+# Pending tasks for the port loop. `scripts/port-loop.py` pops one entry at a
+# time and dispatches an agent to handle it before moving on to porting new
+# upstream tests. Add entries at any position; remove an entry when it's done.
+#
+# Schema per entry:
+#   - title: one-line summary
+#     details: |
+#       Multi-line body with context, pointers, acceptance criteria.
+
+- title: Switch native StringChoice to a codepoint-indexed text representation
+  details: |
+    `ChoiceValue::String` in `src/native/core/choices.rs:397` currently stores
+    text values as a Rust `String` (UTF-8 bytes). Every engine operation on
+    it — `StringChoice::validate` (:367), `::sort_key` (:379), the shrinker
+    in `src/native/shrinker/strings.rs`, and the state machinery in
+    `src/native/core/state.rs` — has to re-decode UTF-8 into codepoints
+    before doing anything useful, because the engine's model of a string is
+    a sequence of Unicode codepoints (shortlex-ordered by
+    `codepoint_key(cp)`), not a sequence of bytes.
+
+    The desired representation is a `Vec<char>` (or equivalent
+    codepoint-indexed container), so that len/index/sort_key are O(1)/O(n)
+    in the codepoint count rather than O(n) UTF-8 decodes, and so that the
+    type signature honestly reflects what the engine is doing. A `char` in
+    Rust is exactly a Unicode scalar value, which matches the existing
+    no-surrogate invariant on StringChoice.
+
+    Scope:
+    - Change `ChoiceValue::String(String)` to `ChoiceValue::String(Vec<char>)`
+      (name TBD — `Text`/`CharVec` also reasonable).
+    - Update all construction/read sites under `src/native/` to work in
+      `&[char]` / `Vec<char>` directly rather than round-tripping through
+      `String`.
+    - Public API boundaries (the `TextGenerator`-facing parts) still hand
+      the user a `String`; the conversion happens at the boundary, not in
+      the engine core.
+    - Update embedded tests under `tests/embedded/native/` that currently
+      assert on `String` values.
+    - Leave the SERVER path (`src/generators/strings.rs` schema plumbing)
+      untouched; this is a native-engine representation change only.
+
+    Acceptance:
+    - `cargo test` passes.
+    - `HEGEL_SERVER_COMMAND=/bin/false cargo test --features native` passes.
+    - No `String` field remains on `StringChoice`-associated types in the
+      native engine's internal data model.

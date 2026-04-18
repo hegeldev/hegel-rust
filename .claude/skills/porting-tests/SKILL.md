@@ -123,6 +123,9 @@ it's passed by `&T`). If unsure about element types, make them explicit with
 
 ## Skip vs. port decision
 
+Default: **port**. The skip-list is narrow and strict; redundancy is fine,
+mis-skips are not.
+
 ### Add to SKIPPED.md — public-API incompatibility only
 
 An upstream file goes in `SKIPPED.md` ONLY when its tests rely on *public
@@ -137,16 +140,38 @@ API* that has no hegel-rust counterpart:
 
 Add the filename to the appropriate section of `SKIPPED.md` with a
 one-line rationale naming the specific public API or integration that
-blocks the port, then commit. "Too complex" and "engine internal" are
-NOT valid reasons — those are covered below.
+blocks the port, then commit. "Too complex", "engine internal", and
+"no Rust counterpart" (by itself) are NOT valid reasons — those are
+covered below.
+
+### NOT reasons to skip
+
+Agents have a strong bias to rationalise ports away. These are not valid
+reasons to skip a file, drop a test from the port, or list a case as
+"omitted" in the module docstring:
+
+- **"Has no Rust counterpart"** (for an internal API). That's the reason
+  to port — see the next section.
+- **"This is covered by tests/foo.rs already"** / **"redundant with an
+  existing test"**. Redundancy is fine. A later rationalisation pass will
+  deduplicate; don't pre-empt it. Porting the test a second time costs
+  very little; incorrectly skipping one costs real coverage.
+- **"The test targets pbtkit's serialization tag / database format /
+  internal harness"** when hegel-rust has the equivalent internal
+  facility under `src/native/`. Native-gate it and port.
+- **"The test requires a shrinking pass marked `@pytest.mark.requires(...)`
+  that hegel-rust may or may not have"**. If hegel-rust has it, port
+  normally. If it doesn't yet, native-gate the test and stub/implement
+  the pass per the next section.
 
 ### Port — native-gated plus source-level stub
 
 Tests that exercise pbtkit / Hypothesis *engine internals* —
 `ChoiceNode`, `PbtkitState`, `ConjectureRunner`, `SHRINK_PASSES`,
-`CachedTestFunction`, `IntegerChoice`, `FloatChoice`, `TC.for_choices`,
-etc. — have counterparts under `src/native/` and are reachable only in
-native mode. Port these; do NOT skip them.
+`CachedTestFunction`, `IntegerChoice`, `FloatChoice`, `StringChoice`,
+`TC.for_choices`, `to_index`/`from_index`, database serialization tags,
+span introspection, etc. — have counterparts under `src/native/` and
+are reachable only in native mode. Port these; do NOT skip them.
 
 1. Write the test in its usual destination (`tests/<kind>/<module>.rs`),
    or as an embedded test in `tests/embedded/native/...` if it needs
