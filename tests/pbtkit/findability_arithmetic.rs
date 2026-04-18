@@ -19,9 +19,9 @@ fn test_float_addition_is_not_associative() {
     expect_panic(
         || {
             Hegel::new(|tc| {
-                let x: f64 = tc.draw(&gs::floats::<f64>());
-                let y: f64 = tc.draw(&gs::floats::<f64>());
-                let z: f64 = tc.draw(&gs::floats::<f64>());
+                let x: f64 = tc.draw(gs::floats::<f64>());
+                let y: f64 = tc.draw(gs::floats::<f64>());
+                let z: f64 = tc.draw(gs::floats::<f64>());
                 assert!(x + (y + z) == (x + y) + z);
             })
             .settings(Settings::new().test_cases(2000).database(None))
@@ -36,8 +36,8 @@ fn test_float_addition_does_not_cancel() {
     expect_panic(
         || {
             Hegel::new(|tc| {
-                let x: f64 = tc.draw(&gs::floats::<f64>().min_value(-1e100).max_value(1e100));
-                let y: f64 = tc.draw(&gs::floats::<f64>().min_value(-1e100).max_value(1e100));
+                let x: f64 = tc.draw(gs::floats::<f64>().min_value(-1e100).max_value(1e100));
+                let y: f64 = tc.draw(gs::floats::<f64>().min_value(-1e100).max_value(1e100));
                 assert!(x + (y - x) == y);
             })
             .settings(Settings::new().test_cases(2000).database(None))
@@ -52,8 +52,8 @@ fn test_string_addition_is_not_commutative() {
     expect_panic(
         || {
             Hegel::new(|tc| {
-                let x: String = tc.draw(&gs::text().min_size(1));
-                let y: String = tc.draw(&gs::text().min_size(1));
+                let x: String = tc.draw(gs::text().min_size(1));
+                let y: String = tc.draw(gs::text().min_size(1));
                 assert!(format!("{x}{y}") == format!("{y}{x}"));
             })
             .settings(Settings::new().database(None))
@@ -68,8 +68,8 @@ fn test_bytes_addition_is_not_commutative() {
     expect_panic(
         || {
             Hegel::new(|tc| {
-                let x: Vec<u8> = tc.draw(&gs::binary().min_size(1));
-                let y: Vec<u8> = tc.draw(&gs::binary().min_size(1));
+                let x: Vec<u8> = tc.draw(gs::binary().min_size(1));
+                let y: Vec<u8> = tc.draw(gs::binary().min_size(1));
                 let xy: Vec<u8> = x.iter().chain(y.iter()).copied().collect();
                 let yx: Vec<u8> = y.iter().chain(x.iter()).copied().collect();
                 assert!(xy == yx);
@@ -87,7 +87,7 @@ fn test_integer_bound_can_be_exceeded() {
         expect_panic(
             || {
                 Hegel::new(move |tc| {
-                    let x: i64 = tc.draw(&gs::integers::<i64>());
+                    let x: i64 = tc.draw(gs::integers::<i64>());
                     assert!(x < t);
                 })
                 .settings(Settings::new().test_cases(10000).database(None))
@@ -103,7 +103,7 @@ fn test_int_is_not_always_negative() {
     expect_panic(
         || {
             Hegel::new(|tc| {
-                let x: i64 = tc.draw(&gs::integers::<i64>());
+                let x: i64 = tc.draw(gs::integers::<i64>());
                 assert!(x < 0);
             })
             .settings(Settings::new().database(None))
@@ -116,8 +116,8 @@ fn test_int_is_not_always_negative() {
 #[test]
 fn test_int_addition_is_commutative() {
     Hegel::new(|tc| {
-        let x: i64 = tc.draw(&gs::integers::<i64>());
-        let y: i64 = tc.draw(&gs::integers::<i64>());
+        let x: i64 = tc.draw(gs::integers::<i64>());
+        let y: i64 = tc.draw(gs::integers::<i64>());
         assert_eq!(x.wrapping_add(y), y.wrapping_add(x));
     })
     .settings(Settings::new().database(None))
@@ -127,9 +127,9 @@ fn test_int_addition_is_commutative() {
 #[test]
 fn test_int_addition_is_associative() {
     Hegel::new(|tc| {
-        let x: i64 = tc.draw(&gs::integers::<i64>());
-        let y: i64 = tc.draw(&gs::integers::<i64>());
-        let z: i64 = tc.draw(&gs::integers::<i64>());
+        let x: i64 = tc.draw(gs::integers::<i64>());
+        let y: i64 = tc.draw(gs::integers::<i64>());
+        let z: i64 = tc.draw(gs::integers::<i64>());
         assert_eq!(
             x.wrapping_add(y.wrapping_add(z)),
             x.wrapping_add(y).wrapping_add(z),
@@ -142,7 +142,7 @@ fn test_int_addition_is_associative() {
 #[test]
 fn test_reversing_preserves_integer_addition() {
     Hegel::new(|tc| {
-        let xs: Vec<i64> = tc.draw(&gs::vecs(gs::integers::<i64>()));
+        let xs: Vec<i64> = tc.draw(gs::vecs(gs::integers::<i64>()));
         let forward = xs.iter().copied().fold(0i64, i64::wrapping_add);
         let backward = xs.iter().rev().copied().fold(0i64, i64::wrapping_add);
         assert_eq!(forward, backward);
@@ -154,7 +154,7 @@ fn test_reversing_preserves_integer_addition() {
 #[test]
 fn test_integer_division_preserves_order() {
     Hegel::new(|tc| {
-        let n: i64 = tc.draw(&gs::integers::<i64>().min_value(1));
+        let n: i64 = tc.draw(gs::integers::<i64>().min_value(1));
         assert!(n / 2 < n);
     })
     .settings(Settings::new().database(None))
