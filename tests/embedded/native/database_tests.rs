@@ -739,6 +739,28 @@ fn test_in_memory_same_listener_twice_fires_twice_per_event() {
     assert_eq!(events.lock().unwrap().len(), 2);
 }
 
+/// NativeDatabase broadcasts listener events via a filesystem watcher,
+/// so events arrive asynchronously. Block until `count` events have
+/// been recorded (or panic on timeout). Mirrors Hypothesis's use of
+/// `wait_for(...)` in `tests/watchdog/test_database.py`.
+fn wait_for_events(events: &Arc<StdMutex<Vec<ListenerEvent>>>, count: usize) -> Vec<ListenerEvent> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let snap = events.lock().unwrap().clone();
+        if snap.len() >= count {
+            return snap;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!(
+                "timed out waiting for {count} events; got {}: {:?}",
+                snap.len(),
+                snap
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 #[test]
 fn test_native_db_save_broadcasts() {
     let dir = tempfile::TempDir::new().unwrap();
@@ -746,9 +768,9 @@ fn test_native_db_save_broadcasts() {
     let (events, listener) = record_events();
     db.add_listener(listener);
     db.save(b"k", b"v");
-    let events = events.lock().unwrap();
-    assert_eq!(events.len(), 1);
-    assert!(matches!(&events[0], ListenerEvent::Save { key, value }
+    let snap = wait_for_events(&events, 1);
+    assert_eq!(snap.len(), 1);
+    assert!(matches!(&snap[0], ListenerEvent::Save { key, value }
         if key == b"k" && value == b"v"));
 }
 
@@ -760,11 +782,13 @@ fn test_native_db_delete_broadcasts() {
     let (events, listener) = record_events();
     db.add_listener(listener);
     db.delete(b"k", b"v");
-    let events = events.lock().unwrap();
-    assert_eq!(events.len(), 1);
+    let snap = wait_for_events(&events, 1);
+    assert_eq!(snap.len(), 1);
+    // The watcher sees the file after it's already gone, so the
+    // deleted value is reported as None. Hypothesis matches this.
     assert!(
-        matches!(&events[0], ListenerEvent::Delete { key, value: Some(v) }
-        if key == b"k" && v == b"v")
+        matches!(&snap[0], ListenerEvent::Delete { key, value: None }
+        if key == b"k")
     );
 }
 
@@ -776,10 +800,20 @@ fn test_native_db_move_broadcasts_delete_then_save() {
     let (events, listener) = record_events();
     db.add_listener(listener);
     db.move_value(b"k1", b"k2", b"v");
-    let events = events.lock().unwrap();
-    assert_eq!(events.len(), 2);
-    assert!(matches!(events[0], ListenerEvent::Delete { .. }));
-    assert!(matches!(events[1], ListenerEvent::Save { .. }));
+    // The watcher can deliver a rename as a paired event (yielding both
+    // delete-with-value and save), or as separate From/To events
+    // (yielding delete-with-None and save). Check that both events show
+    // up as a Delete(k1, _) + Save(k2, v) pair regardless of order.
+    let snap = wait_for_events(&events, 2);
+    let has_delete_k1 = snap
+        .iter()
+        .any(|e| matches!(e, ListenerEvent::Delete { key, .. } if key == b"k1"));
+    let has_save_k2 = snap.iter().any(|e| {
+        matches!(e, ListenerEvent::Save { key, value }
+        if key == b"k2" && value == b"v")
+    });
+    assert!(has_delete_k1, "expected Delete(k1, _); got {:?}", snap);
+    assert!(has_save_k2, "expected Save(k2, v); got {:?}", snap);
 }
 
 #[test]
@@ -789,9 +823,44 @@ fn test_native_db_move_to_self_broadcasts_single_save() {
     let (events, listener) = record_events();
     db.add_listener(listener);
     db.move_value(b"k", b"k", b"v");
-    let events = events.lock().unwrap();
-    assert_eq!(events.len(), 1);
-    assert!(matches!(events[0], ListenerEvent::Save { .. }));
+    let snap = wait_for_events(&events, 1);
+    assert!(matches!(&snap[0], ListenerEvent::Save { key, value }
+        if key == b"k" && value == b"v"));
+}
+
+#[test]
+fn test_native_db_cross_instance_listener_observes_writes() {
+    // Two NativeDatabase handles pointing at the same directory —
+    // analogous to two separate processes writing to a shared on-disk
+    // database. A listener attached to db1 must observe writes
+    // performed by db2.
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db1 = NativeDatabase::new(&path);
+    let db2 = NativeDatabase::new(&path);
+    let (events, listener) = record_events();
+    db1.add_listener(listener);
+
+    db2.save(b"shared-key", b"external-value");
+
+    let snap = wait_for_events(&events, 1);
+    assert!(
+        snap.iter()
+            .any(|e| matches!(e, ListenerEvent::Save { key, value }
+            if key == b"shared-key" && value == b"external-value")),
+        "expected a Save(shared-key, external-value); got {:?}",
+        snap
+    );
+
+    // db2 deletes the value; db1's listener must see it.
+    db2.delete(b"shared-key", b"external-value");
+    let snap = wait_for_events(&events, 2);
+    assert!(
+        snap.iter()
+            .any(|e| matches!(e, ListenerEvent::Delete { key, .. } if key == b"shared-key")),
+        "expected a Delete(shared-key, _); got {:?}",
+        snap
+    );
 }
 
 #[test]

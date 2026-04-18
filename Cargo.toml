@@ -61,6 +61,7 @@ serde_json = { version = "1.0.61", optional = true }
 regex-syntax = { version = "0.8", optional = true }
 num-bigint = { version = "0.4", optional = true }
 num-traits = { version = "0.2", optional = true }
+notify = { version = "8", optional = true }
 
 [dev-dependencies]
 regex = "1.0"
@@ -73,7 +74,7 @@ trybuild = "1.0"
 default = []
 rand = ["dep:rand"]
 antithesis = ["dep:serde_json"]
-native = ["dep:rand", "dep:regex-syntax", "dep:num-bigint", "dep:num-traits"]
+native = ["dep:rand", "dep:regex-syntax", "dep:num-bigint", "dep:num-traits", "dep:notify"]
 
 [package.metadata.docs.rs]
 all-features = true
