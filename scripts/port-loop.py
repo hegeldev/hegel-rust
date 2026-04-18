@@ -704,6 +704,32 @@ def repair(state: IterCounter) -> None:
             any_failures = True
 
 
+def resolve_port_arg(raw: str) -> Path:
+    """Resolve a --port argument to an upstream Path; abort on invalid input."""
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = (REPO_ROOT / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+    if not candidate.is_file():
+        sys.exit(f"[port-loop] --port: no such file: {raw}")
+    try:
+        candidate.relative_to(PBTKIT_DIR)
+    except ValueError:
+        try:
+            candidate.relative_to(HYPOTHESIS_DIR)
+        except ValueError:
+            sys.exit(
+                f"[port-loop] --port: {raw} is not under {PBTKIT_DIR} "
+                f"or {HYPOTHESIS_DIR}"
+            )
+    if not candidate.name.startswith("test_") or candidate.suffix != ".py":
+        sys.exit(
+            f"[port-loop] --port: {raw} does not look like a test_*.py file"
+        )
+    return candidate
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -718,8 +744,32 @@ def main() -> None:
         default=600,
         help="Per-claude-call timeout in seconds (default: 600s = 10 minutes).",
     )
+    parser.add_argument(
+        "--port",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Port exactly this upstream file (absolute or repo-relative). "
+            "Runs repair → drive_port → repair and exits, instead of "
+            "looping over random unported picks."
+        ),
+    )
     args = parser.parse_args()
     state = IterCounter(args.max_iterations, args.timeout)
+
+    if args.port is not None:
+        picked = resolve_port_arg(args.port)
+        destination = destination_for(picked)
+        print(
+            f"\n[port-loop] --port: targeting {picked} → {destination}; "
+            f"running pre-repair, sub-loop, then post-repair."
+        )
+        repair(state)
+        drive_port(picked, destination, state)
+        repair(state)
+        print(f"\n[port-loop] --port done after {state.n} iteration(s).")
+        return
 
     iters = 0
     while True:
