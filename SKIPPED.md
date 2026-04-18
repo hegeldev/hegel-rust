@@ -45,6 +45,13 @@ Individually-skipped tests (rest of the file is ported):
 - `test_posonly_args_py38.py` — tests Python 3.8 positional-only arg
   syntax (`/`) on `@st.composite` and `st.builds()`; both are
   Python-syntax / Python-API specific with no Rust counterpart.
+- `test_lookup.py` — tests `from_type()` and `st.register_type_strategy()`
+  resolution of Python typing constructs (`typing.TypeVar`,
+  `typing.ForwardRef`, `typing.Protocol`, `typing.NamedTuple`,
+  `typing.Generic`, `typing.NewType`, `enum.Enum`, `typing.Callable`,
+  `abc.ABC`, `typing.TypedDict`) via runtime type introspection; neither
+  `from_type` nor `register_type_strategy` exists in hegel-rust and the
+  derive-macro analog (`#[derive(Generate)]`) is compile-time only.
 - `test_lookup_py38.py` — tests `from_type()` resolution of Python typing
   constructs (`typing.Final`, `typing.Literal`, `typing.TypedDict`,
   `typing.Protocol`), Python positional-only/keyword-only arg syntax,
