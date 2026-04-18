@@ -54,6 +54,12 @@ Ground rules:
   never --no-verify.
 - Read .claude/skills/porting-tests/SKILL.md before porting or reviewing
   a port.
+- As you port, keep the skill current. If you figure out how to port
+  something in a way not already covered by SKILL.md or its references
+  under .claude/skills/porting-tests/references/ — a Python→Rust
+  translation that's missing from the cheat sheet, a non-obvious
+  pattern, a gotcha — update the relevant file in the same commit.
+  Don't duplicate things that are already documented.
 
 Skip vs. port policy (applies to every port-related task):
 
@@ -172,6 +178,11 @@ policy from the system prompt:
 - Is the coverage of the upstream behavior adequate given hegel-rust's
   available API? If missing cases could be added by native-gating plus
   a source-level stub, add them.
+- Did this port surface any new Python→Rust translation, pattern, or
+  gotcha that isn't already documented under
+  `.claude/skills/porting-tests/` (SKILL.md, references/api-mapping.md,
+  references/pbtkit-overview.md, references/hypothesis-overview.md)?
+  If so, add a terse entry in a commit.
 
 If you find anything worth changing, make focused commits to fix it —
 the sub-loop will re-run the gates afterward and invoke you again if
@@ -215,6 +226,16 @@ def run_gate(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int,
         captured.append(line)
     proc.wait()
     return proc.returncode, "".join(captured)
+
+
+def apply_format() -> None:
+    """Run `just format` to auto-fix formatting before the lint gate.
+
+    Any changes made end up as a dirty tree which the clean-tree gate catches
+    and commits; the model never has to run `just format` themselves to fix
+    formatting-only lints.
+    """
+    run_gate(["just", "format"])
 
 
 def gate_lint() -> tuple[bool, str]:
@@ -682,6 +703,7 @@ def repair(state: IterCounter) -> None:
     any_failures = True
     while any_failures:
         any_failures = False
+        apply_format()
         ok, out = gate_lint()
         if not ok:
             any_failures = True
