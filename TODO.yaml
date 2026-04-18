@@ -7,79 +7,114 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Make NativeDatabase multi-value per key (match Hypothesis)
+- title: Port InMemoryNativeDatabase (match Hypothesis's InMemoryExampleDatabase)
   details: |
-    `src/native/database.rs` currently stores exactly one value per key
-    (`db_root/<fnv_hex(key)>/best`, with `save()` overwriting). This
-    matches pbtkit's `DirectoryDB` (`get`/`__setitem__`/`__delitem__`),
-    which deliberately simplified Hypothesis's richer model.
-
-    Hypothesis's `ExampleDatabase` (resources/hypothesis/hypothesis-
-    python/src/hypothesis/database.py) is multi-value: one key maps to
-    a set of values. The core API is:
-      - `save(key, value)`    — add value to the set under key
-      - `fetch(key)`          — yield every value stored under key
-      - `delete(key, value)`  — remove one specific value
-      - `move(src, dst, v)`   — atomically move one value between keys
-
-    Plus wrappers: `InMemoryExampleDatabase`, `MultiplexedDatabase`,
-    `ReadOnlyDatabase`, `BackgroundWriteDatabase`,
-    `GitHubArtifactDatabase`, and the `add_listener`/`remove_listener`
-    listener API on the base class.
-
-    Per `.claude/skills/implementing-native/SKILL.md`, when pbtkit's
-    simplification is insufficient for a feature's requirements,
-    Hypothesis wins. The database is one of those cases — the
-    multi-value model is strictly more general (single-value replay
-    becomes "fetch, pick the smallest, save the new one"), and the
-    missing API is what's blocking porting `test_database_backend.py`.
+    Follow-up to the multi-value `NativeDatabase` rework.
+    `resources/hypothesis/hypothesis-python/src/hypothesis/database.py`
+    ships `InMemoryExampleDatabase`, a non-persistent sibling of the
+    directory-backed database that keeps `data: dict[bytes, set[bytes]]`
+    in memory. hegel-rust has no in-memory counterpart.
 
     Scope:
-    1. Rework the core `NativeDatabase` on-disk format to store
-       multiple values per key. One straightforward layout is
-       `db_root/<fnv_hex(key)>/<fnv_hex(value)>` (one file per
-       (key, value) pair), mirroring
-       `DirectoryBasedExampleDatabase` in Hypothesis. Replace the
-       `load`/`save` API with `save(key, value)`, `fetch(key) ->
-       impl Iterator<Item = Vec<u8>>`, `delete(key, value)`, and
-       `move(src, dst, value)`.
-    2. Migrate the current replay callers in `src/native/runner.rs`
-       and anywhere else that uses `NativeDatabase::{load, save}` to
-       the new API. A "load the best known counterexample" helper
-       on top of `fetch` (e.g. pick the shortlex-smallest value) is
-       fine and keeps the replay path ergonomic.
-    3. Update the on-disk value format only if needed; the existing
-       `serialize_choices` / `deserialize_choices` format is already
-       value-level and works unchanged as the "value" bytes.
-    4. Revisit the skip of `test_database_backend.py` in SKIPPED.md
-       (currently justified on the grounds that this API doesn't
-       exist — which was never a valid skip rationale under the
-       project's own policy). Port whatever's portable; for the
-       wrapper classes and listener API, either port them too or
-       split the skip entry into narrower, more honest rationales.
-       See the "audit SKIPPED.md" follow-up TODO below.
-    5. Update `tests/embedded/native/database_tests.rs` and
-       `tests/test_database_key.rs` to cover multi-value round-trips
-       and deletion.
-
-    Don't do this in one commit if it naturally splits (e.g. core
-    multi-value API first, then the wrappers, then the un-skip /
-    port pass). TODO_RECOVERY_PROMPT semantics mean a stuck large
-    TODO will get re-scoped anyway, but aim for coherent focused
-    commits on the way.
+    1. Decide on a shared trait. The cleanest structure is probably
+       an `ExampleDatabase` trait in `src/native/database.rs` with
+       `save`/`fetch`/`delete`/`move_value` methods; `NativeDatabase`
+       (the directory-backed one) and a new
+       `InMemoryNativeDatabase` both implement it. The runner's
+       `db: Option<NativeDatabase>` becomes
+       `db: Option<Box<dyn ExampleDatabase>>` (or equivalent).
+    2. Implement `InMemoryNativeDatabase` using
+       `HashMap<Vec<u8>, HashSet<Vec<u8>>>`.
+    3. Port the in-memory subset of
+       `tests/cover/test_database_backend.py`
+       (`test_backend_returns_what_you_put_in`, `test_can_delete_keys`,
+       parametrized `exampledatabase` fixture tests) as native-only
+       integration tests. Remove the corresponding sub-bullets from
+       the `test_database_backend.py` entry in SKIPPED.md.
+    4. The public-facing `Database::Path(p)` enum in
+       `src/runner.rs` may need a new `Database::InMemory` variant —
+       see the `Database` / `Settings` surface before adding it to
+       keep the server/native split clean.
 
     Acceptance:
-    - `NativeDatabase` has `save`/`fetch`/`delete`/`move` matching
-      Hypothesis's semantics, with doc comments pointing at
-      `database.py`.
-    - Replay (`test_database_key.rs`) still works after the
-      migration — same end-user behaviour, just via the richer API.
-    - `test_database_backend.py` is no longer skipped on
-      multi-value-API grounds. If individual sub-tests inside it
-      remain unportable (e.g. `GitHubArtifactDatabase` is genuinely
-      a public-API dependency on Hypothesis-only infrastructure),
-      they get their own narrower skip entries, not a blanket
-      "the whole API doesn't exist" entry.
+    - An `InMemoryNativeDatabase` type exists with the same
+      multi-value semantics as `NativeDatabase`.
+    - The replay test suite passes in both directory and in-memory
+      modes.
+    - `test_database_backend.py` entry in SKIPPED.md lists one
+      fewer sub-bullet of un-ported functionality.
+
+- title: Port ReadOnlyDatabase / MultiplexedDatabase / BackgroundWriteDatabase wrappers
+  details: |
+    Follow-up to the multi-value `NativeDatabase` rework.
+    `hypothesis.database` exports three wrapper classes that compose
+    databases together: `ReadOnlyDatabase` (silently drops writes),
+    `MultiplexedDatabase` (reads union, writes fan out),
+    `BackgroundWriteDatabase` (flushes writes on a worker thread). All
+    three rely on the base-class `save`/`fetch`/`delete`/`move` API
+    that `NativeDatabase` now exposes, so they are unblocked by the
+    multi-value rework. None exist in Rust yet.
+
+    Prerequisite: the `ExampleDatabase` trait from the
+    `InMemoryNativeDatabase` TODO above (this work is much cleaner on
+    top of that trait).
+
+    Scope:
+    1. `ReadOnlyNativeDatabase<D>` that forwards `fetch` to its inner
+       database and silently ignores `save` / `delete` /
+       `move_value`. Ports `test_readonly_db_is_not_writable`.
+    2. `MultiplexedNativeDatabase` holding a `Vec<Box<dyn
+       ExampleDatabase>>`. `save` / `delete` / `move_value` fan out;
+       `fetch` unions results and de-duplicates. Ports
+       `test_multiplexed_dbs_read_and_write_all`.
+    3. `BackgroundWriteNativeDatabase` that buffers writes to a
+       worker thread. Careful with shutdown semantics (matching
+       Hypothesis's `__del__`-style flush). Ports
+       `test_background_write_database`.
+    4. Each wrapper gets its own `tests/embedded/native/` or
+       `tests/native/` test file; remove the corresponding
+       sub-bullets from the `test_database_backend.py` entry in
+       SKIPPED.md.
+
+    Acceptance:
+    - All three wrapper types exist and round-trip data via the
+      `ExampleDatabase` trait.
+    - Corresponding sub-bullets removed from SKIPPED.md.
+
+- title: Port the ExampleDatabase listener API (add_listener / remove_listener)
+  details: |
+    Follow-up to the multi-value `NativeDatabase` rework.
+    Hypothesis's base `ExampleDatabase` class exposes
+    `add_listener` / `remove_listener` / `clear_listeners` and an
+    internal `_broadcast_change` helper that fires `("save", (k, v))`
+    / `("delete", (k, v))` events whenever the underlying store
+    changes (see `database.py`). On `DirectoryBasedExampleDatabase`
+    this hooks into watchdog so that external writers to the same
+    directory are also observed. Hegel-rust has no listener surface.
+
+    Scope:
+    1. Design the Rust listener API. Likely a `Fn(ListenerEvent)`
+       closure stored alongside the database, where `ListenerEvent`
+       is an enum `Save { key, value } | Delete { key, value: Option<...> }`.
+    2. Wire events into `save` / `delete` / `move_value` on
+       `NativeDatabase` and `InMemoryNativeDatabase` (once that
+       lands). Whether to port the watchdog integration for
+       cross-process observation is a separate design question —
+       watchdog is Python-specific, but the `notify` crate is the
+       Rust analogue.
+    3. Port the `_database_conforms_to_listener_api` state-machine
+       test and the `test_add_listener_*` tests. The state-machine
+       test uses Hypothesis's `RuleBasedStateMachine`; hegel-rust's
+       stateful support lives in `src/stateful.rs` — check fit
+       before starting. If stateful support is insufficient, file a
+       narrower follow-up for that first.
+    4. Update the `test_database_backend.py` SKIPPED.md sub-bullet.
+
+    Acceptance:
+    - `NativeDatabase` supports registering listeners that fire on
+      save/delete/move_value.
+    - The Hypothesis listener-API test suite passes against
+      `NativeDatabase` and `InMemoryNativeDatabase`.
 
 - title: Audit SKIPPED.md for entries miscategorised under the skip policy
   details: |
