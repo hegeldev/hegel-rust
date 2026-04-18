@@ -380,6 +380,155 @@ impl StringChoice {
         let keys: Vec<u32> = value.chars().map(|c| codepoint_key(c as u32)).collect();
         (keys.len(), keys)
     }
+
+    /// Count of valid codepoints in range, excluding surrogates.
+    /// pbtkit: `text.py::StringChoice._alpha_size`.
+    #[allow(dead_code)]
+    pub fn alpha_size(&self) -> u64 {
+        let total = u64::from(self.max_codepoint - self.min_codepoint + 1);
+        let sur_lo = self.min_codepoint.max(0xD800);
+        let sur_hi = self.max_codepoint.min(0xDFFF);
+        if sur_lo <= sur_hi {
+            total - u64::from(sur_hi - sur_lo + 1)
+        } else {
+            total
+        }
+    }
+
+    /// Largest valid index for [`from_index`].
+    ///
+    /// pbtkit: `text.py::StringChoice.max_index`. Panics on overflow when the
+    /// alphabet/length combination exceeds u128 range.
+    #[allow(dead_code)]
+    pub fn max_index(&self) -> u128 {
+        let alpha = u128::from(self.alpha_size());
+        let mut total: u128 = 0;
+        for length in self.min_size..=self.max_size {
+            let term = alpha
+                .checked_pow(length as u32)
+                .expect("StringChoice::max_index overflow");
+            total = total
+                .checked_add(term)
+                .expect("StringChoice::max_index overflow");
+        }
+        total - 1
+    }
+
+    /// Rank of a codepoint within valid (non-surrogate) codepoints in range,
+    /// sorted by [`codepoint_key`].
+    ///
+    /// pbtkit: `text.py::StringChoice._codepoint_rank`.
+    #[allow(dead_code)]
+    pub fn codepoint_rank(&self, codepoint: u32) -> u64 {
+        let key = codepoint_key(codepoint);
+        let mut count: u64 = 0;
+        // Low codepoints (< 128) are reordered by codepoint_key, so count by scan.
+        let lo = self.min_codepoint;
+        let hi = self.max_codepoint.min(127);
+        if lo <= hi {
+            for c in lo..=hi {
+                if codepoint_key(c) < key {
+                    count += 1;
+                }
+            }
+        }
+        // High codepoints (>= 128) preserve natural order; count those < key.
+        let hi_lo = self.min_codepoint.max(128);
+        let hi_hi = self.max_codepoint;
+        if hi_lo <= hi_hi && key > hi_lo {
+            let end = (key - 1).min(hi_hi);
+            let mut n = u64::from(end - hi_lo + 1);
+            // Subtract surrogates that fall within [hi_lo, end].
+            let sur_lo = hi_lo.max(0xD800);
+            let sur_hi = end.min(0xDFFF);
+            if sur_lo <= sur_hi {
+                n -= u64::from(sur_hi - sur_lo + 1);
+            }
+            count += n;
+        }
+        count
+    }
+
+    /// Codepoint at the given rank among valid (non-surrogate) codepoints in
+    /// range, sorted by [`codepoint_key`].
+    ///
+    /// pbtkit: `text.py::StringChoice._codepoint_at_rank`. Panics if `rank`
+    /// exceeds [`alpha_size`].
+    #[allow(dead_code)]
+    pub fn codepoint_at_rank(&self, rank: u64) -> u32 {
+        let lo = self.min_codepoint;
+        let hi = self.max_codepoint.min(127);
+        let mut low_sorted: Vec<u32> = if lo <= hi {
+            (lo..=hi).collect()
+        } else {
+            Vec::new()
+        };
+        low_sorted.sort_by_key(|&c| codepoint_key(c));
+        if rank < low_sorted.len() as u64 {
+            return low_sorted[rank as usize];
+        }
+        let rank = rank - low_sorted.len() as u64;
+        let hi_lo = self.min_codepoint.max(128);
+        let mut c = hi_lo + rank as u32;
+        if c >= 0xD800 {
+            c += 0xDFFF - 0xD800 + 1;
+        }
+        assert!(
+            c <= self.max_codepoint,
+            "rank out of range for StringChoice"
+        );
+        c
+    }
+
+    /// Shortlex index of `value` under this choice's mapped-codepoint alphabet.
+    ///
+    /// pbtkit: `text.py::StringChoice.to_index`. Inverse of [`from_index`].
+    #[allow(dead_code)]
+    pub fn to_index(&self, value: &str) -> u128 {
+        let alpha = u128::from(self.alpha_size());
+        let len = value.chars().count();
+        let mut offset: u128 = 0;
+        for length in self.min_size..len {
+            offset += alpha
+                .checked_pow(length as u32)
+                .expect("StringChoice::to_index overflow");
+        }
+        let mut position: u128 = 0;
+        for ch in value.chars() {
+            position = position * alpha + u128::from(self.codepoint_rank(ch as u32));
+        }
+        offset + position
+    }
+
+    /// String at the given shortlex index, or `None` if `index` exceeds the
+    /// total bucket size (i.e. > [`max_index`]).
+    ///
+    /// pbtkit: `text.py::StringChoice.from_index`. Inverse of [`to_index`].
+    #[allow(dead_code, clippy::wrong_self_convention)]
+    pub fn from_index(&self, index: u128) -> Option<String> {
+        let alpha = u128::from(self.alpha_size());
+        assert!(alpha > 0, "StringChoice::from_index: empty alphabet");
+        let mut remaining = index;
+        for length in self.min_size..=self.max_size {
+            let bucket_size = alpha
+                .checked_pow(length as u32)
+                .expect("StringChoice::from_index overflow");
+            if remaining < bucket_size {
+                let mut chars: Vec<char> = Vec::with_capacity(length);
+                for _ in 0..length {
+                    let r = (remaining % alpha) as u64;
+                    let cp = self.codepoint_at_rank(r);
+                    chars
+                        .push(char::from_u32(cp).expect("codepoint_at_rank returned a non-scalar"));
+                    remaining /= alpha;
+                }
+                chars.reverse();
+                return Some(chars.into_iter().collect());
+            }
+            remaining -= bucket_size;
+        }
+        None
+    }
 }
 
 /// The kind of choice made at a particular point.
