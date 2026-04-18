@@ -217,6 +217,14 @@ pub use test_case::{__IsTestCase, __assert_is_test_case, generate_from_schema, g
 #[doc(hidden)]
 pub use antithesis::TestLocation;
 
+// Re-exports of native-engine internals for integration-test access.
+// `#[doc(hidden)]` — not part of the stable public API.
+#[cfg(feature = "native")]
+#[doc(hidden)]
+pub mod __native_test_internals {
+    pub use crate::native::core::StringChoice;
+}
+
 /// Derive a generator for a struct or enum.
 ///
 /// This implements [`DefaultGenerator`](generators::DefaultGenerator) for the type,
