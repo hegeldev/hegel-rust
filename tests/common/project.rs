@@ -118,6 +118,8 @@ impl TempRustProject {
                     .join(", ")
             )
         };
+        // Use forward slashes in the path to avoid TOML escape issues on Windows
+        let hegel_path_str = hegel_path.display().to_string().replace('\\', "/");
         let cargo_toml = format!(
             r#"[package]
 name = "{crate_name}"
@@ -128,7 +130,7 @@ edition = "2021"
 hegeltest = {{ path = "{path}"{features} }}
 "#,
             crate_name = self.crate_name,
-            path = hegel_path.display(),
+            path = hegel_path_str,
             features = features,
         );
         std::fs::write(self.project_path.join("Cargo.toml"), cargo_toml).unwrap();

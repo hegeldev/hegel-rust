@@ -111,6 +111,6 @@ pub fn read_packet<R: Read + ?Sized>(reader: &mut R) -> std::io::Result<Packet> 
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "../../tests/embedded/protocol/packet_tests.rs"]
 mod tests;

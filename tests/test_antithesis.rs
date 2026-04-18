@@ -1,3 +1,6 @@
+// Antithesis only supports Linux.
+#![cfg(not(windows))]
+
 mod common;
 
 use common::project::TempRustProject;
