@@ -66,3 +66,15 @@ Individually-skipped tests (rest of the file is ported):
 - `test_example.py` — tests the fluent `.via("...")` and `.xfail(...)`
   methods chained onto `@example(...)`; hegel-rust's
   `#[hegel::explicit_test_case]` has no equivalent of either.
+- `test_database_backend.py` — tests Hypothesis's full
+  `ExampleDatabase` public-API surface: `InMemoryExampleDatabase`,
+  `MultiplexedDatabase`, `ReadOnlyDatabase`, `BackgroundWriteDatabase`,
+  `GitHubArtifactDatabase`, the `add_listener`/`remove_listener`
+  listener API, `choices_to_bytes`/`choices_from_bytes` with
+  `_pack_uleb128`/`_unpack_uleb128`, `_metakeys_name`, and the
+  multi-value `save`/`fetch`/`delete`/`move` semantics. hegel-rust's
+  `NativeDatabase` is a fundamentally different single-value-per-key
+  replay store with only `load`/`save`; none of these wrappers,
+  variants, or APIs exist. The replay round-trip is covered by
+  `tests/test_database_key.rs` and the serialize/load/save round-trips
+  by `tests/embedded/native/database_tests.rs`.
