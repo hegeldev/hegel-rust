@@ -93,6 +93,10 @@ Individually-skipped tests (rest of the file is ported):
   cannot raise an assumption failure. `test_identity_map_is_noop` uses
   the internal `unwrap_strategies` API and Python `is` object identity
   to check that `s.map(identity) is s`, with no Rust counterpart.
+- `test_replay_logic.py::test_does_not_shrink_on_replay_with_multiple_bugs`
+  — depends on `report_multiple_bugs=True` (no equivalent setting in
+  hegel-rust) and the reported failure arriving as a Python
+  `ExceptionGroup`; hegel-rust always surfaces a single panic per run.
 - `test_database_backend.py` — tests Hypothesis's full
   `ExampleDatabase` public-API surface: `InMemoryExampleDatabase`,
   `MultiplexedDatabase`, `ReadOnlyDatabase`, `BackgroundWriteDatabase`,
