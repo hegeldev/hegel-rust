@@ -6,3 +6,4 @@ mod common;
 
 mod composite;
 mod float_nastiness;
+mod replay_logic;
