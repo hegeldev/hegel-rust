@@ -47,7 +47,31 @@ pub(super) fn interpret_float(ntc: &mut NativeTestCase, schema: &Value) -> Resul
         max_value
     };
 
+    // For f32 schemas with infinity disallowed, clamp the unbounded end(s) to
+    // the f32 finite range. Otherwise `draw_float` can produce large f64 values
+    // that round to ±f32::INFINITY when the client deserializes as f32 — and
+    // since the draw used f64 bounds, the engine would not recognise the result
+    // as violating `allow_infinity=false`. Mirrors Hypothesis, which applies
+    // `float_of(x, width)` post-generation and rejects f32 overflows
+    // (`strategies/_internal/numbers.py::floats`).
+    let (min_value, max_value) = if width == 32 && !allow_infinity {
+        (
+            min_value.max(f32::MIN as f64),
+            max_value.min(f32::MAX as f64),
+        )
+    } else {
+        (min_value, max_value)
+    };
+
     let v = ntc.draw_float(min_value, max_value, allow_nan, allow_infinity)?;
+    // Round the drawn f64 to f32 precision when the user asked for f32.
+    // This matches what the client's deserializer will do and keeps
+    // shrinking / replay stable (the same bit pattern round-trips).
+    let v = if width == 32 && v.is_finite() {
+        (v as f32) as f64
+    } else {
+        v
+    };
     Ok(Value::Float(v))
 }
 
