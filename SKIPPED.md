@@ -58,6 +58,11 @@ Individually-skipped tests (rest of the file is ported):
   and Python reflection helpers (`convert_positional_arguments`,
   `get_pretty_function_description`); all Python-API specific with no
   Rust counterpart.
+- `test_lookup_py314.py` — tests `from_type()` resolution of Python 3.14's
+  parameterized `memoryview[T]` and `collections.abc.Buffer` via the
+  Python buffer protocol (`__buffer__` dunder, `memoryview`, `bytearray`);
+  `from_type` doesn't exist in hegel-rust and the buffer protocol has no
+  Rust counterpart.
 - `test_example.py` — tests the fluent `.via("...")` and `.xfail(...)`
   methods chained onto `@example(...)`; hegel-rust's
   `#[hegel::explicit_test_case]` has no equivalent of either.
