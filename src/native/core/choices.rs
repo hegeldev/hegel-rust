@@ -386,21 +386,19 @@ impl StringChoice {
 
     /// Largest valid index for [`from_index`].
     ///
-    /// pbtkit: `text.py::StringChoice.max_index`. Panics on overflow when the
-    /// alphabet/length combination exceeds u128 range.
+    /// pbtkit: `text.py::StringChoice.max_index`. Returned as arbitrary
+    /// precision because realistic alphabet/length combinations
+    /// (`256^{max_size}`-style) blow past `u128` — see
+    /// `src/native/bignum.rs`.
     #[allow(dead_code)]
-    pub fn max_index(&self) -> u128 {
-        let alpha = u128::from(self.alpha_size());
-        let mut total: u128 = 0;
+    pub fn max_index(&self) -> crate::native::bignum::BigUint {
+        use crate::native::bignum::{BigUint, Zero};
+        let alpha = BigUint::from(self.alpha_size());
+        let mut total = BigUint::zero();
         for length in self.min_size..=self.max_size {
-            let term = alpha
-                .checked_pow(length as u32)
-                .expect("StringChoice::max_index overflow");
-            total = total
-                .checked_add(term)
-                .expect("StringChoice::max_index overflow");
+            total += alpha.pow(length as u32);
         }
-        total - 1
+        total - BigUint::from(1u32)
     }
 
     /// Rank of a codepoint within valid (non-surrogate) codepoints in range,
@@ -472,18 +470,18 @@ impl StringChoice {
     /// Shortlex index of `value` under this choice's mapped-codepoint alphabet.
     ///
     /// pbtkit: `text.py::StringChoice.to_index`. Inverse of [`from_index`].
+    /// Arbitrary precision — see [`max_index`] for the bound rationale.
     #[allow(dead_code)]
-    pub fn to_index(&self, value: &[u32]) -> u128 {
-        let alpha = u128::from(self.alpha_size());
-        let mut offset: u128 = 0;
+    pub fn to_index(&self, value: &[u32]) -> crate::native::bignum::BigUint {
+        use crate::native::bignum::{BigUint, Zero};
+        let alpha = BigUint::from(self.alpha_size());
+        let mut offset = BigUint::zero();
         for length in self.min_size..value.len() {
-            offset += alpha
-                .checked_pow(length as u32)
-                .expect("StringChoice::to_index overflow");
+            offset += alpha.pow(length as u32);
         }
-        let mut position: u128 = 0;
+        let mut position = BigUint::zero();
         for &cp in value {
-            position = position * alpha + u128::from(self.codepoint_rank(cp));
+            position = position * &alpha + BigUint::from(self.codepoint_rank(cp));
         }
         offset + position
     }
@@ -493,20 +491,21 @@ impl StringChoice {
     ///
     /// pbtkit: `text.py::StringChoice.from_index`. Inverse of [`to_index`].
     #[allow(dead_code, clippy::wrong_self_convention)]
-    pub fn from_index(&self, index: u128) -> Option<Vec<u32>> {
-        let alpha = u128::from(self.alpha_size());
-        assert!(alpha > 0, "StringChoice::from_index: empty alphabet");
+    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<Vec<u32>> {
+        use crate::native::bignum::{BigUint, Zero};
+        let alpha = BigUint::from(self.alpha_size());
+        assert!(!alpha.is_zero(), "StringChoice::from_index: empty alphabet");
         let mut remaining = index;
         for length in self.min_size..=self.max_size {
-            let bucket_size = alpha
-                .checked_pow(length as u32)
-                .expect("StringChoice::from_index overflow");
+            let bucket_size = alpha.pow(length as u32);
             if remaining < bucket_size {
                 let mut cps: Vec<u32> = Vec::with_capacity(length);
                 for _ in 0..length {
-                    let r = (remaining % alpha) as u64;
+                    let r: u64 = (&remaining % &alpha)
+                        .try_into()
+                        .expect("rank < alpha_size fits in u64");
                     cps.push(self.codepoint_at_rank(r));
-                    remaining /= alpha;
+                    remaining /= &alpha;
                 }
                 cps.reverse();
                 return Some(cps);
