@@ -612,3 +612,343 @@ fn test_background_write_flushes_on_drop() {
     got.sort();
     assert_eq!(got, vec![b"v1".to_vec(), b"v2".to_vec()]);
 }
+
+// ── Listener API ───────────────────────────────────────────────────────────
+//
+// Mirrors the listener tests in Hypothesis's `test_database_backend.py`:
+// `test_can_remove_nonexistent_listener`, `test_readonly_listener`, and
+// `test_start_end_listening`. The `_database_conforms_to_listener_api`
+// state-machine test is tracked as a separate TODO.
+
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+fn record_events() -> (Arc<StdMutex<Vec<ListenerEvent>>>, Listener) {
+    let events = Arc::new(StdMutex::new(Vec::new()));
+    let events_clone = Arc::clone(&events);
+    let listener: Listener = Arc::new(move |event: &ListenerEvent| {
+        events_clone.lock().unwrap().push(event.clone());
+    });
+    (events, listener)
+}
+
+#[test]
+fn test_can_remove_nonexistent_listener() {
+    // Hypothesis: `test_can_remove_nonexistent_listener`.
+    let db = InMemoryNativeDatabase::new();
+    let listener: Listener = Arc::new(|_event: &ListenerEvent| {});
+    db.remove_listener(&listener); // must not panic
+}
+
+#[test]
+fn test_in_memory_save_broadcasts_save_event() {
+    let db = InMemoryNativeDatabase::new();
+    let (events, listener) = record_events();
+    db.add_listener(listener);
+    db.save(b"k", b"v");
+    let events = events.lock().unwrap();
+    assert_eq!(
+        *events,
+        vec![ListenerEvent::Save {
+            key: b"k".to_vec(),
+            value: b"v".to_vec()
+        }]
+    );
+}
+
+#[test]
+fn test_in_memory_idempotent_save_does_not_broadcast() {
+    let db = InMemoryNativeDatabase::new();
+    db.save(b"k", b"v");
+    let (events, listener) = record_events();
+    db.add_listener(listener);
+    db.save(b"k", b"v"); // already present
+    assert!(events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn test_in_memory_delete_broadcasts_delete_event() {
+    let db = InMemoryNativeDatabase::new();
+    db.save(b"k", b"v");
+    let (events, listener) = record_events();
+    db.add_listener(listener);
+    db.delete(b"k", b"v");
+    let events = events.lock().unwrap();
+    assert_eq!(
+        *events,
+        vec![ListenerEvent::Delete {
+            key: b"k".to_vec(),
+            value: Some(b"v".to_vec())
+        }]
+    );
+}
+
+#[test]
+fn test_in_memory_noop_delete_does_not_broadcast() {
+    let db = InMemoryNativeDatabase::new();
+    let (events, listener) = record_events();
+    db.add_listener(listener);
+    db.delete(b"k", b"absent");
+    assert!(events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn test_in_memory_move_broadcasts_delete_then_save() {
+    let db = InMemoryNativeDatabase::new();
+    db.save(b"k1", b"v");
+    let (events, listener) = record_events();
+    db.add_listener(listener);
+    db.move_value(b"k1", b"k2", b"v");
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(events[0], ListenerEvent::Delete { .. }));
+    assert!(matches!(events[1], ListenerEvent::Save { .. }));
+}
+
+#[test]
+fn test_in_memory_remove_listener_stops_events() {
+    let db = InMemoryNativeDatabase::new();
+    let (events, listener) = record_events();
+    db.add_listener(Arc::clone(&listener));
+    db.save(b"a", b"1");
+    db.remove_listener(&listener);
+    db.save(b"b", b"2");
+    assert_eq!(events.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn test_in_memory_clear_listeners_removes_all() {
+    let db = InMemoryNativeDatabase::new();
+    let (events, l1) = record_events();
+    let (_, l2) = record_events();
+    db.add_listener(l1);
+    db.add_listener(l2);
+    db.clear_listeners();
+    db.save(b"k", b"v");
+    assert!(events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn test_in_memory_same_listener_twice_fires_twice_per_event() {
+    let db = InMemoryNativeDatabase::new();
+    let (events, listener) = record_events();
+    db.add_listener(Arc::clone(&listener));
+    db.add_listener(Arc::clone(&listener));
+    db.save(b"k", b"v");
+    assert_eq!(events.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn test_native_db_save_broadcasts() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db = NativeDatabase::new(dir.path().to_str().unwrap());
+    let (events, listener) = record_events();
+    db.add_listener(listener);
+    db.save(b"k", b"v");
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(&events[0], ListenerEvent::Save { key, value }
+        if key == b"k" && value == b"v"));
+}
+
+#[test]
+fn test_native_db_delete_broadcasts() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db = NativeDatabase::new(dir.path().to_str().unwrap());
+    db.save(b"k", b"v");
+    let (events, listener) = record_events();
+    db.add_listener(listener);
+    db.delete(b"k", b"v");
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert!(
+        matches!(&events[0], ListenerEvent::Delete { key, value: Some(v) }
+        if key == b"k" && v == b"v")
+    );
+}
+
+#[test]
+fn test_native_db_move_broadcasts_delete_then_save() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db = NativeDatabase::new(dir.path().to_str().unwrap());
+    db.save(b"k1", b"v");
+    let (events, listener) = record_events();
+    db.add_listener(listener);
+    db.move_value(b"k1", b"k2", b"v");
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(events[0], ListenerEvent::Delete { .. }));
+    assert!(matches!(events[1], ListenerEvent::Save { .. }));
+}
+
+#[test]
+fn test_native_db_move_to_self_broadcasts_single_save() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db = NativeDatabase::new(dir.path().to_str().unwrap());
+    let (events, listener) = record_events();
+    db.add_listener(listener);
+    db.move_value(b"k", b"k", b"v");
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(events[0], ListenerEvent::Save { .. }));
+}
+
+#[test]
+fn test_readonly_listener_never_fires() {
+    // Hypothesis: `test_readonly_listener`.
+    let inner = Arc::new(InMemoryNativeDatabase::new());
+    let wrapped = ReadOnlyNativeDatabase::new(Arc::clone(&inner));
+    let (events, listener) = record_events();
+    wrapped.add_listener(Arc::clone(&listener));
+    wrapped.save(b"a", b"a");
+    wrapped.remove_listener(&listener);
+    wrapped.save(b"b", b"b");
+    assert!(events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn test_multiplexed_listener_fans_out_from_inner_writes() {
+    let a = Arc::new(InMemoryNativeDatabase::new());
+    let b = Arc::new(InMemoryNativeDatabase::new());
+    let multi = MultiplexedNativeDatabase::new(vec![
+        Arc::clone(&a) as Arc<dyn ExampleDatabase>,
+        Arc::clone(&b) as Arc<dyn ExampleDatabase>,
+    ]);
+    let (events, listener) = record_events();
+    multi.add_listener(listener);
+    multi.save(b"k", b"v");
+    // Each inner db fires its own event; the proxy re-broadcasts both.
+    assert_eq!(events.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn test_multiplexed_remove_listener_unsubscribes_from_inner() {
+    let inner = Arc::new(InMemoryNativeDatabase::new());
+    let multi =
+        MultiplexedNativeDatabase::new(vec![Arc::clone(&inner) as Arc<dyn ExampleDatabase>]);
+    let (events, listener) = record_events();
+    multi.add_listener(Arc::clone(&listener));
+    multi.save(b"k", b"v");
+    assert_eq!(events.lock().unwrap().len(), 1);
+    multi.remove_listener(&listener);
+    // After removal, writes going through the wrapper (or directly to the
+    // inner db) must not reach our listener.
+    multi.save(b"k", b"w");
+    inner.save(b"k", b"x");
+    assert_eq!(events.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn test_multiplexed_clear_listeners_unsubscribes_from_inner() {
+    let inner = Arc::new(InMemoryNativeDatabase::new());
+    let multi =
+        MultiplexedNativeDatabase::new(vec![Arc::clone(&inner) as Arc<dyn ExampleDatabase>]);
+    let (events, listener) = record_events();
+    multi.add_listener(listener);
+    multi.clear_listeners();
+    inner.save(b"k", b"v");
+    assert!(events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn test_background_write_listener_fires_on_inner_write() {
+    let bg = BackgroundWriteNativeDatabase::new(InMemoryNativeDatabase::new());
+    let (events, listener) = record_events();
+    bg.add_listener(listener);
+    bg.save(b"k", b"v");
+    // fetch() drains the worker queue so all enqueued writes have
+    // landed on the inner database (and thus fired listener events)
+    // by the time it returns.
+    bg.fetch(b"k");
+    assert_eq!(events.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn test_background_write_remove_listener_unsubscribes_from_inner() {
+    let bg = BackgroundWriteNativeDatabase::new(InMemoryNativeDatabase::new());
+    let (events, listener) = record_events();
+    bg.add_listener(Arc::clone(&listener));
+    bg.save(b"k", b"v");
+    bg.fetch(b"k");
+    bg.remove_listener(&listener);
+    bg.save(b"k2", b"v2");
+    bg.fetch(b"k2");
+    assert_eq!(events.lock().unwrap().len(), 1);
+}
+
+// Hypothesis: `test_start_end_listening`. We express the start/stop hooks
+// via the transition return values of the `Listeners` helper.
+struct TracksListens {
+    starts: AtomicUsize,
+    ends: AtomicUsize,
+    listeners: Listeners,
+}
+
+impl TracksListens {
+    fn new() -> Self {
+        Self {
+            starts: AtomicUsize::new(0),
+            ends: AtomicUsize::new(0),
+            listeners: Listeners::new(),
+        }
+    }
+}
+
+impl ExampleDatabase for TracksListens {
+    fn fetch(&self, _key: &[u8]) -> Vec<Vec<u8>> {
+        Vec::new()
+    }
+    fn save(&self, _key: &[u8], _value: &[u8]) {}
+    fn delete(&self, _key: &[u8], _value: &[u8]) {}
+
+    fn add_listener(&self, f: Listener) {
+        if self.listeners.add(f) {
+            self.starts.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    fn remove_listener(&self, f: &Listener) {
+        let (removed, now_empty) = self.listeners.remove(f);
+        if removed && now_empty {
+            self.ends.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    fn clear_listeners(&self) {
+        if self.listeners.clear() {
+            self.ends.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+#[test]
+fn test_start_end_listening() {
+    let db = TracksListens::new();
+    let l1: Listener = Arc::new(|_: &ListenerEvent| {});
+    let l2: Listener = Arc::new(|_: &ListenerEvent| {});
+
+    assert_eq!(db.starts.load(Ordering::SeqCst), 0);
+    db.add_listener(Arc::clone(&l1));
+    assert_eq!(db.starts.load(Ordering::SeqCst), 1);
+    db.add_listener(Arc::clone(&l2));
+    assert_eq!(db.starts.load(Ordering::SeqCst), 1);
+
+    assert_eq!(db.ends.load(Ordering::SeqCst), 0);
+    db.remove_listener(&l2);
+    assert_eq!(db.ends.load(Ordering::SeqCst), 0);
+    db.remove_listener(&l1);
+    assert_eq!(db.ends.load(Ordering::SeqCst), 1);
+
+    db.clear_listeners();
+    assert_eq!(db.ends.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn test_start_end_listening_clear_triggers_stop() {
+    // When listeners are non-empty, clear_listeners() fires the stop hook.
+    let db = TracksListens::new();
+    let l: Listener = Arc::new(|_: &ListenerEvent| {});
+    db.add_listener(Arc::clone(&l));
+    assert_eq!(db.starts.load(Ordering::SeqCst), 1);
+    db.clear_listeners();
+    assert_eq!(db.ends.load(Ordering::SeqCst), 1);
+}

@@ -31,6 +31,100 @@ use std::thread::{self, JoinHandle};
 
 use crate::native::core::ChoiceValue;
 
+/// Change-listener event payload.
+///
+/// Mirrors Hypothesis's `ListenerEventT`
+/// (`hypothesis/database.py`): databases broadcast `Save` / `Delete`
+/// events to registered listeners whenever a write changes the
+/// underlying store. A `move_value` is surfaced as a `Delete` followed
+/// by a `Save` rather than a dedicated event.
+///
+/// `Delete::value` is `Option<Vec<u8>>` because some backends
+/// (e.g. the watchdog-driven directory observer in Hypothesis) may know
+/// a deletion occurred at a key without knowing which value was
+/// removed. Hegel-rust's current in-process backends always populate it
+/// with `Some`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListenerEvent {
+    Save {
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
+    Delete {
+        key: Vec<u8>,
+        value: Option<Vec<u8>>,
+    },
+}
+
+/// Registered change-listener callback. Use `Arc::new` to construct one
+/// so `remove_listener` can later match it via `Arc::ptr_eq`.
+///
+/// Listener invocations happen on the thread that performed the
+/// underlying write, which for `BackgroundWriteNativeDatabase` is the
+/// worker thread.
+pub type Listener = Arc<dyn Fn(&ListenerEvent) + Send + Sync>;
+
+/// Helper type holding the registered listeners for a database.
+///
+/// Hypothesis: the `self._listeners` list on `ExampleDatabase`. Each
+/// mutating method returns enough information to let the caller fire
+/// the `_start_listening` / `_stop_listening` hook on the 0↔1 boundary
+/// (see `MultiplexedNativeDatabase` and `BackgroundWriteNativeDatabase`
+/// for concrete uses).
+#[derive(Default)]
+pub struct Listeners {
+    inner: Mutex<Vec<Listener>>,
+}
+
+#[allow(dead_code)]
+impl Listeners {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Append `f` to the listener list. Returns `true` if the listener
+    /// count transitioned from 0 to 1 (the `_start_listening` trigger).
+    pub fn add(&self, f: Listener) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        let was_empty = inner.is_empty();
+        inner.push(f);
+        was_empty
+    }
+
+    /// Remove the first occurrence of `f` (by `Arc::ptr_eq`). Returns
+    /// `(removed, now_empty)`: `removed` is `false` if `f` was not in
+    /// the list; `now_empty` is `true` when the list is empty after the
+    /// removal (the `_stop_listening` trigger).
+    pub fn remove(&self, f: &Listener) -> (bool, bool) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(idx) = inner.iter().position(|l| Arc::ptr_eq(l, f)) {
+            inner.remove(idx);
+            (true, inner.is_empty())
+        } else {
+            (false, false)
+        }
+    }
+
+    /// Drop every registered listener. Returns `true` if the list was
+    /// non-empty before the call (the `_stop_listening` trigger).
+    pub fn clear(&self) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        let had = !inner.is_empty();
+        inner.clear();
+        had
+    }
+
+    /// Invoke every registered listener with `event`. Listeners are
+    /// snapshotted before invocation so a listener may safely register
+    /// or remove listeners without deadlocking on the internal mutex.
+    pub fn broadcast(&self, event: &ListenerEvent) {
+        let snapshot: Vec<Listener> = self.inner.lock().unwrap().iter().cloned().collect();
+        for listener in &snapshot {
+            listener(event);
+        }
+    }
+}
+
 /// Multi-value key/value store backing the native engine's replay phase.
 ///
 /// Mirrors Hypothesis's `ExampleDatabase` base class
@@ -38,6 +132,13 @@ use crate::native::core::ChoiceValue;
 /// values. Implementations must tolerate concurrent or corrupt state and
 /// surface failures as silent no-ops rather than errors — a non-writable
 /// database must never abort an otherwise-successful test run.
+///
+/// Change-listener support (`add_listener` / `remove_listener` /
+/// `clear_listeners`) is optional: the default implementations are
+/// no-ops, so a database that doesn't support listening simply drops
+/// the callbacks on the floor. Databases that *do* support listening
+/// override all three and drive broadcasts through a `Listeners`
+/// helper.
 pub trait ExampleDatabase: Send + Sync {
     /// Return every value stored under `key`, in arbitrary order. Returns
     /// an empty `Vec` if the key is absent.
@@ -57,9 +158,7 @@ pub trait ExampleDatabase: Send + Sync {
     /// Named `move_value` rather than `move` because `move` is a Rust
     /// keyword. Hypothesis: `ExampleDatabase.move`. The default
     /// implementation is `delete` + `save`; backends may override for
-    /// atomicity (e.g. `NativeDatabase` uses `rename`). No internal
-    /// caller yet — kept to match the Hypothesis spec for wrappers such
-    /// as `MultiplexedDatabase` (not yet ported) that rely on it.
+    /// atomicity (e.g. `NativeDatabase` uses `rename`).
     #[allow(dead_code)]
     fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]) {
         if src == dst {
@@ -69,6 +168,25 @@ pub trait ExampleDatabase: Send + Sync {
         self.delete(src, value);
         self.save(dst, value);
     }
+
+    /// Register a change listener. The callback is invoked whenever a
+    /// write to this database changes the underlying store. Adding the
+    /// same `Arc` twice registers two callbacks; each fires once per
+    /// event. Hypothesis: `ExampleDatabase.add_listener`.
+    #[allow(unused_variables, dead_code)]
+    fn add_listener(&self, f: Listener) {}
+
+    /// Unregister a previously-added change listener. Silently does
+    /// nothing if `f` was not registered. Matches listeners by
+    /// `Arc::ptr_eq`, so pass the same `Arc` that was added.
+    /// Hypothesis: `ExampleDatabase.remove_listener`.
+    #[allow(unused_variables, dead_code)]
+    fn remove_listener(&self, f: &Listener) {}
+
+    /// Drop every change listener. Hypothesis:
+    /// `ExampleDatabase.clear_listeners`.
+    #[allow(dead_code)]
+    fn clear_listeners(&self) {}
 }
 
 /// Let `Arc<T>` stand in for an `ExampleDatabase` wherever the trait is
@@ -88,16 +206,27 @@ impl<T: ExampleDatabase + ?Sized> ExampleDatabase for Arc<T> {
     fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]) {
         (**self).move_value(src, dst, value);
     }
+    fn add_listener(&self, f: Listener) {
+        (**self).add_listener(f);
+    }
+    fn remove_listener(&self, f: &Listener) {
+        (**self).remove_listener(f);
+    }
+    fn clear_listeners(&self) {
+        (**self).clear_listeners();
+    }
 }
 
 pub struct NativeDatabase {
     db_root: PathBuf,
+    listeners: Listeners,
 }
 
 impl NativeDatabase {
     pub fn new(db_root: &str) -> Self {
         NativeDatabase {
             db_root: PathBuf::from(db_root),
+            listeners: Listeners::new(),
         }
     }
 
@@ -130,6 +259,13 @@ impl ExampleDatabase for NativeDatabase {
 
     /// Hypothesis: `DirectoryBasedExampleDatabase.save`. I/O errors are
     /// silently ignored.
+    ///
+    /// Hypothesis fires change events for this backend via watchdog in
+    /// `_start_listening`, so its own `save` does not broadcast. hegel-rust
+    /// does not yet integrate a filesystem watcher, so we broadcast
+    /// from the write path directly — this observes own-writes but not
+    /// external-writer changes. Cross-process listening is tracked as a
+    /// follow-up TODO.
     fn save(&self, key: &[u8], value: &[u8]) {
         let dir = self.key_path(key);
         if std::fs::create_dir_all(&dir).is_err() {
@@ -139,7 +275,12 @@ impl ExampleDatabase for NativeDatabase {
         if path.exists() {
             return;
         }
-        let _ = std::fs::write(&path, value);
+        if std::fs::write(&path, value).is_ok() {
+            self.listeners.broadcast(&ListenerEvent::Save {
+                key: key.to_vec(),
+                value: value.to_vec(),
+            });
+        }
     }
 
     /// Hypothesis: `DirectoryBasedExampleDatabase.delete`. If `value` was
@@ -152,6 +293,10 @@ impl ExampleDatabase for NativeDatabase {
         // `remove_dir` only succeeds if the directory is empty; that's
         // exactly the "value was the last entry" case.
         let _ = std::fs::remove_dir(self.key_path(key));
+        self.listeners.broadcast(&ListenerEvent::Delete {
+            key: key.to_vec(),
+            value: Some(value.to_vec()),
+        });
     }
 
     /// Hypothesis: `DirectoryBasedExampleDatabase.move`. Overrides the
@@ -177,6 +322,28 @@ impl ExampleDatabase for NativeDatabase {
         }
         // Cleanup: if `src`'s key directory is now empty, remove it.
         let _ = std::fs::remove_dir(self.key_path(src));
+        // Atomic rename succeeded: broadcast as delete+save to match the
+        // listener-API contract.
+        self.listeners.broadcast(&ListenerEvent::Delete {
+            key: src.to_vec(),
+            value: Some(value.to_vec()),
+        });
+        self.listeners.broadcast(&ListenerEvent::Save {
+            key: dst.to_vec(),
+            value: value.to_vec(),
+        });
+    }
+
+    fn add_listener(&self, f: Listener) {
+        self.listeners.add(f);
+    }
+
+    fn remove_listener(&self, f: &Listener) {
+        self.listeners.remove(f);
+    }
+
+    fn clear_listeners(&self) {
+        self.listeners.clear();
     }
 }
 
@@ -191,6 +358,7 @@ impl ExampleDatabase for NativeDatabase {
 #[allow(dead_code)]
 pub struct InMemoryNativeDatabase {
     data: Mutex<HashMap<Vec<u8>, HashSet<Vec<u8>>>>,
+    listeners: Listeners,
 }
 
 #[allow(dead_code)]
@@ -198,6 +366,7 @@ impl InMemoryNativeDatabase {
     pub fn new() -> Self {
         InMemoryNativeDatabase {
             data: Mutex::new(HashMap::new()),
+            listeners: Listeners::new(),
         }
     }
 }
@@ -217,15 +386,43 @@ impl ExampleDatabase for InMemoryNativeDatabase {
     }
 
     fn save(&self, key: &[u8], value: &[u8]) {
-        let mut data = self.data.lock().unwrap();
-        data.entry(key.to_vec()).or_default().insert(value.to_vec());
+        let inserted = {
+            let mut data = self.data.lock().unwrap();
+            data.entry(key.to_vec()).or_default().insert(value.to_vec())
+        };
+        if inserted {
+            self.listeners.broadcast(&ListenerEvent::Save {
+                key: key.to_vec(),
+                value: value.to_vec(),
+            });
+        }
     }
 
     fn delete(&self, key: &[u8], value: &[u8]) {
-        let mut data = self.data.lock().unwrap();
-        if let Some(values) = data.get_mut(key) {
-            values.remove(value);
+        let removed = {
+            let mut data = self.data.lock().unwrap();
+            data.get_mut(key)
+                .map(|values| values.remove(value))
+                .unwrap_or(false)
+        };
+        if removed {
+            self.listeners.broadcast(&ListenerEvent::Delete {
+                key: key.to_vec(),
+                value: Some(value.to_vec()),
+            });
         }
+    }
+
+    fn add_listener(&self, f: Listener) {
+        self.listeners.add(f);
+    }
+
+    fn remove_listener(&self, f: &Listener) {
+        self.listeners.remove(f);
+    }
+
+    fn clear_listeners(&self) {
+        self.listeners.clear();
     }
 }
 
@@ -269,12 +466,26 @@ impl<D: ExampleDatabase> ExampleDatabase for ReadOnlyNativeDatabase<D> {
 #[allow(dead_code)]
 pub struct MultiplexedNativeDatabase {
     inner: Vec<Arc<dyn ExampleDatabase>>,
+    listeners: Arc<Listeners>,
+    // Proxy listener registered on every inner db whenever we have at
+    // least one listener ourselves. When any inner db fires an event,
+    // the proxy re-broadcasts it to our own listeners.
+    proxy: Listener,
 }
 
 #[allow(dead_code)]
 impl MultiplexedNativeDatabase {
     pub fn new(inner: Vec<Arc<dyn ExampleDatabase>>) -> Self {
-        Self { inner }
+        let listeners = Arc::new(Listeners::new());
+        let listeners_for_proxy = Arc::clone(&listeners);
+        let proxy: Listener = Arc::new(move |event: &ListenerEvent| {
+            listeners_for_proxy.broadcast(event);
+        });
+        Self {
+            inner,
+            listeners,
+            proxy,
+        }
     }
 }
 
@@ -307,6 +518,32 @@ impl ExampleDatabase for MultiplexedNativeDatabase {
     fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]) {
         for db in &self.inner {
             db.move_value(src, dst, value);
+        }
+    }
+
+    fn add_listener(&self, f: Listener) {
+        let was_empty = self.listeners.add(f);
+        if was_empty {
+            for db in &self.inner {
+                db.add_listener(Arc::clone(&self.proxy));
+            }
+        }
+    }
+
+    fn remove_listener(&self, f: &Listener) {
+        let (removed, now_empty) = self.listeners.remove(f);
+        if removed && now_empty {
+            for db in &self.inner {
+                db.remove_listener(&self.proxy);
+            }
+        }
+    }
+
+    fn clear_listeners(&self) {
+        if self.listeners.clear() {
+            for db in &self.inner {
+                db.remove_listener(&self.proxy);
+            }
         }
     }
 }
@@ -344,6 +581,8 @@ pub struct BackgroundWriteNativeDatabase {
     inner: Arc<dyn ExampleDatabase>,
     queue: Arc<BackgroundQueue>,
     handle: Option<JoinHandle<()>>,
+    listeners: Arc<Listeners>,
+    proxy: Listener,
 }
 
 #[allow(dead_code)]
@@ -362,10 +601,17 @@ impl BackgroundWriteNativeDatabase {
         let worker_inner = Arc::clone(&inner);
         let worker_queue = Arc::clone(&queue);
         let handle = thread::spawn(move || background_worker_loop(worker_inner, worker_queue));
+        let listeners = Arc::new(Listeners::new());
+        let listeners_for_proxy = Arc::clone(&listeners);
+        let proxy: Listener = Arc::new(move |event: &ListenerEvent| {
+            listeners_for_proxy.broadcast(event);
+        });
         Self {
             inner,
             queue,
             handle: Some(handle),
+            listeners,
+            proxy,
         }
     }
 
@@ -442,6 +688,26 @@ impl ExampleDatabase for BackgroundWriteNativeDatabase {
             dst.to_vec(),
             value.to_vec(),
         ));
+    }
+
+    fn add_listener(&self, f: Listener) {
+        let was_empty = self.listeners.add(f);
+        if was_empty {
+            self.inner.add_listener(Arc::clone(&self.proxy));
+        }
+    }
+
+    fn remove_listener(&self, f: &Listener) {
+        let (removed, now_empty) = self.listeners.remove(f);
+        if removed && now_empty {
+            self.inner.remove_listener(&self.proxy);
+        }
+    }
+
+    fn clear_listeners(&self) {
+        if self.listeners.clear() {
+            self.inner.remove_listener(&self.proxy);
+        }
     }
 }
 
