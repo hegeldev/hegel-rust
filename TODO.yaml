@@ -7,49 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Merge TempRustProject cases in the same test file
-  details: |
-    Several test files spin up many near-identical TempRustProjects
-    that only differ by env var or a string-assertion pattern. Each
-    one pays the full cargo compile cost (today — after the shared
-    target dir change, just link time, but still not free, and still
-    runs the test binary). The worst offenders today:
-
-    - tests/test_explicit_test_case.rs — 11 instances
-    - tests/test_bad_server_command.rs — 7 instances
-    - tests/test_output.rs — 4 instances
-    - tests/test_composite.rs — 4 instances
-    - tests/test_hegel_test.rs — 3 instances
-
-    For each file where the per-case differences are small, restructure
-    so one TempRustProject is built once and then invoked multiple times
-    via `cargo_run` / `cargo_test` with different env, CLI args, or test
-    filters. A common pattern that works well:
-
-    - Build a single `src/main.rs` that reads a mode/env var (e.g.
-      `HEGEL_TEST_SCENARIO`) and dispatches to one of several test
-      scenarios.
-    - Build the project once at module load (via `OnceLock` or a
-      `lazy_static!`-equivalent, or by factoring a helper that the
-      individual `#[test]`s call).
-    - Each `#[test]` then only sets env vars + runs the binary; the
-      assertion logic stays per-test so failures still pinpoint which
-      scenario broke.
-
-    Don't do this if merging meaningfully damages readability or hides
-    independent failures. A file of 3 scenarios is probably fine to
-    leave alone; a file of 11 isn't.
-
-    Acceptance:
-    - `test_explicit_test_case.rs` and `test_bad_server_command.rs`
-      (at minimum) share their cargo build across scenarios. The other
-      listed files are stretch goals if the diff stays small.
-    - All previously passing tests still pass. If a scenario gets
-      dropped or folded, mention it in the commit message with a
-      reason.
-    - Wall-clock benchmark before/after on one of the converted files
-      in the commit message.
-
 - title: Move TempRustProject tests that don't need a subprocess in-process
   details: |
     Some tests currently pay for a full `cargo run`/`cargo test`
