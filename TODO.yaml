@@ -7,45 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Adopt num-bigint for arbitrary-precision integers in the native engine
-  details: |
-    Both pbtkit and Hypothesis lean on Python's bignum int type in
-    several places the native engine has to match — most prominently
-    the shortlex index code (`to_index`/`from_index`/`codepoint_rank`
-    in `resources/pbtkit/src/pbtkit/core.py`, `text.py`, `bytes.py`),
-    where the index for e.g. `BytesChoice{max_size=16}` is bounded
-    above by 256^16 ≈ 2^128, and realistic bounds (larger `max_size`,
-    wider codepoint ranges) blow past `u128` immediately. Shrinking
-    passes that manipulate those indices (e.g. pbtkit
-    `shrinking/index_passes.py`) have the same requirement.
-
-    Currently `src/native/` avoids these by just not implementing the
-    index API, but the tightened skip policy — and the `tests/pbtkit/
-    text.rs` revisit TODO above — routes those tests back into the
-    native engine, where they'll need real arbitrary-precision
-    arithmetic to pass.
-
-    Plan:
-    - Add `num-bigint` (and likely `num-traits`, `num-integer`) to
-      `Cargo.toml` under the `native` feature. Re-export what
-      `src/native/` uses through a small internal module so later
-      swaps (e.g. to `malachite`) are localised.
-    - Replace hand-rolled big-integer stand-ins under `src/native/`
-      with `BigUint`/`BigInt`.
-    - Use it as the signature for `to_index`/`from_index` when they
-      land (see the text.rs revisit TODO).
-    - Decide deliberately whether bignum leaks into the public native
-      API or stays `pub(crate)` — default to `pub(crate)`, only
-      promote if a public test genuinely needs it.
-
-    Acceptance:
-    - Native-mode tests that require arbitrary-precision arithmetic
-      compile and pass without `u128`-width clamping.
-    - Server mode is untouched (the server path has no bignum
-      requirement).
-    - `src/native/` has no ad-hoc big-integer helpers — all
-      arithmetic routes through `num`.
-
 - title: Port Python's unicodedata (from UnicodeData.txt) for category queries
   details: |
     Hypothesis's text generation leans on Python's `unicodedata`
