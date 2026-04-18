@@ -1,0 +1,7 @@
+error: custom attribute panicked
+ --> tests/compile/fail/composite_nullary.rs:1:1
+  |
+1 | #[hegel::composite]
+  | ^^^^^^^^^^^^^^^^^^^
+  |
+  = help: message: A #[composite] generator must define a first parameter of type TestCase. When drawing from a #[composite] generator with tc.draw(my_composite_gen), `tc` will be automatically passed to my_composite_gen as the first argument.

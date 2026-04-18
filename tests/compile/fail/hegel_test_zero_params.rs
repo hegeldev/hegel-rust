@@ -1,0 +1,2 @@
+#[hegel::test]
+fn main() {}

@@ -1,0 +1,6 @@
+error: #[hegel::explicit_test_case] requires at least one name = value pair.
+       Usage: #[hegel::explicit_test_case(name = value, ...)]
+ --> tests/compile/fail/explicit_test_case_empty_args.rs:2:1
+  |
+2 | #[hegel::explicit_test_case()]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

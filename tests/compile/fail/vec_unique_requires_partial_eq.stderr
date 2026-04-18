@@ -1,0 +1,24 @@
+error[E0599]: the method `unique` exists for struct `VecGenerator<NoEqGenerator<'_>, NoEq>`, but its trait bounds were not satisfied
+ --> tests/compile/fail/vec_unique_requires_partial_eq.rs:9:49
+  |
+4 | struct NoEq {
+  | ----------- doesn't satisfy `NoEq: PartialEq`
+...
+9 |     let _ = gs::vecs(NoEq::default_generator()).unique(true);
+  |                                                 ^^^^^^ method cannot be called on `VecGenerator<NoEqGenerator<'_>, NoEq>` due to unsatisfied trait bounds
+  |
+  = note: the following trait bounds were not satisfied:
+          `NoEq: PartialEq`
+help: consider annotating `NoEq` with `#[derive(PartialEq)]`
+  |
+4 + #[derive(PartialEq)]
+5 | struct NoEq {
+  |
+
+warning: unused import: `Generator`
+ --> tests/compile/fail/vec_unique_requires_partial_eq.rs:1:55
+  |
+1 | use hegel::generators::{self as gs, DefaultGenerator, Generator};
+  |                                                       ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

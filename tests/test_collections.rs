@@ -1,6 +1,9 @@
+// The compile-time assertion that `gs::vecs(...).unique(true)` requires
+// `PartialEq` on the element type lives in
+// tests/compile/fail/vec_unique_requires_partial_eq.rs, driven by `trybuild`.
+
 mod common;
 
-use common::project::TempRustProject;
 use hegel::TestCase;
 use hegel::generators::{self as gs, DefaultGenerator, Generator};
 use std::collections::{HashMap, HashSet};
@@ -288,23 +291,4 @@ fn test_vec_unique_sampled_from_no_duplicates(tc: TestCase) {
     let vec: Vec<i64> = tc.draw(gs::vecs(gs::sampled_from(vec![0_i64; 100])).unique(true));
     // All elements are 0, so a unique vec can have at most 1 element.
     assert!(vec.len() <= 1);
-}
-
-#[test]
-fn test_vec_unique_requires_partial_eq() {
-    TempRustProject::new()
-        .expect_failure("doesn't satisfy `NoEq: PartialEq`")
-        .main_file(
-            r#"
-use hegel::generators::{self as gs, DefaultGenerator, Generator};
-
-#[derive(hegel::DefaultGenerator)]
-struct NoEq { value: i32 }
-
-fn main() {
-    let _ = gs::vecs(NoEq::default_generator()).unique(true);
-}
-"#,
-        )
-        .cargo_run(&[]);
 }

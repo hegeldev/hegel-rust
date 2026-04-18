@@ -1,0 +1,6 @@
+error: #[hegel::explicit_test_case] can only be used together with #[hegel::test].
+       Add #[hegel::test] above #[hegel::explicit_test_case].
+ --> tests/compile/fail/explicit_test_case_on_bare_function.rs:2:1
+  |
+2 | fn my_func(tc: hegel::TestCase) {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

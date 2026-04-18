@@ -1,6 +1,9 @@
+// Compile-time error behaviour of #[hegel::test] (duplicate #[test], zero or
+// two parameters) lives in tests/compile/fail/hegel_test_*.rs, driven by
+// `trybuild`.
+
 mod common;
 
-use common::project::TempRustProject;
 use common::utils::expect_panic;
 use hegel::TestCase;
 use hegel::generators as gs;
@@ -75,49 +78,4 @@ fn test_database_persists_failing_examples() {
 
     let entries: Vec<_> = std::fs::read_dir(db_path.path()).unwrap().collect();
     assert!(!entries.is_empty());
-}
-
-#[test]
-fn test_duplicate_test_attribute_compile_error() {
-    let code = r#"
-use hegel::generators as gs;
-
-#[hegel::test]
-#[test]
-fn main(tc: hegel::TestCase) {}
-"#;
-    TempRustProject::new()
-        .main_file(code)
-        .expect_failure("Remove the #\\[test\\] attribute")
-        .cargo_run(&[]);
-}
-
-#[test]
-fn test_params_compile_error() {
-    // Zero parameters should be rejected
-    let code_zero = r#"
-use hegel::generators as gs;
-
-#[hegel::test]
-fn main() {
-}
-"#;
-    TempRustProject::new()
-        .main_file(code_zero)
-        .expect_failure("must take exactly one parameter of type hegel::TestCase")
-        .cargo_run(&[]);
-
-    // Two parameters should be rejected
-    let code_two = r#"
-use hegel::generators as gs;
-
-#[hegel::test]
-fn main(tc: hegel::TestCase, x: bool) {
-    let _ = (tc, x);
-}
-"#;
-    TempRustProject::new()
-        .main_file(code_two)
-        .expect_failure("must take exactly one parameter of type hegel::TestCase")
-        .cargo_run(&[]);
 }
