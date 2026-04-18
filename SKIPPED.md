@@ -97,6 +97,12 @@ Individually-skipped tests (rest of the file is ported):
   — depends on `report_multiple_bugs=True` (no equivalent setting in
   hegel-rust) and the reported failure arriving as a Python
   `ExceptionGroup`; hegel-rust always surfaces a single panic per run.
+- `test_compat.py` — tests `hypothesis.internal.compat`, a Python-language
+  compatibility layer: `floor`/`ceil` on Python numeric types,
+  `get_type_hints` over `inspect.Signature`/`ForwardRef`/`typing.Union`,
+  `dataclass_asdict` over `@dataclass`/`namedtuple`/`defaultdict`,
+  `add_note` on frozen-dataclass exceptions, and `extract_bits`. All
+  Python-specific with no Rust counterpart.
 - `test_database_backend.py` — tests Hypothesis's full
   `ExampleDatabase` public-API surface: `InMemoryExampleDatabase`,
   `MultiplexedDatabase`, `ReadOnlyDatabase`, `BackgroundWriteDatabase`,
