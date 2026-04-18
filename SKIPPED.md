@@ -33,3 +33,6 @@ file and treats listed files as "done".
 - `test_constants_ast.py` — tests Hypothesis's Python-AST constant
   extractor (`ConstantVisitor`, `constants_from_module`); parses Python
   source code, no Rust counterpart.
+- `test_caching.py` — tests Python object identity (`st.text() is
+  st.text()`) of Hypothesis's strategy cache; Rust generators are
+  builder structs with no `is`-style identity equivalent.
