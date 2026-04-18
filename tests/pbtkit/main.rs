@@ -5,4 +5,5 @@
 mod common;
 
 mod findability_arithmetic;
+mod shrink_quality_strings;
 mod text;
