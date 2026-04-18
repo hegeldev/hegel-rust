@@ -397,11 +397,14 @@ fn test_limitation_destructuring_pattern() {
 
 #[test]
 fn test_limitation_chained_method_on_draw() {
-    // `let _x = tc.draw(gen).abs()` — the init expression is `.abs()`, not
-    // `.draw()`, so is_test_case_draw_binding doesn't match.
+    // `let _x = tc.draw(gen).to_string()` — the init expression is
+    // `.to_string()`, not `.draw()`, so is_test_case_draw_binding doesn't
+    // match. `.to_string()` is used instead of `.abs()` because `.abs()` on
+    // `i32::MIN` panics with overflow, which Hypothesis treats as a separate
+    // interesting example and prints an extra counterexample line.
     let lines = draw_lines(
         "
-        let x = tc.draw(gs::integers::<i32>()).abs();
+        let x = tc.draw(gs::integers::<i32>()).to_string();
     ",
     );
     assert_eq!(lines, vec!["let draw_1 = 0;"]);
