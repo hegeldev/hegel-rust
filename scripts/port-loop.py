@@ -67,12 +67,20 @@ Ground rules:
   never --no-verify.
 - Read .claude/skills/porting-tests/SKILL.md before porting or reviewing
   a port.
-- As you port, keep the skill current. If you figure out how to port
-  something in a way not already covered by SKILL.md or its references
-  under .claude/skills/porting-tests/references/ — a Python→Rust
-  translation that's missing from the cheat sheet, a non-obvious
-  pattern, a gotcha — update the relevant file in the same commit.
-  Don't duplicate things that are already documented.
+- Read .claude/skills/implementing-native/SKILL.md before adding or
+  extending code under src/native/ (including filling in a todo!()
+  stub, or native-gating a test that needs new engine support). The
+  key rule: consult pbtkit (resources/pbtkit/src/pbtkit/) first, then
+  Hypothesis (resources/hypothesis/hypothesis-python/src/hypothesis/
+  internal/) only where pbtkit is insufficient. The native engine is
+  a port — match upstream semantics rather than reinventing them.
+- As you port, keep the skills current. If you figure out how to port
+  something in a way not already covered by the porting-tests skill
+  (or its references under .claude/skills/porting-tests/references/)
+  or the implementing-native skill — a Python→Rust translation that's
+  missing from the cheat sheet, a non-obvious pattern, a gotcha —
+  update the relevant file in the same commit. Don't duplicate things
+  that are already documented.
 
 Skip vs. port policy (applies to every port-related task):
 
@@ -156,6 +164,12 @@ native-gate the affected test(s) with `#[cfg(feature = "native")]` and
 add the missing feature under `src/native/` — stubbed with `todo!()` if
 it's too large to implement in one focused commit. The test itself
 must compile in both modes; the `todo!()` goes in the source.
+
+When you do implement (or stub) the missing feature, read
+.claude/skills/implementing-native/SKILL.md first: consult pbtkit
+(`resources/pbtkit/src/pbtkit/`) as the primary reference, and
+Hypothesis (`resources/hypothesis/hypothesis-python/src/hypothesis/
+internal/`) only where pbtkit is insufficient.
 """
 
 PORT_COMMIT_PROMPT = """\
