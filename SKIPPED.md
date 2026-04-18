@@ -6,27 +6,33 @@ file and treats listed files as "done".
 
 ## pbtkit (`/tmp/pbtkit/tests/`)
 
-- `test_targeting.py` — uses `tc.target(score)`; hegel-rust has no targeting
-  API yet.
+- `test_targeting.py` — uses `tc.target(score)`, a pbtkit public-API feature
+  (targeted property-based testing) with no hegel-rust analog. Hegel-rust
+  exposes no targeting surface on its `TestCase`.
 - `test_features.py` — tests Python-specific module-system shims
   (`sys.modules`, dunder access) with no Rust counterpart.
-- `test_spans.py` — relies on pbtkit-internal span introspection
-  (`tc.spans`, `tc.nodes`, `PbtkitState`, `_span_mutation_hook`) not
-  exposed by hegel-rust.
-- `test_exercise_shrink_paths.py` — exercises each `SHRINK_PASSES` pass via
-  `PbtkitState`, pure pbtkit engine internals.
-- `test_findability_comparison.py` — compares pbtkit vs Hypothesis by
-  running both engines in the same process; neither oracle is available in
-  hegel-rust.
-- `test_hypothesis.py` — raw pbtkit API stress tests (`tc.weighted`,
-  `tc.choice`, `tc.mark_status`) that don't map to the generator-based
-  public API.
+- `test_exercise_shrink_paths.py` — depends on `test_pbtsmith.py` (see
+  below) and on `hypothesis.internal.conjecture` (`ConjectureData`) to
+  bootstrap shrink-pass inputs. Both are Python-only integrations with no
+  Rust counterpart.
+- `test_findability_comparison.py` — runs the test programs under
+  `hypothesis.internal.conjecture.engine.ConjectureRunner` as the oracle
+  to compare against pbtkit's findability. Hypothesis's engine is a Python
+  library dependency with no Rust counterpart.
+- `test_hypothesis.py` — drives pbtkit via the public `tc.weighted(p)` and
+  `tc.target(score)` methods, which hegel-rust deliberately doesn't expose
+  on `TestCase` (no public weighted-boolean or targeting API). The
+  `tc.choice(n)` / `tc.mark_status(...)` calls do have hegel-rust
+  counterparts, but the test's method-dispatch loop can't be expressed
+  without the missing two.
 - `test_pbtsmith.py` — generates random Python programs via pbtkit's code
-  generator and execs them; no `hegelsmith` equivalent yet.
-- `test_shrink_comparison.py` — compares shrinker quality via
-  `ConjectureRunner`/`ConjectureData`/`ChoiceNode`, pure engine internals.
-- `test_choice_index.py` — tests pbtkit's `to_index`/`from_index` shortlex
-  enumeration; hegel-rust doesn't implement an index-based shrink pass.
+  generator and `exec()`s them; this is a Python-syntax/runtime integration
+  with no hegel-rust counterpart.
+- `test_shrink_comparison.py` — uses `hypothesis.internal.conjecture`
+  (`ConjectureRunner`, `ConjectureData`, `calc_label_from_name`,
+  `IntervalSet`) to run Hypothesis as an oracle against pbtkit's shrinker.
+  Hypothesis's engine is a Python library dependency with no Rust
+  counterpart.
 
 Individually-skipped tests (rest of the file is ported):
 
@@ -39,8 +45,9 @@ Individually-skipped tests (rest of the file is ported):
   no targeting API in hegel-rust (already covered by the whole-file skip
   of `test_targeting.py`).
 - `test_generators.py::test_impossible_weighted`,
-  `test_generators.py::test_guaranteed_weighted` — both use
-  `tc.weighted(p)`; hegel-rust has no public weighted-boolean API.
+  `test_generators.py::test_guaranteed_weighted` — both use pbtkit's
+  public `tc.weighted(p)` method; hegel-rust deliberately exposes no
+  weighted-boolean API on `TestCase` (public-API incompatibility).
 - `test_generators.py::test_many_reject`,
   `test_generators.py::test_many_reject_unsatisfiable` — exercise
   pbtkit's free-function `many()` helper and its Unsatisfiable-on-reject
@@ -118,45 +125,27 @@ Individually-skipped tests (rest of the file is ported):
   Rust has no `slice`-object type and hegel-rust has no `gs::slices()`
   generator; the tests rely on Python indexing semantics
   (`range(size)[x.start]`, `x.indices(size)`) throughout.
-- `test_database_backend.py` — the multi-value
-  `save`/`fetch`/`delete`/`move` semantics that the bulk of this file
-  exercises are covered in Rust by
-  `tests/embedded/native/database_tests.rs`, which exercises both
-  backends — `NativeDatabase` (mirroring
-  `DirectoryBasedExampleDatabase`) and `InMemoryNativeDatabase`
-  (mirroring `InMemoryExampleDatabase`) — via the shared
-  `ExampleDatabase` trait. The remainder targets public-API surface
-  that hegel-rust doesn't have and tracks as separate TODOs:
+- `test_database_backend.py` — this file mixes portable public-API tests
+  (multi-value `save`/`fetch`/`delete`/`move` semantics, listener API,
+  wrappers) with Python-specific ones. Only the latter are skipped here;
+  the portable portions have a dedicated port TODO (`TODO.yaml`) tracking
+  a line-by-line port to `tests/hypothesis/database_backend.rs`. The
+  Python-specific sub-bullets kept here are:
     - `GitHubArtifactDatabase` (tests `test_ga_*`, `TestGADReads`,
       `test_gadb_coverage`) is Python-only infrastructure (urllib,
       zipfile, GitHub Actions artifact endpoints) with no Rust
       counterpart — a permanent skip.
-    - The `add_listener`/`remove_listener`/`clear_listeners`
-      change-listener API has landed on the `ExampleDatabase` trait
-      (see `src/native/database.rs`) and is exercised by the listener
-      tests in `tests/embedded/native/database_tests.rs`
-      (`test_can_remove_nonexistent_listener`,
-      `test_readonly_listener_never_fires`, `test_start_end_listening`,
-      the per-backend broadcast tests, and the state-machine ports
-      `test_database_listener_memory` /
-      `test_database_listener_background_write`, which mirror
-      Hypothesis's `_database_conforms_to_listener_api` via a manual
-      `StateMachine` impl over `Variables<Vec<u8>>` pools).
-      One follow-up remains in `TODO.yaml`: `NativeDatabase`'s
-      listener only fires on own-writes (no cross-process
-      watchdog/`notify` integration yet).
-      (`ReadOnlyDatabase`, `MultiplexedDatabase`, and
-      `BackgroundWriteDatabase` have been ported — see
-      `ReadOnlyNativeDatabase`, `MultiplexedNativeDatabase`, and
-      `BackgroundWriteNativeDatabase` in `src/native/database.rs`.)
     - `choices_to_bytes`/`choices_from_bytes` with
-      `_pack_uleb128`/`_unpack_uleb128` and `_metakeys_name` test
-      internals of Hypothesis's wire format that aren't part of the
-      native engine's serialization format (`serialize_choices` uses
-      a distinct layout; see `tests/embedded/native/database_tests.rs`).
+      `_pack_uleb128`/`_unpack_uleb128` and `_metakeys_name` test the
+      bytes of Hypothesis's wire format (ULEB128 packing, metakey name
+      conventions). The native engine deliberately uses a different
+      serialization layout (`serialize_choices`), so these specific byte
+      patterns don't exist in hegel-rust — a public-API design
+      difference, not an engine-internal gap.
     - `test_default_database_is_in_memory`,
       `test_default_on_disk_database_is_dir`, and
       `test_database_directory_inaccessible` test Hypothesis's
-      `ExampleDatabase()` factory / `_db_for_path`, which has no
-      hegel-rust counterpart (hegel databases are constructed
-      directly from a path).
+      `ExampleDatabase()` zero-arg factory and `_db_for_path` path
+      resolution. Hegel-rust exposes no equivalent factory — databases
+      are constructed directly from a path — so these tests target
+      a public-API surface that doesn't exist here.
