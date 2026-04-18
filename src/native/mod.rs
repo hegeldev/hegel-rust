@@ -15,3 +15,4 @@ pub mod runner;
 pub mod schema;
 pub mod shrinker;
 pub mod tree;
+pub mod unicodedata;
