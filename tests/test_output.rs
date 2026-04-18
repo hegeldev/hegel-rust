@@ -1,5 +1,7 @@
 mod common;
 
+use std::sync::OnceLock;
+
 use common::project::TempRustProject;
 use common::utils::assert_matches_regex;
 
@@ -14,10 +16,18 @@ fn main() {
 }
 "#;
 
+// One TempRustProject shared by the three failing-output tests below.
+// They only differ by RUST_BACKTRACE, so a single compiled wrapper
+// crate suffices.
+fn failing_project() -> &'static TempRustProject {
+    static PROJECT: OnceLock<TempRustProject> = OnceLock::new();
+    PROJECT.get_or_init(|| TempRustProject::new().main_file(FAILING_TEST_CODE))
+}
+
 #[test]
 fn test_failing_test_output() {
-    let output = TempRustProject::new()
-        .main_file(FAILING_TEST_CODE)
+    let output = failing_project()
+        .invoke()
         .expect_failure("intentional failure")
         .cargo_run(&[]);
 
@@ -38,8 +48,8 @@ fn test_failing_test_output() {
 
 #[test]
 fn test_failing_test_output_with_backtrace() {
-    let output = TempRustProject::new()
-        .main_file(FAILING_TEST_CODE)
+    let output = failing_project()
+        .invoke()
         .env("RUST_BACKTRACE", "1")
         .expect_failure("intentional failure")
         .cargo_run(&[]);
@@ -89,8 +99,8 @@ fn test_failing_test_output_with_backtrace() {
 
 #[test]
 fn test_failing_test_output_with_full_backtrace() {
-    let output = TempRustProject::new()
-        .main_file(FAILING_TEST_CODE)
+    let output = failing_project()
+        .invoke()
         .env("RUST_BACKTRACE", "full")
         .expect_failure("intentional failure")
         .cargo_run(&[]);
