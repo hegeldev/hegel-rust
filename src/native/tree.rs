@@ -47,12 +47,14 @@ impl From<&ChoiceValue> for ChoiceValueKey {
 
 /// A node in the data tree trie.
 ///
-/// Each node stores the expected `ChoiceKind` for this position and branches
-/// to children keyed by the choice value at this position.
+/// Each node represents a choice position: `kind` is the expected schema at
+/// this position (set on first visit and shared by every draw made here),
+/// and `children` branches to the position following this draw, keyed by
+/// the choice value.
 struct TreeNode {
     /// The expected ChoiceKind at this position (set on first visit).
     kind: Option<ChoiceKind>,
-    /// Children keyed by the choice value at this position.
+    /// Children keyed by the choice value drawn at this position.
     children: HashMap<ChoiceValueKey, TreeNode>,
 }
 
@@ -159,12 +161,15 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
     }
 
     /// Record nodes in the data tree, checking for non-determinism.
+    ///
+    /// The kind at each position is a property of that position, not of the
+    /// value drawn: every draw made at the same prefix must use the same
+    /// schema regardless of which value it produced. A mismatch means the
+    /// generator's constraints depend on external state.
     fn record(&mut self, nodes: &[ChoiceNode]) {
         let mut current = &mut self.tree_root;
         for node in nodes {
-            let key = ChoiceValueKey::from(&node.value);
-            let child = current.children.entry(key).or_insert_with(TreeNode::new);
-            if let Some(ref expected_kind) = child.kind {
+            if let Some(ref expected_kind) = current.kind {
                 if *expected_kind != node.kind {
                     panic!(
                         "Your data generation is non-deterministic: at the same choice \
@@ -174,9 +179,10 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
                     );
                 }
             } else {
-                child.kind = Some(node.kind.clone());
+                current.kind = Some(node.kind.clone());
             }
-            current = child;
+            let key = ChoiceValueKey::from(&node.value);
+            current = current.children.entry(key).or_insert_with(TreeNode::new);
         }
     }
 

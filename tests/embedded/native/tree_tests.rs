@@ -47,7 +47,13 @@ fn tree_detects_kind_mismatch() {
 }
 
 #[test]
-fn tree_allows_different_kinds_at_different_values() {
+#[should_panic(expected = "non-deterministic")]
+fn tree_detects_kind_mismatch_at_different_values() {
+    // The schema at a given choice position must be consistent across
+    // runs, regardless of which value was drawn. If the same prefix
+    // produces draws with different kinds (here: different min_value
+    // constraints), that's non-deterministic data generation — even
+    // though the drawn values differ.
     let mut ctf = CachedTestFunction::new(dummy_test);
     let nodes_a = vec![ChoiceNode {
         kind: ChoiceKind::Integer(IntegerChoice {
@@ -66,8 +72,48 @@ fn tree_allows_different_kinds_at_different_values() {
         was_forced: false,
     }];
     ctf.record(&nodes_a);
-    // Different value → different tree branch → no conflict.
     ctf.record(&nodes_b);
+}
+
+#[test]
+fn tree_allows_different_kinds_at_different_prefixes() {
+    // Different prefixes mean different tree positions, so kinds are
+    // tracked independently. Here both paths start with the same bool,
+    // but since the second draw only happens after descending into one
+    // branch of the root, its kind can differ between branches.
+    let mut ctf = CachedTestFunction::new(dummy_test);
+    let path_true = vec![
+        ChoiceNode {
+            kind: ChoiceKind::Boolean(BooleanChoice),
+            value: ChoiceValue::Boolean(true),
+            was_forced: false,
+        },
+        ChoiceNode {
+            kind: ChoiceKind::Integer(IntegerChoice {
+                min_value: 0,
+                max_value: 100,
+            }),
+            value: ChoiceValue::Integer(42),
+            was_forced: false,
+        },
+    ];
+    let path_false = vec![
+        ChoiceNode {
+            kind: ChoiceKind::Boolean(BooleanChoice),
+            value: ChoiceValue::Boolean(false),
+            was_forced: false,
+        },
+        ChoiceNode {
+            kind: ChoiceKind::Bytes(BytesChoice {
+                min_size: 0,
+                max_size: 10,
+            }),
+            value: ChoiceValue::Bytes(vec![]),
+            was_forced: false,
+        },
+    ];
+    ctf.record(&path_true);
+    ctf.record(&path_false);
 }
 
 #[test]
