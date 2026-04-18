@@ -19,7 +19,7 @@
 //!   existing tests/test_database_key.rs pattern; not re-ported here.
 
 use crate::common::utils::{assert_all_examples, minimal};
-use hegel::generators::{self as gs, Generator};
+use hegel::generators as gs;
 
 #[test]
 fn test_text_basic() {
