@@ -13,6 +13,7 @@ target/
 result
 .claude-reliability/
 .claude/reliability-config.yml
+.remember/
 
 lcov.info
 
@@ -22,3 +23,6 @@ lcov.info
 .claude/*.local
 
 docs/superpowers
+resources
+
+.port-loop-cache.json

@@ -1,4 +1,7 @@
+#![cfg(not(feature = "native"))]
 mod common;
+
+use std::sync::OnceLock;
 
 use common::project::TempRustProject;
 
@@ -10,10 +13,18 @@ fn main() {
 }
 "#;
 
+// One TempRustProject shared by every #[test] in this file. Each test
+// sets its own `HEGEL_SERVER_COMMAND` and expected failure pattern on a
+// fresh `Invocation`; the wrapper crate itself is only compiled once.
+fn shared_project() -> &'static TempRustProject {
+    static PROJECT: OnceLock<TempRustProject> = OnceLock::new();
+    PROJECT.get_or_init(|| TempRustProject::new().main_file(HEGEL_CODE))
+}
+
 #[test]
 fn test_non_hegel_command_gives_informative_error() {
-    TempRustProject::new()
-        .main_file(HEGEL_CODE)
+    shared_project()
+        .invoke()
         .env("HEGEL_SERVER_COMMAND", "false")
         .expect_failure("(?s)failed during startup.*Is this a hegel binary")
         .cargo_run(&[]);
@@ -38,8 +49,8 @@ fn test_wrong_version_hegel_gives_informative_error() {
         std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    TempRustProject::new()
-        .main_file(HEGEL_CODE)
+    shared_project()
+        .invoke()
         .env("HEGEL_SERVER_COMMAND", script_path.to_str().unwrap())
         .expect_failure(
             "(?s)failed during startup.*Version mismatch.*expected 'hegel \\(version 0\\.4\\.\\d+\\)'.*got 'hegel \\(version 0\\.1\\.0\\)'",
@@ -49,8 +60,8 @@ fn test_wrong_version_hegel_gives_informative_error() {
 
 #[test]
 fn test_nonexistent_binary_gives_informative_error() {
-    TempRustProject::new()
-        .main_file(HEGEL_CODE)
+    shared_project()
+        .invoke()
         .env("HEGEL_SERVER_COMMAND", "/nonexistent/path/to/hegel")
         .expect_failure("not found at '/nonexistent/path/to/hegel'")
         .cargo_run(&[]);
@@ -58,8 +69,8 @@ fn test_nonexistent_binary_gives_informative_error() {
 
 #[test]
 fn test_bare_name_not_on_path_gives_informative_error() {
-    TempRustProject::new()
-        .main_file(HEGEL_CODE)
+    shared_project()
+        .invoke()
         .env("HEGEL_SERVER_COMMAND", "definitely_not_a_real_hegel_binary")
         .expect_failure("not found on PATH")
         .cargo_run(&[]);
@@ -76,8 +87,8 @@ fn test_not_executable_gives_informative_error() {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-    TempRustProject::new()
-        .main_file(HEGEL_CODE)
+    shared_project()
+        .invoke()
         .env("HEGEL_SERVER_COMMAND", script_path.to_str().unwrap())
         .expect_failure("not executable.*Check file permissions")
         .cargo_run(&[]);
@@ -95,8 +106,8 @@ fn test_server_hangs_gives_bad_virtualenv_message() {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    TempRustProject::new()
-        .main_file(HEGEL_CODE)
+    shared_project()
+        .invoke()
         .env("HEGEL_SERVER_COMMAND", script_path.to_str().unwrap())
         .expect_failure("(?s)failed during startup.*Possibly bad virtualenv")
         .cargo_run(&[]);
@@ -123,8 +134,8 @@ fn test_server_log_included_in_error() {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    TempRustProject::new()
-        .main_file(HEGEL_CODE)
+    shared_project()
+        .invoke()
         .env("HEGEL_SERVER_COMMAND", script_path.to_str().unwrap())
         .expect_failure("(?s)Server log.*Error: startup failed.*see .* for full output")
         .cargo_run(&[]);

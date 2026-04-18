@@ -191,12 +191,13 @@ pub(crate) mod cbor_utils;
 pub(crate) mod control;
 pub mod explicit_test_case;
 pub mod generators;
-pub(crate) mod protocol;
+#[cfg(feature = "native")]
+pub(crate) mod native;
 pub(crate) mod runner;
+#[cfg(not(feature = "native"))]
+pub(crate) mod server;
 pub mod stateful;
 mod test_case;
-pub(crate) mod utils;
-mod uv;
 
 #[doc(hidden)]
 pub use control::currently_in_test_context;
@@ -215,6 +216,16 @@ pub use test_case::{__IsTestCase, __assert_is_test_case, generate_from_schema, g
 // re-export public api
 #[doc(hidden)]
 pub use antithesis::TestLocation;
+
+// Re-exports of native-engine internals for integration-test access.
+// `#[doc(hidden)]` — not part of the stable public API.
+#[cfg(feature = "native")]
+#[doc(hidden)]
+pub mod __native_test_internals {
+    pub use crate::native::bignum::BigUint;
+    pub use crate::native::core::StringChoice;
+    pub use crate::native::unicodedata;
+}
 
 /// Derive a generator for a struct or enum.
 ///
@@ -333,9 +344,11 @@ pub use hegel_macros::state_machine;
 pub use hegel_macros::test;
 
 #[doc(hidden)]
-pub use runner::__test_kill_server;
-#[doc(hidden)]
-pub use runner::format_log_excerpt;
-#[doc(hidden)]
 pub use runner::hegel;
 pub use runner::{HealthCheck, Hegel, Settings, Verbosity};
+#[cfg(not(feature = "native"))]
+#[doc(hidden)]
+pub use server::process::__test_kill_server;
+#[cfg(not(feature = "native"))]
+#[doc(hidden)]
+pub use server::process::format_log_excerpt;

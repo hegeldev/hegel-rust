@@ -1,0 +1,84 @@
+# Pending tasks for the port loop. `scripts/port-loop.py` pops one entry at a
+# time and dispatches an agent to handle it before moving on to porting new
+# upstream tests. Add entries at any position; remove an entry when it's done.
+#
+# Schema per entry:
+#   - title: one-line summary
+#     details: |
+#       Multi-line body with context, pointers, acceptance criteria.
+
+- title: Cross-process listener support for NativeDatabase (notify crate)
+  details: |
+    `NativeDatabase::{save, delete, move_value}` currently broadcast
+    listener events directly from the write path, so same-process
+    writes are observed but external-process writers to the same
+    directory are not. Hypothesis's `DirectoryBasedExampleDatabase`
+    solves this by starting a watchdog `Observer` in
+    `_start_listening` that translates filesystem events into
+    `_broadcast_change` calls (see `database.py`).
+
+    Scope:
+    1. Pick a Rust filesystem-notification crate (`notify` is the
+       obvious choice) and thread it through `NativeDatabase` so that
+       on the 0→1 listener transition it starts watching `db_root`,
+       and on 1→0 it stops.
+    2. Translate filesystem events back into `ListenerEvent`s. The
+       current broadcast-on-own-write path will need to move into the
+       watcher (or be skipped when the watcher is active) to avoid
+       double-firing.
+    3. Reproduce Hypothesis's `_metakeys_name` scheme (or an
+       equivalent) so the watcher can reverse hashed directory names
+       into the original keys.
+    4. Add a cross-process test under
+       `tests/embedded/native/database_tests.rs` (or a new integration
+       test) that opens two `NativeDatabase` handles against the same
+       directory and verifies listeners on one see writes from the
+       other.
+
+    Acceptance:
+    - Listeners on a `NativeDatabase` instance observe writes made by
+      any other process (or in-process instance) against the same
+      directory.
+    - The existing own-write listener tests keep passing with no
+      duplicate events.
+
+- title: Audit SKIPPED.md for entries miscategorised under the skip policy
+  details: |
+    `.claude/skills/porting-tests/SKILL.md` tightened the skip policy:
+    "no Rust counterpart" is NOT a valid skip rationale for
+    engine-internal gaps — those should be native-gated + stubbed.
+    Only public-API incompatibilities (Python facilities, external
+    library integrations) justify a skip.
+
+    The `test_database_backend.py` entry at SKIPPED.md:121 is the
+    known example — skipped on "this API doesn't exist" grounds,
+    which is the anti-pattern the policy now forbids. The
+    multi-value-database TODO above fixes that specific entry, but
+    the same miscategorisation may apply elsewhere in SKIPPED.md.
+
+    Go through every entry in SKIPPED.md (both `## pbtkit` and
+    `## hypothesis` sections) and classify each one:
+    - Public-API incompatibility (Python-only facility, external
+      library dep, missing user-facing Rust type) — keep the skip,
+      but tighten the rationale to say that explicitly.
+    - Engine-internal gap (native feature missing, internal API
+      has no counterpart, "already covered elsewhere", "redundant")
+      — remove from SKIPPED.md and either:
+        a) port the tests with the missing pieces native-gated +
+           stubbed under `src/native/`, or
+        b) file a focused TODO entry for the port and remove the
+           SKIPPED.md entry in the same commit so it doesn't
+           linger as an accidental gate.
+
+    This is a survey + one-or-more follow-up TODOs task; if the
+    audit turns up N mis-skips, it's fine to replace this TODO
+    with N narrower port-or-port-plan TODOs rather than doing them
+    all at once.
+
+    Acceptance:
+    - Every SKIPPED.md entry states a rationale that matches the
+      current skip policy (public-API incompatibility only).
+    - Any mis-skipped files are either ported or have explicit
+      TODO entries tracking them.
+    - Commit message (or PR description if multiple commits) lists
+      which entries were re-examined and what happened to each.

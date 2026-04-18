@@ -93,7 +93,7 @@ where
                 "Found value that does not match predicate"
             );
         })
-        .settings(Settings::new().test_cases(self.test_cases))
+        .settings(Settings::new().test_cases(self.test_cases).database(None))
         .run();
     }
 }
@@ -197,7 +197,7 @@ where
                     panic!("HEGEL_FOUND"); // Early exit marker
                 }
             })
-            .settings(Settings::new().test_cases(max_attempts))
+            .settings(Settings::new().test_cases(max_attempts).database(None))
             .run();
         }));
 

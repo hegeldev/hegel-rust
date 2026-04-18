@@ -55,6 +55,7 @@ Adding new patterns to the allowlist could mask actual coverage gaps.
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import subprocess
@@ -64,6 +65,9 @@ from pathlib import Path
 
 RATCHET_FILE = Path(".github/coverage-ratchet.json")
 SOURCE_DIRS = [Path("src"), Path("hegel-macros/src")]
+# Directories where // nocov is banned outright. The native backend has no
+# legitimate reason for nocov — everything there is testable.
+NOCOV_BANNED_DIRS = [Path("src/native")]
 
 # ──────────────────────────────────────────────────────────────────────
 # nocov block cache
@@ -286,9 +290,14 @@ def get_target_triple() -> str:
     return "unknown"
 
 
-def run_coverage() -> Path:
-    """Run coverage analysis and generate LCOV report."""
-    print("Running coverage analysis...")
+def run_coverage(native_mode: bool = False) -> Path:
+    """Run coverage analysis and generate LCOV report.
+
+    When native_mode is True, runs with --features native (the native backend).
+    When False, runs with --features rand,antithesis (excludes native).
+    """
+    mode_label = "native" if native_mode else "standard"
+    print(f"Running coverage analysis ({mode_label} mode)...")
     lcov_path = Path("lcov.info")
 
     # Clean previous profdata
@@ -306,8 +315,12 @@ def run_coverage() -> Path:
 
     # Phase 1: Run tests and collect profraw data (no report yet)
     print("  Running tests with coverage...")
+    if native_mode:
+        features_args = ["--features", "native"]
+    else:
+        features_args = ["--features", "rand,antithesis"]
     result = subprocess.run(
-        ["cargo", "llvm-cov", "--no-report", "--all-features"],
+        ["cargo", "llvm-cov", "--no-report"] + features_args,
         capture_output=True,
         text=True,
     )
@@ -607,10 +620,10 @@ def count_annotations() -> int:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def read_ratchet() -> int | float:
-    """Read the ratchet file. Returns the nocov limit.
+def read_ratchet(key: str = "nocov") -> int | float:
+    """Read the ratchet file. Returns the nocov limit for the given key.
 
-    If the file doesn't exist, returns inf to allow initialization.
+    If the file doesn't exist or key is absent, returns inf to allow initialization.
     """
     if not RATCHET_FILE.exists():
         return float("inf")
@@ -618,18 +631,69 @@ def read_ratchet() -> int | float:
     try:
         with RATCHET_FILE.open() as f:
             data = json.load(f)
-        return data.get("nocov", 0)
+        return data.get(key, float("inf"))
     except (json.JSONDecodeError, OSError, IOError):
         return float("inf")
 
 
-def write_ratchet(nocov: int) -> None:
-    """Write the ratchet file with current count."""
+def write_ratchet(nocov: int, key: str = "nocov") -> None:
+    """Write the ratchet file, updating only the given key."""
     RATCHET_FILE.parent.mkdir(parents=True, exist_ok=True)
+    # Read existing data so other keys are preserved.
+    data: dict = {}
+    if RATCHET_FILE.exists():
+        try:
+            with RATCHET_FILE.open() as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError, IOError):
+            data = {}
+    data[key] = nocov
     with RATCHET_FILE.open("w") as f:
-        json.dump({"nocov": nocov}, f, indent=2)
+        json.dump(data, f, indent=2, sort_keys=True)
         f.write("\n")
 
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Banned directories
+# ──────────────────────────────────────────────────────────────────────
+
+
+def check_banned_nocov() -> int:
+    """Check that no // nocov annotations exist in banned directories.
+
+    Returns 0 if clean, 1 if violations found.
+    """
+    nocov_pattern = re.compile(r"//\s*nocov\b")
+    violations: list[tuple[Path, int, str]] = []
+
+    for banned_dir in NOCOV_BANNED_DIRS:
+        if not banned_dir.exists():
+            continue
+        for rs_file in sorted(banned_dir.rglob("*.rs")):
+            try:
+                with rs_file.open() as f:
+                    for i, line in enumerate(f, 1):
+                        if nocov_pattern.search(line):
+                            violations.append((rs_file, i, line.rstrip("\n")))
+            except (OSError, IOError):
+                continue
+
+    if not violations:
+        return 0
+
+    print("\n// nocov is BANNED in the following directories:")
+    for d in NOCOV_BANNED_DIRS:
+        print(f"  {d}/")
+    print(f"\nFound {len(violations)} violation(s):")
+    for file_path, line_num, content in violations:
+        try:
+            rel = file_path.relative_to(Path.cwd())
+        except ValueError:
+            rel = file_path
+        print(f"  {rel}:{line_num}: {content.strip()}")
+    print("\nRemove the // nocov annotations and add tests instead.")
+    return 1
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -701,8 +765,22 @@ def check_uncovered_lines(uncovered: list[UncoveredLine]) -> int:
 
 def main() -> int:
     """Main entry point."""
+    parser = argparse.ArgumentParser(description="Check code coverage")
+    parser.add_argument(
+        "--native",
+        action="store_true",
+        help="Run coverage in native mode (--features native, separate ratchet)",
+    )
+    args = parser.parse_args()
+    native_mode: bool = args.native
+    ratchet_key = "nocov_native" if native_mode else "nocov"
+
+    # 0. Check for banned nocov annotations (fast, no compilation needed)
+    if check_banned_nocov() != 0:
+        return 1
+
     # 1. Generate coverage
-    lcov_path = run_coverage()
+    lcov_path = run_coverage(native_mode=native_mode)
 
     # 2. Parse coverage data
     coverage = parse_lcov(lcov_path)
@@ -722,10 +800,10 @@ def main() -> int:
 
     # 5. Count remaining annotations
     nocov_count = count_annotations()
-    print(f"\nCoverage annotations: {nocov_count} // nocov")
+    print(f"\nCoverage annotations ({ratchet_key}): {nocov_count} // nocov")
 
     # 6. Check ratchet
-    nocov_limit = read_ratchet()
+    nocov_limit = read_ratchet(key=ratchet_key)
 
     if nocov_count > nocov_limit:
         print(f"\nCoverage annotation ratchet EXCEEDED!")
@@ -738,11 +816,11 @@ def main() -> int:
     ratchet_changed = False
     if nocov_count < nocov_limit:
         old = nocov_limit if nocov_limit != float("inf") else "none"
-        print(f"  Ratchet tightened: nocov {old} -> {nocov_count}")
-        write_ratchet(nocov_count)
+        print(f"  Ratchet tightened: {ratchet_key} {old} -> {nocov_count}")
+        write_ratchet(nocov_count, key=ratchet_key)
         ratchet_changed = True
     elif not RATCHET_FILE.exists():
-        write_ratchet(nocov_count)
+        write_ratchet(nocov_count, key=ratchet_key)
         ratchet_changed = True
 
     if ratchet_changed:

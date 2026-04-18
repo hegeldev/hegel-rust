@@ -1,5 +1,7 @@
 mod common;
 
+use std::sync::OnceLock;
+
 use common::project::TempRustProject;
 use common::utils::assert_matches_regex;
 
@@ -14,10 +16,18 @@ fn main() {
 }
 "#;
 
+// One TempRustProject shared by the three failing-output tests below.
+// They only differ by RUST_BACKTRACE, so a single compiled wrapper
+// crate suffices.
+fn failing_project() -> &'static TempRustProject {
+    static PROJECT: OnceLock<TempRustProject> = OnceLock::new();
+    PROJECT.get_or_init(|| TempRustProject::new().main_file(FAILING_TEST_CODE))
+}
+
 #[test]
 fn test_failing_test_output() {
-    let output = TempRustProject::new()
-        .main_file(FAILING_TEST_CODE)
+    let output = failing_project()
+        .invoke()
         .expect_failure("intentional failure")
         .cargo_run(&[]);
 
@@ -38,8 +48,8 @@ fn test_failing_test_output() {
 
 #[test]
 fn test_failing_test_output_with_backtrace() {
-    let output = TempRustProject::new()
-        .main_file(FAILING_TEST_CODE)
+    let output = failing_project()
+        .invoke()
         .env("RUST_BACKTRACE", "1")
         .expect_failure("intentional failure")
         .cargo_run(&[]);
@@ -89,8 +99,8 @@ fn test_failing_test_output_with_backtrace() {
 
 #[test]
 fn test_failing_test_output_with_full_backtrace() {
-    let output = TempRustProject::new()
-        .main_file(FAILING_TEST_CODE)
+    let output = failing_project()
+        .invoke()
         .env("RUST_BACKTRACE", "full")
         .expect_failure("intentional failure")
         .cargo_run(&[]);
@@ -122,6 +132,34 @@ fn test_failing_test_output_with_full_backtrace() {
     assert!(
         !output.stderr.contains("Some details are omitted"),
         "Actual: {}",
+        output.stderr
+    );
+}
+
+/// When a property test fails, the failure message should appear exactly once
+/// in stderr — not duplicated by a secondary "Property test failed: ..." panic.
+#[cfg(feature = "native")]
+#[test]
+fn native_single_panic_on_failure() {
+    const CODE: &str = r#"
+use hegel::generators as gs;
+
+fn main() {
+    hegel::hegel(|tc| {
+        let _x: bool = tc.draw(gs::booleans());
+        panic!("deliberate failure");
+    });
+}
+"#;
+    let output = TempRustProject::new()
+        .main_file(CODE)
+        .expect_failure("deliberate failure")
+        .cargo_run(&[]);
+
+    let count = output.stderr.matches("deliberate failure").count();
+    assert_eq!(
+        count, 1,
+        "expected exactly one occurrence of 'deliberate failure' in stderr, got {count}:\n{}",
         output.stderr
     );
 }
