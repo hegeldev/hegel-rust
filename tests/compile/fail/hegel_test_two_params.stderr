@@ -1,0 +1,11 @@
+error: #[hegel::test] functions must take exactly one parameter of type hegel::TestCase.
+ --> tests/compile/fail/hegel_test_two_params.rs:2:1
+  |
+2 | fn main(tc: hegel::TestCase, x: bool) {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/compile/fail/hegel_test_two_params.rs:4:2
+  |
+4 | }
+  |  ^ consider adding a `main` function to `$DIR/tests/compile/fail/hegel_test_two_params.rs`
