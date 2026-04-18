@@ -24,3 +24,5 @@ lcov.info
 
 docs/superpowers
 resources
+
+.port-loop-cache.json
