@@ -91,6 +91,7 @@ impl<'a> Shrinker<'a> {
             self.shrink_floats();
             self.shrink_bytes();
             self.shrink_strings();
+            self.redistribute_string_pairs();
         }
     }
 }
