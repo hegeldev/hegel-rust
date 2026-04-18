@@ -7,43 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Port InMemoryNativeDatabase (match Hypothesis's InMemoryExampleDatabase)
-  details: |
-    Follow-up to the multi-value `NativeDatabase` rework.
-    `resources/hypothesis/hypothesis-python/src/hypothesis/database.py`
-    ships `InMemoryExampleDatabase`, a non-persistent sibling of the
-    directory-backed database that keeps `data: dict[bytes, set[bytes]]`
-    in memory. hegel-rust has no in-memory counterpart.
-
-    Scope:
-    1. Decide on a shared trait. The cleanest structure is probably
-       an `ExampleDatabase` trait in `src/native/database.rs` with
-       `save`/`fetch`/`delete`/`move_value` methods; `NativeDatabase`
-       (the directory-backed one) and a new
-       `InMemoryNativeDatabase` both implement it. The runner's
-       `db: Option<NativeDatabase>` becomes
-       `db: Option<Box<dyn ExampleDatabase>>` (or equivalent).
-    2. Implement `InMemoryNativeDatabase` using
-       `HashMap<Vec<u8>, HashSet<Vec<u8>>>`.
-    3. Port the in-memory subset of
-       `tests/cover/test_database_backend.py`
-       (`test_backend_returns_what_you_put_in`, `test_can_delete_keys`,
-       parametrized `exampledatabase` fixture tests) as native-only
-       integration tests. Remove the corresponding sub-bullets from
-       the `test_database_backend.py` entry in SKIPPED.md.
-    4. The public-facing `Database::Path(p)` enum in
-       `src/runner.rs` may need a new `Database::InMemory` variant —
-       see the `Database` / `Settings` surface before adding it to
-       keep the server/native split clean.
-
-    Acceptance:
-    - An `InMemoryNativeDatabase` type exists with the same
-      multi-value semantics as `NativeDatabase`.
-    - The replay test suite passes in both directory and in-memory
-      modes.
-    - `test_database_backend.py` entry in SKIPPED.md lists one
-      fewer sub-bullet of un-ported functionality.
-
 - title: Port ReadOnlyDatabase / MultiplexedDatabase / BackgroundWriteDatabase wrappers
   details: |
     Follow-up to the multi-value `NativeDatabase` rework.

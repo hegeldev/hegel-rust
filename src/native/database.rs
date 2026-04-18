@@ -1,8 +1,13 @@
 // Persistence layer for the native backend.
 //
-// Mirrors Hypothesis's `DirectoryBasedExampleDatabase`
+// Mirrors Hypothesis's `ExampleDatabase` hierarchy
 // (resources/hypothesis/hypothesis-python/src/hypothesis/database.py): a
 // multi-value key/value store where each key maps to a *set* of values.
+// The `ExampleDatabase` trait captures the shared surface
+// (`save` / `fetch` / `delete` / `move_value`); `NativeDatabase` is the
+// directory-backed implementation (mirroring
+// `DirectoryBasedExampleDatabase`) and `InMemoryNativeDatabase` is a
+// non-persistent sibling (mirroring `InMemoryExampleDatabase`).
 //
 // pbtkit's `DirectoryDB` (`resources/pbtkit/src/pbtkit/database.py`)
 // deliberately simplified this to a single-value store. The richer
@@ -11,7 +16,7 @@
 // `reuse_existing_examples` in `conjecture/engine.py`), so the native
 // engine follows Hypothesis here.
 //
-// Storage layout:
+// Storage layout (directory backend):
 //   db_root/<fnv_hex(key)>/<fnv_hex(value)>
 //
 // where the file contents are the raw value bytes. `serialize_choices`
@@ -19,9 +24,51 @@
 // ChoiceValue sequences (the value bytes); they are kept here so that
 // the replay path in `runner.rs` can round-trip them.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use crate::native::core::ChoiceValue;
+
+/// Multi-value key/value store backing the native engine's replay phase.
+///
+/// Mirrors Hypothesis's `ExampleDatabase` base class
+/// (`hypothesis/database.py`): each key maps to an unordered *set* of
+/// values. Implementations must tolerate concurrent or corrupt state and
+/// surface failures as silent no-ops rather than errors — a non-writable
+/// database must never abort an otherwise-successful test run.
+pub trait ExampleDatabase: Send + Sync {
+    /// Return every value stored under `key`, in arbitrary order. Returns
+    /// an empty `Vec` if the key is absent.
+    fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>>;
+
+    /// Add `value` to the set stored under `key`. Idempotent: saving a
+    /// value that is already present is a no-op.
+    fn save(&self, key: &[u8], value: &[u8]);
+
+    /// Remove `value` from the set stored under `key`. A no-op when
+    /// `value` is absent.
+    fn delete(&self, key: &[u8], value: &[u8]);
+
+    /// Move `value` from `src` to `dst`. `value` is inserted at `dst`
+    /// regardless of whether it was present at `src`.
+    ///
+    /// Named `move_value` rather than `move` because `move` is a Rust
+    /// keyword. Hypothesis: `ExampleDatabase.move`. The default
+    /// implementation is `delete` + `save`; backends may override for
+    /// atomicity (e.g. `NativeDatabase` uses `rename`). No internal
+    /// caller yet — kept to match the Hypothesis spec for wrappers such
+    /// as `MultiplexedDatabase` (not yet ported) that rely on it.
+    #[allow(dead_code)]
+    fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]) {
+        if src == dst {
+            self.save(src, value);
+            return;
+        }
+        self.delete(src, value);
+        self.save(dst, value);
+    }
+}
 
 pub struct NativeDatabase {
     db_root: PathBuf,
@@ -41,12 +88,12 @@ impl NativeDatabase {
     fn value_path(&self, key: &[u8], value: &[u8]) -> PathBuf {
         self.key_path(key).join(fnv_hex(value))
     }
+}
 
-    /// Return every value stored under `key`, in arbitrary order.
-    ///
-    /// Returns an empty `Vec` if the key is absent or the directory is
-    /// unreadable. Hypothesis: `DirectoryBasedExampleDatabase.fetch`.
-    pub fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
+impl ExampleDatabase for NativeDatabase {
+    /// Hypothesis: `DirectoryBasedExampleDatabase.fetch`. Returns an
+    /// empty `Vec` if the key is absent or the directory is unreadable.
+    fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
         let dir = self.key_path(key);
         let entries = match std::fs::read_dir(&dir) {
             Ok(d) => d,
@@ -61,12 +108,9 @@ impl NativeDatabase {
         out
     }
 
-    /// Save `value` under `key`. If the value is already present, silently
-    /// do nothing. I/O errors are silently ignored so that a non-writable
-    /// database does not abort an otherwise-successful test run.
-    ///
-    /// Hypothesis: `DirectoryBasedExampleDatabase.save`.
-    pub fn save(&self, key: &[u8], value: &[u8]) {
+    /// Hypothesis: `DirectoryBasedExampleDatabase.save`. I/O errors are
+    /// silently ignored.
+    fn save(&self, key: &[u8], value: &[u8]) {
         let dir = self.key_path(key);
         if std::fs::create_dir_all(&dir).is_err() {
             return;
@@ -78,12 +122,10 @@ impl NativeDatabase {
         let _ = std::fs::write(&path, value);
     }
 
-    /// Remove one specific `value` from `key`. Silently ignores missing
-    /// values and I/O errors. If `value` was the last entry under `key`,
-    /// the (now-empty) key directory is also removed.
-    ///
-    /// Hypothesis: `DirectoryBasedExampleDatabase.delete`.
-    pub fn delete(&self, key: &[u8], value: &[u8]) {
+    /// Hypothesis: `DirectoryBasedExampleDatabase.delete`. If `value` was
+    /// the last entry under `key`, the (now-empty) key directory is also
+    /// removed.
+    fn delete(&self, key: &[u8], value: &[u8]) {
         if std::fs::remove_file(self.value_path(key, value)).is_err() {
             return;
         }
@@ -92,18 +134,10 @@ impl NativeDatabase {
         let _ = std::fs::remove_dir(self.key_path(key));
     }
 
-    /// Move `value` from `src` to `dst`. Equivalent to
-    /// `delete(src, value)` then `save(dst, value)`, but implemented as a
-    /// single rename when possible. `value` is inserted at `dst`
-    /// regardless of whether it was present at `src`.
-    ///
-    /// Named `move_value` rather than `move` because `move` is a Rust
-    /// keyword. Hypothesis: `DirectoryBasedExampleDatabase.move`. No
-    /// internal caller yet — exists so the public API matches the
-    /// Hypothesis spec, which wrappers such as `MultiplexedDatabase`
-    /// (not yet ported) rely on.
-    #[allow(dead_code)]
-    pub fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]) {
+    /// Hypothesis: `DirectoryBasedExampleDatabase.move`. Overrides the
+    /// default `delete` + `save` with a single `rename` when possible so
+    /// that the move is atomic on the same filesystem.
+    fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]) {
         if src == dst {
             self.save(src, value);
             return;
@@ -123,6 +157,55 @@ impl NativeDatabase {
         }
         // Cleanup: if `src`'s key directory is now empty, remove it.
         let _ = std::fs::remove_dir(self.key_path(src));
+    }
+}
+
+/// Non-persistent sibling of [`NativeDatabase`]. Backing store is a
+/// `HashMap<Vec<u8>, HashSet<Vec<u8>>>` behind a `Mutex`.
+///
+/// Hypothesis: `InMemoryExampleDatabase`. Useful when the replay
+/// machinery needs a database that doesn't survive the process, e.g.
+/// in tests that exercise the `ExampleDatabase` contract against
+/// multiple backends. Not currently wired into the public `Settings`
+/// surface — exposed via the trait for test use.
+#[allow(dead_code)]
+pub struct InMemoryNativeDatabase {
+    data: Mutex<HashMap<Vec<u8>, HashSet<Vec<u8>>>>,
+}
+
+#[allow(dead_code)]
+impl InMemoryNativeDatabase {
+    pub fn new() -> Self {
+        InMemoryNativeDatabase {
+            data: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl Default for InMemoryNativeDatabase {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ExampleDatabase for InMemoryNativeDatabase {
+    fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
+        let data = self.data.lock().unwrap();
+        data.get(key)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    fn save(&self, key: &[u8], value: &[u8]) {
+        let mut data = self.data.lock().unwrap();
+        data.entry(key.to_vec()).or_default().insert(value.to_vec());
+    }
+
+    fn delete(&self, key: &[u8], value: &[u8]) {
+        let mut data = self.data.lock().unwrap();
+        if let Some(values) = data.get_mut(key) {
+            values.remove(value);
+        }
     }
 }
 

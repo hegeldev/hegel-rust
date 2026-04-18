@@ -121,16 +121,18 @@ Individually-skipped tests (rest of the file is ported):
 - `test_database_backend.py` — the multi-value
   `save`/`fetch`/`delete`/`move` semantics that the bulk of this file
   exercises are covered in Rust by
-  `tests/embedded/native/database_tests.rs` (via `NativeDatabase`,
-  which now mirrors `DirectoryBasedExampleDatabase`). The remainder
-  targets public-API surface that hegel-rust doesn't have and tracks
-  as separate TODOs:
+  `tests/embedded/native/database_tests.rs`, which exercises both
+  backends — `NativeDatabase` (mirroring
+  `DirectoryBasedExampleDatabase`) and `InMemoryNativeDatabase`
+  (mirroring `InMemoryExampleDatabase`) — via the shared
+  `ExampleDatabase` trait. The remainder targets public-API surface
+  that hegel-rust doesn't have and tracks as separate TODOs:
     - `GitHubArtifactDatabase` (tests `test_ga_*`, `TestGADReads`,
       `test_gadb_coverage`) is Python-only infrastructure (urllib,
       zipfile, GitHub Actions artifact endpoints) with no Rust
       counterpart — a permanent skip.
-    - `InMemoryExampleDatabase`, `ReadOnlyDatabase`,
-      `MultiplexedDatabase`, `BackgroundWriteDatabase`, and the
+    - `ReadOnlyDatabase`, `MultiplexedDatabase`,
+      `BackgroundWriteDatabase`, and the
       `add_listener`/`remove_listener` change-listener API are
       engine-internal gaps; they live as focused TODOs in
       `TODO.yaml` and will be ported (or split into narrower skips)

@@ -320,3 +320,172 @@ fn test_database_stores_serialized_choices() {
     let raw = db.fetch(b"my-test").into_iter().next().unwrap();
     assert_eq!(deserialize_choices(&raw).unwrap(), choices);
 }
+
+// ── ExampleDatabase trait: fixture-parametrized tests ──────────────────────
+//
+// Mirrors the `exampledatabase` fixture tests in
+// `tests/cover/test_database_backend.py`, which are parametrized over
+// `InMemoryExampleDatabase` and `DirectoryBasedExampleDatabase`.
+// Each behaviour is expressed as an `assert_*` helper taking
+// `&dyn ExampleDatabase` and is driven once per backend.
+
+fn assert_can_delete_a_key_that_is_not_present(db: &dyn ExampleDatabase) {
+    db.delete(b"foo", b"bar");
+}
+
+fn assert_can_fetch_a_key_that_is_not_present(db: &dyn ExampleDatabase) {
+    assert!(db.fetch(b"foo").is_empty());
+}
+
+fn assert_saving_a_key_twice_fetches_it_once(db: &dyn ExampleDatabase) {
+    db.save(b"foo", b"bar");
+    db.save(b"foo", b"bar");
+    assert_eq!(db.fetch(b"foo"), vec![b"bar".to_vec()]);
+}
+
+fn assert_absent_value_is_present_after_it_moves(db: &dyn ExampleDatabase) {
+    db.move_value(b"a", b"b", b"c");
+    assert_eq!(db.fetch(b"b"), vec![b"c".to_vec()]);
+}
+
+fn assert_absent_value_is_present_after_it_moves_to_self(db: &dyn ExampleDatabase) {
+    db.move_value(b"a", b"a", b"b");
+    assert_eq!(db.fetch(b"a"), vec![b"b".to_vec()]);
+}
+
+#[test]
+fn test_memory_can_delete_a_key_that_is_not_present() {
+    assert_can_delete_a_key_that_is_not_present(&InMemoryNativeDatabase::new());
+}
+
+#[test]
+fn test_directory_can_delete_a_key_that_is_not_present() {
+    let dir = tempfile::TempDir::new().unwrap();
+    assert_can_delete_a_key_that_is_not_present(&NativeDatabase::new(dir.path().to_str().unwrap()));
+}
+
+#[test]
+fn test_memory_can_fetch_a_key_that_is_not_present() {
+    assert_can_fetch_a_key_that_is_not_present(&InMemoryNativeDatabase::new());
+}
+
+#[test]
+fn test_directory_can_fetch_a_key_that_is_not_present() {
+    let dir = tempfile::TempDir::new().unwrap();
+    assert_can_fetch_a_key_that_is_not_present(&NativeDatabase::new(dir.path().to_str().unwrap()));
+}
+
+#[test]
+fn test_memory_saving_a_key_twice_fetches_it_once() {
+    assert_saving_a_key_twice_fetches_it_once(&InMemoryNativeDatabase::new());
+}
+
+#[test]
+fn test_directory_saving_a_key_twice_fetches_it_once() {
+    let dir = tempfile::TempDir::new().unwrap();
+    assert_saving_a_key_twice_fetches_it_once(&NativeDatabase::new(dir.path().to_str().unwrap()));
+}
+
+#[test]
+fn test_memory_absent_value_is_present_after_it_moves() {
+    assert_absent_value_is_present_after_it_moves(&InMemoryNativeDatabase::new());
+}
+
+#[test]
+fn test_directory_absent_value_is_present_after_it_moves() {
+    let dir = tempfile::TempDir::new().unwrap();
+    assert_absent_value_is_present_after_it_moves(&NativeDatabase::new(
+        dir.path().to_str().unwrap(),
+    ));
+}
+
+#[test]
+fn test_memory_absent_value_is_present_after_it_moves_to_self() {
+    assert_absent_value_is_present_after_it_moves_to_self(&InMemoryNativeDatabase::new());
+}
+
+#[test]
+fn test_directory_absent_value_is_present_after_it_moves_to_self() {
+    let dir = tempfile::TempDir::new().unwrap();
+    assert_absent_value_is_present_after_it_moves_to_self(&NativeDatabase::new(
+        dir.path().to_str().unwrap(),
+    ));
+}
+
+// ── InMemoryNativeDatabase-specific tests ──────────────────────────────────
+//
+// Mirror the InMemory-only tests from `test_database_backend.py`.
+
+#[test]
+fn test_in_memory_backend_returns_what_you_put_in() {
+    // Direct port of `test_backend_returns_what_you_put_in`. The upstream
+    // test is `@given(lists(tuples(binary(), binary())))` — here we pick a
+    // fixed representative sample (including duplicate keys and duplicate
+    // (key, value) pairs) so the embedded suite stays a plain unit test.
+    let db = InMemoryNativeDatabase::new();
+    let pairs: Vec<(&[u8], &[u8])> = vec![
+        (b"", b""),
+        (b"foo", b"bar"),
+        (b"foo", b"baz"),
+        (b"foo", b"bar"),
+        (b"key", b"value"),
+        (b"key", b""),
+    ];
+    let mut mapping: std::collections::HashMap<&[u8], std::collections::HashSet<Vec<u8>>> =
+        std::collections::HashMap::new();
+    for (k, v) in &pairs {
+        mapping.entry(*k).or_default().insert(v.to_vec());
+        db.save(k, v);
+    }
+    for (k, expected) in &mapping {
+        let contents = db.fetch(k);
+        let distinct: std::collections::HashSet<Vec<u8>> = contents.iter().cloned().collect();
+        assert_eq!(contents.len(), distinct.len());
+        assert_eq!(&distinct, expected);
+    }
+}
+
+#[test]
+fn test_in_memory_can_delete_keys() {
+    let db = InMemoryNativeDatabase::new();
+    db.save(b"foo", b"bar");
+    db.save(b"foo", b"baz");
+    db.delete(b"foo", b"bar");
+    assert_eq!(db.fetch(b"foo"), vec![b"baz".to_vec()]);
+}
+
+#[test]
+fn test_in_memory_delete_missing_value_is_noop() {
+    let db = InMemoryNativeDatabase::new();
+    db.save(b"k", b"v");
+    db.delete(b"k", b"absent");
+    assert_eq!(db.fetch(b"k"), vec![b"v".to_vec()]);
+}
+
+#[test]
+fn test_in_memory_multiple_values_per_key() {
+    let db = InMemoryNativeDatabase::new();
+    db.save(b"k", b"v1");
+    db.save(b"k", b"v2");
+    db.save(b"k", b"v3");
+    let mut got = db.fetch(b"k");
+    got.sort();
+    assert_eq!(got, vec![b"v1".to_vec(), b"v2".to_vec(), b"v3".to_vec()]);
+}
+
+#[test]
+fn test_in_memory_default_is_empty() {
+    let db = InMemoryNativeDatabase::default();
+    assert!(db.fetch(b"anything").is_empty());
+}
+
+#[test]
+fn test_in_memory_move_uses_default_trait_impl() {
+    // `InMemoryNativeDatabase` does not override `move_value`, so the
+    // trait's default delete-then-save runs here.
+    let db = InMemoryNativeDatabase::new();
+    db.save(b"src", b"v");
+    db.move_value(b"src", b"dst", b"v");
+    assert!(db.fetch(b"src").is_empty());
+    assert_eq!(db.fetch(b"dst"), vec![b"v".to_vec()]);
+}

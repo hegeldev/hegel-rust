@@ -11,7 +11,9 @@ use rand::rngs::SmallRng;
 
 use crate::antithesis::TestLocation;
 use crate::native::core::{ChoiceNode, ChoiceValue, NativeTestCase, Span, Status, sort_key};
-use crate::native::database::{NativeDatabase, deserialize_choices, serialize_choices};
+use crate::native::database::{
+    ExampleDatabase, NativeDatabase, deserialize_choices, serialize_choices,
+};
 use crate::native::shrinker::Shrinker;
 use crate::native::tree::CachedTestFunction;
 use crate::runner::{Database, HealthCheck, Settings, Verbosity};
@@ -152,8 +154,8 @@ pub fn native_run<F>(
     let verbosity = settings.verbosity;
 
     // Build database handle if configured.
-    let db: Option<NativeDatabase> = match &settings.database {
-        Database::Path(p) => Some(NativeDatabase::new(p)),
+    let db: Option<Box<dyn ExampleDatabase>> = match &settings.database {
+        Database::Path(p) => Some(Box::new(NativeDatabase::new(p))),
         _ => None,
     };
 
