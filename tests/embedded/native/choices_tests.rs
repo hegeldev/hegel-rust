@@ -546,3 +546,135 @@ fn string_choice_sort_key_shortlex_on_codepoint_keys() {
     // Digits simpler than space (key (32-48)%128 = 112).
     assert!(sc.sort_key("0") < sc.sort_key(" "));
 }
+
+// ── StringChoice::unit (single-codepoint alphabet) ────────────────────────
+//
+// Ports of pbtkit/tests/test_text.py::test_string_single_codepoint_unit.
+
+#[test]
+fn string_choice_single_codepoint_unit_variable_length() {
+    // Single codepoint '0', variable length: unit lengthens by one char.
+    let kind = StringChoice {
+        min_codepoint: 48,
+        max_codepoint: 48,
+        min_size: 0,
+        max_size: 5,
+    };
+    assert_eq!(kind.unit(), "0");
+    assert_eq!(kind.simplest(), "");
+}
+
+#[test]
+fn string_choice_single_codepoint_unit_fixed_length() {
+    // Single codepoint '0', fixed length: unit degenerates to simplest.
+    let kind = StringChoice {
+        min_codepoint: 48,
+        max_codepoint: 48,
+        min_size: 2,
+        max_size: 2,
+    };
+    assert_eq!(kind.unit(), kind.simplest());
+}
+
+#[test]
+fn string_choice_single_codepoint_unit_non_zero() {
+    // Single codepoint 'A' — the second-simplest candidate ('1') falls outside
+    // the range, so the general unit path falls back to the simplest codepoint.
+    let kind = StringChoice {
+        min_codepoint: 65,
+        max_codepoint: 65,
+        min_size: 0,
+        max_size: 5,
+    };
+    assert_eq!(kind.unit(), "A");
+}
+
+// ── StringChoice index helpers ────────────────────────────────────────────
+//
+// Ports of pbtkit/tests/test_text.py::test_string_from_index_out_of_range,
+// test_string_from_index_past_end, test_string_codepoint_rank_with_surrogates.
+
+#[test]
+fn string_choice_from_index_out_of_range() {
+    let sc = StringChoice {
+        min_codepoint: 32,
+        max_codepoint: 126,
+        min_size: 0,
+        max_size: 2,
+    };
+    assert!(sc.from_index(sc.max_index() + 1).is_none());
+}
+
+#[test]
+fn string_choice_from_index_past_end() {
+    // alpha_size = 95; max_index = 95^0 + 95^1 + 95^2 - 1 = 9120;
+    // index 9121 exhausts all length buckets.
+    let sc = StringChoice {
+        min_codepoint: 32,
+        max_codepoint: 126,
+        min_size: 0,
+        max_size: 2,
+    };
+    assert_eq!(sc.alpha_size(), 95);
+    assert_eq!(sc.max_index(), 9120);
+    assert!(sc.from_index(9121).is_none());
+}
+
+#[test]
+fn string_choice_codepoint_rank_with_surrogates() {
+    // Range spanning the surrogate block (0xD800..=0xDFFF).
+    let sc = StringChoice {
+        min_codepoint: 0xD700,
+        max_codepoint: 0xE000,
+        min_size: 0,
+        max_size: 1,
+    };
+    let rank = sc.codepoint_rank(0xE000);
+    // 0xE000 is at the top of the (surrogate-filtered) range.
+    let expected: u64 = (0xE000u32 - 0xD700u32) as u64 - (0xDFFFu32 - 0xD800u32 + 1) as u64;
+    assert_eq!(rank, expected);
+    // Round-trip through to_index/from_index.
+    let s = char::from_u32(0xE000).unwrap().to_string();
+    let idx = sc.to_index(&s);
+    assert_eq!(sc.from_index(idx).unwrap(), s);
+}
+
+#[test]
+fn string_choice_to_index_from_index_roundtrip_ascii() {
+    let sc = StringChoice {
+        min_codepoint: 32,
+        max_codepoint: 126,
+        min_size: 0,
+        max_size: 3,
+    };
+    for s in ["", "0", "1", "A", "00", "abc", "z!@"] {
+        let idx = sc.to_index(s);
+        assert_eq!(
+            sc.from_index(idx).as_deref(),
+            Some(s),
+            "round-trip failed for {s:?}"
+        );
+    }
+}
+
+#[test]
+fn string_choice_alpha_size_no_surrogate_overlap() {
+    let sc = StringChoice {
+        min_codepoint: 32,
+        max_codepoint: 126,
+        min_size: 0,
+        max_size: 2,
+    };
+    assert_eq!(sc.alpha_size(), 95);
+}
+
+#[test]
+fn string_choice_alpha_size_skips_surrogates() {
+    let sc = StringChoice {
+        min_codepoint: 0,
+        max_codepoint: 0xFFFF,
+        min_size: 0,
+        max_size: 1,
+    };
+    assert_eq!(sc.alpha_size(), 0x10000 - 0x800);
+}
