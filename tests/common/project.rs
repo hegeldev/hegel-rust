@@ -5,6 +5,7 @@ use super::utils::assert_matches_regex;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use tempfile::TempDir;
 
 // No shared/global cargo cache. Each TempRustProject owns its own
@@ -20,6 +21,21 @@ use tempfile::TempDir;
 // test binary into the shared temp dir on every CI run.
 
 static PACKAGE_NAME_ID: AtomicU64 = AtomicU64::new(0);
+
+// Serialize cargo invocations across tests. Each TempRustProject compiles the
+// full hegeltest dependency tree from scratch (no shared target/), and running
+// many of those builds in parallel exhausts RAM on modest machines (rustc gets
+// OOM-killed, producing confusing "signal: 9, SIGKILL" failures). Holding this
+// lock around the cargo call means a single build runs at a time, but that
+// build gets all cores — net wall time is similar and we avoid the OOM.
+static CARGO_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_cargo() -> MutexGuard<'static, ()> {
+    match CARGO_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
 
 pub struct TempRustProject {
     _temp_dir: TempDir,
@@ -148,6 +164,7 @@ hegeltest = {{ path = "{path}"{features} }}
             cmd.env(key, value);
         }
 
+        let _guard = lock_cargo();
         let output = cmd.output().unwrap();
 
         let run_output = RunOutput {
