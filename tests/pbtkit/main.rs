@@ -4,4 +4,5 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod findability_arithmetic;
 mod text;
