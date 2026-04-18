@@ -125,6 +125,15 @@ Individually-skipped tests (rest of the file is ported):
   Rust has no `slice`-object type and hegel-rust has no `gs::slices()`
   generator; the tests rely on Python indexing semantics
   (`range(size)[x.start]`, `x.indices(size)`) throughout.
+- `test_explicit_examples.py` — all tests rely on Python-specific facilities:
+  Python decorator stacking (`@example`/`@given` ordering and `@pytest.mark.parametrize`),
+  `unittest.TestCase` integration, Python error APIs (`InvalidArgument`,
+  `HypothesisWarning`, `DeadlineExceeded`), Python output-capture helpers
+  (`capture_out`, `reporting`, `assert_falsifying_output`), Python's
+  `ExceptionGroup`, dunder attributes (`__notes__`, `hypothesis_explicit_examples`),
+  and Hypothesis settings absent from hegel-rust (`Phase.explicit`,
+  `report_multiple_bugs`, `deadline`). The core explicit-test-case behaviour
+  already has thorough coverage in `tests/test_explicit_test_case.rs`.
 - `test_database_backend.py` — this file mixes portable public-API tests
   (multi-value `save`/`fetch`/`delete`/`move` semantics, listener API,
   wrappers) with Python-specific ones. Only the latter are skipped here;
