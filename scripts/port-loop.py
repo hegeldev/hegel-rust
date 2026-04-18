@@ -1,12 +1,20 @@
-#!/usr/bin/env python3
-"""Self-driving loop that runs gates, then picks an upstream test file to port.
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pyyaml>=6"]
+# ///
+"""Self-driving loop that runs gates, clears TODOs, then ports upstream tests.
 
 Outer loop, each iteration:
-  1. `just lint`
-  2. `cargo test`
-  3. `HEGEL_SERVER_COMMAND=/bin/false cargo test --features native`
-  4. working tree clean (`git status --porcelain` empty)
-  5. if all pass, pick a random unported upstream file and enter the port sub-loop
+  1. repair(): `just format` + `cargo clippy --fix` (auto-committed if the
+     tree was clean before), then `just lint`, `cargo test`,
+     `HEGEL_SERVER_COMMAND=/bin/false cargo test --features native`, clean
+     tree — each as a gate that dispatches claude on failure.
+  2. If `TODO.yaml` has any entries, pop the first one and dispatch claude
+     to clear it, then continue the outer loop (repair runs again before
+     the next action).
+  3. If no TODOs, pick a random unported upstream file and enter the port
+     sub-loop.
 
 Port sub-loop (one pick; the outer gates are skipped while this runs):
   a. upstream file in SKIPPED.md → sub-loop done
@@ -22,8 +30,11 @@ Port sub-loop (one pick; the outer gates are skipped while this runs):
 
 On the first failing check (outer or inner), claude is invoked with a focused
 prompt and the same loop restarts at the top. When every upstream file is
-accounted for (ported or in SKIPPED.md) and the outer gates all pass, the
-loop exits 0.
+accounted for (ported or in SKIPPED.md), TODO.yaml is empty, and the outer
+gates all pass, the loop exits 0.
+
+Run via `uv run scripts/port-loop.py` (uv reads the PEP 723 header above and
+provisions PyYAML automatically).
 """
 
 from __future__ import annotations
@@ -37,6 +48,8 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+
+import yaml
 
 
 # ---- prompts (tune freely) ---------------------------------------------------
@@ -68,10 +81,13 @@ Skip vs. port policy (applies to every port-related task):
   __repr__, sys.modules, Python syntax, dunder access) or integrations
   with other Python libraries (numpy, pandas, django, attrs, redis).
 
-- Everything else is portable — including tests that exercise pbtkit /
-  Hypothesis engine internals. Those internals have counterparts under
-  `src/native/` and are reachable in native mode. If the test depends on
-  a native-mode feature that isn't implemented yet:
+- "Has no Rust counterpart" is NOT on its own a valid reason to skip. It
+  is the reason to PORT. Tests on internal APIs (pbtkit / Hypothesis
+  engine internals — `PbtkitState`, `ChoiceNode`, `ConjectureRunner`,
+  `SHRINK_PASSES`, `TC.for_choices`, `to_index`/`from_index`, database
+  serialization tags, span introspection, etc.) exist to pin down
+  behaviour that `src/native/` needs to match. Port them. If the
+  corresponding native feature doesn't exist yet:
   * native-gate the test with `#[cfg(feature = "native")]` (or
     `#![cfg(feature = "native")]` at file top if every test in it is
     native-only),
@@ -82,6 +98,12 @@ Skip vs. port policy (applies to every port-related task):
     belongs in the source code, never in the test body. "Too complex
     to port" is not a valid reason to skip — that's exactly the
     native-gated-plus-source-stub case.
+
+- Do NOT skip tests on the grounds that "hegel-rust already has an
+  equivalent test elsewhere", "this is covered by tests/foo.rs", or
+  "this looks redundant". Redundancy is fine. Incorrectly skipping a
+  test is much worse than porting something a second time. A later
+  rationalisation pass will deduplicate; don't pre-empt it.
 """
 
 LINT_FIX_PROMPT = (
@@ -166,13 +188,22 @@ policy from the system prompt:
   failures hidden behind `#[ignore]`, or `todo!()` placed in the test
   body rather than in the native-mode source code it should be
   driving.
-- Was anything pushed to SKIPPED.md that should actually have been
-  ported? The skip policy only covers public-API incompatibility
-  (Python-specific facilities, external-library integrations). Engine
-  internals and missing native-mode features are NOT skip-worthy —
-  they should be native-gated in the test and stubbed under
-  `src/native/`. If a skip was miscategorised, revert it and port
-  properly.
+- Was anything pushed to SKIPPED.md, or silently dropped from the port
+  (listed as "omitted" in the module docstring), that should actually
+  have been ported? The skip policy only covers public-API
+  incompatibility (Python-specific facilities, external-library
+  integrations). Engine internals and missing native-mode features
+  are NOT skip-worthy — they should be native-gated in the test and
+  stubbed under `src/native/`. In particular, watch for these common
+  mistakes:
+  * Tests omitted because "hegel-rust has no counterpart for this
+    internal API" — that's exactly the native-gated-plus-source-stub
+    case; port them.
+  * Tests omitted on the grounds that they're "already covered" by
+    some other Rust test or "redundant" — redundancy is fine, mis-skips
+    are not. A later rationalisation pass handles deduplication; don't
+    pre-empt it. Restore any such tests.
+  If a skip or drop was miscategorised, revert it and port properly.
 - Are there improvements worth making to clarity, naming, idiom, or
   code quality in the ported file or anything it touched?
 - Is the coverage of the upstream behavior adequate given hegel-rust's
@@ -193,6 +224,35 @@ on.
 Commits under review:
 
 {log}
+"""
+
+TODO_PROMPT = """\
+Clear the following TODO entry from TODO.yaml (at the repo root). The port
+loop dispatches TODO entries one at a time; each invocation is expected to
+handle ONE entry.
+
+Entry:
+
+{entry}
+
+({remaining} other entries will remain in TODO.yaml after this one.)
+
+When the work is done:
+- Remove THIS entry (and only this entry) from TODO.yaml.
+- Commit the code changes and the TODO.yaml edit together. Multiple focused
+  commits are fine if the work naturally splits; just make sure the final
+  commit removes the entry so the loop knows it's cleared.
+
+If the work is larger than one invocation, replace this entry in TODO.yaml
+with one or more narrower follow-ups that together cover the remaining
+work. Don't leave the original entry in place.
+
+If you realise the TODO is wrong, already done, or a bad idea, remove it
+anyway with a commit that explains the decision.
+
+You may also add new TODO entries if you notice things that should be done
+along the way — anywhere in the list, not just at the end. Keep new entries
+focused and use the same `title` / `details` schema as existing ones.
 """
 
 
@@ -228,14 +288,70 @@ def run_gate(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int,
     return proc.returncode, "".join(captured)
 
 
-def apply_format() -> None:
-    """Run `just format` to auto-fix formatting before the lint gate.
+def _git_status_porcelain() -> str:
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
 
-    Any changes made end up as a dirty tree which the clean-tree gate catches
-    and commits; the model never has to run `just format` themselves to fix
-    formatting-only lints.
+
+def is_tree_clean() -> bool:
+    return not _git_status_porcelain().strip()
+
+
+def apply_auto_fixes() -> None:
+    """Run `just format` and `cargo clippy --fix` before the lint gate.
+
+    If the working tree was clean before this ran and the auto-fixers produce
+    changes, commit them here so the model is never dispatched for purely
+    cosmetic lint output. If the tree was already dirty, leave the changes
+    for the clean-tree gate / the model to handle as part of the dirty diff.
     """
+    was_clean = is_tree_clean()
     run_gate(["just", "format"])
+    run_gate(
+        [
+            "cargo",
+            "clippy",
+            "--all-features",
+            "--tests",
+            "--fix",
+            "--allow-dirty",
+            "--allow-staged",
+        ]
+    )
+    run_gate(
+        [
+            "cargo",
+            "clippy",
+            "--manifest-path",
+            "tests/conformance/rust/Cargo.toml",
+            "--fix",
+            "--allow-dirty",
+            "--allow-staged",
+        ]
+    )
+    if not was_clean or is_tree_clean():
+        return
+    print("\n[port-loop] auto-fixes produced changes; auto-committing.", flush=True)
+    # -u stages only modifications to tracked files; format + clippy --fix
+    # should never create new tracked files, and we don't want to sweep in
+    # stray untracked files either.
+    subprocess.run(["git", "add", "-u"], cwd=REPO_ROOT, check=True)
+    subprocess.run(
+        [
+            "git",
+            "commit",
+            "-m",
+            "Auto-apply `just format` + `cargo clippy --fix`",
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+    )
 
 
 def gate_lint() -> tuple[bool, str]:
@@ -281,18 +397,11 @@ def destination_has_tests(dest: Path) -> bool:
 
 def gate_clean_tree() -> tuple[bool, str]:
     print("\n$ git status --porcelain")
-    result = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    out = result.stdout + result.stderr
+    out = _git_status_porcelain()
     if out:
         sys.stdout.write(out)
         sys.stdout.flush()
-    return result.returncode == 0 and not result.stdout.strip(), out
+    return not out.strip(), out
 
 
 def git_head() -> str:
@@ -403,6 +512,32 @@ def unported_pool() -> list[Path]:
                 continue
             pool.append(path)
     return pool
+
+
+# ---- TODO handling ----------------------------------------------------------
+
+
+TODO_PATH = REPO_ROOT / "TODO.yaml"
+
+
+def read_todos() -> list[dict]:
+    """Parse TODO.yaml into a list of entry dicts. Empty/missing file → []."""
+    if not TODO_PATH.exists():
+        return []
+    data = yaml.safe_load(TODO_PATH.read_text())
+    if data is None:
+        return []
+    if not isinstance(data, list):
+        sys.exit(
+            f"[port-loop] TODO.yaml must be a YAML list at the top level, "
+            f"got {type(data).__name__}"
+        )
+    return data
+
+
+def format_todo(entry: dict) -> str:
+    """Render one TODO entry as a YAML fragment for inclusion in a prompt."""
+    return yaml.safe_dump([entry], sort_keys=False).rstrip()
 
 
 # ---- claude dispatch ---------------------------------------------------------
@@ -703,7 +838,7 @@ def repair(state: IterCounter) -> None:
     any_failures = True
     while any_failures:
         any_failures = False
-        apply_format()
+        apply_auto_fixes()
         ok, out = gate_lint()
         if not ok:
             any_failures = True
@@ -724,6 +859,32 @@ def repair(state: IterCounter) -> None:
         if not ok:
             state.dispatch(COMMIT_PROMPT, gate_output=out)
             any_failures = True
+
+
+def drive_todos(state: IterCounter) -> bool:
+    """Pop one TODO entry if any are pending. Returns True iff dispatched.
+
+    When dispatching cleared the last entry in TODO.yaml, runs a full
+    `repair()` before returning so the outer loop sees a fresh green
+    baseline before switching to porting new tests.
+    """
+    todos = read_todos()
+    if not todos:
+        return False
+    first = todos[0]
+    remaining = len(todos) - 1
+    print(
+        f"\n[port-loop] {len(todos)} TODO entry(ies) pending; dispatching "
+        f"first."
+    )
+    state.dispatch(TODO_PROMPT.format(entry=format_todo(first), remaining=remaining))
+    if remaining == 0 and not read_todos():
+        print(
+            f"\n[port-loop] last TODO cleared; running a full repair before "
+            f"moving on to porting."
+        )
+        repair(state)
+    return True
 
 
 def resolve_port_arg(raw: str) -> Path:
@@ -793,19 +954,19 @@ def main() -> None:
         print(f"\n[port-loop] --port done after {state.n} iteration(s).")
         return
 
-    iters = 0
     while True:
-        if iters % 10 == 0:
-            repair(state)
-        iters += 1
+        repair(state)
+
+        if drive_todos(state):
+            continue
 
         pool = unported_pool()
         if not pool:
             print(
-                f"\n[port-loop] every upstream file is ported or skipped; "
-                f"running final repair after {state.n} iteration(s)."
+                f"\n[port-loop] TODO.yaml empty and every upstream file is "
+                f"ported or skipped; done after {state.n} iteration(s)."
             )
-            break
+            return
 
         picked = random.choice(pool)
         destination = destination_for(picked)
@@ -814,8 +975,6 @@ def main() -> None:
             f"→ {destination} (random)."
         )
         drive_port(picked, destination, state)
-    repair(state)
-    print(f"\n[port-loop] done after {state.n} iteration(s).")
 
 
 if __name__ == "__main__":
