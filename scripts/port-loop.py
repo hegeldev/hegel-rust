@@ -188,11 +188,64 @@ policy in the system prompt before routing this file to SKIPPED.md;
 it is strict.
 """
 
+PORT_SKILL_UPDATE_PROMPT = """\
+Reflection pass for the port of {path} → {destination}. The gates are
+green and commits have been made ({start_sha}..HEAD below). Before the
+reviewer looks at this, update the skills so future porting agents
+benefit from anything non-obvious this port surfaced.
+
+Existing skills live under `.claude/skills/`:
+  - changelog/             — release-note conventions
+  - coverage/              — coverage philosophy + ratchet
+  - implementing-native/   — adding/extending src/native/ features
+  - native-review/         — auditing native code after it lands
+  - porting-tests/         — porting Python PBT tests to Rust
+  - self-review/           — pre-commit self-audit
+
+Read the relevant skill file(s) and the diff ({start_sha}..HEAD). Then
+decide — honestly — whether any of the following apply:
+
+- A Python→Rust translation pattern that was non-obvious and isn't
+  already documented (goes in
+  `.claude/skills/porting-tests/references/api-mapping.md`).
+- A pbtkit or Hypothesis convention that tripped you up (fixture
+  style, hook ordering, conftest.py setup, parametrize shapes,
+  unusual imports) — add to the relevant reference under
+  `.claude/skills/porting-tests/references/`.
+- A native-implementation insight (how to structure a new
+  `src/native/` module, where pbtkit and Hypothesis diverge on a
+  feature, a subtle invariant you had to preserve) — belongs in
+  `.claude/skills/implementing-native/SKILL.md`.
+- Something large enough, distinct enough, or recurring enough that
+  it deserves its own skill. If so, create
+  `.claude/skills/<new-skill>/SKILL.md` with the standard YAML
+  frontmatter:
+
+      ---
+      name: <new-skill>
+      description: "<one-line summary of when an agent should use this>"
+      ---
+
+  and cross-link it from any existing skills that should mention it.
+
+If you add or change skills, commit the edits as a separate focused
+commit ("Update <skill> with <thing>" or similar). Don't duplicate
+what's already there; amend in place. If nothing from this port is
+novel enough to document, reply with one short sentence explaining
+why and make no commits — the loop will continue to the review
+step either way.
+
+Commits in this sub-loop:
+
+{log}
+"""
+
 PORT_REVIEW_PROMPT = """\
 Review the port of {path} → {destination}. The gate chain (destination
 exists, has `#[test]` attributes, server-mode tests pass, native-mode
-tests pass, working tree clean) is currently green. Below is the list
-of commits made during this sub-loop ({start_sha}..HEAD).
+tests pass, working tree clean) is currently green, and a skill-update
+reflection pass has already run. Below is the list of commits made
+during this sub-loop ({start_sha}..HEAD).
 
 Read the upstream file ({path}), the ported file ({destination}), and
 the commits under review. Then evaluate honestly, applying the skip
@@ -225,11 +278,10 @@ policy from the system prompt:
 - Is the coverage of the upstream behavior adequate given hegel-rust's
   available API? If missing cases could be added by native-gating plus
   a source-level stub, add them.
-- Did this port surface any new Python→Rust translation, pattern, or
-  gotcha that isn't already documented under
-  `.claude/skills/porting-tests/` (SKILL.md, references/api-mapping.md,
-  references/pbtkit-overview.md, references/hypothesis-overview.md)?
-  If so, add a terse entry in a commit.
+- If the skill-update pass added or changed a skill file: is the
+  change accurate, terse, and non-duplicative? Revert or tighten if
+  not. If the skill-update pass made no commits but obvious
+  patterns went undocumented, do it now.
 
 If you find anything worth changing, make focused commits to fix it —
 the sub-loop will re-run the gates afterward and invoke you again if
@@ -1072,7 +1124,7 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
             break
 
         # All gates passed. If nothing was committed during this sub-loop
-        # there's nothing to review.
+        # there's nothing to review or reflect on.
         current_sha = git_head()
         if current_sha == start_sha:
             print(
@@ -1081,12 +1133,35 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
             )
             break
 
-        # Step 6: dispatch a review of the commits made during this port.
+        # Step 6: skill-update reflection pass. Ask the agent to capture
+        # anything this port taught us into `.claude/skills/`, possibly
+        # creating new skills, before the reviewer sees the port. Skill
+        # edits are markdown, so they can't break code gates — we don't
+        # loop back to re-verify after this step; we just make sure any
+        # uncommitted skill changes get committed, then fall through to
+        # the review.
+        log = git_log(f"{start_sha}..HEAD")
         print(
             f"\n[port-loop] {destination} ported and green; "
-            f"dispatching review of {start_sha[:12]}..HEAD."
+            f"dispatching skill-update reflection of {start_sha[:12]}"
+            f"..HEAD."
         )
+        state.dispatch(
+            PORT_SKILL_UPDATE_PROMPT.format(
+                start_sha=start_sha, log=log, **fmt_args
+            )
+        )
+        ok, out = gate_clean_tree()
+        if not ok:
+            state.resume_last(COMMIT_PROMPT, gate_output=out)
+
+        # Step 7: dispatch a review of the commits made during this port
+        # (including any skill-update commits from the previous step).
+        current_sha = git_head()
         log = git_log(f"{start_sha}..HEAD")
+        print(
+            f"\n[port-loop] dispatching review of {start_sha[:12]}..HEAD."
+        )
         state.dispatch(
             PORT_REVIEW_PROMPT.format(start_sha=start_sha, log=log, **fmt_args)
         )
