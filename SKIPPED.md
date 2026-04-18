@@ -112,6 +112,12 @@ Individually-skipped tests (rest of the file is ported):
   Rust has no global singleton PRNG, no `register_random` analog, and no
   equivalent GC-based weak-reference semantics; hegel-rust's `gs::randoms()`
   is a shrinkable RNG value, a different concept.
+- `test_slices.py` — tests `st.slices(size)`, which generates Python
+  `slice` objects (built-in type with `.start`/`.stop`/`.step` attributes
+  and a `.indices(size)` resolver used with Python's indexing protocol).
+  Rust has no `slice`-object type and hegel-rust has no `gs::slices()`
+  generator; the tests rely on Python indexing semantics
+  (`range(size)[x.start]`, `x.indices(size)`) throughout.
 - `test_database_backend.py` — tests Hypothesis's full
   `ExampleDatabase` public-API surface: `InMemoryExampleDatabase`,
   `MultiplexedDatabase`, `ReadOnlyDatabase`, `BackgroundWriteDatabase`,
