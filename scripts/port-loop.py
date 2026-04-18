@@ -271,6 +271,42 @@ along the way — anywhere in the list, not just at the end. Keep new entries
 focused and use the same `title` / `details` schema as existing ones.
 """
 
+TODO_RECOVERY_PROMPT = """\
+Recovery task: the port loop has dispatched {attempts} previous attempts at
+the following TODO entry from TODO.yaml, and the entry is still in the
+queue. Something is wrong with the entry itself, or with how agents keep
+approaching it.
+
+Entry:
+
+{entry}
+
+Figure out what's going on and act on it. Options (pick whichever fits):
+
+1. The entry is too broad / badly framed — rewrite it in place, or replace
+   it with one or more narrower follow-ups that each fit in a single
+   invocation. Commit the TODO.yaml edit with a message explaining the
+   rewrite.
+
+2. The entry is already (partly) done and prior attempts couldn't find a
+   natural commit to make — remove or rewrite the entry accordingly, and
+   commit.
+
+3. The work is genuinely not worth doing (wrong, obsolete, or a bad idea) —
+   remove the entry with a commit message explaining the decision.
+
+4. The work is blocked by something not capturable as a TODO — move the
+   affected piece to SKIPPED.md (under the appropriate section, with a
+   one-line rationale), shrink or drop the TODO entry to match, and
+   commit.
+
+Read the recent git log (`git log -n 20 --oneline`) to see what the
+previous attempts actually committed; that's often the clearest signal
+for why they stalled. Whatever you choose, the TODO.yaml state MUST
+change in this invocation so the loop doesn't keep hammering the same
+unchanged entry.
+"""
+
 
 # ---- gate helpers ------------------------------------------------------------
 
@@ -780,13 +816,14 @@ def dispatch_claude(
     gate_output: str | None,
     timeout: float | None,
     resume_session: str | None = None,
-) -> str | None:
+) -> tuple[str | None, int]:
     """Spawn claude -p (or resume an existing session), stream events live.
 
-    Returns the session_id reported in the `system/init` event so the
-    caller can later `--resume` that session. Returns None if the event
-    stream never produced an init (e.g., process failed before
-    handshake).
+    Returns `(session_id, exit_code)`. `session_id` is the id reported in
+    the `system/init` event (None if the stream never produced one, e.g.
+    the process failed before handshake). `exit_code` is the subprocess
+    return code; non-zero + resume = the resume target is likely stale
+    and the caller should drop it.
     """
     full_prompt = prompt
     if gate_output is not None:
@@ -872,7 +909,7 @@ def dispatch_claude(
         if timed_out:
             print(f"\n[port-loop] claude timed out after {timeout}s; continuing.")
 
-    return session_id
+    return session_id, proc.returncode
 
 
 # ---- main loop ---------------------------------------------------------------
@@ -892,6 +929,11 @@ class IterCounter:
         self.max = max_iterations
         self.timeout = timeout
         self.last_session_id: str | None = None
+        # Per-TODO-title attempt counter. Used by drive_todos() to escalate
+        # to a recovery agent when the same entry stays in TODO.yaml after
+        # several normal attempts, and eventually to skip it rather than
+        # loop forever on something the agents can't clear.
+        self.todo_attempts: dict[str, int] = {}
 
     def _check_cap(self) -> None:
         if self.max > 0 and self.n >= self.max:
@@ -903,9 +945,11 @@ class IterCounter:
         self._check_cap()
         self.n += 1
         print(f"\n{'#' * 72}\n# iteration {self.n}\n{'#' * 72}")
-        sid = dispatch_claude(
+        sid, _code = dispatch_claude(
             prompt, gate_output=gate_output, timeout=self.timeout
         )
+        # Even if exit code was non-zero, a captured sid still means a
+        # valid session exists that we can try to resume later.
         self.last_session_id = sid
 
     def resume_last(
@@ -917,22 +961,33 @@ class IterCounter:
         pre-existing dirty tree), falls back to a fresh dispatch —
         that agent has no context either way and will have to figure
         it out from the diff.
+
+        If the resume subprocess exits non-zero, drops `last_session_id`
+        so the next call won't retry the same (likely stale) target.
         """
         if self.last_session_id is None:
             self.dispatch(prompt, gate_output=gate_output)
             return
         self._check_cap()
         self.n += 1
+        previous = self.last_session_id
         print(
             f"\n{'#' * 72}\n# iteration {self.n} "
-            f"(resume {self.last_session_id[:12]}…)\n{'#' * 72}"
+            f"(resume {previous[:12]}…)\n{'#' * 72}"
         )
-        sid = dispatch_claude(
+        sid, code = dispatch_claude(
             prompt,
             gate_output=gate_output,
             timeout=self.timeout,
-            resume_session=self.last_session_id,
+            resume_session=previous,
         )
+        if code != 0:
+            print(
+                f"\n[port-loop] resume of {previous[:12]} exited {code}; "
+                f"dropping session id so the next call starts fresh."
+            )
+            self.last_session_id = None
+            return
         if sid is not None:
             self.last_session_id = sid
 
@@ -1080,17 +1135,49 @@ def drive_todos(state: IterCounter) -> bool:
     When dispatching cleared the last entry in TODO.yaml, runs a full
     `repair()` before returning so the outer loop sees a fresh green
     baseline before switching to porting new tests.
+
+    Per-title retry budget: the first 4 attempts on a given entry use
+    `TODO_PROMPT`. The 5th attempt escalates to `TODO_RECOVERY_PROMPT`
+    (whose job is to rewrite/remove/skip the stuck entry). From the 6th
+    attempt onwards — meaning the recovery agent itself didn't modify
+    the entry — we stop dispatching on this title and return False so
+    the outer loop can move on to porting new files instead of spinning
+    forever on a stuck entry.
     """
     todos = read_todos()
     if not todos:
         return False
     first = todos[0]
+    title = str(first.get("title", "")) or format_todo(first).splitlines()[0]
+    attempts = state.todo_attempts.get(title, 0)
     remaining = len(todos) - 1
-    print(
-        f"\n[port-loop] {len(todos)} TODO entry(ies) pending; dispatching "
-        f"first."
-    )
-    state.dispatch(TODO_PROMPT.format(entry=format_todo(first), remaining=remaining))
+
+    if attempts >= 5:
+        print(
+            f"\n[port-loop] TODO {title!r} unresolved after {attempts} "
+            f"attempts (including recovery); leaving it in place and "
+            f"skipping to porting."
+        )
+        return False
+
+    state.todo_attempts[title] = attempts + 1
+    if attempts >= 4:
+        print(
+            f"\n[port-loop] TODO {title!r} still present after {attempts} "
+            f"attempts; dispatching recovery agent."
+        )
+        state.dispatch(
+            TODO_RECOVERY_PROMPT.format(entry=format_todo(first), attempts=attempts)
+        )
+    else:
+        print(
+            f"\n[port-loop] {len(todos)} TODO entry(ies) pending; dispatching "
+            f"first (attempt {attempts + 1})."
+        )
+        state.dispatch(
+            TODO_PROMPT.format(entry=format_todo(first), remaining=remaining)
+        )
+
     if remaining == 0 and not read_todos():
         print(
             f"\n[port-loop] last TODO cleared; running a full repair before "
