@@ -6,14 +6,15 @@
 """Self-driving loop that runs gates, clears TODOs, then ports upstream tests.
 
 Outer loop, each iteration:
-  1. repair(): `just format` + `cargo clippy --fix` (auto-committed if the
+  1. `cargo clean` so the build starts from cold.
+  2. repair(): `just format` + `cargo clippy --fix` (auto-committed if the
      tree was clean before), then `just lint`, `cargo test`,
      `HEGEL_SERVER_COMMAND=/bin/false cargo test --features native`, clean
      tree — each as a gate that dispatches claude on failure.
-  2. If `TODO.yaml` has any entries, pop the first one and dispatch claude
+  3. If `TODO.yaml` has any entries, pop the first one and dispatch claude
      to clear it, then continue the outer loop (repair runs again before
      the next action).
-  3. If no TODOs, pick a random unported upstream file and enter the port
+  4. If no TODOs, pick a random unported upstream file and enter the port
      sub-loop.
 
 Port sub-loop (one pick; the outer gates are skipped while this runs):
@@ -40,6 +41,7 @@ provisions PyYAML automatically).
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import random
@@ -368,6 +370,11 @@ def apply_auto_fixes() -> None:
     )
 
 
+def cargo_clean() -> None:
+    """Wipe the target/ directory so each iteration starts from cold."""
+    run_gate(["cargo", "clean"])
+
+
 def gate_lint() -> tuple[bool, str]:
     code, out = run_gate(["just", "lint"])
     return code == 0, out
@@ -588,6 +595,69 @@ def _tool_summary(name: str, inp: dict) -> str:
     return blob[:200] + ("…" if len(blob) > 200 else "")
 
 
+def _print_tool_detail(name: str, inp: dict) -> None:
+    """Print additional indented context below the tool-use header.
+
+    For file-modifying tools, show the diff / content so the user can
+    follow along without opening the file. Truncate aggressively to
+    keep the live log readable; claude's own output already captures
+    the full content.
+    """
+    if not isinstance(inp, dict):
+        return
+    max_lines = 40
+    if name == "Edit":
+        old_s = str(inp.get("old_string", ""))
+        new_s = str(inp.get("new_string", ""))
+        if inp.get("replace_all"):
+            print("[claude]     (replace_all=True)", flush=True)
+        diff = list(
+            difflib.unified_diff(
+                old_s.splitlines(),
+                new_s.splitlines(),
+                fromfile="old",
+                tofile="new",
+                lineterm="",
+                n=1,
+            )
+        )
+        # Skip the `--- old` / `+++ new` header lines — they're noise
+        # when there's only ever one hunk per Edit call.
+        body = [line for line in diff if not line.startswith(("---", "+++"))]
+        for line in body[:max_lines]:
+            print(f"[claude]     {line}", flush=True)
+        if len(body) > max_lines:
+            print(
+                f"[claude]     … ({len(body) - max_lines} more diff lines)",
+                flush=True,
+            )
+        return
+    if name == "Write":
+        content = str(inp.get("content", ""))
+        lines = content.splitlines()
+        for line in lines[:max_lines]:
+            print(f"[claude]     + {line}", flush=True)
+        if len(lines) > max_lines:
+            print(
+                f"[claude]     … ({len(lines) - max_lines} more lines)",
+                flush=True,
+            )
+        return
+    if name == "NotebookEdit":
+        new_source = str(inp.get("new_source", ""))
+        lines = new_source.splitlines()
+        mode = inp.get("edit_mode") or "replace"
+        print(f"[claude]     (mode={mode})", flush=True)
+        for line in lines[:max_lines]:
+            print(f"[claude]     + {line}", flush=True)
+        if len(lines) > max_lines:
+            print(
+                f"[claude]     … ({len(lines) - max_lines} more lines)",
+                flush=True,
+            )
+        return
+
+
 def _print_event(evt: dict) -> None:
     """Print a human-friendly line for one stream-json event."""
     etype = evt.get("type")
@@ -605,8 +675,10 @@ def _print_event(evt: dict) -> None:
                         print(f"[claude] {line}", flush=True)
             elif btype == "tool_use":
                 name = block.get("name", "?")
-                summary = _tool_summary(name, block.get("input") or {})
+                inp = block.get("input") or {}
+                summary = _tool_summary(name, inp)
                 print(f"[claude] → {name}({summary})", flush=True)
+                _print_tool_detail(name, inp)
             elif btype == "thinking":
                 # Skip internal thinking blocks in live output.
                 pass
@@ -974,6 +1046,7 @@ def main() -> None:
             f"\n[port-loop] --port: targeting {picked} → {destination}; "
             f"running pre-repair, sub-loop, then post-repair."
         )
+        cargo_clean()
         repair(state)
         drive_port(picked, destination, state)
         repair(state)
@@ -982,6 +1055,7 @@ def main() -> None:
 
     if args.todo_only:
         while True:
+            cargo_clean()
             repair(state)
             if not drive_todos(state):
                 print(
@@ -991,6 +1065,7 @@ def main() -> None:
                 return
 
     while True:
+        cargo_clean()
         repair(state)
 
         if drive_todos(state):
