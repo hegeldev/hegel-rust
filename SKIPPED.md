@@ -103,6 +103,15 @@ Individually-skipped tests (rest of the file is ported):
   `dataclass_asdict` over `@dataclass`/`namedtuple`/`defaultdict`,
   `add_note` on frozen-dataclass exceptions, and `extract_bits`. All
   Python-specific with no Rust counterpart.
+- `test_random_module.py` — tests Hypothesis's integration with Python's
+  global `random` module: `st.random_module()` (seeds Python's global PRNG),
+  `register_random()` (registers external `random.Random` instances with
+  `entropy.RANDOMS_TO_MANAGE`), `deterministic_PRNG()` (context manager for
+  Python random determinism), and the `ReferenceError`/`HypothesisWarning`
+  raised when a `Random` instance is passed without a surviving referrer.
+  Rust has no global singleton PRNG, no `register_random` analog, and no
+  equivalent GC-based weak-reference semantics; hegel-rust's `gs::randoms()`
+  is a shrinkable RNG value, a different concept.
 - `test_database_backend.py` — tests Hypothesis's full
   `ExampleDatabase` public-API surface: `InMemoryExampleDatabase`,
   `MultiplexedDatabase`, `ReadOnlyDatabase`, `BackgroundWriteDatabase`,
