@@ -2,10 +2,11 @@
 #![allow(dead_code)]
 
 use super::utils::assert_matches_regex;
-use std::path::PathBuf;
-use std::process::{Command, ExitStatus};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::process::ExitStatus;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
 use tempfile::TempDir;
 
 // Shared cargo target dir across TempRustProject instances. Each
@@ -27,21 +28,109 @@ use tempfile::TempDir;
 
 static PACKAGE_NAME_ID: AtomicU64 = AtomicU64::new(0);
 
-// Serialize cargo invocations across tests. Even with a shared
-// `CARGO_TARGET_DIR`, a cold build of the shared artefacts kicked off
-// by several tests in parallel can OOM-kill rustc on modest machines
-// (confusing "signal: 9, SIGKILL" failures). Holding this lock around
-// the cargo call means a single build runs at a time, but that build
-// gets all cores — net wall time is similar and we avoid the OOM. Once
-// the shared dir is warm, the per-test cost is mostly linking the test
-// crate, which is cheap anyway.
-static CARGO_LOCK: Mutex<()> = Mutex::new(());
+// First-build gate. A cold `cargo build` of `hegeltest` and its
+// transitive dep graph peaks at hundreds of MBs of rustc memory; with a
+// previous-generation unconditional `Mutex` around every cargo
+// invocation, we avoided letting parallel test threads race several of
+// those cold builds at once (which OOM-kills rustc on ≤8 GiB machines).
+// The mutex also serialised every *warm* rebuild, which is wasted
+// parallelism once the shared target dir is populated.
+//
+// This `OnceLock` is the narrower replacement: the first thread to call
+// `warmup_shared_target` runs a dedicated warmup build (a synthetic
+// project that depends on hegeltest with the feature set this test
+// binary uses) and all other threads block on `get_or_init` until it
+// completes. After that the shared target dir is hot, every subsequent
+// per-test cargo call is mostly linking the temp wrapper crate, and
+// they can all run concurrently.
+//
+// Cross-process (cargo-test-launched sibling binaries) coordination is
+// delegated to cargo's own `.cargo-lock` inside the shared target dir,
+// same as before; we've never tried to serialise those and the workload
+// hasn't been a problem in practice.
+static WARMUP: OnceLock<()> = OnceLock::new();
 
-fn lock_cargo() -> MutexGuard<'static, ()> {
-    match CARGO_LOCK.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
+fn shared_target_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("hegel-shared-target")
+}
+
+fn warmup_shared_target() {
+    WARMUP.get_or_init(|| {
+        let hegel_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let shared_target = shared_target_dir();
+        let features: &[&str] = if cfg!(feature = "native") {
+            &["native"]
+        } else {
+            &[]
+        };
+        run_warmup_build(&hegel_path, &shared_target, features);
+    });
+}
+
+fn run_warmup_build(hegel_path: &Path, shared_target: &Path, features: &[&str]) {
+    let suffix = if features.is_empty() {
+        "base".to_string()
+    } else {
+        features.join("_")
+    };
+    let warmup_dir = shared_target.join(format!("warmup_{}", suffix));
+    std::fs::create_dir_all(warmup_dir.join("src")).unwrap();
+
+    let features_str = if features.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ", features = [{}]",
+            features
+                .iter()
+                .map(|f| format!("\"{}\"", f))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    // `[workspace]` marks this as its own workspace root. The warmup dir
+    // lives inside `target/`, which is inside the outer hegeltest
+    // workspace, so cargo would otherwise complain that the warmup
+    // project looks like it should be a workspace member.
+    std::fs::write(
+        warmup_dir.join("Cargo.toml"),
+        format!(
+            r#"[workspace]
+
+[package]
+name = "hegel_warmup_{suffix}"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hegeltest = {{ path = "{path}"{features_str} }}
+"#,
+            suffix = suffix,
+            path = hegel_path.display(),
+            features_str = features_str,
+        ),
+    )
+    .unwrap();
+    std::fs::write(warmup_dir.join("src/lib.rs"), "").unwrap();
+
+    let lock_src = hegel_path.join("Cargo.lock");
+    if lock_src.exists() {
+        std::fs::copy(&lock_src, warmup_dir.join("Cargo.lock")).unwrap();
     }
+
+    let output = Command::new(env!("CARGO"))
+        .args(["build", "--quiet"])
+        .current_dir(&warmup_dir)
+        .env("CARGO_TARGET_DIR", shared_target)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "warmup cargo build failed for features {:?}\nstdout:\n{}\nstderr:\n{}",
+        features,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
 }
 
 pub struct TempRustProject {
@@ -168,7 +257,7 @@ hegeltest = {{ path = "{path}"{features} }}
         // directory under `target/`. `CARGO_TARGET_TMPDIR` is provided
         // by cargo for integration tests and lives inside the outer
         // workspace's `target/`, so `cargo clean` still sweeps it.
-        let shared_target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("hegel-shared-target");
+        let shared_target = shared_target_dir();
         cmd.env("CARGO_TARGET_DIR", &shared_target);
 
         for key in &self.env_removes {
@@ -178,7 +267,10 @@ hegeltest = {{ path = "{path}"{features} }}
             cmd.env(key, value);
         }
 
-        let _guard = lock_cargo();
+        // Ensure the shared target dir has been warmed up once in this
+        // process before any test thread spawns its own cargo. See the
+        // comment on `WARMUP` above for why a one-shot gate is enough.
+        warmup_shared_target();
         let output = cmd.output().unwrap();
 
         let run_output = RunOutput {
