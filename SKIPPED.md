@@ -134,6 +134,14 @@ Individually-skipped tests (rest of the file is ported):
   and Hypothesis settings absent from hegel-rust (`Phase.explicit`,
   `report_multiple_bugs`, `deadline`). The core explicit-test-case behaviour
   already has thorough coverage in `tests/test_explicit_test_case.rs`.
+- `test_falsifying_example_output.py` — both tests rely on Python-specific facilities:
+  `test_inserts_line_breaks_only_at_appropriate_lengths` uses the `@example` decorator,
+  `Phase.explicit`, and `__notes__` (PEP 678 exception annotation) to inspect Hypothesis's
+  "Falsifying explicit example: test(x=..., y=...)" output format; `test_vararg_output`
+  uses Python `*args` function signatures and likewise inspects `__notes__`. Neither the
+  `@example` API, `Phase.explicit`, nor `__notes__` have hegel-rust counterparts, and
+  hegel-rust's failure output format (`let draw_1 = ...; panicked at...`) is
+  completely different from Hypothesis's.
 - `test_reflection.py` — all tests exercise Python-specific reflection utilities:
   `convert_keyword_arguments`/`convert_positional_arguments`/`define_function_signature`
   (Python `inspect.Signature`/`Parameter` manipulation), `function_digest`/`repr_call`/
