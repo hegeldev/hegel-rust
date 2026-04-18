@@ -24,9 +24,10 @@
 // ChoiceValue sequences (the value bytes); they are kept here so that
 // the replay path in `runner.rs` can round-trip them.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{self, JoinHandle};
 
 use crate::native::core::ChoiceValue;
 
@@ -67,6 +68,25 @@ pub trait ExampleDatabase: Send + Sync {
         }
         self.delete(src, value);
         self.save(dst, value);
+    }
+}
+
+/// Let `Arc<T>` stand in for an `ExampleDatabase` wherever the trait is
+/// required, so callers can keep their own handle on an inner database
+/// (and read it back) while also passing it into a wrapper such as
+/// `ReadOnlyNativeDatabase` or `MultiplexedNativeDatabase`.
+impl<T: ExampleDatabase + ?Sized> ExampleDatabase for Arc<T> {
+    fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
+        (**self).fetch(key)
+    }
+    fn save(&self, key: &[u8], value: &[u8]) {
+        (**self).save(key, value);
+    }
+    fn delete(&self, key: &[u8], value: &[u8]) {
+        (**self).delete(key, value);
+    }
+    fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]) {
+        (**self).move_value(src, dst, value);
     }
 }
 
@@ -206,6 +226,222 @@ impl ExampleDatabase for InMemoryNativeDatabase {
         if let Some(values) = data.get_mut(key) {
             values.remove(value);
         }
+    }
+}
+
+/// Read-only view of another database: `fetch` forwards to the inner
+/// database; `save` / `delete` / `move_value` are silent no-ops.
+///
+/// Hypothesis: `ReadOnlyDatabase`. Useful for exposing a shared database
+/// (e.g. CI-populated) to developer machines without letting local runs
+/// propagate changes back.
+#[allow(dead_code)]
+pub struct ReadOnlyNativeDatabase<D: ExampleDatabase> {
+    inner: D,
+}
+
+#[allow(dead_code)]
+impl<D: ExampleDatabase> ReadOnlyNativeDatabase<D> {
+    pub fn new(inner: D) -> Self {
+        Self { inner }
+    }
+}
+
+impl<D: ExampleDatabase> ExampleDatabase for ReadOnlyNativeDatabase<D> {
+    fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
+        self.inner.fetch(key)
+    }
+    fn save(&self, _key: &[u8], _value: &[u8]) {}
+    fn delete(&self, _key: &[u8], _value: &[u8]) {}
+    fn move_value(&self, _src: &[u8], _dst: &[u8], _value: &[u8]) {}
+}
+
+/// Fan-out wrapper that multiplexes writes across several databases and
+/// unions their reads.
+///
+/// Hypothesis: `MultiplexedDatabase`. `save` / `delete` / `move_value`
+/// run against every inner database; `fetch` returns the union of each
+/// inner database's values, de-duplicated so that a value present in
+/// multiple backends is yielded once. Inner databases are held behind
+/// `Arc` so callers can retain their own handles and observe the writes
+/// landing (the `test_multiplexed_dbs_read_and_write_all` test checks
+/// each backing database individually).
+#[allow(dead_code)]
+pub struct MultiplexedNativeDatabase {
+    inner: Vec<Arc<dyn ExampleDatabase>>,
+}
+
+#[allow(dead_code)]
+impl MultiplexedNativeDatabase {
+    pub fn new(inner: Vec<Arc<dyn ExampleDatabase>>) -> Self {
+        Self { inner }
+    }
+}
+
+impl ExampleDatabase for MultiplexedNativeDatabase {
+    fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
+        let mut seen: HashSet<Vec<u8>> = HashSet::new();
+        let mut out = Vec::new();
+        for db in &self.inner {
+            for v in db.fetch(key) {
+                if seen.insert(v.clone()) {
+                    out.push(v);
+                }
+            }
+        }
+        out
+    }
+
+    fn save(&self, key: &[u8], value: &[u8]) {
+        for db in &self.inner {
+            db.save(key, value);
+        }
+    }
+
+    fn delete(&self, key: &[u8], value: &[u8]) {
+        for db in &self.inner {
+            db.delete(key, value);
+        }
+    }
+
+    fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]) {
+        for db in &self.inner {
+            db.move_value(src, dst, value);
+        }
+    }
+}
+
+enum BackgroundTask {
+    Save(Vec<u8>, Vec<u8>),
+    Delete(Vec<u8>, Vec<u8>),
+    Move(Vec<u8>, Vec<u8>, Vec<u8>),
+}
+
+struct BackgroundQueue {
+    state: Mutex<BackgroundQueueState>,
+    not_empty: Condvar,
+    all_done: Condvar,
+}
+
+struct BackgroundQueueState {
+    tasks: VecDeque<BackgroundTask>,
+    // `pending` counts queued-but-not-yet-processed tasks *plus* the
+    // task currently in flight, so `fetch` can block until every
+    // enqueued write has actually run against the inner database.
+    pending: usize,
+    shutdown: bool,
+}
+
+/// Wrapper that defers writes to a background worker thread so that
+/// `save` / `delete` / `move_value` return quickly. `fetch` blocks
+/// until the queue drains so reads see every previously-enqueued write.
+///
+/// Hypothesis: `BackgroundWriteDatabase`. Python uses `queue.Queue` +
+/// `threading.Thread` + `weakref.finalize` to flush on GC; Rust uses
+/// a `Mutex<VecDeque>` + `Condvar` and flushes on `Drop`.
+#[allow(dead_code)]
+pub struct BackgroundWriteNativeDatabase {
+    inner: Arc<dyn ExampleDatabase>,
+    queue: Arc<BackgroundQueue>,
+    handle: Option<JoinHandle<()>>,
+}
+
+#[allow(dead_code)]
+impl BackgroundWriteNativeDatabase {
+    pub fn new<D: ExampleDatabase + 'static>(db: D) -> Self {
+        let inner: Arc<dyn ExampleDatabase> = Arc::new(db);
+        let queue = Arc::new(BackgroundQueue {
+            state: Mutex::new(BackgroundQueueState {
+                tasks: VecDeque::new(),
+                pending: 0,
+                shutdown: false,
+            }),
+            not_empty: Condvar::new(),
+            all_done: Condvar::new(),
+        });
+        let worker_inner = Arc::clone(&inner);
+        let worker_queue = Arc::clone(&queue);
+        let handle = thread::spawn(move || background_worker_loop(worker_inner, worker_queue));
+        Self {
+            inner,
+            queue,
+            handle: Some(handle),
+        }
+    }
+
+    fn enqueue(&self, task: BackgroundTask) {
+        let mut state = self.queue.state.lock().unwrap();
+        state.tasks.push_back(task);
+        state.pending += 1;
+        self.queue.not_empty.notify_one();
+    }
+
+    fn wait_all_done(&self) {
+        let mut state = self.queue.state.lock().unwrap();
+        while state.pending > 0 {
+            state = self.queue.all_done.wait(state).unwrap();
+        }
+    }
+}
+
+fn background_worker_loop(inner: Arc<dyn ExampleDatabase>, queue: Arc<BackgroundQueue>) {
+    loop {
+        let task = {
+            let mut state = queue.state.lock().unwrap();
+            while state.tasks.is_empty() && !state.shutdown {
+                state = queue.not_empty.wait(state).unwrap();
+            }
+            match state.tasks.pop_front() {
+                Some(t) => t,
+                None => return, // shutdown signalled and queue drained
+            }
+        };
+        match task {
+            BackgroundTask::Save(k, v) => inner.save(&k, &v),
+            BackgroundTask::Delete(k, v) => inner.delete(&k, &v),
+            BackgroundTask::Move(src, dst, v) => inner.move_value(&src, &dst, &v),
+        }
+        let mut state = queue.state.lock().unwrap();
+        state.pending -= 1;
+        if state.pending == 0 {
+            queue.all_done.notify_all();
+        }
+    }
+}
+
+impl Drop for BackgroundWriteNativeDatabase {
+    fn drop(&mut self) {
+        {
+            let mut state = self.queue.state.lock().unwrap();
+            state.shutdown = true;
+            self.queue.not_empty.notify_all();
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl ExampleDatabase for BackgroundWriteNativeDatabase {
+    fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
+        self.wait_all_done();
+        self.inner.fetch(key)
+    }
+
+    fn save(&self, key: &[u8], value: &[u8]) {
+        self.enqueue(BackgroundTask::Save(key.to_vec(), value.to_vec()));
+    }
+
+    fn delete(&self, key: &[u8], value: &[u8]) {
+        self.enqueue(BackgroundTask::Delete(key.to_vec(), value.to_vec()));
+    }
+
+    fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]) {
+        self.enqueue(BackgroundTask::Move(
+            src.to_vec(),
+            dst.to_vec(),
+            value.to_vec(),
+        ));
     }
 }
 

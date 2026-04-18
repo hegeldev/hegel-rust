@@ -7,43 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Port ReadOnlyDatabase / MultiplexedDatabase / BackgroundWriteDatabase wrappers
-  details: |
-    Follow-up to the multi-value `NativeDatabase` rework.
-    `hypothesis.database` exports three wrapper classes that compose
-    databases together: `ReadOnlyDatabase` (silently drops writes),
-    `MultiplexedDatabase` (reads union, writes fan out),
-    `BackgroundWriteDatabase` (flushes writes on a worker thread). All
-    three rely on the base-class `save`/`fetch`/`delete`/`move` API
-    that `NativeDatabase` now exposes, so they are unblocked by the
-    multi-value rework. None exist in Rust yet.
-
-    Prerequisite: the `ExampleDatabase` trait from the
-    `InMemoryNativeDatabase` TODO above (this work is much cleaner on
-    top of that trait).
-
-    Scope:
-    1. `ReadOnlyNativeDatabase<D>` that forwards `fetch` to its inner
-       database and silently ignores `save` / `delete` /
-       `move_value`. Ports `test_readonly_db_is_not_writable`.
-    2. `MultiplexedNativeDatabase` holding a `Vec<Box<dyn
-       ExampleDatabase>>`. `save` / `delete` / `move_value` fan out;
-       `fetch` unions results and de-duplicates. Ports
-       `test_multiplexed_dbs_read_and_write_all`.
-    3. `BackgroundWriteNativeDatabase` that buffers writes to a
-       worker thread. Careful with shutdown semantics (matching
-       Hypothesis's `__del__`-style flush). Ports
-       `test_background_write_database`.
-    4. Each wrapper gets its own `tests/embedded/native/` or
-       `tests/native/` test file; remove the corresponding
-       sub-bullets from the `test_database_backend.py` entry in
-       SKIPPED.md.
-
-    Acceptance:
-    - All three wrapper types exist and round-trip data via the
-      `ExampleDatabase` trait.
-    - Corresponding sub-bullets removed from SKIPPED.md.
-
 - title: Port the ExampleDatabase listener API (add_listener / remove_listener)
   details: |
     Follow-up to the multi-value `NativeDatabase` rework.

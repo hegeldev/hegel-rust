@@ -131,12 +131,13 @@ Individually-skipped tests (rest of the file is ported):
       `test_gadb_coverage`) is Python-only infrastructure (urllib,
       zipfile, GitHub Actions artifact endpoints) with no Rust
       counterpart — a permanent skip.
-    - `ReadOnlyDatabase`, `MultiplexedDatabase`,
-      `BackgroundWriteDatabase`, and the
-      `add_listener`/`remove_listener` change-listener API are
-      engine-internal gaps; they live as focused TODOs in
-      `TODO.yaml` and will be ported (or split into narrower skips)
-      there, not here.
+    - The `add_listener`/`remove_listener` change-listener API is an
+      engine-internal gap; it lives as a focused TODO in `TODO.yaml`
+      and will be ported (or split into narrower skips) there, not
+      here. (`ReadOnlyDatabase`, `MultiplexedDatabase`, and
+      `BackgroundWriteDatabase` have been ported — see
+      `ReadOnlyNativeDatabase`, `MultiplexedNativeDatabase`, and
+      `BackgroundWriteNativeDatabase` in `src/native/database.rs`.)
     - `choices_to_bytes`/`choices_from_bytes` with
       `_pack_uleb128`/`_unpack_uleb128` and `_metakeys_name` test
       internals of Hypothesis's wire format that aren't part of the
