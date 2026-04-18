@@ -51,3 +51,6 @@ Individually-skipped tests (rest of the file is ported):
   and Python reflection helpers (`convert_positional_arguments`,
   `get_pretty_function_description`); all Python-API specific with no
   Rust counterpart.
+- `test_example.py` — tests the fluent `.via("...")` and `.xfail(...)`
+  methods chained onto `@example(...)`; hegel-rust's
+  `#[hegel::explicit_test_case]` has no equivalent of either.
