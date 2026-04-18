@@ -2,6 +2,7 @@
 
 use crate::cbor_utils::{as_text, as_u64, map_get};
 use crate::native::core::{ManyState, NativeTestCase, StopTest};
+use crate::native::unicodedata;
 use ciborium::Value;
 
 use super::many_more;
@@ -230,13 +231,16 @@ pub(super) fn build_string_alphabet(schema: &Value) -> StringAlphabet {
 
         // Apply category filters.
         if let Some(ref cats) = categories {
-            if !cats.iter().any(|cat| char_in_category(c, cat)) {
+            if !cats
+                .iter()
+                .any(|cat| unicodedata::is_in_group(c as u32, cat))
+            {
                 continue;
             }
         } else if let Some(ref excl_cats) = exclude_categories {
             if excl_cats
                 .iter()
-                .any(|cat| cat != "Cs" && char_in_category(c, cat))
+                .any(|cat| cat != "Cs" && unicodedata::is_in_group(c as u32, cat))
             {
                 continue;
             }
@@ -366,29 +370,4 @@ fn is_surrogate(c: char) -> bool {
 
 pub(super) fn is_surrogate_cp(cp: u32) -> bool {
     (0xD800..=0xDFFF).contains(&cp)
-}
-
-/// Check if a character belongs to a Unicode general category.
-///
-/// Uses Rust's built-in char methods as approximations for common categories.
-fn char_in_category(c: char, category: &str) -> bool {
-    match category {
-        "Lu" => c.is_alphabetic() && c.is_uppercase(),
-        "Ll" => c.is_alphabetic() && c.is_lowercase(),
-        "Lt" => c.is_alphabetic() && c.is_uppercase(), // Title case approximation
-        "L" | "LC" => c.is_alphabetic(),
-        "Lm" | "Lo" => c.is_alphabetic() && !c.is_uppercase() && !c.is_lowercase(),
-        "Nd" => c.is_ascii_digit(),
-        "No" | "Nl" | "N" => c.is_numeric(),
-        "Zs" => c == ' ',
-        "Z" => c.is_whitespace(),
-        "Pc" => c == '_',
-        "Pd" => c == '-',
-        "P" | "Po" | "Pe" | "Pf" | "Pi" | "Ps" => c.is_ascii_punctuation(),
-        "Sm" => matches!(c, '+' | '<' | '=' | '>' | '|' | '~'),
-        "S" | "Sc" | "Sk" | "So" => !c.is_alphanumeric() && !c.is_whitespace() && !c.is_control(),
-        "Cc" | "C" => c.is_control(),
-        "Cs" => false, // Surrogates never appear in Rust strings
-        _ => false,    // Unknown category
-    }
 }
