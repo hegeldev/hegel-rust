@@ -137,9 +137,13 @@ pub struct TempRustProject {
     _temp_dir: TempDir,
     project_path: PathBuf,
     crate_name: String,
+    features: Vec<String>,
+    // Default invocation state. Used by the one-shot builder API (`.env()`,
+    // `.expect_failure()`, `.cargo_run()` directly on the project). When
+    // reusing a project across multiple tests, start with `.invoke()` and
+    // configure the returned `Invocation` instead.
     env_vars: Vec<(String, String)>,
     env_removes: Vec<String>,
-    features: Vec<String>,
     expect_failure: Option<String>,
 }
 
@@ -148,6 +152,21 @@ pub struct RunOutput {
     #[allow(dead_code)]
     pub stdout: String,
     pub stderr: String,
+}
+
+/// A single `cargo run` / `cargo test` invocation of a `TempRustProject`.
+///
+/// Enables reusing one built project across multiple `#[test]`s: build the
+/// project once (e.g. behind a `OnceLock`), then call `.invoke()` per test
+/// and configure env / expected failure / CLI args independently. Each
+/// invocation still spawns its own cargo subprocess, but the wrapper crate
+/// and its deps are only compiled once, and subsequent cargo calls reuse
+/// the cached binary.
+pub struct Invocation<'a> {
+    project: &'a TempRustProject,
+    env_vars: Vec<(String, String)>,
+    env_removes: Vec<String>,
+    expect_failure: Option<String>,
 }
 
 impl TempRustProject {
@@ -180,9 +199,9 @@ impl TempRustProject {
             _temp_dir: temp_dir,
             project_path,
             crate_name,
+            features,
             env_vars: Vec::new(),
             env_removes: Vec::new(),
-            features,
             expect_failure: None,
         }
     }
@@ -221,14 +240,61 @@ impl TempRustProject {
         self
     }
 
-    fn cargo(&self, args: &[&str]) -> RunOutput {
+    /// Begin a fresh invocation of this project. Use this when reusing one
+    /// built project across several tests with different env / expected
+    /// failure / CLI args.
+    pub fn invoke(&self) -> Invocation<'_> {
+        Invocation {
+            project: self,
+            env_vars: Vec::new(),
+            env_removes: Vec::new(),
+            expect_failure: None,
+        }
+    }
+
+    fn default_invocation(&self) -> Invocation<'_> {
+        Invocation {
+            project: self,
+            env_vars: self.env_vars.clone(),
+            env_removes: self.env_removes.clone(),
+            expect_failure: self.expect_failure.clone(),
+        }
+    }
+
+    pub fn cargo_run(&self, args: &[&str]) -> RunOutput {
+        self.default_invocation().cargo_run(args)
+    }
+
+    pub fn cargo_test(&self, args: &[&str]) -> RunOutput {
+        self.default_invocation().cargo_test(args)
+    }
+}
+
+impl<'a> Invocation<'a> {
+    pub fn env(mut self, key: &str, value: &str) -> Self {
+        self.env_vars.push((key.to_string(), value.to_string()));
+        self
+    }
+
+    pub fn env_remove(mut self, key: &str) -> Self {
+        self.env_removes.push(key.to_string());
+        self
+    }
+
+    pub fn expect_failure(mut self, pattern: &str) -> Self {
+        self.expect_failure = Some(pattern.to_string());
+        self
+    }
+
+    fn cargo(self, args: &[&str]) -> RunOutput {
         let hegel_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let features = if self.features.is_empty() {
+        let features = if self.project.features.is_empty() {
             String::new()
         } else {
             format!(
                 ", features = [{}]",
-                self.features
+                self.project
+                    .features
                     .iter()
                     .map(|f| format!("\"{}\"", f))
                     .collect::<Vec<_>>()
@@ -244,14 +310,14 @@ edition = "2021"
 [dependencies]
 hegeltest = {{ path = "{path}"{features} }}
 "#,
-            crate_name = self.crate_name,
+            crate_name = self.project.crate_name,
             path = hegel_path.display(),
             features = features,
         );
-        std::fs::write(self.project_path.join("Cargo.toml"), cargo_toml).unwrap();
+        std::fs::write(self.project.project_path.join("Cargo.toml"), cargo_toml).unwrap();
 
         let mut cmd = Command::new(env!("CARGO"));
-        cmd.args(args).current_dir(&self.project_path);
+        cmd.args(args).current_dir(&self.project.project_path);
 
         // Point every TempRustProject build at a single shared target
         // directory under `target/`. `CARGO_TARGET_TMPDIR` is provided
@@ -303,13 +369,13 @@ hegeltest = {{ path = "{path}"{features} }}
         run_output
     }
 
-    pub fn cargo_run(&self, args: &[&str]) -> RunOutput {
+    pub fn cargo_run(self, args: &[&str]) -> RunOutput {
         let mut all = vec!["run", "--quiet"];
         all.extend(args);
         self.cargo(&all)
     }
 
-    pub fn cargo_test(&self, args: &[&str]) -> RunOutput {
+    pub fn cargo_test(self, args: &[&str]) -> RunOutput {
         let mut all = vec!["test", "--quiet"];
         all.extend(args);
         self.cargo(&all)
