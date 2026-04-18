@@ -7,7 +7,10 @@ use hegel::{Hegel, Settings};
 
 #[test]
 fn test_integers_from_minimizes_leftwards() {
-    assert_eq!(minimal(gs::integers::<i64>().min_value(101), |_: &i64| true), 101);
+    assert_eq!(
+        minimal(gs::integers::<i64>().min_value(101), |_: &i64| true),
+        101
+    );
 }
 
 #[test]
@@ -158,11 +161,11 @@ fn test_redistribute_stale_indices() {
 
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Hegel::new(move |tc| {
-            let b: bool = tc.draw(&gs::booleans());
-            let a: i64 = tc.draw(&gs::integers::<i64>().min_value(0).max_value(100));
-            let c: i64 = tc.draw(&gs::integers::<i64>().min_value(0).max_value(100));
+            let b: bool = tc.draw(gs::booleans());
+            let a: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(100));
+            let c: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(100));
             if b {
-                let d: i64 = tc.draw(&gs::integers::<i64>().min_value(0).max_value(100));
+                let d: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(100));
                 if a + c + d > 200 {
                     *found_clone.lock().unwrap() = true;
                     panic!("found");
@@ -189,10 +192,10 @@ fn test_redistribute_stale_indices_at_gap_two() {
 
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Hegel::new(move |tc| {
-            let gate: i64 = tc.draw(&gs::integers::<i64>().min_value(0).max_value(138));
-            let base: i64 = tc.draw(&gs::integers::<i64>().min_value(0).max_value(100));
+            let gate: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(138));
+            let base: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(100));
             if gate > 46 {
-                let extra: i64 = tc.draw(&gs::integers::<i64>().min_value(0).max_value(100));
+                let extra: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(100));
                 if base + extra > 30 {
                     *shrunk_clone.lock().unwrap() = Some((gate, base));
                     panic!("found");
