@@ -44,27 +44,31 @@ Ground rules:
 """
 
 LINT_FIX_PROMPT = (
-    "`just lint` is failing. Read the output and fix the lints, then commit."
+    "`just lint` is failing. The full output is included below — work from "
+    "it instead of rerunning the command. Fix the lints and commit."
 )
 
 SERVER_TEST_FIX_PROMPT = (
-    "`cargo test` is failing. Fix the first failing test and commit. "
-    "Don't bundle other fixes in the same commit."
+    "`cargo test` is failing. The full output is included below — work from "
+    "it instead of rerunning the command. Fix the first failing test and "
+    "commit. Don't bundle other fixes in the same commit."
 )
 
 NATIVE_TEST_FIX_PROMPT = (
     "`HEGEL_SERVER_COMMAND=/bin/false cargo test --features native` is "
-    "failing. Fix the first failing test and commit."
+    "failing. The full output is included below — work from it instead of "
+    "rerunning the command. Fix the first failing test and commit."
 )
 
 COMMIT_PROMPT = (
-    "All gates pass but the working tree is dirty. Make a focused commit "
-    "describing the change, or stash/revert if the diff was accidental."
+    "All gates pass but the working tree is dirty. `git status --porcelain` "
+    "output is included below. Make a focused commit describing the change, "
+    "or stash/revert if the diff was accidental."
 )
 
 PORT_PROMPT = """\
-Port the upstream test file {path} to its Rust counterpart under
-tests/pbtkit/ or tests/hypothesis/ per the porting-tests skill.
+Port the upstream test file {path} to {destination} per the porting-tests
+skill.
 
 If the file has no tests that can be ported to hegel-rust, instead add
 `{name}` to SKIPPED.md under the appropriate section with a one-line
@@ -190,6 +194,26 @@ def upstream_files(kind: str) -> list[Path]:
     return sorted(root.rglob("test_*.py"))
 
 
+def destination_for(upstream: Path) -> Path:
+    """Map an upstream test path to its Rust port path.
+
+    - `resources/pbtkit/tests/test_text.py` → `tests/pbtkit/text.rs`
+    - `resources/pbtkit/tests/findability/test_types.py` →
+      `tests/pbtkit/findability_types.rs`
+    - `resources/hypothesis/.../cover/test_floats.py` →
+      `tests/hypothesis/floats.rs`
+    """
+    if upstream.is_relative_to(PBTKIT_DIR):
+        kind = "pbtkit"
+        rel = upstream.relative_to(PBTKIT_DIR)
+    else:
+        kind = "hypothesis"
+        rel = upstream.relative_to(HYPOTHESIS_DIR)
+    stem = upstream.stem.removeprefix("test_")
+    parts = list(rel.parent.parts) + [stem]
+    return Path("tests") / kind / ("_".join(parts) + ".rs")
+
+
 def unported_pool() -> list[Path]:
     pool: list[Path] = []
     for kind in ("pbtkit", "hypothesis"):
@@ -213,8 +237,7 @@ def dispatch_claude(
 ) -> None:
     full_prompt = prompt
     if gate_output is not None:
-        tail = gate_output[-2000:]
-        full_prompt += f"\n\nGate output (trailing):\n{tail}"
+        full_prompt += f"\n\nGate output:\n{gate_output}"
     print("\n" + "=" * 72)
     print("Dispatching claude with prompt:")
     print("-" * 72)
@@ -302,10 +325,14 @@ def main() -> int:
             return 0
 
         picked = random.choice(pool)
+        destination = destination_for(picked)
         print(
-            f"\n[port-loop] {len(pool)} files remain; picked {picked} (random)."
+            f"\n[port-loop] {len(pool)} files remain; picked {picked} "
+            f"→ {destination} (random)."
         )
-        prompt = PORT_PROMPT.format(path=picked, name=picked.name)
+        prompt = PORT_PROMPT.format(
+            path=picked, destination=destination, name=picked.name
+        )
         dispatch_claude(prompt, gate_output=None, timeout=args.timeout)
 
 
