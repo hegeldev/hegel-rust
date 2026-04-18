@@ -7,6 +7,7 @@
 //
 // Based on https://github.com/DRMacIver/pbtkit (core.py).
 
+pub mod bignum;
 pub mod core;
 pub mod data_source;
 pub mod database;

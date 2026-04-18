@@ -254,6 +254,7 @@ pub use antithesis::TestLocation;
 #[cfg(feature = "native")]
 #[doc(hidden)]
 pub mod __native_test_internals {
+    pub use crate::native::bignum::BigUint;
     pub use crate::native::core::StringChoice;
 }
 
