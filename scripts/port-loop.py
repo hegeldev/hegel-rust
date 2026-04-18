@@ -14,7 +14,11 @@ Port sub-loop (one pick; the outer gates are skipped while this runs):
   c. `cargo test --test {kind} {module}` passes
   d. `HEGEL_SERVER_COMMAND=/bin/false cargo test --features native
        --test {kind} {module}` passes
-  e. working tree clean → sub-loop done
+  e. working tree clean
+  f. once a-e all pass in a single pass and commits have been made during
+     this sub-loop, dispatch claude to review the port; if the reviewer
+     makes any new commits, the sub-loop restarts to re-verify. If the
+     reviewer makes no changes, sub-loop done.
 
 On the first failing check (outer or inner), claude is invoked with a focused
 prompt and the same loop restarts at the top. When every upstream file is
@@ -126,6 +130,35 @@ If the file truly has nothing portable, delete {destination}, add
 `{name}` to SKIPPED.md with a one-line rationale, and commit.
 """
 
+PORT_REVIEW_PROMPT = """\
+Review the port of {path} → {destination}. The gate chain (destination
+exists, has `#[test]` attributes, server-mode tests pass, native-mode
+tests pass, working tree clean) is currently green. Below is the list
+of commits made during this sub-loop ({start_sha}..HEAD).
+
+Read the upstream file ({path}), the ported file ({destination}), and
+the commits under review. Then evaluate honestly:
+
+- Was a real, faithful attempt made to port the tests, or were corners
+  cut? Watch for: tests stubbed out, assertions weakened, whole test
+  cases silently dropped, unrelated behavior papered over with
+  `assume!`, failures hidden behind `#[ignore]`, etc.
+- Are there improvements worth making to clarity, naming, idiom, or
+  code quality in the ported file or anything it touched?
+- Is the coverage of the upstream behavior adequate given hegel-rust's
+  available API?
+
+If you find anything worth changing, make focused commits to fix it —
+the sub-loop will re-run the gates afterward and invoke you again if
+anything is broken. If the port is genuinely good as-is, reply with a
+short confirmation and make no commits; the sub-loop will then move
+on.
+
+Commits under review:
+
+{log}
+"""
+
 
 # ---- gate helpers ------------------------------------------------------------
 
@@ -214,6 +247,28 @@ def gate_clean_tree() -> tuple[bool, str]:
         sys.stdout.write(out)
         sys.stdout.flush()
     return result.returncode == 0 and not result.stdout.strip(), out
+
+
+def git_head() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def git_log(range_spec: str) -> str:
+    result = subprocess.run(
+        ["git", "log", range_spec, "--oneline", "--no-decorate"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
 
 
 # ---- unported-pool computation ----------------------------------------------
@@ -493,6 +548,7 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
     """Sub-loop driving one port; exits via `state.dispatch` if the cap is hit."""
     kind = "pbtkit" if picked.is_relative_to(PBTKIT_DIR) else "hypothesis"
     module = destination.stem
+    start_sha = git_head()
     fmt_args = dict(
         path=picked,
         destination=destination,
@@ -502,7 +558,8 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
     )
     print(
         f"\n[port-loop] entering sub-loop for {picked} → {destination} "
-        f"(module '{module}' in test binary '{kind}')."
+        f"(module '{module}' in test binary '{kind}'); start sha "
+        f"{start_sha[:12]}."
     )
     while True:
         # Exit A: upstream is now in SKIPPED.md.
@@ -520,13 +577,17 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
                 )
                 continue
 
+        any_dispatched = False
+
         # Step 1: destination must exist.
         if not destination.exists():
             state.dispatch(PORT_PROMPT.format(**fmt_args))
+            any_dispatched = True
 
         # Step 2: destination must contain at least one #[test].
         if not destination_has_tests(destination):
             state.dispatch(PORT_MISSING_TESTS_PROMPT.format(**fmt_args))
+            any_dispatched = True
 
         # Step 3: module's server-mode tests must pass.
         ok, out = gate_module_server(kind, module)
@@ -534,6 +595,7 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
             state.dispatch(
                 PORT_TEST_FIX_SERVER_PROMPT.format(**fmt_args), gate_output=out
             )
+            any_dispatched = True
 
         # Step 4: module's native-mode tests must pass.
         ok, out = gate_module_native(kind, module)
@@ -541,6 +603,7 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
             state.dispatch(
                 PORT_TEST_FIX_NATIVE_PROMPT.format(**fmt_args), gate_output=out
             )
+            any_dispatched = True
 
         # Step 5: tree must be clean.
         ok, out = gate_clean_tree()
@@ -548,12 +611,46 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
             state.dispatch(
                 PORT_COMMIT_PROMPT.format(**fmt_args), gate_output=out
             )
+            any_dispatched = True
 
-        # Exit B: destination exists, filtered tests pass, tree clean.
+        if any_dispatched:
+            # Progress was made but the port isn't green yet; fall back to
+            # the outer loop so lint/full-test gates get a chance before we
+            # retry this file.
+            print(
+                f"\n[port-loop] sub-loop iteration made progress; "
+                f"returning to outer loop."
+            )
+            break
+
+        # All gates passed. If nothing was committed during this sub-loop
+        # there's nothing to review.
+        current_sha = git_head()
+        if current_sha == start_sha:
+            print(
+                f"\n[port-loop] {destination} green with no new commits; "
+                f"sub-loop done."
+            )
+            break
+
+        # Step 6: dispatch a review of the commits made during this port.
         print(
-            f"\n[port-loop] {destination} ported and green; sub-loop done."
+            f"\n[port-loop] {destination} ported and green; "
+            f"dispatching review of {start_sha[:12]}..HEAD."
         )
-        break
+        log = git_log(f"{start_sha}..HEAD")
+        state.dispatch(
+            PORT_REVIEW_PROMPT.format(start_sha=start_sha, log=log, **fmt_args)
+        )
+        if git_head() == current_sha:
+            print(
+                f"\n[port-loop] review made no changes; sub-loop done."
+            )
+            break
+        print(
+            f"\n[port-loop] review made changes; re-verifying gates."
+        )
+        # Loop around to re-run the gates on the reviewer's changes.
 
 
 def repair(state: IterCounter) -> None:
