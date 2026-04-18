@@ -412,7 +412,15 @@ fn bytes_choice_sort_key_shortlex() {
 
 // ── StringChoice ──────────────────────────────────────────────────────────
 //
-// Ports of pbtkit/tests/test_text.py::test_string_* and related.
+// Ports of pbtkit/tests/test_text.py::test_string_* and related. Note that
+// `StringChoice::simplest`/`unit` return codepoint sequences (`Vec<u32>`) —
+// the `String` boundary lives one level up in `NativeTestCase::draw_string`.
+
+/// Helper: turn a short ASCII `&str` literal into a `Vec<u32>` for use in
+/// assertions against codepoint-sequence results.
+fn cps(s: &str) -> Vec<u32> {
+    s.chars().map(|c| c as u32).collect()
+}
 
 #[test]
 fn string_choice_simplest_ascii_range() {
@@ -423,7 +431,7 @@ fn string_choice_simplest_ascii_range() {
         max_size: 10,
     };
     // Under codepoint_key ordering, '0' (48) is the simplest codepoint.
-    assert_eq!(sc.simplest(), "000");
+    assert_eq!(sc.simplest(), cps("000"));
 }
 
 #[test]
@@ -435,11 +443,7 @@ fn string_choice_simplest_no_ascii_overlap() {
         max_size: 5,
     };
     // No ASCII overlap: simplest codepoint is min_codepoint.
-    let s = sc.simplest();
-    assert_eq!(s.chars().count(), 2);
-    for c in s.chars() {
-        assert_eq!(c as u32, 0x2000);
-    }
+    assert_eq!(sc.simplest(), vec![0x2000, 0x2000]);
 }
 
 #[test]
@@ -454,7 +458,7 @@ fn string_choice_simplest_partial_ascii_overlap() {
         min_size: 1,
         max_size: 5,
     };
-    assert_eq!(sc.simplest(), "2");
+    assert_eq!(sc.simplest(), cps("2"));
 }
 
 #[test]
@@ -465,7 +469,7 @@ fn string_choice_simplest_empty_min() {
         min_size: 0,
         max_size: 10,
     };
-    assert_eq!(sc.simplest(), "");
+    assert_eq!(sc.simplest(), Vec::<u32>::new());
 }
 
 #[test]
@@ -477,7 +481,7 @@ fn string_choice_unit_positive_min_size() {
         min_size: 3,
         max_size: 10,
     };
-    assert_eq!(sc.unit(), "001");
+    assert_eq!(sc.unit(), cps("001"));
 }
 
 #[test]
@@ -490,7 +494,7 @@ fn string_choice_unit_zero_min_size() {
         min_size: 0,
         max_size: 10,
     };
-    assert_eq!(sc.unit(), "1");
+    assert_eq!(sc.unit(), cps("1"));
 }
 
 #[test]
@@ -501,32 +505,31 @@ fn string_choice_validate() {
         min_size: 2,
         max_size: 4,
     };
-    assert!(sc.validate("aa"));
-    assert!(sc.validate("zzzz"));
-    assert!(!sc.validate(""));
-    assert!(!sc.validate("a"));
-    assert!(!sc.validate("aaaaa"));
-    assert!(!sc.validate("aA")); // 'A' out of range
+    assert!(sc.validate(&cps("aa")));
+    assert!(sc.validate(&cps("zzzz")));
+    assert!(!sc.validate(&cps("")));
+    assert!(!sc.validate(&cps("a")));
+    assert!(!sc.validate(&cps("aaaaa")));
+    assert!(!sc.validate(&cps("aA"))); // 'A' out of range
 }
 
 #[test]
 fn string_choice_validate_rejects_surrogates() {
-    // Even if the surrogate range overlaps the codepoint bounds, the value
-    // itself can't contain surrogates (Rust strings are UTF-8 so this is
-    // mostly a moot assertion; we exercise the explicit check via a string
-    // that spans the surrogate gap).
+    // The engine's codepoint model can represent surrogates as raw `u32`s,
+    // so `validate` has to reject them explicitly rather than rely on the
+    // `char` type's scalar-value guarantee.
     let sc = StringChoice {
         min_codepoint: 0xD000,
         max_codepoint: 0xE000,
         min_size: 0,
         max_size: 4,
     };
-    // \u{D800} is an unpaired surrogate and can't exist in a Rust String,
-    // so we can't directly construct a value containing one. Verify the
-    // empty string is valid and non-surrogate codepoints in range pass.
-    assert!(sc.validate(""));
-    let ok = String::from('\u{D000}');
-    assert!(sc.validate(&ok));
+    // Empty value is valid.
+    assert!(sc.validate(&[]));
+    // A non-surrogate codepoint in range passes.
+    assert!(sc.validate(&[0xD000]));
+    // An in-range surrogate is rejected.
+    assert!(!sc.validate(&[0xD800]));
 }
 
 #[test]
@@ -538,13 +541,13 @@ fn string_choice_sort_key_shortlex_on_codepoint_keys() {
         max_size: 10,
     };
     // Shorter is always simpler.
-    assert!(sc.sort_key("") < sc.sort_key("0"));
+    assert!(sc.sort_key(&cps("")) < sc.sort_key(&cps("0")));
     // '0' has key 0, '1' has key 1, so "0" < "1".
-    assert!(sc.sort_key("0") < sc.sort_key("1"));
+    assert!(sc.sort_key(&cps("0")) < sc.sort_key(&cps("1")));
     // '0' < 'A' (key 17, since (65-48)%128 = 17).
-    assert!(sc.sort_key("0") < sc.sort_key("A"));
+    assert!(sc.sort_key(&cps("0")) < sc.sort_key(&cps("A")));
     // Digits simpler than space (key (32-48)%128 = 112).
-    assert!(sc.sort_key("0") < sc.sort_key(" "));
+    assert!(sc.sort_key(&cps("0")) < sc.sort_key(&cps(" ")));
 }
 
 // ── StringChoice::unit (single-codepoint alphabet) ────────────────────────
@@ -553,15 +556,15 @@ fn string_choice_sort_key_shortlex_on_codepoint_keys() {
 
 #[test]
 fn string_choice_single_codepoint_unit_variable_length() {
-    // Single codepoint '0', variable length: unit lengthens by one char.
+    // Single codepoint '0', variable length: unit lengthens by one codepoint.
     let kind = StringChoice {
         min_codepoint: 48,
         max_codepoint: 48,
         min_size: 0,
         max_size: 5,
     };
-    assert_eq!(kind.unit(), "0");
-    assert_eq!(kind.simplest(), "");
+    assert_eq!(kind.unit(), cps("0"));
+    assert_eq!(kind.simplest(), Vec::<u32>::new());
 }
 
 #[test]
@@ -586,7 +589,7 @@ fn string_choice_single_codepoint_unit_non_zero() {
         min_size: 0,
         max_size: 5,
     };
-    assert_eq!(kind.unit(), "A");
+    assert_eq!(kind.unit(), cps("A"));
 }
 
 // ── StringChoice index helpers ────────────────────────────────────────────
@@ -634,9 +637,9 @@ fn string_choice_codepoint_rank_with_surrogates() {
     let expected: u64 = (0xE000u32 - 0xD700u32) as u64 - (0xDFFFu32 - 0xD800u32 + 1) as u64;
     assert_eq!(rank, expected);
     // Round-trip through to_index/from_index.
-    let s = char::from_u32(0xE000).unwrap().to_string();
-    let idx = sc.to_index(&s);
-    assert_eq!(sc.from_index(idx).unwrap(), s);
+    let v = vec![0xE000u32];
+    let idx = sc.to_index(&v);
+    assert_eq!(sc.from_index(idx).unwrap(), v);
 }
 
 #[test]
@@ -648,12 +651,9 @@ fn string_choice_to_index_from_index_roundtrip_ascii() {
         max_size: 3,
     };
     for s in ["", "0", "1", "A", "00", "abc", "z!@"] {
-        let idx = sc.to_index(s);
-        assert_eq!(
-            sc.from_index(idx).as_deref(),
-            Some(s),
-            "round-trip failed for {s:?}"
-        );
+        let v = cps(s);
+        let idx = sc.to_index(&v);
+        assert_eq!(sc.from_index(idx), Some(v), "round-trip failed for {s:?}");
     }
 }
 

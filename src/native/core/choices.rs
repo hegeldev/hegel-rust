@@ -274,9 +274,12 @@ impl BytesChoice {
 
 /// A string choice with bounded length and codepoint range.
 ///
-/// Port of pbtkit's StringChoice. Ordered by shortlex over [`codepoint_key`]-
-/// remapped characters (so '0' is the simplest codepoint, then '1', and so
-/// on). Surrogates (0xD800..=0xDFFF) are never valid values.
+/// Port of pbtkit's StringChoice. Values are sequences of raw Unicode
+/// codepoints (`Vec<u32>`) in `0..=0x10FFFF`; the no-surrogate filter is
+/// applied at the user-facing boundary where the engine hands a `String`
+/// back, not in the core representation. Ordered by shortlex over
+/// [`codepoint_key`]-remapped codepoints (so '0' is the simplest codepoint,
+/// then '1', and so on).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StringChoice {
     pub min_codepoint: u32,
@@ -290,7 +293,7 @@ impl StringChoice {
     /// under [`codepoint_key`] ordering, or the smallest non-surrogate codepoint
     /// at or above `min_codepoint` (clamped to `max_codepoint`) if the range has
     /// no ASCII overlap. Guaranteed to be a valid non-surrogate scalar value.
-    fn simplest_codepoint(&self) -> u32 {
+    pub(crate) fn simplest_codepoint(&self) -> u32 {
         let upper = self.max_codepoint.min(127);
         if self.min_codepoint > upper {
             // No ASCII in range; pick the smallest non-surrogate codepoint.
@@ -312,21 +315,14 @@ impl StringChoice {
         best
     }
 
-    /// The simplest codepoint in range, as a `char`. Guaranteed valid because
-    /// `simplest_codepoint` never returns a surrogate.
-    pub(crate) fn simplest_char(&self) -> char {
-        char::from_u32(self.simplest_codepoint())
-            .expect("simplest_codepoint returns a valid scalar value")
+    /// The simplest sequence of codepoints of length `min_size`, built from
+    /// repeated [`simplest_codepoint`].
+    pub fn simplest(&self) -> Vec<u32> {
+        vec![self.simplest_codepoint(); self.min_size]
     }
 
-    /// The simplest string of length `min_size`, built from repeated
-    /// [`simplest_codepoint`].
-    pub fn simplest(&self) -> String {
-        self.simplest_char().to_string().repeat(self.min_size)
-    }
-
-    /// Second-simplest string, used for type-punning during replay.
-    pub fn unit(&self) -> String {
+    /// Second-simplest codepoint sequence, used for type-punning during replay.
+    pub fn unit(&self) -> Vec<u32> {
         // Pick the "second-simplest" codepoint under codepoint_key ordering,
         // falling back to the simplest codepoint if that lies outside the range
         // or inside the surrogate block.
@@ -339,45 +335,38 @@ impl StringChoice {
         } else {
             self.simplest_codepoint()
         };
-        let second_ch =
-            char::from_u32(second_cp).expect("second_cp is a validated non-surrogate scalar value");
 
         // Single-codepoint alphabet → lengthen if possible, else simplest.
         if second_cp == self.simplest_codepoint() {
             if self.min_size < self.max_size {
-                return self.simplest_char().to_string().repeat(self.min_size + 1);
+                return vec![self.simplest_codepoint(); self.min_size + 1];
             }
             return self.simplest();
         }
 
         if self.min_size > 0 {
-            let mut s = self.simplest();
-            // Replace the last char with the second-simplest codepoint.
-            let mut chars: Vec<char> = s.chars().collect();
-            *chars.last_mut().unwrap() = second_ch;
-            s = chars.into_iter().collect();
-            return s;
+            let mut v = self.simplest();
+            *v.last_mut().unwrap() = second_cp;
+            return v;
         }
         if self.max_size > 0 {
-            return second_ch.to_string();
+            return vec![second_cp];
         }
         self.simplest()
     }
 
-    pub fn validate(&self, value: &str) -> bool {
-        let len = value.chars().count();
-        if !(self.min_size <= len && len <= self.max_size) {
+    pub fn validate(&self, value: &[u32]) -> bool {
+        if !(self.min_size <= value.len() && value.len() <= self.max_size) {
             return false;
         }
-        value.chars().all(|c| {
-            let cp = c as u32;
+        value.iter().all(|&cp| {
             self.min_codepoint <= cp && cp <= self.max_codepoint && !(0xD800..=0xDFFF).contains(&cp)
         })
     }
 
     /// Shortlex sort key: `(length, Vec<codepoint_key>)`.
-    pub fn sort_key(&self, value: &str) -> (usize, Vec<u32>) {
-        let keys: Vec<u32> = value.chars().map(|c| codepoint_key(c as u32)).collect();
+    pub fn sort_key(&self, value: &[u32]) -> (usize, Vec<u32>) {
+        let keys: Vec<u32> = value.iter().map(|&cp| codepoint_key(cp)).collect();
         (keys.len(), keys)
     }
 
@@ -484,28 +473,27 @@ impl StringChoice {
     ///
     /// pbtkit: `text.py::StringChoice.to_index`. Inverse of [`from_index`].
     #[allow(dead_code)]
-    pub fn to_index(&self, value: &str) -> u128 {
+    pub fn to_index(&self, value: &[u32]) -> u128 {
         let alpha = u128::from(self.alpha_size());
-        let len = value.chars().count();
         let mut offset: u128 = 0;
-        for length in self.min_size..len {
+        for length in self.min_size..value.len() {
             offset += alpha
                 .checked_pow(length as u32)
                 .expect("StringChoice::to_index overflow");
         }
         let mut position: u128 = 0;
-        for ch in value.chars() {
-            position = position * alpha + u128::from(self.codepoint_rank(ch as u32));
+        for &cp in value {
+            position = position * alpha + u128::from(self.codepoint_rank(cp));
         }
         offset + position
     }
 
-    /// String at the given shortlex index, or `None` if `index` exceeds the
-    /// total bucket size (i.e. > [`max_index`]).
+    /// Codepoint sequence at the given shortlex index, or `None` if `index`
+    /// exceeds the total bucket size (i.e. > [`max_index`]).
     ///
     /// pbtkit: `text.py::StringChoice.from_index`. Inverse of [`to_index`].
     #[allow(dead_code, clippy::wrong_self_convention)]
-    pub fn from_index(&self, index: u128) -> Option<String> {
+    pub fn from_index(&self, index: u128) -> Option<Vec<u32>> {
         let alpha = u128::from(self.alpha_size());
         assert!(alpha > 0, "StringChoice::from_index: empty alphabet");
         let mut remaining = index;
@@ -514,16 +502,14 @@ impl StringChoice {
                 .checked_pow(length as u32)
                 .expect("StringChoice::from_index overflow");
             if remaining < bucket_size {
-                let mut chars: Vec<char> = Vec::with_capacity(length);
+                let mut cps: Vec<u32> = Vec::with_capacity(length);
                 for _ in 0..length {
                     let r = (remaining % alpha) as u64;
-                    let cp = self.codepoint_at_rank(r);
-                    chars
-                        .push(char::from_u32(cp).expect("codepoint_at_rank returned a non-scalar"));
+                    cps.push(self.codepoint_at_rank(r));
                     remaining /= alpha;
                 }
-                chars.reverse();
-                return Some(chars.into_iter().collect());
+                cps.reverse();
+                return Some(cps);
             }
             remaining -= bucket_size;
         }
@@ -548,7 +534,11 @@ pub enum ChoiceValue {
     Boolean(bool),
     Float(f64),
     Bytes(Vec<u8>),
-    String(String),
+    /// A sequence of Unicode codepoints (raw `u32`s in `0..=0x10FFFF`). The
+    /// engine reasons internally about any codepoint, including surrogates;
+    /// conversion to a `char`/`String` (with the surrogate filter applied)
+    /// happens at the user-facing boundary.
+    String(Vec<u32>),
 }
 
 impl PartialEq for ChoiceValue {

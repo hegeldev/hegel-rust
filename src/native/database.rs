@@ -74,7 +74,10 @@ fn fnv_hex(s: &str) -> String {
 ///     - Boolean: 1 byte (0 or 1)
 ///     - Float: 8 bytes (u64 bit representation, little-endian)
 ///     - Bytes: 4-byte le u32 length, then that many raw bytes
-///     - String: 4-byte le u32 byte-length, then that many UTF-8 bytes
+///     - String: 4-byte le u32 codepoint count, then that many 4-byte
+///       little-endian u32 codepoints (raw Unicode codepoints, including
+///       surrogates — the engine's internal codepoint model preserves them;
+///       the no-surrogate filter lives at the user-facing boundary).
 fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + choices.len() * 17);
     let count = choices.len() as u32;
@@ -101,10 +104,11 @@ fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
             }
             ChoiceValue::String(v) => {
                 buf.push(4);
-                let bytes = v.as_bytes();
-                let len = bytes.len() as u32;
+                let len = v.len() as u32;
                 buf.extend_from_slice(&len.to_le_bytes());
-                buf.extend_from_slice(bytes);
+                for &cp in v {
+                    buf.extend_from_slice(&cp.to_le_bytes());
+                }
             }
         }
     }
@@ -171,16 +175,24 @@ fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
                 if pos + 4 > bytes.len() {
                     return None;
                 }
-                let len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().ok()?) as usize;
+                let count = u32::from_le_bytes(bytes[pos..pos + 4].try_into().ok()?) as usize;
                 pos += 4;
-                if pos + len > bytes.len() {
+                let byte_len = count.checked_mul(4)?;
+                if pos + byte_len > bytes.len() {
                     return None;
                 }
-                let s = std::str::from_utf8(&bytes[pos..pos + len])
-                    .ok()?
-                    .to_string();
-                choices.push(ChoiceValue::String(s));
-                pos += len;
+                let mut cps: Vec<u32> = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let cp = u32::from_le_bytes(bytes[pos..pos + 4].try_into().ok()?);
+                    // Guard against out-of-range codepoints from a corrupt
+                    // database entry — real values lie in `0..=0x10FFFF`.
+                    if cp > 0x10FFFF {
+                        return None;
+                    }
+                    cps.push(cp);
+                    pos += 4;
+                }
+                choices.push(ChoiceValue::String(cps));
             }
             _ => return None,
         }

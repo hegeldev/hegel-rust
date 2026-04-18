@@ -106,7 +106,7 @@ fn test_deserialize_unknown_type_tag_returns_none() {
 
 #[test]
 fn test_deserialize_truncated_string_length_returns_none() {
-    // count=1, type=String, but only 2 of the required 4 length bytes.
+    // count=1, type=String, but only 2 of the required 4 codepoint-count bytes.
     let mut bytes = vec![1, 0, 0, 0, 4u8]; // count=1, type=4
     bytes.extend_from_slice(&[0u8; 2]);
     assert!(deserialize_choices(&bytes).is_none());
@@ -114,20 +114,36 @@ fn test_deserialize_truncated_string_length_returns_none() {
 
 #[test]
 fn test_deserialize_truncated_string_payload_returns_none() {
-    // count=1, type=String, length=5, but only 1 byte of payload.
+    // count=1, type=String, codepoint count=5 (20 payload bytes expected),
+    // but only 4 bytes of payload.
     let mut bytes = vec![1, 0, 0, 0, 4u8]; // count=1, type=4
-    bytes.extend_from_slice(&5u32.to_le_bytes()); // length=5
-    bytes.push(b'a'); // 1 byte instead of 5
+    bytes.extend_from_slice(&5u32.to_le_bytes()); // 5 codepoints
+    bytes.extend_from_slice(&[0u8; 4]); // 4 bytes instead of 20
     assert!(deserialize_choices(&bytes).is_none());
 }
 
 #[test]
-fn test_deserialize_invalid_utf8_returns_none() {
-    // count=1, type=String, length=2, payload is invalid UTF-8.
+fn test_deserialize_out_of_range_codepoint_returns_none() {
+    // count=1, type=String, codepoint count=1, payload is a u32 above 0x10FFFF.
     let mut bytes = vec![1, 0, 0, 0, 4u8];
-    bytes.extend_from_slice(&2u32.to_le_bytes());
-    bytes.extend_from_slice(&[0xC0, 0xC1]); // invalid UTF-8 sequence
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(&0x20_0000u32.to_le_bytes());
     assert!(deserialize_choices(&bytes).is_none());
+}
+
+#[test]
+fn test_roundtrip_string() {
+    let choices = vec![
+        ChoiceValue::String(vec![]),
+        ChoiceValue::String(vec![b'a' as u32, b'b' as u32, b'c' as u32]),
+        // A non-BMP codepoint (U+1F600, 😀) round-trips as a single u32 entry.
+        ChoiceValue::String(vec![0x1F600]),
+        // Surrogate codepoints are preserved in the raw-u32 representation.
+        ChoiceValue::String(vec![0xD800, 0xDFFF]),
+    ];
+    let bytes = serialize_choices(&choices);
+    let decoded = deserialize_choices(&bytes).unwrap();
+    assert_eq!(decoded, choices);
 }
 
 #[test]

@@ -513,18 +513,18 @@ impl NativeTestCase {
         // Edge-case-boosting: simplest, empty (if allowed), single simplest
         // codepoint (if allowed), two simplest codepoints (for duplicate-char
         // counterexamples).
-        let nasty: Vec<String> = {
+        let nasty: Vec<Vec<u32>> = {
             let simplest = kind.simplest();
-            let simplest_char = kind.simplest_char();
-            let mut v = vec![simplest.clone()];
+            let simplest_cp = kind.simplest_codepoint();
+            let mut v = vec![simplest];
             if min_size == 0 && max_size > 0 {
-                v.push(String::new());
+                v.push(Vec::new());
             }
             if min_size <= 1 && max_size >= 1 {
-                v.push(simplest_char.to_string());
+                v.push(vec![simplest_cp]);
             }
             if min_size <= 2 && max_size >= 2 {
-                v.push(simplest_char.to_string().repeat(2));
+                v.push(vec![simplest_cp, simplest_cp]);
             }
             v
         };
@@ -543,23 +543,21 @@ impl NativeTestCase {
                 }
                 // Build a small sub-alphabet of valid codepoints (1..=10).
                 let alpha_size = rng.random_range(1..=10);
-                let mut alphabet: Vec<char> = Vec::with_capacity(alpha_size);
+                let mut alphabet: Vec<u32> = Vec::with_capacity(alpha_size);
                 while alphabet.len() < alpha_size {
                     // Rejection-sample a valid (non-surrogate) codepoint.
                     let cp = rng.random_range(kind_rand.min_codepoint..=kind_rand.max_codepoint);
                     if (0xD800..=0xDFFF).contains(&cp) {
                         continue;
                     }
-                    if let Some(c) = char::from_u32(cp) {
-                        alphabet.push(c);
-                    }
+                    alphabet.push(cp);
                 }
                 let len = if kind_rand.min_size == kind_rand.max_size {
                     kind_rand.min_size
                 } else {
                     rng.random_range(kind_rand.min_size..=kind_rand.max_size)
                 };
-                let s: String = (0..len)
+                let s: Vec<u32> = (0..len)
                     .map(|_| alphabet[rng.random_range(0..alphabet.len())])
                     .collect();
                 ChoiceValue::String(s)
@@ -576,7 +574,13 @@ impl NativeTestCase {
             was_forced,
         });
 
-        Ok(v)
+        // Boundary: convert the internal codepoint sequence back to a Rust
+        // `String`, dropping any surrogate codepoints (which can't be
+        // represented as a `char`). In practice the engine never produces
+        // surrogates here — generation rejection-samples them and `validate`
+        // rejects them — but a user-supplied prefix could feed one in, so we
+        // drop rather than panic.
+        Ok(codepoints_to_string(&v))
     }
 
     fn pre_choice(&mut self) -> Result<(), StopTest> {
@@ -630,6 +634,17 @@ impl NativeTestCase {
             Ok((random(rng), false))
         }
     }
+}
+
+/// Convert an internal codepoint sequence into a Rust `String`.
+///
+/// This is the boundary where the engine's raw-`u32` codepoint model meets
+/// Rust's scalar-value-only `char`. Surrogate codepoints (`0xD800..=0xDFFF`)
+/// can't be represented as a `char`, so they are dropped. Engine-produced
+/// values never contain surrogates in practice, but a user-supplied prefix
+/// could.
+fn codepoints_to_string(cps: &[u32]) -> String {
+    cps.iter().filter_map(|&cp| char::from_u32(cp)).collect()
 }
 
 #[cfg(test)]

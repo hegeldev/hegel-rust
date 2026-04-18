@@ -30,7 +30,7 @@ enum ChoiceValueKey {
     Boolean(bool),
     Float(u64), // f64::to_bits()
     Bytes(Vec<u8>),
-    String(String),
+    String(Vec<u32>),
 }
 
 impl From<&ChoiceValue> for ChoiceValueKey {
