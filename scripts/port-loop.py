@@ -369,6 +369,42 @@ HYPOTHESIS_DIR = (
     REPO_ROOT / "resources" / "hypothesis" / "hypothesis-python" / "tests" / "cover"
 )
 
+# Hot-reload bookkeeping: captured once at import, checked at the top of
+# each main-loop iteration. If this script's mtime changes mid-run
+# (e.g. during a `git pull` or while the user is iterating on the
+# driver itself), re-exec into the new version with the original argv
+# so the long-running loop doesn't need to be restarted by hand.
+SCRIPT_PATH = Path(__file__).resolve()
+SCRIPT_MTIME_AT_STARTUP = SCRIPT_PATH.stat().st_mtime
+ORIGINAL_ARGV: list[str] = list(sys.argv)
+
+
+def maybe_hot_reload() -> None:
+    """If port-loop.py has been modified since startup, re-exec into it.
+
+    Called at the top of each iteration of the long-running outer loops
+    (default and `--todo-only` modes), before any expensive work.
+    Per-process state (iteration count, TODO attempts, last session id)
+    is discarded on re-exec — that's intentional: a new version of the
+    script starts clean.
+
+    Uses the shebang's `uv run --script` line via `os.execv` on the
+    script path, so PEP 723 deps get re-resolved if they changed.
+    """
+    try:
+        current = SCRIPT_PATH.stat().st_mtime
+    except OSError:
+        return
+    if current == SCRIPT_MTIME_AT_STARTUP:
+        return
+    print(
+        f"\n[port-loop] {SCRIPT_PATH.name} changed on disk "
+        f"(mtime {SCRIPT_MTIME_AT_STARTUP:.0f} → {current:.0f}); "
+        f"re-exec'ing with argv {ORIGINAL_ARGV!r}.",
+        flush=True,
+    )
+    os.execv(str(SCRIPT_PATH), ORIGINAL_ARGV)
+
 
 def run_gate(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str]:
     """Run a gate command, stream output live, return (exit_code, captured_output)."""
@@ -1343,6 +1379,7 @@ def main() -> None:
 
     if args.todo_only:
         while True:
+            maybe_hot_reload()
             cargo_clean()
             repair(state)
             if not drive_todos(state):
@@ -1353,6 +1390,7 @@ def main() -> None:
                 return
 
     while True:
+        maybe_hot_reload()
         cargo_clean()
         repair(state)
 
