@@ -140,8 +140,14 @@ impl<'de> Deserializer<'de> for HegelValue {
             HegelValue::Number(n) => {
                 // For whole numbers that fit in i64, use visit_i64 so integer
                 // deserialization works. NaN/Inf have fract() != 0, so they
-                // go to visit_f64.
-                if n.fract() == 0.0 && n >= i64::MIN as f64 && n <= i64::MAX as f64 {
+                // go to visit_f64. Negative zero must also go to visit_f64 to
+                // preserve the sign bit (`-0.0 as i64` is `0`, losing the sign).
+                let is_neg_zero = n == 0.0 && n.is_sign_negative();
+                if n.fract() == 0.0
+                    && !is_neg_zero
+                    && n >= i64::MIN as f64
+                    && n <= i64::MAX as f64
+                {
                     visitor.visit_i64(n as i64)
                 } else {
                     visitor.visit_f64(n)
