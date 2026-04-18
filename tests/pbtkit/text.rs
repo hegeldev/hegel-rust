@@ -1,17 +1,9 @@
 //! Ported from resources/pbtkit/tests/test_text.py.
 //!
-//! A handful of upstream tests are ported elsewhere rather than duplicated here:
-//! - Tests on `StringChoice` internals (`test_string_single_codepoint_unit`,
-//!   `test_string_validate`, `test_string_from_index_out_of_range`,
-//!   `test_string_from_index_past_end`, `test_string_codepoint_rank_with_surrogates`)
-//!   are embedded tests in `tests/embedded/native/choices_tests.rs`, where the
-//!   crate-internal `StringChoice` type is accessible.
-//! - Tests on the database byte layout (`test_truncated_string_database_entry`)
-//!   are covered by `tests/embedded/native/database_tests.rs`
-//!   (`test_deserialize_truncated_string_length_returns_none`,
-//!   `test_deserialize_truncated_string_payload_returns_none`,
-//!   `test_database_load_corrupt_file_returns_none`).
-//! - `test_text_database_round_trip` is covered by `tests/test_database_key.rs`.
+//! Tests that exercise `StringChoice` / index-helper internals require
+//! `--features native`; they are `#[cfg(feature = "native")]`-gated here.
+//! They are also present as embedded tests in
+//! `tests/embedded/native/choices_tests.rs` — redundancy is fine.
 //!
 //! `test_string_sort_key_type_mismatch` is listed in `SKIPPED.md`: Rust's typed
 //! `sort_key(&str)` makes the "non-string argument" case unrepresentable.
@@ -168,4 +160,253 @@ fn test_draw_string_invalid_range() {
         },
         "InvalidArgument",
     );
+}
+
+// ── Tests against native `StringChoice` internals ─────────────────────────
+//
+// These exercise engine internals that are only reachable under
+// `--features native`. They are also covered as embedded tests in
+// `tests/embedded/native/choices_tests.rs`; redundancy is fine.
+
+#[cfg(feature = "native")]
+mod string_choice_internals {
+    use hegel::__native_test_internals::StringChoice;
+
+    #[test]
+    fn test_string_single_codepoint_unit_variable_length() {
+        // Single codepoint '0', variable length: unit lengthens by one char.
+        let kind = StringChoice {
+            min_codepoint: 48,
+            max_codepoint: 48,
+            min_size: 0,
+            max_size: 5,
+        };
+        assert_eq!(kind.unit(), "0");
+        assert_eq!(kind.simplest(), "");
+    }
+
+    #[test]
+    fn test_string_single_codepoint_unit_fixed_length() {
+        // Single codepoint '0', fixed length: unit degenerates to simplest.
+        let kind = StringChoice {
+            min_codepoint: 48,
+            max_codepoint: 48,
+            min_size: 2,
+            max_size: 2,
+        };
+        assert_eq!(kind.unit(), kind.simplest());
+    }
+
+    #[test]
+    fn test_string_single_codepoint_unit_non_zero() {
+        // Single codepoint 'A': 'A' itself (not '0') is the unit.
+        let kind = StringChoice {
+            min_codepoint: 65,
+            max_codepoint: 65,
+            min_size: 0,
+            max_size: 5,
+        };
+        assert_eq!(kind.unit(), "A");
+    }
+
+    #[test]
+    fn test_string_validate() {
+        let kind = StringChoice {
+            min_codepoint: 32,
+            max_codepoint: 126,
+            min_size: 1,
+            max_size: 5,
+        };
+        assert!(kind.validate("abc"));
+        assert!(!kind.validate("")); // too short
+        assert!(!kind.validate("abcdef")); // too long
+    }
+
+    #[test]
+    fn test_string_from_index_out_of_range() {
+        // from_index past max_index returns None.
+        let sc = StringChoice {
+            min_codepoint: 32,
+            max_codepoint: 126,
+            min_size: 0,
+            max_size: 2,
+        };
+        assert!(sc.from_index(sc.max_index() + 1).is_none());
+    }
+
+    #[test]
+    fn test_string_from_index_past_end() {
+        // alpha_size = 95; max_index = 95^0 + 95^1 + 95^2 - 1 = 9120;
+        // index 9121 exhausts all length buckets.
+        let sc = StringChoice {
+            min_codepoint: 32,
+            max_codepoint: 126,
+            min_size: 0,
+            max_size: 2,
+        };
+        assert_eq!(sc.alpha_size(), 95);
+        assert_eq!(sc.max_index(), 9120);
+        assert!(sc.from_index(9121).is_none());
+    }
+
+    #[test]
+    fn test_string_codepoint_rank_with_surrogates() {
+        // Range spanning the surrogate block (0xD800..=0xDFFF).
+        let sc = StringChoice {
+            min_codepoint: 0xD700,
+            max_codepoint: 0xE000,
+            min_size: 0,
+            max_size: 1,
+        };
+        // A codepoint above the surrogate block has correct rank.
+        let rank = sc.codepoint_rank(0xE000);
+        assert!(rank > 0);
+        // Round-trip through to_index/from_index.
+        let s = char::from_u32(0xE000).unwrap().to_string();
+        let idx = sc.to_index(&s);
+        assert_eq!(sc.from_index(idx).as_deref(), Some(s.as_str()));
+    }
+}
+
+// ── Database-round-trip and corrupt-entry tests ────────────────────────────
+//
+// Ported from `test_text_database_round_trip` and
+// `test_truncated_string_database_entry`. Both pbtkit tests exercise the
+// engine's persistence layer; hegel-rust's native database lives at
+// `src/native/database.rs` and uses a different binary layout, so we match
+// the semantics (write then replay, and corrupt entries are ignored
+// gracefully) rather than the exact on-disk bytes.
+
+#[cfg(feature = "native")]
+#[test]
+fn test_text_database_round_trip() {
+    use crate::common::project::TempRustProject;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("database");
+    std::fs::create_dir_all(&db_path).unwrap();
+    let db_str = db_path.to_str().unwrap();
+
+    let test_code = format!(
+        r#"
+use hegel::generators as gs;
+use std::io::Write;
+
+fn record_test_case(label: &str, s: &str) {{
+    let path = format!("{{}}/{{}}", std::env::var("VALUES_DIR").unwrap(), label);
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .unwrap();
+    writeln!(f, "{{}}", s).unwrap();
+}}
+
+#[hegel::test(database = Some("{db_str}".to_string()))]
+fn test_text_db(tc: hegel::TestCase) {{
+    let s: String = tc.draw(gs::text().min_size(1).max_size(5));
+    record_test_case("test_text_db", &s);
+    assert!(s.chars().count() < 1);
+}}
+"#
+    );
+
+    let values_path = temp_dir.path().join("values");
+    std::fs::create_dir_all(&values_path).unwrap();
+    let project = TempRustProject::new()
+        .test_file("text_db.rs", &test_code)
+        .env("VALUES_DIR", values_path.to_str().unwrap())
+        .expect_failure("FAILED");
+
+    // First run: database starts empty, failure gets shrunk and saved.
+    project.cargo_test(&["test_text_db"]);
+    let first_run: Vec<String> = std::fs::read_to_string(values_path.join("test_text_db"))
+        .unwrap()
+        .lines()
+        .map(|s| s.to_string())
+        .collect();
+    let shrunk_first = first_run.last().unwrap().clone();
+
+    // Second run: the saved failing case should replay immediately as the
+    // first value.
+    std::fs::remove_file(values_path.join("test_text_db")).unwrap();
+    project.cargo_test(&["test_text_db"]);
+    let second_run: Vec<String> = std::fs::read_to_string(values_path.join("test_text_db"))
+        .unwrap()
+        .lines()
+        .map(|s| s.to_string())
+        .collect();
+    assert_eq!(
+        second_run[0], shrunk_first,
+        "Expected to replay shrunk value {shrunk_first:?} first, got {:?}",
+        second_run[0]
+    );
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn test_truncated_string_database_entry() {
+    // Write a corrupt string entry into the on-disk database and verify the
+    // test still runs instead of crashing. Mirrors the Python test that
+    // seeds a database dict with a truncated `SerializationTag.STRING`
+    // record; the hegel-rust native serialization uses type-tag 4 for
+    // strings followed by a 4-byte little-endian length and UTF-8 payload
+    // (see `src/native/database.rs::serialize_choices`).
+    use crate::common::project::TempRustProject;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("database");
+    std::fs::create_dir_all(&db_path).unwrap();
+
+    // Key directory uses FNV-1a hex of the database key; we don't know the
+    // key ahead of time, so write the corrupt entry into every dir that
+    // ends up under db_root by creating a catch-all key directory. Since
+    // the key is derived from the test fn path, we instead shell out to a
+    // test that creates the file itself before the second run.
+    let db_str = db_path.to_str().unwrap();
+
+    let test_code = format!(
+        r#"
+use hegel::generators as gs;
+
+#[hegel::test(database = Some("{db_str}".to_string()))]
+fn test_text_corrupt(tc: hegel::TestCase) {{
+    let _: String = tc.draw(gs::text().min_size(0).max_size(5));
+}}
+"#
+    );
+
+    let project = TempRustProject::new().test_file("text_corrupt.rs", &test_code);
+
+    // First run populates the database with a real entry so we know which
+    // hashed directory to target.
+    project.cargo_test(&["test_text_corrupt"]);
+
+    // Now corrupt every entry on disk: truncated-length headers and
+    // length-past-payload records. Either should be ignored and the test
+    // should still run (and pass).
+    for entry in std::fs::read_dir(&db_path).unwrap() {
+        let entry = entry.unwrap();
+        let best = entry.path().join("best");
+        if best.exists() {
+            // count=1, type=4 (String), then a truncated length prefix.
+            let mut bytes = vec![1u8, 0, 0, 0, 4u8];
+            bytes.extend_from_slice(&[0u8, 0]); // 2 of 4 length bytes
+            std::fs::write(&best, &bytes).unwrap();
+        }
+    }
+    project.cargo_test(&["test_text_corrupt"]);
+
+    // Second corruption: length-overruns-payload.
+    for entry in std::fs::read_dir(&db_path).unwrap() {
+        let entry = entry.unwrap();
+        let best = entry.path().join("best");
+        if best.exists() {
+            let mut bytes = vec![1u8, 0, 0, 0, 4u8];
+            bytes.extend_from_slice(&5u32.to_le_bytes());
+            bytes.push(b'a'); // 1 byte of payload, length claims 5
+            std::fs::write(&best, &bytes).unwrap();
+        }
+    }
+    project.cargo_test(&["test_text_corrupt"]);
 }
