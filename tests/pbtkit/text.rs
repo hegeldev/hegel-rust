@@ -65,10 +65,7 @@ fn test_text_shrinks_characters() {
 fn test_text_no_surrogates() {
     assert_all_examples(
         gs::text().min_codepoint(0xD700).max_codepoint(0xE000),
-        |s: &String| {
-            s.chars()
-                .all(|c| !(0xD800..=0xDFFF).contains(&(c as u32)))
-        },
+        |s: &String| s.chars().all(|c| !(0xD800..=0xDFFF).contains(&(c as u32))),
     );
 }
 
