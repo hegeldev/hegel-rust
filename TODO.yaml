@@ -6,3 +6,165 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
+
+- title: Share cargo target dir across TempRustProject instances
+  details: |
+    `tests/common/project.rs` (`TempRustProject`) currently gives every
+    test its own `TempDir` and therefore its own `target/`. There are 43
+    TempRustProject instances across ~14 test files, and each one
+    recompiles `hegeltest` + every transitive dep from scratch. Combined
+    with the global `CARGO_LOCK` mutex in the same file (which forces
+    builds to run serially to avoid OOM-kills), this dominates test
+    wall time.
+
+    Goal: point every TempRustProject build at a single shared
+    `CARGO_TARGET_DIR` so the bulk of compilation (deps + hegeltest
+    itself) happens once per configuration and is reused across tests.
+    The per-test `TempDir` keeps owning the source tree (Cargo.toml,
+    src/, tests/) as today — only the artifact directory is shared.
+
+    Implementation sketch:
+    - In `TempRustProject::cargo`, set `CARGO_TARGET_DIR` on the
+      `Command` to a stable path. `env!("CARGO_TARGET_TMPDIR")` is
+      available to integration tests and already points inside the
+      workspace's `target/`, so `cargo clean` continues to sweep it.
+      Something like `{CARGO_TARGET_TMPDIR}/hegel-shared-target/` is
+      a good default.
+    - Read the big comment block at the top of `tests/common/project.rs`
+      (the one about the ~300-800MB leak into `/tmp`) and update it to
+      reflect the new design: the shared target dir lives inside
+      `target/` rather than `/tmp`, so RAII cleanup isn't the mechanism
+      any more — `cargo clean` is.
+    - Keep `CARGO_LOCK` in place for this task (see the next TODO).
+
+    Acceptance:
+    - `cargo test` wall-clock time for the TempRustProject-heavy tests
+      (`test_bad_server_command`, `test_explicit_test_case`,
+      `test_hegel_test`, `test_composite`, `test_output`) drops
+      substantially on a warm run. Do a before/after measurement in the
+      commit message.
+    - `HEGEL_SERVER_COMMAND=/bin/false cargo test --features native`
+      still passes.
+    - `cargo clean` still removes the shared directory (verify
+      manually).
+    - No regressions: the set of features passed by each project still
+      produces a matching build (native vs. not). If two projects
+      demand disjoint feature sets, cargo will rebuild on feature
+      switch — that's fine, the savings are across same-feature
+      runs.
+
+- title: Drop or narrow the serial CARGO_LOCK in TempRustProject
+  details: |
+    `tests/common/project.rs::CARGO_LOCK` is a global Mutex that
+    serialises every cargo invocation across every TempRustProject
+    test. The comment explains why: with per-test `target/` dirs,
+    parallel full compiles would OOM-kill rustc. Once the previous
+    TODO lands (shared `CARGO_TARGET_DIR`), a warm build is cheap and
+    the OOM justification goes away — at which point `cargo test`'s
+    built-in parallelism can actually do work.
+
+    This TODO is blocked on the shared-target-dir change; do it
+    afterwards, not in the same commit.
+
+    Things to check before removing the mutex:
+    - cargo does its own locking on `target/` (per-dir `.cargo-lock`),
+      so concurrent builds targeting the same `CARGO_TARGET_DIR`
+      serialise themselves at the artifact level. That's correctness.
+      The open question is peak memory on a cold build when several
+      tests race in first.
+    - A middle ground: keep a narrower gate that only serialises the
+      very first build (e.g. a `OnceLock` that does a cold
+      `cargo build` in a known setup project), and let subsequent
+      per-test invocations run free.
+
+    Acceptance:
+    - Remove `CARGO_LOCK` (or replace it with a narrower first-build
+      gate, documented in the code).
+    - Full `cargo test` run stays green on a modest machine (≤8 GiB
+      RAM) without OOM-kills. If peak memory is a concern, document
+      the remaining constraint alongside whatever narrower lock you
+      kept.
+    - Update the comment block that currently justifies the mutex so
+      it reflects the new reality.
+
+- title: Merge TempRustProject cases in the same test file
+  details: |
+    Several test files spin up many near-identical TempRustProjects
+    that only differ by env var or a string-assertion pattern. Each
+    one pays the full cargo compile cost (today — after the shared
+    target dir change, just link time, but still not free, and still
+    runs the test binary). The worst offenders today:
+
+    - tests/test_explicit_test_case.rs — 11 instances
+    - tests/test_bad_server_command.rs — 7 instances
+    - tests/test_output.rs — 4 instances
+    - tests/test_composite.rs — 4 instances
+    - tests/test_hegel_test.rs — 3 instances
+
+    For each file where the per-case differences are small, restructure
+    so one TempRustProject is built once and then invoked multiple times
+    via `cargo_run` / `cargo_test` with different env, CLI args, or test
+    filters. A common pattern that works well:
+
+    - Build a single `src/main.rs` that reads a mode/env var (e.g.
+      `HEGEL_TEST_SCENARIO`) and dispatches to one of several test
+      scenarios.
+    - Build the project once at module load (via `OnceLock` or a
+      `lazy_static!`-equivalent, or by factoring a helper that the
+      individual `#[test]`s call).
+    - Each `#[test]` then only sets env vars + runs the binary; the
+      assertion logic stays per-test so failures still pinpoint which
+      scenario broke.
+
+    Don't do this if merging meaningfully damages readability or hides
+    independent failures. A file of 3 scenarios is probably fine to
+    leave alone; a file of 11 isn't.
+
+    Acceptance:
+    - `test_explicit_test_case.rs` and `test_bad_server_command.rs`
+      (at minimum) share their cargo build across scenarios. The other
+      listed files are stretch goals if the diff stays small.
+    - All previously passing tests still pass. If a scenario gets
+      dropped or folded, mention it in the commit message with a
+      reason.
+    - Wall-clock benchmark before/after on one of the converted files
+      in the commit message.
+
+- title: Move TempRustProject tests that don't need a subprocess in-process
+  details: |
+    Some tests currently pay for a full `cargo run`/`cargo test`
+    subprocess despite only exercising behaviour observable within the
+    test binary itself. Those are cheaper as ordinary unit/integration
+    tests.
+
+    Prime candidate: `tests/test_derive_compile.rs` — it's exercising
+    `#[derive(Generate)]` expansion, which is exactly what the
+    `trybuild` crate is built for. `trybuild` compiles tiny snippets
+    out of process but shares a single `target/` across all of them
+    and caches aggressively, so it's a strict win for this kind of
+    test.
+
+    Go through the TempRustProject callsites and, for each, ask: is
+    anything we're asserting observable only after hegel has been built
+    as a user-facing dep, or could we assert it directly against the
+    library crate? If the latter, pull the test inside the workspace.
+    Candidates likely include:
+    - `test_derive_compile.rs` (trybuild)
+    - any test that only verifies that certain code compiles or fails
+      to compile (trybuild-ui)
+    - any test whose assertion is purely on macro-expanded output
+
+    Tests that genuinely need a subprocess (stdout capture of a hegel
+    run, real server/binary interaction, env-var-driven startup errors,
+    version-check failures) should stay on TempRustProject.
+
+    Acceptance:
+    - `test_derive_compile.rs` migrated to `trybuild` (or explicit
+      commit-message justification for keeping it on TempRustProject).
+    - Any other TempRustProject tests that are really checking
+      compile-time behaviour get the same treatment.
+    - Net TempRustProject instance count drops; commit message notes
+      which files moved and why.
+    - Before removing a TempRustProject instance, confirm its
+      assertions are genuinely representable in-process — don't drop
+      coverage of a behaviour just because it's inconvenient.
