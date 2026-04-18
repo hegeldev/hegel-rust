@@ -22,7 +22,7 @@ structure.
 | `gs.one_of(a, b)`                          | `gs::one_of(vec![a.boxed(), b.boxed()])`                      |
 | `gs.sampled_from([x, y])`                  | `gs::sampled_from(vec![x, y])`                                |
 | `gs.just(x)`                               | `gs::just(x)`                                                 |
-| `gs.nothing()`                             | **missing** — leave test as `todo!()`                         |
+| `gs.nothing()`                             | **missing** — native-gate the test and stub under `src/native/` (see SKILL.md skip-vs-port policy) |
 | `gs.from_regex(pat)`                       | `gs::from_regex(pat)` (add `.fullmatch(true)` if used)        |
 | `gs.emails()` / `gs.urls()`                | `gs::emails()` / `gs::urls()`                                 |
 | `gs.dates()` etc.                          | `gs::dates()`, `gs::times()`, `gs::datetimes()`, `gs::durations()` |
