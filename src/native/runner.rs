@@ -168,6 +168,12 @@ pub fn native_run<F>(
     let mut calls: u64 = 0;
     let mut test_is_trivial = false;
     let mut invalid_calls: u64 = 0;
+    // True when `result` came from a database replay that matched the
+    // stored choice sequence exactly (same length = same test shape). In
+    // that case we trust the stored value is already shrunk and skip the
+    // shrinking phase entirely. If the replay misaligns (fewer nodes
+    // consumed than stored), the test shape has changed and we re-shrink.
+    let mut replay_aligned = false;
 
     // --- Database replay phase ---
     // If a stored counterexample exists for this key, try it before random
@@ -179,6 +185,7 @@ pub fn native_run<F>(
             let ntc = NativeTestCase::for_choices(&stored_choices, None);
             let (status, nodes, _) = ctf.run(ntc);
             if status == Status::Interesting {
+                replay_aligned = nodes.len() == stored_choices.len();
                 result = Some(nodes);
             }
         }
@@ -271,42 +278,51 @@ pub fn native_run<F>(
 
     // --- Shrinking phase ---
     if let Some(ref mut best_nodes) = result {
-        if verbosity == Verbosity::Debug {
-            eprintln!(
-                "Shrinking: initial choice sequence length = {}",
-                best_nodes.len()
-            );
-        }
+        if replay_aligned {
+            if verbosity == Verbosity::Debug {
+                eprintln!(
+                    "Skipping shrink: reused aligned database replay of length {}",
+                    best_nodes.len()
+                );
+            }
+        } else {
+            if verbosity == Verbosity::Debug {
+                eprintln!(
+                    "Shrinking: initial choice sequence length = {}",
+                    best_nodes.len()
+                );
+            }
 
-        // Verify the result is still interesting.
-        let choices: Vec<ChoiceValue> = best_nodes.iter().map(|n| n.value.clone()).collect();
-        let verify_ntc = NativeTestCase::for_choices(&choices, Some(best_nodes));
-        let (verify_status, verify_nodes, _) = ctf.run(verify_ntc);
-        assert_eq!(
-            verify_status,
-            Status::Interesting,
-            "Result was not reproducibly interesting"
-        );
-        *best_nodes = verify_nodes;
-
-        {
-            let mut shrinker = Shrinker::new(
-                Box::new(|candidate_nodes: &[ChoiceNode]| {
-                    let result = ctf.run_shrink(candidate_nodes);
-                    calls += 1;
-                    result
-                }),
-                best_nodes.clone(),
+            // Verify the result is still interesting.
+            let choices: Vec<ChoiceValue> = best_nodes.iter().map(|n| n.value.clone()).collect();
+            let verify_ntc = NativeTestCase::for_choices(&choices, Some(best_nodes));
+            let (verify_status, verify_nodes, _) = ctf.run(verify_ntc);
+            assert_eq!(
+                verify_status,
+                Status::Interesting,
+                "Result was not reproducibly interesting"
             );
-            shrinker.shrink();
-            *best_nodes = shrinker.current_nodes;
-        }
+            *best_nodes = verify_nodes;
 
-        if verbosity == Verbosity::Debug {
-            eprintln!(
-                "Shrinking complete: final choice sequence length = {}",
-                best_nodes.len()
-            );
+            {
+                let mut shrinker = Shrinker::new(
+                    Box::new(|candidate_nodes: &[ChoiceNode]| {
+                        let result = ctf.run_shrink(candidate_nodes);
+                        calls += 1;
+                        result
+                    }),
+                    best_nodes.clone(),
+                );
+                shrinker.shrink();
+                *best_nodes = shrinker.current_nodes;
+            }
+
+            if verbosity == Verbosity::Debug {
+                eprintln!(
+                    "Shrinking complete: final choice sequence length = {}",
+                    best_nodes.len()
+                );
+            }
         }
     }
 
