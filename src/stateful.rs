@@ -104,8 +104,13 @@ impl<T> Variables<T> {
     }
 
     /// Returns true if no variables are in the pool.
-    pub fn empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.values.is_empty()
+    }
+
+    /// Number of variables currently in the pool.
+    pub fn len(&self) -> usize {
+        self.values.len()
     }
 
     /// Add a value to the pool.
@@ -126,7 +131,7 @@ impl<T> Variables<T> {
     ///
     /// Calls `assume(false)` if the pool is empty.
     pub fn draw(&self) -> &T {
-        self.tc.assume(!self.empty());
+        self.tc.assume(!self.is_empty());
         let variable_id = self.pool_generate(false);
         self.values.get(&variable_id).unwrap()
     }
@@ -135,7 +140,7 @@ impl<T> Variables<T> {
     ///
     /// Calls `assume(false)` if the pool is empty.
     pub fn consume(&mut self) -> T {
-        self.tc.assume(!self.empty());
+        self.tc.assume(!self.is_empty());
         let variable_id = self.pool_generate(true);
         self.values.remove(&variable_id).unwrap()
     }
