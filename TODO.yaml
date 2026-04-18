@@ -7,51 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Port _database_conforms_to_listener_api state-machine test
-  details: |
-    The listener API itself (add/remove/clear_listeners +
-    broadcast-on-save/delete/move) now lives in
-    `src/native/database.rs`, and the non-state-machine listener tests
-    from `tests/cover/test_database_backend.py` are ported in
-    `tests/embedded/native/database_tests.rs`. What remains is the
-    `RuleBasedStateMachine`-based `_database_conforms_to_listener_api`
-    driver and its two instantiations
-    (`test_database_listener_memory`,
-    `test_database_listener_background_write`).
-
-    The state machine uses Hypothesis features that hegel-rust's
-    `src/stateful.rs` does not currently model:
-      - `Bundle("keys")` / `Bundle("values")` with `@rule(target=...)`
-        for adding and `k=keys` / `v=values` for consuming. hegel-rust
-        has `Variables<T>` pools, but they are not wired into the
-        `#[hegel::state_machine]` macro as generator arguments.
-      - `@precondition(lambda self: ...)` gating rule eligibility.
-        hegel-rust rules are always eligible; the closest analogue is
-        `tc.assume(...)` inside the rule body, which changes the
-        shrinker semantics.
-      - `@invariant()` is supported (`#[invariant]`), so
-        `events_agree` can port directly once the rest lands.
-
-    Scope:
-    1. Decide whether to extend `src/stateful.rs` + the `state_machine`
-       macro to model Bundles and preconditions, or to express the
-       listener test via a hand-rolled driver (e.g. a
-       `Hegel::new(|tc| { ... })` that draws a sequence of operations
-       and threads them through the state machine without preconditions).
-       The first is more faithful; the second unblocks this TODO sooner.
-    2. Port `_database_conforms_to_listener_api`, both instantiations,
-       and run it against `InMemoryNativeDatabase` and
-       `BackgroundWriteNativeDatabase(InMemoryNativeDatabase)`.
-    3. Update the `test_database_backend.py` SKIPPED.md sub-bullet to
-       drop the reference to this follow-up.
-
-    Acceptance:
-    - A state-machine (or equivalent randomised-sequence) test asserts
-      that for every sequence of save/delete/move operations, the
-      listener observes exactly the set of events prescribed by the
-      Hypothesis contract.
-    - Both backends listed above pass the test.
-
 - title: Cross-process listener support for NativeDatabase (notify crate)
   details: |
     `NativeDatabase::{save, delete, move_value}` currently broadcast
