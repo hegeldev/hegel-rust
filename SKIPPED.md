@@ -66,6 +66,15 @@ Individually-skipped tests (rest of the file is ported):
 - `test_example.py` — tests the fluent `.via("...")` and `.xfail(...)`
   methods chained onto `@example(...)`; hegel-rust's
   `#[hegel::explicit_test_case]` has no equivalent of either.
+- `test_map.py` — all three tests rely on Python-specific facilities:
+  `test_can_assume_in_map` and `test_assume_in_just_raises_immediately`
+  call Hypothesis's standalone thread-local `assume()` inside `.map()`
+  closures, but in hegel-rust `assume` is a method on `TestCase` (there
+  is no standalone `hegel::assume()` and `ASSUME_FAIL_STRING` is
+  `pub(crate)`), so `.map` closures — which receive only the value —
+  cannot raise an assumption failure. `test_identity_map_is_noop` uses
+  the internal `unwrap_strategies` API and Python `is` object identity
+  to check that `s.map(identity) is s`, with no Rust counterpart.
 - `test_database_backend.py` — tests Hypothesis's full
   `ExampleDatabase` public-API surface: `InMemoryExampleDatabase`,
   `MultiplexedDatabase`, `ReadOnlyDatabase`, `BackgroundWriteDatabase`,
