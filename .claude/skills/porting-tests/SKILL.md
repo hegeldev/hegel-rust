@@ -1,14 +1,15 @@
 ---
 name: porting-tests
-description: "Port Python property-based tests from pbtkit or hypothesis to Rust in this repo. Use when the Stop hook names a specific upstream file to port, or when you manually decide to port one."
+description: "Port Python property-based tests from pbtkit or hypothesis to Rust in this repo. Use when scripts/port-loop.py dispatches you on a specific upstream file, or when you manually decide to port one."
 ---
 
 # Porting Python tests to hegel-rust
 
-You are porting ONE Python test file from pbtkit (`/tmp/pbtkit/tests/`) or
-Hypothesis (`/tmp/hypothesis/hypothesis-python/tests/cover/`) to a Rust test
-file in this repo. The Stop hook gives you the exact upstream path. Port only
-that file in this commit — do not batch.
+You are porting ONE Python test file from pbtkit
+(`resources/pbtkit/tests/`) or Hypothesis
+(`resources/hypothesis/hypothesis-python/tests/cover/`) to a Rust test file
+in this repo. `scripts/port-loop.py` gives you the exact upstream path and
+destination. Port only that file in this commit — do not batch.
 
 ## Structure
 
@@ -123,78 +124,84 @@ For tuples: `|(x, y): &(i64, i64)| ...`. For floats: `|f: &f64| ...` (note
 it's passed by `&T`). If unsure about element types, make them explicit with
 `gs::integers::<i64>()` rather than `gs::integers()` bare.
 
-## What to skip (cleanly, with no stub)
+## Skip vs. port decision
 
-Entire test functions should be dropped — or the whole file added to
-`SKIPPED.md` with a one-line rationale — when they test something that has no
-meaningful counterpart in Rust at all:
+### Add to SKIPPED.md — public-API incompatibility only
 
-1. Python internals (`__repr__`, `__iter__`, `sys.modules`, `pickle`).
-2. Python syntactic constructs that don't exist in Rust.
-3. Integration with other Python libraries (numpy, pandas, django, redis, attrs, etc.).
+An upstream file goes in `SKIPPED.md` ONLY when its tests rely on *public
+API* that has no hegel-rust counterpart:
 
-## What to leave as `todo!()` (don't drop)
+1. Python-specific facilities: `pickle`, `__repr__`, `__iter__`,
+   `sys.modules`, dunder access patterns, Python syntax checks.
+2. Integrations with other Python libraries: numpy, pandas, django,
+   attrs, redis, etc.
+3. Hypothesis/pbtkit public-API features with genuinely no analog (rare
+   — most of the public API *does* have a counterpart).
 
-Tests that exercise a hegel-rust feature that *could* exist but currently
-doesn't, or that you can't port cleanly in a small change:
+Add the filename to the appropriate section of `SKIPPED.md` with a
+one-line rationale naming the specific public API or integration that
+blocks the port, then commit. "Too complex" and "engine internal" are
+NOT valid reasons — those are covered below.
 
-1. **Missing public API** (`target()`, `.weighted()` on TestCase, `.reject()`
-   vs `.assume(false)` distinction, deadlines). When you hit one of these,
-   also add a TODO.md entry for adding that API to hegel-rust and reference
-   it from the `todo!()` stub.
-2. **Tests that *should* work but hit a Rust type-inference or API shape
-   problem** you can't resolve in a small change — leave a `todo!()` with
-   the error you saw.
+### Port — native-gated plus source-level stub
 
-### Think harder before writing todo!()
+Tests that exercise pbtkit / Hypothesis *engine internals* —
+`ChoiceNode`, `PbtkitState`, `ConjectureRunner`, `SHRINK_PASSES`,
+`CachedTestFunction`, `IntegerChoice`, `FloatChoice`, `TC.for_choices`,
+etc. — have counterparts under `src/native/` and are reachable only in
+native mode. Port these; do NOT skip them.
 
-Agents have a strong bias to mark anything unfamiliar as untestable. Many
-tests that look like pbtkit internals *do* have a portable shape in
-hegel-rust:
+1. Write the test in its usual destination (`tests/<kind>/<module>.rs`),
+   or as an embedded test in `tests/embedded/native/...` if it needs
+   private access — the embedded pattern wires the test into the source
+   via
+   `#[cfg(test)] #[path = "../../../tests/embedded/native/foo_tests.rs"] mod tests;`.
+   Look at `tests/embedded/native/choices_tests.rs` and
+   `tree_tests.rs` for the pattern.
+2. Native-gate it. Put `#![cfg(feature = "native")]` at the top of the
+   file if every test in it is native-only; otherwise mark individual
+   tests with `#[cfg(feature = "native")]`.
+3. If the test depends on a native-mode feature that isn't implemented
+   yet:
+   - If the feature is easy to add, implement it properly in
+     `src/native/...`.
+   - If it's hard, stub the missing function body in `src/native/...`
+     with `todo!("specific thing missing")` — a runtime panic, not a
+     compile error. A subsequent fixer-task invocation will pick it
+     up once the test fails at runtime.
+   - The test MUST compile cleanly in both server and native modes.
+     `todo!()` lives in the source code, never in the test body.
 
-- **pbtkit engine-internal tests** (`ChoiceNode`, `TC.for_choices`,
-  `PbtkitState`, `ConjectureRunner`, `SHRINK_PASSES`, `CachedTestFunction`,
-  `IntegerChoice`, `FloatChoice`, etc.) — hegel-rust has equivalents in
-  `src/native/`. These types are `pub(crate)` — **you are expected to test
-  them via embedded tests**. Look at `tests/embedded/native/choices_tests.rs`
-  and `tree_tests.rs` for the pattern: an embedded test is wired into the
-  source file via
-  `#[cfg(test)] #[path = "../../../tests/embedded/native/foo_tests.rs"] mod tests;`.
-  Write the embedded test and modify the target source file to add the wiring
-  (but don't change other code in the src file). This is the PREFERRED
-  outcome over `todo!()` for engine behavior tests.
+### Port — normal (the common case)
 
-- **stdout/stderr capture** (tests using `capsys` in Python) — hegel-rust
-  has a `TempRustProject` helper used in `tests/test_output.rs` and
+For tests that only use the public generator API (`gs::integers`,
+`gs::vecs`, `Hegel::new(...).run()`, etc.) — just port them. No
+native-gating, no stubs.
+
+### Think harder before skipping
+
+Agents have a strong bias to mark anything unfamiliar as unportable.
+Specific shapes that *look* skip-worthy but aren't:
+
+- **stdout/stderr capture** (`capsys` in Python) — hegel-rust has a
+  `TempRustProject` helper used in `tests/test_output.rs` and
   `tests/test_draw_named.rs` that runs test code as a subprocess and
-  captures stderr. Don't say "too heavy a port".
-
+  captures stderr.
 - **Database replay** (writing a failing case, replaying it) — hegel-rust
-  has a `Database` type usable via
+  has `Database::Path(...)` via
   `Settings::new().database(Database::Path(...))`. The round-trip is only
-  exercised by the native backend, so gate such tests with
-  `#[cfg(feature = "native")]`. Look at `tests/test_database_key.rs`. Only
-  use `todo!()` if the test is about pbtkit's specific serialized format
-  (e.g. `test_malformed_database_entry`).
-
-- **`tc.choice(n)` in Python** → in hegel-rust this is
+  exercised natively, so native-gate it. See `tests/test_database_key.rs`.
+- **`tc.choice(n)` in Python** → in hegel-rust,
   `tc.draw(gs::integers::<i64>().min_value(0).max_value(n-1))`.
-
 - **Full 64-bit integer range** → `gs::integers::<u64>()` etc.
-
-- **`@gs.composite`** → `#[hegel::composite]` or `hegel::compose!` macros.
-
-When you *do* use `todo!()`, the comment should name the specific API that's
-missing, not a vague "engine internal". A future reader should be able to
-tell whether the blocker is "hegel-rust needs a new public method" vs "this
-genuinely can't work without exposing private types".
+- **`@gs.composite`** → `#[hegel::composite]` or `hegel::compose!`.
 
 ## Conjecture tests (Hypothesis internal engine)
 
-Tests under `hypothesis-python/tests/conjecture/` test Hypothesis's engine
-internals. The hegel-rust equivalent lives in `src/native/`. Port these as
-native-only by placing them at `tests/hypothesis/conjecture_*.rs` with
-`#![cfg(feature = "native")]` at the top.
+Tests under `resources/hypothesis/hypothesis-python/tests/conjecture/`
+test Hypothesis's engine internals. Place these at
+`tests/hypothesis/conjecture_*.rs` with `#![cfg(feature = "native")]`
+at the top, following the native-gated-plus-source-stub rules above.
 
 ## Style
 
@@ -214,11 +221,12 @@ Before you finish:
    your new module. Create the main.rs if it doesn't exist.
 3. Run `cargo test --test pbtkit --no-run` (or `--test hypothesis`). The
    suite MUST compile.
-4. Run `cargo test --test pbtkit <your_module>` (server mode). Every non-todo
-   test you wrote must pass. `todo!()` stubs will fail — that's expected.
+4. Run `cargo test --test pbtkit <your_module>` (server mode). Every test
+   you wrote must either pass or fail with a runtime `todo!()` raised
+   from `src/native/` (see the skip-vs-port section). Tests themselves
+   must not contain `todo!()`.
 5. Run `cargo test --features native --test pbtkit --no-run` — the suite
-   must still compile under native mode. Don't worry about test failures in
-   native mode from pre-existing canary panics; the Stop hook handles those.
+   must still compile under native mode.
 
 **Interpreting failures:**
 
@@ -232,31 +240,24 @@ Before you finish:
 - **Runtime test failures** are *usually* a problem in your test translation
   (wrong expected value, wrong bounds, misread the Python intent). Look at
   your test first.
-- But runtime failures can occasionally be genuine hegel-rust bugs, especially
-  under `#[cfg(feature = "native")]` where the engine is less mature. If
-  after re-reading the Python original and your translation you believe the
-  test is correct, note this in a new TODO.md entry — don't force the
-  assertion to pass by fudging values.
+- But runtime failures can occasionally be genuine hegel-rust bugs,
+  especially under `#[cfg(feature = "native")]` where the engine is less
+  mature. If after re-reading the Python original and your translation you
+  believe the test is correct, leave the test asserting the correct
+  behavior — don't fudge the assertion to make it pass. The fixer loop
+  will pick up the failure and fix the engine.
 
-### Handling tests that can't be completed
+### Handling tests that can't pass yet
 
-If a `#[test]` cannot be written fully, **do NOT delete the test**. Instead,
-leave it in place with a `todo!()` body and a comment explaining what went
-wrong:
+If a test calls a native-mode feature that isn't implemented yet, do NOT
+`todo!()` the test body. Instead, per the skip-vs-port section above:
 
-```rust
-#[test]
-fn test_weighted_coin() {
-    // TODO: hegel-rust has no public `weighted()` API on TestCase.
-    // Original Python used `tc.weighted(0.7)`. See TODO.md entry
-    // "add weighted() to TestCase".
-    todo!()
-}
-```
-
-This keeps the intent visible and lets future work pick it up. The `todo!()`
-will cause the test to fail when run, but the file will still compile — which
-is what the verification step requires.
+1. Write the full test body (native-gated if it exercises engine internals).
+2. Implement the missing feature in `src/native/...`, or stub the missing
+   function body with `todo!("specific thing missing")` if it's too large
+   for this commit.
+3. Commit. The test will compile and (if the source was stubbed) fail at
+   runtime — that's expected; a fixer-task invocation will pick it up.
 
 ## Commit
 
@@ -265,8 +266,9 @@ After verification passes, commit with a focused message like:
 ```
 Port pbtkit/test_text.py to tests/pbtkit/text.rs
 
-7 tests ported via the public generator API. 12 left as todo!() stubs
-(engine internals not exposed through the public API).
+7 tests ported via the public generator API. 12 native-gated tests
+exercise src/native/choices, which currently stubs `choice_with_weight`
+as `todo!()`; fixer-task invocations will fill the stub in.
 ```
 
 One port per commit. Update `tests/pbtkit/main.rs` in the same commit.
@@ -275,6 +277,8 @@ One port per commit. Update `tests/pbtkit/main.rs` in the same commit.
 
 - `tests/common/utils.rs`.
 - Any existing ported file.
-- `src/` code, **except** for adding a single
-  `#[cfg(test)] #[path = "..."] mod tests;` wiring at the bottom of a file to
-  hook up a new embedded test module. Don't change the source code itself.
+- `src/` code beyond the scope of this port. You MAY:
+  - Add a `#[cfg(test)] #[path = "..."] mod tests;` wiring at the bottom
+    of a source file to hook up a new embedded test module.
+  - Add or stub a missing native-mode function under `src/native/...`
+    as required by the port (see the skip-vs-port section).

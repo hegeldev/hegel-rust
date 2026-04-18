@@ -44,18 +44,38 @@ from pathlib import Path
 COMMON_SYSTEM_PROMPT = """\
 You are being driven by scripts/port-loop.py, a non-interactive loop that
 calls you with one focused task per invocation. Do the task, commit, and
-exit. The loop re-runs the gates (just lint, cargo test, native-mode tests,
-clean tree) after you return, so a partial fix is fine — the next
-invocation will pick up from wherever the gates next fail.
+exit. The loop re-runs its gates after you return, so a partial fix is
+fine — the next invocation will pick up from wherever the gates next
+fail.
 
 Ground rules:
 - Work in TDD order when fixing bugs (regression test first).
 - Commit every focused change with a descriptive message. Never --amend,
   never --no-verify.
-- If a port is truly unportable, add its filename to SKIPPED.md under the
-  right section with a one-line rationale and commit, rather than leaving
-  a stub.
-- Read .claude/skills/porting-tests/SKILL.md before porting a file.
+- Read .claude/skills/porting-tests/SKILL.md before porting or reviewing
+  a port.
+
+Skip vs. port policy (applies to every port-related task):
+
+- Add a file to SKIPPED.md ONLY when its tests rely on *public API* that
+  has no hegel-rust counterpart: Python-specific facilities (pickle,
+  __repr__, sys.modules, Python syntax, dunder access) or integrations
+  with other Python libraries (numpy, pandas, django, attrs, redis).
+
+- Everything else is portable — including tests that exercise pbtkit /
+  Hypothesis engine internals. Those internals have counterparts under
+  `src/native/` and are reachable in native mode. If the test depends on
+  a native-mode feature that isn't implemented yet:
+  * native-gate the test with `#[cfg(feature = "native")]` (or
+    `#![cfg(feature = "native")]` at file top if every test in it is
+    native-only),
+  * add the missing feature under `src/native/`. If it's easy,
+    implement it properly. If it's hard, stub the function body with
+    `todo!("...")` so a later fixer-task invocation picks it up.
+  * the test itself MUST compile cleanly in both modes. `todo!()`
+    belongs in the source code, never in the test body. "Too complex
+    to port" is not a valid reason to skip — that's exactly the
+    native-gated-plus-source-stub case.
 """
 
 LINT_FIX_PROMPT = (
@@ -83,36 +103,31 @@ COMMIT_PROMPT = (
 
 PORT_PROMPT = """\
 Port the upstream test file {path} to {destination} per the porting-tests
-skill. You will be invoked repeatedly until either the tests in
-{destination} pass in both server and native mode with a clean tree, OR
-`{name}` appears in SKIPPED.md. Make whatever focused commit makes
-progress toward one of those outcomes.
-
-If the file has no tests that can be ported to hegel-rust, instead add
-`{name}` to SKIPPED.md under the appropriate section with a one-line
-rationale and commit.
+skill. You will be invoked repeatedly on this file until it's green in
+both server and native mode with a clean tree, or (per the skip policy
+in the system prompt) `{name}` is in SKIPPED.md. Make one focused commit
+toward that goal.
 """
 
 PORT_TEST_FIX_SERVER_PROMPT = """\
 Continuing port {path} → {destination}. The module's server-mode tests
 are failing: `cargo test --test {kind} {module}`. Full output below —
-work from it instead of rerunning the command. Fix the failing tests
-(or the test module) and commit.
-
-If the port can't be completed cleanly (e.g. an unavailable hegel-rust
-API), add `{name}` to SKIPPED.md with a one-line rationale and commit.
+work from it rather than rerunning the command. Fix the failing tests
+(or the ported module) and commit.
 """
 
 PORT_TEST_FIX_NATIVE_PROMPT = """\
 Continuing port {path} → {destination}. The module's native-mode tests
 are failing: `HEGEL_SERVER_COMMAND=/bin/false cargo test --features
 native --test {kind} {module}`. Full output below — work from it
-instead of rerunning the command. Fix the failing tests (or the test
-module) and commit.
+rather than rerunning the command. Fix the failing tests and commit.
 
-If this reveals a missing native-mode feature that can't be added in
-one focused change, add `{name}` to SKIPPED.md with a one-line
-rationale and commit.
+Per the skip policy in the system prompt, missing native-mode engine
+features are NOT a reason to add this file to SKIPPED.md. Instead:
+native-gate the affected test(s) with `#[cfg(feature = "native")]` and
+add the missing feature under `src/native/` — stubbed with `todo!()` if
+it's too large to implement in one focused commit. The test itself
+must compile in both modes; the `todo!()` goes in the source.
 """
 
 PORT_COMMIT_PROMPT = """\
@@ -124,10 +139,9 @@ server and native mode, but the working tree is dirty. `git status
 PORT_MISSING_TESTS_PROMPT = """\
 Continuing port {path} → {destination}. The destination file exists
 but contains no `#[test]` attribute — either the port is incomplete
-or stubbed out. Add the ported tests and commit.
-
-If the file truly has nothing portable, delete {destination}, add
-`{name}` to SKIPPED.md with a one-line rationale, and commit.
+or stubbed out. Add the ported tests and commit. Review the skip
+policy in the system prompt before routing this file to SKIPPED.md;
+it is strict.
 """
 
 PORT_REVIEW_PROMPT = """\
@@ -137,16 +151,27 @@ tests pass, working tree clean) is currently green. Below is the list
 of commits made during this sub-loop ({start_sha}..HEAD).
 
 Read the upstream file ({path}), the ported file ({destination}), and
-the commits under review. Then evaluate honestly:
+the commits under review. Then evaluate honestly, applying the skip
+policy from the system prompt:
 
 - Was a real, faithful attempt made to port the tests, or were corners
   cut? Watch for: tests stubbed out, assertions weakened, whole test
-  cases silently dropped, unrelated behavior papered over with
-  `assume!`, failures hidden behind `#[ignore]`, etc.
+  cases silently dropped, behavior papered over with `assume!`,
+  failures hidden behind `#[ignore]`, or `todo!()` placed in the test
+  body rather than in the native-mode source code it should be
+  driving.
+- Was anything pushed to SKIPPED.md that should actually have been
+  ported? The skip policy only covers public-API incompatibility
+  (Python-specific facilities, external-library integrations). Engine
+  internals and missing native-mode features are NOT skip-worthy —
+  they should be native-gated in the test and stubbed under
+  `src/native/`. If a skip was miscategorised, revert it and port
+  properly.
 - Are there improvements worth making to clarity, naming, idiom, or
   code quality in the ported file or anything it touched?
 - Is the coverage of the upstream behavior adequate given hegel-rust's
-  available API?
+  available API? If missing cases could be added by native-gating plus
+  a source-level stub, add them.
 
 If you find anything worth changing, make focused commits to fix it —
 the sub-loop will re-run the gates afterward and invoke you again if
