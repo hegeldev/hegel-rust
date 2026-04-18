@@ -25,9 +25,12 @@
 // the replay path in `runner.rs` can round-trip them.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
+
+use notify::event::{CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::native::core::ChoiceValue;
 
@@ -217,16 +220,36 @@ impl<T: ExampleDatabase + ?Sized> ExampleDatabase for Arc<T> {
     }
 }
 
+/// Name of the bookkeeping key under which every save() records its
+/// own key bytes. Mirrors Hypothesis's
+/// `DirectoryBasedExampleDatabase._metakeys_name` (`.hypothesis-keys`):
+/// the filesystem watcher sees only hashed directory names, so on
+/// `_start_listening` we initialize a hash→key map by fetching the
+/// metakey entry. Subsequent Create events under the metakey directory
+/// keep the map up to date as new keys are written (by any process).
+pub(super) const METAKEYS_NAME: &[u8] = b".hegel-keys";
+
+/// Watcher-thread state for a `NativeDatabase`. Dropping the
+/// `RecommendedWatcher` joins and stops the background notify thread,
+/// which is the `_stop_listening` action in Hypothesis's model.
+struct WatcherState {
+    _watcher: RecommendedWatcher,
+}
+
 pub struct NativeDatabase {
     db_root: PathBuf,
-    listeners: Listeners,
+    metakeys_hash: String,
+    listeners: Arc<Listeners>,
+    watcher: Mutex<Option<WatcherState>>,
 }
 
 impl NativeDatabase {
     pub fn new(db_root: &str) -> Self {
         NativeDatabase {
             db_root: PathBuf::from(db_root),
-            listeners: Listeners::new(),
+            metakeys_hash: fnv_hex(METAKEYS_NAME),
+            listeners: Arc::new(Listeners::new()),
+            watcher: Mutex::new(None),
         }
     }
 
@@ -236,6 +259,57 @@ impl NativeDatabase {
 
     fn value_path(&self, key: &[u8], value: &[u8]) -> PathBuf {
         self.key_path(key).join(fnv_hex(value))
+    }
+
+    /// Start a `notify` watcher over `db_root` so that filesystem
+    /// changes (including from other processes) are translated into
+    /// listener events. Called on the 0→1 listener-count transition.
+    /// Hypothesis: `DirectoryBasedExampleDatabase._start_listening`.
+    fn start_watcher(&self) {
+        // Seed the hash→key reverse map from the persisted metakey
+        // entry. Without this, events arriving for keys that existed
+        // before the listener was attached would be dropped.
+        let hash_to_key: HashMap<String, Vec<u8>> = self
+            .fetch(METAKEYS_NAME)
+            .into_iter()
+            .map(|key| (fnv_hex(&key), key))
+            .collect();
+        let hash_to_key = Arc::new(Mutex::new(hash_to_key));
+        let listeners = Arc::clone(&self.listeners);
+        let hash_to_key_cb = Arc::clone(&hash_to_key);
+        let metakeys_hash_cb = self.metakeys_hash.clone();
+
+        let mut watcher =
+            match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                if let Ok(event) = res {
+                    handle_watcher_event(event, &hash_to_key_cb, &metakeys_hash_cb, &listeners);
+                }
+            }) {
+                Ok(w) => w,
+                Err(_) => return,
+            };
+
+        // Hypothesis: if the db directory doesn't exist yet, the
+        // watcher will not fire any events even after it gets created,
+        // so ensure the directory exists before scheduling the watch.
+        if std::fs::create_dir_all(&self.db_root).is_err() {
+            return;
+        }
+        if watcher
+            .watch(&self.db_root, RecursiveMode::Recursive)
+            .is_err()
+        {
+            return;
+        }
+
+        *self.watcher.lock().unwrap() = Some(WatcherState { _watcher: watcher });
+    }
+
+    /// Stop the `notify` watcher. Called on the 1→0 listener-count
+    /// transition. Hypothesis:
+    /// `DirectoryBasedExampleDatabase._stop_listening`.
+    fn stop_watcher(&self) {
+        *self.watcher.lock().unwrap() = None;
     }
 }
 
@@ -260,13 +334,20 @@ impl ExampleDatabase for NativeDatabase {
     /// Hypothesis: `DirectoryBasedExampleDatabase.save`. I/O errors are
     /// silently ignored.
     ///
-    /// Hypothesis fires change events for this backend via watchdog in
-    /// `_start_listening`, so its own `save` does not broadcast. hegel-rust
-    /// does not yet integrate a filesystem watcher, so we broadcast
-    /// from the write path directly — this observes own-writes but not
-    /// external-writer changes. Cross-process listening is tracked as a
-    /// follow-up TODO.
+    /// Listener events are not broadcast from the write path. Instead,
+    /// the filesystem watcher started in `start_watcher` observes the
+    /// Create events and broadcasts them, which means listeners on one
+    /// `NativeDatabase` handle also see writes from other processes
+    /// (or other in-process handles) sharing the same directory.
     fn save(&self, key: &[u8], value: &[u8]) {
+        // Hypothesis keeps a "metakeys" entry — a bookkeeping key whose
+        // values are the raw bytes of every other key ever saved. The
+        // watcher uses it to reverse hashed directory names back to
+        // keys. Avoid infinite recursion when we're already saving
+        // under the metakey itself.
+        if fnv_hex(key) != self.metakeys_hash {
+            self.save(METAKEYS_NAME, key);
+        }
         let dir = self.key_path(key);
         if std::fs::create_dir_all(&dir).is_err() {
             return;
@@ -275,28 +356,23 @@ impl ExampleDatabase for NativeDatabase {
         if path.exists() {
             return;
         }
-        if std::fs::write(&path, value).is_ok() {
-            self.listeners.broadcast(&ListenerEvent::Save {
-                key: key.to_vec(),
-                value: value.to_vec(),
-            });
-        }
+        let _ = std::fs::write(&path, value);
     }
 
     /// Hypothesis: `DirectoryBasedExampleDatabase.delete`. If `value` was
     /// the last entry under `key`, the (now-empty) key directory is also
-    /// removed.
+    /// removed. Listener broadcasting happens via the filesystem watcher
+    /// (see `start_watcher`).
     fn delete(&self, key: &[u8], value: &[u8]) {
         if std::fs::remove_file(self.value_path(key, value)).is_err() {
             return;
         }
         // `remove_dir` only succeeds if the directory is empty; that's
         // exactly the "value was the last entry" case.
-        let _ = std::fs::remove_dir(self.key_path(key));
-        self.listeners.broadcast(&ListenerEvent::Delete {
-            key: key.to_vec(),
-            value: Some(value.to_vec()),
-        });
+        if std::fs::remove_dir(self.key_path(key)).is_ok() && fnv_hex(key) != self.metakeys_hash {
+            // Key directory is gone; drop the metakey entry too.
+            self.delete(METAKEYS_NAME, key);
+        }
     }
 
     /// Hypothesis: `DirectoryBasedExampleDatabase.move`. Overrides the
@@ -306,6 +382,13 @@ impl ExampleDatabase for NativeDatabase {
         if src == dst {
             self.save(src, value);
             return;
+        }
+        // If dst doesn't exist yet, the rename below will create its
+        // key directory but won't register it in the metakeys entry,
+        // so do that explicitly first — otherwise a cross-process
+        // watcher would never learn about dst.
+        if !self.key_path(dst).exists() {
+            self.save(METAKEYS_NAME, dst);
         }
         let dst_dir = self.key_path(dst);
         if std::fs::create_dir_all(&dst_dir).is_err() {
@@ -321,30 +404,219 @@ impl ExampleDatabase for NativeDatabase {
             return;
         }
         // Cleanup: if `src`'s key directory is now empty, remove it.
-        let _ = std::fs::remove_dir(self.key_path(src));
-        // Atomic rename succeeded: broadcast as delete+save to match the
-        // listener-API contract.
-        self.listeners.broadcast(&ListenerEvent::Delete {
-            key: src.to_vec(),
-            value: Some(value.to_vec()),
-        });
-        self.listeners.broadcast(&ListenerEvent::Save {
-            key: dst.to_vec(),
-            value: value.to_vec(),
-        });
+        if std::fs::remove_dir(self.key_path(src)).is_ok() && fnv_hex(src) != self.metakeys_hash {
+            self.delete(METAKEYS_NAME, src);
+        }
     }
 
     fn add_listener(&self, f: Listener) {
-        self.listeners.add(f);
+        if self.listeners.add(f) {
+            self.start_watcher();
+        }
     }
 
     fn remove_listener(&self, f: &Listener) {
-        self.listeners.remove(f);
+        let (removed, now_empty) = self.listeners.remove(f);
+        if removed && now_empty {
+            self.stop_watcher();
+        }
     }
 
     fn clear_listeners(&self) {
-        self.listeners.clear();
+        if self.listeners.clear() {
+            self.stop_watcher();
+        }
     }
+}
+
+/// Translate a `notify::Event` into zero or more `ListenerEvent`
+/// broadcasts. Mirrors the `Handler` class in Hypothesis's
+/// `DirectoryBasedExampleDatabase._start_listening`.
+fn handle_watcher_event(
+    event: notify::Event,
+    hash_to_key: &Mutex<HashMap<String, Vec<u8>>>,
+    metakeys_hash: &str,
+    listeners: &Listeners,
+) {
+    match event.kind {
+        EventKind::Create(CreateKind::File)
+        | EventKind::Create(CreateKind::Any)
+        | EventKind::Create(CreateKind::Other) => {
+            for path in &event.paths {
+                on_file_created(path, hash_to_key, metakeys_hash, listeners);
+            }
+        }
+        EventKind::Create(CreateKind::Folder) => {
+            // notify's inotify backend has a race: when a new subdir is
+            // created under a recursive watch, it can't attach a watch
+            // fast enough to catch files written into the subdir
+            // immediately afterwards. Hegel-rust's own writes create
+            // exactly this pattern (`mkdir subdir; write subdir/file`),
+            // so those file events are silently lost. Compensate by
+            // scanning the new folder for files already present and
+            // emitting synthetic events — the same workaround
+            // watchdog (used by Hypothesis) applies.
+            for path in &event.paths {
+                scan_new_folder(path, hash_to_key, metakeys_hash, listeners);
+            }
+        }
+        EventKind::Remove(RemoveKind::File)
+        | EventKind::Remove(RemoveKind::Any)
+        | EventKind::Remove(RemoveKind::Other) => {
+            for path in &event.paths {
+                on_file_deleted(path, hash_to_key, metakeys_hash, listeners);
+            }
+        }
+        EventKind::Modify(ModifyKind::Name(RenameMode::Both)) if event.paths.len() >= 2 => {
+            on_file_moved(
+                &event.paths[0],
+                &event.paths[1],
+                hash_to_key,
+                metakeys_hash,
+                listeners,
+            );
+        }
+        EventKind::Modify(ModifyKind::Name(RenameMode::From | RenameMode::Any)) => {
+            for path in &event.paths {
+                on_file_deleted(path, hash_to_key, metakeys_hash, listeners);
+            }
+        }
+        EventKind::Modify(ModifyKind::Name(RenameMode::To)) => {
+            for path in &event.paths {
+                on_file_created(path, hash_to_key, metakeys_hash, listeners);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Walk a newly-created folder and emit a synthetic `on_file_created`
+/// for each file (recursing into any subfolders). Recovers the file
+/// events that inotify races cause to be dropped on directory creation.
+fn scan_new_folder(
+    path: &Path,
+    hash_to_key: &Mutex<HashMap<String, Vec<u8>>>,
+    metakeys_hash: &str,
+    listeners: &Listeners,
+) {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let child = entry.path();
+        if file_type.is_dir() {
+            scan_new_folder(&child, hash_to_key, metakeys_hash, listeners);
+        } else if file_type.is_file() {
+            on_file_created(&child, hash_to_key, metakeys_hash, listeners);
+        }
+    }
+}
+
+/// Extract the parent-directory basename (the hashed key) from a value
+/// file path. Returns `None` if the path has no parent or the basename
+/// is not valid UTF-8.
+fn key_hash_of(path: &Path) -> Option<String> {
+    path.parent()
+        .and_then(|p| p.file_name())
+        .and_then(|s| s.to_str())
+        .map(String::from)
+}
+
+fn on_file_created(
+    path: &Path,
+    hash_to_key: &Mutex<HashMap<String, Vec<u8>>>,
+    metakeys_hash: &str,
+    listeners: &Listeners,
+) {
+    let Some(key_hash) = key_hash_of(path) else {
+        return;
+    };
+    if key_hash == metakeys_hash {
+        // The file contents are the raw bytes of a key; record them in
+        // the reverse map so later value events under that key resolve.
+        if let Ok(key_bytes) = std::fs::read(path)
+            && let Some(value_name) = path.file_name().and_then(|s| s.to_str())
+        {
+            hash_to_key
+                .lock()
+                .unwrap()
+                .insert(value_name.to_string(), key_bytes);
+        }
+        return;
+    }
+    let key = match hash_to_key.lock().unwrap().get(&key_hash).cloned() {
+        Some(k) => k,
+        None => return,
+    };
+    let value = match std::fs::read(path) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    listeners.broadcast(&ListenerEvent::Save { key, value });
+}
+
+fn on_file_deleted(
+    path: &Path,
+    hash_to_key: &Mutex<HashMap<String, Vec<u8>>>,
+    metakeys_hash: &str,
+    listeners: &Listeners,
+) {
+    let Some(key_hash) = key_hash_of(path) else {
+        return;
+    };
+    // Metakey deletes are internal bookkeeping, not user-visible state
+    // changes — skip them.
+    if key_hash == metakeys_hash {
+        return;
+    }
+    let key = match hash_to_key.lock().unwrap().get(&key_hash).cloned() {
+        Some(k) => k,
+        None => return,
+    };
+    // We know the key, but not the value — the file is already gone, so
+    // we can't read its contents. Matches Hypothesis's behaviour.
+    listeners.broadcast(&ListenerEvent::Delete { key, value: None });
+}
+
+fn on_file_moved(
+    src_path: &Path,
+    dst_path: &Path,
+    hash_to_key: &Mutex<HashMap<String, Vec<u8>>>,
+    metakeys_hash: &str,
+    listeners: &Listeners,
+) {
+    let (Some(src_h), Some(dst_h)) = (key_hash_of(src_path), key_hash_of(dst_path)) else {
+        return;
+    };
+    // Don't broadcast metakey moves (they shouldn't happen in normal
+    // operation, but defend against it).
+    if src_h == metakeys_hash || dst_h == metakeys_hash {
+        return;
+    }
+    let (src_key, dst_key) = {
+        let map = hash_to_key.lock().unwrap();
+        (map.get(&src_h).cloned(), map.get(&dst_h).cloned())
+    };
+    let (Some(src_key), Some(dst_key)) = (src_key, dst_key) else {
+        return;
+    };
+    // Read the value from the new location — the old path no longer
+    // exists. Both delete and save carry the value.
+    let value = match std::fs::read(dst_path) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    listeners.broadcast(&ListenerEvent::Delete {
+        key: src_key,
+        value: Some(value.clone()),
+    });
+    listeners.broadcast(&ListenerEvent::Save {
+        key: dst_key,
+        value,
+    });
 }
 
 /// Non-persistent sibling of [`NativeDatabase`]. Backing store is a
