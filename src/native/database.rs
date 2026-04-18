@@ -1,13 +1,23 @@
 // Persistence layer for the native backend.
 //
-// Stores shrunk counterexamples keyed by `database_key` so that subsequent
-// runs can replay known failures immediately without repeating the full
-// generation + shrink cycle.
+// Mirrors Hypothesis's `DirectoryBasedExampleDatabase`
+// (resources/hypothesis/hypothesis-python/src/hypothesis/database.py): a
+// multi-value key/value store where each key maps to a *set* of values.
+//
+// pbtkit's `DirectoryDB` (`resources/pbtkit/src/pbtkit/database.py`)
+// deliberately simplified this to a single-value store. The richer
+// Hypothesis model is needed so that the replay phase can retain more
+// than one candidate counterexample per key (see
+// `reuse_existing_examples` in `conjecture/engine.py`), so the native
+// engine follows Hypothesis here.
 //
 // Storage layout:
-//   db_root/<fnv_hex(key)>/best
+//   db_root/<fnv_hex(key)>/<fnv_hex(value)>
 //
-// where `best` contains a binary-encoded sequence of ChoiceValue records.
+// where the file contents are the raw value bytes. `serialize_choices`
+// and `deserialize_choices` are the canonical binary encoding used for
+// ChoiceValue sequences (the value bytes); they are kept here so that
+// the replay path in `runner.rs` can round-trip them.
 
 use std::path::PathBuf;
 
@@ -24,39 +34,105 @@ impl NativeDatabase {
         }
     }
 
-    fn key_dir(&self, key: &str) -> PathBuf {
+    fn key_path(&self, key: &[u8]) -> PathBuf {
         self.db_root.join(fnv_hex(key))
     }
 
-    /// Load the stored choice sequence for `key`, or `None` if nothing is stored.
-    pub fn load(&self, key: &str) -> Option<Vec<ChoiceValue>> {
-        let path = self.key_dir(key).join("best");
-        let bytes = std::fs::read(&path).ok()?;
-        deserialize_choices(&bytes)
+    fn value_path(&self, key: &[u8], value: &[u8]) -> PathBuf {
+        self.key_path(key).join(fnv_hex(value))
     }
 
-    /// Persist `choices` as the best known counterexample for `key`.
+    /// Return every value stored under `key`, in arbitrary order.
     ///
-    /// Silently ignores I/O errors so that a non-writable database does not
-    /// abort an otherwise-successful test run.
-    pub fn save(&self, key: &str, choices: &[ChoiceValue]) {
-        let dir = self.key_dir(key);
+    /// Returns an empty `Vec` if the key is absent or the directory is
+    /// unreadable. Hypothesis: `DirectoryBasedExampleDatabase.fetch`.
+    pub fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
+        let dir = self.key_path(key);
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(d) => d,
+            Err(_) => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            if let Ok(bytes) = std::fs::read(entry.path()) {
+                out.push(bytes);
+            }
+        }
+        out
+    }
+
+    /// Save `value` under `key`. If the value is already present, silently
+    /// do nothing. I/O errors are silently ignored so that a non-writable
+    /// database does not abort an otherwise-successful test run.
+    ///
+    /// Hypothesis: `DirectoryBasedExampleDatabase.save`.
+    pub fn save(&self, key: &[u8], value: &[u8]) {
+        let dir = self.key_path(key);
         if std::fs::create_dir_all(&dir).is_err() {
             return;
         }
-        let path = dir.join("best");
-        let bytes = serialize_choices(choices);
-        let _ = std::fs::write(&path, bytes);
+        let path = self.value_path(key, value);
+        if path.exists() {
+            return;
+        }
+        let _ = std::fs::write(&path, value);
+    }
+
+    /// Remove one specific `value` from `key`. Silently ignores missing
+    /// values and I/O errors. If `value` was the last entry under `key`,
+    /// the (now-empty) key directory is also removed.
+    ///
+    /// Hypothesis: `DirectoryBasedExampleDatabase.delete`.
+    pub fn delete(&self, key: &[u8], value: &[u8]) {
+        if std::fs::remove_file(self.value_path(key, value)).is_err() {
+            return;
+        }
+        // `remove_dir` only succeeds if the directory is empty; that's
+        // exactly the "value was the last entry" case.
+        let _ = std::fs::remove_dir(self.key_path(key));
+    }
+
+    /// Move `value` from `src` to `dst`. Equivalent to
+    /// `delete(src, value)` then `save(dst, value)`, but implemented as a
+    /// single rename when possible. `value` is inserted at `dst`
+    /// regardless of whether it was present at `src`.
+    ///
+    /// Named `move_value` rather than `move` because `move` is a Rust
+    /// keyword. Hypothesis: `DirectoryBasedExampleDatabase.move`. No
+    /// internal caller yet — exists so the public API matches the
+    /// Hypothesis spec, which wrappers such as `MultiplexedDatabase`
+    /// (not yet ported) rely on.
+    #[allow(dead_code)]
+    pub fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]) {
+        if src == dst {
+            self.save(src, value);
+            return;
+        }
+        let dst_dir = self.key_path(dst);
+        if std::fs::create_dir_all(&dst_dir).is_err() {
+            self.delete(src, value);
+            self.save(dst, value);
+            return;
+        }
+        let src_path = self.value_path(src, value);
+        let dst_path = self.value_path(dst, value);
+        if std::fs::rename(&src_path, &dst_path).is_err() {
+            self.delete(src, value);
+            self.save(dst, value);
+            return;
+        }
+        // Cleanup: if `src`'s key directory is now empty, remove it.
+        let _ = std::fs::remove_dir(self.key_path(src));
     }
 }
 
-/// FNV-1a 64-bit hash of a string, formatted as a 16-character hex string.
+/// FNV-1a 64-bit hash of a byte slice, formatted as a 16-character hex string.
 ///
-/// Used to map database keys to directory names so that arbitrary key strings
-/// are safe to use as filesystem path components.
-fn fnv_hex(s: &str) -> String {
+/// Used to map database keys and values to directory / file names so that
+/// arbitrary binary inputs are safe to use as filesystem path components.
+pub(super) fn fnv_hex(s: &[u8]) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in s.bytes() {
+    for &byte in s {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
@@ -78,7 +154,7 @@ fn fnv_hex(s: &str) -> String {
 ///       little-endian u32 codepoints (raw Unicode codepoints, including
 ///       surrogates — the engine's internal codepoint model preserves them;
 ///       the no-surrogate filter lives at the user-facing boundary).
-fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
+pub(super) fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + choices.len() * 17);
     let count = choices.len() as u32;
     buf.extend_from_slice(&count.to_le_bytes());
@@ -119,7 +195,7 @@ fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
 ///
 /// Returns `None` if the data is truncated, malformed, or contains an
 /// unknown type tag (defensive against filesystem corruption).
-fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
+pub(super) fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
     if bytes.len() < 4 {
         return None;
     }
