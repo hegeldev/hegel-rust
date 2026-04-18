@@ -497,7 +497,10 @@ impl NativeTestCase {
         min_size: usize,
         max_size: usize,
     ) -> Result<String, StopTest> {
-        assert!(min_codepoint <= max_codepoint);
+        assert!(
+            min_codepoint <= max_codepoint,
+            "Invalid codepoint range [{min_codepoint}, {max_codepoint}]"
+        );
         assert!(min_size <= max_size);
 
         let kind = StringChoice {
@@ -628,3 +631,7 @@ impl NativeTestCase {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/state_tests.rs"]
+mod tests;
