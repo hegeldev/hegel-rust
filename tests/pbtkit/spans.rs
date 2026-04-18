@@ -6,15 +6,15 @@ use std::collections::HashSet;
 
 use crate::common::utils::find_any;
 use hegel::__native_test_internals::{CachedTestFunction, ChoiceValue, NativeTestCase};
-use hegel::generators::{self as gs};
 use hegel::TestCase;
+use hegel::generators::{self as gs};
 
 #[test]
 fn test_draw_records_spans() {
     // Each draw() call creates a span covering the choices it used.
     let mut ctf = CachedTestFunction::new(|tc: TestCase| {
-        tc.draw(&gs::integers::<i64>().min_value(0).max_value(10));
-        tc.draw(&gs::integers::<i64>().min_value(0).max_value(10));
+        tc.draw(gs::integers::<i64>().min_value(0).max_value(10));
+        tc.draw(gs::integers::<i64>().min_value(0).max_value(10));
     });
     let choices = vec![ChoiceValue::Integer(3), ChoiceValue::Integer(5)];
     let ntc = NativeTestCase::for_choices(&choices, None);
@@ -44,7 +44,7 @@ fn test_nested_spans() {
     // Unlike Python's pbtkit, Rust does not record an outer composite span
     // (start_span/stop_span are no-ops in the native backend).
     let mut ctf = CachedTestFunction::new(|tc: TestCase| {
-        tc.draw(&gs::tuples!(
+        tc.draw(gs::tuples!(
             gs::integers::<i64>().min_value(0).max_value(5),
             gs::integers::<i64>().min_value(0).max_value(5),
         ));
@@ -70,7 +70,7 @@ fn test_list_draw_has_spans() {
     // are drawn via ntc.weighted(), which bypasses interpret_schema and
     // therefore does not produce a span.
     let mut ctf = CachedTestFunction::new(|tc: TestCase| {
-        tc.draw(&gs::vecs(gs::integers::<i64>().min_value(0).max_value(10)).max_size(5));
+        tc.draw(gs::vecs(gs::integers::<i64>().min_value(0).max_value(10)).max_size(5));
     });
     // Boolean(true)=continue, Integer(3)=element value, Boolean(false)=stop.
     let choices = vec![
