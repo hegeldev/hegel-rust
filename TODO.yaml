@@ -6,3 +6,118 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
+
+- title: Make NativeDatabase multi-value per key (match Hypothesis)
+  details: |
+    `src/native/database.rs` currently stores exactly one value per key
+    (`db_root/<fnv_hex(key)>/best`, with `save()` overwriting). This
+    matches pbtkit's `DirectoryDB` (`get`/`__setitem__`/`__delitem__`),
+    which deliberately simplified Hypothesis's richer model.
+
+    Hypothesis's `ExampleDatabase` (resources/hypothesis/hypothesis-
+    python/src/hypothesis/database.py) is multi-value: one key maps to
+    a set of values. The core API is:
+      - `save(key, value)`    — add value to the set under key
+      - `fetch(key)`          — yield every value stored under key
+      - `delete(key, value)`  — remove one specific value
+      - `move(src, dst, v)`   — atomically move one value between keys
+
+    Plus wrappers: `InMemoryExampleDatabase`, `MultiplexedDatabase`,
+    `ReadOnlyDatabase`, `BackgroundWriteDatabase`,
+    `GitHubArtifactDatabase`, and the `add_listener`/`remove_listener`
+    listener API on the base class.
+
+    Per `.claude/skills/implementing-native/SKILL.md`, when pbtkit's
+    simplification is insufficient for a feature's requirements,
+    Hypothesis wins. The database is one of those cases — the
+    multi-value model is strictly more general (single-value replay
+    becomes "fetch, pick the smallest, save the new one"), and the
+    missing API is what's blocking porting `test_database_backend.py`.
+
+    Scope:
+    1. Rework the core `NativeDatabase` on-disk format to store
+       multiple values per key. One straightforward layout is
+       `db_root/<fnv_hex(key)>/<fnv_hex(value)>` (one file per
+       (key, value) pair), mirroring
+       `DirectoryBasedExampleDatabase` in Hypothesis. Replace the
+       `load`/`save` API with `save(key, value)`, `fetch(key) ->
+       impl Iterator<Item = Vec<u8>>`, `delete(key, value)`, and
+       `move(src, dst, value)`.
+    2. Migrate the current replay callers in `src/native/runner.rs`
+       and anywhere else that uses `NativeDatabase::{load, save}` to
+       the new API. A "load the best known counterexample" helper
+       on top of `fetch` (e.g. pick the shortlex-smallest value) is
+       fine and keeps the replay path ergonomic.
+    3. Update the on-disk value format only if needed; the existing
+       `serialize_choices` / `deserialize_choices` format is already
+       value-level and works unchanged as the "value" bytes.
+    4. Revisit the skip of `test_database_backend.py` in SKIPPED.md
+       (currently justified on the grounds that this API doesn't
+       exist — which was never a valid skip rationale under the
+       project's own policy). Port whatever's portable; for the
+       wrapper classes and listener API, either port them too or
+       split the skip entry into narrower, more honest rationales.
+       See the "audit SKIPPED.md" follow-up TODO below.
+    5. Update `tests/embedded/native/database_tests.rs` and
+       `tests/test_database_key.rs` to cover multi-value round-trips
+       and deletion.
+
+    Don't do this in one commit if it naturally splits (e.g. core
+    multi-value API first, then the wrappers, then the un-skip /
+    port pass). TODO_RECOVERY_PROMPT semantics mean a stuck large
+    TODO will get re-scoped anyway, but aim for coherent focused
+    commits on the way.
+
+    Acceptance:
+    - `NativeDatabase` has `save`/`fetch`/`delete`/`move` matching
+      Hypothesis's semantics, with doc comments pointing at
+      `database.py`.
+    - Replay (`test_database_key.rs`) still works after the
+      migration — same end-user behaviour, just via the richer API.
+    - `test_database_backend.py` is no longer skipped on
+      multi-value-API grounds. If individual sub-tests inside it
+      remain unportable (e.g. `GitHubArtifactDatabase` is genuinely
+      a public-API dependency on Hypothesis-only infrastructure),
+      they get their own narrower skip entries, not a blanket
+      "the whole API doesn't exist" entry.
+
+- title: Audit SKIPPED.md for entries miscategorised under the skip policy
+  details: |
+    `.claude/skills/porting-tests/SKILL.md` tightened the skip policy:
+    "no Rust counterpart" is NOT a valid skip rationale for
+    engine-internal gaps — those should be native-gated + stubbed.
+    Only public-API incompatibilities (Python facilities, external
+    library integrations) justify a skip.
+
+    The `test_database_backend.py` entry at SKIPPED.md:121 is the
+    known example — skipped on "this API doesn't exist" grounds,
+    which is the anti-pattern the policy now forbids. The
+    multi-value-database TODO above fixes that specific entry, but
+    the same miscategorisation may apply elsewhere in SKIPPED.md.
+
+    Go through every entry in SKIPPED.md (both `## pbtkit` and
+    `## hypothesis` sections) and classify each one:
+    - Public-API incompatibility (Python-only facility, external
+      library dep, missing user-facing Rust type) — keep the skip,
+      but tighten the rationale to say that explicitly.
+    - Engine-internal gap (native feature missing, internal API
+      has no counterpart, "already covered elsewhere", "redundant")
+      — remove from SKIPPED.md and either:
+        a) port the tests with the missing pieces native-gated +
+           stubbed under `src/native/`, or
+        b) file a focused TODO entry for the port and remove the
+           SKIPPED.md entry in the same commit so it doesn't
+           linger as an accidental gate.
+
+    This is a survey + one-or-more follow-up TODOs task; if the
+    audit turns up N mis-skips, it's fine to replace this TODO
+    with N narrower port-or-port-plan TODOs rather than doing them
+    all at once.
+
+    Acceptance:
+    - Every SKIPPED.md entry states a rationale that matches the
+      current skip policy (public-API incompatibility only).
+    - Any mis-skipped files are either ported or have explicit
+      TODO entries tracking them.
+    - Commit message (or PR description if multiple commits) lists
+      which entries were re-examined and what happened to each.
