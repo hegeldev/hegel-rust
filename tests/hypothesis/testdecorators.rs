@@ -110,10 +110,9 @@ fn test_still_minimizes_on_non_assertion_failures() {
 
 #[test]
 fn test_integer_division_shrinks_positive_integers() {
-    assert_all_examples(
-        gs::integers::<i64>().filter(|x: &i64| *x > 0),
-        |n: &i64| n / 2 < *n,
-    );
+    assert_all_examples(gs::integers::<i64>().filter(|x: &i64| *x > 0), |n: &i64| {
+        n / 2 < *n
+    });
 }
 
 // Tests from TestCases — ported as top-level fns (no class/self in Rust).
@@ -144,10 +143,7 @@ fn test_float_addition_cancels() {
 fn test_can_be_given_keyword_args() {
     // @fails: find (x, name) with x > 0 and len(name) >= x.
     find_any(
-        gs::tuples!(
-            gs::integers::<i64>().min_value(1).max_value(3),
-            gs::text()
-        ),
+        gs::tuples!(gs::integers::<i64>().min_value(1).max_value(3), gs::text()),
         |(x, name): &(i64, String)| name.chars().count() as i64 >= *x,
     );
 }
@@ -209,8 +205,8 @@ fn test_removing_an_element_from_a_non_unique_list() {
     // @fails: [1, 1] with y=1 — removing first 1 leaves 1 still in list.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Hegel::new(|tc| {
-            let xs: Vec<i64> = tc.draw(&gs::vecs(gs::integers::<i64>()).min_size(2));
-            let y: i64 = tc.draw(&gs::sampled_from(xs.clone()));
+            let xs: Vec<i64> = tc.draw(gs::vecs(gs::integers::<i64>()).min_size(2));
+            let y: i64 = tc.draw(gs::sampled_from(xs.clone()));
             let mut xs_mut = xs;
             if let Some(pos) = xs_mut.iter().position(|&v| v == y) {
                 xs_mut.remove(pos);
@@ -227,9 +223,7 @@ fn test_removing_an_element_from_a_non_unique_list() {
 fn test_can_test_sets_sampled_from() {
     assert_all_examples(
         gs::hashsets(gs::sampled_from(vec![0_i64, 1, 2, 3, 4, 5, 6, 7, 8, 9])),
-        |xs: &std::collections::HashSet<i64>| {
-            xs.iter().all(|&x| (0..10).contains(&x))
-        },
+        |xs: &std::collections::HashSet<i64>| xs.iter().all(|&x| (0..10).contains(&x)),
     );
 }
 
@@ -327,7 +321,7 @@ fn test_can_derandomize() {
     let run = |values: Arc<Mutex<Vec<i64>>>| {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             Hegel::new(move |tc| {
-                let x: i64 = tc.draw(&gs::integers::<i64>());
+                let x: i64 = tc.draw(gs::integers::<i64>());
                 values.lock().unwrap().push(x);
                 assert!(x > 0);
             })
@@ -408,8 +402,10 @@ fn test_named_tuples_are_of_right_type() {
         kitten2: i64,
     }
     assert_all_examples(
-        gs::tuples!(gs::integers::<i64>(), gs::integers::<i64>())
-            .map(|(k1, k2)| Litter { kitten1: k1, kitten2: k2 }),
+        gs::tuples!(gs::integers::<i64>(), gs::integers::<i64>()).map(|(k1, k2)| Litter {
+            kitten1: k1,
+            kitten2: k2,
+        }),
         |litter: &Litter| litter.kitten1 >= i64::MIN && litter.kitten2 >= i64::MIN,
     );
 }
@@ -420,7 +416,7 @@ fn test_fails_in_reify() {
     expect_panic(
         || {
             Hegel::new(|tc| {
-                let _: i64 = tc.draw(&gs::integers::<i64>().map(|_x| panic!("AttributeError")));
+                let _: i64 = tc.draw(gs::integers::<i64>().map(|_x| panic!("AttributeError")));
             })
             .settings(
                 Settings::new()
@@ -466,10 +462,9 @@ fn test_filtered_values_satisfy_condition() {
 #[test]
 fn test_can_map_nameless() {
     // nameless_const(2) returns a partial that always returns 2 regardless of input.
-    assert_all_examples(
-        gs::hashsets(gs::booleans()).map(|_set| 2_i32),
-        |x: &i32| *x == 2,
-    );
+    assert_all_examples(gs::hashsets(gs::booleans()).map(|_set| 2_i32), |x: &i32| {
+        *x == 2
+    });
 }
 
 #[test]
