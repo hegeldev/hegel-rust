@@ -16,11 +16,13 @@ SKIPPED.md) and the gates all pass, the loop exits 0.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import random
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 
@@ -232,6 +234,92 @@ def unported_pool() -> list[Path]:
 # ---- claude dispatch ---------------------------------------------------------
 
 
+def _tool_summary(name: str, inp: dict) -> str:
+    """Render a one-line summary of a tool use for live logging."""
+    if not isinstance(inp, dict):
+        return ""
+    if name == "Bash":
+        cmd = str(inp.get("command", "")).strip().splitlines()
+        return cmd[0][:200] if cmd else ""
+    if name in ("Read", "Write", "Edit", "NotebookEdit"):
+        return str(inp.get("file_path", ""))
+    if name == "Glob":
+        parts = [str(inp.get("pattern", ""))]
+        if inp.get("path"):
+            parts.append(f"in {inp['path']}")
+        return " ".join(parts)
+    if name == "Grep":
+        parts = [repr(str(inp.get("pattern", "")))]
+        if inp.get("path"):
+            parts.append(f"in {inp['path']}")
+        if inp.get("glob"):
+            parts.append(f"glob={inp['glob']}")
+        return " ".join(parts)
+    if name == "TodoWrite":
+        todos = inp.get("todos") or []
+        return f"{len(todos)} todos"
+    if name == "Task":
+        return str(inp.get("description", ""))[:200]
+    # Generic fallback: trimmed JSON.
+    blob = json.dumps(inp, default=str)
+    return blob[:200] + ("…" if len(blob) > 200 else "")
+
+
+def _print_event(evt: dict) -> None:
+    """Print a human-friendly line for one stream-json event."""
+    etype = evt.get("type")
+    if etype == "system" and evt.get("subtype") == "init":
+        sid = evt.get("session_id", "?")
+        cwd = evt.get("cwd", "?")
+        print(f"[claude] init session={sid} cwd={cwd}", flush=True)
+        return
+    if etype == "assistant":
+        for block in (evt.get("message") or {}).get("content", []) or []:
+            btype = block.get("type")
+            if btype == "text":
+                for line in (block.get("text") or "").splitlines():
+                    if line.strip():
+                        print(f"[claude] {line}", flush=True)
+            elif btype == "tool_use":
+                name = block.get("name", "?")
+                summary = _tool_summary(name, block.get("input") or {})
+                print(f"[claude] → {name}({summary})", flush=True)
+            elif btype == "thinking":
+                # Skip internal thinking blocks in live output.
+                pass
+        return
+    if etype == "user":
+        for block in (evt.get("message") or {}).get("content", []) or []:
+            if block.get("type") != "tool_result":
+                continue
+            if block.get("is_error"):
+                content = block.get("content")
+                text = content if isinstance(content, str) else json.dumps(content)
+                first = (text or "").strip().splitlines()[:1]
+                print(
+                    f"[claude] ← ERROR: {first[0] if first else ''}", flush=True
+                )
+        return
+    if etype == "result":
+        subtype = evt.get("subtype", "")
+        turns = evt.get("num_turns")
+        cost = evt.get("total_cost_usd")
+        duration_ms = evt.get("duration_ms")
+        pieces = [f"result={subtype}"]
+        if turns is not None:
+            pieces.append(f"turns={turns}")
+        if duration_ms is not None:
+            pieces.append(f"{duration_ms / 1000:.1f}s")
+        if cost is not None:
+            pieces.append(f"${cost:.4f}")
+        print(f"[claude] {' '.join(pieces)}", flush=True)
+        res = evt.get("result")
+        if isinstance(res, str) and res.strip():
+            first = res.strip().splitlines()[0]
+            print(f"[claude] final: {first[:300]}", flush=True)
+        return
+
+
 def dispatch_claude(
     prompt: str, *, gate_output: str | None, timeout: float | None
 ) -> None:
@@ -242,25 +330,67 @@ def dispatch_claude(
     print("Dispatching claude with prompt:")
     print("-" * 72)
     print(full_prompt)
-    print("=" * 72 + "\n")
+    print("=" * 72, flush=True)
+
+    proc = subprocess.Popen(
+        [
+            "claude",
+            "-p",
+            "--dangerously-skip-permissions",
+            "--model",
+            "opus",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--append-system-prompt",
+            COMMON_SYSTEM_PROMPT,
+            full_prompt,
+        ],
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    timed_out = False
+
+    def _kill_on_timeout() -> None:
+        nonlocal timed_out
+        timed_out = True
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    timer = (
+        threading.Timer(timeout, _kill_on_timeout) if timeout is not None else None
+    )
+    if timer is not None:
+        timer.daemon = True
+        timer.start()
+
+    assert proc.stdout is not None
     try:
-        subprocess.run(
-            [
-                "claude",
-                "-p",
-                "--dangerously-skip-permissions",
-                "--model",
-                "opus",
-                "--append-system-prompt",
-                COMMON_SYSTEM_PROMPT,
-                full_prompt,
-            ],
-            cwd=REPO_ROOT,
-            timeout=timeout,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        print(f"\n[port-loop] claude timed out after {timeout}s; continuing.")
+        for raw in proc.stdout:
+            line = raw.rstrip("\n")
+            if not line:
+                continue
+            try:
+                evt = json.loads(line)
+            except json.JSONDecodeError:
+                print(f"[claude:raw] {line}", flush=True)
+                continue
+            try:
+                _print_event(evt)
+            except Exception as e:
+                print(f"[port-loop] event-format error: {e}", flush=True)
+    finally:
+        if timer is not None:
+            timer.cancel()
+        proc.wait()
+        if timed_out:
+            print(f"\n[port-loop] claude timed out after {timeout}s; continuing.")
 
 
 # ---- main loop ---------------------------------------------------------------
