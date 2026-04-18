@@ -1,0 +1,11 @@
+error: #[hegel::test] used on a function with #[test].Remove the #[test] attribute; [hegel::test] automatically adds #[test].
+ --> tests/compile/fail/hegel_test_duplicate_test_attribute.rs:2:1
+  |
+2 | #[test]
+  | ^^^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/compile/fail/hegel_test_duplicate_test_attribute.rs:3:33
+  |
+3 | fn main(_tc: hegel::TestCase) {}
+  |                                 ^ consider adding a `main` function to `$DIR/tests/compile/fail/hegel_test_duplicate_test_attribute.rs`
