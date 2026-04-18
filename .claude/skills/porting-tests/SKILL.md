@@ -218,6 +218,15 @@ Specific shapes that *look* skip-worthy but aren't:
 - **Full 64-bit integer range** → `gs::integers::<u64>()` etc.
 - **`@gs.composite`** → `#[hegel::composite]` or `hegel::compose!`.
 
+## Stateful (rule-based) tests
+
+If the upstream file uses `hypothesis.stateful` —
+`RuleBasedStateMachine`, `@rule`, `@invariant`, `Bundle`, `@initialize`,
+`@precondition`, `consumes`, `multiple`, or `run_state_machine_as_test` —
+follow `.claude/skills/porting-stateful/SKILL.md` for the stateful-specific
+API mapping. The layout, naming, verification and skip policy rules in this
+file still apply.
+
 ## Conjecture tests (Hypothesis internal engine)
 
 Tests under `resources/hypothesis/hypothesis-python/tests/conjecture/`
