@@ -137,12 +137,14 @@ Individually-skipped tests (rest of the file is ported):
       tests in `tests/embedded/native/database_tests.rs`
       (`test_can_remove_nonexistent_listener`,
       `test_readonly_listener_never_fires`, `test_start_end_listening`,
-      and the per-backend broadcast tests). Two follow-ups remain in
-      `TODO.yaml`: the `_database_conforms_to_listener_api`
-      state-machine test still needs porting once hegel-rust's stateful
-      framework grows the features it relies on, and
-      `NativeDatabase`'s listener only fires on own-writes (no
-      cross-process watchdog/`notify` integration yet).
+      the per-backend broadcast tests, and the state-machine ports
+      `test_database_listener_memory` /
+      `test_database_listener_background_write`, which mirror
+      Hypothesis's `_database_conforms_to_listener_api` via a manual
+      `StateMachine` impl over `Variables<Vec<u8>>` pools).
+      One follow-up remains in `TODO.yaml`: `NativeDatabase`'s
+      listener only fires on own-writes (no cross-process
+      watchdog/`notify` integration yet).
       (`ReadOnlyDatabase`, `MultiplexedDatabase`, and
       `BackgroundWriteDatabase` have been ported — see
       `ReadOnlyNativeDatabase`, `MultiplexedNativeDatabase`, and

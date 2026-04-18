@@ -952,3 +952,232 @@ fn test_start_end_listening_clear_triggers_stop() {
     db.clear_listeners();
     assert_eq!(db.ends.load(Ordering::SeqCst), 1);
 }
+
+// ── _database_conforms_to_listener_api state-machine test ──────────────────
+//
+// Mirrors `_database_conforms_to_listener_api` + `test_database_listener_memory`
+// + `test_database_listener_background_write` in Hypothesis's
+// `test_database_backend.py`.
+//
+// Hypothesis uses `Bundle("keys")` / `Bundle("values")` + `@precondition` to
+// drive a `RuleBasedStateMachine`. hegel-rust's `#[state_machine]` macro
+// doesn't wire those features in, so here we:
+//
+//   * Use `Variables<T>` for the key/value pools. `Variables::draw()` calls
+//     `tc.assume(!empty())` internally, which the state machine runner
+//     translates into "skip this step" — the closest analogue to an empty-
+//     Bundle rule being filtered at dispatch time.
+//   * Use `tc.assume(...)` at the top of precondition-gated rule bodies
+//     (`add_listener` / `remove_listener`). Hypothesis filters rules at
+//     dispatch; we reject them after dispatch — same logical behaviour,
+//     slightly less precise shrinking.
+//   * Implement `StateMachine` manually rather than through the
+//     `#[state_machine]` macro, because the machine is generic over the
+//     database backend and holds a `Box<dyn Fn(&D)>` flush closure.
+
+use crate::TestCase;
+use crate::generators as gs;
+use crate::runner::Hegel;
+use crate::stateful::{Rule, StateMachine, Variables, run as run_state_machine, variables};
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ExpectedEvent {
+    Save(Vec<u8>, Vec<u8>),
+    Delete(Vec<u8>, Option<Vec<u8>>),
+}
+
+fn to_expected(ev: &ListenerEvent) -> ExpectedEvent {
+    match ev {
+        ListenerEvent::Save { key, value } => ExpectedEvent::Save(key.clone(), value.clone()),
+        ListenerEvent::Delete { key, value } => ExpectedEvent::Delete(key.clone(), value.clone()),
+    }
+}
+
+fn event_counts(events: &[ExpectedEvent]) -> HashMap<ExpectedEvent, usize> {
+    let mut out = HashMap::new();
+    for ev in events {
+        *out.entry(ev.clone()).or_insert(0) += 1;
+    }
+    out
+}
+
+struct DatabaseListenerMachine<D: ExampleDatabase> {
+    db: D,
+    keys: Variables<Vec<u8>>,
+    values: Variables<Vec<u8>>,
+    expected: Vec<ExpectedEvent>,
+    actual: Arc<StdMutex<Vec<ListenerEvent>>>,
+    listener: Listener,
+    active: bool,
+    flush: Box<dyn Fn(&D)>,
+}
+
+impl<D: ExampleDatabase> DatabaseListenerMachine<D> {
+    fn new(tc: &TestCase, db: D, flush: Box<dyn Fn(&D)>) -> Self {
+        let actual = Arc::new(StdMutex::new(Vec::new()));
+        let sink = Arc::clone(&actual);
+        let listener: Listener = Arc::new(move |ev: &ListenerEvent| {
+            sink.lock().unwrap().push(ev.clone());
+        });
+        // Hypothesis's __init__ registers the listener immediately, so the
+        // machine starts in the "active" state.
+        db.add_listener(Arc::clone(&listener));
+        Self {
+            db,
+            keys: variables(tc),
+            values: variables(tc),
+            expected: Vec::new(),
+            actual,
+            listener,
+            active: true,
+            flush,
+        }
+    }
+
+    fn expect_save(&mut self, k: Vec<u8>, v: Vec<u8>) {
+        if self.active {
+            self.expected.push(ExpectedEvent::Save(k, v));
+        }
+    }
+
+    fn expect_delete(&mut self, k: Vec<u8>, v: Vec<u8>) {
+        if self.active {
+            self.expected.push(ExpectedEvent::Delete(k, Some(v)));
+        }
+    }
+
+    fn rule_add_key(&mut self, tc: TestCase) {
+        let k: Vec<u8> = tc.draw(gs::binary());
+        self.keys.add(k);
+    }
+
+    fn rule_add_value(&mut self, tc: TestCase) {
+        let v: Vec<u8> = tc.draw(gs::binary());
+        self.values.add(v);
+    }
+
+    fn rule_add_listener(&mut self, tc: TestCase) {
+        // Hypothesis precondition: `not self.active_listeners`.
+        tc.assume(!self.active);
+        self.db.add_listener(Arc::clone(&self.listener));
+        self.active = true;
+    }
+
+    fn rule_remove_listener(&mut self, tc: TestCase) {
+        // Hypothesis precondition: `self.listener in self.active_listeners`.
+        tc.assume(self.active);
+        self.db.remove_listener(&self.listener);
+        self.active = false;
+    }
+
+    fn rule_clear_listeners(&mut self, _tc: TestCase) {
+        self.db.clear_listeners();
+        self.active = false;
+    }
+
+    fn rule_fetch(&mut self, _tc: TestCase) {
+        let k = self.keys.draw().clone();
+        // Read-only: must not fire listener events.
+        let _ = self.db.fetch(&k);
+    }
+
+    fn rule_save(&mut self, _tc: TestCase) {
+        let k = self.keys.draw().clone();
+        let v = self.values.draw().clone();
+        let changed = !self.db.fetch(&k).iter().any(|e| e == &v);
+        self.db.save(&k, &v);
+        if changed {
+            self.expect_save(k, v);
+        }
+    }
+
+    fn rule_delete(&mut self, _tc: TestCase) {
+        let k = self.keys.draw().clone();
+        let v = self.values.draw().clone();
+        let changed = self.db.fetch(&k).iter().any(|e| e == &v);
+        self.db.delete(&k, &v);
+        if changed {
+            self.expect_delete(k, v);
+        }
+    }
+
+    fn rule_move(&mut self, _tc: TestCase) {
+        let k1 = self.keys.draw().clone();
+        let k2 = self.keys.draw().clone();
+        let v = self.values.draw().clone();
+        let in_k1 = self.db.fetch(&k1).iter().any(|e| e == &v);
+        let save_changed = !self.db.fetch(&k2).iter().any(|e| e == &v);
+        let delete_changed = k1 != k2 && in_k1;
+        self.db.move_value(&k1, &k2, &v);
+        // Matches Hypothesis: a move is broadcast as delete+save, except the
+        // delete is suppressed when k1 == k2 or v wasn't at k1, and the save
+        // is suppressed when v is already at k2.
+        if delete_changed {
+            self.expect_delete(k1, v.clone());
+        }
+        if save_changed {
+            self.expect_save(k2, v);
+        }
+    }
+
+    fn invariant_events_agree(&mut self, _tc: TestCase) {
+        (self.flush)(&self.db);
+        let actual_raw = self.actual.lock().unwrap();
+        let actual: Vec<ExpectedEvent> = actual_raw.iter().map(to_expected).collect();
+        drop(actual_raw);
+        assert_eq!(
+            event_counts(&self.expected),
+            event_counts(&actual),
+            "listener events diverged from contract:\n  expected={:?}\n  actual={:?}",
+            self.expected,
+            actual,
+        );
+    }
+}
+
+impl<D: ExampleDatabase> StateMachine for DatabaseListenerMachine<D> {
+    fn rules(&self) -> Vec<Rule<Self>> {
+        vec![
+            Rule::new("add_key", Self::rule_add_key),
+            Rule::new("add_value", Self::rule_add_value),
+            Rule::new("add_listener", Self::rule_add_listener),
+            Rule::new("remove_listener", Self::rule_remove_listener),
+            Rule::new("clear_listeners", Self::rule_clear_listeners),
+            Rule::new("fetch", Self::rule_fetch),
+            Rule::new("save", Self::rule_save),
+            Rule::new("delete", Self::rule_delete),
+            Rule::new("move", Self::rule_move),
+        ]
+    }
+    fn invariants(&self) -> Vec<Rule<Self>> {
+        vec![Rule::new("events_agree", Self::invariant_events_agree)]
+    }
+}
+
+#[test]
+fn test_database_listener_memory() {
+    Hegel::new(|tc: TestCase| {
+        let db = InMemoryNativeDatabase::new();
+        let machine = DatabaseListenerMachine::new(&tc, db, Box::new(|_db| {}));
+        run_state_machine(machine, tc);
+    })
+    .run();
+}
+
+#[test]
+fn test_database_listener_background_write() {
+    Hegel::new(|tc: TestCase| {
+        let db = BackgroundWriteNativeDatabase::new(InMemoryNativeDatabase::new());
+        let flush: Box<dyn Fn(&BackgroundWriteNativeDatabase)> = Box::new(|db| {
+            // fetch() blocks until the background queue drains, giving
+            // enqueued writes a chance to fire listener events on the inner
+            // database. The key is immaterial; the side-effect we want is the
+            // drain, not the read.
+            let _ = db.fetch(b"");
+        });
+        let machine = DatabaseListenerMachine::new(&tc, db, flush);
+        run_state_machine(machine, tc);
+    })
+    .run();
+}
