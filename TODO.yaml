@@ -7,40 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Drop or narrow the serial CARGO_LOCK in TempRustProject
-  details: |
-    `tests/common/project.rs::CARGO_LOCK` is a global Mutex that
-    serialises every cargo invocation across every TempRustProject
-    test. The comment explains why: with per-test `target/` dirs,
-    parallel full compiles would OOM-kill rustc. Once the previous
-    TODO lands (shared `CARGO_TARGET_DIR`), a warm build is cheap and
-    the OOM justification goes away — at which point `cargo test`'s
-    built-in parallelism can actually do work.
-
-    This TODO is blocked on the shared-target-dir change; do it
-    afterwards, not in the same commit.
-
-    Things to check before removing the mutex:
-    - cargo does its own locking on `target/` (per-dir `.cargo-lock`),
-      so concurrent builds targeting the same `CARGO_TARGET_DIR`
-      serialise themselves at the artifact level. That's correctness.
-      The open question is peak memory on a cold build when several
-      tests race in first.
-    - A middle ground: keep a narrower gate that only serialises the
-      very first build (e.g. a `OnceLock` that does a cold
-      `cargo build` in a known setup project), and let subsequent
-      per-test invocations run free.
-
-    Acceptance:
-    - Remove `CARGO_LOCK` (or replace it with a narrower first-build
-      gate, documented in the code).
-    - Full `cargo test` run stays green on a modest machine (≤8 GiB
-      RAM) without OOM-kills. If peak memory is a concern, document
-      the remaining constraint alongside whatever narrower lock you
-      kept.
-    - Update the comment block that currently justifies the mutex so
-      it reflects the new reality.
-
 - title: Merge TempRustProject cases in the same test file
   details: |
     Several test files spin up many near-identical TempRustProjects
