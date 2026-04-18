@@ -258,6 +258,29 @@ If a test calls a native-mode feature that isn't implemented yet, do NOT
 3. Commit. The test will compile and (if the source was stubbed) fail at
    runtime — that's expected; a fixer-task invocation will pick it up.
 
+## Keep this skill current
+
+As you port, you'll figure things out that aren't documented yet. When
+you do, update the relevant file as part of the same commit (or a
+separate follow-up commit during the same sub-loop). Additions should
+be terse — tables over prose, real code over hand-waving — and only
+for things not already covered somewhere else in the skill.
+
+Where new content belongs:
+
+- `references/api-mapping.md` — a Python→Rust translation missing from
+  the cheat sheet, or a transform whose shape in Rust isn't obvious.
+- `references/pbtkit-overview.md` /
+  `references/hypothesis-overview.md` — structural or organizational
+  facts about the upstream that would help a future porter orient.
+- This file (`SKILL.md`) — a new porting-workflow rule, a recurring
+  gotcha, or a clarification to the skip-vs-port policy.
+
+Do NOT record per-file notes (one-off quirks of a single upstream file
+don't belong in the skill; they belong in the port's commit message).
+Do NOT rewrite existing content to match your preferences; add to it
+only when there's something genuinely new.
+
 ## Commit
 
 After verification passes, commit with a focused message like:
