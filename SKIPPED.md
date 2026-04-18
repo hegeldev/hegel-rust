@@ -131,10 +131,19 @@ Individually-skipped tests (rest of the file is ported):
       `test_gadb_coverage`) is Python-only infrastructure (urllib,
       zipfile, GitHub Actions artifact endpoints) with no Rust
       counterpart — a permanent skip.
-    - The `add_listener`/`remove_listener` change-listener API is an
-      engine-internal gap; it lives as a focused TODO in `TODO.yaml`
-      and will be ported (or split into narrower skips) there, not
-      here. (`ReadOnlyDatabase`, `MultiplexedDatabase`, and
+    - The `add_listener`/`remove_listener`/`clear_listeners`
+      change-listener API has landed on the `ExampleDatabase` trait
+      (see `src/native/database.rs`) and is exercised by the listener
+      tests in `tests/embedded/native/database_tests.rs`
+      (`test_can_remove_nonexistent_listener`,
+      `test_readonly_listener_never_fires`, `test_start_end_listening`,
+      and the per-backend broadcast tests). Two follow-ups remain in
+      `TODO.yaml`: the `_database_conforms_to_listener_api`
+      state-machine test still needs porting once hegel-rust's stateful
+      framework grows the features it relies on, and
+      `NativeDatabase`'s listener only fires on own-writes (no
+      cross-process watchdog/`notify` integration yet).
+      (`ReadOnlyDatabase`, `MultiplexedDatabase`, and
       `BackgroundWriteDatabase` have been ported — see
       `ReadOnlyNativeDatabase`, `MultiplexedNativeDatabase`, and
       `BackgroundWriteNativeDatabase` in `src/native/database.rs`.)
