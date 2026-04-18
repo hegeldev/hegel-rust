@@ -7,52 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Share cargo target dir across TempRustProject instances
-  details: |
-    `tests/common/project.rs` (`TempRustProject`) currently gives every
-    test its own `TempDir` and therefore its own `target/`. There are 43
-    TempRustProject instances across ~14 test files, and each one
-    recompiles `hegeltest` + every transitive dep from scratch. Combined
-    with the global `CARGO_LOCK` mutex in the same file (which forces
-    builds to run serially to avoid OOM-kills), this dominates test
-    wall time.
-
-    Goal: point every TempRustProject build at a single shared
-    `CARGO_TARGET_DIR` so the bulk of compilation (deps + hegeltest
-    itself) happens once per configuration and is reused across tests.
-    The per-test `TempDir` keeps owning the source tree (Cargo.toml,
-    src/, tests/) as today — only the artifact directory is shared.
-
-    Implementation sketch:
-    - In `TempRustProject::cargo`, set `CARGO_TARGET_DIR` on the
-      `Command` to a stable path. `env!("CARGO_TARGET_TMPDIR")` is
-      available to integration tests and already points inside the
-      workspace's `target/`, so `cargo clean` continues to sweep it.
-      Something like `{CARGO_TARGET_TMPDIR}/hegel-shared-target/` is
-      a good default.
-    - Read the big comment block at the top of `tests/common/project.rs`
-      (the one about the ~300-800MB leak into `/tmp`) and update it to
-      reflect the new design: the shared target dir lives inside
-      `target/` rather than `/tmp`, so RAII cleanup isn't the mechanism
-      any more — `cargo clean` is.
-    - Keep `CARGO_LOCK` in place for this task (see the next TODO).
-
-    Acceptance:
-    - `cargo test` wall-clock time for the TempRustProject-heavy tests
-      (`test_bad_server_command`, `test_explicit_test_case`,
-      `test_hegel_test`, `test_composite`, `test_output`) drops
-      substantially on a warm run. Do a before/after measurement in the
-      commit message.
-    - `HEGEL_SERVER_COMMAND=/bin/false cargo test --features native`
-      still passes.
-    - `cargo clean` still removes the shared directory (verify
-      manually).
-    - No regressions: the set of features passed by each project still
-      produces a matching build (native vs. not). If two projects
-      demand disjoint feature sets, cargo will rebuild on feature
-      switch — that's fine, the savings are across same-feature
-      runs.
-
 - title: Drop or narrow the serial CARGO_LOCK in TempRustProject
   details: |
     `tests/common/project.rs::CARGO_LOCK` is a global Mutex that

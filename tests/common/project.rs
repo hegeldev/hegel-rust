@@ -8,26 +8,33 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use tempfile::TempDir;
 
-// No shared/global cargo cache. Each TempRustProject owns its own
-// `TempDir`; cargo builds under that directory's default `target/`, so
-// when the TempRustProject drops, everything the build produced drops
-// with it via RAII. Nothing lands outside the TempDir, so nothing needs
-// to be cleaned up after the fact.
+// Shared cargo target dir across TempRustProject instances. Each
+// project's `TempDir` still owns the per-test source tree (Cargo.toml,
+// src/, tests/), but every `cargo` invocation is pointed at a single
+// `CARGO_TARGET_DIR` under `target/` (via `CARGO_TARGET_TMPDIR`). That
+// way, `hegeltest` and its transitive deps compile once per feature
+// configuration and then get reused across all 40+ TempRustProjects in
+// the test suite, instead of each one doing a cold build.
 //
-// Within a single TempRustProject, repeated cargo calls do share the
-// same `target/` (same project_path), so in-test caching is unaffected.
-// Across tests we pay a full compile. This is the deliberate tradeoff:
-// faster cross-test caching previously leaked ~300-800MB per stopped
-// test binary into the shared temp dir on every CI run.
+// Cleanup is now `cargo clean`'s job, not RAII. The shared target dir
+// sits inside the workspace's `target/` (where `CARGO_TARGET_TMPDIR`
+// already lives), so it gets swept whenever the workspace is cleaned.
+// A previous version of this file kept per-project `target/` dirs
+// under `TempDir` precisely so RAII could clean them up — the
+// motivation was a ~300-800MB leak into `/tmp` per stopped test binary
+// when a shared target dir lived there. That motivation is gone now
+// that the shared dir is inside `target/`.
 
 static PACKAGE_NAME_ID: AtomicU64 = AtomicU64::new(0);
 
-// Serialize cargo invocations across tests. Each TempRustProject compiles the
-// full hegeltest dependency tree from scratch (no shared target/), and running
-// many of those builds in parallel exhausts RAM on modest machines (rustc gets
-// OOM-killed, producing confusing "signal: 9, SIGKILL" failures). Holding this
-// lock around the cargo call means a single build runs at a time, but that
-// build gets all cores — net wall time is similar and we avoid the OOM.
+// Serialize cargo invocations across tests. Even with a shared
+// `CARGO_TARGET_DIR`, a cold build of the shared artefacts kicked off
+// by several tests in parallel can OOM-kill rustc on modest machines
+// (confusing "signal: 9, SIGKILL" failures). Holding this lock around
+// the cargo call means a single build runs at a time, but that build
+// gets all cores — net wall time is similar and we avoid the OOM. Once
+// the shared dir is warm, the per-test cost is mostly linking the test
+// crate, which is cheap anyway.
 static CARGO_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock_cargo() -> MutexGuard<'static, ()> {
@@ -156,6 +163,14 @@ hegeltest = {{ path = "{path}"{features} }}
 
         let mut cmd = Command::new(env!("CARGO"));
         cmd.args(args).current_dir(&self.project_path);
+
+        // Point every TempRustProject build at a single shared target
+        // directory under `target/`. `CARGO_TARGET_TMPDIR` is provided
+        // by cargo for integration tests and lives inside the outer
+        // workspace's `target/`, so `cargo clean` still sweeps it.
+        let shared_target =
+            PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("hegel-shared-target");
+        cmd.env("CARGO_TARGET_DIR", &shared_target);
 
         for key in &self.env_removes {
             cmd.env_remove(key);
