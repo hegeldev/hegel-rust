@@ -848,7 +848,7 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
         # Loop around to re-run the gates on the reviewer's changes.
 
 
-def repair(state: IterCounter) -> None:
+def repair(state: IterCounter, run_server_tests: bool = False) -> None:
     any_failures = True
     while any_failures:
         any_failures = False
@@ -858,10 +858,11 @@ def repair(state: IterCounter) -> None:
             any_failures = True
             state.dispatch(LINT_FIX_PROMPT, gate_output=out)
 
-        ok, out = gate_server_tests()
-        if not ok:
-            state.dispatch(SERVER_TEST_FIX_PROMPT, gate_output=out)
-            any_failures = True
+        if run_server_tests:
+            ok, out = gate_server_tests()
+            if not ok:
+                state.dispatch(SERVER_TEST_FIX_PROMPT, gate_output=out)
+                any_failures = True
 
         ok, out = gate_native_tests()
         if not ok:
@@ -1001,7 +1002,7 @@ def main() -> None:
                 f"\n[port-loop] TODO.yaml empty and every upstream file is "
                 f"ported or skipped; done after {state.n} iteration(s)."
             )
-            return
+            break
 
         picked = random.choice(pool)
         destination = destination_for(picked)
@@ -1010,6 +1011,8 @@ def main() -> None:
             f"→ {destination} (random)."
         )
         drive_port(picked, destination, state)
+
+    repair(state, run_server_tests=True)
 
 
 if __name__ == "__main__":
