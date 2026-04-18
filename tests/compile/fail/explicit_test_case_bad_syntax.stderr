@@ -1,0 +1,5 @@
+error: expected `,`
+ --> tests/compile/fail/explicit_test_case_bad_syntax.rs:3:35
+  |
+3 | #[hegel::explicit_test_case(x = 42;)]
+  |                                   ^
