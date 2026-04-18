@@ -118,15 +118,31 @@ Individually-skipped tests (rest of the file is ported):
   Rust has no `slice`-object type and hegel-rust has no `gs::slices()`
   generator; the tests rely on Python indexing semantics
   (`range(size)[x.start]`, `x.indices(size)`) throughout.
-- `test_database_backend.py` — tests Hypothesis's full
-  `ExampleDatabase` public-API surface: `InMemoryExampleDatabase`,
-  `MultiplexedDatabase`, `ReadOnlyDatabase`, `BackgroundWriteDatabase`,
-  `GitHubArtifactDatabase`, the `add_listener`/`remove_listener`
-  listener API, `choices_to_bytes`/`choices_from_bytes` with
-  `_pack_uleb128`/`_unpack_uleb128`, `_metakeys_name`, and the
-  multi-value `save`/`fetch`/`delete`/`move` semantics. hegel-rust's
-  `NativeDatabase` is a fundamentally different single-value-per-key
-  replay store with only `load`/`save`; none of these wrappers,
-  variants, or APIs exist. The replay round-trip is covered by
-  `tests/test_database_key.rs` and the serialize/load/save round-trips
-  by `tests/embedded/native/database_tests.rs`.
+- `test_database_backend.py` — the multi-value
+  `save`/`fetch`/`delete`/`move` semantics that the bulk of this file
+  exercises are covered in Rust by
+  `tests/embedded/native/database_tests.rs` (via `NativeDatabase`,
+  which now mirrors `DirectoryBasedExampleDatabase`). The remainder
+  targets public-API surface that hegel-rust doesn't have and tracks
+  as separate TODOs:
+    - `GitHubArtifactDatabase` (tests `test_ga_*`, `TestGADReads`,
+      `test_gadb_coverage`) is Python-only infrastructure (urllib,
+      zipfile, GitHub Actions artifact endpoints) with no Rust
+      counterpart — a permanent skip.
+    - `InMemoryExampleDatabase`, `ReadOnlyDatabase`,
+      `MultiplexedDatabase`, `BackgroundWriteDatabase`, and the
+      `add_listener`/`remove_listener` change-listener API are
+      engine-internal gaps; they live as focused TODOs in
+      `TODO.yaml` and will be ported (or split into narrower skips)
+      there, not here.
+    - `choices_to_bytes`/`choices_from_bytes` with
+      `_pack_uleb128`/`_unpack_uleb128` and `_metakeys_name` test
+      internals of Hypothesis's wire format that aren't part of the
+      native engine's serialization format (`serialize_choices` uses
+      a distinct layout; see `tests/embedded/native/database_tests.rs`).
+    - `test_default_database_is_in_memory`,
+      `test_default_on_disk_database_is_dir`, and
+      `test_database_directory_inaccessible` test Hypothesis's
+      `ExampleDatabase()` factory / `_db_for_path`, which has no
+      hegel-rust counterpart (hegel databases are constructed
+      directly from a path).
