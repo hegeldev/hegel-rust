@@ -153,11 +153,11 @@ fn test_one_of_produces_different_values() {
     find_any(
         gs::tuples!(
             gs::one_of(vec![
-                gs::floats::<f64>().map(|f| f as i64 * 0 + i64::MAX).boxed(),
+                gs::floats::<f64>().map(|_| i64::MAX).boxed(),
                 gs::booleans().map(|_| i64::MIN).boxed(),
             ]),
             gs::one_of(vec![
-                gs::floats::<f64>().map(|f| f as i64 * 0 + i64::MAX).boxed(),
+                gs::floats::<f64>().map(|_| i64::MAX).boxed(),
                 gs::booleans().map(|_| i64::MIN).boxed(),
             ])
         ),
@@ -397,6 +397,7 @@ fn test_can_call_an_argument_f() {
 #[test]
 fn test_named_tuples_are_of_right_type() {
     #[derive(Debug)]
+    #[allow(dead_code)]
     struct Litter {
         kitten1: i64,
         kitten2: i64,
@@ -406,7 +407,7 @@ fn test_named_tuples_are_of_right_type() {
             kitten1: k1,
             kitten2: k2,
         }),
-        |litter: &Litter| litter.kitten1 >= i64::MIN && litter.kitten2 >= i64::MIN,
+        |_: &Litter| true,
     );
 }
 
