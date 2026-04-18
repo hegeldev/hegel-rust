@@ -17,9 +17,9 @@
 //! are native-gated off: validation currently happens server-side, and the
 //! native backend does not yet reject these combinations.
 
-use crate::common::utils::{assert_all_examples, check_can_generate_examples, find_any, minimal};
 #[cfg(not(feature = "native"))]
 use crate::common::utils::expect_panic;
+use crate::common::utils::{assert_all_examples, check_can_generate_examples, find_any, minimal};
 use hegel::generators::{self as gs, Generator};
 #[cfg(not(feature = "native"))]
 use hegel::{Hegel, Settings};
