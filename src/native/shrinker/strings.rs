@@ -20,7 +20,7 @@ use std::collections::HashMap;
 
 use crate::native::core::{ChoiceKind, ChoiceValue, StringChoice, codepoint_key};
 
-use super::Shrinker;
+use super::{Shrinker, bin_search_down};
 
 impl<'a> Shrinker<'a> {
     pub(super) fn shrink_strings(&mut self) {
@@ -153,6 +153,103 @@ impl<'a> Shrinker<'a> {
             Some(ChoiceValue::String(s)) => Some(s.clone()),
             _ => None,
         }
+    }
+
+    /// Try redistributing length between pairs of string values.
+    ///
+    /// Port of pbtkit's `redistribute_string_pairs`
+    /// (`shrinking/advanced_string_passes.py`). For adjacent and
+    /// skip-one-adjacent pairs of `StringChoice` nodes, try moving
+    /// characters from the earlier node's value to the later one's.
+    /// Useful for tests with a total-length constraint across two
+    /// strings, where the minimal counterexample has the first string
+    /// as short as possible.
+    pub(super) fn redistribute_string_pairs(&mut self) {
+        for gap in 1..3usize {
+            let mut idx = 0;
+            loop {
+                let indices = self.string_indices();
+                if idx + gap >= indices.len() {
+                    break;
+                }
+                let i = indices[idx];
+                let j = indices[idx + gap];
+                self.redistribute_string_pair(i, j);
+                idx += 1;
+            }
+        }
+    }
+
+    fn string_indices(&self) -> Vec<usize> {
+        self.current_nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| match &n.kind {
+                ChoiceKind::String(_) => Some(i),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn redistribute_string_pair(&mut self, i: usize, j: usize) {
+        let (s, t, kind_j) = match (
+            &self.current_nodes[i].value,
+            &self.current_nodes[j].value,
+            &self.current_nodes[j].kind,
+        ) {
+            (ChoiceValue::String(s), ChoiceValue::String(t), ChoiceKind::String(kj)) => {
+                (s.clone(), t.clone(), kj.clone())
+            }
+            _ => return,
+        };
+
+        if s.is_empty() {
+            return;
+        }
+
+        // Port of pbtkit's `redistribute_sequence_pair`.
+
+        // Try moving everything from s to t.
+        let combined: Vec<u32> = s.iter().copied().chain(t.iter().copied()).collect();
+        if self.try_redistribute(i, j, Vec::new(), combined, &kind_j) {
+            return;
+        }
+
+        // Try moving the last codepoint of s to the start of t.
+        let (last, s_init) = s.split_last().unwrap();
+        let mut t_prepended = Vec::with_capacity(t.len() + 1);
+        t_prepended.push(*last);
+        t_prepended.extend_from_slice(&t);
+        if !self.try_redistribute(i, j, s_init.to_vec(), t_prepended, &kind_j) {
+            return;
+        }
+
+        // Binary search for the longest suffix of s that can be moved.
+        let s_len = s.len();
+        bin_search_down(1, s_len as i128, &mut |n| {
+            let n = n as usize;
+            let new_s = s[..s_len - n].to_vec();
+            let mut new_t = s[s_len - n..].to_vec();
+            new_t.extend_from_slice(&t);
+            self.try_redistribute(i, j, new_s, new_t, &kind_j)
+        });
+    }
+
+    fn try_redistribute(
+        &mut self,
+        i: usize,
+        j: usize,
+        new_s: Vec<u32>,
+        new_t: Vec<u32>,
+        kind_j: &StringChoice,
+    ) -> bool {
+        if !kind_j.validate(&new_t) {
+            return false;
+        }
+        self.replace(&HashMap::from([
+            (i, ChoiceValue::String(new_s)),
+            (j, ChoiceValue::String(new_t)),
+        ]))
     }
 }
 

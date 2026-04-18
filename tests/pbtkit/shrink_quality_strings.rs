@@ -53,12 +53,15 @@ fn test_string_insertion_sort_swap_succeeds() {
     assert_eq!(s, "ab");
 }
 
+#[cfg(feature = "native")]
 #[test]
 fn test_string_length_redistribution() {
     // When two strings share a total-length constraint (len(v0)+len(v1) >= 30),
     // the shrinker should redistribute length so v0 is as short as possible
     // (10 chars, since v1 caps at 20). Regression for shrink quality found
-    // by pbtsmith.
+    // by pbtsmith. Native-only: depends on pbtkit's
+    // `shrinking.advanced_string_passes` (redistribute_string_pairs), which
+    // Hypothesis's server backend does not provide.
     let (v0, _v1) = Minimal::new(
         gs::tuples!(
             gs::text().min_codepoint(32).max_codepoint(126).max_size(20),
