@@ -28,6 +28,12 @@ file and treats listed files as "done".
 - `test_choice_index.py` — tests pbtkit's `to_index`/`from_index` shortlex
   enumeration; hegel-rust doesn't implement an index-based shrink pass.
 
+Individually-skipped tests (rest of the file is ported):
+
+- `test_text.py::test_string_sort_key_type_mismatch` — exercises Python's
+  dynamically-typed `sort_key(non-string)`; Rust's `sort_key(&str)` signature
+  makes the "non-string argument" case unrepresentable at compile time.
+
 ## hypothesis (`/tmp/hypothesis/hypothesis-python/tests/cover/`)
 
 - `test_constants_ast.py` — tests Hypothesis's Python-AST constant
