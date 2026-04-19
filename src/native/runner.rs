@@ -380,20 +380,19 @@ pub fn native_run<F>(
     // (no antithesis feature) or emit declaration + evaluation to sdk.jsonl.
     let test_failed = result.is_some();
     use crate::antithesis::is_running_in_antithesis;
-    if is_running_in_antithesis() {
-        #[cfg(not(feature = "antithesis"))]
-        panic!(
-            "When Hegel is run inside of Antithesis, it requires the `antithesis` feature. \
-            You can add it with {{ features = [\"antithesis\"] }}."
-        );
+    crate::antithesis::require_antithesis_feature(
+        is_running_in_antithesis(),
+        cfg!(feature = "antithesis"),
+    );
 
-        #[cfg(feature = "antithesis")]
+    #[cfg(feature = "antithesis")]
+    if is_running_in_antithesis() {
         if let Some(loc) = test_location {
             crate::antithesis::emit_assertion(loc, !test_failed);
         }
     }
     // Suppress unused-variable warnings for the non-antithesis-feature build: both
-    // variables are only consumed inside the is_running_in_antithesis() block above.
+    // variables are only consumed inside the cfg(feature = "antithesis") block above.
     let _ = (test_location, test_failed);
 
     // --- Result handling ---

@@ -407,9 +407,15 @@ def run_coverage(native_mode: bool = False) -> Path:
     # `debug/deps/test-<hash>`. We also keep the legacy pattern under
     # `debug/` for older layouts.
     subprocess_bin_globs = (
+        # Non-coverage mode: TempRustProject sets CARGO_TARGET_DIR = shared_target_dir
         "debug/temp_hegel_test_*",
         "tmp/hegel-shared-target/debug/deps/temp_hegel_test_*-*",
         "tmp/hegel-shared-target/debug/deps/test-*",
+        # Coverage mode: cargo-llvm-cov may override CARGO_TARGET_DIR and place
+        # subprocess binaries directly under the llvm-cov-target root, or in a
+        # per-package tmp subdirectory.
+        "debug/deps/test-*",
+        "tmp/temp_hegel_test_*/debug/deps/test-*",
     )
     subprocess_bins = sorted(
         p

@@ -318,10 +318,8 @@ hegeltest = {{ path = "{path}"{features} }}
             cmd.args(["llvm-cov", "--no-report"]);
         }
         cmd.args(args)
-            .current_dir(&self.project.project_path);
-        if !use_coverage {
-            cmd.env("CARGO_TARGET_DIR", shared_target_dir());
-        }
+            .current_dir(&self.project.project_path)
+            .env("CARGO_TARGET_DIR", shared_target_dir());
 
         for key in &self.env_removes {
             cmd.env_remove(key);
