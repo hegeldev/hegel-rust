@@ -204,6 +204,57 @@ mod tests {
 }
 ```
 
+## Feature-Gated Code
+
+Code under `#[cfg(feature = "...")]` or `#[cfg(not(feature = "..."))]` is not compiled in
+coverage runs that don't include (or that do include) that feature. The standard coverage run
+uses `--features rand,antithesis`, so code under `#[cfg(not(feature = "antithesis"))]` is
+simply not compiled and won't appear in coverage at all.
+
+**Fix**: Test via `TempRustProject` with the appropriate feature configuration.
+
+`TempRustProject` subprocesses compile hegel without any extra features by default (unless the
+outer test suite is compiled with `--features native`, in which case `native` is propagated).
+This means a `TempRustProject` test can exercise code that is excluded from the main coverage
+run by the feature set.
+
+```rust
+// In tests/test_antithesis.rs — exercises src/server/runner.rs panic that only
+// exists when `antithesis` feature is NOT enabled
+#[test]
+fn test_antithesis_panics_without_feature() {
+    let output_dir = TempDir::new().unwrap();
+    let output_path = output_dir.path().to_str().unwrap().to_string();
+
+    let code = r#"
+use hegel::generators as gs;
+
+#[hegel::test]
+fn my_test(tc: hegel::TestCase) {
+    let _ = tc.draw(gs::booleans());
+}
+"#;
+    TempRustProject::new()
+        .test_file("test.rs", code)
+        .env("ANTITHESIS_OUTPUT_DIR", &output_path)
+        .expect_failure("antithesis")
+        .cargo_test(&[]);
+}
+```
+
+**Important caveat**: coverage capture from TempRustProject subprocesses depends on whether the
+subprocess binary is compiled with LLVM instrumentation (it inherits `RUSTFLAGS` from the
+`cargo llvm-cov` parent process). The coverage script tries to include these binaries but this
+is best-effort. If a feature-gated line remains uncovered despite a TempRustProject test
+exercising it, check `scripts/check-coverage.py` — the line may simply not be compiled in any
+instrumented binary at all.
+
+If TempRustProject coverage is not being captured and the code cannot be refactored to be
+directly unit-testable, consider the "Parameterize Over Environment" pattern below as an
+alternative: extract the logic into a function that takes the feature-flag-dependent value as
+a parameter, test that function directly from an embedded test, and leave a thin wrapper that
+reads the real value.
+
 ## Common Anti-Patterns to Avoid
 
 ### Don't: Suppress with Annotations
