@@ -3,8 +3,8 @@
 mod common;
 
 use common::utils::assert_all_examples;
-use hegel::generators::{self as gs, Generator};
 use hegel::HealthCheck;
+use hegel::generators::{self as gs, Generator};
 
 #[hegel::test]
 fn native_integer_in_range(tc: hegel::TestCase) {
