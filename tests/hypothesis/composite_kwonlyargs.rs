@@ -5,8 +5,8 @@
 //! cover the same semantics.
 
 use crate::common::utils::check_can_generate_examples;
-use hegel::generators as gs;
 use hegel::TestCase;
+use hegel::generators as gs;
 
 #[hegel::composite]
 fn kwonlyargs_composites(tc: TestCase, kwarg1: &'static str) -> (String, i64) {
