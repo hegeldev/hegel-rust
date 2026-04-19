@@ -6,3 +6,65 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
+
+  - title: "[CI] coverage: just check-coverage fails with 4551 uncovered code lines across src/native/"
+    details: |
+      Failing job: `coverage` (workflow run 24639689321, job 72041344365) on
+      PR #188. Command: `just check-coverage` invoking
+      `scripts/check-coverage.py`. All other CI jobs pass; this is the sole
+      failing gate.
+
+      Summary line from the failing run:
+
+          Uncovered closing braces (allowed):           1047
+          Uncovered #[cfg(test)] code (allowed):        0
+          Uncovered todo!/unreachable! (allowed):        24
+          Uncovered macro continuations (allowed):      70
+          Uncovered #[ignore]d test bodies (allowed):   0
+          Uncovered // nocov lines (allowed):           244
+          Uncovered code lines:                         4551
+          Found uncovered CODE that requires tests:
+          ...
+          error: Recipe `check-coverage` failed on line 51 with exit code 1
+          ##[error]Process completed with exit code 1.
+
+      Files reported as containing uncovered code lines (all in the
+      freshly-added native backend plus one pre-existing generator):
+
+        - src/generators/combinators.rs          (permutations / do_draw)
+        - src/native/core/choices.rs
+        - src/native/core/float_index.rs
+        - src/native/core/state.rs
+        - src/native/data_source.rs
+        - src/native/database.rs
+        - src/native/featureflags.rs
+        - src/native/mod.rs
+        - src/native/re/constants.rs
+        - src/native/re/parser.rs
+        - src/native/runner.rs
+        - src/native/schema/collections.rs
+        - src/native/schema/float.rs
+        - src/native/schema/mod.rs
+        - src/native/schema/numeric.rs
+        - src/native/schema/regex.rs
+        - src/native/schema/special.rs
+        - src/native/schema/text.rs
+        - src/native/shrinker/bytes.rs
+        - src/native/shrinker/deletion.rs
+        - src/native/shrinker/floats.rs
+        - src/native/shrinker/integers.rs
+        - src/native/shrinker/mod.rs
+        - src/native/shrinker/sequence.rs
+        - src/native/shrinker/strings.rs
+        - src/native/tree.rs
+        - src/native/unicodedata.rs
+
+      Root cause is a single gate (coverage ratchet on the native backend);
+      a single focused commit may not clear the whole list. Work through the
+      files above — adding tests where feasible, `// nocov` only with
+      explicit human permission per CLAUDE.md — until `just check-coverage`
+      passes. Consult the `coverage` skill before starting. Do NOT bump
+      `.github/coverage-ratchet.json` without explicit human permission.
+
+      Acceptance: `just check-coverage` exits 0 locally and the `coverage`
+      job on the next CI run for PR #188 is green.
