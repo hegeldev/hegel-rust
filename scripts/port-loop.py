@@ -497,6 +497,7 @@ PBTKIT_DIR = REPO_ROOT / "resources" / "pbtkit" / "tests"
 HYPOTHESIS_DIR = (
     REPO_ROOT / "resources" / "hypothesis" / "hypothesis-python" / "tests" / "cover"
 )
+SESSIONS_DIR = REPO_ROOT / ".porting" / "sessions"
 
 # Upstream PR whose CI the loop babysits. If CI on this PR has completed
 # as failed, the loop pauses everything else and dispatches a specialised
@@ -1318,6 +1319,18 @@ def dispatch_claude(
         timer.daemon = True
         timer.start()
 
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    if resume_session is not None:
+        log_path = SESSIONS_DIR / f"{resume_session}.jsonl"
+        pending_path = None
+    else:
+        pending_path = (
+            SESSIONS_DIR / f".pending-{os.getpid()}-{int(time.time())}.jsonl"
+        )
+        log_path = pending_path
+    log_file = log_path.open("a", encoding="utf-8")
+    print(f"[port-loop] logging raw stream to {log_path}", flush=True)
+
     session_id: str | None = None
     assert proc.stdout is not None
     try:
@@ -1325,6 +1338,8 @@ def dispatch_claude(
             line = raw.rstrip("\n")
             if not line:
                 continue
+            log_file.write(line + "\n")
+            log_file.flush()
             try:
                 evt = json.loads(line)
             except json.JSONDecodeError:
@@ -1332,8 +1347,25 @@ def dispatch_claude(
                 continue
             if evt.get("type") == "system" and evt.get("subtype") == "init":
                 sid = evt.get("session_id")
-                if isinstance(sid, str):
+                if isinstance(sid, str) and session_id is None:
                     session_id = sid
+                    if pending_path is not None:
+                        final_path = SESSIONS_DIR / f"{sid}.jsonl"
+                        log_file.close()
+                        # Merge into any pre-existing log for this session id
+                        # (shouldn't happen for a fresh session, but be safe).
+                        if final_path.exists():
+                            with (
+                                pending_path.open("r", encoding="utf-8") as src,
+                                final_path.open("a", encoding="utf-8") as dst,
+                            ):
+                                dst.write(src.read())
+                            pending_path.unlink()
+                        else:
+                            pending_path.rename(final_path)
+                        log_path = final_path
+                        pending_path = None
+                        log_file = log_path.open("a", encoding="utf-8")
             try:
                 _print_event(evt)
             except Exception as e:
@@ -1342,6 +1374,7 @@ def dispatch_claude(
         if timer is not None:
             timer.cancel()
         proc.wait()
+        log_file.close()
         if timed_out:
             print(f"\n[port-loop] claude timed out after {timeout}s; continuing.")
 
