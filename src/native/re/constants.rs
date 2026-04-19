@@ -5,6 +5,11 @@
 //! between `resources/cpython/Lib/re/_constants.py` and this file stays
 //! mechanical.
 
+// Allowed while the consumer side of the parser port (the regex strategy)
+// is still being ported — every item here mirrors a CPython constant we
+// expect that port to need.
+#![allow(dead_code)]
+
 pub const MAGIC: u32 = 20230612;
 
 pub const MAXREPEAT: u32 = u32::MAX;
