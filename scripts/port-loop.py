@@ -1923,6 +1923,11 @@ def main() -> None:
             maybe_hot_reload()
             cargo_clean()
             repair(state)
+            dispatched, pushed = sync_with_origin(state)
+            if dispatched:
+                continue
+            if not pushed and drive_pr_ci(state):
+                continue
             if not drive_todos(state):
                 print(
                     f"\n[port-loop] --todo-only: TODO.yaml empty; done after "
@@ -1934,6 +1939,12 @@ def main() -> None:
         maybe_hot_reload()
         cargo_clean()
         repair(state)
+
+        dispatched, pushed = sync_with_origin(state)
+        if dispatched:
+            continue
+        if not pushed and drive_pr_ci(state):
+            continue
 
         if drive_todos(state):
             continue
