@@ -747,7 +747,14 @@ def _git_status_porcelain() -> str:
         text=True,
         check=True,
     )
-    return result.stdout
+    # Ignore the port-loop script itself: agents may modify it mid-run and
+    # the loop commits it separately, so a dirty script shouldn't block gates.
+    script_rel = str(SCRIPT_PATH.relative_to(REPO_ROOT))
+    lines = [
+        ln for ln in result.stdout.splitlines(keepends=True)
+        if ln[3:].rstrip() != script_rel
+    ]
+    return "".join(lines)
 
 
 def is_tree_clean() -> bool:
