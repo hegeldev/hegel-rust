@@ -8,6 +8,7 @@ mod composite;
 mod composite_kwonlyargs;
 mod database_backend;
 mod datetimes;
+mod feature_flags;
 mod float_nastiness;
 mod permutations;
 mod regex;
