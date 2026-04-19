@@ -1,6 +1,8 @@
 //! Ported from hypothesis-python/tests/cover/test_uuids.py
 
-use crate::common::utils::{assert_no_examples, check_can_generate_examples, expect_panic, find_any};
+use crate::common::utils::{
+    assert_no_examples, check_can_generate_examples, expect_panic, find_any,
+};
 use hegel::generators as gs;
 
 #[test]
