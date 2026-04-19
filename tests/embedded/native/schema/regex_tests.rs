@@ -1,32 +1,49 @@
 use super::*;
 
 #[test]
-fn translate_no_backslash() {
-    assert_eq!(translate_python_escapes("abc"), "abc");
+fn codepoint_to_char_ascii() {
+    assert_eq!(codepoint_to_char(65), 'A');
 }
 
 #[test]
-fn translate_z_anchor() {
-    assert_eq!(translate_python_escapes(r"\Z"), r"\z");
+#[should_panic(expected = "invalid codepoint")]
+fn codepoint_to_char_surrogate_panics() {
+    let _ = codepoint_to_char(0xD800);
 }
 
 #[test]
-fn translate_z_in_pattern() {
-    assert_eq!(translate_python_escapes(r"\A.\Z"), r"\A.\z");
+fn char_swapcase_lower_to_upper() {
+    assert_eq!(char_swapcase('a'), 'A');
 }
 
 #[test]
-fn translate_escaped_backslash_before_z() {
-    // \\Z is a literal backslash in regex followed by 'Z', not an anchor.
-    assert_eq!(translate_python_escapes(r"\\Z"), r"\\Z");
+fn char_swapcase_upper_to_lower() {
+    assert_eq!(char_swapcase('Z'), 'z');
 }
 
 #[test]
-fn translate_other_escapes_unchanged() {
-    assert_eq!(translate_python_escapes(r"\A\d\w"), r"\A\d\w");
+fn char_swapcase_digit_is_identity() {
+    assert_eq!(char_swapcase('3'), '3');
 }
 
 #[test]
-fn translate_trailing_backslash() {
-    assert_eq!(translate_python_escapes("a\\"), "a\\");
+fn in_category_digit_matches_ascii_digit() {
+    assert!(in_category('7', ChCode::Digit));
+    assert!(!in_category('a', ChCode::Digit));
+}
+
+#[test]
+fn in_category_word_matches_underscore() {
+    assert!(in_category('_', ChCode::Word));
+    assert!(in_category('a', ChCode::Word));
+    assert!(in_category('5', ChCode::Word));
+    assert!(!in_category(' ', ChCode::Word));
+}
+
+#[test]
+fn in_category_space_matches_whitespace() {
+    assert!(in_category(' ', ChCode::Space));
+    assert!(in_category('\t', ChCode::Space));
+    assert!(in_category('\n', ChCode::Space));
+    assert!(!in_category('a', ChCode::Space));
 }
