@@ -8,6 +8,7 @@ mod composite;
 mod composite_kwonlyargs;
 mod datetimes;
 mod float_nastiness;
+mod regex;
 mod replay_logic;
 mod testdecorators;
 mod threading;
