@@ -11,6 +11,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::TestCase;
 use crate::generators::Generator;
+use crate::native::core::StopTest;
+use crate::native::with_native_tc;
+use crate::test_case::STOP_TEST_STRING;
 
 /// Tracks which features are enabled for a test case.
 ///
@@ -20,11 +23,14 @@ pub struct FeatureFlags {
     inner: Arc<Mutex<FeatureFlagsInner>>,
 }
 
-#[allow(dead_code)] // at_least_one_of / p_disabled are written by the (stubbed) generator.
 struct FeatureFlagsInner {
     is_disabled: HashMap<String, bool>,
     at_least_one_of: HashSet<String>,
     p_disabled: f64,
+    /// True when this FeatureFlags has no live test case backing it (either
+    /// constructed outside a test run, or the run it was created in has
+    /// since completed). In that state, `is_enabled` uses only the stored
+    /// enable/disable map and shrink-open defaults.
     frozen: bool,
 }
 
@@ -62,24 +68,67 @@ impl FeatureFlags {
         }
     }
 
+    /// Construct a live FeatureFlags for an in-progress test case.
+    ///
+    /// Called from `FeatureStrategy::do_draw` after drawing `p_disabled`.
+    fn live(p_disabled: f64, at_least_one_of: HashSet<String>) -> Self {
+        FeatureFlags {
+            inner: Arc::new(Mutex::new(FeatureFlagsInner {
+                is_disabled: HashMap::new(),
+                at_least_one_of,
+                p_disabled,
+                frozen: false,
+            })),
+        }
+    }
+
     /// Returns whether the feature named `name` is enabled on this test run.
     pub fn is_enabled(&self, name: &str) -> bool {
-        let inner = self.inner.lock().unwrap();
-        if let Some(&is_disabled) = inner.is_disabled.get(name) {
-            return !is_disabled;
+        let (p_disabled, forced) = {
+            let inner = self.inner.lock().unwrap();
+            if inner.frozen {
+                return !inner.is_disabled.get(name).copied().unwrap_or(false);
+            }
+            // Live path: compute the forced argument against the current
+            // oneof/is_disabled state before any mutation.
+            let oneof = &inner.at_least_one_of;
+            let forced = if oneof.len() == 1 && oneof.contains(name) {
+                Some(false)
+            } else {
+                inner.is_disabled.get(name).copied()
+            };
+            (inner.p_disabled, forced)
+        };
+
+        // A live FeatureFlags may outlive its generating test case (e.g. be
+        // returned from `find_any` / `minimal` and inspected afterwards). In
+        // that case the thread-local handle is gone, so fall back to the
+        // frozen-mode default: enabled, unless we already recorded a decision.
+        let Some(is_disabled) = with_native_tc(|handle| {
+            handle.map(|handle| {
+                let start = handle.borrow().nodes.len();
+                let value = match handle.borrow_mut().weighted(p_disabled, forced) {
+                    Ok(v) => v,
+                    Err(StopTest) => panic!("{}", STOP_TEST_STRING),
+                };
+                let end = handle.borrow().nodes.len();
+                handle
+                    .borrow_mut()
+                    .record_span(start, end, "feature_flag".to_string());
+                value
+            })
+        }) else {
+            let inner = self.inner.lock().unwrap();
+            return !inner.is_disabled.get(name).copied().unwrap_or(false);
+        };
+
+        let mut inner = self.inner.lock().unwrap();
+        inner.is_disabled.insert(name.to_string(), is_disabled);
+        if inner.at_least_one_of.contains(name) && !is_disabled {
+            inner.at_least_one_of.clear();
         }
-        if inner.frozen {
-            // Frozen / example mode: unknown features default to enabled,
-            // matching Hypothesis's shrink direction.
-            return true;
-        }
-        drop(inner);
-        // Active test: need to make a weighted draw through the native
-        // engine. Not yet wired up — the fixer loop will pick this up.
-        todo!(
-            "FeatureFlags::is_enabled on an active test case: weighted-draw \
-             primitive needs to be wired through the native engine."
-        )
+        inner.at_least_one_of.remove(name);
+        !is_disabled
     }
 }
 
@@ -139,18 +188,19 @@ impl FeatureStrategy {
 
 impl Generator<FeatureFlags> for FeatureStrategy {
     fn do_draw(&self, _tc: &TestCase) -> FeatureFlags {
-        // To port Hypothesis semantics we need:
-        //   - draw an integer in [0, 254] for p_disabled
-        //   - for each is_enabled() call during the test, draw a weighted
-        //     boolean with probability p_disabled, using the forced value
-        //     when at_least_one_of constraints require it
-        // The weighted-draw primitive is internal to `src/native/core`; a
-        // follow-up commit will expose it for this generator to call.
-        let _ = &self.at_least_one_of;
-        todo!(
-            "FeatureStrategy::do_draw: needs weighted-boolean access from the \
-             native engine (`NativeTestCase::weighted`). See \
-             src/native/featureflags.rs."
-        )
+        // Mirrors Hypothesis's FeatureFlags.__init__: draw an integer in
+        // [0, 254] to decide the probability that each individual feature
+        // is disabled. Zero (the shrink target) means every feature is
+        // enabled.
+        let p_disabled = with_native_tc(|handle| {
+            let handle = handle.expect(
+                "FeatureStrategy::do_draw called outside the native test context",
+            );
+            match handle.borrow_mut().draw_integer(0, 254) {
+                Ok(n) => n as f64 / 255.0,
+                Err(StopTest) => panic!("{}", STOP_TEST_STRING),
+            }
+        });
+        FeatureFlags::live(p_disabled, self.at_least_one_of.clone())
     }
 }
