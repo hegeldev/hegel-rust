@@ -282,12 +282,7 @@ impl NativeDatabase {
         let mut watcher =
             match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
                 if let Ok(event) = res {
-                    handle_watcher_event(
-                        event,
-                        &hash_to_key_cb,
-                        &metakeys_hash_cb,
-                        &listeners,
-                    );
+                    handle_watcher_event(event, &hash_to_key_cb, &metakeys_hash_cb, &listeners);
                 }
             }) {
                 Ok(w) => w,
