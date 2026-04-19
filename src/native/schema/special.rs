@@ -48,10 +48,16 @@ pub(super) fn interpret_date(ntc: &mut NativeTestCase) -> Result<Value, StopTest
 }
 
 /// `time` schema → HH:MM:SS.
+///
+/// Encodes as total seconds in [0, 86399] rather than three independent draws,
+/// so that midnight (0) is a single boundary case that the engine finds reliably.
+/// Drawing hour/minute/second independently would require all three to hit 0
+/// simultaneously, which is extremely unlikely (~0.003% per test case).
 pub(super) fn interpret_time(ntc: &mut NativeTestCase) -> Result<Value, StopTest> {
-    let hour = ntc.draw_integer(0, 23)?;
-    let minute = ntc.draw_integer(0, 59)?;
-    let second = ntc.draw_integer(0, 59)?;
+    let total_secs = ntc.draw_integer(0, 86399)?;
+    let hour = total_secs / 3600;
+    let minute = (total_secs % 3600) / 60;
+    let second = total_secs % 60;
     Ok(encode_string(format!("{hour:02}:{minute:02}:{second:02}")))
 }
 
