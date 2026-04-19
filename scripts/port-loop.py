@@ -2175,6 +2175,13 @@ def drive_pr_ci(state: IterCounter, *, just_pushed: bool = False) -> bool:
     Returns True if any action was taken; False only when CI was
     already green (or `gh` couldn't tell).
     """
+    if has_ci_todos():
+        print(
+            "[port-loop] TODO.yaml already has [CI] entries; "
+            "skipping CI gate and letting drive_todos drain them."
+        )
+        return False  # fall through to drive_todos in the outer loop
+
     if just_pushed:
         _wait_for_new_pr_checks()
 
@@ -2186,12 +2193,6 @@ def drive_pr_ci(state: IterCounter, *, just_pushed: bool = False) -> bool:
         _watch_pr_ci()
         return True
     # status == "failure"
-    if has_ci_todos():
-        print(
-            "[port-loop] CI failing but TODO.yaml already has [CI] entries; "
-            "letting drive_todos drain them before re-triaging."
-        )
-        return False  # fall through to drive_todos in the outer loop
     state.dispatch(
         CI_TRIAGE_PROMPT.format(repo=PR_REPO, pr=PR_NUMBER),
         gate_output=detail,
