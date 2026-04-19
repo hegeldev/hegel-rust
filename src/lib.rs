@@ -263,6 +263,11 @@ pub mod __native_test_internals {
         BooleanChoice, BytesChoice, ChoiceValue, FloatChoice, IntegerChoice, NativeTestCase, Span,
         StringChoice,
     };
+    pub use crate::native::database::{
+        BackgroundWriteNativeDatabase, ExampleDatabase, InMemoryNativeDatabase, Listener,
+        ListenerEvent, Listeners, METAKEYS_NAME, MultiplexedNativeDatabase, NativeDatabase,
+        ReadOnlyNativeDatabase,
+    };
     pub use crate::native::tree::CachedTestFunction;
     pub use crate::native::unicodedata;
 }
