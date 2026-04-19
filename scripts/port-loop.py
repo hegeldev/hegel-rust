@@ -1205,8 +1205,9 @@ def _print_event(evt: dict) -> None:
                 print(f"[claude] → {name}({summary})", flush=True)
                 _print_tool_detail(name, inp)
             elif btype == "thinking":
-                # Skip internal thinking blocks in live output.
-                pass
+                for line in (block.get("thinking") or "").splitlines():
+                    if line.strip():
+                        print(f"[claude:think] {line}", flush=True)
         return
     if etype == "user":
         for block in (evt.get("message") or {}).get("content", []) or []:
