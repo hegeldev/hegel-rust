@@ -311,15 +311,32 @@ hegeltest = {{ path = "{path}"{features} }}
         );
         std::fs::write(self.project.project_path.join("Cargo.toml"), cargo_toml).unwrap();
 
-        let use_coverage = std::env::var("CARGO_LLVM_COV_TARGET_DIR").is_ok();
+        // When compiled under `cargo llvm-cov`, __CARGO_LLVM_COV_RUSTC_WRAPPER=1
+        // is set in the environment by the RUSTC_WRAPPER and is therefore present
+        // at compile time. Use it as a signal that we're in a coverage run and
+        // should instrument subprocess crates too.
+        let use_coverage = option_env!("__CARGO_LLVM_COV_RUSTC_WRAPPER").is_some();
 
         let mut cmd = Command::new(env!("CARGO"));
-        if use_coverage {
-            cmd.args(["llvm-cov", "--no-report"]);
-        }
         cmd.args(args)
             .current_dir(&self.project.project_path)
             .env("CARGO_TARGET_DIR", shared_target_dir());
+
+        if use_coverage {
+            // cargo-llvm-cov's RUSTC_WRAPPER only instruments crates listed in
+            // __CARGO_LLVM_COV_RUSTC_WRAPPER_CRATE_NAMES. Append this temp
+            // project's crate name (and "test" for tests/test.rs integration
+            // tests) so the wrapper instruments them too, giving us coverage
+            // for feature-gated code exercised only by subprocess builds.
+            let existing =
+                std::env::var("__CARGO_LLVM_COV_RUSTC_WRAPPER_CRATE_NAMES").unwrap_or_default();
+            let new_names = if existing.is_empty() {
+                format!("{},test", self.project.crate_name)
+            } else {
+                format!("{},{},test", existing, self.project.crate_name)
+            };
+            cmd.env("__CARGO_LLVM_COV_RUSTC_WRAPPER_CRATE_NAMES", new_names);
+        }
 
         for key in &self.env_removes {
             cmd.env_remove(key);
@@ -328,12 +345,10 @@ hegeltest = {{ path = "{path}"{features} }}
             cmd.env(key, value);
         }
 
-        if !use_coverage {
-            // Ensure the shared target dir has been warmed up once in this
-            // process before any test thread spawns its own cargo. See the
-            // comment on `WARMUP` above for why a one-shot gate is enough.
-            warmup_shared_target();
-        }
+        // Ensure the shared target dir has been warmed up once in this
+        // process before any test thread spawns its own cargo. See the
+        // comment on `WARMUP` above for why a one-shot gate is enough.
+        warmup_shared_target();
         let output = cmd.output().unwrap();
 
         let run_output = RunOutput {

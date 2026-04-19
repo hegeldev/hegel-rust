@@ -160,6 +160,7 @@ where
     generator: G,
     condition: P,
     max_attempts: u64,
+    suppress_health_checks: Vec<HealthCheck>,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -174,6 +175,7 @@ where
             generator,
             condition,
             max_attempts: 1000,
+            suppress_health_checks: Vec::new(),
             _marker: std::marker::PhantomData,
         }
     }
@@ -184,10 +186,17 @@ where
         self
     }
 
+    #[allow(dead_code)]
+    pub fn suppress_health_check(mut self, hc: HealthCheck) -> Self {
+        self.suppress_health_checks.push(hc);
+        self
+    }
+
     pub fn run(self) -> T {
         let found: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
         let found_clone = Arc::clone(&found);
         let max_attempts = self.max_attempts;
+        let suppress_health_checks = self.suppress_health_checks;
 
         let hegel_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Hegel::new(move |tc| {
@@ -197,7 +206,12 @@ where
                     panic!("HEGEL_FOUND"); // Early exit marker
                 }
             })
-            .settings(Settings::new().test_cases(max_attempts).database(None))
+            .settings(
+                Settings::new()
+                    .test_cases(max_attempts)
+                    .database(None)
+                    .suppress_health_check(suppress_health_checks),
+            )
             .run();
         }));
 
