@@ -398,12 +398,18 @@ def run_coverage(native_mode: bool = False) -> Path:
     # If that fails, fall back to standard report.
     llvm_cov_target = Path("target/llvm-cov-target")
     # TempRustProject tests share a target dir under CARGO_TARGET_TMPDIR
-    # (tests/common/project.rs::shared_target_dir), which lives at
-    # `<llvm-cov-target>/tmp/hegel-shared-target/debug/`. Older runs may also
-    # leave binaries directly under `debug/`, so check both.
+    # (tests/common/project.rs::shared_target_dir), which for integration
+    # tests under `cargo llvm-cov` lives at
+    # `target/llvm-cov-target/tmp/hegel-shared-target/`. Within that shared
+    # target, cargo places the temp crate's own test binary at
+    # `debug/deps/temp_hegel_test_<id>-<hash>` and, when the temp crate has
+    # a `tests/test.rs`, the integration-test binary at
+    # `debug/deps/test-<hash>`. We also keep the legacy pattern under
+    # `debug/` for older layouts.
     subprocess_bin_globs = (
         "debug/temp_hegel_test_*",
-        "tmp/hegel-shared-target/debug/temp_hegel_test_*",
+        "tmp/hegel-shared-target/debug/deps/temp_hegel_test_*-*",
+        "tmp/hegel-shared-target/debug/deps/test-*",
     )
     subprocess_bins = sorted(
         p
@@ -427,8 +433,11 @@ def run_coverage(native_mode: bool = False) -> Path:
         llvm_cov_bin = llvm_bin / "llvm-cov"
 
         if llvm_profdata.exists() and llvm_cov_bin.exists():
-            # Merge all profraw files
-            profraw_files = list(llvm_cov_target.glob("*.profraw"))
+            # Merge all profraw files — subprocess crates (via
+            # TempRustProject's shared target) emit their own profraws
+            # nested under `tmp/hegel-shared-target/...`, so search
+            # recursively.
+            profraw_files = list(llvm_cov_target.rglob("*.profraw"))
             merged_profdata = llvm_cov_target / "merged.profdata"
             result = subprocess.run(
                 [str(llvm_profdata), "merge", "-sparse"]
