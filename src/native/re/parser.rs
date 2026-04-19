@@ -82,7 +82,7 @@ pub enum OpCode {
 
 /// An item inside a character class `[...]`. Maps to the nested `(op, av)`
 /// tuples Python emits as the `IN` argument.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SetItem {
     /// `(LITERAL, codepoint)`.
     Literal(u32),
