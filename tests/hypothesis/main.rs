@@ -5,6 +5,7 @@
 mod common;
 
 mod composite;
+mod composite_kwonlyargs;
 mod float_nastiness;
 mod replay_logic;
 mod testdecorators;
