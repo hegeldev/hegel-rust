@@ -7,6 +7,34 @@ use ciborium::Value;
 use super::many_more;
 use super::text::{StringAlphabet, build_string_alphabet, is_surrogate_cp};
 
+/// Translate Python regex escapes that regex-syntax doesn't understand.
+///
+/// `\Z` is Python's end-of-string anchor; regex-syntax uses `\z`.
+/// We scan character-by-character so that `\\Z` (escaped backslash + literal Z)
+/// is left alone.
+fn translate_python_escapes(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('Z') => {
+                out.push('\\');
+                out.push('z');
+            }
+            Some(next) => {
+                out.push('\\');
+                out.push(next);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
 pub(super) fn interpret_regex(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
     let pattern = map_get(schema, "pattern")
         .and_then(as_text)
@@ -16,9 +44,11 @@ pub(super) fn interpret_regex(ntc: &mut NativeTestCase, schema: &Value) -> Resul
         .unwrap_or(false);
     let alphabet_schema = map_get(schema, "alphabet");
 
+    let translated = translate_python_escapes(pattern);
+
     // Parse the regex to HIR using regex-syntax.
     let hir = regex_syntax::Parser::new()
-        .parse(pattern)
+        .parse(&translated)
         .unwrap_or_else(|e| panic!("invalid regex pattern {:?}: {}", pattern, e));
 
     // Build the alphabet constraint (if any) from the alphabet sub-schema.
@@ -144,3 +174,7 @@ fn regex_alphabet_allows(alphabet: &Option<StringAlphabet>, c: char) -> bool {
         Some(StringAlphabet::Explicit(chars)) => chars.contains(&c),
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/schema/regex_tests.rs"]
+mod tests;
