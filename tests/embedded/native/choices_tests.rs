@@ -291,6 +291,90 @@ fn float_choice_sort_index_ordering() {
     assert!(kind.sort_index(1.0) < kind.sort_index(-1.0));
 }
 
+// ── FloatChoice::to_index regression ────────────────────────────────────────
+//
+// Regression for a failure surfaced by `tests/pbtkit/choice_index.rs`: a tiny
+// non-integer-spanning range like [65672.5, 65673.0] picks `simplest = 65673.0`
+// (the integer wins under native's Hypothesis-lex sort_key), but the original
+// pbtkit-style raw-index implementation computed `to_index(value)` as
+// `raw_idx(value) - raw_idx(simplest)` — which underflowed because in raw-idx
+// terms 65672.5 < 65672.80222519021 < 65673.0. The fix is to base the index
+// API on the same `sort_key` ordering used elsewhere in native.
+
+#[test]
+fn float_choice_to_index_does_not_underflow_when_simplest_is_above_value() {
+    let fc = FloatChoice {
+        min_value: 65672.5,
+        max_value: 65673.0,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    // Must not panic. The exact value is unimportant beyond being in range.
+    let _ = fc.to_index(65672.80222519021);
+    let _ = fc.to_index(65672.5);
+    let _ = fc.to_index(65673.0);
+}
+
+#[test]
+fn float_choice_index_roundtrip_tiny_range() {
+    let fc = FloatChoice {
+        min_value: 65672.5,
+        max_value: 65673.0,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    for &v in &[65672.5_f64, 65672.80222519021, 65673.0] {
+        let idx = fc.to_index(v);
+        assert_eq!(fc.from_index(idx).map(f64::to_bits), Some(v.to_bits()));
+    }
+}
+
+#[test]
+fn float_choice_from_index_zero_is_simplest_tiny_range() {
+    let fc = FloatChoice {
+        min_value: 65672.5,
+        max_value: 65673.0,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    assert_eq!(
+        fc.from_index(BigUint::from(0u32)).map(f64::to_bits),
+        Some(fc.simplest().to_bits())
+    );
+}
+
+// Regression: `simplest` for a fractional-only range like [0.25, 0.5] is
+// `0.5`, whose Hypothesis lex index ((1<<63) | (1024<<52)) exceeds
+// `float_to_index(f64::MAX)` ((1<<63) | (1023<<52) | mantissa_max). The old
+// `max_finite_global_rank` used the latter as the bound, so `from_index(0)`
+// landed in the +inf slot above max_finite and returned None.
+#[test]
+fn float_choice_from_index_zero_is_simplest_fractional_range() {
+    let fc = FloatChoice {
+        min_value: 0.25,
+        max_value: 0.5,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    assert_eq!(
+        fc.from_index(BigUint::from(0u32)).map(f64::to_bits),
+        Some(fc.simplest().to_bits())
+    );
+}
+
+#[test]
+fn float_choice_index_roundtrip_fractional_value() {
+    let fc = FloatChoice {
+        min_value: 0.0,
+        max_value: 1.0,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    let v = 0.5_f64;
+    let idx = fc.to_index(v);
+    assert_eq!(fc.from_index(idx).map(f64::to_bits), Some(v.to_bits()));
+}
+
 // ── FloatChoice::unit ───────────────────────────────────────────────────────
 //
 // Port of pbtkit/tests/test_floats.py::test_float_choice_unit, adapted to the

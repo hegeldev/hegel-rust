@@ -62,19 +62,83 @@ impl IntegerChoice {
     /// pbtkit: `core.py::IntegerChoice.max_index`.
     #[allow(dead_code)]
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
-        todo!("IntegerChoice::max_index not yet implemented")
+        use crate::native::bignum::BigUint;
+        // max_value - min_value can exceed i128 positive range (e.g. full
+        // i128 span). Two's-complement wrapping_sub reinterpreted as u128
+        // recovers the correct non-negative distance.
+        let diff = (self.max_value as u128).wrapping_sub(self.min_value as u128);
+        BigUint::from(diff)
     }
 
     /// pbtkit: `core.py::IntegerChoice.to_index`.
     #[allow(dead_code)]
-    pub fn to_index(&self, _value: i128) -> crate::native::bignum::BigUint {
-        todo!("IntegerChoice::to_index not yet implemented")
+    pub fn to_index(&self, value: i128) -> crate::native::bignum::BigUint {
+        use crate::native::bignum::{BigUint, Zero};
+        let s = self.simplest();
+        if value == s {
+            return BigUint::zero();
+        }
+        let above = BigUint::from((self.max_value as u128).wrapping_sub(s as u128));
+        let below = BigUint::from((s as u128).wrapping_sub(self.min_value as u128));
+        let d_abs_u = if value > s {
+            (value as u128).wrapping_sub(s as u128)
+        } else {
+            (s as u128).wrapping_sub(value as u128)
+        };
+        let d_abs = BigUint::from(d_abs_u);
+        let d_minus_one = &d_abs - BigUint::from(1u32);
+        let mut count = std::cmp::min(&d_minus_one, &above).clone()
+            + std::cmp::min(&d_minus_one, &below).clone();
+        if value > s {
+            return count + BigUint::from(1u32);
+        }
+        if d_abs <= above {
+            count += BigUint::from(1u32);
+        }
+        count + BigUint::from(1u32)
     }
 
     /// pbtkit: `core.py::IntegerChoice.from_index`.
     #[allow(dead_code, clippy::wrong_self_convention)]
-    pub fn from_index(&self, _index: crate::native::bignum::BigUint) -> Option<i128> {
-        todo!("IntegerChoice::from_index not yet implemented")
+    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<i128> {
+        use crate::native::bignum::{BigUint, Zero};
+        let s = self.simplest();
+        if index.is_zero() {
+            return Some(s);
+        }
+        let above_u = (self.max_value as u128).wrapping_sub(s as u128);
+        let below_u = (s as u128).wrapping_sub(self.min_value as u128);
+        let above = BigUint::from(above_u);
+        let below = BigUint::from(below_u);
+        let mut lo = BigUint::from(1u32);
+        let mut hi = &above + &below;
+        let two = BigUint::from(2u32);
+        while lo < hi {
+            let mid = (&lo + &hi) / &two;
+            let total = std::cmp::min(&mid, &above).clone() + std::cmp::min(&mid, &below).clone();
+            if total >= index {
+                hi = mid;
+            } else {
+                lo = mid + BigUint::from(1u32);
+            }
+        }
+        let d = lo;
+        let total_at_d = std::cmp::min(&d, &above).clone() + std::cmp::min(&d, &below).clone();
+        if total_at_d < index {
+            return None;
+        }
+        let d_minus_one = &d - BigUint::from(1u32);
+        let before = std::cmp::min(&d_minus_one, &above).clone()
+            + std::cmp::min(&d_minus_one, &below).clone();
+        let pos_in_d = &index - before;
+        let d_u: u128 = (&d)
+            .try_into()
+            .expect("d fits in u128 (range is <= u128::MAX)");
+        if pos_in_d == BigUint::from(1u32) && d <= above {
+            return Some((s as u128).wrapping_add(d_u) as i128);
+        }
+        debug_assert!(d <= below);
+        Some((s as u128).wrapping_sub(d_u) as i128)
     }
 }
 
@@ -100,19 +164,26 @@ impl BooleanChoice {
     /// pbtkit: `core.py::BooleanChoice.max_index`.
     #[allow(dead_code)]
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
-        todo!("BooleanChoice::max_index not yet implemented")
+        crate::native::bignum::BigUint::from(1u32)
     }
 
     /// pbtkit: `core.py::BooleanChoice.to_index`.
     #[allow(dead_code)]
-    pub fn to_index(&self, _value: bool) -> crate::native::bignum::BigUint {
-        todo!("BooleanChoice::to_index not yet implemented")
+    pub fn to_index(&self, value: bool) -> crate::native::bignum::BigUint {
+        crate::native::bignum::BigUint::from(u32::from(value))
     }
 
     /// pbtkit: `core.py::BooleanChoice.from_index`.
     #[allow(dead_code, clippy::wrong_self_convention)]
-    pub fn from_index(&self, _index: crate::native::bignum::BigUint) -> Option<bool> {
-        todo!("BooleanChoice::from_index not yet implemented")
+    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<bool> {
+        use crate::native::bignum::BigUint;
+        if index == BigUint::from(0u32) {
+            Some(false)
+        } else if index == BigUint::from(1u32) {
+            Some(true)
+        } else {
+            None
+        }
     }
 }
 
@@ -275,23 +346,122 @@ impl FloatChoice {
         self.sort_index(v)
     }
 
-    /// pbtkit: `floats.py::FloatChoice.max_index`.
+    /// pbtkit: `floats.py::FloatChoice.max_index`. Largest valid index for
+    /// [`from_index`]. Indexes the full finite range (both signs) followed
+    /// by `+inf`, `-inf`, then all NaN payloads.
     #[allow(dead_code)]
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
-        todo!("FloatChoice::max_index not yet implemented")
+        use crate::native::bignum::BigUint;
+        // 2^52 NaN payloads (one bit forced to 1) × 2 signs = 2^53 NaN slots.
+        max_finite_global_rank() + BigUint::from(2u32) + BigUint::from(1u64 << 53)
     }
 
     /// pbtkit: `floats.py::FloatChoice.to_index`.
+    ///
+    /// Implementation note: pbtkit defines `to_index` as
+    /// `_float_to_index(value) - _float_to_index(simplest)` over its own
+    /// raw-index ordering, which puts `65672.5` before `65673.0`. Native's
+    /// `simplest` uses the Hypothesis lex ordering (which prefers integer
+    /// `65673.0` for the range `[65672.5, 65673.0]`), so the pbtkit recipe
+    /// would underflow whenever `value` is below `simplest` in raw-index
+    /// terms. Instead, we build the dense ordering directly from native's
+    /// `sort_key` = `(float_to_index(|v|), is_neg)`.
     #[allow(dead_code)]
-    pub fn to_index(&self, _value: f64) -> crate::native::bignum::BigUint {
-        todo!("FloatChoice::to_index not yet implemented")
+    pub fn to_index(&self, value: f64) -> crate::native::bignum::BigUint {
+        float_global_rank(value) - float_global_rank(self.simplest())
     }
 
     /// pbtkit: `floats.py::FloatChoice.from_index`.
     #[allow(dead_code, clippy::wrong_self_convention)]
-    pub fn from_index(&self, _index: crate::native::bignum::BigUint) -> Option<f64> {
-        todo!("FloatChoice::from_index not yet implemented")
+    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<f64> {
+        let raw = float_global_rank(self.simplest()) + index;
+        let value = float_from_global_rank(raw)?;
+        if self.validate(value) {
+            Some(value)
+        } else {
+            None
+        }
     }
+}
+
+/// Dense rank of `v` under native's `sort_key` ordering: finite floats
+/// indexed by `(float_to_index(|v|), is_neg)`, then `+inf`, `-inf`, then NaN
+/// payloads.
+fn float_global_rank(v: f64) -> crate::native::bignum::BigUint {
+    use super::float_index::float_to_index;
+    use crate::native::bignum::BigUint;
+
+    if v.is_nan() {
+        // NaN payload (one bit always forced to 1, see `from_index` below).
+        let bits = v.to_bits();
+        let nan_offset = bits & ((1u64 << 52) - 1);
+        let sign = bits >> 63;
+        return max_finite_global_rank()
+            + BigUint::from(3u32)
+            + BigUint::from(nan_offset) * BigUint::from(2u32)
+            + BigUint::from(sign);
+    }
+    if v.is_infinite() {
+        return if v > 0.0 {
+            max_finite_global_rank() + BigUint::from(1u32)
+        } else {
+            max_finite_global_rank() + BigUint::from(2u32)
+        };
+    }
+    let is_neg = v.is_sign_negative();
+    let mag = if is_neg { -v } else { v };
+    let mag_idx = float_to_index(mag);
+    BigUint::from(mag_idx) * BigUint::from(2u32) + BigUint::from(u32::from(is_neg))
+}
+
+/// Inverse of [`float_global_rank`]. Returns `None` if `rank` falls in the
+/// NaN-payload region for a sign+offset combination that would not actually
+/// be a NaN bit pattern.
+fn float_from_global_rank(rank: crate::native::bignum::BigUint) -> Option<f64> {
+    use super::float_index::index_to_float;
+    use crate::native::bignum::BigUint;
+
+    let max_finite = max_finite_global_rank();
+    if rank > max_finite {
+        let offset = &rank - &max_finite;
+        if offset == BigUint::from(1u32) {
+            return Some(f64::INFINITY);
+        }
+        if offset == BigUint::from(2u32) {
+            return Some(f64::NEG_INFINITY);
+        }
+        let nan_rel = offset - BigUint::from(3u32);
+        let sign: u64 = (&nan_rel % BigUint::from(2u32))
+            .try_into()
+            .expect("mod 2 fits in u64");
+        let mantissa_base: u64 = (nan_rel / BigUint::from(2u32)).try_into().ok()?;
+        // Force bit 51 to 1 so the mantissa is non-zero (matches pbtkit).
+        let mantissa = mantissa_base | (1u64 << 51);
+        let bits = (sign << 63) | (0x7FFu64 << 52) | mantissa;
+        let v = f64::from_bits(bits);
+        return if v.is_nan() { Some(v) } else { None };
+    }
+    let is_neg_u: u64 = (&rank % BigUint::from(2u32))
+        .try_into()
+        .expect("mod 2 fits in u64");
+    let mag_big = rank / BigUint::from(2u32);
+    let mag_idx: u64 = (&mag_big).try_into().ok()?;
+    let mag = index_to_float(mag_idx);
+    Some(if is_neg_u == 1 { -mag } else { mag })
+}
+
+/// Largest dense rank used by any finite float. The maximum lex index over
+/// any finite float is `(1<<63) | (2046<<52) | mantissa_max` — bit 63 set
+/// (non-simple), encoded exponent 2046 (the last non-NaN/inf slot), and
+/// every fractional bit set. (Note: this is *not* `float_to_index(f64::MAX)`,
+/// because Hypothesis's lex ordering ranks fractions like `0.5` — encoded
+/// exponent 1024 — *higher* than huge integers like `f64::MAX`, which has
+/// encoded exponent 1023.) The `+1` is the negative-sign slot for that lex
+/// index, since `float_global_rank` packs sign into the low bit.
+fn max_finite_global_rank() -> crate::native::bignum::BigUint {
+    use crate::native::bignum::BigUint;
+    let max_finite_lex = (1u64 << 63) | (2046u64 << 52) | ((1u64 << 52) - 1);
+    BigUint::from(max_finite_lex) * BigUint::from(2u32) + BigUint::from(1u32)
 }
 
 /// Map a codepoint to its sort-key position.
@@ -358,19 +528,48 @@ impl BytesChoice {
     /// pbtkit: `bytes.py::BytesChoice.max_index`.
     #[allow(dead_code)]
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
-        todo!("BytesChoice::max_index not yet implemented")
+        self.to_index(&vec![0xffu8; self.max_size])
     }
 
     /// pbtkit: `bytes.py::BytesChoice.to_index`.
     #[allow(dead_code)]
-    pub fn to_index(&self, _value: &[u8]) -> crate::native::bignum::BigUint {
-        todo!("BytesChoice::to_index not yet implemented")
+    pub fn to_index(&self, value: &[u8]) -> crate::native::bignum::BigUint {
+        use crate::native::bignum::{BigUint, Zero};
+        let base = BigUint::from(256u32);
+        let mut offset = BigUint::zero();
+        for length in self.min_size..value.len() {
+            offset += base.pow(length as u32);
+        }
+        let mut position = BigUint::zero();
+        for &b in value {
+            position = position * &base + BigUint::from(b);
+        }
+        offset + position
     }
 
     /// pbtkit: `bytes.py::BytesChoice.from_index`.
     #[allow(dead_code, clippy::wrong_self_convention)]
-    pub fn from_index(&self, _index: crate::native::bignum::BigUint) -> Option<Vec<u8>> {
-        todo!("BytesChoice::from_index not yet implemented")
+    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<Vec<u8>> {
+        use crate::native::bignum::BigUint;
+        let base = BigUint::from(256u32);
+        let mut remaining = index;
+        for length in self.min_size..=self.max_size {
+            let bucket = base.pow(length as u32);
+            if remaining < bucket {
+                let mut result: Vec<u8> = Vec::with_capacity(length);
+                for _ in 0..length {
+                    let b: u8 = (&remaining % &base)
+                        .try_into()
+                        .expect("byte < 256 fits in u8");
+                    result.push(b);
+                    remaining /= &base;
+                }
+                result.reverse();
+                return Some(result);
+            }
+            remaining -= bucket;
+        }
+        None
     }
 }
 
