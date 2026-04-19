@@ -335,10 +335,16 @@ fn test_fullmatch_generates_example_star() {
 
 #[test]
 fn test_fullmatch_generates_example_ignorecase_charset() {
-    find_any(
+    // Uses a larger max_attempts because the target "aBb" has roughly 0.15%
+    // per-draw probability ([ab]* with IGNORECASE expands to 4 chars, length-3
+    // is ~10% of draws, specific ordering is 1/64). 1000 attempts gives only a
+    // ~78% pass rate; 10_000 pushes this above 99.999%.
+    FindAny::new(
         gs::from_regex(r"(?i)[ab]*").fullmatch(true),
         |s: &String| s == "aBb",
-    );
+    )
+    .max_attempts(10_000)
+    .run();
 }
 
 #[test]
