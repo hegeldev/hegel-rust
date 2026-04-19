@@ -1315,6 +1315,7 @@ def dispatch_claude(
     timeout: float | None,
     model: str,
     max_turns: int = 0,
+    max_budget_usd: float | None = None,
     resume_session: str | None = None,
 ) -> tuple[str | None, int]:
     """Spawn claude -p (or resume an existing session), stream events live.
@@ -1351,6 +1352,8 @@ def dispatch_claude(
         "stream-json",
         "--verbose",
     ]
+    if max_budget_usd is not None:
+        cmd += ["--max-budget-usd", str(max_budget_usd)]
     if resume_session is not None:
         # Resuming carries forward the original session's system prompt
         # and history, so don't re-append. The follow-up task goes in as
@@ -1489,12 +1492,14 @@ class IterCounter:
         timeout: float | None,
         model: str,
         max_turns: int = 0,
+        max_budget_usd: float | None = None,
     ) -> None:
         self.n = 0
         self.max = max_iterations
         self.timeout = timeout
         self.model = model
         self.max_turns = max_turns
+        self.max_budget_usd = max_budget_usd
         self.last_session_id: str | None = None
 
     def _check_cap(self) -> None:
@@ -1513,6 +1518,7 @@ class IterCounter:
             timeout=self.timeout,
             model=self.model,
             max_turns=self.max_turns,
+            max_budget_usd=self.max_budget_usd,
         )
         # Even if exit code was non-zero, a captured sid still means a
         # valid session exists that we can try to resume later.
@@ -1547,6 +1553,7 @@ class IterCounter:
             timeout=self.timeout,
             model=self.model,
             max_turns=self.max_turns,
+            max_budget_usd=self.max_budget_usd,
             resume_session=previous,
         )
         if code != 0:
@@ -2244,8 +2251,18 @@ def main() -> None:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=300,
-        help="Per-claude-call timeout in seconds (default: 300s = 5 minutes).",
+        default=3600,
+        help="Per-claude-call timeout in seconds (default: 3600s = 1 hour).",
+    )
+    parser.add_argument(
+        "--max-budget-usd",
+        type=float,
+        default=20.0,
+        dest="max_budget_usd",
+        help=(
+            "Per-dispatch spend cap passed to `claude --max-budget-usd` "
+            "(default: $20). Set to 0 to disable."
+        ),
     )
     parser.add_argument(
         "--max-turns-per-dispatch",
@@ -2296,7 +2313,11 @@ def main() -> None:
     if args.port is not None and args.todo_only:
         parser.error("--port and --todo-only are mutually exclusive.")
     state = IterCounter(
-        args.max_iterations, args.timeout, args.model, args.max_turns
+        args.max_iterations,
+        args.timeout,
+        args.model,
+        args.max_turns,
+        max_budget_usd=args.max_budget_usd if args.max_budget_usd else None,
     )
 
     def maybe_clean() -> None:
