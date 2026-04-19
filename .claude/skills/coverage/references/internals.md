@@ -6,8 +6,8 @@ The canonical source of truth for the behaviour is `scripts/check-coverage.py`, 
 
 ## How the coverage script works
 
-1. Runs `cargo llvm-cov --no-report --all-features` to collect coverage data.
-2. Generates an LCOV report. Tries to include TempRustProject subprocess binaries (found as `temp_hegel_test_*` in the target directory), though this depends on the binaries being compiled with coverage instrumentation.
+1. Runs `cargo llvm-cov --no-report --features rand,antithesis` (standard) or `--features native` (native mode) to collect coverage data. Code under `#[cfg(not(feature = "antithesis"))]` is not compiled in the standard run and will not appear in the coverage output.
+2. Generates an LCOV report. Tries to include TempRustProject subprocess binaries (found as `temp_hegel_test_*` in the target directory), though this depends on the binaries being compiled with coverage instrumentation (they inherit `RUSTFLAGS` from the `cargo llvm-cov` parent process, which should instrument them).
 3. Parses the LCOV data (`DA:<line>,<count>` format — line-level, not region-level).
 4. Checks each uncovered line against automatic exclusion patterns.
 5. Lines that don't match any exclusion and don't have `// nocov` are reported as failures.
