@@ -63,6 +63,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -372,6 +373,15 @@ def run_coverage(native_mode: bool = False) -> Path:
             print(result.stderr, file=sys.stderr)
         print("ERROR: Failed to clean coverage data", file=sys.stderr)
         sys.exit(1)
+    # `cargo llvm-cov clean` removes profraw/profdata but NOT compiled binaries.
+    # Stale subprocess binaries from previous runs (possibly compiled with
+    # different feature flags) would otherwise be picked up by the report step
+    # and contribute 0-coverage entries for source files they compile but whose
+    # code paths were never reached. Wipe the tmp/ directory to remove them.
+    tmp_dir = Path("target/llvm-cov-target/tmp")
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
+        tmp_dir.mkdir(parents=True, exist_ok=True)
 
     # Phase 1: Run tests and collect profraw data (no report yet)
     print("  Running tests with coverage...")
@@ -583,6 +593,15 @@ def parse_lcov(lcov_path: Path) -> CoverageData:
 
             elif line == "end_of_record":
                 current_file = None
+
+    # A line may appear as both covered and uncovered when multiple SF blocks
+    # exist for the same file (from different object binaries). If any object
+    # covered it, treat it as covered.
+    covered = data.covered_lines
+    data.uncovered_lines = [
+        u for u in data.uncovered_lines
+        if u.line_number not in covered.get(u.file, set())
+    ]
 
     return data
 

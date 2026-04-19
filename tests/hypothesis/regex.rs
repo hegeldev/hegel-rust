@@ -4,7 +4,7 @@ use crate::common::utils::{
     FindAny, assert_all_examples, assert_no_examples, check_can_generate_examples, find_any,
 };
 use hegel::generators::{self as gs};
-use hegel::{Hegel, Settings};
+use hegel::{HealthCheck, Hegel, Settings};
 use regex::Regex;
 
 // test_matching: omitted — validates Python-internal category constants
@@ -180,9 +180,10 @@ fn test_groupref_not_shared_between_regex() {
 
 #[test]
 fn test_positive_lookbehind() {
-    find_any(gs::from_regex(".*(?<=ab)c"), |s: &String| {
-        s.ends_with("abc")
-    });
+    // TooSlow suppressed: .*(?<=ab)c is slow to generate under instrumented binaries.
+    FindAny::new(gs::from_regex(".*(?<=ab)c"), |s: &String| s.ends_with("abc"))
+        .suppress_health_check(HealthCheck::TooSlow)
+        .run();
 }
 
 #[test]
