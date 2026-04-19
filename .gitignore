@@ -32,3 +32,4 @@ docs/superpowers
 resources
 
 .port-loop-cache.json
+.port-loop-todo-attempts.json

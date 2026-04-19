@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import json
 import os
 import random
@@ -55,6 +56,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import yaml
@@ -421,6 +423,13 @@ Entry:
 {entry}
 
 ({remaining} other entries will remain in TODO.yaml after this one.)
+
+BEFORE doing any work, first check whether the entry's acceptance criteria
+are already satisfied. Port-loop agents have touched this repo many times
+and some TODO entries describe work that has since landed under a different
+framing. Grep for the files/functions/tests the entry names, check recent
+git log, and check SKIPPED.md. If the work is already done, delete the
+entry from TODO.yaml with a one-line commit explaining what you observed.
 
 When the work is done:
 - Remove THIS entry (and only this entry) from TODO.yaml.
@@ -1035,6 +1044,45 @@ def format_todo(entry: dict) -> str:
     return yaml.safe_dump([entry], sort_keys=False).rstrip()
 
 
+def _todo_hash(entry: dict) -> str:
+    """Content hash of a TODO entry (short sha1 of its YAML fragment).
+
+    Used as a stable key for `_load_todo_attempts` so that rewriting an
+    entry's text resets its attempt counter — the agent has produced a
+    visibly different entry and deserves a fresh budget.
+    """
+    return hashlib.sha1(format_todo(entry).encode("utf-8")).hexdigest()[:16]
+
+
+TODO_ATTEMPTS_PATH = REPO_ROOT / ".port-loop-todo-attempts.json"
+
+
+def _load_todo_attempts() -> dict[str, int]:
+    """Load the persisted `{content_hash: attempt_count}` map."""
+    if not TODO_ATTEMPTS_PATH.exists():
+        return {}
+    try:
+        data = json.loads(TODO_ATTEMPTS_PATH.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): int(v) for k, v in data.items() if isinstance(v, int)}
+
+
+def _save_todo_attempts(attempts: dict[str, int]) -> None:
+    TODO_ATTEMPTS_PATH.write_text(
+        json.dumps(attempts, indent=2, sort_keys=True)
+    )
+
+
+def _prune_todo_attempts(
+    attempts: dict[str, int], live_hashes: set[str]
+) -> dict[str, int]:
+    """Drop attempt counters for hashes that are no longer in TODO.yaml."""
+    return {h: n for h, n in attempts.items() if h in live_hashes}
+
+
 # ---- claude dispatch ---------------------------------------------------------
 
 
@@ -1312,11 +1360,6 @@ class IterCounter:
         self.timeout = timeout
         self.model = model
         self.last_session_id: str | None = None
-        # Per-TODO-title attempt counter. Used by drive_todos() to escalate
-        # to a recovery agent when the same entry stays in TODO.yaml after
-        # several normal attempts, and eventually to skip it rather than
-        # loop forever on something the agents can't clear.
-        self.todo_attempts: dict[str, int] = {}
 
     def _check_cap(self) -> None:
         if self.max > 0 and self.n >= self.max:
@@ -1548,52 +1591,77 @@ def repair(state: IterCounter, run_server_tests: bool = False) -> None:
 
 
 def drive_todos(state: IterCounter) -> bool:
-    """Pop one TODO entry if any are pending. Returns True iff dispatched.
+    """Dispatch one TODO entry if any are pending. Returns True iff dispatched.
 
     When dispatching cleared the last entry in TODO.yaml, runs a full
     `repair()` before returning so the outer loop sees a fresh green
     baseline before switching to porting new tests.
 
-    Per-title retry budget: the first 4 attempts on a given entry use
-    `TODO_PROMPT`. The 5th attempt escalates to `TODO_RECOVERY_PROMPT`
-    (whose job is to rewrite/remove/skip the stuck entry). From the 6th
-    attempt onwards — meaning the recovery agent itself didn't modify
-    the entry — we stop dispatching on this title and return False so
-    the outer loop can move on to porting new files instead of spinning
-    forever on a stuck entry.
+    Entry rotation: picks the entry with the fewest recorded attempts,
+    with ties broken by original list order. This keeps a single stuck
+    entry at the head of TODO.yaml from blocking all the others from
+    ever being tried. A new entry (attempts=0) therefore gets first
+    shot on the iteration it lands.
+
+    Per-entry retry budget (persisted across restarts via
+    `.port-loop-todo-attempts.json`, keyed by content hash so rewriting
+    an entry resets its budget):
+    - Attempts 1-4: dispatch `TODO_PROMPT` (normal).
+    - Attempt 5: escalate to `TODO_RECOVERY_PROMPT` (rewrite/remove/skip).
+    - Attempt 6+: the recovery agent didn't modify the entry either;
+      skip this entry and fall through to porting.
     """
     todos = read_todos()
     if not todos:
         return False
-    first = todos[0]
-    title = str(first.get("title", "")) or format_todo(first).splitlines()[0]
-    attempts = state.todo_attempts.get(title, 0)
-    remaining = len(todos) - 1
 
-    if attempts >= 5:
+    attempts_map = _load_todo_attempts()
+    hashes = [_todo_hash(t) for t in todos]
+    attempts_map = _prune_todo_attempts(attempts_map, set(hashes))
+
+    # Rank (attempts_so_far, original_index) ascending.
+    ranked = sorted(
+        range(len(todos)),
+        key=lambda i: (attempts_map.get(hashes[i], 0), i),
+    )
+    # Skip entries that have exhausted the budget (5 normal + 1 recovery).
+    pickable = [i for i in ranked if attempts_map.get(hashes[i], 0) < 6]
+    if not pickable:
         print(
-            f"\n[port-loop] TODO {title!r} unresolved after {attempts} "
-            f"attempts (including recovery); leaving it in place and "
-            f"skipping to porting."
+            f"\n[port-loop] all {len(todos)} TODO entry(ies) have exhausted "
+            f"their attempt budget; leaving them in place and skipping to "
+            f"porting."
         )
         return False
 
-    state.todo_attempts[title] = attempts + 1
+    idx = pickable[0]
+    entry = todos[idx]
+    entry_hash = hashes[idx]
+    title = str(entry.get("title", "")) or format_todo(entry).splitlines()[0]
+    attempts = attempts_map.get(entry_hash, 0)
+    remaining = len(todos) - 1
+
+    attempts_map[entry_hash] = attempts + 1
+    _save_todo_attempts(attempts_map)
+
     if attempts >= 4:
         print(
-            f"\n[port-loop] TODO {title!r} still present after {attempts} "
-            f"attempts; dispatching recovery agent."
+            f"\n[port-loop] TODO {title!r} (hash {entry_hash}) still present "
+            f"after {attempts} attempts; dispatching recovery agent."
         )
         state.dispatch(
-            TODO_RECOVERY_PROMPT.format(entry=format_todo(first), attempts=attempts)
+            TODO_RECOVERY_PROMPT.format(
+                entry=format_todo(entry), attempts=attempts
+            )
         )
     else:
         print(
-            f"\n[port-loop] {len(todos)} TODO entry(ies) pending; dispatching "
-            f"first (attempt {attempts + 1})."
+            f"\n[port-loop] {len(todos)} TODO entry(ies) pending; picked "
+            f"{title!r} at index {idx} (attempt {attempts + 1}/5, lowest in "
+            f"the queue)."
         )
         state.dispatch(
-            TODO_PROMPT.format(entry=format_todo(first), remaining=remaining)
+            TODO_PROMPT.format(entry=format_todo(entry), remaining=remaining)
         )
 
     if remaining == 0 and not read_todos():
@@ -1814,8 +1882,61 @@ def gate_pr_ci() -> tuple[bool, str]:
     return status != "failure", detail
 
 
+def _wait_for_new_pr_checks(grace: float = 120.0) -> bool:
+    """Poll until at least one PR check is in `pending` state.
+
+    Called immediately after dispatching a CI fix agent that is expected
+    to have committed + pushed. Returns True if pending checks appeared
+    within the grace window (so we can usefully block on `--watch`);
+    False if the window elapsed with only terminal states visible
+    (meaning either the agent didn't push, or GitHub hasn't registered
+    the push yet — in which case `drive_pr_ci` will re-dispatch on the
+    next outer iteration rather than blocking on stale checks).
+    """
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        status, summary, _ = _pr_check_status()
+        print(
+            f"[port-loop] PR CI wait-for-new-checks: {status} — {summary}",
+            flush=True,
+        )
+        if status == "pending":
+            return True
+        time.sleep(10)
+    return False
+
+
+def _watch_pr_ci(timeout: float = 3600.0) -> None:
+    """Stream `gh pr checks --watch` until all checks complete (or timeout)."""
+    print(f"\n$ gh pr checks {PR_NUMBER} --repo {PR_REPO} --watch")
+    try:
+        subprocess.run(
+            [
+                "gh",
+                "pr",
+                "checks",
+                str(PR_NUMBER),
+                "--repo",
+                PR_REPO,
+                "--watch",
+            ],
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        print("[port-loop] gh pr checks --watch timed out")
+    except FileNotFoundError as e:
+        print(f"[port-loop] gh unavailable: {e}")
+
+
 def drive_pr_ci(state: IterCounter) -> bool:
-    """If PR CI has completed as failed, dispatch the fix agent.
+    """If PR CI has completed as failed, dispatch the fix agent and wait.
+
+    After dispatching, blocks until a new CI cycle completes (`gh pr
+    checks --watch`) so the outer loop doesn't race ahead to TODOs while
+    the fix push is still being verified by CI. If the new cycle is
+    still failing, the next outer iteration observes that and dispatches
+    again; if it's green, the outer loop proceeds to TODOs / porting.
 
     Returns True iff an agent was dispatched (caller should continue
     the outer loop).
@@ -1823,10 +1944,24 @@ def drive_pr_ci(state: IterCounter) -> bool:
     ok, detail = gate_pr_ci()
     if ok:
         return False
+    pre_sha = _rev_parse("HEAD")
     state.dispatch(
         PR_CI_FIX_PROMPT.format(repo=PR_REPO, pr=PR_NUMBER),
         gate_output=detail,
     )
+    if _rev_parse("HEAD") == pre_sha:
+        print(
+            "[port-loop] PR CI fix agent produced no new commit; "
+            "skipping --watch (outer loop will re-evaluate)."
+        )
+        return True
+    if _wait_for_new_pr_checks():
+        _watch_pr_ci()
+    else:
+        print(
+            "[port-loop] PR CI: no pending checks appeared after push; "
+            "outer loop will re-evaluate."
+        )
     return True
 
 
