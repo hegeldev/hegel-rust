@@ -246,9 +246,17 @@ fn test_can_mix_sampling_with_generating() {
 
 #[test]
 fn test_can_find_large_sum_frozenset() {
+    // HashSet iteration order is randomised per instance, so `iter().sum::<i64>()`
+    // is order-dependent under overflow: in debug builds, a partial-sum overflow
+    // panics, which can flip the predicate between runs with identical choices
+    // (one iteration order triggers it, another doesn't). `wrapping_add` is
+    // associative and commutative mod 2^64, so the final value is the same
+    // regardless of order.
     find_any(
         gs::hashsets(gs::integers::<i64>()),
-        |xs: &std::collections::HashSet<i64>| xs.iter().sum::<i64>() >= 100,
+        |xs: &std::collections::HashSet<i64>| {
+            xs.iter().copied().fold(0_i64, i64::wrapping_add) >= 100
+        },
     );
 }
 
