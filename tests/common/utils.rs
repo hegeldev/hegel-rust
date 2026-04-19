@@ -5,7 +5,7 @@ use std::panic::{UnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
 use hegel::generators::Generator;
-use hegel::{Hegel, Settings};
+use hegel::{HealthCheck, Hegel, Settings};
 use regex::Regex;
 use std::fmt::Debug;
 
@@ -356,8 +356,24 @@ where
     }
 
     pub fn run(self) {
-        AssertAllExamples::new(self.generator, move |v| !(self.condition)(v))
-            .test_cases(self.test_cases)
-            .run();
+        // Matches Python's `assert_no_examples`, which catches Unsatisfiable:
+        // if the strategy only produces invalid inputs, the assertion holds
+        // vacuously. Suppress FilterTooMuch so the run completes instead of
+        // panicking on excess rejections.
+        let condition = self.condition;
+        Hegel::new(move |tc| {
+            let value = tc.draw(&self.generator);
+            assert!(
+                !condition(&value),
+                "Found value that does not match predicate"
+            );
+        })
+        .settings(
+            Settings::new()
+                .test_cases(self.test_cases)
+                .database(None)
+                .suppress_health_check([HealthCheck::FilterTooMuch]),
+        )
+        .run();
     }
 }
