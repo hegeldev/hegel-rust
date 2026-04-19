@@ -16,6 +16,7 @@ result
 .remember/
 
 lcov.info
+*.profraw
 
 .claude/bin/
 .claude/*.local.md
