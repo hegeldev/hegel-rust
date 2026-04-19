@@ -221,8 +221,30 @@ fn generate_op(
             let chars = gather_chars(alphabet, |c| allow_newline || c != '\n');
             emit_from_chars(ntc, &chars, out)?;
         }
-        OpCode::At(_) => {
-            // Zero-width anchors don't emit a character.
+        OpCode::At(at) => {
+            // Zero-width anchors don't emit a character, but some of them
+            // constrain the current position in `out`. Python's
+            // `regex_strategy` handles this by filtering the final result
+            // through `regex.search`; we don't have a Python-compatible
+            // matcher, so we validate inline for the position anchors we
+            // can check against the partial output.
+            match at {
+                AtCode::BeginningString => {
+                    if !out.is_empty() {
+                        mark_invalid(ntc)?;
+                    }
+                }
+                AtCode::Beginning => {
+                    if state.flags & SRE_FLAG_MULTILINE != 0 {
+                        if !out.is_empty() && !out.ends_with('\n') {
+                            mark_invalid(ntc)?;
+                        }
+                    } else if !out.is_empty() {
+                        mark_invalid(ntc)?;
+                    }
+                }
+                _ => {}
+            }
         }
         OpCode::In(items) => {
             let chars = build_in_set(items, state.flags, alphabet);
