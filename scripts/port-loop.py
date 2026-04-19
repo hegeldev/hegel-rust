@@ -1605,6 +1605,231 @@ def drive_todos(state: IterCounter) -> bool:
     return True
 
 
+def _run_git(args: list[str]) -> subprocess.CompletedProcess:
+    """Run a git subcommand, capturing output and echoing it live."""
+    cmd = ["git", *args]
+    print(f"\n$ {' '.join(cmd)}")
+    proc = subprocess.run(
+        cmd,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.stdout:
+        sys.stdout.write(proc.stdout)
+    if proc.stderr:
+        sys.stdout.write(proc.stderr)
+    sys.stdout.flush()
+    return proc
+
+
+def _current_branch() -> str:
+    r = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return r.stdout.strip()
+
+
+def _rev_parse(rev: str) -> str | None:
+    r = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", rev],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if r.returncode != 0:
+        return None
+    return r.stdout.strip()
+
+
+def gate_sync_with_origin() -> tuple[bool, str, bool]:
+    """Fetch, rebase onto origin/main, push. Returns (ok, output, pushed).
+
+    Called only after local gates are green and the tree is clean. Does
+    nothing destructive: always uses `--force-with-lease`, never
+    `--force`. Refuses to operate on the `main`/`master` branch itself
+    (the loop should run on a feature branch).
+
+    On any failure, aborts any in-progress rebase and returns (False,
+    combined_output, False) so the caller can dispatch a recovery agent.
+    """
+    branch = _current_branch()
+    if branch in ("main", "master", "HEAD"):
+        print(
+            f"\n[port-loop] on branch {branch!r}; skipping sync-with-origin. "
+            f"The sync gate only runs on feature branches."
+        )
+        return True, "", False
+
+    combined: list[str] = []
+
+    def _record(proc: subprocess.CompletedProcess) -> None:
+        combined.append(f"$ {' '.join(proc.args)}\n")
+        if proc.stdout:
+            combined.append(proc.stdout)
+        if proc.stderr:
+            combined.append(proc.stderr)
+
+    fetch = _run_git(["fetch", "origin"])
+    _record(fetch)
+    if fetch.returncode != 0:
+        return False, "".join(combined), False
+
+    before_sha = git_head()
+    origin_main = _rev_parse("origin/main")
+    if origin_main is None:
+        # No origin/main — likely a fresh clone or misconfigured remote.
+        # Leave the rebase step out and just try to push what we have.
+        print(
+            "\n[port-loop] no origin/main to rebase onto; skipping rebase."
+        )
+    else:
+        rebase = _run_git(["rebase", "origin/main"])
+        _record(rebase)
+        if rebase.returncode != 0:
+            abort = _run_git(["rebase", "--abort"])
+            _record(abort)
+            return False, "".join(combined), False
+
+    # Decide whether we need to push. If origin already has our exact
+    # HEAD, this is a no-op.
+    after_sha = git_head()
+    origin_branch = _rev_parse(f"origin/{branch}")
+    needs_push = origin_branch is None or origin_branch != after_sha
+
+    if not needs_push:
+        return True, "".join(combined), False
+
+    if origin_branch is None:
+        push = _run_git(["push", "--set-upstream", "origin", "HEAD"])
+    else:
+        push = _run_git(["push", "--force-with-lease", "origin", "HEAD"])
+    _record(push)
+    if push.returncode != 0:
+        return False, "".join(combined), False
+
+    rebased = origin_main is not None and before_sha != after_sha
+    if rebased:
+        print(
+            f"\n[port-loop] rebased {before_sha[:12]} → {after_sha[:12]} "
+            f"and pushed."
+        )
+    else:
+        print(f"\n[port-loop] pushed {after_sha[:12]} to origin/{branch}.")
+    return True, "".join(combined), True
+
+
+def sync_with_origin(state: IterCounter) -> tuple[bool, bool]:
+    """Run the sync gate. Returns (dispatched, pushed).
+
+    `dispatched` is True if the gate failed and an agent was dispatched
+    — the caller should `continue` the outer loop in that case.
+    `pushed` is True if the sync resulted in an actual push; the caller
+    uses this to skip the PR CI check for one iteration so GitHub has
+    time to kick off the new run.
+    """
+    ok, out, pushed = gate_sync_with_origin()
+    if not ok:
+        state.dispatch(SYNC_FIX_PROMPT, gate_output=out)
+        return True, False
+    return False, pushed
+
+
+# ---- PR CI gate -------------------------------------------------------------
+
+
+def _pr_check_status() -> tuple[str, str, str]:
+    """Return (status, summary, detail) for the tracked PR's CI.
+
+    `status` is one of `"skip"` (can't tell / PR closed / no checks),
+    `"pending"`, `"success"`, `"failure"`. `summary` is a short label
+    for logs. `detail` is the raw `gh pr checks` output suitable for
+    handing to a fix agent (empty for statuses other than `"failure"`).
+    """
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "pr",
+                "checks",
+                str(PR_NUMBER),
+                "--repo",
+                PR_REPO,
+                "--json",
+                "name,bucket,state,link,workflow",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        return "skip", f"gh unavailable: {e}", ""
+    if result.returncode != 0:
+        return "skip", f"gh pr checks failed: {result.stderr.strip()}", ""
+    try:
+        checks = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError:
+        return "skip", "gh pr checks returned non-JSON", ""
+    if not checks:
+        return "skip", "no checks reported yet", ""
+
+    buckets = [c.get("bucket", "") for c in checks]
+    if any(b == "pending" for b in buckets):
+        n = sum(1 for b in buckets if b == "pending")
+        return "pending", f"{n}/{len(checks)} checks still running", ""
+    failing = [
+        c.get("name", "?")
+        for c in checks
+        if c.get("bucket") in ("fail", "cancel")
+    ]
+    if failing:
+        # Grab the human-readable form for the agent prompt.
+        detail_proc = subprocess.run(
+            ["gh", "pr", "checks", str(PR_NUMBER), "--repo", PR_REPO],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        detail = detail_proc.stdout + detail_proc.stderr
+        return (
+            "failure",
+            f"{len(failing)} failing: {', '.join(failing)}",
+            detail,
+        )
+    return "success", f"all {len(checks)} checks passing", ""
+
+
+def gate_pr_ci() -> tuple[bool, str]:
+    """Returns (ok, detail). ok=False only on completed-failure."""
+    print(f"\n$ gh pr checks {PR_NUMBER} --repo {PR_REPO}")
+    status, summary, detail = _pr_check_status()
+    print(f"[port-loop] PR #{PR_NUMBER}: {status} — {summary}", flush=True)
+    return status != "failure", detail
+
+
+def drive_pr_ci(state: IterCounter) -> bool:
+    """If PR CI has completed as failed, dispatch the fix agent.
+
+    Returns True iff an agent was dispatched (caller should continue
+    the outer loop).
+    """
+    ok, detail = gate_pr_ci()
+    if ok:
+        return False
+    state.dispatch(
+        PR_CI_FIX_PROMPT.format(repo=PR_REPO, pr=PR_NUMBER),
+        gate_output=detail,
+    )
+    return True
+
+
 def resolve_port_arg(raw: str) -> Path:
     """Resolve a --port argument to an upstream Path; abort on invalid input."""
     candidate = Path(raw)
