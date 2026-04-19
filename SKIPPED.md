@@ -185,10 +185,9 @@ Individually-skipped tests (rest of the file is ported):
 
 - `test_database_backend.py` — this file mixes portable public-API tests
   (multi-value `save`/`fetch`/`delete`/`move` semantics, listener API,
-  wrappers) with Python-specific ones. Only the latter are skipped here;
-  the portable portions have a dedicated port TODO (`TODO.yaml`) tracking
-  a line-by-line port to `tests/hypothesis/database_backend.rs`. The
-  Python-specific sub-bullets kept here are:
+  wrappers) with Python-specific ones. The portable portions are ported
+  in `tests/hypothesis/database_backend.rs`. Only the Python-specific
+  sub-bullets remain skipped:
     - `GitHubArtifactDatabase` (tests `test_ga_*`, `TestGADReads`,
       `test_gadb_coverage`) is Python-only infrastructure (urllib,
       zipfile, GitHub Actions artifact endpoints) with no Rust
@@ -207,3 +206,16 @@ Individually-skipped tests (rest of the file is ported):
       resolution. Hegel-rust exposes no equivalent factory — databases
       are constructed directly from a path — so these tests target
       a public-API surface that doesn't exist here.
+    - `test_warns_when_listening_not_supported` exercises
+      `HypothesisWarning`, a Python `warnings.warn` category emitted
+      from `ExampleDatabase.add_listener` when the subclass doesn't
+      override `_start_listening`. hegel-rust's default `add_listener`
+      silently drops the listener (no warning surface) — a public-API
+      design difference.
+    - `test_database_equal` / `test_database_not_equal` test Python's
+      default `==` (attribute-wise) on database instances. hegel-rust's
+      native database types don't implement `PartialEq`; adding it
+      would require per-type semantics (path-equality for
+      `NativeDatabase`, instance-identity for `InMemoryNativeDatabase`,
+      deep equality through `Arc<dyn ExampleDatabase>` for
+      `MultiplexedNativeDatabase`). Tracked as a TODO.yaml follow-up.

@@ -227,7 +227,7 @@ impl<T: ExampleDatabase + ?Sized> ExampleDatabase for Arc<T> {
 /// `_start_listening` we initialize a hash→key map by fetching the
 /// metakey entry. Subsequent Create events under the metakey directory
 /// keep the map up to date as new keys are written (by any process).
-pub(super) const METAKEYS_NAME: &[u8] = b".hegel-keys";
+pub const METAKEYS_NAME: &[u8] = b".hegel-keys";
 
 /// Watcher-thread state for a `NativeDatabase`. Dropping the
 /// `RecommendedWatcher` joins and stops the background notify thread,
@@ -253,7 +253,7 @@ impl NativeDatabase {
         }
     }
 
-    fn key_path(&self, key: &[u8]) -> PathBuf {
+    pub fn key_path(&self, key: &[u8]) -> PathBuf {
         self.db_root.join(fnv_hex(key))
     }
 
@@ -404,9 +404,12 @@ impl ExampleDatabase for NativeDatabase {
             return;
         }
         // Cleanup: if `src`'s key directory is now empty, remove it.
-        if std::fs::remove_dir(self.key_path(src)).is_ok() && fnv_hex(src) != self.metakeys_hash {
-            self.delete(METAKEYS_NAME, src);
-        }
+        // Matches Python's `os.renames`, which prunes empty ancestor
+        // directories after the rename. Unlike `delete`, we don't also
+        // remove the metakey entry for `src`: Hypothesis's `move` leaves
+        // a stale metakey on empty src, and `test_metakeys_move_into_
+        // nonexistent_key` in `test_database_backend.py` relies on that.
+        let _ = std::fs::remove_dir(self.key_path(src));
     }
 
     fn add_listener(&self, f: Listener) {

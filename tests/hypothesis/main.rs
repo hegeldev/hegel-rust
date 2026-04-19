@@ -6,6 +6,7 @@ mod common;
 
 mod composite;
 mod composite_kwonlyargs;
+mod database_backend;
 mod datetimes;
 mod float_nastiness;
 mod regex;
