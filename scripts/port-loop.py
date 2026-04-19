@@ -1256,13 +1256,21 @@ def dispatch_claude(
     full_prompt = prompt
     if gate_output is not None:
         full_prompt += f"\n\nGate output:\n{gate_output}"
-    print("\n" + "=" * 72)
+    print("\n" + "=" * 72, flush=True)
     if resume_session is not None:
-        print(f"Resuming claude session {resume_session[:12]}… with prompt:")
+        print(
+            f"Resuming claude session {resume_session[:12]}… "
+            f"(model={model}, no system prompt re-applied)",
+            flush=True,
+        )
     else:
-        print("Dispatching claude with prompt:")
-    print("-" * 72)
-    print(full_prompt)
+        print(f"Dispatching fresh claude (model={model})", flush=True)
+        print("-" * 72, flush=True)
+        print("System prompt:", flush=True)
+        print(COMMON_SYSTEM_PROMPT, flush=True)
+    print("-" * 72, flush=True)
+    print("Task prompt:", flush=True)
+    print(full_prompt, flush=True)
     print("=" * 72, flush=True)
 
     cmd = [
@@ -1992,6 +2000,13 @@ def resolve_port_arg(raw: str) -> Path:
 
 
 def main() -> None:
+    # Line-buffer stdout/stderr so prompts and gate output stream out in real
+    # time even when the script is tee'd or piped to a log file.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
+    except (AttributeError, ValueError):
+        pass
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--max-iterations",
