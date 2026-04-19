@@ -83,3 +83,7 @@ fn cbor_to_f64(value: &Value) -> f64 {
         _ => panic!("Expected CBOR float/integer, got {:?}", value),
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/schema/float_tests.rs"]
+mod tests;
