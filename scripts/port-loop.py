@@ -1998,6 +1998,19 @@ def _fetch_run_log_summary(run_id: str) -> str:
     return _extract_failure_lines(raw)
 
 
+def _check_run_bucket(c: dict) -> str:
+    """Map a GitHub check-run object to a bucket: pending/pass/fail/cancel."""
+    status = c.get("status", "")
+    conclusion = c.get("conclusion") or ""
+    if status != "completed":
+        return "pending"
+    if conclusion in ("success", "skipped", "neutral"):
+        return "pass"
+    if conclusion == "cancelled":
+        return "cancel"
+    return "fail"  # failure, timed_out, action_required
+
+
 def _pr_check_status() -> tuple[str, str, str]:
     """Return (status, summary, detail) for the tracked PR's CI.
 
@@ -2005,48 +2018,56 @@ def _pr_check_status() -> tuple[str, str, str]:
     `"pending"`, `"success"`, `"failure"`. `summary` is a short label
     for logs. `detail` is a pre-extracted failing-log summary for the
     triage agent (empty for statuses other than `"failure"`).
+
+    Uses `gh api` directly (avoids `gh pr checks --json` which is
+    absent in some packaged versions of gh).
     """
+    # Step 1: resolve PR head SHA.
     try:
-        result = subprocess.run(
-            [
-                "gh",
-                "pr",
-                "checks",
-                str(PR_NUMBER),
-                "--repo",
-                PR_REPO,
-                "--json",
-                "name,bucket,state,link,workflow",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
+        sha_result = subprocess.run(
+            ["gh", "api", f"repos/{PR_REPO}/pulls/{PR_NUMBER}",
+             "--jq", ".head.sha"],
+            capture_output=True, text=True, timeout=60, check=False,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         return "skip", f"gh unavailable: {e}", ""
-    if result.returncode != 0:
-        return "skip", f"gh pr checks failed: {result.stderr.strip()}", ""
+    if sha_result.returncode != 0:
+        return "skip", f"gh api PR failed: {sha_result.stderr.strip()}", ""
+    sha = sha_result.stdout.strip()
+    if not sha:
+        return "skip", "could not determine PR head SHA", ""
+
+    # Step 2: fetch check runs for that commit.
     try:
-        checks = json.loads(result.stdout or "[]")
+        runs_result = subprocess.run(
+            ["gh", "api", f"repos/{PR_REPO}/commits/{sha}/check-runs",
+             "--paginate"],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        return "skip", f"gh unavailable: {e}", ""
+    if runs_result.returncode != 0:
+        return "skip", f"gh api check-runs failed: {runs_result.stderr.strip()}", ""
+    try:
+        data = json.loads(runs_result.stdout or "{}")
     except json.JSONDecodeError:
-        return "skip", "gh pr checks returned non-JSON", ""
+        return "skip", "gh api returned non-JSON", ""
+    checks = data.get("check_runs", [])
     if not checks:
         return "skip", "no checks reported yet", ""
 
-    buckets = [c.get("bucket", "") for c in checks]
+    buckets = [_check_run_bucket(c) for c in checks]
     if any(b == "pending" for b in buckets):
         n = sum(1 for b in buckets if b == "pending")
         return "pending", f"{n}/{len(checks)} checks still running", ""
-    failing = [
-        c for c in checks if c.get("bucket") in ("fail", "cancel")
-    ]
+    failing = [c for c in checks if _check_run_bucket(c) in ("fail", "cancel")]
     if failing:
         names = [c.get("name", "?") for c in failing]
         # Dedup run ids: multiple failing jobs can share one workflow run.
         run_ids: list[str] = []
         for c in failing:
-            m = re.search(r"/runs/(\d+)", c.get("link") or "")
+            url = c.get("html_url") or c.get("details_url") or ""
+            m = re.search(r"/runs/(\d+)", url)
             if m and m.group(1) not in run_ids:
                 run_ids.append(m.group(1))
         sections: list[str] = []
@@ -2059,7 +2080,7 @@ def _pr_check_status() -> tuple[str, str, str]:
                 f"=== run {rid} ===\n{_fetch_run_log_summary(rid)}"
             )
         if not sections:
-            sections.append("(no run-id parseable from `gh pr checks` links)")
+            sections.append("(no run-id parseable from check URLs)")
         detail = "\n\n".join(sections)
         return (
             "failure",
@@ -2258,12 +2279,21 @@ def main() -> None:
             "(default: sonnet)."
         ),
     )
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Run `cargo clean` at the start of each outer-loop iteration.",
+    )
     args = parser.parse_args()
     if args.port is not None and args.todo_only:
         parser.error("--port and --todo-only are mutually exclusive.")
     state = IterCounter(
         args.max_iterations, args.timeout, args.model, args.max_turns
     )
+
+    def maybe_clean() -> None:
+        if args.clean:
+            cargo_clean()
 
     if args.port is not None:
         picked = resolve_port_arg(args.port)
@@ -2272,7 +2302,7 @@ def main() -> None:
             f"\n[port-loop] --port: targeting {picked} → {destination}; "
             f"running pre-repair, sub-loop, then post-repair."
         )
-        cargo_clean()
+        maybe_clean()
         repair(state)
         drive_port(picked, destination, state)
         repair(state)
@@ -2282,7 +2312,7 @@ def main() -> None:
     if args.todo_only:
         while True:
             maybe_hot_reload()
-            cargo_clean()
+            maybe_clean()
             repair(state)
             dispatched, pushed = sync_with_origin(state)
             if dispatched:
@@ -2298,7 +2328,7 @@ def main() -> None:
 
     while True:
         maybe_hot_reload()
-        cargo_clean()
+        maybe_clean()
         repair(state)
 
         dispatched, pushed = sync_with_origin(state)
