@@ -6,6 +6,7 @@ mod common;
 
 mod composite;
 mod composite_kwonlyargs;
+mod datetimes;
 mod float_nastiness;
 mod replay_logic;
 mod testdecorators;
