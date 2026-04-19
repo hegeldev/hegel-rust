@@ -26,8 +26,10 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use notify::event::{CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -232,8 +234,45 @@ pub const METAKEYS_NAME: &[u8] = b".hegel-keys";
 /// Watcher-thread state for a `NativeDatabase`. Dropping the
 /// `RecommendedWatcher` joins and stops the background notify thread,
 /// which is the `_stop_listening` action in Hypothesis's model.
+/// `shutdown` is flipped in `Drop` so any delayed-rescan helper threads
+/// spawned in response to `Create(Folder)` events exit promptly rather
+/// than firing broadcasts against listeners that the caller has since
+/// removed.
 struct WatcherState {
     _watcher: RecommendedWatcher,
+    shutdown: Arc<AtomicBool>,
+}
+
+impl Drop for WatcherState {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Shared state threaded through the watcher callback and its helpers.
+///
+/// Cloning this struct clones all the inner `Arc`s / owned values, which
+/// is what lets a delayed-rescan thread outlive the single notify
+/// callback invocation that spawned it.
+#[derive(Clone)]
+struct WatcherCtx {
+    db_root: PathBuf,
+    // hash → raw key bytes for every key we've seen. Populated from the
+    // on-disk `.hegel-keys` entry at watcher-start time and kept in sync
+    // as new metakey files are created.
+    hash_to_key: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    metakeys_hash: String,
+    listeners: Arc<Listeners>,
+    // Paths for which a `Save` event has already been broadcast. Both
+    // the immediate scan in response to `Create(Folder)` and any delayed
+    // rescan pull from the same disk state, so without dedup a file
+    // whose creation straddles two scans would fire two `Save` events.
+    // Entries are removed on delete/rename so a subsequent re-save of
+    // the same key/value fires again.
+    seen_saves: Arc<Mutex<HashSet<PathBuf>>>,
+    // Cleared when the watcher is torn down; delayed-rescan threads
+    // poll this and exit early.
+    shutdown: Arc<AtomicBool>,
 }
 
 pub struct NativeDatabase {
@@ -274,22 +313,21 @@ impl NativeDatabase {
             .into_iter()
             .map(|key| (fnv_hex(&key), key))
             .collect();
-        let hash_to_key = Arc::new(Mutex::new(hash_to_key));
-        let listeners = Arc::clone(&self.listeners);
-        let hash_to_key_cb = Arc::clone(&hash_to_key);
-        let metakeys_hash_cb = self.metakeys_hash.clone();
-        let db_root_cb = self.db_root.clone();
+        let ctx = WatcherCtx {
+            db_root: self.db_root.clone(),
+            hash_to_key: Arc::new(Mutex::new(hash_to_key)),
+            metakeys_hash: self.metakeys_hash.clone(),
+            listeners: Arc::clone(&self.listeners),
+            seen_saves: Arc::new(Mutex::new(HashSet::new())),
+            shutdown: Arc::new(AtomicBool::new(false)),
+        };
+        let shutdown = Arc::clone(&ctx.shutdown);
+        let cb_ctx = ctx.clone();
 
         let mut watcher =
             match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
                 if let Ok(event) = res {
-                    handle_watcher_event(
-                        event,
-                        &db_root_cb,
-                        &hash_to_key_cb,
-                        &metakeys_hash_cb,
-                        &listeners,
-                    );
+                    handle_watcher_event(event, &cb_ctx);
                 }
             }) {
                 Ok(w) => w,
@@ -309,7 +347,15 @@ impl NativeDatabase {
             return;
         }
 
-        *self.watcher.lock().unwrap() = Some(WatcherState { _watcher: watcher });
+        // Prime the seen-saves set with everything already on disk, so
+        // the first rescan after a Create(Folder) event doesn't
+        // re-broadcast existing entries as fresh saves.
+        prime_seen_saves(&ctx);
+
+        *self.watcher.lock().unwrap() = Some(WatcherState {
+            _watcher: watcher,
+            shutdown,
+        });
     }
 
     /// Stop the `notify` watcher. Called on the 1→0 listener-count
@@ -463,19 +509,13 @@ impl ExampleDatabase for NativeDatabase {
 /// Translate a `notify::Event` into zero or more `ListenerEvent`
 /// broadcasts. Mirrors the `Handler` class in Hypothesis's
 /// `DirectoryBasedExampleDatabase._start_listening`.
-fn handle_watcher_event(
-    event: notify::Event,
-    db_root: &Path,
-    hash_to_key: &Mutex<HashMap<String, Vec<u8>>>,
-    metakeys_hash: &str,
-    listeners: &Listeners,
-) {
+fn handle_watcher_event(event: notify::Event, ctx: &WatcherCtx) {
     match event.kind {
         EventKind::Create(CreateKind::File)
         | EventKind::Create(CreateKind::Any)
         | EventKind::Create(CreateKind::Other) => {
             for path in &event.paths {
-                on_file_created(path, db_root, hash_to_key, metakeys_hash, listeners);
+                on_file_created(path, ctx);
             }
         }
         EventKind::Create(CreateKind::Folder) => {
@@ -486,52 +526,41 @@ fn handle_watcher_event(
             // exactly this pattern (`mkdir subdir; write subdir/file`),
             // so those file events are silently lost. Compensate by
             // scanning the new folder for files already present and
-            // emitting synthetic events — the same workaround
-            // watchdog (used by Hypothesis) applies.
+            // emitting synthetic events, then scheduling a delayed
+            // rescan to catch writes that hadn't landed yet.
             for path in &event.paths {
-                scan_new_folder(path, db_root, hash_to_key, metakeys_hash, listeners);
+                scan_new_folder(path, ctx);
+                schedule_delayed_rescan(path.clone(), ctx.clone());
             }
         }
         EventKind::Remove(RemoveKind::File)
         | EventKind::Remove(RemoveKind::Any)
         | EventKind::Remove(RemoveKind::Other) => {
             for path in &event.paths {
-                on_file_deleted(path, hash_to_key, metakeys_hash, listeners);
+                on_file_deleted(path, ctx);
             }
         }
         EventKind::Modify(ModifyKind::Name(RenameMode::Both)) if event.paths.len() >= 2 => {
-            on_file_moved(
-                &event.paths[0],
-                &event.paths[1],
-                hash_to_key,
-                metakeys_hash,
-                listeners,
-            );
+            on_file_moved(&event.paths[0], &event.paths[1], ctx);
         }
         EventKind::Modify(ModifyKind::Name(RenameMode::From | RenameMode::Any)) => {
             for path in &event.paths {
-                on_file_deleted(path, hash_to_key, metakeys_hash, listeners);
+                on_file_deleted(path, ctx);
             }
         }
         EventKind::Modify(ModifyKind::Name(RenameMode::To)) => {
             for path in &event.paths {
-                on_file_created(path, db_root, hash_to_key, metakeys_hash, listeners);
+                on_file_created(path, ctx);
             }
         }
         _ => {}
     }
 }
 
-/// Walk a newly-created folder and emit a synthetic `on_file_created`
-/// for each file (recursing into any subfolders). Recovers the file
-/// events that inotify races cause to be dropped on directory creation.
-fn scan_new_folder(
-    path: &Path,
-    db_root: &Path,
-    hash_to_key: &Mutex<HashMap<String, Vec<u8>>>,
-    metakeys_hash: &str,
-    listeners: &Listeners,
-) {
+/// Walk a folder and emit a synthetic `on_file_created` for each file
+/// (recursing into any subfolders). Recovers the file events that
+/// inotify races cause to be dropped on directory creation.
+fn scan_new_folder(path: &Path, ctx: &WatcherCtx) {
     let Ok(entries) = std::fs::read_dir(path) else {
         return;
     };
@@ -541,11 +570,62 @@ fn scan_new_folder(
         };
         let child = entry.path();
         if file_type.is_dir() {
-            scan_new_folder(&child, db_root, hash_to_key, metakeys_hash, listeners);
+            scan_new_folder(&child, ctx);
         } else if file_type.is_file() {
-            on_file_created(&child, db_root, hash_to_key, metakeys_hash, listeners);
+            on_file_created(&child, ctx);
         }
     }
+}
+
+/// Seed `ctx.seen_saves` with every value file already on disk at the
+/// moment the watcher starts, so a subsequent rescan triggered by a
+/// `Create(Folder)` event doesn't replay pre-existing entries as fresh
+/// `Save` broadcasts.
+fn prime_seen_saves(ctx: &WatcherCtx) {
+    let Ok(key_dirs) = std::fs::read_dir(&ctx.db_root) else {
+        return;
+    };
+    let mut seen = ctx.seen_saves.lock().unwrap();
+    for entry in key_dirs.flatten() {
+        let path = entry.path();
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
+        if !ft.is_dir() {
+            continue;
+        }
+        let Ok(files) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for f in files.flatten() {
+            if f.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                seen.insert(f.path());
+            }
+        }
+    }
+}
+
+/// inotify has a well-known race: a file written into a freshly-created
+/// subdirectory can appear before notify manages to install a watch on
+/// that subdir, so the file's `Create(File)` event is silently lost.
+/// The immediate scan in `handle_watcher_event` only catches files that
+/// were already in place; this helper fires repeatedly for a short
+/// window afterwards to catch writes that were in flight when the
+/// `Create(Folder)` event was delivered. Dedup via `ctx.seen_saves`
+/// guarantees each value file produces at most one `Save` broadcast.
+fn schedule_delayed_rescan(path: PathBuf, ctx: WatcherCtx) {
+    thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut delay = Duration::from_millis(10);
+        while Instant::now() < deadline {
+            if ctx.shutdown.load(Ordering::SeqCst) {
+                return;
+            }
+            thread::sleep(delay);
+            scan_new_folder(&path, &ctx);
+            delay = (delay * 2).min(Duration::from_millis(200));
+        }
+    });
 }
 
 /// Extract the parent-directory basename (the hashed key) from a value
@@ -558,22 +638,16 @@ fn key_hash_of(path: &Path) -> Option<String> {
         .map(String::from)
 }
 
-fn on_file_created(
-    path: &Path,
-    db_root: &Path,
-    hash_to_key: &Mutex<HashMap<String, Vec<u8>>>,
-    metakeys_hash: &str,
-    listeners: &Listeners,
-) {
+fn on_file_created(path: &Path, ctx: &WatcherCtx) {
     let Some(key_hash) = key_hash_of(path) else {
         return;
     };
-    if key_hash == metakeys_hash {
+    if key_hash == ctx.metakeys_hash {
         // The file contents are the raw bytes of a key; record them in
         // the reverse map so later value events under that key resolve.
         if let Ok(key_bytes) = std::fs::read(path) {
             if let Some(value_name) = path.file_name().and_then(|s| s.to_str()) {
-                hash_to_key
+                ctx.hash_to_key
                     .lock()
                     .unwrap()
                     .insert(value_name.to_string(), key_bytes);
@@ -581,7 +655,14 @@ fn on_file_created(
         }
         return;
     }
-    let key = match resolve_key(&key_hash, db_root, hash_to_key, metakeys_hash) {
+    // Dedup: the immediate scan of a newly-created folder, the delayed
+    // rescan spawned by `Create(Folder)`, and an eventual `Create(File)`
+    // from the new per-subdir inotify watch can all observe the same
+    // value file. Only the first observer broadcasts a `Save`.
+    if !ctx.seen_saves.lock().unwrap().insert(path.to_path_buf()) {
+        return;
+    }
+    let key = match resolve_key(&key_hash, ctx) {
         Some(k) => k,
         None => return,
     };
@@ -589,7 +670,7 @@ fn on_file_created(
         Ok(v) => v,
         Err(_) => return,
     };
-    listeners.broadcast(&ListenerEvent::Save { key, value });
+    ctx.listeners.broadcast(&ListenerEvent::Save { key, value });
 }
 
 /// Resolve a key hash to its raw key bytes, falling back to a direct read
@@ -602,64 +683,52 @@ fn on_file_created(
 /// `hash_to_key` never learns about the key. Recovering it from the
 /// on-disk metakeys file lets us still resolve the key when the value
 /// file's event eventually arrives.
-fn resolve_key(
-    key_hash: &str,
-    db_root: &Path,
-    hash_to_key: &Mutex<HashMap<String, Vec<u8>>>,
-    metakeys_hash: &str,
-) -> Option<Vec<u8>> {
-    if let Some(k) = hash_to_key.lock().unwrap().get(key_hash).cloned() {
+fn resolve_key(key_hash: &str, ctx: &WatcherCtx) -> Option<Vec<u8>> {
+    if let Some(k) = ctx.hash_to_key.lock().unwrap().get(key_hash).cloned() {
         return Some(k);
     }
-    let metakey_file = db_root.join(metakeys_hash).join(key_hash);
+    let metakey_file = ctx.db_root.join(&ctx.metakeys_hash).join(key_hash);
     let key_bytes = std::fs::read(&metakey_file).ok()?;
-    hash_to_key
+    ctx.hash_to_key
         .lock()
         .unwrap()
         .insert(key_hash.to_string(), key_bytes.clone());
     Some(key_bytes)
 }
 
-fn on_file_deleted(
-    path: &Path,
-    hash_to_key: &Mutex<HashMap<String, Vec<u8>>>,
-    metakeys_hash: &str,
-    listeners: &Listeners,
-) {
+fn on_file_deleted(path: &Path, ctx: &WatcherCtx) {
     let Some(key_hash) = key_hash_of(path) else {
         return;
     };
     // Metakey deletes are internal bookkeeping, not user-visible state
     // changes — skip them.
-    if key_hash == metakeys_hash {
+    if key_hash == ctx.metakeys_hash {
         return;
     }
-    let key = match hash_to_key.lock().unwrap().get(&key_hash).cloned() {
+    let key = match ctx.hash_to_key.lock().unwrap().get(&key_hash).cloned() {
         Some(k) => k,
         None => return,
     };
+    // Drop the seen-saves entry so a subsequent re-save of the same
+    // key/value fires a fresh `Save` broadcast.
+    ctx.seen_saves.lock().unwrap().remove(path);
     // We know the key, but not the value — the file is already gone, so
     // we can't read its contents. Matches Hypothesis's behaviour.
-    listeners.broadcast(&ListenerEvent::Delete { key, value: None });
+    ctx.listeners
+        .broadcast(&ListenerEvent::Delete { key, value: None });
 }
 
-fn on_file_moved(
-    src_path: &Path,
-    dst_path: &Path,
-    hash_to_key: &Mutex<HashMap<String, Vec<u8>>>,
-    metakeys_hash: &str,
-    listeners: &Listeners,
-) {
+fn on_file_moved(src_path: &Path, dst_path: &Path, ctx: &WatcherCtx) {
     let (Some(src_h), Some(dst_h)) = (key_hash_of(src_path), key_hash_of(dst_path)) else {
         return;
     };
     // Don't broadcast metakey moves (they shouldn't happen in normal
     // operation, but defend against it).
-    if src_h == metakeys_hash || dst_h == metakeys_hash {
+    if src_h == ctx.metakeys_hash || dst_h == ctx.metakeys_hash {
         return;
     }
     let (src_key, dst_key) = {
-        let map = hash_to_key.lock().unwrap();
+        let map = ctx.hash_to_key.lock().unwrap();
         (map.get(&src_h).cloned(), map.get(&dst_h).cloned())
     };
     let (Some(src_key), Some(dst_key)) = (src_key, dst_key) else {
@@ -671,11 +740,16 @@ fn on_file_moved(
         Ok(v) => v,
         Err(_) => return,
     };
-    listeners.broadcast(&ListenerEvent::Delete {
+    {
+        let mut seen = ctx.seen_saves.lock().unwrap();
+        seen.remove(src_path);
+        seen.insert(dst_path.to_path_buf());
+    }
+    ctx.listeners.broadcast(&ListenerEvent::Delete {
         key: src_key,
         value: Some(value.clone()),
     });
-    listeners.broadcast(&ListenerEvent::Save {
+    ctx.listeners.broadcast(&ListenerEvent::Save {
         key: dst_key,
         value,
     });
