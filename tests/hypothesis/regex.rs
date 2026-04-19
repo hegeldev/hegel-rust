@@ -107,12 +107,9 @@ fn test_any_doesnt_generate_newline() {
 }
 
 // test_any_with_dotall_generate_newline: re.compile("\\A.\\Z", re.DOTALL) == "(?s)\\A.\\Z"
-// Uses large max_attempts because \n is rare in the full Unicode space.
 #[test]
 fn test_any_with_dotall_generate_newline() {
-    FindAny::new(gs::from_regex(r"(?s)\A.\Z"), |s: &String| s == "\n")
-        .max_attempts(1_000_000)
-        .run();
+    find_any(gs::from_regex(r"(?s)\A.\Z"), |s: &String| s == "\n");
 }
 
 // test_any_with_dotall_generate_newline_binary: omitted — bytes patterns not supported.
