@@ -397,9 +397,18 @@ def run_coverage(native_mode: bool = False) -> Path:
     # First try with subprocess binaries included (for TempRustProject coverage).
     # If that fails, fall back to standard report.
     llvm_cov_target = Path("target/llvm-cov-target")
+    # TempRustProject tests share a target dir under CARGO_TARGET_TMPDIR
+    # (tests/common/project.rs::shared_target_dir), which lives at
+    # `<llvm-cov-target>/tmp/hegel-shared-target/debug/`. Older runs may also
+    # leave binaries directly under `debug/`, so check both.
+    subprocess_bin_globs = (
+        "debug/temp_hegel_test_*",
+        "tmp/hegel-shared-target/debug/temp_hegel_test_*",
+    )
     subprocess_bins = sorted(
         p
-        for p in llvm_cov_target.glob("debug/temp_hegel_test_*")
+        for pattern in subprocess_bin_globs
+        for p in llvm_cov_target.glob(pattern)
         if p.is_file() and not p.suffix  # exclude .d, .pdb etc
     )
     print(f"  Generating report ({len(subprocess_bins)} subprocess binaries)...")
