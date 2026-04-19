@@ -15,14 +15,17 @@ Outer loop, each iteration:
      `origin/main`, and push (auto-pushes any local commits). Rebase
      conflicts or push failures dispatch a claude agent.
   4. Gate on the upstream PR (hegeldev/hegel-rust#188)'s CI. Block on
-     `gh pr checks --watch` while checks are pending; dispatch a
-     specialised agent to fix CI if the cycle completes as failed;
-     loop until CI is green before advancing. (If we just pushed in
-     step 3, poll briefly for the new cycle to register before reading
-     status so we don't act on stale state.)
+     `gh pr checks --watch` while checks are pending. If the cycle
+     completes red, dispatch a short TRIAGE agent that reads an
+     already-extracted failing-log summary and prepends one `[CI]`-
+     prefixed TODO entry per independent failure to TODO.yaml (it does
+     not fix anything). The entries are then cleared one-per-dispatch
+     by step 5. If TODO.yaml already has `[CI]` entries when CI goes
+     red, skip re-triage and let them drain first.
   5. If `TODO.yaml` has any entries, pop the first one and dispatch claude
      to clear it, then continue the outer loop (repair runs again before
-     the next action).
+     the next action). CI failures flow through this path via step 4's
+     triage.
   6. If no TODOs, pick a random unported upstream file and enter the port
      sub-loop.
 
@@ -68,63 +71,46 @@ import yaml
 # ---- prompts (tune freely) ---------------------------------------------------
 
 COMMON_SYSTEM_PROMPT = """\
-You are being driven by scripts/port-loop.py, a non-interactive loop that
-calls you with one focused task per invocation. Do the task, commit, and
-exit. The loop re-runs its gates after you return, so a partial fix is
-fine — the next invocation will pick up from wherever the gates next
-fail.
+You are driven by scripts/port-loop.py — a non-interactive loop that
+invokes you with one focused task per call. Do the task, commit, exit.
+The loop re-runs its gates after you return; a partial fix is fine, the
+next invocation picks up from the next failing gate.
 
 Ground rules:
-- Work in TDD order when fixing bugs (regression test first).
-- Commit every focused change with a descriptive message. Never --amend,
-  never --no-verify.
-- Read .claude/skills/porting-tests/SKILL.md before porting or reviewing
-  a port.
-- Read .claude/skills/implementing-native/SKILL.md before adding or
-  extending code under src/native/ (including filling in a todo!()
-  stub, or native-gating a test that needs new engine support). The
-  key rule: consult pbtkit (resources/pbtkit/src/pbtkit/) first, then
-  Hypothesis (resources/hypothesis/hypothesis-python/src/hypothesis/
-  internal/) only where pbtkit is insufficient. The native engine is
-  a port — match upstream semantics rather than reinventing them.
-- As you port, keep the skills current. If you figure out how to port
-  something in a way not already covered by the porting-tests skill
-  (or its references under .claude/skills/porting-tests/references/)
-  or the implementing-native skill — a Python→Rust translation that's
-  missing from the cheat sheet, a non-obvious pattern, a gotcha —
-  update the relevant file in the same commit. Don't duplicate things
-  that are already documented.
+- TDD when fixing bugs: regression test first.
+- Commit each focused change. Never --amend, never --no-verify.
+- Before porting or reviewing a port, read
+  .claude/skills/porting-tests/SKILL.md.
+- Before touching src/native/ (including filling a todo!() stub or
+  native-gating a test that needs new engine support), read
+  .claude/skills/implementing-native/SKILL.md. The native engine is a
+  port: consult pbtkit (resources/pbtkit/src/pbtkit/) first, Hypothesis
+  (resources/hypothesis/hypothesis-python/src/hypothesis/internal/)
+  where pbtkit is insufficient. Match upstream semantics.
+"""
 
-Skip vs. port policy (applies to every port-related task):
+# Appended to port-related prompts only (not to the common system prompt)
+# so non-port dispatches don't pay to cache-read it every turn.
+SKIP_POLICY = """\
 
-- Add a file to SKIPPED.md ONLY when its tests rely on *public API* that
-  has no hegel-rust counterpart: Python-specific facilities (pickle,
-  __repr__, sys.modules, Python syntax, dunder access) or integrations
-  with other Python libraries (numpy, pandas, django, attrs, redis).
+Skip vs. port policy:
+
+- Add a file to SKIPPED.md ONLY when its tests rely on *public API* with
+  no hegel-rust counterpart: Python-specific facilities (pickle, __repr__,
+  sys.modules, Python syntax, dunder access) or integrations with other
+  Python libraries (numpy, pandas, django, attrs, redis).
 
 - "Has no Rust counterpart" is NOT on its own a valid reason to skip. It
-  is the reason to PORT. Tests on internal APIs (pbtkit / Hypothesis
-  engine internals — `PbtkitState`, `ChoiceNode`, `ConjectureRunner`,
-  `SHRINK_PASSES`, `TC.for_choices`, `to_index`/`from_index`, database
-  serialization tags, span introspection, etc.) exist to pin down
-  behaviour that `src/native/` needs to match. Port them. If the
-  corresponding native feature doesn't exist yet:
-  * native-gate the test with `#[cfg(feature = "native")]` (or
-    `#![cfg(feature = "native")]` at file top if every test in it is
-    native-only),
-  * add the missing feature under `src/native/`. If it's easy,
-    implement it properly. If it's hard, stub the function body with
-    `todo!("...")` so a later fixer-task invocation picks it up.
-  * the test itself MUST compile cleanly in both modes. `todo!()`
-    belongs in the source code, never in the test body. "Too complex
-    to port" is not a valid reason to skip — that's exactly the
-    native-gated-plus-source-stub case.
+  is the reason to PORT. Tests on internal APIs (pbtkit/Hypothesis engine
+  internals) exist to pin down behaviour that src/native/ must match. If
+  the native feature doesn't exist yet: native-gate the test with
+  `#[cfg(feature = "native")]` and add the feature under src/native/
+  (stubbed with `todo!()` if too large for one commit). The test must
+  compile in both modes; `todo!()` goes in the source, never the test.
 
-- Do NOT skip tests on the grounds that "hegel-rust already has an
-  equivalent test elsewhere", "this is covered by tests/foo.rs", or
-  "this looks redundant". Redundancy is fine. Incorrectly skipping a
-  test is much worse than porting something a second time. A later
-  rationalisation pass will deduplicate; don't pre-empt it.
+- Do NOT skip tests on the grounds that hegel-rust has "an equivalent
+  elsewhere" or "this is redundant". Redundancy is fine. A later
+  rationalisation pass deduplicates; don't pre-empt it.
 """
 
 LINT_FIX_PROMPT = (
@@ -203,31 +189,31 @@ Ground rules:
   re-dispatch you if any test still trips the warning.
 """
 
-PR_CI_FIX_PROMPT = """\
-CI on https://github.com/{repo}/pull/{pr} has completed with failures,
-and the port loop is parked on that until it's fixed. Output of `gh
-pr checks {pr} --repo {repo}` is included below.
+CI_TRIAGE_PROMPT = """\
+CI on https://github.com/{repo}/pull/{pr} is red. Your ONLY job in this
+dispatch is triage: break the failing-job logs below into independent
+TODO entries and prepend them to TODO.yaml. Do NOT try to fix anything
+in this invocation — a later dispatch will pick each TODO off the top
+and fix it.
 
-Steps:
-1. Identify which checks failed from the output below.
-2. Pull the failing-run logs:
-      gh run view <run-id> --log-failed --repo {repo}
-   (the run-id is in the "link" column of `gh pr checks`).
-3. Find the root cause and fix it on the PR's head branch:
-   - If the PR tracks the currently-checked-out branch (`git rev-parse
-     --abbrev-ref HEAD` matches the PR's headRefName), make the fix in
-     place: commit and `git push` here.
-   - Otherwise: `gh pr checkout {pr}`, fix, commit, push, then
-     `git switch -` to return to the original branch before exiting.
-4. Do NOT paper over failures with `--no-verify`, `#[ignore]`,
-   SKIPPED.md entries, or by removing the failing test. Fix the root
-   cause.
-5. Do NOT `git push --force` unless the PR history truly needs
-   rewriting (use `--force-with-lease` if so).
+The log extract below is already filtered (panics, assertion failures,
+test-result lines, compile errors, coverage-ratchet failures). Read it,
+identify the distinct root causes, and write ONE TODO entry per
+independent root cause. Guidelines:
 
-One focused commit is fine. The next port-loop iteration re-checks PR
-CI; if it's still red after its next run, you'll be dispatched again
-with fresh output.
+- Title: start with `[CI] ` and name the failing test or check.
+  Example: `[CI] tests/test_native.rs::native_regex_unicode_...`.
+- If two failures share a root cause (same test, same panic),
+  merge into one entry — don't split cosmetically.
+- `details`: include the relevant extracted log lines verbatim so the
+  fix agent doesn't need `gh run view`. Also note the failing command
+  or workflow job if clear from the log.
+- Prepend the new entries to the top of TODO.yaml (above existing
+  entries). Keep existing entries and their order otherwise untouched.
+- Do NOT modify any other files. Do NOT fix the failures. Do NOT run
+  tests. Just edit TODO.yaml.
+
+One focused commit: "Triage CI failures on PR {pr}" or similar.
 """
 
 SYNC_FIX_PROMPT = """\
@@ -265,9 +251,9 @@ PORT_PROMPT = """\
 Port the upstream test file {path} to {destination} per the porting-tests
 skill. You will be invoked repeatedly on this file until it's green in
 both server and native mode with a clean tree, or (per the skip policy
-in the system prompt) `{name}` is in SKIPPED.md. Make one focused commit
-toward that goal.
-"""
+below) `{name}` is in SKIPPED.md. Make one focused commit toward that
+goal.
+""" + SKIP_POLICY
 
 PORT_TEST_FIX_SERVER_PROMPT = """\
 Continuing port {path} → {destination}. The module's server-mode tests
@@ -282,19 +268,16 @@ are failing: `HEGEL_SERVER_COMMAND=/bin/false cargo test --features
 native --test {kind} {module}`. Full output below — work from it
 rather than rerunning the command. Fix the failing tests and commit.
 
-Per the skip policy in the system prompt, missing native-mode engine
-features are NOT a reason to add this file to SKIPPED.md. Instead:
-native-gate the affected test(s) with `#[cfg(feature = "native")]` and
-add the missing feature under `src/native/` — stubbed with `todo!()` if
-it's too large to implement in one focused commit. The test itself
-must compile in both modes; the `todo!()` goes in the source.
-
-When you do implement (or stub) the missing feature, read
-.claude/skills/implementing-native/SKILL.md first: consult pbtkit
-(`resources/pbtkit/src/pbtkit/`) as the primary reference, and
-Hypothesis (`resources/hypothesis/hypothesis-python/src/hypothesis/
-internal/`) only where pbtkit is insufficient.
-"""
+Missing native-mode engine features are NOT a reason to add this file to
+SKIPPED.md (see skip policy below). Instead: native-gate the affected
+test(s) with `#[cfg(feature = "native")]` and add the missing feature
+under `src/native/` — stubbed with `todo!()` if it's too large for one
+focused commit. When implementing or stubbing: read
+.claude/skills/implementing-native/SKILL.md first; consult pbtkit
+(`resources/pbtkit/src/pbtkit/`) as the primary reference, Hypothesis
+(`resources/hypothesis/hypothesis-python/src/hypothesis/internal/`) only
+where pbtkit is insufficient.
+""" + SKIP_POLICY
 
 PORT_COMMIT_PROMPT = """\
 Continuing port {path} → {destination}. Filtered tests pass in both
@@ -306,9 +289,8 @@ PORT_MISSING_TESTS_PROMPT = """\
 Continuing port {path} → {destination}. The destination file exists
 but contains no `#[test]` attribute — either the port is incomplete
 or stubbed out. Add the ported tests and commit. Review the skip
-policy in the system prompt before routing this file to SKIPPED.md;
-it is strict.
-"""
+policy below before routing this file to SKIPPED.md; it is strict.
+""" + SKIP_POLICY
 
 PORT_SKILL_UPDATE_PROMPT = """\
 Reflection pass for the port of {path} → {destination}. The gates are
@@ -371,7 +353,7 @@ during this sub-loop ({start_sha}..HEAD).
 
 Read the upstream file ({path}), the ported file ({destination}), and
 the commits under review. Then evaluate honestly, applying the skip
-policy from the system prompt:
+policy below:
 
 - Was a real, faithful attempt made to port the tests, or were corners
   cut? Watch for: tests stubbed out, assertions weakened, whole test
@@ -414,7 +396,7 @@ on.
 Commits under review:
 
 {log}
-"""
+""" + SKIP_POLICY
 
 TODO_PROMPT = """\
 Clear the following TODO entry from TODO.yaml (at the repo root). The port
@@ -1248,6 +1230,7 @@ def dispatch_claude(
     gate_output: str | None,
     timeout: float | None,
     model: str,
+    max_turns: int = 0,
     resume_session: str | None = None,
 ) -> tuple[str | None, int]:
     """Spawn claude -p (or resume an existing session), stream events live.
@@ -1303,6 +1286,7 @@ def dispatch_claude(
     )
 
     timed_out = False
+    turn_capped = False
 
     def _kill_on_timeout() -> None:
         nonlocal timed_out
@@ -1318,6 +1302,8 @@ def dispatch_claude(
     if timer is not None:
         timer.daemon = True
         timer.start()
+
+    seen_msg_ids: set[str] = set()
 
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     if resume_session is not None:
@@ -1345,6 +1331,21 @@ def dispatch_claude(
             except json.JSONDecodeError:
                 print(f"[claude:raw] {line}", flush=True)
                 continue
+            if evt.get("type") == "assistant" and max_turns > 0:
+                mid = (evt.get("message") or {}).get("id")
+                if isinstance(mid, str) and mid not in seen_msg_ids:
+                    seen_msg_ids.add(mid)
+                    if len(seen_msg_ids) > max_turns:
+                        turn_capped = True
+                        print(
+                            f"\n[port-loop] hit --max-turns-per-dispatch="
+                            f"{max_turns}; killing subprocess.",
+                            flush=True,
+                        )
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
             if evt.get("type") == "system" and evt.get("subtype") == "init":
                 sid = evt.get("session_id")
                 if isinstance(sid, str) and session_id is None:
@@ -1377,6 +1378,11 @@ def dispatch_claude(
         log_file.close()
         if timed_out:
             print(f"\n[port-loop] claude timed out after {timeout}s; continuing.")
+        elif turn_capped:
+            print(
+                f"\n[port-loop] claude hit turn cap after "
+                f"{len(seen_msg_ids)} turns; continuing."
+            )
 
     return session_id, proc.returncode
 
@@ -1394,12 +1400,17 @@ class IterCounter:
     """
 
     def __init__(
-        self, max_iterations: int, timeout: float | None, model: str
+        self,
+        max_iterations: int,
+        timeout: float | None,
+        model: str,
+        max_turns: int = 0,
     ) -> None:
         self.n = 0
         self.max = max_iterations
         self.timeout = timeout
         self.model = model
+        self.max_turns = max_turns
         self.last_session_id: str | None = None
 
     def _check_cap(self) -> None:
@@ -1417,6 +1428,7 @@ class IterCounter:
             gate_output=gate_output,
             timeout=self.timeout,
             model=self.model,
+            max_turns=self.max_turns,
         )
         # Even if exit code was non-zero, a captured sid still means a
         # valid session exists that we can try to resume later.
@@ -1450,6 +1462,7 @@ class IterCounter:
             gate_output=gate_output,
             timeout=self.timeout,
             model=self.model,
+            max_turns=self.max_turns,
             resume_session=previous,
         )
         if code != 0:
@@ -1853,13 +1866,68 @@ def sync_with_origin(state: IterCounter) -> tuple[bool, bool]:
 # ---- PR CI gate -------------------------------------------------------------
 
 
+_CI_SIGNAL_RE = re.compile(
+    r"(FAILED|"
+    r"panicked at|thread .* panicked|assertion (failed|`left)|"
+    r"error(\[E\d+\])?:|warning: unused|"
+    r"test result:|"
+    r"^Uncovered|Coverage check (FAILED|PASSED)|"
+    r"^\s*---- .+ stdout ----|^failures:|"
+    r"note: run with `RUST_BACKTRACE|"
+    r"Error: Process completed with exit code)",
+    re.MULTILINE,
+)
+
+
+def _extract_failure_lines(raw: str, max_chars: int = 6000) -> str:
+    """Keep lines matching CI-failure patterns, plus a little context.
+
+    Logs from `gh run view --log-failed` can be tens of thousands of
+    lines; the fix agent only needs the failure markers and their
+    nearby context. Returns a trimmed string capped at `max_chars`.
+    """
+    if not raw.strip():
+        return "(empty log)"
+    lines = raw.splitlines()
+    keep = [False] * len(lines)
+    for i, line in enumerate(lines):
+        if _CI_SIGNAL_RE.search(line):
+            for j in range(max(0, i - 1), min(len(lines), i + 8)):
+                keep[j] = True
+    kept = [ln for ln, k in zip(lines, keep) if k]
+    out = "\n".join(kept).strip()
+    if not out:
+        # No signal matched; fall back to the last ~80 lines so the
+        # agent at least has something to work with.
+        out = "\n".join(lines[-80:])
+    if len(out) > max_chars:
+        out = out[:max_chars].rstrip() + "\n... (truncated)\n"
+    return out
+
+
+def _fetch_run_log_summary(run_id: str) -> str:
+    """Fetch `gh run view --log-failed` for a run id and extract signal."""
+    try:
+        proc = subprocess.run(
+            [
+                "gh", "run", "view", run_id,
+                "--log-failed", "--repo", PR_REPO,
+            ],
+            capture_output=True, text=True, timeout=180, check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        return f"(gh run view failed: {e})"
+    raw = proc.stdout + ("\n" + proc.stderr if proc.stderr else "")
+    return _extract_failure_lines(raw)
+
+
 def _pr_check_status() -> tuple[str, str, str]:
     """Return (status, summary, detail) for the tracked PR's CI.
 
     `status` is one of `"skip"` (can't tell / PR closed / no checks),
     `"pending"`, `"success"`, `"failure"`. `summary` is a short label
-    for logs. `detail` is the raw `gh pr checks` output suitable for
-    handing to a fix agent (empty for statuses other than `"failure"`).
+    for logs. `detail` is a pre-extracted failing-log summary for the
+    triage agent (empty for statuses other than `"failure"`).
     """
     try:
         result = subprocess.run(
@@ -1894,25 +1962,44 @@ def _pr_check_status() -> tuple[str, str, str]:
         n = sum(1 for b in buckets if b == "pending")
         return "pending", f"{n}/{len(checks)} checks still running", ""
     failing = [
-        c.get("name", "?")
-        for c in checks
-        if c.get("bucket") in ("fail", "cancel")
+        c for c in checks if c.get("bucket") in ("fail", "cancel")
     ]
     if failing:
-        # Grab the human-readable form for the agent prompt.
-        detail_proc = subprocess.run(
-            ["gh", "pr", "checks", str(PR_NUMBER), "--repo", PR_REPO],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        detail = detail_proc.stdout + detail_proc.stderr
+        names = [c.get("name", "?") for c in failing]
+        # Dedup run ids: multiple failing jobs can share one workflow run.
+        run_ids: list[str] = []
+        for c in failing:
+            m = re.search(r"/runs/(\d+)", c.get("link") or "")
+            if m and m.group(1) not in run_ids:
+                run_ids.append(m.group(1))
+        sections: list[str] = []
+        for rid in run_ids:
+            print(
+                f"[port-loop] fetching --log-failed for run {rid}",
+                flush=True,
+            )
+            sections.append(
+                f"=== run {rid} ===\n{_fetch_run_log_summary(rid)}"
+            )
+        if not sections:
+            sections.append("(no run-id parseable from `gh pr checks` links)")
+        detail = "\n\n".join(sections)
         return (
             "failure",
-            f"{len(failing)} failing: {', '.join(failing)}",
+            f"{len(failing)} failing: {', '.join(names)}",
             detail,
         )
     return "success", f"all {len(checks)} checks passing", ""
+
+
+def has_ci_todos() -> bool:
+    """True if TODO.yaml has at least one `[CI]`-prefixed entry."""
+    for entry in read_todos():
+        if isinstance(entry, dict):
+            title = entry.get("title")
+            if isinstance(title, str) and title.startswith("[CI]"):
+                return True
+    return False
 
 
 def gate_pr_ci() -> tuple[bool, str]:
@@ -1971,62 +2058,38 @@ def _watch_pr_ci(timeout: float = 3600.0) -> None:
 
 
 def drive_pr_ci(state: IterCounter, *, just_pushed: bool = False) -> bool:
-    """Block until the upstream PR's CI is green (or unknowable).
+    """Act on the upstream PR's CI state.
 
-    Loops internally on the PR state:
-    - "success" / "skip": return False (no action needed).
-    - "pending": block on `gh pr checks --watch` until CI finishes,
-      then re-evaluate.
-    - "failure": dispatch the fix agent; if it produced a new commit
-      (which `sync_with_origin` will have pushed next tick via rebase
-      onto the branch), wait for GitHub to register new checks and
-      loop on `--watch` again.
+    - "success" / "skip": return False (no action).
+    - "pending": block on `gh pr checks --watch`, then re-evaluate.
+    - "failure": if TODO.yaml already has `[CI]` entries, return True so
+      the outer loop drains them via drive_todos. Otherwise dispatch
+      the triage agent (which writes `[CI]` entries to TODO.yaml) and
+      return True.
 
-    When `just_pushed=True` (the caller's `sync_with_origin` just
-    pushed new commits), poll for the new CI cycle to register before
-    reading status, so we don't act on stale pre-push state.
-
-    Returns True if anything was dispatched or waited on — the outer
-    loop continues in that case so repair + sync re-run. Returns False
-    only when CI was already green (or `gh` couldn't tell).
+    Returns True if any action was taken; False only when CI was
+    already green (or `gh` couldn't tell).
     """
     if just_pushed:
         _wait_for_new_pr_checks()
 
-    max_cycles = 5
-    any_action = False
-    for _ in range(max_cycles):
-        status, summary, detail = _pr_check_status()
-        print(f"[port-loop] PR #{PR_NUMBER}: {status} — {summary}", flush=True)
-        if status in ("success", "skip"):
-            return any_action
-        if status == "pending":
-            _watch_pr_ci()
-            any_action = True
-            continue
-        # status == "failure"
-        pre_sha = _rev_parse("HEAD")
-        state.dispatch(
-            PR_CI_FIX_PROMPT.format(repo=PR_REPO, pr=PR_NUMBER),
-            gate_output=detail,
+    status, summary, detail = _pr_check_status()
+    print(f"[port-loop] PR #{PR_NUMBER}: {status} — {summary}", flush=True)
+    if status in ("success", "skip"):
+        return False
+    if status == "pending":
+        _watch_pr_ci()
+        return True
+    # status == "failure"
+    if has_ci_todos():
+        print(
+            "[port-loop] CI failing but TODO.yaml already has [CI] entries; "
+            "letting drive_todos drain them before re-triaging."
         )
-        any_action = True
-        if _rev_parse("HEAD") == pre_sha:
-            print(
-                "[port-loop] PR CI fix agent produced no new commit; "
-                "returning so the outer loop can re-evaluate."
-            )
-            return True
-        if not _wait_for_new_pr_checks():
-            print(
-                "[port-loop] new CI cycle didn't register after fix push; "
-                "returning so the outer loop can re-evaluate."
-            )
-            return True
-        # New cycle is pending; loop back to --watch it.
-    print(
-        f"[port-loop] drive_pr_ci: {max_cycles} inner cycles without reaching "
-        f"green; returning so the outer loop can retry."
+        return True
+    state.dispatch(
+        CI_TRIAGE_PROMPT.format(repo=PR_REPO, pr=PR_NUMBER),
+        gate_output=detail,
     )
     return True
 
@@ -2075,8 +2138,19 @@ def main() -> None:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=600,
-        help="Per-claude-call timeout in seconds (default: 600s = 10 minutes).",
+        default=300,
+        help="Per-claude-call timeout in seconds (default: 300s = 5 minutes).",
+    )
+    parser.add_argument(
+        "--max-turns-per-dispatch",
+        type=int,
+        default=40,
+        dest="max_turns",
+        help=(
+            "Kill a dispatched claude subprocess after this many distinct "
+            "assistant API calls (default: 40). Forces early give-up before "
+            "the subprocess grinds up the full --timeout. 0 = unlimited."
+        ),
     )
     parser.add_argument(
         "--port",
@@ -2110,7 +2184,9 @@ def main() -> None:
     args = parser.parse_args()
     if args.port is not None and args.todo_only:
         parser.error("--port and --todo-only are mutually exclusive.")
-    state = IterCounter(args.max_iterations, args.timeout, args.model)
+    state = IterCounter(
+        args.max_iterations, args.timeout, args.model, args.max_turns
+    )
 
     if args.port is not None:
         picked = resolve_port_arg(args.port)
