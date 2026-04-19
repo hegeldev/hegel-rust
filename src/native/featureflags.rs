@@ -193,9 +193,8 @@ impl Generator<FeatureFlags> for FeatureStrategy {
         // is disabled. Zero (the shrink target) means every feature is
         // enabled.
         let p_disabled = with_native_tc(|handle| {
-            let handle = handle.expect(
-                "FeatureStrategy::do_draw called outside the native test context",
-            );
+            let handle =
+                handle.expect("FeatureStrategy::do_draw called outside the native test context");
             match handle.borrow_mut().draw_integer(0, 254) {
                 Ok(n) => n as f64 / 255.0,
                 Err(StopTest) => panic!("{}", STOP_TEST_STRING),
