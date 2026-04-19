@@ -878,20 +878,46 @@ def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Check code coverage")
     parser.add_argument(
+        "--mode",
+        choices=["standard", "native", "both"],
+        default="both",
+        help=(
+            "Coverage mode: 'standard' (--features rand,antithesis), "
+            "'native' (--features native), or 'both' (default — runs "
+            "both and merges the lcov reports before checking)."
+        ),
+    )
+    parser.add_argument(
         "--native",
         action="store_true",
-        help="Run coverage in native mode (--features native, separate ratchet)",
+        help="Deprecated alias for --mode native (kept for backwards compat).",
     )
     args = parser.parse_args()
-    native_mode: bool = args.native
-    ratchet_key = "nocov_native" if native_mode else "nocov"
+    mode: str = "native" if args.native else args.mode
+    ratchet_key = "nocov_native" if mode == "native" else "nocov"
 
     # 0. Check for banned nocov annotations (fast, no compilation needed)
     if check_banned_nocov() != 0:
         return 1
 
     # 1. Generate coverage
-    lcov_path = run_coverage(native_mode=native_mode)
+    if mode == "both":
+        # Run both modes and merge their lcov reports. A line is considered
+        # covered if it was executed under either feature set: native embedded
+        # tests cover src/native/*, standard tests cover src/server/* and the
+        # rest. Concatenation is a valid lcov file (multiple SF blocks per
+        # source file), and parse_lcov's existing dedup logic treats a line as
+        # covered if any block reports it covered.
+        lcov_path = Path("lcov.info")
+        std_lcov = Path("lcov-standard.info")
+        nat_lcov = Path("lcov-native.info")
+        run_coverage(native_mode=False)
+        std_lcov.write_bytes(lcov_path.read_bytes())
+        run_coverage(native_mode=True)
+        nat_lcov.write_bytes(lcov_path.read_bytes())
+        lcov_path.write_bytes(std_lcov.read_bytes() + nat_lcov.read_bytes())
+    else:
+        lcov_path = run_coverage(native_mode=(mode == "native"))
 
     # 2. Parse coverage data
     coverage = parse_lcov(lcov_path)
