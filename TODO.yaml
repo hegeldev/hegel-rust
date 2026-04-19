@@ -7,10 +7,10 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Fix test_floats::fuzz_floats_bounds pre-existing failure
+- title: Make server float generator panic on min=0.0/max=-0.0 like native does
   details: |
-    The test panics with "no valid floats between them" when min_value=0.0 and
-    max_value=-0.0 (positive and negative zero are distinct IEEE 754 values but
-    compare equal). This is a pre-existing bug that blocks the standard
-    (non-native) coverage check. Fix the float range logic to treat 0.0 and
-    -0.0 as the same bound, or normalise the inputs before comparison.
+    test_floats::fuzz_floats_bounds passes min_value=0.0 and max_value=-0.0
+    (positive and negative zero). The native backend correctly panics with
+    "no valid floats between them", matching Hypothesis's behaviour. The
+    server-based backend does not panic, causing the test to fail only in
+    native mode. Fix the server float generator to match the same convention.
