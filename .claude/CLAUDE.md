@@ -29,7 +29,6 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 - `src/runner.rs` — Spawns hegel CLI, manages socket server
 - `src/generators/` — All generator implementations (`mod.rs` has the `Generate` trait + `TestCaseData`)
 - `hegel-macros/` — Proc macro crate for `#[derive(Generate)]` (sub-crate with its own `Cargo.toml`)
-- `build.rs` — Locates `hegel` binary on PATH, exports `HEGEL_BINARY_PATH` env var (falls back to `"hegel"`)
 
 ### Feature Flags
 
