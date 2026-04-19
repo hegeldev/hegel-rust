@@ -11,6 +11,11 @@
 //!
 //! Source: `resources/cpython/Lib/re/_parser.py`.
 
+// Allowed while the consumer side of the parser port (the regex strategy)
+// is still being ported — every item here is referenced by either the
+// port's tests or the not-yet-ported strategy.
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 use super::constants::*;
@@ -1197,7 +1202,7 @@ fn parse(
                 } else if ch == "(" {
                     let condname = source.getuntil(')', "group name")?;
                     let condgroup: u32;
-                    if !(condname.chars().all(|c| c.is_ascii_digit()) && !condname.is_empty()) {
+                    if condname.is_empty() || !condname.chars().all(|c| c.is_ascii_digit()) {
                         source.checkgroupname(&condname, 1)?;
                         let Some(&g) = state.groupdict.get(&condname) else {
                             return Err(source.error(
