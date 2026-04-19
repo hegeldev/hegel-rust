@@ -311,10 +311,17 @@ hegeltest = {{ path = "{path}"{features} }}
         );
         std::fs::write(self.project.project_path.join("Cargo.toml"), cargo_toml).unwrap();
 
+        let use_coverage = std::env::var("HEGEL_BUILD_WITH_COVERAGE").is_ok();
+
         let mut cmd = Command::new(env!("CARGO"));
+        if use_coverage {
+            cmd.args(["llvm-cov", "--no-report"]);
+        }
         cmd.args(args)
-            .current_dir(&self.project.project_path)
-            .env("CARGO_TARGET_DIR", shared_target_dir());
+            .current_dir(&self.project.project_path);
+        if !use_coverage {
+            cmd.env("CARGO_TARGET_DIR", shared_target_dir());
+        }
 
         for key in &self.env_removes {
             cmd.env_remove(key);
@@ -323,10 +330,12 @@ hegeltest = {{ path = "{path}"{features} }}
             cmd.env(key, value);
         }
 
-        // Ensure the shared target dir has been warmed up once in this
-        // process before any test thread spawns its own cargo. See the
-        // comment on `WARMUP` above for why a one-shot gate is enough.
-        warmup_shared_target();
+        if !use_coverage {
+            // Ensure the shared target dir has been warmed up once in this
+            // process before any test thread spawns its own cargo. See the
+            // comment on `WARMUP` above for why a one-shot gate is enough.
+            warmup_shared_target();
+        }
         let output = cmd.output().unwrap();
 
         let run_output = RunOutput {
