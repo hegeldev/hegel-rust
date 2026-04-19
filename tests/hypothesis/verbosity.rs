@@ -139,6 +139,19 @@ fn test_no_indexerror_in_quiet_mode() {
 }
 
 #[test]
+fn test_verbose_run_succeeds_in_process() {
+    // Exercises the verbose logging path (the "Trying example" emission in
+    // the runner) from inside the test binary, so coverage instrumentation
+    // records it. The TempRustProject-based tests above rely on subprocess
+    // binaries that are not built with coverage instrumentation.
+    Hegel::new(|tc| {
+        let _x: bool = tc.draw(gs::booleans());
+    })
+    .settings(Settings::new().verbosity(Verbosity::Verbose).database(None))
+    .run();
+}
+
+#[test]
 fn test_no_indexerror_in_quiet_mode_report_multiple() {
     // report_multiple_bugs has no hegel-rust equivalent; verify quiet mode
     // doesn't crash unexpectedly on a failing test.
