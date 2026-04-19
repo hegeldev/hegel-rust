@@ -169,6 +169,15 @@ Individually-skipped tests (rest of the file is ported):
   accesses `test.hypothesis._given_kwargs` (Python dunder-adjacent attribute). Neither
   the fuzzer-integration API nor the attribute-access pattern have Rust counterparts.
 
+- `test_pretty.py` — tests `hypothesis.vendor.pretty`, a vendored IPython
+  pretty-printer that operates entirely on Python object protocols
+  (`__repr__`, `_repr_pretty_` dunder dispatch, `id()`-based cycle
+  detection) and Python-specific types (`dict`, `set`, `frozenset`,
+  `Counter`, `OrderedDict`, `defaultdict`, `deque`, `@dataclass`,
+  `Enum`/`Flag`, `functools.partial`, `re.compile`, `struct`,
+  metaclasses, `super()`). Hegel-rust has no pretty-printer module and
+  no equivalent dunder-dispatch surface — all Python-specific.
+
 - `test_lazy_import.py` — the single test checks that Hypothesis does not import
   Python test runners (`pytest`, `nose`, `unittest2`) by running a Python subprocess
   and inspecting `sys.modules`. Both `sys.modules` and the subprocess-Python approach
