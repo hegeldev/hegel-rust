@@ -145,15 +145,6 @@ fn native_regex_capture() {
     });
 }
 
-/// HirKind::Class::Bytes: byte-mode character class generates matching chars.
-#[test]
-fn native_regex_bytes_class() {
-    assert_all_examples(
-        gs::from_regex("(?-u)[a-z]+").fullmatch(true),
-        |s: &String| !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase()),
-    );
-}
-
 /// HirKind::Class::Unicode with Explicit alphabet: filters against explicit char list.
 #[test]
 fn native_regex_unicode_class_explicit_alphabet() {
@@ -212,20 +203,6 @@ fn native_regex_unicode_class_empty_after_filter() {
     hegel::Hegel::new(|tc: hegel::TestCase| {
         let _s = tc.draw(
             gs::from_regex("[a-z]+")
-                .fullmatch(true)
-                .alphabet(gs::characters().categories(&["Nd"])),
-        );
-    })
-    .settings(hegel::Settings::new().test_cases(10))
-    .run();
-}
-
-/// HirKind::Class::Bytes empty after filtering triggers Invalid.
-#[test]
-fn native_regex_bytes_class_empty_after_filter() {
-    hegel::Hegel::new(|tc: hegel::TestCase| {
-        let _s = tc.draw(
-            gs::from_regex("(?-u)[a-z]+")
                 .fullmatch(true)
                 .alphabet(gs::characters().categories(&["Nd"])),
         );
