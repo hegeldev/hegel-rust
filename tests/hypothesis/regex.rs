@@ -109,7 +109,14 @@ fn test_any_doesnt_generate_newline() {
 // test_any_with_dotall_generate_newline: re.compile("\\A.\\Z", re.DOTALL) == "(?s)\\A.\\Z"
 #[test]
 fn test_any_with_dotall_generate_newline() {
-    find_any(gs::from_regex(r"(?s)\A.\Z"), |s: &String| s == "\n");
+    // Under DOTALL `.` draws from the whole BMP-minus-surrogates alphabet.
+    // `emit_from_chars` biases 80% of draws into the first 256 codepoints, so
+    // `\n` (codepoint 10) lands with ~0.00269 probability per attempt — the
+    // default 1000-attempt ceiling only hits ~93% reliability. 10_000 attempts
+    // pushes this above 99.999%.
+    FindAny::new(gs::from_regex(r"(?s)\A.\Z"), |s: &String| s == "\n")
+        .max_attempts(10_000)
+        .run();
 }
 
 // test_any_with_dotall_generate_newline_binary: omitted — bytes patterns not supported.
