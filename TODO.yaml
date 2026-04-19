@@ -7,39 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Port pbtkit/test_choice_index.py (native-gated to_index/from_index)
-  details: |
-    Previously skipped on "hegel-rust doesn't implement an index-based
-    shrink pass" grounds. That's exactly the engine-internal-gap case
-    the policy says to port-and-stub, not to skip.
-
-    Hegel-rust's `src/native/core/choices.rs` currently exposes
-    `to_index`/`from_index` only for `StringChoice`
-    (see lines ~492 and ~511). `IntegerChoice`, `BooleanChoice`,
-    `FloatChoice`, and `BytesChoice` need the same pair.
-
-    Destination: `tests/pbtkit/choice_index.rs` with
-    `#![cfg(feature = "native")]`. The tests cover the invariants
-    `from_index(0) == simplest`, roundtrip, non-negativity,
-    `from_index` → `to_index` <= original, and monotonicity with
-    `sort_key`.
-
-    Approach:
-    - Port the six invariant tests using hegel generators for the
-      choice kinds and values (see the upstream `st.composite`
-      strategies as a template).
-    - If `IntegerChoice::to_index` / `FloatChoice::to_index` / etc.
-      are missing, stub them in `src/native/core/choices.rs` with
-      `todo!("IntegerChoice::to_index not yet implemented")` rather
-      than leaving the test body unimplemented.
-
-    Acceptance:
-    - `cargo test --features native --test pbtkit choice_index` builds
-      and either passes or fails with a `todo!()` raised from
-      `src/native/core/choices.rs`. No `todo!()` in the test body.
-    - `SKIPPED.md` entry for `test_choice_index.py` has already been
-      removed; don't re-add it.
-
 - title: Port hypothesis/test_database_backend.py (portable portions)
   details: |
     The SKIPPED.md entry for this file previously rationalised a large

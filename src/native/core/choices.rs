@@ -58,6 +58,24 @@ impl IntegerChoice {
     pub fn sort_key(&self, value: i128) -> (u128, bool) {
         (value.unsigned_abs(), value < 0)
     }
+
+    /// pbtkit: `core.py::IntegerChoice.max_index`.
+    #[allow(dead_code)]
+    pub fn max_index(&self) -> crate::native::bignum::BigUint {
+        todo!("IntegerChoice::max_index not yet implemented")
+    }
+
+    /// pbtkit: `core.py::IntegerChoice.to_index`.
+    #[allow(dead_code)]
+    pub fn to_index(&self, _value: i128) -> crate::native::bignum::BigUint {
+        todo!("IntegerChoice::to_index not yet implemented")
+    }
+
+    /// pbtkit: `core.py::IntegerChoice.from_index`.
+    #[allow(dead_code, clippy::wrong_self_convention)]
+    pub fn from_index(&self, _index: crate::native::bignum::BigUint) -> Option<i128> {
+        todo!("IntegerChoice::from_index not yet implemented")
+    }
 }
 
 /// A boolean choice. Simplest value is `false`.
@@ -71,6 +89,30 @@ impl BooleanChoice {
 
     pub fn unit(&self) -> bool {
         true
+    }
+
+    /// Sort key matching the ordering used for shrinking: `false` < `true`.
+    #[allow(dead_code)]
+    pub fn sort_key(&self, value: bool) -> u32 {
+        u32::from(value)
+    }
+
+    /// pbtkit: `core.py::BooleanChoice.max_index`.
+    #[allow(dead_code)]
+    pub fn max_index(&self) -> crate::native::bignum::BigUint {
+        todo!("BooleanChoice::max_index not yet implemented")
+    }
+
+    /// pbtkit: `core.py::BooleanChoice.to_index`.
+    #[allow(dead_code)]
+    pub fn to_index(&self, _value: bool) -> crate::native::bignum::BigUint {
+        todo!("BooleanChoice::to_index not yet implemented")
+    }
+
+    /// pbtkit: `core.py::BooleanChoice.from_index`.
+    #[allow(dead_code, clippy::wrong_self_convention)]
+    pub fn from_index(&self, _index: crate::native::bignum::BigUint) -> Option<bool> {
+        todo!("BooleanChoice::from_index not yet implemented")
     }
 }
 
@@ -225,6 +267,31 @@ impl FloatChoice {
         let mag = if is_neg { -v } else { v };
         (float_to_index(mag), is_neg)
     }
+
+    /// Alias for [`sort_index`]: matches pbtkit's `FloatChoice.sort_key` name
+    /// for the index-invariant tests.
+    #[allow(dead_code)]
+    pub fn sort_key(&self, v: f64) -> (u64, bool) {
+        self.sort_index(v)
+    }
+
+    /// pbtkit: `floats.py::FloatChoice.max_index`.
+    #[allow(dead_code)]
+    pub fn max_index(&self) -> crate::native::bignum::BigUint {
+        todo!("FloatChoice::max_index not yet implemented")
+    }
+
+    /// pbtkit: `floats.py::FloatChoice.to_index`.
+    #[allow(dead_code)]
+    pub fn to_index(&self, _value: f64) -> crate::native::bignum::BigUint {
+        todo!("FloatChoice::to_index not yet implemented")
+    }
+
+    /// pbtkit: `floats.py::FloatChoice.from_index`.
+    #[allow(dead_code, clippy::wrong_self_convention)]
+    pub fn from_index(&self, _index: crate::native::bignum::BigUint) -> Option<f64> {
+        todo!("FloatChoice::from_index not yet implemented")
+    }
 }
 
 /// Map a codepoint to its sort-key position.
@@ -286,6 +353,24 @@ impl BytesChoice {
     /// Shortlex sort key: (length, bytes).
     pub fn sort_key(&self, value: &[u8]) -> (usize, Vec<u8>) {
         (value.len(), value.to_vec())
+    }
+
+    /// pbtkit: `bytes.py::BytesChoice.max_index`.
+    #[allow(dead_code)]
+    pub fn max_index(&self) -> crate::native::bignum::BigUint {
+        todo!("BytesChoice::max_index not yet implemented")
+    }
+
+    /// pbtkit: `bytes.py::BytesChoice.to_index`.
+    #[allow(dead_code)]
+    pub fn to_index(&self, _value: &[u8]) -> crate::native::bignum::BigUint {
+        todo!("BytesChoice::to_index not yet implemented")
+    }
+
+    /// pbtkit: `bytes.py::BytesChoice.from_index`.
+    #[allow(dead_code, clippy::wrong_self_convention)]
+    pub fn from_index(&self, _index: crate::native::bignum::BigUint) -> Option<Vec<u8>> {
+        todo!("BytesChoice::from_index not yet implemented")
     }
 }
 
