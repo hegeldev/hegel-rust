@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -383,6 +384,7 @@ def run_coverage(native_mode: bool = False) -> Path:
         ["cargo", "llvm-cov", "--no-report"] + features_args,
         capture_output=True,
         text=True,
+        env={**os.environ, "HEGEL_BUILD_WITH_COVERAGE": "1"},
     )
     if result.stdout:
         print(result.stdout)
