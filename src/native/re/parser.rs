@@ -402,8 +402,7 @@ fn is_id_continue(c: char) -> bool {
 const DIGITS: &str = "0123456789";
 const OCTDIGITS: &str = "01234567";
 const HEXDIGITS: &str = "0123456789abcdefABCDEF";
-const ASCIILETTERS: &str =
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const ASCIILETTERS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const WHITESPACE: &str = " \t\n\r\x0b\x0c";
 
 const SPECIAL_CHARS: &str = ".\\[{()*+?^$|";
@@ -463,10 +462,7 @@ fn flag_for_char(c: char) -> Option<u32> {
 /// Escape handler inside a character class `[...]`.
 ///
 /// Port of `_parser._class_escape`.
-fn class_escape(
-    source: &mut Tokenizer,
-    escape: &str,
-) -> ParseResult<ClassEscapeResult> {
+fn class_escape(source: &mut Tokenizer, escape: &str) -> ParseResult<ClassEscapeResult> {
     if let Some(cp) = lookup_escape_literal(escape) {
         return Ok(ClassEscapeResult::Literal(cp));
     }
@@ -490,8 +486,9 @@ fn class_escape(
                 ));
             }
             let hex: String = escape.chars().skip(2).collect();
-            let n = u32::from_str_radix(&hex, 16)
-                .map_err(|_| source.error(&format!("bad escape {}", escape), escape.chars().count()))?;
+            let n = u32::from_str_radix(&hex, 16).map_err(|_| {
+                source.error(&format!("bad escape {}", escape), escape.chars().count())
+            })?;
             Ok(ClassEscapeResult::Literal(n))
         }
         Some('u') if source.istext => {
@@ -521,10 +518,7 @@ fn class_escape(
                 source.error(&format!("bad escape {}", escape), escape.chars().count())
             })?;
             if char::from_u32(n).is_none() {
-                return Err(source.error(
-                    &format!("bad escape {}", escape),
-                    escape.chars().count(),
-                ));
+                return Err(source.error(&format!("bad escape {}", escape), escape.chars().count()));
             }
             Ok(ClassEscapeResult::Literal(n))
         }
@@ -546,38 +540,27 @@ fn class_escape(
             })?;
             if n > 0o377 {
                 return Err(source.error(
-                    &format!(
-                        "octal escape value {} outside of range 0-0o377",
-                        escape
-                    ),
+                    &format!("octal escape value {} outside of range 0-0o377", escape),
                     escape.chars().count(),
                 ));
             }
             Ok(ClassEscapeResult::Literal(n))
         }
-        Some(ch) if DIGITS.contains(ch) => Err(source.error(
-            &format!("bad escape {}", escape),
-            escape.chars().count(),
-        )),
+        Some(ch) if DIGITS.contains(ch) => {
+            Err(source.error(&format!("bad escape {}", escape), escape.chars().count()))
+        }
         Some(ch) => {
             if escape.chars().count() == 2 {
                 if ASCIILETTERS.contains(ch) {
-                    return Err(source.error(
-                        &format!("bad escape {}", escape),
-                        escape.chars().count(),
-                    ));
+                    return Err(
+                        source.error(&format!("bad escape {}", escape), escape.chars().count())
+                    );
                 }
                 return Ok(ClassEscapeResult::Literal(ch as u32));
             }
-            Err(source.error(
-                &format!("bad escape {}", escape),
-                escape.chars().count(),
-            ))
+            Err(source.error(&format!("bad escape {}", escape), escape.chars().count()))
         }
-        None => Err(source.error(
-            &format!("bad escape {}", escape),
-            escape.chars().count(),
-        )),
+        None => Err(source.error(&format!("bad escape {}", escape), escape.chars().count())),
     }
 }
 
@@ -647,10 +630,7 @@ fn escape_code(
                 source.error(&format!("bad escape {}", escape), escape.chars().count())
             })?;
             if char::from_u32(n).is_none() {
-                return Err(source.error(
-                    &format!("bad escape {}", escape),
-                    escape.chars().count(),
-                ));
+                return Err(source.error(&format!("bad escape {}", escape), escape.chars().count()));
             }
             Ok(EscapeResult::Literal(n))
         }
@@ -687,17 +667,11 @@ fn escape_code(
                         escape.push_str(&more);
                         let oct: String = escape.chars().skip(1).collect();
                         let n = u32::from_str_radix(&oct, 8).map_err(|_| {
-                            source.error(
-                                &format!("bad escape {}", escape),
-                                escape.chars().count(),
-                            )
+                            source.error(&format!("bad escape {}", escape), escape.chars().count())
                         })?;
                         if n > 0o377 {
                             return Err(source.error(
-                                &format!(
-                                    "octal escape value {} outside of range 0-0o377",
-                                    escape
-                                ),
+                                &format!("octal escape value {} outside of range 0-0o377", escape),
                                 escape.chars().count(),
                             ));
                         }
@@ -707,17 +681,13 @@ fn escape_code(
             }
             let dec: String = escape.chars().skip(1).collect();
             let group = dec.parse::<u32>().map_err(|_| {
-                source.error(
-                    &format!("bad escape {}", escape),
-                    escape.chars().count(),
-                )
+                source.error(&format!("bad escape {}", escape), escape.chars().count())
             })?;
             if group < state.groups() {
                 if !state.checkgroup(group) {
-                    return Err(source.error(
-                        "cannot refer to an open group",
-                        escape.chars().count(),
-                    ));
+                    return Err(
+                        source.error("cannot refer to an open group", escape.chars().count())
+                    );
                 }
                 state.checklookbehindgroup(group, source)?;
                 return Ok(EscapeResult::GroupRef(group));
@@ -730,22 +700,15 @@ fn escape_code(
         Some(ch) => {
             if escape.chars().count() == 2 {
                 if ASCIILETTERS.contains(ch) {
-                    return Err(source.error(
-                        &format!("bad escape {}", escape),
-                        escape.chars().count(),
-                    ));
+                    return Err(
+                        source.error(&format!("bad escape {}", escape), escape.chars().count())
+                    );
                 }
                 return Ok(EscapeResult::Literal(ch as u32));
             }
-            Err(source.error(
-                &format!("bad escape {}", escape),
-                escape.chars().count(),
-            ))
+            Err(source.error(&format!("bad escape {}", escape), escape.chars().count()))
         }
-        None => Err(source.error(
-            &format!("bad escape {}", escape),
-            escape.chars().count(),
-        )),
+        None => Err(source.error(&format!("bad escape {}", escape), escape.chars().count())),
     }
 }
 
@@ -876,8 +839,8 @@ fn parse(
         }
         source.advance()?;
 
-        if verbose {
-            if this.chars().count() == 1 {
+        if verbose
+            && this.chars().count() == 1 {
                 let c = this.chars().next().unwrap();
                 if WHITESPACE.contains(c) {
                     continue;
@@ -894,7 +857,6 @@ fn parse(
                     continue;
                 }
             }
-        }
 
         let first_char = this.chars().next().unwrap();
 
@@ -1035,18 +997,18 @@ fn parse(
                     continue;
                 }
                 if !lo.is_empty() {
-                    let parsed = lo.parse::<u64>().map_err(|_| {
-                        source.error("the repetition number is too large", 0)
-                    })?;
+                    let parsed = lo
+                        .parse::<u64>()
+                        .map_err(|_| source.error("the repetition number is too large", 0))?;
                     if parsed >= MAXREPEAT as u64 {
                         return Err(source.error("the repetition number is too large", 0));
                     }
                     min = parsed as u32;
                 }
                 if !hi.is_empty() {
-                    let parsed = hi.parse::<u64>().map_err(|_| {
-                        source.error("the repetition number is too large", 0)
-                    })?;
+                    let parsed = hi
+                        .parse::<u64>()
+                        .map_err(|_| source.error("the repetition number is too large", 0))?;
                     if parsed >= MAXREPEAT as u64 {
                         return Err(source.error("the repetition number is too large", 0));
                     }
@@ -1157,10 +1119,8 @@ fn parse(
                             ));
                         };
                         if !state.checkgroup(gid) {
-                            return Err(source.error(
-                                "cannot refer to an open group",
-                                n.chars().count() + 1,
-                            ));
+                            return Err(source
+                                .error("cannot refer to an open group", n.chars().count() + 1));
                         }
                         state.checklookbehindgroup(gid, source)?;
                         subpattern.push(OpCode::GroupRef(gid));
@@ -1238,8 +1198,7 @@ fn parse(
                 } else if ch == "(" {
                     let condname = source.getuntil(')', "group name")?;
                     let condgroup: u32;
-                    if !(condname.chars().all(|c| c.is_ascii_digit()) && !condname.is_empty())
-                    {
+                    if !(condname.chars().all(|c| c.is_ascii_digit()) && !condname.is_empty()) {
                         source.checkgroupname(&condname, 1)?;
                         let Some(&g) = state.groupdict.get(&condname) else {
                             return Err(source.error(
@@ -1256,10 +1215,9 @@ fn parse(
                             )
                         })?;
                         if parsed == 0 {
-                            return Err(source.error(
-                                "bad group number",
-                                condname.chars().count() + 1,
-                            ));
+                            return Err(
+                                source.error("bad group number", condname.chars().count() + 1)
+                            );
                         }
                         if parsed >= MAXGROUPS {
                             return Err(source.error(
@@ -1278,10 +1236,9 @@ fn parse(
                     let item_no = if source.take_match('|')? {
                         let no = parse(source, state, verbose, nested + 1, false)?;
                         if source.peek_next_char() == Some('|') {
-                            return Err(source.error(
-                                "conditional backref with more than two branches",
-                                0,
-                            ));
+                            return Err(
+                                source.error("conditional backref with more than two branches", 0)
+                            );
                         }
                         Some(no)
                     } else {
@@ -1303,8 +1260,7 @@ fn parse(
                     capture = false;
                     atomic = true;
                 } else if flag_for_char(ch.chars().next().unwrap()).is_some() || ch == "-" {
-                    let flags =
-                        parse_flags(source, state, ch.chars().next().unwrap())?;
+                    let flags = parse_flags(source, state, ch.chars().next().unwrap())?;
                     match flags {
                         None => {
                             if !first || !subpattern.is_empty() {
@@ -1571,12 +1527,7 @@ pub fn parse_pattern(pattern: &str, flags: u32) -> ParseResult<ParsedPattern> {
     let mut state = State::new();
     state.flags = flags;
 
-    let p = parse_sub(
-        &mut source,
-        &mut state,
-        flags & SRE_FLAG_VERBOSE != 0,
-        0,
-    )?;
+    let p = parse_sub(&mut source, &mut state, flags & SRE_FLAG_VERBOSE != 0, 0)?;
     state.flags = fix_flags(true, state.flags)?;
 
     if source.next.is_some() {
