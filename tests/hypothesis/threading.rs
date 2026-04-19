@@ -22,7 +22,7 @@ fn test_run_given_concurrently() {
             let barrier = Arc::clone(&barrier);
             thread::spawn(move || {
                 Hegel::new(move |tc| {
-                    let _n: i64 = tc.draw(&gs::integers());
+                    let _n: i64 = tc.draw(gs::integers());
                     barrier.wait();
                 })
                 .settings(Settings::new().database(None))
