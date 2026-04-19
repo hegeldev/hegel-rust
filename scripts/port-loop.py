@@ -11,10 +11,16 @@ Outer loop, each iteration:
      tree was clean before), then `just lint`, `cargo test`,
      `HEGEL_SERVER_COMMAND=/bin/false cargo test --features native`, clean
      tree — each as a gate that dispatches claude on failure.
-  3. If `TODO.yaml` has any entries, pop the first one and dispatch claude
+  3. Sync with origin: `git fetch`, rebase the current branch onto
+     `origin/main`, and push (auto-pushes any local commits). Rebase
+     conflicts or push failures dispatch a claude agent.
+  4. If the upstream PR (hegeldev/hegel-rust#188) has completed CI as
+     failed, dispatch a specialised agent to fix CI and restart the
+     iteration before doing any other work.
+  5. If `TODO.yaml` has any entries, pop the first one and dispatch claude
      to clear it, then continue the outer loop (repair runs again before
      the next action).
-  4. If no TODOs, pick a random unported upstream file and enter the port
+  6. If no TODOs, pick a random unported upstream file and enter the port
      sub-loop.
 
 Port sub-loop (one pick; the outer gates are skipped while this runs):
@@ -160,6 +166,88 @@ Ground rules:
 - Commit the fix. The next iteration re-runs the same gate with the
   same timeout and will either green-light it or re-dispatch you with
   fresh output.
+"""
+
+TEST_SLOW_FIX_PROMPT = """\
+A `cargo test` run completed (all tests passed overall), but libtest
+emitted one or more `test <name> has been running for over N seconds`
+warnings. Those lines are preserved in the output below — search for
+`has been running for over` to find them.
+
+This is a performance problem even though the tests passed. A test that
+takes over 60 seconds is a bug regardless of the final result; it slows
+the feedback loop, stresses CI, and usually indicates the test is doing
+far more work than it should.
+
+Performance target:
+- Every `#[test]` should ideally run in < 1 second and definitely
+  < 5 seconds. Anything above 60 seconds is always a bug to be fixed.
+- `TempRustProject` compiles a fresh cargo project per call and is the
+  usual suspect when a batch of tests blows the budget; look at sharing
+  compile artefacts or moving compile-only assertions to `trybuild`.
+
+For each flagged test: identify it, understand WHY it's slow (profile
+it if needed), and fix the root cause — in the test itself or in the
+library code it exercises.
+
+Ground rules:
+- Do NOT "fix" this by marking tests `#[ignore]`, deleting them, or
+  adding them to SKIPPED.md.
+- Do NOT suppress libtest's "has been running for over" warning.
+- Commit the fix. The next iteration re-runs the same gate and will
+  re-dispatch you if any test still trips the warning.
+"""
+
+PR_CI_FIX_PROMPT = """\
+CI on https://github.com/{repo}/pull/{pr} has completed with failures,
+and the port loop is parked on that until it's fixed. Output of `gh
+pr checks {pr} --repo {repo}` is included below.
+
+Steps:
+1. Identify which checks failed from the output below.
+2. Pull the failing-run logs:
+      gh run view <run-id> --log-failed --repo {repo}
+   (the run-id is in the "link" column of `gh pr checks`).
+3. Find the root cause and fix it on the PR's head branch:
+   - If the PR tracks the currently-checked-out branch (`git rev-parse
+     --abbrev-ref HEAD` matches the PR's headRefName), make the fix in
+     place: commit and `git push` here.
+   - Otherwise: `gh pr checkout {pr}`, fix, commit, push, then
+     `git switch -` to return to the original branch before exiting.
+4. Do NOT paper over failures with `--no-verify`, `#[ignore]`,
+   SKIPPED.md entries, or by removing the failing test. Fix the root
+   cause.
+5. Do NOT `git push --force` unless the PR history truly needs
+   rewriting (use `--force-with-lease` if so).
+
+One focused commit is fine. The next port-loop iteration re-checks PR
+CI; if it's still red after its next run, you'll be dispatched again
+with fresh output.
+"""
+
+SYNC_FIX_PROMPT = """\
+The port loop was unable to rebase the current branch onto origin/main
+and push it (the previous step in the iteration). Output of the failed
+command(s) is included below.
+
+Common causes:
+- Rebase conflict: resolve the conflict, `git rebase --continue`, then
+  push with `--force-with-lease`. If the conflict is more involved than
+  a quick resolution, investigate — it may indicate the local work has
+  drifted from upstream in a way that needs a human call.
+- Push rejected because origin moved: fetch again (`git fetch origin`)
+  and re-inspect; someone else may have pushed to the same branch. If
+  the remote has commits you don't: pull/rebase them in. If it's a
+  `--force-with-lease` mismatch that looks safe, proceed with
+  `git push --force-with-lease` once the lease matches.
+- Missing upstream ref: run `git push --set-upstream origin HEAD` if
+  this branch has never been pushed.
+
+Do NOT `git push --force` blindly — prefer `--force-with-lease`. Do
+NOT rebase or force-push `main`/`master` under any circumstances.
+
+After resolving, the next port-loop iteration will re-run the sync
+gate; a clean run there moves the loop on to the PR CI check.
 """
 
 COMMIT_PROMPT = (
@@ -398,6 +486,71 @@ HYPOTHESIS_DIR = (
     REPO_ROOT / "resources" / "hypothesis" / "hypothesis-python" / "tests" / "cover"
 )
 
+# Upstream PR whose CI the loop babysits. If CI on this PR has completed
+# as failed, the loop pauses everything else and dispatches a specialised
+# fix agent until the PR is green (or at least pending again).
+PR_NUMBER = 188
+PR_REPO = "hegeldev/hegel-rust"
+
+# libtest emits `test <name> has been running for over N seconds` when a
+# test has exceeded a 60-second soft threshold. We treat this as a
+# performance failure even when the overall test exit code is clean.
+SLOW_TEST_RE = re.compile(
+    r"^\s*test \S+ has been running for over \d+ seconds?\s*$"
+)
+
+# Lines we strip from gate output before feeding it back to a fix agent.
+# These are cargo/libtest noise that eats tokens without informing the
+# fix — compile progress, per-test "ok" lines, the "running N tests"
+# preamble. The human watching the terminal still sees everything live;
+# only the agent prompt is stripped.
+_CARGO_PROGRESS_PREFIXES = (
+    "Compiling ",
+    "Finished ",
+    "Running ",
+    "Blocking ",
+    "Checking ",
+    "Fresh ",
+    "Updating ",
+    "Downloaded ",
+    "Downloading ",
+    "Locking ",
+    "Adding ",
+    "Building ",
+    "Packaging ",
+    "Documenting ",
+)
+_PASSING_TEST_RE = re.compile(r"^\s*test \S+ \.\.\. ok\s*$")
+_RUNNING_PREAMBLE_RE = re.compile(r"^\s*running \d+ tests?\s*$")
+
+
+def strip_build_noise(output: str) -> str:
+    """Remove cargo progress + passing-test lines from gate output.
+
+    Keeps failing tests, panic/backtrace, slow-test warnings, compile
+    errors, clippy output, test-result summaries, and everything else
+    that could help an agent diagnose the failure. Collapses runs of
+    blank lines so stripping doesn't leave huge gaps.
+    """
+    kept: list[str] = []
+    prev_blank = False
+    for line in output.splitlines():
+        stripped = line.lstrip()
+        if any(stripped.startswith(p) for p in _CARGO_PROGRESS_PREFIXES):
+            continue
+        if _PASSING_TEST_RE.match(line):
+            continue
+        if _RUNNING_PREAMBLE_RE.match(line):
+            continue
+        if not line.strip():
+            if prev_blank:
+                continue
+            prev_blank = True
+        else:
+            prev_blank = False
+        kept.append(line)
+    return "\n".join(kept)
+
 # Hot-reload bookkeeping: captured once at import, checked at the top of
 # each main-loop iteration. If this script's mtime changes mid-run
 # (e.g. during a `git pull` or while the user is iterating on the
@@ -454,12 +607,12 @@ def run_gate(
     *,
     env: dict[str, str] | None = None,
     timeout: float | None = None,
-) -> tuple[int, str, bool]:
-    """Run a gate command, stream output live, return (exit_code, output, timed_out).
+) -> tuple[int, str, str | None]:
+    """Run a gate command, stream output live, return (exit_code, output, perf).
 
-    If `timeout` is set and the command doesn't finish in time, the process is
-    killed, `timed_out` is True, `exit_code` is 124, and the returned output
-    includes a trailing banner naming the command and elapsed limit.
+    `perf` is `"timeout"` if the command was killed by the port-loop timer,
+    otherwise `None`. Test-specific gates post-process the captured output
+    to additionally detect libtest slow-test warnings (→ `perf = "slow"`).
     """
     print(f"\n$ {' '.join(cmd)}")
     if timeout is not None:
@@ -501,8 +654,17 @@ def run_gate(
             f"captured before the timeout. ***\n"
         )
         print(banner, flush=True)
-        return 124, output + banner, True
-    return proc.returncode, output, False
+        return 124, output + banner, "timeout"
+    return proc.returncode, output, None
+
+
+def _detect_slow_tests(output: str) -> list[str]:
+    """Return the `has been running for over N seconds` warning lines, if any."""
+    return [
+        line.rstrip()
+        for line in output.splitlines()
+        if SLOW_TEST_RE.match(line)
+    ]
 
 
 def _git_status_porcelain() -> str:
@@ -624,15 +786,35 @@ def _run_cached_gate(
     *,
     env: dict[str, str] | None = None,
     timeout: float | None = None,
-) -> tuple[bool, str, bool]:
+    detect_slow: bool = False,
+) -> tuple[bool, str, str | None]:
+    """Run `cmd` (or return a cached pass), returning (ok, output, perf).
+
+    `perf` is `"timeout"` if the gate was killed by the port-loop timer,
+    `"slow"` if `detect_slow` is set and libtest emitted any "has been
+    running for over N seconds" warnings (even when the exit code is
+    clean), or `None` otherwise. A `"slow"` signal also demotes `ok`
+    to `False` so the caller treats it as a failure.
+    """
     if _gate_cached(key):
         print(f"\n[port-loop] gate cache hit: `{key}` @ HEAD; skipping.")
-        return True, "", False
-    code, out, timed_out = run_gate(cmd, env=env, timeout=timeout)
+        return True, "", None
+    code, out, perf = run_gate(cmd, env=env, timeout=timeout)
     ok = code == 0
+    if ok and detect_slow:
+        slow = _detect_slow_tests(out)
+        if slow:
+            print(
+                f"\n[port-loop] {len(slow)} slow-test warning(s) despite "
+                f"clean exit; treating gate as failed:"
+            )
+            for line in slow:
+                print(f"  {line}")
+            perf = "slow"
+            ok = False
     if ok:
         _record_gate_success(key)
-    return ok, out, timed_out
+    return ok, out, perf
 
 
 # Suite-wide `cargo test` runs occasionally legitimately take minutes;
@@ -643,17 +825,20 @@ SUITE_TEST_TIMEOUT_S = 15 * 60
 MODULE_TEST_TIMEOUT_S = 2 * 60
 
 
-def gate_lint() -> tuple[bool, str, bool]:
+def gate_lint() -> tuple[bool, str, str | None]:
     return _run_cached_gate("just lint", ["just", "lint"])
 
 
-def gate_server_tests() -> tuple[bool, str, bool]:
+def gate_server_tests() -> tuple[bool, str, str | None]:
     return _run_cached_gate(
-        "cargo test", ["cargo", "test"], timeout=SUITE_TEST_TIMEOUT_S
+        "cargo test",
+        ["cargo", "test"],
+        timeout=SUITE_TEST_TIMEOUT_S,
+        detect_slow=True,
     )
 
 
-def gate_native_tests() -> tuple[bool, str, bool]:
+def gate_native_tests() -> tuple[bool, str, str | None]:
     env = os.environ.copy()
     env["HEGEL_SERVER_COMMAND"] = "/bin/false"
     return _run_cached_gate(
@@ -661,18 +846,20 @@ def gate_native_tests() -> tuple[bool, str, bool]:
         ["cargo", "test", "--features", "native"],
         env=env,
         timeout=SUITE_TEST_TIMEOUT_S,
+        detect_slow=True,
     )
 
 
-def gate_module_server(kind: str, module: str) -> tuple[bool, str, bool]:
+def gate_module_server(kind: str, module: str) -> tuple[bool, str, str | None]:
     return _run_cached_gate(
         f"cargo test --test {kind} {module}",
         ["cargo", "test", "--test", kind, module],
         timeout=MODULE_TEST_TIMEOUT_S,
+        detect_slow=True,
     )
 
 
-def gate_module_native(kind: str, module: str) -> tuple[bool, str, bool]:
+def gate_module_native(kind: str, module: str) -> tuple[bool, str, str | None]:
     env = os.environ.copy()
     env["HEGEL_SERVER_COMMAND"] = "/bin/false"
     return _run_cached_gate(
@@ -681,7 +868,17 @@ def gate_module_native(kind: str, module: str) -> tuple[bool, str, bool]:
         ["cargo", "test", "--features", "native", "--test", kind, module],
         env=env,
         timeout=MODULE_TEST_TIMEOUT_S,
+        detect_slow=True,
     )
+
+
+def test_fix_prompt_for(perf: str | None, default_prompt: str) -> str:
+    """Pick the right fix prompt for a test gate's perf signal."""
+    if perf == "timeout":
+        return TEST_PERF_FIX_PROMPT
+    if perf == "slow":
+        return TEST_SLOW_FIX_PROMPT
+    return default_prompt
 
 
 def destination_has_tests(dest: Path) -> bool:
@@ -1228,25 +1425,21 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
             any_dispatched = True
 
         # Step 3: module's server-mode tests must pass.
-        ok, out, timed_out = gate_module_server(kind, module)
+        ok, out, perf = gate_module_server(kind, module)
         if not ok:
-            prompt = (
-                TEST_PERF_FIX_PROMPT
-                if timed_out
-                else PORT_TEST_FIX_SERVER_PROMPT.format(**fmt_args)
+            prompt = test_fix_prompt_for(
+                perf, PORT_TEST_FIX_SERVER_PROMPT.format(**fmt_args)
             )
-            state.dispatch(prompt, gate_output=out)
+            state.dispatch(prompt, gate_output=strip_build_noise(out))
             any_dispatched = True
 
         # Step 4: module's native-mode tests must pass.
-        ok, out, timed_out = gate_module_native(kind, module)
+        ok, out, perf = gate_module_native(kind, module)
         if not ok:
-            prompt = (
-                TEST_PERF_FIX_PROMPT
-                if timed_out
-                else PORT_TEST_FIX_NATIVE_PROMPT.format(**fmt_args)
+            prompt = test_fix_prompt_for(
+                perf, PORT_TEST_FIX_NATIVE_PROMPT.format(**fmt_args)
             )
-            state.dispatch(prompt, gate_output=out)
+            state.dispatch(prompt, gate_output=strip_build_noise(out))
             any_dispatched = True
 
         # Step 5: tree must be clean.
@@ -1328,19 +1521,23 @@ def repair(state: IterCounter, run_server_tests: bool = False) -> None:
         ok, out, _ = gate_lint()
         if not ok:
             any_failures = True
-            state.dispatch(LINT_FIX_PROMPT, gate_output=out)
+            state.dispatch(LINT_FIX_PROMPT, gate_output=strip_build_noise(out))
 
         if run_server_tests:
-            ok, out, timed_out = gate_server_tests()
+            ok, out, perf = gate_server_tests()
             if not ok:
-                prompt = TEST_PERF_FIX_PROMPT if timed_out else SERVER_TEST_FIX_PROMPT
-                state.dispatch(prompt, gate_output=out)
+                state.dispatch(
+                    test_fix_prompt_for(perf, SERVER_TEST_FIX_PROMPT),
+                    gate_output=strip_build_noise(out),
+                )
                 any_failures = True
 
-        ok, out, timed_out = gate_native_tests()
+        ok, out, perf = gate_native_tests()
         if not ok:
-            prompt = TEST_PERF_FIX_PROMPT if timed_out else NATIVE_TEST_FIX_PROMPT
-            state.dispatch(prompt, gate_output=out)
+            state.dispatch(
+                test_fix_prompt_for(perf, NATIVE_TEST_FIX_PROMPT),
+                gate_output=strip_build_noise(out),
+            )
             any_failures = True
         if any_failures:
             continue
