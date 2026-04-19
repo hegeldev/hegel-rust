@@ -25,6 +25,20 @@ fn test_floats_min_greater_than_max() {
 }
 
 #[test]
+#[should_panic(expected = "InvalidArgument")]
+fn test_floats_pos_zero_min_neg_zero_max() {
+    let g = gs::floats::<f64>().min_value(0.0).max_value(-0.0);
+    g.as_basic();
+}
+
+#[test]
+#[should_panic(expected = "InvalidArgument")]
+fn test_floats_pos_zero_min_neg_zero_max_f32() {
+    let g = gs::floats::<f32>().min_value(0.0).max_value(-0.0);
+    g.as_basic();
+}
+
+#[test]
 #[should_panic(expected = "allow_infinity=true")]
 fn test_floats_allow_infinity_with_both_bounds() {
     let g = gs::floats::<f64>()
