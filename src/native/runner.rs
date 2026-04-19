@@ -223,6 +223,9 @@ pub fn native_run<F>(
 
             let batch_rng = SmallRng::from_rng(&mut rng);
             let ntc = NativeTestCase::new_random(batch_rng);
+            if verbosity == Verbosity::Verbose {
+                eprintln!("Trying example: ");
+            }
             let tc_start = std::time::Instant::now();
             let (status, nodes, spans) = ctf.run(ntc);
             let tc_elapsed = tc_start.elapsed();
@@ -321,6 +324,9 @@ pub fn native_run<F>(
             {
                 let mut shrinker = Shrinker::new(
                     Box::new(|candidate_nodes: &[ChoiceNode]| {
+                        if verbosity == Verbosity::Verbose {
+                            eprintln!("Trying example: ");
+                        }
                         let result = ctf.run_shrink(candidate_nodes);
                         calls += 1;
                         result
