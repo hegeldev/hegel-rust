@@ -356,7 +356,28 @@ impl ExampleDatabase for NativeDatabase {
         if path.exists() {
             return;
         }
-        let _ = std::fs::write(&path, value);
+        // Stage the write in a tempfile outside the watched directory
+        // tree and rename into place. Without this, `notify` can fire a
+        // Create event between `open` and `write`, so listeners observe
+        // a zero-byte file. Matches the tempfile dance in Hypothesis's
+        // `DirectoryBasedExampleDatabase.save`.
+        let Ok(mut tmp) = tempfile::NamedTempFile::new() else {
+            return;
+        };
+        use std::io::Write;
+        if tmp.write_all(value).is_err() {
+            return;
+        }
+        if let Err(err) = tmp.persist(&path) {
+            // Cross-filesystem rename (EXDEV, raw errno 18 on Linux)
+            // falls back to a direct write — reintroduces the race but
+            // only triggers on unusual setups where the OS tempdir is
+            // on a different filesystem from `db_root`. Mirrors the
+            // EXDEV fallback in Hypothesis's `save`.
+            if err.error.raw_os_error() == Some(18) {
+                let _ = std::fs::write(&path, value);
+            }
+        }
     }
 
     /// Hypothesis: `DirectoryBasedExampleDatabase.delete`. If `value` was
