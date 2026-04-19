@@ -186,6 +186,10 @@ impl FeatureStrategy {
     }
 }
 
+#[cfg(test)]
+#[path = "../../tests/embedded/native/featureflags_tests.rs"]
+mod tests;
+
 impl Generator<FeatureFlags> for FeatureStrategy {
     fn do_draw(&self, _tc: &TestCase) -> FeatureFlags {
         // Mirrors Hypothesis's FeatureFlags.__init__: draw an integer in
