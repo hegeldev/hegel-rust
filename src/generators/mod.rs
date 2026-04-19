@@ -38,7 +38,8 @@ pub use collections::{
     VecGenerator, arrays, fixed_dicts, hashmaps, hashsets, vecs,
 };
 pub use combinators::{
-    OneOfGenerator, OptionalGenerator, SampledFromGenerator, one_of, optional, sampled_from,
+    OneOfGenerator, OptionalGenerator, PermutationsGenerator, SampledFromGenerator, one_of,
+    optional, permutations, sampled_from,
 };
 pub use compose::ComposedGenerator;
 #[doc(hidden)]
