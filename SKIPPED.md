@@ -169,6 +169,15 @@ Individually-skipped tests (rest of the file is ported):
   accesses `test.hypothesis._given_kwargs` (Python dunder-adjacent attribute). Neither
   the fuzzer-integration API nor the attribute-access pattern have Rust counterparts.
 
+- `test_sideeffect_warnings.py` — all tests exercise Hypothesis's Python-specific
+  import-time initialization infrastructure: `_hypothesis_globals.in_initialization`
+  (a Python module attribute tracking import phase), `hypothesis.configuration`
+  internals (`_first_postinit_what`, `notice_initialization_restarted`,
+  `check_sideeffect_during_initialization`), `HypothesisSideeffectWarning` (a
+  Python warning type), and `pytest.warns`/`monkeypatch` pytest fixtures. This
+  tests Python module-loading side-effect detection during entrypoint loading,
+  a concept with no Rust counterpart.
+
 - `test_database_backend.py` — this file mixes portable public-API tests
   (multi-value `save`/`fetch`/`delete`/`move` semantics, listener API,
   wrappers) with Python-specific ones. Only the latter are skipped here;
