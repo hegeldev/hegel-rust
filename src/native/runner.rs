@@ -132,9 +132,20 @@ const SPAN_MUTATION_ATTEMPTS: usize = 5;
 /// but scaled up slightly to be less sensitive to mild filtering.
 const FILTER_TOO_MUCH_THRESHOLD: u64 = 200;
 
-/// Wall-clock threshold for a single test case before TooSlow fires.
-/// Matches Hypothesis's default `deriving_timeout` of 200 ms.
-const TOO_SLOW_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(200);
+/// Cumulative wall-clock threshold across the generation phase before
+/// TooSlow fires. Hypothesis's `engine.py` checks `total_draw_time` against
+/// `max(1.0s, 5 * deadline)`; with the default 200 ms deadline this floors
+/// at 1 second, which is what we mirror here. Hypothesis tracks draw time
+/// only, but until the native engine separates draw time from test
+/// execution we approximate it with whole-test wall-clock.
+const TOO_SLOW_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Health checks (TooSlow / FilterTooMuch) are evaluated only while the run
+/// has fewer than this many valid examples on record. Mirrors Hypothesis's
+/// `max_valid_draws = 10` in `record_for_health_check`: once the first ten
+/// valid examples have been observed, the health-check window closes and
+/// later slow or filtered draws no longer trigger a failure.
+const HEALTH_CHECK_MAX_VALID: u64 = 10;
 
 /// Entry point for native-backend test execution.
 ///
@@ -170,6 +181,7 @@ pub fn native_run<F>(
     let mut calls: u64 = 0;
     let mut test_is_trivial = false;
     let mut invalid_calls: u64 = 0;
+    let mut total_test_time = std::time::Duration::ZERO;
     // True when `result` came from a database replay that matched the
     // stored choice sequence exactly (same length = same test shape). In
     // that case we trust the stored value is already shrunk and skip the
@@ -228,21 +240,27 @@ pub fn native_run<F>(
             }
             let tc_start = std::time::Instant::now();
             let (status, nodes, spans) = ctf.run(ntc);
-            let tc_elapsed = tc_start.elapsed();
+            total_test_time += tc_start.elapsed();
             calls += 1;
 
-            // TooSlow health check: if a single test case takes too long, report it.
-            if tc_elapsed > TOO_SLOW_THRESHOLD
+            // TooSlow health check: if cumulative test execution time exceeds
+            // the threshold, report it. Mirrors Hypothesis's `total_draw_time`
+            // check in `conjecture/engine.py`. The check is only active while
+            // we are still in the first `HEALTH_CHECK_MAX_VALID` valid examples;
+            // once that window closes, later slow examples are tolerated.
+            if valid_test_cases < HEALTH_CHECK_MAX_VALID
+                && total_test_time > TOO_SLOW_THRESHOLD
                 && !settings
                     .suppress_health_check
                     .contains(&HealthCheck::TooSlow)
             {
                 panic!(
-                    "FailedHealthCheck: TooSlow — this test case took {:?}, which is \
-                     over the {:?} threshold. Slow test cases make property testing much \
-                     less effective. If this is expected, suppress the check with \
+                    "FailedHealthCheck: TooSlow — input generation is slow: \
+                     only {valid_test_cases} valid inputs after {:?} (threshold \
+                     {:?}). Slow generation makes property testing much less \
+                     effective. If this is expected, suppress the check with \
                      suppress_health_check = [HealthCheck::TooSlow].",
-                    tc_elapsed, TOO_SLOW_THRESHOLD
+                    total_test_time, TOO_SLOW_THRESHOLD
                 );
             }
 
