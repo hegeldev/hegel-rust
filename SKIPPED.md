@@ -169,6 +169,11 @@ Individually-skipped tests (rest of the file is ported):
   accesses `test.hypothesis._given_kwargs` (Python dunder-adjacent attribute). Neither
   the fuzzer-integration API nor the attribute-access pattern have Rust counterparts.
 
+- `test_lazy_import.py` — the single test checks that Hypothesis does not import
+  Python test runners (`pytest`, `nose`, `unittest2`) by running a Python subprocess
+  and inspecting `sys.modules`. Both `sys.modules` and the subprocess-Python approach
+  are Python-specific facilities with no Rust counterpart.
+
 - `test_sideeffect_warnings.py` — all tests exercise Hypothesis's Python-specific
   import-time initialization infrastructure: `_hypothesis_globals.in_initialization`
   (a Python module attribute tracking import phase), `hypothesis.configuration`
