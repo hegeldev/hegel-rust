@@ -1746,10 +1746,9 @@ def drive_todos(state: IterCounter) -> bool:
     if not pickable:
         print(
             f"\n[port-loop] all {len(todos)} TODO entry(ies) have exhausted "
-            f"their attempt budget; leaving them in place and skipping to "
-            f"porting."
+            f"their attempt budget; blocking porting until a human intervenes."
         )
-        return False
+        return True
 
     idx = pickable[0]
     entry = todos[idx]
