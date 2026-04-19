@@ -1316,6 +1316,7 @@ def dispatch_claude(
     model: str,
     max_budget_usd: float | None = None,
     resume_session: str | None = None,
+    skip_permissions: bool = False,
 ) -> tuple[str | None, int]:
     """Spawn claude -p (or resume an existing session), stream events live.
 
@@ -1344,13 +1345,14 @@ def dispatch_claude(
     cmd = [
         "claude",
         "-p",
-        "--dangerously-skip-permissions",
         "--model",
         model,
         "--output-format",
         "stream-json",
         "--verbose",
     ]
+    if skip_permissions:
+        cmd.append("--dangerously-skip-permissions")
     if max_budget_usd is not None:
         cmd += ["--max-budget-usd", str(max_budget_usd)]
     if resume_session is not None:
@@ -1468,12 +1470,14 @@ class IterCounter:
         timeout: float | None,
         model: str,
         max_budget_usd: float | None = None,
+        skip_permissions: bool = False,
     ) -> None:
         self.n = 0
         self.max = max_iterations
         self.timeout = timeout
         self.model = model
         self.max_budget_usd = max_budget_usd
+        self.skip_permissions = skip_permissions
         self.last_session_id: str | None = None
 
     def _check_cap(self) -> None:
@@ -1492,6 +1496,7 @@ class IterCounter:
             timeout=self.timeout,
             model=self.model,
             max_budget_usd=self.max_budget_usd,
+            skip_permissions=self.skip_permissions,
         )
         # Even if exit code was non-zero, a captured sid still means a
         # valid session exists that we can try to resume later.
@@ -1527,6 +1532,7 @@ class IterCounter:
             model=self.model,
             max_budget_usd=self.max_budget_usd,
             resume_session=previous,
+            skip_permissions=self.skip_permissions,
         )
         if code != 0:
             print(
@@ -2269,6 +2275,12 @@ def main() -> None:
         action="store_true",
         help="Run `cargo clean` at the start of each outer-loop iteration.",
     )
+    parser.add_argument(
+        "--dangerously-skip-permissions",
+        action="store_true",
+        dest="skip_permissions",
+        help="Pass --dangerously-skip-permissions to each claude invocation.",
+    )
     args = parser.parse_args()
     if args.port is not None and args.todo_only:
         parser.error("--port and --todo-only are mutually exclusive.")
@@ -2277,6 +2289,7 @@ def main() -> None:
         args.timeout,
         args.model,
         max_budget_usd=args.max_budget_usd if args.max_budget_usd else None,
+        skip_permissions=args.skip_permissions,
     )
 
     def maybe_clean() -> None:
