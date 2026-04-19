@@ -521,9 +521,11 @@ _PASSING_TEST_RE = re.compile(
 )
 _RUNNING_PREAMBLE_RE = re.compile(r"^\s*running \d+ tests?\s*$")
 _CC_LINKER_NOTE_RE = re.compile(r'^\s*=\s+note:\s+"cc"\s+"')
+_LD_LINE_RE = re.compile(r"/usr/bin/ld:")
 
 
 _MAX_GLOBAL_OCCURRENCES = 3
+_MAX_LD_LINES = 15
 
 
 def strip_build_noise(output: str) -> str:
@@ -543,6 +545,11 @@ def strip_build_noise(output: str) -> str:
       dumps that follow `error: linking with cc failed` — the
       invocation is never what the agent needs; the `ld:` errors
       below it are.
+    - caps `/usr/bin/ld:` lines at `_MAX_LD_LINES` globally: each
+      line is unique (different rlib hashes, symbol addresses), but
+      cargo emits essentially the same linker failure once per crate
+      in the dependency graph, so after ~15 samples further ld lines
+      are dropped silently.
     - collapses runs of blank lines.
     """
     kept: list[str] = []
@@ -551,6 +558,8 @@ def strip_build_noise(output: str) -> str:
     dup_count = 0
     global_count: dict[str, int] = {}
     dropped_global: dict[str, int] = {}
+    ld_count = 0
+    ld_dropped = 0
 
     def flush_dups() -> None:
         nonlocal dup_count
@@ -573,6 +582,11 @@ def strip_build_noise(output: str) -> str:
             line = (
                 line[:120].rstrip() + " ... (cc invocation truncated)"
             )
+        if _LD_LINE_RE.search(line):
+            if ld_count >= _MAX_LD_LINES:
+                ld_dropped += 1
+                continue
+            ld_count += 1
         if line == prev_line:
             dup_count += 1
             continue
@@ -593,6 +607,12 @@ def strip_build_noise(output: str) -> str:
             prev_blank = False
         kept.append(line)
     flush_dups()
+    if ld_dropped:
+        kept.append(
+            f"\n  (... {ld_dropped} further `/usr/bin/ld:` line(s) omitted "
+            f"after the first {_MAX_LD_LINES}; the linker emits essentially "
+            f"the same failure once per crate ...)"
+        )
     if dropped_global:
         total = sum(dropped_global.values())
         uniq = len(dropped_global)
