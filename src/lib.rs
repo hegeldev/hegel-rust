@@ -264,6 +264,7 @@ pub mod __native_test_internals {
         ListenerEvent, Listeners, METAKEYS_NAME, MultiplexedNativeDatabase, NativeDatabase,
         ReadOnlyNativeDatabase,
     };
+    pub use crate::native::featureflags::{FeatureFlags, FeatureStrategy};
     pub use crate::native::tree::CachedTestFunction;
     pub use crate::native::unicodedata;
 }
