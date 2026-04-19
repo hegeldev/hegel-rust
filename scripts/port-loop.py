@@ -1314,7 +1314,6 @@ def dispatch_claude(
     gate_output: str | None,
     timeout: float | None,
     model: str,
-    max_turns: int = 0,
     max_budget_usd: float | None = None,
     resume_session: str | None = None,
 ) -> tuple[str | None, int]:
@@ -1373,7 +1372,6 @@ def dispatch_claude(
     )
 
     timed_out = False
-    turn_capped = False
 
     def _kill_on_timeout() -> None:
         nonlocal timed_out
@@ -1389,8 +1387,6 @@ def dispatch_claude(
     if timer is not None:
         timer.daemon = True
         timer.start()
-
-    seen_msg_ids: set[str] = set()
 
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     if resume_session is not None:
@@ -1418,21 +1414,6 @@ def dispatch_claude(
             except json.JSONDecodeError:
                 print(f"[claude:raw] {line}", flush=True)
                 continue
-            if evt.get("type") == "assistant" and max_turns > 0:
-                mid = (evt.get("message") or {}).get("id")
-                if isinstance(mid, str) and mid not in seen_msg_ids:
-                    seen_msg_ids.add(mid)
-                    if len(seen_msg_ids) > max_turns:
-                        turn_capped = True
-                        print(
-                            f"\n[port-loop] hit --max-turns-per-dispatch="
-                            f"{max_turns}; killing subprocess.",
-                            flush=True,
-                        )
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
             if evt.get("type") == "system" and evt.get("subtype") == "init":
                 sid = evt.get("session_id")
                 if isinstance(sid, str) and session_id is None:
@@ -1465,11 +1446,6 @@ def dispatch_claude(
         log_file.close()
         if timed_out:
             print(f"\n[port-loop] claude timed out after {timeout}s; continuing.")
-        elif turn_capped:
-            print(
-                f"\n[port-loop] claude hit turn cap after "
-                f"{len(seen_msg_ids)} turns; continuing."
-            )
 
     return session_id, proc.returncode
 
@@ -1491,14 +1467,12 @@ class IterCounter:
         max_iterations: int,
         timeout: float | None,
         model: str,
-        max_turns: int = 0,
         max_budget_usd: float | None = None,
     ) -> None:
         self.n = 0
         self.max = max_iterations
         self.timeout = timeout
         self.model = model
-        self.max_turns = max_turns
         self.max_budget_usd = max_budget_usd
         self.last_session_id: str | None = None
 
@@ -1517,7 +1491,6 @@ class IterCounter:
             gate_output=gate_output,
             timeout=self.timeout,
             model=self.model,
-            max_turns=self.max_turns,
             max_budget_usd=self.max_budget_usd,
         )
         # Even if exit code was non-zero, a captured sid still means a
@@ -1552,7 +1525,6 @@ class IterCounter:
             gate_output=gate_output,
             timeout=self.timeout,
             model=self.model,
-            max_turns=self.max_turns,
             max_budget_usd=self.max_budget_usd,
             resume_session=previous,
         )
@@ -2265,17 +2237,6 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--max-turns-per-dispatch",
-        type=int,
-        default=40,
-        dest="max_turns",
-        help=(
-            "Kill a dispatched claude subprocess after this many distinct "
-            "assistant API calls (default: 40). Forces early give-up before "
-            "the subprocess grinds up the full --timeout. 0 = unlimited."
-        ),
-    )
-    parser.add_argument(
         "--port",
         type=str,
         default=None,
@@ -2316,7 +2277,6 @@ def main() -> None:
         args.max_iterations,
         args.timeout,
         args.model,
-        args.max_turns,
         max_budget_usd=args.max_budget_usd if args.max_budget_usd else None,
     )
 
