@@ -282,22 +282,21 @@ pub fn server_run<F>(
 
     let test_failed = !result.passed || got_interesting.load(Ordering::SeqCst);
 
-    if is_running_in_antithesis() {
-        #[cfg(not(feature = "antithesis"))]
-        panic!(
-            "When Hegel is run inside of Antithesis, it requires the `antithesis` feature. \
-            You can add it with {{ features = [\"antithesis\"] }}."
-        );
+    crate::antithesis::require_antithesis_feature(
+        is_running_in_antithesis(),
+        cfg!(feature = "antithesis"),
+    );
 
-        #[cfg(feature = "antithesis")]
-        // nocov start
+    #[cfg(feature = "antithesis")]
+    // nocov start
+    if is_running_in_antithesis() {
         if let Some(ref loc) = test_location {
             crate::antithesis::emit_assertion(loc, !test_failed);
-            // nocov end
         }
     }
+    // nocov end
     // Suppress unused-variable warning for the non-antithesis-feature build:
-    // test_location is only consumed inside the is_running_in_antithesis() block above.
+    // test_location is only consumed inside the cfg(feature = "antithesis") block above.
     let _ = test_location;
 
     if test_failed {
