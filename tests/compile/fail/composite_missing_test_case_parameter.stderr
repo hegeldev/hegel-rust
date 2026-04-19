@@ -23,8 +23,8 @@ error[E0308]: mismatched types
   | ^^^^^^^^^^^^^^^^^^^
   | |
   | expected `ComposedGenerator<i32, _>`, found `ComposedGenerator<TestCase, ...>`
-  | expected `ComposedGenerator<i32, _>` because of return type
+  | expected `hegel::generators::ComposedGenerator<i32, _>` because of return type
   |
-  = note: expected struct `ComposedGenerator<i32, _>`
-             found struct `ComposedGenerator<TestCase, {closure@$DIR/src/generators/compose.rs:76:52: 76:80}>`
+  = note: expected struct `hegel::generators::ComposedGenerator<i32, _>`
+             found struct `hegel::generators::ComposedGenerator<TestCase, {closure@$DIR/src/generators/compose.rs:76:52: 76:80}>`
   = note: this error originates in the macro `::hegel::compose` which comes from the expansion of the attribute macro `hegel::composite` (in Nightly builds, run with -Z macro-backtrace for more info)

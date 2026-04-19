@@ -540,13 +540,13 @@ fn on_file_created(
     if key_hash == metakeys_hash {
         // The file contents are the raw bytes of a key; record them in
         // the reverse map so later value events under that key resolve.
-        if let Ok(key_bytes) = std::fs::read(path)
-            && let Some(value_name) = path.file_name().and_then(|s| s.to_str())
-        {
-            hash_to_key
-                .lock()
-                .unwrap()
-                .insert(value_name.to_string(), key_bytes);
+        if let Ok(key_bytes) = std::fs::read(path) {
+            if let Some(value_name) = path.file_name().and_then(|s| s.to_str()) {
+                hash_to_key
+                    .lock()
+                    .unwrap()
+                    .insert(value_name.to_string(), key_bytes);
+            }
         }
         return;
     }

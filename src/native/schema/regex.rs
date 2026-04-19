@@ -273,11 +273,10 @@ fn generate_op(
             // matcher, so we validate inline for the position anchors we
             // can check against the partial output.
             match at {
-                AtCode::BeginningString => {
-                    if !out.is_empty() {
-                        mark_invalid(ntc)?;
-                    }
+                AtCode::BeginningString if !out.is_empty() => {
+                    mark_invalid(ntc)?;
                 }
+                AtCode::BeginningString => {}
                 AtCode::Beginning => {
                     if state.flags & SRE_FLAG_MULTILINE != 0 {
                         if !out.is_empty() && !out.ends_with('\n') {
