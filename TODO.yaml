@@ -26,14 +26,6 @@
       Acceptance: these files report 0 uncovered code lines in
       `just check-coverage` output.
 
-  - title: "[CI] coverage: src/native/unicodedata.rs"
-    details: |
-      Part of the PR #188 coverage ratchet split. 44 uncovered code lines.
-      tests/embedded/native/unicodedata_tests.rs already exists; extend it.
-
-      Acceptance: src/native/unicodedata.rs reports 0 uncovered code lines
-      in `just check-coverage`.
-
   - title: "[CI] coverage: src/native/re/constants.rs"
     details: |
       Part of the PR #188 coverage ratchet split. 51 uncovered code lines.
