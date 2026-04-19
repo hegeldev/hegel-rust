@@ -618,7 +618,20 @@ fn emit_from_chars(
     if chars.is_empty() {
         mark_invalid(ntc)?;
     }
-    let idx = ntc.draw_integer(0, chars.len() as i128 - 1)? as usize;
+    // Mirror `HypothesisProvider.draw_string`: when the pool is larger than
+    // 256, pick from the first 256 entries 80% of the time. `gather_chars`
+    // returns codepoints in ascending order, so the low-index slice covers
+    // the low codepoints (ASCII / control chars). Without this bias,
+    // interesting characters like '\n' are astronomically rare draws out of
+    // the full BMP alphabet.
+    let n = chars.len() as i128;
+    let idx = if n > 256 && ntc.weighted(0.8, None)? {
+        ntc.draw_integer(0, 255)? as usize
+    } else if n > 256 {
+        ntc.draw_integer(256, n - 1)? as usize
+    } else {
+        ntc.draw_integer(0, n - 1)? as usize
+    };
     out.push(chars[idx]);
     Ok(())
 }
