@@ -1260,16 +1260,12 @@ def dispatch_claude(
     if resume_session is not None:
         print(
             f"Resuming claude session {resume_session[:12]}… "
-            f"(model={model}, no system prompt re-applied)",
+            f"(model={model}) with prompt:",
             flush=True,
         )
     else:
-        print(f"Dispatching fresh claude (model={model})", flush=True)
-        print("-" * 72, flush=True)
-        print("System prompt:", flush=True)
-        print(COMMON_SYSTEM_PROMPT, flush=True)
+        print(f"Dispatching fresh claude (model={model}) with prompt:", flush=True)
     print("-" * 72, flush=True)
-    print("Task prompt:", flush=True)
     print(full_prompt, flush=True)
     print("=" * 72, flush=True)
 
