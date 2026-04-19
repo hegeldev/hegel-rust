@@ -7,6 +7,84 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
+- title: Port CPython's Lib/re/_parser.py and rewrite regex schema on it
+  details: |
+    `src/native/schema/regex.rs` currently leans on the `regex-syntax`
+    crate to parse Python regexes. That's the anti-pattern: `regex-syntax`
+    has Rust-regex semantics, which are close-but-not-identical to
+    Python's `re` module (different escape handling, different
+    ordering/scoping of flags, different character-class behaviour,
+    different treatment of `\Z`, of named groups, of `\d\w\s` under
+    ASCII vs Unicode, and so on). The current file has already grown a
+    `translate_python_escapes` helper and several HIR walks to paper
+    over the gap. When the test port tries to exercise anything
+    non-trivial, the divergence bites.
+
+    The fix is to stop adapting regex-syntax and instead port CPython's
+    regex parser directly. The original:
+    `https://raw.githubusercontent.com/python/cpython/refs/heads/main/Lib/re/_parser.py`
+    (also mirrorable as `resources/cpython/Lib/re/_parser.py` once
+    vendored). It's a straightforward top-down parser that produces
+    CPython's internal `SubPattern`/`OP`-tuple AST — exactly the shape
+    Hypothesis's `hypothesis.strategies._internal.regex` walks to build
+    a generation strategy.
+
+    Precedent: `src/native/unicodedata.rs` is the template for this
+    kind of stdlib port — a self-contained module that mirrors the
+    Python module's public API and vendors whatever supporting data
+    it needs (Unicode 15.1.0 UCD in that case). Follow the same
+    structure for the regex parser.
+
+    Scope:
+    1. Vendor (or reference by URL) the CPython `_parser.py` source.
+       Also vendor its sibling `_constants.py` — the OP/AT/CATEGORY
+       integer constants `_parser.py` emits are part of the public
+       contract the rest of the code will consume.
+    2. Create `src/native/re/parser.rs` (+ `mod.rs`, + a
+       `re/constants.rs` mirror of `_constants.py`). Port the parser
+       to a Rust function returning a `SubPattern` AST. Use Rust
+       enums for the OP-tuple variants rather than stringly-typed
+       tuples — keep the variant names matching the Python constants
+       so cross-referencing stays trivial.
+    3. Rewrite `src/native/schema/regex.rs` to use `native::re::parse`
+       and walk the resulting AST directly. Drop the `regex-syntax`
+       dependency from the schema path (it can stay in the workspace
+       if another module still needs it — grep before removing from
+       Cargo.toml).
+    4. Add unit tests at `tests/embedded/native/re_parser_tests.rs`
+       covering every OP the parser can emit, using CPython's own
+       `sre_parse.parse(pat)` as an oracle during development (hand-
+       transcribe the expected AST into each assertion; don't ship a
+       Python dependency).
+
+    Non-negotiables:
+    - Do NOT reach for `regex-syntax`, `regex_automata`, `fancy-regex`,
+      `onig`, or any other regex crate for a parser shim. Python's
+      `re` module is the authoritative semantics; anything else is a
+      near-miss that will break tests in subtle ways we then have to
+      paper over.
+    - Do NOT "simplify" by only porting the subset Hypothesis's
+      regex strategy happens to exercise today. Port the whole
+      parser. Hypothesis will reach further into the AST as more
+      regex tests land and the partial port becomes its own source
+      of drift.
+    - Do NOT port `_compiler.py` / `_sre.c` (matching/execution).
+      The parser alone is what Hypothesis's strategy needs; matching
+      is handled by the Rust `regex` crate at test-runtime, which is
+      fine because the test generator only needs to *produce* matching
+      strings, not match them.
+
+    Acceptance:
+    - `src/native/re/parser.rs` exists, parses the full Python regex
+      grammar `_parser.py` covers, and has direct-equivalent tests.
+    - `src/native/schema/regex.rs` no longer depends on
+      `regex-syntax` for parsing; it walks the new AST instead.
+    - Previously-failing regex test ports (check recent git log
+      around `hypothesis/test_regex.py`) pass without the escape-
+      translation / HIR-walk workarounds.
+    - Commit each step as a focused commit (vendor → port parser →
+      rewrite schema → port tests) rather than a single mega-commit.
+
 - title: Port pbtkit/test_choice_index.py (native-gated to_index/from_index)
   details: |
     Previously skipped on "hegel-rust doesn't implement an index-based

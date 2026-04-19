@@ -10,6 +10,93 @@ Rust, go read how the feature works in the upstream Python
 implementations. The native engine is a port — its job is to match
 pbtkit/Hypothesis semantics, not to reinvent them.
 
+## Port, don't adapt: prefer a vendored Python port over a third-party crate
+
+When a piece of pbtkit/Hypothesis/CPython-stdlib behaviour is needed on
+the Rust side and a nearby third-party Rust crate appears to offer "most"
+of it — **port the Python module directly into `src/native/` instead**.
+Adapting a crate with subtly different semantics is almost always the
+wrong call, even when the crate is widely used, well-maintained, and
+99% correct.
+
+Concrete precedents in this repo:
+
+- **`src/native/unicodedata.rs`** is a direct port of CPython's
+  `unicodedata` module with the UCD tables vendored at a known version.
+  An earlier attempt to stand on the `unicode-general-category` crate
+  diverged on enough edge cases (private-use blocks, specific codepoints
+  Python treats as `Cn` that the crate labels otherwise) that every
+  test written against Python semantics kept surfacing off-by-one
+  disagreements. The port ended the whack-a-mole.
+- **`src/native/bignum.rs`** ports Python's int semantics rather than
+  adapting `num-bigint` at the Hypothesis boundary, for the same reason
+  (Python's modular arithmetic and shift semantics don't match
+  `BigInt`'s signed two's-complement-ish behaviour without per-call
+  fix-ups).
+
+The third-party-crate shape has a recognisable tell: you start writing
+"translate X" or "normalise Y" helpers at the boundary to paper over
+differences. That's the signal to stop and port the module instead.
+The translation helpers accrete indefinitely; the ported module is
+bounded by the size of the Python source.
+
+### When to port a CPython stdlib module rather than adapt a crate
+
+Prefer a direct port when any of the following hold:
+
+- The Rust crate's behaviour isn't a subset of Python's; the two
+  disagree on edge cases rather than the crate being a strict restriction.
+- You can see a `translate_X_to_Y`, `python_escape_fixup`,
+  `walk_ast_and_rewrite` shim forming at the boundary.
+- The Python module is under ~2000 lines of readable stdlib code
+  (CPython's `Lib/re/_parser.py`, `Lib/fractions.py`, etc. are in this
+  range). Ports at this scale are manageable; they're a one-off cost,
+  the translation shims are not.
+- Matching Python semantics exactly is the whole point — we are, after
+  all, a port of a Python PBT library.
+
+Ports that are generally *not* worth doing directly:
+
+- Parsers for formats Rust already has identically-spec'd crates for
+  (JSON, TOML). `serde_json` really does match the spec.
+- Anything below the Python level (libc, syscalls, threads). Those
+  aren't a semantics problem.
+
+### How to do the port
+
+Follow the `unicodedata.rs` shape:
+
+1. **Vendor the source.** Drop the Python file(s) into
+   `src/native/<module>/` alongside the Rust port so the diff is
+   reviewable without clicking through to CPython. Record the upstream
+   URL and commit hash in a module-level doc comment. Ported from a
+   snapshot — don't try to track upstream live.
+2. **Mirror the Python API.** Function names, public constants, and
+   argument order should match the Python module's public API so a
+   reader can move between the two files without remapping. Internal
+   helpers named with a leading `_` in Python stay `_`-prefixed in
+   Rust (lint-allow if needed); private Python modules (`_parser.py`,
+   `_constants.py`) become private Rust modules (`parser.rs`,
+   `constants.rs`) with the same shape.
+3. **Use Rust enums for Python's stringly-typed unions.** Where the
+   Python source uses integer constants or string tags (`OP.LITERAL`,
+   `AT.BEGINNING`, `"ALL"`) to discriminate variants, define a Rust
+   enum. Keep the variant names identical to the Python constants.
+4. **Port the tests too.** CPython usually has tests at `Lib/test/test_<module>.py`
+   and Hypothesis has tests at `resources/hypothesis/hypothesis-python/
+   tests/`. Use them as the behavioural spec. If the tests themselves
+   are hard to port (they exercise Python runtime machinery), write
+   unit tests against a hand-transcribed oracle derived from running
+   the original Python at development time.
+5. **Don't port what you don't need.** The bar for inclusion is "the
+   rest of the native engine calls it"; the bar for exclusion is "no
+   current caller + no plausible near-term caller". Err on the side of
+   inclusion — a partial port is its own source of drift later.
+6. **Once the port lands, rip out the boundary shims.** The
+   `translate_python_escapes`-style helpers from the old
+   third-party-crate path come out in the same commit that swaps the
+   dependency. Don't leave them for a follow-up; they rot immediately.
+
 ## Where to look, in order
 
 1. **pbtkit first.** `resources/pbtkit/src/pbtkit/`. pbtkit is a

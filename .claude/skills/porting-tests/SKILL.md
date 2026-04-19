@@ -218,6 +218,31 @@ Specific shapes that *look* skip-worthy but aren't:
 - **Full 64-bit integer range** → `gs::integers::<u64>()` etc.
 - **`@gs.composite`** → `#[hegel::composite]` or `hegel::compose!`.
 
+## When a test fails because Rust ≠ Python semantics, STOP
+
+If a test port keeps tripping over disagreements between a Rust crate
+`src/native/` is using and the Python module Hypothesis is using —
+e.g. a regex crate that disagrees with Python's `re` on `\Z` vs `\z`,
+a unicode crate that disagrees with CPython's `unicodedata` on some
+edge codepoint, a bignum crate that disagrees with Python `int` on
+shift semantics — **do not paper over it with per-test translation
+shims**. That's how we end up with `translate_python_escapes`,
+`normalise_category`, and other sticks of gum holding the boundary
+together until it collapses.
+
+The fix is to stop, file a TODO (or pick up the relevant existing
+one), and port the Python module directly into `src/native/` as a
+standalone Rust module. `src/native/unicodedata.rs` and
+`src/native/bignum.rs` are worked precedents. The full rationale is
+in `.claude/skills/implementing-native/SKILL.md` under "Port, don't
+adapt" — read it before reaching for another third-party crate at
+the semantics boundary.
+
+In the meantime, add the failing tests to SKIPPED.md with a rationale
+that names the underlying Python module needing to be ported (so the
+skip is visibly blocked on a known follow-up, not "no Rust
+counterpart"). They come back out of SKIPPED.md once the port lands.
+
 ## Stateful (rule-based) tests
 
 If the upstream file uses `hypothesis.stateful` —
