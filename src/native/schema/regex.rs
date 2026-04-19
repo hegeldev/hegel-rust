@@ -6,7 +6,8 @@
 // exactly, rather than adapting the subtly-different Rust regex-syntax
 // grammar.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use crate::cbor_utils::{as_bool, as_text, map_get};
 use crate::native::core::{ManyState, NativeTestCase, Status, StopTest};
@@ -36,6 +37,8 @@ pub(super) fn interpret_regex(ntc: &mut NativeTestCase, schema: &Value) -> Resul
     let mut state = GenState {
         groups: HashMap::new(),
         flags: parsed.flags,
+        pending_lookaheads: Vec::new(),
+        in_cache: HashMap::new(),
     };
     let mut result = String::new();
 
@@ -57,6 +60,27 @@ pub(super) fn interpret_regex(ntc: &mut NativeTestCase, schema: &Value) -> Resul
         draw_suffix(ntc, &parsed, &alphabet, &mut result)?;
     }
 
+    // Validate any deferred negative-lookahead assertions against the final
+    // output. This mirrors Python's `.filter(regex.search)` for `(?!...)`
+    // bodies — we only check the assertion position, but that's enough to
+    // reject the impossible/violating cases the test suite cares about.
+    if !state.pending_lookaheads.is_empty() {
+        let final_chars: Vec<char> = result.chars().collect();
+        for pending in &state.pending_lookaheads {
+            if match_seq(
+                &pending.pattern.data,
+                pending.char_pos,
+                &final_chars,
+                pending.flags,
+                &pending.groups,
+            )
+            .is_some()
+            {
+                mark_invalid(ntc)?;
+            }
+        }
+    }
+
     Ok(encode(result))
 }
 
@@ -70,6 +94,26 @@ fn encode(s: String) -> Value {
 struct GenState {
     groups: HashMap<u32, String>,
     flags: u32,
+    /// Negative-lookahead assertions recorded during generation. Each entry
+    /// captures the assertion body, the active flags, and a snapshot of the
+    /// groups at the point of the assertion. We check them against the final
+    /// output string in [`interpret_regex`].
+    pending_lookaheads: Vec<PendingAssertNot>,
+    /// Memoised character sets for `OpCode::In` nodes. Categories like `\w`
+    /// require a full BMP scan; without caching, a `\w+` match would redo
+    /// that work for every emitted character. Keyed by the slice pointer
+    /// of the SetItem list (stable across one walk of the parsed AST) plus
+    /// the active flags (which affect IGNORECASE swaps and ASCII-only
+    /// filtering).
+    in_cache: HashMap<(*const SetItem, usize, u32), Rc<[char]>>,
+}
+
+#[derive(Clone)]
+struct PendingAssertNot {
+    char_pos: usize,
+    pattern: SubPattern,
+    flags: u32,
+    groups: HashMap<u32, String>,
 }
 
 /// Draw 0..10 arbitrary characters from `alphabet` (or ASCII 32..126 when
@@ -247,7 +291,15 @@ fn generate_op(
             }
         }
         OpCode::In(items) => {
-            let chars = build_in_set(items, state.flags, alphabet);
+            let key = (items.as_ptr(), items.len(), state.flags);
+            let chars = match state.in_cache.get(&key) {
+                Some(cached) => Rc::clone(cached),
+                None => {
+                    let computed: Rc<[char]> = build_in_set(items, state.flags, alphabet).into();
+                    state.in_cache.insert(key, Rc::clone(&computed));
+                    computed
+                }
+            };
             emit_from_chars(ntc, &chars, out)?;
         }
         OpCode::Branch(items) => {
@@ -293,10 +345,41 @@ fn generate_op(
             // this too.)
             generate_subpattern(ntc, p, state, alphabet, out)?;
         }
-        OpCode::AssertNot { .. } | OpCode::Failure => {
-            // Negative lookahead/lookbehind and explicit FAILURE: emit
-            // nothing. Production stays valid if the surrounding text
-            // doesn't violate the assertion.
+        OpCode::AssertNot { direction, p } => {
+            // Negative lookaround emits nothing itself, but we still have to
+            // enforce the assertion. Python relies on `.filter(regex.search)`
+            // to reject violating outputs; we don't have a Python-compatible
+            // matcher to filter against, so we run a small SRE interpreter
+            // (`match_seq`) against the output instead.
+            //
+            // Lookbehind (`dir < 0`) fires immediately: `p` must not match as
+            // a suffix of what's been emitted so far. Lookahead defers until
+            // after generation so we can check the body against what comes
+            // next in the final string.
+            if *direction < 0 {
+                let out_chars: Vec<char> = out.chars().collect();
+                let end = out_chars.len();
+                for start in 0..=end {
+                    if match_seq(&p.data, start, &out_chars, state.flags, &state.groups)
+                        == Some(end)
+                    {
+                        mark_invalid(ntc)?;
+                    }
+                }
+            } else {
+                state.pending_lookaheads.push(PendingAssertNot {
+                    char_pos: out.chars().count(),
+                    pattern: p.clone(),
+                    flags: state.flags,
+                    groups: state.groups.clone(),
+                });
+            }
+        }
+        OpCode::Failure => {
+            // Explicit FAILURE is emitted for empty negative lookahead `(?!)`:
+            // a position that can never match. Reject the generation rather
+            // than producing a value that the regex wouldn't accept.
+            mark_invalid(ntc)?;
         }
         OpCode::AtomicGroup(p) => {
             generate_subpattern(ntc, p, state, alphabet, out)?;
@@ -356,11 +439,22 @@ fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<StringAlphabet>
     let ascii_only = flags & SRE_FLAG_ASCII != 0;
 
     if !negate {
-        let mut out: Vec<char> = positive
-            .into_iter()
-            .filter(|c| !ascii_only || (*c as u32) < 128)
-            .filter(|c| alphabet_allows(alphabet, *c))
-            .collect();
+        // Use a HashSet for O(1) deduplication. Category gathers can yield
+        // tens of thousands of characters (e.g. `\w`), so any linear-scan
+        // membership check turns this into an O(n²) hot loop.
+        let mut out: Vec<char> = Vec::new();
+        let mut seen: HashSet<char> = HashSet::new();
+        for c in positive {
+            if ascii_only && (c as u32) >= 128 {
+                continue;
+            }
+            if !alphabet_allows(alphabet, c) {
+                continue;
+            }
+            if seen.insert(c) {
+                out.push(c);
+            }
+        }
         if !categories.is_empty() {
             let cat_chars = gather_chars(alphabet, |c| {
                 categories.iter().any(|cat| in_category(c, *cat))
@@ -369,20 +463,20 @@ fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<StringAlphabet>
                 if ascii_only && (c as u32) >= 128 {
                     continue;
                 }
-                if !out.contains(&c) {
+                if seen.insert(c) {
                     out.push(c);
                 }
             }
         }
-        dedup(&mut out);
         out
     } else {
         let cat_blocks: Vec<ChCode> = categories;
+        let positive_set: HashSet<char> = positive.into_iter().collect();
         gather_chars(alphabet, |c| {
             if ascii_only && (c as u32) >= 128 {
                 return false;
             }
-            if positive.contains(&c) {
+            if positive_set.contains(&c) {
                 return false;
             }
             if cat_blocks.iter().any(|cat| in_category(c, *cat)) {
@@ -403,18 +497,6 @@ fn add_with_swapcase(v: &mut Vec<char>, c: char, flags: u32) {
             v.push(sw);
         }
     }
-}
-
-fn dedup(v: &mut Vec<char>) {
-    let mut seen: Vec<char> = Vec::with_capacity(v.len());
-    v.retain(|c| {
-        if seen.contains(c) {
-            false
-        } else {
-            seen.push(*c);
-            true
-        }
-    });
 }
 
 /// Return whether codepoint `c` is in the given CPython character category.
@@ -563,6 +645,318 @@ fn char_swapcase(c: char) -> char {
     } else {
         c
     }
+}
+
+// -- SRE-style matcher -------------------------------------------------------
+//
+// Minimal backtracking matcher over our parsed `SubPattern` AST, used to
+// validate `AssertNot` bodies during generation. Python's `regex_strategy`
+// does this externally via `regex.search` on the final output; we don't have a
+// Python-compatible matcher to filter against, so we roll a small one that
+// understands the subset of `OpCode`s that legitimately appear in lookaround
+// bodies.
+//
+// `match_seq` tries to match the opcode sequence `ops` starting at `pos` in
+// `chars` and returns `Some(end_pos)` on success. Backtracking is handled
+// inline for `Branch` and the repeat opcodes; `Subpattern` scoped flags are
+// approximated by matching the body with its modified flags and then
+// continuing the tail with the outer flags.
+
+fn match_seq(
+    ops: &[OpCode],
+    pos: usize,
+    chars: &[char],
+    flags: u32,
+    groups: &HashMap<u32, String>,
+) -> Option<usize> {
+    let Some((first, rest)) = ops.split_first() else {
+        return Some(pos);
+    };
+    match first {
+        OpCode::Literal(cp) => {
+            let want = char::from_u32(*cp)?;
+            let got = *chars.get(pos)?;
+            if chars_eq(got, want, flags) {
+                match_seq(rest, pos + 1, chars, flags, groups)
+            } else {
+                None
+            }
+        }
+        OpCode::NotLiteral(cp) => {
+            let banned = char::from_u32(*cp)?;
+            let got = *chars.get(pos)?;
+            if chars_eq(got, banned, flags) {
+                None
+            } else {
+                match_seq(rest, pos + 1, chars, flags, groups)
+            }
+        }
+        OpCode::Any => {
+            let got = *chars.get(pos)?;
+            if got == '\n' && flags & SRE_FLAG_DOTALL == 0 {
+                None
+            } else {
+                match_seq(rest, pos + 1, chars, flags, groups)
+            }
+        }
+        OpCode::In(items) => {
+            let got = *chars.get(pos)?;
+            if char_matches_set(items, got, flags) {
+                match_seq(rest, pos + 1, chars, flags, groups)
+            } else {
+                None
+            }
+        }
+        OpCode::At(at) => {
+            if at_matches(at, chars, pos, flags) {
+                match_seq(rest, pos, chars, flags, groups)
+            } else {
+                None
+            }
+        }
+        OpCode::Branch(branches) => {
+            for br in branches {
+                let mut combined = br.data.clone();
+                combined.extend_from_slice(rest);
+                if let Some(end) = match_seq(&combined, pos, chars, flags, groups) {
+                    return Some(end);
+                }
+            }
+            None
+        }
+        OpCode::Subpattern {
+            add_flags,
+            del_flags,
+            p,
+            ..
+        } => {
+            let inner_flags = (flags | *add_flags) & !*del_flags;
+            let end = match_seq(&p.data, pos, chars, inner_flags, groups)?;
+            match_seq(rest, end, chars, flags, groups)
+        }
+        OpCode::AtomicGroup(p) => {
+            let end = match_seq(&p.data, pos, chars, flags, groups)?;
+            match_seq(rest, end, chars, flags, groups)
+        }
+        OpCode::GroupRef(gid) => {
+            let val = groups.get(gid)?;
+            let vcs: Vec<char> = val.chars().collect();
+            if pos + vcs.len() > chars.len() {
+                return None;
+            }
+            for (i, vc) in vcs.iter().enumerate() {
+                if !chars_eq(chars[pos + i], *vc, flags) {
+                    return None;
+                }
+            }
+            match_seq(rest, pos + vcs.len(), chars, flags, groups)
+        }
+        OpCode::GroupRefExists {
+            cond_group,
+            yes,
+            no,
+        } => {
+            let mut combined = if groups.contains_key(cond_group) {
+                yes.data.clone()
+            } else if let Some(n) = no {
+                n.data.clone()
+            } else {
+                Vec::new()
+            };
+            combined.extend_from_slice(rest);
+            match_seq(&combined, pos, chars, flags, groups)
+        }
+        OpCode::Assert { p, .. } => {
+            if match_seq(&p.data, pos, chars, flags, groups).is_some() {
+                match_seq(rest, pos, chars, flags, groups)
+            } else {
+                None
+            }
+        }
+        OpCode::AssertNot { p, .. } => {
+            if match_seq(&p.data, pos, chars, flags, groups).is_none() {
+                match_seq(rest, pos, chars, flags, groups)
+            } else {
+                None
+            }
+        }
+        OpCode::Failure => None,
+        OpCode::MaxRepeat { min, max, item } => {
+            let mn = *min as usize;
+            let mx = if *max == u32::MAX {
+                None
+            } else {
+                Some(*max as usize)
+            };
+            let mut positions = vec![pos];
+            let mut cur = pos;
+            loop {
+                if let Some(m) = mx {
+                    if positions.len() > m {
+                        break;
+                    }
+                }
+                match match_seq(&item.data, cur, chars, flags, groups) {
+                    Some(next) if next > cur => {
+                        cur = next;
+                        positions.push(cur);
+                    }
+                    _ => break,
+                }
+            }
+            if positions.len() - 1 < mn {
+                return None;
+            }
+            for i in (mn..positions.len()).rev() {
+                if let Some(end) = match_seq(rest, positions[i], chars, flags, groups) {
+                    return Some(end);
+                }
+            }
+            None
+        }
+        OpCode::MinRepeat { min, max, item } => {
+            let mn = *min as usize;
+            let mx = if *max == u32::MAX {
+                None
+            } else {
+                Some(*max as usize)
+            };
+            let mut cur = pos;
+            let mut count = 0usize;
+            while count < mn {
+                let next = match_seq(&item.data, cur, chars, flags, groups)?;
+                if next <= cur {
+                    return None;
+                }
+                cur = next;
+                count += 1;
+            }
+            loop {
+                if let Some(end) = match_seq(rest, cur, chars, flags, groups) {
+                    return Some(end);
+                }
+                if let Some(m) = mx {
+                    if count >= m {
+                        return None;
+                    }
+                }
+                let next = match_seq(&item.data, cur, chars, flags, groups)?;
+                if next <= cur {
+                    return None;
+                }
+                cur = next;
+                count += 1;
+            }
+        }
+        OpCode::PossessiveRepeat { min, max, item } => {
+            let mn = *min as usize;
+            let mx = if *max == u32::MAX {
+                None
+            } else {
+                Some(*max as usize)
+            };
+            let mut cur = pos;
+            let mut count = 0usize;
+            loop {
+                if let Some(m) = mx {
+                    if count >= m {
+                        break;
+                    }
+                }
+                match match_seq(&item.data, cur, chars, flags, groups) {
+                    Some(next) if next > cur => {
+                        cur = next;
+                        count += 1;
+                    }
+                    _ => break,
+                }
+            }
+            if count < mn {
+                return None;
+            }
+            match_seq(rest, cur, chars, flags, groups)
+        }
+    }
+}
+
+fn chars_eq(a: char, b: char, flags: u32) -> bool {
+    if a == b {
+        return true;
+    }
+    if flags & SRE_FLAG_IGNORECASE != 0 {
+        char_swapcase(a) == b || a == char_swapcase(b)
+    } else {
+        false
+    }
+}
+
+fn char_matches_set(items: &[SetItem], c: char, flags: u32) -> bool {
+    let negate = matches!(items.first(), Some(SetItem::Negate));
+    let mut contained = false;
+    for item in items {
+        match item {
+            SetItem::Negate => {}
+            SetItem::Literal(cp) => {
+                if let Some(lc) = char::from_u32(*cp) {
+                    if chars_eq(c, lc, flags) {
+                        contained = true;
+                    }
+                }
+            }
+            SetItem::Range(lo, hi) => {
+                let cp = c as u32;
+                if cp >= *lo && cp <= *hi {
+                    contained = true;
+                } else if flags & SRE_FLAG_IGNORECASE != 0 {
+                    let sw = char_swapcase(c) as u32;
+                    if sw >= *lo && sw <= *hi {
+                        contained = true;
+                    }
+                }
+            }
+            SetItem::Category(cat) => {
+                if in_category(c, *cat) {
+                    contained = true;
+                }
+            }
+        }
+    }
+    if negate { !contained } else { contained }
+}
+
+fn at_matches(at: &AtCode, chars: &[char], pos: usize, flags: u32) -> bool {
+    match at {
+        AtCode::BeginningString => pos == 0,
+        AtCode::Beginning => {
+            if flags & SRE_FLAG_MULTILINE != 0 {
+                pos == 0 || chars[pos - 1] == '\n'
+            } else {
+                pos == 0
+            }
+        }
+        AtCode::BeginningLine => pos == 0 || (pos > 0 && chars[pos - 1] == '\n'),
+        AtCode::End => {
+            if flags & SRE_FLAG_MULTILINE != 0 {
+                pos == chars.len() || chars[pos] == '\n'
+            } else {
+                pos == chars.len() || (pos + 1 == chars.len() && chars[pos] == '\n')
+            }
+        }
+        AtCode::EndLine => pos == chars.len() || chars[pos] == '\n',
+        AtCode::EndString => pos == chars.len(),
+        AtCode::Boundary | AtCode::UniBoundary | AtCode::LocBoundary => {
+            is_word_boundary(chars, pos)
+        }
+        AtCode::NonBoundary | AtCode::UniNonBoundary | AtCode::LocNonBoundary => {
+            !is_word_boundary(chars, pos)
+        }
+    }
+}
+
+fn is_word_boundary(chars: &[char], pos: usize) -> bool {
+    let before = pos > 0 && is_uni_word(chars[pos - 1]);
+    let after = pos < chars.len() && is_uni_word(chars[pos]);
+    before != after
 }
 
 #[cfg(test)]
