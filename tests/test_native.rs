@@ -4,6 +4,7 @@ mod common;
 
 use common::utils::assert_all_examples;
 use hegel::generators::{self as gs, Generator};
+use hegel::HealthCheck;
 
 #[hegel::test]
 fn native_integer_in_range(tc: hegel::TestCase) {
@@ -200,6 +201,10 @@ fn native_regex_literal_blocked_by_alphabet() {
 /// A class [a-z] filtered to digits (no overlap) gives empty chars → Invalid.
 #[test]
 fn native_regex_unicode_class_empty_after_filter() {
+    // Every case is Invalid, so we never accumulate valid examples; the
+    // resulting cumulative wall-clock trips TooSlow before the run ends.
+    // Suppress it — this test is specifically about the empty-class path,
+    // not generation speed.
     hegel::Hegel::new(|tc: hegel::TestCase| {
         let _s = tc.draw(
             gs::from_regex("[a-z]+")
@@ -207,7 +212,11 @@ fn native_regex_unicode_class_empty_after_filter() {
                 .alphabet(gs::characters().categories(&["Nd"])),
         );
     })
-    .settings(hegel::Settings::new().test_cases(10))
+    .settings(
+        hegel::Settings::new()
+            .test_cases(10)
+            .suppress_health_check([HealthCheck::TooSlow]),
+    )
     .run();
 }
 
