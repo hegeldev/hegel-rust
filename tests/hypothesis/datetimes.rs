@@ -137,10 +137,14 @@ fn test_simplifies_towards_midnight() {
 
 #[test]
 fn test_can_generate_naive_time() {
-    find_any(gs::times(), |s: &String| !s.contains('+') && !s.contains('Z'));
+    find_any(gs::times(), |s: &String| {
+        !s.contains('+') && !s.contains('Z')
+    });
 }
 
 #[test]
 fn test_naive_times_are_naive() {
-    assert_all_examples(gs::times(), |s: &String| !s.contains('+') && !s.contains('Z'));
+    assert_all_examples(gs::times(), |s: &String| {
+        !s.contains('+') && !s.contains('Z')
+    });
 }
