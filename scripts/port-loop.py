@@ -133,6 +133,35 @@ NATIVE_TEST_FIX_PROMPT = (
     "rerunning the command. Fix the first failing test and commit."
 )
 
+TEST_PERF_FIX_PROMPT = """\
+A `cargo test` run timed out and was killed by the port-loop harness.
+The partial output below ends with a `*** port-loop: ... timed out
+after Ns and was killed ***` banner that names the exact command.
+
+This is a performance problem, not a correctness one. The root cause
+may be in the tests themselves (doing too much generation, recompiling
+a fresh cargo project per test, etc.) or in the library code the tests
+exercise. Identify the slow test(s) — the `--nocapture --test-threads=1`
+output or a quick `cargo test -- -Z unstable-options --report-time`
+will surface them — understand WHY they're slow, and fix the root
+cause.
+
+Performance target:
+- Every `#[test]` should ideally run in < 1 second and definitely
+  < 5 seconds. Anything above that is a bug to be fixed.
+- `TempRustProject` compiles a fresh cargo project per call and is the
+  usual suspect when a batch of tests blows the budget; look at sharing
+  compile artefacts or moving compile-only assertions to `trybuild`.
+
+Ground rules:
+- Do NOT "fix" this by marking tests `#[ignore]`, deleting them, or
+  adding them to SKIPPED.md.
+- Do NOT raise the port-loop timeout.
+- Commit the fix. The next iteration re-runs the same gate with the
+  same timeout and will either green-light it or re-dispatch you with
+  fresh output.
+"""
+
 COMMIT_PROMPT = (
     "All gates pass but the working tree is dirty. `git status --porcelain` "
     "output is included below. Make a focused commit describing the change, "
@@ -420,9 +449,21 @@ def maybe_hot_reload() -> None:
     os.execv(str(SCRIPT_PATH), ORIGINAL_ARGV)
 
 
-def run_gate(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str]:
-    """Run a gate command, stream output live, return (exit_code, captured_output)."""
+def run_gate(
+    cmd: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    timeout: float | None = None,
+) -> tuple[int, str, bool]:
+    """Run a gate command, stream output live, return (exit_code, output, timed_out).
+
+    If `timeout` is set and the command doesn't finish in time, the process is
+    killed, `timed_out` is True, `exit_code` is 124, and the returned output
+    includes a trailing banner naming the command and elapsed limit.
+    """
     print(f"\n$ {' '.join(cmd)}")
+    if timeout is not None:
+        print(f"[port-loop] timeout: {timeout:.0f}s", flush=True)
     proc = subprocess.Popen(
         cmd,
         cwd=REPO_ROOT,
@@ -434,12 +475,34 @@ def run_gate(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int,
     )
     captured: list[str] = []
     assert proc.stdout is not None
-    for line in proc.stdout:
-        sys.stdout.write(line)
-        sys.stdout.flush()
-        captured.append(line)
-    proc.wait()
-    return proc.returncode, "".join(captured)
+
+    def _reader() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            captured.append(line)
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        proc.kill()
+        proc.wait()
+    t.join()
+    output = "".join(captured)
+    if timed_out:
+        banner = (
+            f"\n\n*** port-loop: `{' '.join(cmd)}` timed out after "
+            f"{timeout:.0f}s and was killed. Output above is only what was "
+            f"captured before the timeout. ***\n"
+        )
+        print(banner, flush=True)
+        return 124, output + banner, True
+    return proc.returncode, output, False
 
 
 def _git_status_porcelain() -> str:
@@ -556,44 +619,60 @@ def _record_gate_success(key: str) -> None:
 
 
 def _run_cached_gate(
-    key: str, cmd: list[str], *, env: dict[str, str] | None = None
-) -> tuple[bool, str]:
+    key: str,
+    cmd: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    timeout: float | None = None,
+) -> tuple[bool, str, bool]:
     if _gate_cached(key):
         print(f"\n[port-loop] gate cache hit: `{key}` @ HEAD; skipping.")
-        return True, ""
-    code, out = run_gate(cmd, env=env)
+        return True, "", False
+    code, out, timed_out = run_gate(cmd, env=env, timeout=timeout)
     ok = code == 0
     if ok:
         _record_gate_success(key)
-    return ok, out
+    return ok, out, timed_out
 
 
-def gate_lint() -> tuple[bool, str]:
+# Suite-wide `cargo test` runs occasionally legitimately take minutes;
+# per-module runs should finish in well under a minute. Timeouts above
+# those budgets mean something is pathological — we kill and hand the
+# output to an agent with a perf-focused prompt.
+SUITE_TEST_TIMEOUT_S = 15 * 60
+MODULE_TEST_TIMEOUT_S = 2 * 60
+
+
+def gate_lint() -> tuple[bool, str, bool]:
     return _run_cached_gate("just lint", ["just", "lint"])
 
 
-def gate_server_tests() -> tuple[bool, str]:
-    return _run_cached_gate("cargo test", ["cargo", "test"])
+def gate_server_tests() -> tuple[bool, str, bool]:
+    return _run_cached_gate(
+        "cargo test", ["cargo", "test"], timeout=SUITE_TEST_TIMEOUT_S
+    )
 
 
-def gate_native_tests() -> tuple[bool, str]:
+def gate_native_tests() -> tuple[bool, str, bool]:
     env = os.environ.copy()
     env["HEGEL_SERVER_COMMAND"] = "/bin/false"
     return _run_cached_gate(
         "HEGEL_SERVER_COMMAND=/bin/false cargo test --features native",
         ["cargo", "test", "--features", "native"],
         env=env,
+        timeout=SUITE_TEST_TIMEOUT_S,
     )
 
 
-def gate_module_server(kind: str, module: str) -> tuple[bool, str]:
+def gate_module_server(kind: str, module: str) -> tuple[bool, str, bool]:
     return _run_cached_gate(
         f"cargo test --test {kind} {module}",
         ["cargo", "test", "--test", kind, module],
+        timeout=MODULE_TEST_TIMEOUT_S,
     )
 
 
-def gate_module_native(kind: str, module: str) -> tuple[bool, str]:
+def gate_module_native(kind: str, module: str) -> tuple[bool, str, bool]:
     env = os.environ.copy()
     env["HEGEL_SERVER_COMMAND"] = "/bin/false"
     return _run_cached_gate(
@@ -601,6 +680,7 @@ def gate_module_native(kind: str, module: str) -> tuple[bool, str]:
         f"--test {kind} {module}",
         ["cargo", "test", "--features", "native", "--test", kind, module],
         env=env,
+        timeout=MODULE_TEST_TIMEOUT_S,
     )
 
 
@@ -1148,19 +1228,25 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
             any_dispatched = True
 
         # Step 3: module's server-mode tests must pass.
-        ok, out = gate_module_server(kind, module)
+        ok, out, timed_out = gate_module_server(kind, module)
         if not ok:
-            state.dispatch(
-                PORT_TEST_FIX_SERVER_PROMPT.format(**fmt_args), gate_output=out
+            prompt = (
+                TEST_PERF_FIX_PROMPT
+                if timed_out
+                else PORT_TEST_FIX_SERVER_PROMPT.format(**fmt_args)
             )
+            state.dispatch(prompt, gate_output=out)
             any_dispatched = True
 
         # Step 4: module's native-mode tests must pass.
-        ok, out = gate_module_native(kind, module)
+        ok, out, timed_out = gate_module_native(kind, module)
         if not ok:
-            state.dispatch(
-                PORT_TEST_FIX_NATIVE_PROMPT.format(**fmt_args), gate_output=out
+            prompt = (
+                TEST_PERF_FIX_PROMPT
+                if timed_out
+                else PORT_TEST_FIX_NATIVE_PROMPT.format(**fmt_args)
             )
+            state.dispatch(prompt, gate_output=out)
             any_dispatched = True
 
         # Step 5: tree must be clean.
@@ -1239,20 +1325,22 @@ def repair(state: IterCounter, run_server_tests: bool = False) -> None:
     while any_failures:
         any_failures = False
         apply_auto_fixes()
-        ok, out = gate_lint()
+        ok, out, _ = gate_lint()
         if not ok:
             any_failures = True
             state.dispatch(LINT_FIX_PROMPT, gate_output=out)
 
         if run_server_tests:
-            ok, out = gate_server_tests()
+            ok, out, timed_out = gate_server_tests()
             if not ok:
-                state.dispatch(SERVER_TEST_FIX_PROMPT, gate_output=out)
+                prompt = TEST_PERF_FIX_PROMPT if timed_out else SERVER_TEST_FIX_PROMPT
+                state.dispatch(prompt, gate_output=out)
                 any_failures = True
 
-        ok, out = gate_native_tests()
+        ok, out, timed_out = gate_native_tests()
         if not ok:
-            state.dispatch(NATIVE_TEST_FIX_PROMPT, gate_output=out)
+            prompt = TEST_PERF_FIX_PROMPT if timed_out else NATIVE_TEST_FIX_PROMPT
+            state.dispatch(prompt, gate_output=out)
             any_failures = True
         if any_failures:
             continue
