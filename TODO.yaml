@@ -26,20 +26,6 @@
       Acceptance: these files report 0 uncovered code lines in
       `just check-coverage` output.
 
-  - title: "[CI] coverage: src/native/schema/numeric.rs + schema/float.rs"
-    details: |
-      Part of the PR #188 coverage ratchet split.
-
-        - src/native/schema/numeric.rs   (24 uncovered code lines)
-        - src/native/schema/float.rs     (45 uncovered code lines)
-
-      Add tests (integration in tests/ or embedded under
-      tests/embedded/native/schema/). See `coverage` skill. No // nocov and
-      no ratchet bumps without explicit permission.
-
-      Acceptance: these two files report 0 uncovered code lines in
-      `just check-coverage`.
-
   - title: "[CI] coverage: src/native/featureflags.rs"
     details: |
       Part of the PR #188 coverage ratchet split.
