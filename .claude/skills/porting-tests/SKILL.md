@@ -241,7 +241,13 @@ the semantics boundary.
 In the meantime, add the failing tests to SKIPPED.md with a rationale
 that names the underlying Python module needing to be ported (so the
 skip is visibly blocked on a known follow-up, not "no Rust
-counterpart"). They come back out of SKIPPED.md once the port lands.
+counterpart"). **Whenever you add skips for this reason, update the
+corresponding TODO.yaml entry for the port so that removing those exact
+SKIPPED.md entries is part of its acceptance criteria.** If no TODO
+exists yet, file one and include the skip list in the acceptance
+criteria from the start. Without that link the skips become invisible
+debt — the port "completes" while the tests it was meant to unblock
+quietly stay skipped.
 
 ## Stateful (rule-based) tests
 

@@ -82,8 +82,17 @@
     - Previously-failing regex test ports (check recent git log
       around `hypothesis/test_regex.py`) pass without the escape-
       translation / HIR-walk workarounds.
+    - Every SKIPPED.md entry whose rationale names regex-syntax
+      divergence, `translate_python_escapes`, or Python `re`
+      semantics mismatch is removed, with the corresponding test
+      actually ported (or a tighter, non-semantics-divergence
+      rationale substituted). Grep SKIPPED.md for `regex`,
+      `translate_python_escapes`, and `re._parser` before declaring
+      done; leftovers here mean the port missed the tests it was
+      meant to unblock.
     - Commit each step as a focused commit (vendor → port parser →
-      rewrite schema → port tests) rather than a single mega-commit.
+      rewrite schema → port tests → unskip SKIPPED.md entries)
+      rather than a single mega-commit.
 
 - title: Port pbtkit/test_choice_index.py (native-gated to_index/from_index)
   details: |
