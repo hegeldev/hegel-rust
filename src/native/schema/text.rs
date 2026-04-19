@@ -1,5 +1,8 @@
 // String and binary schema interpreters, plus StringAlphabet helpers.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
 use crate::cbor_utils::{as_text, as_u64, map_get};
 use crate::native::core::{ManyState, NativeTestCase, StopTest};
 use crate::native::unicodedata;
@@ -94,6 +97,7 @@ pub(super) fn interpret_binary(
 }
 
 /// Alphabet for string generation.
+#[derive(Clone)]
 pub(super) enum StringAlphabet {
     /// Contiguous codepoint range [min, max] with surrogates excluded.
     Range { min: u32, max: u32 },
@@ -144,7 +148,29 @@ impl StringAlphabet {
 }
 
 /// Build the effective character alphabet for a string schema.
+///
+/// Category-driven alphabets (e.g. `categories=["Nd"]`) require a full BMP
+/// scan with a category lookup per codepoint. The same schema is re-presented
+/// once per draw, so we memoise the result globally keyed by the schema's
+/// canonical CBOR encoding. Mirrors Hypothesis's `limited_category_index_cache`
+/// in `internal/charmap.py`.
 pub(super) fn build_string_alphabet(schema: &Value) -> StringAlphabet {
+    type Cache = Mutex<HashMap<Vec<u8>, Arc<StringAlphabet>>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut key = Vec::new();
+    if ciborium::into_writer(schema, &mut key).is_ok() {
+        if let Some(cached) = cache.lock().unwrap().get(&key) {
+            return (**cached).clone();
+        }
+        let computed = Arc::new(build_string_alphabet_uncached(schema));
+        cache.lock().unwrap().insert(key, Arc::clone(&computed));
+        return (*computed).clone();
+    }
+    build_string_alphabet_uncached(schema)
+}
+
+fn build_string_alphabet_uncached(schema: &Value) -> StringAlphabet {
     // Determine codepoint range from codec + min/max codepoint.
     let codec = map_get(schema, "codec").and_then(as_text);
     let (mut cp_min, mut cp_max): (u32, u32) = match codec {
