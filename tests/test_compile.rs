@@ -9,7 +9,12 @@
 //!
 //! To regenerate stderr snapshots after intentional macro-error changes,
 //! run `TRYBUILD=overwrite cargo test --test test_compile`.
+//!
+//! The stderr snapshots are rustc-version-specific (rustc's diagnostic
+//! output evolves between releases), so this test is pinned to the
+//! toolchain version used to generate the committed snapshots.
 
+#[rustversion::attr(not(stable(1.95)), ignore = "stderr snapshots pinned to rustc 1.95")]
 #[test]
 fn compile_tests() {
     let t = trybuild::TestCases::new();

@@ -579,7 +579,7 @@ impl BytesChoice {
 /// codepoints (`Vec<u32>`) in `0..=0x10FFFF`; the no-surrogate filter is
 /// applied at the user-facing boundary where the engine hands a `String`
 /// back, not in the core representation. Ordered by shortlex over
-/// [`codepoint_key`]-remapped codepoints (so '0' is the simplest codepoint,
+/// `codepoint_key`-remapped codepoints (so '0' is the simplest codepoint,
 /// then '1', and so on).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StringChoice {
