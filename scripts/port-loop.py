@@ -515,8 +515,12 @@ _CARGO_PROGRESS_PREFIXES = (
     "Packaging ",
     "Documenting ",
 )
-_PASSING_TEST_RE = re.compile(r"^\s*test \S+ \.\.\. ok\s*$")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+_PASSING_TEST_RE = re.compile(
+    r"^\s*test \S+(?: - should panic)? \.\.\. ok\s*$"
+)
 _RUNNING_PREAMBLE_RE = re.compile(r"^\s*running \d+ tests?\s*$")
+_CC_LINKER_NOTE_RE = re.compile(r'^\s*=\s+note:\s+"cc"\s+"')
 
 
 def strip_build_noise(output: str) -> str:
@@ -524,12 +528,31 @@ def strip_build_noise(output: str) -> str:
 
     Keeps failing tests, panic/backtrace, slow-test warnings, compile
     errors, clippy output, test-result summaries, and everything else
-    that could help an agent diagnose the failure. Collapses runs of
-    blank lines so stripping doesn't leave huge gaps.
+    that could help an agent diagnose the failure. Also:
+    - strips ANSI escape codes so regexes match colored cargo output,
+    - collapses runs of consecutive identical lines (common with
+      `/usr/bin/ld:` spam from linker failures) behind a counter,
+    - truncates multi-kilobyte `= note: "cc" "..."` linker-command
+      dumps that follow `error: linking with \`cc\` failed` — the
+      invocation is never what the agent needs; the `ld:` errors
+      below it are.
+    - collapses runs of blank lines.
     """
     kept: list[str] = []
     prev_blank = False
-    for line in output.splitlines():
+    prev_line: str | None = None
+    dup_count = 0
+
+    def flush_dups() -> None:
+        nonlocal dup_count
+        if dup_count:
+            kept.append(
+                f"  (... previous line repeated {dup_count} more times ...)"
+            )
+            dup_count = 0
+
+    for raw in output.splitlines():
+        line = _ANSI_RE.sub("", raw).rstrip()
         stripped = line.lstrip()
         if any(stripped.startswith(p) for p in _CARGO_PROGRESS_PREFIXES):
             continue
@@ -537,6 +560,15 @@ def strip_build_noise(output: str) -> str:
             continue
         if _RUNNING_PREAMBLE_RE.match(line):
             continue
+        if _CC_LINKER_NOTE_RE.match(line) and len(line) > 200:
+            line = (
+                line[:120].rstrip() + " ... (cc invocation truncated)"
+            )
+        if line == prev_line:
+            dup_count += 1
+            continue
+        flush_dups()
+        prev_line = line
         if not line.strip():
             if prev_blank:
                 continue
@@ -544,6 +576,7 @@ def strip_build_noise(output: str) -> str:
         else:
             prev_blank = False
         kept.append(line)
+    flush_dups()
     return "\n".join(kept)
 
 # Hot-reload bookkeeping: captured once at import, checked at the top of
