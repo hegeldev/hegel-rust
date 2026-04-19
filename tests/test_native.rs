@@ -3,7 +3,6 @@
 mod common;
 
 use common::utils::assert_all_examples;
-use hegel::HealthCheck;
 use hegel::generators::{self as gs, Generator};
 
 #[hegel::test]
@@ -212,11 +211,7 @@ fn native_regex_unicode_class_empty_after_filter() {
                 .alphabet(gs::characters().categories(&["Nd"])),
         );
     })
-    .settings(
-        hegel::Settings::new()
-            .test_cases(10)
-            .suppress_health_check([HealthCheck::TooSlow]),
-    )
+    .settings(hegel::Settings::new().test_cases(10))
     .run();
 }
 
