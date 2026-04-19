@@ -162,6 +162,13 @@ Individually-skipped tests (rest of the file is ported):
   `_normalize_code`/`_clean_source` (Python bytecode and source-code manipulation),
   `LazyStrategy.__repr__` warnings, `unittest.mock` objects, `sys.path`, and
   `functools.partial/wraps`. None of these have Rust counterparts.
+- `test_fuzz_one_input.py` — all tests exercise `test.hypothesis.fuzz_one_input(buffer)`,
+  a Python-specific public API that lets `@given`-decorated tests serve as AFL/libFuzzer
+  corpus targets (feeding raw bytes as test input). Hegel-rust has no `fuzz_one_input`
+  equivalent and no analogous attribute-on-decorated-function surface. One test also
+  accesses `test.hypothesis._given_kwargs` (Python dunder-adjacent attribute). Neither
+  the fuzzer-integration API nor the attribute-access pattern have Rust counterparts.
+
 - `test_database_backend.py` — this file mixes portable public-API tests
   (multi-value `save`/`fetch`/`delete`/`move` semantics, listener API,
   wrappers) with Python-specific ones. Only the latter are skipped here;
