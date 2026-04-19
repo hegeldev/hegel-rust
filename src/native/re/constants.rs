@@ -49,7 +49,7 @@ pub enum AtCode {
 }
 
 /// Character-class category codes. Matches Python's `CHCODES`.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ChCode {
     Digit,
     NotDigit,
