@@ -61,6 +61,14 @@ Individually-skipped tests (rest of the file is ported):
 
 ## hypothesis (`/tmp/hypothesis/hypothesis-python/tests/cover/`)
 
+- `test_recursive.py` — all tests exercise `st.recursive(base, extend, max_leaves=N)`, a
+  public API that generates dynamically-typed recursive data structures (e.g.
+  `bool | list[bool | list[...]]`). The return type varies at runtime based on the
+  `extend` function, which is natural in Python's dynamic type system but has no clean
+  Rust analog: a generic `gs::recursive()` combinator would require type erasure
+  (`Box<dyn Any>`) or a concrete per-use-case recursive enum, neither of which
+  matches this API surface. Hegel-rust has no `gs::recursive()` equivalent.
+
 - `test_constants_ast.py` — tests Hypothesis's Python-AST constant
   extractor (`ConstantVisitor`, `constants_from_module`); parses Python
   source code, no Rust counterpart.
