@@ -14,9 +14,12 @@ Outer loop, each iteration:
   3. Sync with origin: `git fetch`, rebase the current branch onto
      `origin/main`, and push (auto-pushes any local commits). Rebase
      conflicts or push failures dispatch a claude agent.
-  4. If the upstream PR (hegeldev/hegel-rust#188) has completed CI as
-     failed, dispatch a specialised agent to fix CI and restart the
-     iteration before doing any other work.
+  4. Gate on the upstream PR (hegeldev/hegel-rust#188)'s CI. Block on
+     `gh pr checks --watch` while checks are pending; dispatch a
+     specialised agent to fix CI if the cycle completes as failed;
+     loop until CI is green before advancing. (If we just pushed in
+     step 3, poll briefly for the new cycle to register before reading
+     status so we don't act on stale state.)
   5. If `TODO.yaml` has any entries, pop the first one and dispatch claude
      to clear it, then continue the outer loop (repair runs again before
      the next action).
@@ -1933,39 +1936,64 @@ def _watch_pr_ci(timeout: float = 3600.0) -> None:
         print(f"[port-loop] gh unavailable: {e}")
 
 
-def drive_pr_ci(state: IterCounter) -> bool:
-    """If PR CI has completed as failed, dispatch the fix agent and wait.
+def drive_pr_ci(state: IterCounter, *, just_pushed: bool = False) -> bool:
+    """Block until the upstream PR's CI is green (or unknowable).
 
-    After dispatching, blocks until a new CI cycle completes (`gh pr
-    checks --watch`) so the outer loop doesn't race ahead to TODOs while
-    the fix push is still being verified by CI. If the new cycle is
-    still failing, the next outer iteration observes that and dispatches
-    again; if it's green, the outer loop proceeds to TODOs / porting.
+    Loops internally on the PR state:
+    - "success" / "skip": return False (no action needed).
+    - "pending": block on `gh pr checks --watch` until CI finishes,
+      then re-evaluate.
+    - "failure": dispatch the fix agent; if it produced a new commit
+      (which `sync_with_origin` will have pushed next tick via rebase
+      onto the branch), wait for GitHub to register new checks and
+      loop on `--watch` again.
 
-    Returns True iff an agent was dispatched (caller should continue
-    the outer loop).
+    When `just_pushed=True` (the caller's `sync_with_origin` just
+    pushed new commits), poll for the new CI cycle to register before
+    reading status, so we don't act on stale pre-push state.
+
+    Returns True if anything was dispatched or waited on — the outer
+    loop continues in that case so repair + sync re-run. Returns False
+    only when CI was already green (or `gh` couldn't tell).
     """
-    ok, detail = gate_pr_ci()
-    if ok:
-        return False
-    pre_sha = _rev_parse("HEAD")
-    state.dispatch(
-        PR_CI_FIX_PROMPT.format(repo=PR_REPO, pr=PR_NUMBER),
-        gate_output=detail,
+    if just_pushed:
+        _wait_for_new_pr_checks()
+
+    max_cycles = 5
+    any_action = False
+    for _ in range(max_cycles):
+        status, summary, detail = _pr_check_status()
+        print(f"[port-loop] PR #{PR_NUMBER}: {status} — {summary}", flush=True)
+        if status in ("success", "skip"):
+            return any_action
+        if status == "pending":
+            _watch_pr_ci()
+            any_action = True
+            continue
+        # status == "failure"
+        pre_sha = _rev_parse("HEAD")
+        state.dispatch(
+            PR_CI_FIX_PROMPT.format(repo=PR_REPO, pr=PR_NUMBER),
+            gate_output=detail,
+        )
+        any_action = True
+        if _rev_parse("HEAD") == pre_sha:
+            print(
+                "[port-loop] PR CI fix agent produced no new commit; "
+                "returning so the outer loop can re-evaluate."
+            )
+            return True
+        if not _wait_for_new_pr_checks():
+            print(
+                "[port-loop] new CI cycle didn't register after fix push; "
+                "returning so the outer loop can re-evaluate."
+            )
+            return True
+        # New cycle is pending; loop back to --watch it.
+    print(
+        f"[port-loop] drive_pr_ci: {max_cycles} inner cycles without reaching "
+        f"green; returning so the outer loop can retry."
     )
-    if _rev_parse("HEAD") == pre_sha:
-        print(
-            "[port-loop] PR CI fix agent produced no new commit; "
-            "skipping --watch (outer loop will re-evaluate)."
-        )
-        return True
-    if _wait_for_new_pr_checks():
-        _watch_pr_ci()
-    else:
-        print(
-            "[port-loop] PR CI: no pending checks appeared after push; "
-            "outer loop will re-evaluate."
-        )
     return True
 
 
@@ -2072,7 +2100,7 @@ def main() -> None:
             dispatched, pushed = sync_with_origin(state)
             if dispatched:
                 continue
-            if not pushed and drive_pr_ci(state):
+            if drive_pr_ci(state, just_pushed=pushed):
                 continue
             if not drive_todos(state):
                 print(
@@ -2089,7 +2117,7 @@ def main() -> None:
         dispatched, pushed = sync_with_origin(state)
         if dispatched:
             continue
-        if not pushed and drive_pr_ci(state):
+        if drive_pr_ci(state, just_pushed=pushed):
             continue
 
         if drive_todos(state):
