@@ -259,7 +259,10 @@ pub use antithesis::TestLocation;
 #[doc(hidden)]
 pub mod __native_test_internals {
     pub use crate::native::bignum::BigUint;
-    pub use crate::native::core::{ChoiceValue, NativeTestCase, Span, StringChoice};
+    pub use crate::native::core::{
+        BooleanChoice, BytesChoice, ChoiceValue, FloatChoice, IntegerChoice, NativeTestCase, Span,
+        StringChoice,
+    };
     pub use crate::native::tree::CachedTestFunction;
     pub use crate::native::unicodedata;
 }
