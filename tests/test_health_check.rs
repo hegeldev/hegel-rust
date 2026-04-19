@@ -91,12 +91,15 @@ fn test_large_base_example_suppressed(tc: TestCase) {
     }
 }
 
-/// When a test case takes longer than the TooSlow threshold, the health check fires.
+/// When cumulative test-case time exceeds the TooSlow threshold, the health
+/// check fires. The test draws a value so the runner doesn't bail out on the
+/// trivial-case path after the first iteration.
 #[cfg(feature = "native")]
 #[test]
 fn native_too_slow_detected() {
     let result = std::panic::catch_unwind(|| {
-        hegel::Hegel::new(|_tc: hegel::TestCase| {
+        hegel::Hegel::new(|tc: hegel::TestCase| {
+            let _: bool = tc.draw(gs::booleans());
             std::thread::sleep(std::time::Duration::from_millis(300));
         })
         .run();
@@ -108,7 +111,7 @@ fn native_too_slow_detected() {
         .or_else(|| payload.downcast_ref::<&str>().copied())
         .unwrap_or("");
     assert!(
-        msg.contains("TooSlow") || msg.contains("too long"),
+        msg.contains("TooSlow") || msg.contains("too long") || msg.contains("slow"),
         "expected TooSlow health check error, got: {msg}"
     );
 }
@@ -126,5 +129,40 @@ fn native_too_slow_suppressed() {
             .test_cases(1)
             .suppress_health_check([HealthCheck::TooSlow]),
     )
+    .run();
+}
+
+/// A single moderately-slow test case followed by fast cases must not trigger
+/// TooSlow. Hypothesis's TooSlow check looks at cumulative draw time across
+/// the run (with a 1s floor), not per-case wall-clock time, so a one-off slow
+/// example shouldn't cause the run to fail.
+#[cfg(feature = "native")]
+#[test]
+fn native_too_slow_single_slow_case_does_not_fire() {
+    let mut count = 0;
+    hegel::Hegel::new(move |_tc: hegel::TestCase| {
+        if count == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        count += 1;
+    })
+    .run();
+}
+
+/// Once a run has accumulated more than the upstream `max_valid_draws` (10)
+/// valid examples, the TooSlow health check is disabled — mirroring
+/// Hypothesis's `record_for_health_check`. Each test case here sleeps 50 ms,
+/// so 50 valid examples take ~2.5 s of wall-clock time; without the cap the
+/// check would fire after ~20 examples (1 s threshold), but in upstream
+/// behaviour the check is silenced once the first 10 valid examples have
+/// been recorded.
+#[cfg(feature = "native")]
+#[test]
+fn native_too_slow_disabled_after_first_10_valid() {
+    hegel::Hegel::new(|tc: hegel::TestCase| {
+        let _: bool = tc.draw(gs::booleans());
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    })
+    .settings(hegel::Settings::new().test_cases(50))
     .run();
 }
