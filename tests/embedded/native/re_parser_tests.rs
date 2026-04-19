@@ -226,7 +226,9 @@ fn max_repeat_plus() {
         vec![OpCode::MaxRepeat {
             min: 1,
             max: u32::MAX,
-            item: SubPattern { data: vec![lit(97)] },
+            item: SubPattern {
+                data: vec![lit(97)]
+            },
         }]
     );
 }
@@ -238,7 +240,9 @@ fn max_repeat_star() {
         vec![OpCode::MaxRepeat {
             min: 0,
             max: u32::MAX,
-            item: SubPattern { data: vec![lit(97)] },
+            item: SubPattern {
+                data: vec![lit(97)]
+            },
         }]
     );
 }
@@ -250,7 +254,9 @@ fn max_repeat_question() {
         vec![OpCode::MaxRepeat {
             min: 0,
             max: 1,
-            item: SubPattern { data: vec![lit(97)] },
+            item: SubPattern {
+                data: vec![lit(97)]
+            },
         }]
     );
 }
@@ -262,7 +268,9 @@ fn max_repeat_braces_fixed() {
         vec![OpCode::MaxRepeat {
             min: 3,
             max: 3,
-            item: SubPattern { data: vec![lit(97)] },
+            item: SubPattern {
+                data: vec![lit(97)]
+            },
         }]
     );
 }
@@ -274,7 +282,9 @@ fn max_repeat_braces_range() {
         vec![OpCode::MaxRepeat {
             min: 2,
             max: 5,
-            item: SubPattern { data: vec![lit(97)] },
+            item: SubPattern {
+                data: vec![lit(97)]
+            },
         }]
     );
 }
@@ -286,7 +296,9 @@ fn max_repeat_braces_open_upper() {
         vec![OpCode::MaxRepeat {
             min: 3,
             max: u32::MAX,
-            item: SubPattern { data: vec![lit(97)] },
+            item: SubPattern {
+                data: vec![lit(97)]
+            },
         }]
     );
 }
@@ -298,7 +310,9 @@ fn max_repeat_braces_open_lower() {
         vec![OpCode::MaxRepeat {
             min: 0,
             max: 5,
-            item: SubPattern { data: vec![lit(97)] },
+            item: SubPattern {
+                data: vec![lit(97)]
+            },
         }]
     );
 }
@@ -310,7 +324,9 @@ fn min_repeat_plus_question() {
         vec![OpCode::MinRepeat {
             min: 1,
             max: u32::MAX,
-            item: SubPattern { data: vec![lit(97)] },
+            item: SubPattern {
+                data: vec![lit(97)]
+            },
         }]
     );
 }
@@ -322,7 +338,9 @@ fn possessive_repeat_double_plus() {
         vec![OpCode::PossessiveRepeat {
             min: 1,
             max: u32::MAX,
-            item: SubPattern { data: vec![lit(97)] },
+            item: SubPattern {
+                data: vec![lit(97)]
+            },
         }]
     );
 }
@@ -340,7 +358,9 @@ fn subpattern_capturing() {
             group: Some(1),
             add_flags: 0,
             del_flags: 0,
-            p: SubPattern { data: vec![lit(97)] },
+            p: SubPattern {
+                data: vec![lit(97)]
+            },
         }]
     );
 }
@@ -362,7 +382,9 @@ fn subpattern_named_group() {
             group: Some(1),
             add_flags: 0,
             del_flags: 0,
-            p: SubPattern { data: vec![lit(97)] },
+            p: SubPattern {
+                data: vec![lit(97)]
+            },
         }]
     );
     assert_eq!(parsed_full.group_names.get("foo"), Some(&1));
@@ -405,10 +427,7 @@ fn subpattern_inline_flags_add_and_del() {
 fn global_inline_flags() {
     // (?i)abc sets the global IGNORECASE flag and emits just the literals.
     let parsed_full = parse_pattern("(?i)abc", 0).unwrap();
-    assert_eq!(
-        parsed_full.pattern.data,
-        vec![lit(97), lit(98), lit(99)]
-    );
+    assert_eq!(parsed_full.pattern.data, vec![lit(97), lit(98), lit(99)]);
     assert!(parsed_full.flags & 2 != 0);
 }
 
@@ -422,7 +441,9 @@ fn groupref_decimal() {
                 group: Some(1),
                 add_flags: 0,
                 del_flags: 0,
-                p: SubPattern { data: vec![lit(97)] },
+                p: SubPattern {
+                    data: vec![lit(97)]
+                },
             },
             OpCode::GroupRef(1),
         ]
@@ -438,7 +459,9 @@ fn groupref_named() {
                 group: Some(1),
                 add_flags: 0,
                 del_flags: 0,
-                p: SubPattern { data: vec![lit(97)] },
+                p: SubPattern {
+                    data: vec![lit(97)]
+                },
             },
             OpCode::GroupRef(1),
         ]
@@ -460,12 +483,18 @@ fn groupref_exists() {
                 group: Some(1),
                 add_flags: 0,
                 del_flags: 0,
-                p: SubPattern { data: vec![lit(97)] },
+                p: SubPattern {
+                    data: vec![lit(97)]
+                },
             },
             OpCode::GroupRefExists {
                 cond_group: 1,
-                yes: SubPattern { data: vec![lit(98)] },
-                no: Some(SubPattern { data: vec![lit(99)] }),
+                yes: SubPattern {
+                    data: vec![lit(98)]
+                },
+                no: Some(SubPattern {
+                    data: vec![lit(99)]
+                }),
             },
         ]
     );
@@ -479,7 +508,9 @@ fn assert_lookahead() {
         vec![
             OpCode::Assert {
                 direction: 1,
-                p: SubPattern { data: vec![lit(97)] },
+                p: SubPattern {
+                    data: vec![lit(97)]
+                },
             },
             lit(98),
         ]
@@ -493,7 +524,9 @@ fn assert_not_lookahead() {
         vec![
             OpCode::AssertNot {
                 direction: 1,
-                p: SubPattern { data: vec![lit(97)] },
+                p: SubPattern {
+                    data: vec![lit(97)]
+                },
             },
             lit(98),
         ]
@@ -507,7 +540,9 @@ fn assert_lookbehind() {
         vec![
             OpCode::Assert {
                 direction: -1,
-                p: SubPattern { data: vec![lit(97)] },
+                p: SubPattern {
+                    data: vec![lit(97)]
+                },
             },
             lit(98),
         ]
@@ -521,7 +556,9 @@ fn assert_not_lookbehind() {
         vec![
             OpCode::AssertNot {
                 direction: -1,
-                p: SubPattern { data: vec![lit(97)] },
+                p: SubPattern {
+                    data: vec![lit(97)]
+                },
             },
             lit(98),
         ]
@@ -532,7 +569,9 @@ fn assert_not_lookbehind() {
 fn atomic_group() {
     assert_eq!(
         parsed("(?>a)").data,
-        vec![OpCode::AtomicGroup(SubPattern { data: vec![lit(97)] })]
+        vec![OpCode::AtomicGroup(SubPattern {
+            data: vec![lit(97)]
+        })]
     );
 }
 
@@ -543,9 +582,15 @@ fn branch_three_way() {
     assert_eq!(
         parsed("ab|cd|ef").data,
         vec![OpCode::Branch(vec![
-            SubPattern { data: vec![lit(97), lit(98)] },
-            SubPattern { data: vec![lit(99), lit(100)] },
-            SubPattern { data: vec![lit(101), lit(102)] },
+            SubPattern {
+                data: vec![lit(97), lit(98)]
+            },
+            SubPattern {
+                data: vec![lit(99), lit(100)]
+            },
+            SubPattern {
+                data: vec![lit(101), lit(102)]
+            },
         ])]
     );
 }
@@ -571,10 +616,7 @@ fn branch_shared_prefix_moved_out() {
         vec![
             lit(97),
             lit(98),
-            OpCode::In(vec![
-                SetItem::Literal(99),
-                SetItem::Literal(100),
-            ]),
+            OpCode::In(vec![SetItem::Literal(99), SetItem::Literal(100),]),
         ]
     );
 }
