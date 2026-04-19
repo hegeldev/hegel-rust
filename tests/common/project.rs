@@ -311,7 +311,7 @@ hegeltest = {{ path = "{path}"{features} }}
         );
         std::fs::write(self.project.project_path.join("Cargo.toml"), cargo_toml).unwrap();
 
-        let use_coverage = std::env::var("HEGEL_BUILD_WITH_COVERAGE").is_ok();
+        let use_coverage = std::env::var("CARGO_LLVM_COV_TARGET_DIR").is_ok();
 
         let mut cmd = Command::new(env!("CARGO"));
         if use_coverage {
