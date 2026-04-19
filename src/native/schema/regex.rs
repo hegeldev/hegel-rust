@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::cbor_utils::{as_bool, as_text, map_get};
 use crate::native::core::{ManyState, NativeTestCase, Status, StopTest};
@@ -290,16 +291,22 @@ fn generate_op(
             }
         }
         OpCode::In(items) => {
-            let key = (items.as_ptr(), items.len(), state.flags);
-            let chars = match state.in_cache.get(&key) {
-                Some(cached) => Rc::clone(cached),
-                None => {
-                    let computed: Rc<[char]> = build_in_set(items, state.flags, alphabet).into();
-                    state.in_cache.insert(key, Rc::clone(&computed));
-                    computed
-                }
-            };
-            emit_from_chars(ntc, &chars, out)?;
+            if alphabet.is_none() {
+                let chars = cached_default_in_set(items, state.flags);
+                emit_from_chars(ntc, &chars, out)?;
+            } else {
+                let key = (items.as_ptr(), items.len(), state.flags);
+                let chars = match state.in_cache.get(&key) {
+                    Some(cached) => Rc::clone(cached),
+                    None => {
+                        let computed: Rc<[char]> =
+                            build_in_set(items, state.flags, alphabet).into();
+                        state.in_cache.insert(key, Rc::clone(&computed));
+                        computed
+                    }
+                };
+                emit_from_chars(ntc, &chars, out)?;
+            }
         }
         OpCode::Branch(items) => {
             let idx = ntc.draw_integer(0, items.len() as i128 - 1)? as usize;
@@ -402,6 +409,33 @@ fn generate_op(
         }
     }
     Ok(())
+}
+
+/// Cached version of [`build_in_set`] for the default (no-alphabet) case.
+///
+/// Category-driven classes like `\w`, `\s`, `[^a-z0-9_]` require a full
+/// 65 536-codepoint BMP scan to compute, and the parser yields distinct
+/// `SetItem` slices for distinct regex patterns — so the state-level
+/// pointer cache only helps within one draw. Patterns like `\w` alone
+/// cost ~35ms per draw in debug; 10 draws trips the 1s TooSlow health
+/// check on slower CI runners. Since the default alphabet is fixed, we
+/// can memoise across draws (and across patterns).
+fn cached_default_in_set(items: &[SetItem], flags: u32) -> Arc<[char]> {
+    type Cache = Mutex<HashMap<(Vec<SetItem>, u32), Arc<[char]>>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    {
+        let guard = cache.lock().unwrap();
+        if let Some(cached) = guard.get(&(items.to_vec(), flags)) {
+            return Arc::clone(cached);
+        }
+    }
+    let computed: Arc<[char]> = build_in_set(items, flags, &None).into();
+    cache
+        .lock()
+        .unwrap()
+        .insert((items.to_vec(), flags), Arc::clone(&computed));
+    computed
 }
 
 /// Build the set of characters that a `(IN, items)` node can emit, after
