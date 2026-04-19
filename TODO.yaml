@@ -69,3 +69,43 @@
     - The SKIPPED.md entry for `test_database_backend.py` remains only
       as the three Python-specific sub-bullets (no "covered elsewhere"
       rationale).
+
+- title: Fix `native_regex_unicode_class_empty_after_filter` slowness instead of suppressing TooSlow
+  details: |
+    `tests/test_native.rs::native_regex_unicode_class_empty_after_filter`
+    currently passes only because commit 7afecf68 papered over a
+    `HealthCheck::TooSlow` failure by adding
+    `.suppress_health_check([HealthCheck::TooSlow])`. That was the
+    wrong fix: the test is native-only (not a port — introduced in
+    440dfc2), so there's no upstream source that also suppressed
+    the check. A tripped TooSlow here is a real signal that the
+    empty-class fullmatch path is slow enough for 10 Invalid draws
+    to exceed the 1s threshold introduced in c438554.
+
+    The test draws from
+    `gs::from_regex("[a-z]+").fullmatch(true).alphabet(gs::characters().categories(&["Nd"]))`.
+    Every draw is Invalid (the alphabet and class don't intersect).
+    Candidates for the slowness:
+
+    - unicode-category filtering inside `characters().categories(...)`
+      re-scanning the codepoint table per draw,
+    - regex HIR compile / rejection running per draw instead of
+      being cached,
+    - a rejection-sampling inner loop in the regex schema burning
+      attempts before giving up on an empty class.
+
+    Diagnose the actual cost (e.g. `cargo test --features native
+    native_regex_unicode_class_empty_after_filter -- --nocapture`
+    plus targeted prints, or a throwaway benchmark), fix the
+    underlying path under `src/native/` or `src/generators/`, then
+    remove `.suppress_health_check([HealthCheck::TooSlow])` from the
+    test.
+
+    Acceptance:
+    - The `.suppress_health_check([HealthCheck::TooSlow])` call is
+      removed from `native_regex_unicode_class_empty_after_filter`.
+    - `HealthCheck` is no longer imported in `tests/test_native.rs`
+      if that was its only use.
+    - `cargo test --features native
+      native_regex_unicode_class_empty_after_filter` passes with
+      `.test_cases(10)` and no health-check suppression.

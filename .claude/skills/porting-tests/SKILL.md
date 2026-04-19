@@ -218,6 +218,34 @@ Specific shapes that *look* skip-worthy but aren't:
 - **Full 64-bit integer range** → `gs::integers::<u64>()` etc.
 - **`@gs.composite`** → `#[hegel::composite]` or `hegel::compose!`.
 
+## Don't add `suppress_health_check` that wasn't in the original
+
+If a ported test starts tripping a health check (`TooSlow`,
+`FilterTooMuch`, `LargeBaseExample`, etc.) only after the port, do
+NOT reach for `.suppress_health_check([...])`. A tripped health
+check is usually signalling a real performance or
+generation-rejection problem in the engine or generator — silence
+it and the next test that walks the same path will silently pay
+the same cost.
+
+Before adding any suppression:
+
+1. Check the upstream source. If the original did not call
+   `suppress_health_check` (or the pbtkit equivalent), your port
+   must not either. If the original DID, mirror it exactly — same
+   checks, no extras.
+2. If there's no upstream (native-only coverage tests), the same
+   rule holds: a health check trip on a native-only test means the
+   underlying path is genuinely slow / genuinely rejects too much,
+   and that's the bug to fix.
+3. File a TODO.yaml entry describing the slow or rejection-heavy
+   path and what needs investigating. Leave the test failing, or
+   native-gate it, rather than suppressing the check.
+
+The exception is when the *purpose* of the test is to exercise the
+health-check mechanism itself (e.g.
+`native_too_slow_suppressed`) — those are obvious on inspection.
+
 ## When a test fails because Rust ≠ Python semantics, STOP
 
 If a test port keeps tripping over disagreements between a Rust crate
