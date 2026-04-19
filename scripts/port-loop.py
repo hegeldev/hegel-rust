@@ -2191,7 +2191,7 @@ def drive_pr_ci(state: IterCounter, *, just_pushed: bool = False) -> bool:
             "[port-loop] CI failing but TODO.yaml already has [CI] entries; "
             "letting drive_todos drain them before re-triaging."
         )
-        return True
+        return False  # fall through to drive_todos in the outer loop
     state.dispatch(
         CI_TRIAGE_PROMPT.format(repo=PR_REPO, pr=PR_NUMBER),
         gate_output=detail,
