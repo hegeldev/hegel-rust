@@ -63,7 +63,8 @@ fn test_cannot_witness_empty_one_of() {
     // alternatives; hegel-rust panics at construction instead.
     expect_panic(
         || {
-            gs::one_of::<i32>(vec![]);
+            let empty: Vec<gs::BoxedGenerator<i32>> = vec![];
+            gs::one_of(empty);
         },
         "one_of requires at least one generator",
     );
@@ -151,7 +152,8 @@ fn test_sampled_from_single() {
 fn test_sampled_from_empty() {
     expect_panic(
         || {
-            gs::sampled_from::<i32>(vec![]);
+            let empty: Vec<i32> = vec![];
+            gs::sampled_from(empty);
         },
         "cannot be empty",
     );
