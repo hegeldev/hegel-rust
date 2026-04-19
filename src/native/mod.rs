@@ -36,10 +36,7 @@ thread_local! {
 /// Install `handle` as the current test-case handle for the duration of `f`.
 ///
 /// Previous value is restored on exit, supporting nested contexts.
-pub(crate) fn with_current_native_tc<R>(
-    handle: NativeTestCaseHandle,
-    f: impl FnOnce() -> R,
-) -> R {
+pub(crate) fn with_current_native_tc<R>(handle: NativeTestCaseHandle, f: impl FnOnce() -> R) -> R {
     let prev = CURRENT_NATIVE_TC.with(|cell| cell.replace(Some(handle)));
     let result = f();
     CURRENT_NATIVE_TC.with(|cell| cell.replace(prev));
