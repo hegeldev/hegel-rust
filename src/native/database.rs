@@ -278,11 +278,18 @@ impl NativeDatabase {
         let listeners = Arc::clone(&self.listeners);
         let hash_to_key_cb = Arc::clone(&hash_to_key);
         let metakeys_hash_cb = self.metakeys_hash.clone();
+        let db_root_cb = self.db_root.clone();
 
         let mut watcher =
             match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
                 if let Ok(event) = res {
-                    handle_watcher_event(event, &hash_to_key_cb, &metakeys_hash_cb, &listeners);
+                    handle_watcher_event(
+                        event,
+                        &db_root_cb,
+                        &hash_to_key_cb,
+                        &metakeys_hash_cb,
+                        &listeners,
+                    );
                 }
             }) {
                 Ok(w) => w,
@@ -458,6 +465,7 @@ impl ExampleDatabase for NativeDatabase {
 /// `DirectoryBasedExampleDatabase._start_listening`.
 fn handle_watcher_event(
     event: notify::Event,
+    db_root: &Path,
     hash_to_key: &Mutex<HashMap<String, Vec<u8>>>,
     metakeys_hash: &str,
     listeners: &Listeners,
@@ -467,7 +475,7 @@ fn handle_watcher_event(
         | EventKind::Create(CreateKind::Any)
         | EventKind::Create(CreateKind::Other) => {
             for path in &event.paths {
-                on_file_created(path, hash_to_key, metakeys_hash, listeners);
+                on_file_created(path, db_root, hash_to_key, metakeys_hash, listeners);
             }
         }
         EventKind::Create(CreateKind::Folder) => {
@@ -481,7 +489,7 @@ fn handle_watcher_event(
             // emitting synthetic events — the same workaround
             // watchdog (used by Hypothesis) applies.
             for path in &event.paths {
-                scan_new_folder(path, hash_to_key, metakeys_hash, listeners);
+                scan_new_folder(path, db_root, hash_to_key, metakeys_hash, listeners);
             }
         }
         EventKind::Remove(RemoveKind::File)
@@ -507,7 +515,7 @@ fn handle_watcher_event(
         }
         EventKind::Modify(ModifyKind::Name(RenameMode::To)) => {
             for path in &event.paths {
-                on_file_created(path, hash_to_key, metakeys_hash, listeners);
+                on_file_created(path, db_root, hash_to_key, metakeys_hash, listeners);
             }
         }
         _ => {}
@@ -519,6 +527,7 @@ fn handle_watcher_event(
 /// events that inotify races cause to be dropped on directory creation.
 fn scan_new_folder(
     path: &Path,
+    db_root: &Path,
     hash_to_key: &Mutex<HashMap<String, Vec<u8>>>,
     metakeys_hash: &str,
     listeners: &Listeners,
@@ -532,9 +541,9 @@ fn scan_new_folder(
         };
         let child = entry.path();
         if file_type.is_dir() {
-            scan_new_folder(&child, hash_to_key, metakeys_hash, listeners);
+            scan_new_folder(&child, db_root, hash_to_key, metakeys_hash, listeners);
         } else if file_type.is_file() {
-            on_file_created(&child, hash_to_key, metakeys_hash, listeners);
+            on_file_created(&child, db_root, hash_to_key, metakeys_hash, listeners);
         }
     }
 }
@@ -551,6 +560,7 @@ fn key_hash_of(path: &Path) -> Option<String> {
 
 fn on_file_created(
     path: &Path,
+    db_root: &Path,
     hash_to_key: &Mutex<HashMap<String, Vec<u8>>>,
     metakeys_hash: &str,
     listeners: &Listeners,
@@ -571,7 +581,7 @@ fn on_file_created(
         }
         return;
     }
-    let key = match hash_to_key.lock().unwrap().get(&key_hash).cloned() {
+    let key = match resolve_key(&key_hash, db_root, hash_to_key, metakeys_hash) {
         Some(k) => k,
         None => return,
     };
@@ -580,6 +590,34 @@ fn on_file_created(
         Err(_) => return,
     };
     listeners.broadcast(&ListenerEvent::Save { key, value });
+}
+
+/// Resolve a key hash to its raw key bytes, falling back to a direct read
+/// of the metakeys directory if the in-memory map doesn't yet have it.
+///
+/// inotify (and hence notify) has a well-known race when files are
+/// written into a freshly-created directory under a recursive watch: the
+/// per-subdirectory watch may not be installed in time to observe the
+/// file event. In that case the metakey file's Create event is lost, so
+/// `hash_to_key` never learns about the key. Recovering it from the
+/// on-disk metakeys file lets us still resolve the key when the value
+/// file's event eventually arrives.
+fn resolve_key(
+    key_hash: &str,
+    db_root: &Path,
+    hash_to_key: &Mutex<HashMap<String, Vec<u8>>>,
+    metakeys_hash: &str,
+) -> Option<Vec<u8>> {
+    if let Some(k) = hash_to_key.lock().unwrap().get(key_hash).cloned() {
+        return Some(k);
+    }
+    let metakey_file = db_root.join(metakeys_hash).join(key_hash);
+    let key_bytes = std::fs::read(&metakey_file).ok()?;
+    hash_to_key
+        .lock()
+        .unwrap()
+        .insert(key_hash.to_string(), key_bytes.clone());
+    Some(key_bytes)
 }
 
 fn on_file_deleted(
