@@ -839,24 +839,23 @@ fn parse(
         }
         source.advance()?;
 
-        if verbose
-            && this.chars().count() == 1 {
-                let c = this.chars().next().unwrap();
-                if WHITESPACE.contains(c) {
-                    continue;
-                }
-                if c == '#' {
-                    loop {
-                        let got = source.get()?;
-                        match got {
-                            None => break,
-                            Some(s) if s == "\n" => break,
-                            _ => {}
-                        }
-                    }
-                    continue;
-                }
+        if verbose && this.chars().count() == 1 {
+            let c = this.chars().next().unwrap();
+            if WHITESPACE.contains(c) {
+                continue;
             }
+            if c == '#' {
+                loop {
+                    let got = source.get()?;
+                    match got {
+                        None => break,
+                        Some(s) if s == "\n" => break,
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+        }
 
         let first_char = this.chars().next().unwrap();
 
