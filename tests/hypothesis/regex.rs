@@ -181,9 +181,11 @@ fn test_groupref_not_shared_between_regex() {
 #[test]
 fn test_positive_lookbehind() {
     // TooSlow suppressed: .*(?<=ab)c is slow to generate under instrumented binaries.
-    FindAny::new(gs::from_regex(".*(?<=ab)c"), |s: &String| s.ends_with("abc"))
-        .suppress_health_check(HealthCheck::TooSlow)
-        .run();
+    FindAny::new(gs::from_regex(".*(?<=ab)c"), |s: &String| {
+        s.ends_with("abc")
+    })
+    .suppress_health_check(HealthCheck::TooSlow)
+    .run();
 }
 
 #[test]
