@@ -111,6 +111,10 @@ Individually-skipped tests (rest of the file is ported):
 - `test_verbosity.py::test_prints_initial_attempts_on_find` — uses `hypothesis.find()`,
   a public API with no hegel-rust counterpart (hegel-rust exposes no standalone `find()`
   function; the equivalent is `Hegel::new(...).run()`).
+- `test_feature_flags.py::test_eval_featureflags_repr`,
+  `test_feature_flags.py::test_repr_can_be_evalled` — both rely on Python's
+  `eval(repr(flags))` round-trip; Rust has no equivalent of `eval`, and
+  `FeatureFlags`'s Debug output is not round-trippable by design.
 - `test_replay_logic.py::test_does_not_shrink_on_replay_with_multiple_bugs`
   — depends on `report_multiple_bugs=True` (no equivalent setting in
   hegel-rust) and the reported failure arriving as a Python

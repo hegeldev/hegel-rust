@@ -11,6 +11,7 @@ pub mod bignum;
 pub mod core;
 pub mod data_source;
 pub mod database;
+pub mod featureflags;
 pub mod re;
 pub mod runner;
 pub mod schema;
