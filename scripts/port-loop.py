@@ -523,6 +523,9 @@ _RUNNING_PREAMBLE_RE = re.compile(r"^\s*running \d+ tests?\s*$")
 _CC_LINKER_NOTE_RE = re.compile(r'^\s*=\s+note:\s+"cc"\s+"')
 
 
+_MAX_GLOBAL_OCCURRENCES = 3
+
+
 def strip_build_noise(output: str) -> str:
     """Remove cargo progress + passing-test lines from gate output.
 
@@ -532,8 +535,12 @@ def strip_build_noise(output: str) -> str:
     - strips ANSI escape codes so regexes match colored cargo output,
     - collapses runs of consecutive identical lines (common with
       `/usr/bin/ld:` spam from linker failures) behind a counter,
+    - caps each identical non-blank line at `_MAX_GLOBAL_OCCURRENCES`
+      across the whole output, dropping further repeats silently —
+      cargo frequently repeats the same linker/compile error for every
+      crate in the graph, and the agent only needs to see it once,
     - truncates multi-kilobyte `= note: "cc" "..."` linker-command
-      dumps that follow `error: linking with \`cc\` failed` — the
+      dumps that follow `error: linking with cc failed` — the
       invocation is never what the agent needs; the `ld:` errors
       below it are.
     - collapses runs of blank lines.
@@ -542,6 +549,8 @@ def strip_build_noise(output: str) -> str:
     prev_blank = False
     prev_line: str | None = None
     dup_count = 0
+    global_count: dict[str, int] = {}
+    dropped_global: dict[str, int] = {}
 
     def flush_dups() -> None:
         nonlocal dup_count
@@ -569,6 +578,13 @@ def strip_build_noise(output: str) -> str:
             continue
         flush_dups()
         prev_line = line
+        # Global occurrence cap (only applies to non-blank content).
+        if line.strip():
+            seen = global_count.get(line, 0)
+            if seen >= _MAX_GLOBAL_OCCURRENCES:
+                dropped_global[line] = dropped_global.get(line, 0) + 1
+                continue
+            global_count[line] = seen + 1
         if not line.strip():
             if prev_blank:
                 continue
@@ -577,6 +593,14 @@ def strip_build_noise(output: str) -> str:
             prev_blank = False
         kept.append(line)
     flush_dups()
+    if dropped_global:
+        total = sum(dropped_global.values())
+        uniq = len(dropped_global)
+        kept.append(
+            f"\n  (... {total} further repeats of {uniq} previously-shown "
+            f"line(s) omitted; each is quoted above at least "
+            f"{_MAX_GLOBAL_OCCURRENCES} times ...)"
+        )
     return "\n".join(kept)
 
 # Hot-reload bookkeeping: captured once at import, checked at the top of
