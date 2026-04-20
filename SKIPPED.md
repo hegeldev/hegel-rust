@@ -96,6 +96,11 @@ Individually-skipped tests (rest of the file is ported):
   Python buffer protocol (`__buffer__` dunder, `memoryview`, `bytearray`);
   `from_type` doesn't exist in hegel-rust and the buffer protocol has no
   Rust counterpart.
+- `test_lookup_py37.py` — tests `from_type()` resolution of PEP 585 generic
+  types (`tuple[Elem]`, `list[Elem]`, `dict[Elem, Value]`,
+  `collections.deque[Elem]`, `collections.abc.Iterable[Elem]`,
+  `re.Match[str]`, etc.) via `@given(...)` with type annotations; neither
+  `from_type` nor runtime type-annotation resolution exists in hegel-rust.
 - `test_example.py` — tests the fluent `.via("...")` and `.xfail(...)`
   methods chained onto `@example(...)`; hegel-rust's
   `#[hegel::explicit_test_case]` has no equivalent of either.
