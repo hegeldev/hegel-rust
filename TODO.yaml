@@ -26,14 +26,6 @@
       Acceptance: these files report 0 uncovered code lines in
       `just check-coverage` output.
 
-  - title: "[CI] coverage: src/native/schema/mod.rs"
-    details: |
-      Part of the PR #188 coverage ratchet split. 165 uncovered code lines.
-      Schema entry point — dispatch table, encode/decode, shared helpers.
-
-      Acceptance: src/native/schema/mod.rs reports 0 uncovered code lines
-      in `just check-coverage`.
-
   - title: "[CI] coverage: src/native/shrinker/integers.rs"
     details: |
       Part of the PR #188 coverage ratchet split. 172 uncovered code lines.
