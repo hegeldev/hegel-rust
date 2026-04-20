@@ -6,3 +6,32 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
+
+- title: "[CI] tests/hypothesis/sampled_from.rs filtered sampling tests"
+  details: |
+    PR 188, run 24660653203, job: coverage (check-coverage).
+    Four filtered-sampling tests in sampled_from fail:
+
+      test sampled_from::test_easy_filtered_sampling ... FAILED
+      test sampled_from::test_filtered_sampling_finds_rare_value ... FAILED
+      test sampled_from::test_unsat_filtered_sampling_in_rejection_stage ... FAILED
+      test sampled_from::test_unsat_filtered_sampling ... FAILED
+
+    These likely share a root cause related to filtered sampling on
+    sampled_from generators. Investigate the test implementations and
+    the filter/rejection logic in the sampled_from generator.
+
+    error: test failed, to rerun pass `--test hypothesis`
+    error: Recipe `check-coverage` failed on line 51 with exit code 1
+
+- title: "[CI] tests/hypothesis/sampled_from.rs::test_efficient_sets_of_samples_with_chained_transformations_slow_path"
+  details: |
+    PR 188, run 24660653203, job: coverage (check-coverage).
+
+      test sampled_from::test_efficient_sets_of_samples_with_chained_transformations_slow_path ... FAILED
+
+    This test is about unique sets with chained transformations on the
+    slow (non-basic) path. May share a root cause with the filtered
+    sampling failures above, but the test exercises a different code
+    path (chained map/filter on sets of sampled values). Investigate
+    separately.
