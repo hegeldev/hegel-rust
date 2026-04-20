@@ -40,6 +40,7 @@ paste = "1.0"
 tempfile = "3.0"
 ciborium = "0.2.2"
 crc32fast = "1.4"
+parking_lot = "0.12"
 hegeltest-macros = { version = "=0.7.1", path = "hegel-macros" }
 # optional feature dependencies
 rand = { version = "0.10", optional = true }
