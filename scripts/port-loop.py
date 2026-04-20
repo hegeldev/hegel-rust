@@ -2268,15 +2268,16 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
     try:
         while True:
             # Before doing anything else, make sure we have headroom on
-            # disk. Idle slots get wiped if we're below the threshold;
-            # in-flight slots are left alone (their cargo is actively
-            # writing to those dirs).
-            _emergency_disk_cleanup(set(in_flight.keys()), N)
+            # disk. Escalation (in `_emergency_disk_cleanup`): idle
+            # worker dirs → supervisor `target/` → refuse admission.
+            # Returns False only when even the escalation can't get us
+            # above the BLOCKING threshold.
+            disk_ok = _emergency_disk_cleanup(set(in_flight.keys()), N)
 
             # Admit into every free slot we can. Admission is re-checked
             # here so a TODO or CI-failure that appears mid-pool stops
             # new spawns without interrupting in-flight ones.
-            if not stop[0]:
+            if not stop[0] and disk_ok:
                 adm_ok, adm_reason = _pool_admission_ok()
                 if not adm_ok and not in_flight:
                     print(
@@ -2345,6 +2346,13 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
                     print(
                         "\n[port-loop] pool: stop requested and all "
                         "workers drained; returning."
+                    )
+                    return
+                if not disk_ok:
+                    print(
+                        "\n[port-loop] pool: disk is blocking admission "
+                        "and no workers in flight; returning to outer "
+                        "loop."
                     )
                     return
                 if not unported_pool():
@@ -2810,17 +2818,20 @@ def _worker_target_dir(i: int) -> Path:
 
 # Per-worker CARGO_TARGET_DIR size above which we nuke-and-rebuild before
 # spawning the next task in that slot. Test-binary artifacts accumulate
-# as ports land fast; even at 6 GiB each, four workers plus the supervisor's
-# own `target/` can fill a 123 GiB disk. Rebuilding from empty costs one
-# slow cycle but keeps disk usage bounded.
-WORKER_TARGET_SIZE_LIMIT_BYTES = 6 * 1024 * 1024 * 1024  # 6 GiB
+# as ports land fast. Four workers at 4 GiB each + supervisor `target/`
+# fits comfortably on a 123 GiB disk; rebuilding from empty costs one
+# slow cycle per trim but keeps disk usage bounded.
+WORKER_TARGET_SIZE_LIMIT_BYTES = 4 * 1024 * 1024 * 1024  # 4 GiB
 
-# Below this much free space on the partition holding REPO_ROOT, trigger
-# emergency cleanup of all *idle* worker target dirs (regardless of per-
-# slot size). Kicks in before a build fails with ENOSPC. Tuned for
-# cargo's worst-case scratch: a link step on a big test crate can
-# temporarily grow a target dir by ~5 GiB.
-EMERGENCY_DISK_FREE_BYTES = 15 * 1024 * 1024 * 1024  # 15 GiB
+# Staircase of free-disk thresholds. Below the `EMERGENCY` threshold we
+# wipe idle worker target dirs. If that still leaves us below the
+# `CRITICAL` threshold, we escalate by wiping the supervisor `target/`
+# too (rebuild cost: the next outer-loop gate). Below `BLOCKING` we
+# refuse admission of new workers and drain — pushing a build into
+# the last couple of GiB is the recipe for ENOSPC mid-link.
+EMERGENCY_DISK_FREE_BYTES = 20 * 1024 * 1024 * 1024  # 20 GiB
+CRITICAL_DISK_FREE_BYTES = 10 * 1024 * 1024 * 1024   # 10 GiB
+BLOCKING_DISK_FREE_BYTES = 5 * 1024 * 1024 * 1024    # 5 GiB
 
 
 def _dir_size_bytes(path: Path) -> int:
@@ -2865,25 +2876,37 @@ def _maybe_clean_worker_target(slot: int) -> None:
     subprocess.run(["rm", "-rf", str(target)], check=False)
 
 
-def _emergency_disk_cleanup(busy_slots: set[int], max_slots: int) -> None:
-    """When free disk is low, wipe all idle worker target dirs.
+def _emergency_disk_cleanup(busy_slots: set[int], max_slots: int) -> bool:
+    """Escalating disk-space reclaim. Returns True if disk is now OK.
 
-    Called from the pool loop (before admission) and before spawning.
-    `busy_slots` is the set of slot indices with a live worker attached;
-    those dirs are in use and left alone. `max_slots` is the configured
-    pool size. If still low after idle-slot cleanup, logs a loud warning
-    — the supervisor's own `target/` is the likely culprit but we don't
-    wipe it automatically (it'd slow every local `just check` / `cargo
-    test` the user runs between loop iterations).
+    `busy_slots` = slot indices with a live worker writing to their
+    target dir; those are left alone. `max_slots` = configured pool
+    size. Escalation:
+
+    1. Free >= EMERGENCY: no-op, return True.
+    2. Free < EMERGENCY: wipe all idle worker target dirs.
+    3. Still < CRITICAL: also wipe the supervisor `target/`. The next
+       outer-loop gate will rebuild — that's one slow cycle, not per
+       port. Safe inside `drive_port_pool` because cargo invocations
+       from the supervisor only happen *between* pool cycles (in the
+       outer repair/sync gates), never while we're here.
+    4. Still < BLOCKING: return False so the caller refuses admission
+       and drains in-flight workers.
+
+    Cheap when disk is healthy (one `statvfs` call); only fans out
+    into `rm -rf` when actually needed.
     """
     free = _disk_free_bytes()
     if free >= EMERGENCY_DISK_FREE_BYTES:
-        return
-    free_gib = free / (1024 ** 3)
-    threshold_gib = EMERGENCY_DISK_FREE_BYTES / (1024 ** 3)
+        return True
+
+    def _free_gib() -> float:
+        return _disk_free_bytes() / (1024 ** 3)
+
     print(
-        f"\n[port-loop] pool: emergency — only {free_gib:.1f} GiB free "
-        f"(< {threshold_gib:.0f} GiB); wiping idle worker target dirs.",
+        f"\n[port-loop] pool: emergency — only {_free_gib():.1f} GiB free "
+        f"(< {EMERGENCY_DISK_FREE_BYTES / (1024 ** 3):.0f} GiB); "
+        f"wiping idle worker target dirs.",
         flush=True,
     )
     for slot in range(max_slots):
@@ -2897,23 +2920,36 @@ def _emergency_disk_cleanup(busy_slots: set[int], max_slots: int) -> None:
                 flush=True,
             )
             subprocess.run(["rm", "-rf", str(target)], check=False)
-    free_after = _disk_free_bytes() / (1024 ** 3)
-    if _disk_free_bytes() < EMERGENCY_DISK_FREE_BYTES:
-        supervisor_target_gib = (
-            _dir_size_bytes(REPO_ROOT / "target") / (1024 ** 3)
-        )
+
+    if _disk_free_bytes() < CRITICAL_DISK_FREE_BYTES:
+        supervisor_target = REPO_ROOT / "target"
+        if supervisor_target.exists():
+            size_gib = _dir_size_bytes(supervisor_target) / (1024 ** 3)
+            print(
+                f"[port-loop] pool: still {_free_gib():.1f} GiB free after "
+                f"worker cleanup; wiping supervisor target/ ({size_gib:.1f} "
+                f"GiB). Next outer-loop gate will rebuild.",
+                flush=True,
+            )
+            subprocess.run(
+                ["rm", "-rf", str(supervisor_target)], check=False,
+            )
+
+    free_after = _disk_free_bytes()
+    free_after_gib = free_after / (1024 ** 3)
+    if free_after < BLOCKING_DISK_FREE_BYTES:
         print(
-            f"\n[port-loop] pool: WARNING — still only {free_after:.1f} GiB "
-            f"free after idle cleanup. Supervisor `target/` is "
-            f"{supervisor_target_gib:.1f} GiB; consider `rm -rf target/` "
-            f"between runs. Continuing anyway.",
+            f"\n[port-loop] pool: CRITICAL — still only {free_after_gib:.1f} "
+            f"GiB free after all cleanup. Refusing admission; draining "
+            f"in-flight workers.",
             flush=True,
         )
-    else:
-        print(
-            f"[port-loop] pool: reclaimed to {free_after:.1f} GiB free.",
-            flush=True,
-        )
+        return False
+    print(
+        f"[port-loop] pool: reclaimed to {free_after_gib:.1f} GiB free.",
+        flush=True,
+    )
+    return True
 
 
 def _run_capture(args: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess:
