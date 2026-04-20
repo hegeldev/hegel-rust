@@ -115,3 +115,7 @@ fn encode_schema_value(value: &Value) -> Value {
         other => other.clone(),
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/schema/collections_tests.rs"]
+mod tests;
