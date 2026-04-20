@@ -511,12 +511,12 @@ impl TestRunner for ServerTestRunner {
                     ));
                     let tc_result = run_case(backend, is_final);
 
-                    if is_final {
-                        pre_done_final_cases += 1;
-                        if let TestCaseResult::Interesting { panic_message } = tc_result {
-                            failure_message = Some(panic_message);
-                        }
-                    }
+                    record_test_case_result(
+                        is_final,
+                        tc_result,
+                        &mut pre_done_final_cases,
+                        &mut failure_message,
+                    );
                 }
                 "test_done" => {
                     let ack_true = cbor_map! {"result" => true};
@@ -1409,6 +1409,27 @@ fn run_test_case(
     }
 
     tc_result
+}
+
+/// Record the outcome of a `test_case` event that arrived before `test_done`.
+///
+/// When the server marks a case as final (e.g. in `one_shot` mode, or any
+/// future protocol extension that pre-delivers final replays), count it so
+/// the later replay loop can skip it, and capture any failure message so the
+/// panic at the end of the run has the right content.
+fn record_test_case_result(
+    is_final: bool,
+    tc_result: TestCaseResult,
+    pre_done_final_cases: &mut u64,
+    failure_message: &mut Option<String>,
+) {
+    if !is_final {
+        return;
+    }
+    *pre_done_final_cases += 1;
+    if let TestCaseResult::Interesting { panic_message } = tc_result {
+        *failure_message = Some(panic_message);
+    }
 }
 
 /// Extract a message from a panic payload.

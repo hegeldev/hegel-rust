@@ -294,3 +294,67 @@ fn handle_channel_error_connection_aborted() {
         "unexpected panic message: {msg}"
     );
 }
+
+#[test]
+fn record_test_case_result_non_final_is_noop() {
+    let mut count = 0u64;
+    let mut msg: Option<String> = None;
+    record_test_case_result(
+        false,
+        TestCaseResult::Interesting {
+            panic_message: "ignored".into(),
+        },
+        &mut count,
+        &mut msg,
+    );
+    assert_eq!(count, 0);
+    assert!(msg.is_none());
+}
+
+#[test]
+fn record_test_case_result_final_valid_counts_only() {
+    let mut count = 0u64;
+    let mut msg: Option<String> = None;
+    record_test_case_result(true, TestCaseResult::Valid, &mut count, &mut msg);
+    assert_eq!(count, 1);
+    assert!(msg.is_none());
+}
+
+#[test]
+fn record_test_case_result_final_invalid_counts_only() {
+    let mut count = 0u64;
+    let mut msg: Option<String> = None;
+    record_test_case_result(true, TestCaseResult::Invalid, &mut count, &mut msg);
+    assert_eq!(count, 1);
+    assert!(msg.is_none());
+}
+
+#[test]
+fn record_test_case_result_final_overrun_counts_only() {
+    let mut count = 0u64;
+    let mut msg: Option<String> = None;
+    record_test_case_result(true, TestCaseResult::Overrun, &mut count, &mut msg);
+    assert_eq!(count, 1);
+    assert!(msg.is_none());
+}
+
+#[test]
+fn record_test_case_result_final_interesting_captures_message() {
+    let mut count = 0u64;
+    let mut msg: Option<String> = None;
+    record_test_case_result(
+        true,
+        TestCaseResult::Interesting {
+            panic_message: "boom".into(),
+        },
+        &mut count,
+        &mut msg,
+    );
+    assert_eq!(count, 1);
+    assert_eq!(msg.as_deref(), Some("boom"));
+}
+
+#[test]
+fn pinned_server_version_is_nonempty() {
+    assert!(!pinned_server_version().is_empty());
+}
