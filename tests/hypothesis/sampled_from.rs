@@ -35,11 +35,6 @@
 //!   filter; server passes vacuously when all test cases are rejected via assume.
 //! - `test_unsat_filtered_sampling_in_rejection_stage` — expects `Unsatisfiable`;
 //!   same issue.
-//! - `test_efficient_sets_of_samples_with_chained_transformations` — chained
-//!   `.map().filter().map()` on `sampled_from` loses the basic-generator path;
-//!   generic filter rejects too much.
-//! - `test_efficient_sets_of_samples_with_chained_transformations_slow_path` —
-//!   same mechanism via `compose!` with filtered `sampled_from` in a loop.
 
 use crate::common::utils::{
     assert_all_examples, assert_simple_property, check_can_generate_examples, expect_panic,

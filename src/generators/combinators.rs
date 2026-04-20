@@ -40,6 +40,10 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<T> for SampledFromGenerator<'a, 
             elements[index].clone()
         }))
     }
+
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        Some(self.elements.to_vec())
+    }
 }
 
 /// Pick uniformly from a fixed list of values.
