@@ -326,7 +326,7 @@ impl TestCase {
 
         while collection.more() {
             iteration += 1;
-            self.note(&format!("// Loop iteration {}", iteration));
+            self.note(&format!("// Repetition #{}", iteration));
 
             // Indent draws inside the body so replay output shows them nested
             // under their "Loop iteration N" header. Always restored after the

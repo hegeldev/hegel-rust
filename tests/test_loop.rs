@@ -50,8 +50,8 @@ fn snapshot_loop_fails_on_first_iteration() {
             assert!(x < 10);
         });
     }));
-    insta::assert_snapshot!(output, @r"
-    // Loop iteration 1
+    insta::assert_snapshot!(output, @"
+    // Repetition #1
       let x_1 = 10;
     ");
 }
@@ -65,10 +65,10 @@ fn snapshot_loop_runs_multiple_iterations_before_failing() {
             assert!(count < 3);
         });
     }));
-    insta::assert_snapshot!(output, @r"
-    // Loop iteration 1
-    // Loop iteration 2
-    // Loop iteration 3
+    insta::assert_snapshot!(output, @"
+    // Repetition #1
+    // Repetition #2
+    // Repetition #3
     ");
 }
 
@@ -81,8 +81,8 @@ fn snapshot_loop_with_multiple_draws_per_iteration() {
             assert!(x + y < 5);
         });
     }));
-    insta::assert_snapshot!(output, @r"
-    // Loop iteration 1
+    insta::assert_snapshot!(output, @"
+    // Repetition #1
       let x_1 = 0;
       let y_1 = 5;
     ");
@@ -99,8 +99,8 @@ fn snapshot_loop_accumulates_state_across_iterations() {
             assert!(total_inside.get() < 5);
         });
     }));
-    insta::assert_snapshot!(output, @r"
-    // Loop iteration 1
+    insta::assert_snapshot!(output, @"
+    // Repetition #1
       let n_1 = 5;
     ");
 }
