@@ -3,8 +3,6 @@
 //! during macro expansion even though the cfg predicate is inactive.
 //! see https://github.com/hegeldev/hegel-rust/issues/151
 
-#![allow(unexpected_cfgs)]
-
 use hegel::TestCase;
 
 struct A {
