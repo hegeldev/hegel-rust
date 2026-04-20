@@ -110,10 +110,7 @@ draw_example_tests!(
 );
 
 // sampled_from(("a", "b", "c"))
-draw_example_tests!(
-    sampled_from_strings,
-    gs::sampled_from(vec!["a", "b", "c"])
-);
+draw_example_tests!(sampled_from_strings, gs::sampled_from(vec!["a", "b", "c"]));
 
 // integers()
 draw_example_tests!(integers, gs::integers::<i64>());
@@ -163,10 +160,7 @@ draw_example_tests!(binary, gs::binary());
 draw_example_tests!(booleans, gs::booleans());
 
 // tuples(booleans(), booleans())
-draw_example_tests!(
-    tuple_booleans,
-    gs::tuples!(gs::booleans(), gs::booleans())
-);
+draw_example_tests!(tuple_booleans, gs::tuples!(gs::booleans(), gs::booleans()));
 
 // frozensets(integers())
 draw_example_tests!(hashsets_integers, gs::hashsets(gs::integers::<i64>()));
