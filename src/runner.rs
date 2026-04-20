@@ -345,14 +345,30 @@ impl HegelSession {
         let server_version = match decoded.strip_prefix("Hegel/") {
             Some(v) => v,
             None => {
-                let _ = child.kill(); // nocov
-                panic!("Bad handshake response: {decoded:?}"); // nocov
+                // nocov start
+                // Killing the server terminates its process; the OS then closes
+                // its stdout fd. If the server were to attempt a write between
+                // SIGKILL delivery and actual exit, it would see BrokenPipe.
+                eprintln!(
+                    "[HEGEL-RUST-CLOSE-STDOUT SITE-02-HANDSHAKE-BAD-RESPONSE] \
+                     killing server: handshake reply did not start with 'Hegel/': {decoded:?}"
+                );
+                let _ = child.kill();
+                panic!("Bad handshake response: {decoded:?}");
+                // nocov end
             }
         };
         let (lo, hi) = SUPPORTED_PROTOCOL_VERSIONS;
         let version = parse_version(server_version);
         if version < parse_version(lo) || version > parse_version(hi) {
             // nocov start
+            // Killing the server terminates its process; the OS then closes its
+            // stdout fd (server-side). Any pending writes in flight before exit
+            // would see BrokenPipe.
+            eprintln!(
+                "[HEGEL-RUST-CLOSE-STDOUT SITE-03-UNSUPPORTED-PROTOCOL-VERSION] \
+                 killing server: protocol version {server_version} is outside supported range [{lo}, {hi}]"
+            );
             let _ = child.kill();
             panic!(
                 "hegel-rust supports protocol versions {lo} through {hi}, but \
@@ -785,6 +801,13 @@ fn handle_handshake_failure(
     let exit_status = wait_for_exit(child, Duration::from_millis(100));
     let child_still_running = exit_status.is_none();
     if child_still_running {
+        // Handshake failed AND the server never exited on its own; we force-kill
+        // it so the test harness doesn't hang. Killing closes the server's stdout
+        // fd from the server side (via process death).
+        eprintln!(
+            "[HEGEL-RUST-CLOSE-STDOUT SITE-04-HANDSHAKE-FAILURE-HANGING-SERVER] \
+             killing server: handshake failed and child did not exit within 100ms: {handshake_err}"
+        );
         let _ = child.kill();
         let _ = child.wait();
         panic!(
@@ -1003,6 +1026,13 @@ pub fn __test_kill_server() {
         let child_arc = Arc::clone(&session.child);
         let conn = Arc::clone(&session.connection);
         drop(guard);
+        // Test hook: force-kill the running server to simulate a crash. The
+        // server's stdout will close as the process dies, the reader thread
+        // then hits EOF/err (→ SITE-01) and marks server_exited.
+        eprintln!(
+            "[HEGEL-RUST-CLOSE-STDOUT SITE-05-TEST-KILL-SERVER] \
+             killing server: __test_kill_server() was invoked"
+        );
         let _ = child_arc.lock().unwrap().kill();
         while !conn.server_has_exited() {
             std::thread::yield_now();

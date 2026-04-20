@@ -41,8 +41,16 @@ impl Connection {
                         }
                         // Packets for unknown streams are silently dropped.
                     }
-                    Err(_) => {
+                    Err(e) => {
                         // Stream closed or error — mark server as exited and stop.
+                        // Exiting this closure drops `reader` (the ChildStdout),
+                        // which closes the *read* end of the server's stdout pipe.
+                        // After this point, if the server is still alive and tries
+                        // to write to stdout, it will receive SIGPIPE / BrokenPipeError.
+                        eprintln!(
+                            "[HEGEL-RUST-CLOSE-STDOUT SITE-01-READER-THREAD-EXIT] \
+                             reader thread dropping ChildStdout after read_packet error: {e}"
+                        );
                         conn_for_reader.server_exited.store(true, Ordering::SeqCst);
                         // Drop all senders so any thread blocked on stream.recv()
                         // unblocks with RecvError instead of hanging forever.
