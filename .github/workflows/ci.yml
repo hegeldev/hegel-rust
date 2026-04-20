@@ -74,17 +74,30 @@ jobs:
         if: always()
         shell: bash
         run: |
-          shopt -s nullglob globstar
-          files=( **/.hegel/server.*.log )
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No server.log files found."
+          echo "cwd: $(pwd)"
+          echo
+          dirs=$(find "$(pwd)" /tmp -type d -name '.hegel' 2>/dev/null)
+          if [ -z "$dirs" ]; then
+            echo "No .hegel directories found under $(pwd) or /tmp."
             exit 0
           fi
-          for f in "${files[@]}"; do
+          echo "Found .hegel directories:"
+          echo "$dirs"
+          echo
+          files=$(find "$(pwd)" /tmp -type f -name 'server.*.log' -path '*/.hegel/*' 2>/dev/null)
+          if [ -z "$files" ]; then
+            echo "No server.*.log files in those .hegel directories. Contents:"
+            for d in $dirs; do
+              echo "--- $d ---"
+              ls -la "$d" 2>&1 || true
+            done
+            exit 0
+          fi
+          while IFS= read -r f; do
             echo "::group::$f"
             cat "$f"
             echo "::endgroup::"
-          done
+          done <<< "$files"
 
   test-all-features:
     name: test-all-features (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
@@ -129,17 +142,30 @@ jobs:
         if: always()
         shell: bash
         run: |
-          shopt -s nullglob globstar
-          files=( **/.hegel/server.*.log )
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No server.log files found."
+          echo "cwd: $(pwd)"
+          echo
+          dirs=$(find "$(pwd)" /tmp -type d -name '.hegel' 2>/dev/null)
+          if [ -z "$dirs" ]; then
+            echo "No .hegel directories found under $(pwd) or /tmp."
             exit 0
           fi
-          for f in "${files[@]}"; do
+          echo "Found .hegel directories:"
+          echo "$dirs"
+          echo
+          files=$(find "$(pwd)" /tmp -type f -name 'server.*.log' -path '*/.hegel/*' 2>/dev/null)
+          if [ -z "$files" ]; then
+            echo "No server.*.log files in those .hegel directories. Contents:"
+            for d in $dirs; do
+              echo "--- $d ---"
+              ls -la "$d" 2>&1 || true
+            done
+            exit 0
+          fi
+          while IFS= read -r f; do
             echo "::group::$f"
             cat "$f"
             echo "::endgroup::"
-          done
+          done <<< "$files"
 
   test-min-protocol:
     name: test-min-protocol
@@ -181,17 +207,30 @@ jobs:
         if: always()
         shell: bash
         run: |
-          shopt -s nullglob globstar
-          files=( **/.hegel/server.*.log )
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No server.log files found."
+          echo "cwd: $(pwd)"
+          echo
+          dirs=$(find "$(pwd)" /tmp -type d -name '.hegel' 2>/dev/null)
+          if [ -z "$dirs" ]; then
+            echo "No .hegel directories found under $(pwd) or /tmp."
             exit 0
           fi
-          for f in "${files[@]}"; do
+          echo "Found .hegel directories:"
+          echo "$dirs"
+          echo
+          files=$(find "$(pwd)" /tmp -type f -name 'server.*.log' -path '*/.hegel/*' 2>/dev/null)
+          if [ -z "$files" ]; then
+            echo "No server.*.log files in those .hegel directories. Contents:"
+            for d in $dirs; do
+              echo "--- $d ---"
+              ls -la "$d" 2>&1 || true
+            done
+            exit 0
+          fi
+          while IFS= read -r f; do
             echo "::group::$f"
             cat "$f"
             echo "::endgroup::"
-          done
+          done <<< "$files"
 
   docs:
     name: docs
@@ -242,17 +281,30 @@ jobs:
         if: always()
         shell: bash
         run: |
-          shopt -s nullglob globstar
-          files=( **/.hegel/server.*.log )
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No server.log files found."
+          echo "cwd: $(pwd)"
+          echo
+          dirs=$(find "$(pwd)" /tmp -type d -name '.hegel' 2>/dev/null)
+          if [ -z "$dirs" ]; then
+            echo "No .hegel directories found under $(pwd) or /tmp."
             exit 0
           fi
-          for f in "${files[@]}"; do
+          echo "Found .hegel directories:"
+          echo "$dirs"
+          echo
+          files=$(find "$(pwd)" /tmp -type f -name 'server.*.log' -path '*/.hegel/*' 2>/dev/null)
+          if [ -z "$files" ]; then
+            echo "No server.*.log files in those .hegel directories. Contents:"
+            for d in $dirs; do
+              echo "--- $d ---"
+              ls -la "$d" 2>&1 || true
+            done
+            exit 0
+          fi
+          while IFS= read -r f; do
             echo "::group::$f"
             cat "$f"
             echo "::endgroup::"
-          done
+          done <<< "$files"
 
   compile-examples:
     name: compile-examples (${{ matrix.rust }})
@@ -319,17 +371,30 @@ jobs:
         if: always()
         shell: bash
         run: |
-          shopt -s nullglob globstar
-          files=( **/.hegel/server.*.log )
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No server.log files found."
+          echo "cwd: $(pwd)"
+          echo
+          dirs=$(find "$(pwd)" /tmp -type d -name '.hegel' 2>/dev/null)
+          if [ -z "$dirs" ]; then
+            echo "No .hegel directories found under $(pwd) or /tmp."
             exit 0
           fi
-          for f in "${files[@]}"; do
+          echo "Found .hegel directories:"
+          echo "$dirs"
+          echo
+          files=$(find "$(pwd)" /tmp -type f -name 'server.*.log' -path '*/.hegel/*' 2>/dev/null)
+          if [ -z "$files" ]; then
+            echo "No server.*.log files in those .hegel directories. Contents:"
+            for d in $dirs; do
+              echo "--- $d ---"
+              ls -la "$d" 2>&1 || true
+            done
+            exit 0
+          fi
+          while IFS= read -r f; do
             echo "::group::$f"
             cat "$f"
             echo "::endgroup::"
-          done
+          done <<< "$files"
 
       - name: Auto-update coverage annotations and ratchet
         if: success() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
@@ -389,17 +454,30 @@ jobs:
         if: always()
         shell: bash
         run: |
-          shopt -s nullglob globstar
-          files=( **/.hegel/server.*.log )
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No server.log files found."
+          echo "cwd: $(pwd)"
+          echo
+          dirs=$(find "$(pwd)" /tmp -type d -name '.hegel' 2>/dev/null)
+          if [ -z "$dirs" ]; then
+            echo "No .hegel directories found under $(pwd) or /tmp."
             exit 0
           fi
-          for f in "${files[@]}"; do
+          echo "Found .hegel directories:"
+          echo "$dirs"
+          echo
+          files=$(find "$(pwd)" /tmp -type f -name 'server.*.log' -path '*/.hegel/*' 2>/dev/null)
+          if [ -z "$files" ]; then
+            echo "No server.*.log files in those .hegel directories. Contents:"
+            for d in $dirs; do
+              echo "--- $d ---"
+              ls -la "$d" 2>&1 || true
+            done
+            exit 0
+          fi
+          while IFS= read -r f; do
             echo "::group::$f"
             cat "$f"
             echo "::endgroup::"
-          done
+          done <<< "$files"
 
   nix:
     name: nix
