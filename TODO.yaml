@@ -26,16 +26,6 @@
       Acceptance: these files report 0 uncovered code lines in
       `just check-coverage` output.
 
-  - title: "[CI] coverage: src/native/shrinker/mod.rs"
-    details: |
-      Part of the PR #188 coverage ratchet split. 51 uncovered code lines.
-      This is the shrinker entry point; driving it requires a full
-      NativeTestCase + CachedTestFunction round-trip (see
-      tests/embedded/native/tree_tests.rs for the pattern).
-
-      Acceptance: src/native/shrinker/mod.rs reports 0 uncovered code lines
-      in `just check-coverage`.
-
   - title: "[CI] coverage: src/native/core/float_index.rs"
     details: |
       Part of the PR #188 coverage ratchet split. 54 uncovered code lines.
