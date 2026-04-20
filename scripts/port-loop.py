@@ -2082,6 +2082,7 @@ def _spawn_worker(
     args: argparse.Namespace,
 ) -> subprocess.Popen:
     """Reset worker `slot`'s worktree to `base_sha` and spawn its subprocess."""
+    _maybe_clean_worker_target(slot)
     worktree = _ensure_worktree(slot, base_sha)
     # Use the worktree's own copy of this script so `__file__`-relative
     # constants (REPO_ROOT, SESSIONS_DIR, etc.) resolve inside the
@@ -2638,6 +2639,48 @@ def _worker_branch(i: int) -> str:
 
 def _worker_target_dir(i: int) -> Path:
     return REPO_ROOT / f"target-worker-{i}"
+
+
+# Per-worker CARGO_TARGET_DIR size above which we nuke-and-rebuild before
+# spawning the next task in that slot. Test-binary artifacts accumulate
+# as ports land, and three or four workers each at 15 GB is enough to
+# exhaust a modest disk. Rebuilding from empty costs one slow cycle but
+# keeps disk usage bounded.
+WORKER_TARGET_SIZE_LIMIT_BYTES = 10 * 1024 * 1024 * 1024  # 10 GiB
+
+
+def _dir_size_bytes(path: Path) -> int:
+    """Return `path`'s recursive size in bytes, or 0 if it doesn't exist.
+
+    Uses `du -sb` for speed — a pure-Python walk of a 15 GB target dir
+    takes noticeable wall time while `du` completes in well under a
+    second on these volumes.
+    """
+    if not path.exists():
+        return 0
+    r = _run_capture(["du", "-sb", str(path)])
+    if r.returncode != 0 or not r.stdout:
+        return 0
+    try:
+        return int(r.stdout.split(maxsplit=1)[0])
+    except (ValueError, IndexError):
+        return 0
+
+
+def _maybe_clean_worker_target(slot: int) -> None:
+    """Delete worker `slot`'s CARGO_TARGET_DIR if it's over the size limit."""
+    target = _worker_target_dir(slot)
+    size = _dir_size_bytes(target)
+    if size <= WORKER_TARGET_SIZE_LIMIT_BYTES:
+        return
+    gib = size / (1024 ** 3)
+    limit_gib = WORKER_TARGET_SIZE_LIMIT_BYTES / (1024 ** 3)
+    print(
+        f"\n[port-loop] pool: worker {slot} target-dir is "
+        f"{gib:.1f} GiB (> {limit_gib:.0f} GiB); rm -rf to reclaim.",
+        flush=True,
+    )
+    subprocess.run(["rm", "-rf", str(target)], check=False)
 
 
 def _run_capture(args: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess:
