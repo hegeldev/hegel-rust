@@ -1997,13 +1997,17 @@ def _check_run_bucket(c: dict) -> str:
     return "fail"  # failure, timed_out, action_required
 
 
-def _pr_check_status() -> tuple[str, str, str]:
-    """Return (status, summary, detail) for the tracked PR's CI.
+def _pr_check_status() -> tuple[str, str, str, int]:
+    """Return (status, summary, detail, failing_count) for the tracked PR's CI.
 
     `status` is one of `"skip"` (can't tell / PR closed / no checks),
     `"pending"`, `"success"`, `"failure"`. `summary` is a short label
     for logs. `detail` is a pre-extracted failing-log summary for the
     triage agent (empty for statuses other than `"failure"`).
+    `failing_count` is the number of already-completed checks that
+    failed or were cancelled — reported even when `status == "pending"`
+    so callers can distinguish "pending but clean" from "pending with
+    some checks already failing".
 
     Uses `gh api` directly (avoids `gh pr checks --json` which is
     absent in some packaged versions of gh).
@@ -2016,12 +2020,12 @@ def _pr_check_status() -> tuple[str, str, str]:
             capture_output=True, text=True, timeout=60, check=False,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        return "skip", f"gh unavailable: {e}", ""
+        return "skip", f"gh unavailable: {e}", "", 0
     if sha_result.returncode != 0:
-        return "skip", f"gh api PR failed: {sha_result.stderr.strip()}", ""
+        return "skip", f"gh api PR failed: {sha_result.stderr.strip()}", "", 0
     sha = sha_result.stdout.strip()
     if not sha:
-        return "skip", "could not determine PR head SHA", ""
+        return "skip", "could not determine PR head SHA", "", 0
 
     # Step 2: fetch check runs for that commit.
     try:
@@ -2031,21 +2035,25 @@ def _pr_check_status() -> tuple[str, str, str]:
             capture_output=True, text=True, timeout=60, check=False,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        return "skip", f"gh unavailable: {e}", ""
+        return "skip", f"gh unavailable: {e}", "", 0
     if runs_result.returncode != 0:
-        return "skip", f"gh api check-runs failed: {runs_result.stderr.strip()}", ""
+        return "skip", f"gh api check-runs failed: {runs_result.stderr.strip()}", "", 0
     try:
         data = json.loads(runs_result.stdout or "{}")
     except json.JSONDecodeError:
-        return "skip", "gh api returned non-JSON", ""
+        return "skip", "gh api returned non-JSON", "", 0
     checks = data.get("check_runs", [])
     if not checks:
-        return "skip", "no checks reported yet", ""
+        return "skip", "no checks reported yet", "", 0
 
     buckets = [_check_run_bucket(c) for c in checks]
+    failing_count = sum(1 for b in buckets if b in ("fail", "cancel"))
     if any(b == "pending" for b in buckets):
         n = sum(1 for b in buckets if b == "pending")
-        return "pending", f"{n}/{len(checks)} checks still running", ""
+        summary = f"{n}/{len(checks)} checks still running"
+        if failing_count:
+            summary += f" ({failing_count} already failing)"
+        return "pending", summary, "", failing_count
     failing = [c for c in checks if _check_run_bucket(c) in ("fail", "cancel")]
     if failing:
         names = [c.get("name", "?") for c in failing]
@@ -2072,8 +2080,9 @@ def _pr_check_status() -> tuple[str, str, str]:
             "failure",
             f"{len(failing)} failing: {', '.join(names)}",
             detail,
+            len(failing),
         )
-    return "success", f"all {len(checks)} checks passing", ""
+    return "success", f"all {len(checks)} checks passing", "", 0
 
 
 def has_ci_todos() -> bool:
@@ -2089,7 +2098,7 @@ def has_ci_todos() -> bool:
 def gate_pr_ci() -> tuple[bool, str]:
     """Returns (ok, detail). ok=False only on completed-failure."""
     print(f"\n$ gh pr checks {PR_NUMBER} --repo {PR_REPO}")
-    status, summary, detail = _pr_check_status()
+    status, summary, detail, _ = _pr_check_status()
     print(f"[port-loop] PR #{PR_NUMBER}: {status} — {summary}", flush=True)
     return status != "failure", detail
 
@@ -2107,7 +2116,7 @@ def _wait_for_new_pr_checks(grace: float = 120.0) -> bool:
     """
     deadline = time.monotonic() + grace
     while time.monotonic() < deadline:
-        status, summary, _ = _pr_check_status()
+        status, summary, _, _ = _pr_check_status()
         print(
             f"[port-loop] PR CI wait-for-new-checks: {status} — {summary}",
             flush=True,
