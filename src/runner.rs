@@ -16,7 +16,7 @@ use std::sync::{Arc, LazyLock, Mutex, Once};
 use std::time::{Duration, Instant};
 
 const SUPPORTED_PROTOCOL_VERSIONS: (&str, &str) = ("0.10", "0.10");
-const HEGEL_SERVER_VERSION: &str = "0.4.2";
+const HEGEL_SERVER_VERSION: &str = "0.4.4";
 const HEGEL_SERVER_COMMAND_ENV: &str = "HEGEL_SERVER_COMMAND";
 const HEGEL_SERVER_DIR: &str = ".hegel";
 static SERVER_LOG_PATH: Mutex<Option<String>> = Mutex::new(None);
