@@ -414,7 +414,8 @@ impl TestRunner for ServerTestRunner {
             "seed" => settings.seed.map_or(Value::Null, Value::from),
             "stream_id" => test_stream.stream_id,
             "database_key" => database_key_bytes,
-            "derandomize" => settings.derandomize
+            "derandomize" => settings.derandomize,
+            "one_shot" => settings.one_shot
         };
         let db_value = match &settings.database {
             Database::Unset => Option::None, // nocov
@@ -454,6 +455,8 @@ impl TestRunner for ServerTestRunner {
 
         let result_data: Value;
         let ack_null = cbor_map! {"result" => Value::Null};
+        let mut failure_message: Option<String> = None;
+        let mut pre_done_final_cases = 0u64;
         loop {
             // Handle the server dying between events: receive_request will
             // fail with RecvError once the background reader clears the senders.
@@ -481,6 +484,9 @@ impl TestRunner for ServerTestRunner {
                     let stream_id = map_get(&event, "stream_id")
                         .and_then(as_u64)
                         .expect("Missing stream id") as u32;
+                    let is_final = map_get(&event, "is_final")
+                        .and_then(as_bool)
+                        .unwrap_or(false);
 
                     let test_case_stream = connection.connect_stream(stream_id);
 
@@ -494,7 +500,14 @@ impl TestRunner for ServerTestRunner {
                         test_case_stream,
                         verbosity,
                     ));
-                    run_case(backend, false);
+                    let tc_result = run_case(backend, is_final);
+
+                    if is_final {
+                        pre_done_final_cases += 1;
+                        if let TestCaseResult::Interesting { panic_message } = tc_result {
+                            failure_message = Some(panic_message);
+                        }
+                    }
                 }
                 "test_done" => {
                     let ack_true = cbor_map! {"result" => true};
@@ -533,9 +546,11 @@ impl TestRunner for ServerTestRunner {
             eprintln!("Test done. interesting_test_cases={}", n_interesting);
         }
 
-        // Process final replay test cases (one per interesting example)
-        let mut failure_message: Option<String> = None;
-        for _ in 0..n_interesting {
+        // Process final replay test cases (one per interesting example),
+        // subtracting any that the server already delivered as is_final before
+        // test_done (e.g. in one-shot mode).
+        let remaining_finals = n_interesting.saturating_sub(pre_done_final_cases);
+        for _ in 0..remaining_finals {
             let (event_id, event_payload) = test_stream
                 .receive_request()
                 .expect("Failed to receive final test_case");
@@ -1078,6 +1093,7 @@ pub struct Settings {
     pub(crate) derandomize: bool,
     pub(crate) database: Database,
     pub(crate) suppress_health_check: Vec<HealthCheck>,
+    pub(crate) one_shot: bool,
 }
 
 impl Settings {
@@ -1095,6 +1111,7 @@ impl Settings {
                 Database::Unset // nocov
             },
             suppress_health_check: Vec::new(),
+            one_shot: false,
         }
     }
 
@@ -1150,6 +1167,23 @@ impl Settings {
     /// ```
     pub fn suppress_health_check(mut self, checks: impl IntoIterator<Item = HealthCheck>) -> Self {
         self.suppress_health_check.extend(checks);
+        self
+    }
+
+    /// When true, run exactly one test case and return the result. No shrinking,
+    /// no replay, no exploration beyond the single case.
+    ///
+    /// This is intended for callers who want to use Hegel purely for data
+    /// generation — e.g. Antithesis workloads or other environments where the
+    /// system under test cannot be reset and shrinking would be meaningless.
+    ///
+    /// The single test case runs in "final" mode, matching the behaviour of
+    /// the final replay pass at the end of a normal run: `note()` output is
+    /// emitted and panic messages are printed.
+    ///
+    /// Requires hegel-core 0.4.4 or later.
+    pub fn one_shot(mut self, one_shot: bool) -> Self {
+        self.one_shot = one_shot;
         self
     }
 }
