@@ -1939,22 +1939,45 @@ def drive_port_worker(
 # flight has been drained.
 
 
+_POOL_ADMISSION_CACHE: dict = {"ts": 0.0, "result": None}
+_POOL_ADMISSION_TTL = 30.0  # seconds
+
+
 def _pool_admission_ok() -> tuple[bool, str]:
     """Check whether new workers may be spawned right now.
 
     Admission is denied if TODO.yaml has any entries or if PR CI has
     already-failing checks (either completed-failed or pending-with-fails).
     Returns `(ok, reason)` — the reason is useful for logging.
+
+    Result is cached for `_POOL_ADMISSION_TTL` seconds to avoid hitting
+    `gh api` on every 1 s pool tick; the outer loop re-evaluates
+    admission between pool cycles anyway.
     """
+    now = time.monotonic()
+    cached = _POOL_ADMISSION_CACHE["result"]
+    if cached is not None and now - _POOL_ADMISSION_CACHE["ts"] < _POOL_ADMISSION_TTL:
+        return cached
     todos = read_todos()
     if todos:
-        return False, f"{len(todos)} TODO entry(ies) pending"
-    status, summary, _detail, failing = _pr_check_status()
-    if status == "failure":
-        return False, f"PR CI failure: {summary}"
-    if failing > 0:
-        return False, f"PR CI has {failing} failing check(s): {summary}"
-    return True, status or "ok"
+        result = (False, f"{len(todos)} TODO entry(ies) pending")
+    else:
+        status, summary, _detail, failing = _pr_check_status(fetch_logs=False)
+        if status == "failure":
+            result = (False, f"PR CI failure: {summary}")
+        elif failing > 0:
+            result = (False, f"PR CI has {failing} failing check(s): {summary}")
+        else:
+            result = (True, status or "ok")
+    _POOL_ADMISSION_CACHE["ts"] = now
+    _POOL_ADMISSION_CACHE["result"] = result
+    return result
+
+
+def _pool_admission_invalidate() -> None:
+    """Force the next `_pool_admission_ok` call to re-fetch (bypass cache)."""
+    _POOL_ADMISSION_CACHE["result"] = None
+    _POOL_ADMISSION_CACHE["ts"] = 0.0
 
 
 def _dispatch_worker_rescue(
@@ -2119,6 +2142,9 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
     in_flight: dict[int, dict] = {}
     assigned: set[Path] = set()
     stop = [False]
+    # Start with a fresh admission check so the outer loop's stale cache
+    # (if any) doesn't let us enter under false-negative admission.
+    _pool_admission_invalidate()
 
     def _handle_sigint(_signum, _frame):
         if not stop[0]:
@@ -2245,6 +2271,9 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
                 _handle_worker_exit(
                     slot, info, rc, supervisor_branch, args, state,
                 )
+            # A worker completion may have added a TODO entry or pushed
+            # commits that affect PR CI; force a fresh admission check.
+            _pool_admission_invalidate()
     finally:
         for info in in_flight.values():
             try:
@@ -2823,20 +2852,22 @@ def _check_run_bucket(c: dict) -> str:
     return "fail"  # failure, timed_out, action_required
 
 
-def _pr_check_status() -> tuple[str, str, str, int]:
+def _pr_check_status(fetch_logs: bool = True) -> tuple[str, str, str, int]:
     """Return (status, summary, detail, failing_count) for the tracked PR's CI.
 
     `status` is one of `"skip"` (can't tell / PR closed / no checks),
     `"pending"`, `"success"`, `"failure"`. `summary` is a short label
     for logs. `detail` is a pre-extracted failing-log summary for the
-    triage agent (empty for statuses other than `"failure"`).
-    `failing_count` is the number of already-completed checks that
-    failed or were cancelled — reported even when `status == "pending"`
-    so callers can distinguish "pending but clean" from "pending with
-    some checks already failing".
+    triage agent (empty for statuses other than `"failure"`, or when
+    `fetch_logs=False`). `failing_count` is the number of already-
+    completed checks that failed or were cancelled — reported even
+    when `status == "pending"` so callers can distinguish "pending but
+    clean" from "pending with some checks already failing".
 
     Uses `gh api` directly (avoids `gh pr checks --json` which is
-    absent in some packaged versions of gh).
+    absent in some packaged versions of gh). Set `fetch_logs=False`
+    when the caller only needs status/summary/failing_count — avoids
+    running `gh run view --log-failed` (slow + API-quota expensive).
     """
     # Step 1: resolve PR head SHA.
     try:
@@ -2883,25 +2914,28 @@ def _pr_check_status() -> tuple[str, str, str, int]:
     failing = [c for c in checks if _check_run_bucket(c) in ("fail", "cancel")]
     if failing:
         names = [c.get("name", "?") for c in failing]
-        # Dedup run ids: multiple failing jobs can share one workflow run.
-        run_ids: list[str] = []
-        for c in failing:
-            url = c.get("html_url") or c.get("details_url") or ""
-            m = re.search(r"/runs/(\d+)", url)
-            if m and m.group(1) not in run_ids:
-                run_ids.append(m.group(1))
-        sections: list[str] = []
-        for rid in run_ids:
-            print(
-                f"[port-loop] fetching --log-failed for run {rid}",
-                flush=True,
-            )
-            sections.append(
-                f"=== run {rid} ===\n{_fetch_run_log_summary(rid)}"
-            )
-        if not sections:
-            sections.append("(no run-id parseable from check URLs)")
-        detail = "\n\n".join(sections)
+        if fetch_logs:
+            # Dedup run ids: multiple failing jobs can share one workflow run.
+            run_ids: list[str] = []
+            for c in failing:
+                url = c.get("html_url") or c.get("details_url") or ""
+                m = re.search(r"/runs/(\d+)", url)
+                if m and m.group(1) not in run_ids:
+                    run_ids.append(m.group(1))
+            sections: list[str] = []
+            for rid in run_ids:
+                print(
+                    f"[port-loop] fetching --log-failed for run {rid}",
+                    flush=True,
+                )
+                sections.append(
+                    f"=== run {rid} ===\n{_fetch_run_log_summary(rid)}"
+                )
+            if not sections:
+                sections.append("(no run-id parseable from check URLs)")
+            detail = "\n\n".join(sections)
+        else:
+            detail = ""
         return (
             "failure",
             f"{len(failing)} failing: {', '.join(names)}",
