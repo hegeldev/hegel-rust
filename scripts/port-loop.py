@@ -59,6 +59,7 @@ import json
 import os
 import random
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -2266,6 +2267,12 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
 
     try:
         while True:
+            # Before doing anything else, make sure we have headroom on
+            # disk. Idle slots get wiped if we're below the threshold;
+            # in-flight slots are left alone (their cargo is actively
+            # writing to those dirs).
+            _emergency_disk_cleanup(set(in_flight.keys()), N)
+
             # Admit into every free slot we can. Admission is re-checked
             # here so a TODO or CI-failure that appears mid-pool stops
             # new spawns without interrupting in-flight ones.
@@ -2803,10 +2810,17 @@ def _worker_target_dir(i: int) -> Path:
 
 # Per-worker CARGO_TARGET_DIR size above which we nuke-and-rebuild before
 # spawning the next task in that slot. Test-binary artifacts accumulate
-# as ports land, and three or four workers each at 15 GB is enough to
-# exhaust a modest disk. Rebuilding from empty costs one slow cycle but
-# keeps disk usage bounded.
-WORKER_TARGET_SIZE_LIMIT_BYTES = 10 * 1024 * 1024 * 1024  # 10 GiB
+# as ports land fast; even at 6 GiB each, four workers plus the supervisor's
+# own `target/` can fill a 123 GiB disk. Rebuilding from empty costs one
+# slow cycle but keeps disk usage bounded.
+WORKER_TARGET_SIZE_LIMIT_BYTES = 6 * 1024 * 1024 * 1024  # 6 GiB
+
+# Below this much free space on the partition holding REPO_ROOT, trigger
+# emergency cleanup of all *idle* worker target dirs (regardless of per-
+# slot size). Kicks in before a build fails with ENOSPC. Tuned for
+# cargo's worst-case scratch: a link step on a big test crate can
+# temporarily grow a target dir by ~5 GiB.
+EMERGENCY_DISK_FREE_BYTES = 15 * 1024 * 1024 * 1024  # 15 GiB
 
 
 def _dir_size_bytes(path: Path) -> int:
@@ -2827,6 +2841,14 @@ def _dir_size_bytes(path: Path) -> int:
         return 0
 
 
+def _disk_free_bytes() -> int:
+    """Free bytes on the filesystem holding REPO_ROOT."""
+    try:
+        return shutil.disk_usage(str(REPO_ROOT)).free
+    except OSError:
+        return 0
+
+
 def _maybe_clean_worker_target(slot: int) -> None:
     """Delete worker `slot`'s CARGO_TARGET_DIR if it's over the size limit."""
     target = _worker_target_dir(slot)
@@ -2841,6 +2863,57 @@ def _maybe_clean_worker_target(slot: int) -> None:
         flush=True,
     )
     subprocess.run(["rm", "-rf", str(target)], check=False)
+
+
+def _emergency_disk_cleanup(busy_slots: set[int], max_slots: int) -> None:
+    """When free disk is low, wipe all idle worker target dirs.
+
+    Called from the pool loop (before admission) and before spawning.
+    `busy_slots` is the set of slot indices with a live worker attached;
+    those dirs are in use and left alone. `max_slots` is the configured
+    pool size. If still low after idle-slot cleanup, logs a loud warning
+    — the supervisor's own `target/` is the likely culprit but we don't
+    wipe it automatically (it'd slow every local `just check` / `cargo
+    test` the user runs between loop iterations).
+    """
+    free = _disk_free_bytes()
+    if free >= EMERGENCY_DISK_FREE_BYTES:
+        return
+    free_gib = free / (1024 ** 3)
+    threshold_gib = EMERGENCY_DISK_FREE_BYTES / (1024 ** 3)
+    print(
+        f"\n[port-loop] pool: emergency — only {free_gib:.1f} GiB free "
+        f"(< {threshold_gib:.0f} GiB); wiping idle worker target dirs.",
+        flush=True,
+    )
+    for slot in range(max_slots):
+        if slot in busy_slots:
+            continue
+        target = _worker_target_dir(slot)
+        if target.exists():
+            size_gib = _dir_size_bytes(target) / (1024 ** 3)
+            print(
+                f"[port-loop] pool: rm -rf {target.name} ({size_gib:.1f} GiB)",
+                flush=True,
+            )
+            subprocess.run(["rm", "-rf", str(target)], check=False)
+    free_after = _disk_free_bytes() / (1024 ** 3)
+    if _disk_free_bytes() < EMERGENCY_DISK_FREE_BYTES:
+        supervisor_target_gib = (
+            _dir_size_bytes(REPO_ROOT / "target") / (1024 ** 3)
+        )
+        print(
+            f"\n[port-loop] pool: WARNING — still only {free_after:.1f} GiB "
+            f"free after idle cleanup. Supervisor `target/` is "
+            f"{supervisor_target_gib:.1f} GiB; consider `rm -rf target/` "
+            f"between runs. Continuing anyway.",
+            flush=True,
+        )
+    else:
+        print(
+            f"[port-loop] pool: reclaimed to {free_after:.1f} GiB free.",
+            flush=True,
+        )
 
 
 def _run_capture(args: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess:
