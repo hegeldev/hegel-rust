@@ -126,6 +126,6 @@ lines.
 
 ## Reference Repositories
 
-- **pbtkit** (primary reference): `/tmp/pbtkit/src/pbtkit/`
+- **Hypothesis** (behavioural ground truth): `/tmp/hypothesis/hypothesis-python/src/hypothesis/`
+- **pbtkit** (cleaner reference implementation of the same ideas — read for structure, defer to Hypothesis on conflicts): `/tmp/pbtkit/src/pbtkit/`
 - **hegel-core** (schema format): `/tmp/hegel-core/src/hegel/schema.py`
-- **Hypothesis** (complex internals): `/tmp/hypothesis/hypothesis-python/src/hypothesis/`
