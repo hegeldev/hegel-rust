@@ -100,7 +100,7 @@ pub(crate) fn store_final_panic_info(msg: &str) {
             "thread '{}' ({}) panicked at {}:",
             thread_name, thread_id, location
         );
-        eprintln!("{}", msg);
+        eprintln!("Property test failed: {}", msg);
 
         if backtrace.status() == std::backtrace::BacktraceStatus::Captured {
             let is_full = std::env::var("RUST_BACKTRACE")
