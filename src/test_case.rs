@@ -1,8 +1,10 @@
 pub use crate::backend::{DataSource, DataSourceError};
 use crate::generators::Generator;
 use ciborium::Value;
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 
 use crate::generators::value;
@@ -30,6 +32,13 @@ pub(crate) const ASSUME_FAIL_STRING: &str = "__HEGEL_ASSUME_FAIL";
 /// assumption failures apart from backend-initiated data exhaustion.
 pub(crate) const STOP_TEST_STRING: &str = "__HEGEL_STOP_TEST";
 
+/// The sentinel string used by `TestCase::repeat` to signal that its loop
+/// completed naturally (the collection said "stop" and no panic occurred
+/// inside the body). Because `repeat` returns `!`, it has no normal-return
+/// path; this panic is how it tells the runner "this test case finished
+/// successfully, record it as Valid".
+pub(crate) const LOOP_DONE_STRING: &str = "__HEGEL_LOOP_DONE";
+
 /// Panic with the appropriate sentinel for the given data source error.
 fn panic_on_data_source_error(e: DataSourceError) -> ! {
     match e {
@@ -55,7 +64,7 @@ pub(crate) struct DrawState {
 pub(crate) struct TestCaseLocalData {
     span_depth: usize,
     indent: usize,
-    on_draw: Rc<dyn Fn(&str)>,
+    on_draw: OutputSink,
 }
 
 /// A handle to the current test case.
@@ -95,12 +104,44 @@ impl std::fmt::Debug for TestCase {
     }
 }
 
+/// A callback invoked for each line of draw/note output during the final replay.
+pub(crate) type OutputSink = Rc<dyn Fn(&str)>;
+
+thread_local! {
+    static OUTPUT_OVERRIDE: RefCell<Option<OutputSink>> = const { RefCell::new(None) };
+}
+
+/// Install a custom output sink for the duration of `f`, replacing the usual
+/// `eprintln!` behavior of draw and note output. Intended for tests that want
+/// to capture what a test case would print.
+///
+/// While active, notes and draws from the final replay go to `sink` instead of
+/// stderr. Non-final test cases still drop their draw/note output as usual.
+#[doc(hidden)]
+pub fn with_output_override<R>(sink: OutputSink, f: impl FnOnce() -> R) -> R {
+    let prev = OUTPUT_OVERRIDE.with(|cell| cell.borrow_mut().replace(sink));
+    let result = f();
+    OUTPUT_OVERRIDE.with(|cell| *cell.borrow_mut() = prev);
+    result
+}
+
+fn panic_message(payload: &Box<dyn Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "Unknown panic".to_string() // nocov
+    }
+}
+
 impl TestCase {
     pub(crate) fn new(data_source: Box<dyn DataSource>, is_last_run: bool) -> Self {
-        let on_draw: Rc<dyn Fn(&str)> = if is_last_run {
-            Rc::new(|msg| eprintln!("{}", msg))
-        } else {
-            Rc::new(|_| {})
+        let override_sink = OUTPUT_OVERRIDE.with(|cell| cell.borrow().clone());
+        let on_draw: OutputSink = match override_sink {
+            Some(sink) if is_last_run => sink,
+            _ if is_last_run => Rc::new(|msg| eprintln!("{}", msg)),
+            _ => Rc::new(|_| {}),
         };
         TestCase {
             global: Rc::new(TestCaseGlobalData {
@@ -234,10 +275,101 @@ impl TestCase {
     /// }
     /// ```
     pub fn note(&self, message: &str) {
-        if self.global.is_last_run {
-            let indent = self.local.borrow().indent; // nocov
-            eprintln!("{:indent$}{}", "", message, indent = indent); // nocov
+        if !self.global.is_last_run {
+            return;
         }
+        let local = self.local.borrow();
+        let indent = local.indent;
+        (local.on_draw)(&format!("{:indent$}{}", "", message, indent = indent));
+    }
+
+    /// Run `body` in a loop that should runs "logically infinitely" or until
+    /// error. Roughly equivalent to a `loop` but with better interaction with
+    /// the test runner: This loop will never exit until the test case completes.
+    ///
+    /// At the start of each iteration a `// Loop iteration N` note is emitted
+    /// into the failing-test replay output.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators as gs;
+    ///
+    /// #[hegel::test]
+    /// fn my_test(tc: hegel::TestCase) {
+    ///     let mut total: i32 = 0;
+    ///     tc.repeat(|| {
+    ///         let n: i32 = tc.draw(gs::integers().min_value(0).max_value(10));
+    ///         total += n;
+    ///         assert!(total >= 0);
+    ///     });
+    /// }
+    /// ```
+    pub fn repeat<F: FnMut()>(&self, mut body: F) -> ! {
+        use crate::generators::{booleans, integers};
+
+        // Draw min_size uniformly over a large range to get good shrinking.
+        //
+        // Most of the time the collection is forced huge (making the loop
+        // behave like an infinite loop), but during shrinking the backend
+        // can reduce min_size to pick a finite iteration count.
+        //
+        // hegel-core's collection machinery hits an internal AssertionError
+        // around float precision when min_size approaches 2^53, so we add a
+        // cap well below that (the backend's data budget runs out long before
+        // this many iterations anyway) without tripping the bug.
+        const MAX_SAFE_MIN_SIZE: usize = 1 << 40;
+        let min_size = self.draw_silent(integers::<usize>().max_value(MAX_SAFE_MIN_SIZE));
+
+        let mut collection = Collection::new(self, min_size, None);
+        let mut iteration: u64 = 0;
+
+        while collection.more() {
+            iteration += 1;
+            self.note(&format!("// Repetition #{}", iteration));
+
+            // Indent draws inside the body so replay output shows them nested
+            // under their "Loop iteration N" header. Always restored after the
+            // body returns, including on panic.
+            let prev_indent = self.local.borrow().indent;
+            self.local.borrow_mut().indent = prev_indent + 2;
+            let result = catch_unwind(AssertUnwindSafe(&mut body));
+            self.local.borrow_mut().indent = prev_indent;
+
+            match result {
+                Ok(()) => {}
+                Err(e) => {
+                    let msg = panic_message(&e);
+                    if msg == ASSUME_FAIL_STRING {
+                        // Assumption failure inside the body: skip this
+                        // iteration and continue with the next, matching
+                        // stateful testing.
+                    } else if msg == STOP_TEST_STRING {
+                        // Backend exhausted: let the outer runner end this
+                        // test case as Overrun rather than falling through
+                        // and running more user code against a dead data
+                        // source.
+                        resume_unwind(e);
+                    } else {
+                        // Shrinking hack: draw a sentinel boolean before
+                        // re-raising the panic. If the shrinker later picks a
+                        // test case that doesn't trigger this panic, the
+                        // sentinel takes the place of the collection's stop
+                        // draw at this position, so the loop is always seen to
+                        // stop normally in the uninteresting shrunk case.
+                        self.draw_silent(booleans());
+                        resume_unwind(e);
+                    }
+                }
+            }
+        }
+
+        // The collection has decided the loop is "done". There is no
+        // successful-return path for `!`, so end this test case via
+        // LOOP_DONE_STRING — the runner treats that sentinel as a normal
+        // successful completion (Valid), which is the right treatment for a
+        // stateful-style loop that never found a bug.
+        panic!("{}", LOOP_DONE_STRING);
     }
 
     pub(crate) fn child(&self, extra_indent: usize) -> Self {

@@ -67,11 +67,35 @@ impl Parse for TestArgs {
 /// - tc -> Some("tc")
 /// - tc: TestCase -> Some("tc")
 /// - (a, b) -> None
-fn extract_ident_from_pat(pat: &Pat) -> Option<String> {
+pub(crate) fn extract_ident_from_pat(pat: &Pat) -> Option<String> {
     match pat {
         Pat::Ident(pat_ident) => Some(pat_ident.ident.to_string()),
         Pat::Type(pat_type) => extract_ident_from_pat(&pat_type.pat),
         _ => None,
+    }
+}
+
+/// Run the two-pass draw rewrite over a sequence of statements.
+///
+/// Statements at the top level are visited directly (not wrapped in an extra
+/// block visit), matching the convention used by `#[hegel::test]` so that the
+/// outermost body doesn't count as a nesting level for repeatability.
+pub(crate) fn rewrite_draws_in_stmts(stmts: &mut [syn::Stmt], tc_ident: &str) {
+    let mut collector = DrawNameCollector {
+        test_case_ident: tc_ident.to_string(),
+        block_depth: 0,
+        name_flags: HashMap::new(),
+    };
+    for stmt in stmts.iter_mut() {
+        collector.visit_stmt_mut(stmt);
+    }
+
+    let mut rewriter = DrawRewriter {
+        test_case_ident: tc_ident.to_string(),
+        name_flags: collector.name_flags,
+    };
+    for stmt in stmts.iter_mut() {
+        rewriter.visit_stmt_mut(stmt);
     }
 }
 
@@ -337,36 +361,11 @@ pub fn expand_test(attr: proc_macro2::TokenStream, item: proc_macro2::TokenStrea
         Err(err) => return err,
     };
 
-    // Rewrite `let x = tc.draw(gen)` -> `let x = tc.__draw_named(gen, "x", repeatable)`
-    //
-    // Two-pass approach:
-    //   1. Collect all draw variable names and determine per-name repeatable flags.
-    //      If any use of a name is in a nested block/closure, all uses are repeatable.
-    //   2. Rewrite draws using the computed flags.
-    //
-    // We visit the function body's statements directly (not the block itself) so that
-    // the outermost block doesn't count as a nesting level.
+    // Rewrite `let x = tc.draw(gen)` -> `let x = tc.__draw_named(gen, "x", repeatable)`.
     let body = {
         let mut body = (*func.block).clone();
         if let Some(test_case_name) = extract_ident_from_pat(param_pat) {
-            // Pass 1: collect names
-            let mut collector = DrawNameCollector {
-                test_case_ident: test_case_name.clone(),
-                block_depth: 0,
-                name_flags: HashMap::new(),
-            };
-            for stmt in &mut body.stmts {
-                collector.visit_stmt_mut(stmt);
-            }
-
-            // Pass 2: rewrite
-            let mut rewriter = DrawRewriter {
-                test_case_ident: test_case_name,
-                name_flags: collector.name_flags,
-            };
-            for stmt in &mut body.stmts {
-                rewriter.visit_stmt_mut(stmt);
-            }
+            rewrite_draws_in_stmts(&mut body.stmts, &test_case_name);
         }
         body
     };

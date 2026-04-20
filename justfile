@@ -61,3 +61,10 @@ test: check-tests
 coverage: check-coverage
 lint: check-lint
 check: check-lint check-tests check-tests-all-features
+
+# Run cargo-insta, installing it first if it's missing. Pinned to the same
+# version as the `insta` dev-dependency so snapshot format stays consistent.
+INSTA_VERSION := "1.47.2"
+insta *ARGS:
+    @cargo install --quiet --locked --version {{INSTA_VERSION}} cargo-insta
+    cargo insta {{ARGS}}

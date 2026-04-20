@@ -2,6 +2,7 @@ mod composite;
 mod enum_gen;
 mod explicit_test_case;
 mod hegel_test;
+mod rewrite_draws;
 mod stateful;
 mod struct_gen;
 mod utils;
@@ -74,4 +75,22 @@ pub fn explicit_test_case(attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn state_machine(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let block = parse_macro_input!(item as ItemImpl);
     stateful::expand_state_machine(block).into()
+}
+
+/// Rewrite `tc.draw(gen)` calls inside a closure body to the named form used
+/// by `#[hegel::test]`, so failing-test output prints real variable names.
+///
+/// Intended for test infrastructure that constructs `Hegel::new(...)` by hand
+/// (e.g. when wrapping a test run with custom output capture) where the
+/// ordinary `#[hegel::test]` attribute isn't an option.
+///
+/// ```ignore
+/// let closure = hegel::rewrite_draws!(|tc: hegel::TestCase| {
+///     let x: i32 = tc.draw(hegel::generators::integers());
+///     assert!(x < 10);
+/// });
+/// ```
+#[proc_macro]
+pub fn rewrite_draws(input: TokenStream) -> TokenStream {
+    rewrite_draws::expand_rewrite_draws(input.into()).into()
 }
