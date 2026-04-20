@@ -106,11 +106,7 @@ fn test_startup_error_message_version_matches() {
     #[cfg(windows)]
     let script = {
         let s = dir.join("fake_version_ok.bat");
-        std::fs::write(
-            &s,
-            format!("@echo off\r\necho {}\r\n", expected_output),
-        )
-        .unwrap();
+        std::fs::write(&s, format!("@echo off\r\necho {}\r\n", expected_output)).unwrap();
         s
     };
     let exit_status = exit_failure_status();
