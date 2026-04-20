@@ -112,8 +112,12 @@ impl ExplicitTestCase {
 
     pub fn assume(&self, condition: bool) {
         if !condition {
-            panic!("{}", ASSUME_FAIL_STRING);
+            self.reject();
         }
+    }
+
+    pub fn reject(&self) -> ! {
+        panic!("{}", ASSUME_FAIL_STRING);
     }
 
     #[doc(hidden)]
