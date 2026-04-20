@@ -92,10 +92,17 @@ fn startup_error_message(
         match Command::new(binary_path).arg("--version").output() {
             Ok(output) if output.status.success() => {
                 let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if stdout != expected_version_string {
+                if stdout == expected_version_string {
+                    // Version matches — nothing to report
+                } else if stdout.starts_with("hegel ") {
                     parts.push(format!(
                         "Version mismatch: expected '{}', got '{}'.",
                         expected_version_string, stdout
+                    ));
+                } else {
+                    parts.push(format!(
+                        "'{}' --version returned unexpected output. Is this a hegel binary?",
+                        binary_path
                     ));
                 }
             }
