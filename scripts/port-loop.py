@@ -2617,6 +2617,27 @@ def _rev_parse(rev: str) -> str | None:
     return r.stdout.strip()
 
 
+PUSH_MIN_INTERVAL_SECONDS = 60 * 60  # at most one push per hour
+LAST_PUSH_PATH = REPO_ROOT / ".port-loop-last-push"
+
+
+def _seconds_since_last_push() -> float | None:
+    """Seconds since the most recent successful push recorded by this script.
+
+    Returns None if no push has been recorded (e.g. first run, or the
+    timestamp file was cleared).
+    """
+    try:
+        ts = float(LAST_PUSH_PATH.read_text().strip())
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+    return time.time() - ts
+
+
+def _record_push_now() -> None:
+    LAST_PUSH_PATH.write_text(f"{time.time():.0f}\n")
+
+
 def gate_sync_with_origin() -> tuple[bool, str, bool]:
     """Fetch, rebase onto origin/main, push. Returns (ok, output, pushed).
 
@@ -2624,6 +2645,13 @@ def gate_sync_with_origin() -> tuple[bool, str, bool]:
     nothing destructive: always uses `--force-with-lease`, never
     `--force`. Refuses to operate on the `main`/`master` branch itself
     (the loop should run on a feature branch).
+
+    Pushes are rate-limited to at most one every
+    `PUSH_MIN_INTERVAL_SECONDS`: if a push would happen sooner than
+    that, the fetch/rebase still runs but the push is deferred to the
+    next sync cycle that falls outside the cooldown. This keeps CI
+    from churning on every committed port when workers are landing
+    commits rapidly.
 
     On any failure, aborts any in-progress rebase and returns (False,
     combined_output, False) so the caller can dispatch a recovery agent.
@@ -2675,6 +2703,23 @@ def gate_sync_with_origin() -> tuple[bool, str, bool]:
     if not needs_push:
         return True, "".join(combined), False
 
+    # Rate-limit: skip if we pushed recently. New-upstream pushes
+    # (origin_branch is None) bypass the throttle so a fresh branch
+    # gets its initial publish without delay.
+    if origin_branch is not None:
+        elapsed = _seconds_since_last_push()
+        if elapsed is not None and elapsed < PUSH_MIN_INTERVAL_SECONDS:
+            remaining = PUSH_MIN_INTERVAL_SECONDS - elapsed
+            msg = (
+                f"[port-loop] push throttle: last push "
+                f"{int(elapsed)}s ago, next push in {int(remaining)}s "
+                f"(min interval {PUSH_MIN_INTERVAL_SECONDS}s). "
+                f"Deferring push of {after_sha[:12]}.\n"
+            )
+            print(msg, end="")
+            combined.append(msg)
+            return True, "".join(combined), False
+
     if origin_branch is None:
         push = _run_git(["push", "--set-upstream", "origin", "HEAD"])
     else:
@@ -2682,6 +2727,7 @@ def gate_sync_with_origin() -> tuple[bool, str, bool]:
     _record(push)
     if push.returncode != 0:
         return False, "".join(combined), False
+    _record_push_now()
 
     rebased = origin_main is not None and before_sha != after_sha
     if rebased:

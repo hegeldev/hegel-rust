@@ -28,6 +28,7 @@ resources
 
 .port-loop-cache.json
 .port-loop-todo-attempts.json
+.port-loop-last-push
 .porting/
 .port-worktrees/
 target-worker-*/
