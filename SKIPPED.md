@@ -323,3 +323,9 @@ Individually-skipped tests (rest of the file is ported):
 - `test_sampled_from.py::TestErrorNoteBehavior3819` — Python `__notes__` (PEP 678
   exception annotations) and dynamic typing (strategies as `sampled_from`
   elements); no Rust counterpart.
+
+- `test_executors.py` — all tests exercise Hypothesis's `execute_example` protocol,
+  a Python class-method hook that lets classes (e.g. `unittest.TestCase` subclasses)
+  customize how `@given`-decorated method bodies are executed. Hegel-rust has no
+  class-based test dispatch — tests are closures passed to `Hegel::new(|tc| {...}).run()`,
+  so there is no `execute_example` surface or equivalent wrapping mechanism.
