@@ -19,7 +19,7 @@ structure.
 | `gs.sets(inner)`                           | `gs::hashsets(inner)`                                         |
 | `gs.dictionaries(k, v)`                    | `gs::hashmaps(k, v)`                                          |
 | `gs.tuples(a, b)`                          | `gs::tuples!(a, b)` (macro)                                   |
-| `gs.one_of(a, b)`                          | `gs::one_of(vec![a.boxed(), b.boxed()])`                      |
+| `gs.one_of(a, b)`                          | `gs::one_of(vec![a.boxed(), b.boxed()])` (same element type; for mixed types wrap each branch in a local `enum` and `.map(Variant::…)` — see SKILL.md "Think harder before skipping") |
 | `gs.sampled_from([x, y])`                  | `gs::sampled_from(vec![x, y])`                                |
 | `gs.just(x)`                               | `gs::just(x)`                                                 |
 | `gs.nothing()`                             | **missing** — native-gate the test and stub under `src/native/` (see SKILL.md skip-vs-port policy) |
