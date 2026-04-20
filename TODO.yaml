@@ -7,42 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: "[CI] tests/test_compile.rs — all 12 fail_* tests broken on Windows"
-  details: |
-    All compile-failure tests in tests/test_compile.rs fail on Windows CI
-    (all 4 Windows jobs: test stable, test 1.86, test-all-features stable,
-    test-all-features 1.86). Root cause: TempRustProject writes a Cargo.toml
-    with an unescaped Windows path like:
-      hegeltest = { path = "D:\a\hegel-rust\hegel-rust" }
-    The backslashes (\a, \h) are invalid TOML escape sequences.
-
-    Failing tests (same 12 in every Windows job):
-      fail_composite_missing_return_type
-      fail_composite_missing_test_case_parameter
-      fail_composite_nullary
-      fail_explicit_test_case_bad_syntax
-      fail_explicit_test_case_empty_args
-      fail_explicit_test_case_no_parens
-      fail_explicit_test_case_on_bare_function
-      fail_explicit_test_case_wrong_order
-      fail_hegel_test_duplicate_test_attribute
-      fail_hegel_test_two_params
-      fail_hegel_test_zero_params
-      fail_vec_unique_requires_partial_eq
-
-    Representative log line (stable):
-      thread 'fail_hegel_test_two_params' panicked at tests\test_compile.rs:86:5:
-      Expected error containing: functions must take exactly one parameter of type hegel::TestCase
-      Actual stderr:
-      error: missing escaped value, expected `b`, `e`, `f`, `n`, `r`, `\`, `"`, `x`, `u`, `U`
-       --> Cargo.toml:7:26
-        |
-      7 | hegeltest = { path = "D:\a\hegel-rust\hegel-rust" }
-        |                          ^
-
-    Fix: where the Cargo.toml path string is built, convert backslashes to
-    forward slashes (Cargo accepts forward slashes on Windows).
-
 - title: "[CI] coverage — test_native_db_cross_instance_listener_observes_writes flaky timeout"
   details: |
     Job: coverage (check-coverage). One test failed:
