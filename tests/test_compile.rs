@@ -52,6 +52,8 @@ fn assert_compile_fails(code: &str, expected_error: &str) {
     std::fs::write(dir.join("src/main.rs"), code).unwrap();
 
     let id = CHECK_ID.fetch_add(1, Ordering::Relaxed);
+    // Use forward slashes to avoid TOML escape issues on Windows
+    let hegel_path_str = hegel_path.display().to_string().replace('\\', "/");
     let cargo_toml = format!(
         "[package]\n\
          name = \"compile-fail-{pid}-{id}\"\n\
@@ -62,7 +64,7 @@ fn assert_compile_fails(code: &str, expected_error: &str) {
          hegeltest = {{ path = \"{path}\" }}\n",
         pid = std::process::id(),
         id = id,
-        path = hegel_path.display(),
+        path = hegel_path_str,
     );
     std::fs::write(dir.join("Cargo.toml"), &cargo_toml).unwrap();
 
