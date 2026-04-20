@@ -222,7 +222,7 @@ fn many_reject(ntc: &mut NativeTestCase, state: &mut ManyState) -> Result<(), St
 ///
 /// For positive bignums (tag 2) that exceed i128::MAX (e.g. u128::MAX),
 /// we saturate at i128::MAX so the integer range remains valid.
-fn cbor_to_i128(value: &Value) -> i128 {
+pub(super) fn cbor_to_i128(value: &Value) -> i128 {
     match value {
         Value::Integer(i) => (*i).into(),
         Value::Tag(2, inner) => {

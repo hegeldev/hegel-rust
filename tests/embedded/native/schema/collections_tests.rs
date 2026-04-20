@@ -200,6 +200,25 @@ fn interpret_list_unique_rejects_duplicates_over_min() {
     }
 }
 
+#[test]
+fn interpret_list_unique_large_range_falls_back_to_rejection() {
+    let mut ntc = fresh_ntc();
+    let schema = cbor_map! {
+        "type" => "list",
+        "elements" => cbor_map! {
+            "type" => "integer", "min_value" => 0, "max_value" => 10_000u64,
+        },
+        "min_size" => 1u64,
+        "max_size" => 1u64,
+        "unique" => true,
+    };
+    let result = interpret_list(&mut ntc, &schema).ok().unwrap();
+    let Value::Array(items) = result else {
+        panic!("expected array")
+    };
+    assert_eq!(items.len(), 1);
+}
+
 // ── interpret_dict ──────────────────────────────────────────────────────────
 
 #[test]
