@@ -92,24 +92,27 @@ jobs:
         with:
           tools: just uv
 
-      - name: Build stress test binary
-        run: cargo build --tests --test test_stress_parallel
+      - name: Build all tests
+        run: cargo test --no-run
 
-      - name: Loop stress test
+      - name: Loop full test suite
+        # Use `cargo test` (full suite) since the originally-observed crash
+        # site was test_integers in a normal CI run — we want to reproduce
+        # that exact condition. Run many iterations to amplify the ~low%
+        # per-run probability.
         env:
           RUST_BACKTRACE: "1"
         run: |
           set +e
           FAILED=0
-          for i in $(seq 1 15); do
+          for i in $(seq 1 10); do
             echo "::group::iteration $i"
-            cargo test --test test_stress_parallel --no-fail-fast -- --test-threads=8 2>&1 | tee iter-$i.log
+            cargo test --no-fail-fast 2>&1 | tee iter-$i.log
             ec=${PIPESTATUS[0]}
             echo "::endgroup::"
             if [ "$ec" -ne 0 ]; then
               FAILED=1
               echo "FAILED on iteration $i (exit=$ec)"
-              # Keep going — collect as many logs as we can
             fi
           done
           if [ "$FAILED" -ne 0 ]; then
@@ -119,7 +122,7 @@ jobs:
 
       - name: Upload iteration logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: stress-logs-shard-${{ matrix.shard }}
           path: iter-*.log
