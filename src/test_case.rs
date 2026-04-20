@@ -1,11 +1,12 @@
 pub use crate::backend::{DataSource, DataSourceError};
 use crate::generators::Generator;
 use ciborium::Value;
+use parking_lot::Mutex;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::generators::value;
 
@@ -49,9 +50,19 @@ fn panic_on_data_source_error(e: DataSourceError) -> ! {
 }
 
 pub(crate) struct TestCaseGlobalData {
-    data_source: Box<dyn DataSource>,
     is_last_run: bool,
-    draw_state: RefCell<DrawState>,
+    /// Fine-grained lock over the state shared between clones of a
+    /// `TestCase`. Acquired briefly around each individual backend call
+    /// and around each mutation of the draw-tracking bookkeeping, not
+    /// around entire user-visible operations like a `draw`. The mutex is
+    /// non-reentrant; no method holds it while calling back into
+    /// `TestCase`.
+    shared: Mutex<SharedState>,
+}
+
+pub(crate) struct SharedState {
+    data_source: Box<dyn DataSource>,
+    draw_state: DrawState,
 }
 
 pub(crate) struct DrawState {
@@ -84,8 +95,79 @@ pub(crate) struct TestCaseLocalData {
 ///     tc.note(&format!("x = {}", x));
 /// }
 /// ```
+///
+/// # Threading
+///
+/// `TestCase` is `Send` but not `Sync`. To drive generation from another
+/// thread, clone the test case and move the clone. Clones share the same
+/// underlying backend connection — they are views onto one test case, not
+/// independent test cases.
+///
+/// ```no_run
+/// use hegel::generators as gs;
+///
+/// #[hegel::test]
+/// fn my_test(tc: hegel::TestCase) {
+///     let tc_worker = tc.clone();
+///     let handle = std::thread::spawn(move || {
+///         tc_worker.draw(gs::integers::<i32>())
+///     });
+///     let n = handle.join().unwrap();
+///     let _b: bool = tc.draw(gs::booleans());
+///     let _ = n;
+/// }
+/// ```
+///
+/// ## What is guaranteed
+///
+/// Individual backend operations (a single `generate`, `start_span`,
+/// `stop_span`, or pool/collection call) are serialised by a shared
+/// mutex, so the bytes on the wire to the backend stay well-formed no
+/// matter how clones are used across threads.
+///
+/// This is enough for patterns where threads do not race on generation —
+/// for example:
+///
+/// - Spawn a worker, let it draw, `join` it, then continue on the main
+///   thread.
+/// - Repeatedly spawn-and-join one worker at a time.
+/// - Any pattern where exactly one thread is drawing at a time, with a
+///   happens-before relationship (join, channel receive, barrier) between
+///   each thread's work.
+///
+/// ## What is not guaranteed
+///
+/// Concurrent generation will get progressively better over time, but
+/// right now should be considered a borderline-internal feature. If
+/// you do not know exactly what you're doing it probably won't work.
+///
+/// Two or more threads drawing concurrently from clones of the same
+/// `TestCase` is allowed by the type system but is **not deterministic**:
+/// the order in which draws interleave depends on thread scheduling, and
+/// the backend has no way to reproduce that order on replay. Composite
+/// draws are also not atomic with respect to other threads — another
+/// thread's draws can land between this thread's `start_span` and
+/// `stop_span`, corrupting the shrink-friendly span structure. In
+/// practice this means such tests may:
+///
+/// - Produce different values on successive runs of the same seed.
+/// - Shrink poorly or not at all.
+/// - Surface backend errors (e.g. `StopTest`) in one thread caused by
+///   another thread's draws exhausting the budget.
+///
+/// ## Panics inside spawned threads
+///
+/// If a worker thread panics with an assumption failure or a backend
+/// `StopTest`, that panic stays inside the thread's `JoinHandle` until
+/// the main thread joins it. The main thread is responsible for
+/// propagating (or suppressing) the panic — typically by calling
+/// `handle.join().unwrap()`, which resumes the panic on the main thread
+/// so Hegel's runner can observe it.
 pub struct TestCase {
-    global: Rc<TestCaseGlobalData>,
+    global: Arc<TestCaseGlobalData>,
+    // RefCell makes `TestCase: !Sync`. Local data is per-clone: each clone gets
+    // its own span depth, indent, and on_draw. Concurrent use across threads
+    // therefore requires cloning, which is enforced by the `!Sync` bound.
     local: RefCell<TestCaseLocalData>,
 }
 
@@ -105,7 +187,7 @@ impl std::fmt::Debug for TestCase {
 }
 
 /// A callback invoked for each line of draw/note output during the final replay.
-pub(crate) type OutputSink = Rc<dyn Fn(&str)>;
+pub(crate) type OutputSink = Arc<dyn Fn(&str) + Send + Sync>;
 
 thread_local! {
     static OUTPUT_OVERRIDE: RefCell<Option<OutputSink>> = const { RefCell::new(None) };
@@ -140,17 +222,19 @@ impl TestCase {
         let override_sink = OUTPUT_OVERRIDE.with(|cell| cell.borrow().clone());
         let on_draw: OutputSink = match override_sink {
             Some(sink) if is_last_run => sink,
-            _ if is_last_run => Rc::new(|msg| eprintln!("{}", msg)),
-            _ => Rc::new(|_| {}),
+            _ if is_last_run => Arc::new(|msg| eprintln!("{}", msg)),
+            _ => Arc::new(|_| {}),
         };
         TestCase {
-            global: Rc::new(TestCaseGlobalData {
-                data_source,
+            global: Arc::new(TestCaseGlobalData {
                 is_last_run,
-                draw_state: RefCell::new(DrawState {
-                    named_draw_counts: HashMap::new(),
-                    named_draw_repeatable: HashMap::new(),
-                    allocated_display_names: HashSet::new(),
+                shared: Mutex::new(SharedState {
+                    data_source,
+                    draw_state: DrawState {
+                        named_draw_counts: HashMap::new(),
+                        named_draw_repeatable: HashMap::new(),
+                        allocated_display_names: HashSet::new(),
+                    },
                 }),
             }),
             local: RefCell::new(TestCaseLocalData {
@@ -159,6 +243,17 @@ impl TestCase {
                 on_draw,
             }),
         }
+    }
+
+    /// Acquire the shared mutex for the duration of `f`.
+    ///
+    /// Held briefly around individual backend calls or draw-state updates,
+    /// never around whole user-visible operations. The mutex is
+    /// non-reentrant, so `f` must not call any other method that also
+    /// acquires the shared mutex.
+    fn with_shared<R>(&self, f: impl FnOnce(&mut SharedState) -> R) -> R {
+        let mut guard = self.global.shared.lock();
+        f(&mut guard)
     }
 
     /// Draw a value from a generator.
@@ -385,54 +480,55 @@ impl TestCase {
     }
 
     fn record_named_draw<T: std::fmt::Debug>(&self, value: &T, name: &str, repeatable: bool) {
-        let mut draw_state = self.global.draw_state.borrow_mut();
+        let display_name = self.with_shared(|shared| {
+            let draw_state = &mut shared.draw_state;
 
-        match draw_state.named_draw_repeatable.get(name) {
-            Some(&prev) if prev != repeatable => {
+            match draw_state.named_draw_repeatable.get(name) {
+                Some(&prev) if prev != repeatable => {
+                    panic!(
+                        "__draw_named: name {:?} used with inconsistent repeatable flag (was {}, now {}). \
+                        If you have not called __draw_named deliberately yourself, this is likely a bug in \
+                        hegel. Please file a bug report at https://github.com/hegeldev/hegel-rust/issues",
+                        name, prev, repeatable
+                    );
+                }
+                _ => {
+                    draw_state
+                        .named_draw_repeatable
+                        .insert(name.to_string(), repeatable);
+                }
+            }
+
+            let count = draw_state
+                .named_draw_counts
+                .entry(name.to_string())
+                .or_insert(0);
+            *count += 1;
+            let current_count = *count;
+
+            if !repeatable && current_count > 1 {
                 panic!(
-                    "__draw_named: name {:?} used with inconsistent repeatable flag (was {}, now {}). \
-                    If you have not called __draw_named deliberately yourself, this is likely a bug in \
-                    hegel. Please file a bug report at https://github.com/hegeldev/hegel-rust/issues",
-                    name, prev, repeatable
+                    "__draw_named: name {:?} used more than once but repeatable is false. \
+                    This is almost certainly a bug in hegel - please report it at https://github.com/hegeldev/hegel-rust/issues",
+                    name
                 );
             }
-            _ => {
-                draw_state
-                    .named_draw_repeatable
-                    .insert(name.to_string(), repeatable);
-            }
-        }
 
-        let count = draw_state
-            .named_draw_counts
-            .entry(name.to_string())
-            .or_insert(0);
-        *count += 1;
-        let current_count = *count;
-
-        if !repeatable && current_count > 1 {
-            panic!(
-                "__draw_named: name {:?} used more than once but repeatable is false. \
-                This is almost certainly a bug in hegel - please report it at https://github.com/hegeldev/hegel-rust/issues",
-                name
-            );
-        }
-
-        let display_name = if repeatable {
-            let mut candidate = current_count;
-            loop {
-                let name = format!("{}_{}", name, candidate);
-                if draw_state.allocated_display_names.insert(name.clone()) {
-                    break name;
+            if repeatable {
+                let mut candidate = current_count;
+                loop {
+                    let name = format!("{}_{}", name, candidate);
+                    if draw_state.allocated_display_names.insert(name.clone()) {
+                        break name;
+                    }
+                    candidate += 1;
                 }
-                candidate += 1;
+            } else {
+                let name = name.to_string();
+                draw_state.allocated_display_names.insert(name.clone());
+                name
             }
-        } else {
-            let name = name.to_string();
-            draw_state.allocated_display_names.insert(name.clone());
-            name
-        };
-        drop(draw_state);
+        });
 
         let local = self.local.borrow();
         let indent = local.indent;
@@ -446,15 +542,32 @@ impl TestCase {
         ));
     }
 
-    /// Access the data source for this test case.
-    pub(crate) fn data_source(&self) -> &dyn DataSource {
-        self.global.data_source.as_ref()
+    /// Run `f` with access to this test case's data source.
+    ///
+    /// Acquires the shared mutex for the duration of the call so
+    /// concurrent threads don't scramble backend traffic. The closure
+    /// must not call back into any other `TestCase` method that would
+    /// re-acquire the shared mutex.
+    pub(crate) fn with_data_source<R>(&self, f: impl FnOnce(&dyn DataSource) -> R) -> R {
+        self.with_shared(|shared| f(shared.data_source.as_ref()))
+    }
+
+    /// Report whether the test case has been aborted (StopTest/overflow).
+    ///
+    /// Used by the runner to decide whether to send `mark_complete`.
+    pub(crate) fn test_aborted(&self) -> bool {
+        self.with_data_source(|ds| ds.test_aborted())
+    }
+
+    /// Send `mark_complete` on this test case's data source.
+    pub(crate) fn mark_complete(&self, status: &str, origin: Option<&str>) {
+        self.with_data_source(|ds| ds.mark_complete(status, origin));
     }
 
     #[doc(hidden)]
     pub fn start_span(&self, label: u64) {
         self.local.borrow_mut().span_depth += 1;
-        if let Err(e) = self.data_source().start_span(label) {
+        if let Err(e) = self.with_data_source(|ds| ds.start_span(label)) {
             // nocov start
             let mut local = self.local.borrow_mut();
             assert!(local.span_depth > 0);
@@ -472,14 +585,14 @@ impl TestCase {
             assert!(local.span_depth > 0);
             local.span_depth -= 1;
         }
-        let _ = self.data_source().stop_span(discard);
+        let _ = self.with_data_source(|ds| ds.stop_span(discard));
     }
 }
 
 /// Send a schema to the backend and return the raw CBOR response.
 #[doc(hidden)]
 pub fn generate_raw(tc: &TestCase, schema: &Value) -> Value {
-    match tc.data_source().generate(schema) {
+    match tc.with_data_source(|ds| ds.generate(schema)) {
         Ok(v) => v,
         Err(e) => panic_on_data_source_error(e),
     }
@@ -527,11 +640,10 @@ impl<'a> Collection<'a> {
 
     fn ensure_initialized(&mut self) -> &str {
         if self.handle.is_none() {
-            let name = match self
-                .tc
-                .data_source()
-                .new_collection(self.min_size as u64, self.max_size.map(|m| m as u64))
-            {
+            let result = self.tc.with_data_source(|ds| {
+                ds.new_collection(self.min_size as u64, self.max_size.map(|m| m as u64))
+            });
+            let name = match result {
                 Ok(name) => name,
                 Err(e) => panic_on_data_source_error(e), // nocov
             };
@@ -546,7 +658,7 @@ impl<'a> Collection<'a> {
             return false; // nocov
         }
         let handle = self.ensure_initialized().to_string();
-        let result = match self.tc.data_source().collection_more(&handle) {
+        let result = match self.tc.with_data_source(|ds| ds.collection_more(&handle)) {
             Ok(b) => b,
             Err(e) => {
                 self.finished = true;
@@ -560,15 +672,17 @@ impl<'a> Collection<'a> {
     }
 
     /// Reject the last element (don't count it towards the size budget).
-    // nocov start
     pub fn reject(&mut self, why: Option<&str>) {
+        // nocov start
         if self.finished {
             return;
         }
         let handle = self.ensure_initialized().to_string();
-        let _ = self.tc.data_source().collection_reject(&handle, why);
+        let _ = self
+            .tc
+            .with_data_source(|ds| ds.collection_reject(&handle, why));
+        // nocov end
     }
-    // nocov end
 }
 
 #[doc(hidden)]

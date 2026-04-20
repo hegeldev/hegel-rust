@@ -95,6 +95,34 @@ fn main() {}
         .cargo_run(&[]);
 }
 
+#[test]
+fn test_explicit_test_case_rejects_threading_body() {
+    // #[hegel::test] expands the body twice: once with `tc: TestCase` (Send)
+    // and once with `tc: &ExplicitTestCase` (not Send). Spawning a thread that
+    // moves `tc` compiles in the property-test version but must fail to
+    // compile in the explicit version, because `&ExplicitTestCase` is not
+    // Send. This test pins that behavior — if someone accidentally makes
+    // ExplicitTestCase Send/Sync, the compile-fail check will stop firing.
+    let code = r#"
+use hegel::generators as gs;
+
+#[hegel::test(test_cases = 1)]
+#[hegel::explicit_test_case(x = true)]
+fn my_test(tc: hegel::TestCase) {
+    let tc_clone = tc.clone();
+    let handle = std::thread::spawn(move || {
+        let _: bool = tc_clone.draw(gs::booleans());
+    });
+    handle.join().unwrap();
+    let _x: bool = tc.draw(gs::booleans());
+}
+"#;
+    TempRustProject::new()
+        .test_file("test_explicit_threading.rs", code)
+        .expect_failure("cannot be shared between threads safely")
+        .cargo_test(&["--test", "test_explicit_threading"]);
+}
+
 // ============================================================
 // Success cases (inline #[hegel::test])
 // ============================================================

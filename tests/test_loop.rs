@@ -7,9 +7,10 @@
 //! named-variable rewriting that `#[hegel::test]` performs — this is what
 //! makes `let x_1 = ...` appear in the snapshots instead of `let draw_1 = ...`.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use hegel::generators as gs;
 use hegel::{Hegel, Settings};
@@ -21,9 +22,10 @@ fn capture_loop_output<F>(body: F) -> String
 where
     F: FnMut(hegel::TestCase) + 'static,
 {
-    let buf: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    let buf: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let buf_writer = buf.clone();
-    let sink: Rc<dyn Fn(&str)> = Rc::new(move |s| buf_writer.borrow_mut().push(s.to_string()));
+    let sink: Arc<dyn Fn(&str) + Send + Sync> =
+        Arc::new(move |s: &str| buf_writer.lock().unwrap().push(s.to_string()));
 
     let _ = catch_unwind(AssertUnwindSafe(|| {
         hegel::with_output_override(sink, || {
@@ -38,7 +40,7 @@ where
         });
     }));
 
-    let lines = buf.borrow().clone();
+    let lines = buf.lock().unwrap().clone();
     lines.join("\n")
 }
 
