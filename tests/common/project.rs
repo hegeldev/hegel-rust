@@ -83,6 +83,8 @@ fn run_warmup_build(hegel_path: &Path, shared_target: &Path) {
     // lives inside `target/`, which is inside the outer hegeltest
     // workspace, so cargo would otherwise complain that the warmup
     // project looks like it should be a workspace member.
+    // Use forward slashes in the path to avoid TOML escape issues on Windows
+    let hegel_path_str = hegel_path.display().to_string().replace('\\', "/");
     let cargo_toml = format!(
         r#"[workspace]
 
@@ -94,7 +96,7 @@ edition = "2021"
 [dependencies]
 hegeltest = {{ path = "{path}" }}
 "#,
-        path = hegel_path.display(),
+        path = hegel_path_str,
     );
     // Write Cargo.toml and src/lib.rs atomically. Sibling test-binary processes
     // may each run their own warmup concurrently, and a plain `fs::write`
