@@ -22,6 +22,28 @@
 //!   vs values error message.
 //! - `TestErrorNoteBehavior3819` — Python `__notes__` (PEP 678) and dynamic typing
 //!   (strategies passed as `sampled_from` elements).
+//!
+//! Tests that depend on Hypothesis's `FilteredStrategy` optimization for
+//! `SampledFromStrategy` (pre-computing which elements satisfy a filter) are
+//! not ported. Hegel-rust uses generic post-draw filtering (3 retries + assume)
+//! which triggers `FilterTooMuch` health checks on selective filters:
+//!
+//! - `test_easy_filtered_sampling` — `sampled_from(0..100).filter(|x| x == 0)`
+//!   rejects 99% of draws; health check fires.
+//! - `test_filtered_sampling_finds_rare_value` — same mechanism with `x == 99`.
+//! - `test_unsat_filtered_sampling` — expects `FailedHealthCheck` from unsatisfiable
+//!   filter; server passes vacuously when all test cases are rejected via assume.
+//! - `test_unsat_filtered_sampling_in_rejection_stage` — expects `Unsatisfiable`;
+//!   same issue.
+//! - `test_efficient_sets_of_samples_with_chained_transformations` — chained
+//!   `.map().filter().map()` on `sampled_from` loses the basic-generator path;
+//!   generic filter rejects too much.
+//! - `test_efficient_sets_of_samples_with_chained_transformations_slow_path` —
+//!   same mechanism via `compose!` with filtered `sampled_from` in a loop.
+//! - `test_does_not_include_duplicates_even_when_duplicated_in_collection` —
+//!   `unique(true)` on the basic-generator path enforces index-level uniqueness
+//!   (server generates unique integers 0..N), not value-level uniqueness;
+//!   `sampled_from(vec![0; 100]).unique(true)` produces duplicate values.
 
 use crate::common::utils::{
     assert_all_examples, assert_simple_property, check_can_generate_examples, expect_panic,
@@ -45,10 +67,8 @@ fn test_unsat_filtered_sampling() {
     expect_panic(
         || {
             Hegel::new(|tc| {
-                let _: i64 = tc.draw(
-                    gs::sampled_from((0..10).collect::<Vec<i64>>())
-                        .filter(|x: &i64| *x < 0),
-                );
+                let _: i64 = tc
+                    .draw(gs::sampled_from((0..10).collect::<Vec<i64>>()).filter(|x: &i64| *x < 0));
             })
             .settings(Settings::new().database(None))
             .run();
@@ -62,9 +82,7 @@ fn test_unsat_filtered_sampling_in_rejection_stage() {
     expect_panic(
         || {
             Hegel::new(|tc| {
-                let _: i64 = tc.draw(
-                    gs::sampled_from(vec![0_i64, 1]).filter(|x: &i64| *x < 0),
-                );
+                let _: i64 = tc.draw(gs::sampled_from(vec![0_i64, 1]).filter(|x: &i64| *x < 0));
             })
             .settings(Settings::new().database(None))
             .run();
@@ -92,9 +110,8 @@ fn test_filtered_sampling_finds_rare_value() {
 #[test]
 fn test_efficient_sets_of_samples() {
     Hegel::new(|tc| {
-        let x: HashSet<i64> = tc.draw(
-            gs::hashsets(gs::sampled_from((0..50).collect::<Vec<i64>>())).min_size(50),
-        );
+        let x: HashSet<i64> =
+            tc.draw(gs::hashsets(gs::sampled_from((0..50).collect::<Vec<i64>>())).min_size(50));
         let expected: HashSet<i64> = (0..50).collect();
         assert_eq!(x, expected);
     })
@@ -106,8 +123,11 @@ fn test_efficient_sets_of_samples() {
 fn test_efficient_dicts_with_sampled_keys() {
     Hegel::new(|tc| {
         let x: HashMap<i64, ()> = tc.draw(
-            gs::hashmaps(gs::sampled_from((0..50).collect::<Vec<i64>>()), gs::just(()))
-                .min_size(50),
+            gs::hashmaps(
+                gs::sampled_from((0..50).collect::<Vec<i64>>()),
+                gs::just(()),
+            )
+            .min_size(50),
         );
         let keys: HashSet<i64> = x.keys().copied().collect();
         let expected: HashSet<i64> = (0..50).collect();
@@ -162,10 +182,7 @@ fn test_efficient_sets_of_samples_with_chained_transformations_slow_path() {
             }
             result
         }));
-        let expected: HashSet<i64> = (0..20)
-            .filter(|x| x % 3 != 0)
-            .map(|x| x * 2)
-            .collect();
+        let expected: HashSet<i64> = (0..20).filter(|x| x % 3 != 0).map(|x| x * 2).collect();
         assert_eq!(result, expected);
     })
     .settings(Settings::new().database(None))
