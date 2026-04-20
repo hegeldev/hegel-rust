@@ -196,6 +196,19 @@ Individually-skipped tests (rest of the file is ported):
   tests Python module-loading side-effect detection during entrypoint loading,
   a concept with no Rust counterpart.
 
+- `test_filter_rewriting.py` — all tests exercise Hypothesis's filter rewriting
+  optimization, which inspects Python predicates at runtime (lambda AST source
+  parsing via `hypothesis.internal.reflection`, `functools.partial` attribute
+  introspection, recognition of specific Python built-ins like `math.isfinite`,
+  `str.isidentifier`, `re.compile().method`) and rewrites `.filter()` calls into
+  tighter bounds on internal strategy types (`IntegersStrategy`, `FloatStrategy`,
+  `TextStrategy`, `FilteredStrategy`). The tests verify the rewriting by checking
+  `isinstance` on internal Python strategy classes and reading their `.start`,
+  `.end`, `.min_value`, `.max_value`, `.min_size`, `.max_size` attributes via
+  `unwrap_strategies`. Rust closures cannot be introspected at runtime, so filter
+  rewriting is inherently Python-specific; hegel-rust's `.filter()` is pure
+  rejection sampling with no predicate analysis.
+
 - `test_database_backend.py` — this file mixes portable public-API tests
   (multi-value `save`/`fetch`/`delete`/`move` semantics, listener API,
   wrappers) with Python-specific ones. The portable portions are ported
