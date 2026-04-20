@@ -6,3 +6,27 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
+
+- title: "[CI] coverage: uncovered lines in src/native/schema/text.rs"
+  details: |
+    The `coverage` job in CI run 24689359661 (PR 188) fails because of
+    uncovered code lines in src/native/schema/text.rs:
+
+      src/native/schema/text.rs:218: break;
+      src/native/schema/text.rs:440: 0
+      src/native/schema/text.rs:456: panic!("keyed_codepoint_at_index: ASCII index out of range");
+
+    Coverage report output:
+      Uncovered code lines:                         6
+      (6 because each line is reported twice in the two coverage passes)
+
+      Found uncovered CODE that requires tests:
+        src/native/schema/text.rs:218: break;
+        src/native/schema/text.rs:440: 0
+        src/native/schema/text.rs:456: panic!("keyed_codepoint_at_index: ASCII index out of range");
+
+      error: Recipe `check-coverage` failed on line 54 with exit code 1
+
+    All other CI jobs pass (tests, lint, conformance, docs, etc.).
+    Add tests covering these lines, or if truly untestable, add // nocov
+    annotations (requires explicit human permission per CLAUDE.md).
