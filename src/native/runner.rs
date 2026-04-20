@@ -245,6 +245,12 @@ pub fn native_run<F>(
             let (status, nodes, spans) = ctf.run(ntc);
             total_test_time += tc_start.elapsed();
             calls += 1;
+            if verbosity == Verbosity::Debug {
+                eprintln!(
+                    "test case #{calls}: status = {status:?}, choices = {}",
+                    nodes.len()
+                );
+            }
 
             // TooSlow health check: if cumulative test execution time exceeds
             // the threshold, report it. Mirrors Hypothesis's `total_draw_time`

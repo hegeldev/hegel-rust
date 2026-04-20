@@ -140,7 +140,7 @@ fn main(tc: TestCase) {
     let _: bool = tc.draw(gs::booleans());
 }
 "#;
-    // Debug verbosity prints REQUEST/RESPONSE lines via ServerDataSource.
+    // Debug verbosity prints REQUEST/RESPONSE lines (server) or test case status (native).
     let output = TempRustProject::new().main_file(code).cargo_run(&[
         "--",
         "--verbosity",
@@ -149,7 +149,9 @@ fn main(tc: TestCase) {
         "1",
     ]);
     assert!(
-        output.stderr.contains("REQUEST:") || output.stderr.contains("run_test response"),
+        output.stderr.contains("REQUEST:")
+            || output.stderr.contains("run_test response")
+            || output.stderr.contains("test case #"),
         "Expected debug output, got: {}",
         output.stderr
     );
