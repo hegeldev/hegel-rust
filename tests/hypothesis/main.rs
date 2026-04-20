@@ -8,6 +8,7 @@ mod composite;
 mod composite_kwonlyargs;
 mod database_backend;
 mod datetimes;
+mod draw_example;
 mod debug_information;
 mod feature_flags;
 mod float_nastiness;
