@@ -185,10 +185,6 @@ impl<T, G: Generator<T>> Generator<T> for &G {
     // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
         (*self).as_basic()
-    }
-
-    fn enumerate_values(&self) -> Option<Vec<T>> {
-        (*self).enumerate_values()
         // nocov end
     }
 }

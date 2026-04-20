@@ -477,10 +477,17 @@ def run_coverage(native_mode: bool = False) -> Path:
                     if p.is_file() and not p.suffix
                 )
                 all_bins = main_bins + subprocess_bins
-                # Also include integration test binaries
+                # Also include integration test binaries (auto-discovered
+                # test_* plus named targets from Cargo.toml [[test]])
+                test_bin_patterns = [
+                    "debug/deps/test_*",
+                    "debug/deps/hypothesis-*",
+                    "debug/deps/pbtkit-*",
+                ]
                 test_bins = sorted(
                     p
-                    for p in llvm_cov_target.glob("debug/deps/test_*")
+                    for pattern in test_bin_patterns
+                    for p in llvm_cov_target.glob(pattern)
                     if p.is_file() and not p.suffix
                 )
                 all_bins.extend(test_bins)
