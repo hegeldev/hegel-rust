@@ -80,6 +80,9 @@ next invocation picks up from the next failing gate.
 Ground rules:
 - TDD when fixing bugs: regression test first.
 - Commit each focused change. Never --amend, never --no-verify.
+- Do NOT run `git push`. The port-loop script manages pushing; your
+  commits will be picked up and pushed (or cherry-picked) by the
+  supervisor. Pushing from here can land half-done work on the remote.
 - Before porting or reviewing a port, read
   .claude/skills/porting-tests/SKILL.md.
 - Before touching src/native/ (including filling a todo!() stub or
@@ -2145,6 +2148,9 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
     # Start with a fresh admission check so the outer loop's stale cache
     # (if any) doesn't let us enter under false-negative admission.
     _pool_admission_invalidate()
+    # Clean up any worker branches that leaked to the remote in an
+    # earlier run before we start minting new ones.
+    _cleanup_remote_worker_branches()
 
     def _handle_sigint(_signum, _frame):
         if not stop[0]:
@@ -2719,6 +2725,59 @@ def _reset_worktree(i: int, base_sha: str) -> None:
         ],
         cwd=path,
     )
+
+
+def _cleanup_remote_worker_branches() -> None:
+    """Delete any `port/worker-*` branches that leaked to origin.
+
+    Worker branches exist only as integration targets for the
+    cherry-pick back to the supervisor branch; they must never live on
+    the remote. If a sub-agent (or a stale run) pushed one, remove it
+    and unset any branch-tracking config that would make future `git
+    push` calls repeat the mistake.
+    """
+    r = _run_capture(
+        ["git", "branch", "-r", "--list", "origin/port/worker-*"],
+        cwd=REPO_ROOT,
+    )
+    if r.returncode != 0:
+        return
+    for line in r.stdout.splitlines():
+        name = line.strip()
+        if not name.startswith("origin/port/worker-"):
+            continue
+        branch = name[len("origin/"):]
+        print(
+            f"\n[port-loop] pool: deleting leaked origin/{branch}.",
+            flush=True,
+        )
+        _run_capture(
+            ["git", "push", "origin", "--delete", branch],
+            cwd=REPO_ROOT,
+        )
+    # Clear branch.<port/worker-*>.{remote,merge,pushRemote} entries
+    # in the main config so subsequent `git push` from a worker won't
+    # auto-push to origin.
+    cfg = _run_capture(
+        ["git", "config", "--get-regexp", r"^branch\.port/worker-.*"],
+        cwd=REPO_ROOT,
+    )
+    if cfg.returncode == 0:
+        seen: set[str] = set()
+        for line in cfg.stdout.splitlines():
+            key = line.split(" ", 1)[0] if " " in line else line
+            # key looks like branch.port/worker-0.remote
+            parts = key.rsplit(".", 1)
+            if len(parts) != 2:
+                continue
+            section = parts[0]  # branch.port/worker-0
+            if section in seen:
+                continue
+            seen.add(section)
+            _run_capture(
+                ["git", "config", "--remove-section", section],
+                cwd=REPO_ROOT,
+            )
 
 
 def _integrate_worker(
