@@ -245,3 +245,9 @@ Individually-skipped tests (rest of the file is ported):
       `NativeDatabase`, instance-identity for `InMemoryNativeDatabase`,
       deep equality through `Arc<dyn ExampleDatabase>` for
       `MultiplexedNativeDatabase`). Tracked as a TODO.yaml follow-up.
+
+- `test_statistical_events.py` — every test relies on `hypothesis.statistics.collector`
+  / `describe_statistics` (programmatic test-run statistics collection) and/or
+  `event()` / `target()` (Hypothesis public APIs for recording custom events and
+  targeted PBT scores). hegel-rust exposes none of these: no `event()`, no `target()`,
+  no statistics collection or formatting infrastructure.
