@@ -111,3 +111,7 @@ pub fn lex_to_float(bits: u64) -> f64 {
     };
     f64::from_bits(bits)
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/float_index_tests.rs"]
+mod tests;
