@@ -67,6 +67,15 @@ jobs:
         with:
           tools: just uv
 
+      - name: Install debug hegel-core from branch (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          uv tool install "git+https://github.com/hegeldev/hegel-core.git@DRMacIver/debug-writer-close-please-ignore"
+          HEGEL_BIN=$(command -v hegel || echo "$HOME/.local/bin/hegel")
+          echo "Resolved hegel binary: $HEGEL_BIN"
+          "$HEGEL_BIN" --version
+          echo "HEGEL_SERVER_COMMAND=$HEGEL_BIN" >> "$GITHUB_ENV"
+
       - name: Run tests
         run: just check-tests
 
@@ -105,6 +114,15 @@ jobs:
       - uses: ./.github/actions/install-tools
         with:
           tools: just uv
+
+      - name: Install debug hegel-core from branch (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          uv tool install "git+https://github.com/hegeldev/hegel-core.git@DRMacIver/debug-writer-close-please-ignore"
+          HEGEL_BIN=$(command -v hegel || echo "$HOME/.local/bin/hegel")
+          echo "Resolved hegel binary: $HEGEL_BIN"
+          "$HEGEL_BIN" --version
+          echo "HEGEL_SERVER_COMMAND=$HEGEL_BIN" >> "$GITHUB_ENV"
 
       - name: Run tests
         run: just ${{ matrix.recipe }}
