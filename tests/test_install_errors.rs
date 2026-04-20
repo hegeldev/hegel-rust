@@ -2,7 +2,10 @@ mod common;
 
 use common::project::TempRustProject;
 
+// Unix-only: exercises the sh-based uv auto-install path and uses Unix PATH
+// separators (:) and bare binary names. On Windows, uv must be pre-installed.
 #[test]
+#[cfg(unix)]
 fn test_missing_uv_error_message() {
     // When uv is not on PATH, not cached, and curl/wget are also missing,
     // the user should get a helpful error about installing uv manually.
@@ -37,6 +40,7 @@ fn main() {
 }
 
 #[test]
+#[cfg(unix)]
 fn test_downloads_uv_when_not_on_path() {
     // When uv is not on PATH and not cached, hegel should download uv
     // and use it to run hegel-core successfully.

@@ -30,7 +30,7 @@ fn test_failing_test_output() {
         &output.stderr,
         concat!(
             r"let draw_1 = -?\d+;\n",
-            r"thread '.*' \(\d+\) panicked at src/main\.rs:\d+:\d+:\n",
+            r"thread '.*' \(\d+\) panicked at src[/\\]main\.rs:\d+:\d+:\n",
             r"intentional failure: -?\d+",
         ),
     );
@@ -46,7 +46,7 @@ fn test_failing_test_output_with_backtrace() {
 
     // We've seen `{{closure}}` on stable Linux and `{closure#0}` on nightly and
     // macOS stable (the exact conditions aren't fully understood). Accept both.
-    let closure_name = r"(?:\{closure#0\}|\{\{closure\}\})";
+    let closure_name = r"(?:\{closure#0\}|\{\{closure\}\}|closure\$0)";
     // For example:
     //   let draw_1 = 0;
     //   thread 'main' (1) panicked at src/main.rs:7:9:
@@ -67,14 +67,13 @@ fn test_failing_test_output_with_backtrace() {
             concat!(
                 r"(?s)",
                 r"let draw_1 = -?\d+;\n",
-                r"thread 'main' \(\d+\) panicked at src/main\.rs:\d+:\d+:\n",
+                r"thread 'main' \(\d+\) panicked at src[/\\]main\.rs:\d+:\d+:\n",
                 r"intentional failure: -?\d+\n",
                 r"stack backtrace:\n",
-                r"\s+0: .*\n", // frame 0: panic machinery
                 r".*",
-                r"\s+1: core::panicking::panic_fmt\n", // frame 1: panic_fmt
+                r"core::panicking::panic_fmt\n", // panic_fmt frame
                 r".*",
-                r"\s+2: temp_hegel_test_\d+_\d+::main::{closure_name}\n", // frame 2: user's closure
+                r"temp_hegel_test_\d+_\d+::main::{closure_name}\n", // user's closure
                 r".*",
                 r"hegel::runner::", // hegel internals appear
                 r".*",
@@ -97,17 +96,16 @@ fn test_failing_test_output_with_full_backtrace() {
 
     // We've seen `{{closure}}` on stable Linux and `{closure#0}` on nightly and
     // macOS stable (the exact conditions aren't fully understood). Accept both.
-    let closure_name = r"(?:\{closure#0\}|\{\{closure\}\})";
+    let closure_name = r"(?:\{closure#0\}|\{\{closure\}\}|closure\$0)";
     assert_matches_regex(
         &output.stderr,
         &format!(
             concat!(
                 r"(?s)",
                 r"let draw_1 = -?\d+;\n",
-                r"thread 'main' \(\d+\) panicked at src/main\.rs:\d+:\d+:\n",
+                r"thread 'main' \(\d+\) panicked at src[/\\]main\.rs:\d+:\d+:\n",
                 r"intentional failure: -?\d+\n",
                 r"stack backtrace:\n",
-                r"\s+0: .*\n", // starts at frame 0
                 r".*",
                 r"temp_hegel_test_\d+_\d+::main::{closure_name}", // user's closure
                 r".*",
