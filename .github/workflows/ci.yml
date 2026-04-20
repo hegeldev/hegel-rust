@@ -66,6 +66,65 @@ jobs:
       - name: Run tests
         run: just check-tests
 
+  stress-repro:
+    # TEMPORARY: tries to reproduce the intermittent server crash by looping the
+    # stress test binary many times across a parallel matrix. Delete this job
+    # once the crash is reproduced and root-caused.
+    name: stress-repro (shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just uv
+
+      - name: Build stress test binary
+        run: cargo build --tests --test test_stress_parallel
+
+      - name: Loop stress test
+        env:
+          RUST_BACKTRACE: "1"
+        run: |
+          set +e
+          FAILED=0
+          for i in $(seq 1 15); do
+            echo "::group::iteration $i"
+            cargo test --test test_stress_parallel --no-fail-fast -- --test-threads=8 2>&1 | tee iter-$i.log
+            ec=${PIPESTATUS[0]}
+            echo "::endgroup::"
+            if [ "$ec" -ne 0 ]; then
+              FAILED=1
+              echo "FAILED on iteration $i (exit=$ec)"
+              # Keep going — collect as many logs as we can
+            fi
+          done
+          if [ "$FAILED" -ne 0 ]; then
+            echo "At least one iteration failed; logs above"
+            exit 1
+          fi
+
+      - name: Upload iteration logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-logs-shard-${{ matrix.shard }}
+          path: iter-*.log
+          if-no-files-found: ignore
+
   test-all-features:
     name: test-all-features (${{ matrix.rust }})
     runs-on: ubuntu-latest
