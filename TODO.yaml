@@ -7,23 +7,3 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: "[CI] tests/embedded/server/process_tests.rs::test_startup_error_message_not_hegel (Windows)"
-  details: |
-    Job: test-all-features (stable, windows) (run 24683355589)
-    Command: cargo test --lib (via just check-tests-rand-feature)
-
-    test server::process::tests::test_startup_error_message_not_hegel ... FAILED
-
-    Panic at tests/embedded/server/process_tests.rs:74:
-      Message: The hegel server failed during startup handshake.
-      The server process exited with exit code: 1.
-      Version mismatch: expected 'hegel (version 0.4.4)', got 'Microsoft Windows [Version 10.0.26100.32522]
-      (c) Microsoft Corporation. All rights reserved.
-
-    The test spawns a non-hegel process and expects a "not hegel" error,
-    but on Windows the spawned process (likely cmd.exe) prints the Windows
-    version banner on stdout, which gets parsed as a version string and
-    triggers the "version mismatch" path instead of the "not hegel" path.
-    The assertion at line 74 expects a different error message.
-
-    test result: FAILED. 87 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
