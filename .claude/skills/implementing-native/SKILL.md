@@ -99,32 +99,47 @@ Follow the `unicodedata.rs` shape:
 
 ## Where to look, in order
 
-1. **pbtkit first.** `resources/pbtkit/src/pbtkit/`. pbtkit is a
-   deliberately-modularised subset of Hypothesis designed to be ported;
-   its core (`core.py`, `floats.py`, `text.py`, `bytes.py`,
-   `database.py`, `shrinking/*.py`) is self-contained, small, and
-   readable. For any feature that exists in both, pbtkit is the
-   authoritative reference for hegel-rust's native engine.
+**Ground rule: Hypothesis is the behavioural target.** hegel-rust's
+native engine exists to match Hypothesis semantics. pbtkit is a
+cleaner, better-factored reference implementation of the same core
+ideas, and is usually the easier read — but when the two disagree on
+*what the code should do*, Hypothesis wins. pbtkit's role is clarity;
+Hypothesis's role is truth.
 
-2. **Hypothesis second, when pbtkit isn't enough.**
+1. **pbtkit for structure and readability.**
+   `resources/pbtkit/src/pbtkit/`. pbtkit is a deliberately-modularised
+   subset of Hypothesis designed to be ported; its core (`core.py`,
+   `floats.py`, `text.py`, `bytes.py`, `database.py`, `shrinking/*.py`)
+   is self-contained, small, and readable. Start here to understand
+   *how to factor* a feature in Rust — the module boundaries, the
+   data types, the control flow.
+
+2. **Hypothesis for behavioural ground truth.**
    `resources/hypothesis/hypothesis-python/src/hypothesis/internal/`
-   (especially `conjecture/`). Hypothesis takes precedence over pbtkit
-   only when:
+   (especially `conjecture/`). Always cross-check your understanding
+   against the Hypothesis counterpart before writing Rust. When the
+   two disagree — on edge cases, constants, shrink orderings, NaN
+   handling, range semantics, anything — match Hypothesis. pbtkit
+   simplifies in places; the native engine does not get to.
+
+3. **When they conflict, match Hypothesis and say so.** A short doc
+   comment naming the Hypothesis file and the pbtkit divergence keeps
+   future readers from re-litigating the decision:
+
+   ```rust
+   /// Port of Hypothesis `conjecture/floats.py::float_to_lex`.
+   /// pbtkit's `floats.py::float_to_lex` simplifies away the
+   /// subnormal handling we need here.
+   ```
+
+   Cases where Hypothesis wins include (non-exhaustive):
    - The feature doesn't exist in pbtkit at all (pbtkit is a subset —
      e.g. span mutation, some shrink passes, some targeting details).
-   - pbtkit's implementation is known to be incomplete, buggy, or
-     under-tested for the case you're handling (check git log / issue
-     history before concluding this).
-   - You're handling an edge case pbtkit simplifies away.
-
-   When Hypothesis wins, say so in the source: a short doc comment
-   naming both the Hypothesis file and why pbtkit's version was
-   insufficient keeps future readers from re-litigating the decision.
-
-3. **Both, for cross-checking.** Even when pbtkit is the primary
-   reference, read the Hypothesis counterpart too if the feature is
-   non-trivial. They occasionally diverge, and noticing the divergence
-   early is cheaper than discovering it via a failing port.
+   - pbtkit simplifies away an edge case (subnormals, surrogates,
+     specific shrink-pass orderings).
+   - pbtkit's implementation is incomplete or under-tested for the
+     case you're handling.
+   - Tests (ported from either side) assert Hypothesis-exact behaviour.
 
 ## File mapping
 
