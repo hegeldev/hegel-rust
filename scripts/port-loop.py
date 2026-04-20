@@ -1468,6 +1468,22 @@ def dispatch_claude(
     ]
     if skip_permissions:
         cmd.append("--dangerously-skip-permissions")
+    # Worker worktrees don't inherit the supervisor's .claude/settings.local.json
+    # (it's gitignored, so `git worktree add` skips it). Pass the skills /
+    # commands / agents allowlist directly on the CLI so every dispatched
+    # claude — in any cwd — can edit its own skill/agent/command files
+    # without prompting, regardless of which settings files it finds.
+    # `--allowedTools` is variadic; the `--flag=value` form is required
+    # so argparse doesn't swallow the positional prompt into the list.
+    cmd.append(
+        "--allowedTools="
+        "Edit(.claude/skills/**),"
+        "Write(.claude/skills/**),"
+        "Edit(.claude/commands/**),"
+        "Write(.claude/commands/**),"
+        "Edit(.claude/agents/**),"
+        "Write(.claude/agents/**)"
+    )
     if max_budget_usd is not None:
         cmd += ["--max-budget-usd", str(max_budget_usd)]
     if resume_session is not None:
