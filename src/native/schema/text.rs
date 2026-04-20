@@ -128,7 +128,6 @@ impl StringAlphabet {
     /// These correspond to indices [0, ascii_count) in `char_at` order,
     /// since both `keyed_codepoint_at_index` and the explicit alphabet's
     /// `codepoint_sort_key` ordering put ASCII characters first.
-    // nocov start
     pub(super) fn ascii_count(&self) -> usize {
         match self {
             StringAlphabet::Range { min, max } => {
@@ -139,20 +138,14 @@ impl StringAlphabet {
                 }
             }
             StringAlphabet::Intervals { ascii_sorted, .. } => ascii_sorted.len(),
-            StringAlphabet::Explicit(v) => {
-                // Alphabet is sorted by codepoint_sort_key; ASCII chars (key < 128)
-                // always precede non-ASCII chars (key == codepoint >= 128).
-                v.iter().take_while(|c| (**c as u32) < 128).count()
-            }
+            StringAlphabet::Explicit(v) => v.iter().take_while(|c| (**c as u32) < 128).count(),
         }
     }
-    // nocov end
 
     /// Return the character at position `idx` in `codepoint_sort_key` order.
     ///
     /// Index 0 returns '0' (codepoint 48) for alphabets that contain it,
     /// matching pbtkit's shrinking behavior where '0' is the simplest char.
-    // nocov start
     pub(super) fn char_at(&self, idx: usize) -> char {
         match self {
             StringAlphabet::Range { min, max } => keyed_codepoint_at_index(*min, *max, idx),
@@ -170,12 +163,10 @@ impl StringAlphabet {
             StringAlphabet::Explicit(v) => v[idx],
         }
     }
-    // nocov end
 }
 
 /// Return the `idx`-th non-ASCII (codepoint >= 128) character across the
 /// given sorted intervals, in natural codepoint order.
-// nocov start
 fn intervals_non_ascii_at(ranges: &[(u32, u32)], idx: usize) -> char {
     let mut remaining = idx;
     for &(start, end) in ranges {
@@ -191,12 +182,10 @@ fn intervals_non_ascii_at(ranges: &[(u32, u32)], idx: usize) -> char {
     }
     panic!("intervals_non_ascii_at: index {idx} out of range");
 }
-// nocov end
 
 /// Build an `Intervals` alphabet from a codepoint range minus surrogates and
 /// a small set of excluded characters. O(|excluded| log |excluded|) instead
 /// of the O(range_size) scan that the `Explicit` path would require.
-// nocov start
 fn build_intervals_alphabet(cp_min: u32, cp_max: u32, exclude_chars: &[char]) -> StringAlphabet {
     let mut excluded: Vec<u32> = exclude_chars
         .iter()
@@ -258,7 +247,6 @@ fn build_intervals_alphabet(cp_min: u32, cp_max: u32, exclude_chars: &[char]) ->
         ascii_sorted,
     }
 }
-// nocov end
 
 /// Build the effective character alphabet for a string schema.
 ///
@@ -442,7 +430,6 @@ fn codepoint_sort_key(c: u32) -> u32 {
 ///
 /// ASCII chars (0-127) come first, sorted by codepoint_sort_key.
 /// Non-ASCII chars (128+) come after, in natural codepoint order.
-// nocov start
 fn keyed_codepoint_at_index(min: u32, max: u32, idx: usize) -> char {
     // Count ASCII chars in the range.
     let ascii_end = max.min(127);
@@ -473,10 +460,8 @@ fn keyed_codepoint_at_index(min: u32, max: u32, idx: usize) -> char {
         codepoint_at_index(non_ascii_start, max, (idx - ascii_count) as u32)
     }
 }
-// nocov end
 
 /// Extract an array of strings from a schema field.
-// nocov start
 fn extract_string_array(schema: &Value, key: &str) -> Option<Vec<String>> {
     map_get(schema, key).and_then(|v| {
         if let Value::Array(arr) = v {
@@ -486,7 +471,6 @@ fn extract_string_array(schema: &Value, key: &str) -> Option<Vec<String>> {
         }
     })
 }
-// nocov end
 
 /// Count valid (non-surrogate) codepoints in the range [min, max].
 fn count_valid_codepoints(min: u32, max: u32) -> u32 {
@@ -504,7 +488,6 @@ fn count_valid_codepoints(min: u32, max: u32) -> u32 {
 }
 
 /// Map a 0-based index to a codepoint in [min, max] excluding surrogates.
-// nocov start
 fn codepoint_at_index(min: u32, max: u32, idx: u32) -> char {
     // Count codepoints in [min, min(max, 0xD7FF)] (before surrogates).
     let pre_max = 0xD7FFu32.min(max);
@@ -520,7 +503,6 @@ fn codepoint_at_index(min: u32, max: u32, idx: u32) -> char {
     char::from_u32(cp)
         .unwrap_or_else(|| panic!("codepoint_at_index produced invalid codepoint {:#x}", cp))
 }
-// nocov end
 
 fn is_surrogate(c: char) -> bool {
     let cp = c as u32;
@@ -530,3 +512,7 @@ fn is_surrogate(c: char) -> bool {
 pub(super) fn is_surrogate_cp(cp: u32) -> bool {
     (0xD800..=0xDFFF).contains(&cp)
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/schema/text_tests.rs"]
+mod tests;
