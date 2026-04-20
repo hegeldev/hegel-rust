@@ -259,3 +259,7 @@ Individually-skipped tests (rest of the file is ported):
   repr formatting in failure output. Rust generators have no equivalent repr
   surface — `Debug` output is structurally different and hegel-rust's failure
   output format (`let draw_1 = ...`) doesn't include strategy reprs.
+
+- `test_complex_numbers.py` — all tests use `st.complex_numbers()`, a Hypothesis
+  public-API strategy that generates Python `complex` values. Rust has no built-in
+  complex number type and hegel-rust has no `gs::complex_numbers()` generator.
