@@ -358,3 +358,182 @@ fn record_test_case_result_final_interesting_captures_message() {
 fn pinned_server_version_is_nonempty() {
     assert!(!pinned_server_version().is_empty());
 }
+
+#[test]
+fn parse_semver_accepts_three_numeric_parts() {
+    assert_eq!(parse_semver("0.4.5"), Some((0, 4, 5)));
+    assert_eq!(parse_semver("1.20.300"), Some((1, 20, 300)));
+}
+
+#[test]
+fn parse_semver_rejects_wrong_number_of_parts() {
+    assert_eq!(parse_semver("0.4"), None);
+    assert_eq!(parse_semver("0.4.5.6"), None);
+    assert_eq!(parse_semver(""), None);
+}
+
+#[test]
+fn parse_semver_rejects_non_numeric_parts() {
+    assert_eq!(parse_semver("a.4.5"), None);
+    assert_eq!(parse_semver("0.b.5"), None);
+    assert_eq!(parse_semver("0.4.c"), None);
+}
+
+#[test]
+fn supports_one_shot_at_min_version_is_true() {
+    let (maj, min, patch) = ONE_SHOT_MIN_SERVER_VERSION;
+    assert!(supports_one_shot(&format!("{maj}.{min}.{patch}")));
+}
+
+#[test]
+fn supports_one_shot_below_min_version_is_false() {
+    // Compute a version strictly below the minimum by decrementing patch, or
+    // minor if patch is 0.
+    let (maj, min, patch) = ONE_SHOT_MIN_SERVER_VERSION;
+    let below = if patch > 0 {
+        format!("{maj}.{min}.{}", patch - 1)
+    } else if min > 0 {
+        format!("{maj}.{}.{}", min - 1, u32::MAX)
+    } else {
+        format!("{}.{}.{}", maj - 1, u32::MAX, u32::MAX)
+    };
+    assert!(!supports_one_shot(&below));
+}
+
+#[test]
+fn supports_one_shot_above_min_version_is_true() {
+    let (maj, _, _) = ONE_SHOT_MIN_SERVER_VERSION;
+    assert!(supports_one_shot(&format!("{}.0.0", maj + 1)));
+}
+
+#[test]
+fn supports_one_shot_unparseable_is_false() {
+    assert!(!supports_one_shot("not-a-version"));
+}
+
+#[test]
+fn parse_version_output_extracts_semver() {
+    assert_eq!(
+        parse_version_output("hegel (version 1.2.3)\n").as_deref(),
+        Some("1.2.3")
+    );
+    assert_eq!(
+        parse_version_output("wrapper says: hegel (version 0.4.5) and then some").as_deref(),
+        Some("0.4.5")
+    );
+}
+
+#[test]
+fn parse_version_output_returns_none_when_format_unexpected() {
+    assert_eq!(parse_version_output("hegel 1.2.3"), None);
+    assert_eq!(parse_version_output("version 1.2.3 no closing paren"), None);
+    assert_eq!(parse_version_output(""), None);
+}
+
+#[test]
+fn effective_server_version_falls_back_to_pinned_without_env() {
+    // No env var lookup wrapper here — tests in this file don't set
+    // HEGEL_SERVER_COMMAND by default. If another test has set it, this
+    // assertion would still hold only when the pointed-at binary parses.
+    let prior = std::env::var(HEGEL_SERVER_COMMAND_ENV).ok();
+    unsafe {
+        std::env::remove_var(HEGEL_SERVER_COMMAND_ENV);
+    }
+    let v = effective_server_version();
+    if let Some(val) = prior {
+        unsafe {
+            std::env::set_var(HEGEL_SERVER_COMMAND_ENV, val);
+        }
+    }
+    assert_eq!(v, pinned_server_version());
+}
+
+/// Lock around tests that manipulate HEGEL_SERVER_COMMAND so they don't race.
+static SERVER_COMMAND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn with_fake_server_command<R>(stdout: &str, exit_code: i32, f: impl FnOnce() -> R) -> R {
+    let _guard = SERVER_COMMAND_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let dir =
+        std::env::temp_dir().join(format!("hegel_test_fake_server_cmd_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("fake_hegel");
+    std::fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '{stdout}'; exit {exit_code}; fi\nexit {exit_code}\n",
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let prior = std::env::var(HEGEL_SERVER_COMMAND_ENV).ok();
+    unsafe {
+        std::env::set_var(HEGEL_SERVER_COMMAND_ENV, path.to_str().unwrap());
+    }
+    let result = f();
+    unsafe {
+        match prior {
+            Some(v) => std::env::set_var(HEGEL_SERVER_COMMAND_ENV, v),
+            None => std::env::remove_var(HEGEL_SERVER_COMMAND_ENV),
+        }
+    }
+    result
+}
+
+#[test]
+fn effective_server_version_reads_from_env_binary() {
+    let v = with_fake_server_command("hegel (version 9.8.7)", 0, effective_server_version);
+    assert_eq!(v, "9.8.7");
+}
+
+#[test]
+fn effective_server_version_falls_back_when_env_binary_fails() {
+    let v = with_fake_server_command("hegel (version 9.8.7)", 1, effective_server_version);
+    assert_eq!(v, pinned_server_version());
+}
+
+#[test]
+fn effective_server_version_falls_back_when_env_binary_output_unparseable() {
+    let v = with_fake_server_command("not-a-hegel-binary", 0, effective_server_version);
+    assert_eq!(v, pinned_server_version());
+}
+
+#[test]
+fn effective_server_version_falls_back_when_env_binary_cannot_be_spawned() {
+    let _guard = SERVER_COMMAND_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let prior = std::env::var(HEGEL_SERVER_COMMAND_ENV).ok();
+    unsafe {
+        std::env::set_var(
+            HEGEL_SERVER_COMMAND_ENV,
+            "/definitely/nonexistent/hegel_xyz",
+        );
+    }
+    let v = effective_server_version();
+    unsafe {
+        match prior {
+            Some(val) => std::env::set_var(HEGEL_SERVER_COMMAND_ENV, val),
+            None => std::env::remove_var(HEGEL_SERVER_COMMAND_ENV),
+        }
+    }
+    assert_eq!(v, pinned_server_version());
+}
+
+#[test]
+#[should_panic(expected = "Settings::one_shot requires hegel-core")]
+fn require_one_shot_support_panics_when_version_too_old() {
+    with_fake_server_command("hegel (version 0.0.1)", 0, require_one_shot_support);
+}
+
+#[test]
+fn require_one_shot_support_returns_when_version_new_enough() {
+    let (maj, min, patch) = ONE_SHOT_MIN_SERVER_VERSION;
+    let new_ver = format!("hegel (version {maj}.{min}.{patch})");
+    with_fake_server_command(&new_ver, 0, require_one_shot_support);
+}

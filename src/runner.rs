@@ -18,6 +18,9 @@ use std::time::{Duration, Instant};
 const SUPPORTED_PROTOCOL_VERSIONS: (&str, &str) = ("0.10", "0.10");
 const HEGEL_SERVER_VERSION: &str = "0.4.4";
 
+/// Minimum hegel-core semver that supports the `one_shot` protocol option.
+const ONE_SHOT_MIN_SERVER_VERSION: (u32, u32, u32) = (0, 4, 5);
+
 /// The `hegel-core` version that this library is pinned against when spawning
 /// the server via `uv tool run`. Exposed for tests that need to gate on the
 /// server's supported feature set (e.g. features only available in newer
@@ -257,6 +260,64 @@ impl DataSource for ServerDataSource {
 
 // ─── HegelSession ───────────────────────────────────────────────────────────
 
+/// Parse a "major.minor.patch" semver string into a comparable tuple.
+fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
+    let parts: Vec<&str> = s.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let major = parts[0].parse().ok()?;
+    let minor = parts[1].parse().ok()?;
+    let patch = parts[2].parse().ok()?;
+    Some((major, minor, patch))
+}
+
+/// Return true if the given hegel-core semver supports `one_shot`.
+fn supports_one_shot(version: &str) -> bool {
+    parse_semver(version).is_some_and(|v| v >= ONE_SHOT_MIN_SERVER_VERSION)
+}
+
+/// Extract the semver from `hegel --version` output of the form
+/// `hegel (version 1.2.3)`.
+fn parse_version_output(text: &str) -> Option<String> {
+    let idx = text.find("version ")?;
+    let rest = &text[idx + "version ".len()..];
+    let end = rest.find(')')?;
+    Some(rest[..end].trim().to_string())
+}
+
+/// Determine the hegel-core semver for this session: queried from the
+/// binary at `HEGEL_SERVER_COMMAND` when set, otherwise the pinned version
+/// used when spawning via `uv tool run`.
+fn effective_server_version() -> String {
+    if let Ok(cmd) = std::env::var(HEGEL_SERVER_COMMAND_ENV) {
+        if let Ok(output) = Command::new(&cmd).arg("--version").output() {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                if let Some(ver) = parse_version_output(&text) {
+                    return ver;
+                }
+            }
+        }
+    }
+    HEGEL_SERVER_VERSION.to_string()
+}
+
+/// Panic with a clear message if the configured hegel-core server is too
+/// old to support `one_shot`. Called from `ServerTestRunner::run` when the
+/// user has opted in via `Settings::one_shot(true)`.
+fn require_one_shot_support() {
+    let version = effective_server_version();
+    if !supports_one_shot(&version) {
+        let (maj, min, patch) = ONE_SHOT_MIN_SERVER_VERSION;
+        panic!(
+            "Settings::one_shot requires hegel-core >= {maj}.{min}.{patch}, but the \
+             configured hegel-core version is {version}. Upgrade hegel-core or remove \
+             one_shot from your test settings."
+        );
+    }
+}
+
 /// Parse a "major.minor" version string into a comparable tuple.
 fn parse_version(s: &str) -> (u32, u32) {
     let parts: Vec<&str> = s.split('.').collect();
@@ -402,6 +463,9 @@ impl TestRunner for ServerTestRunner {
         database_key: Option<&str>,
         run_case: &mut dyn FnMut(Box<dyn DataSource>, bool) -> TestCaseResult,
     ) -> TestRunResult {
+        if settings.one_shot {
+            require_one_shot_support();
+        }
         let session = HegelSession::get();
         let connection = &session.connection;
         let verbosity = settings.verbosity;
@@ -1189,11 +1253,6 @@ impl Settings {
     /// The single test case runs in "final" mode, matching the behaviour of
     /// the final replay pass at the end of a normal run: `note()` output is
     /// emitted and panic messages are printed.
-    ///
-    /// Requires a `hegel-core` release that includes the underlying `one_shot`
-    /// protocol support (added in
-    /// [hegel-core#97](https://github.com/hegeldev/hegel-core/pull/97)).
-    /// Against older servers the option is silently ignored.
     pub fn one_shot(mut self, one_shot: bool) -> Self {
         self.one_shot = one_shot;
         self

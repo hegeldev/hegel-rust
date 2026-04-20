@@ -1,12 +1,11 @@
 //! Tests for the `one_shot` setting, which runs a single test case in final
 //! mode with no shrinking or replay.
 //!
-//! Requires a `hegel-core` that implements the `one_shot` protocol option
-//! (added in [hegeldev/hegel-core#97](https://github.com/hegeldev/hegel-core/pull/97),
-//! not yet released as of this writing). Against older servers, tests that
-//! directly verify one-shot semantics skip rather than fail — once the
-//! pinned `hegel-core` is bumped to a version with the feature they will
-//! start running automatically.
+//! Requires a `hegel-core` that implements the `one_shot` protocol option.
+//! Against older servers, the `one_shot` setting panics with a clear error
+//! message; tests that directly verify one-shot semantics skip when the
+//! pinned `hegel-core` is too old, and start running automatically once the
+//! pinned version is bumped to one that supports the feature.
 
 use hegel::generators as gs;
 use std::cell::Cell;
@@ -120,10 +119,40 @@ fn one_shot_false_runs_normally() {
     assert_eq!(count.get(), 5);
 }
 
-/// The `#[hegel::test(one_shot = true)]` attribute form compiles and runs.
+/// Verifies that the `#[hegel::test]` attribute macro accepts
+/// `one_shot = true`. The actual runtime semantics of one-shot are covered
+/// by `one_shot_runs_exactly_one_test_case` above (via the `Settings`
+/// builder). This attribute test is ignored at runtime because it cannot
+/// pass against a pinned `hegel-core` that is too old — its value is in
+/// exercising the macro expansion at compile time.
 #[hegel::test(one_shot = true)]
+#[ignore = "requires hegel-core with one_shot support; kept for macro expansion coverage"]
 fn attribute_form_with_one_shot(tc: hegel::TestCase) {
     let _ = tc.draw(gs::integers::<i32>());
+}
+
+#[test]
+fn one_shot_panics_against_too_old_server() {
+    if hegel_supports_one_shot() {
+        return;
+    }
+    let result = std::panic::catch_unwind(|| {
+        hegel::Hegel::new(|tc| {
+            let _ = tc.draw(gs::booleans());
+        })
+        .settings(hegel::Settings::new().one_shot(true))
+        .run();
+    });
+    let err = result.expect_err("expected panic when hegel-core is too old");
+    let msg = err
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| err.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(
+        msg.contains("Settings::one_shot requires hegel-core"),
+        "unexpected panic message: {msg}"
+    );
 }
 
 #[test]
