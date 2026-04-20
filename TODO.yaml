@@ -6,20 +6,3 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-- title: "[CI] coverage — test_native_db_cross_instance_listener_observes_writes flaky timeout"
-  details: |
-    Job: coverage (check-coverage). One test failed:
-      native::database::tests::test_native_db_cross_instance_listener_observes_writes
-
-    Panic at tests/embedded/native/database_tests.rs:754:13:
-      timed out waiting for 2 events; got 1: [Save { key: [115, 104, 97, 114,
-      101, 100, 45, 107, 101, 121], value: [101, 120, 116, 101, 114, 110, 97,
-      108, 45, 118, 97, 108, 117, 101] }]
-
-    This is a timing-dependent test that waits for cross-instance database
-    listener events. The second event never arrived within the timeout.
-    Coverage instrumentation adds overhead which likely widens the race window.
-
-    Fix options: increase the timeout, add a retry/poll loop, or make the
-    event delivery more deterministic.

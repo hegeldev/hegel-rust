@@ -744,7 +744,7 @@ fn test_in_memory_same_listener_twice_fires_twice_per_event() {
 /// been recorded (or panic on timeout). Mirrors Hypothesis's use of
 /// `wait_for(...)` in `tests/watchdog/test_database.py`.
 fn wait_for_events(events: &Arc<StdMutex<Vec<ListenerEvent>>>, count: usize) -> Vec<ListenerEvent> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         let snap = events.lock().unwrap().clone();
         if snap.len() >= count {
