@@ -190,9 +190,12 @@ fn test_positive_lookbehind() {
 
 #[test]
 fn test_positive_lookahead() {
-    find_any(gs::from_regex("a(?=bc).*"), |s: &String| {
+    // TooSlow suppressed: a(?=bc).* is slow to generate under instrumented binaries.
+    FindAny::new(gs::from_regex("a(?=bc).*"), |s: &String| {
         s.starts_with("abc")
-    });
+    })
+    .suppress_health_check(HealthCheck::TooSlow)
+    .run();
 }
 
 #[test]
