@@ -51,10 +51,7 @@ fn test_will_find_ascii_examples_given_the_chance() {
 
 #[test]
 fn test_minimisation_consistent_with_characters() {
-    let s = minimal(
-        gs::text().alphabet("FEDCBA").min_size(3),
-        |_: &String| true,
-    );
+    let s = minimal(gs::text().alphabet("FEDCBA").min_size(3), |_: &String| true);
     assert_eq!(s, "AAA");
 }
 
@@ -104,10 +101,9 @@ fn test_can_encode_as_utf8() {
 
 #[test]
 fn test_can_blacklist_newlines() {
-    assert_all_examples(
-        gs::text().exclude_characters("\n"),
-        |s: &String| !s.contains('\n'),
-    );
+    assert_all_examples(gs::text().exclude_characters("\n"), |s: &String| {
+        !s.contains('\n')
+    });
 }
 
 #[test]
@@ -120,10 +116,7 @@ fn test_can_exclude_newlines_by_category() {
 
 #[test]
 fn test_can_restrict_to_ascii_only() {
-    assert_all_examples(
-        gs::text().max_codepoint(127),
-        |s: &String| s.is_ascii(),
-    );
+    assert_all_examples(gs::text().max_codepoint(127), |s: &String| s.is_ascii());
 }
 
 #[cfg(feature = "native")]
