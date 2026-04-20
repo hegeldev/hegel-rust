@@ -557,9 +557,8 @@ impl NativeTestCase {
                         rng.random_range(kind_rand.min_codepoint..=ascii_hi)
                     } else {
                         loop {
-                            let cp = rng.random_range(
-                                kind_rand.min_codepoint..=kind_rand.max_codepoint,
-                            );
+                            let cp =
+                                rng.random_range(kind_rand.min_codepoint..=kind_rand.max_codepoint);
                             if !(0xD800..=0xDFFF).contains(&cp) {
                                 break cp;
                             }
@@ -571,12 +570,8 @@ impl NativeTestCase {
                 // generating unreasonably large strings for huge max_size.
                 let min_f = kind_rand.min_size as f64;
                 let max_f = kind_rand.max_size as f64;
-                let average = f64::min(
-                    f64::max(min_f * 2.0, min_f + 5.0),
-                    0.5 * (min_f + max_f),
-                );
-                let effective_max =
-                    ((2.0 * average).ceil() as usize).min(kind_rand.max_size);
+                let average = f64::min(f64::max(min_f * 2.0, min_f + 5.0), 0.5 * (min_f + max_f));
+                let effective_max = ((2.0 * average).ceil() as usize).min(kind_rand.max_size);
                 let len = if kind_rand.min_size == effective_max {
                     kind_rand.min_size
                 } else {
