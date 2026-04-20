@@ -8,7 +8,7 @@ use crate::test_case::{ASSUME_FAIL_STRING, LOOP_DONE_STRING, STOP_TEST_STRING, T
 use ciborium::Value;
 
 use std::backtrace::{Backtrace, BacktraceStatus};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
 use std::process::{Command, Stdio};
@@ -42,8 +42,8 @@ static PROTOCOL_DEBUG: LazyLock<bool> = LazyLock::new(|| {
 /// over a multiplexed stream.
 pub(crate) struct ServerDataSource {
     connection: Arc<Connection>,
-    stream: RefCell<Stream>,
-    aborted: Cell<bool>,
+    stream: Mutex<Stream>,
+    aborted: AtomicBool,
     verbosity: Verbosity,
 }
 
@@ -51,14 +51,14 @@ impl ServerDataSource {
     pub(crate) fn new(connection: Arc<Connection>, stream: Stream, verbosity: Verbosity) -> Self {
         ServerDataSource {
             connection,
-            stream: RefCell::new(stream),
-            aborted: Cell::new(false),
+            stream: Mutex::new(stream),
+            aborted: AtomicBool::new(false),
             verbosity,
         }
     }
 
     fn send_request(&self, command: &str, payload: &Value) -> Result<Value, DataSourceError> {
-        if self.aborted.get() {
+        if self.aborted.load(Ordering::SeqCst) {
             return Err(DataSourceError::StopTest);
         }
         let debug = *PROTOCOL_DEBUG || self.verbosity == Verbosity::Debug;
@@ -80,7 +80,11 @@ impl ServerDataSource {
             eprintln!("REQUEST: {:?}", request);
         }
 
-        let result = self.stream.borrow_mut().request_cbor(&request);
+        let result = self
+            .stream
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .request_cbor(&request);
 
         match result {
             Ok(response) => {
@@ -105,16 +109,22 @@ impl ServerDataSource {
                     if debug {
                         eprintln!("RESPONSE: StopTest/overflow"); // nocov
                     }
-                    self.stream.borrow_mut().mark_closed();
-                    self.aborted.set(true);
+                    self.stream
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .mark_closed();
+                    self.aborted.store(true, Ordering::SeqCst);
                     Err(DataSourceError::StopTest)
                 // nocov start
                 } else if error_msg.contains("FlakyStrategyDefinition")
                     || error_msg.contains("FlakyReplay")
                 // nocov end
                 {
-                    self.stream.borrow_mut().mark_closed();
-                    self.aborted.set(true);
+                    self.stream
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .mark_closed();
+                    self.aborted.store(true, Ordering::SeqCst);
                     Err(DataSourceError::StopTest)
                 } else if self.connection.server_has_exited() {
                     panic!("{}", server_crash_message()); // nocov
@@ -237,13 +247,13 @@ impl DataSource for ServerDataSource {
             "status" => status,
             "origin" => origin_value
         };
-        let mut stream = self.stream.borrow_mut();
+        let mut stream = self.stream.lock().unwrap_or_else(|e| e.into_inner());
         let _ = stream.request_cbor(&mark_complete);
         let _ = stream.close();
     }
 
     fn test_aborted(&self) -> bool {
-        self.aborted.get()
+        self.aborted.load(Ordering::SeqCst)
     }
 }
 
@@ -1220,14 +1230,14 @@ fn run_test_case(
 
     // Send mark_complete via the data source.
     // Skip if test was aborted (StopTest) - the data source already closed.
-    if !tc.data_source().test_aborted() {
+    if !tc.test_aborted() {
         let status = match &tc_result {
             TestCaseResult::Valid => "VALID",
             TestCaseResult::Invalid | TestCaseResult::Overrun => "INVALID",
             TestCaseResult::Interesting { .. } => "INTERESTING",
             TestCaseResult::InternalError { .. } => unreachable!(),
         };
-        tc.data_source().mark_complete(status, origin.as_deref());
+        tc.mark_complete(status, origin.as_deref());
     }
 
     tc_result

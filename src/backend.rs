@@ -34,7 +34,9 @@ impl std::error::Error for DataSourceError {}
 /// for operations that can be cut short by data exhaustion or assumption rejection.
 ///
 /// All methods take `&self` — implementations use interior mutability as needed.
-pub trait DataSource {
+/// Implementations must be `Send + Sync` so a `TestCase` clone can be moved to
+/// another thread.
+pub trait DataSource: Send + Sync {
     /// Send a CBOR schema and receive a generated CBOR value.
     fn generate(&self, schema: &Value) -> Result<Value, DataSourceError>;
 

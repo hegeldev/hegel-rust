@@ -177,6 +177,39 @@
 //! }
 //! ```
 //!
+//! ## Threading
+//!
+//! [`TestCase`] is `Send` but not `Sync`: you can clone it and move the clone
+//! to another thread to drive generation from there.
+//!
+//! ```no_run
+//! use hegel::TestCase;
+//! use hegel::generators as gs;
+//!
+//! #[hegel::test]
+//! fn test_with_worker_thread(tc: TestCase) {
+//!     let tc_worker = tc.clone();
+//!     let handle = std::thread::spawn(move || {
+//!         tc_worker.draw(gs::vecs(gs::integers::<i32>()).max_size(10))
+//!     });
+//!     let xs = handle.join().unwrap();
+//!     let more: bool = tc.draw(gs::booleans());
+//!     let _ = (xs, more);
+//! }
+//! ```
+//!
+//! Clones share the same backend connection — they are views onto one test
+//! case, not independent test cases. Individual backend calls are serialised
+//! by a shared mutex, so code like "spawn worker, worker draws, join, main
+//! thread draws" is deterministic.
+//!
+//! **Using threads is currently extremely fragile and should only be used with
+//! extreme caution right now.** You are liable to get flaky test failures when
+//! multiple threads draw concurrently. We intend to support this use case
+//! increasingly well over time, but right now it is a significant footgun —
+//! see [`TestCase`]'s documentation for the full contract and the patterns
+//! that are safe to rely on.
+//!
 //! ## Learning more
 //!
 //! - Browse the [`generators`] module for the full list of available generators.

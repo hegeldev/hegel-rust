@@ -92,7 +92,10 @@ pub struct Variables<T> {
 
 impl<T> Variables<T> {
     fn pool_generate(&self, consume: bool) -> i128 {
-        match self.tc.data_source().pool_generate(self.pool_id, consume) {
+        match self
+            .tc
+            .with_data_source(|ds| ds.pool_generate(self.pool_id, consume))
+        {
             Ok(id) => id,
             Err(_) => {
                 panic!("{}", STOP_TEST_STRING);
@@ -107,7 +110,7 @@ impl<T> Variables<T> {
 
     /// Add a value to the pool.
     pub fn add(&mut self, v: T) {
-        let variable_id: i128 = match self.tc.data_source().pool_add(self.pool_id) {
+        let variable_id: i128 = match self.tc.with_data_source(|ds| ds.pool_add(self.pool_id)) {
             Ok(id) => id,
             Err(_) => {
                 panic!("{}", STOP_TEST_STRING); // nocov
@@ -140,7 +143,7 @@ impl<T> Variables<T> {
 
 /// Create a new variable pool for stateful tests.
 pub fn variables<T>(tc: &TestCase) -> Variables<T> {
-    let pool_id = match tc.data_source().new_pool() {
+    let pool_id = match tc.with_data_source(|ds| ds.new_pool()) {
         Ok(id) => id,
         Err(_) => {
             panic!("{}", STOP_TEST_STRING); // nocov
