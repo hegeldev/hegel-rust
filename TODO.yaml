@@ -6,38 +6,3 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-- title: "[CI] coverage: uncovered enumerate_values fallback for filtered sampled_from"
-  details: |
-    The `coverage` job on PR 188 (run 24662202971) fails because recently added
-    `enumerate_values` code paths are not exercised by the server-backend test
-    suite that `just check-coverage` runs against.
-
-    Uncovered lines (reported twice — once per instrumentation binary):
-
-      src/generators/combinators.rs:44-45
-        fn enumerate_values(&self) -> Option<Vec<T>> {
-            Some(self.elements.to_vec())
-
-      src/generators/generators.rs:225-228
-        fn enumerate_values(&self) -> Option<Vec<U>> {
-            self.source
-                .enumerate_values()
-                .map(|vals| vals.into_iter().map(|v| (self.f)(v)).collect())
-
-      src/generators/generators.rs:278-288
-        if valid.is_empty() {
-            panic!(
-            ...
-            let idx = super::integers::<usize>()
-                .min_value(0)
-                .max_value(valid.len() - 1)
-                .do_draw(tc);
-            return valid.into_iter().nth(idx).unwrap();
-
-    These were added in commits 8558819 and 23ea692 for the native backend
-    but need coverage from tests that run under the server backend too (or
-    the lines need // nocov if truly server-unreachable — but ask first).
-
-    Error from CI:
-      error: Recipe `check-coverage` failed on line 51 with exit code 1
