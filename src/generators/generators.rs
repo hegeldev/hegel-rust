@@ -138,6 +138,16 @@ pub trait Generator<T>: Send + Sync {
         }
     }
 
+    /// Return all possible values if this generator has a known finite value set.
+    ///
+    /// Used by [`Filtered`] as a fallback when random sampling fails: instead of
+    /// calling `assume(false)`, enumerate valid elements and pick one.
+    /// Mirrors Hypothesis's `SampledFromStrategy.do_filtered_draw` optimization.
+    #[doc(hidden)]
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        None
+    }
+
     /// Convert this generator into a type-erased boxed generator.
     ///
     /// This is needed when you have generators of different concrete types
@@ -175,6 +185,10 @@ impl<T, G: Generator<T>> Generator<T> for &G {
     // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
         (*self).as_basic()
+    }
+
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        (*self).enumerate_values()
         // nocov end
     }
 }
@@ -206,6 +220,12 @@ where
         let source_basic = self.source.as_basic()?;
         let f = Arc::clone(&self.f);
         Some(source_basic.map(move |t| f(t)))
+    }
+
+    fn enumerate_values(&self) -> Option<Vec<U>> {
+        self.source
+            .enumerate_values()
+            .map(|vals| vals.into_iter().map(|v| (self.f)(v)).collect())
     }
 }
 
@@ -254,8 +274,23 @@ where
             }
             tc.stop_span(true);
         }
+        if let Some(valid) = self.enumerate_values() {
+            if !valid.is_empty() {
+                let idx = super::integers::<usize>()
+                    .min_value(0)
+                    .max_value(valid.len() - 1)
+                    .do_draw(tc);
+                return valid.into_iter().nth(idx).unwrap();
+            }
+        }
         tc.assume(false);
         unreachable!()
+    }
+
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        self.source
+            .enumerate_values()
+            .map(|vals| vals.into_iter().filter(|v| (self.predicate)(v)).collect())
     }
 }
 
@@ -279,6 +314,10 @@ impl<T> Generator<T> for BoxedGenerator<'_, T> {
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
         self.inner.as_basic()
+    }
+
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        self.inner.enumerate_values()
     }
 
     fn boxed<'b>(self) -> BoxedGenerator<'b, T>
