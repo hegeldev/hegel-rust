@@ -26,13 +26,6 @@
       Acceptance: these files report 0 uncovered code lines in
       `just check-coverage` output.
 
-  - title: "[CI] coverage: src/native/schema/special.rs"
-    details: |
-      Part of the PR #188 coverage ratchet split. 85 uncovered code lines.
-
-      Acceptance: src/native/schema/special.rs reports 0 uncovered code
-      lines in `just check-coverage`.
-
   - title: "[CI] coverage: src/native/shrinker/sequence.rs + shrinker/deletion.rs"
     details: |
       Part of the PR #188 coverage ratchet split.
