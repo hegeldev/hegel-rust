@@ -335,6 +335,9 @@ Individually-skipped tests (rest of the file is ported):
   concurrent changes to `src/native/schema/regex.rs` and `text.rs`; deferred
   for manual conflict resolution.
 
+- `test_charmap.py` — cherry-pick of worker port conflicted with concurrent changes
+  to `src/native/schema/regex.rs` and `text.rs`; deferred for manual conflict resolution.
+
 - `test_executors.py` — all tests exercise Hypothesis's `execute_example` protocol,
   a Python class-method hook that lets classes (e.g. `unittest.TestCase` subclasses)
   customize how `@given`-decorated method bodies are executed. Hegel-rust has no
