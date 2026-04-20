@@ -106,14 +106,15 @@ impl FeatureFlags {
         // frozen-mode default: enabled, unless we already recorded a decision.
         let Some(is_disabled) = with_native_tc(|handle| {
             handle.map(|handle| {
-                let start = handle.borrow().nodes.len();
-                let value = match handle.borrow_mut().weighted(p_disabled, forced) {
+                let start = handle.lock().unwrap().nodes.len();
+                let value = match handle.lock().unwrap().weighted(p_disabled, forced) {
                     Ok(v) => v,
                     Err(StopTest) => panic!("{}", STOP_TEST_STRING),
                 };
-                let end = handle.borrow().nodes.len();
+                let end = handle.lock().unwrap().nodes.len();
                 handle
-                    .borrow_mut()
+                    .lock()
+                    .unwrap()
                     .record_span(start, end, "feature_flag".to_string());
                 value
             })
@@ -199,7 +200,7 @@ impl Generator<FeatureFlags> for FeatureStrategy {
         let p_disabled = with_native_tc(|handle| {
             let handle =
                 handle.expect("FeatureStrategy::do_draw called outside the native test context");
-            match handle.borrow_mut().draw_integer(0, 254) {
+            match handle.lock().unwrap().draw_integer(0, 254) {
                 Ok(n) => n as f64 / 255.0,
                 Err(StopTest) => panic!("{}", STOP_TEST_STRING),
             }

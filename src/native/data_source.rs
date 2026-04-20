@@ -4,8 +4,8 @@
 // the DataSource trait (which takes &self).  The Rc<RefCell<...>> handle
 // is shared with the runner so it can extract nodes/spans after the test.
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use ciborium::Value;
 
@@ -17,11 +17,11 @@ use crate::native::schema;
 ///
 /// Both `NativeDataSource` and the caller hold a clone of this handle.
 /// After the test case completes, the caller reads nodes/spans from it.
-pub type NativeTestCaseHandle = Rc<RefCell<NativeTestCase>>;
+pub type NativeTestCaseHandle = Arc<Mutex<NativeTestCase>>;
 
 pub struct NativeDataSource {
     inner: NativeTestCaseHandle,
-    aborted: Cell<bool>,
+    aborted: AtomicBool,
 }
 
 impl NativeDataSource {
@@ -30,12 +30,12 @@ impl NativeDataSource {
     /// The handle can be used to extract `nodes` and `spans` after the
     /// test case has finished running.
     pub fn new(ntc: NativeTestCase) -> (Self, NativeTestCaseHandle) {
-        let inner = Rc::new(RefCell::new(ntc));
-        let handle = Rc::clone(&inner);
+        let inner = Arc::new(Mutex::new(ntc));
+        let handle = Arc::clone(&inner);
         (
             NativeDataSource {
                 inner,
-                aborted: Cell::new(false),
+                aborted: AtomicBool::new(false),
             },
             handle,
         )
@@ -43,21 +43,21 @@ impl NativeDataSource {
 
     /// Convenience: extract choice nodes from a handle after a test case.
     pub fn take_nodes(handle: &NativeTestCaseHandle) -> Vec<ChoiceNode> {
-        handle.borrow().nodes.clone()
+        handle.lock().unwrap().nodes.clone()
     }
 
     /// Convenience: extract spans from a handle after a test case.
     pub fn take_spans(handle: &NativeTestCaseHandle) -> Vec<Span> {
-        handle.borrow().spans.clone()
+        handle.lock().unwrap().spans.clone()
     }
 
     fn dispatch(&self, command: &str, payload: &Value) -> Result<Value, DataSourceError> {
-        if self.aborted.get() {
+        if self.aborted.load(Ordering::Relaxed) {
             return Err(DataSourceError::StopTest);
         }
-        let mut ntc = self.inner.borrow_mut();
+        let mut ntc = self.inner.lock().unwrap();
         schema::dispatch_request(&mut ntc, command, payload).map_err(|_stop| {
-            self.aborted.set(true);
+            self.aborted.store(true, Ordering::Relaxed);
             DataSourceError::StopTest
         })
     }
@@ -163,7 +163,7 @@ impl DataSource for NativeDataSource {
     }
 
     fn test_aborted(&self) -> bool {
-        self.aborted.get()
+        self.aborted.load(Ordering::Relaxed)
     }
 }
 
