@@ -12,6 +12,11 @@ fn test_can_minimize_up_to_zero() {
 #[test]
 fn test_minimizes_towards_ascii_zero() {
     let s = minimal(gs::text(), |s: &String| s.chars().any(|c| c < '0'));
+    // Native engine's codepoint_key ordering makes NUL (key 80) simpler
+    // than '/' (key 127); Hypothesis's ordering spirals around '0'.
+    #[cfg(feature = "native")]
+    assert_eq!(s, "\0");
+    #[cfg(not(feature = "native"))]
     assert_eq!(s, "/");
 }
 
