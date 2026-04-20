@@ -2150,7 +2150,27 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
                         f"returning to outer loop."
                     )
                     return
-                if adm_ok:
+                if adm_ok and len(in_flight) < N:
+                    pool = [
+                        f for f in unported_pool()
+                        if f not in assigned
+                    ]
+                    if pool:
+                        # Rebase onto origin/main before spawning new
+                        # tasks so workers start from fresh state. Done
+                        # once per admission burst, not per slot. Workers
+                        # already in flight will pick up the new head via
+                        # their own post_rebase step when they finish.
+                        sync_dispatched, _sync_pushed = sync_with_origin(
+                            state
+                        )
+                        if sync_dispatched:
+                            print(
+                                "\n[port-loop] pool: sync_with_origin "
+                                "dispatched a rescue agent; returning to "
+                                "outer loop."
+                            )
+                            return
                     while len(in_flight) < N:
                         pool = [
                             f for f in unported_pool()
