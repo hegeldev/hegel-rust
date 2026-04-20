@@ -26,15 +26,6 @@
       Acceptance: these files report 0 uncovered code lines in
       `just check-coverage` output.
 
-  - title: "[CI] coverage: src/native/shrinker/strings.rs"
-    details: |
-      Part of the PR #188 coverage ratchet split. 143 uncovered code lines.
-      Largest remaining shrinker file; test via CachedTestFunction with
-      string-bearing generators.
-
-      Acceptance: src/native/shrinker/strings.rs reports 0 uncovered code
-      lines in `just check-coverage`.
-
   - title: "[CI] coverage: src/native/schema/mod.rs"
     details: |
       Part of the PR #188 coverage ratchet split. 165 uncovered code lines.
