@@ -74,11 +74,11 @@ fn test_failing_test_output_with_backtrace() {
                 r".*",
                 r"\s+1: core::panicking::panic_fmt\n", // frame 1: panic_fmt
                 r".*",
-                r"\s+2: temp_hegel_test_\d+::main::{closure_name}\n", // frame 2: user's closure
+                r"\s+2: temp_hegel_test_\d+_\d+::main::{closure_name}\n", // frame 2: user's closure
                 r".*",
                 r"hegel::runner::", // hegel internals appear
                 r".*",
-                r"temp_hegel_test_\d+::main\n", // user's main (not closure)
+                r"temp_hegel_test_\d+_\d+::main\n", // user's main (not closure)
                 r".*",
                 r"note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace\.",
             ),
@@ -109,11 +109,11 @@ fn test_failing_test_output_with_full_backtrace() {
                 r"stack backtrace:\n",
                 r"\s+0: .*\n", // starts at frame 0
                 r".*",
-                r"temp_hegel_test_\d+::main::{closure_name}", // user's closure
+                r"temp_hegel_test_\d+_\d+::main::{closure_name}", // user's closure
                 r".*",
                 r"hegel::runner::", // hegel internals
                 r".*",
-                r"temp_hegel_test_\d+::main\n", // user's main
+                r"temp_hegel_test_\d+_\d+::main\n", // user's main
                 r".*$",
             ),
             closure_name = closure_name,
