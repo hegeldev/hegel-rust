@@ -315,3 +315,7 @@ fn i128_to_cbor(v: i128) -> Value {
         crate::cbor_utils::cbor_serialize(&v)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/schema/mod_tests.rs"]
+mod tests;
