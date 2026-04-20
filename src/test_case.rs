@@ -283,9 +283,9 @@ impl TestCase {
         (local.on_draw)(&format!("{:indent$}{}", "", message, indent = indent));
     }
 
-    /// Run `body` in a loop that should runs until error. Conceptually you should
-    /// imagine that this is a while true during normal operations - the loop can
-    /// terminate, but only by terminating the whole test case.
+    /// Run `body` in a loop that should runs "logically infinitely" or until
+    /// error. Roughly equivalent to a `loop` but with better interaction with
+    /// the test runner: This loop will never exit until the test case completes.
     ///
     /// At the start of each iteration a `// Loop iteration N` note is emitted
     /// into the failing-test replay output.
@@ -308,18 +308,18 @@ impl TestCase {
     pub fn repeat<F: FnMut()>(&self, mut body: F) -> ! {
         use crate::generators::{booleans, integers};
 
-        // Draw min_size uniformly over the full usize range. This is a
-        // shrinking trick: most of the time the collection is forced huge
-        // (making the loop behave like an infinite loop), but during shrinking
-        // the backend can reduce min_size to pick a finite iteration count.
-        let raw = self.draw_silent(integers::<usize>());
+        // Draw min_size uniformly over a large range to get good shrinking.
+        //
+        // Most of the time the collection is forced huge (making the loop
+        // behave like an infinite loop), but during shrinking the backend
+        // can reduce min_size to pick a finite iteration count.
+        //
         // hegel-core's collection machinery hits an internal AssertionError
-        // around float precision when min_size approaches 2^53. Cap well below
-        // that so any huge draw still behaves like "infinite" (the backend's
-        // data budget runs out long before this many iterations) without
-        // tripping the bug.
+        // around float precision when min_size approaches 2^53, so we add a
+        // cap well below that (the backend's data budget runs out long before
+        // this many iterations anyway) without tripping the bug.
         const MAX_SAFE_MIN_SIZE: usize = 1 << 40;
-        let min_size = std::cmp::min(raw, MAX_SAFE_MIN_SIZE);
+        let min_size = self.draw_silent(integers::<usize>().max_value(MAX_SAFE_MIN_SIZE));
 
         let mut collection = Collection::new(self, min_size, None);
         let mut iteration: u64 = 0;
