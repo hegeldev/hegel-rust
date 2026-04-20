@@ -635,6 +635,19 @@ fn gather_chars<F: Fn(char) -> bool>(alphabet: &Option<StringAlphabet>, predicat
             }
             out
         }
+        Some(StringAlphabet::Intervals { ranges, .. }) => {
+            let mut out = Vec::new();
+            for &(start, end) in ranges {
+                for cp in start..=end {
+                    if let Some(c) = char::from_u32(cp) {
+                        if predicate(c) {
+                            out.push(c);
+                        }
+                    }
+                }
+            }
+            out
+        }
         Some(StringAlphabet::Explicit(chars)) => {
             chars.iter().copied().filter(|c| predicate(*c)).collect()
         }
@@ -648,6 +661,10 @@ fn alphabet_allows(alphabet: &Option<StringAlphabet>, c: char) -> bool {
         Some(StringAlphabet::Range { min, max }) => {
             let cp = c as u32;
             cp >= *min && cp <= *max && !is_surrogate_cp(cp)
+        }
+        Some(StringAlphabet::Intervals { ranges, .. }) => {
+            let cp = c as u32;
+            ranges.iter().any(|&(s, e)| cp >= s && cp <= e)
         }
         Some(StringAlphabet::Explicit(chars)) => chars.contains(&c),
     }
@@ -677,12 +694,14 @@ fn draw_any_char(
                 }
             }
         }
-        Some(StringAlphabet::Explicit(chars)) => {
-            if chars.is_empty() {
+        Some(alpha) => {
+            let n = alpha.len();
+            if n == 0 {
                 mark_invalid(ntc)?;
+                unreachable!()
             }
-            let idx = ntc.draw_integer(0, chars.len() as i128 - 1)?;
-            Ok(chars[idx as usize])
+            let idx = ntc.draw_integer(0, n as i128 - 1)?;
+            Ok(alpha.char_at(idx as usize))
         }
     }
 }
