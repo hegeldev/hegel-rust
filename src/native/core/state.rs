@@ -546,20 +546,41 @@ impl NativeTestCase {
                     return ChoiceValue::String(nasty[idx].clone());
                 }
                 // Build a small sub-alphabet of valid codepoints (1..=10).
+                // Each entry has a 20% chance of being drawn from the ASCII
+                // sub-range (if any), matching pbtkit's _draw_string.
+                let ascii_hi = kind_rand.max_codepoint.min(127);
+                let has_ascii = kind_rand.min_codepoint <= ascii_hi;
                 let alpha_size = rng.random_range(1..=10);
                 let mut alphabet: Vec<u32> = Vec::with_capacity(alpha_size);
                 while alphabet.len() < alpha_size {
-                    // Rejection-sample a valid (non-surrogate) codepoint.
-                    let cp = rng.random_range(kind_rand.min_codepoint..=kind_rand.max_codepoint);
-                    if (0xD800..=0xDFFF).contains(&cp) {
-                        continue;
-                    }
+                    let cp = if has_ascii && rng.random::<f64>() < 0.2 {
+                        rng.random_range(kind_rand.min_codepoint..=ascii_hi)
+                    } else {
+                        loop {
+                            let cp = rng.random_range(
+                                kind_rand.min_codepoint..=kind_rand.max_codepoint,
+                            );
+                            if !(0xD800..=0xDFFF).contains(&cp) {
+                                break cp;
+                            }
+                        }
+                    };
                     alphabet.push(cp);
                 }
-                let len = if kind_rand.min_size == kind_rand.max_size {
+                // Cap random length using ManyState's average to avoid
+                // generating unreasonably large strings for huge max_size.
+                let min_f = kind_rand.min_size as f64;
+                let max_f = kind_rand.max_size as f64;
+                let average = f64::min(
+                    f64::max(min_f * 2.0, min_f + 5.0),
+                    0.5 * (min_f + max_f),
+                );
+                let effective_max =
+                    ((2.0 * average).ceil() as usize).min(kind_rand.max_size);
+                let len = if kind_rand.min_size == effective_max {
                     kind_rand.min_size
                 } else {
-                    rng.random_range(kind_rand.min_size..=kind_rand.max_size)
+                    rng.random_range(kind_rand.min_size..=effective_max)
                 };
                 let s: Vec<u32> = (0..len)
                     .map(|_| alphabet[rng.random_range(0..alphabet.len())])
