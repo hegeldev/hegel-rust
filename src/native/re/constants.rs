@@ -149,3 +149,7 @@ impl ChCode {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/re_constants_tests.rs"]
+mod tests;
