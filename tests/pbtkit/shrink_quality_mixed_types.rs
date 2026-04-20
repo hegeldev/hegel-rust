@@ -54,9 +54,7 @@ fn test_minimize_mixed_list() {
     );
     assert_eq!(result.len(), 10);
     for item in &result {
-        assert!(
-            *item == Tagged::Int(0) || *item == Tagged::Text(String::new()),
-        );
+        assert!(*item == Tagged::Int(0) || *item == Tagged::Text(String::new()),);
     }
 }
 
@@ -78,8 +76,14 @@ fn test_mixed_list_flatmap() {
     });
 
     let result = Minimal::new(gs::vecs(bool_or_text), |ls: &Vec<BoolOrText>| {
-        let bools = ls.iter().filter(|x| matches!(x, BoolOrText::Bool(_))).count();
-        let texts = ls.iter().filter(|x| matches!(x, BoolOrText::Text(_))).count();
+        let bools = ls
+            .iter()
+            .filter(|x| matches!(x, BoolOrText::Bool(_)))
+            .count();
+        let texts = ls
+            .iter()
+            .filter(|x| matches!(x, BoolOrText::Text(_)))
+            .count();
         bools >= 3 && texts >= 3
     })
     .test_cases(10000)
@@ -88,10 +92,9 @@ fn test_mixed_list_flatmap() {
     let as_set: std::collections::HashSet<_> = result.into_iter().collect();
     assert_eq!(
         as_set,
-        std::collections::HashSet::from([
-            BoolOrText::Bool(false),
-            BoolOrText::Text(String::new()),
-        ])
+        std::collections::HashSet::from(
+            [BoolOrText::Bool(false), BoolOrText::Text(String::new()),]
+        )
     );
 }
 
