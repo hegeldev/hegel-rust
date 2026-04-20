@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Expr, ExprClosure};
 
-use crate::hegel_test::{extract_ident_from_pat, rewrite_draws_in_stmts};
+use crate::common::{extract_ident_from_pat, rewrite_draws_in_block};
 
 /// Expand `hegel::rewrite_draws!(|tc| { ... })`.
 ///
@@ -37,7 +37,7 @@ pub fn expand_rewrite_draws(input: TokenStream) -> TokenStream {
     };
 
     if let Expr::Block(block_expr) = &mut *closure.body {
-        rewrite_draws_in_stmts(&mut block_expr.block.stmts, &tc_ident);
+        rewrite_draws_in_block(&mut block_expr.block, &tc_ident);
     }
 
     quote! { #closure }

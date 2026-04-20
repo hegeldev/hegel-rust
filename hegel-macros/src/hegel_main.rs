@@ -7,8 +7,8 @@ use crate::common::{
     rewrite_draws_in_block,
 };
 
-pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let test_args: SettingsAttrArgs = if attr.is_empty() {
+pub fn expand_main(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let main_args: SettingsAttrArgs = if attr.is_empty() {
         SettingsAttrArgs {
             settings: None,
             settings_args: Vec::new(),
@@ -28,7 +28,7 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     if func.sig.inputs.len() != 1 {
         return syn::Error::new_spanned(
             &func.sig,
-            "#[hegel::test] functions must take exactly one parameter of type hegel::TestCase.",
+            "#[hegel::main] functions must take exactly one parameter of type hegel::TestCase.",
         )
         .to_compile_error();
     }
@@ -39,7 +39,7 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
         FnArg::Receiver(_) => {
             return syn::Error::new_spanned(
                 param,
-                "#[hegel::test] functions cannot have a self parameter.",
+                "#[hegel::main] functions cannot have a self parameter.",
             )
             .to_compile_error();
         }
@@ -51,8 +51,8 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
         if attr.path().is_ident("test") {
             return syn::Error::new_spanned(
                 attr,
-                "#[hegel::test] used on a function with #[test].\
-                Remove the #[test] attribute; [hegel::test] automatically adds #[test].",
+                "#[hegel::main] used on a function with #[test]. \
+                 Remove the #[test] attribute.",
             )
             .to_compile_error();
         }
@@ -71,19 +71,35 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
         body
     };
 
-    let test_name = func.sig.ident.to_string();
-    let settings_expr = test_args.to_settings_expr();
+    let fn_name = func.sig.ident.to_string();
+    let default_settings_expr = main_args.to_settings_expr();
     let explicit_blocks = build_explicit_blocks(&explicit_cases, param_pat, &body);
 
     let new_body: TokenStream = quote! {
         {
+            let __hegel_default_settings: hegel::Settings = #default_settings_expr;
+            let __hegel_settings: hegel::Settings = match hegel::__apply_cli_args(
+                __hegel_default_settings,
+                ::std::env::args(),
+            ) {
+                hegel::CliOutcome::Success(s) => s,
+                hegel::CliOutcome::Help(msg) => {
+                    println!("{}", msg);
+                    ::std::process::exit(0);
+                }
+                hegel::CliOutcome::ParseError(msg) => {
+                    eprintln!("{}", msg);
+                    ::std::process::exit(2);
+                }
+            };
+
             #(#explicit_blocks)*
 
             hegel::Hegel::new(|#param_pat: #param_ty| #body)
-            .settings(#settings_expr)
-            .__database_key(format!("{}::{}", module_path!(), #test_name))
+            .settings(__hegel_settings)
+            .__database_key(format!("{}::{}", module_path!(), #fn_name))
             .test_location(hegel::TestLocation {
-                function: #test_name.to_string(),
+                function: #fn_name.to_string(),
                 file: file!().to_string(),
                 class: module_path!().to_string(),
                 begin_line: line!(),
@@ -99,7 +115,6 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     *func.block = new_block;
 
     quote! {
-        #[test]
         #func
     }
 }
