@@ -91,17 +91,11 @@ impl DataSource for NativeDataSource {
         if let Some(max) = max_size {
             map_insert(&mut payload, "max_size", max);
         }
-        let response = self.dispatch("new_collection", &payload)?;
-        match response {
-            Value::Integer(i) => {
-                let n: i128 = i.into();
-                Ok(n.to_string())
-            }
-            _ => panic!(
-                "Expected integer response from new_collection, got {:?}",
-                response
-            ),
-        }
+        let Value::Integer(i) = self.dispatch("new_collection", &payload)? else {
+            unreachable!("new_collection always returns Value::Integer")
+        };
+        let n: i128 = i.into();
+        Ok(n.to_string())
     }
 
     fn collection_more(&self, collection: &str) -> Result<bool, DataSourceError> {
@@ -111,10 +105,10 @@ impl DataSource for NativeDataSource {
             "collection_more",
             &cbor_map! { "collection_id" => collection_id },
         )?;
-        match response {
-            Value::Bool(b) => Ok(b),
-            _ => panic!("Expected bool from collection_more, got {:?}", response),
-        }
+        let Value::Bool(b) = response else {
+            unreachable!("collection_more always returns Value::Bool")
+        };
+        Ok(b)
     }
 
     fn collection_reject(
@@ -134,35 +128,34 @@ impl DataSource for NativeDataSource {
 
     fn new_pool(&self) -> Result<i128, DataSourceError> {
         use crate::cbor_utils::cbor_map;
-        let response = self.dispatch("new_pool", &cbor_map! {})?;
-        match response {
-            Value::Integer(i) => Ok(i.into()),
-            other => panic!("Expected integer for pool id, got {:?}", other),
-        }
+        let Value::Integer(i) = self.dispatch("new_pool", &cbor_map! {})? else {
+            unreachable!("new_pool always returns Value::Integer")
+        };
+        Ok(i.into())
     }
 
     fn pool_add(&self, pool_id: i128) -> Result<i128, DataSourceError> {
         use crate::cbor_utils::cbor_map;
-        let response = self.dispatch("pool_add", &cbor_map! {"pool_id" => pool_id})?;
-        match response {
-            Value::Integer(i) => Ok(i.into()),
-            other => panic!("Expected integer for variable id, got {:?}", other),
-        }
+        let Value::Integer(i) = self.dispatch("pool_add", &cbor_map! {"pool_id" => pool_id})?
+        else {
+            unreachable!("pool_add always returns Value::Integer")
+        };
+        Ok(i.into())
     }
 
     fn pool_generate(&self, pool_id: i128, consume: bool) -> Result<i128, DataSourceError> {
         use crate::cbor_utils::cbor_map;
-        let response = self.dispatch(
+        let Value::Integer(i) = self.dispatch(
             "pool_generate",
             &cbor_map! {
                 "pool_id" => pool_id,
                 "consume" => consume,
             },
-        )?;
-        match response {
-            Value::Integer(i) => Ok(i.into()),
-            other => panic!("Expected integer for variable id, got {:?}", other),
-        }
+        )?
+        else {
+            unreachable!("pool_generate always returns Value::Integer")
+        };
+        Ok(i.into())
     }
 
     fn mark_complete(&self, _status: &str, _origin: Option<&str>) {
@@ -173,3 +166,7 @@ impl DataSource for NativeDataSource {
         self.aborted.get()
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/embedded/native/data_source_tests.rs"]
+mod tests;
