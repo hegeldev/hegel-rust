@@ -195,6 +195,15 @@ Individually-skipped tests (rest of the file is ported):
   and inspecting `sys.modules`. Both `sys.modules` and the subprocess-Python approach
   are Python-specific facilities with no Rust counterpart.
 
+- `test_seed_printing.py` — all tests exercise Python/pytest-specific seed-reporting
+  infrastructure: `monkeypatch.setattr(core, "running_under_pytest", ...)` and
+  `monkeypatch.setattr(core, "global_force_seed", ...)` (patching Python module globals),
+  `test._hypothesis_internal_use_generated_seed` (Python dunder-adjacent attribute),
+  `@seed(N)` decorator syntax in output, `--hypothesis-seed=N` pytest CLI flag,
+  `capture_out` (Python stdout capture), and `InMemoryExampleDatabase` health-check
+  interaction. The seed-reporting UX is fundamentally Python/pytest-specific with no
+  hegel-rust counterpart.
+
 - `test_sideeffect_warnings.py` — all tests exercise Hypothesis's Python-specific
   import-time initialization infrastructure: `_hypothesis_globals.in_initialization`
   (a Python module attribute tracking import phase), `hypothesis.configuration`
