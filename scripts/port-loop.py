@@ -1563,7 +1563,11 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
         f"{start_sha[:12]}."
     )
     while True:
-        # Exit A: upstream is now in SKIPPED.md.
+        # Exit A: upstream is now in SKIPPED.md. Checked at the top of every
+        # iteration so that any dispatch below which causes the agent to add
+        # the file to SKIPPED.md short-circuits on the next turn rather than
+        # triggering a later step (e.g., PORT_MISSING_TESTS_PROMPT firing on
+        # a non-existent destination after the agent chose to skip).
         if picked.name in read_skipped(kind):
             # Step 5: tree must be clean.
             ok, out = gate_clean_tree()
@@ -1578,17 +1582,18 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
                 )
                 continue
 
-        any_dispatched = False
+        # Each step below `continue`s after dispatching, so the skip check
+        # above re-runs before any later step fires.
 
         # Step 1: destination must exist.
         if not destination.exists():
             state.dispatch(PORT_PROMPT.format(**fmt_args))
-            any_dispatched = True
+            continue
 
         # Step 2: destination must contain at least one #[test].
         if not destination_has_tests(destination):
             state.dispatch(PORT_MISSING_TESTS_PROMPT.format(**fmt_args))
-            any_dispatched = True
+            continue
 
         # Step 3: module's server-mode tests must pass.
         ok, out, perf = gate_module_server(kind, module)
@@ -1597,7 +1602,7 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
                 perf, PORT_TEST_FIX_SERVER_PROMPT.format(**fmt_args)
             )
             state.dispatch(prompt, gate_output=strip_build_noise(out))
-            any_dispatched = True
+            continue
 
         # Step 4: module's native-mode tests must pass.
         ok, out, perf = gate_module_native(kind, module)
@@ -1606,7 +1611,7 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
                 perf, PORT_TEST_FIX_NATIVE_PROMPT.format(**fmt_args)
             )
             state.dispatch(prompt, gate_output=strip_build_noise(out))
-            any_dispatched = True
+            continue
 
         # Step 5: tree must be clean.
         ok, out = gate_clean_tree()
@@ -1614,17 +1619,7 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
             state.resume_last(
                 PORT_COMMIT_PROMPT.format(**fmt_args), gate_output=out
             )
-            any_dispatched = True
-
-        if any_dispatched:
-            # Progress was made but the port isn't green yet; fall back to
-            # the outer loop so lint/full-test gates get a chance before we
-            # retry this file.
-            print(
-                f"\n[port-loop] sub-loop iteration made progress; "
-                f"returning to outer loop."
-            )
-            break
+            continue
 
         # All gates passed. If nothing was committed during this sub-loop
         # there's nothing to review or reflect on.
