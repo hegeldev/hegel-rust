@@ -77,6 +77,25 @@ fn test_can_generate_patterns_with_alphabet() {
     }
 }
 
+// Coverage: exercises the StringAlphabet::Intervals branch in alphabet_allows
+// (regex.rs:665-667). exclude_characters builds an Intervals alphabet; the
+// literal "a" and character class "[a-z]" both call alphabet_allows.
+#[test]
+#[cfg(feature = "native")]
+fn test_regex_with_intervals_alphabet() {
+    for pattern in ["a", "abc", "[a-z]", "[a-z0-9_]", "ab?", "ab|cd"] {
+        check_can_generate_examples(
+            gs::from_regex(pattern).alphabet(gs::characters().exclude_characters("x")),
+        );
+    }
+    assert_all_examples(
+        gs::from_regex(r"\A[a-z]+\Z")
+            .fullmatch(true)
+            .alphabet(gs::characters().exclude_characters("x")),
+        |s: &String| !s.contains('x'),
+    );
+}
+
 // test_literals_with_ignorecase: patterns with re.IGNORECASE or inline (?i).
 // re.compile("\\Aa\\Z", re.IGNORECASE) == "(?i)\\Aa\\Z"
 #[test]
