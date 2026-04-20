@@ -32,6 +32,13 @@ pub(crate) const ASSUME_FAIL_STRING: &str = "__HEGEL_ASSUME_FAIL";
 /// assumption failures apart from backend-initiated data exhaustion.
 pub(crate) const STOP_TEST_STRING: &str = "__HEGEL_STOP_TEST";
 
+/// The sentinel string used by `TestCase::repeat` to signal that its loop
+/// completed naturally (the collection said "stop" and no panic occurred
+/// inside the body). Because `repeat` returns `!`, it has no normal-return
+/// path; this panic is how it tells the runner "this test case finished
+/// successfully, record it as Valid".
+pub(crate) const LOOP_DONE_STRING: &str = "__HEGEL_LOOP_DONE";
+
 /// Panic with the appropriate sentinel for the given data source error.
 fn panic_on_data_source_error(e: DataSourceError) -> ! {
     match e {
@@ -276,14 +283,9 @@ impl TestCase {
         (local.on_draw)(&format!("{:indent$}{}", "", message, indent = indent));
     }
 
-    /// Run `body` in a loop that logically never terminates but can shrink to a
-    /// finite number of iterations.
-    ///
-    /// The loop is driven by the backend's collection API so that shrinking can
-    /// reduce the number of iterations, while normal runs continue until the
-    /// backend runs out of data. If an assumption inside `body` fails, that
-    /// iteration is skipped and the loop continues with the next one, matching
-    /// the behavior of rules in stateful testing.
+    /// Run `body` in a loop that should runs until error. Conceptually you should
+    /// imagine that this is a while true during normal operations - the loop can
+    /// terminate, but only by terminating the whole test case.
     ///
     /// At the start of each iteration a `// Loop iteration N` note is emitted
     /// into the failing-test replay output.
@@ -296,14 +298,14 @@ impl TestCase {
     /// #[hegel::test]
     /// fn my_test(tc: hegel::TestCase) {
     ///     let mut total: i32 = 0;
-    ///     tc.repeat(|tc| {
+    ///     tc.repeat(|| {
     ///         let n: i32 = tc.draw(gs::integers().min_value(0).max_value(10));
     ///         total += n;
     ///         assert!(total >= 0);
     ///     });
     /// }
     /// ```
-    pub fn repeat<F: FnMut(&TestCase)>(&self, mut body: F) {
+    pub fn repeat<F: FnMut()>(&self, mut body: F) -> ! {
         use crate::generators::{booleans, integers};
 
         // Draw min_size uniformly over the full usize range. This is a
@@ -326,8 +328,13 @@ impl TestCase {
             iteration += 1;
             self.note(&format!("// Loop iteration {}", iteration));
 
-            let body_tc = self.child(2);
-            let result = catch_unwind(AssertUnwindSafe(|| body(&body_tc)));
+            // Indent draws inside the body so replay output shows them nested
+            // under their "Loop iteration N" header. Always restored after the
+            // body returns, including on panic.
+            let prev_indent = self.local.borrow().indent;
+            self.local.borrow_mut().indent = prev_indent + 2;
+            let result = catch_unwind(AssertUnwindSafe(&mut body));
+            self.local.borrow_mut().indent = prev_indent;
 
             match result {
                 Ok(()) => {}
@@ -356,6 +363,13 @@ impl TestCase {
                 }
             }
         }
+
+        // The collection has decided the loop is "done". There is no
+        // successful-return path for `!`, so end this test case via
+        // LOOP_DONE_STRING — the runner treats that sentinel as a normal
+        // successful completion (Valid), which is the right treatment for a
+        // stateful-style loop that never found a bug.
+        panic!("{}", LOOP_DONE_STRING);
     }
 
     pub(crate) fn child(&self, extra_indent: usize) -> Self {
