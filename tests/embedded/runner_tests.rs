@@ -1,37 +1,5 @@
 use super::*;
 
-fn exit_failure_status() -> std::process::ExitStatus {
-    #[cfg(unix)]
-    use std::os::unix::process::ExitStatusExt;
-    #[cfg(windows)]
-    use std::os::windows::process::ExitStatusExt;
-    std::process::ExitStatus::from_raw(1)
-}
-
-fn spawn_exit_0() -> std::process::Child {
-    #[cfg(unix)]
-    return Command::new("true").spawn().unwrap();
-    #[cfg(windows)]
-    return Command::new("cmd").args(["/C", "exit 0"]).spawn().unwrap();
-}
-
-fn spawn_exit_1() -> std::process::Child {
-    #[cfg(unix)]
-    return Command::new("false").spawn().unwrap();
-    #[cfg(windows)]
-    return Command::new("cmd").args(["/C", "exit 1"]).spawn().unwrap();
-}
-
-fn spawn_long_running() -> std::process::Child {
-    #[cfg(unix)]
-    return Command::new("sleep").arg("100").spawn().unwrap();
-    #[cfg(windows)]
-    return Command::new("powershell")
-        .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 100"])
-        .spawn()
-        .unwrap();
-}
-
 #[test]
 fn test_settings_verbosity() {
     let _ = Settings::new().verbosity(Verbosity::Debug);
