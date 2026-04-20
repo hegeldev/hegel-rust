@@ -398,6 +398,34 @@ gates; if still broken after this attempt, the worker escalates to a
 rescue agent which will abandon the port rather than loop forever.
 """
 
+POST_REBASE_CONFLICT_PROMPT = """\
+Parallel port-loop worker: a rebase of the worker branch onto
+`origin/{supervisor_branch}` hit conflicts. `git status` is included
+below. You are now mid-rebase.
+
+Resolve the conflict(s) and drive the rebase to completion:
+
+- Inspect the conflicted files and decide the right content for each
+  hunk. For `SKIPPED.md`, the usual resolution is a union — keep both
+  workers' entries in the same section. For source/test files, prefer
+  the version that matches what the port actually needs; drop stale
+  edits.
+- `git add <file>` each resolved file (or `git rm` if the file is
+  meant to be deleted).
+- `git rebase --continue` until the rebase is done. If more conflicts
+  surface, repeat.
+- If a commit becomes empty after resolution, use `git rebase --skip`.
+- Do NOT `git rebase --abort` unless the conflict is genuinely
+  unresolvable and the whole port needs to be redone from scratch.
+
+After this, the worker re-runs the native + server gates. If those
+pass, the port is complete. If they fail, a follow-up dispatch gets
+one chance to fix the regression before the port is abandoned via
+SKIPPED.md.
+
+Rebase-state output:
+"""
+
 PORT_REVIEW_PROMPT = """\
 Review the port of {path} → {destination}. The gate chain (destination
 exists, has `#[test]` attributes, server-mode tests pass, native-mode
@@ -1845,6 +1873,17 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
         # Loop around to re-run the gates on the reviewer's changes.
 
 
+def _rebase_in_progress() -> bool:
+    """True if `.git/rebase-{merge,apply}/` exists in REPO_ROOT's gitdir."""
+    r = _run_capture(["git", "rev-parse", "--git-path", "rebase-merge"], cwd=REPO_ROOT)
+    if r.returncode == 0 and Path(r.stdout.strip()).exists():
+        return True
+    r = _run_capture(["git", "rev-parse", "--git-path", "rebase-apply"], cwd=REPO_ROOT)
+    if r.returncode == 0 and Path(r.stdout.strip()).exists():
+        return True
+    return False
+
+
 def _gates_green_for(kind: str, module: str) -> tuple[bool, str]:
     """Fast re-check of the module's server+native gates + clean tree.
 
@@ -1903,12 +1942,36 @@ def post_rebase(
 
     rebase = _run_capture(["git", "rebase", target], cwd=REPO_ROOT)
     if rebase.returncode != 0:
-        _run_capture(["git", "rebase", "--abort"], cwd=REPO_ROOT)
-        raise RuntimeError(
-            f"post-rebase `git rebase {target}` had conflicts:\n"
-            f"{rebase.stdout}\n{rebase.stderr}"
+        # Don't abort. Let an agent resolve the conflict; a merge is
+        # almost always recoverable (e.g. two workers both appending to
+        # SKIPPED.md) and the existing gate-check loop catches the case
+        # where resolution leaves the tree in a regressed state.
+        print(
+            "\n[port-loop] post-rebase: conflict during rebase; "
+            "dispatching resolution agent."
         )
-    print(f"\n[port-loop] post-rebase: rebased onto {target_sha[:12]}.")
+        status = _run_capture(["git", "status"], cwd=REPO_ROOT)
+        prompt = POST_REBASE_CONFLICT_PROMPT.format(
+            supervisor_branch=supervisor_branch,
+        )
+        state.dispatch(
+            prompt,
+            gate_output=rebase.stdout + rebase.stderr + "\n" + status.stdout,
+        )
+        if _rebase_in_progress():
+            # Agent gave up or stalled. Abort so we leave a clean tree
+            # and escalate to merge-rescue.
+            _run_capture(["git", "rebase", "--abort"], cwd=REPO_ROOT)
+            raise RuntimeError(
+                f"post-rebase `git rebase {target}` had conflicts the "
+                f"resolution agent could not finish."
+            )
+        print(
+            f"\n[port-loop] post-rebase: conflict resolved; now at "
+            f"{git_head()[:12]}."
+        )
+    else:
+        print(f"\n[port-loop] post-rebase: rebased onto {target_sha[:12]}.")
 
     # Verify gates still pass. On failure, dispatch one fix; if that
     # doesn't restore green, raise so the worker hands off to rescue.
@@ -2169,6 +2232,21 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
     # earlier run before we start minting new ones.
     _cleanup_remote_worker_branches()
 
+    def _signal_worker_group(proc: subprocess.Popen, sig: int) -> None:
+        """Signal the worker's whole process group.
+
+        Workers are spawned with `start_new_session=True` so each one
+        has its own PGID equal to its PID. Signaling the group cascades
+        to the worker's own `claude` subprocesses (which live in the
+        same group — `dispatch_claude` does NOT start a new session for
+        them). Without this, SIGINT lands only on the worker's Python
+        process and leaves claude running underneath.
+        """
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+
     def _handle_sigint(_signum, _frame):
         if not stop[0]:
             print(
@@ -2178,10 +2256,7 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
             )
         stop[0] = True
         for info in in_flight.values():
-            try:
-                info["proc"].send_signal(signal.SIGINT)
-            except Exception:
-                pass
+            _signal_worker_group(info["proc"], signal.SIGINT)
 
     prev_handler = signal.signal(signal.SIGINT, _handle_sigint)
 
@@ -2298,17 +2373,17 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
             # commits that affect PR CI; force a fresh admission check.
             _pool_admission_invalidate()
     finally:
+        # Escalate: SIGTERM → wait 30s → SIGKILL, all signaling the
+        # worker's process group so `claude` under the worker also dies.
         for info in in_flight.values():
-            try:
-                info["proc"].terminate()
-            except Exception:
-                pass
+            _signal_worker_group(info["proc"], signal.SIGTERM)
         for info in in_flight.values():
             try:
                 info["proc"].wait(timeout=30)
             except Exception:
+                _signal_worker_group(info["proc"], signal.SIGKILL)
                 try:
-                    info["proc"].kill()
+                    info["proc"].wait(timeout=5)
                 except Exception:
                     pass
         signal.signal(signal.SIGINT, prev_handler)
