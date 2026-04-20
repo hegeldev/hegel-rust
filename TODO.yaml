@@ -6,17 +6,3 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-- title: "[CI] coverage: uncovered lines in src/server/process.rs:96,103-105"
-  details: |
-    The coverage job on PR 188 (run 24687359704) fails because
-    src/server/process.rs lines 96 and 103-105 are uncovered:
-
-      src/server/process.rs:96:  // Version matches — nothing to report
-      src/server/process.rs:103: parts.push(format!(
-      src/server/process.rs:104:     "'{}' --version returned unexpected output. Is this a hegel binary?",
-      src/server/process.rs:105:     binary_path
-
-    Line 96 is the success arm of a version check (no message to push).
-    Lines 103-105 are the "unexpected --version output" arm. Add tests
-    that hit both arms of the version-comparison logic.
