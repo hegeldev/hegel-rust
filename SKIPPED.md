@@ -274,6 +274,13 @@ Individually-skipped tests (rest of the file is ported):
   targeted PBT scores). hegel-rust exposes none of these: no `event()`, no `target()`,
   no statistics collection or formatting infrastructure.
 
+- `test_detection.py` — all tests use `is_hypothesis_test()`, a Python public API
+  that checks whether a function was decorated with `@given` by inspecting a Python
+  function attribute. Hegel-rust tests are closures passed to `Hegel::new(|tc| {...}).run()`,
+  not decorated functions, so the concept of runtime test-detection has no Rust counterpart.
+  The stateful test additionally uses `RuleBasedStateMachine.TestCase().runTest`, which is
+  Python unittest metaclass machinery.
+
 - `test_custom_reprs.py` — every test exercises Python's `__repr__` dunder on
   Hypothesis strategy objects (`repr(st.integers())`, `repr(st.sampled_from(...))`,
   `repr(st.builds(...))`, `repr(st.characters())`, etc.) and/or inspects
