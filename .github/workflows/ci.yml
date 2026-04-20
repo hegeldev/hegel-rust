@@ -43,12 +43,16 @@ jobs:
         run: cargo package --workspace
 
   test:
-    name: test (${{ matrix.rust }})
-    runs-on: ubuntu-latest
+    # Keep the name matching the branch-protection required checks on Linux
+    # (`test (1.86)` / `test (stable)`); Windows variants get a suffix.
+    name: test (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         rust: ["1.86", stable]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -67,13 +71,28 @@ jobs:
         run: just check-tests
 
   test-all-features:
-    name: test-all-features (${{ matrix.rust }})
-    runs-on: ubuntu-latest
+    name: test-all-features (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     strategy:
+      fail-fast: false
       matrix:
-        rust: ["1.86", stable]
+        include:
+          # On Windows, --all-features would enable `antithesis`, which triggers
+          # a compile_error! on Windows. Drop back to just `rand`.
+          - os: windows-latest
+            rust: "1.86"
+            recipe: check-tests-rand-feature
+          - os: windows-latest
+            rust: stable
+            recipe: check-tests-rand-feature
+          - os: ubuntu-latest
+            rust: "1.86"
+            recipe: check-tests-all-features
+          - os: ubuntu-latest
+            rust: stable
+            recipe: check-tests-all-features
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -87,8 +106,8 @@ jobs:
         with:
           tools: just uv
 
-      - name: Run tests with all features
-        run: just check-tests-all-features
+      - name: Run tests
+        run: just ${{ matrix.recipe }}
 
   test-min-protocol:
     name: test-min-protocol

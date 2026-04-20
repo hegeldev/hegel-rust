@@ -14,7 +14,10 @@ fn test_cache_dir_with_home() {
 
 #[test]
 fn test_find_in_path_finds_known_binary() {
+    #[cfg(unix)]
     assert!(find_in_path("sh").is_some());
+    #[cfg(windows)]
+    assert!(find_in_path("cmd").is_some());
 }
 
 #[test]
@@ -35,13 +38,14 @@ fn test_find_uv_impl_uses_path_uv_when_available() {
 fn test_find_uv_impl_returns_cached_when_not_in_path() {
     let temp = tempfile::tempdir().unwrap();
     let cache = temp.path().to_path_buf();
-    let fake_uv = cache.join("uv");
+    let fake_uv = cache.join(UV_BINARY_NAME);
     std::fs::write(&fake_uv, b"fake uv").unwrap();
     let result = find_uv_impl(None, cache);
     assert_eq!(result, fake_uv.to_string_lossy());
 }
 
 #[test]
+#[cfg(unix)]
 #[should_panic(expected = "Failed to run uv installer")]
 fn test_install_uv_fails_with_bad_sh_command() {
     let temp = tempfile::tempdir().unwrap();
@@ -50,7 +54,9 @@ fn test_install_uv_fails_with_bad_sh_command() {
 
 /// Integration test: exercises the full install path using the embedded
 /// installer script. Requires network access to download uv from GitHub.
+/// Unix-only because the embedded installer is a shell script.
 #[test]
+#[cfg(unix)]
 fn test_find_uv_impl_installs_when_missing() {
     let temp = tempfile::tempdir().unwrap();
     let cache = temp.path().to_path_buf();
