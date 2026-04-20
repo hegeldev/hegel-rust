@@ -190,8 +190,32 @@ impl TestCase {
     /// ```
     pub fn assume(&self, condition: bool) {
         if !condition {
-            panic!("{}", ASSUME_FAIL_STRING);
+            self.reject();
         }
+    }
+
+    /// Reject the current test input unconditionally.
+    ///
+    /// Equivalent to `assume(false)`, but with a `!` return type so that code
+    /// following the call is statically known to be unreachable.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators as gs;
+    ///
+    /// #[hegel::test]
+    /// fn my_test(tc: hegel::TestCase) {
+    ///     let n: i32 = tc.draw(gs::integers());
+    ///     let positive: u32 = match u32::try_from(n) {
+    ///         Ok(v) => v,
+    ///         Err(_) => tc.reject(),
+    ///     };
+    ///     let _ = positive;
+    /// }
+    /// ```
+    pub fn reject(&self) -> ! {
+        panic!("{}", ASSUME_FAIL_STRING);
     }
 
     /// Note a message which will be displayed with the reported failing test case.
