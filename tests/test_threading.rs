@@ -1,9 +1,9 @@
 //! Tests for sharing a TestCase across threads.
 //!
 //! `TestCase` is `Send` (but not `Sync`): a clone may be moved to another
-//! thread, and data generation works from that thread. A shared reentrant
-//! lock on the shared state serialises top-level interactions, so a single
-//! `draw` always runs atomically.
+//! thread, and data generation works from that thread. A shared mutex
+//! serialises individual backend calls, so concurrent backend traffic never
+//! interleaves mid-message.
 //!
 //! These tests cover *fully deterministic* uses where the test interleaves
 //! thread work but does not race — that is, one thread does work, another
@@ -99,4 +99,27 @@ fn test_nested_generators_work_across_thread_boundary(tc: TestCase) {
         .take()
         .expect("thread produced no value");
     assert!(xs.len() <= 5);
+}
+
+/// Composite generator that draws, spawns a worker thread that also draws
+/// and returns a value, joins it, then draws again. Under the previous
+/// coarse-grained reentrant lock this pattern deadlocked: `tc.draw(composite)`
+/// held the lock on the main thread while the worker tried to acquire the
+/// same (reentrant) lock from a different thread. Fine-grained locking fixes
+/// this.
+#[hegel::composite]
+fn thread_mid_generator(tc: TestCase) -> (i32, i64, bool) {
+    let a: i32 = tc.draw(gs::integers::<i32>());
+
+    let tc_worker = tc.clone();
+    let handle = std::thread::spawn(move || tc_worker.draw(gs::integers::<i64>()));
+    let b: i64 = handle.join().expect("thread panicked");
+
+    let c: bool = tc.draw(gs::booleans());
+    (a, b, c)
+}
+
+#[hegel::test(test_cases = 10)]
+fn test_thread_inside_composite_does_not_deadlock(tc: TestCase) {
+    let (_a, _b, _c) = tc.draw(thread_mid_generator());
 }

@@ -1,7 +1,7 @@
 pub use crate::backend::{DataSource, DataSourceError};
 use crate::generators::Generator;
 use ciborium::Value;
-use parking_lot::{ReentrantMutex, ReentrantMutexGuard};
+use parking_lot::Mutex;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -51,21 +51,18 @@ fn panic_on_data_source_error(e: DataSourceError) -> ! {
 
 pub(crate) struct TestCaseGlobalData {
     is_last_run: bool,
-    /// Shared, reentrant lock around the state a test case mutates through its
-    /// data source and draw-tracking bookkeeping.
-    ///
-    /// All top-level `TestCase` methods acquire this lock for the duration of a
-    /// single operation. Reentrance lets nested calls (e.g. a generator inside
-    /// `draw` calling `start_span`) re-acquire on the same thread without
-    /// deadlock. Clones of a `TestCase` share this lock, so moving a clone to a
-    /// different thread serialises generation between the two threads while
-    /// still allowing each thread to drive its own draws.
-    shared: ReentrantMutex<SharedState>,
+    /// Fine-grained lock over the state shared between clones of a
+    /// `TestCase`. Acquired briefly around each individual backend call
+    /// and around each mutation of the draw-tracking bookkeeping, not
+    /// around entire user-visible operations like a `draw`. The mutex is
+    /// non-reentrant; no method holds it while calling back into
+    /// `TestCase`.
+    shared: Mutex<SharedState>,
 }
 
 pub(crate) struct SharedState {
     data_source: Box<dyn DataSource>,
-    draw_state: RefCell<DrawState>,
+    draw_state: DrawState,
 }
 
 pub(crate) struct DrawState {
@@ -123,11 +120,10 @@ pub(crate) struct TestCaseLocalData {
 ///
 /// ## What is guaranteed
 ///
-/// Each top-level operation (`draw`, `draw_silent`, `note`, takes a shared
-/// reentrant lock for its entire duration, so a single operation always
-/// runs atomically with respect to other threads holding a clone. The
-/// lock is reentrant, so generators that call back  into `TestCase` on
-/// the same thread do not deadlock.
+/// Individual backend operations (a single `generate`, `start_span`,
+/// `stop_span`, or pool/collection call) are serialised by a shared
+/// mutex, so the bytes on the wire to the backend stay well-formed no
+/// matter how clones are used across threads.
 ///
 /// This is enough for patterns where threads do not race on generation —
 /// for example:
@@ -145,22 +141,19 @@ pub(crate) struct TestCaseLocalData {
 /// right now should be considered a borderline-internal feature. If
 /// you do not know exactly what you're doing it probably won't work.
 ///
-/// The main things that will definitely cause things to go wrong are:
-///
 /// Two or more threads drawing concurrently from clones of the same
 /// `TestCase` is allowed by the type system but is **not deterministic**:
 /// the order in which draws interleave depends on thread scheduling, and
-/// the backend has no way to reproduce that order on replay. In practice
-/// this means such tests may:
+/// the backend has no way to reproduce that order on replay. Composite
+/// draws are also not atomic with respect to other threads — another
+/// thread's draws can land between this thread's `start_span` and
+/// `stop_span`, corrupting the shrink-friendly span structure. In
+/// practice this means such tests may:
 ///
 /// - Produce different values on successive runs of the same seed.
 /// - Shrink poorly or not at all.
 /// - Surface backend errors (e.g. `StopTest`) in one thread caused by
 ///   another thread's draws exhausting the budget.
-///
-/// Additionally, if within a data generator (e.g. in `composite`) you
-/// wait on the results of another thread that is also generating data,
-/// you will get a deadlock.
 ///
 /// ## Panics inside spawned threads
 ///
@@ -235,13 +228,13 @@ impl TestCase {
         TestCase {
             global: Arc::new(TestCaseGlobalData {
                 is_last_run,
-                shared: ReentrantMutex::new(SharedState {
+                shared: Mutex::new(SharedState {
                     data_source,
-                    draw_state: RefCell::new(DrawState {
+                    draw_state: DrawState {
                         named_draw_counts: HashMap::new(),
                         named_draw_repeatable: HashMap::new(),
                         allocated_display_names: HashSet::new(),
-                    }),
+                    },
                 }),
             }),
             local: RefCell::new(TestCaseLocalData {
@@ -252,16 +245,15 @@ impl TestCase {
         }
     }
 
-    /// Acquire the shared reentrant lock for the duration of `f`.
+    /// Acquire the shared mutex for the duration of `f`.
     ///
-    /// Every top-level `TestCase` operation (draw, assume, note, span
-    /// manipulation, raw schema-based generation) runs inside this helper, so
-    /// concurrent operations from different threads serialise but recursive
-    /// operations on the same thread reuse the existing guard without
-    /// deadlocking.
-    fn with_shared<R>(&self, f: impl FnOnce(&SharedState) -> R) -> R {
-        let guard: ReentrantMutexGuard<'_, SharedState> = self.global.shared.lock();
-        f(&guard)
+    /// Held briefly around individual backend calls or draw-state updates,
+    /// never around whole user-visible operations. The mutex is
+    /// non-reentrant, so `f` must not call any other method that also
+    /// acquires the shared mutex.
+    fn with_shared<R>(&self, f: impl FnOnce(&mut SharedState) -> R) -> R {
+        let mut guard = self.global.shared.lock();
+        f(&mut guard)
     }
 
     /// Draw a value from a generator.
@@ -304,13 +296,11 @@ impl TestCase {
         name: &str,
         repeatable: bool,
     ) -> T {
-        self.with_shared(|shared| {
-            let value = generator.do_draw(self);
-            if self.local.borrow().span_depth == 0 {
-                self.record_named_draw(shared, &value, name, repeatable);
-            }
-            value
-        })
+        let value = generator.do_draw(self);
+        if self.local.borrow().span_depth == 0 {
+            self.record_named_draw(&value, name, repeatable);
+        }
+        value
     }
 
     /// Draw a value from a generator without recording it in the output.
@@ -318,7 +308,7 @@ impl TestCase {
     /// Unlike [`draw`](Self::draw), this does not require `T: Debug` and
     /// will not print the value in the failing-test summary.
     pub fn draw_silent<T>(&self, generator: impl Generator<T>) -> T {
-        self.with_shared(|_| generator.do_draw(self))
+        generator.do_draw(self)
     }
 
     /// Assume a condition is true. If false, reject the current test input.
@@ -380,14 +370,12 @@ impl TestCase {
     /// }
     /// ```
     pub fn note(&self, message: &str) {
-        self.with_shared(|_| {
-            if !self.global.is_last_run {
-                return;
-            }
-            let local = self.local.borrow();
-            let indent = local.indent;
-            (local.on_draw)(&format!("{:indent$}{}", "", message, indent = indent));
-        })
+        if !self.global.is_last_run {
+            return;
+        }
+        let local = self.local.borrow();
+        let indent = local.indent;
+        (local.on_draw)(&format!("{:indent$}{}", "", message, indent = indent));
     }
 
     /// Run `body` in a loop that should runs "logically infinitely" or until
@@ -491,61 +479,56 @@ impl TestCase {
         }
     }
 
-    fn record_named_draw<T: std::fmt::Debug>(
-        &self,
-        shared: &SharedState,
-        value: &T,
-        name: &str,
-        repeatable: bool,
-    ) {
-        let mut draw_state = shared.draw_state.borrow_mut();
+    fn record_named_draw<T: std::fmt::Debug>(&self, value: &T, name: &str, repeatable: bool) {
+        let display_name = self.with_shared(|shared| {
+            let draw_state = &mut shared.draw_state;
 
-        match draw_state.named_draw_repeatable.get(name) {
-            Some(&prev) if prev != repeatable => {
+            match draw_state.named_draw_repeatable.get(name) {
+                Some(&prev) if prev != repeatable => {
+                    panic!(
+                        "__draw_named: name {:?} used with inconsistent repeatable flag (was {}, now {}). \
+                        If you have not called __draw_named deliberately yourself, this is likely a bug in \
+                        hegel. Please file a bug report at https://github.com/hegeldev/hegel-rust/issues",
+                        name, prev, repeatable
+                    );
+                }
+                _ => {
+                    draw_state
+                        .named_draw_repeatable
+                        .insert(name.to_string(), repeatable);
+                }
+            }
+
+            let count = draw_state
+                .named_draw_counts
+                .entry(name.to_string())
+                .or_insert(0);
+            *count += 1;
+            let current_count = *count;
+
+            if !repeatable && current_count > 1 {
                 panic!(
-                    "__draw_named: name {:?} used with inconsistent repeatable flag (was {}, now {}). \
-                    If you have not called __draw_named deliberately yourself, this is likely a bug in \
-                    hegel. Please file a bug report at https://github.com/hegeldev/hegel-rust/issues",
-                    name, prev, repeatable
+                    "__draw_named: name {:?} used more than once but repeatable is false. \
+                    This is almost certainly a bug in hegel - please report it at https://github.com/hegeldev/hegel-rust/issues",
+                    name
                 );
             }
-            _ => {
-                draw_state
-                    .named_draw_repeatable
-                    .insert(name.to_string(), repeatable);
-            }
-        }
 
-        let count = draw_state
-            .named_draw_counts
-            .entry(name.to_string())
-            .or_insert(0);
-        *count += 1;
-        let current_count = *count;
-
-        if !repeatable && current_count > 1 {
-            panic!(
-                "__draw_named: name {:?} used more than once but repeatable is false. \
-                This is almost certainly a bug in hegel - please report it at https://github.com/hegeldev/hegel-rust/issues",
-                name
-            );
-        }
-
-        let display_name = if repeatable {
-            let mut candidate = current_count;
-            loop {
-                let name = format!("{}_{}", name, candidate);
-                if draw_state.allocated_display_names.insert(name.clone()) {
-                    break name;
+            if repeatable {
+                let mut candidate = current_count;
+                loop {
+                    let name = format!("{}_{}", name, candidate);
+                    if draw_state.allocated_display_names.insert(name.clone()) {
+                        break name;
+                    }
+                    candidate += 1;
                 }
-                candidate += 1;
+            } else {
+                let name = name.to_string();
+                draw_state.allocated_display_names.insert(name.clone());
+                name
             }
-        } else {
-            let name = name.to_string();
-            draw_state.allocated_display_names.insert(name.clone());
-            name
-        };
-        drop(draw_state);
+        });
 
         let local = self.local.borrow();
         let indent = local.indent;
@@ -561,18 +544,17 @@ impl TestCase {
 
     /// Run `f` with access to this test case's data source.
     ///
-    /// Acquires the shared reentrant lock so the closure sees a consistent
-    /// view of the data source; nested `with_data_source` calls on the same
-    /// thread reuse the existing guard.
+    /// Acquires the shared mutex for the duration of the call so
+    /// concurrent threads don't scramble backend traffic. The closure
+    /// must not call back into any other `TestCase` method that would
+    /// re-acquire the shared mutex.
     pub(crate) fn with_data_source<R>(&self, f: impl FnOnce(&dyn DataSource) -> R) -> R {
         self.with_shared(|shared| f(shared.data_source.as_ref()))
     }
 
     /// Report whether the test case has been aborted (StopTest/overflow).
     ///
-    /// Used by the runner to decide whether to send `mark_complete`. Acquires
-    /// the shared lock so it observes a consistent view of the data source
-    /// even if another thread is mid-draw.
+    /// Used by the runner to decide whether to send `mark_complete`.
     pub(crate) fn test_aborted(&self) -> bool {
         self.with_data_source(|ds| ds.test_aborted())
     }
@@ -584,30 +566,26 @@ impl TestCase {
 
     #[doc(hidden)]
     pub fn start_span(&self, label: u64) {
-        self.with_shared(|shared| {
-            self.local.borrow_mut().span_depth += 1;
-            if let Err(e) = shared.data_source.start_span(label) {
-                // nocov start
-                let mut local = self.local.borrow_mut();
-                assert!(local.span_depth > 0);
-                local.span_depth -= 1;
-                drop(local);
-                panic_on_data_source_error(e);
-                // nocov end
-            }
-        })
+        self.local.borrow_mut().span_depth += 1;
+        if let Err(e) = self.with_data_source(|ds| ds.start_span(label)) {
+            // nocov start
+            let mut local = self.local.borrow_mut();
+            assert!(local.span_depth > 0);
+            local.span_depth -= 1;
+            drop(local);
+            panic_on_data_source_error(e);
+            // nocov end
+        }
     }
 
     #[doc(hidden)]
     pub fn stop_span(&self, discard: bool) {
-        self.with_shared(|shared| {
-            {
-                let mut local = self.local.borrow_mut();
-                assert!(local.span_depth > 0);
-                local.span_depth -= 1;
-            }
-            let _ = shared.data_source.stop_span(discard);
-        })
+        {
+            let mut local = self.local.borrow_mut();
+            assert!(local.span_depth > 0);
+            local.span_depth -= 1;
+        }
+        let _ = self.with_data_source(|ds| ds.stop_span(discard));
     }
 }
 
