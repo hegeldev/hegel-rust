@@ -6,30 +6,3 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-  - title: "[CI] tests/hypothesis/verbosity.rs::test_no_indexerror_in_quiet_mode_report_multiple"
-    details: |
-      Job: test-min-protocol ("Run tests with minimum protocol version")
-      Test: verbosity::test_no_indexerror_in_quiet_mode_report_multiple
-
-      The TempRustProject created by quiet_failing_project() produces an
-      invalid Cargo.toml. The test panics at tests/common/utils.rs:19 with:
-
-        error: failed to parse manifest at `/tmp/.tmpvIg7kE/Cargo.toml`
-        Caused by:
-          manifest is missing either a `[package]` or a `[workspace]`
-
-      quiet_failing_project() is defined at tests/hypothesis/verbosity.rs:71-78.
-      It calls TempRustProject::new().main_file(QUIET_FAILING_CODE).expect_failure(...).
-
-      Full log lines:
-        thread 'verbosity::test_no_indexerror_in_quiet_mode_report_multiple' (4730) panicked at tests/hypothesis/../common/utils.rs:19:5:
-        Expected to match pattern: x should be true
-        Actual:
-
-        error: failed to parse manifest at `/tmp/.tmpvIg7kE/Cargo.toml`
-
-        Caused by:
-          manifest is missing either a `[package]` or a `[workspace]`
-
-      Result line: test result: FAILED. 241 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
