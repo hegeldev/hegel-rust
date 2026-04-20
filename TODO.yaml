@@ -26,20 +26,6 @@
       Acceptance: these files report 0 uncovered code lines in
       `just check-coverage` output.
 
-  - title: "[CI] coverage: src/native/shrinker/bytes.rs + shrinker/floats.rs"
-    details: |
-      Part of the PR #188 coverage ratchet split.
-
-        - src/native/shrinker/bytes.rs   (80 uncovered code lines)
-        - src/native/shrinker/floats.rs  (85 uncovered code lines)
-
-      Exercise the shrinker passes via CachedTestFunction end-to-end
-      (pattern: tests/embedded/native/tree_tests.rs,
-      tests/embedded/native/shrinker_tests.rs).
-
-      Acceptance: both files report 0 uncovered code lines in
-      `just check-coverage`.
-
   - title: "[CI] coverage: src/native/schema/special.rs"
     details: |
       Part of the PR #188 coverage ratchet split. 85 uncovered code lines.
