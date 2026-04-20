@@ -333,9 +333,17 @@ impl TestCase {
                 Ok(()) => {}
                 Err(e) => {
                     let msg = panic_message(&e);
-                    if msg == STOP_TEST_STRING {
-                        break;
-                    } else if msg != ASSUME_FAIL_STRING {
+                    if msg == ASSUME_FAIL_STRING {
+                        // Assumption failure inside the body: skip this
+                        // iteration and continue with the next, matching
+                        // stateful testing.
+                    } else if msg == STOP_TEST_STRING {
+                        // Backend exhausted: let the outer runner end this
+                        // test case as Overrun rather than falling through
+                        // and running more user code against a dead data
+                        // source.
+                        resume_unwind(e);
+                    } else {
                         // Shrinking hack: draw a sentinel boolean before
                         // re-raising the panic. If the shrinker later picks a
                         // test case that doesn't trigger this panic, the
