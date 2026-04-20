@@ -96,6 +96,9 @@ Individually-skipped tests (rest of the file is ported):
   Python buffer protocol (`__buffer__` dunder, `memoryview`, `bytearray`);
   `from_type` doesn't exist in hegel-rust and the buffer protocol has no
   Rust counterpart.
+- `test_lookup_py310.py` — tests `from_type()` resolution of Python 3.10's
+  native union syntax (`int | list[str]`); `from_type` doesn't exist in
+  hegel-rust and Python union-type introspection has no Rust counterpart.
 - `test_lookup_py37.py` — tests `from_type()` resolution of PEP 585 generic
   types (`tuple[Elem]`, `list[Elem]`, `dict[Elem, Value]`,
   `collections.deque[Elem]`, `collections.abc.Iterable[Elem]`,
