@@ -76,8 +76,23 @@ jobs:
           "$HEGEL_BIN" --version
           echo "HEGEL_SERVER_COMMAND=$HEGEL_BIN" >> "$GITHUB_ENV"
 
+      - name: Run tests (Linux, no-fail-fast for debug)
+        if: runner.os == 'Linux'
+        run: RUST_BACKTRACE=1 cargo test --no-fail-fast
+
       - name: Run tests
+        if: runner.os != 'Linux'
         run: just check-tests
+
+      - name: Upload server logs (Linux, always)
+        if: runner.os == 'Linux' && always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: hegel-server-logs-${{ matrix.rust }}-${{ github.run_attempt }}
+          path: |
+            **/.hegel/server.*.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   test-all-features:
     name: test-all-features (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
@@ -124,8 +139,23 @@ jobs:
           "$HEGEL_BIN" --version
           echo "HEGEL_SERVER_COMMAND=$HEGEL_BIN" >> "$GITHUB_ENV"
 
+      - name: Run tests (Linux, no-fail-fast for debug)
+        if: runner.os == 'Linux'
+        run: RUST_BACKTRACE=1 cargo test --all-features --no-fail-fast
+
       - name: Run tests
+        if: runner.os != 'Linux'
         run: just ${{ matrix.recipe }}
+
+      - name: Upload server logs (Linux, always)
+        if: runner.os == 'Linux' && always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: hegel-server-logs-all-features-${{ matrix.rust }}-${{ github.run_attempt }}
+          path: |
+            **/.hegel/server.*.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   test-min-protocol:
     name: test-min-protocol
