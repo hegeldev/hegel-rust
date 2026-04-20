@@ -6,15 +6,3 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-- title: "[CI] tests/hypothesis/sampled_from.rs::test_efficient_sets_of_samples_with_chained_transformations_slow_path"
-  details: |
-    PR 188, run 24660653203, job: coverage (check-coverage).
-
-      test sampled_from::test_efficient_sets_of_samples_with_chained_transformations_slow_path ... FAILED
-
-    This test is about unique sets with chained transformations on the
-    slow (non-basic) path. May share a root cause with the filtered
-    sampling failures above, but the test exercises a different code
-    path (chained map/filter on sets of sampled values). Investigate
-    separately.
