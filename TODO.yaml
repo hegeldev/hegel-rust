@@ -6,25 +6,3 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-- title: "[CI] coverage: uncovered lines in src/generators/generators.rs:284-288"
-  details: |
-    The `coverage` job on PR 188 (run 24671014806) fails because
-    `just check-coverage` finds 10 uncovered code lines (5 unique, listed
-    twice by the tool) in the filter-generator's `do_draw` fallback path:
-
-      src/generators/generators.rs:284: let idx = super::integers::<usize>()
-      src/generators/generators.rs:285: .min_value(0)
-      src/generators/generators.rs:286: .max_value(valid.len() - 1)
-      src/generators/generators.rs:287: .do_draw(tc);
-      src/generators/generators.rs:288: return valid.into_iter().nth(idx).unwrap();
-
-    This is the branch inside `do_draw` for `FilteredGenerator` where
-    `enumerate_values()` returns `Some(valid)` with non-empty values.
-    It needs a test that exercises this path (e.g., a filter on a
-    small-domain generator where the filter keeps at least one value),
-    or if genuinely untestable, a `// nocov` annotation (requires human
-    permission per CLAUDE.md).
-
-    Error line:
-      error: Recipe `check-coverage` failed on line 51 with exit code 1
