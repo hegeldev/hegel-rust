@@ -47,16 +47,10 @@ impl<'a> Shrinker<'a> {
             // per-codepoint key is not monotonic under prefix-taking (the suffix
             // we drop may have been the only "interesting" part), so a linear
             // scan is simpler and small.
-            let cur_len = self.current_string(i).map(|v| v.len()).unwrap_or(0);
+            let cur_len = self.current_string(i).len();
             if cur_len > kind.min_size {
                 for target_len in kind.min_size..cur_len {
-                    let Some(cur) = self.current_string(i) else {
-                        break;
-                    };
-                    if target_len >= cur.len() {
-                        break;
-                    }
-                    let cand: Vec<u32> = cur[..target_len].to_vec();
+                    let cand: Vec<u32> = self.current_string(i)[..target_len].to_vec();
                     if self.replace(&HashMap::from([(i, ChoiceValue::String(cand))])) {
                         break;
                     }
@@ -64,13 +58,11 @@ impl<'a> Shrinker<'a> {
             }
 
             // Step 3: delete individual codepoints, right-to-left.
-            let mut j = self.current_string(i).map(|v| v.len()).unwrap_or(0);
+            let mut j = self.current_string(i).len();
             while j > 0 {
                 j -= 1;
-                let Some(cur) = self.current_string(i) else {
-                    break;
-                };
-                if j >= cur.len() || cur.len() <= kind.min_size {
+                let cur = self.current_string(i);
+                if cur.len() <= kind.min_size {
                     continue;
                 }
                 let mut cand = cur.clone();
@@ -79,16 +71,10 @@ impl<'a> Shrinker<'a> {
             }
 
             // Step 4: reduce each codepoint toward the simplest codepoint.
-            let mut j = self.current_string(i).map(|v| v.len()).unwrap_or(0);
+            let mut j = self.current_string(i).len();
             while j > 0 {
                 j -= 1;
-                let Some(cur) = self.current_string(i) else {
-                    break;
-                };
-                if j >= cur.len() {
-                    continue;
-                }
-                let current_key = codepoint_key(cur[j]);
+                let current_key = codepoint_key(self.current_string(i)[j]);
                 if current_key == 0 {
                     continue;
                 }
@@ -98,13 +84,7 @@ impl<'a> Shrinker<'a> {
                     let Some(cp) = key_to_codepoint_in_range(k, &kind) else {
                         continue;
                     };
-                    let Some(cur_now) = self.current_string(i) else {
-                        break;
-                    };
-                    if j >= cur_now.len() {
-                        break;
-                    }
-                    let mut cand = cur_now.clone();
+                    let mut cand = self.current_string(i);
                     cand[j] = cp;
                     if self.replace(&HashMap::from([(i, ChoiceValue::String(cand))])) {
                         break;
@@ -116,18 +96,13 @@ impl<'a> Shrinker<'a> {
             // codepoints (under codepoint_key ordering).
             let mut pos = 1;
             loop {
-                let cur_len = self.current_string(i).map(|v| v.len()).unwrap_or(0);
+                let cur_len = self.current_string(i).len();
                 if pos >= cur_len {
                     break;
                 }
                 let mut j = pos;
                 while j > 0 {
-                    let Some(cur) = self.current_string(i) else {
-                        break;
-                    };
-                    if j >= cur.len() {
-                        break;
-                    }
+                    let cur = self.current_string(i);
                     let prev_key = codepoint_key(cur[j - 1]);
                     let cur_key = codepoint_key(cur[j]);
                     if prev_key <= cur_key {
@@ -148,10 +123,10 @@ impl<'a> Shrinker<'a> {
         }
     }
 
-    fn current_string(&self, i: usize) -> Option<Vec<u32>> {
-        match self.current_nodes.get(i).map(|n| &n.value) {
-            Some(ChoiceValue::String(s)) => Some(s.clone()),
-            _ => None,
+    fn current_string(&self, i: usize) -> Vec<u32> {
+        match &self.current_nodes[i].value {
+            ChoiceValue::String(s) => s.clone(),
+            _ => unreachable!(),
         }
     }
 
@@ -192,15 +167,11 @@ impl<'a> Shrinker<'a> {
     }
 
     fn redistribute_string_pair(&mut self, i: usize, j: usize) {
-        let (s, t, kind_j) = match (
-            &self.current_nodes[i].value,
-            &self.current_nodes[j].value,
-            &self.current_nodes[j].kind,
-        ) {
-            (ChoiceValue::String(s), ChoiceValue::String(t), ChoiceKind::String(kj)) => {
-                (s.clone(), t.clone(), kj.clone())
-            }
-            _ => return,
+        let s = self.current_string(i);
+        let t = self.current_string(j);
+        let kind_j = match &self.current_nodes[j].kind {
+            ChoiceKind::String(kj) => kj.clone(),
+            _ => unreachable!(),
         };
 
         if s.is_empty() {
@@ -255,7 +226,7 @@ impl<'a> Shrinker<'a> {
 
 /// Return the codepoint corresponding to sort-key `k`, if it lies within the
 /// valid range (excluding surrogates).
-fn key_to_codepoint_in_range(k: u32, kind: &StringChoice) -> Option<u32> {
+pub(super) fn key_to_codepoint_in_range(k: u32, kind: &StringChoice) -> Option<u32> {
     let cp = if k < 128 { (k + b'0' as u32) % 128 } else { k };
     if cp < kind.min_codepoint || cp > kind.max_codepoint {
         return None;

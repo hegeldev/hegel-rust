@@ -1,6 +1,8 @@
+use super::strings::key_to_codepoint_in_range;
 use super::*;
 use crate::native::core::{
     BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice,
+    StringChoice,
 };
 
 // ── bin_search_down ─────────────────────────────────────────────────────────
@@ -821,4 +823,456 @@ fn bind_deletion_skips_non_integers_and_simplest_integers() {
     shrinker.bind_deletion();
     assert_eq!(shrinker.current_nodes.len(), 3);
     assert_eq!(int_at(&shrinker.current_nodes, 1), 0);
+}
+
+// ── key_to_codepoint_in_range ───────────────────────────────────────────────
+//
+// The helper powers step 4 of shrink_strings (reduce codepoints). It converts
+// a sort-key back into the raw codepoint that produces it, filtering out
+// anything outside the alphabet or in the surrogate block.
+
+fn sc(min_cp: u32, max_cp: u32) -> StringChoice {
+    StringChoice {
+        min_codepoint: min_cp,
+        max_codepoint: max_cp,
+        min_size: 0,
+        max_size: 10,
+    }
+}
+
+#[test]
+fn key_to_codepoint_in_range_ascii_maps_through_key_to_codepoint() {
+    // k < 128 → cp = (k + '0') % 128. For k=0 → '0' (48); for k=80 the
+    // sum wraps back to 0.
+    let kind = sc(0, 127);
+    assert_eq!(key_to_codepoint_in_range(0, &kind), Some(b'0' as u32));
+    assert_eq!(key_to_codepoint_in_range(80, &kind), Some(0));
+}
+
+#[test]
+fn key_to_codepoint_in_range_ascii_rejected_when_below_min() {
+    // k=0 → cp=48. If min_cp excludes 48, returns None.
+    let kind = sc(50, 127);
+    assert_eq!(key_to_codepoint_in_range(0, &kind), None);
+    // k=2 → cp=50, at the boundary: accepted.
+    assert_eq!(key_to_codepoint_in_range(2, &kind), Some(50));
+}
+
+#[test]
+fn key_to_codepoint_in_range_high_codepoint_identity() {
+    // k ≥ 128 → cp = k.
+    let kind = sc(0, 0x10000);
+    assert_eq!(key_to_codepoint_in_range(200, &kind), Some(200));
+    assert_eq!(key_to_codepoint_in_range(0xE000, &kind), Some(0xE000));
+}
+
+#[test]
+fn key_to_codepoint_in_range_rejects_surrogates() {
+    // Both endpoints of the surrogate block map to None even though the
+    // alphabet nominally contains them.
+    let kind = sc(0, 0xFFFF);
+    assert_eq!(key_to_codepoint_in_range(0xD800, &kind), None);
+    assert_eq!(key_to_codepoint_in_range(0xDFFF, &kind), None);
+}
+
+#[test]
+fn key_to_codepoint_in_range_rejects_above_max() {
+    let kind = sc(0, 100);
+    assert_eq!(key_to_codepoint_in_range(200, &kind), None);
+}
+
+// ── shrink_strings ──────────────────────────────────────────────────────────
+//
+// Exercises each pass: the non-string skip, the simplest replacement, the
+// linear-scan shortener, per-codepoint deletion, reduction toward the
+// simplest codepoint, and the insertion-sort normaliser. Also covers the
+// `current_key == 0 → continue` branch of the reduce pass.
+
+fn string_node(
+    min_size: usize,
+    max_size: usize,
+    min_cp: u32,
+    max_cp: u32,
+    value: Vec<u32>,
+) -> ChoiceNode {
+    ChoiceNode {
+        kind: ChoiceKind::String(StringChoice {
+            min_codepoint: min_cp,
+            max_codepoint: max_cp,
+            min_size,
+            max_size,
+        }),
+        value: ChoiceValue::String(value),
+        was_forced: false,
+    }
+}
+
+fn string_at(nodes: &[ChoiceNode], i: usize) -> Vec<u32> {
+    match &nodes[i].value {
+        ChoiceValue::String(v) => v.clone(),
+        _ => panic!("expected String at index {i}"),
+    }
+}
+
+#[test]
+fn shrink_strings_skips_non_string_nodes() {
+    // A non-string node alongside a string: the pass must skip the boolean
+    // without panicking and still shrink the string.
+    let nodes = vec![
+        bool_node(true),
+        string_node(0, 10, 0x30, 0x7A, vec![b'a' as u32, b'b' as u32]),
+    ];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    shrinker.shrink_strings();
+    assert!(matches!(
+        shrinker.current_nodes[0].value,
+        ChoiceValue::Boolean(true)
+    ));
+    // String shrunk to empty (simplest for min_size=0).
+    assert_eq!(string_at(&shrinker.current_nodes, 1), Vec::<u32>::new());
+}
+
+#[test]
+fn shrink_strings_replaces_with_simplest() {
+    // Always interesting → string shrinks to min_size copies of the simplest
+    // codepoint ('0' = 48).
+    let nodes = vec![string_node(
+        3,
+        10,
+        0x30,
+        0x7A,
+        vec![b'a' as u32, b'b' as u32, b'c' as u32],
+    )];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    shrinker.shrink_strings();
+    assert_eq!(string_at(&shrinker.current_nodes, 0), vec![48, 48, 48]);
+}
+
+#[test]
+fn shrink_strings_linear_scan_catches_non_monotonic_lengths() {
+    // Interesting iff length is exactly 2 or exactly 7. Step 2's linear scan
+    // from min_size=0 hits length 2 before reaching the original length 7.
+    let nodes = vec![string_node(0, 100, 0x30, 0x7A, vec![b'a' as u32; 7])];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::String(s) = &n[0].value else {
+                unreachable!()
+            };
+            (s.len() == 2 || s.len() == 7, 1)
+        }),
+        nodes,
+    );
+    shrinker.shrink_strings();
+    // Reduces to ['0', '0'] after shortening + reducing.
+    assert_eq!(string_at(&shrinker.current_nodes, 0), vec![48, 48]);
+}
+
+#[test]
+fn shrink_strings_deletes_middle_codepoints() {
+    // Predicate needs first char 'X' and last char 'Y', length ≥ 2. Step 2's
+    // prefix shortening can never satisfy "ends in Y", so only step 3 (delete
+    // by index) can shrink length.
+    let nodes = vec![string_node(
+        0,
+        100,
+        0x30,
+        0x7A,
+        vec![
+            b'X' as u32,
+            b'a' as u32,
+            b'b' as u32,
+            b'c' as u32,
+            b'Y' as u32,
+        ],
+    )];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::String(s) = &n[0].value else {
+                unreachable!()
+            };
+            let ok = s.len() >= 2 && s[0] == b'X' as u32 && *s.last().unwrap() == b'Y' as u32;
+            (ok, 1)
+        }),
+        nodes,
+    );
+    shrinker.shrink_strings();
+    assert_eq!(
+        string_at(&shrinker.current_nodes, 0),
+        vec![b'X' as u32, b'Y' as u32]
+    );
+}
+
+#[test]
+fn shrink_strings_delete_skips_when_at_min_size() {
+    // min_size=2 with a length-3 input whose first two codepoints are fixed
+    // and whose third is arbitrary. After one successful delete the length
+    // hits min_size=2; subsequent delete iterations must hit the
+    // `cur.len() <= min_size → continue` branch.
+    let nodes = vec![string_node(
+        2,
+        10,
+        0x30,
+        0x7A,
+        vec![b'A' as u32, b'B' as u32, b'C' as u32],
+    )];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::String(s) = &n[0].value else {
+                unreachable!()
+            };
+            // Interesting iff length ≥ 2 and starts 'A','B'. The delete pass
+            // can drop the trailing 'C' once, then further deletes are
+            // blocked by min_size.
+            let ok = s.len() >= 2 && s[0] == b'A' as u32 && s[1] == b'B' as u32;
+            (ok, 1)
+        }),
+        nodes,
+    );
+    shrinker.shrink_strings();
+    assert_eq!(
+        string_at(&shrinker.current_nodes, 0),
+        vec![b'A' as u32, b'B' as u32]
+    );
+}
+
+#[test]
+fn shrink_strings_reduce_skips_simplest_codepoint() {
+    // Start already at the simplest value (['0','0']). Step 4 visits each
+    // position, computes current_key = 0, and hits the `continue` branch
+    // for both positions without calling the predicate.
+    let nodes = vec![string_node(2, 2, 0x30, 0x7A, vec![48, 48])];
+    let mut calls = 0;
+    let mut shrinker = Shrinker::new(
+        Box::new(|_: &[ChoiceNode]| {
+            calls += 1;
+            (true, 1)
+        }),
+        nodes,
+    );
+    shrinker.shrink_strings();
+    assert_eq!(string_at(&shrinker.current_nodes, 0), vec![48, 48]);
+}
+
+#[test]
+fn shrink_strings_reduce_advances_past_none_candidates() {
+    // min_codepoint=50 rules out candidate keys 0 and 1 (which would be
+    // codepoints 48 and 49), forcing the reduce loop to iterate past the
+    // `None` arm of `key_to_codepoint_in_range` before finding cp=50.
+    let nodes = vec![string_node(1, 1, 50, 100, vec![80])];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    shrinker.shrink_strings();
+    assert_eq!(string_at(&shrinker.current_nodes, 0), vec![50]);
+}
+
+#[test]
+fn shrink_strings_insertion_sort_stops_when_swap_rejected() {
+    // Exercises step 5's `else { break }` path. Predicate accepts only two
+    // orderings so the insertion-sort swap at one position is rejected.
+    let nodes = vec![string_node(
+        3,
+        3,
+        0x30,
+        0x7A,
+        vec![b'2' as u32, b'3' as u32, b'1' as u32],
+    )];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::String(s) = &n[0].value else {
+                unreachable!()
+            };
+            let a = b'1' as u32;
+            let b = b'2' as u32;
+            let c = b'3' as u32;
+            let ok = s == &[b, c, a] || s == &[b, a, c] || s == &[a, b, c];
+            (ok, 1)
+        }),
+        nodes,
+    );
+    shrinker.shrink_strings();
+    assert_eq!(
+        string_at(&shrinker.current_nodes, 0),
+        vec![b'1' as u32, b'2' as u32, b'3' as u32]
+    );
+}
+
+// ── redistribute_string_pairs ───────────────────────────────────────────────
+
+#[test]
+fn redistribute_string_pairs_moves_everything_s_to_t() {
+    // Two adjacent strings, predicate only cares about the concatenation.
+    // Moving s entirely into t succeeds on the first try and shrinks s to
+    // empty (the minimal sort_key).
+    let nodes = vec![
+        string_node(0, 10, 0x30, 0x7A, vec![b'a' as u32, b'b' as u32]),
+        string_node(0, 10, 0x30, 0x7A, vec![b'c' as u32]),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let (ChoiceValue::String(s), ChoiceValue::String(t)) = (&n[0].value, &n[1].value)
+            else {
+                unreachable!()
+            };
+            let combined: Vec<u32> = s.iter().copied().chain(t.iter().copied()).collect();
+            (combined == vec![b'a' as u32, b'b' as u32, b'c' as u32], 1)
+        }),
+        nodes,
+    );
+    shrinker.redistribute_string_pairs();
+    assert_eq!(string_at(&shrinker.current_nodes, 0), Vec::<u32>::new());
+    assert_eq!(
+        string_at(&shrinker.current_nodes, 1),
+        vec![b'a' as u32, b'b' as u32, b'c' as u32]
+    );
+}
+
+#[test]
+fn redistribute_string_pairs_moves_last_codepoint_when_move_all_rejected() {
+    // Predicate needs s non-empty and t length ≥ 2. "Move everything" leaves
+    // s empty (rejected); "move just last" succeeds, shrinking s by one and
+    // growing t. bin_search_down then probes f(1), which matches the current
+    // sort_key and returns immediately without further iteration.
+    let nodes = vec![
+        string_node(
+            0,
+            10,
+            0x30,
+            0x7A,
+            vec![b'a' as u32, b'b' as u32, b'c' as u32],
+        ),
+        string_node(0, 10, 0x30, 0x7A, vec![b'd' as u32]),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let (ChoiceValue::String(s), ChoiceValue::String(t)) = (&n[0].value, &n[1].value)
+            else {
+                unreachable!()
+            };
+            (!s.is_empty() && t.len() >= 2, 1)
+        }),
+        nodes,
+    );
+    shrinker.redistribute_string_pairs();
+    assert_eq!(
+        string_at(&shrinker.current_nodes, 0),
+        vec![b'a' as u32, b'b' as u32]
+    );
+    assert_eq!(
+        string_at(&shrinker.current_nodes, 1),
+        vec![b'c' as u32, b'd' as u32]
+    );
+}
+
+#[test]
+fn redistribute_string_pairs_aborts_when_single_move_rejected() {
+    // Predicate needs s ≥ 2 codepoints. Moving everything fails (leaves s
+    // empty), moving just the last codepoint also fails (leaves s with 1),
+    // so the pair is abandoned without running the binary search.
+    let nodes = vec![
+        string_node(0, 10, 0x30, 0x7A, vec![b'a' as u32, b'b' as u32]),
+        string_node(0, 10, 0x30, 0x7A, vec![b'c' as u32]),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::String(s) = &n[0].value else {
+                unreachable!()
+            };
+            (s.len() >= 2, 1)
+        }),
+        nodes,
+    );
+    shrinker.redistribute_string_pairs();
+    // Unchanged.
+    assert_eq!(
+        string_at(&shrinker.current_nodes, 0),
+        vec![b'a' as u32, b'b' as u32]
+    );
+    assert_eq!(string_at(&shrinker.current_nodes, 1), vec![b'c' as u32]);
+}
+
+#[test]
+fn redistribute_string_pairs_skips_empty_s() {
+    // s is already empty → the pair is skipped without any predicate calls.
+    let nodes = vec![
+        string_node(0, 10, 0x30, 0x7A, Vec::<u32>::new()),
+        string_node(0, 10, 0x30, 0x7A, vec![b'x' as u32]),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|_: &[ChoiceNode]| panic!("predicate should not be called")),
+        nodes,
+    );
+    shrinker.redistribute_string_pairs();
+    assert_eq!(string_at(&shrinker.current_nodes, 0), Vec::<u32>::new());
+    assert_eq!(string_at(&shrinker.current_nodes, 1), vec![b'x' as u32]);
+}
+
+#[test]
+fn redistribute_string_pairs_rejects_when_target_max_size_exceeded() {
+    // j's max_size=2 blocks any move that would grow t beyond 2 codepoints.
+    // try_redistribute's validate check returns false, so the pair is
+    // skipped despite the predicate being permissive.
+    let nodes = vec![
+        string_node(
+            0,
+            10,
+            0x30,
+            0x7A,
+            vec![b'a' as u32, b'b' as u32, b'c' as u32],
+        ),
+        string_node(0, 2, 0x30, 0x7A, vec![b'd' as u32, b'e' as u32]),
+    ];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    shrinker.redistribute_string_pairs();
+    // Both strings unchanged: every move would push t past max_size=2.
+    assert_eq!(
+        string_at(&shrinker.current_nodes, 0),
+        vec![b'a' as u32, b'b' as u32, b'c' as u32]
+    );
+    assert_eq!(
+        string_at(&shrinker.current_nodes, 1),
+        vec![b'd' as u32, b'e' as u32]
+    );
+}
+
+#[test]
+fn redistribute_string_pairs_gap_of_two_matches_skip_one_adjacent_strings() {
+    // Three strings with a non-string between them exercises the gap=2
+    // iteration: position 0 pairs with position 2 (indices after the
+    // boolean skip).
+    let nodes = vec![
+        string_node(0, 10, 0x30, 0x7A, vec![b'a' as u32]),
+        bool_node(true),
+        string_node(0, 10, 0x30, 0x7A, vec![b'b' as u32]),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let (ChoiceValue::String(s), ChoiceValue::String(t)) = (&n[0].value, &n[2].value)
+            else {
+                unreachable!()
+            };
+            let combined: Vec<u32> = s.iter().copied().chain(t.iter().copied()).collect();
+            (combined == vec![b'a' as u32, b'b' as u32], 1)
+        }),
+        nodes,
+    );
+    shrinker.redistribute_string_pairs();
+    assert_eq!(string_at(&shrinker.current_nodes, 0), Vec::<u32>::new());
+    assert_eq!(
+        string_at(&shrinker.current_nodes, 2),
+        vec![b'a' as u32, b'b' as u32]
+    );
+}
+
+#[test]
+fn redistribute_string_pairs_no_op_with_single_string() {
+    // Only one string → no pair exists at any gap.
+    let nodes = vec![
+        bool_node(true),
+        string_node(0, 10, 0x30, 0x7A, vec![b'z' as u32]),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|_: &[ChoiceNode]| panic!("predicate should not be called")),
+        nodes,
+    );
+    shrinker.redistribute_string_pairs();
+    assert_eq!(string_at(&shrinker.current_nodes, 1), vec![b'z' as u32]);
 }
