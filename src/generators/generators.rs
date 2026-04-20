@@ -257,10 +257,14 @@ pub struct Filtered<T, F, G> {
 
 impl<T, F, G> Generator<T> for Filtered<T, F, G>
 where
+    T: Clone + Send + Sync,
     G: Generator<T>,
     F: Fn(&T) -> bool + Send + Sync,
 {
     fn do_draw(&self, tc: &TestCase) -> T {
+        if let Some(basic) = self.as_basic() {
+            return basic.do_draw(tc);
+        }
         for _ in 0..3 {
             tc.start_span(labels::FILTER);
             let value = self.source.do_draw(tc);
@@ -285,6 +289,23 @@ where
         }
         tc.assume(false);
         unreachable!()
+    }
+
+    fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
+        let valid = self.enumerate_values()?;
+        if valid.is_empty() {
+            return None;
+        }
+        use crate::cbor_utils::cbor_map;
+        let schema = cbor_map! {
+            "type" => "integer",
+            "min_value" => 0u64,
+            "max_value" => (valid.len() - 1) as u64
+        };
+        Some(BasicGenerator::new(schema, move |raw| {
+            let index: usize = super::deserialize_value(raw);
+            valid[index].clone()
+        }))
     }
 
     fn enumerate_values(&self) -> Option<Vec<T>> {
