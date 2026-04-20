@@ -101,6 +101,15 @@ pub(super) fn interpret_binary(
 pub(super) enum StringAlphabet {
     /// Contiguous codepoint range [min, max] with surrogates excluded.
     Range { min: u32, max: u32 },
+    /// Interval-based alphabet: a codepoint range minus surrogates and a
+    /// small set of excluded characters. Mirrors Hypothesis's `IntervalSet`
+    /// approach (`internal/intervalsets.py`) — avoids the O(1M) codepoint
+    /// scan that `Explicit` would require for large ranges with few exclusions.
+    Intervals {
+        ranges: Vec<(u32, u32)>,
+        total: usize,
+        ascii_sorted: Vec<char>,
+    },
     /// Explicit list of valid characters, ordered by `codepoint_key`.
     Explicit(Vec<char>),
 }
@@ -109,6 +118,7 @@ impl StringAlphabet {
     pub(super) fn len(&self) -> usize {
         match self {
             StringAlphabet::Range { min, max } => count_valid_codepoints(*min, *max) as usize,
+            StringAlphabet::Intervals { total, .. } => *total,
             StringAlphabet::Explicit(v) => v.len(),
         }
     }
@@ -128,6 +138,7 @@ impl StringAlphabet {
                     ((*max).min(127) - *min + 1) as usize
                 }
             }
+            StringAlphabet::Intervals { ascii_sorted, .. } => ascii_sorted.len(),
             StringAlphabet::Explicit(v) => {
                 // Alphabet is sorted by codepoint_sort_key; ASCII chars (key < 128)
                 // always precede non-ASCII chars (key == codepoint >= 128).
@@ -145,11 +156,109 @@ impl StringAlphabet {
     pub(super) fn char_at(&self, idx: usize) -> char {
         match self {
             StringAlphabet::Range { min, max } => keyed_codepoint_at_index(*min, *max, idx),
+            StringAlphabet::Intervals {
+                ranges,
+                ascii_sorted,
+                ..
+            } => {
+                if idx < ascii_sorted.len() {
+                    ascii_sorted[idx]
+                } else {
+                    intervals_non_ascii_at(ranges, idx - ascii_sorted.len())
+                }
+            }
             StringAlphabet::Explicit(v) => v[idx],
         }
     }
     // nocov end
 }
+
+/// Return the `idx`-th non-ASCII (codepoint >= 128) character across the
+/// given sorted intervals, in natural codepoint order.
+// nocov start
+fn intervals_non_ascii_at(ranges: &[(u32, u32)], idx: usize) -> char {
+    let mut remaining = idx;
+    for &(start, end) in ranges {
+        let lo = start.max(128);
+        if lo > end {
+            continue;
+        }
+        let count = (end - lo + 1) as usize;
+        if remaining < count {
+            return char::from_u32(lo + remaining as u32).unwrap();
+        }
+        remaining -= count;
+    }
+    panic!("intervals_non_ascii_at: index {idx} out of range");
+}
+// nocov end
+
+/// Build an `Intervals` alphabet from a codepoint range minus surrogates and
+/// a small set of excluded characters. O(|excluded| log |excluded|) instead
+/// of the O(range_size) scan that the `Explicit` path would require.
+// nocov start
+fn build_intervals_alphabet(cp_min: u32, cp_max: u32, exclude_chars: &[char]) -> StringAlphabet {
+    let mut excluded: Vec<u32> = exclude_chars
+        .iter()
+        .map(|c| *c as u32)
+        .filter(|&cp| cp >= cp_min && cp <= cp_max && !is_surrogate_cp(cp))
+        .collect();
+    excluded.sort();
+    excluded.dedup();
+
+    let mut base_ranges: Vec<(u32, u32)> = Vec::new();
+    if cp_max < 0xD800 || cp_min > 0xDFFF {
+        base_ranges.push((cp_min, cp_max));
+    } else {
+        if cp_min < 0xD800 {
+            base_ranges.push((cp_min, 0xD7FF));
+        }
+        if cp_max > 0xDFFF {
+            base_ranges.push((0xE000, cp_max));
+        }
+    }
+
+    let mut ranges: Vec<(u32, u32)> = Vec::new();
+    for (start, end) in base_ranges {
+        let mut current = start;
+        for &ep in &excluded {
+            if ep < current {
+                continue;
+            }
+            if ep > end {
+                break;
+            }
+            if current < ep {
+                ranges.push((current, ep - 1));
+            }
+            current = ep + 1;
+        }
+        if current <= end {
+            ranges.push((current, end));
+        }
+    }
+
+    let mut ascii_sorted: Vec<char> = Vec::new();
+    for &(start, end) in &ranges {
+        if start > 127 {
+            continue;
+        }
+        let hi = end.min(127);
+        for cp in start..=hi {
+            ascii_sorted.push(char::from_u32(cp).unwrap());
+        }
+    }
+    ascii_sorted.sort_by_key(|c| codepoint_sort_key(*c as u32));
+
+    let total: usize = ranges.iter().map(|(s, e)| (e - s + 1) as usize).sum();
+
+    StringAlphabet::Intervals {
+        ranges,
+        total,
+        ascii_sorted,
+    }
+}
+// nocov end
 
 /// Build the effective character alphabet for a string schema.
 ///
@@ -241,6 +350,16 @@ fn build_string_alphabet_uncached(schema: &Value) -> StringAlphabet {
             min: cp_min,
             max: cp_max,
         };
+    }
+
+    // Interval fast path: when only exclude_chars is active (no category
+    // filtering beyond surrogates, no include_chars), build intervals from
+    // the codepoint range minus the excluded chars. This is O(|excluded|)
+    // instead of the O(range_size) scan below.
+    if !needs_category_filter && include_chars.is_none() {
+        if let Some(ref excl) = exclude_chars {
+            return build_intervals_alphabet(cp_min, cp_max, excl);
+        }
     }
 
     // Build explicit alphabet by iterating the effective range.
