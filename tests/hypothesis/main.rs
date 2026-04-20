@@ -7,6 +7,7 @@ mod common;
 mod composite;
 mod composite_kwonlyargs;
 mod database_backend;
+mod debug_information;
 mod datetimes;
 mod feature_flags;
 mod float_nastiness;
