@@ -23,18 +23,10 @@
 //! - `TestErrorNoteBehavior3819` — Python `__notes__` (PEP 678) and dynamic typing
 //!   (strategies passed as `sampled_from` elements).
 //!
-//! Tests that depend on Hypothesis's `FilteredStrategy` optimization for
-//! `SampledFromStrategy` (pre-computing which elements satisfy a filter) are
-//! not ported. Hegel-rust uses generic post-draw filtering (3 retries + assume)
-//! which triggers `FilterTooMuch` health checks on selective filters:
-//!
-//! - `test_easy_filtered_sampling` — `sampled_from(0..100).filter(|x| x == 0)`
-//!   rejects 99% of draws; health check fires.
-//! - `test_filtered_sampling_finds_rare_value` — same mechanism with `x == 99`.
-//! - `test_unsat_filtered_sampling` — expects `FailedHealthCheck` from unsatisfiable
-//!   filter; server passes vacuously when all test cases are rejected via assume.
-//! - `test_unsat_filtered_sampling_in_rejection_stage` — expects `Unsatisfiable`;
-//!   same issue.
+//! Hegel-rust uses generic post-draw filtering (3 retries then
+//! `enumerate_values` fallback) rather than Hypothesis's `FilteredStrategy`
+//! optimization. The `enumerate_values` path handles both rare-value and
+//! unsatisfiable cases correctly.
 
 use crate::common::utils::{
     assert_all_examples, assert_simple_property, check_can_generate_examples, expect_panic,

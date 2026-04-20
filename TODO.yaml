@@ -7,22 +7,19 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: "[CI] tests/hypothesis/sampled_from.rs filtered sampling tests"
+- title: "[CI] tests/hypothesis/sampled_from.rs::test_efficient_sets_of_samples_with_chained_transformations"
   details: |
-    PR 188, run 24660653203, job: coverage (check-coverage).
-    Four filtered-sampling tests in sampled_from fail:
+    Pre-existing failure: hashsets of sampled_from with chained
+    map/filter/map hits FilterTooMuch health check. The filter
+    rejects ~33% of draws, and building a 33-element hashset from 50
+    candidates requires many draws. Individual element generation
+    works (enumerate_values fallback), but the cumulative filter
+    rejections across the collection exceed the health check threshold.
 
-      test sampled_from::test_easy_filtered_sampling ... FAILED
-      test sampled_from::test_filtered_sampling_finds_rare_value ... FAILED
-      test sampled_from::test_unsat_filtered_sampling_in_rejection_stage ... FAILED
-      test sampled_from::test_unsat_filtered_sampling ... FAILED
-
-    These likely share a root cause related to filtered sampling on
-    sampled_from generators. Investigate the test implementations and
-    the filter/rejection logic in the sampled_from generator.
-
-    error: test failed, to rerun pass `--test hypothesis`
-    error: Recipe `check-coverage` failed on line 51 with exit code 1
+    Root cause: hegel-rust lacks Hypothesis's FilteredStrategy
+    optimization that pre-computes which elements satisfy a filter
+    for sampled_from. The enumerate_values fallback helps per-element
+    but the collection builder still accumulates filter rejections.
 
 - title: "[CI] tests/hypothesis/sampled_from.rs::test_efficient_sets_of_samples_with_chained_transformations_slow_path"
   details: |
