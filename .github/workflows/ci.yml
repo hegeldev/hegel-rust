@@ -13,22 +13,54 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test-all-features:
-    name: test-all-features (shard ${{ matrix.shard }})
+  lint:
+    name: lint
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    strategy:
-      fail-fast: true
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
       - name: Install Rust
-        run: rustup toolchain install stable --profile minimal && rustup default stable
+        run: rustup toolchain install stable --profile minimal -c rustfmt -c clippy
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just
+
+      - name: Check lint
+        run: just check-lint
+      - name: Check zizmor
+        run: |
+          pipx install zizmor==1.23.1
+          zizmor --format plain .github/
+      - name: Check `cargo package`
+        # creates a .crate for distribution and verifies it can build in isolation
+        # see https://doc.rust-lang.org/cargo/commands/cargo-package.html
+        run: cargo package --workspace
+
+  test:
+    # Keep the name matching the branch-protection required checks on Linux
+    # (`test (1.86)` / `test (stable)`); Windows variants get a suffix.
+    name: test (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        rust: ["1.86", stable]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install ${{ matrix.rust }} --profile minimal && rustup default ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - uses: ./.github/actions/install-tools
@@ -36,14 +68,341 @@ jobs:
           tools: just uv
 
       - name: Run tests
-        run: just check-tests-all-features
+        run: just check-tests
 
-      - name: Upload server logs (always)
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+  test-all-features:
+    name: test-all-features (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # On Windows, --all-features would enable `antithesis`, which triggers
+          # a compile_error! on Windows. Drop back to just `rand`.
+          - os: windows-latest
+            rust: "1.86"
+            recipe: check-tests-rand-feature
+          - os: windows-latest
+            rust: stable
+            recipe: check-tests-rand-feature
+          - os: ubuntu-latest
+            rust: "1.86"
+            recipe: check-tests-all-features
+          - os: ubuntu-latest
+            rust: stable
+            recipe: check-tests-all-features
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          name: hegel-server-logs-shard-${{ matrix.shard }}-${{ github.run_attempt }}
-          path: |
-            **/.hegel/server.*.log
-          if-no-files-found: ignore
-          retention-days: 7
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install ${{ matrix.rust }} --profile minimal && rustup default ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just uv
+
+      - name: Run tests
+        run: just ${{ matrix.recipe }}
+
+  test-min-protocol:
+    name: test-min-protocol
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just uv
+
+      - id: min-version
+        run: |
+          MIN_PROTOCOL=$(grep -oE 'SUPPORTED_PROTOCOL_VERSIONS.*"[0-9.]+"' src/runner.rs | grep -oE '"[0-9.]+"' | head -1 | tr -d '"')
+
+          VERSIONS_JSON=$(curl -sf https://hegel.dev/api/versions.json)
+
+          MIN_CORE=$(echo "$VERSIONS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['$MIN_PROTOCOL'])")
+          echo "Minimum supported protocol version: $MIN_PROTOCOL"
+          echo "Minimum hegel-core version: $MIN_CORE"
+          echo "min_core=$MIN_CORE" >> "$GITHUB_OUTPUT"
+
+      - name: Run tests with minimum protocol version
+        env:
+          MIN_CORE: ${{ steps.min-version.outputs.min_core }}
+        run: |
+          uv tool install "hegel-core==$MIN_CORE"
+          HEGEL_SERVER_COMMAND=$(which hegel) just check-tests
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install nightly --profile minimal && rustup default nightly
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just
+
+      - name: Install cargo-docs-rs
+        run: cargo install --locked cargo-docs-rs
+
+      - name: Check docs
+        run: just check-docs
+
+  # test with the minimal versions of all our dependencies
+  test-minimal-versions:
+    name: test-minimal-versions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install nightly --profile minimal && rustup default nightly
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just uv
+
+      - name: Generate lockfile
+        run: cargo generate-lockfile -Z minimal-versions
+      - name: Run tests
+        run: just check-tests-minimal-versions
+
+  compile-examples:
+    name: compile-examples (${{ matrix.rust }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        rust: ["1.86", stable]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install ${{ matrix.rust }} --profile minimal && rustup default ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Compile examples
+        run: cargo build --examples --all-features
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # needed for ratchet auto-update
+      pull-requests: write  # needed for creating PRs on main
+    steps:
+      # For fork PRs, head_ref points to a branch that doesn't exist on the base repo,
+      # so we fall back to the default ref (the merge commit).
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        with:
+          persist-credentials: false
+
+      # use an app token so that the commit re-triggers CI. GITHUB_TOKEN pushes don't trigger CI
+      - name: Generate app token
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        id: app-token
+        with:
+          app-id: ${{ vars.HEGEL_RELEASE_APP_ID }}
+          private-key: ${{ secrets.HEGEL_RELEASE_APP_PRIVATE_KEY }}
+          repositories: hegel-rust
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 # zizmor: ignore[artipacked]
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal -c llvm-tools-preview
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Install cargo-llvm-cov
+        run: cargo install --locked cargo-llvm-cov
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just uv
+
+      - name: Run coverage
+        run: just check-coverage
+
+      - name: Auto-update coverage annotations and ratchet
+        if: success() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if git diff --quiet; then
+            echo "No coverage annotation changes needed"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -u
+
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git commit -m "Auto-update coverage annotations and ratchet"
+            git push
+          else
+            BRANCH="auto/coverage-ratchet-update"
+            git checkout -b "$BRANCH"
+            git commit -m "Auto-update coverage annotations and ratchet"
+            git push -f origin "$BRANCH"
+            gh pr create \
+              --title "Auto-update coverage ratchet" \
+              --body "The coverage ratchet has tightened on main. This PR updates the ratchet file and removes unnecessary annotations." \
+              --base main \
+              --head "$BRANCH" || true
+          fi
+
+  conformance:
+    name: conformance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just uv
+
+      - name: Run conformance tests
+        run: just check-conformance
+
+  nix:
+    name: nix
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@1ca7d21a94afc7c957383a2d217460d980de4934 # v31.10.1
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just
+      - name: lint
+        run: just check-format-nix
+
+  release:
+    name: release
+    if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust'
+    needs: [lint, test, test-all-features, test-minimal-versions, docs, coverage, conformance, nix]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # id-token: "enables the workflow to request and use an OIDC token from GitHub's OIDC provider".
+      # Used by our trusted publishing flow
+      id-token: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Check for RELEASE.md
+        id: check
+        run: |
+          if [ ! -f RELEASE.md ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate app token
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        id: app-token
+        with:
+          app-id: ${{ vars.HEGEL_RELEASE_APP_ID }}
+          private-key: ${{ secrets.HEGEL_RELEASE_APP_PRIVATE_KEY }}
+          repositories: hegel-rust
+
+      - name: Re-checkout with app token # zizmor: ignore[artipacked]
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Release
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          HEGEL_RELEASE_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: python .github/scripts/release.py release
+
+      - name: Install Rust
+        if: steps.check.outputs.skip != 'true'
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Authenticate with crates.io
+        if: steps.check.outputs.skip != 'true'
+        uses: rust-lang/crates-io-auth-action@b7e9a28eded4986ec6b1fa40eeee8f8f165559ec # v1.0.3
+        id: crates-io-auth
+
+      - name: Publish hegeltest-macros
+        if: steps.check.outputs.skip != 'true'
+        run: cargo publish -p hegeltest-macros
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+
+      - name: Wait for crates.io index
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          VERSION=$(grep '^version' hegel-macros/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "waiting for hegeltest-macros $VERSION to appear on crates.io..."
+          for i in $(seq 1 60); do
+            if cargo search hegeltest-macros | grep -q "\"$VERSION\""; then
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Timed out waiting for hegeltest-macros to appear on Crates.io"
+          exit 1
+
+      - name: Publish hegeltest
+        if: steps.check.outputs.skip != 'true'
+        run: cargo publish -p hegeltest
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+
+      - name: Push to main or open PR
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: python .github/scripts/release.py push-or-pr
