@@ -29,17 +29,7 @@ impl<'a> Shrinker<'a> {
                     self.replace(&HashMap::from([(i, ChoiceValue::Float(s))]));
                 }
 
-                // Re-read current value.
-                let v = {
-                    let Some(n) = self.current_nodes.get(i) else {
-                        break;
-                    };
-                    let ChoiceValue::Float(f) = n.value else {
-                        i += 1;
-                        continue;
-                    };
-                    f
-                };
+                let v = self.float_at(i);
 
                 // Skip NaN — can't binary search on NaN.
                 if v.is_nan() {
@@ -55,22 +45,10 @@ impl<'a> Shrinker<'a> {
                     }
                 }
 
-                // Re-read after possible negation.
-                let v = {
-                    let Some(n) = self.current_nodes.get(i) else {
-                        break;
-                    };
-                    let ChoiceValue::Float(f) = n.value else {
-                        i += 1;
-                        continue;
-                    };
-                    f
-                };
-
-                if v.is_nan() {
-                    i += 1;
-                    continue;
-                }
+                // After negation, v is still finite non-NaN: simplest/negation only
+                // produce finite non-NaN candidates, and a failed replace leaves the
+                // (finite non-NaN) value in place.
+                let v = self.float_at(i);
 
                 // Step 3a: When current is a non-integer, explicitly search the
                 // integer-float range.  In our ordering, integer floats 0, 1, 2, …
@@ -81,21 +59,18 @@ impl<'a> Shrinker<'a> {
                 let current_idx = float_to_index(v_abs);
                 let is_neg = v.is_sign_negative();
                 if current_idx >= (1u64 << 63) {
-                    // Compute the integer magnitude range valid for fc.
+                    // Compute the integer magnitude range valid for fc. The bounds
+                    // below keep candidates strictly inside [fc.min_value,
+                    // fc.max_value], so fc.validate is guaranteed to hold.
                     let (int_lo, int_hi) = if is_neg {
-                        // Negative float: candidate = -(n as f64).
-                        // Valid when -(n as f64) ∈ [fc.min_value, fc.max_value],
-                        // i.e. n ∈ [-fc.max_value, -fc.min_value].
+                        // Negative float: candidate = -(n as f64). v < 0 implies
+                        // fc.min_value < 0, so the `hi` expression is well-defined.
                         let lo = if fc.max_value <= 0.0 {
                             (-fc.max_value).ceil() as i128
                         } else {
                             0
                         };
-                        let hi = if fc.min_value <= 0.0 {
-                            (-fc.min_value).floor() as i128
-                        } else {
-                            -1
-                        };
+                        let hi = (-fc.min_value).floor() as i128;
                         (lo, hi)
                     } else {
                         let lo = fc.min_value.max(0.0).ceil() as i128;
@@ -105,43 +80,23 @@ impl<'a> Shrinker<'a> {
                     if int_lo >= 0 && int_lo <= int_hi {
                         let i_capture = i;
                         let is_neg_capture = is_neg;
-                        let fc_capture = fc.clone();
                         bin_search_down(int_lo, int_hi, &mut |n| {
                             let candidate = if is_neg_capture {
                                 -(n as f64)
                             } else {
                                 n as f64
                             };
-                            if fc_capture.validate(candidate) {
-                                self.replace(&HashMap::from([(
-                                    i_capture,
-                                    ChoiceValue::Float(candidate),
-                                )]))
-                            } else {
-                                false
-                            }
+                            self.replace(&HashMap::from([(
+                                i_capture,
+                                ChoiceValue::Float(candidate),
+                            )]))
                         });
                     }
                 }
 
-                // Re-read current value after possible integer replacement.
-                let v = {
-                    let Some(n) = self.current_nodes.get(i) else {
-                        break;
-                    };
-                    let ChoiceValue::Float(f) = n.value else {
-                        i += 1;
-                        continue;
-                    };
-                    f
-                };
-                if v.is_nan() {
-                    i += 1;
-                    continue;
-                }
-
                 // Step 3b: Binary search on absolute-value lex index toward 0.
-                // float_to_index handles both finite and infinite non-NaN non-negative floats.
+                // Integer replacement above only produces finite non-NaN values.
+                let v = self.float_at(i);
                 let v_abs = v.abs();
                 let current_idx = float_to_index(v_abs);
                 let is_neg = v.is_sign_negative();
@@ -162,6 +117,13 @@ impl<'a> Shrinker<'a> {
                 }
             }
             i += 1;
+        }
+    }
+
+    fn float_at(&self, i: usize) -> f64 {
+        match self.current_nodes[i].value {
+            ChoiceValue::Float(f) => f,
+            _ => unreachable!(),
         }
     }
 }

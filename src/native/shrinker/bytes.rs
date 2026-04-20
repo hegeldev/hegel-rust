@@ -33,26 +33,21 @@ impl<'a> Shrinker<'a> {
             }
 
             // Shorten via binary search.
-            let cur_len = self.current_byte_value(i).map(|v| v.len()).unwrap_or(0);
+            let cur_len = self.current_byte_value(i).len();
             if cur_len > min_size {
-                let captured = self.current_byte_value(i).unwrap_or_default();
+                let captured = self.current_byte_value(i);
                 bin_search_down(min_size as i128, cur_len as i128, &mut |sz| {
                     let sz = sz as usize;
-                    if sz > captured.len() {
-                        return false;
-                    }
                     let cand = captured[..sz].to_vec();
                     self.replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))
                 });
             }
 
             // Linear scan small lengths (non-monotonic fallback).
-            let cur_len = self.current_byte_value(i).map(|v| v.len()).unwrap_or(0);
+            let cur_len = self.current_byte_value(i).len();
             let scan_end = (min_size + 8).min(cur_len);
             for sz in min_size..scan_end {
-                let Some(cur) = self.current_byte_value(i) else {
-                    break;
-                };
+                let cur = self.current_byte_value(i);
                 if sz > cur.len() {
                     break;
                 }
@@ -61,13 +56,11 @@ impl<'a> Shrinker<'a> {
             }
 
             // Delete individual elements, from right to left.
-            let mut j = self.current_byte_value(i).map(|v| v.len()).unwrap_or(0);
+            let mut j = self.current_byte_value(i).len();
             while j > 0 {
                 j -= 1;
-                let Some(cur) = self.current_byte_value(i) else {
-                    break;
-                };
-                if j >= cur.len() || cur.len() <= min_size {
+                let cur = self.current_byte_value(i);
+                if cur.len() <= min_size {
                     continue;
                 }
                 let mut cand = cur.clone();
@@ -76,24 +69,16 @@ impl<'a> Shrinker<'a> {
             }
 
             // Reduce each byte toward 0, from right to left.
-            let mut j = self.current_byte_value(i).map(|v| v.len()).unwrap_or(0);
+            let mut j = self.current_byte_value(i).len();
             while j > 0 {
                 j -= 1;
-                let Some(cur) = self.current_byte_value(i) else {
-                    break;
-                };
-                if j >= cur.len() || cur[j] == 0 {
+                let cur = self.current_byte_value(i);
+                if cur[j] == 0 {
                     continue;
                 }
                 let hi = cur[j] as i128;
                 bin_search_down(0, hi, &mut |e| {
-                    let Some(cur_now) = self.current_byte_value(i) else {
-                        return false;
-                    };
-                    if j >= cur_now.len() {
-                        return false;
-                    }
-                    let mut cand = cur_now;
+                    let mut cand = self.current_byte_value(i);
                     cand[j] = e as u8;
                     self.replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))
                 });
@@ -102,18 +87,13 @@ impl<'a> Shrinker<'a> {
             // Insertion-sort pass: swap adjacent out-of-order bytes.
             let mut pos = 1;
             loop {
-                let cur_len = self.current_byte_value(i).map(|v| v.len()).unwrap_or(0);
+                let cur_len = self.current_byte_value(i).len();
                 if pos >= cur_len {
                     break;
                 }
                 let mut j = pos;
                 while j > 0 {
-                    let Some(cur) = self.current_byte_value(i) else {
-                        break;
-                    };
-                    if j >= cur.len() {
-                        break;
-                    }
+                    let cur = self.current_byte_value(i);
                     if cur[j - 1] <= cur[j] {
                         break;
                     }
@@ -132,10 +112,10 @@ impl<'a> Shrinker<'a> {
         }
     }
 
-    fn current_byte_value(&self, i: usize) -> Option<Vec<u8>> {
-        match self.current_nodes.get(i).map(|n| &n.value) {
-            Some(ChoiceValue::Bytes(v)) => Some(v.clone()),
-            _ => None,
+    fn current_byte_value(&self, i: usize) -> Vec<u8> {
+        match &self.current_nodes[i].value {
+            ChoiceValue::Bytes(v) => v.clone(),
+            _ => unreachable!(),
         }
     }
 }
