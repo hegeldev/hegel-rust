@@ -86,6 +86,14 @@ where
     }
 
     pub fn run(self) {
+        self.run_with_health_checks_suppressed(&[]);
+    }
+
+    pub fn run_with_health_checks_suppressed(self, checks: &[HealthCheck]) {
+        let settings = Settings::new()
+            .test_cases(self.test_cases)
+            .database(None)
+            .suppress_health_check(checks.iter().cloned());
         Hegel::new(move |tc| {
             let value = tc.draw(&self.generator);
             assert!(
@@ -93,7 +101,7 @@ where
                 "Found value that does not match predicate"
             );
         })
-        .settings(Settings::new().test_cases(self.test_cases).database(None))
+        .settings(settings)
         .run();
     }
 }
@@ -137,7 +145,10 @@ where
     }
 
     pub fn run(self) {
-        self.inner.run();
+        // These checks are about "can we generate at all", not speed, and
+        // instrumented coverage binaries routinely trip the TooSlow check.
+        self.inner
+            .run_with_health_checks_suppressed(&[HealthCheck::TooSlow]);
     }
 }
 

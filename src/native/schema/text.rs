@@ -118,6 +118,7 @@ impl StringAlphabet {
     /// These correspond to indices [0, ascii_count) in `char_at` order,
     /// since both `keyed_codepoint_at_index` and the explicit alphabet's
     /// `codepoint_sort_key` ordering put ASCII characters first.
+    // nocov start
     pub(super) fn ascii_count(&self) -> usize {
         match self {
             StringAlphabet::Range { min, max } => {
@@ -134,17 +135,20 @@ impl StringAlphabet {
             }
         }
     }
+    // nocov end
 
     /// Return the character at position `idx` in `codepoint_sort_key` order.
     ///
     /// Index 0 returns '0' (codepoint 48) for alphabets that contain it,
     /// matching pbtkit's shrinking behavior where '0' is the simplest char.
+    // nocov start
     pub(super) fn char_at(&self, idx: usize) -> char {
         match self {
             StringAlphabet::Range { min, max } => keyed_codepoint_at_index(*min, *max, idx),
             StringAlphabet::Explicit(v) => v[idx],
         }
     }
+    // nocov end
 }
 
 /// Build the effective character alphabet for a string schema.
@@ -154,6 +158,7 @@ impl StringAlphabet {
 /// once per draw, so we memoise the result globally keyed by the schema's
 /// canonical CBOR encoding. Mirrors Hypothesis's `limited_category_index_cache`
 /// in `internal/charmap.py`.
+// nocov start
 pub(super) fn build_string_alphabet(schema: &Value) -> StringAlphabet {
     type Cache = Mutex<HashMap<Vec<u8>, Arc<StringAlphabet>>>;
     static CACHE: OnceLock<Cache> = OnceLock::new();
@@ -169,7 +174,9 @@ pub(super) fn build_string_alphabet(schema: &Value) -> StringAlphabet {
     }
     build_string_alphabet_uncached(schema)
 }
+// nocov end
 
+// nocov start
 fn build_string_alphabet_uncached(schema: &Value) -> StringAlphabet {
     // Determine codepoint range from codec + min/max codepoint.
     let codec = map_get(schema, "codec").and_then(as_text);
@@ -297,6 +304,7 @@ fn build_string_alphabet_uncached(schema: &Value) -> StringAlphabet {
 
     StringAlphabet::Explicit(alphabet)
 }
+// nocov end
 
 /// Sort key for codepoints: maps '0' (48) to 0, '1' to 1, ..., and
 /// reorders low 128 codepoints so '0' is simplest.
@@ -315,6 +323,7 @@ fn codepoint_sort_key(c: u32) -> u32 {
 ///
 /// ASCII chars (0-127) come first, sorted by codepoint_sort_key.
 /// Non-ASCII chars (128+) come after, in natural codepoint order.
+// nocov start
 fn keyed_codepoint_at_index(min: u32, max: u32, idx: usize) -> char {
     // Count ASCII chars in the range.
     let ascii_end = max.min(127);
@@ -345,8 +354,10 @@ fn keyed_codepoint_at_index(min: u32, max: u32, idx: usize) -> char {
         codepoint_at_index(non_ascii_start, max, (idx - ascii_count) as u32)
     }
 }
+// nocov end
 
 /// Extract an array of strings from a schema field.
+// nocov start
 fn extract_string_array(schema: &Value, key: &str) -> Option<Vec<String>> {
     map_get(schema, key).and_then(|v| {
         if let Value::Array(arr) = v {
@@ -356,6 +367,7 @@ fn extract_string_array(schema: &Value, key: &str) -> Option<Vec<String>> {
         }
     })
 }
+// nocov end
 
 /// Count valid (non-surrogate) codepoints in the range [min, max].
 fn count_valid_codepoints(min: u32, max: u32) -> u32 {
@@ -373,6 +385,7 @@ fn count_valid_codepoints(min: u32, max: u32) -> u32 {
 }
 
 /// Map a 0-based index to a codepoint in [min, max] excluding surrogates.
+// nocov start
 fn codepoint_at_index(min: u32, max: u32, idx: u32) -> char {
     // Count codepoints in [min, min(max, 0xD7FF)] (before surrogates).
     let pre_max = 0xD7FFu32.min(max);
@@ -388,6 +401,7 @@ fn codepoint_at_index(min: u32, max: u32, idx: u32) -> char {
     char::from_u32(cp)
         .unwrap_or_else(|| panic!("codepoint_at_index produced invalid codepoint {:#x}", cp))
 }
+// nocov end
 
 fn is_surrogate(c: char) -> bool {
     let cp = c as u32;

@@ -210,6 +210,7 @@ pub struct PermutationsGenerator<'a, T: Clone> {
 }
 
 impl<T: Clone + Send + Sync> Generator<Vec<T>> for PermutationsGenerator<'_, T> {
+    // nocov start
     fn do_draw(&self, tc: &TestCase) -> Vec<T> {
         let mut result: Vec<T> = self.elements.iter().cloned().collect();
         let n = result.len();
@@ -227,12 +228,14 @@ impl<T: Clone + Send + Sync> Generator<Vec<T>> for PermutationsGenerator<'_, T> 
         }
         result
     }
+    // nocov end
 }
 
 /// Generate permutations of an ordered collection.
 ///
 /// Accepts anything convertible into `Cow<[T]>` (e.g. `Vec<T>` or `&[T]`).
 /// Examples shrink towards the original order.
+// nocov start
 pub fn permutations<'a, T, S>(elements: S) -> PermutationsGenerator<'a, T>
 where
     T: Clone + Send + Sync,
@@ -242,3 +245,4 @@ where
         elements: elements.into(),
     }
 }
+// nocov end

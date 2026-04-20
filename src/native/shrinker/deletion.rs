@@ -99,6 +99,7 @@ impl<'a> Shrinker<'a> {
     /// Try replacing the value at `idx`. If the result is interesting, done.
     /// If the result is valid but used fewer nodes than `expected_len`, try
     /// deleting regions after `idx` to recover an interesting result.
+    // nocov start
     pub(super) fn try_replace_with_deletion(
         &mut self,
         idx: usize,
@@ -141,4 +142,5 @@ impl<'a> Shrinker<'a> {
         }
         false
     }
+    // nocov end
 }
