@@ -234,9 +234,7 @@ fn shrink_bytes_insertion_sort_stops_when_swap_rejected() {
                 unreachable!()
             };
             // Accept only specific orderings so mid-sort swaps can be rejected.
-            let ok = b == &[2u8, 3, 1]
-                || b == &[2u8, 1, 3]
-                || b == &[1u8, 2, 3];
+            let ok = b == &[2u8, 3, 1] || b == &[2u8, 1, 3] || b == &[1u8, 2, 3];
             (ok, 1)
         }),
         nodes,
@@ -275,10 +273,7 @@ fn unbounded_float() -> FloatChoice {
 #[test]
 fn shrink_floats_skips_non_float_nodes() {
     // Non-float alongside float: skip the bool, shrink the float.
-    let nodes = vec![
-        bool_node(true),
-        float_node(unbounded_float(), 4.5),
-    ];
+    let nodes = vec![bool_node(true), float_node(unbounded_float(), 4.5)];
     let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
     shrinker.shrink_floats();
     assert!(matches!(
@@ -454,12 +449,12 @@ fn shrink_floats_final_binary_search_rejects_out_of_range() {
             };
             // Only non-integers in [2, 5] are "interesting", preventing
             // integer search from snapping to 2.0 / 3.0 / etc.
-            (f >= 2.0 && f <= 5.0 && f.fract() != 0.0, 1)
+            ((2.0..=5.0).contains(&f) && f.fract() != 0.0, 1)
         }),
         nodes,
     );
     shrinker.shrink_floats();
     let v = float_at(&shrinker.current_nodes, 0);
-    assert!(v >= 2.0 && v <= 5.0);
+    assert!((2.0..=5.0).contains(&v));
     assert!(v.fract() != 0.0);
 }
