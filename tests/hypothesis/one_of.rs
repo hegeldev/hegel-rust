@@ -29,9 +29,11 @@ fn test_one_of_filtered() {
 #[test]
 fn test_one_of_flatmapped() {
     assert_all_examples(
-        gs::one_of(vec![gs::just(100i64)
-            .flat_map(|n| gs::integers::<i64>().min_value(n))
-            .boxed()]),
+        gs::one_of(vec![
+            gs::just(100i64)
+                .flat_map(|n| gs::integers::<i64>().min_value(n))
+                .boxed(),
+        ]),
         |i: &i64| *i >= 100,
     );
 }
