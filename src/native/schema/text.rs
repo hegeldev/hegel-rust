@@ -453,7 +453,7 @@ fn keyed_codepoint_at_index(min: u32, max: u32, idx: usize) -> char {
                 found += 1;
             }
         }
-        panic!("keyed_codepoint_at_index: ASCII index out of range");
+        unreachable!("keyed_codepoint_at_index: ASCII index out of range");
     } else {
         // Non-ASCII chars: natural order, skipping surrogates.
         let non_ascii_start = min.max(128);

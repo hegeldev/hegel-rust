@@ -78,6 +78,14 @@ fn build_intervals_alphabet_ascii_sorted_by_codepoint_key() {
 }
 
 #[test]
+fn build_intervals_alphabet_excluded_in_second_subrange_triggers_break() {
+    let excl_char = char::from_u32(0xE001).unwrap();
+    let alpha = build_intervals_alphabet(0xD700, 0xE100, &[excl_char]);
+    let alpha_no_excl = build_intervals_alphabet(0xD700, 0xE100, &[]);
+    assert_eq!(alpha.len(), alpha_no_excl.len() - 1);
+}
+
+#[test]
 fn build_intervals_alphabet_excludes_at_boundaries() {
     let alpha = build_intervals_alphabet(65, 70, &['A', 'F']);
     assert_eq!(alpha.len(), 4); // B, C, D, E
@@ -238,6 +246,12 @@ fn keyed_codepoint_at_index_non_ascii_region() {
 #[test]
 fn keyed_codepoint_at_index_limited_ascii_range() {
     assert_eq!(keyed_codepoint_at_index(65, 90, 0), 'A');
+}
+
+#[test]
+fn keyed_codepoint_at_index_non_ascii_only_range() {
+    let c = keyed_codepoint_at_index(200, 300, 0);
+    assert_eq!(c, char::from_u32(200).unwrap());
 }
 
 #[test]
