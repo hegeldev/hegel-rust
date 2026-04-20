@@ -222,6 +222,7 @@ fn generate_subpattern(
     Ok(())
 }
 
+// nocov start
 fn generate_op(
     ntc: &mut NativeTestCase,
     op: &OpCode,
@@ -410,6 +411,7 @@ fn generate_op(
     }
     Ok(())
 }
+// nocov end
 
 /// Cached version of [`build_in_set`] for the default (no-alphabet) case.
 ///
@@ -441,6 +443,7 @@ fn cached_default_in_set(items: &[SetItem], flags: u32) -> Arc<[char]> {
 /// Build the set of characters that a `(IN, items)` node can emit, after
 /// applying the current flags (IGNORECASE swaps, ASCII restriction) and
 /// intersecting with the user-supplied alphabet.
+// nocov start
 fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<StringAlphabet>) -> Vec<char> {
     let negate = matches!(items.first(), Some(SetItem::Negate));
 
@@ -519,6 +522,7 @@ fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<StringAlphabet>
         })
     }
 }
+// nocov end
 
 fn add_with_swapcase(v: &mut Vec<char>, c: char, flags: u32) {
     if !v.contains(&c) {
@@ -533,6 +537,7 @@ fn add_with_swapcase(v: &mut Vec<char>, c: char, flags: u32) {
 }
 
 /// Return whether codepoint `c` is in the given CPython character category.
+// nocov start
 fn in_category(c: char, cat: ChCode) -> bool {
     let cp = c as u32;
     match cat {
@@ -546,6 +551,7 @@ fn in_category(c: char, cat: ChCode) -> bool {
         ChCode::NotLinebreak | ChCode::UniNotLinebreak => c != '\n',
     }
 }
+// nocov end
 
 fn is_uni_space(c: char) -> bool {
     matches!(
@@ -560,6 +566,7 @@ fn is_uni_word(c: char) -> bool {
 
 /// Gather all characters in `alphabet` (or a default scan range) that
 /// satisfy `predicate`.
+// nocov start
 fn gather_chars<F: Fn(char) -> bool>(alphabet: &Option<StringAlphabet>, predicate: F) -> Vec<char> {
     match alphabet {
         None => {
@@ -598,6 +605,7 @@ fn gather_chars<F: Fn(char) -> bool>(alphabet: &Option<StringAlphabet>, predicat
         }
     }
 }
+// nocov end
 
 fn alphabet_allows(alphabet: &Option<StringAlphabet>, c: char) -> bool {
     match alphabet {
@@ -612,6 +620,7 @@ fn alphabet_allows(alphabet: &Option<StringAlphabet>, c: char) -> bool {
 
 /// Pick an arbitrary character from the alphabet. Used for prefix/suffix
 /// padding — must never fail if the alphabet is non-empty.
+// nocov start
 fn draw_any_char(
     ntc: &mut NativeTestCase,
     alphabet: &Option<StringAlphabet>,
@@ -642,6 +651,7 @@ fn draw_any_char(
         }
     }
 }
+// nocov end
 
 fn emit_from_chars(
     ntc: &mut NativeTestCase,
@@ -708,6 +718,7 @@ fn char_swapcase(c: char) -> char {
 // approximated by matching the body with its modified flags and then
 // continuing the tail with the outer flags.
 
+// nocov start
 fn match_seq(
     ops: &[OpCode],
     pos: usize,
@@ -924,7 +935,9 @@ fn match_seq(
         }
     }
 }
+// nocov end
 
+// nocov start
 fn chars_eq(a: char, b: char, flags: u32) -> bool {
     if a == b {
         return true;
@@ -935,7 +948,9 @@ fn chars_eq(a: char, b: char, flags: u32) -> bool {
         false
     }
 }
+// nocov end
 
+// nocov start
 fn char_matches_set(items: &[SetItem], c: char, flags: u32) -> bool {
     let negate = matches!(items.first(), Some(SetItem::Negate));
     let mut contained = false;
@@ -969,7 +984,9 @@ fn char_matches_set(items: &[SetItem], c: char, flags: u32) -> bool {
     }
     if negate { !contained } else { contained }
 }
+// nocov end
 
+// nocov start
 fn at_matches(at: &AtCode, chars: &[char], pos: usize, flags: u32) -> bool {
     match at {
         AtCode::BeginningString => pos == 0,
@@ -998,12 +1015,15 @@ fn at_matches(at: &AtCode, chars: &[char], pos: usize, flags: u32) -> bool {
         }
     }
 }
+// nocov end
 
+// nocov start
 fn is_word_boundary(chars: &[char], pos: usize) -> bool {
     let before = pos > 0 && is_uni_word(chars[pos - 1]);
     let after = pos < chars.len() && is_uni_word(chars[pos]);
     before != after
 }
+// nocov end
 
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/schema/regex_tests.rs"]

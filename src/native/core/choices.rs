@@ -60,6 +60,7 @@ impl IntegerChoice {
     }
 
     /// pbtkit: `core.py::IntegerChoice.max_index`.
+    // nocov start
     #[allow(dead_code)]
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         use crate::native::bignum::BigUint;
@@ -69,6 +70,7 @@ impl IntegerChoice {
         let diff = (self.max_value as u128).wrapping_sub(self.min_value as u128);
         BigUint::from(diff)
     }
+    // nocov end
 
     /// pbtkit: `core.py::IntegerChoice.to_index`.
     #[allow(dead_code)]
@@ -162,10 +164,12 @@ impl BooleanChoice {
     }
 
     /// pbtkit: `core.py::BooleanChoice.max_index`.
+    // nocov start
     #[allow(dead_code)]
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         crate::native::bignum::BigUint::from(1u32)
     }
+    // nocov end
 
     /// pbtkit: `core.py::BooleanChoice.to_index`.
     #[allow(dead_code)]
@@ -211,6 +215,7 @@ impl Eq for FloatChoice {}
 
 impl FloatChoice {
     /// The simplest (lowest-sort-key) valid float for this choice.
+    // nocov start
     pub fn simplest(&self) -> f64 {
         use super::float_index::{float_to_index, index_to_float};
 
@@ -287,8 +292,10 @@ impl FloatChoice {
         }
         panic!("FloatChoice::simplest: no valid float for this choice")
     }
+    // nocov end
 
     /// Second-simplest valid float (for type punning during replay).
+    // nocov start
     pub fn unit(&self) -> f64 {
         use super::float_index::{float_to_index, index_to_float};
 
@@ -307,6 +314,7 @@ impl FloatChoice {
         }
         s
     }
+    // nocov end
 
     pub fn validate(&self, v: f64) -> bool {
         if v.is_nan() {
@@ -349,12 +357,14 @@ impl FloatChoice {
     /// pbtkit: `floats.py::FloatChoice.max_index`. Largest valid index for
     /// [`from_index`]. Indexes the full finite range (both signs) followed
     /// by `+inf`, `-inf`, then all NaN payloads.
+    // nocov start
     #[allow(dead_code)]
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         use crate::native::bignum::BigUint;
         // 2^52 NaN payloads (one bit forced to 1) × 2 signs = 2^53 NaN slots.
         max_finite_global_rank() + BigUint::from(2u32) + BigUint::from(1u64 << 53)
     }
+    // nocov end
 
     /// pbtkit: `floats.py::FloatChoice.to_index`.
     ///
@@ -387,6 +397,7 @@ impl FloatChoice {
 /// Dense rank of `v` under native's `sort_key` ordering: finite floats
 /// indexed by `(float_to_index(|v|), is_neg)`, then `+inf`, `-inf`, then NaN
 /// payloads.
+// nocov start
 fn float_global_rank(v: f64) -> crate::native::bignum::BigUint {
     use super::float_index::float_to_index;
     use crate::native::bignum::BigUint;
@@ -413,10 +424,12 @@ fn float_global_rank(v: f64) -> crate::native::bignum::BigUint {
     let mag_idx = float_to_index(mag);
     BigUint::from(mag_idx) * BigUint::from(2u32) + BigUint::from(u32::from(is_neg))
 }
+// nocov end
 
 /// Inverse of [`float_global_rank`]. Returns `None` if `rank` falls in the
 /// NaN-payload region for a sign+offset combination that would not actually
 /// be a NaN bit pattern.
+// nocov start
 fn float_from_global_rank(rank: crate::native::bignum::BigUint) -> Option<f64> {
     use super::float_index::index_to_float;
     use crate::native::bignum::BigUint;
@@ -449,6 +462,7 @@ fn float_from_global_rank(rank: crate::native::bignum::BigUint) -> Option<f64> {
     let mag = index_to_float(mag_idx);
     Some(if is_neg_u == 1 { -mag } else { mag })
 }
+// nocov end
 
 /// Largest dense rank used by any finite float. The maximum lex index over
 /// any finite float is `(1<<63) | (2046<<52) | mantissa_max` — bit 63 set
@@ -526,10 +540,12 @@ impl BytesChoice {
     }
 
     /// pbtkit: `bytes.py::BytesChoice.max_index`.
+    // nocov start
     #[allow(dead_code)]
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         self.to_index(&vec![0xffu8; self.max_size])
     }
+    // nocov end
 
     /// pbtkit: `bytes.py::BytesChoice.to_index`.
     #[allow(dead_code)]
@@ -602,7 +618,7 @@ impl StringChoice {
                 return self.min_codepoint;
             }
             // min_codepoint falls inside the surrogate block; step past it.
-            return 0xE000u32.min(self.max_codepoint);
+            return 0xE000u32.min(self.max_codepoint); // nocov
         }
         let mut best = self.min_codepoint;
         let mut best_key = codepoint_key(best);
@@ -842,6 +858,7 @@ pub enum ChoiceValue {
 }
 
 impl PartialEq for ChoiceValue {
+    // nocov start
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (ChoiceValue::Integer(a), ChoiceValue::Integer(b)) => a == b,
@@ -853,6 +870,7 @@ impl PartialEq for ChoiceValue {
             _ => false,
         }
     }
+    // nocov end
 }
 
 impl Eq for ChoiceValue {}

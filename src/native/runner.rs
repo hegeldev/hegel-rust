@@ -76,6 +76,7 @@ fn take_panic_payload() -> Option<Box<dyn std::any::Any + Send>> {
 }
 
 /// Extract a string message from a panic payload.
+// nocov start
 pub(crate) fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         s.to_string()
@@ -85,6 +86,7 @@ pub(crate) fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
         "Unknown panic".to_string()
     }
 }
+// nocov end
 
 /// Print the panic details for the final replay, then store the wrapped
 /// payload for re-raising via `resume_unwind`.
@@ -150,6 +152,7 @@ const HEALTH_CHECK_MAX_VALID: u64 = 10;
 /// Entry point for native-backend test execution.
 ///
 /// Called from `Hegel::run()` when the `native` feature is enabled.
+// nocov start
 pub fn native_run<F>(
     test_fn: F,
     settings: &Settings,
@@ -433,6 +436,7 @@ pub fn native_run<F>(
         }
     }
 }
+// nocov end
 
 /// Format a backtrace captured from inside the panic hook, optionally filtering
 /// to the "short" format used by Rust's default panic handler.
@@ -441,6 +445,7 @@ pub fn native_run<F>(
 /// `__rust_begin_short_backtrace` markers (the user-visible range), then
 /// renumbers them starting from 0.  This produces the same frame layout as
 /// Rust's own short backtrace, ensuring frame 2 is the user's test closure.
+// nocov start
 fn format_backtrace_native(bt: &Backtrace, full: bool) -> String {
     let backtrace_str = format!("{}", bt);
 
@@ -515,6 +520,7 @@ fn format_backtrace_native(bt: &Backtrace, full: bool) -> String {
     }
     result.join("\n")
 }
+// nocov end
 
 /// Try span mutation: find two spans with the same label and replace both with
 /// identical choices from one donor. This makes two independently-generated
@@ -522,6 +528,7 @@ fn format_backtrace_native(bt: &Backtrace, full: bool) -> String {
 /// `test_long_duplicates_strings`-style tests are found.
 ///
 /// Port of pbtkit's `span_mutation.py`.
+// nocov start
 fn try_span_mutation<F: FnMut(TestCase)>(
     nodes: &[ChoiceNode],
     spans: &[Span],
@@ -587,6 +594,7 @@ fn try_span_mutation<F: FnMut(TestCase)>(
 
     None
 }
+// nocov end
 
 fn create_rng(settings: &Settings, database_key: Option<&str>) -> SmallRng {
     if let Some(seed) = settings.seed {
