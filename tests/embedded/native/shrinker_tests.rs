@@ -1276,3 +1276,560 @@ fn redistribute_string_pairs_no_op_with_single_string() {
     shrinker.redistribute_string_pairs();
     assert_eq!(string_at(&shrinker.current_nodes, 1), vec![b'z' as u32]);
 }
+
+// ── zero_choices ────────────────────────────────────────────────────────────
+//
+// Exercises each branch of the integer-level zero_choices pass: the empty
+// short-circuit, advance-past-simplest, block replacement, and fall-back to
+// smaller k when the big block is rejected.
+
+#[test]
+fn zero_choices_empty_nodes_is_noop() {
+    // len=0 → outer `while k > 0` is immediately false.
+    let nodes: Vec<ChoiceNode> = Vec::new();
+    let mut shrinker = Shrinker::new(
+        Box::new(|_: &[ChoiceNode]| panic!("predicate should not be called")),
+        nodes,
+    );
+    shrinker.zero_choices();
+    assert!(shrinker.current_nodes.is_empty());
+}
+
+#[test]
+fn zero_choices_replaces_single_block_with_simplest() {
+    let nodes = vec![int_node(0, 10, 5)];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    shrinker.zero_choices();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+}
+
+#[test]
+fn zero_choices_advances_past_simplest_node() {
+    // First node already simplest → `i += 1` branch fires. Second node then
+    // gets its own block replacement at k=1.
+    let nodes = vec![int_node(0, 10, 0), int_node(0, 10, 5)];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    shrinker.zero_choices();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+    assert_eq!(int_at(&shrinker.current_nodes, 1), 0);
+}
+
+#[test]
+fn zero_choices_replaces_multi_node_block_simultaneously() {
+    // Block of size 2: both replaced in a single step.
+    let nodes = vec![int_node(0, 10, 7), int_node(0, 10, 3)];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    shrinker.zero_choices();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+    assert_eq!(int_at(&shrinker.current_nodes, 1), 0);
+}
+
+#[test]
+fn zero_choices_falls_back_to_smaller_k_when_big_block_rejected() {
+    // Predicate requires first int >= 5. The k=2 block tries [0, 0] which
+    // fails; `i += k` advances. k halves to 1, and the individual replace
+    // succeeds on the second node only.
+    let nodes = vec![int_node(0, 10, 8), int_node(0, 10, 3)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::Integer(v) = n[0].value else {
+                unreachable!()
+            };
+            (v >= 5, 2)
+        }),
+        nodes,
+    );
+    shrinker.zero_choices();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 8);
+    assert_eq!(int_at(&shrinker.current_nodes, 1), 0);
+}
+
+// ── swap_integer_sign ──────────────────────────────────────────────────────
+//
+// Five branches: non-integer skip, already-simplest skip, negative flips to
+// positive, negative where -v is out of range, and positive reduced to
+// simplest without a flip.
+
+#[test]
+fn swap_integer_sign_skips_non_integer_nodes() {
+    let nodes = vec![bool_node(true), int_node(-10, 10, -5)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::Integer(v) = n[1].value else {
+                unreachable!()
+            };
+            (v != 0, 2)
+        }),
+        nodes,
+    );
+    shrinker.swap_integer_sign();
+    assert!(bool_at(&shrinker.current_nodes, 0));
+    // simplest=0 rejected, -5 flipped to 5.
+    assert_eq!(int_at(&shrinker.current_nodes, 1), 5);
+}
+
+#[test]
+fn swap_integer_sign_skips_when_already_simplest() {
+    // v == simplest → outer replace branch skipped; re-read still runs but
+    // v < 0 is false for v=0.
+    let nodes = vec![int_node(-10, 10, 0)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|_: &[ChoiceNode]| panic!("predicate should not be called")),
+        nodes,
+    );
+    shrinker.swap_integer_sign();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+}
+
+#[test]
+fn swap_integer_sign_negative_flips_to_positive() {
+    let nodes = vec![int_node(-10, 10, -5)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::Integer(v) = n[0].value else {
+                unreachable!()
+            };
+            (v != 0, 1)
+        }),
+        nodes,
+    );
+    shrinker.swap_integer_sign();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 5);
+}
+
+#[test]
+fn swap_integer_sign_skips_flip_when_negated_out_of_range() {
+    // Range [-10, 5], v=-7. -(-7)=7 > 5, so validate(-v)=false; flip skipped.
+    let nodes = vec![int_node(-10, 5, -7)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::Integer(v) = n[0].value else {
+                unreachable!()
+            };
+            (v <= -6, 1)
+        }),
+        nodes,
+    );
+    shrinker.swap_integer_sign();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), -7);
+}
+
+#[test]
+fn swap_integer_sign_positive_reduced_to_simplest() {
+    // Positive → simplest accepted. Re-read sees 0 so flip branch is skipped.
+    let nodes = vec![int_node(-10, 10, 5)];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    shrinker.swap_integer_sign();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+}
+
+// ── binary_search_integer_towards_zero ─────────────────────────────────────
+//
+// Exercises every branch of both sign cases: non-integer skip, v=0 skip,
+// positive with small/large ranges, positive with min<0 negative probe,
+// positive where the probe is skipped because cur_v≤0 or upper<1, and the
+// negative-branch mirrors of each.
+
+#[test]
+fn binary_search_integer_skips_non_integer_nodes() {
+    let nodes = vec![bool_node(true)];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    shrinker.binary_search_integer_towards_zero();
+    assert!(bool_at(&shrinker.current_nodes, 0));
+}
+
+#[test]
+fn binary_search_integer_skips_value_zero() {
+    // v=0: neither v>0 nor v<0 branches fire.
+    let nodes = vec![int_node(-10, 10, 0)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|_: &[ChoiceNode]| panic!("predicate should not be called")),
+        nodes,
+    );
+    shrinker.binary_search_integer_towards_zero();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+}
+
+#[test]
+fn binary_search_integer_positive_small_range_min_non_negative() {
+    // Small range (≤128), min≥0. bin search + linear scan with
+    // scan_count=min(range,32); negative-probe branch skipped.
+    let nodes = vec![int_node(0, 100, 50)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::Integer(v) = n[0].value else {
+                unreachable!()
+            };
+            (v >= 7, 1)
+        }),
+        nodes,
+    );
+    shrinker.binary_search_integer_towards_zero();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 7);
+}
+
+#[test]
+fn binary_search_integer_positive_large_range_uses_scan_count_8() {
+    // Range > 128: scan_count = 8.
+    let nodes = vec![int_node(0, 10_000, 1000)];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    shrinker.binary_search_integer_towards_zero();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+}
+
+#[test]
+fn binary_search_integer_positive_probes_negatives_when_min_below_zero() {
+    // v=10 with min<0. Predicate accepts v=10 or v<=-3. The positive bin
+    // search can't shrink 10 (no other positive accepted); the negative
+    // probe then reaches -3 via bin_search_down on a=3.
+    let nodes = vec![int_node(-100, 100, 10)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::Integer(v) = n[0].value else {
+                unreachable!()
+            };
+            (v == 10 || v <= -3, 1)
+        }),
+        nodes,
+    );
+    shrinker.binary_search_integer_towards_zero();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), -3);
+}
+
+#[test]
+fn binary_search_integer_positive_skips_negative_probe_when_cur_nonpositive() {
+    // min<0 but after bin_search cur_v=0. `if cur_v > 0` is false.
+    let nodes = vec![int_node(-100, 100, 10)];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    shrinker.binary_search_integer_towards_zero();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+}
+
+#[test]
+fn binary_search_integer_positive_skips_negative_probe_when_upper_lt_1() {
+    // cur_v=1, -min=100. upper = min(cur_v-1, -min) = 0 < 1, so skip.
+    let nodes = vec![int_node(-100, 100, 1)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::Integer(v) = n[0].value else {
+                unreachable!()
+            };
+            (v >= 1, 1)
+        }),
+        nodes,
+    );
+    shrinker.binary_search_integer_towards_zero();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 1);
+}
+
+#[test]
+fn binary_search_integer_negative_small_range_max_nonpositive() {
+    // Small range, max≤0. v<0 bin search + small-range neg_scan.
+    let nodes = vec![int_node(-100, 0, -50)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::Integer(v) = n[0].value else {
+                unreachable!()
+            };
+            (v <= -7, 1)
+        }),
+        nodes,
+    );
+    shrinker.binary_search_integer_towards_zero();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), -7);
+}
+
+#[test]
+fn binary_search_integer_negative_large_range_uses_neg_scan_8() {
+    // Range > 128: neg_scan = 8 in the else arm.
+    let nodes = vec![int_node(-10_000, 0, -1000)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::Integer(v) = n[0].value else {
+                unreachable!()
+            };
+            (v <= -3, 1)
+        }),
+        nodes,
+    );
+    shrinker.binary_search_integer_towards_zero();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), -3);
+}
+
+#[test]
+fn binary_search_integer_negative_probes_positives_when_max_above_zero() {
+    // v=-10, max>0. Predicate accepts only {-10, 3}: positive probe finds 3.
+    let nodes = vec![int_node(-100, 100, -10)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::Integer(v) = n[0].value else {
+                unreachable!()
+            };
+            (v == 3 || v == -10, 1)
+        }),
+        nodes,
+    );
+    shrinker.binary_search_integer_towards_zero();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 3);
+}
+
+#[test]
+fn binary_search_integer_negative_skips_positive_probe_when_cur_nonnegative() {
+    // After bin_search, cur_v=0. `if cur_v < 0` is false; skip positive probe.
+    let nodes = vec![int_node(-100, 100, -10)];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    shrinker.binary_search_integer_towards_zero();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+}
+
+#[test]
+fn binary_search_integer_negative_skips_positive_probe_when_upper_lt_1() {
+    // cur_v=-1, max=100. upper = min(-cur_v - 1, max) = 0 < 1, skip.
+    let nodes = vec![int_node(-100, 100, -1)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::Integer(v) = n[0].value else {
+                unreachable!()
+            };
+            (v <= -1, 1)
+        }),
+        nodes,
+    );
+    shrinker.binary_search_integer_towards_zero();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), -1);
+}
+
+#[test]
+fn binary_search_integer_negative_positive_probe_large_range() {
+    // Negative branch with positive-probe large-range path: scan_count=8.
+    let nodes = vec![int_node(-10_000, 10_000, -10)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::Integer(v) = n[0].value else {
+                unreachable!()
+            };
+            (v == 3 || v == -10, 1)
+        }),
+        nodes,
+    );
+    shrinker.binary_search_integer_towards_zero();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 3);
+}
+
+#[test]
+fn binary_search_integer_negative_positive_probe_small_range() {
+    // Negative branch, positive-probe small-range (range_size ≤ 128). Covers
+    // the `range_size.min(32)` scan_count branch.
+    let nodes = vec![int_node(-50, 50, -10)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::Integer(v) = n[0].value else {
+                unreachable!()
+            };
+            (v == 3 || v == -10, 1)
+        }),
+        nodes,
+    );
+    shrinker.binary_search_integer_towards_zero();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 3);
+}
+
+// ── redistribute_integers ──────────────────────────────────────────────────
+
+#[test]
+fn redistribute_integers_noop_with_no_integers() {
+    // Empty int_indices → max_gap=0; outer for-loop empty.
+    let nodes = vec![bool_node(true), bool_node(false)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|_: &[ChoiceNode]| panic!("predicate should not be called")),
+        nodes,
+    );
+    shrinker.redistribute_integers();
+    assert!(bool_at(&shrinker.current_nodes, 0));
+    assert!(!bool_at(&shrinker.current_nodes, 1));
+}
+
+#[test]
+fn redistribute_integers_noop_with_single_integer() {
+    // 1 integer → max_gap=1 → `for gap in 1..1` is empty.
+    let nodes = vec![int_node(0, 10, 5)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|_: &[ChoiceNode]| panic!("predicate should not be called")),
+        nodes,
+    );
+    shrinker.redistribute_integers();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 5);
+}
+
+#[test]
+fn redistribute_integers_reduces_positive_pair() {
+    // prev_i>0 branch. bin_search pulls value out of a into b, keeping
+    // a+b constant at 130.
+    let nodes = vec![int_node(0, 200, 80), int_node(0, 200, 50)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let (ChoiceValue::Integer(a), ChoiceValue::Integer(b)) = (&n[0].value, &n[1].value)
+            else {
+                unreachable!()
+            };
+            (a + b >= 100, 2)
+        }),
+        nodes,
+    );
+    shrinker.redistribute_integers();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+    assert_eq!(int_at(&shrinker.current_nodes, 1), 130);
+}
+
+#[test]
+fn redistribute_integers_reduces_negative_pair() {
+    // prev_i<0 branch. bin_search drives a toward 0 while keeping a+b = -30.
+    let nodes = vec![int_node(-200, 200, -80), int_node(-200, 200, 50)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let (ChoiceValue::Integer(a), ChoiceValue::Integer(b)) = (&n[0].value, &n[1].value)
+            else {
+                unreachable!()
+            };
+            (a + b == -30, 2)
+        }),
+        nodes,
+    );
+    shrinker.redistribute_integers();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+    assert_eq!(int_at(&shrinker.current_nodes, 1), -30);
+}
+
+#[test]
+fn redistribute_integers_skips_when_prev_i_at_simplest() {
+    // prev_i==simplest: neither prev_i>0 nor prev_i<0 branch fires.
+    let nodes = vec![int_node(0, 10, 0), int_node(0, 10, 5)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|_: &[ChoiceNode]| panic!("predicate should not be called")),
+        nodes,
+    );
+    shrinker.redistribute_integers();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+    assert_eq!(int_at(&shrinker.current_nodes, 1), 5);
+}
+
+#[test]
+fn redistribute_integers_walks_reverse_pair_order() {
+    // Three positive ints — gap=1 iterates pairs (1,2) then (0,1), exercising
+    // the pair_idx decrement branch.
+    let nodes = vec![
+        int_node(0, 100, 10),
+        int_node(0, 100, 20),
+        int_node(0, 100, 30),
+    ];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 3)), nodes);
+    shrinker.redistribute_integers();
+    // Sum preserved (60); progress was made.
+    let a = int_at(&shrinker.current_nodes, 0);
+    let b = int_at(&shrinker.current_nodes, 1);
+    let c = int_at(&shrinker.current_nodes, 2);
+    assert_eq!(a + b + c, 60);
+    assert!(a <= 10);
+}
+
+// ── shrink_duplicates ──────────────────────────────────────────────────────
+
+#[test]
+fn shrink_duplicates_noop_without_duplicates() {
+    let nodes = vec![int_node(0, 10, 3), int_node(0, 10, 7)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|_: &[ChoiceNode]| panic!("predicate should not be called")),
+        nodes,
+    );
+    shrinker.shrink_duplicates();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 3);
+    assert_eq!(int_at(&shrinker.current_nodes, 1), 7);
+}
+
+#[test]
+fn shrink_duplicates_skips_non_integer_kinds() {
+    // Two booleans: the outer grouping only collects integer nodes.
+    let nodes = vec![bool_node(true), bool_node(true)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|_: &[ChoiceNode]| panic!("predicate should not be called")),
+        nodes,
+    );
+    shrinker.shrink_duplicates();
+    assert!(bool_at(&shrinker.current_nodes, 0));
+    assert!(bool_at(&shrinker.current_nodes, 1));
+}
+
+#[test]
+fn shrink_duplicates_reduces_positive_pair_to_simplest() {
+    // Predicate permissive → simplest(0) replaces both simultaneously.
+    let nodes = vec![int_node(0, 100, 50), int_node(0, 100, 50)];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    shrinker.shrink_duplicates();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+    assert_eq!(int_at(&shrinker.current_nodes, 1), 0);
+}
+
+#[test]
+fn shrink_duplicates_reduces_negative_pair_to_simplest() {
+    let nodes = vec![int_node(-100, 100, -50), int_node(-100, 100, -50)];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    shrinker.shrink_duplicates();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+    assert_eq!(int_at(&shrinker.current_nodes, 1), 0);
+}
+
+#[test]
+fn shrink_duplicates_positive_bin_search_makes_partial_progress() {
+    // Predicate requires both equal AND both >= 10: simplest(0) rejected,
+    // forcing the positive bin_search branch. After the first successful
+    // candidate, cur_value no longer matches current_nodes so the
+    // `current_valid.len() < 2 → return false` branch also fires.
+    let nodes = vec![int_node(0, 100, 50), int_node(0, 100, 50)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let (ChoiceValue::Integer(a), ChoiceValue::Integer(b)) = (&n[0].value, &n[1].value)
+            else {
+                unreachable!()
+            };
+            (a == b && *a >= 10, 2)
+        }),
+        nodes,
+    );
+    shrinker.shrink_duplicates();
+    let a = int_at(&shrinker.current_nodes, 0);
+    let b = int_at(&shrinker.current_nodes, 1);
+    assert_eq!(a, b);
+    assert!(a >= 10);
+    assert!(a < 50);
+}
+
+#[test]
+fn shrink_duplicates_negative_bin_search_makes_partial_progress() {
+    let nodes = vec![int_node(-100, 100, -50), int_node(-100, 100, -50)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let (ChoiceValue::Integer(a), ChoiceValue::Integer(b)) = (&n[0].value, &n[1].value)
+            else {
+                unreachable!()
+            };
+            (a == b && *a <= -10, 2)
+        }),
+        nodes,
+    );
+    shrinker.shrink_duplicates();
+    let a = int_at(&shrinker.current_nodes, 0);
+    let b = int_at(&shrinker.current_nodes, 1);
+    assert_eq!(a, b);
+    assert!(a <= -10);
+    assert!(a > -50);
+}
+
+#[test]
+fn shrink_duplicates_skips_bin_search_when_already_simplest() {
+    // cur_value==0: neither v>0 nor v<0 branch runs.
+    let nodes = vec![int_node(0, 10, 0), int_node(0, 10, 0)];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    shrinker.shrink_duplicates();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+    assert_eq!(int_at(&shrinker.current_nodes, 1), 0);
+}
