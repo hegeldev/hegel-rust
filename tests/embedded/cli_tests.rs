@@ -1,5 +1,5 @@
 use super::*;
-use crate::runner::{Database, Settings, Verbosity};
+use crate::settings::{Database, Settings, Verbosity};
 
 fn s(strs: &[&str]) -> Vec<String> {
     std::iter::once("prog")
@@ -82,7 +82,7 @@ fn test_suppress_health_check_single() {
     let parsed = apply(&["--suppress-health-check", "too_slow"]);
     assert_eq!(
         parsed.suppress_health_check,
-        vec![crate::runner::HealthCheck::TooSlow]
+        vec![crate::settings::HealthCheck::TooSlow]
     );
 }
 
@@ -92,8 +92,8 @@ fn test_suppress_health_check_multiple() {
     assert_eq!(
         parsed.suppress_health_check,
         vec![
-            crate::runner::HealthCheck::TooSlow,
-            crate::runner::HealthCheck::FilterTooMuch
+            crate::settings::HealthCheck::TooSlow,
+            crate::settings::HealthCheck::FilterTooMuch
         ]
     );
 }

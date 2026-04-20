@@ -886,8 +886,8 @@ fn resolve_hegel_path(path: &str) -> String {
         return path.to_string();
     }
 
-    // Bare name (no '/') — try PATH lookup
-    if !path.contains('/') {
+    // Bare name (no path separator) — try PATH lookup
+    if !path.chars().any(std::path::is_separator) {
         if let Some(resolved) = crate::utils::which(path) {
             crate::utils::validate_executable(&resolved);
             return resolved;

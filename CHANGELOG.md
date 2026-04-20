@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.4 - 2026-04-20
+
+This patch adds windows support for hegel-rust. It is somewhat experimental, but the full
+feature set should work.
+
 ## 0.7.3 - 2026-04-20
 
 This adds two new macros to allow more flexible use of hegel.

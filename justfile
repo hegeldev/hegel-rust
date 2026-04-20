@@ -7,6 +7,9 @@ check-tests:
 check-tests-all-features:
     RUST_BACKTRACE=1 cargo test --all-features
 
+check-tests-rand-feature:
+    RUST_BACKTRACE=1 cargo test --features rand
+
 check-tests-minimal-versions:
     # This is an annoyingly specific check and feels like it overly couples CI concerns and check
     # concerns. I don't have a better proposal right now.

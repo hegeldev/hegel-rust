@@ -84,7 +84,7 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
             .__database_key(format!("{}::{}", module_path!(), #test_name))
             .test_location(hegel::TestLocation {
                 function: #test_name.to_string(),
-                file: file!().to_string(),
+                file: file!().replace('\\', "/"),
                 class: module_path!().to_string(),
                 begin_line: line!(),
             })

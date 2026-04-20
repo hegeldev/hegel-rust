@@ -4,6 +4,13 @@ use std::path::Path;
 //
 // Antithesis will never be required to use Hegel. This functionality is only to provide a better user experience when
 // Hegel happens to be run inside of Antithesis.
+//
+// Antithesis only supports Linux, so the feature is not available on Windows.
+
+#[cfg(all(feature = "antithesis", windows))]
+compile_error!(
+    "The `antithesis` feature is not supported on Windows. Antithesis only runs on Linux."
+);
 
 pub struct TestLocation {
     pub function: String,
@@ -13,18 +20,18 @@ pub struct TestLocation {
 }
 
 pub(crate) fn is_running_in_antithesis() -> bool {
-    match std::env::var("ANTITHESIS_OUTPUT_DIR") {
-        // nocov start
-        Ok(output_dir) => {
-            assert!(
-                Path::new(&output_dir).exists(),
-                "Expected ANTITHESIS_OUTPUT_DIR={output_dir} to exist when running inside of Antithesis"
-            );
-            true
-        }
-        // nocov end
-        Err(_) => false,
+    // Antithesis only supports Linux; skip the check entirely on Windows.
+    #[cfg(not(windows))]
+    // nocov start
+    if let Ok(output_dir) = std::env::var("ANTITHESIS_OUTPUT_DIR") {
+        assert!(
+            Path::new(&output_dir).exists(),
+            "Expected ANTITHESIS_OUTPUT_DIR={output_dir} to exist when running inside of Antithesis"
+        );
+        return true;
     }
+    // nocov end
+    false
 }
 
 // nocov start
