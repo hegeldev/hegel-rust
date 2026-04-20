@@ -223,13 +223,13 @@ fn run_test_case(
 
     // Send mark_complete via the data source.
     // Skip if test was aborted (StopTest) - the data source already closed.
-    if !tc.data_source().test_aborted() {
+    if !tc.test_aborted() {
         let status = match &tc_result {
             TestCaseResult::Valid => "VALID",
             TestCaseResult::Invalid | TestCaseResult::Overrun => "INVALID",
             TestCaseResult::Interesting { .. } => "INTERESTING",
         };
-        tc.data_source().mark_complete(status, origin.as_deref());
+        tc.mark_complete(status, origin.as_deref());
     }
 
     tc_result
