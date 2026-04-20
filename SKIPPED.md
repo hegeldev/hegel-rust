@@ -276,3 +276,33 @@ Individually-skipped tests (rest of the file is ported):
   `convert_positional_arguments` (Python argument conversion), and `@given`/
   `@st.composite` decorator annotation editing. None of these Python
   introspection APIs have Rust counterparts.
+
+- `test_sampled_from.py::test_cannot_sample_sets` — Rust's type system prevents
+  passing non-sequence types to `sampled_from`; the Python runtime type check has
+  no Rust counterpart.
+- `test_sampled_from.py::test_can_sample_enums` — Python `enum.Enum`/`enum.Flag`
+  auto-iteration integration; `sampled_from(EnumClass)` iterates members natively
+  in Python, no Rust equivalent.
+- `test_sampled_from.py::test_efficient_lists_of_tuples_first_element_sampled_from`
+  — uses `unique_by=fn`; `VecGenerator` only has `.unique(bool)`, no
+  `.unique_by(key_fn)` setter.
+- `test_sampled_from.py::test_unsatisfiable_explicit_filteredstrategy_sampled`,
+  `test_sampled_from.py::test_unsatisfiable_explicit_filteredstrategy_just` —
+  construct `FilteredStrategy` directly with Python `bool` as predicate
+  (truthiness semantics); no Rust counterpart for either the internal class or
+  the truthiness-as-filter pattern.
+- `test_sampled_from.py::test_transformed_just_strategy` — uses
+  `ConjectureData.for_choices`, `JustStrategy`, `do_draw`/`do_filtered_draw`/
+  `filter_not_satisfied` (Hypothesis strategy-protocol internals with no
+  hegel-rust counterpart at any level).
+- `test_sampled_from.py::test_issue_2247_regression` — Python int/float equality
+  (`0 == 0.0`) with dynamic typing; Rust's type system prevents mixed-type
+  sequences.
+- `test_sampled_from.py::test_mutability_1`,
+  `test_sampled_from.py::test_mutability_2` — Python list mutability after
+  strategy creation; Rust's ownership model makes this untestable.
+- `test_sampled_from.py::test_suggests_elements_instead_of_annotations` — Python
+  enum type-annotation vs values error message; no Rust counterpart.
+- `test_sampled_from.py::TestErrorNoteBehavior3819` — Python `__notes__` (PEP 678
+  exception annotations) and dynamic typing (strategies as `sampled_from`
+  elements); no Rust counterpart.
