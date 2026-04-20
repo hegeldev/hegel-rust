@@ -685,11 +685,7 @@ fn delete_chunks_decrements_preceding_integer_on_failed_delete() {
     // The test expects a counter that tracks how many trailing booleans there
     // are. Deleting a trailing bool alone breaks the invariant; decrementing
     // the counter alongside the delete restores it.
-    let nodes = vec![
-        int_node(0, 10, 2),
-        bool_node(true),
-        bool_node(true),
-    ];
+    let nodes = vec![int_node(0, 10, 2), bool_node(true), bool_node(true)];
     let mut shrinker = Shrinker::new(
         Box::new(|n: &[ChoiceNode]| {
             let ok = !n.is_empty()
@@ -739,15 +735,8 @@ fn delete_chunks_decrements_preceding_boolean_on_failed_delete() {
 fn delete_chunks_skips_integer_decrement_when_already_simplest() {
     // Preceding integer is already at its simplest value, so the integer
     // branch of the decrement match arm is skipped. No further action.
-    let nodes = vec![
-        int_node(0, 10, 0),
-        bool_node(false),
-        bool_node(false),
-    ];
-    let mut shrinker = Shrinker::new(
-        Box::new(|n: &[ChoiceNode]| (!n.is_empty(), n.len())),
-        nodes,
-    );
+    let nodes = vec![int_node(0, 10, 0), bool_node(false), bool_node(false)];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (!n.is_empty(), n.len())), nodes);
     shrinker.delete_chunks();
     // Must terminate without panicking. Some shrink is allowed.
     assert!(!shrinker.current_nodes.is_empty());
@@ -827,11 +816,7 @@ fn bind_deletion_skips_non_integers_and_simplest_integers() {
     // No work possible: the single integer is already at simplest, and the
     // booleans aren't eligible. bind_deletion must walk the list without
     // making any changes.
-    let nodes = vec![
-        bool_node(true),
-        int_node(0, 10, 0),
-        bool_node(false),
-    ];
+    let nodes = vec![bool_node(true), int_node(0, 10, 0), bool_node(false)];
     let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 3)), nodes);
     shrinker.bind_deletion();
     assert_eq!(shrinker.current_nodes.len(), 3);
