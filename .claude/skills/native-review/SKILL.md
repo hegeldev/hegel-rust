@@ -19,9 +19,13 @@ do in its top-of-file comment or module doc.
 
 ### 2. Read the counterpart(s).
 
-Find the best-matching file in each upstream reference:
+Find the best-matching file in each upstream reference. **Hypothesis is
+the behavioural ground truth**; pbtkit is a cleaner reference
+implementation of the same core ideas (easier to read, but defers to
+Hypothesis when the two disagree on *what the code should do*).
 
-- **pbtkit** under `/tmp/pbtkit/src/pbtkit/`. Common mappings:
+- **pbtkit** under `/tmp/pbtkit/src/pbtkit/` — read for structure and
+  naming vocabulary. Common mappings:
   - `src/native/core/choices.rs` ↔ `core.py` + `floats.py` + `bytes.py` + `text.py` (choice types)
   - `src/native/core/state.rs` ↔ `core.py` (`TestCase` and `_make_choice`)
   - `src/native/tree.rs` ↔ `caching.py` (`CachedTestFunction`)
@@ -29,11 +33,15 @@ Find the best-matching file in each upstream reference:
   - `src/native/database.rs` ↔ `database.py`
   - `src/native/schema/*` ↔ no direct counterpart (hegel-rust owns the CBOR schema dispatch)
 
-- **Hypothesis** under `/tmp/hypothesis/hypothesis-python/src/hypothesis/internal/`.
-  Not every file has a Hypothesis counterpart; skip when none fits.
+- **Hypothesis** under `/tmp/hypothesis/hypothesis-python/src/hypothesis/internal/`
+  — behavioural source of truth. If the Rust file's semantics match
+  pbtkit but diverge from Hypothesis, that's a bug to flag, not
+  accept. Not every file has a Hypothesis counterpart; skip when none
+  fits.
 
 Read the counterpart and note: what does it cover that the Rust file doesn't?
-What does the Rust file do differently or more verbosely?
+What does the Rust file do differently or more verbosely? Where do pbtkit
+and Hypothesis disagree, and does the Rust code follow Hypothesis?
 
 ### 3. Invoke the `simplify` skill.
 

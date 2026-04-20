@@ -88,9 +88,12 @@ Ground rules:
 - Before touching src/native/ (including filling a todo!() stub or
   native-gating a test that needs new engine support), read
   .claude/skills/implementing-native/SKILL.md. The native engine is a
-  port: consult pbtkit (resources/pbtkit/src/pbtkit/) first, Hypothesis
-  (resources/hypothesis/hypothesis-python/src/hypothesis/internal/)
-  where pbtkit is insufficient. Match upstream semantics.
+  port of Hypothesis's semantics. Hypothesis
+  (resources/hypothesis/hypothesis-python/src/hypothesis/internal/) is
+  the behavioural ground truth; pbtkit
+  (resources/pbtkit/src/pbtkit/) is a cleaner reference implementation
+  of the same core ideas and is usually the easier read. When they
+  conflict, match Hypothesis.
 """
 
 # Appended to port-related prompts only (not to the common system prompt)
@@ -277,10 +280,11 @@ SKIPPED.md (see skip policy below). Instead: native-gate the affected
 test(s) with `#[cfg(feature = "native")]` and add the missing feature
 under `src/native/` — stubbed with `todo!()` if it's too large for one
 focused commit. When implementing or stubbing: read
-.claude/skills/implementing-native/SKILL.md first; consult pbtkit
-(`resources/pbtkit/src/pbtkit/`) as the primary reference, Hypothesis
-(`resources/hypothesis/hypothesis-python/src/hypothesis/internal/`) only
-where pbtkit is insufficient.
+.claude/skills/implementing-native/SKILL.md first. Hypothesis
+(`resources/hypothesis/hypothesis-python/src/hypothesis/internal/`) is
+the behavioural ground truth; pbtkit (`resources/pbtkit/src/pbtkit/`)
+is a cleaner reference implementation of the same core ideas. When
+they conflict, match Hypothesis.
 """ + SKIP_POLICY
 
 PORT_COMMIT_PROMPT = """\
