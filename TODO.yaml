@@ -7,20 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: "[CI] coverage: uncovered lines in src/native/schema/regex.rs:665-667"
-  details: |
-    The coverage job on PR 188 (run 24687359704) fails because
-    src/native/schema/regex.rs lines 665-667 are uncovered:
-
-      src/native/schema/regex.rs:665: Some(StringAlphabet::Intervals { ranges, .. }) => {
-      src/native/schema/regex.rs:666: let cp = c as u32;
-      src/native/schema/regex.rs:667: ranges.iter().any(|&(s, e)| cp >= s && cp <= e)
-
-    This is the Intervals branch of a character-membership check. Add a
-    test that exercises regex generation with a StringAlphabet::Intervals
-    alphabet, or mark the lines // nocov if truly untestable (requires
-    human permission per CLAUDE.md).
-
 - title: "[CI] coverage: uncovered lines in src/server/process.rs:96,103-105"
   details: |
     The coverage job on PR 188 (run 24687359704) fails because
