@@ -20,7 +20,7 @@ use crate::control::with_test_context;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Span, Status};
 use crate::native::data_source::NativeDataSource;
 use crate::native::with_current_native_tc;
-use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING, TestCase};
+use crate::test_case::{ASSUME_FAIL_STRING, LOOP_DONE_STRING, STOP_TEST_STRING, TestCase};
 
 use super::runner::{panic_message, store_final_panic_info};
 
@@ -150,6 +150,8 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
                 let msg = panic_message(&e);
                 if msg == ASSUME_FAIL_STRING || msg == STOP_TEST_STRING {
                     (Status::Invalid, None)
+                } else if msg == LOOP_DONE_STRING {
+                    (Status::Valid, None)
                 } else {
                     if is_final {
                         store_final_panic_info(&msg);
