@@ -32,7 +32,7 @@ use crate::common::utils::{
     assert_all_examples, assert_simple_property, check_can_generate_examples, expect_panic,
 };
 use hegel::generators::{self as gs, Generator};
-use hegel::{Hegel, Settings};
+use hegel::{HealthCheck, Hegel, Settings};
 use std::collections::{HashMap, HashSet};
 
 #[test]
@@ -116,7 +116,11 @@ fn test_efficient_dicts_with_sampled_keys() {
         let expected: HashSet<i64> = (0..50).collect();
         assert_eq!(keys, expected);
     })
-    .settings(Settings::new().database(None))
+    .settings(
+        Settings::new()
+            .database(None)
+            .suppress_health_check([HealthCheck::TooSlow]),
+    )
     .run();
 }
 
@@ -143,7 +147,11 @@ fn test_efficient_sets_of_samples_with_chained_transformations() {
         let expected: HashSet<i64> = (0..50).filter(|x| (x * 2) % 3 != 0).collect();
         assert_eq!(x, expected);
     })
-    .settings(Settings::new().database(None))
+    .settings(
+        Settings::new()
+            .database(None)
+            .suppress_health_check([HealthCheck::FilterTooMuch]),
+    )
     .run();
 }
 
