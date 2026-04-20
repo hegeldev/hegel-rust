@@ -6,3 +6,22 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
+
+- title: "[CI] coverage ratchet EXCEEDED — // nocov count 4082 vs limit 3963"
+  details: |
+    The `coverage` job on PR 188 (run 24688277262) fails because the
+    `// nocov` annotation ratchet is exceeded.
+
+    Log lines:
+      Coverage annotation ratchet EXCEEDED!
+        // nocov: 4082 (limit: 3963)
+      The nocov ratchet may not be increased. Remove the
+      annotations or add tests to cover the code.
+      error: Recipe `check-coverage` failed on line 54 with exit code 1
+
+    The ratchet file is `.github/coverage-ratchet.json` (current limit: 3963).
+    The branch has 119 more `// nocov` lines than allowed.
+
+    Fix: add tests to cover the newly-annotated lines, or remove unneeded
+    `// nocov` annotations. Per CLAUDE.md, the ratchet number MUST NOT be
+    increased without explicit human permission.
