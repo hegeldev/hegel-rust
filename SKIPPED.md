@@ -34,6 +34,10 @@ file and treats listed files as "done".
   Hypothesis's engine is a Python library dependency with no Rust
   counterpart.
 
+- `test_flatmap.py` — cherry-pick of worker port conflicted with concurrent
+  changes to `src/native/schema/regex.rs` and `text.rs`; deferred for manual
+  conflict resolution.
+
 Individually-skipped tests (rest of the file is ported):
 
 - `test_text.py::test_string_sort_key_type_mismatch` — exercises Python's
