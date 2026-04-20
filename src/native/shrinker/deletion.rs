@@ -17,63 +17,41 @@ impl<'a> Shrinker<'a> {
         while k > 0 {
             let mut i = self.current_nodes.len().saturating_sub(k + 1);
             loop {
+                // Only reached when a prior iteration shrank current_nodes to
+                // empty; with usize i we can't go negative, so we bail.
                 if i >= self.current_nodes.len() {
-                    if i == 0 {
-                        break;
-                    }
-                    i -= 1;
-                    continue;
+                    break;
                 }
                 let end = (i + k).min(self.current_nodes.len());
                 let mut attempt: Vec<_> = self.current_nodes[..i].to_vec();
                 attempt.extend_from_slice(&self.current_nodes[end..]);
                 assert!(attempt.len() < self.current_nodes.len());
 
-                if !self.consider(&attempt) {
+                if !self.consider(&attempt) && i > 0 {
                     // Try decrementing the preceding choice (helps with
                     // collection length counters).
-                    if i > 0 {
-                        let prev = &attempt[i - 1];
-                        if let (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) =
-                            (&prev.kind, &prev.value)
+                    let prev = &attempt[i - 1];
+                    let decremented = match (&prev.kind, &prev.value) {
+                        (ChoiceKind::Integer(ic), ChoiceValue::Integer(v))
+                            if *v != ic.simplest() =>
                         {
-                            if *v != ic.simplest() {
-                                let mut modified = attempt.clone();
-                                modified[i - 1] =
-                                    modified[i - 1].with_value(ChoiceValue::Integer(v - 1));
-                                if self.consider(&modified) {
-                                    if i == 0 {
-                                        break;
-                                    }
-                                    i -= 1;
-                                    continue;
-                                }
-                            }
+                            Some(ChoiceValue::Integer(v - 1))
                         }
-                        if let (ChoiceKind::Boolean(_), ChoiceValue::Boolean(true)) =
-                            (&prev.kind, &prev.value)
-                        {
-                            let mut modified = attempt.clone();
-                            modified[i - 1] =
-                                modified[i - 1].with_value(ChoiceValue::Boolean(false));
-                            if self.consider(&modified) {
-                                if i == 0 {
-                                    break;
-                                }
-                                i -= 1;
-                                continue;
-                            }
+                        (ChoiceKind::Boolean(_), ChoiceValue::Boolean(true)) => {
+                            Some(ChoiceValue::Boolean(false))
                         }
+                        _ => None,
+                    };
+                    if let Some(new_value) = decremented {
+                        let mut modified = attempt.clone();
+                        modified[i - 1] = modified[i - 1].with_value(new_value);
+                        self.consider(&modified);
                     }
-                    if i == 0 {
-                        break;
-                    }
-                    i -= 1;
-                } else if i == 0 {
-                    break;
-                } else {
-                    i -= 1;
                 }
+                if i == 0 {
+                    break;
+                }
+                i -= 1;
             }
             k -= 1;
         }
@@ -127,26 +105,21 @@ impl<'a> Shrinker<'a> {
         value: ChoiceValue,
         expected_len: usize,
     ) -> bool {
-        // First try a straight replace.
+        // First try a straight replace. consider() already calls test_fn and
+        // records the interesting case; we'd just duplicate work by retrying.
         if self.replace(&HashMap::from([(idx, value.clone())])) {
             return true;
         }
 
-        // Build the attempt with new value and probe the test.
-        if idx >= self.current_nodes.len() {
-            return false;
-        }
+        // The replace couldn't narrow the result directly. Re-run the test to
+        // see how many nodes it consumed — if fewer than expected, the trailing
+        // choices may be deletable. replace() asserted idx < current_nodes.len()
+        // and, since it returned false, did not mutate current_nodes, so idx is
+        // still in range here.
         let mut attempt = self.current_nodes.clone();
         attempt[idx] = attempt[idx].with_value(value);
 
-        let (is_interesting, actual_len) = (self.test_fn)(&attempt);
-        if is_interesting {
-            if super::sort_key(&attempt) < super::sort_key(&self.current_nodes) {
-                self.current_nodes = attempt.clone();
-            }
-            return true;
-        }
-
+        let (_, actual_len) = (self.test_fn)(&attempt);
         if actual_len >= expected_len {
             return false;
         }
@@ -154,27 +127,16 @@ impl<'a> Shrinker<'a> {
         // The test used fewer nodes. Try deleting regions after idx.
         let k = expected_len - actual_len;
         for size in (1..=k).rev() {
-            // Start near the end and work backward.
             let start = attempt.len().saturating_sub(size);
-            let mut j = if start > idx { start } else { continue };
-            loop {
-                let end = j + size;
-                if end > attempt.len() {
-                    if j == 0 || j <= idx {
-                        break;
-                    }
-                    j -= 1;
-                    continue;
-                }
+            if start <= idx {
+                continue;
+            }
+            for j in (idx + 1..=start).rev() {
                 let mut candidate = attempt[..j].to_vec();
-                candidate.extend_from_slice(&attempt[end..]);
+                candidate.extend_from_slice(&attempt[j + size..]);
                 if self.consider(&candidate) {
                     return true;
                 }
-                if j <= idx {
-                    break;
-                }
-                j -= 1;
             }
         }
         false

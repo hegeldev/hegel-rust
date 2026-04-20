@@ -19,7 +19,7 @@ impl<'a> Shrinker<'a> {
         self.sort_values_booleans();
     }
 
-    fn sort_values_integers(&mut self) {
+    pub(super) fn sort_values_integers(&mut self) {
         let int_indices: Vec<usize> = self
             .current_nodes
             .iter()
@@ -62,7 +62,7 @@ impl<'a> Shrinker<'a> {
         }
     }
 
-    fn sort_values_booleans(&mut self) {
+    pub(super) fn sort_values_booleans(&mut self) {
         let bool_indices: Vec<usize> = self
             .current_nodes
             .iter()

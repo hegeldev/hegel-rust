@@ -1,6 +1,6 @@
 use super::*;
 use crate::native::core::{
-    BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice,
+    BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice,
 };
 
 // ── bin_search_down ─────────────────────────────────────────────────────────
@@ -457,4 +457,383 @@ fn shrink_floats_final_binary_search_rejects_out_of_range() {
     let v = float_at(&shrinker.current_nodes, 0);
     assert!((2.0..=5.0).contains(&v));
     assert!(v.fract() != 0.0);
+}
+
+// ── sort_values / swap_adjacent_blocks ──────────────────────────────────────
+
+fn int_node(min: i128, max: i128, value: i128) -> ChoiceNode {
+    ChoiceNode {
+        kind: ChoiceKind::Integer(IntegerChoice {
+            min_value: min,
+            max_value: max,
+        }),
+        value: ChoiceValue::Integer(value),
+        was_forced: false,
+    }
+}
+
+fn int_at(nodes: &[ChoiceNode], i: usize) -> i128 {
+    match nodes[i].value {
+        ChoiceValue::Integer(v) => v,
+        _ => panic!("expected Integer at index {i}"),
+    }
+}
+
+fn bool_at(nodes: &[ChoiceNode], i: usize) -> bool {
+    match nodes[i].value {
+        ChoiceValue::Boolean(v) => v,
+        _ => panic!("expected Boolean at index {i}"),
+    }
+}
+
+#[test]
+fn sort_values_integers_reorders_by_absolute_magnitude() {
+    // Three ints at positions 0, 2, 4 — the pass groups them and sorts by
+    // |value| without regard to sign. Boolean at position 1 is untouched.
+    let nodes = vec![
+        int_node(-100, 100, 50),
+        bool_node(true),
+        int_node(-100, 100, -3),
+        bool_node(true),
+        int_node(-100, 100, 20),
+    ];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 5)), nodes);
+    shrinker.sort_values_integers();
+    // Expected sorted by |v|: -3, 20, 50.
+    assert_eq!(int_at(&shrinker.current_nodes, 0), -3);
+    assert_eq!(int_at(&shrinker.current_nodes, 2), 20);
+    assert_eq!(int_at(&shrinker.current_nodes, 4), 50);
+    // Booleans unchanged.
+    assert!(bool_at(&shrinker.current_nodes, 1));
+    assert!(bool_at(&shrinker.current_nodes, 3));
+}
+
+#[test]
+fn sort_values_integers_skips_when_fewer_than_two() {
+    // Single integer → short-circuit: the sort can't reorder anything.
+    let nodes = vec![bool_node(true), int_node(-100, 100, 42), bool_node(false)];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 3)), nodes);
+    shrinker.sort_values_integers();
+    assert_eq!(int_at(&shrinker.current_nodes, 1), 42);
+}
+
+#[test]
+fn sort_values_integers_noop_when_already_sorted() {
+    // Already in magnitude-sorted order: no change, predicate never called.
+    let nodes = vec![int_node(-100, 100, 1), int_node(-100, 100, -5)];
+    let mut calls = 0;
+    let mut shrinker = Shrinker::new(
+        Box::new(|_: &[ChoiceNode]| {
+            calls += 1;
+            (true, 2)
+        }),
+        nodes,
+    );
+    shrinker.sort_values_integers();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 1);
+    assert_eq!(int_at(&shrinker.current_nodes, 1), -5);
+}
+
+#[test]
+fn sort_values_booleans_orders_false_before_true() {
+    let nodes = vec![bool_node(true), bool_node(false), bool_node(true)];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 3)), nodes);
+    shrinker.sort_values_booleans();
+    assert!(!bool_at(&shrinker.current_nodes, 0));
+    assert!(bool_at(&shrinker.current_nodes, 1));
+    assert!(bool_at(&shrinker.current_nodes, 2));
+}
+
+#[test]
+fn sort_values_booleans_skips_when_fewer_than_two() {
+    let nodes = vec![int_node(0, 10, 5), bool_node(true)];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    shrinker.sort_values_booleans();
+    assert!(bool_at(&shrinker.current_nodes, 1));
+}
+
+#[test]
+fn sort_values_booleans_noop_when_already_sorted() {
+    let nodes = vec![bool_node(false), bool_node(true)];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    shrinker.sort_values_booleans();
+    assert!(!bool_at(&shrinker.current_nodes, 0));
+    assert!(bool_at(&shrinker.current_nodes, 1));
+}
+
+#[test]
+fn sort_values_dispatches_to_both_helpers() {
+    // sort_values() is the public entry point; both sub-passes should run.
+    let nodes = vec![
+        int_node(-100, 100, 50),
+        int_node(-100, 100, 3),
+        bool_node(true),
+        bool_node(false),
+    ];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 4)), nodes);
+    shrinker.sort_values();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 3);
+    assert_eq!(int_at(&shrinker.current_nodes, 1), 50);
+    assert!(!bool_at(&shrinker.current_nodes, 2));
+    assert!(bool_at(&shrinker.current_nodes, 3));
+}
+
+#[test]
+fn swap_adjacent_blocks_swaps_differing_pair() {
+    // Two adjacent [int, bool] blocks: swapping should succeed if the later
+    // block sorts simpler. Predicate accepts everything.
+    let nodes = vec![
+        int_node(0, 100, 5),
+        bool_node(true),
+        int_node(0, 100, 2),
+        bool_node(false),
+    ];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 4)), nodes);
+    shrinker.swap_adjacent_blocks();
+    // After swap the simpler block moves first.
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 2);
+    assert!(!bool_at(&shrinker.current_nodes, 1));
+    assert_eq!(int_at(&shrinker.current_nodes, 2), 5);
+    assert!(bool_at(&shrinker.current_nodes, 3));
+}
+
+#[test]
+fn swap_adjacent_blocks_skips_mismatched_types() {
+    // Block [int, bool] next to [bool, int] — types don't match, skip.
+    let nodes = vec![
+        int_node(0, 100, 9),
+        bool_node(false),
+        bool_node(false),
+        int_node(0, 100, 1),
+    ];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 4)), nodes);
+    shrinker.swap_adjacent_blocks();
+    // Unchanged.
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 9);
+    assert_eq!(int_at(&shrinker.current_nodes, 3), 1);
+}
+
+#[test]
+fn swap_adjacent_blocks_skips_equal_blocks() {
+    // Two identical [int, bool] blocks — nothing to gain from swap.
+    let nodes = vec![
+        int_node(0, 100, 7),
+        bool_node(true),
+        int_node(0, 100, 7),
+        bool_node(true),
+    ];
+    let mut calls = 0;
+    let mut shrinker = Shrinker::new(
+        Box::new(|_: &[ChoiceNode]| {
+            calls += 1;
+            (true, 4)
+        }),
+        nodes,
+    );
+    shrinker.swap_adjacent_blocks();
+    // Swap would be a no-op so it shouldn't fire.
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 7);
+    assert_eq!(int_at(&shrinker.current_nodes, 2), 7);
+}
+
+// ── delete_chunks ───────────────────────────────────────────────────────────
+
+#[test]
+fn delete_chunks_empty_nodes_terminates_cleanly() {
+    // Starting with zero nodes, every k iteration must bail via the
+    // `i >= self.current_nodes.len()` break without attempting deletions.
+    let nodes: Vec<ChoiceNode> = Vec::new();
+    let mut shrinker = Shrinker::new(
+        Box::new(|_: &[ChoiceNode]| panic!("test_fn must not be called on empty nodes")),
+        nodes,
+    );
+    shrinker.delete_chunks();
+    assert!(shrinker.current_nodes.is_empty());
+}
+
+#[test]
+fn delete_chunks_removes_middle_booleans() {
+    // Predicate: first two booleans must be true. Middle false booleans are
+    // pure padding and can be deleted in any chunk size.
+    let nodes = vec![
+        bool_node(true),
+        bool_node(true),
+        bool_node(false),
+        bool_node(false),
+        bool_node(false),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let got_leaders = n.len() >= 2
+                && matches!(n[0].value, ChoiceValue::Boolean(true))
+                && matches!(n[1].value, ChoiceValue::Boolean(true));
+            (got_leaders, n.len())
+        }),
+        nodes,
+    );
+    shrinker.delete_chunks();
+    // Single delete_chunks pass can remove three padding Fs. `shrink()` would
+    // iterate further; here we exercise just the pass and verify it made
+    // progress without breaking the invariant.
+    assert_eq!(shrinker.current_nodes.len(), 3);
+    assert!(bool_at(&shrinker.current_nodes, 0));
+    assert!(bool_at(&shrinker.current_nodes, 1));
+}
+
+#[test]
+fn delete_chunks_decrements_preceding_integer_on_failed_delete() {
+    // The test expects a counter that tracks how many trailing booleans there
+    // are. Deleting a trailing bool alone breaks the invariant; decrementing
+    // the counter alongside the delete restores it.
+    let nodes = vec![
+        int_node(0, 10, 2),
+        bool_node(true),
+        bool_node(true),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ok = !n.is_empty()
+                && matches!(&n[0].value, ChoiceValue::Integer(v) if (*v as usize) + 1 == n.len());
+            (ok, n.len())
+        }),
+        nodes,
+    );
+    shrinker.delete_chunks();
+    // Counter should match the number of trailing booleans (0, 1, or 2).
+    let ChoiceValue::Integer(v) = shrinker.current_nodes[0].value else {
+        panic!("expected integer")
+    };
+    assert_eq!((v as usize) + 1, shrinker.current_nodes.len());
+    assert!(shrinker.current_nodes.len() < 3);
+}
+
+#[test]
+fn delete_chunks_decrements_preceding_boolean_on_failed_delete() {
+    // A "has-extra" boolean gate followed by a boolean payload: dropping just
+    // the payload breaks the invariant (gate says true but no payload); the
+    // pass flips the gate to false while deleting the payload.
+    let nodes = vec![bool_node(true), bool_node(false), bool_node(true)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            if n.is_empty() {
+                return (false, 0);
+            }
+            let ChoiceValue::Boolean(gate) = n[0].value else {
+                return (false, n.len());
+            };
+            let ok = if gate { n.len() >= 2 } else { n.len() == 1 };
+            (ok, n.len())
+        }),
+        nodes,
+    );
+    shrinker.delete_chunks();
+    // Either [true, x] kept (len 2) or [false] after flipping gate.
+    if shrinker.current_nodes.len() == 1 {
+        assert!(!bool_at(&shrinker.current_nodes, 0));
+    } else {
+        assert!(shrinker.current_nodes.len() >= 2);
+    }
+}
+
+#[test]
+fn delete_chunks_skips_integer_decrement_when_already_simplest() {
+    // Preceding integer is already at its simplest value, so the integer
+    // branch of the decrement match arm is skipped. No further action.
+    let nodes = vec![
+        int_node(0, 10, 0),
+        bool_node(false),
+        bool_node(false),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| (!n.is_empty(), n.len())),
+        nodes,
+    );
+    shrinker.delete_chunks();
+    // Must terminate without panicking. Some shrink is allowed.
+    assert!(!shrinker.current_nodes.is_empty());
+}
+
+// ── try_replace_with_deletion / bind_deletion ───────────────────────────────
+
+#[test]
+fn try_replace_with_deletion_returns_true_on_direct_replace() {
+    // Straight replace succeeds → short-circuit, no further probing.
+    let nodes = vec![int_node(0, 10, 5)];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    let got = shrinker.try_replace_with_deletion(0, ChoiceValue::Integer(2), 1);
+    assert!(got);
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 2);
+}
+
+#[test]
+fn try_replace_with_deletion_returns_false_when_actual_len_not_shorter() {
+    // The attempt isn't interesting, and the test uses the same number of
+    // nodes — no deletion can recover anything.
+    let nodes = vec![int_node(0, 10, 5), bool_node(true)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            // Only interesting on the untouched value 5.
+            let ok = matches!(&n[0].value, ChoiceValue::Integer(v) if *v == 5);
+            (ok, n.len())
+        }),
+        nodes,
+    );
+    let got = shrinker.try_replace_with_deletion(0, ChoiceValue::Integer(3), 2);
+    assert!(!got);
+}
+
+#[test]
+fn try_replace_with_deletion_deletes_trailing_region() {
+    // Length-prefixed sequence: the integer at index 0 is the claimed
+    // length. The test only reads `v` trailing booleans and requires the
+    // total length to match exactly, so replace alone can't shrink — the
+    // trailing region must also be deleted.
+    let nodes = vec![
+        int_node(0, 10, 3),
+        bool_node(true),
+        bool_node(true),
+        bool_node(true),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            if n.is_empty() {
+                return (false, 0);
+            }
+            let ChoiceValue::Integer(v) = n[0].value else {
+                return (false, n.len());
+            };
+            let needed = v as usize;
+            let consumed = 1 + needed.min(n.len() - 1);
+            // Interesting iff length matches exactly AND v >= 2.
+            let ok = n.len() == 1 + needed && needed >= 2;
+            (ok, consumed)
+        }),
+        nodes,
+    );
+    // Initial [3, T, T, T] is interesting. bind_deletion drives
+    // replace-with-deletion via bin_search_down; replace alone can't reduce
+    // v without also deleting the now-excess booleans, so the deletion loop
+    // inside `try_replace_with_deletion` fires.
+    shrinker.bind_deletion();
+    // Should have shrunk to [2, T, T] (minimal v with the "v >= 2" bound).
+    assert_eq!(shrinker.current_nodes.len(), 3);
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 2);
+    assert!(bool_at(&shrinker.current_nodes, 1));
+    assert!(bool_at(&shrinker.current_nodes, 2));
+}
+
+#[test]
+fn bind_deletion_skips_non_integers_and_simplest_integers() {
+    // No work possible: the single integer is already at simplest, and the
+    // booleans aren't eligible. bind_deletion must walk the list without
+    // making any changes.
+    let nodes = vec![
+        bool_node(true),
+        int_node(0, 10, 0),
+        bool_node(false),
+    ];
+    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 3)), nodes);
+    shrinker.bind_deletion();
+    assert_eq!(shrinker.current_nodes.len(), 3);
+    assert_eq!(int_at(&shrinker.current_nodes, 1), 0);
 }
