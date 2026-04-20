@@ -1,11 +1,12 @@
-use std::path::Path;
-
 // This file provides functionality for running Hegel inside of Antithesis. It requires the `antithesis` feature to be enabled.
 //
 // Antithesis will never be required to use Hegel. This functionality is only to provide a better user experience when
 // Hegel happens to be run inside of Antithesis.
 //
 // Antithesis only supports Linux, so the feature is not available on Windows.
+
+#[cfg(not(windows))]
+use std::path::Path;
 
 #[cfg(all(feature = "antithesis", windows))]
 compile_error!(

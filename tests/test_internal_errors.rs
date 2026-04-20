@@ -78,7 +78,7 @@ fn test_internal_error_message() {
                 );
             });
         },
-        r"(?s)hegel internal error at .*generators/numeric\.rs.*Cannot have max_value < min_value.*original backtrace:",
+        r"(?s)hegel internal error at .*generators[/\\]numeric\.rs.*Cannot have max_value < min_value.*original backtrace:",
     );
 }
 
@@ -103,8 +103,8 @@ fn test_internal_error_output() {
     assert_matches_regex(
         &output.stderr,
         concat!(
-            r"thread '.*'(?: \(\d+\))? panicked at .*src/runner\.rs:\d+:\d+:\n",
-            r"hegel internal error at .*src/generators/numeric\.rs:\d+:\d+:\n",
+            r"thread '.*'(?: \(\d+\))? panicked at .*src[/\\]runner\.rs:\d+:\d+:\n",
+            r"hegel internal error at .*src[/\\]generators[/\\]numeric\.rs:\d+:\d+:\n",
             r"Cannot have max_value < min_value\n\n",
             r"note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
         ),
@@ -138,20 +138,23 @@ fn test_internal_error_output_with_backtrace() {
         .expect_failure("Cannot have max_value < min_value")
         .cargo_run(&[]);
 
-    let closure_name = r"(?:\{closure#0\}|\{\{closure\}\})";
+    let closure_name = r"(?:\{closure#0\}|\{\{closure\}\}|closure\$0)";
     assert_matches_regex(
         &output.stderr,
         // Backtrace frame names vary between platforms — macOS stable shows
         // generic params (IntegerGenerator<T>) while Linux shows monomorphized
         // types (IntegerGenerator<i32>), and the leading `<` wrapper differs too.
-        // We match the function name loosely to handle both.
+        // On Windows, trait method frames mangle to `impl$N::method` rather
+        // than `<... as Trait>::method`, and monomorphized symbols carry a
+        // trailing `<i32>` after the method name. We match function names
+        // loosely to handle all of these.
         &format!(
             concat!(
                 r"(?s)",
                 // re-panic location from default handler
-                r"thread '.*'(?: \(\d+\))? panicked at .*src/runner\.rs:\d+:\d+:\n",
+                r"thread '.*'(?: \(\d+\))? panicked at .*src[/\\]runner\.rs:\d+:\d+:\n",
                 // our formatted message: original location + error
-                r"hegel internal error at .*src/generators/numeric\.rs:\d+:\d+:\n",
+                r"hegel internal error at .*src[/\\]generators[/\\]numeric\.rs:\d+:\d+:\n",
                 r"Cannot have max_value < min_value\n",
                 r"\n",
                 // original backtrace from the actual panic site
@@ -160,9 +163,9 @@ fn test_internal_error_output_with_backtrace() {
                 r".*",
                 r"\s+1: core::panicking::panic_fmt\n", // frame 1: panic_fmt
                 r".*",
-                r"\s+\d+: .*IntegerGenerator.*>::build_schema\n", // build_schema
+                r"\s+\d+: .*IntegerGenerator.*build_schema[^\n]*\n", // build_schema
                 r".*",
-                r"IntegerGenerator.*>::do_draw\n", // do_draw
+                r"do_draw[^\n]*\n", // do_draw
                 r".*",
                 r"TestCase[^\n]*::draw[^\n]*\n", // draw
                 r".*",
@@ -175,7 +178,7 @@ fn test_internal_error_output_with_backtrace() {
                 // re-panic backtrace from default handler
                 r"\nstack backtrace:\n",
                 r".*",
-                r"Hegel.*>::run\n", // re-panic site
+                r"Hegel.*run[^\n]*\n", // re-panic site
                 r".*",
                 r"note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace\.",
             ),
