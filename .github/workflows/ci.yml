@@ -49,6 +49,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
+    env:
+      HEGEL_SERVER_LOG_DIR: ${{ github.workspace }}/server-logs
     strategy:
       fail-fast: false
       matrix:
@@ -74,36 +76,35 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo "cwd: $(pwd)"
-          echo
-          dirs=$(find "$(pwd)" /tmp -type d -name '.hegel' 2>/dev/null)
-          if [ -z "$dirs" ]; then
-            echo "No .hegel directories found under $(pwd) or /tmp."
+          set +e
+          dir="${HEGEL_SERVER_LOG_DIR:-}"
+          echo "HEGEL_SERVER_LOG_DIR=$dir"
+          if [ -z "$dir" ] || [ ! -d "$dir" ]; then
+            echo "Log dir not set or does not exist."
             exit 0
           fi
-          echo "Found .hegel directories:"
-          echo "$dirs"
+          echo "Contents of $dir:"
+          ls -la "$dir" 2>&1
           echo
-          files=$(find "$(pwd)" /tmp -type f -name 'server.*.log' -path '*/.hegel/*' 2>/dev/null)
-          if [ -z "$files" ]; then
-            echo "No server.*.log files in those .hegel directories. Contents:"
-            for d in $dirs; do
-              echo "--- $d ---"
-              ls -la "$d" 2>&1 || true
-            done
+          shopt -s nullglob
+          files=( "$dir"/server.*.log )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No server.*.log files in $dir."
             exit 0
           fi
-          while IFS= read -r f; do
+          for f in "${files[@]}"; do
             echo "::group::$f"
             cat "$f"
             echo "::endgroup::"
-          done <<< "$files"
+          done
 
   test-all-features:
     name: test-all-features (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
+    env:
+      HEGEL_SERVER_LOG_DIR: ${{ github.workspace }}/server-logs
     strategy:
       fail-fast: false
       matrix:
@@ -142,36 +143,35 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo "cwd: $(pwd)"
-          echo
-          dirs=$(find "$(pwd)" /tmp -type d -name '.hegel' 2>/dev/null)
-          if [ -z "$dirs" ]; then
-            echo "No .hegel directories found under $(pwd) or /tmp."
+          set +e
+          dir="${HEGEL_SERVER_LOG_DIR:-}"
+          echo "HEGEL_SERVER_LOG_DIR=$dir"
+          if [ -z "$dir" ] || [ ! -d "$dir" ]; then
+            echo "Log dir not set or does not exist."
             exit 0
           fi
-          echo "Found .hegel directories:"
-          echo "$dirs"
+          echo "Contents of $dir:"
+          ls -la "$dir" 2>&1
           echo
-          files=$(find "$(pwd)" /tmp -type f -name 'server.*.log' -path '*/.hegel/*' 2>/dev/null)
-          if [ -z "$files" ]; then
-            echo "No server.*.log files in those .hegel directories. Contents:"
-            for d in $dirs; do
-              echo "--- $d ---"
-              ls -la "$d" 2>&1 || true
-            done
+          shopt -s nullglob
+          files=( "$dir"/server.*.log )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No server.*.log files in $dir."
             exit 0
           fi
-          while IFS= read -r f; do
+          for f in "${files[@]}"; do
             echo "::group::$f"
             cat "$f"
             echo "::endgroup::"
-          done <<< "$files"
+          done
 
   test-min-protocol:
     name: test-min-protocol
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      HEGEL_SERVER_LOG_DIR: ${{ github.workspace }}/server-logs
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -207,30 +207,27 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo "cwd: $(pwd)"
-          echo
-          dirs=$(find "$(pwd)" /tmp -type d -name '.hegel' 2>/dev/null)
-          if [ -z "$dirs" ]; then
-            echo "No .hegel directories found under $(pwd) or /tmp."
+          set +e
+          dir="${HEGEL_SERVER_LOG_DIR:-}"
+          echo "HEGEL_SERVER_LOG_DIR=$dir"
+          if [ -z "$dir" ] || [ ! -d "$dir" ]; then
+            echo "Log dir not set or does not exist."
             exit 0
           fi
-          echo "Found .hegel directories:"
-          echo "$dirs"
+          echo "Contents of $dir:"
+          ls -la "$dir" 2>&1
           echo
-          files=$(find "$(pwd)" /tmp -type f -name 'server.*.log' -path '*/.hegel/*' 2>/dev/null)
-          if [ -z "$files" ]; then
-            echo "No server.*.log files in those .hegel directories. Contents:"
-            for d in $dirs; do
-              echo "--- $d ---"
-              ls -la "$d" 2>&1 || true
-            done
+          shopt -s nullglob
+          files=( "$dir"/server.*.log )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No server.*.log files in $dir."
             exit 0
           fi
-          while IFS= read -r f; do
+          for f in "${files[@]}"; do
             echo "::group::$f"
             cat "$f"
             echo "::endgroup::"
-          done <<< "$files"
+          done
 
   docs:
     name: docs
@@ -261,6 +258,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      HEGEL_SERVER_LOG_DIR: ${{ github.workspace }}/server-logs
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -281,30 +280,27 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo "cwd: $(pwd)"
-          echo
-          dirs=$(find "$(pwd)" /tmp -type d -name '.hegel' 2>/dev/null)
-          if [ -z "$dirs" ]; then
-            echo "No .hegel directories found under $(pwd) or /tmp."
+          set +e
+          dir="${HEGEL_SERVER_LOG_DIR:-}"
+          echo "HEGEL_SERVER_LOG_DIR=$dir"
+          if [ -z "$dir" ] || [ ! -d "$dir" ]; then
+            echo "Log dir not set or does not exist."
             exit 0
           fi
-          echo "Found .hegel directories:"
-          echo "$dirs"
+          echo "Contents of $dir:"
+          ls -la "$dir" 2>&1
           echo
-          files=$(find "$(pwd)" /tmp -type f -name 'server.*.log' -path '*/.hegel/*' 2>/dev/null)
-          if [ -z "$files" ]; then
-            echo "No server.*.log files in those .hegel directories. Contents:"
-            for d in $dirs; do
-              echo "--- $d ---"
-              ls -la "$d" 2>&1 || true
-            done
+          shopt -s nullglob
+          files=( "$dir"/server.*.log )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No server.*.log files in $dir."
             exit 0
           fi
-          while IFS= read -r f; do
+          for f in "${files[@]}"; do
             echo "::group::$f"
             cat "$f"
             echo "::endgroup::"
-          done <<< "$files"
+          done
 
   compile-examples:
     name: compile-examples (${{ matrix.rust }})
@@ -330,6 +326,8 @@ jobs:
     permissions:
       contents: write  # needed for ratchet auto-update
       pull-requests: write  # needed for creating PRs on main
+    env:
+      HEGEL_SERVER_LOG_DIR: ${{ github.workspace }}/server-logs
     steps:
       # For fork PRs, head_ref points to a branch that doesn't exist on the base repo,
       # so we fall back to the default ref (the merge commit).
@@ -371,30 +369,27 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo "cwd: $(pwd)"
-          echo
-          dirs=$(find "$(pwd)" /tmp -type d -name '.hegel' 2>/dev/null)
-          if [ -z "$dirs" ]; then
-            echo "No .hegel directories found under $(pwd) or /tmp."
+          set +e
+          dir="${HEGEL_SERVER_LOG_DIR:-}"
+          echo "HEGEL_SERVER_LOG_DIR=$dir"
+          if [ -z "$dir" ] || [ ! -d "$dir" ]; then
+            echo "Log dir not set or does not exist."
             exit 0
           fi
-          echo "Found .hegel directories:"
-          echo "$dirs"
+          echo "Contents of $dir:"
+          ls -la "$dir" 2>&1
           echo
-          files=$(find "$(pwd)" /tmp -type f -name 'server.*.log' -path '*/.hegel/*' 2>/dev/null)
-          if [ -z "$files" ]; then
-            echo "No server.*.log files in those .hegel directories. Contents:"
-            for d in $dirs; do
-              echo "--- $d ---"
-              ls -la "$d" 2>&1 || true
-            done
+          shopt -s nullglob
+          files=( "$dir"/server.*.log )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No server.*.log files in $dir."
             exit 0
           fi
-          while IFS= read -r f; do
+          for f in "${files[@]}"; do
             echo "::group::$f"
             cat "$f"
             echo "::endgroup::"
-          done <<< "$files"
+          done
 
       - name: Auto-update coverage annotations and ratchet
         if: success() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
@@ -434,6 +429,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      HEGEL_SERVER_LOG_DIR: ${{ github.workspace }}/server-logs
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -454,30 +451,27 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo "cwd: $(pwd)"
-          echo
-          dirs=$(find "$(pwd)" /tmp -type d -name '.hegel' 2>/dev/null)
-          if [ -z "$dirs" ]; then
-            echo "No .hegel directories found under $(pwd) or /tmp."
+          set +e
+          dir="${HEGEL_SERVER_LOG_DIR:-}"
+          echo "HEGEL_SERVER_LOG_DIR=$dir"
+          if [ -z "$dir" ] || [ ! -d "$dir" ]; then
+            echo "Log dir not set or does not exist."
             exit 0
           fi
-          echo "Found .hegel directories:"
-          echo "$dirs"
+          echo "Contents of $dir:"
+          ls -la "$dir" 2>&1
           echo
-          files=$(find "$(pwd)" /tmp -type f -name 'server.*.log' -path '*/.hegel/*' 2>/dev/null)
-          if [ -z "$files" ]; then
-            echo "No server.*.log files in those .hegel directories. Contents:"
-            for d in $dirs; do
-              echo "--- $d ---"
-              ls -la "$d" 2>&1 || true
-            done
+          shopt -s nullglob
+          files=( "$dir"/server.*.log )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No server.*.log files in $dir."
             exit 0
           fi
-          while IFS= read -r f; do
+          for f in "${files[@]}"; do
             echo "::group::$f"
             cat "$f"
             echo "::endgroup::"
-          done <<< "$files"
+          done
 
   nix:
     name: nix

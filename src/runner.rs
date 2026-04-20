@@ -765,10 +765,11 @@ fn hegel_command() -> Command {
 }
 
 fn server_log_file() -> File {
-    std::fs::create_dir_all(HEGEL_SERVER_DIR).ok();
+    let dir = std::env::var("HEGEL_SERVER_LOG_DIR").unwrap_or_else(|_| HEGEL_SERVER_DIR.into());
+    std::fs::create_dir_all(&dir).ok();
     let pid = std::process::id();
     let ix = LOG_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = format!("{HEGEL_SERVER_DIR}/server.{pid}-{ix}.log");
+    let path = format!("{dir}/server.{pid}-{ix}.log");
     *SERVER_LOG_PATH.lock().unwrap() = Some(path.clone());
     OpenOptions::new()
         .create(true)
