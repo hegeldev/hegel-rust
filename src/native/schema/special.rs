@@ -161,3 +161,7 @@ pub(super) fn interpret_url(ntc: &mut NativeTestCase) -> Result<Value, StopTest>
 
     Ok(encode_string(format!("{scheme}://{host}{path}")))
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/schema/special_tests.rs"]
+mod tests;
