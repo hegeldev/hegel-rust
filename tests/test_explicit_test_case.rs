@@ -221,6 +221,17 @@ fn test_explicit_assume_panics() {
 }
 
 #[test]
+fn test_explicit_reject_panics() {
+    expect_panic(
+        || {
+            let etc = hegel::ExplicitTestCase::new();
+            etc.reject();
+        },
+        "__HEGEL_ASSUME_FAIL",
+    );
+}
+
+#[test]
 fn test_explicit_start_span_panics() {
     expect_panic(
         || {
