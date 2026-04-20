@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0 - 2026-04-20
+
+This release adds a `reject` method to `TestCase` and `ExplicitTestCase`. It behaves like `assume(false)`, rejecting the current test input, but returns `!` so the compiler knows that code following the call is unreachable.
+
+```rust
+#[hegel::test]
+fn my_test(tc: hegel::TestCase) {
+    let n: i32 = tc.draw(gs::integers());
+    let positive: u32 = match u32::try_from(n) {
+        Ok(v) => v,
+        Err(_) => tc.reject(),
+    };
+    // use `positive` here without needing an extra `unreachable!()` branch
+}
+```
+
 ## 0.6.2 - 2026-04-20
 
 Bump our pinned hegel-core to [0.4.4](https://github.com/hegeldev/hegel-core/releases/tag/v0.4.4), incorporating the following changes:
