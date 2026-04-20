@@ -73,8 +73,7 @@ fn test_empty_bytes_with_wide_dependent_range() {
                 let v1: Vec<u8> = tc.draw(gs::binary().max_size(20));
                 tc.draw(gs::binary().max_size(20));
                 let v3: i64 = tc.draw(gs::booleans().map(|x| x as i64));
-                let v4: i64 =
-                    tc.draw(gs::integers::<i64>().min_value(v3).max_value(v3 + 39));
+                let v4: i64 = tc.draw(gs::integers::<i64>().min_value(v3).max_value(v3 + 39));
                 if !v1.is_empty() {
                     tc.draw(gs::booleans());
                 } else {
@@ -98,8 +97,7 @@ fn test_empty_bytes_with_dependent_condition() {
                 let v1: Vec<u8> = tc.draw(gs::binary().max_size(20));
                 tc.draw(gs::binary().max_size(20));
                 let v3: i64 = tc.draw(gs::booleans().map(|x| x as i64));
-                let v4: i64 =
-                    tc.draw(gs::integers::<i64>().min_value(v3).max_value(v3 + 2));
+                let v4: i64 = tc.draw(gs::integers::<i64>().min_value(v3).max_value(v3 + 2));
                 if !v1.is_empty() {
                     tc.draw(gs::booleans());
                 } else {
