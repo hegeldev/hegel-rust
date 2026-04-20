@@ -2150,37 +2150,63 @@ def _watch_pr_ci(timeout: float = 3600.0) -> None:
         print(f"[port-loop] gh unavailable: {e}")
 
 
+_ci_seen_green_since_failure = False
+
+
 def drive_pr_ci(state: IterCounter, *, just_pushed: bool = False) -> bool:
     """Act on the upstream PR's CI state.
 
     - "success" / "skip": return False (no action).
-    - "pending": block on `gh pr checks --watch`, then re-evaluate.
+    - "pending": if we've previously observed a fully-green CI and
+      no failures have appeared since, skip the watch and return
+      False so the loop keeps working while checks run in the
+      background. Otherwise block on `gh pr checks --watch` and
+      re-evaluate on the next pass.
     - "failure": if TODO.yaml already has `[CI]` entries, return True so
       the outer loop drains them via drive_todos. Otherwise dispatch
       the triage agent (which writes `[CI]` entries to TODO.yaml) and
       return True.
 
     Returns True if any action was taken; False only when CI was
-    already green (or `gh` couldn't tell).
+    already green, skipped, or safe to ignore while pending.
     """
+    global _ci_seen_green_since_failure
+
     if has_ci_todos():
         print(
             "[port-loop] TODO.yaml already has [CI] entries; "
             "skipping CI gate and letting drive_todos drain them."
         )
+        # A [CI] TODO exists only because we saw a failure; the
+        # green-baseline flag is stale until the triage cycle
+        # completes and CI goes green again.
+        _ci_seen_green_since_failure = False
         return False  # fall through to drive_todos in the outer loop
 
     if just_pushed:
         _wait_for_new_pr_checks()
 
-    status, summary, detail = _pr_check_status()
+    status, summary, detail, failing_count = _pr_check_status()
     print(f"[port-loop] PR #{PR_NUMBER}: {status} — {summary}", flush=True)
-    if status in ("success", "skip"):
+    if status == "success":
+        _ci_seen_green_since_failure = True
+        return False
+    if status == "skip":
         return False
     if status == "pending":
+        if failing_count == 0 and _ci_seen_green_since_failure:
+            print(
+                "[port-loop] PR CI pending with no failures yet and a "
+                "green baseline already observed; continuing without "
+                "blocking on --watch."
+            )
+            return False
+        if failing_count:
+            _ci_seen_green_since_failure = False
         _watch_pr_ci()
         return True
     # status == "failure"
+    _ci_seen_green_since_failure = False
     state.dispatch(
         CI_TRIAGE_PROMPT.format(repo=PR_REPO, pr=PR_NUMBER),
         gate_output=detail,
