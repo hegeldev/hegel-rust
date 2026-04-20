@@ -48,6 +48,28 @@ impl ManyState {
     }
 }
 
+/// Hypothesis `many()`-style length for atomic collection choices (bytes, strings).
+///
+/// Instead of drawing length uniformly from `[min_size, max_size]` (which produces
+/// huge values when max_size is large), this uses the same geometric distribution
+/// as Hypothesis's `many()` mechanism: length clusters around a small `average_size`
+/// computed as `min(max(min_size * 2, min_size + 5), 0.5 * (min_size + max_size))`.
+///
+/// Hypothesis: `conjecture/providers.py::HypothesisProvider.draw_string` (and
+/// `draw_bytes`). pbtkit's `text.py::_draw_string` uses uniform instead; we match
+/// Hypothesis here as it is the behavioural ground truth.
+fn many_draw_length(rng: &mut SmallRng, min_size: usize, max_size: usize) -> usize {
+    if min_size == max_size {
+        return min_size;
+    }
+    let many = ManyState::new(min_size, Some(max_size));
+    let mut len = min_size;
+    while len < max_size && rng.random::<f64>() < many.p_continue {
+        len += 1;
+    }
+    len
+}
+
 /// A pool of variable IDs for stateful testing.
 ///
 /// Port of hegel-core's `Variables` class from server.py.
@@ -463,11 +485,7 @@ impl NativeTestCase {
                     let idx = rng.random_range(0..nasty.len());
                     return ChoiceValue::Bytes(nasty[idx].clone());
                 }
-                let len = if min_size == max_size {
-                    min_size
-                } else {
-                    rng.random_range(min_size..=max_size)
-                };
+                let len = many_draw_length(rng, min_size, max_size);
                 let bytes: Vec<u8> = (0..len).map(|_| rng.random::<u8>()).collect();
                 ChoiceValue::Bytes(bytes)
             },
@@ -566,17 +584,7 @@ impl NativeTestCase {
                     };
                     alphabet.push(cp);
                 }
-                // Cap random length using ManyState's average to avoid
-                // generating unreasonably large strings for huge max_size.
-                let min_f = kind_rand.min_size as f64;
-                let max_f = kind_rand.max_size as f64;
-                let average = f64::min(f64::max(min_f * 2.0, min_f + 5.0), 0.5 * (min_f + max_f));
-                let effective_max = ((2.0 * average).ceil() as usize).min(kind_rand.max_size);
-                let len = if kind_rand.min_size == effective_max {
-                    kind_rand.min_size
-                } else {
-                    rng.random_range(kind_rand.min_size..=effective_max)
-                };
+                let len = many_draw_length(rng, kind_rand.min_size, kind_rand.max_size);
                 let s: Vec<u32> = (0..len)
                     .map(|_| alphabet[rng.random_range(0..alphabet.len())])
                     .collect();
