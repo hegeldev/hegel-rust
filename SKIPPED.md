@@ -251,3 +251,11 @@ Individually-skipped tests (rest of the file is ported):
   `event()` / `target()` (Hypothesis public APIs for recording custom events and
   targeted PBT scores). hegel-rust exposes none of these: no `event()`, no `target()`,
   no statistics collection or formatting infrastructure.
+
+- `test_custom_reprs.py` — every test exercises Python's `__repr__` dunder on
+  Hypothesis strategy objects (`repr(st.integers())`, `repr(st.sampled_from(...))`,
+  `repr(st.builds(...))`, `repr(st.characters())`, etc.) and/or inspects
+  `__notes__` (PEP 678 exception annotations) and `unwrap_strategies` to verify
+  repr formatting in failure output. Rust generators have no equivalent repr
+  surface — `Debug` output is structurally different and hegel-rust's failure
+  output format (`let draw_1 = ...`) doesn't include strategy reprs.
