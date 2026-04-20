@@ -17,6 +17,7 @@ mod permutations;
 mod regex;
 mod replay_logic;
 mod sampled_from;
+mod simple_strings;
 mod testdecorators;
 mod threading;
 mod uuids;
