@@ -274,18 +274,14 @@ where
             }
             tc.stop_span(true);
         }
-        if let Some(valid) = self.enumerate_values() {
-            if valid.is_empty() {
-                panic!(
-                    "Unsatisfiable filter: all values from the source generator \
-                     are rejected by the filter predicate"
-                );
-            }
-            let idx = super::integers::<usize>()
-                .min_value(0)
-                .max_value(valid.len() - 1)
-                .do_draw(tc);
-            return valid.into_iter().nth(idx).unwrap();
+        if self
+            .enumerate_values()
+            .is_some_and(|valid| valid.is_empty())
+        {
+            panic!(
+                "Unsatisfiable filter: all values from the source generator \
+                 are rejected by the filter predicate"
+            );
         }
         tc.assume(false);
         unreachable!()
