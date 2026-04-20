@@ -166,11 +166,11 @@ fn test_internal_error_output_with_backtrace() {
                 r".*",
                 r"TestCase[^\n]*::draw[^\n]*\n", // draw
                 r".*",
-                r"temp_hegel_test_\d+::main::{closure_name}\n", // user's closure
+                r"temp_hegel_test_\d+_\d+::main::{closure_name}\n", // user's closure
                 r".*",
                 r"hegel::runner::run_test_case", // hegel runner internals
                 r".*",
-                r"temp_hegel_test_\d+::main\n", // user's main
+                r"temp_hegel_test_\d+_\d+::main\n", // user's main
                 r".*",
                 // re-panic backtrace from default handler
                 r"\nstack backtrace:\n",
