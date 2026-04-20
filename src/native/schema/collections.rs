@@ -4,7 +4,7 @@ use crate::cbor_utils::{as_bool, as_u64, map_get};
 use crate::native::core::{ManyState, NativeTestCase, StopTest};
 use ciborium::Value;
 
-use super::{interpret_schema, many_more, many_reject};
+use super::{cbor_to_i128, interpret_schema, many_more, many_reject};
 
 pub(super) fn interpret_tuple(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
     let elements = match map_get(schema, "elements") {
@@ -58,6 +58,13 @@ pub(super) fn interpret_list(ntc: &mut NativeTestCase, schema: &Value) -> Result
         .map(|n| n as usize);
     let unique = map_get(schema, "unique").and_then(as_bool).unwrap_or(false);
 
+    if unique {
+        if let Some((min_val, max_val)) = bounded_integer_range(element_schema) {
+            let range_size = (max_val - min_val + 1) as usize;
+            return interpret_unique_integer_list(ntc, min_size, max_size, min_val, range_size);
+        }
+    }
+
     let mut state = ManyState::new(min_size, max_size);
     let mut results: Vec<Value> = Vec::new();
 
@@ -74,6 +81,47 @@ pub(super) fn interpret_list(ntc: &mut NativeTestCase, schema: &Value) -> Result
     }
 
     Ok(Value::Array(results))
+}
+
+/// Pool-based unique list generation for bounded integer ranges.
+/// Port of Hypothesis's UniqueSampledListStrategy: draw indices into a
+/// shrinking pool of remaining values, avoiding the coupon-collector problem.
+fn interpret_unique_integer_list(
+    ntc: &mut NativeTestCase,
+    min_size: usize,
+    max_size: Option<usize>,
+    min_val: i128,
+    range_size: usize,
+) -> Result<Value, StopTest> {
+    let effective_max = max_size.map_or(range_size, |m| m.min(range_size));
+    let mut state = ManyState::new(min_size, Some(effective_max));
+    let mut remaining: Vec<i128> = (min_val..min_val + range_size as i128).collect();
+    let mut results = Vec::new();
+
+    loop {
+        if remaining.is_empty() || !many_more(ntc, &mut state)? {
+            break;
+        }
+        let j = ntc.draw_integer(0, remaining.len() as i128 - 1)? as usize;
+        let value = remaining.remove(j);
+        results.push(Value::Integer((value as i64).into()));
+    }
+
+    Ok(Value::Array(results))
+}
+
+fn bounded_integer_range(schema: &Value) -> Option<(i128, i128)> {
+    use crate::cbor_utils::as_text;
+    let schema_type = map_get(schema, "type").and_then(as_text)?;
+    if schema_type != "integer" {
+        return None;
+    }
+    let min_val = cbor_to_i128(map_get(schema, "min_value")?);
+    let max_val = cbor_to_i128(map_get(schema, "max_value")?);
+    if !(1..=10_000).contains(&(max_val - min_val + 1)) {
+        return None;
+    }
+    Some((min_val, max_val))
 }
 
 pub(super) fn interpret_dict(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
