@@ -309,7 +309,10 @@ hegeltest = {{ path = "{path}"{features} }}
             path = hegel_path_str,
             features = features,
         );
-        std::fs::write(self.project.project_path.join("Cargo.toml"), cargo_toml).unwrap();
+        write_atomic(
+            &self.project.project_path.join("Cargo.toml"),
+            cargo_toml.as_bytes(),
+        );
 
         // When compiled under `cargo llvm-cov`, __CARGO_LLVM_COV_RUSTC_WRAPPER=1
         // is set in the environment by the RUSTC_WRAPPER and is therefore present
