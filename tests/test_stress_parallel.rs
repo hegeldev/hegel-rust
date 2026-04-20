@@ -13,6 +13,7 @@
 
 mod common;
 
+use common::utils::find_any;
 use hegel::TestCase;
 use hegel::generators::{self as gs, Generator};
 
@@ -214,4 +215,83 @@ multidraw_tests!(
     stress_multidraw_017,
     stress_multidraw_018,
     stress_multidraw_019,
+);
+
+// Mimic the find_any/assert_all_examples pattern from test_integers.rs — this
+// is the shape that triggered the first observed panic in CI. Each test
+// deliberately panics once the condition is hit, forcing Hypothesis to go
+// through the shrink + final-replay path, which is where the bug chain
+// (StopTest → flaky → broken writer) actually lives.
+macro_rules! find_tests {
+    ($($name:ident),* $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                find_any(gs::integers::<i32>(), |&n| n > 1000);
+                find_any(gs::integers::<i32>(), |&n| n < -1000);
+                find_any(gs::integers::<i32>(), |&n| n == i32::MIN);
+                find_any(gs::integers::<i32>(), |&n| n == i32::MAX);
+            }
+        )*
+    };
+}
+
+find_tests!(
+    stress_find_000,
+    stress_find_001,
+    stress_find_002,
+    stress_find_003,
+    stress_find_004,
+    stress_find_005,
+    stress_find_006,
+    stress_find_007,
+    stress_find_008,
+    stress_find_009,
+    stress_find_010,
+    stress_find_011,
+    stress_find_012,
+    stress_find_013,
+    stress_find_014,
+    stress_find_015,
+    stress_find_016,
+    stress_find_017,
+    stress_find_018,
+    stress_find_019,
+);
+
+// Mirror test_strings: text generators with find_any, another CI-observed
+// failure shape.
+macro_rules! find_text_tests {
+    ($($name:ident),* $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                find_any(gs::text(), |s: &String| s.len() > 5);
+                find_any(gs::text(), |s: &String| s.contains('a'));
+            }
+        )*
+    };
+}
+
+find_text_tests!(
+    stress_find_text_000,
+    stress_find_text_001,
+    stress_find_text_002,
+    stress_find_text_003,
+    stress_find_text_004,
+    stress_find_text_005,
+    stress_find_text_006,
+    stress_find_text_007,
+    stress_find_text_008,
+    stress_find_text_009,
+    stress_find_text_010,
+    stress_find_text_011,
+    stress_find_text_012,
+    stress_find_text_013,
+    stress_find_text_014,
+    stress_find_text_015,
+    stress_find_text_016,
+    stress_find_text_017,
+    stress_find_text_018,
+    stress_find_text_019,
 );
