@@ -4,7 +4,7 @@ use crate::cbor_utils::{as_bool, as_text, as_u64, cbor_map, map_get, map_insert}
 use crate::control::{currently_in_test_context, with_test_context};
 use crate::protocol::{Connection, HANDSHAKE_STRING, Stream};
 use crate::settings::{Database, Settings, Verbosity};
-use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING, TestCase};
+use crate::test_case::{ASSUME_FAIL_STRING, LOOP_DONE_STRING, STOP_TEST_STRING, TestCase};
 use ciborium::Value;
 
 use std::backtrace::{Backtrace, BacktraceStatus};
@@ -1163,6 +1163,11 @@ fn run_test_case(
                 (TestCaseResult::Invalid, None)
             } else if msg == STOP_TEST_STRING {
                 (TestCaseResult::Overrun, None)
+            } else if msg == LOOP_DONE_STRING {
+                // `TestCase::repeat` returns `!`, so it exits via this
+                // sentinel panic when its loop completes normally. Treat it
+                // the same as a no-panic return.
+                (TestCaseResult::Valid, None)
             } else {
                 let panic_info = take_panic_info()
                     // nocov start

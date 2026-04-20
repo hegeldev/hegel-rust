@@ -211,7 +211,9 @@ pub use ciborium;
 #[doc(hidden)]
 pub use paste;
 #[doc(hidden)]
-pub use test_case::{__IsTestCase, __assert_is_test_case, generate_from_schema, generate_raw};
+pub use test_case::{
+    __IsTestCase, __assert_is_test_case, generate_from_schema, generate_raw, with_output_override,
+};
 
 // re-export public api
 #[doc(hidden)]
@@ -301,6 +303,9 @@ pub use hegel_macros::DefaultGenerator;
 /// ```
 pub use hegel_macros::composite;
 pub use hegel_macros::explicit_test_case;
+
+#[doc(hidden)]
+pub use hegel_macros::rewrite_draws;
 
 /// Derive a [`StateMachine`](crate::stateful::StateMachine) implementation from an `impl` block.
 ///
