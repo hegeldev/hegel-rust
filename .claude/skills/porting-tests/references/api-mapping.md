@@ -91,6 +91,29 @@ adding the feature. Don't invent a workaround in the test.
   `StringChoice` / `BytesChoice`.
 - Explicit replay via `TC.for_choices(values)` — pbtkit-internal only.
 
+## text() with characters() parameters
+
+In Python, `text()` accepts a `characters()` strategy as its alphabet,
+passing character-level constraints through. In Rust, `gs::text()`
+exposes these as builder methods directly — there is no separate
+`characters()` composition step.
+
+| Python                                          | Rust                                         |
+|-------------------------------------------------|----------------------------------------------|
+| `text(characters(exclude_characters="\n"))`     | `gs::text().exclude_characters("\n")`        |
+| `text(characters(max_codepoint=127))`           | `gs::text().max_codepoint(127)`              |
+| `text(characters(exclude_categories=("Cc",)))`  | `gs::text().exclude_categories(&["Cc"])`     |
+
+## Python idiom translations
+
+Common Python patterns that need non-trivial translation in test
+predicates:
+
+| Python                    | Rust                                                      | Why                                                                   |
+|---------------------------|-----------------------------------------------------------|-----------------------------------------------------------------------|
+| `minimal(text(), bool)`   | `minimal(gs::text(), \|s: &String\| !s.is_empty())`      | Python `bool(s)` is truthy = non-empty                                |
+| `x >= "\udfff"` (string comparison) | `s.as_str() >= "\u{e000}"`                      | Rust strings can't contain surrogates; `\u{e000}` is the first valid codepoint past the surrogate range |
+
 ## File naming
 
 Upstream Python filename → Rust module name drops the `test_` prefix:
