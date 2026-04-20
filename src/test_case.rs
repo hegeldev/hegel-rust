@@ -555,11 +555,13 @@ impl TestCase {
     /// Report whether the test case has been aborted (StopTest/overflow).
     ///
     /// Used by the runner to decide whether to send `mark_complete`.
+    #[cfg(not(feature = "native"))]
     pub(crate) fn test_aborted(&self) -> bool {
         self.with_data_source(|ds| ds.test_aborted())
     }
 
     /// Send `mark_complete` on this test case's data source.
+    #[cfg(not(feature = "native"))]
     pub(crate) fn mark_complete(&self, status: &str, origin: Option<&str>) {
         self.with_data_source(|ds| ds.mark_complete(status, origin));
     }
