@@ -217,6 +217,26 @@ Specific shapes that *look* skip-worthy but aren't:
   `tc.draw(gs::integers::<i64>().min_value(0).max_value(n-1))`.
 - **Full 64-bit integer range** → `gs::integers::<u64>()` etc.
 - **`@gs.composite`** → `#[hegel::composite]` or `hegel::compose!`.
+- **Mixed-type `one_of` / `sampled_from`** — e.g.
+  `st.one_of(st.integers(), st.tuples(st.booleans()))` or
+  `st.sampled_from([1, "two", 3.0])`. Python's dynamic typing lets
+  branches produce different types; Rust's `gs::one_of` requires a
+  single element type. Don't skip — define a small local `enum` with
+  one variant per branch, `.map(Variant::…)` each inner generator,
+  and `gs::one_of(vec![…])` the lot. Example:
+
+  ```rust
+  #[derive(Debug, Clone)]
+  enum Value { Int(i64), BoolTuple((bool,)) }
+
+  let gen = gs::one_of(vec![
+      gs::integers::<i64>().map(Value::Int).boxed(),
+      gs::tuples!(gs::booleans()).map(Value::BoolTuple).boxed(),
+  ]);
+  ```
+
+  The test body then matches on `Value` to exercise each branch. The
+  enum is scaffolding for the port, not a new public API.
 
 ## Don't add `suppress_health_check` that wasn't in the original
 
