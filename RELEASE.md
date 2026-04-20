@@ -17,5 +17,7 @@ This is mostly intended for Antithesis workloads and similar environments where
 the system under test cannot be reset between iterations and shrinking would be
 meaningless — you are effectively using Hegel purely for data generation.
 
-Requires hegel-core 0.4.4 or later (the underlying `one_shot` protocol support
-was added in [hegel-core#97](https://github.com/hegeldev/hegel-core/pull/97)).
+Requires a `hegel-core` release that includes the underlying `one_shot`
+protocol support (added in [hegel-core#97](https://github.com/hegeldev/hegel-core/pull/97)).
+Against older servers the option is silently ignored and the run proceeds as if
+`one_shot` were not set.

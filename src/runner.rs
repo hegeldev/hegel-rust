@@ -17,6 +17,15 @@ use std::time::{Duration, Instant};
 
 const SUPPORTED_PROTOCOL_VERSIONS: (&str, &str) = ("0.10", "0.10");
 const HEGEL_SERVER_VERSION: &str = "0.4.4";
+
+/// The `hegel-core` version that this library is pinned against when spawning
+/// the server via `uv tool run`. Exposed for tests that need to gate on the
+/// server's supported feature set (e.g. features only available in newer
+/// releases).
+#[doc(hidden)]
+pub fn pinned_server_version() -> &'static str {
+    HEGEL_SERVER_VERSION
+}
 const HEGEL_SERVER_COMMAND_ENV: &str = "HEGEL_SERVER_COMMAND";
 const HEGEL_SERVER_DIR: &str = ".hegel";
 static SERVER_LOG_PATH: Mutex<Option<String>> = Mutex::new(None);
@@ -1181,7 +1190,10 @@ impl Settings {
     /// the final replay pass at the end of a normal run: `note()` output is
     /// emitted and panic messages are printed.
     ///
-    /// Requires hegel-core 0.4.4 or later.
+    /// Requires a `hegel-core` release that includes the underlying `one_shot`
+    /// protocol support (added in
+    /// [hegel-core#97](https://github.com/hegeldev/hegel-core/pull/97)).
+    /// Against older servers the option is silently ignored.
     pub fn one_shot(mut self, one_shot: bool) -> Self {
         self.one_shot = one_shot;
         self

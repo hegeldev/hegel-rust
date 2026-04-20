@@ -338,4 +338,6 @@ pub use runner::__test_kill_server;
 pub use runner::format_log_excerpt;
 #[doc(hidden)]
 pub use runner::hegel;
+#[doc(hidden)]
+pub use runner::pinned_server_version;
 pub use runner::{HealthCheck, Hegel, Settings, Verbosity};
