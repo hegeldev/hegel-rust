@@ -70,6 +70,22 @@ jobs:
       - name: Run tests
         run: just check-tests
 
+      - name: Print server logs
+        if: always()
+        shell: bash
+        run: |
+          shopt -s nullglob globstar
+          files=( **/.hegel/server.*.log )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No server.log files found."
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            echo "::group::$f"
+            cat "$f"
+            echo "::endgroup::"
+          done
+
   test-all-features:
     name: test-all-features (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
     runs-on: ${{ matrix.os }}
@@ -109,6 +125,22 @@ jobs:
       - name: Run tests
         run: just ${{ matrix.recipe }}
 
+      - name: Print server logs
+        if: always()
+        shell: bash
+        run: |
+          shopt -s nullglob globstar
+          files=( **/.hegel/server.*.log )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No server.log files found."
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            echo "::group::$f"
+            cat "$f"
+            echo "::endgroup::"
+          done
+
   test-min-protocol:
     name: test-min-protocol
     runs-on: ubuntu-latest
@@ -144,6 +176,22 @@ jobs:
         run: |
           uv tool install "hegel-core==$MIN_CORE"
           HEGEL_SERVER_COMMAND=$(which hegel) just check-tests
+
+      - name: Print server logs
+        if: always()
+        shell: bash
+        run: |
+          shopt -s nullglob globstar
+          files=( **/.hegel/server.*.log )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No server.log files found."
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            echo "::group::$f"
+            cat "$f"
+            echo "::endgroup::"
+          done
 
   docs:
     name: docs
@@ -189,6 +237,22 @@ jobs:
         run: cargo generate-lockfile -Z minimal-versions
       - name: Run tests
         run: just check-tests-minimal-versions
+
+      - name: Print server logs
+        if: always()
+        shell: bash
+        run: |
+          shopt -s nullglob globstar
+          files=( **/.hegel/server.*.log )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No server.log files found."
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            echo "::group::$f"
+            cat "$f"
+            echo "::endgroup::"
+          done
 
   compile-examples:
     name: compile-examples (${{ matrix.rust }})
@@ -251,6 +315,22 @@ jobs:
       - name: Run coverage
         run: just check-coverage
 
+      - name: Print server logs
+        if: always()
+        shell: bash
+        run: |
+          shopt -s nullglob globstar
+          files=( **/.hegel/server.*.log )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No server.log files found."
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            echo "::group::$f"
+            cat "$f"
+            echo "::endgroup::"
+          done
+
       - name: Auto-update coverage annotations and ratchet
         if: success() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         env:
@@ -304,6 +384,22 @@ jobs:
 
       - name: Run conformance tests
         run: just check-conformance
+
+      - name: Print server logs
+        if: always()
+        shell: bash
+        run: |
+          shopt -s nullglob globstar
+          files=( **/.hegel/server.*.log )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No server.log files found."
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            echo "::group::$f"
+            cat "$f"
+            echo "::endgroup::"
+          done
 
   nix:
     name: nix
