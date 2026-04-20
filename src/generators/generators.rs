@@ -305,6 +305,7 @@ where
     }
 
 
+
     fn enumerate_values(&self) -> Option<Vec<T>> {
         self.source
             .enumerate_values()
