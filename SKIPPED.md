@@ -263,3 +263,11 @@ Individually-skipped tests (rest of the file is ported):
 - `test_complex_numbers.py` — all tests use `st.complex_numbers()`, a Hypothesis
   public-API strategy that generates Python `complex` values. Rust has no built-in
   complex number type and hegel-rust has no `gs::complex_numbers()` generator.
+
+- `test_annotations.py` — all tests exercise Python reflection and annotation
+  manipulation: `inspect.signature`/`inspect.Parameter` introspection,
+  `define_function_signature` (rewrites Python function signatures),
+  `get_pretty_function_description` (pretty-prints Python lambdas),
+  `convert_positional_arguments` (Python argument conversion), and `@given`/
+  `@st.composite` decorator annotation editing. None of these Python
+  introspection APIs have Rust counterparts.
