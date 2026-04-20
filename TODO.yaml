@@ -6,20 +6,3 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-- title: "[CI] check release — missing RELEASE.md"
-  details: |
-    The `check release` job fails because PR 188 has no RELEASE.md file.
-    The release.py script requires every PR to include one.
-
-    Log (run 24674157469, job "check release", step "Check release"):
-      ValueError:
-        * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
-        *                                                                  *
-        *   Every pull request to hegel-rust requires a RELEASE.md file.   *
-        *  You can find an example and instructions in RELEASE-sample.md.  *
-        *                                                                  *
-        * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
-
-    Fix: add a RELEASE.md following the format in RELEASE-sample.md.
-    Use the `changelog` skill for style guidance.
