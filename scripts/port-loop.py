@@ -59,6 +59,7 @@ import json
 import os
 import random
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -342,6 +343,56 @@ step either way.
 Commits in this sub-loop:
 
 {log}
+"""
+
+PORT_RESCUE_PROMPT = """\
+Rescue task: the parallel port-loop worker spent its full per-file
+dispatch budget ({dispatches} attempts) trying to port {path} →
+{destination} and could not get all gates green. Instead of continuing
+to bang on the same port, abandon it cleanly:
+
+1. Read the tail of the worker's session log (below) and identify what
+   actually failed — the concrete gate(s), the error messages, the
+   nature of the obstacle.
+
+2. Decide between SKIPPED.md and TODO.yaml:
+   - If the blocker is genuinely a skip-worthy public-API gap (Python
+     specific facilities, external-library integrations — see the skip
+     policy below), add `{name}` to the appropriate section of
+     SKIPPED.md with a one-line rationale citing the actual failure.
+   - If the blocker is a missing native-mode engine feature, an unclear
+     porting pattern, or anything else the loop could reasonably pick
+     up later with a cleaner state: add a TODO.yaml entry describing
+     what needs to happen before this file can be ported, then ALSO add
+     `{name}` to SKIPPED.md with a rationale pointing at the TODO so
+     the file stays out of the unported pool until a human unblocks it.
+
+3. Revert any uncommitted changes to unrelated files so the tree is
+   clean apart from your rescue commit. Do not keep half-done port
+   work on disk.
+
+4. Make one focused commit that records the abandonment ("Skip {name}:
+   <reason>" or similar), then exit.
+
+Do NOT attempt a further port. Do NOT claim the port is complete. The
+budget existed precisely to catch ports that get stuck; your job is to
+record the obstacle and let the loop move on.
+
+Session log tail (most recent {log_lines} lines):
+
+{session_tail}
+""" + SKIP_POLICY
+
+POST_REBASE_FIX_PROMPT = """\
+Parallel port-loop worker: after porting {path} → {destination} and
+reaching green gates, the worker rebased its branch onto
+`origin/{supervisor_branch}` and the gates are now broken again —
+something on the supervisor branch changed in a way that conflicts
+with (or regresses) the port. Full gate output is below.
+
+Fix the regression in one focused commit. The worker will re-run the
+gates; if still broken after this attempt, the worker escalates to a
+rescue agent which will abandon the port rather than loop forever.
 """
 
 PORT_REVIEW_PROMPT = """\
@@ -631,6 +682,56 @@ def strip_build_noise(output: str) -> str:
 SCRIPT_PATH = Path(__file__).resolve()
 SCRIPT_MTIME_AT_STARTUP = SCRIPT_PATH.stat().st_mtime
 ORIGINAL_ARGV: list[str] = list(sys.argv)
+
+
+class _LinePrefixStream:
+    """Wrap a text stream, prefixing every output line with `prefix`.
+
+    Used by workers in parallel mode so interleaved supervisor output
+    stays attributable. Buffers partial lines across writes to avoid
+    mid-line prefix insertions.
+    """
+
+    def __init__(self, inner, prefix: str) -> None:
+        self._inner = inner
+        self._prefix = prefix
+        self._buf = ""
+
+    def write(self, s: str) -> int:
+        if not self._prefix:
+            return self._inner.write(s)
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            self._inner.write(f"{self._prefix}{line}\n")
+        return len(s)
+
+    def flush(self) -> None:
+        if self._buf:
+            self._inner.write(f"{self._prefix}{self._buf}")
+            self._buf = ""
+        self._inner.flush()
+
+    def isatty(self) -> bool:
+        return getattr(self._inner, "isatty", lambda: False)()
+
+    def fileno(self) -> int:
+        return self._inner.fileno()
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def _install_log_prefix(prefix: str) -> None:
+    """Wrap `sys.stdout`/`sys.stderr` so every line gets a `[prefix] ` tag.
+
+    No-op when `prefix` is empty. Called once at worker startup.
+    """
+    if not prefix:
+        return
+    tag = f"[{prefix}] "
+    sys.stdout = _LinePrefixStream(sys.stdout, tag)
+    sys.stderr = _LinePrefixStream(sys.stderr, tag)
 
 
 def maybe_hot_reload() -> None:
@@ -1317,6 +1418,7 @@ def dispatch_claude(
     max_budget_usd: float | None = None,
     resume_session: str | None = None,
     skip_permissions: bool = False,
+    cwd_override: Path | None = None,
 ) -> tuple[str | None, int]:
     """Spawn claude -p (or resume an existing session), stream events live.
 
@@ -1364,9 +1466,10 @@ def dispatch_claude(
         cmd += ["--append-system-prompt", COMMON_SYSTEM_PROMPT]
     cmd.append(full_prompt)
 
+    proc_cwd = cwd_override if cwd_override is not None else REPO_ROOT
     proc = subprocess.Popen(
         cmd,
-        cwd=REPO_ROOT,
+        cwd=str(proc_cwd),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -1390,13 +1493,18 @@ def dispatch_claude(
         timer.daemon = True
         timer.start()
 
-    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    sessions_dir = (
+        (cwd_override / ".porting" / "sessions")
+        if cwd_override is not None
+        else SESSIONS_DIR
+    )
+    sessions_dir.mkdir(parents=True, exist_ok=True)
     if resume_session is not None:
-        log_path = SESSIONS_DIR / f"{resume_session}.jsonl"
+        log_path = sessions_dir / f"{resume_session}.jsonl"
         pending_path = None
     else:
         pending_path = (
-            SESSIONS_DIR / f".pending-{os.getpid()}-{int(time.time())}.jsonl"
+            sessions_dir / f".pending-{os.getpid()}-{int(time.time())}.jsonl"
         )
         log_path = pending_path
     log_file = log_path.open("a", encoding="utf-8")
@@ -1421,7 +1529,7 @@ def dispatch_claude(
                 if isinstance(sid, str) and session_id is None:
                     session_id = sid
                     if pending_path is not None:
-                        final_path = SESSIONS_DIR / f"{sid}.jsonl"
+                        final_path = sessions_dir / f"{sid}.jsonl"
                         log_file.close()
                         # Merge into any pre-existing log for this session id
                         # (shouldn't happen for a fresh session, but be safe).
@@ -1455,6 +1563,21 @@ def dispatch_claude(
 # ---- main loop ---------------------------------------------------------------
 
 
+class GateBudgetExhausted(Exception):
+    """Raised when a per-file dispatch cap is hit inside a worker.
+
+    Caught by `main()` in `--worker-mode` to exit with code 42, signalling
+    to the supervisor that a rescue dispatch is warranted.
+    """
+
+    def __init__(self, file: str, cap: int) -> None:
+        super().__init__(
+            f"per-file dispatch budget of {cap} exhausted while porting {file}"
+        )
+        self.file = file
+        self.cap = cap
+
+
 class IterCounter:
     """Tracks and caps total claude dispatches across outer and sub-loops.
 
@@ -1479,8 +1602,25 @@ class IterCounter:
         self.max_budget_usd = max_budget_usd
         self.skip_permissions = skip_permissions
         self.last_session_id: str | None = None
+        # Per-file dispatch cap (only set in worker mode). `per_file_n`
+        # counts dispatches since the last `reset_per_file()` — drive_port
+        # is the only consumer. When the cap is hit we raise
+        # `GateBudgetExhausted` rather than `sys.exit(0)`, so the worker
+        # can clean up and emit an exit code the supervisor understands.
+        self.per_file_cap: int | None = None
+        self.per_file_n = 0
+        self.per_file_label: str | None = None
+
+    def reset_per_file(self, label: str) -> None:
+        """Start fresh per-file counter. Call at the top of each port target."""
+        self.per_file_n = 0
+        self.per_file_label = label
 
     def _check_cap(self) -> None:
+        if self.per_file_cap is not None and self.per_file_n >= self.per_file_cap:
+            raise GateBudgetExhausted(
+                self.per_file_label or "<unknown>", self.per_file_cap
+            )
         if self.max > 0 and self.n >= self.max:
             print(f"\n[port-loop] hit --max-iterations={self.max}; stopping.")
             sys.exit(0)
@@ -1489,6 +1629,7 @@ class IterCounter:
         """Dispatch a fresh claude session, or exit 0 if the cap is hit."""
         self._check_cap()
         self.n += 1
+        self.per_file_n += 1
         print(f"\n{'#' * 72}\n# iteration {self.n}\n{'#' * 72}")
         sid, _code = dispatch_claude(
             prompt,
@@ -1520,6 +1661,7 @@ class IterCounter:
             return
         self._check_cap()
         self.n += 1
+        self.per_file_n += 1
         previous = self.last_session_id
         print(
             f"\n{'#' * 72}\n# iteration {self.n} "
@@ -1672,6 +1814,483 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
             f"\n[port-loop] review made changes; re-verifying gates."
         )
         # Loop around to re-run the gates on the reviewer's changes.
+
+
+def _gates_green_for(kind: str, module: str) -> tuple[bool, str]:
+    """Fast re-check of the module's server+native gates + clean tree.
+
+    Used after a worker-side rebase to decide whether the port survived.
+    Returns `(ok, combined_output)`. Skips slow-test detection so a
+    transient perf signal doesn't flip a passing rebase into a fail.
+    """
+    ok, out, _ = gate_module_server(kind, module)
+    if not ok:
+        return False, out
+    ok, out, _ = gate_module_native(kind, module)
+    if not ok:
+        return False, out
+    ok, out = gate_clean_tree()
+    if not ok:
+        return False, out
+    return True, ""
+
+
+def post_rebase(
+    picked: Path, destination: Path, supervisor_branch: str, state: IterCounter
+) -> None:
+    """Fetch, rebase worker branch onto origin/<supervisor_branch>, re-verify.
+
+    Worker-side step run after `drive_port` goes green. The rebase may
+    pull in changes from the supervisor branch (or from other workers'
+    commits already merged there) that regress the port; if so, we
+    dispatch one fix pass and re-check. A second failure escalates to
+    `GateBudgetExhausted` (rescue in the supervisor).
+
+    Raises `RuntimeError` on unrecoverable rebase conflicts so the worker
+    exits 43 and the supervisor dispatches a merge-rescue agent.
+    """
+    kind = "pbtkit" if picked.is_relative_to(PBTKIT_DIR) else "hypothesis"
+    module = destination.stem
+
+    fetch = _run_capture(["git", "fetch", "origin"], cwd=REPO_ROOT)
+    if fetch.returncode != 0:
+        raise RuntimeError(
+            f"post-rebase fetch failed:\n{fetch.stdout}\n{fetch.stderr}"
+        )
+    target = f"origin/{supervisor_branch}"
+    target_sha = _rev_parse(target)
+    if target_sha is None:
+        print(
+            f"\n[port-loop] post-rebase: {target} does not exist; "
+            f"skipping rebase."
+        )
+        return
+    if target_sha == git_head():
+        print(
+            f"\n[port-loop] post-rebase: already at {target_sha[:12]}; "
+            f"no rebase needed."
+        )
+        return
+
+    rebase = _run_capture(["git", "rebase", target], cwd=REPO_ROOT)
+    if rebase.returncode != 0:
+        _run_capture(["git", "rebase", "--abort"], cwd=REPO_ROOT)
+        raise RuntimeError(
+            f"post-rebase `git rebase {target}` had conflicts:\n"
+            f"{rebase.stdout}\n{rebase.stderr}"
+        )
+    print(f"\n[port-loop] post-rebase: rebased onto {target_sha[:12]}.")
+
+    # Verify gates still pass. On failure, dispatch one fix; if that
+    # doesn't restore green, raise so the worker hands off to rescue.
+    for attempt in range(2):
+        ok, out = _gates_green_for(kind, module)
+        if ok:
+            return
+        if attempt == 1:
+            raise RuntimeError(
+                f"post-rebase gates still broken after one fix pass:\n{out}"
+            )
+        prompt = POST_REBASE_FIX_PROMPT.format(
+            path=picked,
+            destination=destination,
+            supervisor_branch=supervisor_branch,
+        )
+        state.dispatch(prompt, gate_output=strip_build_noise(out))
+
+
+def drive_port_worker(
+    picked: Path,
+    destination: Path,
+    supervisor_branch: str,
+    state: IterCounter,
+) -> None:
+    """Worker-side entrypoint: drive_port + post-rebase under a per-file cap.
+
+    Raises `GateBudgetExhausted` if the budget is exhausted; the caller
+    (`main()` in `--worker-mode`) translates that into exit code 42 so
+    the supervisor can invoke the rescue agent. Post-rebase failures
+    raise `RuntimeError`, translated to exit 43 for merge-rescue.
+    """
+    state.reset_per_file(str(picked))
+    drive_port(picked, destination, state)
+    post_rebase(picked, destination, supervisor_branch, state)
+
+
+# ---- parallel-worker supervisor ---------------------------------------------
+#
+# `drive_port_pool` replaces the final `pick + drive_port` step in the main
+# outer loop when `--max-workers > 1`. It owns admission gating (no new
+# workers unless TODO.yaml is empty and PR CI isn't in a known-bad state),
+# serial integration of worker commits via cherry-pick, rescue dispatches
+# on gate-budget exhaustion, and clean shutdown on SIGINT. The outer loop
+# reclaims control between pool cycles (so repair/sync/TODO/CI gates run
+# unchanged), and exits the porting phase only after every worker in
+# flight has been drained.
+
+
+def _pool_admission_ok() -> tuple[bool, str]:
+    """Check whether new workers may be spawned right now.
+
+    Admission is denied if TODO.yaml has any entries or if PR CI has
+    already-failing checks (either completed-failed or pending-with-fails).
+    Returns `(ok, reason)` — the reason is useful for logging.
+    """
+    todos = read_todos()
+    if todos:
+        return False, f"{len(todos)} TODO entry(ies) pending"
+    status, summary, _detail, failing = _pr_check_status()
+    if status == "failure":
+        return False, f"PR CI failure: {summary}"
+    if failing > 0:
+        return False, f"PR CI has {failing} failing check(s): {summary}"
+    return True, status or "ok"
+
+
+def _dispatch_worker_rescue(
+    slot: int,
+    file: Path,
+    dest: Path,
+    per_file_cap: int,
+    state: IterCounter,
+) -> None:
+    """Dispatch a rescue agent in worker `slot`'s worktree.
+
+    The agent is asked to abandon the port cleanly — record a SKIPPED.md
+    entry (and optionally a TODO entry) and make one focused commit.
+    The commit lands on `port/worker-{slot}`, and the supervisor then
+    cherry-picks it like any other worker commit.
+    """
+    worktree = _worker_path(slot)
+    sessions = worktree / ".porting" / "sessions"
+    tail = "(no worker session log available)"
+    if sessions.exists():
+        finalized = sorted(
+            (p for p in sessions.glob("*.jsonl") if not p.name.startswith(".pending-")),
+            key=lambda p: p.stat().st_mtime,
+        )
+        if finalized:
+            sid = finalized[-1].stem
+            tail = _session_tail(sid, max_lines=200)
+            # `_session_tail` reads from supervisor's SESSIONS_DIR; for
+            # worker worktrees we need to read from the worker's own
+            # sessions dir, so override.
+            try:
+                lines = finalized[-1].read_text(
+                    encoding="utf-8", errors="replace"
+                ).splitlines()
+                tail = "\n".join(lines[-200:])
+            except OSError as e:
+                tail = f"(could not read {finalized[-1]}: {e})"
+    prompt = PORT_RESCUE_PROMPT.format(
+        path=file,
+        destination=dest,
+        name=file.name,
+        dispatches=per_file_cap,
+        log_lines=200,
+        session_tail=tail,
+    )
+    print(
+        f"\n[port-loop] pool: dispatching rescue for worker {slot} "
+        f"({file.name}) in {worktree}.",
+        flush=True,
+    )
+    state._check_cap()
+    state.n += 1
+    sid, _code = dispatch_claude(
+        prompt,
+        gate_output=None,
+        timeout=state.timeout,
+        model=state.model,
+        max_budget_usd=state.max_budget_usd,
+        skip_permissions=state.skip_permissions,
+        cwd_override=worktree,
+    )
+    # Don't carry the rescue session id into the supervisor's
+    # `last_session_id` — it's tied to the worker's worktree, so a
+    # `resume_last` from supervisor context would be wrong.
+
+
+def _dispatch_merge_rescue(
+    slot: int,
+    file: Path,
+    detail: str,
+    state: IterCounter,
+) -> None:
+    """Abandon a worker's port when cherry-picking their commits conflicts.
+
+    Runs in the supervisor's worktree. The agent is asked to add the
+    file to SKIPPED.md with a one-line rationale citing the integration
+    conflict, then commit. The worker's own branch is left untouched
+    for possible human inspection.
+    """
+    prompt = (
+        f"Parallel port-loop integration: cherry-picking "
+        f"`{_worker_branch(slot)}`'s commits for the port of "
+        f"`{file.name}` onto the supervisor branch failed. Abandon "
+        f"the port: add `{file.name}` to the appropriate section of "
+        f"SKIPPED.md (pbtkit or hypothesis) with a one-line rationale "
+        f"citing the integration conflict, then make one focused "
+        f"commit. Do NOT try to resolve the conflict or touch the "
+        f"worker's branch — a later human can inspect it.\n\n"
+        f"Integration failure detail:\n\n{detail}"
+    )
+    state.dispatch(prompt)
+
+
+def _spawn_worker(
+    slot: int,
+    file: Path,
+    base_sha: str,
+    supervisor_branch: str,
+    args: argparse.Namespace,
+) -> subprocess.Popen:
+    """Reset worker `slot`'s worktree to `base_sha` and spawn its subprocess."""
+    worktree = _ensure_worktree(slot, base_sha)
+    # Use the worktree's own copy of this script so `__file__`-relative
+    # constants (REPO_ROOT, SESSIONS_DIR, etc.) resolve inside the
+    # worktree rather than the supervisor's checkout. `git worktree add`
+    # preserves the executable bit.
+    script = worktree / "scripts" / "port-loop.py"
+    if not script.exists():
+        raise RuntimeError(
+            f"worker worktree {worktree} is missing scripts/port-loop.py"
+        )
+    env = os.environ.copy()
+    env["CARGO_TARGET_DIR"] = str(_worker_target_dir(slot))
+    cmd = [
+        str(script),
+        "--worker-mode",
+        "--worktree", str(worktree),
+        "--port", str(file),
+        "--supervisor-branch", supervisor_branch,
+        "--log-prefix", f"worker-{slot}",
+        "--per-file-dispatches", str(args.per_file_dispatches),
+        "--model", args.model,
+        "--timeout", str(args.timeout),
+        "--max-iterations", str(args.max_iterations),
+    ]
+    if args.max_budget_usd:
+        cmd += ["--max-budget-usd", str(args.max_budget_usd)]
+    if args.skip_permissions:
+        cmd.append("--dangerously-skip-permissions")
+    print(
+        f"\n[port-loop] pool: spawning worker {slot} for {file.name} "
+        f"(base {base_sha[:12]}, worktree {worktree}).",
+        flush=True,
+    )
+    return subprocess.Popen(cmd, env=env, start_new_session=True)
+
+
+def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
+    """Supervisor: run up to `args.max_workers` porting tasks in parallel.
+
+    Returns when the unported pool is drained, an admission gate flips,
+    or all workers have been drained due to SIGINT. On return, control
+    goes back to the outer loop for its next `repair → sync → PR CI →
+    TODO` cycle, which re-evaluates admission before re-entering the
+    pool.
+    """
+    supervisor_branch = _current_branch()
+    if supervisor_branch in ("main", "master", "HEAD"):
+        print(
+            f"\n[port-loop] pool: refusing to run on branch "
+            f"{supervisor_branch!r}; parallel porting only runs on "
+            f"feature branches."
+        )
+        return
+
+    N = args.max_workers
+    # slot -> {proc, file, dest, base_sha, started_at}
+    in_flight: dict[int, dict] = {}
+    assigned: set[Path] = set()
+    stop = [False]
+
+    def _handle_sigint(_signum, _frame):
+        if not stop[0]:
+            print(
+                "\n[port-loop] pool: SIGINT received; propagating to "
+                f"{len(in_flight)} worker(s) and draining.",
+                flush=True,
+            )
+        stop[0] = True
+        for info in in_flight.values():
+            try:
+                info["proc"].send_signal(signal.SIGINT)
+            except Exception:
+                pass
+
+    prev_handler = signal.signal(signal.SIGINT, _handle_sigint)
+
+    try:
+        while True:
+            # Admit into every free slot we can. Admission is re-checked
+            # here so a TODO or CI-failure that appears mid-pool stops
+            # new spawns without interrupting in-flight ones.
+            if not stop[0]:
+                adm_ok, adm_reason = _pool_admission_ok()
+                if not adm_ok and not in_flight:
+                    print(
+                        f"\n[port-loop] pool: admission denied "
+                        f"({adm_reason}) and no workers in flight; "
+                        f"returning to outer loop."
+                    )
+                    return
+                if adm_ok:
+                    while len(in_flight) < N:
+                        pool = [
+                            f for f in unported_pool()
+                            if f not in assigned
+                        ]
+                        if not pool:
+                            break
+                        file = random.choice(pool)
+                        dest = destination_for(file)
+                        base_sha = git_head()
+                        slot = next(
+                            i for i in range(N) if i not in in_flight
+                        )
+                        try:
+                            proc = _spawn_worker(
+                                slot, file, base_sha,
+                                supervisor_branch, args,
+                            )
+                        except Exception as e:
+                            print(
+                                f"\n[port-loop] pool: failed to spawn "
+                                f"worker {slot}: {e}"
+                            )
+                            stop[0] = True
+                            break
+                        in_flight[slot] = {
+                            "proc": proc,
+                            "file": file,
+                            "dest": dest,
+                            "base_sha": base_sha,
+                            "started_at": time.monotonic(),
+                        }
+                        assigned.add(file)
+
+            if not in_flight:
+                if stop[0]:
+                    print(
+                        "\n[port-loop] pool: stop requested and all "
+                        "workers drained; returning."
+                    )
+                    return
+                if not unported_pool():
+                    print(
+                        "\n[port-loop] pool: unported pool is empty; "
+                        "returning to outer loop."
+                    )
+                    return
+                # Otherwise the only reason we admitted nothing is
+                # admission denial — handled at top of next iteration.
+                time.sleep(1.0)
+                continue
+
+            # Poll for any completed worker.
+            completed: list[int] = []
+            for slot, info in in_flight.items():
+                if info["proc"].poll() is not None:
+                    completed.append(slot)
+            if not completed:
+                time.sleep(1.0)
+                continue
+
+            for slot in completed:
+                info = in_flight.pop(slot)
+                assigned.discard(info["file"])
+                rc = info["proc"].returncode
+                elapsed = time.monotonic() - info["started_at"]
+                print(
+                    f"\n[port-loop] pool: worker {slot} "
+                    f"({info['file'].name}) exited rc={rc} after "
+                    f"{elapsed:.1f}s."
+                )
+                _handle_worker_exit(
+                    slot, info, rc, supervisor_branch, args, state,
+                )
+    finally:
+        for info in in_flight.values():
+            try:
+                info["proc"].terminate()
+            except Exception:
+                pass
+        for info in in_flight.values():
+            try:
+                info["proc"].wait(timeout=30)
+            except Exception:
+                try:
+                    info["proc"].kill()
+                except Exception:
+                    pass
+        signal.signal(signal.SIGINT, prev_handler)
+
+
+def _handle_worker_exit(
+    slot: int,
+    info: dict,
+    rc: int,
+    supervisor_branch: str,
+    args: argparse.Namespace,
+    state: IterCounter,
+) -> None:
+    """Integrate or rescue a completed worker's output."""
+    file = info["file"]
+    dest = info["dest"]
+    base_sha = info["base_sha"]
+    if rc == 0:
+        ok, detail = _integrate_worker(slot, supervisor_branch, base_sha)
+        if ok:
+            print(f"[port-loop] pool: integrated worker {slot}: {detail}")
+            return
+        print(
+            f"[port-loop] pool: worker {slot} integration failed: "
+            f"{detail}"
+        )
+        _dispatch_merge_rescue(slot, file, detail, state)
+        return
+    if rc == 42:
+        print(
+            f"[port-loop] pool: worker {slot} exhausted per-file budget; "
+            f"dispatching rescue in its worktree."
+        )
+        _dispatch_worker_rescue(
+            slot, file, dest, args.per_file_dispatches, state,
+        )
+        ok, detail = _integrate_worker(slot, supervisor_branch, base_sha)
+        if ok:
+            print(
+                f"[port-loop] pool: integrated rescue from worker "
+                f"{slot}: {detail}"
+            )
+        else:
+            print(
+                f"[port-loop] pool: rescue integration failed: {detail}"
+            )
+            _dispatch_merge_rescue(slot, file, detail, state)
+        return
+    if rc == 43:
+        print(
+            f"[port-loop] pool: worker {slot} post-rebase unresolvable; "
+            f"dispatching merge-rescue."
+        )
+        _dispatch_merge_rescue(
+            slot, file,
+            f"worker-side post-rebase failed for {file.name}", state,
+        )
+        return
+    if rc < 0:
+        print(
+            f"[port-loop] pool: worker {slot} killed by signal "
+            f"{-rc}; no integration attempted."
+        )
+        return
+    print(
+        f"[port-loop] pool: worker {slot} exited {rc} (unknown); "
+        f"skipping integration."
+    )
 
 
 def repair(state: IterCounter, run_server_tests: bool = False) -> None:
@@ -1924,6 +2543,179 @@ def sync_with_origin(state: IterCounter) -> tuple[bool, bool]:
         state.dispatch(SYNC_FIX_PROMPT, gate_output=out)
         return True, False
     return False, pushed
+
+
+# ---- parallel-worker worktree pool ------------------------------------------
+#
+# When `--max-workers > 1`, the porting phase is driven out of a fixed pool
+# of git worktrees under `.port-worktrees/worker-{i}/`. Each worktree is
+# pinned to its own branch `port/worker-{i}` and its own Cargo target
+# directory `target-worker-{i}/` (absolute path, so every worker using slot
+# i reuses the same incremental-build state). The main worktree (where the
+# supervisor runs) is unchanged; workers don't touch it directly. Workers
+# commit locally in their own worktrees; the supervisor cherry-picks their
+# commits onto the supervisor branch serially as each worker finishes.
+
+WORKTREE_ROOT = REPO_ROOT / ".port-worktrees"
+
+
+def _worker_path(i: int) -> Path:
+    return WORKTREE_ROOT / f"worker-{i}"
+
+
+def _worker_branch(i: int) -> str:
+    return f"port/worker-{i}"
+
+
+def _worker_target_dir(i: int) -> Path:
+    return REPO_ROOT / f"target-worker-{i}"
+
+
+def _run_capture(args: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess:
+    """Quiet git/subprocess runner that captures stdout+stderr together."""
+    return subprocess.run(
+        args,
+        cwd=str(cwd) if cwd else None,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _ensure_worktree(i: int, base_sha: str) -> Path:
+    """Create worker `i`'s worktree pinned to `base_sha` (reuses if present)."""
+    path = _worker_path(i)
+    branch = _worker_branch(i)
+    WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
+
+    if path.exists() and (path / ".git").exists():
+        _reset_worktree(i, base_sha)
+        return path
+
+    if path.exists():
+        # Stale filesystem leftover — rm -rf via subprocess (no Python
+        # recursion since the tree may have gitignored subdirs).
+        subprocess.run(["rm", "-rf", str(path)], check=True)
+
+    # Prune first in case a previous run left a dangling worktree registration.
+    _run_capture(["git", "worktree", "prune"], cwd=REPO_ROOT)
+
+    add = _run_capture(
+        ["git", "worktree", "add", "-B", branch, str(path), base_sha],
+        cwd=REPO_ROOT,
+    )
+    if add.returncode != 0:
+        # Branch may already be checked out in a stale registration — force.
+        _run_capture(
+            ["git", "worktree", "remove", "--force", str(path)],
+            cwd=REPO_ROOT,
+        )
+        _run_capture(["git", "branch", "-D", branch], cwd=REPO_ROOT)
+        add = _run_capture(
+            ["git", "worktree", "add", "-B", branch, str(path), base_sha],
+            cwd=REPO_ROOT,
+        )
+        if add.returncode != 0:
+            raise RuntimeError(
+                f"failed to create worktree for worker {i} at {path}: "
+                f"{add.stdout}\n{add.stderr}"
+            )
+    return path
+
+
+def _reset_worktree(i: int, base_sha: str) -> None:
+    """Reset worker `i`'s branch to `base_sha` and clean untracked files.
+
+    Keeps the worker's `.port-loop-cache.json`, the porting sessions dir,
+    and the per-worker Cargo target (which lives outside the worktree
+    anyway) so successive ports don't start from cold every time.
+    """
+    path = _worker_path(i)
+    branch = _worker_branch(i)
+    ck = _run_capture(
+        ["git", "checkout", "-B", branch, base_sha],
+        cwd=path,
+    )
+    if ck.returncode != 0:
+        raise RuntimeError(
+            f"checkout -B {branch} {base_sha} failed in {path}: "
+            f"{ck.stdout}\n{ck.stderr}"
+        )
+    rs = _run_capture(["git", "reset", "--hard", base_sha], cwd=path)
+    if rs.returncode != 0:
+        raise RuntimeError(
+            f"reset --hard {base_sha} failed in {path}: "
+            f"{rs.stdout}\n{rs.stderr}"
+        )
+    _run_capture(
+        [
+            "git", "clean", "-fdx",
+            "-e", ".port-loop-cache.json",
+            "-e", ".port-loop-todo-attempts.json",
+            "-e", ".porting/",
+        ],
+        cwd=path,
+    )
+
+
+def _integrate_worker(
+    i: int, supervisor_branch: str, base_sha: str
+) -> tuple[bool, str]:
+    """Replay worker `i`'s commits onto the supervisor branch.
+
+    `base_sha` is the supervisor-branch HEAD that was in effect when the
+    worker was spawned. Anything the worker committed since then is in
+    the range `base_sha..port/worker-{i}`.
+
+    Uses `git cherry-pick` so the supervisor branch linearly accumulates
+    every worker's commits without needing fast-forward. Returns
+    `(ok, detail)` — on conflict the cherry-pick is aborted and the
+    caller is expected to dispatch a merge-rescue agent.
+    """
+    branch = _worker_branch(i)
+    worker_sha = _rev_parse(branch)
+    if worker_sha is None:
+        return False, f"worker branch {branch} is missing"
+    if worker_sha == base_sha:
+        return True, "worker produced no commits; nothing to integrate"
+    head_branch = _current_branch()
+    if head_branch != supervisor_branch:
+        return False, (
+            f"supervisor-branch drift: expected {supervisor_branch}, "
+            f"on {head_branch}"
+        )
+    range_spec = f"{base_sha}..{branch}"
+    pick = _run_capture(
+        [
+            "git", "cherry-pick",
+            "--allow-empty", "--keep-redundant-commits",
+            range_spec,
+        ],
+        cwd=REPO_ROOT,
+    )
+    if pick.returncode == 0:
+        return True, f"cherry-picked {range_spec}"
+    _run_capture(["git", "cherry-pick", "--abort"], cwd=REPO_ROOT)
+    return False, (
+        f"cherry-pick {range_spec} failed:\n{pick.stdout}\n{pick.stderr}"
+    )
+
+
+def _session_tail(session_id: str, max_lines: int = 200) -> str:
+    """Return the last `max_lines` lines of a session's jsonl log.
+
+    Used to build the rescue prompt — the agent needs to know what the
+    worker tried before giving up.
+    """
+    log = SESSIONS_DIR / f"{session_id}.jsonl"
+    if not log.exists():
+        return "(session log not found)"
+    try:
+        content = log.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as e:
+        return f"(could not read session log: {e})"
+    tail = content[-max_lines:]
+    return "\n".join(tail)
 
 
 # ---- PR CI gate -------------------------------------------------------------
@@ -2311,9 +3103,81 @@ def main() -> None:
         dest="skip_permissions",
         help="Pass --dangerously-skip-permissions to each claude invocation.",
     )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=1,
+        dest="max_workers",
+        help=(
+            "Maximum concurrent porting workers (default: 1 = serial, "
+            "original behaviour). When > 1, the porting phase spawns up "
+            "to N subprocesses in git worktrees under .port-worktrees/. "
+            "Each worker uses its own CARGO_TARGET_DIR (target-worker-I/) "
+            "so builds don't serialize on Cargo file locks; expect "
+            "several GB of extra disk per worker."
+        ),
+    )
+    parser.add_argument(
+        "--per-file-dispatches",
+        type=int,
+        default=12,
+        dest="per_file_dispatches",
+        help=(
+            "Per-file dispatch budget for parallel workers (default: 12). "
+            "When a worker hits this cap without all gates green, the "
+            "supervisor dispatches a rescue agent that abandons the port "
+            "by recording a SKIPPED/TODO entry. Ignored when "
+            "--max-workers=1."
+        ),
+    )
+    # --- hidden flags used by subprocess workers ---
+    parser.add_argument(
+        "--worker-mode",
+        action="store_true",
+        dest="worker_mode",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--worktree",
+        type=str,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--supervisor-branch",
+        type=str,
+        default=None,
+        dest="supervisor_branch",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--log-prefix",
+        type=str,
+        default="",
+        dest="log_prefix",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args()
     if args.port is not None and args.todo_only:
         parser.error("--port and --todo-only are mutually exclusive.")
+    if args.max_workers < 1:
+        parser.error("--max-workers must be >= 1.")
+    if args.worker_mode:
+        if not args.worktree:
+            parser.error("--worker-mode requires --worktree.")
+        if not args.port:
+            parser.error("--worker-mode requires --port.")
+        if not args.supervisor_branch:
+            parser.error("--worker-mode requires --supervisor-branch.")
+        if args.max_workers != 1:
+            parser.error("--worker-mode is incompatible with --max-workers>1.")
+    elif args.max_workers > 1:
+        if args.port:
+            parser.error("--max-workers>1 is incompatible with --port.")
+        if args.todo_only:
+            parser.error("--max-workers>1 is incompatible with --todo-only.")
+    if args.per_file_dispatches < 1:
+        parser.error("--per-file-dispatches must be >= 1.")
     state = IterCounter(
         args.max_iterations,
         args.timeout,
@@ -2325,6 +3189,42 @@ def main() -> None:
     def maybe_clean() -> None:
         if args.clean:
             cargo_clean()
+
+    if args.worker_mode:
+        # Running inside a parallel-port worktree. cwd isn't used for
+        # path resolution (REPO_ROOT comes from __file__, which is this
+        # worktree's copy of the script), but we chdir anyway so any
+        # accidental Path.cwd() usage picks up the worktree.
+        os.chdir(args.worktree)
+        _install_log_prefix(args.log_prefix)
+        state.per_file_cap = args.per_file_dispatches
+        picked = resolve_port_arg(args.port)
+        destination = destination_for(picked)
+        print(
+            f"\n[port-loop] --worker-mode: targeting {picked} → "
+            f"{destination} on branch {_current_branch()} (supervisor "
+            f"branch {args.supervisor_branch}, per-file cap "
+            f"{args.per_file_dispatches})."
+        )
+        try:
+            repair(state)
+            drive_port_worker(
+                picked, destination, args.supervisor_branch, state,
+            )
+        except GateBudgetExhausted as e:
+            print(f"\n[port-loop] --worker-mode: {e}; exiting 42 for rescue.")
+            sys.exit(42)
+        except RuntimeError as e:
+            print(
+                f"\n[port-loop] --worker-mode: post-rebase unrecoverable "
+                f"({e}); exiting 43 for merge-rescue."
+            )
+            sys.exit(43)
+        print(
+            f"\n[port-loop] --worker-mode: green; exiting 0 after "
+            f"{state.n} iteration(s)."
+        )
+        return
 
     if args.port is not None:
         picked = resolve_port_arg(args.port)
@@ -2378,6 +3278,14 @@ def main() -> None:
                 f"ported or skipped; done after {state.n} iteration(s)."
             )
             break
+
+        if args.max_workers > 1:
+            print(
+                f"\n[port-loop] {len(pool)} files remain; entering "
+                f"parallel pool with max-workers={args.max_workers}."
+            )
+            drive_port_pool(state, args)
+            continue
 
         picked = random.choice(pool)
         destination = destination_for(picked)
