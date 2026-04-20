@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1 - 2026-04-20
+
+This patch adds support for a `repeat` method on test case, for operations that
+you want to run repeatedly until they hit an error. Effectively equivalent to
+a `loop` that is better optimised for testing.
+
 ## 0.7.0 - 2026-04-20
 
 This release adds a `reject` method to `TestCase` and `ExplicitTestCase`. It behaves like `assume(false)`, rejecting the current test input, but returns `!` so the compiler knows that code following the call is unreachable.
