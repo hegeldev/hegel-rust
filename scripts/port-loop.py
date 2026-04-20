@@ -526,9 +526,19 @@ unchanged entry.
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PBTKIT_DIR = REPO_ROOT / "resources" / "pbtkit" / "tests"
+# `resources/` is gitignored, so worker worktrees don't have it. Workers
+# set PORT_LOOP_RESOURCES_BASE=<supervisor-repo-root> and read upstream
+# test files from there. Destinations (tests/pbtkit/*.rs) still land in
+# REPO_ROOT (the worker's worktree).
+_RESOURCES_BASE = Path(os.environ.get("PORT_LOOP_RESOURCES_BASE") or REPO_ROOT)
+PBTKIT_DIR = _RESOURCES_BASE / "resources" / "pbtkit" / "tests"
 HYPOTHESIS_DIR = (
-    REPO_ROOT / "resources" / "hypothesis" / "hypothesis-python" / "tests" / "cover"
+    _RESOURCES_BASE
+    / "resources"
+    / "hypothesis"
+    / "hypothesis-python"
+    / "tests"
+    / "cover"
 )
 SESSIONS_DIR = REPO_ROOT / ".porting" / "sessions"
 
@@ -2058,6 +2068,10 @@ def _spawn_worker(
         )
     env = os.environ.copy()
     env["CARGO_TARGET_DIR"] = str(_worker_target_dir(slot))
+    # Worker worktrees don't have the gitignored `resources/` upstream-test
+    # tree; point the worker at the supervisor's copy so PBTKIT_DIR /
+    # HYPOTHESIS_DIR and `destination_for` resolve correctly.
+    env["PORT_LOOP_RESOURCES_BASE"] = str(REPO_ROOT)
     cmd = [
         str(script),
         "--worker-mode",
