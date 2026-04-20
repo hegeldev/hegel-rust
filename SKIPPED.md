@@ -201,6 +201,11 @@ Individually-skipped tests (rest of the file is ported):
   tests Python module-loading side-effect detection during entrypoint loading,
   a concept with no Rust counterpart.
 
+- `test_mock.py` — all tests exercise Python's `unittest.mock` integration
+  (`mock.patch`, `mock.MagicMock`) and pytest fixtures (`pytestconfig`,
+  `pytest.Config`) interacting with Hypothesis's `@given` decorator. Neither
+  `unittest.mock` nor pytest fixtures have Rust counterparts.
+
 - `test_filter_rewriting.py` — all tests exercise Hypothesis's filter rewriting
   optimization, which inspects Python predicates at runtime (lambda AST source
   parsing via `hypothesis.internal.reflection`, `functools.partial` attribute
