@@ -11,9 +11,7 @@
 
 use std::collections::HashMap;
 
-use crate::common::utils::check_can_generate_examples;
-use hegel::generators::{self as gs, Generator};
-
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 enum IntOrBoolTuple {
     Int(i64),
@@ -22,10 +20,11 @@ enum IntOrBoolTuple {
 
 macro_rules! draw_example_tests {
     ($name:ident, $gen:expr) => {
+        #[allow(clippy::approx_constant, unused_imports)]
         mod $name {
             use super::*;
             use crate::common::utils::check_can_generate_examples;
-            use hegel::generators::{self as gs, Generator};
+            use hegel::generators::{self as gs, Generator as _};
 
             #[test]
             fn test_single_example() {
