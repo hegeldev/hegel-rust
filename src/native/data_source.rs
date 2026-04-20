@@ -43,12 +43,20 @@ impl NativeDataSource {
 
     /// Convenience: extract choice nodes from a handle after a test case.
     pub fn take_nodes(handle: &NativeTestCaseHandle) -> Vec<ChoiceNode> {
-        handle.lock().unwrap_or_else(|e| e.into_inner()).nodes.clone()
+        handle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .nodes
+            .clone()
     }
 
     /// Convenience: extract spans from a handle after a test case.
     pub fn take_spans(handle: &NativeTestCaseHandle) -> Vec<Span> {
-        handle.lock().unwrap_or_else(|e| e.into_inner()).spans.clone()
+        handle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .spans
+            .clone()
     }
 
     fn dispatch(&self, command: &str, payload: &Value) -> Result<Value, DataSourceError> {
