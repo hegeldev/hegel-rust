@@ -1,5 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
+use syn::punctuated::Punctuated;
+use syn::token::Comma;
 use syn::{FnArg, ItemFn};
 
 use crate::common::{
@@ -7,8 +9,8 @@ use crate::common::{
     rewrite_draws_in_block,
 };
 
-pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let test_args: SettingsAttrArgs = if attr.is_empty() {
+pub fn expand_standalone_function(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let settings_args: SettingsAttrArgs = if attr.is_empty() {
         SettingsAttrArgs {
             settings: None,
             settings_args: Vec::new(),
@@ -25,34 +27,42 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(e) => return e.to_compile_error(),
     };
 
-    if func.sig.inputs.len() != 1 {
+    if func.sig.inputs.is_empty() {
         return syn::Error::new_spanned(
             &func.sig,
-            "#[hegel::test] functions must take exactly one parameter of type hegel::TestCase.",
+            "#[hegel::standalone_function] functions must take at least one parameter of type hegel::TestCase (as the first parameter).",
         )
         .to_compile_error();
     }
 
-    let param = &func.sig.inputs[0];
-    let param_typed = match param {
+    let tc_param = match &func.sig.inputs[0] {
         FnArg::Typed(pat_type) => pat_type,
         FnArg::Receiver(_) => {
             return syn::Error::new_spanned(
-                param,
-                "#[hegel::test] functions cannot have a self parameter.",
+                &func.sig.inputs[0],
+                "#[hegel::standalone_function] functions cannot have a self parameter.",
             )
             .to_compile_error();
         }
     };
-    let param_pat = &*param_typed.pat;
-    let param_ty = &*param_typed.ty;
+    let tc_pat = (*tc_param.pat).clone();
+    let tc_ty = (*tc_param.ty).clone();
+
+    if let syn::ReturnType::Type(_, _) = &func.sig.output {
+        return syn::Error::new_spanned(
+            &func.sig.output,
+            "#[hegel::standalone_function] functions must not have a return type; \
+             the property test is expected to panic on failure and return `()` on success.",
+        )
+        .to_compile_error();
+    }
 
     for attr in &func.attrs {
         if attr.path().is_ident("test") {
             return syn::Error::new_spanned(
                 attr,
-                "#[hegel::test] used on a function with #[test].\
-                Remove the #[test] attribute; [hegel::test] automatically adds #[test].",
+                "#[hegel::standalone_function] cannot be combined with #[test]. \
+                 Use #[hegel::test] for test functions.",
             )
             .to_compile_error();
         }
@@ -65,25 +75,27 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let body = {
         let mut body = (*func.block).clone();
-        if let Some(test_case_name) = extract_ident_from_pat(param_pat) {
+        if let Some(test_case_name) = extract_ident_from_pat(&tc_pat) {
             rewrite_draws_in_block(&mut body, &test_case_name);
         }
         body
     };
 
-    let test_name = func.sig.ident.to_string();
-    let settings_expr = test_args.to_settings_expr();
-    let explicit_blocks = build_explicit_blocks(&explicit_cases, param_pat, &body);
+    let fn_name = func.sig.ident.to_string();
+    let settings_expr = settings_args.to_settings_expr();
+    let explicit_blocks = build_explicit_blocks(&explicit_cases, &tc_pat, &body);
+
+    let passthrough: Punctuated<FnArg, Comma> = func.sig.inputs.iter().skip(1).cloned().collect();
 
     let new_body: TokenStream = quote! {
         {
             #(#explicit_blocks)*
 
-            hegel::Hegel::new(|#param_pat: #param_ty| #body)
+            hegel::Hegel::new(move |#tc_pat: #tc_ty| #body)
             .settings(#settings_expr)
-            .__database_key(format!("{}::{}", module_path!(), #test_name))
+            .__database_key(format!("{}::{}", module_path!(), #fn_name))
             .test_location(hegel::TestLocation {
-                function: #test_name.to_string(),
+                function: #fn_name.to_string(),
                 file: file!().to_string(),
                 class: module_path!().to_string(),
                 begin_line: line!(),
@@ -95,11 +107,10 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let new_block: syn::Block = syn::parse2(new_body).unwrap();
 
     let mut func = func;
-    func.sig.inputs.clear();
+    func.sig.inputs = passthrough;
     *func.block = new_block;
 
     quote! {
-        #[test]
         #func
     }
 }

@@ -221,6 +221,7 @@
 pub(crate) mod antithesis;
 pub mod backend;
 pub(crate) mod cbor_utils;
+pub(crate) mod cli;
 pub(crate) mod control;
 pub mod explicit_test_case;
 pub mod generators;
@@ -366,6 +367,59 @@ pub use hegel_macros::state_machine;
 /// ```
 pub use hegel_macros::test;
 
+/// Turn a function into a standalone Hegel binary entry point.
+///
+/// The function must take exactly one parameter of type [`TestCase`]. Behaves
+/// like [`test`] — draws are rewritten to record variable names, and any
+/// `#[hegel::explicit_test_case]` attributes are run first — but instead of
+/// producing a `#[test]` it produces a plain function body that parses CLI
+/// arguments and runs a [`Hegel`] driver.
+///
+/// Supported CLI flags (with defaults taken from the attribute args):
+/// `--test-cases`, `--seed`, `--verbosity`, `--derandomize`, `--database`,
+/// `--suppress-health-check`, `-h` / `--help`.
+///
+/// ```ignore
+/// use hegel::TestCase;
+/// use hegel::generators as gs;
+///
+/// #[hegel::main(test_cases = 500)]
+/// fn main(tc: TestCase) {
+///     let n: i32 = tc.draw(gs::integers());
+///     assert_eq!(n + 0, n);
+/// }
+/// ```
+pub use hegel_macros::main;
+
+/// Rewrite a function taking a [`TestCase`] plus additional arguments into
+/// one that takes just those arguments and internally runs Hegel.
+///
+/// Behaves like [`test`] for name rewriting, explicit test cases, and
+/// settings parsing. The generated function has the original signature
+/// with the `TestCase` parameter removed, and its body is run as an
+/// [`FnMut`] closure inside [`Hegel::run`].
+///
+/// ```ignore
+/// use hegel::TestCase;
+/// use hegel::generators as gs;
+///
+/// #[hegel::standalone_function(test_cases = 10)]
+/// fn check_addition_commutative(tc: TestCase, increment: i32) {
+///     let n: i32 = tc.draw(gs::integers());
+///     assert_eq!(n + increment, increment + n);
+/// }
+///
+/// // callers invoke it as a normal function:
+/// # fn _example() {
+/// check_addition_commutative(5);
+/// # }
+/// ```
+pub use hegel_macros::standalone_function;
+
+#[doc(hidden)]
+pub use cli::CliOutcome;
+#[doc(hidden)]
+pub use cli::apply_cli_args as __apply_cli_args;
 #[doc(hidden)]
 pub use runner::__test_kill_server;
 #[doc(hidden)]

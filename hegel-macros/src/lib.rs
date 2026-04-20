@@ -1,8 +1,11 @@
+mod common;
 mod composite;
 mod enum_gen;
 mod explicit_test_case;
+mod hegel_main;
 mod hegel_test;
 mod rewrite_draws;
+mod standalone_function;
 mod stateful;
 mod struct_gen;
 mod utils;
@@ -28,6 +31,16 @@ pub fn derive_generator(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
     hegel_test::expand_test(attr.into(), item.into()).into()
+}
+
+#[proc_macro_attribute]
+pub fn main(attr: TokenStream, item: TokenStream) -> TokenStream {
+    hegel_main::expand_main(attr.into(), item.into()).into()
+}
+
+#[proc_macro_attribute]
+pub fn standalone_function(attr: TokenStream, item: TokenStream) -> TokenStream {
+    standalone_function::expand_standalone_function(attr.into(), item.into()).into()
 }
 
 #[proc_macro_attribute]
