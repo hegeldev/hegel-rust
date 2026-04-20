@@ -12,6 +12,7 @@ mod debug_information;
 mod draw_example;
 mod feature_flags;
 mod float_nastiness;
+mod one_of;
 mod permutations;
 mod regex;
 mod replay_logic;
