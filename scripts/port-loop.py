@@ -2647,11 +2647,16 @@ def gate_sync_with_origin() -> tuple[bool, str, bool]:
     (the loop should run on a feature branch).
 
     Pushes are rate-limited to at most one every
-    `PUSH_MIN_INTERVAL_SECONDS`: if a push would happen sooner than
-    that, the fetch/rebase still runs but the push is deferred to the
-    next sync cycle that falls outside the cooldown. This keeps CI
-    from churning on every committed port when workers are landing
-    commits rapidly.
+    `PUSH_MIN_INTERVAL_SECONDS` *while CI is green*: if a push would
+    happen sooner than that, the fetch/rebase still runs but the push
+    is deferred to the next sync cycle that falls outside the
+    cooldown. This keeps CI from churning on every committed port
+    when workers are landing commits rapidly.
+
+    The throttle is bypassed when CI is currently broken (status
+    `"failure"`, or any already-completed check is failing) — push
+    fixes immediately. First-publish pushes (no existing upstream
+    branch) also bypass the throttle.
 
     On any failure, aborts any in-progress rebase and returns (False,
     combined_output, False) so the caller can dispatch a recovery agent.
@@ -2703,22 +2708,36 @@ def gate_sync_with_origin() -> tuple[bool, str, bool]:
     if not needs_push:
         return True, "".join(combined), False
 
-    # Rate-limit: skip if we pushed recently. New-upstream pushes
-    # (origin_branch is None) bypass the throttle so a fresh branch
-    # gets its initial publish without delay.
+    # Rate-limit: skip if we pushed recently AND CI isn't broken.
+    # New-upstream pushes (origin_branch is None) bypass the throttle
+    # so a fresh branch gets its initial publish without delay.
+    # Broken CI also bypasses — fixes should go out immediately.
     if origin_branch is not None:
         elapsed = _seconds_since_last_push()
         if elapsed is not None and elapsed < PUSH_MIN_INTERVAL_SECONDS:
-            remaining = PUSH_MIN_INTERVAL_SECONDS - elapsed
+            ci_status, ci_summary, _d, ci_failing = _pr_check_status(
+                fetch_logs=False
+            )
+            ci_broken = ci_status == "failure" or ci_failing > 0
+            if not ci_broken:
+                remaining = PUSH_MIN_INTERVAL_SECONDS - elapsed
+                msg = (
+                    f"[port-loop] push throttle: last push "
+                    f"{int(elapsed)}s ago, next push in {int(remaining)}s "
+                    f"(min interval {PUSH_MIN_INTERVAL_SECONDS}s, "
+                    f"CI={ci_status}/{ci_summary}). "
+                    f"Deferring push of {after_sha[:12]}.\n"
+                )
+                print(msg, end="")
+                combined.append(msg)
+                return True, "".join(combined), False
             msg = (
-                f"[port-loop] push throttle: last push "
-                f"{int(elapsed)}s ago, next push in {int(remaining)}s "
-                f"(min interval {PUSH_MIN_INTERVAL_SECONDS}s). "
-                f"Deferring push of {after_sha[:12]}.\n"
+                f"[port-loop] push throttle bypassed: CI broken "
+                f"({ci_status}, {ci_failing} failing), "
+                f"pushing {after_sha[:12]} immediately.\n"
             )
             print(msg, end="")
             combined.append(msg)
-            return True, "".join(combined), False
 
     if origin_branch is None:
         push = _run_git(["push", "--set-upstream", "origin", "HEAD"])
