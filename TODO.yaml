@@ -7,21 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: "[CI] check release — missing RELEASE.md"
-  details: |
-    Job: check release (run 24683355531)
-    Command: python .github/scripts/release.py check "$BASE_REF"
-
-    The PR is missing a RELEASE.md file, which is required for every PR.
-    The release check script raises:
-
-      ValueError:
-        Every pull request to hegel-rust requires a RELEASE.md file.
-        You can find an example and instructions in RELEASE-sample.md.
-
-    Fix: create a RELEASE.md following the format in RELEASE-sample.md.
-    Use the changelog skill for style guidance.
-
 - title: "[CI] tests/embedded/server/process_tests.rs::test_startup_error_message_not_hegel (Windows)"
   details: |
     Job: test-all-features (stable, windows) (run 24683355589)
