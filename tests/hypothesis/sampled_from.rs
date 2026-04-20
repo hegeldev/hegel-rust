@@ -40,10 +40,6 @@
 //!   generic filter rejects too much.
 //! - `test_efficient_sets_of_samples_with_chained_transformations_slow_path` —
 //!   same mechanism via `compose!` with filtered `sampled_from` in a loop.
-//! - `test_does_not_include_duplicates_even_when_duplicated_in_collection` —
-//!   `unique(true)` on the basic-generator path enforces index-level uniqueness
-//!   (server generates unique integers 0..N), not value-level uniqueness;
-//!   `sampled_from(vec![0; 100]).unique(true)` produces duplicate values.
 
 use crate::common::utils::{
     assert_all_examples, assert_simple_property, check_can_generate_examples, expect_panic,
