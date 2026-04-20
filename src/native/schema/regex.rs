@@ -251,16 +251,21 @@ fn generate_op(
             out.push(c);
         }
         OpCode::NotLiteral(cp) => {
-            let c = codepoint_to_char(*cp);
-            let mut blacklist: Vec<char> = vec![c];
-            if state.flags & SRE_FLAG_IGNORECASE != 0 {
-                let sw = char_swapcase(c);
-                if sw != c && !blacklist.contains(&sw) {
-                    blacklist.push(sw);
+            if alphabet.is_none() {
+                let chars = cached_default_not_literal(*cp, state.flags);
+                emit_from_chars(ntc, &chars, out)?;
+            } else {
+                let c = codepoint_to_char(*cp);
+                let mut blacklist: Vec<char> = vec![c];
+                if state.flags & SRE_FLAG_IGNORECASE != 0 {
+                    let sw = char_swapcase(c);
+                    if sw != c && !blacklist.contains(&sw) {
+                        blacklist.push(sw);
+                    }
                 }
+                let chars = gather_chars(alphabet, |c| !blacklist.contains(&c));
+                emit_from_chars(ntc, &chars, out)?;
             }
-            let chars = gather_chars(alphabet, |c| !blacklist.contains(&c));
-            emit_from_chars(ntc, &chars, out)?;
         }
         OpCode::Any => {
             let allow_newline = state.flags & SRE_FLAG_DOTALL != 0;
@@ -437,6 +442,36 @@ fn cached_default_in_set(items: &[SetItem], flags: u32) -> Arc<[char]> {
         .lock()
         .unwrap()
         .insert((items.to_vec(), flags), Arc::clone(&computed));
+    computed
+}
+
+/// Cached character set for `NotLiteral` nodes with the default alphabet.
+/// Same rationale as `cached_default_in_set`: `gather_chars` scans the
+/// entire BMP (~64K codepoints) and is too expensive to repeat per draw.
+fn cached_default_not_literal(cp: u32, flags: u32) -> Arc<[char]> {
+    type Cache = Mutex<HashMap<(u32, u32), Arc<[char]>>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    let cache_key = (cp, flags & SRE_FLAG_IGNORECASE);
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    {
+        let guard = cache.lock().unwrap();
+        if let Some(cached) = guard.get(&cache_key) {
+            return Arc::clone(cached);
+        }
+    }
+    let c = codepoint_to_char(cp);
+    let mut blacklist: Vec<char> = vec![c];
+    if flags & SRE_FLAG_IGNORECASE != 0 {
+        let sw = char_swapcase(c);
+        if sw != c {
+            blacklist.push(sw);
+        }
+    }
+    let computed: Arc<[char]> = gather_chars(&None, |c| !blacklist.contains(&c)).into();
+    cache
+        .lock()
+        .unwrap()
+        .insert(cache_key, Arc::clone(&computed));
     computed
 }
 
