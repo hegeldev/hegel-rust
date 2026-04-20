@@ -41,7 +41,7 @@ fn test_failing_test_output() {
         concat!(
             r"let draw_1 = -?\d+;\n",
             r"thread '.*' \(\d+\) panicked at src[/\\]main\.rs:\d+:\d+:\n",
-            r"intentional failure: -?\d+",
+            r"(?:Property test failed: )?intentional failure: -?\d+",
         ),
     );
 }
@@ -78,10 +78,10 @@ fn test_failing_test_output_with_backtrace() {
                 r"(?s)",
                 r"let draw_1 = -?\d+;\n",
                 r"thread 'main' \(\d+\) panicked at src[/\\]main\.rs:\d+:\d+:\n",
-                r"intentional failure: -?\d+\n",
+                r"(?:Property test failed: )?intentional failure: -?\d+\n",
                 r"stack backtrace:\n",
                 r".*",
-                r"core::panicking::panic_fmt\n", // panic_fmt frame
+                r"core::panicking::panic_fmt\n", // panic_fmt (frame number varies)
                 r".*",
                 r"temp_hegel_test_\d+_\d+::main::{closure_name}\n", // user's closure
                 r".*",
@@ -114,7 +114,7 @@ fn test_failing_test_output_with_full_backtrace() {
                 r"(?s)",
                 r"let draw_1 = -?\d+;\n",
                 r"thread 'main' \(\d+\) panicked at src[/\\]main\.rs:\d+:\d+:\n",
-                r"intentional failure: -?\d+\n",
+                r"(?:Property test failed: )?intentional failure: -?\d+\n",
                 r"stack backtrace:\n",
                 r".*",
                 r"temp_hegel_test_\d+_\d+::main::{closure_name}", // user's closure
