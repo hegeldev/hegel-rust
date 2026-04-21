@@ -4,6 +4,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod arbitrary_data;
 mod composite;
 mod composite_kwonlyargs;
 mod database_backend;
