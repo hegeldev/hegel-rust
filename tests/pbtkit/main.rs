@@ -10,6 +10,7 @@ mod core;
 mod findability_arithmetic;
 mod findability_collections;
 mod findability_pbtsmith_regressions;
+mod floats;
 mod generators;
 mod shrink_quality_flatmap;
 mod shrink_quality_integers;
