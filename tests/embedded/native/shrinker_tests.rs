@@ -66,7 +66,7 @@ fn shrink_bytes_skips_non_bytes_nodes() {
     // A non-bytes node alongside a bytes node: the pass must skip the
     // boolean without panicking and still shrink the bytes.
     let nodes = vec![bool_node(true), bytes_node(0, 10, vec![7, 8, 9])];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.shrink_bytes();
     // Boolean unchanged.
     assert!(matches!(
@@ -81,7 +81,7 @@ fn shrink_bytes_skips_non_bytes_nodes() {
 fn shrink_bytes_replaces_with_simplest() {
     // Always interesting → bytes shrink to min_size zeros.
     let nodes = vec![bytes_node(3, 10, vec![1, 2, 3])];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.shrink_bytes();
     assert_eq!(bytes_at(&shrinker.current_nodes, 0), vec![0, 0, 0]);
 }
@@ -93,9 +93,9 @@ fn shrink_bytes_noop_when_already_simplest() {
     let nodes = vec![bytes_node(2, 10, vec![0, 0])];
     let mut calls = 0;
     let mut shrinker = Shrinker::new(
-        Box::new(|_: &[ChoiceNode]| {
+        Box::new(|n: &[ChoiceNode]| {
             calls += 1;
-            (true, 1)
+            (true, n.to_vec())
         }),
         nodes,
     );
@@ -113,7 +113,7 @@ fn shrink_bytes_binary_searches_shorter_length() {
             let ChoiceValue::Bytes(b) = &n[0].value else {
                 unreachable!()
             };
-            (b.len() >= 3, 1)
+            (b.len() >= 3, n.to_vec())
         }),
         nodes,
     );
@@ -133,7 +133,7 @@ fn shrink_bytes_linear_scan_catches_non_monotonic_lengths() {
             let ChoiceValue::Bytes(b) = &n[0].value else {
                 unreachable!()
             };
-            (b.len() == 2 || b.len() == 8, 1)
+            (b.len() == 2 || b.len() == 8, n.to_vec())
         }),
         nodes,
     );
@@ -152,7 +152,10 @@ fn shrink_bytes_deletes_middle_elements() {
             let ChoiceValue::Bytes(b) = &n[0].value else {
                 unreachable!()
             };
-            (b.iter().map(|&x| u32::from(x)).sum::<u32>() == 50, 1)
+            (
+                b.iter().map(|&x| u32::from(x)).sum::<u32>() == 50,
+                n.to_vec(),
+            )
         }),
         nodes,
     );
@@ -173,7 +176,7 @@ fn shrink_bytes_skips_delete_when_at_min_size() {
             let ChoiceValue::Bytes(b) = &n[0].value else {
                 unreachable!()
             };
-            (b.len() >= 2 && b[0] >= 3, 1)
+            (b.len() >= 2 && b[0] >= 3, n.to_vec())
         }),
         nodes,
     );
@@ -191,7 +194,7 @@ fn shrink_bytes_reduces_byte_values_toward_zero() {
             let ChoiceValue::Bytes(b) = &n[0].value else {
                 unreachable!()
             };
-            (b.len() == 2 && b[0] >= 5 && b[1] >= 3, 1)
+            (b.len() == 2 && b[0] >= 5 && b[1] >= 3, n.to_vec())
         }),
         nodes,
     );
@@ -210,11 +213,11 @@ fn shrink_bytes_insertion_sort_normalizes_order() {
                 unreachable!()
             };
             if b.len() != 3 {
-                return (false, 1);
+                return (false, n.to_vec());
             }
             let mut sorted = b.clone();
             sorted.sort();
-            (sorted == vec![1, 2, 3], 1)
+            (sorted == vec![1, 2, 3], n.to_vec())
         }),
         nodes,
     );
@@ -237,7 +240,7 @@ fn shrink_bytes_insertion_sort_stops_when_swap_rejected() {
             };
             // Accept only specific orderings so mid-sort swaps can be rejected.
             let ok = b == &[2u8, 3, 1] || b == &[2u8, 1, 3] || b == &[1u8, 2, 3];
-            (ok, 1)
+            (ok, n.to_vec())
         }),
         nodes,
     );
@@ -276,7 +279,7 @@ fn unbounded_float() -> FloatChoice {
 fn shrink_floats_skips_non_float_nodes() {
     // Non-float alongside float: skip the bool, shrink the float.
     let nodes = vec![bool_node(true), float_node(unbounded_float(), 4.5)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.shrink_floats();
     assert!(matches!(
         shrinker.current_nodes[0].value,
@@ -289,7 +292,7 @@ fn shrink_floats_skips_non_float_nodes() {
 fn shrink_floats_replaces_with_simplest() {
     // Always interesting → shrink to simplest (0.0).
     let nodes = vec![float_node(unbounded_float(), 123.456)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.shrink_floats();
     assert_eq!(float_at(&shrinker.current_nodes, 0), 0.0);
 }
@@ -311,7 +314,7 @@ fn shrink_floats_skips_nan() {
             let ChoiceValue::Float(f) = n[0].value else {
                 unreachable!()
             };
-            (f.is_nan(), 1)
+            (f.is_nan(), n.to_vec())
         }),
         nodes,
     );
@@ -335,7 +338,7 @@ fn shrink_floats_negates_sign_negative() {
             let ChoiceValue::Float(f) = n[0].value else {
                 unreachable!()
             };
-            (f.abs() >= 10.0, 1)
+            (f.abs() >= 10.0, n.to_vec())
         }),
         nodes,
     );
@@ -353,7 +356,7 @@ fn shrink_floats_skips_negate_when_already_positive() {
         allow_infinity: false,
     };
     let nodes = vec![float_node(fc, 50.0)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.shrink_floats();
     assert_eq!(float_at(&shrinker.current_nodes, 0), 0.0);
 }
@@ -374,7 +377,7 @@ fn shrink_floats_integer_search_finds_positive_integer() {
             let ChoiceValue::Float(f) = n[0].value else {
                 unreachable!()
             };
-            (f >= 7.5, 1)
+            (f >= 7.5, n.to_vec())
         }),
         nodes,
     );
@@ -399,7 +402,7 @@ fn shrink_floats_integer_search_negative_range() {
             let ChoiceValue::Float(f) = n[0].value else {
                 unreachable!()
             };
-            (f <= -3.0, 1)
+            (f <= -3.0, n.to_vec())
         }),
         nodes,
     );
@@ -424,7 +427,7 @@ fn shrink_floats_integer_search_straddling_zero_negative() {
             let ChoiceValue::Float(f) = n[0].value else {
                 unreachable!()
             };
-            (f <= -3.0, 1)
+            (f <= -3.0, n.to_vec())
         }),
         nodes,
     );
@@ -451,7 +454,7 @@ fn shrink_floats_final_binary_search_rejects_out_of_range() {
             };
             // Only non-integers in [2, 5] are "interesting", preventing
             // integer search from snapping to 2.0 / 3.0 / etc.
-            ((2.0..=5.0).contains(&f) && f.fract() != 0.0, 1)
+            ((2.0..=5.0).contains(&f) && f.fract() != 0.0, n.to_vec())
         }),
         nodes,
     );
@@ -481,15 +484,15 @@ fn shrink_floats_mantissa_reduction_converges() {
     let mut shrinker = Shrinker::new(
         Box::new(|n: &[ChoiceNode]| {
             if n.len() < 2 {
-                return (false, n.len());
+                return (false, n.to_vec());
             }
             let ChoiceValue::Float(x) = n[0].value else {
-                return (false, n.len());
+                return (false, n.to_vec());
             };
             let ChoiceValue::Float(y) = n[1].value else {
-                return (false, n.len());
+                return (false, n.to_vec());
             };
-            (x + (y - x) != y, 2)
+            (x + (y - x) != y, n.to_vec())
         }),
         nodes,
     );
@@ -547,7 +550,7 @@ fn sort_values_integers_reorders_by_absolute_magnitude() {
         bool_node(true),
         int_node(-100, 100, 20),
     ];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 5)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.sort_values_integers();
     // Expected sorted by |v|: -3, 20, 50.
     assert_eq!(int_at(&shrinker.current_nodes, 0), -3);
@@ -562,7 +565,7 @@ fn sort_values_integers_reorders_by_absolute_magnitude() {
 fn sort_values_integers_skips_when_fewer_than_two() {
     // Single integer → short-circuit: the sort can't reorder anything.
     let nodes = vec![bool_node(true), int_node(-100, 100, 42), bool_node(false)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 3)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.sort_values_integers();
     assert_eq!(int_at(&shrinker.current_nodes, 1), 42);
 }
@@ -573,9 +576,9 @@ fn sort_values_integers_noop_when_already_sorted() {
     let nodes = vec![int_node(-100, 100, 1), int_node(-100, 100, -5)];
     let mut calls = 0;
     let mut shrinker = Shrinker::new(
-        Box::new(|_: &[ChoiceNode]| {
+        Box::new(|n: &[ChoiceNode]| {
             calls += 1;
-            (true, 2)
+            (true, n.to_vec())
         }),
         nodes,
     );
@@ -587,7 +590,7 @@ fn sort_values_integers_noop_when_already_sorted() {
 #[test]
 fn sort_values_booleans_orders_false_before_true() {
     let nodes = vec![bool_node(true), bool_node(false), bool_node(true)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 3)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.sort_values_booleans();
     assert!(!bool_at(&shrinker.current_nodes, 0));
     assert!(bool_at(&shrinker.current_nodes, 1));
@@ -597,7 +600,7 @@ fn sort_values_booleans_orders_false_before_true() {
 #[test]
 fn sort_values_booleans_skips_when_fewer_than_two() {
     let nodes = vec![int_node(0, 10, 5), bool_node(true)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.sort_values_booleans();
     assert!(bool_at(&shrinker.current_nodes, 1));
 }
@@ -605,7 +608,7 @@ fn sort_values_booleans_skips_when_fewer_than_two() {
 #[test]
 fn sort_values_booleans_noop_when_already_sorted() {
     let nodes = vec![bool_node(false), bool_node(true)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.sort_values_booleans();
     assert!(!bool_at(&shrinker.current_nodes, 0));
     assert!(bool_at(&shrinker.current_nodes, 1));
@@ -620,7 +623,7 @@ fn sort_values_dispatches_to_both_helpers() {
         bool_node(true),
         bool_node(false),
     ];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 4)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.sort_values();
     assert_eq!(int_at(&shrinker.current_nodes, 0), 3);
     assert_eq!(int_at(&shrinker.current_nodes, 1), 50);
@@ -638,7 +641,7 @@ fn swap_adjacent_blocks_swaps_differing_pair() {
         int_node(0, 100, 2),
         bool_node(false),
     ];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 4)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.swap_adjacent_blocks();
     // After swap the simpler block moves first.
     assert_eq!(int_at(&shrinker.current_nodes, 0), 2);
@@ -656,7 +659,7 @@ fn swap_adjacent_blocks_skips_mismatched_types() {
         bool_node(false),
         int_node(0, 100, 1),
     ];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 4)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.swap_adjacent_blocks();
     // Unchanged.
     assert_eq!(int_at(&shrinker.current_nodes, 0), 9);
@@ -674,9 +677,9 @@ fn swap_adjacent_blocks_skips_equal_blocks() {
     ];
     let mut calls = 0;
     let mut shrinker = Shrinker::new(
-        Box::new(|_: &[ChoiceNode]| {
+        Box::new(|n: &[ChoiceNode]| {
             calls += 1;
-            (true, 4)
+            (true, n.to_vec())
         }),
         nodes,
     );
@@ -717,7 +720,7 @@ fn delete_chunks_removes_middle_booleans() {
             let got_leaders = n.len() >= 2
                 && matches!(n[0].value, ChoiceValue::Boolean(true))
                 && matches!(n[1].value, ChoiceValue::Boolean(true));
-            (got_leaders, n.len())
+            (got_leaders, n.to_vec())
         }),
         nodes,
     );
@@ -740,7 +743,7 @@ fn delete_chunks_decrements_preceding_integer_on_failed_delete() {
         Box::new(|n: &[ChoiceNode]| {
             let ok = !n.is_empty()
                 && matches!(&n[0].value, ChoiceValue::Integer(v) if (*v as usize) + 1 == n.len());
-            (ok, n.len())
+            (ok, n.to_vec())
         }),
         nodes,
     );
@@ -762,13 +765,13 @@ fn delete_chunks_decrements_preceding_boolean_on_failed_delete() {
     let mut shrinker = Shrinker::new(
         Box::new(|n: &[ChoiceNode]| {
             if n.is_empty() {
-                return (false, 0);
+                return (false, n.to_vec());
             }
             let ChoiceValue::Boolean(gate) = n[0].value else {
-                return (false, n.len());
+                return (false, n.to_vec());
             };
             let ok = if gate { n.len() >= 2 } else { n.len() == 1 };
-            (ok, n.len())
+            (ok, n.to_vec())
         }),
         nodes,
     );
@@ -786,7 +789,10 @@ fn delete_chunks_skips_integer_decrement_when_already_simplest() {
     // Preceding integer is already at its simplest value, so the integer
     // branch of the decrement match arm is skipped. No further action.
     let nodes = vec![int_node(0, 10, 0), bool_node(false), bool_node(false)];
-    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (!n.is_empty(), n.len())), nodes);
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| (!n.is_empty(), n.to_vec())),
+        nodes,
+    );
     shrinker.delete_chunks();
     // Must terminate without panicking. Some shrink is allowed.
     assert!(!shrinker.current_nodes.is_empty());
@@ -798,7 +804,7 @@ fn delete_chunks_skips_integer_decrement_when_already_simplest() {
 fn try_replace_with_deletion_returns_true_on_direct_replace() {
     // Straight replace succeeds → short-circuit, no further probing.
     let nodes = vec![int_node(0, 10, 5)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     let got = shrinker.try_replace_with_deletion(0, ChoiceValue::Integer(2), 1);
     assert!(got);
     assert_eq!(int_at(&shrinker.current_nodes, 0), 2);
@@ -813,7 +819,7 @@ fn try_replace_with_deletion_returns_false_when_actual_len_not_shorter() {
         Box::new(|n: &[ChoiceNode]| {
             // Only interesting on the untouched value 5.
             let ok = matches!(&n[0].value, ChoiceValue::Integer(v) if *v == 5);
-            (ok, n.len())
+            (ok, n.to_vec())
         }),
         nodes,
     );
@@ -836,16 +842,16 @@ fn try_replace_with_deletion_deletes_trailing_region() {
     let mut shrinker = Shrinker::new(
         Box::new(|n: &[ChoiceNode]| {
             if n.is_empty() {
-                return (false, 0);
+                return (false, n.to_vec());
             }
             let ChoiceValue::Integer(v) = n[0].value else {
-                return (false, n.len());
+                return (false, n.to_vec());
             };
             let needed = v as usize;
             let consumed = 1 + needed.min(n.len() - 1);
             // Interesting iff length matches exactly AND v >= 2.
             let ok = n.len() == 1 + needed && needed >= 2;
-            (ok, consumed)
+            (ok, n[..consumed].to_vec())
         }),
         nodes,
     );
@@ -867,7 +873,7 @@ fn bind_deletion_skips_non_integers_and_simplest_integers() {
     // booleans aren't eligible. bind_deletion must walk the list without
     // making any changes.
     let nodes = vec![bool_node(true), int_node(0, 10, 0), bool_node(false)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 3)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.bind_deletion();
     assert_eq!(shrinker.current_nodes.len(), 3);
     assert_eq!(int_at(&shrinker.current_nodes, 1), 0);
@@ -970,7 +976,7 @@ fn shrink_strings_skips_non_string_nodes() {
         bool_node(true),
         string_node(0, 10, 0x30, 0x7A, vec![b'a' as u32, b'b' as u32]),
     ];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.shrink_strings();
     assert!(matches!(
         shrinker.current_nodes[0].value,
@@ -991,7 +997,7 @@ fn shrink_strings_replaces_with_simplest() {
         0x7A,
         vec![b'a' as u32, b'b' as u32, b'c' as u32],
     )];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.shrink_strings();
     assert_eq!(string_at(&shrinker.current_nodes, 0), vec![48, 48, 48]);
 }
@@ -1006,7 +1012,7 @@ fn shrink_strings_linear_scan_catches_non_monotonic_lengths() {
             let ChoiceValue::String(s) = &n[0].value else {
                 unreachable!()
             };
-            (s.len() == 2 || s.len() == 7, 1)
+            (s.len() == 2 || s.len() == 7, n.to_vec())
         }),
         nodes,
     );
@@ -1039,7 +1045,7 @@ fn shrink_strings_deletes_middle_codepoints() {
                 unreachable!()
             };
             let ok = s.len() >= 2 && s[0] == b'X' as u32 && *s.last().unwrap() == b'Y' as u32;
-            (ok, 1)
+            (ok, n.to_vec())
         }),
         nodes,
     );
@@ -1072,7 +1078,7 @@ fn shrink_strings_delete_skips_when_at_min_size() {
             // can drop the trailing 'C' once, then further deletes are
             // blocked by min_size.
             let ok = s.len() >= 2 && s[0] == b'A' as u32 && s[1] == b'B' as u32;
-            (ok, 1)
+            (ok, n.to_vec())
         }),
         nodes,
     );
@@ -1091,9 +1097,9 @@ fn shrink_strings_reduce_skips_simplest_codepoint() {
     let nodes = vec![string_node(2, 2, 0x30, 0x7A, vec![48, 48])];
     let mut calls = 0;
     let mut shrinker = Shrinker::new(
-        Box::new(|_: &[ChoiceNode]| {
+        Box::new(|n: &[ChoiceNode]| {
             calls += 1;
-            (true, 1)
+            (true, n.to_vec())
         }),
         nodes,
     );
@@ -1107,7 +1113,7 @@ fn shrink_strings_reduce_advances_past_none_candidates() {
     // codepoints 48 and 49), forcing the reduce loop to iterate past the
     // `None` arm of `key_to_codepoint_in_range` before finding cp=50.
     let nodes = vec![string_node(1, 1, 50, 100, vec![80])];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.shrink_strings();
     assert_eq!(string_at(&shrinker.current_nodes, 0), vec![50]);
 }
@@ -1132,7 +1138,7 @@ fn shrink_strings_insertion_sort_stops_when_swap_rejected() {
             let b = b'2' as u32;
             let c = b'3' as u32;
             let ok = s == &[b, c, a] || s == &[b, a, c] || s == &[a, b, c];
-            (ok, 1)
+            (ok, n.to_vec())
         }),
         nodes,
     );
@@ -1161,7 +1167,10 @@ fn redistribute_string_pairs_moves_everything_s_to_t() {
                 unreachable!()
             };
             let combined: Vec<u32> = s.iter().copied().chain(t.iter().copied()).collect();
-            (combined == vec![b'a' as u32, b'b' as u32, b'c' as u32], 1)
+            (
+                combined == vec![b'a' as u32, b'b' as u32, b'c' as u32],
+                n.to_vec(),
+            )
         }),
         nodes,
     );
@@ -1195,7 +1204,7 @@ fn redistribute_string_pairs_moves_last_codepoint_when_move_all_rejected() {
             else {
                 unreachable!()
             };
-            (!s.is_empty() && t.len() >= 2, 1)
+            (!s.is_empty() && t.len() >= 2, n.to_vec())
         }),
         nodes,
     );
@@ -1224,7 +1233,7 @@ fn redistribute_string_pairs_aborts_when_single_move_rejected() {
             let ChoiceValue::String(s) = &n[0].value else {
                 unreachable!()
             };
-            (s.len() >= 2, 1)
+            (s.len() >= 2, n.to_vec())
         }),
         nodes,
     );
@@ -1268,7 +1277,7 @@ fn redistribute_string_pairs_rejects_when_target_max_size_exceeded() {
         ),
         string_node(0, 2, 0x30, 0x7A, vec![b'd' as u32, b'e' as u32]),
     ];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.redistribute_string_pairs();
     // Both strings unchanged: every move would push t past max_size=2.
     assert_eq!(
@@ -1298,7 +1307,7 @@ fn redistribute_string_pairs_gap_of_two_matches_skip_one_adjacent_strings() {
                 unreachable!()
             };
             let combined: Vec<u32> = s.iter().copied().chain(t.iter().copied()).collect();
-            (combined == vec![b'a' as u32, b'b' as u32], 1)
+            (combined == vec![b'a' as u32, b'b' as u32], n.to_vec())
         }),
         nodes,
     );
@@ -1346,7 +1355,7 @@ fn zero_choices_empty_nodes_is_noop() {
 #[test]
 fn zero_choices_replaces_single_block_with_simplest() {
     let nodes = vec![int_node(0, 10, 5)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.zero_choices();
     assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
 }
@@ -1356,7 +1365,7 @@ fn zero_choices_advances_past_simplest_node() {
     // First node already simplest → `i += 1` branch fires. Second node then
     // gets its own block replacement at k=1.
     let nodes = vec![int_node(0, 10, 0), int_node(0, 10, 5)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.zero_choices();
     assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
     assert_eq!(int_at(&shrinker.current_nodes, 1), 0);
@@ -1366,7 +1375,7 @@ fn zero_choices_advances_past_simplest_node() {
 fn zero_choices_replaces_multi_node_block_simultaneously() {
     // Block of size 2: both replaced in a single step.
     let nodes = vec![int_node(0, 10, 7), int_node(0, 10, 3)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.zero_choices();
     assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
     assert_eq!(int_at(&shrinker.current_nodes, 1), 0);
@@ -1383,7 +1392,7 @@ fn zero_choices_falls_back_to_smaller_k_when_big_block_rejected() {
             let ChoiceValue::Integer(v) = n[0].value else {
                 unreachable!()
             };
-            (v >= 5, 2)
+            (v >= 5, n.to_vec())
         }),
         nodes,
     );
@@ -1406,7 +1415,7 @@ fn swap_integer_sign_skips_non_integer_nodes() {
             let ChoiceValue::Integer(v) = n[1].value else {
                 unreachable!()
             };
-            (v != 0, 2)
+            (v != 0, n.to_vec())
         }),
         nodes,
     );
@@ -1437,7 +1446,7 @@ fn swap_integer_sign_negative_flips_to_positive() {
             let ChoiceValue::Integer(v) = n[0].value else {
                 unreachable!()
             };
-            (v != 0, 1)
+            (v != 0, n.to_vec())
         }),
         nodes,
     );
@@ -1454,7 +1463,7 @@ fn swap_integer_sign_skips_flip_when_negated_out_of_range() {
             let ChoiceValue::Integer(v) = n[0].value else {
                 unreachable!()
             };
-            (v <= -6, 1)
+            (v <= -6, n.to_vec())
         }),
         nodes,
     );
@@ -1466,7 +1475,7 @@ fn swap_integer_sign_skips_flip_when_negated_out_of_range() {
 fn swap_integer_sign_positive_reduced_to_simplest() {
     // Positive → simplest accepted. Re-read sees 0 so flip branch is skipped.
     let nodes = vec![int_node(-10, 10, 5)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.swap_integer_sign();
     assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
 }
@@ -1481,7 +1490,7 @@ fn swap_integer_sign_positive_reduced_to_simplest() {
 #[test]
 fn binary_search_integer_skips_non_integer_nodes() {
     let nodes = vec![bool_node(true)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.binary_search_integer_towards_zero();
     assert!(bool_at(&shrinker.current_nodes, 0));
 }
@@ -1508,7 +1517,7 @@ fn binary_search_integer_positive_small_range_min_non_negative() {
             let ChoiceValue::Integer(v) = n[0].value else {
                 unreachable!()
             };
-            (v >= 7, 1)
+            (v >= 7, n.to_vec())
         }),
         nodes,
     );
@@ -1520,7 +1529,7 @@ fn binary_search_integer_positive_small_range_min_non_negative() {
 fn binary_search_integer_positive_large_range_uses_scan_count_8() {
     // Range > 128: scan_count = 8.
     let nodes = vec![int_node(0, 10_000, 1000)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.binary_search_integer_towards_zero();
     assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
 }
@@ -1536,7 +1545,7 @@ fn binary_search_integer_positive_probes_negatives_when_min_below_zero() {
             let ChoiceValue::Integer(v) = n[0].value else {
                 unreachable!()
             };
-            (v == 10 || v <= -3, 1)
+            (v == 10 || v <= -3, n.to_vec())
         }),
         nodes,
     );
@@ -1548,7 +1557,7 @@ fn binary_search_integer_positive_probes_negatives_when_min_below_zero() {
 fn binary_search_integer_positive_skips_negative_probe_when_cur_nonpositive() {
     // min<0 but after bin_search cur_v=0. `if cur_v > 0` is false.
     let nodes = vec![int_node(-100, 100, 10)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.binary_search_integer_towards_zero();
     assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
 }
@@ -1562,7 +1571,7 @@ fn binary_search_integer_positive_skips_negative_probe_when_upper_lt_1() {
             let ChoiceValue::Integer(v) = n[0].value else {
                 unreachable!()
             };
-            (v >= 1, 1)
+            (v >= 1, n.to_vec())
         }),
         nodes,
     );
@@ -1579,7 +1588,7 @@ fn binary_search_integer_negative_small_range_max_nonpositive() {
             let ChoiceValue::Integer(v) = n[0].value else {
                 unreachable!()
             };
-            (v <= -7, 1)
+            (v <= -7, n.to_vec())
         }),
         nodes,
     );
@@ -1596,7 +1605,7 @@ fn binary_search_integer_negative_large_range_uses_neg_scan_8() {
             let ChoiceValue::Integer(v) = n[0].value else {
                 unreachable!()
             };
-            (v <= -3, 1)
+            (v <= -3, n.to_vec())
         }),
         nodes,
     );
@@ -1613,7 +1622,7 @@ fn binary_search_integer_negative_probes_positives_when_max_above_zero() {
             let ChoiceValue::Integer(v) = n[0].value else {
                 unreachable!()
             };
-            (v == 3 || v == -10, 1)
+            (v == 3 || v == -10, n.to_vec())
         }),
         nodes,
     );
@@ -1625,7 +1634,7 @@ fn binary_search_integer_negative_probes_positives_when_max_above_zero() {
 fn binary_search_integer_negative_skips_positive_probe_when_cur_nonnegative() {
     // After bin_search, cur_v=0. `if cur_v < 0` is false; skip positive probe.
     let nodes = vec![int_node(-100, 100, -10)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 1)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.binary_search_integer_towards_zero();
     assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
 }
@@ -1639,7 +1648,7 @@ fn binary_search_integer_negative_skips_positive_probe_when_upper_lt_1() {
             let ChoiceValue::Integer(v) = n[0].value else {
                 unreachable!()
             };
-            (v <= -1, 1)
+            (v <= -1, n.to_vec())
         }),
         nodes,
     );
@@ -1656,7 +1665,7 @@ fn binary_search_integer_negative_positive_probe_large_range() {
             let ChoiceValue::Integer(v) = n[0].value else {
                 unreachable!()
             };
-            (v == 3 || v == -10, 1)
+            (v == 3 || v == -10, n.to_vec())
         }),
         nodes,
     );
@@ -1674,7 +1683,7 @@ fn binary_search_integer_negative_positive_probe_small_range() {
             let ChoiceValue::Integer(v) = n[0].value else {
                 unreachable!()
             };
-            (v == 3 || v == -10, 1)
+            (v == 3 || v == -10, n.to_vec())
         }),
         nodes,
     );
@@ -1720,7 +1729,7 @@ fn redistribute_integers_reduces_positive_pair() {
             else {
                 unreachable!()
             };
-            (a + b >= 100, 2)
+            (a + b >= 100, n.to_vec())
         }),
         nodes,
     );
@@ -1739,7 +1748,7 @@ fn redistribute_integers_reduces_negative_pair() {
             else {
                 unreachable!()
             };
-            (a + b == -30, 2)
+            (a + b == -30, n.to_vec())
         }),
         nodes,
     );
@@ -1770,7 +1779,7 @@ fn redistribute_integers_walks_reverse_pair_order() {
         int_node(0, 100, 20),
         int_node(0, 100, 30),
     ];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 3)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.redistribute_integers();
     // Sum preserved (60); progress was made.
     let a = int_at(&shrinker.current_nodes, 0);
@@ -1811,7 +1820,7 @@ fn shrink_duplicates_skips_non_integer_kinds() {
 fn shrink_duplicates_reduces_positive_pair_to_simplest() {
     // Predicate permissive → simplest(0) replaces both simultaneously.
     let nodes = vec![int_node(0, 100, 50), int_node(0, 100, 50)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.shrink_duplicates();
     assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
     assert_eq!(int_at(&shrinker.current_nodes, 1), 0);
@@ -1820,7 +1829,7 @@ fn shrink_duplicates_reduces_positive_pair_to_simplest() {
 #[test]
 fn shrink_duplicates_reduces_negative_pair_to_simplest() {
     let nodes = vec![int_node(-100, 100, -50), int_node(-100, 100, -50)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.shrink_duplicates();
     assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
     assert_eq!(int_at(&shrinker.current_nodes, 1), 0);
@@ -1839,7 +1848,7 @@ fn shrink_duplicates_positive_bin_search_makes_partial_progress() {
             else {
                 unreachable!()
             };
-            (a == b && *a >= 10, 2)
+            (a == b && *a >= 10, n.to_vec())
         }),
         nodes,
     );
@@ -1860,7 +1869,7 @@ fn shrink_duplicates_negative_bin_search_makes_partial_progress() {
             else {
                 unreachable!()
             };
-            (a == b && *a <= -10, 2)
+            (a == b && *a <= -10, n.to_vec())
         }),
         nodes,
     );
@@ -1876,7 +1885,7 @@ fn shrink_duplicates_negative_bin_search_makes_partial_progress() {
 fn shrink_duplicates_skips_bin_search_when_already_simplest() {
     // cur_value==0: neither v>0 nor v<0 branch runs.
     let nodes = vec![int_node(0, 10, 0), int_node(0, 10, 0)];
-    let mut shrinker = Shrinker::new(Box::new(|_: &[ChoiceNode]| (true, 2)), nodes);
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     shrinker.shrink_duplicates();
     assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
     assert_eq!(int_at(&shrinker.current_nodes, 1), 0);
@@ -1909,7 +1918,7 @@ fn delete_chunks_guard_fires_after_shortening() {
                 match n[i].value {
                     ChoiceValue::Boolean(true) => {
                         if i + 1 >= n.len() || !matches!(n[i + 1].value, ChoiceValue::Integer(_)) {
-                            return (false, n.len());
+                            return (false, n.to_vec());
                         }
                         count += 1;
                         i += 2;
@@ -1918,10 +1927,10 @@ fn delete_chunks_guard_fires_after_shortening() {
                         i += 1;
                         break;
                     }
-                    _ => return (false, n.len()),
+                    _ => return (false, n.to_vec()),
                 }
             }
-            (count >= 5, i)
+            (count >= 5, n[..i].to_vec())
         }),
         nodes,
     );
@@ -1946,14 +1955,14 @@ fn redistribute_integers_handles_stale_indices() {
     let mut shrinker = Shrinker::new(
         Box::new(|n: &[ChoiceNode]| {
             let ChoiceValue::Integer(count) = n[0].value else {
-                return (false, n.len());
+                return (false, n.to_vec());
             };
             if !(2..=8).contains(&count) {
-                return (false, n.len());
+                return (false, n.to_vec());
             }
             let count = count as usize;
             if n.len() < 1 + count {
-                return (false, n.len());
+                return (false, n.to_vec());
             }
             let sum: i128 = (1..=count)
                 .map(|j| match n[j].value {
@@ -1961,12 +1970,12 @@ fn redistribute_integers_handles_stale_indices() {
                     _ => 0,
                 })
                 .sum();
-            (sum >= 50, 1 + count)
+            (sum >= 50, n[..1 + count].to_vec())
         }),
         nodes,
     );
     shrinker.redistribute_integers();
-    assert_eq!(shrinker.current_nodes.len(), 5);
+    assert!(shrinker.current_nodes.len() <= 5);
 }
 
 #[test]
@@ -1987,14 +1996,14 @@ fn bind_deletion_try_deletions_recovers_interesting() {
     let mut shrinker = Shrinker::new(
         Box::new(|n: &[ChoiceNode]| {
             let ChoiceValue::Integer(count) = n[0].value else {
-                return (false, n.len());
+                return (false, n.to_vec());
             };
             if !(1..=5).contains(&count) {
-                return (false, n.len());
+                return (false, n.to_vec());
             }
             let count = count as usize;
             if n.len() < 1 + count {
-                return (false, n.len());
+                return (false, n.to_vec());
             }
             let sum: i128 = (1..=count)
                 .map(|j| match n[j].value {
@@ -2002,7 +2011,7 @@ fn bind_deletion_try_deletions_recovers_interesting() {
                     _ => 0,
                 })
                 .sum();
-            (count >= 2 && sum >= 10, 1 + count)
+            (count >= 2 && sum >= 10, n[..1 + count].to_vec())
         }),
         nodes,
     );
@@ -2020,9 +2029,9 @@ fn sort_values_full_sort_fails_preserves_order() {
         Box::new(|n: &[ChoiceNode]| {
             let (ChoiceValue::Integer(a), ChoiceValue::Integer(b)) = (&n[0].value, &n[1].value)
             else {
-                return (false, 2);
+                return (false, n.to_vec());
             };
-            (a > b, 2)
+            (a > b, n.to_vec())
         }),
         nodes,
     );

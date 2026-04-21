@@ -135,8 +135,8 @@ fn cache_hit_returns_stored_result() {
         value: ChoiceValue::Boolean(true),
         was_forced: false,
     }];
-    ctf.cache_store(&nodes, (true, 1));
-    assert_eq!(ctf.cache_lookup(&nodes), Some((true, 1)));
+    ctf.cache_store(&nodes, (true, vec![]));
+    assert_eq!(ctf.cache_lookup(&nodes), Some((true, vec![])));
 }
 
 #[test]
@@ -152,10 +152,10 @@ fn cache_distinguishes_different_sequences() {
         value: ChoiceValue::Boolean(false),
         was_forced: false,
     }];
-    ctf.cache_store(&nodes_a, (true, 1));
-    ctf.cache_store(&nodes_b, (false, 1));
-    assert_eq!(ctf.cache_lookup(&nodes_a), Some((true, 1)));
-    assert_eq!(ctf.cache_lookup(&nodes_b), Some((false, 1)));
+    ctf.cache_store(&nodes_a, (true, vec![]));
+    ctf.cache_store(&nodes_b, (false, vec![]));
+    assert_eq!(ctf.cache_lookup(&nodes_a), Some((true, vec![])));
+    assert_eq!(ctf.cache_lookup(&nodes_b), Some((false, vec![])));
 }
 
 // ── cache key float-bit sensitivity ─────────────────────────────────────────
@@ -181,12 +181,12 @@ fn cache_key_distinguishes_negative_zero() {
         value: ChoiceValue::Float(-0.0),
         was_forced: false,
     }];
-    ctf.cache_store(&pos_zero, (true, 1));
-    ctf.cache_store(&neg_zero, (false, 1));
+    ctf.cache_store(&pos_zero, (true, vec![]));
+    ctf.cache_store(&neg_zero, (false, vec![]));
     // If the cache key conflated 0.0 and -0.0, the second store would
     // overwrite the first.
-    assert_eq!(ctf.cache_lookup(&pos_zero), Some((true, 1)));
-    assert_eq!(ctf.cache_lookup(&neg_zero), Some((false, 1)));
+    assert_eq!(ctf.cache_lookup(&pos_zero), Some((true, vec![])));
+    assert_eq!(ctf.cache_lookup(&neg_zero), Some((false, vec![])));
 }
 
 #[test]
@@ -208,10 +208,10 @@ fn cache_key_distinguishes_nan_variants() {
         value: ChoiceValue::Float(nan2),
         was_forced: false,
     }];
-    ctf.cache_store(&nodes_a, (true, 1));
-    ctf.cache_store(&nodes_b, (false, 1));
-    assert_eq!(ctf.cache_lookup(&nodes_a), Some((true, 1)));
-    assert_eq!(ctf.cache_lookup(&nodes_b), Some((false, 1)));
+    ctf.cache_store(&nodes_a, (true, vec![]));
+    ctf.cache_store(&nodes_b, (false, vec![]));
+    assert_eq!(ctf.cache_lookup(&nodes_a), Some((true, vec![])));
+    assert_eq!(ctf.cache_lookup(&nodes_b), Some((false, vec![])));
 }
 
 #[test]
@@ -229,7 +229,7 @@ fn cache_distinguishes_negative_zero_in_lookup() {
         value: ChoiceValue::Float(-0.0),
         was_forced: false,
     }];
-    ctf.cache_store(&pos_zero, (true, 1));
+    ctf.cache_store(&pos_zero, (true, vec![]));
     // Lookup with -0.0 should miss because we only stored +0.0.
     assert!(ctf.cache_lookup(&neg_zero).is_none());
 }

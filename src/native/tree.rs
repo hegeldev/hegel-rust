@@ -78,7 +78,7 @@ pub struct CachedTestFunction<F: FnMut(TestCase)> {
     /// Root of the data tree trie.
     tree_root: TreeNode,
     /// Cache of test results keyed on complete choice sequences.
-    cache: HashMap<Vec<ChoiceValueKey>, (bool, usize)>,
+    cache: HashMap<Vec<ChoiceValueKey>, (bool, Vec<ChoiceNode>)>,
 }
 
 impl<F: FnMut(TestCase)> CachedTestFunction<F> {
@@ -105,8 +105,11 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
     ///
     /// Checks the cache first; on a miss, runs the test, records in the
     /// data tree, and stores the result in the cache.
-    /// Returns `(is_interesting, nodes_consumed)`.
-    pub fn run_shrink(&mut self, candidate_nodes: &[ChoiceNode]) -> (bool, usize) {
+    /// Returns `(is_interesting, actual_nodes)` where `actual_nodes` is
+    /// the sequence of nodes the test actually produced (which may differ
+    /// from `candidate_nodes` if the test exited early or if values were
+    /// punned for a changed kind).
+    pub fn run_shrink(&mut self, candidate_nodes: &[ChoiceNode]) -> (bool, Vec<ChoiceNode>) {
         if let Some(cached) = self.cache_lookup(candidate_nodes) {
             return cached;
         }
@@ -116,8 +119,8 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
         let (status, new_nodes, _, _) = self.execute(ntc, false);
         self.record(&new_nodes);
 
-        let result = (status == Status::Interesting, new_nodes.len());
-        self.cache_store(candidate_nodes, result);
+        let result = (status == Status::Interesting, new_nodes);
+        self.cache_store(candidate_nodes, result.clone());
         result
     }
 
@@ -192,15 +195,15 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
         }
     }
 
-    fn cache_lookup(&self, nodes: &[ChoiceNode]) -> Option<(bool, usize)> {
+    fn cache_lookup(&self, nodes: &[ChoiceNode]) -> Option<(bool, Vec<ChoiceNode>)> {
         let key: Vec<ChoiceValueKey> = nodes
             .iter()
             .map(|n| ChoiceValueKey::from(&n.value))
             .collect();
-        self.cache.get(&key).copied()
+        self.cache.get(&key).cloned()
     }
 
-    fn cache_store(&mut self, nodes: &[ChoiceNode], result: (bool, usize)) {
+    fn cache_store(&mut self, nodes: &[ChoiceNode], result: (bool, Vec<ChoiceNode>)) {
         let key: Vec<ChoiceValueKey> = nodes
             .iter()
             .map(|n| ChoiceValueKey::from(&n.value))
