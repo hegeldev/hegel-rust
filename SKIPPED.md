@@ -696,13 +696,12 @@ Individually-skipped tests (rest of the file is ported):
   "data()"`; Python `repr()` output has no Rust counterpart.
 
 - `test_simple_collections.py::test_find_empty_collection_gives_empty` —
-  every parametrize row relies on public-API features with no hegel-rust
-  counterpart: `st.nothing()`, `st.frozensets()`,
+  partial port. The `tuples()`, `lists(none(), max_size=0)`,
+  `sets(none(), max_size=0)`, and `fixed_dictionaries({})` rows are
+  ported; the remaining rows rely on public-API features with no
+  hegel-rust counterpart: `st.nothing()`, `st.frozensets()`,
   `fixed_dictionaries(..., optional=...)`, and non-string
-  `fixed_dictionaries` keys (`0`, `()`).
-- `test_simple_collections.py::test_ordered_dictionaries_preserve_keys` —
-  `gs::fixed_dicts()` returns `ciborium::Value::Map`; hegel-rust has no
-  `OrderedDict` analog exposing insertion-order key iteration.
+  `fixed_dictionaries` keys.
 - `test_simple_collections.py::test_fixed_dictionaries_with_optional_and_empty_keys`
   — uses the `optional=` kwarg on `fixed_dictionaries` and `st.nothing()`,
   neither of which has a hegel-rust counterpart.

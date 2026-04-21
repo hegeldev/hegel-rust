@@ -2,13 +2,12 @@
 //!
 //! Individually-skipped tests:
 //!
-//! - `test_find_empty_collection_gives_empty` — every parametrize row relies
-//!   on public-API features with no hegel-rust counterpart: `gs::nothing()`,
-//!   `gs::frozensets()`, `fixed_dictionaries(..., optional=...)`, non-string
-//!   `fixed_dictionaries` keys (`0`, `()`).
-//! - `test_ordered_dictionaries_preserve_keys` — `gs::fixed_dicts()` returns
-//!   `ciborium::Value::Map`; there is no `OrderedDict` public-API analog
-//!   that exposes insertion order in a Rust-idiomatic form.
+//! - `test_find_empty_collection_gives_empty` — partial port. The
+//!   `tuples()`, `lists(none(), max_size=0)`, `sets(none(), max_size=0)`,
+//!   and `fixed_dictionaries({})` rows are ported below. The remaining
+//!   rows rely on public-API features with no hegel-rust counterpart:
+//!   `gs::nothing()`, `gs::frozensets()`, `fixed_dictionaries(...,
+//!   optional=...)`, and non-string `fixed_dictionaries` keys.
 //! - `test_fixed_dictionaries_with_optional_and_empty_keys` — uses the
 //!   `optional=` kwarg and `gs::nothing()`, neither of which exists.
 //! - `test_minimize_dicts_with_incompatible_keys` — mixes `int` and `str`
@@ -28,8 +27,67 @@
 //! but drop the `frozenset` row (no `gs::frozensets()`).
 
 use crate::common::utils::{assert_all_examples, find_any, minimal};
+use ciborium::Value;
 use hegel::generators::{self as gs, Generator};
 use std::collections::{HashMap, HashSet};
+
+#[test]
+fn test_find_empty_tuple_gives_empty() {
+    // Rust's type system guarantees the returned value is `()`; the
+    // upstream `assert == ()` is vacuous here — this runs as a smoke test.
+    minimal(gs::tuples!(), |_: &()| true);
+}
+
+#[test]
+fn test_find_empty_list_gives_empty() {
+    let xs: Vec<()> = minimal(gs::vecs(gs::unit()).max_size(0), |_| true);
+    assert_eq!(xs, Vec::<()>::new());
+}
+
+#[test]
+fn test_find_empty_set_gives_empty() {
+    let xs: HashSet<()> = minimal(gs::hashsets(gs::unit()).max_size(0), |_| true);
+    assert!(xs.is_empty());
+}
+
+#[test]
+fn test_find_empty_fixed_dict_gives_empty() {
+    let v: Value = minimal(gs::fixed_dicts().build(), |_| true);
+    let Value::Map(entries) = v else {
+        panic!("expected Value::Map");
+    };
+    assert!(entries.is_empty());
+}
+
+#[test]
+fn test_fixed_dicts_preserve_field_order() {
+    // `OrderedDict` in upstream asserts fixed_dictionaries preserves key
+    // order. hegel-rust's `gs::fixed_dicts()` only takes string keys, but
+    // the underlying `Value::Map` preserves insertion order of `.field()`
+    // calls — port with a non-sorted string ordering.
+    let keys: Vec<String> = ["k7", "k2", "k0", "k3", "k9", "k1", "k5", "k8", "k4", "k6"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let mut builder = gs::fixed_dicts();
+    for k in &keys {
+        builder = builder.field(k, gs::booleans());
+    }
+    let expected = keys.clone();
+    assert_all_examples(builder.build(), move |v: &Value| {
+        let Value::Map(entries) = v else {
+            return false;
+        };
+        let got: Vec<String> = entries
+            .iter()
+            .map(|(k, _)| match k {
+                Value::Text(s) => s.clone(),
+                _ => panic!("expected text key, got {:?}", k),
+            })
+            .collect();
+        got == expected
+    });
+}
 
 #[test]
 fn test_find_non_empty_list_gives_single_zero() {
@@ -66,8 +124,7 @@ fn test_minimizes_list_of_lists() {
     // of each inner list (empty lists are falsy in Python).
     let mut xs: Vec<Vec<bool>> =
         minimal(gs::vecs(gs::vecs(gs::booleans())), |x: &Vec<Vec<bool>>| {
-            x.iter().any(|inner| !inner.is_empty())
-                && !x.iter().all(|inner| !inner.is_empty())
+            x.iter().any(|inner| !inner.is_empty()) && !x.iter().all(|inner| !inner.is_empty())
         });
     xs.sort();
     assert_eq!(xs, vec![vec![], vec![false]]);
