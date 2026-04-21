@@ -61,36 +61,42 @@ normal pbtkit integration test. The embedded-tests mirror at
 - `tc.forced_choice(n)` — `forced` is an internal argument on native
   `draw_integer` / `weighted`, not exposed on the public `TestCase`.
 
-## Engine-harness surfaces with no public handle
+## Engine-harness surfaces — port as embedded tests
 
 pbtkit's internal tests routinely drive the engine directly. hegel-rust
-has equivalents under `src/native/` but does not expose them, so these
-shapes are structurally unportable — add them to the port's
-individually-skipped list (`SKIPPED.md` plus a module-docstring bullet)
-and move on. They recur across `test_core.py`, `test_spans.py`,
-`test_draw_names.py`, `test_floats.py`, `test_text.py`,
-`shrink_quality/`, and `findability/`.
+has equivalents under `src/native/` but they're `pub(crate)` / `pub(super)`
+so they can't be called from the pbtkit integration test in
+`tests/pbtkit/`. The port location is **`tests/embedded/native/*_tests.rs`**
+instead: embedded tests are wired into the source via
+`#[cfg(test)] #[path = "..."] mod tests;`, giving them `use super::*`
+access to everything the module sees. Existing precedent:
+`tests/embedded/native/shrinker_tests.rs` ports `test_bin_search_down_lo_satisfies`,
+`test_swap_adjacent_blocks_equal_blocks`, and many more; `tree_tests.rs`
+ports `test_cache_key_distinguishes_negative_zero` /
+`test_cache_key_distinguishes_nan_variants`.
 
-- `PbtkitState(random, tf, max_examples).run()` and inspecting
-  `state.result` / `state.calls` — the native runner
-  (`native/runner.rs`) is driven by `run_native_test` with no
-  intermediate-state accessor.
-- `SHRINK_PASSES` as an introspectable list, and looking up a single
-  pass by `p.__name__` — hegel-rust's shrink passes are `pub(super)`
-  methods on `native::shrinker::Shrinker` reachable only via the
-  all-at-once `Shrinker::shrink()` entry point.
-- `Shrinker(state, initial, is_interesting=fn)` with a custom
-  interesting predicate — same reason; no hand-built `Shrinker`
-  instantiation from tests.
-- `CachedTestFunction([raw_values])` / `.lookup([raw_values])` — pbtkit
-  takes a raw choice-value list. hegel-rust's `CachedTestFunction`
-  takes a `NativeTestCase` (see `api-mapping.md` "Replaying fixed
-  choices" for the shape that does port).
-- `pbtkit.caching._cache_key` — hegel-rust's equivalent
-  `ChoiceValueKey` lives private to `src/native/tree.rs` with no
-  public hook.
-- `Frozen` exception raised when a completed `TestCase` is reused —
-  no counterpart error type is exported.
+Shapes that port this way (do NOT skip them — see SKILL.md "NOT reasons to skip"):
+
+- `SHRINK_PASSES` lookup by name, `Shrinker(state, initial, is_interesting=fn)` —
+  hegel-rust's `Shrinker::new(Box::new(|nodes| (is_interesting, len)), initial_nodes)`
+  plus direct calls to the individual `pub(super)` pass methods
+  (`shrinker.delete_chunks()`, `shrinker.swap_adjacent_blocks()`,
+  `shrinker.bind_deletion()`, etc.). Co-locate with an existing shrink-pass
+  embedded test.
+- `pbtkit.caching._cache_key` — use `ChoiceValueKey::from(&ChoiceValue::...)`
+  inside `tests/embedded/native/tree_tests.rs`.
+- `CachedTestFunction([raw_values])` / `.lookup([raw_values])` — the
+  hegel-rust shape is `NativeTestCase::for_choices(&[ChoiceValue], None)`
+  fed through `ctf.run(ntc)` / `ctf.run_shrink(candidate_nodes)`. Live in
+  `tests/embedded/native/tree_tests.rs`.
+- `PbtkitState(random, tf, max_examples).run()` + inspecting `state.result`
+  — there's no state-equivalent handle on `native_run`, but the behaviour
+  the upstream tests care about is almost always the shrinker's output.
+  Drive `Shrinker::new(...).shrink()` (or the specific pass) directly
+  from an embedded test and assert on `shrinker.current_nodes`.
+- `Frozen` exception on a reused completed `TestCase` — hegel-rust's
+  equivalent is `Status` plus the guards inside `NativeTestCase`
+  methods; exercise them from an embedded test.
 
 ## `@pytest.mark.requires(...)` and `pytestmark`
 
