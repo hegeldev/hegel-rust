@@ -525,12 +525,10 @@ impl BytesChoice {
     }
 
     /// pbtkit: `bytes.py::BytesChoice.max_index`.
-    // nocov start
     #[allow(dead_code)]
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         self.to_index(&vec![0xffu8; self.max_size])
     }
-    // nocov end
 
     /// pbtkit: `bytes.py::BytesChoice.to_index`.
     #[allow(dead_code)]

@@ -752,7 +752,6 @@ fn on_file_created(path: &Path, ctx: &WatcherCtx) {
 /// `hash_to_key` never learns about the key. Recovering it from the
 /// on-disk metakeys file lets us still resolve the key when the value
 /// file's event eventually arrives.
-// nocov start
 fn resolve_key(key_hash: &str, ctx: &WatcherCtx) -> Option<Vec<u8>> {
     if let Some(k) = ctx.hash_to_key.lock().unwrap().get(key_hash).cloned() {
         return Some(k);
@@ -765,7 +764,6 @@ fn resolve_key(key_hash: &str, ctx: &WatcherCtx) -> Option<Vec<u8>> {
         .insert(key_hash.to_string(), key_bytes.clone());
     Some(key_bytes)
 }
-// nocov end
 
 // nocov start
 fn on_file_deleted(path: &Path, ctx: &WatcherCtx) {
