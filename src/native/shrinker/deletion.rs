@@ -119,7 +119,7 @@ impl<'a> Shrinker<'a> {
         let mut attempt = self.current_nodes.clone();
         attempt[idx] = attempt[idx].with_value(value);
 
-        let (_, actual_nodes) = (self.test_fn)(&attempt);
+        let (_, actual_nodes) = (self.test_fn)(super::ShrinkRun::Full(&attempt));
         if actual_nodes.len() >= expected_len {
             return false;
         }
