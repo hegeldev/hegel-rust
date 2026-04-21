@@ -15,9 +15,6 @@
 //!   non-float case unrepresentable (same pattern as the already-skipped
 //!   `test_string_sort_key_type_mismatch`, `test_bytes_sort_key_type_mismatch`,
 //!   `test_core.py::test_sort_key_type_mismatch`).
-//! - `test_draw_unbounded_float_rejects_nan` — exercises pbtkit's private
-//!   `_draw_unbounded_float` helper directly; the Rust equivalent is not
-//!   exposed through any public or native-test surface.
 //!
 //! `test_mantissa_reduction_search` is ported as the embedded shrinker test
 //! `shrink_floats_mantissa_reduction_converges` in
@@ -51,6 +48,24 @@ fn test_floats_unbounded() {
         tc.draw(gs::floats::<f64>());
     })
     .settings(Settings::new().test_cases(200).database(None))
+    .run();
+}
+
+#[test]
+fn test_draw_unbounded_float_rejects_nan() {
+    // Upstream calls pbtkit's private `_draw_unbounded_float(rnd)` 10000
+    // times to reliably hit its NaN-rejection-sampling branch. hegel-rust
+    // has no standalone equivalent (the logic is inlined in the native
+    // float-choice path), so port at the public-API layer: drawing 1000
+    // unbounded floats with `allow_nan(false)` exercises the same property
+    // (no NaN ever returned) through whichever rejection / re-sampling
+    // strategy Hypothesis applies. Redundant with `test_floats_no_nan` —
+    // kept distinct to mirror the upstream test surface.
+    Hegel::new(|tc| {
+        let f: f64 = tc.draw(gs::floats::<f64>().allow_nan(false));
+        assert!(!f.is_nan());
+    })
+    .settings(Settings::new().test_cases(1000).database(None))
     .run();
 }
 
