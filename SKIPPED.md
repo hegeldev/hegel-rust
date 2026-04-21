@@ -382,3 +382,13 @@ Individually-skipped tests (rest of the file is ported):
   hegel-rust analog; Rust's static type system doesn't support
   forward-referenced recursive strategies without explicit per-use-case
   enum scaffolding, and `gs::deferred()` doesn't exist.
+
+- `test_interactive_example.py` — every test exercises `strategy.example()`, a
+  Hypothesis public-API method that draws a single value from a strategy
+  outside of any `@given` / `find` run. Hegel-rust generators expose no
+  `.example()` equivalent: all generation happens inside
+  `Hegel::new(|tc| tc.draw(&gen)).run()`, and there is no standalone
+  "one value from a generator" surface. The remaining tests additionally
+  depend on Python-specific facilities (`warnings.catch_warnings` +
+  `NonInteractiveExampleWarning`, pytester, pexpect-driven REPL subprocess,
+  `PYTEST_CURRENT_TEST` env-var plumbing) with no Rust counterpart.
