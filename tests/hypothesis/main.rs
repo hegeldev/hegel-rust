@@ -14,6 +14,7 @@ mod draw_example;
 mod feature_flags;
 mod find;
 mod float_nastiness;
+mod float_utils;
 mod health_checks;
 mod one_of;
 mod permutations;
