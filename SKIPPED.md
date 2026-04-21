@@ -686,3 +686,18 @@ Individually-skipped tests (rest of the file is ported):
   time, so the "wrong-type argument produces a good runtime error" case
   is unrepresentable (same pattern as the already-skipped
   `sort_key_type_mismatch` entries).
+
+- `test_arbitrary_data.py::test_given_twice_is_same` — hegel-rust test
+  bodies take a single `tc: TestCase` argument; the "two independent
+  `data()` arguments share the same test case" shape has no counterpart.
+- `test_arbitrary_data.py::test_data_supports_find` — uses Python
+  `hypothesis.find(st.data(), …)` (no standalone `find()` in hegel-rust)
+  and asserts on `data.conjecture_data.choices`, a Python engine-internal
+  attribute with no public accessor in hegel-rust.
+- `test_arbitrary_data.py::test_errors_when_normal_strategy_functions_are_used`
+  — asserts `st.data().filter(...)` / `.map(...)` / `.flatmap(...)` raise
+  `InvalidArgument`; there is no `st.data()` strategy object in
+  hegel-rust to apply those transforms to (the "data" surface is the `tc`
+  argument, not a strategy).
+- `test_arbitrary_data.py::test_nice_repr` — tests `repr(st.data()) ==
+  "data()"`; Python `repr()` output has no Rust counterpart.
