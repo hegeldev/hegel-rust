@@ -6,3 +6,16 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
+
+  - title: "[CI] check release: RELEASE.md already exists on main"
+    details: |
+      Failing workflow job: "check release" / "Check release" (run 24752257934).
+      Command: `python .github/scripts/release.py check "$BASE_REF"` (BASE_REF=main).
+
+      Traceback (most recent call last):
+        File "/home/runner/work/hegel-rust/hegel-rust/.github/scripts/release.py", line 256, in <module>
+          check(args.base_ref)
+        File "/home/runner/work/hegel-rust/hegel-rust/.github/scripts/release.py", line 103, in check
+          raise ValueError(
+      ValueError: RELEASE.md already exists on main. It's possible the CI job responsible for cutting a new release is in progress, or has failed.
+      ##[error]Process completed with exit code 1.
