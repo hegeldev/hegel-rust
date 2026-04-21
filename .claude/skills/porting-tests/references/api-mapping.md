@@ -11,6 +11,8 @@ structure.
 | `gs.integers(a, b)`                        | `gs::integers::<i64>().min_value(a).max_value(b)`             |
 | `st.integers(min_value=a, max_value=b)`    | same                                                          |
 | `gs.floats(min=a, max=b, allow_nan=True)`  | `gs::floats::<f64>().min_value(a).max_value(b).allow_nan(true)` |
+| `gs.floats(..., width=N)` (N in 64/32/16)  | width is the Rust element type, not a runtime parameter — `gs::floats::<f64>()` / `gs::floats::<f32>()`. There is no `f16` generator. Drop the `width=[64,32,16]` parametrize and port the `f64` case only (see `tests/hypothesis/float_nastiness.rs`, `numerics.rs` for precedents). |
+| `gs.floats(min_value=inf, ...)` / `gs.floats(max_value=-inf, ...)` | Hypothesis infers `allow_infinity=True` when a bound is infinite; hegel-rust keys `allow_infinity` purely off whether bounds are set and rejects infinite bounds regardless. Filter infinite bounds out with `tc.assume(!b.is_infinite())` when porting fuzz-style bounds tests. Tests that assert on the specific Hypothesis error message for inf-bound + `allow_infinity=False` (e.g. `test_numerics.py::test_floats_message`) can't be ported — hegel-rust's default-bound fill-in (`max_value=f64::MAX` when `allow_infinity=False`) masks the error with a different one. |
 | `gs.booleans()`                            | `gs::booleans()`                                              |
 | `gs.text(min_size=, max_size=, alphabet=)` | `gs::text().min_size(n).max_size(n).alphabet(g)`              |
 | `gs.binary(min_size=, max_size=)`          | `gs::binary().min_size(n).max_size(n)`                        |
@@ -27,6 +29,8 @@ structure.
 | `gs.sampled_from([x, y])`                  | `gs::sampled_from(vec![x, y])`                                |
 | `gs.just(x)`                               | `gs::just(x)`                                                 |
 | `gs.nothing()`                             | **missing** — native-gate the test and stub under `src/native/` (see SKILL.md skip-vs-port policy) |
+| `gs.decimals(...)`                         | **missing** — Python-stdlib `decimal.Decimal` has no Rust counterpart and no `gs::decimals()` exists. Skip tests whose strategy is `decimals()` with a one-line `decimal.Decimal`-absence rationale in SKIPPED.md. |
+| `gs.fractions(...)`                        | **missing** — Python-stdlib `fractions.Fraction` has no Rust counterpart and no `gs::fractions()` exists. Skip as above. |
 | `gs.from_regex(pat)`                       | `gs::from_regex(pat)` (add `.fullmatch(true)` if used)        |
 | `gs.emails()` / `gs.urls()`                | `gs::emails()` / `gs::urls()`                                 |
 | `gs.dates()` etc.                          | `gs::dates()`, `gs::times()`, `gs::datetimes()`, `gs::durations()` |
