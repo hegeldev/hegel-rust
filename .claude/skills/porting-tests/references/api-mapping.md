@@ -161,6 +161,65 @@ exposes these as builder methods directly — there is no separate
 | `text(characters(max_codepoint=127))`           | `gs::text().max_codepoint(127)`              |
 | `text(characters(exclude_categories=("Cc",)))`  | `gs::text().exclude_categories(&["Cc"])`     |
 
+## Validation-panic tests (`InvalidArgument` in Python)
+
+`test_validates_keyword_arguments` in Hypothesis (and similar shapes in
+`test_validation.py`, `test_regex.py`, `test_sampled_from.py`,
+`test_uuids.py`, …) wraps `check_can_generate_examples(fn(**kwargs))` in
+`pytest.raises(InvalidArgument)`. The translation depends on *when* the
+check fires:
+
+- **Construction-time** — a few factory functions validate eagerly (e.g.
+  `gs::sampled_from(vec![])` panics on empty input). Wrap the constructor:
+
+  ```rust
+  expect_panic(|| { gs::sampled_from::<i64, _>(Vec::<i64>::new()); },
+               "sampled_from cannot be empty");
+  ```
+
+- **Draw-time (the common case)** — bounds checks (`min > max`), mutually
+  exclusive flags (`allow_nan=true` with `min_value`), and server-rejected
+  shapes only panic when the engine actually runs. `expect_panic` over a
+  bare constructor won't trigger them. A small local helper keeps each
+  test a one-liner:
+
+  ```rust
+  fn expect_generator_panic<T, G>(generator: G, pattern: &str)
+  where
+      G: Generator<T> + 'static + std::panic::UnwindSafe,
+      T: std::fmt::Debug + Send + 'static,
+  {
+      expect_panic(
+          move || {
+              Hegel::new(move |tc| { tc.draw(&generator); })
+                  .settings(Settings::new().test_cases(1).database(None))
+                  .run();
+          },
+          pattern,
+      );
+  }
+
+  #[test]
+  fn test_integers_rejects_min_greater_than_max() {
+      expect_generator_panic(
+          gs::integers::<i64>().min_value(2).max_value(1),
+          "max_value < min_value",
+      );
+  }
+  ```
+
+  The `database(None)` avoids replay noise; `test_cases(1)` keeps it fast.
+  Put this helper *in the test file*, not in `tests/common/utils.rs` (see
+  SKILL.md "Don't modify").
+
+**Drop wrong-typed-kwarg cases.** Hypothesis parametrizes heavily over
+values that violate the Python signature — `min_value=math.nan`,
+`min_value="fish"`, `regex=123`, `alphabet=[1]`, `v="4"`, `unique_by=(...)`,
+`elements="hi"`, etc. Rust's type system rejects these at compile time, so
+there is no runtime behaviour to assert. List the dropped categories
+once in the module docstring rather than per-case — a reviewer checking
+the original against the port can see the whole class is accounted for.
+
 ## Python idiom translations
 
 Common Python patterns that need non-trivial translation in test
