@@ -24,6 +24,7 @@
 // ChoiceValue sequences (the value bytes); they are kept here so that
 // the replay path in `runner.rs` can round-trip them.
 
+use std::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -192,13 +193,32 @@ pub trait ExampleDatabase: Send + Sync {
     /// `ExampleDatabase.clear_listeners`.
     #[allow(dead_code)]
     fn clear_listeners(&self) {} // nocov
+
+    /// Expose `self` as `&dyn Any` so equality impls can downcast through
+    /// a `&dyn ExampleDatabase` to their concrete type. Each concrete
+    /// type must override with `self` so the returned `Any` resolves to
+    /// the concrete type, not to the wrapper.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Cross-type equality through a trait object. Mirrors
+    /// Hypothesis's `__eq__` pattern (`isinstance` check + attribute
+    /// comparison): returns `false` when `other` is a different concrete
+    /// type, and otherwise compares whatever the concrete semantics
+    /// treat as identifying state (path, instance-identity, inner dbs).
+    ///
+    /// Default: never equal — databases without a defined equality
+    /// relation never compare equal through this surface.
+    #[allow(unused_variables, dead_code)]
+    fn db_eq(&self, other: &dyn ExampleDatabase) -> bool {
+        false
+    }
 }
 
 /// Let `Arc<T>` stand in for an `ExampleDatabase` wherever the trait is
 /// required, so callers can keep their own handle on an inner database
 /// (and read it back) while also passing it into a wrapper such as
 /// `ReadOnlyNativeDatabase` or `MultiplexedNativeDatabase`.
-impl<T: ExampleDatabase + ?Sized> ExampleDatabase for Arc<T> {
+impl<T: ExampleDatabase + ?Sized + 'static> ExampleDatabase for Arc<T> {
     fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
         (**self).fetch(key)
     }
@@ -222,6 +242,12 @@ impl<T: ExampleDatabase + ?Sized> ExampleDatabase for Arc<T> {
         (**self).clear_listeners();
     }
     // nocov end
+    fn as_any(&self) -> &dyn Any {
+        (**self).as_any()
+    }
+    fn db_eq(&self, other: &dyn ExampleDatabase) -> bool {
+        (**self).db_eq(other)
+    }
 }
 
 /// Name of the bookkeeping key under which every save() records its
@@ -518,7 +544,28 @@ impl ExampleDatabase for NativeDatabase {
         }
     }
     // nocov end
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Hypothesis: `DirectoryBasedExampleDatabase.__eq__` compares by
+    /// `self.path == other.path`.
+    fn db_eq(&self, other: &dyn ExampleDatabase) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<NativeDatabase>()
+            .is_some_and(|o| self.db_root == o.db_root)
+    }
 }
+
+impl PartialEq for NativeDatabase {
+    fn eq(&self, other: &Self) -> bool {
+        self.db_eq(other)
+    }
+}
+
+impl Eq for NativeDatabase {}
 
 /// Translate a `notify::Event` into zero or more `ListenerEvent`
 /// broadcasts. Mirrors the `Handler` class in Hypothesis's
@@ -860,7 +907,31 @@ impl ExampleDatabase for InMemoryNativeDatabase {
     fn clear_listeners(&self) {
         self.listeners.clear();
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Hypothesis: `InMemoryExampleDatabase.__eq__` uses `self.data is
+    /// other.data`, i.e. instance identity of the backing dict. Rust
+    /// mirrors that with pointer equality on the database object itself:
+    /// distinct `InMemoryNativeDatabase::new()` calls produce distinct
+    /// `Mutex<HashMap>` allocations and therefore never compare equal.
+    fn db_eq(&self, other: &dyn ExampleDatabase) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<InMemoryNativeDatabase>()
+            .is_some_and(|o| std::ptr::eq(self, o))
+    }
 }
+
+impl PartialEq for InMemoryNativeDatabase {
+    fn eq(&self, other: &Self) -> bool {
+        self.db_eq(other)
+    }
+}
+
+impl Eq for InMemoryNativeDatabase {}
 
 /// Read-only view of another database: `fetch` forwards to the inner
 /// database; `save` / `delete` / `move_value` are silent no-ops.
@@ -880,14 +951,35 @@ impl<D: ExampleDatabase> ReadOnlyNativeDatabase<D> {
     }
 }
 
-impl<D: ExampleDatabase> ExampleDatabase for ReadOnlyNativeDatabase<D> {
+impl<D: ExampleDatabase + 'static> ExampleDatabase for ReadOnlyNativeDatabase<D> {
     fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
         self.inner.fetch(key)
     }
     fn save(&self, _key: &[u8], _value: &[u8]) {}
     fn delete(&self, _key: &[u8], _value: &[u8]) {}
     fn move_value(&self, _src: &[u8], _dst: &[u8], _value: &[u8]) {}
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Hypothesis: `ReadOnlyDatabase.__eq__` is structural through the
+    /// wrapped database (`self._wrapped == other._wrapped`).
+    fn db_eq(&self, other: &dyn ExampleDatabase) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<ReadOnlyNativeDatabase<D>>()
+            .is_some_and(|o| self.inner.db_eq(&o.inner))
+    }
 }
+
+impl<D: ExampleDatabase + 'static> PartialEq for ReadOnlyNativeDatabase<D> {
+    fn eq(&self, other: &Self) -> bool {
+        self.db_eq(other)
+    }
+}
+
+impl<D: ExampleDatabase + 'static> Eq for ReadOnlyNativeDatabase<D> {}
 
 /// Fan-out wrapper that multiplexes writes across several databases and
 /// unions their reads.
@@ -982,7 +1074,31 @@ impl ExampleDatabase for MultiplexedNativeDatabase {
             }
         }
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Hypothesis: `MultiplexedDatabase.__eq__` compares `self._wrapped
+    /// == other._wrapped` — a structural tuple-equality over the inner
+    /// databases. Recurse through `db_eq` so each inner's own equality
+    /// (path-based, identity-based, etc.) is respected.
+    fn db_eq(&self, other: &dyn ExampleDatabase) -> bool {
+        let Some(o) = other.as_any().downcast_ref::<MultiplexedNativeDatabase>() else {
+            return false;
+        };
+        self.inner.len() == o.inner.len()
+            && self.inner.iter().zip(&o.inner).all(|(a, b)| a.db_eq(&**b))
+    }
 }
+
+impl PartialEq for MultiplexedNativeDatabase {
+    fn eq(&self, other: &Self) -> bool {
+        self.db_eq(other)
+    }
+}
+
+impl Eq for MultiplexedNativeDatabase {}
 
 enum BackgroundTask {
     Save(Vec<u8>, Vec<u8>),
@@ -1145,7 +1261,28 @@ impl ExampleDatabase for BackgroundWriteNativeDatabase {
             self.inner.remove_listener(&self.proxy);
         }
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Hypothesis: `BackgroundWriteDatabase.__eq__` compares `self._db
+    /// == other._db` — structural through the wrapped database.
+    fn db_eq(&self, other: &dyn ExampleDatabase) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<BackgroundWriteNativeDatabase>()
+            .is_some_and(|o| self.inner.db_eq(&*o.inner))
+    }
 }
+
+impl PartialEq for BackgroundWriteNativeDatabase {
+    fn eq(&self, other: &Self) -> bool {
+        self.db_eq(other)
+    }
+}
+
+impl Eq for BackgroundWriteNativeDatabase {}
 
 /// FNV-1a 64-bit hash of a byte slice, formatted as a 16-character hex string.
 ///

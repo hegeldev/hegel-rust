@@ -20,8 +20,6 @@
 //!   `ExampleDatabase()` zero-arg factory / `_db_for_path`.
 //! - `test_warns_when_listening_not_supported` — HypothesisWarning (Python
 //!   warning type); hegel-rust has no equivalent runtime warning surface.
-//! - `test_database_equal` / `test_database_not_equal` — no PartialEq on the
-//!   native database types; see TODO.yaml.
 #![cfg(feature = "native")]
 
 use hegel::__native_test_internals::{
@@ -369,6 +367,9 @@ impl ExampleDatabase for TracksListens {
             self.ends.fetch_add(1, Ordering::SeqCst);
         }
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 #[test]
@@ -666,4 +667,91 @@ fn test_database_listener_background_write() {
     })
     .settings(Settings::new().test_cases(5).database(None))
     .run();
+}
+
+// ── test_database_equal / test_database_not_equal ──────────────────────────
+//
+// Upstream is a pytest-parametrized pair over (db1, db2) pairs. Rust's
+// type system doesn't allow `==`/`!=` between values of different
+// concrete types, so the cross-type cases from the Python file
+// (`InMemoryExampleDatabase() != DirectoryBasedExampleDatabase("a")`,
+// `BackgroundWriteDatabase(...) != InMemoryExampleDatabase()`) are not
+// expressible and are omitted. `GitHubArtifactDatabase` has no Rust
+// analog and is skipped. Each remaining (same-type) pair becomes an
+// assertion below.
+
+#[test]
+fn test_database_equal() {
+    // DirectoryBasedExampleDatabase("a") == DirectoryBasedExampleDatabase("a")
+    assert!(NativeDatabase::new("a") == NativeDatabase::new("a"));
+
+    // MultiplexedDatabase(Directory("a"), Directory("b")) == same, structurally.
+    let m1 = MultiplexedNativeDatabase::new(vec![
+        Arc::new(NativeDatabase::new("a")) as Arc<dyn ExampleDatabase>,
+        Arc::new(NativeDatabase::new("b")) as Arc<dyn ExampleDatabase>,
+    ]);
+    let m2 = MultiplexedNativeDatabase::new(vec![
+        Arc::new(NativeDatabase::new("a")) as Arc<dyn ExampleDatabase>,
+        Arc::new(NativeDatabase::new("b")) as Arc<dyn ExampleDatabase>,
+    ]);
+    assert!(m1 == m2);
+
+    // ReadOnlyDatabase(Directory("a")) == ReadOnlyDatabase(Directory("a"))
+    let r1 = ReadOnlyNativeDatabase::new(NativeDatabase::new("a"));
+    let r2 = ReadOnlyNativeDatabase::new(NativeDatabase::new("a"));
+    assert!(r1 == r2);
+}
+
+#[test]
+fn test_database_not_equal() {
+    // Two InMemoryExampleDatabase() instances have distinct backing
+    // dicts, so Python's `self.data is other.data` is false. Rust mirrors
+    // that with pointer equality on the database object.
+    let a = InMemoryNativeDatabase::new();
+    let b = InMemoryNativeDatabase::new();
+    assert!(a != b);
+
+    // DirectoryBasedExampleDatabase("a") != DirectoryBasedExampleDatabase("b")
+    assert!(NativeDatabase::new("a") != NativeDatabase::new("b"));
+
+    // ReadOnlyDatabase(Directory("a")) != ReadOnlyDatabase(Directory("b"))
+    let r1 = ReadOnlyNativeDatabase::new(NativeDatabase::new("a"));
+    let r2 = ReadOnlyNativeDatabase::new(NativeDatabase::new("b"));
+    assert!(r1 != r2);
+}
+
+// Direct exercise of the trait-level `db_eq` for paths that `PartialEq`
+// can't reach: the default impl (used by types like `TracksListens` that
+// define no equality relation) and the cross-type miss branch in
+// `MultiplexedNativeDatabase::db_eq` (hit when `other` dispatches through
+// `&dyn ExampleDatabase` to a non-Multiplexed concrete type).
+#[test]
+fn test_db_eq_default_and_cross_type() {
+    let tracks = TracksListens::new();
+    assert!(!tracks.db_eq(&tracks));
+
+    let multi = MultiplexedNativeDatabase::new(vec![
+        Arc::new(NativeDatabase::new("a")) as Arc<dyn ExampleDatabase>,
+    ]);
+    let native = NativeDatabase::new("a");
+    assert!(!multi.db_eq(&native));
+}
+
+// Beyond upstream: the Python test parametrizes
+// `BackgroundWriteDatabase(InMemoryExampleDatabase()) != InMemoryExampleDatabase()`,
+// which is a cross-type comparison that Rust's type system disallows.
+// Cover the same-type side of `BackgroundWriteDatabase.__eq__` (structural
+// through the wrapped database) instead.
+#[test]
+fn test_background_write_database_equality() {
+    let inner = Arc::new(InMemoryNativeDatabase::new());
+    let bg_a = BackgroundWriteNativeDatabase::new(Arc::clone(&inner));
+    let bg_b = BackgroundWriteNativeDatabase::new(Arc::clone(&inner));
+    // Same inner InMemory instance → structurally equal.
+    assert!(bg_a == bg_b);
+
+    let bg_c = BackgroundWriteNativeDatabase::new(InMemoryNativeDatabase::new());
+    let bg_d = BackgroundWriteNativeDatabase::new(InMemoryNativeDatabase::new());
+    // Distinct inner InMemory instances → not equal.
+    assert!(bg_c != bg_d);
 }

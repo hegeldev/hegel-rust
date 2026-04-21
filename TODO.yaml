@@ -7,23 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Add PartialEq to native database types and port test_database_equal/test_database_not_equal
-  details: |
-    SKIPPED.md notes that test_database_equal and test_database_not_equal in
-    tests/hypothesis/database_backend.rs are skipped because NativeDatabase,
-    InMemoryNativeDatabase, and MultiplexedNativeDatabase don't implement
-    PartialEq. The skip comment in tests/hypothesis/database_backend.rs says
-    "Tracked as TODO.yaml follow-up" but that entry was never added.
-
-    Work to do:
-    - Add PartialEq (and Eq) derives/impls to NativeDatabase (path-equality),
-      InMemoryNativeDatabase (instance-identity or content-equality — pick the
-      semantically correct one), and MultiplexedNativeDatabase (structural
-      equality of its component databases).
-    - Remove the skip comment in database_backend.rs and port the two tests.
-    - Update SKIPPED.md to remove those two bullet points from the
-      test_database_backend.py entry.
-
 - title: Port test_reproduce_failure.py (encoding/decoding half)
   details: |
     SKIPPED.md lists test_reproduce_failure.py as skipped due to a cherry-pick
