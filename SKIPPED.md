@@ -101,21 +101,19 @@ Individually-skipped tests (rest of the file is ported):
 - `test_core.py::test_value_punning_on_type_change`,
   `test_core.py::test_bind_deletion_valid_but_not_shorter`,
   `test_core.py::test_delete_chunks_stale_index`,
-  `test_core.py::test_bin_search_down_lo_satisfies`,
   `test_core.py::test_shrink_duplicates_with_stale_indices` — drive
-  pbtkit's `PbtkitState(random, tf, max_examples).run()` loop directly
-  and inspect `state.result`; hegel-rust's native runner has no
-  `State`-equivalent handle with an intermediate-state accessor.
-- `test_core.py::test_delete_chunks_guard_after_decrement`,
-  `test_core.py::test_redistribute_integers_stale_indices`,
-  `test_core.py::test_bind_deletion_try_deletions_succeeds`,
-  `test_core.py::test_sort_values_full_sort_fails`,
-  `test_core.py::test_swap_adjacent_blocks_equal_blocks`,
-  `test_core.py::test_shrink_duplicates_valid_drops_below_two` — look
-  up an individual shrink pass by name from pbtkit's `SHRINK_PASSES`
-  list and invoke it on a hand-built `Shrinker`. hegel-rust's shrink
-  passes are `pub(super)` methods on `native::shrinker::Shrinker`,
-  reachable only via the all-at-once `Shrinker::shrink()` entry point.
+  pbtkit's `PbtkitState(random, tf, max_examples).run()` loop and
+  depend on the result-truncation-on-accept behaviour of pbtkit's
+  shrinker. hegel-rust's shrinker preserves the full candidate sequence
+  in `current_nodes` (never shortens it on `consider`), so the specific
+  "length shrinks past i" regressions these guard against don't occur
+  in hegel-rust's implementation.
+- `test_core.py::test_shrink_duplicates_valid_drops_below_two` — relies
+  on pbtkit's shrinker truncating `current_nodes` on accept; hegel-rust's
+  `consider()` never shortens, so the outer `valid.len() < 2` branch
+  these exercise isn't reachable. The inner `current_valid.len() < 2`
+  path is covered by the embedded test
+  `shrink_duplicates_positive_bin_search_makes_partial_progress`.
 - `test_core.py::test_redistribute_binary_search` — calls pbtkit's
   `redistribute_sequence_pair` helper directly with a Python callback;
   no equivalent public function surface in hegel-rust.
