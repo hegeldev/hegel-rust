@@ -114,6 +114,17 @@ Follow the `unicodedata.rs` shape:
    rest of the native engine calls it"; the bar for exclusion is "no
    current caller + no plausible near-term caller". Err on the side of
    inclusion — a partial port is its own source of drift later.
+
+   **Exception: the coverage ratchet forbids uncovered code.** `just
+   check-coverage` demands 100% line coverage for new native code, and
+   `// nocov` needs human permission. If your port's tests don't
+   exercise a Python method (`IntervalSet.union` when only `difference`
+   / `intersection` are tested), omit that method from the Rust port
+   rather than adding it for completeness. Structure the Rust API so a
+   later port (e.g. `test_charmap.py`'s `union` cases) can drop the
+   method in alongside its siblings. Name the omission and the future
+   port that will reintroduce it in the commit message — that's the
+   breadcrumb that keeps "partial" from becoming "drifted".
 6. **Once the port lands, rip out the boundary shims.** The
    `translate_python_escapes`-style helpers from the old
    third-party-crate path come out in the same commit that swaps the
