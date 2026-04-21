@@ -987,6 +987,9 @@ impl ExampleDatabase for TracksListens {
             self.ends.fetch_add(1, Ordering::SeqCst);
         }
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 #[test]

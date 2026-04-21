@@ -270,13 +270,6 @@ Individually-skipped tests (rest of the file is ported):
       override `_start_listening`. hegel-rust's default `add_listener`
       silently drops the listener (no warning surface) — a public-API
       design difference.
-    - `test_database_equal` / `test_database_not_equal` test Python's
-      default `==` (attribute-wise) on database instances. hegel-rust's
-      native database types don't implement `PartialEq`; adding it
-      would require per-type semantics (path-equality for
-      `NativeDatabase`, instance-identity for `InMemoryNativeDatabase`,
-      deep equality through `Arc<dyn ExampleDatabase>` for
-      `MultiplexedNativeDatabase`). Tracked as a TODO.yaml follow-up.
 
 - `test_statistical_events.py` — every test relies on `hypothesis.statistics.collector`
   / `describe_statistics` (programmatic test-run statistics collection) and/or
