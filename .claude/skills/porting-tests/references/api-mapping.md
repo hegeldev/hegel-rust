@@ -102,6 +102,21 @@ adding the feature. Don't invent a workaround in the test.
 - `deadline` setting.
 - `phases` / `Phase.generate` / `Phase.shrink` — no phase control. See
   "Seeded `find()`" below for how to emulate no-shrinking semantics.
+- `settings.default` — the Python module-level mutable settings global.
+  hegel-rust constructs settings per-test via `Settings::new()`; there
+  is no writable default to inspect or swap. Skip tests that read or
+  write `settings.default`.
+- `find()` + predicate-call-count assertions — tests that drive
+  `find(strategy, predicate)` and assert an exact / bounded count on
+  a counter incremented inside the predicate (`count == max_examples`,
+  `count <= 10*max_examples`, etc.) are unportable. `Hegel::new(...).run()`
+  re-enters the test function for span-mutation attempts (up to 5 per
+  valid case in native), so the predicate-call shape Python's `find()`
+  pins down isn't reproducible through the public Rust surface. Skip
+  with a rationale naming the span-mutation re-entry.
+- `pytest.skip()` inside a `@given` body aborting shrinking —
+  hegel-rust has no per-test "skip-aborts-shrinking" mechanism on the
+  public API. Skip.
 - `@flaky(max_runs=N, min_passes=M)` — Hypothesis's retry-on-failure
   decorator for tests whose predicate depends on external
   nondeterminism (set iteration order, `PYTHONHASHSEED`, etc.).
@@ -343,6 +358,21 @@ A few shape differences between Python `st.characters()` and
   added regardless of `min_codepoint`/`max_codepoint`. A test
   asserting that `include_characters` produces chars outside the
   codepoint range is correct and should port unchanged.
+- **Codec round-trip checks collapse.** Python tests of the shape
+  `example.encode(codec).decode(codec) == example` port to trivial
+  or near-trivial assertions in Rust because `char` is a Unicode
+  scalar by construction: `"utf-8"` is always round-trippable (drop
+  the assertion; just exercise the schema), `"ascii"` reduces to
+  `c.is_ascii()`, and `exclude_categories=["Cs"]` is a no-op (the
+  surrogate range is already unreachable). See the
+  `test_characters_codec` rows in `tests/hypothesis/core.rs`.
+- **Verifying that a drawn char belongs to a Unicode category**
+  (e.g. `categories=["N"]` / `exclude_categories=["N"]` rows of
+  `test_characters_codec`) is native-only: use
+  `hegel::__native_test_internals::unicodedata::general_category(c as u32).as_str()`
+  and gate the test with `#[cfg(feature = "native")]`. Don't reach
+  for a third-party `unicode-*` crate — see
+  `implementing-native/SKILL.md` "Port, don't adapt".
 
 ## Validation-panic tests (`InvalidArgument` in Python)
 
