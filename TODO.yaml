@@ -6,28 +6,3 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-  - title: "[CI] check release fails: RELEASE.md already exists on main"
-    details: |
-      The `check release` job on PR 188 fails because RELEASE.md is present on
-      `main`. This is the same symptom as the earlier "resolved" TODO that was
-      removed in commit 8c62972 — it has recurred.
-
-      Failing run: https://github.com/hegeldev/hegel-rust/actions/runs/24743255076
-      Failing command: `python .github/scripts/release.py check "$BASE_REF"`
-      (BASE_REF=main)
-
-      Traceback:
-          Traceback (most recent call last):
-            File "/home/runner/work/hegel-rust/hegel-rust/.github/scripts/release.py", line 256, in <module>
-              check(args.base_ref)
-            File "/home/runner/work/hegel-rust/hegel-rust/.github/scripts/release.py", line 103, in check
-              raise ValueError(
-          ValueError: RELEASE.md already exists on main. It's possible the CI job responsible for cutting a new release is in progress, or has failed.
-          ##[error]Process completed with exit code 1.
-
-      Investigate whether the release cut job actually failed (and needs
-      manual intervention to remove the stale RELEASE.md on main) or whether
-      the check should be more forgiving. Do NOT delete RELEASE.md without
-      understanding why it is there.
-
