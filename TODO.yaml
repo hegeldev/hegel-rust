@@ -6,3 +6,33 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
+
+  - title: "[CI] check release: RELEASE.md already exists on main"
+    details: |
+      CI job "check release" (.github/workflows, step: Check release) is
+      failing because RELEASE.md already exists on the main branch. This
+      is raised by .github/scripts/release.py in the check() function —
+      it's not a bug in the PR branch, but a state issue on main that
+      requires human intervention (either the release CI job is in
+      progress, or a prior release CI run failed and left RELEASE.md
+      behind on main).
+
+      Extracted log:
+        Traceback (most recent call last):
+          File ".github/scripts/release.py", line 256, in <module>
+            check(args.base_ref)
+          File ".github/scripts/release.py", line 103, in check
+            raise ValueError(
+        ValueError: RELEASE.md already exists on main. It's possible the
+        CI job responsible for cutting a new release is in progress, or
+        has failed.
+        ##[error]Process completed with exit code 1.
+
+      Failing command: `python .github/scripts/release.py check "$BASE_REF"`
+      (BASE_REF=main)
+
+      Acceptance: not auto-fixable from the PR branch. A human needs to
+      investigate the state of main (check whether a release job is in
+      progress or failed, and clear RELEASE.md on main if appropriate).
+      Previous triage runs on this PR have added and re-added this TODO
+      because the underlying main-branch state has not been resolved.
