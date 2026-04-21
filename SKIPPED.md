@@ -927,3 +927,33 @@ Individually-skipped tests (rest of the file is ported):
   module, no `TestCase` / `setUp` / `subTest` surface, and hegel-rust
   tests are closures passed to `Hegel::new(|tc| ...).run()` with no
   class-based test dispatch or per-test fixture hooks — all Python-specific.
+
+- `test_numerics.py::test_fuzz_fractions_bounds`,
+  `test_numerics.py::test_fraction_addition_is_well_behaved` — both use
+  the `fractions()` strategy (Python `fractions.Fraction`). hegel-rust
+  has no counterpart for Python's stdlib `Fraction` type and no
+  `gs::fractions()` generator.
+- `test_numerics.py::test_fuzz_decimals_bounds`,
+  `test_numerics.py::test_all_decimals_can_be_exact_floats`,
+  `test_numerics.py::test_decimals_include_nan`,
+  `test_numerics.py::test_decimals_include_inf`,
+  `test_numerics.py::test_decimals_can_disallow_nan`,
+  `test_numerics.py::test_decimals_can_disallow_inf`,
+  `test_numerics.py::test_decimals_have_correct_places`,
+  `test_numerics.py::test_works_with_few_values`,
+  `test_numerics.py::test_issue_725_regression`,
+  `test_numerics.py::test_issue_739_regression`,
+  `test_numerics.py::test_consistent_decimal_error`,
+  `test_numerics.py::test_minimal_nonfinite_decimal_is_inf`,
+  `test_numerics.py::test_decimals_warns_for_inexact_numeric_bounds` —
+  all use the `decimals()` strategy (Python `decimal.Decimal`).
+  hegel-rust has no counterpart for Python's stdlib `Decimal` type and
+  no `gs::decimals()` generator.
+- `test_numerics.py::test_floats_message` (all four parametrize rows) —
+  asserts on the exact `InvalidArgument` message Hypothesis emits for
+  infinite bounds combined with `allow_infinity=False`. hegel-rust's
+  float generator fills in a default `max_value=f64::MAX` (or
+  `min_value=f64::MIN`) when `allow_infinity=False` and one bound is
+  left unset, which masks the upstream error with a different "no
+  floating-point values between …" message; the exact wording the
+  test matches against doesn't appear in hegel-rust's output.
