@@ -4,10 +4,7 @@
 //! `inspect.getsource` + import-time monkey-patching of `TestCase`) that turns
 //! `x = tc.draw(gen)` into `tc.draw_named(gen, "x", repeatable)`. Hegel-rust's
 //! equivalent is the `#[hegel::test]` proc macro, which does the same rewrite
-//! at compile time. The behavioural output coverage for the Rust macro lives
-//! in `tests/test_draw_named.rs`; this port covers the pbtkit tests that
-//! exercise the `__draw_named` method contract and composite-depth semantics
-//! independently of the rewriter.
+//! at compile time.
 //!
 //! Individually-skipped tests (rest of the file is ported):
 //!
@@ -15,10 +12,6 @@
 //!   `test_draw_counter_only_fires_when_print_results`: access
 //!   `tc._draw_counter` on pbtkit's `TestCase` — a Python-internal attribute
 //!   with no hegel-rust counterpart.
-//! - Section A `test_draw_silent_does_not_print`: pbtkit's `tc.draw_silent`
-//!   has no exposed-output surface in hegel-rust (`draw_silent` exists but
-//!   bypasses the named-draw machinery entirely, so there's nothing to assert
-//!   beyond "no panic").
 //! - Section A `test_choice_output_unchanged`: pbtkit's `tc.choice(n)` prints
 //!   `choice(5): …`. Hegel-rust models the same via
 //!   `tc.draw(gs::integers().min_value(0).max_value(n-1))` whose output shape
@@ -32,36 +25,50 @@
 //!   one-to-one mapping.
 //! - Section B `test_draw_named_repeatable_skips_taken_suffixes`: mutates
 //!   `tc._named_draw_used` directly — a Python-internal attribute.
-//!   (The same skip-taken-suffix behaviour is covered by
-//!   `tests/test_draw_named.rs::test_draw_named_repeatable_skips_taken_name`.)
 //! - Section B `test_draw_named_no_print_when_print_results_false`: pbtkit's
 //!   `print_results=False` flag has no equivalent on hegel-rust's `TestCase`
 //!   — replay-output gating is run-level (last-run flag), not per-testcase.
-//! - Section C (all 12 rewriter unit tests): test pbtkit's
-//!   `rewrite_test_function` / `_DrawNameCollector`, a libcst CST visitor
-//!   that rewrites Python source at runtime. Hegel-rust's equivalent is the
-//!   `#[hegel::test]` proc macro — a compile-time syn-based rewrite — whose
-//!   behavioural coverage lives in `tests/test_draw_named.rs`.
-//! - Section D (all 7 integration tests): already covered by
-//!   `tests/test_draw_named.rs` tests (`test_macro_output_uses_variable_name`,
-//!   `test_macro_loop_output_has_counter`, `test_macro_closure_is_repeatable`,
-//!   `test_macro_unique_names_at_top_level`, etc.), which drive the same
-//!   observable output end-to-end via the proc macro.
-//! - Section E `test_importing_draw_names_enables_auto_rewriting`: pbtkit's
-//!   import-time monkey-patching is replaced in hegel-rust by the always-on
-//!   `#[hegel::test]` macro — no "importing a module flips a switch"
-//!   surface.
+//! - Section C `test_rewriter_try_block_is_repeatable`: Python `try`/`except`
+//!   has no stable Rust syntactic analog (no `try` blocks, no bare-block
+//!   `except`), so "draw inside a try block becomes repeatable" has no
+//!   direct Rust equivalent.
+//! - Section C `test_rewriter_nested_function_is_repeatable`: the upstream
+//!   comment notes the inner `tc.draw(...)` is a `return` expression, not an
+//!   assignment, so the test drains output but asserts nothing — no
+//!   observable behaviour to pin.
+//! - Section D `test_auto_rewriting_without_decorator`: pbtkit's import-time
+//!   `TestCase` monkey-patching is replaced in hegel-rust by the always-on
+//!   `#[hegel::test]` macro — no "importing a module flips a switch" surface.
+//! - Section D `test_rewrite_draws_with_closure`: tests that pbtkit's libcst
+//!   rewriter preserves Python `__closure__` cell references. Rust's
+//!   proc-macro rewrite operates on tokens, so closure-variable preservation
+//!   is not a meaningful rewriter concern.
+//! - Section E `test_importing_draw_names_enables_auto_rewriting`: same
+//!   import-time monkey-patching as the Section D entry above.
 //! - Section E `test_draw_named_stub_raises_before_import`: tests pbtkit's
-//!   stub-before-import behaviour (`NotImplementedError` if draw_names
+//!   stub-before-import behaviour (`NotImplementedError` if `draw_names`
 //!   isn't imported). Hegel-rust has no such stub; `__draw_named` is always
 //!   available on `TestCase`.
-//! - Section E `test_draw_named_validation_runs_outside_composite`: redundant
-//!   with the non-repeatable-reuse and mixed-flags tests below (the
-//!   `print_results=False` angle is the Python-internal flag described
-//!   above; the validation-fires-anyway assertion is the same as the panics
-//!   below).
-//! - Section F (all 7 CST visitor coverage tests): same libcst-specific
-//!   rationale as Section C.
+//! - Section F `test_collector_trystar_marks_repeatable`,
+//!   `test_collector_classdef_marks_repeatable`,
+//!   `test_collector_chained_assignment_skipped`: direct uses of
+//!   `cst.parse_module(...)` + `_DrawNameCollector` — external Python
+//!   library (libcst) integration with no Rust surface.
+//! - Section F `test_rewriter_multiple_targets_in_same_fn`: exercises Python
+//!   chained assignment (`a = b = tc.draw(...)`), a Python-syntax construct
+//!   that doesn't exist in Rust.
+//! - Section F `test_rewriter_kwdefaults_preserved`: asserts
+//!   `rewritten.__kwdefaults__ == {...}` — Python-specific
+//!   keyword-only-default machinery.
+//! - Section F `test_rewriter_draw_with_no_args`: pbtkit's `tc.draw()` takes
+//!   no argument; hegel-rust's `tc.draw(g)` requires a generator, so the
+//!   zero-arg case is unrepresentable in the Rust type system.
+//! - Section F `test_rewrite_fallback_on_bad_source`: tests pbtkit's
+//!   `inspect.getsource` fallback (runtime Python source reflection); the
+//!   proc macro has no equivalent failure mode.
+//! - Section F `test_hook_noop_when_original_test_is_none`: exercises
+//!   pbtkit's internal `_draw_names_hook` against a `PbtkitState` with
+//!   `_original_test is None` — an internal hook with no Rust counterpart.
 
 use crate::common::utils::expect_panic;
 use hegel::generators as gs;
@@ -88,6 +95,18 @@ fn test_draw_counter_increments() {
         lines,
         vec!["let draw_1 = 0;", "let draw_2 = 0;", "let draw_3 = 0;"]
     );
+}
+
+#[test]
+fn test_draw_silent_does_not_print() {
+    // draw_silent bypasses the named-draw machinery: no `let draw_N = …;`
+    // line in the replay output.
+    let lines = draw_lines(
+        "
+        tc.draw_silent(gs::just(5i32));
+    ",
+    );
+    assert!(lines.is_empty(), "expected no draw lines, got {lines:?}");
 }
 
 // ---------------------------------------------------------------------------
@@ -170,8 +189,199 @@ fn test_draw_named_different_names_ok() {
 }
 
 // ---------------------------------------------------------------------------
+// Section C: Rewriter unit tests (rewritten as macro-output tests)
+//
+// Upstream tests pbtkit's libcst-based `rewrite_test_function`; here we
+// exercise the `#[hegel::test]` proc-macro equivalent through its
+// observable draw-output surface.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_rewriter_top_level_assignment() {
+    // Top-level `let x = tc.draw(gen)` rewrites to non-repeatable
+    // `__draw_named(..., "x", false)`, printing `let x = …;`.
+    let lines = draw_lines(
+        "
+        let x = tc.draw(gs::just(5i32));
+    ",
+    );
+    assert_eq!(lines, vec!["let x = 5;"]);
+}
+
+#[test]
+fn test_rewriter_for_loop_body_is_repeatable() {
+    // A draw inside a `for` loop is repeatable — suffixed `x_1`, `x_2`.
+    let lines = draw_lines(
+        "
+        for _ in 0..2 {
+            let x = tc.draw(gs::just(0i32));
+        }
+    ",
+    );
+    assert_eq!(lines, vec!["let x_1 = 0;", "let x_2 = 0;"]);
+}
+
+#[test]
+fn test_rewriter_while_loop_body_is_repeatable() {
+    let lines = draw_lines(
+        "
+        let mut i = 0;
+        while i < 1 {
+            let x = tc.draw(gs::just(0i32));
+            i += 1;
+        }
+    ",
+    );
+    assert_eq!(lines, vec!["let x_1 = 0;"]);
+}
+
+#[test]
+fn test_rewriter_if_body_is_repeatable() {
+    let lines = draw_lines(
+        "
+        if true {
+            let x = tc.draw(gs::just(0i32));
+        }
+    ",
+    );
+    assert_eq!(lines, vec!["let x_1 = 0;"]);
+}
+
+#[test]
+fn test_rewriter_nested_block_is_repeatable() {
+    // Rust analog of Python's `with` block: any nested `{}` block marks
+    // the draw repeatable. (Python: `with contextlib.nullcontext(): …`.)
+    let lines = draw_lines(
+        "
+        {
+            let x = tc.draw(gs::just(0i32));
+        }
+    ",
+    );
+    assert_eq!(lines, vec!["let x_1 = 0;"]);
+}
+
+#[test]
+fn test_rewriter_name_seen_at_top_and_loop_all_repeatable() {
+    // Same name used top-level AND in a loop → all uses become repeatable.
+    let lines = draw_lines(
+        "
+        let x = tc.draw(gs::just(0i32));
+        for _ in 0..1 {
+            let x = tc.draw(gs::just(0i32));
+        }
+    ",
+    );
+    assert_eq!(lines, vec!["let x_1 = 0;", "let x_2 = 0;"]);
+}
+
+#[test]
+fn test_rewriter_no_draws_is_noop() {
+    // A body with no `tc.draw(...)` calls produces no draw lines.
+    let lines = draw_lines("");
+    assert!(lines.is_empty(), "expected no draw lines, got {lines:?}");
+}
+
+#[test]
+fn test_rewriter_expression_context_not_rewritten() {
+    // `tc.draw(...)` in expression context (not a `let x = …` binding)
+    // isn't rewritten — falls back to the `draw_N` counter format.
+    let lines = draw_lines(
+        "
+        assert!(tc.draw(gs::just(0i32)) >= 0);
+    ",
+    );
+    assert_eq!(lines, vec!["let draw_1 = 0;"]);
+}
+
+#[test]
+fn test_rewriter_tuple_target_not_rewritten() {
+    // Tuple destructuring target isn't rewritten (only simple name targets
+    // are) — falls back to `draw_N` format.
+    let lines = draw_lines(
+        "
+        let (_a, _b) = tc.draw(gs::tuples!(gs::just(0i32), gs::just(0i32)));
+    ",
+    );
+    assert_eq!(lines, vec!["let draw_1 = (0, 0);"]);
+}
+
+// ---------------------------------------------------------------------------
+// Section D: Integration tests (@hegel::test end-to-end)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_rewrite_draws_output_is_named() {
+    let lines = draw_lines(
+        "
+        let value = tc.draw(gs::just(0i32));
+    ",
+    );
+    assert_eq!(lines, vec!["let value = 0;"]);
+}
+
+#[test]
+fn test_rewrite_draws_two_draws() {
+    let lines = draw_lines(
+        "
+        let first = tc.draw(gs::just(0i32));
+        let second = tc.draw(gs::just(0i32));
+    ",
+    );
+    assert_eq!(lines, vec!["let first = 0;", "let second = 0;"]);
+}
+
+#[test]
+fn test_rewrite_draws_final_replay_uses_rewritten_function() {
+    // The final failing-example replay uses the rewritten function —
+    // output carries the named binding, not the generic `draw_N`.
+    let lines = draw_lines(
+        "
+        let answer = tc.draw(gs::just(0i32));
+    ",
+    );
+    assert_eq!(lines, vec!["let answer = 0;"]);
+}
+
+#[test]
+fn test_rewrite_draws_loop_output_numbered() {
+    let lines = draw_lines(
+        "
+        for _ in 0..2 {
+            let item = tc.draw(gs::just(0i32));
+        }
+    ",
+    );
+    assert_eq!(lines, vec!["let item_1 = 0;", "let item_2 = 0;"]);
+}
+
+#[test]
+fn test_rewrite_draws_no_error_for_no_draw_function() {
+    // A `#[hegel::test]` body with no draws still works — no draw output.
+    let lines = draw_lines("");
+    assert!(lines.is_empty(), "expected no draw lines, got {lines:?}");
+}
+
+// ---------------------------------------------------------------------------
 // Section E: Full pbtkit integration
 // ---------------------------------------------------------------------------
+
+#[test]
+fn test_draw_named_validation_runs_outside_composite() {
+    // `__draw_named` validation (non-repeatable reuse) fires at the
+    // top-level `TestCase`, independent of replay/output gating.
+    expect_panic(
+        || {
+            hegel::Hegel::new(|tc: hegel::TestCase| {
+                tc.__draw_named(gs::booleans(), "x", false);
+                tc.__draw_named(gs::booleans(), "x", false);
+            })
+            .settings(hegel::Settings::new().test_cases(1))
+            .run();
+        },
+        r#"__draw_named.*"x".*more than once"#,
+    );
+}
 
 #[test]
 fn test_draw_named_no_validation_inside_composite() {
