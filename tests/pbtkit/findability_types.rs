@@ -22,11 +22,11 @@ fn test_one_of_produces_different_types() {
     expect_panic(
         || {
             Hegel::new(|tc| {
-                let x = tc.draw(&gs::one_of(vec![
+                let x = tc.draw(gs::one_of(vec![
                     gs::floats::<f64>().map(FloatOrBool::Float).boxed(),
                     gs::booleans().map(FloatOrBool::Bool).boxed(),
                 ]));
-                let y = tc.draw(&gs::one_of(vec![
+                let y = tc.draw(gs::one_of(vec![
                     gs::floats::<f64>().map(FloatOrBool::Float).boxed(),
                     gs::booleans().map(FloatOrBool::Bool).boxed(),
                 ]));
@@ -45,7 +45,7 @@ fn test_list_is_not_always_sorted() {
         || {
             Hegel::new(|tc| {
                 let xs: Vec<i64> =
-                    tc.draw(&gs::vecs(gs::integers::<i64>().min_value(0).max_value(100)));
+                    tc.draw(gs::vecs(gs::integers::<i64>().min_value(0).max_value(100)));
                 let mut sorted = xs.clone();
                 sorted.sort();
                 assert!(sorted == xs);
@@ -63,7 +63,7 @@ fn test_float_is_not_always_an_endpoint() {
         || {
             Hegel::new(|tc| {
                 let x: f64 = tc.draw(
-                    &gs::floats::<f64>()
+                    gs::floats::<f64>()
                         .min_value(1.0)
                         .max_value(2.0)
                         .allow_nan(false),
@@ -82,7 +82,7 @@ fn test_can_find_string_with_duplicate_characters() {
     expect_panic(
         || {
             Hegel::new(|tc| {
-                let s: String = tc.draw(&gs::text().min_size(2));
+                let s: String = tc.draw(gs::text().min_size(2));
                 let unique: HashSet<char> = s.chars().collect();
                 assert!(unique.len() == s.chars().count());
             })
@@ -98,7 +98,7 @@ fn test_can_find_non_ascii_text() {
     expect_panic(
         || {
             Hegel::new(|tc| {
-                let x: String = tc.draw(&gs::text());
+                let x: String = tc.draw(gs::text());
                 assert!(x.is_ascii());
             })
             .settings(Settings::new().test_cases(200).database(None))
@@ -114,9 +114,9 @@ fn test_removing_element_from_non_unique_list() {
         || {
             Hegel::new(|tc| {
                 let mut xs: Vec<i64> = tc.draw(
-                    &gs::vecs(gs::integers::<i64>().min_value(0).max_value(10)).min_size(2),
+                    gs::vecs(gs::integers::<i64>().min_value(0).max_value(10)).min_size(2),
                 );
-                let y: i64 = tc.draw(&gs::sampled_from(xs.clone()));
+                let y: i64 = tc.draw(gs::sampled_from(xs.clone()));
                 let pos = xs.iter().position(|&v| v == y).unwrap();
                 xs.remove(pos);
                 assert!(!xs.contains(&y));
