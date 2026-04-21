@@ -396,6 +396,33 @@ If a test calls a native-mode feature that isn't implemented yet, do NOT
 3. Commit. The test will compile and (if the source was stubbed) fail at
    runtime — that's expected; a fixer-task invocation will pick it up.
 
+## Coverage witnesses the Python original doesn't have
+
+If your port adds or pulls in `src/native/` code with a defensive
+branch (a `clamp`-to-bound fallthrough, an `unreachable`-adjacent
+fall-through that returns a sentinel, a `.max(0)` guard on an
+arithmetic result), Python's `@example` cases often don't exercise it
+— Python coverage tools don't flag it and the upstream author never
+needed to. Rust's 100% line-coverage ratchet does flag it.
+
+Don't delete the defensive branch; it's there for a reason. Don't add
+`// nocov`; that needs human permission. Instead add a single small
+test with a pathological input that actually hits the branch. Mark it
+clearly as non-upstream so a later reviewer diffing the port against
+the Python doesn't think it's missing from their audit:
+
+```rust
+// Exercise the defensive `return lower` branch of make_float_clamper:
+// when the constraint is pathological (no value can satisfy both sm > max
+// and -sm >= min) the clamper falls back to min_value rather than a
+// value below it. Python coverage doesn't test this; Rust's ratchet does.
+#[test]
+fn test_float_clamper_defensive_lower() { ... }
+```
+
+One focused `#[test]` per defensive branch, same file as the port,
+commit message notes the extra.
+
 ## Keep this skill current
 
 As you port, you'll figure things out that aren't documented yet. When
