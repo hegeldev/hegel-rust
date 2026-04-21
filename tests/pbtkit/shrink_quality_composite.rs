@@ -9,15 +9,6 @@
 //!   pass on a seeded test case, so the direct-invocation shape has no
 //!   analog.
 //!
-//! Two tests are server-only (`#[cfg(not(feature = "native"))]`) because
-//! they require pbtkit's `mutate_and_shrink` (`shrinking.mutation`) pass
-//! (or an equivalent probe-with-random-continuation step), not yet
-//! implemented in `src/native/shrinker/`. Under Hypothesis (server mode)
-//! an equivalent pass already exists.
-//!     - `test_one_of_switches_to_shorter_branch`
-//!     - `test_one_of_shorter_branch_needs_non_simplest_value`
-//!
-//! See TODO.yaml for the implementation task.
 
 use crate::common::utils::{Minimal, minimal};
 use hegel::generators::{self as gs, Generator};
@@ -208,23 +199,12 @@ fn test_one_of_branch_switch_to_float() {
     assert_eq!(result, BoolOrFloat::Float(0.0));
 }
 
-#[cfg(not(feature = "native"))]
 #[derive(Debug, Clone, PartialEq)]
 enum TupOrBool {
     Tup((bool, bool)),
     Bool(bool),
 }
 
-// Server-only: the native shrinker's `try_shortening_via_increment` +
-// `lower_and_bump` cannot cross from Tup((false, true)) to Bool(true) on
-// their own — as pbtkit's own docstring notes, "the increment + pun
-// produces branch=1 with False (not interesting)". In pbtkit this test
-// only passes because `Random(0)` happens to find `Bool(true)` during
-// generation; hegel's `minimal()` uses a different seed path and finds
-// `Tup((false, true))` first. Crossing to the shorter branch needs a
-// probe-with-random-continuation pass (`shrinking.mutation` /
-// `mutate_and_shrink`), which is tracked separately in TODO.yaml.
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_one_of_shorter_branch_needs_non_simplest_value() {
     let result = minimal(
@@ -617,7 +597,6 @@ fn test_shrink_duplicates_three_copies() {
     assert_eq!(c, 1);
 }
 
-#[cfg(not(feature = "native"))]
 #[derive(Debug, Clone, PartialEq)]
 enum ListOrIntOrBool {
     List(Vec<i64>),
@@ -625,11 +604,6 @@ enum ListOrIntOrBool {
     Bool(bool),
 }
 
-// Requires `mutate_and_shrink` (`shrinking.mutation`) to perform the
-// 3-position compound change that switches the outer one_of branch from
-// 0 (list) to 1 (inner one_of → booleans) AND sets the inner index and
-// boolean value simultaneously.
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_one_of_switches_to_shorter_branch() {
     // Outer one_of:

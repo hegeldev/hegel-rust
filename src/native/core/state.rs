@@ -183,6 +183,29 @@ impl NativeTestCase {
         }
     }
 
+    /// A test case that replays `prefix` for the first positions and then
+    /// draws randomly from `rng` for subsequent positions, up to a total of
+    /// `max_size` choices.
+    ///
+    /// Used by `mutate_and_shrink`: port of pbtkit's
+    /// `TestCase(prefix=..., random=..., max_size=...)` construction in
+    /// `shrinking/mutation.py`.
+    pub fn for_probe(prefix: &[ChoiceValue], rng: SmallRng, max_size: usize) -> Self {
+        NativeTestCase {
+            prefix: prefix.to_vec(),
+            prefix_nodes: None,
+            rng: Some(rng),
+            max_size,
+            nodes: Vec::new(),
+            status: None,
+            collections: HashMap::new(),
+            next_collection_id: 0,
+            variable_pools: Vec::new(),
+            spans: Vec::new(),
+            has_discards: false,
+        }
+    }
+
     /// Record a span covering choice nodes [start, end) with the given label.
     pub fn record_span(&mut self, start: usize, end: usize, label: String) {
         if end > start {

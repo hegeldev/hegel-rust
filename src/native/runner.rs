@@ -349,12 +349,20 @@ pub fn native_run<F>(
             *best_nodes = verify_nodes;
 
             {
-                let mut shrinker = Shrinker::new(
-                    Box::new(|candidate_nodes: &[ChoiceNode]| {
+                use crate::native::shrinker::ShrinkRun;
+                let mut shrinker = Shrinker::with_probe(
+                    Box::new(|req: ShrinkRun| {
                         if verbosity == Verbosity::Verbose {
                             eprintln!("Trying example: ");
                         }
-                        let result = ctf.run_shrink(candidate_nodes);
+                        let result = match req {
+                            ShrinkRun::Full(candidate_nodes) => ctf.run_shrink(candidate_nodes),
+                            ShrinkRun::Probe {
+                                prefix,
+                                seed,
+                                max_size,
+                            } => ctf.run_probe(prefix, seed, max_size),
+                        };
                         calls += 1;
                         result
                     }),

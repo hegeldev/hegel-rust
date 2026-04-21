@@ -17,6 +17,7 @@ mod deletion;
 mod floats;
 mod index_passes;
 mod integers;
+mod mutation;
 mod sequence;
 mod strings;
 pub mod value_shrinkers;
@@ -25,13 +26,28 @@ use std::collections::HashMap;
 
 use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINK_ITERATIONS, NodeSortKey, sort_key};
 
-/// A callback that runs a test case from a choice sequence.
+/// Request passed to the shrinker's test function.
+///
+/// [`Full`] replays a full node sequence with punning (the shape used by
+/// most shrink passes). [`Probe`] replays a prefix of choice values and
+/// then draws randomly beyond it — needed by `mutate_and_shrink` (port of
+/// pbtkit's `shrinking/mutation.py`).
+pub enum ShrinkRun<'a> {
+    Full(&'a [ChoiceNode]),
+    Probe {
+        prefix: &'a [ChoiceValue],
+        seed: u64,
+        max_size: usize,
+    },
+}
+
+/// A callback that runs a test case for the shrinker.
 /// Returns `(is_interesting, actual_nodes)`.
 /// `actual_nodes` is the sequence of ChoiceNodes produced during the run.
-/// It may be shorter than the candidate length (for early exit / flatmap
-/// bindings), or have different values where the candidate was punned
-/// because the kind changed at that position.
-pub type TestFn<'a> = dyn FnMut(&[ChoiceNode]) -> (bool, Vec<ChoiceNode>) + 'a;
+/// For [`ShrinkRun::Full`], it may be shorter than the candidate length
+/// (for early exit / flatmap bindings), or have different values where the
+/// candidate was punned because the kind changed at that position.
+pub type TestFn<'a> = dyn FnMut(ShrinkRun) -> (bool, Vec<ChoiceNode>) + 'a;
 
 pub struct Shrinker<'a> {
     test_fn: Box<TestFn<'a>>,
@@ -39,7 +55,29 @@ pub struct Shrinker<'a> {
 }
 
 impl<'a> Shrinker<'a> {
-    pub fn new(test_fn: Box<TestFn<'a>>, initial_nodes: Vec<ChoiceNode>) -> Self {
+    /// Construct a Shrinker from a `&[ChoiceNode]`-taking closure. Passes
+    /// that issue [`ShrinkRun::Probe`] requests (currently only
+    /// `mutate_and_shrink`) are no-ops with this constructor: the wrapped
+    /// closure ignores the probe and returns `(false, vec![])`. Use
+    /// [`Shrinker::with_probe`] when probe support is needed.
+    #[cfg(test)]
+    pub fn new<F>(mut test_fn: Box<F>, initial_nodes: Vec<ChoiceNode>) -> Self
+    where
+        F: FnMut(&[ChoiceNode]) -> (bool, Vec<ChoiceNode>) + ?Sized + 'a,
+    {
+        Shrinker {
+            test_fn: Box::new(move |req: ShrinkRun| match req {
+                ShrinkRun::Full(nodes) => test_fn(nodes),
+                ShrinkRun::Probe { .. } => (false, Vec::new()),
+            }),
+            current_nodes: initial_nodes,
+        }
+    }
+
+    /// Construct a Shrinker from a closure that handles both [`ShrinkRun::Full`]
+    /// and [`ShrinkRun::Probe`] requests. Required for `mutate_and_shrink` to
+    /// actually explore random continuations.
+    pub fn with_probe(test_fn: Box<TestFn<'a>>, initial_nodes: Vec<ChoiceNode>) -> Self {
         Shrinker {
             test_fn,
             current_nodes: initial_nodes,
@@ -58,11 +96,28 @@ impl<'a> Shrinker<'a> {
         if sort_key(nodes) == sort_key(&self.current_nodes) {
             return true;
         }
-        let (is_interesting, actual_nodes) = (self.test_fn)(nodes);
+        let (is_interesting, actual_nodes) = (self.test_fn)(ShrinkRun::Full(nodes));
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
             self.current_nodes = actual_nodes;
         }
         is_interesting
+    }
+
+    /// Run a probe: replay `prefix` then continue with random draws from a
+    /// deterministic RNG seeded by `seed`, capped at `max_size` choices. If
+    /// the resulting run is interesting and shortlex-smaller than
+    /// `current_nodes`, update `current_nodes`.
+    ///
+    /// Port of pbtkit's `shrinker.test_function(TestCase(prefix=..., random=...))`.
+    pub(super) fn probe(&mut self, prefix: &[ChoiceValue], seed: u64, max_size: usize) {
+        let (is_interesting, actual_nodes) = (self.test_fn)(ShrinkRun::Probe {
+            prefix,
+            seed,
+            max_size,
+        });
+        if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
+            self.current_nodes = actual_nodes;
+        }
     }
 
     /// Try replacing values at specific indices.
@@ -104,6 +159,7 @@ impl<'a> Shrinker<'a> {
             self.redistribute_string_pairs();
             self.lower_and_bump();
             self.try_shortening_via_increment();
+            self.mutate_and_shrink();
         }
     }
 }
