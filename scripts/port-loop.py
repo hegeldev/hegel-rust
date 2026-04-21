@@ -3617,6 +3617,15 @@ def main() -> None:
             parser.error("--max-workers>1 is incompatible with --todo-only.")
     if args.per_file_dispatches < 1:
         parser.error("--per-file-dispatches must be >= 1.")
+
+    # Use sccache as a shared compiler cache when available.  Workers inherit
+    # this via `os.environ.copy()`, so a single sccache daemon serves all of
+    # them and the supervisor, cutting repeated dependency compilations down to
+    # cache hits.
+    if shutil.which("sccache") and "RUSTC_WRAPPER" not in os.environ:
+        os.environ["RUSTC_WRAPPER"] = "sccache"
+        print("[port-loop] sccache found; setting RUSTC_WRAPPER=sccache for all builds.")
+
     state = IterCounter(
         args.max_iterations,
         args.timeout,
