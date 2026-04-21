@@ -472,3 +472,19 @@ Individually-skipped tests (rest of the file is ported):
   function being called from inside another `@given` function. hegel-rust
   has no decorator-based test dispatch to nest and no `nested_given`
   variant on its `HealthCheck` enum.
+
+- `test_error_in_draw.py` — every test inspects Python-specific
+  error-annotation surfaces with no Rust counterpart:
+  `test_error_is_in_finally` asserts the drawn-value list appears in
+  PEP 678 `__notes__` after a `try/finally` re-raise (Rust has no
+  `finally` and no `__notes__`); `test_warns_on_bool_strategy` uses
+  `pytest.warns(HypothesisWarning)` triggered by `if st.booleans():`
+  (Rust's type system makes "use a generator as a bool"
+  unrepresentable, and there is no `HypothesisWarning` analog);
+  `test_adds_note_showing_which_strategy` and
+  `test_adds_note_showing_which_strategy_stateful` match
+  `pytest.raises(...).match(f"while generating 'value' from {rep}")`
+  against `__notes__` containing `st.from_type(X)`'s `__repr__`
+  (hegel-rust has no `from_type`, no strategy `__repr__` surface, and
+  its failure output is `let draw_1 = ...;` with no strategy repr or
+  PEP 678 notes).
