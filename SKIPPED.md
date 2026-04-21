@@ -448,6 +448,11 @@ Individually-skipped tests (rest of the file is ported):
   targeted PBT scores). hegel-rust exposes none of these: no `event()`, no `target()`,
   no statistics collection or formatting infrastructure.
 
+- `test_targeting.py` — every test calls Hypothesis's public `target(observation, label=...)`
+  function and/or stresses its internal `TargetSelector` pool-size logic. hegel-rust
+  exposes no `target()` function and no targeted-PBT surface at all (same gap as
+  `test_statistical_events.py`), so none of the nine tests are portable.
+
 - `test_observability.py` — every test sits on Hypothesis's observability public
   API surface, none of which hegel-rust exposes:
   `capture_observations` / `TestCaseObservation` / `InfoObservation` /
