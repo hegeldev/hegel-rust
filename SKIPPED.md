@@ -43,6 +43,12 @@ Individually-skipped tests (rest of the file is ported):
 - `test_text.py::test_string_sort_key_type_mismatch` — exercises Python's
   dynamically-typed `sort_key(non-string)`; Rust's `sort_key(&str)` signature
   makes the "non-string argument" case unrepresentable at compile time.
+- `test_bytes.py::test_bytes_sort_key_type_mismatch` — same pattern as the
+  string equivalent: Rust's `sort_key(&[u8])` signature makes the
+  "non-bytes argument" case unrepresentable at compile time.
+- `test_bytes.py::test_targeting_with_bytes` — uses `tc.target(score)`;
+  no targeting API in hegel-rust (already covered by the whole-file skip
+  of `test_targeting.py`).
 - `test_generators.py::test_cannot_witness_nothing` — uses `gs.nothing()`;
   hegel-rust has no empty-generator public API.
 - `test_generators.py::test_target_and_reduce` — uses `tc.target(score)`;
