@@ -248,6 +248,10 @@ impl TestCase {
         }
     }
 
+    pub(crate) fn mode(&self) -> Mode {
+        self.global.mode
+    }
+
     /// Acquire the shared mutex for the duration of `f`.
     ///
     /// Held briefly around individual backend calls or draw-state updates,

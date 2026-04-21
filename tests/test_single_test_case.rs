@@ -148,6 +148,49 @@ fn test_single_test_case_repeat_loops_indefinitely() {
 }
 
 #[test]
+fn test_single_test_case_stateful_runs_forever() {
+    let step_count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let counter = step_count.clone();
+
+    struct Counter {
+        count: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    }
+
+    #[hegel::state_machine]
+    impl Counter {
+        #[rule]
+        fn step(&mut self, _tc: TestCase) {
+            let n = self
+                .count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1;
+            if n >= 200 {
+                panic!("reached 200 steps");
+            }
+        }
+    }
+
+    expect_panic(
+        move || {
+            hegel::Hegel::new(move |tc| {
+                let m = Counter {
+                    count: counter.clone(),
+                };
+                hegel::stateful::run(m, tc);
+            })
+            .settings(hegel::Settings::new().mode(Mode::SingleTestCase))
+            .run();
+        },
+        "reached 200 steps",
+    );
+
+    assert_eq!(
+        step_count.load(std::sync::atomic::Ordering::Relaxed),
+        200
+    );
+}
+
+#[test]
 fn test_hegel_main_macro_with_single_test_case() {
     let code = r#"
 use hegel::generators as gs;
