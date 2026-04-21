@@ -442,6 +442,16 @@ Individually-skipped tests (rest of the file is ported):
   hegel-rust has no scrutineer / branch-coverage infrastructure or
   warning surface.
 
+- `test_filestorage.py` — all tests exercise Hypothesis's `hypothesis.configuration`
+  module (`storage_directory`, `set_hypothesis_home_dir`, the
+  `HYPOTHESIS_STORAGE_DIRECTORY` environment variable, and the auto-written
+  `.gitignore` in `.hypothesis/`), a Python-side facility for configuring where
+  Python Hypothesis persists its examples database. Hegel-rust's client has no
+  storage-directory configuration surface — persistence is handled server-side
+  by Python Hypothesis and is opaque to the Rust client. The two
+  `test_writes_gitignore_to_new_storage_dir` / `test_skips_gitignore_for_existing_storage_dir`
+  tests additionally drive `subprocess`-launched Python scripts and `git init`.
+
 - `test_filter_rewriting.py` — all tests exercise Hypothesis's filter rewriting
   optimization, which inspects Python predicates at runtime (lambda AST source
   parsing via `hypothesis.internal.reflection`, `functools.partial` attribute
