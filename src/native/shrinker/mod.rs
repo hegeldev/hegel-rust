@@ -18,6 +18,7 @@ mod floats;
 mod integers;
 mod sequence;
 mod strings;
+pub mod value_shrinkers;
 
 use std::collections::HashMap;
 
