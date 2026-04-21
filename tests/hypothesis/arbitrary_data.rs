@@ -4,25 +4,22 @@
 //! `.draw()` method for dynamic draws inside a test. In hegel-rust, every
 //! test body already receives a `tc: TestCase` with the same surface
 //! (`tc.draw(...)`), so there is no separate `data()` strategy — the
-//! "conditional draw" pattern ports as a normal `Hegel::new(|tc| …).run()`.
+//! "conditional draw" pattern ports as a normal `Hegel::new(|tc| …).run()`,
+//! and the "dynamic draw inside `find()`" pattern ports as a `compose!`
+//! generator passed to `minimal()`.
 //!
 //! Individually-skipped tests:
 //!
-//! - `test_given_twice_is_same` — hegel-rust tests take a single `tc`
-//!   argument; the "two independent `data()` arguments" shape has no
-//!   counterpart.
-//! - `test_data_supports_find` — uses `hypothesis.find(st.data(), …)` and
-//!   asserts on `data.conjecture_data.choices`, a Python engine-internal
-//!   attribute; hegel-rust has no standalone `find()` and no public
-//!   "choices" accessor on a returned value.
 //! - `test_errors_when_normal_strategy_functions_are_used` — asserts
 //!   `st.data().filter(...)` / `.map(...)` / `.flatmap(...)` raise
 //!   `InvalidArgument`; there is no `st.data()` strategy object in
-//!   hegel-rust to apply those transforms to.
+//!   hegel-rust to apply those transforms to (the equivalent is a
+//!   compile-time absence of those methods on `TestCase`).
 //! - `test_nice_repr` — tests `repr(st.data()) == "data()"`; Python `repr`
 //!   has no Rust counterpart.
 
 use crate::common::project::TempRustProject;
+use crate::common::utils::minimal;
 use hegel::generators as gs;
 use hegel::{Hegel, Settings};
 
@@ -129,4 +126,58 @@ fn main() {
         "expected `let a_number = 0;` in stderr:\n{}",
         output.stderr
     );
+}
+
+#[test]
+fn test_given_twice_is_same() {
+    // Python: `@given(st.data(), st.data())` with `data1.draw(...)` and
+    // `data2.draw(...)` asserts `Draw 1: 0` / `Draw 2: 0` appear in the
+    // failure's `__notes__`. hegel-rust has a single `tc`, so the port is
+    // two consecutive `tc.draw()` calls; the same Draw-N numbering appears
+    // as `let draw_N = ...;` lines in stderr.
+    const CODE: &str = r#"
+use hegel::generators as gs;
+use hegel::{Hegel, Settings};
+
+fn main() {
+    Hegel::new(|tc| {
+        tc.draw(gs::integers::<i64>());
+        tc.draw(gs::integers::<i64>());
+        panic!("TWICE_IS_SAME");
+    })
+    .settings(Settings::new().database(None))
+    .run();
+}
+"#;
+
+    let output = TempRustProject::new()
+        .main_file(CODE)
+        .expect_failure("TWICE_IS_SAME")
+        .cargo_run(&[]);
+
+    assert!(
+        output.stderr.contains("let draw_1 = 0;"),
+        "expected `let draw_1 = 0;` in stderr:\n{}",
+        output.stderr
+    );
+    assert!(
+        output.stderr.contains("let draw_2 = 0;"),
+        "expected `let draw_2 = 0;` in stderr:\n{}",
+        output.stderr
+    );
+}
+
+#[test]
+fn test_data_supports_find() {
+    // Python: `find(st.data(), lambda data: data.draw(st.integers()) >= 10)`
+    // then `assert data.conjecture_data.choices == (10,)`. In hegel-rust,
+    // `compose!` plays the role of `st.data()` (dynamic draws inside a
+    // generator) and `minimal()` plays the role of `find()`; the
+    // engine-internal `choices` accessor has no public counterpart, so we
+    // assert on the returned minimal value instead.
+    let value: i64 = minimal(
+        hegel::compose!(|tc| { tc.draw(gs::integers::<i64>()) }),
+        |x: &i64| *x >= 10,
+    );
+    assert_eq!(value, 10);
 }
