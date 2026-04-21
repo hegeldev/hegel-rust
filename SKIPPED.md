@@ -760,3 +760,10 @@ Individually-skipped tests (rest of the file is ported):
   enforces, adding no coverage. `test_verbosity_is_comparable` would
   require `Verbosity: Ord`, which hegel-rust deliberately does not
   derive.
+
+- `test_traceback_elision.py` — exercises Python's traceback module
+  (`traceback.extract_tb`, `e.__traceback__`) and counts frames to verify
+  Hypothesis's internal-frame-trimming behaviour (gated on the
+  `HYPOTHESIS_NO_TRACEBACK_TRIM` env var). Rust panics and backtraces have
+  no equivalent frame-inspection or trim surface, and hegel-rust has no
+  `HYPOTHESIS_NO_TRACEBACK_TRIM` analog — all Python-specific.
