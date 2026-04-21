@@ -430,6 +430,19 @@ fn test_float_clamper_defensive_lower() { ... }
 One focused `#[test]` per defensive branch, same file as the port,
 commit message notes the extra.
 
+The same witness pattern applies when the upstream's *predicate shape*
+is what starves coverage, not a defensive branch in the code. Budget /
+call-count tests (e.g. `test_shrink_budgeting.py`, which asserts
+`shrinker.calls <= 10` with a `lambda x: x == value` predicate that
+accepts only the initial value) deliberately reject every
+improvement, so the *mainline* improvement paths of the code under
+test go unhit. Add one witness per path the budget predicate skips —
+a permissive predicate to hit the short-circuit improvement arm, a
+threshold predicate to walk the binary-search / mask arms, inputs
+that trigger the skip-branch of a "continue if already in order"
+loop, etc. Same file, same "non-upstream" comment style, commit
+message notes the extras.
+
 ## Keep this skill current
 
 As you port, you'll figure things out that aren't documented yet. When
