@@ -15,6 +15,7 @@
 mod bytes;
 mod deletion;
 mod floats;
+mod index_passes;
 mod integers;
 mod sequence;
 mod strings;
@@ -25,10 +26,12 @@ use std::collections::HashMap;
 use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINK_ITERATIONS, NodeSortKey, sort_key};
 
 /// A callback that runs a test case from a choice sequence.
-/// Returns `(is_interesting, actual_nodes_consumed)`.
-/// `actual_nodes_consumed` is how many ChoiceNodes were produced
-/// during the run (may be less than candidate length for flatmap bindings).
-pub type TestFn<'a> = dyn FnMut(&[ChoiceNode]) -> (bool, usize) + 'a;
+/// Returns `(is_interesting, actual_nodes)`.
+/// `actual_nodes` is the sequence of ChoiceNodes produced during the run.
+/// It may be shorter than the candidate length (for early exit / flatmap
+/// bindings), or have different values where the candidate was punned
+/// because the kind changed at that position.
+pub type TestFn<'a> = dyn FnMut(&[ChoiceNode]) -> (bool, Vec<ChoiceNode>) + 'a;
 
 pub struct Shrinker<'a> {
     test_fn: Box<TestFn<'a>>,
@@ -45,13 +48,19 @@ impl<'a> Shrinker<'a> {
 
     /// Try a candidate choice sequence. If interesting and smaller than
     /// the current best, update current_nodes. Returns whether interesting.
+    ///
+    /// The stored nodes are the actual sequence produced by the test
+    /// function, not the candidate passed in. This matters when the test
+    /// exits early (actual is shorter than candidate) or when value
+    /// punning replaces values that no longer fit the kind at that
+    /// position after a one_of branch switch.
     pub fn consider(&mut self, nodes: &[ChoiceNode]) -> bool {
         if sort_key(nodes) == sort_key(&self.current_nodes) {
             return true;
         }
-        let (is_interesting, _) = (self.test_fn)(nodes);
-        if is_interesting && sort_key(nodes) < sort_key(&self.current_nodes) {
-            self.current_nodes = nodes.to_vec();
+        let (is_interesting, actual_nodes) = (self.test_fn)(nodes);
+        if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
+            self.current_nodes = actual_nodes;
         }
         is_interesting
     }
@@ -93,6 +102,8 @@ impl<'a> Shrinker<'a> {
             self.shrink_bytes();
             self.shrink_strings();
             self.redistribute_string_pairs();
+            self.lower_and_bump();
+            self.try_shortening_via_increment();
         }
     }
 }

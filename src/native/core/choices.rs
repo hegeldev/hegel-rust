@@ -869,10 +869,67 @@ impl ChoiceKind {
             ChoiceKind::String(sc) => ChoiceValue::String(sc.simplest()),
         }
     }
+
+    /// Largest valid index for [`from_index`].
+    ///
+    /// pbtkit: `core.py::ChoiceType.max_index`.
+    #[allow(dead_code)]
+    pub fn max_index(&self) -> crate::native::bignum::BigUint {
+        match self {
+            ChoiceKind::Integer(ic) => ic.max_index(),
+            ChoiceKind::Boolean(bc) => bc.max_index(),
+            ChoiceKind::Float(fc) => fc.max_index(),
+            ChoiceKind::Bytes(bc) => bc.max_index(),
+            ChoiceKind::String(sc) => sc.max_index(),
+        }
+    }
+
+    /// Convert a value to its dense index under this kind's sort order.
+    ///
+    /// pbtkit: `core.py::ChoiceType.to_index`.
+    #[allow(dead_code)]
+    pub fn to_index(&self, value: &ChoiceValue) -> crate::native::bignum::BigUint {
+        match (self, value) {
+            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.to_index(*v),
+            (ChoiceKind::Boolean(bc), ChoiceValue::Boolean(v)) => bc.to_index(*v),
+            (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => fc.to_index(*v),
+            (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => bc.to_index(v),
+            (ChoiceKind::String(sc), ChoiceValue::String(v)) => sc.to_index(v),
+            _ => panic!("ChoiceKind::to_index: kind/value mismatch"),
+        }
+    }
+
+    /// Inverse of [`to_index`]. Returns `None` when the index is out of range
+    /// (or falls on a bounded-range gap for float kinds).
+    ///
+    /// pbtkit: `core.py::ChoiceType.from_index`.
+    #[allow(dead_code, clippy::wrong_self_convention)]
+    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<ChoiceValue> {
+        match self {
+            ChoiceKind::Integer(ic) => ic.from_index(index).map(ChoiceValue::Integer),
+            ChoiceKind::Boolean(bc) => bc.from_index(index).map(ChoiceValue::Boolean),
+            ChoiceKind::Float(fc) => fc.from_index(index).map(ChoiceValue::Float),
+            ChoiceKind::Bytes(bc) => bc.from_index(index).map(ChoiceValue::Bytes),
+            ChoiceKind::String(sc) => sc.from_index(index).map(ChoiceValue::String),
+        }
+    }
+
+    /// Whether `value` is a valid draw for this kind.
+    #[allow(dead_code)]
+    pub fn validate(&self, value: &ChoiceValue) -> bool {
+        match (self, value) {
+            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.validate(*v),
+            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(_)) => true,
+            (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => fc.validate(*v),
+            (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => bc.validate(v),
+            (ChoiceKind::String(sc), ChoiceValue::String(v)) => sc.validate(v),
+            _ => false,
+        }
+    }
 }
 
 /// A single recorded choice in a test case.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ChoiceNode {
     pub kind: ChoiceKind,
     pub value: ChoiceValue,

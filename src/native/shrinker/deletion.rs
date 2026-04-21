@@ -119,13 +119,13 @@ impl<'a> Shrinker<'a> {
         let mut attempt = self.current_nodes.clone();
         attempt[idx] = attempt[idx].with_value(value);
 
-        let (_, actual_len) = (self.test_fn)(&attempt);
-        if actual_len >= expected_len {
+        let (_, actual_nodes) = (self.test_fn)(&attempt);
+        if actual_nodes.len() >= expected_len {
             return false;
         }
 
         // The test used fewer nodes. Try deleting regions after idx.
-        let k = expected_len - actual_len;
+        let k = expected_len - actual_nodes.len();
         for size in (1..=k).rev() {
             let start = attempt.len().saturating_sub(size);
             if start <= idx {
