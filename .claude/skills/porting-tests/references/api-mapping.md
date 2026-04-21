@@ -198,6 +198,36 @@ Dynamic-typing checks such as `test_it_is_an_error_to_suppress_non_iterables`
 are prevented at compile time by Rust's `impl IntoIterator<Item = HealthCheck>`
 bound — skip them.
 
+## Stateful filter closures
+
+Python tests frequently construct a `.filter(f)` where `f` closes over a
+mutable local (a set, a counter) — e.g. the `unhealthy_filter` pattern
+from `test_health_checks.py` that rejects until it has seen 200 values,
+then starts accepting. `Generator::filter` takes `F: Fn + Clone`, so the
+state must be shared through interior mutability:
+
+```rust
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+let counter = Arc::new(AtomicUsize::new(0));
+let filter = move |_: &i64| counter.fetch_add(1, Ordering::Relaxed) >= THRESHOLD;
+```
+
+For a `HashSet`-style `forbidden` set use `Arc<Mutex<HashSet<T>>>`. If
+the test runs the closure twice (e.g. part 1 then part 2 of
+`test_suppressing_filtering_health_check`) wrap the setup in a
+`make_filter` closure and call it each time — `Arc` state persists across
+`Hegel::new(...).run()` calls otherwise.
+
+**Filter retry multiplier.** `Filtered::do_draw` retries the predicate
+up to 3 times per draw before falling back to `assume(false)`. If you
+port a Python test whose threshold is measured in *draws* (e.g. "reject
+the first 200 values") the equivalent Rust threshold is measured in
+*filter calls* and needs roughly ×3 the number — pick a value that still
+exceeds FilterTooMuch's 200-invalid bar but leaves enough budget for the
+filter to open up before the test case count is exhausted.
+
 ## text() with characters() parameters
 
 In Python, `text()` accepts a `characters()` strategy as its alphabet,
