@@ -269,6 +269,10 @@ pub mod __native_test_internals {
         ReadOnlyNativeDatabase,
     };
     pub use crate::native::featureflags::{FeatureFlags, FeatureStrategy};
+    pub use crate::native::floats::{
+        FloatConstraints, choice_equal_float, choice_permitted_float, count_between_floats,
+        make_float_clamper, next_down, next_up, sign_aware_lte,
+    };
     pub use crate::native::tree::CachedTestFunction;
     pub use crate::native::unicodedata;
 }
