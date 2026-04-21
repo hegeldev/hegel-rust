@@ -274,11 +274,19 @@ A few shape differences between Python `st.characters()` and
 check fires:
 
 - **Construction-time** — a few factory functions validate eagerly (e.g.
-  `gs::sampled_from(vec![])` panics on empty input). Wrap the constructor:
+  `gs::sampled_from(vec![])` and `gs::one_of(vec![])` both panic on empty
+  input). Wrap the constructor:
 
   ```rust
   expect_panic(|| { gs::sampled_from::<i64, _>(Vec::<i64>::new()); },
                "sampled_from cannot be empty");
+  expect_panic(
+      || {
+          let empty: Vec<gs::BoxedGenerator<i64>> = vec![];
+          gs::one_of(empty);
+      },
+      "one_of requires at least one generator",
+  );
   ```
 
 - **Draw-time (the common case)** — bounds checks (`min > max`), mutually
