@@ -75,6 +75,12 @@ access to everything the module sees. Existing precedent:
 ports `test_cache_key_distinguishes_negative_zero` /
 `test_cache_key_distinguishes_nan_variants`.
 
+Before listing an engine-harness test as skipped, grep
+`tests/embedded/native/` for its name — a prior port of a different
+upstream file may have already covered it, in which case don't record
+it as skipped at all. (The test_core.py port initially skipped three
+cases that turned out to live in `tree_tests.rs`.)
+
 Shapes that port this way (do NOT skip them — see SKILL.md "NOT reasons to skip"):
 
 - `SHRINK_PASSES` lookup by name, `Shrinker(state, initial, is_interesting=fn)` —
