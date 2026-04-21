@@ -5,7 +5,7 @@
 //! `#[hegel::main(test_cases = 500)]` produces a binary whose `--test-cases`
 //! flag defaults to 500) and applies CLI overrides on top of it.
 
-use crate::runner::{HealthCheck, Settings, Verbosity};
+use crate::runner::{HealthCheck, Mode, Settings, Verbosity};
 
 /// Result of applying CLI overrides. The macro wrapper in `#[hegel::main]`
 /// dispatches on this to print messages and exit the process; keeping the
@@ -107,6 +107,9 @@ where
                 let checks = parse_health_check(&value)?;
                 settings = settings.suppress_health_check(checks);
             }
+            "--single-test-case" => {
+                settings = settings.mode(Mode::SingleTestCase);
+            }
             _ => {
                 return Err(CliError::Parse(format!("Unknown argument: {arg}")));
             }
@@ -187,6 +190,9 @@ fn usage() -> String {
     );
     s.push_str(
         "  --suppress-health-check <NAMES>      Comma-separated health check names, or 'all'\n",
+    );
+    s.push_str(
+        "  --single-test-case                   Run one test case, no shrinking or replay\n",
     );
     s.push_str("  -h, --help                           Show this help and exit\n");
     s
