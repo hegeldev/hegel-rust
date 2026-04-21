@@ -48,7 +48,7 @@ Generator transforms (all require `Generator` trait in scope):
 | `tc.weighted(p)`            | **missing** (no public API) — `todo!()`  |
 | `tc.mark_status(INTERESTING)` | `panic!(...)` to signal failure        |
 | `tc.target(score)`         | **missing** — `todo!()`                  |
-| `tc.for_choices([...])`    | pbtkit-internal replay shim — not public |
+| `ConjectureData.for_choices([v, ...])` | `NativeTestCase::for_choices(&[ChoiceValue::…, …], None)` from `hegel::__native_test_internals` (native-only) — see "Replaying fixed choices" below |
 | `tc.reject()`              | `tc.assume(false)` is the closest (but see pbtkit-overview.md) |
 
 ## Settings
@@ -89,7 +89,64 @@ adding the feature. Don't invent a workaround in the test.
 - `deadline` setting.
 - Index-based shrink passes (`max_index`, `to_index`, `from_index`) on
   `StringChoice` / `BytesChoice`.
-- Explicit replay via `TC.for_choices(values)` — pbtkit-internal only.
+
+## Replaying fixed choices (`ConjectureData.for_choices`)
+
+Hypothesis's conjecture tests often exercise a strategy against a
+handwritten choice sequence via `data = ConjectureData.for_choices([...])`
+followed by `s.do_draw(data)`. In hegel-rust (native mode only) the same
+pattern is expressed by running the strategy inside a `CachedTestFunction`
+closure and replaying a `NativeTestCase::for_choices` as the input:
+
+```python
+# Hypothesis
+data = ConjectureData.for_choices([])
+assert st.just("hello").do_draw(data) == "hello"
+```
+
+```rust
+// hegel-rust
+#[cfg(feature = "native")]
+#[test]
+fn test_just_does_not_draw() {
+    use hegel::__native_test_internals::{CachedTestFunction, NativeTestCase};
+    use hegel::TestCase;
+    use std::sync::{Arc, Mutex};
+
+    let seen = Arc::new(Mutex::new(None::<String>));
+    let seen_c = Arc::clone(&seen);
+    let mut ctf = CachedTestFunction::new(move |tc: TestCase| {
+        let v: String = tc.draw(gs::just("hello".to_string()));
+        *seen_c.lock().unwrap() = Some(v);
+    });
+    let ntc = NativeTestCase::for_choices(&[], None);
+    let (_status, nodes, _span_tree) = ctf.run(ntc);
+
+    assert_eq!(seen.lock().unwrap().as_deref(), Some("hello"));
+    assert!(nodes.is_empty()); // strategy consumed zero choice nodes
+}
+```
+
+Key points:
+
+- The closure takes the public `tc: TestCase` and calls `tc.draw(...)`
+  exactly as a normal test body does — this is what lets you drive
+  public-API strategies from a fixed choice sequence rather than only
+  low-level `ntc.draw_bytes` / `ntc.draw_integer`.
+- Captured state goes through `Arc<Mutex<_>>` because the closure is
+  `move` and `ctf.run` consumes its input but does not return the
+  closure's result.
+- `ctf.run(ntc)` returns `(status, choice_nodes, span_tree)`. Assert on
+  `nodes.is_empty()` to verify the strategy draws nothing, or on the
+  nodes directly to verify what it drew.
+- This is native-only — gate with `#[cfg(feature = "native")]`. In server
+  mode there is no equivalent replay surface; skip that half of the test
+  or make the whole test native.
+
+Non-replay uses of `NativeTestCase::for_choices` (driving `ntc.draw_bytes`,
+`ntc.draw_integer`, etc. directly without a strategy) don't need
+`CachedTestFunction` — see `tests/hypothesis/simple_strings.rs::test_fixed_size_bytes_just_draw_bytes`
+for that simpler shape.
 
 ## text() with characters() parameters
 
