@@ -26,6 +26,7 @@ structure.
 | `gs.from_regex(pat)`                       | `gs::from_regex(pat)` (add `.fullmatch(true)` if used)        |
 | `gs.emails()` / `gs.urls()`                | `gs::emails()` / `gs::urls()`                                 |
 | `gs.dates()` etc.                          | `gs::dates()`, `gs::times()`, `gs::datetimes()`, `gs::durations()` |
+| `st.data()` (the "draw inside the test" strategy) | **no analog — and that's fine**: the test body's `tc: TestCase` already exposes `tc.draw(...)`. A Hypothesis `@given(st.integers(), st.data()) def t(x, data): data.draw(...)` ports as `Hegel::new(\|tc\| { let x = tc.draw(...); let y = tc.draw(...); })`. Don't skip these as "no `st.data()` strategy" — only skip Hypothesis tests that need *two* independent `st.data()` arguments (the "two test-cases in one test" shape has no counterpart) or that call `.filter`/`.map`/`.flatmap` *on the strategy object itself*. |
 
 Generator transforms (all require `Generator` trait in scope):
 
@@ -42,6 +43,8 @@ Generator transforms (all require `Generator` trait in scope):
 | Python                     | Rust                                     |
 |----------------------------|------------------------------------------|
 | `tc.draw(gen)`             | `tc.draw(&gen)`                          |
+| `data.draw(gen)` (where `data = st.data()`) | `tc.draw(&gen)` — the Hypothesis "data" object is the same surface as hegel-rust's `tc` |
+| `data.draw(gen, label="X")` | `tc.__draw_named(gen, "X", false)` — the third arg is `repeatable`; `false` matches Hypothesis's per-draw-numbered behaviour |
 | `tc.assume(cond)`          | `tc.assume(cond)`                        |
 | `tc.note(msg)`              | `tc.note(msg)`                           |
 | `tc.choice(n)`             | `tc.draw(gs::integers::<i64>().min_value(0).max_value(n-1))` |
@@ -198,6 +201,34 @@ Dynamic-typing checks such as `test_it_is_an_error_to_suppress_non_iterables`
 (passing a non-iterable / non-`HealthCheck` to `suppress_health_check`)
 are prevented at compile time by Rust's `impl IntoIterator<Item = HealthCheck>`
 bound — skip them.
+
+## Hypothesis `__notes__` → hegel-rust stderr `let` lines
+
+When a Hypothesis test fails, drawn values (and `note(...)` lines) are
+attached to the exception's PEP 678 `__notes__`. Tests that capture the
+exception and assert on `__notes__` content port to `TempRustProject`
+assertions on stderr — but the *line shape* differs:
+
+| Hypothesis `__notes__` entry          | hegel-rust stderr line             |
+|---------------------------------------|------------------------------------|
+| `Draw 1: [0, 0]`                      | `let draw_1 = [0, 0];`             |
+| `Draw 2: 0`                           | `let draw_2 = 0;`                  |
+| `Draw 1 (Some numbers): [0, 0]`       | `let some_numbers = [0, 0];`       |
+| `Draw 2 (A number): 0`                | `let a_number = 0;`                |
+
+Notes:
+
+- The label *replaces* the `draw_N` placeholder — there is no `draw_N`
+  prefix when a label is given.
+- Labels with spaces / capitalisation in Python become snake_case Rust
+  identifiers (`"Some numbers"` → `some_numbers`). Pick a label the
+  port can pass directly to `tc.__draw_named(..., "name", false)`.
+- Values use Rust's `Debug` formatting (`[0, 0]`, not `[0, 0]` — usually
+  identical for primitives, but watch strings: `"foo"` Debug-prints with
+  quotes whereas Python's `repr` is the same shape, so most cases match).
+- Assert with `output.stderr.contains("let draw_1 = [0, 0];")` rather
+  than a regex when the value is concrete; `output` comes from
+  `TempRustProject::new().main_file(CODE).expect_failure(PANIC).cargo_run(&[])`.
 
 ## Stateful filter closures
 
