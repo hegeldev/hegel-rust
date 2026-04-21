@@ -874,3 +874,14 @@ Individually-skipped tests (rest of the file is ported):
   was abandoned after its commits failed to cherry-pick cleanly
   (SKIPPED.md merge conflict); the branch is preserved for a later
   human to inspect.
+
+- `test_unittest.py` — every test exercises Python's `unittest` module
+  integration: `test_subTest` builds a `unittest.TestSuite` around a
+  `unittest.TestCase` subclass and runs it through `unittest.TextTestRunner`
+  while calling `self.subTest(...)` inside a `@given`-decorated method;
+  `test_given_on_setUp_fails_health_check` applies `@given` to a
+  `unittest.TestCase.setUp` hook; `test_subTest_no_self` spawns a Python
+  subprocess to run a `unittest.main()` module. Rust has no `unittest`
+  module, no `TestCase` / `setUp` / `subTest` surface, and hegel-rust
+  tests are closures passed to `Hegel::new(|tc| ...).run()` with no
+  class-based test dispatch or per-test fixture hooks — all Python-specific.
