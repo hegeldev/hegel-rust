@@ -7,6 +7,7 @@ mod common;
 mod bytes;
 mod choice_index;
 mod core;
+mod draw_names;
 mod findability_arithmetic;
 mod findability_collections;
 mod findability_pbtsmith_regressions;
