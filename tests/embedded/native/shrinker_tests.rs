@@ -1833,3 +1833,155 @@ fn shrink_duplicates_skips_bin_search_when_already_simplest() {
     assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
     assert_eq!(int_at(&shrinker.current_nodes, 1), 0);
 }
+
+// ── Additional per-pass regressions ported from pbtkit/test_core.py ─────────
+
+#[test]
+fn delete_chunks_guard_fires_after_shortening() {
+    // Port of pbtkit/tests/test_core.py::test_delete_chunks_guard_after_decrement.
+    // Exercises the `i >= self.current_nodes.len()` guard in delete_chunks:
+    // when a deletion succeeds and shortens the result, the loop's i pointer
+    // may now be past the new end; the guard bails out cleanly.
+    //
+    // Upstream shape: `while tc.weighted(0.9) { tc.draw_integer(0, 10) }`
+    // with the body counting iterations; interesting iff count >= 5.
+    // Initial: 10 (True, value) pairs + trailing False = 21 nodes.
+    let mut nodes = Vec::new();
+    for v in [7, 3, 0, 5, 2, 8, 1, 4, 6, 9] {
+        nodes.push(bool_node(true));
+        nodes.push(int_node(0, 10, v));
+    }
+    nodes.push(bool_node(false));
+
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let mut count = 0;
+            let mut i = 0;
+            while i < n.len() {
+                match n[i].value {
+                    ChoiceValue::Boolean(true) => {
+                        if i + 1 >= n.len()
+                            || !matches!(n[i + 1].value, ChoiceValue::Integer(_))
+                        {
+                            return (false, n.len());
+                        }
+                        count += 1;
+                        i += 2;
+                    }
+                    ChoiceValue::Boolean(false) => {
+                        i += 1;
+                        break;
+                    }
+                    _ => return (false, n.len()),
+                }
+            }
+            (count >= 5, i)
+        }),
+        nodes,
+    );
+
+    shrinker.delete_chunks();
+    // Must terminate without panicking and make some progress below 21 nodes.
+    assert!(shrinker.current_nodes.len() < 21);
+}
+
+#[test]
+fn redistribute_integers_handles_stale_indices() {
+    // Port of pbtkit/tests/test_core.py::test_redistribute_integers_stale_indices.
+    // redistribute_integers must not panic when redistribution between a
+    // loop-controlling value and a later value shortens consumption.
+    let nodes = vec![
+        int_node(2, 8, 4),
+        int_node(0, 100, 20),
+        int_node(0, 100, 30),
+        int_node(0, 100, 25),
+        int_node(0, 100, 35),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::Integer(count) = n[0].value else {
+                return (false, n.len());
+            };
+            if !(2..=8).contains(&count) {
+                return (false, n.len());
+            }
+            let count = count as usize;
+            if n.len() < 1 + count {
+                return (false, n.len());
+            }
+            let sum: i128 = (1..=count)
+                .map(|j| match n[j].value {
+                    ChoiceValue::Integer(v) => v,
+                    _ => 0,
+                })
+                .sum();
+            (sum >= 50, 1 + count)
+        }),
+        nodes,
+    );
+    shrinker.redistribute_integers();
+    assert_eq!(shrinker.current_nodes.len(), 5);
+}
+
+#[test]
+fn bind_deletion_try_deletions_recovers_interesting() {
+    // Port of pbtkit/tests/test_core.py::test_bind_deletion_try_deletions_succeeds.
+    // bind_deletion + try_replace_with_deletion recovers an interesting result
+    // by deleting excess choices after reducing a loop-count value.
+    //
+    // Seed: [n=3, 8, 1, 4], sum=13 >= 10 → interesting. Reducing n to 2 alone
+    // leaves the low-value node orphaned; deletion of the low-value (1) yields
+    // [n=2, 8, 4] sum=12 still interesting.
+    let nodes = vec![
+        int_node(1, 5, 3),
+        int_node(0, 10, 8),
+        int_node(0, 10, 1),
+        int_node(0, 10, 4),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let ChoiceValue::Integer(count) = n[0].value else {
+                return (false, n.len());
+            };
+            if !(1..=5).contains(&count) {
+                return (false, n.len());
+            }
+            let count = count as usize;
+            if n.len() < 1 + count {
+                return (false, n.len());
+            }
+            let sum: i128 = (1..=count)
+                .map(|j| match n[j].value {
+                    ChoiceValue::Integer(v) => v,
+                    _ => 0,
+                })
+                .sum();
+            (count >= 2 && sum >= 10, 1 + count)
+        }),
+        nodes,
+    );
+    shrinker.bind_deletion();
+    assert!(shrinker.current_nodes.len() < 4);
+}
+
+#[test]
+fn sort_values_full_sort_fails_preserves_order() {
+    // Port of pbtkit/tests/test_core.py::test_sort_values_full_sort_fails.
+    // sort_values must leave the sequence untouched when sorting would change
+    // the test outcome (predicate: first > second; sorting gives the opposite).
+    let nodes = vec![int_node(0, 10, 5), int_node(0, 10, 3)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let (ChoiceValue::Integer(a), ChoiceValue::Integer(b)) =
+                (&n[0].value, &n[1].value)
+            else {
+                return (false, 2);
+            };
+            (a > b, 2)
+        }),
+        nodes,
+    );
+    shrinker.sort_values();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 5);
+    assert_eq!(int_at(&shrinker.current_nodes, 1), 3);
+}
