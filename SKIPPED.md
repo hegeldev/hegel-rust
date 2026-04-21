@@ -844,3 +844,8 @@ Individually-skipped tests (rest of the file is ported):
   hegel-rust has no `Frozen` / `StopTest` / `Flaky*` error types. The
   whole file sits on Python exception-group semantics with no Rust
   counterpart.
+
+- `test_stateful.py` — a parallel-port attempt on branch `port/worker-0`
+  was abandoned after its commits failed to cherry-pick cleanly
+  (SKIPPED.md merge conflict); the branch is preserved for a later
+  human to inspect.
