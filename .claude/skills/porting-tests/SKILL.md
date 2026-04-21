@@ -200,6 +200,31 @@ For tests that only use the public generator API (`gs::integers`,
 `gs::vecs`, `Hegel::new(...).run()`, etc.) — just port them. No
 native-gating, no stubs.
 
+### Skipping individual tests within an otherwise-ported file
+
+Occasionally one test (or one parametrize row) in an otherwise
+fully-ported file is unrepresentable — usually because its input
+exercises a Python type / shape that Rust's type system forbids, or
+because it tests a failure mode unreachable through the Rust public
+API (e.g. a client-side invariant the runner adds silently, such as
+`gs::characters()`'s implicit `exclude_categories=["Cs"]`).
+
+Record these in **both** places:
+
+1. At the top of the Rust module, under an `//! Individually-skipped
+   tests:` docstring listing each skipped test with a one-line
+   reason. Future readers comparing the port against the Python
+   original see what's missing and why.
+2. In `SKIPPED.md` under the `Individually-skipped tests (rest of
+   the file is ported):` section for that upstream (pbtkit or
+   hypothesis), as `test_file.py::test_name — reason.`. The
+   unported-gate and port audits scan this file; a skip that lives
+   only in a module docstring is invisible to them.
+
+Do **not** add the whole file to SKIPPED.md's whole-file section —
+that tells the unported-gate the file is done and stops it dispatching
+further work on it.
+
 ### Think harder before skipping
 
 Agents have a strong bias to mark anything unfamiliar as unportable.

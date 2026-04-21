@@ -241,6 +241,29 @@ exposes these as builder methods directly — there is no separate
 | `text(characters(max_codepoint=127))`           | `gs::text().max_codepoint(127)`              |
 | `text(characters(exclude_categories=("Cc",)))`  | `gs::text().exclude_categories(&["Cc"])`     |
 
+### characters() shape differences
+
+A few shape differences between Python `st.characters()` and
+`gs::characters()` affect which test cases port:
+
+- **`include_characters` / `exclude_characters` take `&str`** — each
+  codepoint is a char in the set. Python accepts a list of
+  1-character strings, and parametrizes "one element is a
+  multi-character string" to assert input validation. Rust's
+  signature makes that case unrepresentable; drop those parametrize
+  rows with a note in the module docstring.
+- **The Rust client always emits `exclude_categories=["Cs"]`** so
+  generated strings stay valid UTF-8. Python tests that rely on
+  "`include_characters` alone (with no other constraint) is an
+  error" (e.g. `test_whitelisted_characters_alone`) are unreachable —
+  the implicit `Cs` exclusion means `include_characters` is never
+  the only constraint. Drop the individual case.
+- **`include_characters` is a union override, not a range filter**
+  (matches Hypothesis `charmap.query`): chars listed there are
+  added regardless of `min_codepoint`/`max_codepoint`. A test
+  asserting that `include_characters` produces chars outside the
+  codepoint range is correct and should port unchanged.
+
 ## Validation-panic tests (`InvalidArgument` in Python)
 
 `test_validates_keyword_arguments` in Hypothesis (and similar shapes in
