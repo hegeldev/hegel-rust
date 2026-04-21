@@ -56,6 +56,22 @@ integration test.
   hegel-rust equivalent)
 - `tc.choice(n)` → `tc.draw(gs::integers::<i64>().min_value(0).max_value(n-1))`
 
+## `@pytest.mark.requires(...)` and `pytestmark`
+
+pbtkit's `conftest.py` defines a `requires(module)` marker that skips a
+test when the named pbtkit feature is disabled via `PBTKIT_DISABLED` —
+e.g. `@pytest.mark.requires("collections")`,
+`@pytest.mark.requires("shrinking.sorting")`,
+`@pytest.mark.requires("shrinking.bind_deletion")`, or a module-level
+`pytestmark = pytest.mark.requires(...)`. These are feature gates for
+pbtkit's own compiled-mode builds, not test preconditions. hegel-rust
+always has the corresponding behaviour (the listed modules map to
+`src/native/shrinker/` passes and the server backend), so port such
+tests unconditionally — strip the marker and don't record it anywhere.
+The only time one of these should influence the port is if the required
+feature genuinely has no counterpart; in that case follow the
+native-gated-plus-stub policy in SKILL.md.
+
 ## Findability and shrink-quality tests
 
 `tests/findability/` and `tests/shrink_quality/` in pbtkit are directly
