@@ -113,9 +113,8 @@ fn test_removing_element_from_non_unique_list() {
     expect_panic(
         || {
             Hegel::new(|tc| {
-                let mut xs: Vec<i64> = tc.draw(
-                    gs::vecs(gs::integers::<i64>().min_value(0).max_value(10)).min_size(2),
-                );
+                let mut xs: Vec<i64> =
+                    tc.draw(gs::vecs(gs::integers::<i64>().min_value(0).max_value(10)).min_size(2));
                 let y: i64 = tc.draw(gs::sampled_from(xs.clone()));
                 let pos = xs.iter().position(|&v| v == y).unwrap();
                 xs.remove(pos);
