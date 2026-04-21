@@ -557,11 +557,51 @@ change in this invocation so the loop doesn't keep hammering the same
 unchanged entry.
 """
 
+# ---- finalize-mode prompts ---------------------------------------------------
+
+FINALIZE_PROMPT = """\
+Integrate the ported test file {path} into the hegel-rust test suite.
+
+You will be invoked repeatedly until {path} no longer exists and its stem
+({stem}) appears in FINALIZED.md. Make one focused commit toward that goal.
+
+Steps:
+1. Read {path} carefully. Understand what each test covers.
+2. Search tests/ (excluding tests/hypothesis/ and tests/pbtkit/) for existing
+   tests that cover the same ground. Remove duplicates from {path}.
+3. Move the remaining unique tests to appropriate locations in tests/:
+   - If they fit an existing file logically, add them there.
+   - If they warrant a new file, create one with a feature-oriented name (not
+     the upstream Python source name).
+   - Use `use hegel::generators as gs;` imports throughout.
+4. Once all tests are relocated, delete {path} and update
+   tests/{kind}/main.rs if it declares the module.
+5. Add a line to FINALIZED.md:
+     - {stem} — <one-line summary of where the tests ended up>
+6. Commit everything in one focused commit.
+
+The loop re-runs gates after you return; partial progress is fine.
+"""
+
+FINALIZE_FIX_PROMPT = """\
+The test suite is broken after integrating {path}. Full output is below —
+work from it rather than rerunning the command. Fix the failing tests and
+commit.
+"""
+
+FINALIZE_RECORD_PROMPT = """\
+The file {path} has been removed but {stem} is not yet recorded in
+FINALIZED.md. Add the line:
+  - {stem} — <one-line summary of what was done>
+to FINALIZED.md and commit.
+"""
+
 
 # ---- gate helpers ------------------------------------------------------------
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+FINALIZED_MD = REPO_ROOT / "FINALIZED.md"
 # `resources/` is gitignored, so worker worktrees don't have it. Workers
 # set PORT_LOOP_RESOURCES_BASE=<supervisor-repo-root> and read upstream
 # test files from there. Destinations (tests/pbtkit/*.rs) still land in
@@ -1235,6 +1275,33 @@ def unported_pool() -> list[Path]:
     return pool
 
 
+def finalized_stems() -> set[str]:
+    """Stems already integrated into the main test suite (recorded in FINALIZED.md)."""
+    if not FINALIZED_MD.exists():
+        return set()
+    stems: set[str] = set()
+    for line in FINALIZED_MD.read_text().splitlines():
+        line = line.strip()
+        if line.startswith("- "):
+            stem = line[2:].split(" — ")[0].strip()
+            if stem:
+                stems.add(stem)
+    return stems
+
+
+def finalize_pool() -> list[Path]:
+    """Files in tests/{hypothesis,pbtkit}/ not yet integrated into the main suite."""
+    done = finalized_stems()
+    all_files: list[Path] = []
+    for kind in ("hypothesis", "pbtkit"):
+        d = REPO_ROOT / "tests" / kind
+        if d.exists():
+            all_files.extend(
+                sorted(p for p in d.glob("*.rs") if p.name != "main.rs")
+            )
+    return [f for f in all_files if f.stem not in done]
+
+
 # ---- TODO handling ----------------------------------------------------------
 
 
@@ -1876,6 +1943,59 @@ def drive_port(picked: Path, destination: Path, state: IterCounter) -> None:
             f"\n[port-loop] review made changes; re-verifying gates."
         )
         # Loop around to re-run the gates on the reviewer's changes.
+
+
+def drive_finalize_file(picked: Path, state: IterCounter) -> None:
+    """Sub-loop integrating one ported test file into the main test suite.
+
+    Dispatches agents until the file no longer exists and its stem appears
+    in FINALIZED.md, running full server + native test gates each round.
+    """
+    rel = picked.relative_to(REPO_ROOT)
+    kind = "hypothesis" if "hypothesis" in picked.parts else "pbtkit"
+    print(f"\n[port-loop] finalize: sub-loop for {rel}")
+
+    while True:
+        # Done when file is gone and stem recorded in FINALIZED.md.
+        if not picked.exists() and picked.stem in finalized_stems():
+            print(
+                f"\n[port-loop] finalize: {picked.stem} integrated; "
+                f"sub-loop done."
+            )
+            return
+
+        # File removed but not yet recorded — nudge agent to write the entry.
+        if not picked.exists():
+            state.resume_last(
+                FINALIZE_RECORD_PROMPT.format(path=rel, stem=picked.stem)
+            )
+        else:
+            state.dispatch(
+                FINALIZE_PROMPT.format(path=rel, stem=picked.stem, kind=kind)
+            )
+
+        # Gate: full server tests.
+        ok, out, _ = gate_server_tests()
+        if not ok:
+            state.dispatch(
+                FINALIZE_FIX_PROMPT.format(path=rel),
+                gate_output=strip_build_noise(out),
+            )
+            continue
+
+        # Gate: full native tests.
+        ok, out, _ = gate_native_tests()
+        if not ok:
+            state.dispatch(
+                FINALIZE_FIX_PROMPT.format(path=rel),
+                gate_output=strip_build_noise(out),
+            )
+            continue
+
+        # Gate: clean tree.
+        ok, out = gate_clean_tree()
+        if not ok:
+            state.resume_last(COMMIT_PROMPT, gate_output=out)
 
 
 def _rebase_in_progress() -> bool:
@@ -3559,6 +3679,17 @@ def main() -> None:
         help="Run `cargo clean` at the start of each outer-loop iteration.",
     )
     parser.add_argument(
+        "--finalize",
+        action="store_true",
+        help=(
+            "Integration mode: once porting is complete, pick files from "
+            "tests/{hypothesis,pbtkit}/ one at a time and dispatch agents "
+            "to integrate them into the main test suite. Progress is tracked "
+            "in FINALIZED.md. Incompatible with --port, --todo-only, and "
+            "--max-workers>1."
+        ),
+    )
+    parser.add_argument(
         "--dangerously-skip-permissions",
         action="store_true",
         dest="skip_permissions",
@@ -3621,6 +3752,15 @@ def main() -> None:
     args = parser.parse_args()
     if args.port is not None and args.todo_only:
         parser.error("--port and --todo-only are mutually exclusive.")
+    if args.finalize:
+        if args.port is not None:
+            parser.error("--finalize is incompatible with --port.")
+        if args.todo_only:
+            parser.error("--finalize is incompatible with --todo-only.")
+        if args.max_workers > 1:
+            parser.error("--finalize is incompatible with --max-workers>1.")
+        if args.worker_mode:
+            parser.error("--finalize is incompatible with --worker-mode.")
     if args.max_workers < 1:
         parser.error("--max-workers must be >= 1.")
     if args.worker_mode:
@@ -3726,6 +3866,34 @@ def main() -> None:
                     f"{state.n} iteration(s)."
                 )
                 return
+
+    if args.finalize:
+        while True:
+            maybe_hot_reload()
+            maybe_clean()
+            repair(state)
+            dispatched, pushed = sync_with_origin(state)
+            if dispatched:
+                continue
+            if drive_pr_ci(state, just_pushed=pushed):
+                continue
+            if drive_todos(state):
+                continue
+            pool = finalize_pool()
+            if not pool:
+                print(
+                    f"\n[port-loop] --finalize: all files integrated; "
+                    f"done after {state.n} iteration(s)."
+                )
+                break
+            picked = random.choice(pool)
+            print(
+                f"\n[port-loop] --finalize: {len(pool)} file(s) remain; "
+                f"picked {picked.relative_to(REPO_ROOT)} (random)."
+            )
+            drive_finalize_file(picked, state)
+        repair(state, run_server_tests=True)
+        return
 
     while True:
         maybe_hot_reload()

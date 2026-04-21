@@ -1860,9 +1860,7 @@ fn delete_chunks_guard_fires_after_shortening() {
             while i < n.len() {
                 match n[i].value {
                     ChoiceValue::Boolean(true) => {
-                        if i + 1 >= n.len()
-                            || !matches!(n[i + 1].value, ChoiceValue::Integer(_))
-                        {
+                        if i + 1 >= n.len() || !matches!(n[i + 1].value, ChoiceValue::Integer(_)) {
                             return (false, n.len());
                         }
                         count += 1;
@@ -1972,8 +1970,7 @@ fn sort_values_full_sort_fails_preserves_order() {
     let nodes = vec![int_node(0, 10, 5), int_node(0, 10, 3)];
     let mut shrinker = Shrinker::new(
         Box::new(|n: &[ChoiceNode]| {
-            let (ChoiceValue::Integer(a), ChoiceValue::Integer(b)) =
-                (&n[0].value, &n[1].value)
+            let (ChoiceValue::Integer(a), ChoiceValue::Integer(b)) = (&n[0].value, &n[1].value)
             else {
                 return (false, 2);
             };
