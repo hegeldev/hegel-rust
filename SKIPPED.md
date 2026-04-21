@@ -399,6 +399,14 @@ Individually-skipped tests (rest of the file is ported):
   `pytest.Config`) interacting with Hypothesis's `@given` decorator. Neither
   `unittest.mock` nor pytest fixtures have Rust counterparts.
 
+- `test_monitoring.py` — the single test exercises Python 3.12+'s
+  `sys.monitoring` VM introspection API (PEP 669) via `use_tool_id`/
+  `free_tool_id` and `hypothesis.internal.scrutineer.MONITORING_TOOL_ID`
+  to verify a `HypothesisWarning` when another tool has already claimed the
+  monitoring tool ID. Rust has no `sys.monitoring` counterpart and
+  hegel-rust has no scrutineer / branch-coverage infrastructure or
+  warning surface.
+
 - `test_filter_rewriting.py` — all tests exercise Hypothesis's filter rewriting
   optimization, which inspects Python predicates at runtime (lambda AST source
   parsing via `hypothesis.internal.reflection`, `functools.partial` attribute
