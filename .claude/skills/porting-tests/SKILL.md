@@ -242,6 +242,13 @@ Specific shapes that *look* skip-worthy but aren't:
   `tc.draw(gs::integers::<i64>().min_value(0).max_value(n-1))`.
 - **Full 64-bit integer range** → `gs::integers::<u64>()` etc.
 - **`@gs.composite`** → `#[hegel::composite]` or `hegel::compose!`.
+- **`tc.weighted(0.0)` / `tc.weighted(1.0)`** — the public API is
+  missing, but the *forced* cases substitute cleanly: `tc.draw(gs::just(false))`
+  / `tc.draw(gs::just(true))`. Don't skip tests just because they mention
+  `tc.weighted`; check the probability first. (pbtkit uses this forcing
+  idiom in `test_core.py`, `test_draw_names.py`, `test_generators.py`,
+  and `test_hypothesis.py`.) Real probabilistic `tc.weighted(0.9)` etc.
+  stay skipped.
 - **Mixed-type `one_of` / `sampled_from`** — e.g.
   `st.one_of(st.integers(), st.tuples(st.booleans()))` or
   `st.sampled_from([1, "two", 3.0])`. Python's dynamic typing lets
