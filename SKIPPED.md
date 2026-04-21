@@ -65,6 +65,86 @@ Individually-skipped tests (rest of the file is ported):
 - `test_generators.py::test_generator_repr` — tests Python `repr()`
   output; no analog in hegel-rust.
 
+- `test_core.py::test_reuses_results_from_the_database`,
+  `test_core.py::test_database_round_trip_with_booleans`,
+  `test_core.py::test_malformed_database_entry`,
+  `test_core.py::test_empty_database_entry`,
+  `test_core.py::test_truncated_database_entry` — exercise pbtkit's
+  `DirectoryDB` on-disk byte-level serialization format (tag bytes,
+  length headers); hegel-rust's `NativeDatabase` uses a different
+  serialization layout (`serialize_choices` in
+  `src/native/database.rs`), so the exact byte patterns have no
+  analog.
+- `test_core.py::test_error_on_unbounded_test_function` —
+  monkeypatches `pbtkit.core.BUFFER_SIZE` at runtime; hegel-rust's
+  `BUFFER_SIZE` is a native-only `const` with no runtime-patch surface.
+- `test_core.py::test_function_cache`,
+  `test_core.py::test_cache_distinguishes_negative_zero_in_lookup` —
+  use pbtkit's `CachedTestFunction([values])` / `.lookup([values])`
+  shape; hegel-rust's `CachedTestFunction` takes a `NativeTestCase`
+  and exposes only `run` / `run_shrink` / `run_final`.
+- `test_core.py::test_cache_key_distinguishes_negative_zero`,
+  `test_core.py::test_cache_key_distinguishes_nan_variants` — pbtkit's
+  private `pbtkit.caching._cache_key` helper; no equivalent public
+  hook in hegel-rust.
+- `test_core.py::test_prints_a_top_level_weighted` — uses
+  `tc.weighted(p)`, no hegel-rust counterpart (same reason as the
+  other `weighted` skips).
+- `test_core.py::test_errors_when_using_frozen` — pbtkit's public
+  `Frozen` exception; hegel-rust has no equivalent error type.
+- `test_core.py::test_forced_choice_bounds` — uses
+  `tc.forced_choice(n)`, no public API in hegel-rust.
+- `test_core.py::test_errors_on_too_large_choice` — uses
+  `tc.choice(2**64)` with a runtime-typed Python int; hegel-rust's
+  typed integer generators cap bounds via `T` at compile time, so
+  this failure mode is unrepresentable.
+- `test_core.py::test_value_punning_on_type_change`,
+  `test_core.py::test_bind_deletion_valid_but_not_shorter`,
+  `test_core.py::test_delete_chunks_stale_index`,
+  `test_core.py::test_bin_search_down_lo_satisfies`,
+  `test_core.py::test_shrink_duplicates_with_stale_indices` — drive
+  pbtkit's `PbtkitState(random, tf, max_examples).run()` loop directly
+  and inspect `state.result`; hegel-rust's native runner has no
+  `State`-equivalent handle with an intermediate-state accessor.
+- `test_core.py::test_delete_chunks_guard_after_decrement`,
+  `test_core.py::test_redistribute_integers_stale_indices`,
+  `test_core.py::test_bind_deletion_try_deletions_succeeds`,
+  `test_core.py::test_sort_values_full_sort_fails`,
+  `test_core.py::test_swap_adjacent_blocks_equal_blocks`,
+  `test_core.py::test_shrink_duplicates_valid_drops_below_two` — look
+  up an individual shrink pass by name from pbtkit's `SHRINK_PASSES`
+  list and invoke it on a hand-built `Shrinker`. hegel-rust's shrink
+  passes are `pub(super)` methods on `native::shrinker::Shrinker`,
+  reachable only via the all-at-once `Shrinker::shrink()` entry point.
+- `test_core.py::test_redistribute_binary_search` — calls pbtkit's
+  `redistribute_sequence_pair` helper directly with a Python callback;
+  no equivalent public function surface in hegel-rust.
+- `test_core.py::test_run_test_with_preseeded_result` — uses
+  `unittest.mock.patch.object(State, "__init__", ...)` to preseed
+  `state.result`; Python-only monkey-patching facility.
+- `test_core.py::test_sort_key_type_mismatch` — Python dynamic-typing
+  `sort_key(wrong_type)` (same pattern as the already-skipped
+  `test_string_sort_key_type_mismatch` /
+  `test_bytes_sort_key_type_mismatch`).
+- `test_core.py::test_targeting_skips_non_integer` — uses
+  `tc.target(score)`, no analog (whole-file skip of
+  `test_targeting.py`).
+- `test_core.py::test_note_prints_on_failing_example`,
+  `test_core.py::test_draw_silent_does_not_print` — exercise
+  `tc.note` / `tc.draw_silent` interactions with pbtkit's
+  final-replay stdout formatter; hegel-rust's final-replay format
+  differs (`let draw_1 = ...;`, stderr not stdout) and the behaviour
+  is already covered by `tests/test_combinators.rs` and
+  `tests/test_output.rs`.
+- `test_core.py::test_error_on_too_strict_precondition` — pbtkit
+  raises `Unsatisfiable` when every test case rejects; hegel-rust
+  diverges across modes (server mode silently passes, native mode
+  fires FilterTooMuch). The FilterTooMuch path is already covered
+  by `tests/test_health_check.rs`.
+- `test_core.py::test_generator_repr` — Python `repr()` output; no
+  analog in hegel-rust (same reason as the `test_generators.py`
+  equivalent above).
+
 ## hypothesis (`/tmp/hypothesis/hypothesis-python/tests/cover/`)
 
 - `test_recursive.py` — all tests exercise `st.recursive(base, extend, max_leaves=N)`, a
