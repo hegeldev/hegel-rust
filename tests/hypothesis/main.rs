@@ -18,6 +18,7 @@ mod filtered_strategy;
 mod find;
 mod float_nastiness;
 mod float_utils;
+mod given_error_conditions;
 mod health_checks;
 mod one_of;
 mod permutations;
