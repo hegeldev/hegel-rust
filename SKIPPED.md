@@ -144,6 +144,30 @@ Individually-skipped tests (rest of the file is ported):
   analog in hegel-rust (same reason as the `test_generators.py`
   equivalent above).
 
+- `test_floats.py::test_floats_database_round_trip` — asserts pbtkit's
+  `count == prev + 2` replay invariant on `DirectoryDB`; hegel-rust's
+  replay-loop call-count shape isn't guaranteed to match (same reason
+  as `test_core.py::test_reuses_results_from_the_database`).
+- `test_floats.py::test_floats_deserialize_truncated` — feeds pbtkit's
+  `SerializationTag.FLOAT` byte layout directly to its `DirectoryDB`;
+  hegel-rust's `NativeDatabase` uses `serialize_choices` with a
+  different on-disk layout (same reason as the `test_core.py`
+  byte-format-specific skips).
+- `test_floats.py::test_float_sort_key_type_mismatch` — Python
+  dynamic-typing `sort_key("hello")`; Rust's `sort_key(f64)` signature
+  makes the non-float case unrepresentable (same pattern as the
+  already-skipped `sort_key_type_mismatch` entries).
+- `test_floats.py::test_draw_unbounded_float_rejects_nan` — exercises
+  pbtkit's private `_draw_unbounded_float` helper directly; the Rust
+  equivalent logic is inlined in the native float-choice path with no
+  standalone function surface exposed through
+  `__native_test_internals`.
+- `test_floats.py::test_mantissa_reduction_search` — preseeds
+  `PbtkitState.result` with two hand-built `ChoiceNode`s and calls
+  `state.shrink()`; hegel-rust's `__native_test_internals` exposes
+  `ChoiceValue` / `NativeTestCase` but no `Shrinker` entry point that
+  accepts a preseeded result.
+
 ## hypothesis (`/tmp/hypothesis/hypothesis-python/tests/cover/`)
 
 - `test_recursive.py` — all tests exercise `st.recursive(base, extend, max_leaves=N)`, a

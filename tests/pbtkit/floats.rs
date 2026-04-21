@@ -1,9 +1,6 @@
 //! Ported from resources/pbtkit/tests/test_floats.py.
 //!
 //! Individually-skipped tests:
-//! - `test_floats_unbounded` — monkeypatches `pbtkit.floats.NAN_DRAW_PROBABILITY`
-//!   at runtime to boost NaN coverage. hegel-rust's NaN-draw probability lives
-//!   as a native-only constant with no runtime-patch surface.
 //! - `test_floats_database_round_trip` — asserts pbtkit's `count == prev + 2`
 //!   replay invariant on `DirectoryDB`; hegel-rust's replay-loop call-count
 //!   shape isn't guaranteed to match (same reason as the
@@ -43,6 +40,18 @@ fn test_floats_bounded() {
         assert!((0.0..=1.0).contains(&f));
     })
     .settings(Settings::new().test_cases(100).database(None))
+    .run();
+}
+
+#[test]
+fn test_floats_unbounded() {
+    // The upstream `monkeypatch.setattr(..., "NAN_DRAW_PROBABILITY", 0.5)` was
+    // purely a pbtkit-coverage boost for `_draw_nan`; drop it here. The
+    // portable part is that unbounded float draws complete without panicking.
+    Hegel::new(|tc| {
+        tc.draw(gs::floats::<f64>());
+    })
+    .settings(Settings::new().test_cases(200).database(None))
     .run();
 }
 
