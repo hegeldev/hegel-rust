@@ -36,7 +36,7 @@ fn test_raises_unsatisfiable_if_all_false_in_finite_set() {
     expect_panic(
         || {
             Hegel::new(|tc: TestCase| {
-                tc.draw(&gs::booleans());
+                tc.draw(gs::booleans());
                 tc.reject();
             })
             .settings(Settings::new().database(None))
@@ -49,7 +49,7 @@ fn test_raises_unsatisfiable_if_all_false_in_finite_set() {
 #[test]
 fn test_does_not_raise_unsatisfiable_if_some_false_in_finite_set() {
     Hegel::new(|tc: TestCase| {
-        let x: bool = tc.draw(&gs::booleans());
+        let x: bool = tc.draw(gs::booleans());
         tc.assume(x);
     })
     .settings(Settings::new().database(None))
