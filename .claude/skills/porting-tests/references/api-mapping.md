@@ -87,8 +87,6 @@ adding the feature. Don't invent a workaround in the test.
 - `tc.forced_choice(v)` — direct replay fixture.
 - `gs::nothing()` — the empty generator.
 - `deadline` setting.
-- Index-based shrink passes (`max_index`, `to_index`, `from_index`) on
-  `StringChoice` / `BytesChoice`.
 
 ## Replaying fixed choices (`ConjectureData.for_choices`)
 
