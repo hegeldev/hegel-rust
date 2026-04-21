@@ -694,3 +694,31 @@ Individually-skipped tests (rest of the file is ported):
   argument, not a strategy).
 - `test_arbitrary_data.py::test_nice_repr` — tests `repr(st.data()) ==
   "data()"`; Python `repr()` output has no Rust counterpart.
+
+- `test_simple_collections.py::test_find_empty_collection_gives_empty` —
+  every parametrize row relies on public-API features with no hegel-rust
+  counterpart: `st.nothing()`, `st.frozensets()`,
+  `fixed_dictionaries(..., optional=...)`, and non-string
+  `fixed_dictionaries` keys (`0`, `()`).
+- `test_simple_collections.py::test_ordered_dictionaries_preserve_keys` —
+  `gs::fixed_dicts()` returns `ciborium::Value::Map`; hegel-rust has no
+  `OrderedDict` analog exposing insertion-order key iteration.
+- `test_simple_collections.py::test_fixed_dictionaries_with_optional_and_empty_keys`
+  — uses the `optional=` kwarg on `fixed_dictionaries` and `st.nothing()`,
+  neither of which has a hegel-rust counterpart.
+- `test_simple_collections.py::test_minimize_dicts_with_incompatible_keys`
+  — mixes `int` and `str` keys in one dict; Rust's type system makes a
+  heterogeneous-key dict unrepresentable.
+- `test_simple_collections.py::test_lists_unique_by_tuple_funcs` — uses
+  `unique_by=(key_fn_1, key_fn_2)`; `VecGenerator` exposes only
+  `.unique(bool)`, no `.unique_by(key_fn)` setter.
+- `test_simple_collections.py::test_can_find_unique_lists_of_non_set_order`
+  — Python retries under `@flaky` because its predicate depends on
+  process-randomised set iteration order. hegel-rust's engine classifies
+  a non-deterministic predicate as a flaky-test bug and raises
+  `Flaky test detected` inside the property run, so the test cannot be
+  stabilised with an outer retry.
+- `test_simple_collections.py::test_find_non_empty_collection_gives_single_zero[frozenset]`,
+  `test_simple_collections.py::test_minimizes_to_empty[frozenset]` — only
+  the `frozenset` parametrize rows are dropped; there is no
+  `gs::frozensets()`. The `list` and `set` rows are ported.
