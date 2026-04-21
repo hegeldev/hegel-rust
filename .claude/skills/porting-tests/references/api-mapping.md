@@ -645,6 +645,26 @@ predicates:
 | `type(x) == type(y)` on mixed-type `one_of` draws | `std::mem::discriminant(&x) == std::mem::discriminant(&y)` | After wrapping mixed-type `one_of` branches in a local enum (see SKILL.md), `type()` equality becomes variant equality. `discriminant` compares the variant tag without unpacking payloads and works even when payload types (e.g. `f64`) aren't `Eq`. |
 | `xs.remove(y)` on `list[T]` | `let pos = xs.iter().position(\|v\| *v == y).unwrap(); xs.remove(pos);` | Python's `list.remove` takes a **value** and removes the first match; Rust's `Vec::remove` takes an **index**. Same method name, different semantics — translate via `position` + `remove`. |
 
+### Don't sort before asserting order
+
+When the Python test compares a container to a literal list —
+`assert list(cache) == [1, 3]`, `assert list(od.keys()) == ["a", "b"]` —
+the *order* is usually part of the assertion (LRU position, insertion
+order, shrink order). Port the Rust side as
+`assert_eq!(cache.keys(), vec![1, 3]);` and **do not** `ks.sort()` before
+comparing. Sorting turns an ordered-equality check into a set-equality
+check: a broken LRU emitting `[3, 1]` would still pass, which is
+exactly the bug the test exists to catch.
+
+Reflexive sorting is tempting because many elsewhere-in-the-port
+assertions on `HashSet` / `HashMap` iteration legitimately need a sort
+for determinism. The tell for "don't sort here" is that the upstream
+container's Python type is already ordered — `LRUCache`, `OrderedDict`,
+a `list` returned from a deterministic algorithm, a span tree's
+children. If `keys()` on the Rust side returns a `Vec` in a declared
+order (walks an underlying `VecDeque` / `LinkedList`, or yields
+indices in shrink order), assert that order directly.
+
 ## File naming
 
 Upstream Python filename → Rust module name drops the `test_` prefix:
