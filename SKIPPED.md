@@ -65,9 +65,17 @@ Individually-skipped tests (rest of the file is ported):
 - `test_generators.py::test_generator_repr` — tests Python `repr()`
   output; no analog in hegel-rust.
 
-- `test_core.py::test_reuses_results_from_the_database`,
-  `test_core.py::test_database_round_trip_with_booleans`,
-  `test_core.py::test_malformed_database_entry`,
+- `test_core.py::test_reuses_results_from_the_database` — asserts
+  `len(tmpdir.listdir()) == 1` on pbtkit's `DirectoryDB`
+  single-file-per-key layout and an exact `count == prev + 2`
+  replay+verify invariant. hegel-rust's `NativeDatabase` uses a
+  nested `key/value` hash-directory layout (so the root-`listdir()`
+  assertion doesn't translate) and the replay-loop call-count shape
+  isn't guaranteed to match pbtkit's literally.
+- `test_core.py::test_database_round_trip_with_booleans` — uses
+  `tc.weighted(p)`, no hegel-rust counterpart (same public-API
+  incompatibility as the other `weighted` skips).
+- `test_core.py::test_malformed_database_entry`,
   `test_core.py::test_empty_database_entry`,
   `test_core.py::test_truncated_database_entry` — exercise pbtkit's
   `DirectoryDB` on-disk byte-level serialization format (tag bytes,
