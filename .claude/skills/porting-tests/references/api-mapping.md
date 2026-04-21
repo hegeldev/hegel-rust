@@ -570,23 +570,33 @@ Practical points:
 
 When the Python hook body itself calls `data.draw(...)` (e.g. the
 `new_score` closure inside `test_always_evicts_the_lowest_scoring_value`),
-the strategy-trait translation has no `tc` in scope. Pre-draw the
-values the hook will need before constructing the wrapper, and have
-the scoring struct look them up:
+the strategy-trait translation has no `tc` in scope. Draw a PRNG seed
+from `tc` up-front and let the scoring struct pull values from a
+seeded `StdRng` inside each hook call:
 
 ```rust
-// Pre-draw one score per candidate key up-front:
-let mut scores: HashMap<i64, i64> = HashMap::new();
-for &k in &distinct_keys {
-    scores.insert(k, tc.draw(gs::integers::<i64>().min_value(0).max_value(1000)));
+// In the test body:
+let seed: u64 = tc.draw(gs::integers::<u64>());
+let scoring = DynamicScoring {
+    rng: StdRng::seed_from_u64(seed),
+    /* … */
+};
+
+// In the scoring struct:
+fn on_access(&mut self, _k: &i64, _v: &i64, _s: i64) -> i64 {
+    (self.rng.next_u64() % 1001) as i64   // matches st.integers(0, 1000)
 }
-// Scoring looks up, doesn't draw:
-let mut target = GenericCache::new(size, PrecomputedScoring { scores, /* … */ }).unwrap();
 ```
 
-Behaviourally equivalent — scores are still random per-key values
-chosen during the test run — but the draw happens at the `tc` layer
-where it belongs.
+A single-seed shrink is coarser than Python's per-draw shrinking, but
+it preserves the Python test's semantics — a fresh score on every
+`new_entry`/`on_access` call, so the cache's rebalance-after-access
+path is actually exercised. A pre-drawn `HashMap<K, Score>` filled in
+before the cache is constructed does *not* do this: scores become
+static per key and `on_access` collapses into a no-op, which is why
+`test_always_evicts_the_lowest_scoring_value` uses the seeded-RNG form
+above. Reserve pre-drawing for cases where the hook draws at most
+once per key.
 
 ## Python idiom translations
 
