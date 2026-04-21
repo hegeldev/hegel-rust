@@ -6,3 +6,34 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
+
+  - title: Implement `try_shortening_via_increment` / `lower_and_bump` in src/native/shrinker/
+    details: |
+      Port pbtkit's `shrinking/index_passes.py` (176 lines) to
+      `src/native/shrinker/index_passes.rs` and call from
+      `Shrinker::shrink()` in the main loop.
+
+      Requires `to_index`/`from_index`/`max_index`/`supports_index` on
+      `ChoiceNode`/`ChoiceValue` in `src/native/core/`. Check what already
+      exists (shrinker already has binary-search and zero-choice passes
+      operating on integer choices).
+
+      Acceptance: remove the `#[cfg(not(feature = "native"))]` gates from:
+        - tests/pbtkit/shrink_quality_composite.rs::test_one_of_shorter_branch_needs_non_simplest_value
+        - tests/pbtkit/shrink_quality_composite.rs::test_increment_with_dependent_continuation
+      ... and they pass in `cargo test --features native --test pbtkit`.
+
+  - title: Implement `mutate_and_shrink` in src/native/shrinker/
+    details: |
+      Port pbtkit's `shrinking/mutation.py` (92 lines) to
+      `src/native/shrinker/mutation.rs` and call from
+      `Shrinker::shrink()` as a last-resort pass (results > 32 nodes are
+      skipped per the upstream).
+
+      Needs `TestCase`-style probe machinery that fills a prefix then draws
+      random continuations. The native backend's data_source has equivalent
+      primitives.
+
+      Acceptance: remove the `#[cfg(not(feature = "native"))]` gate from
+      tests/pbtkit/shrink_quality_composite.rs::test_one_of_switches_to_shorter_branch
+      and it passes in `cargo test --features native --test pbtkit`.
