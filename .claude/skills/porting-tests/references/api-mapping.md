@@ -18,7 +18,7 @@ structure.
 | `gs.lists(inner, min_size=, max_size=)`    | `gs::vecs(inner).min_size(n).max_size(n)`                     |
 | `gs.sets(inner)`                           | `gs::hashsets(inner)`                                         |
 | `gs.dictionaries(k, v)`                    | `gs::hashmaps(k, v)`                                          |
-| `gs.fixed_dictionaries({k: gen, ...})`     | `gs::fixed_dicts(...)` — returns `ciborium::Value::Map`. No `optional=` kwarg; non-string keys unrepresentable; no `OrderedDict` insertion-order analog. Drop those parametrize rows. |
+| `gs.fixed_dictionaries({k: gen, ...})`     | `gs::fixed_dicts().field(name, gen).build()` — returns `ciborium::Value::Map` (a `Vec<(Value, Value)>`, so insertion order from `.field()` is preserved). No `optional=` kwarg; only string keys; skip or adapt those rows. |
 | `gs.lists(inner, unique=True)`             | `gs::vecs(inner).unique(true)`                                |
 | `gs.lists(inner, unique_by=f)` / `unique_by=(f, g)` | **missing** — `VecGenerator` exposes only `.unique(bool)`. Skip with rationale. |
 | `gs.frozensets(inner)`                     | **missing** — no `gs::frozensets()`. Drop the frozenset parametrize row; port the list/set rows. |
