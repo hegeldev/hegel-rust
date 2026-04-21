@@ -731,3 +731,32 @@ Individually-skipped tests (rest of the file is ported):
   `test_simple_collections.py::test_minimizes_to_empty[frozenset]` — only
   the `frozenset` parametrize rows are dropped; there is no
   `gs::frozensets()`. The `list` and `set` rows are ported.
+
+- `test_settings.py` — every test sits on Hypothesis's Python-specific
+  settings framework, none of which hegel-rust exposes. Profile
+  machinery (`settings.register_profile`, `load_profile`, `get_profile`,
+  `settings.default` singleton, `local_settings` context manager) is
+  Hypothesis public API with no hegel-rust counterpart; `@settings`
+  decorator semantics (stacking order, `@settings` on
+  `RuleBasedStateMachine` / non-state-machine classes,
+  `@settings()(1)` callable-check) are Python syntax; attribute-access
+  patterns (`settings().kittens`, `x.max_examples = "foo"`,
+  `settings.max_examples = 10`, `settings.default = ...`) are Python
+  dunder access; settings attributes not exposed by hegel-rust's
+  `Settings` builder (`deadline`, `phases`, `backend`, `print_blob`,
+  `stateful_step_count`, `max_examples`) have no counterpart; runtime
+  `InvalidArgument` error-raising on wrong-typed args and
+  `note_deprecation` / `HypothesisDeprecationWarning` are
+  unrepresentable (Rust's type system catches wrong types at compile
+  time and hegel-rust has no deprecation-warning surface);
+  `InMemoryExampleDatabase`, `set_hypothesis_home_dir`, and the CI-
+  profile subprocess plumbing (`test_check_defaults_to_derandomize_*`,
+  `test_will_automatically_pick_up_changes_to_ci_profile_in_ci`) target
+  Hypothesis-specific on-disk / global-default behaviour; and
+  string/integer → enum coercions (`verbosity="quiet"`, `Verbosity(0)`,
+  `Phase(4)`, `HealthCheck(1)`) are Python's dynamic typing. The one
+  candidate for a trivial port — `test_can_set_verbosity` — reduces in
+  Rust to constructing four enum variants the compiler already
+  enforces, adding no coverage. `test_verbosity_is_comparable` would
+  require `Verbosity: Ord`, which hegel-rust deliberately does not
+  derive.
