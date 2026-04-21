@@ -20,11 +20,6 @@
 //! - Section A `test_weighted_output_unchanged`: uses `tc.weighted(p)`; no
 //!   hegel-rust counterpart on `TestCase` (same policy as the other
 //!   `weighted` skips in SKIPPED.md).
-//! - Section A `test_draw_uses_repr_format`: Python `repr()` quoting
-//!   (`'hello'`); Rust's `Debug` uses `"hello"` — a format mismatch with no
-//!   one-to-one mapping.
-//! - Section B `test_draw_named_repeatable_skips_taken_suffixes`: mutates
-//!   `tc._named_draw_used` directly — a Python-internal attribute.
 //! - Section B `test_draw_named_no_print_when_print_results_false`: pbtkit's
 //!   `print_results=False` flag has no equivalent on hegel-rust's `TestCase`
 //!   — replay-output gating is run-level (last-run flag), not per-testcase.
@@ -98,6 +93,20 @@ fn test_draw_counter_increments() {
 }
 
 #[test]
+fn test_draw_uses_debug_format() {
+    // Rust analog of pbtkit's `test_draw_uses_repr_format`: `draw()`
+    // renders values via `Debug`, so `&str` values print with quotes
+    // (the Rust equivalent of Python `repr()` quoting — just `"hello"`
+    // instead of `'hello'`).
+    let lines = draw_lines(
+        r#"
+        let _ = tc.draw(gs::just("hello"));
+    "#,
+    );
+    assert_eq!(lines, vec![r#"let draw_1 = "hello";"#]);
+}
+
+#[test]
 fn test_draw_silent_does_not_print() {
     // draw_silent bypasses the named-draw machinery: no `let draw_N = …;`
     // line in the replay output.
@@ -133,6 +142,22 @@ fn test_draw_named_repeatable_single_use() {
     "#,
     );
     assert_eq!(lines, vec!["let x_1 = 3;"]);
+}
+
+#[test]
+fn test_draw_named_repeatable_skips_taken_suffixes() {
+    // Repeatable numbering skips names already consumed by a prior
+    // non-repeatable draw. Here `x_1` is taken non-repeatably first, so
+    // the subsequent repeatable `x` must start at `x_2`.
+    // (Upstream Python mutates `tc._named_draw_used` directly; the same
+    // state is reachable through the public `__draw_named` API.)
+    let lines = draw_lines(
+        r#"
+        tc.__draw_named(gs::just(0i32), "x_1", false);
+        tc.__draw_named(gs::just(5i32), "x", true);
+    "#,
+    );
+    assert_eq!(lines, vec!["let x_1 = 0;", "let x_2 = 5;"]);
 }
 
 #[test]
@@ -400,6 +425,39 @@ fn test_draw_named_no_validation_inside_composite() {
 #[hegel::composite]
 fn composite_reuses_inner_name(tc: hegel::TestCase) -> i32 {
     tc.__draw_named(gs::just(3i32), "inner", false)
+}
+
+// ---------------------------------------------------------------------------
+// Section F: Rewriter edge cases (mixed bodies, nested items)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_rewriter_tuple_target_mixed_with_simple() {
+    // A simple-target draw and a tuple-target draw in the same body: the
+    // simple one is rewritten (`let x = …;`), the tuple one falls back to
+    // the `draw_N` counter. Upstream `test_rewriter_tuple_target_when_regular_draw_present`.
+    let lines = draw_lines(
+        "
+        let x = tc.draw(gs::just(0i32));
+        let (_a, _b) = tc.draw(gs::tuples!(gs::just(0i32), gs::just(0i32)));
+    ",
+    );
+    assert_eq!(lines, vec!["let x = 0;", "let draw_1 = (0, 0);"]);
+}
+
+#[test]
+fn test_rewriter_nested_fn_item_does_not_break_outer_rewrite() {
+    // A nested `fn inner()` item alongside a draw doesn't interfere with
+    // the outer rewrite — `let x = tc.draw(...)` still becomes `let x = …;`.
+    // Upstream `test_rewriter_nested_funcdef_line_268`.
+    let lines = draw_lines(
+        "
+        let x = tc.draw(gs::just(0i32));
+        fn inner() {}
+        inner();
+    ",
+    );
+    assert_eq!(lines, vec!["let x = 0;"]);
 }
 
 // ---------------------------------------------------------------------------
