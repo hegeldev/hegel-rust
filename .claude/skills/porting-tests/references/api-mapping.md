@@ -47,8 +47,8 @@ Generator transforms (all require `Generator` trait in scope):
 
 | Python                     | Rust                                     |
 |----------------------------|------------------------------------------|
-| `tc.draw(gen)`             | `tc.draw(&gen)`                          |
-| `data.draw(gen)` (where `data = st.data()`) | `tc.draw(&gen)` — the Hypothesis "data" object is the same surface as hegel-rust's `tc` |
+| `tc.draw(gen)`             | `tc.draw(gen)` — pass inline generators by value; this matches the established style in `tests/pbtkit/`. A blanket `impl Generator<T> for &G` means `tc.draw(&gen)` also compiles, and you do need the `&` when `gen` is a local variable reused across iterations of a `move` closure (a move would error on the second test case). |
+| `data.draw(gen)` (where `data = st.data()`) | `tc.draw(gen)` — the Hypothesis "data" object is the same surface as hegel-rust's `tc` |
 | `data.draw(gen, label="X")` | `tc.__draw_named(gen, "X", false)` — the third arg is `repeatable`; `false` matches Hypothesis's per-draw-numbered behaviour |
 | `tc.assume(cond)`          | `tc.assume(cond)`                        |
 | `tc.note(msg)`              | `tc.note(msg)`                           |
@@ -525,6 +525,7 @@ predicates:
 | `sum(xs) >= N` where `xs: list[int]` from `integers()` | `xs.iter().copied().map(i128::from).sum::<i128>() >= N as i128` | Python ints are unbounded; `i64` sums overflow on extreme generated values. Promote to `i128` (or `num-bigint`) before summing. |
 | `any(xs) and not all(xs)` on `list[list[T]]` | `xs.iter().any(\|inner\| !inner.is_empty()) && !xs.iter().all(\|inner\| !inner.is_empty())` | Python `bool(list)` = non-empty, so `any/all` test inner-list non-emptiness. Rust `Vec` has no truthiness; translate explicitly to `!inner.is_empty()`. |
 | `type(x) == type(y)` on mixed-type `one_of` draws | `std::mem::discriminant(&x) == std::mem::discriminant(&y)` | After wrapping mixed-type `one_of` branches in a local enum (see SKILL.md), `type()` equality becomes variant equality. `discriminant` compares the variant tag without unpacking payloads and works even when payload types (e.g. `f64`) aren't `Eq`. |
+| `xs.remove(y)` on `list[T]` | `let pos = xs.iter().position(\|v\| *v == y).unwrap(); xs.remove(pos);` | Python's `list.remove` takes a **value** and removes the first match; Rust's `Vec::remove` takes an **index**. Same method name, different semantics — translate via `position` + `remove`. |
 
 ## File naming
 
