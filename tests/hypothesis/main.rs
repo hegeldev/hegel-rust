@@ -21,6 +21,7 @@ mod regex;
 mod replay_logic;
 mod sampled_from;
 mod searchstrategy;
+mod simple_characters;
 mod simple_strings;
 mod testdecorators;
 mod threading;
