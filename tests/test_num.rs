@@ -182,6 +182,11 @@ fn test_rationals_custom_numerator_denominator() {
     });
 }
 
+#[test]
+fn test_rationals_biguint_denom_positive() {
+    assert_all_examples(gs::rationals::<BigUint>(), |r| *r.denom() > BigUint::zero());
+}
+
 // ---------------------------------------------------------------------------
 // BigInt as_basic (via map combinator)
 // ---------------------------------------------------------------------------
