@@ -513,6 +513,39 @@ If the upstream `@given` uses a strategy with no direct Rust analog
 the strategy as a small `tc.draw(...)` block in the property test
 rather than chasing a library helper.
 
+### `@example` + `@given` under `@pytest.mark.parametrize`
+
+When a `parametrize` over N implementations sits on top of the
+`@example` + `@given` stack (shape: one Python function covering N×K
+combinations), the split-into-two-tests guidance above would blow up
+into `2N` `#[test]` functions. Instead, embed the examples as an
+explicit loop at the top of the *shared* driver and follow with the
+property block:
+
+```rust
+fn behaves_like_a_dict_with_losses_hegel<C, F>(make: F)
+where F: Fn(usize) -> C + Send + Sync + 'static, C: DictLikeCache + 'static,
+{
+    for (writes, size) in [ /* @example rows */ ] {
+        let mut target = make(size);
+        run_dict_like_losses(&mut target, &writes, size);
+    }
+    Hegel::new(move |tc| { /* @given body */ }).run();
+}
+
+#[test] fn test_..._lru()      { behaves_like_a_dict_with_losses_hegel(LRUCache::new); }
+#[test] fn test_..._lfu()      { behaves_like_a_dict_with_losses_hegel(|sz| GenericCache::new(sz, LFUScoring).unwrap()); }
+// ... one #[test] per parametrize row
+```
+
+Each `#[test]` now runs the regression examples *and* the property
+phase against its implementation, and `cargo test`'s output still
+reports an individual test per implementation (what `pytest` would
+show). See `tests/hypothesis/cache_implementation.rs` for the full
+shape, which also uses a test-local `DictLikeCache` trait to unify
+wrappers with non-identical `insert` signatures (some return
+`Result<_, CachePinError>`, some return `()`).
+
 ## Python subclass-override hooks → strategy trait on the native type
 
 A common pbtkit/Hypothesis test shape defines a one-off subclass of a
