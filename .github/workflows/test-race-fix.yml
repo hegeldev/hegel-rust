@@ -1,0 +1,113 @@
+name: Test Race Fix
+
+on:
+  push:
+    branches: [DRMacIver/debug-pr-please-ignore]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  test-race-fix:
+    name: test-race-fix
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HEGEL_SERVER_LOG_DIR: ${{ github.workspace }}/server-logs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just uv
+
+      # Clone and patch hegel-core with the atomic stream_id fix
+      - name: Setup patched hegel-core
+        run: |
+          set -euo pipefail
+          git clone https://github.com/HypothesisWorks/hegel-core.git /tmp/hegel-core-patched
+          cd /tmp/hegel-core-patched
+
+          # Apply the atomic increment patch
+          cat > fix.patch << 'EOF'
+          --- a/src/hegel/protocol/connection.py
+          +++ b/src/hegel/protocol/connection.py
+          @@ -212,8 +212,10 @@
+               def new_stream(self, *, role: str | None = None) -> "Stream":
+                   assert self._handshake_done
+                   # server streams get even ids
+          -        stream_id = StreamId(self.__next_stream_id << 1)
+          -        self.__next_stream_id += 1
+          +        with self.__writer_lock:
+          +            stream_id = StreamId(self.__next_stream_id << 1)
+          +            self.__next_stream_id += 1
+                   return self._make_stream(stream_id, role=role)
+
+               def register_client_stream(
+          EOF
+
+          patch -p1 < fix.patch
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install --editable .
+
+      # Run the known-failing test configuration with the patched hegel-core
+      - name: Test with patched hegel-core
+        run: |
+          set -euo pipefail
+          source /tmp/hegel-core-patched/.venv/bin/activate
+          export HEGEL_SERVER_COMMAND=$(which hegel)
+          echo "Using patched hegel: $HEGEL_SERVER_COMMAND"
+          hegel --version
+
+          # Target the specific failing tests from run 24690525177
+          # test_minimizes_int_down_to_boundary_{4,31,32} in test_find_quality/integers.rs
+          # We'll run these tests in a loop to increase chances of hitting the race
+          # if the fix doesn't work
+
+          for i in {1..5}; do
+            echo "=== Iteration $i ==="
+            cargo test --test test_find_quality test_minimizes_int_down_to_boundary || {
+              echo "Tests failed on iteration $i - this suggests the fix may not be working"
+              exit 1
+            }
+          done
+
+          echo "SUCCESS: All 5 iterations passed with the patched hegel-core"
+          echo "This suggests the atomic stream_id increment fix prevents the race"
+
+      - name: Print server logs
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          dir="${HEGEL_SERVER_LOG_DIR:-}"
+          echo "HEGEL_SERVER_LOG_DIR=$dir"
+          if [ -z "$dir" ] || [ ! -d "$dir" ]; then
+            echo "Log dir not set or does not exist."
+            exit 0
+          fi
+          echo "Contents of $dir:"
+          ls -la "$dir" 2>&1
+          echo
+          shopt -s nullglob
+          files=( "$dir"/server.*.log )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No server.*.log files in $dir."
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            echo "::group::$f"
+            cat "$f"
+            echo "::endgroup::"
+          done
