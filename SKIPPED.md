@@ -273,6 +273,22 @@ Individually-skipped tests (rest of the file is ported):
   targeted PBT scores). hegel-rust exposes none of these: no `event()`, no `target()`,
   no statistics collection or formatting infrastructure.
 
+- `test_observability.py` — every test sits on Hypothesis's observability public
+  API surface, none of which hegel-rust exposes:
+  `capture_observations` / `TestCaseObservation` / `InfoObservation` /
+  `add_observability_callback` / `remove_observability_callback` /
+  `with_observability_callback` / `observability_enabled` / `TESTCASE_CALLBACKS`
+  (the per-thread / all-threads observation callback registry that emits
+  per-test-case JSON observations with `arguments`, `representation`, `timing`,
+  `status_reason`, `metadata`, etc.); `event()` and `target()` (custom-event /
+  targeted-PBT recording, same gap as `test_statistical_events.py`);
+  `choices_to_json` / `nodes_to_json` (observability-only JSON serialization of
+  `ChoiceNode` sequences); `to_jsonable` (Python-only observability serialization
+  helper, same gap as the `test_searchstrategy.py::test_jsonable*` skips);
+  `fuzz_one_input` (AFL/libFuzzer corpus integration, same gap as the whole-file
+  skip of `test_fuzz_one_input.py`); and `@reproduce_failure` (encoded-failure
+  replay decorator, same gap as the whole-file skip of `test_reproduce_failure.py`).
+
 - `test_detection.py` — all tests use `is_hypothesis_test()`, a Python public API
   that checks whether a function was decorated with `@given` by inspecting a Python
   function attribute. Hegel-rust tests are closures passed to `Hegel::new(|tc| {...}).run()`,
