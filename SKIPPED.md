@@ -275,6 +275,14 @@ Individually-skipped tests (rest of the file is ported):
   `collections.deque[Elem]`, `collections.abc.Iterable[Elem]`,
   `re.Match[str]`, etc.) via `@given(...)` with type annotations; neither
   `from_type` nor runtime type-annotation resolution exists in hegel-rust.
+- `test_typealias_py312.py` — tests `from_type()` resolution of PEP 695
+  `type` alias syntax (`type MyInt = int`, parameterized
+  `type A[T] = list[T]`, mutually-recursive aliases),
+  `register_type_strategy` overrides on aliases, and the internal
+  `evaluate_type_alias_type` helper. Rust `type X = Y;` aliases are
+  compile-time only with no runtime alias-object surface, and hegel-rust
+  has no `from_type` / `register_type_strategy` analog (same family as
+  the `test_lookup*.py` skips above).
 - `test_example.py` — tests the fluent `.via("...")` and `.xfail(...)`
   methods chained onto `@example(...)`; hegel-rust's
   `#[hegel::explicit_test_case]` has no equivalent of either.
