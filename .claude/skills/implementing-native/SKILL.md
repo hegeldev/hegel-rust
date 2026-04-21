@@ -62,6 +62,28 @@ Ports that are generally *not* worth doing directly:
 - Anything below the Python level (libc, syscalls, threads). Those
   aren't a semantics problem.
 
+### Rust stdlib is not exempt
+
+The same logic applies to Rust's own stdlib when it offers a
+nearly-equivalent function. Stdlib is the most tempting "just reuse
+it" target because it's already available — but a mismatch at a single
+edge case is a mismatch, and translation shims around stdlib are just
+as brittle as shims around third-party crates.
+
+Concrete precedent: `src/native/floats.rs` defines `next_up`/`next_down`
+by porting Hypothesis's `hypothesis.internal.floats` rather than
+delegating to `f64::next_up`/`f64::next_down`. Rust's stdlib moves
+`next_up(-0.0)` to the next subnormal; Hypothesis's contract is
+`next_up(-0.0) == 0.0` (and `next_down(0.0) == -0.0`). The tests assert
+the Hypothesis contract, so the port preserves it. Add a `///` doc
+comment saying *why* stdlib wasn't used, so a future reader doesn't
+"simplify" the port back to the stdlib call.
+
+Before reaching for a stdlib function as a shortcut, check its
+behaviour on the usual suspects — `±0.0`, NaN, infinities, empty
+strings, surrogate codepoints — against the Python counterpart. One
+disagreement is enough to justify the port.
+
 ### How to do the port
 
 Follow the `unicodedata.rs` shape:
