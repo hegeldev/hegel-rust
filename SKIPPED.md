@@ -240,6 +240,18 @@ Individually-skipped tests (rest of the file is ported):
   (`Box<dyn Any>`) or a concrete per-use-case recursive enum, neither of which
   matches this API surface. Hegel-rust has no `gs::recursive()` equivalent.
 
+- `test_deferred_strategies.py` — every test exercises `st.deferred(lambda: ...)`,
+  a public-API lazy forward-reference strategy used for recursive definitions
+  (e.g. `tree = st.deferred(lambda: st.integers() | st.tuples(tree, tree))`).
+  Hegel-rust has no `gs::deferred()` equivalent — Rust's static type system
+  requires an explicit per-use-case recursive enum, so the `Strategy`-object
+  forward-declaration pattern has no direct analog (same gap as the whole-file
+  skip of `test_recursive.py` and the individually-skipped
+  `test_searchstrategy.py::test_deferred_strategy_draw`). Most tests also assert
+  on strategy-composition-class introspection (`.branches`, `.is_empty`,
+  `.has_reusable_values`), which hegel-rust's typed-wrapper generators don't
+  expose at any level.
+
 - `test_constants_ast.py` — tests Hypothesis's Python-AST constant
   extractor (`ConstantVisitor`, `constants_from_module`); parses Python
   source code, no Rust counterpart.
