@@ -2028,6 +2028,7 @@ def drive_port_worker(
 
 _POOL_ADMISSION_CACHE: dict = {"ts": 0.0, "result": None}
 _POOL_ADMISSION_TTL = 30.0  # seconds
+_SPAWN_STAGGER_SECS = 30.0  # minimum gap between successive worker spawns
 
 
 def _pool_admission_ok() -> tuple[bool, str]:
@@ -2230,6 +2231,11 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
     in_flight: dict[int, dict] = {}
     assigned: set[Path] = set()
     stop = [False]
+    # SIGUSR1 sets drain=True: no new workers admitted, but in-flight workers
+    # are left running and the pool waits for them to finish naturally.
+    drain = [False]
+    # Stagger spawns: allow first spawn immediately, then enforce the gap.
+    last_spawn_at = time.monotonic() - _SPAWN_STAGGER_SECS
     # Start with a fresh admission check so the outer loop's stale cache
     # (if any) doesn't let us enter under false-negative admission.
     _pool_admission_invalidate()
@@ -2263,7 +2269,17 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
         for info in in_flight.values():
             _signal_worker_group(info["proc"], signal.SIGINT)
 
+    def _handle_sigusr1(_signum, _frame):
+        if not drain[0]:
+            print(
+                "\n[port-loop] pool: SIGUSR1 received; draining gracefully "
+                f"({len(in_flight)} worker(s) will finish, no new spawns).",
+                flush=True,
+            )
+        drain[0] = True
+
     prev_handler = signal.signal(signal.SIGINT, _handle_sigint)
+    prev_usr1_handler = signal.signal(signal.SIGUSR1, _handle_sigusr1)
 
     try:
         while True:
@@ -2277,7 +2293,7 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
             # Admit into every free slot we can. Admission is re-checked
             # here so a TODO or CI-failure that appears mid-pool stops
             # new spawns without interrupting in-flight ones.
-            if not stop[0] and disk_ok:
+            if not stop[0] and not drain[0] and disk_ok:
                 adm_ok, adm_reason = _pool_admission_ok()
                 if not adm_ok and not in_flight:
                     print(
@@ -2308,6 +2324,9 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
                             )
                             return
                     while len(in_flight) < N:
+                        now = time.monotonic()
+                        if now - last_spawn_at < _SPAWN_STAGGER_SECS:
+                            break  # stagger: wait before spawning next worker
                         pool = [
                             f for f in unported_pool()
                             if f not in assigned
@@ -2340,11 +2359,13 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
                             "started_at": time.monotonic(),
                         }
                         assigned.add(file)
+                        last_spawn_at = time.monotonic()
 
             if not in_flight:
-                if stop[0]:
+                if stop[0] or drain[0]:
+                    label = "stop requested" if stop[0] else "graceful drain complete"
                     print(
-                        "\n[port-loop] pool: stop requested and all "
+                        f"\n[port-loop] pool: {label} and all "
                         "workers drained; returning."
                     )
                     return
@@ -2406,6 +2427,7 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
                 except Exception:
                     pass
         signal.signal(signal.SIGINT, prev_handler)
+        signal.signal(signal.SIGUSR1, prev_usr1_handler)
 
 
 def _handle_worker_exit(
