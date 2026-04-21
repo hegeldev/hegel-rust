@@ -207,7 +207,15 @@ fully-ported file is unrepresentable — usually because its input
 exercises a Python type / shape that Rust's type system forbids, or
 because it tests a failure mode unreachable through the Rust public
 API (e.g. a client-side invariant the runner adds silently, such as
-`gs::characters()`'s implicit `exclude_categories=["Cs"]`).
+`gs::characters()`'s implicit `exclude_categories=["Cs"]`), or
+because the test asserts on Hypothesis's *strategy-composition class
+structure* — attribute access on a strategy instance like
+`FilteredStrategy(...).branches` / `.flat_conditions` /
+`.filtered_strategy`. hegel-rust composes strategies as Rust generic
+wrappers (`Filtered<T, F, G>`, `Mapped<...>`, etc.) that have no
+introspectable attributes; these are distinct from engine internals
+(`ChoiceNode`, `ConjectureData.*`) which *do* have `src/native/`
+counterparts and should be native-gated rather than skipped.
 
 Record these in **both** places:
 
