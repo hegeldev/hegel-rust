@@ -6,28 +6,3 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-  - title: "[CI] check-release: RELEASE.md already exists on main"
-    details: |
-      Workflow job "check release / Check release" fails in `python
-      .github/scripts/release.py check "$BASE_REF"` (BASE_REF=main).
-
-      Log extract:
-        Traceback (most recent call last):
-          File ".../.github/scripts/release.py", line 256, in <module>
-            check(args.base_ref)
-          File ".../.github/scripts/release.py", line 103, in check
-            raise ValueError(
-        ValueError: RELEASE.md already exists on main. It's possible the CI
-        job responsible for cutting a new release is in progress, or has
-        failed.
-        ##[error]Process completed with exit code 1.
-
-      NOTE: This is the known "blocked on human intervention" failure —
-      see commit d2f53d1 ("Remove TODO about check-release: blocked on
-      human intervention") and earlier 8c62972. The release-cutting job
-      on main is stuck/failed and a human needs to unstick it (either
-      land the release PR that removes RELEASE.md from main, or retry
-      the failed release workflow). An automated fix agent in this loop
-      CANNOT resolve this — please close this TODO with a note rather
-      than attempting a fix.
