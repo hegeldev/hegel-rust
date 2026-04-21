@@ -46,10 +46,10 @@ impl<'a> Shrinker<'a> {
                 }
                 // `from_index(current_idx - 1)` can be None for bounded float
                 // ranges with gaps.
-                if let Some(v_prev) = kind_i.from_index(&current_idx - BigUint::from(1u32))
-                    && !decrement_targets.contains(&v_prev)
-                {
-                    decrement_targets.push(v_prev);
+                if let Some(v_prev) = kind_i.from_index(&current_idx - BigUint::from(1u32)) {
+                    if !decrement_targets.contains(&v_prev) {
+                        decrement_targets.push(v_prev);
+                    }
                 }
 
                 // Find bump target `j`: the gap'th node after i.
@@ -88,11 +88,11 @@ impl<'a> Shrinker<'a> {
                         let mut bumped_any_relative = false;
                         for bump in [1u32, 2, 4] {
                             let candidate_idx = &target_idx + BigUint::from(bump);
-                            if let Some(bumped) = kind_j.from_index(candidate_idx)
-                                && try_bump_ij(self, i, new_val, j, &bumped)
-                            {
-                                bumped_any_relative = true;
-                                break;
+                            if let Some(bumped) = kind_j.from_index(candidate_idx) {
+                                if try_bump_ij(self, i, new_val, j, &bumped) {
+                                    bumped_any_relative = true;
+                                    break;
+                                }
                             }
                         }
                         if !bumped_any_relative {
@@ -136,18 +136,16 @@ impl<'a> Shrinker<'a> {
             let mut candidates: Vec<ChoiceValue> = Vec::new();
             for d in [1u32, 2, 4, 8, 16] {
                 let t = &current_idx + BigUint::from(d);
-                if let Some(v) = kind.from_index(t)
-                    && v != node.value
-                    && !candidates.contains(&v)
-                {
-                    candidates.push(v);
+                if let Some(v) = kind.from_index(t) {
+                    if v != node.value && !candidates.contains(&v) {
+                        candidates.push(v);
+                    }
                 }
             }
-            if let Some(v) = kind.from_index(kind.max_index())
-                && v != node.value
-                && !candidates.contains(&v)
-            {
-                candidates.push(v);
+            if let Some(v) = kind.from_index(kind.max_index()) {
+                if v != node.value && !candidates.contains(&v) {
+                    candidates.push(v);
+                }
             }
 
             // Also try powers of 2 (and negatives) as raw values. This covers
