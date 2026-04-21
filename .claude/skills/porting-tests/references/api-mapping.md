@@ -18,6 +18,10 @@ structure.
 | `gs.lists(inner, min_size=, max_size=)`    | `gs::vecs(inner).min_size(n).max_size(n)`                     |
 | `gs.sets(inner)`                           | `gs::hashsets(inner)`                                         |
 | `gs.dictionaries(k, v)`                    | `gs::hashmaps(k, v)`                                          |
+| `gs.fixed_dictionaries({k: gen, ...})`     | `gs::fixed_dicts(...)` — returns `ciborium::Value::Map`. No `optional=` kwarg; non-string keys unrepresentable; no `OrderedDict` insertion-order analog. Drop those parametrize rows. |
+| `gs.lists(inner, unique=True)`             | `gs::vecs(inner).unique(true)`                                |
+| `gs.lists(inner, unique_by=f)` / `unique_by=(f, g)` | **missing** — `VecGenerator` exposes only `.unique(bool)`. Skip with rationale. |
+| `gs.frozensets(inner)`                     | **missing** — no `gs::frozensets()`. Drop the frozenset parametrize row; port the list/set rows. |
 | `gs.tuples(a, b)`                          | `gs::tuples!(a, b)` (macro)                                   |
 | `gs.one_of(a, b)`                          | `gs::one_of(vec![a.boxed(), b.boxed()])` (same element type; for mixed types wrap each branch in a local `enum` and `.map(Variant::…)` — see SKILL.md "Think harder before skipping") |
 | `gs.sampled_from([x, y])`                  | `gs::sampled_from(vec![x, y])`                                |
@@ -94,6 +98,15 @@ adding the feature. Don't invent a workaround in the test.
 - `deadline` setting.
 - `phases` / `Phase.generate` / `Phase.shrink` — no phase control. See
   "Seeded `find()`" below for how to emulate no-shrinking semantics.
+- `@flaky(max_runs=N, min_passes=M)` — Hypothesis's retry-on-failure
+  decorator for tests whose predicate depends on external
+  nondeterminism (set iteration order, `PYTHONHASHSEED`, etc.).
+  hegel-rust's engine classifies any nondeterministic predicate *inside*
+  the property run as a `Flaky test detected` bug and panics before the
+  outer retry gets a chance. If the nondeterminism comes from inside the
+  predicate, skip with a rationale naming the `@flaky` decorator. If it
+  comes from a seedable source (a `Random(seed)`, a time-of-day), seed
+  it deterministically in the port instead.
 
 ## Replaying fixed choices (`ConjectureData.for_choices`)
 
@@ -480,6 +493,8 @@ predicates:
 |---------------------------|-----------------------------------------------------------|-----------------------------------------------------------------------|
 | `minimal(text(), bool)`   | `minimal(gs::text(), \|s: &String\| !s.is_empty())`      | Python `bool(s)` is truthy = non-empty                                |
 | `x >= "\udfff"` (string comparison) | `s.as_str() >= "\u{e000}"`                      | Rust strings can't contain surrogates; `\u{e000}` is the first valid codepoint past the surrogate range |
+| `sum(xs) >= N` where `xs: list[int]` from `integers()` | `xs.iter().copied().map(i128::from).sum::<i128>() >= N as i128` | Python ints are unbounded; `i64` sums overflow on extreme generated values. Promote to `i128` (or `num-bigint`) before summing. |
+| `any(xs) and not all(xs)` on `list[list[T]]` | `xs.iter().any(\|inner\| !inner.is_empty()) && !xs.iter().all(\|inner\| !inner.is_empty())` | Python `bool(list)` = non-empty, so `any/all` test inner-list non-emptiness. Rust `Vec` has no truthiness; translate explicitly to `!inner.is_empty()`. |
 
 ## File naming
 
