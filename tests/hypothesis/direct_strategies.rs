@@ -67,18 +67,12 @@ fn test_lists_rejects_min_size_greater_than_max_size() {
 
 #[test]
 fn test_text_rejects_min_size_greater_than_max_size() {
-    expect_generator_panic(
-        gs::text().min_size(10).max_size(9),
-        "max_size < min_size",
-    );
+    expect_generator_panic(gs::text().min_size(10).max_size(9), "max_size < min_size");
 }
 
 #[test]
 fn test_binary_rejects_min_size_greater_than_max_size() {
-    expect_generator_panic(
-        gs::binary().min_size(10).max_size(9),
-        "max_size < min_size",
-    );
+    expect_generator_panic(gs::binary().min_size(10).max_size(9), "max_size < min_size");
 }
 
 #[test]
@@ -251,11 +245,7 @@ fn test_characters_codecs_and_categories() {
     check_can_generate_examples(gs::characters().codec("latin-1"));
     check_can_generate_examples(gs::characters().categories(&["N"]));
     check_can_generate_examples(gs::characters().exclude_categories(&[]));
-    check_can_generate_examples(
-        gs::characters()
-            .include_characters("a")
-            .codec("ascii"),
-    );
+    check_can_generate_examples(gs::characters().include_characters("a").codec("ascii"));
     check_can_generate_examples(gs::characters().exclude_characters("a"));
     check_can_generate_examples(gs::characters().categories(&["Nd"]));
     check_can_generate_examples(gs::characters().exclude_categories(&["Nd"]));
@@ -347,16 +337,16 @@ fn test_float_can_find_max_value_inf() {
         x.is_infinite()
     });
     assert_eq!(v, f64::INFINITY);
-    let v = minimal(gs::floats::<f64>().min_value(0.0), |x: &f64| x.is_infinite());
+    let v = minimal(gs::floats::<f64>().min_value(0.0), |x: &f64| {
+        x.is_infinite()
+    });
     assert_eq!(v, f64::INFINITY);
 }
 
 #[test]
 fn test_float_can_find_min_value_inf() {
     // Unbounded: finds some negative infinity.
-    let v = minimal(gs::floats::<f64>(), |x: &f64| {
-        *x < 0.0 && x.is_infinite()
-    });
+    let v = minimal(gs::floats::<f64>(), |x: &f64| *x < 0.0 && x.is_infinite());
     assert!(v.is_infinite() && v < 0.0);
     // The second upstream assertion (min_value=-inf, max_value=0.0) is not
     // portable: hegel-rust defaults `allow_infinity` to false when both
