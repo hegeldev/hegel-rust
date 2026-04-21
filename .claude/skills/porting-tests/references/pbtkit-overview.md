@@ -27,10 +27,14 @@ Everything in `shrinking/`:
 - `bind_deletion.py` — the "shrink the controlling integer and delete
   downstream" pass (hegel-rust has this as `bind_deletion` in
   `src/native/shrinker/deletion.rs`).
-- `index_passes.py` — shortlex enumeration-based shrinkers (hegel-rust
-  does not implement these).
-- `sorting.py`, `sequence_redistribution.py`, `duplication_passes.py`,
-  `mutation.py` — sequence-normalization and mutation passes.
+- `index_passes.py` — shortlex enumeration-based shrinkers
+  (`try_shortening_via_increment`, `lower_and_bump`). hegel-rust does
+  not implement these.
+- `mutation.py` — `mutate_and_shrink`, a last-resort pass that mutates
+  a prefix then draws random continuations. hegel-rust does not
+  implement this either.
+- `sorting.py`, `sequence_redistribution.py`, `duplication_passes.py`
+  — sequence-normalization passes (all implemented natively).
 
 ## Choice types map onto hegel-rust
 
@@ -213,13 +217,46 @@ e.g. `@pytest.mark.requires("collections")`,
 `@pytest.mark.requires("shrinking.sorting")`,
 `@pytest.mark.requires("shrinking.bind_deletion")`, or a module-level
 `pytestmark = pytest.mark.requires(...)`. These are feature gates for
-pbtkit's own compiled-mode builds, not test preconditions. hegel-rust
-always has the corresponding behaviour (the listed modules map to
-`src/native/shrinker/` passes and the server backend), so port such
-tests unconditionally — strip the marker and don't record it anywhere.
-The only time one of these should influence the port is if the required
-feature genuinely has no counterpart; in that case follow the
-native-gated-plus-stub policy in SKILL.md.
+pbtkit's own compiled-mode builds, not test preconditions. The server
+backend (Hypothesis) always has the corresponding behaviour, and most
+markers also map to an implemented `src/native/shrinker/` pass, so
+port such tests unconditionally — strip the marker and don't record it
+anywhere.
+
+The two exceptions — markers whose named module has **no native
+counterpart yet** — are:
+
+- `@pytest.mark.requires("shrinking.index_passes")` — covers
+  `try_shortening_via_increment` and `lower_and_bump`. No file in
+  `src/native/shrinker/` currently implements them.
+- `@pytest.mark.requires("shrinking.mutation")` — covers
+  `mutate_and_shrink`. Also unimplemented natively.
+
+Server-side these passes exist (Hypothesis has them), so the right
+shape for a test asserting on their shrink output is:
+
+1. Port the test normally (no stub, no `todo!()` — the shrinker
+   doesn't panic when a pass is missing, it just finds a worse
+   minimum).
+2. Mark it `#[cfg(not(feature = "native"))]` so it only runs against
+   the server backend. Any supporting types (local `enum`s for
+   mixed-type `one_of`) that are only referenced by a gated test must
+   also be gated, or the native build warns on dead code.
+3. File a TODO.yaml entry for implementing the pass, listing the
+   server-gated tests as its acceptance criteria (removing the
+   `#[cfg(not(feature = "native"))]` gate is the "done" signal).
+4. Note the gate at the top of the module docstring so a reviewer
+   diffing against the Python sees which tests are server-only and
+   why.
+
+This is distinct from the native-gated-plus-stub policy in SKILL.md,
+which handles features missing from *both* sides. Server-gating is
+for the asymmetric case where Hypothesis has the capability but
+hegel-rust's native engine doesn't yet.
+
+If the required feature genuinely has no counterpart on *either* side
+(neither Hypothesis nor hegel-rust implements it), follow the
+native-gated-plus-stub policy instead.
 
 ## Findability and shrink-quality tests
 
