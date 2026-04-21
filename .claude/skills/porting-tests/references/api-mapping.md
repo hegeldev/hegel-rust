@@ -371,6 +371,66 @@ Key points:
   and, if the original relied on no-shrinking semantics, use the
   `if g.is_none()` guard above.
 
+## `@example` stack + `@given` (shared check helper)
+
+A common Hypothesis shape stacks many `@example(...)` decorators above a
+single `@given(...)` test that does property-style assertions:
+
+```python
+@example(float_constr(1, float_info.max), 0.0)
+@example(float_constr(100.0001, 100.0003), 100.0001)
+# ... 14 more @example lines
+@given(float_constraints(), st.floats())
+def test_float_clamper(constraints, input_value):
+    clamper = make_float_clamper(...)
+    clamped = clamper(input_value)
+    assert sign_aware_lte(min_value, clamped)
+    # ...
+```
+
+The natural Rust translation is **two `#[test]` functions sharing one
+check helper**, not one giant test:
+
+```rust
+fn check_float_clamper(c: &FloatConstraints, input: f64) {
+    let clamper = make_float_clamper(c);
+    let clamped = clamper(input);
+    // ... assertions
+}
+
+#[test]
+fn test_float_clamper_examples() {
+    check_float_clamper(&float_constr(1.0, f64::MAX), 0.0);
+    check_float_clamper(&float_constr(100.0001, 100.0003), 100.0001);
+    // ... one call per @example
+}
+
+#[test]
+fn test_float_clamper_property() {
+    Hegel::new(|tc| {
+        let constraints = /* draw equivalent of float_constraints() */;
+        let input: f64 = tc.draw(gs::floats::<f64>());
+        check_float_clamper(&constraints, input);
+    })
+    .settings(Settings::new().test_cases(100).database(None))
+    .run();
+}
+```
+
+Why split rather than `#[hegel::test(explicit_test_case = ...)]` per
+example: with a stack of 10+ examples, one `#[test]` per example bloats
+the file and the `cargo test` output without buying anything; one
+`_examples` test that runs them in sequence reads cleanly and still
+fails with a useful line number. If a single example is load-bearing
+(e.g. a regression case the upstream named) and worth surfacing on its
+own, give it its own `#[test]` — see `test_float_clamper_defensive_lower`
+in `tests/hypothesis/float_utils.rs` for that pattern.
+
+If the upstream `@given` uses a strategy with no direct Rust analog
+(e.g. Hypothesis's `provider_conformance.float_constraints()`), inline
+the strategy as a small `tc.draw(...)` block in the property test
+rather than chasing a library helper.
+
 ## Python idiom translations
 
 Common Python patterns that need non-trivial translation in test
