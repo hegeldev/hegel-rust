@@ -166,6 +166,37 @@ Non-replay uses of `NativeTestCase::for_choices` (driving `ntc.draw_bytes`,
 `CachedTestFunction` — see `tests/hypothesis/simple_strings.rs::test_fixed_size_bytes_just_draw_bytes`
 for that simpler shape.
 
+### Inspecting `NativeTestCase` state mid-closure
+
+Hypothesis tests sometimes assert on engine-internal bookkeeping on the
+`ConjectureData` after a draw — `data.has_discards`, `data.events`,
+`data.spans`, etc. To read these from inside a `CachedTestFunction`
+closure, grab the current handle via `with_native_tc`:
+
+```rust
+use hegel::__native_test_internals::{CachedTestFunction, NativeTestCase, with_native_tc};
+
+let hd = Arc::new(Mutex::new(false));
+let hd_c = Arc::clone(&hd);
+let mut ctf = CachedTestFunction::new(move |tc: TestCase| {
+    tc.draw(gs::integers::<i64>().filter(|x| *x == 0));
+    let flag = with_native_tc(|handle| {
+        handle.expect("handle set during run").lock().unwrap().has_discards
+    });
+    *hd_c.lock().unwrap() = flag;
+});
+ctf.run(NativeTestCase::for_choices(&[ChoiceValue::Integer(1), ChoiceValue::Integer(0)], None));
+assert!(*hd.lock().unwrap());
+```
+
+`with_native_tc` is re-exported via `__native_test_internals`; it yields
+`Option<&NativeTestCaseHandle>` (a `Mutex<NativeTestCase>`). The handle is
+always set during `ctf.run`, so `.expect(...)` is fine. If the field you
+want to read isn't populated yet (e.g. `has_discards` was a no-op before
+it was wired up to `stop_span(discard=true)`), the native backend needs
+a small bookkeeping change to track it — same shape as any other
+native-gated port that surfaces a missing feature.
+
 ## Health checks
 
 hegel-rust's `HealthCheck` enum has four variants — `FilterTooMuch`,
