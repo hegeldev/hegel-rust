@@ -872,6 +872,20 @@ Individually-skipped tests (rest of the file is ported):
   whole file sits on Python exception-group semantics with no Rust
   counterpart.
 
+- `test_slippage.py` — every test pins down Hypothesis's behaviour when
+  one shrinking pass "slips" into a second distinct failure, which
+  requires the `report_multiple_bugs=True` setting plus the Python
+  `ExceptionGroup` Hypothesis raises to surface both failures from a
+  single run. hegel-rust's `Settings` exposes no `report_multiple_bugs`
+  method (already noted by the
+  `test_replay_logic.py::test_does_not_shrink_on_replay_with_multiple_bugs`
+  skip), always stops on the first failing panic, and has no
+  `ExceptionGroup` / `FlakyFailure` counterpart. Several tests
+  additionally depend on the public `target()` scoring API, `Phase`
+  phase-control, or the internal `MIN_TEST_CALLS` engine constant —
+  none of which hegel-rust exposes — so none of the twelve tests are
+  portable.
+
 - `test_escalation.py` — every test exercises Python-specific
   exception/traceback machinery with no Rust counterpart:
   `is_hypothesis_file` resolves traceback filenames via Python module
