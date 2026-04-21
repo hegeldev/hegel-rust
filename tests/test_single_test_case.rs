@@ -121,6 +121,33 @@ fn test_single_test_case_via_test_macro(tc: TestCase) {
 }
 
 #[test]
+fn test_single_test_case_repeat_loops_indefinitely() {
+    let iteration_count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let counter = iteration_count.clone();
+
+    expect_panic(
+        || {
+            hegel::Hegel::new(move |tc| {
+                tc.repeat(|| {
+                    let n = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    if n >= 100 {
+                        panic!("reached 100 iterations");
+                    }
+                });
+            })
+            .settings(hegel::Settings::new().mode(Mode::SingleTestCase))
+            .run();
+        },
+        "reached 100 iterations",
+    );
+
+    assert_eq!(
+        iteration_count.load(std::sync::atomic::Ordering::Relaxed),
+        100
+    );
+}
+
+#[test]
 fn test_hegel_main_macro_with_single_test_case() {
     let code = r#"
 use hegel::generators as gs;

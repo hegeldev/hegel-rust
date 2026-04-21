@@ -1385,7 +1385,7 @@ where
             &self.settings,
             self.database_key.as_deref(),
             &mut |backend, is_final| {
-                let tc_result = run_test_case(backend, &mut test_fn, is_final);
+                let tc_result = run_test_case(backend, &mut test_fn, is_final, self.settings.mode);
                 if matches!(&tc_result, TestCaseResult::Interesting { .. }) {
                     got_interesting.store(true, Ordering::SeqCst);
                 }
@@ -1423,8 +1423,9 @@ fn run_test_case(
     data_source: Box<dyn DataSource>,
     test_fn: &mut dyn FnMut(TestCase),
     is_final: bool,
+    mode: Mode,
 ) -> TestCaseResult {
-    let tc = TestCase::new(data_source, is_final);
+    let tc = TestCase::new(data_source, is_final, mode);
 
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
 

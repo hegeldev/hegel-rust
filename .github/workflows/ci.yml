@@ -69,9 +69,11 @@ jobs:
 
       # TODO: remove once hegeldev/hegel-core#97 is released
       - name: Install hegel-core from branch
+        shell: bash
         run: uv tool install 'hegel-core @ git+https://github.com/hegeldev/hegel-core@DRMacIver/one-shot'
 
       - name: Run tests
+        shell: bash
         run: HEGEL_SERVER_COMMAND=$(which hegel) just check-tests
 
   test-all-features:
@@ -112,9 +114,11 @@ jobs:
 
       # TODO: remove once hegeldev/hegel-core#97 is released
       - name: Install hegel-core from branch
+        shell: bash
         run: uv tool install 'hegel-core @ git+https://github.com/hegeldev/hegel-core@DRMacIver/one-shot'
 
       - name: Run tests
+        shell: bash
         run: HEGEL_SERVER_COMMAND=$(which hegel) just ${{ matrix.recipe }}
 
   test-min-protocol:
