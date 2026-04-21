@@ -872,6 +872,21 @@ Individually-skipped tests (rest of the file is ported):
   whole file sits on Python exception-group semantics with no Rust
   counterpart.
 
+- `test_escalation.py` — every test exercises Python-specific
+  exception/traceback machinery with no Rust counterpart:
+  `is_hypothesis_file` resolves traceback filenames via Python module
+  `__file__` paths (there is no runtime `__file__` on a Rust crate);
+  `errors.MultipleFailures` / `BaseExceptionGroup` are PEP 654 exception
+  groups (Rust has no exception-group construct, same gap as the
+  whole-file skip of `test_exceptiongroup.py`);
+  `errors.ThisIsNotARealAttribute...` tests Python module-level
+  `__getattr__` raising `AttributeError` (Rust module items resolve at
+  compile time); and `InterestingOrigin.from_exception` traverses Python
+  `__context__` chains and `BaseExceptionGroup.exceptions` to classify
+  the origin of a caught exception — Rust's panic-payload model has no
+  exception chaining, no groups, and `src/native/` has no
+  `InterestingOrigin` / escalation counterpart.
+
 - `test_given_error_conditions.py::test_raises_unsatisfiable_if_passed_explicit_nothing`
   — uses `nothing()`, the empty-generator strategy; hegel-rust has no
   `gs::nothing()` public API (same gap as the `test_core.py::test_nothing_core`
