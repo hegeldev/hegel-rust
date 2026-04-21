@@ -827,3 +827,9 @@ Individually-skipped tests (rest of the file is ported):
   ...)` / `st.fixed_dictionaries` strategies that synthesise
   heterogeneously-typed Python dicts which Rust's type system can't
   represent.
+
+- `test_cache_implementation.py::test_cache_is_threadsafe_issue_2433_regression`
+  — uses `st.builds(partial(str))`, a Python-reflection-based strategy
+  (runtime `inspect.signature` introspection of the target callable) with
+  no hegel-rust counterpart. The thread-safety property it guards is
+  specific to Hypothesis's per-thread caching of strategy introspection.
