@@ -31,60 +31,34 @@ jobs:
         with:
           tools: just uv
 
-      # Clone and patch hegel-core with the atomic stream_id fix
-      - name: Setup patched hegel-core
+      # Install hegel-core from the atomic-stream-allocation branch (PR #98)
+      - name: Setup hegel-core from branch
         run: |
           set -euo pipefail
-          git clone https://github.com/HypothesisWorks/hegel-core.git /tmp/hegel-core-patched
-          cd /tmp/hegel-core-patched
-
-          # Apply the atomic increment patch
-          cat > fix.patch << 'EOF'
-          --- a/src/hegel/protocol/connection.py
-          +++ b/src/hegel/protocol/connection.py
-          @@ -212,8 +212,10 @@
-               def new_stream(self, *, role: str | None = None) -> "Stream":
-                   assert self._handshake_done
-                   # server streams get even ids
-          -        stream_id = StreamId(self.__next_stream_id << 1)
-          -        self.__next_stream_id += 1
-          +        with self.__writer_lock:
-          +            stream_id = StreamId(self.__next_stream_id << 1)
-          +            self.__next_stream_id += 1
-                   return self._make_stream(stream_id, role=role)
-
-               def register_client_stream(
-          EOF
-
-          patch -p1 < fix.patch
+          git clone --branch DRMacIver/atomic-stream-allocation --depth 1 \
+            https://github.com/hegeldev/hegel-core.git /tmp/hegel-core-branch
+          cd /tmp/hegel-core-branch
           python -m venv .venv
           source .venv/bin/activate
           pip install --editable .
 
-      # Run the known-failing test configuration with the patched hegel-core
-      - name: Test with patched hegel-core
+      - name: Test with branch hegel-core
         run: |
           set -euo pipefail
-          source /tmp/hegel-core-patched/.venv/bin/activate
+          source /tmp/hegel-core-branch/.venv/bin/activate
           export HEGEL_SERVER_COMMAND=$(which hegel)
-          echo "Using patched hegel: $HEGEL_SERVER_COMMAND"
+          echo "Using hegel-core from DRMacIver/atomic-stream-allocation branch"
           hegel --version
 
-          # Target the specific failing tests from run 24690525177
-          # test_minimizes_int_down_to_boundary_{4,31,32} in test_find_quality/integers.rs
-          # We'll run these tests in a loop to increase chances of hitting the race
-          # if the fix doesn't work
-
-          for i in {1..5}; do
+          for i in {1..20}; do
             echo "=== Iteration $i ==="
-            cargo test --test test_find_quality test_minimizes_int_down_to_boundary || {
-              echo "Tests failed on iteration $i - this suggests the fix may not be working"
+            cargo test --all-features || {
+              echo "Tests failed on iteration $i"
               exit 1
             }
           done
 
-          echo "SUCCESS: All 5 iterations passed with the patched hegel-core"
-          echo "This suggests the atomic stream_id increment fix prevents the race"
+          echo "All 20 iterations passed"
 
       - name: Print server logs
         if: always()
