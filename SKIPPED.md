@@ -792,3 +792,13 @@ Individually-skipped tests (rest of the file is ported):
   `HYPOTHESIS_NO_TRACEBACK_TRIM` env var). Rust panics and backtraces have
   no equivalent frame-inspection or trim surface, and hegel-rust has no
   `HYPOTHESIS_NO_TRACEBACK_TRIM` analog — all Python-specific.
+
+- `test_asyncio.py` — every test drives Python's `asyncio` library
+  (`asyncio.new_event_loop`, `asyncio.run`, `asyncio.coroutine`,
+  `asyncio.sleep`, `asyncio.wait_for`) through Hypothesis's
+  `TestCase.execute_example` hook (already covered by the whole-file skip
+  of `test_executors.py`), plus Python-only syntax (`async def`/`await`,
+  `yield from`). Rust's async ecosystem (tokio/async-std) is unrelated to
+  Python asyncio, hegel-rust has no `execute_example` class-method hook,
+  and tests are closures passed to `Hegel::new(|tc| ...).run()` rather
+  than methods on a `TestCase` subclass.
