@@ -87,14 +87,33 @@ fn test_default_health_check_can_weaken_specific() {
 #[cfg(feature = "native")]
 #[test]
 fn test_suppressing_filtering_health_check() {
-    // hegel-rust fires FilterTooMuch once 200 consecutive invalid calls
-    // accumulate before any valid case (see `FILTER_TOO_MUCH_THRESHOLD` in
-    // `src/native/runner.rs`). Use the default `test_cases = 100`, which
-    // allows up to 1000 calls — enough headroom for the threshold to trip.
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Model Python's `unhealthy_filter`: reject the first batch of draws,
+    // then start accepting. The upstream test's second half relies on the
+    // filter eventually opening up so the test body runs (it raises
+    // `ValueError`); a filter that rejects *everything* can't exercise
+    // that half. The threshold is measured in filter calls rather than
+    // test cases because `Filtered::do_draw` retries the predicate up to
+    // 3 times per draw before giving up with `assume(false)`. With the
+    // default `test_cases = 100` (→ up to 1000 calls → up to 3000 filter
+    // calls), a threshold of 1500 rejects roughly the first 500 draws —
+    // well past FilterTooMuch's 200-invalid bar — and then opens up so
+    // the remaining budget can produce a valid value.
+    let make_filter = || {
+        let counter = Arc::new(AtomicUsize::new(0));
+        move |_: &i64| counter.fetch_add(1, Ordering::Relaxed) >= 1500
+    };
+
+    // Part 1 (upstream `test1`): no suppression → FilterTooMuch fires
+    // before the filter opens up, so the test body never runs.
     expect_panic(
         || {
-            Hegel::new(|tc: TestCase| {
-                let _: i64 = tc.draw(gs::integers::<i64>().filter(|_| false));
+            let filter = make_filter();
+            Hegel::new(move |tc: TestCase| {
+                let _: i64 = tc.draw(gs::integers::<i64>().filter(filter.clone()));
+                panic!("body-ran");
             })
             .settings(Settings::new().database(None))
             .run();
@@ -102,20 +121,26 @@ fn test_suppressing_filtering_health_check() {
         "FailedHealthCheck.*FilterTooMuch",
     );
 
-    // With FilterTooMuch (and TooSlow, as the Python original does) suppressed,
-    // the same filter must not cause the run to panic with a health check
-    // error. The filter still rejects every value, so the test body never
-    // runs — analogous to Python raising no ValueError when the filter
-    // successfully blocks all inputs.
-    Hegel::new(|tc: TestCase| {
-        let _: i64 = tc.draw(gs::integers::<i64>().filter(|_| false));
-    })
-    .settings(
-        Settings::new()
-            .database(None)
-            .suppress_health_check([HealthCheck::FilterTooMuch, HealthCheck::TooSlow]),
-    )
-    .run();
+    // Part 2 (upstream `test2`): with FilterTooMuch and TooSlow suppressed,
+    // generation pushes past the 200-invalid bar until the filter opens up,
+    // a valid value is drawn, and the test body runs and panics —
+    // analogous to Python's `pytest.raises(ValueError)`.
+    expect_panic(
+        || {
+            let filter = make_filter();
+            Hegel::new(move |tc: TestCase| {
+                let _: i64 = tc.draw(gs::integers::<i64>().filter(filter.clone()));
+                panic!("body-ran");
+            })
+            .settings(
+                Settings::new()
+                    .database(None)
+                    .suppress_health_check([HealthCheck::FilterTooMuch, HealthCheck::TooSlow]),
+            )
+            .run();
+        },
+        "body-ran",
+    );
 }
 
 #[cfg(feature = "native")]
