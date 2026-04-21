@@ -34,10 +34,6 @@ file and treats listed files as "done".
   Hypothesis's engine is a Python library dependency with no Rust
   counterpart.
 
-- `test_flatmap.py` — cherry-pick of worker port conflicted with concurrent
-  changes to `src/native/schema/regex.rs` and `text.rs`; deferred for manual
-  conflict resolution.
-
 Individually-skipped tests (rest of the file is ported):
 
 - `test_text.py::test_string_sort_key_type_mismatch` — exercises Python's
@@ -343,8 +339,24 @@ Individually-skipped tests (rest of the file is ported):
   no base64 or zlib dependency. Every test in the file sits on top of
   that API surface, so nothing is portable today.
 
-- `test_charmap.py` — cherry-pick of worker port conflicted with concurrent changes
-  to `src/native/schema/regex.rs` and `text.rs`; deferred for manual conflict resolution.
+- `test_charmap.py` — tests Python-internal charmap infrastructure with no
+  Rust counterpart. Most tests exercise `hypothesis.internal.charmap`
+  plumbing (the `cm._charmap` module global, `cm.charmap_file()` on-disk
+  cache, `cm.query(categories=...)` returning `IntervalSet`, the
+  `CategoryName` `Literal` type) plus Python-only monkeypatching of
+  `os.utime`, `os.path.exists`, `os.rename`, and `tempfile.mkstemp`.
+  Hegel-rust's native charmap (`src/native/unicodedata.rs`) is a
+  build-time run-length-encoded table with no file cache, no `query`
+  entry point, and no `IntervalSet` return type. The four
+  `IntervalSet.union` tests (`test_union_empty`,
+  `test_union_handles_totally_overlapped_gap`,
+  `test_union_handles_partially_overlapped_gap`,
+  `test_successive_union`) target `hypothesis.internal.intervalsets.IntervalSet`,
+  a standalone set-of-codepoint-ranges type; hegel-rust has no
+  `IntervalSet` type and no interval-union operation on its alphabet
+  representation (`StringAlphabet` in `src/native/schema/text.rs` stores
+  `Vec<(u32, u32)>` but never merges two such lists), so these tests
+  have no Rust target either.
 
 - `test_simple_characters.py::test_include_exclude_with_multiple_chars_is_invalid`
   — Python passes a list of strings where each element must be a single

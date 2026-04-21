@@ -6,27 +6,3 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-- title: Clean up stale and misleading SKIPPED.md cherry-pick-conflict entries
-  details: |
-    Three entries in SKIPPED.md cite "cherry-pick conflict" as the skip reason,
-    but the real situations are different:
-
-    1. test_flatmap.py (pbtkit) — the upstream file does not exist at
-       resources/pbtkit/tests/test_flatmap.py at all. The SKIPPED.md entry is
-       stale. Remove it.
-
-    2. test_charmap.py (hypothesis) — the tests exercise hypothesis.internal.charmap
-       Python internals (file caching, os.utime, monkeypatching os.path.exists).
-       The real skip reason is "tests Python-internal charmap infrastructure with
-       no Rust counterpart". The IntervalSet union tests (test_union_empty,
-       test_union_handles_totally_overlapped_gap, test_union_handles_partially_overlapped_gap,
-       test_successive_union) could potentially be ported as unit tests of the
-       native IntervalSet. Assess portability and update the rationale.
-
-    3. test_reproduce_failure.py (hypothesis) — handled by the separate TODO above;
-       once that's resolved, update this entry to either remove it (if ported) or
-       give the accurate remaining skip reason.
-
-    Fix: update SKIPPED.md so each entry reflects the true reason, not an
-    incidental historical blocker.
