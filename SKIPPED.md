@@ -162,11 +162,6 @@ Individually-skipped tests (rest of the file is ported):
   equivalent logic is inlined in the native float-choice path with no
   standalone function surface exposed through
   `__native_test_internals`.
-- `test_floats.py::test_mantissa_reduction_search` — preseeds
-  `PbtkitState.result` with two hand-built `ChoiceNode`s and calls
-  `state.shrink()`; hegel-rust's `__native_test_internals` exposes
-  `ChoiceValue` / `NativeTestCase` but no `Shrinker` entry point that
-  accepts a preseeded result.
 
 ## hypothesis (`/tmp/hypothesis/hypothesis-python/tests/cover/`)
 

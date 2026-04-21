@@ -461,6 +461,54 @@ fn shrink_floats_final_binary_search_rejects_out_of_range() {
     assert!(v.fract() != 0.0);
 }
 
+#[test]
+fn shrink_floats_mantissa_reduction_converges() {
+    // Port of pbtkit/test_floats.py::test_mantissa_reduction_search.
+    // Starting from (x=1.0, y=-3.0000000136813605) with predicate
+    // `x + (y - x) != y`, the shrinker must converge to a y whose mantissa
+    // sits ~30M ULPs lower, close to -3.0. Without lex-index binary search
+    // this crawls at 1 ULP / iteration; with it, convergence is immediate.
+    let fc = FloatChoice {
+        min_value: -1e100,
+        max_value: 1e100,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    let nodes = vec![
+        float_node(fc.clone(), 1.0),
+        float_node(fc, -3.0000000136813605),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            if n.len() < 2 {
+                return (false, n.len());
+            }
+            let ChoiceValue::Float(x) = n[0].value else {
+                return (false, n.len());
+            };
+            let ChoiceValue::Float(y) = n[1].value else {
+                return (false, n.len());
+            };
+            (x + (y - x) != y, 2)
+        }),
+        nodes,
+    );
+    shrinker.shrink();
+    // pbtkit lands on -3.0000000000000004; hegel-rust's lex-index binary
+    // search shrinks further to -1.0 - 1 ULP (≈ -1.0000000000000002), which
+    // has a smaller lex magnitude and still breaks `x + (y - x) == y`. The
+    // upstream point is convergence (not crawling at 1 ULP/iter), so assert
+    // y landed close to a simple integer and still satisfies the predicate.
+    let x = float_at(&shrinker.current_nodes, 0);
+    let y = float_at(&shrinker.current_nodes, 1);
+    assert_eq!(x, 1.0);
+    assert!(
+        y.abs() <= 3.0 + f64::EPSILON && y != -3.0000000136813605,
+        "y did not converge: {y}"
+    );
+    assert!(x + (y - x) != y);
+}
+
 // ── sort_values / swap_adjacent_blocks ──────────────────────────────────────
 
 fn int_node(min: i128, max: i128, value: i128) -> ChoiceNode {

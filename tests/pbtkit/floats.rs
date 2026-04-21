@@ -18,11 +18,10 @@
 //! - `test_draw_unbounded_float_rejects_nan` — exercises pbtkit's private
 //!   `_draw_unbounded_float` helper directly; the Rust equivalent is not
 //!   exposed through any public or native-test surface.
-//! - `test_mantissa_reduction_search` — preseeds `PbtkitState.result` with
-//!   two specific `ChoiceNode`s and calls `state.shrink()` on them;
-//!   reproducing the exact seed requires direct `Shrinker` access with
-//!   hand-built `ChoiceNode`s, which isn't exposed through
-//!   `__native_test_internals`.
+//!
+//! `test_mantissa_reduction_search` is ported as the embedded shrinker test
+//! `shrink_floats_mantissa_reduction_converges` in
+//! `tests/embedded/native/shrinker_tests.rs`.
 
 use crate::common::utils::{assert_all_examples, find_any, minimal};
 use hegel::generators as gs;
