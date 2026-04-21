@@ -57,7 +57,7 @@ Generator transforms (all require `Generator` trait in scope):
 | `tc.mark_status(INTERESTING)` | `panic!(...)` to signal failure        |
 | `tc.target(score)`         | **missing** — `todo!()`                  |
 | `ConjectureData.for_choices([v, ...])` | `NativeTestCase::for_choices(&[ChoiceValue::…, …], None)` from `hegel::__native_test_internals` (native-only) — see "Replaying fixed choices" below |
-| `tc.reject()`              | `tc.assume(false)` is the closest (but see pbtkit-overview.md) |
+| `tc.reject()`              | `tc.reject()` — public method, equivalent to `assume(false)` but returns `!` so following code is statically unreachable |
 
 ## Settings
 
@@ -206,6 +206,7 @@ dedicated error type to catch.
 | Python                                             | Rust                                                                |
 |----------------------------------------------------|---------------------------------------------------------------------|
 | `pytest.raises(FailedHealthCheck)`                 | `expect_panic(\|\| { ... }, "FailedHealthCheck.*<Variant>")`        |
+| `pytest.raises(Unsatisfiable)` / `@fails_with(Unsatisfiable)` over an always-rejecting test | `expect_panic(\|\| { ... }, "FilterTooMuch")` — Hypothesis's `Unsatisfiable` for "every draw rejected" maps to hegel-rust's `FilterTooMuch` health check. **Native-only** (server mode silently passes on all-rejected runs). Other `Unsatisfiable` causes — explicit `nothing()`, deadline exhaustion — have no Rust analog and skip per the api-mapping rows for those features. |
 | `suppress_health_check=list(HealthCheck)`          | `.suppress_health_check(HealthCheck::all())`                        |
 | `suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow]` | `.suppress_health_check([HealthCheck::FilterTooMuch, HealthCheck::TooSlow])` |
 | `HealthCheck.data_too_large`                       | `HealthCheck::TestCasesTooLarge`                                    |
@@ -405,6 +406,24 @@ values that violate the Python signature — `min_value=math.nan`,
 there is no runtime behaviour to assert. List the dropped categories
 once in the module docstring rather than per-case — a reviewer checking
 the original against the port can see the whole class is accounted for.
+
+### `@given` decorator-shape tests
+
+A separate cluster of validation tests asserts on shapes Python's `@given`
+*decorator* can take but Rust's `#[hegel::test]` *attribute macro* cannot:
+
+| Python `@given` shape                             | Why it skips                                                                  |
+|---------------------------------------------------|--------------------------------------------------------------------------------|
+| `@given(a=...)` / `@given(...)` (ellipsis)        | Type-hint-based strategy inference. `#[hegel::test]` takes generators inline, not by signature inference. |
+| `@given(...)` stacked twice on one function        | Decorator stacking has no Rust analog; one `#[hegel::test]` per fn.            |
+| `@given(...)` on a `class`                         | Rust has no class/decorator composition to reject.                             |
+| `@given(...) async def ...`                        | hegel-rust has no async-test dispatch, so no specific error to assert.         |
+| `@given(a=1, max_examples=5)` (kwarg vs setting collision) | hegel-rust uses `.settings(Settings::new()...)`; no kwarg-merging surface to misuse. |
+
+Skip these per-test under the `Individually-skipped tests` policy in
+SKILL.md, naming the specific decorator shape — they are public-API gaps
+*by design*, not missing features. `test_given_error_conditions.py` is
+the canonical upstream concentration of these.
 
 ## Seeded `find()` (testing determinism)
 
