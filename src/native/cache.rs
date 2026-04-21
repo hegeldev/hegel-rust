@@ -5,13 +5,21 @@
 //! dict-like mapping with a bounded `max_size` where each key has an
 //! associated score; inserting past capacity evicts the lowest-scoring
 //! non-pinned entry.
-//!
-//! Most method bodies are currently stubbed with `todo!()`. A fixer-task
-//! invocation will fill them in. The public shape matches what the
-//! ported tests in `tests/hypothesis/cache_implementation.rs` need.
 
 use std::collections::HashMap;
 use std::hash::Hash;
+
+/// Min-heap ordering key for an entry. Unpinned entries sort before
+/// pinned ones (matching Hypothesis's `Entry.sort_key`); within each
+/// tier, unpinned entries are ordered by `score` and pinned entries are
+/// treated as equal.
+fn sort_key<K, V>(entry: &CacheEntry<K, V>) -> (u8, i64) {
+    if entry.pins == 0 {
+        (0, entry.score)
+    } else {
+        (1, 0)
+    }
+}
 
 /// Error returned when constructing a cache with `max_size == 0`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,15 +112,47 @@ where
 
     /// Look up and return the value for `key`, or `None` if missing.
     /// Calls `on_access` as a side-effect when the key exists.
-    pub fn get(&mut self, _key: &K) -> Option<V> {
-        todo!("GenericCache::get")
+    pub fn get(&mut self, key: &K) -> Option<V> {
+        let i = *self.keys_to_indices.get(key)?;
+        let value = self.data[i].value.clone();
+        self.entry_was_accessed(i);
+        Some(value)
     }
 
     /// Insert or overwrite `key` with `value`. May evict the
     /// lowest-scoring unpinned entry if the cache is full. Returns
     /// `Err(CannotEvictPinnedKey)` if all entries are pinned.
-    pub fn insert(&mut self, _key: K, _value: V) -> Result<(), CachePinError> {
-        todo!("GenericCache::insert")
+    pub fn insert(&mut self, key: K, value: V) -> Result<(), CachePinError> {
+        if let Some(&i) = self.keys_to_indices.get(&key) {
+            self.data[i].value = value;
+            self.entry_was_accessed(i);
+            return Ok(());
+        }
+        let score = self.scoring.new_entry(&key, &value);
+        let entry = CacheEntry {
+            key: key.clone(),
+            value,
+            score,
+            pins: 0,
+        };
+        let (i, evicted) = if self.data.len() >= self.max_size {
+            if self.data[0].pins > 0 {
+                return Err(CachePinError::CannotEvictPinnedKey);
+            }
+            let old = std::mem::replace(&mut self.data[0], entry);
+            self.keys_to_indices.remove(&old.key);
+            (0, Some(old))
+        } else {
+            let idx = self.data.len();
+            self.data.push(entry);
+            (idx, None)
+        };
+        self.keys_to_indices.insert(key, i);
+        self.balance(i);
+        if let Some(ev) = evicted {
+            self.scoring.on_evict(&ev.key, &ev.value, ev.score);
+        }
+        Ok(())
     }
 
     pub fn clear(&mut self) {
@@ -128,23 +168,97 @@ where
     /// Debug-only invariant check: assert the heap property holds and
     /// `keys_to_indices` is consistent with `data`.
     pub fn check_valid(&self) {
-        todo!("GenericCache::check_valid")
+        assert_eq!(self.keys_to_indices.len(), self.data.len());
+        for (i, e) in self.data.iter().enumerate() {
+            assert_eq!(self.keys_to_indices.get(&e.key), Some(&i));
+            for j in [i * 2 + 1, i * 2 + 2] {
+                if j < self.data.len() {
+                    assert!(sort_key(e) <= sort_key(&self.data[j]));
+                }
+            }
+        }
     }
 
     /// Mark `key` as pinned with the given value. Pinned keys cannot be
     /// evicted until unpinned. Multiple `pin` calls stack; matching
     /// `unpin` calls are required to fully release.
-    pub fn pin(&mut self, _key: K, _value: V) -> Result<(), CachePinError> {
-        todo!("GenericCache::pin")
+    pub fn pin(&mut self, key: K, value: V) -> Result<(), CachePinError> {
+        self.insert(key.clone(), value)?;
+        let i = *self.keys_to_indices.get(&key).unwrap();
+        self.data[i].pins += 1;
+        if self.data[i].pins == 1 {
+            self.balance(i);
+        }
+        Ok(())
     }
 
     /// Undo one previous `pin(key)` call.
-    pub fn unpin(&mut self, _key: &K) -> Result<(), CachePinError> {
-        todo!("GenericCache::unpin")
+    pub fn unpin(&mut self, key: &K) -> Result<(), CachePinError> {
+        let i = match self.keys_to_indices.get(key) {
+            Some(&i) if self.data[i].pins > 0 => i,
+            _ => return Err(CachePinError::NotPinned),
+        };
+        self.data[i].pins -= 1;
+        if self.data[i].pins == 0 {
+            self.balance(i);
+        }
+        Ok(())
     }
 
-    pub fn is_pinned(&self, _key: &K) -> bool {
-        todo!("GenericCache::is_pinned")
+    /// Matches Hypothesis's `GenericCache.is_pinned`: panics if the key
+    /// is not in the cache.
+    pub fn is_pinned(&self, key: &K) -> bool {
+        self.data[self.keys_to_indices[key]].pins > 0
+    }
+
+    fn entry_was_accessed(&mut self, i: usize) {
+        let entry = &self.data[i];
+        let new_score = self
+            .scoring
+            .on_access(&entry.key, &entry.value, entry.score);
+        if new_score != self.data[i].score {
+            self.data[i].score = new_score;
+            if self.data[i].pins == 0 {
+                self.balance(i);
+            }
+        }
+    }
+
+    fn swap(&mut self, i: usize, j: usize) {
+        self.data.swap(i, j);
+        self.keys_to_indices.insert(self.data[i].key.clone(), i);
+        self.keys_to_indices.insert(self.data[j].key.clone(), j);
+    }
+
+    fn balance(&mut self, mut i: usize) {
+        while i > 0 {
+            let parent = (i - 1) / 2;
+            if sort_key(&self.data[i]) < sort_key(&self.data[parent]) {
+                self.swap(parent, i);
+                i = parent;
+            } else {
+                break;
+            }
+        }
+        loop {
+            let left = 2 * i + 1;
+            let right = 2 * i + 2;
+            let mut smallest = i;
+            if left < self.data.len() && sort_key(&self.data[left]) < sort_key(&self.data[smallest])
+            {
+                smallest = left;
+            }
+            if right < self.data.len()
+                && sort_key(&self.data[right]) < sort_key(&self.data[smallest])
+            {
+                smallest = right;
+            }
+            if smallest == i {
+                break;
+            }
+            self.swap(i, smallest);
+            i = smallest;
+        }
     }
 }
 
@@ -175,20 +289,30 @@ where
         }
     }
 
-    pub fn insert(&mut self, _key: K, _value: V) {
-        todo!("LRUCache::insert")
+    pub fn insert(&mut self, key: K, value: V) {
+        if let Some(pos) = self.cache.iter().position(|(k, _)| k == &key) {
+            self.cache.remove(pos);
+        }
+        self.cache.push_back((key, value));
+        while self.cache.len() > self.max_size {
+            self.cache.pop_front();
+        }
     }
 
-    pub fn get(&mut self, _key: &K) -> Option<V> {
-        todo!("LRUCache::get")
+    pub fn get(&mut self, key: &K) -> Option<V> {
+        let pos = self.cache.iter().position(|(k, _)| k == key)?;
+        let entry = self.cache.remove(pos).unwrap();
+        let value = entry.1.clone();
+        self.cache.push_back(entry);
+        Some(value)
     }
 
-    pub fn contains_key(&self, _key: &K) -> bool {
-        todo!("LRUCache::contains_key")
+    pub fn contains_key(&self, key: &K) -> bool {
+        self.cache.iter().any(|(k, _)| k == key)
     }
 
     pub fn len(&self) -> usize {
-        todo!("LRUCache::len")
+        self.cache.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -196,7 +320,7 @@ where
     }
 
     pub fn keys(&self) -> Vec<K> {
-        todo!("LRUCache::keys")
+        self.cache.iter().map(|(k, _)| k.clone()).collect()
     }
 
     /// No-op — `LRUCache` has no heap invariant to check.
