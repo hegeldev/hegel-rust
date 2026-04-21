@@ -65,6 +65,13 @@ if ! command -v cargo-llvm-cov >/dev/null 2>&1; then
     cargo install cargo-llvm-cov
 fi
 
+# sccache — shared compiler cache used by port-loop.py workers so repeated
+# dependency compilations become cache hits across parallel workers.
+if ! command -v sccache >/dev/null 2>&1; then
+    log "installing sccache"
+    cargo install sccache
+fi
+
 # -----------------------------------------------------------------------------
 # 4. `uv` — required by scripts/port-loop.py (shebang uses `uv run --script`).
 # -----------------------------------------------------------------------------
