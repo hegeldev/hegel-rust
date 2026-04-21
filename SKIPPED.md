@@ -577,3 +577,17 @@ Individually-skipped tests (rest of the file is ported):
   (hegel-rust has no `from_type`, no strategy `__repr__` surface, and
   its failure output is `let draw_1 = ...;` with no strategy repr or
   PEP 678 notes).
+
+- `test_unicode_identifiers.py` — every test exercises Python-specific
+  facilities with no Rust counterpart: `test_can_copy_signature_of_unicode_args`
+  and `test_can_copy_signature_of_unicode_name` use
+  `hypothesis.internal.reflection.proxies` (a Python decorator that copies
+  one function's signature onto another — no Rust equivalent, same gap as
+  the whole-file `test_reflection.py` skip);
+  `test_can_handle_unicode_identifier_in_same_line_as_lambda_def` uses
+  `get_pretty_function_description` to pretty-print a Python lambda's
+  source (same Python-reflection gap); `test_regression_issue_1700`
+  guards against a Python AST / decorator parsing regression for unicode
+  identifiers inside `@given(...)` — a parse-time concern that cannot
+  manifest in Rust, where unicode identifiers are handled by the
+  compiler before any hegel code runs.
