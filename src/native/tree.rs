@@ -124,6 +124,30 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
         result
     }
 
+    /// Run a probe test case: replay `prefix` then draw randomly beyond it,
+    /// up to `max_size` total choices.
+    ///
+    /// Used by `mutate_and_shrink`. Results are cached on the actual
+    /// produced node sequence (not the prefix), so a probe that happens to
+    /// reproduce a previously-seen trace hits the cache. Records in the
+    /// data tree like any other run.
+    pub fn run_probe(
+        &mut self,
+        prefix: &[ChoiceValue],
+        seed: u64,
+        max_size: usize,
+    ) -> (bool, Vec<ChoiceNode>) {
+        use rand::SeedableRng;
+        use rand::rngs::SmallRng;
+        let rng = SmallRng::seed_from_u64(seed);
+        let ntc = NativeTestCase::for_probe(prefix, rng, max_size);
+        let (status, new_nodes, _, _) = self.execute(ntc, false);
+        self.record(&new_nodes);
+        let result = (status == Status::Interesting, new_nodes);
+        self.cache_store(&result.1, result.clone());
+        result
+    }
+
     /// Run the final replay of a failing test case (with output enabled).
     ///
     /// Does not use the cache or record in the tree — the test is about

@@ -6,25 +6,3 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-  - title: Implement `mutate_and_shrink` in src/native/shrinker/
-    details: |
-      Port pbtkit's `shrinking/mutation.py` (92 lines) to
-      `src/native/shrinker/mutation.rs` and call from
-      `Shrinker::shrink()` as a last-resort pass (results > 32 nodes are
-      skipped per the upstream).
-
-      Needs `TestCase`-style probe machinery that fills a prefix then draws
-      random continuations. The native backend's data_source has equivalent
-      primitives.
-
-      Acceptance: remove the `#[cfg(not(feature = "native"))]` gates from:
-        - tests/pbtkit/shrink_quality_composite.rs::test_one_of_switches_to_shorter_branch
-        - tests/pbtkit/shrink_quality_composite.rs::test_one_of_shorter_branch_needs_non_simplest_value
-      ... and they pass in `cargo test --features native --test pbtkit`.
-
-      Note: `test_one_of_shorter_branch_needs_non_simplest_value` passes
-      in pbtkit only because `Random(0)` happens to seed the shrinker
-      with `Bool(true)` directly; with a different seed pbtkit would
-      also need `mutate_and_shrink` to cross the one_of branch. See the
-      comment on that test in the source file.
