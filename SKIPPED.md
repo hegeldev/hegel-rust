@@ -605,3 +605,12 @@ Individually-skipped tests (rest of the file is ported):
   identifiers inside `@given(...)` — a parse-time concern that cannot
   manifest in Rust, where unicode identifiers are handled by the
   compiler before any hegel code runs.
+
+- `test_internal_helpers.py` — the file's single test
+  (`test_is_negative_gives_good_type_error`) calls
+  `hypothesis.internal.floats.is_negative("foo")` to verify a Python
+  `TypeError` whose message contains `repr(x)`. Rust's type system
+  prevents passing a non-float to a function that expects one at compile
+  time, so the "wrong-type argument produces a good runtime error" case
+  is unrepresentable (same pattern as the already-skipped
+  `sort_key_type_mismatch` entries).
