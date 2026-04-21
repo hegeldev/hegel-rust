@@ -12,6 +12,7 @@ mod debug_information;
 mod direct_strategies;
 mod draw_example;
 mod feature_flags;
+mod find;
 mod float_nastiness;
 mod health_checks;
 mod one_of;
