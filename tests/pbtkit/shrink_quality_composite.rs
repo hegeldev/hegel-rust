@@ -9,12 +9,15 @@
 //!   pass on a seeded test case, so the direct-invocation shape has no
 //!   analog.
 //!
-//! Three tests are server-only (`#[cfg(not(feature = "native"))]`) because
-//! they require pbtkit's `try_shortening_via_increment`
-//! (`shrinking.index_passes`) and `mutate_and_shrink` (`shrinking.mutation`)
-//! passes, which are not yet implemented in `src/native/shrinker/`. Under
-//! Hypothesis (server mode) equivalent passes already exist. See TODO.yaml
-//! for the implementation task.
+//! Two tests are server-only (`#[cfg(not(feature = "native"))]`) because
+//! they require pbtkit's `mutate_and_shrink` (`shrinking.mutation`) pass
+//! (or an equivalent probe-with-random-continuation step), not yet
+//! implemented in `src/native/shrinker/`. Under Hypothesis (server mode)
+//! an equivalent pass already exists.
+//!     - `test_one_of_switches_to_shorter_branch`
+//!     - `test_one_of_shorter_branch_needs_non_simplest_value`
+//!
+//! See TODO.yaml for the implementation task.
 
 use crate::common::utils::{Minimal, minimal};
 use hegel::generators::{self as gs, Generator};
@@ -212,9 +215,15 @@ enum TupOrBool {
     Bool(bool),
 }
 
-// Requires the "increment + pun" behaviour of pbtkit's
-// `try_shortening_via_increment` (`shrinking.index_passes`) to switch from
-// the 3-choice tuple branch to the 2-choice boolean branch.
+// Server-only: the native shrinker's `try_shortening_via_increment` +
+// `lower_and_bump` cannot cross from Tup((false, true)) to Bool(true) on
+// their own — as pbtkit's own docstring notes, "the increment + pun
+// produces branch=1 with False (not interesting)". In pbtkit this test
+// only passes because `Random(0)` happens to find `Bool(true)` during
+// generation; hegel's `minimal()` uses a different seed path and finds
+// `Tup((false, true))` first. Crossing to the shorter branch needs a
+// probe-with-random-continuation pass (`shrinking.mutation` /
+// `mutate_and_shrink`), which is tracked separately in TODO.yaml.
 #[cfg(not(feature = "native"))]
 #[test]
 fn test_one_of_shorter_branch_needs_non_simplest_value() {
@@ -452,7 +461,6 @@ fn test_lower_and_bump_targets_booleans() {
 
 // Requires `try_shortening_via_increment` with prefix_nodes (value punning
 // across type-changing continuations) — `shrinking.index_passes` in pbtkit.
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_increment_with_dependent_continuation() {
     // Shrink to the 5-draw path (via v1=true) not the 6-draw path (via
