@@ -450,6 +450,18 @@ Individually-skipped tests (rest of the file is ported):
       silently drops the listener (no warning surface) — a public-API
       design difference.
 
+- `test_deadline.py` — every test exercises Hypothesis's public `deadline`
+  setting (`@settings(deadline=500)`, `@settings(deadline=None)`,
+  `settings(deadline="3 seconds")` raising `InvalidArgument`) and/or the
+  `DeadlineExceeded` / `FlakyFailure` error types raised when a test
+  exceeds its deadline (including flaky-on-rerun, shrinking-participation,
+  "well above the deadline" margin, GC-pause exclusion, and the
+  deadline-specific flaky error message). hegel-rust's `Settings` builder
+  exposes no `deadline` method (already noted by the `test_health_checks.py`
+  `deadline=None` skip entries), there is no `DeadlineExceeded` or
+  `FlakyFailure` error type, and `.map()` closures cannot `time.sleep`
+  their way into deadline territory via a generator transform.
+
 - `test_statistical_events.py` — every test relies on `hypothesis.statistics.collector`
   / `describe_statistics` (programmatic test-run statistics collection) and/or
   `event()` / `target()` (Hypothesis public APIs for recording custom events and
