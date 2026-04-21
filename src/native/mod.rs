@@ -14,6 +14,7 @@ pub mod data_source;
 pub mod database;
 pub mod featureflags;
 pub mod floats;
+pub mod intervalsets;
 pub mod re;
 pub mod runner;
 pub mod schema;
