@@ -43,9 +43,12 @@ Everything in `shrinking/`:
 | `StringChoice`   | `StringChoice`                           |
 
 All of these expose `simplest()`, `unit()`, `validate()`, `sort_key()` in
-both projects. They are `pub(crate)` in hegel-rust, so tests that exercise
-them go in `tests/embedded/native/choices_tests.rs` rather than a pbtkit
-integration test.
+both projects. In hegel-rust they are re-exported via
+`hegel::__native_test_internals::{IntegerChoice, BooleanChoice, FloatChoice,
+BytesChoice, StringChoice}` (native-only, `#[doc(hidden)]`) — so you can
+exercise them from a `#[cfg(feature = "native")]` submodule inside the
+normal pbtkit integration test. The embedded-tests mirror at
+`tests/embedded/native/choices_tests.rs` is also valid but not required.
 
 ## Test-side fixtures that *don't* port
 
@@ -55,6 +58,39 @@ integration test.
 - `tc.mark_status(Status.INTERESTING)` (no public API; `panic!` is the
   hegel-rust equivalent)
 - `tc.choice(n)` → `tc.draw(gs::integers::<i64>().min_value(0).max_value(n-1))`
+- `tc.forced_choice(n)` — `forced` is an internal argument on native
+  `draw_integer` / `weighted`, not exposed on the public `TestCase`.
+
+## Engine-harness surfaces with no public handle
+
+pbtkit's internal tests routinely drive the engine directly. hegel-rust
+has equivalents under `src/native/` but does not expose them, so these
+shapes are structurally unportable — add them to the port's
+individually-skipped list (`SKIPPED.md` plus a module-docstring bullet)
+and move on. They recur across `test_core.py`, `test_spans.py`,
+`test_draw_names.py`, `test_floats.py`, `test_text.py`,
+`shrink_quality/`, and `findability/`.
+
+- `PbtkitState(random, tf, max_examples).run()` and inspecting
+  `state.result` / `state.calls` — the native runner
+  (`native/runner.rs`) is driven by `run_native_test` with no
+  intermediate-state accessor.
+- `SHRINK_PASSES` as an introspectable list, and looking up a single
+  pass by `p.__name__` — hegel-rust's shrink passes are `pub(super)`
+  methods on `native::shrinker::Shrinker` reachable only via the
+  all-at-once `Shrinker::shrink()` entry point.
+- `Shrinker(state, initial, is_interesting=fn)` with a custom
+  interesting predicate — same reason; no hand-built `Shrinker`
+  instantiation from tests.
+- `CachedTestFunction([raw_values])` / `.lookup([raw_values])` — pbtkit
+  takes a raw choice-value list. hegel-rust's `CachedTestFunction`
+  takes a `NativeTestCase` (see `api-mapping.md` "Replaying fixed
+  choices" for the shape that does port).
+- `pbtkit.caching._cache_key` — hegel-rust's equivalent
+  `ChoiceValueKey` lives private to `src/native/tree.rs` with no
+  public hook.
+- `Frozen` exception raised when a completed `TestCase` is reused —
+  no counterpart error type is exported.
 
 ## `@pytest.mark.requires(...)` and `pytestmark`
 
