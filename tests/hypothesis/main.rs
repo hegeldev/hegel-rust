@@ -25,6 +25,7 @@ mod sampled_from;
 mod searchstrategy;
 mod shrink_budgeting;
 mod simple_characters;
+mod simple_collections;
 mod simple_strings;
 mod testdecorators;
 mod threading;
