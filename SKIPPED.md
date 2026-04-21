@@ -162,10 +162,6 @@ Individually-skipped tests (rest of the file is ported):
   `test_draw_names.py::test_draw_counter_only_fires_when_print_results` —
   access `tc._draw_counter` on pbtkit's `TestCase`, a Python-internal
   attribute with no hegel-rust counterpart.
-- `test_draw_names.py::test_draw_silent_does_not_print` — hegel-rust's
-  `tc.draw_silent` bypasses the named-draw machinery entirely (no
-  counter, no print surface), so there is nothing observable to
-  assert beyond "no panic".
 - `test_draw_names.py::test_choice_output_unchanged` — tests the
   `choice(5): …` output prefix from pbtkit's `tc.choice(n)`; in
   hegel-rust the equivalent is `tc.draw(gs::integers()...)` whose
@@ -179,67 +175,60 @@ Individually-skipped tests (rest of the file is ported):
   a format mismatch with no one-to-one mapping.
 - `test_draw_names.py::test_draw_named_repeatable_skips_taken_suffixes`
   — mutates `tc._named_draw_used` directly (Python-internal
-  attribute). The behaviour itself is covered by
-  `tests/test_draw_named.rs::test_draw_named_repeatable_skips_taken_name`.
+  attribute).
 - `test_draw_names.py::test_draw_named_no_print_when_print_results_false`
   — pbtkit's per-`TestCase` `print_results=False` flag has no
   hegel-rust counterpart (replay-output gating is run-level, keyed
   off the last-run flag, not per-testcase).
-- `test_draw_names.py::test_rewriter_top_level_assignment`,
-  `test_rewriter_for_loop_body_is_repeatable`,
-  `test_rewriter_while_loop_body_is_repeatable`,
-  `test_rewriter_if_body_is_repeatable`,
-  `test_rewriter_with_block_is_repeatable`,
-  `test_rewriter_try_block_is_repeatable`,
-  `test_rewriter_nested_function_is_repeatable`,
-  `test_rewriter_name_seen_at_top_and_loop_all_repeatable`,
-  `test_rewriter_no_draws_is_noop`,
-  `test_rewriter_expression_context_not_rewritten`,
-  `test_rewriter_tuple_target_not_rewritten` — test pbtkit's
-  `rewrite_test_function` / `_DrawNameCollector`, a libcst CST
-  visitor that rewrites Python source at runtime. Hegel-rust's
-  equivalent is the `#[hegel::test]` proc macro (compile-time,
-  syn-based) whose behavioural coverage lives in
-  `tests/test_draw_named.rs`.
-- `test_draw_names.py::test_rewrite_draws_output_is_named`,
-  `test_rewrite_draws_two_draws`,
-  `test_auto_rewriting_without_decorator`,
-  `test_rewrite_draws_final_replay_uses_rewritten_function`,
-  `test_rewrite_draws_loop_output_numbered`,
-  `test_rewrite_draws_with_closure`,
-  `test_rewrite_draws_no_error_for_no_draw_function` — integration
-  tests of pbtkit's runtime libcst rewriter against observable
-  output. The same observable output for hegel-rust's proc-macro
-  rewriter is covered end-to-end by `tests/test_draw_named.rs`
-  (`test_macro_output_uses_variable_name`,
-  `test_macro_loop_output_has_counter`, `test_macro_closure_is_repeatable`,
-  `test_macro_unique_names_at_top_level`, etc.).
-- `test_draw_names.py::test_importing_draw_names_enables_auto_rewriting`
+- `test_draw_names.py::test_rewriter_try_block_is_repeatable` — Python
+  `try`/`except` has no stable Rust syntactic analog (no `try` blocks,
+  no bare-block `except`); the "draw inside a try block is repeatable"
+  assertion has no direct Rust equivalent.
+- `test_draw_names.py::test_rewriter_nested_function_is_repeatable` —
+  the upstream comment notes the inner `tc.draw(...)` is a `return`
+  expression not an assignment, so the test drains output but asserts
+  nothing — no observable behaviour to pin.
+- `test_draw_names.py::test_auto_rewriting_without_decorator`,
+  `test_draw_names.py::test_importing_draw_names_enables_auto_rewriting`
   — pbtkit's import-time `TestCase` monkey-patching is replaced in
-  hegel-rust by the always-on `#[hegel::test]` macro; there is no
-  "importing a module flips a switch" surface to assert on.
+  hegel-rust by the always-on `#[hegel::test]` macro; no "importing
+  a module flips a switch" surface to assert on.
+- `test_draw_names.py::test_rewrite_draws_with_closure` — tests that
+  pbtkit's libcst rewriter preserves Python `__closure__` cell
+  references. Rust's proc-macro rewrite operates on tokens, so
+  closure-variable preservation is not a meaningful rewriter concern.
 - `test_draw_names.py::test_draw_named_stub_raises_before_import` —
   asserts `NotImplementedError` from pbtkit's pre-import stub of
   `draw_named`. Hegel-rust has no such stub; `__draw_named` is
   always available on `TestCase`.
-- `test_draw_names.py::test_draw_named_validation_runs_outside_composite`
-  — the "validation fires" half is redundant with the non-repeatable
-  reuse and mixed-flags panic tests already ported in
-  `tests/pbtkit/draw_names.rs`; the `print_results=False` half uses
-  the Python-internal flag described above.
 - `test_draw_names.py::test_collector_trystar_marks_repeatable`,
   `test_collector_classdef_marks_repeatable`,
-  `test_collector_chained_assignment_skipped`,
-  `test_rewriter_multiple_targets_in_same_fn`,
-  `test_rewriter_tuple_target_when_regular_draw_present`,
-  `test_rewriter_nested_funcdef_line_268`,
-  `test_rewriter_kwdefaults_preserved`,
-  `test_rewriter_draw_with_no_args`,
-  `test_rewrite_fallback_on_bad_source`,
-  `test_hook_noop_when_original_test_is_none` — coverage tests for
-  pbtkit's libcst CST visitor and its `rewrite_test_function`
-  fallbacks; same libcst-specific rationale as the Section C
-  rewriter tests above.
+  `test_collector_chained_assignment_skipped` — direct uses of
+  `cst.parse_module(...)` + `_DrawNameCollector`: external Python
+  library (libcst) integration with no Rust surface.
+- `test_draw_names.py::test_rewriter_multiple_targets_in_same_fn` —
+  exercises Python chained assignment (`a = b = tc.draw(...)`), a
+  Python-syntax construct that doesn't exist in Rust.
+- `test_draw_names.py::test_rewriter_tuple_target_when_regular_draw_present`,
+  `test_rewriter_nested_funcdef_line_268` — pbtkit libcst line-coverage
+  tests for the `_DrawNameCollector` visitor; both behavioural cases
+  (tuple target alongside a regular draw; nested `fn` inside a test
+  body) are covered by the Section C tuple-target and
+  expression-context ports.
+- `test_draw_names.py::test_rewriter_kwdefaults_preserved` — asserts
+  `rewritten.__kwdefaults__ == {...}`; Python-specific
+  keyword-only-default machinery.
+- `test_draw_names.py::test_rewriter_draw_with_no_args` — pbtkit's
+  `tc.draw()` takes no argument; hegel-rust's `tc.draw(g)` requires a
+  generator, so the zero-arg case is unrepresentable in the Rust
+  type system.
+- `test_draw_names.py::test_rewrite_fallback_on_bad_source` — tests
+  pbtkit's `inspect.getsource` fallback (runtime Python source
+  reflection); the proc macro has no equivalent failure mode.
+- `test_draw_names.py::test_hook_noop_when_original_test_is_none` —
+  exercises pbtkit's internal `_draw_names_hook` against a
+  `PbtkitState` with `_original_test is None`; an internal hook with
+  no Rust counterpart.
 
 ## hypothesis (`/tmp/hypothesis/hypothesis-python/tests/cover/`)
 
