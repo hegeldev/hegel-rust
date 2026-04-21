@@ -143,6 +143,11 @@ pub struct NativeTestCase {
     next_collection_id: i64,
     pub variable_pools: Vec<NativeVariables>,
     pub spans: Vec<Span>,
+    /// True iff any `stop_span(discard=true)` has been observed during this test
+    /// case. Mirrors Hypothesis's `ConjectureData.has_discards`: filters that
+    /// retry mark the rejected attempts as discarded, which the shrinker uses
+    /// to prioritise removing them.
+    pub has_discards: bool,
 }
 
 impl NativeTestCase {
@@ -158,6 +163,7 @@ impl NativeTestCase {
             next_collection_id: 0,
             variable_pools: Vec::new(),
             spans: Vec::new(),
+            has_discards: false,
         }
     }
 
@@ -173,6 +179,7 @@ impl NativeTestCase {
             next_collection_id: 0,
             variable_pools: Vec::new(),
             spans: Vec::new(),
+            has_discards: false,
         }
     }
 
