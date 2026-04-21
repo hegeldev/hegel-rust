@@ -392,3 +392,34 @@ Individually-skipped tests (rest of the file is ported):
   depend on Python-specific facilities (`warnings.catch_warnings` +
   `NonInteractiveExampleWarning`, pytester, pexpect-driven REPL subprocess,
   `PYTEST_CURRENT_TEST` env-var plumbing) with no Rust counterpart.
+
+- `test_health_checks.py::test_returning_non_none_is_forbidden`,
+  `test_health_checks.py::test_stateful_returnvalue_healthcheck` — check
+  Hypothesis's `return_value` health check on
+  `@given`/`@rule`/`@initialize`/`@invariant`-decorated functions. Rust
+  closures have declared return types already; the check is Python-specific
+  and hegel-rust has no corresponding `HealthCheck` variant.
+- `test_health_checks.py::test_the_slow_test_health_check_can_be_disabled`,
+  `test_health_checks.py::test_the_slow_test_health_only_runs_if_health_checks_are_on`
+  — use the `deadline=None` setting and `skipif_time_unpatched`, a
+  pytest-specific time-freezing fixture. hegel-rust has no `deadline`
+  setting on `Settings`.
+- `test_health_checks.py::test_differing_executors_fails_health_check` —
+  tests the `differing_executors` health check on `@given`-decorated
+  instance methods called with different `self` receivers. hegel-rust
+  tests are closures passed to `Hegel::new(...).run()` with no
+  class/instance dispatch and no analogous health-check variant.
+- `test_health_checks.py::test_it_is_an_error_to_suppress_non_iterables`,
+  `test_health_checks.py::test_it_is_an_error_to_suppress_non_healthchecks`
+  — Python dynamic typing: pass a non-iterable or non-`HealthCheck` to
+  `suppress_health_check`. Rust's type system prevents these at compile
+  time (`impl IntoIterator<Item = HealthCheck>`).
+- `test_health_checks.py::test_nested_given_raises_healthcheck`,
+  `test_health_checks.py::test_triply_nested_given_raises_healthcheck`,
+  `test_health_checks.py::test_can_suppress_nested_given`,
+  `test_health_checks.py::test_cant_suppress_nested_given_on_inner`,
+  `test_health_checks.py::test_suppress_triply_nested_given` — all
+  exercise `HealthCheck.nested_given`, which detects a `@given`-decorated
+  function being called from inside another `@given` function. hegel-rust
+  has no decorator-based test dispatch to nest and no `nested_given`
+  variant on its `HealthCheck` enum.

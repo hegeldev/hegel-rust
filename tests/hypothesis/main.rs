@@ -13,6 +13,7 @@ mod direct_strategies;
 mod draw_example;
 mod feature_flags;
 mod float_nastiness;
+mod health_checks;
 mod one_of;
 mod permutations;
 mod regex;
