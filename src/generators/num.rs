@@ -1,152 +1,49 @@
-use super::{BasicGenerator, Generator, TestCase};
-use crate::utils::cbor_utils::cbor_map;
+use super::{Generator, TestCase};
 use crate::utils::num::{cbor_to_bigint, cbor_to_biguint, int_to_cbor};
 use ciborium::Value;
 use num_bigint::{BigInt, BigUint};
 use num_complex::Complex;
-use num_integer::Integer;
+use num_integer::Integer as NumInteger;
 use num_rational::Ratio;
 use num_traits::{Num, One, Zero};
 
 // ---------------------------------------------------------------------------
-// BigIntGenerator
+// Integer impls for BigInt/BigUint
 // ---------------------------------------------------------------------------
 
-/// Generator for [`BigInt`] values. Created by [`big_integers()`].
-///
-/// Defaults to the range \[-2^128, 2^128).
-/// Use `min_value` and `max_value` to constrain the range.
-pub struct BigIntGenerator {
-    min: BigInt,
-    max: BigInt,
-}
-
-impl BigIntGenerator {
-    /// Set the minimum value (inclusive).
-    pub fn min_value(mut self, min: BigInt) -> Self {
-        self.min = min;
-        self
+impl super::Integer for BigInt {
+    fn default_min() -> Self {
+        -(<BigInt as One>::one() << 128u32)
     }
-
-    /// Set the maximum value (inclusive).
-    pub fn max_value(mut self, max: BigInt) -> Self {
-        self.max = max;
-        self
+    fn default_max() -> Self {
+        (<BigInt as One>::one() << 128u32) - <BigInt as One>::one()
     }
-
-    fn build_schema(&self) -> Value {
-        assert!(self.min <= self.max, "Cannot have max_value < min_value");
-        cbor_map! {
-            "type" => "integer",
-            "min_value" => int_to_cbor(self.min.clone()),
-            "max_value" => int_to_cbor(self.max.clone())
-        }
+    fn one() -> Self {
+        <BigInt as One>::one()
+    }
+    fn to_cbor(&self) -> Value {
+        int_to_cbor(self.clone())
+    }
+    fn from_cbor(v: Value) -> Self {
+        cbor_to_bigint(v)
     }
 }
 
-impl Generator<BigInt> for BigIntGenerator {
-    fn do_draw(&self, tc: &TestCase) -> BigInt {
-        let raw = super::generate_raw(tc, &self.build_schema());
-        cbor_to_bigint(raw)
+impl super::Integer for BigUint {
+    fn default_min() -> Self {
+        BigUint::zero()
     }
-
-    fn as_basic(&self) -> Option<BasicGenerator<'_, BigInt>> {
-        Some(BasicGenerator::new(self.build_schema(), cbor_to_bigint))
+    fn default_max() -> Self {
+        (<BigUint as One>::one() << 128u32) - <BigUint as One>::one()
     }
-}
-
-/// Generate [`BigInt`] values.
-///
-/// By default, generates values in \[-2^128, 2^128).
-/// Use `min_value` and `max_value` to constrain the range.
-///
-/// # Example
-///
-/// ```no_run
-/// use num_bigint::BigInt;
-///
-/// #[hegel::test]
-/// fn my_test(tc: hegel::TestCase) {
-///     let n = tc.draw(hegel::generators::big_integers()
-///         .max_value(BigInt::from(1000)));
-///     assert!(n <= BigInt::from(1000));
-/// }
-/// ```
-pub fn big_integers() -> BigIntGenerator {
-    BigIntGenerator {
-        min: -(BigInt::one() << 128u32),
-        max: (BigInt::one() << 128u32) - BigInt::one(),
+    fn one() -> Self {
+        <BigUint as One>::one()
     }
-}
-
-// ---------------------------------------------------------------------------
-// BigUintGenerator
-// ---------------------------------------------------------------------------
-
-/// Generator for [`BigUint`] values. Created by [`big_uintegers()`].
-///
-/// Defaults to the range \[0, 2^128).
-/// Use `min_value` and `max_value` to constrain the range.
-pub struct BigUintGenerator {
-    min: BigUint,
-    max: BigUint,
-}
-
-impl BigUintGenerator {
-    /// Set the minimum value (inclusive).
-    pub fn min_value(mut self, min: BigUint) -> Self {
-        self.min = min;
-        self
+    fn to_cbor(&self) -> Value {
+        int_to_cbor(BigInt::from(self.clone()))
     }
-
-    /// Set the maximum value (inclusive).
-    pub fn max_value(mut self, max: BigUint) -> Self {
-        self.max = max;
-        self
-    }
-
-    fn build_schema(&self) -> Value {
-        assert!(self.min <= self.max, "Cannot have max_value < min_value");
-        cbor_map! {
-            "type" => "integer",
-            "min_value" => int_to_cbor(self.min.clone()),
-            "max_value" => int_to_cbor(self.max.clone())
-        }
-    }
-}
-
-impl Generator<BigUint> for BigUintGenerator {
-    fn do_draw(&self, tc: &TestCase) -> BigUint {
-        let raw = super::generate_raw(tc, &self.build_schema());
-        cbor_to_biguint(raw)
-    }
-
-    fn as_basic(&self) -> Option<BasicGenerator<'_, BigUint>> {
-        Some(BasicGenerator::new(self.build_schema(), cbor_to_biguint))
-    }
-}
-
-/// Generate [`BigUint`] values.
-///
-/// By default, generates values in \[0, 2^128).
-/// Use `min_value` and `max_value` to constrain the range.
-///
-/// # Example
-///
-/// ```no_run
-/// use num_bigint::BigUint;
-///
-/// #[hegel::test]
-/// fn my_test(tc: hegel::TestCase) {
-///     let n = tc.draw(hegel::generators::big_uintegers()
-///         .max_value(BigUint::from(1000u32)));
-///     assert!(n <= BigUint::from(1000u32));
-/// }
-/// ```
-pub fn big_uintegers() -> BigUintGenerator {
-    BigUintGenerator {
-        min: BigUint::zero(),
-        max: (BigUint::one() << 128u32) - BigUint::one(),
+    fn from_cbor(v: Value) -> Self {
+        cbor_to_biguint(v)
     }
 }
 
@@ -186,7 +83,7 @@ impl<T, NG, DG> Generator<Ratio<T>> for RationalGenerator<NG, DG>
 where
     NG: Generator<T>,
     DG: Generator<T>,
-    T: Clone + Integer,
+    T: Clone + NumInteger,
 {
     fn do_draw(&self, tc: &TestCase) -> Ratio<T> {
         let numer = self.numer_gen.do_draw(tc);
@@ -195,10 +92,10 @@ where
     }
 }
 
-/// Generate [`Ratio<i64>`] values.
+/// Generate [`Ratio<T>`] values.
 ///
-/// By default, uses `integers::<i64>()` for the numerator and
-/// `integers::<i64>().min_value(1)` for the denominator.
+/// By default, uses `integers::<T>()` for the numerator and
+/// `integers::<T>().min_value(T::one())` for the denominator.
 /// Use `.numerator()` and `.denominator()` to customize.
 ///
 /// # Examples
@@ -209,46 +106,21 @@ where
 ///
 /// #[hegel::test]
 /// fn my_test(tc: hegel::TestCase) {
-///     // Use defaults
-///     let r: Ratio<i64> = tc.draw(gs::rationals());
+///     let r: Ratio<i64> = tc.draw(gs::rationals::<i64>());
 ///     assert!(*r.denom() > 0);
 ///
 ///     // Customize numerator and denominator ranges
-///     let r: Ratio<i64> = tc.draw(gs::rationals()
+///     let r: Ratio<i64> = tc.draw(gs::rationals::<i64>()
 ///         .numerator(gs::integers::<i64>().min_value(0).max_value(100))
 ///         .denominator(gs::integers::<i64>().min_value(1).max_value(10)));
 ///     assert!(*r.numer() >= 0 && *r.denom() >= 1);
 /// }
 /// ```
-pub fn rationals() -> RationalGenerator<super::IntegerGenerator<i64>, super::IntegerGenerator<i64>>
-{
+pub fn rationals<T: super::Integer>()
+-> RationalGenerator<super::IntegerGenerator<T>, super::IntegerGenerator<T>> {
     RationalGenerator {
-        numer_gen: super::integers::<i64>(),
-        denom_gen: super::integers::<i64>().min_value(1),
-    }
-}
-
-/// Generate [`Ratio<BigInt>`] values.
-///
-/// Uses [`big_integers()`] for the numerator and a strictly-positive
-/// range for the denominator.
-///
-/// # Example
-///
-/// ```no_run
-/// use num_bigint::BigInt;
-/// use num_rational::Ratio;
-///
-/// #[hegel::test]
-/// fn my_test(tc: hegel::TestCase) {
-///     let r: Ratio<BigInt> = tc.draw(hegel::generators::big_rationals());
-///     assert!(!r.denom().is_zero());
-/// }
-/// ```
-pub fn big_rationals() -> RationalGenerator<BigIntGenerator, BigIntGenerator> {
-    RationalGenerator {
-        numer_gen: big_integers(),
-        denom_gen: big_integers().min_value(BigInt::one()),
+        numer_gen: super::integers::<T>(),
+        denom_gen: super::integers::<T>().min_value(<T as super::Integer>::one()),
     }
 }
 

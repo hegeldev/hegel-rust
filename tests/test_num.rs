@@ -20,29 +20,31 @@ use num_traits::{One, Zero};
 fn test_big_integers_default_range() {
     let lower = -(BigInt::one() << 128u32);
     let upper = (BigInt::one() << 128u32) - BigInt::one();
-    assert_all_examples(gs::big_integers(), move |n| *n >= lower && *n <= upper);
+    assert_all_examples(gs::integers::<BigInt>(), move |n| {
+        *n >= lower && *n <= upper
+    });
 }
 
 #[test]
 fn test_big_integers_finds_zero() {
-    find_any(gs::big_integers(), |n| n.is_zero());
+    find_any(gs::integers::<BigInt>(), |n| n.is_zero());
 }
 
 #[test]
 fn test_big_integers_finds_positive() {
-    find_any(gs::big_integers(), |n| *n > BigInt::from(1_000_000));
+    find_any(gs::integers::<BigInt>(), |n| *n > BigInt::from(1_000_000));
 }
 
 #[test]
 fn test_big_integers_finds_negative() {
-    find_any(gs::big_integers(), |n| *n < BigInt::from(-1_000_000));
+    find_any(gs::integers::<BigInt>(), |n| *n < BigInt::from(-1_000_000));
 }
 
 #[test]
 fn test_big_integers_constrained() {
     let min = BigInt::from(-100);
     let max = BigInt::from(100);
-    let generator = gs::big_integers()
+    let generator = gs::integers::<BigInt>()
         .min_value(BigInt::from(-100))
         .max_value(BigInt::from(100));
     assert_all_examples(generator, move |n| *n >= min && *n <= max);
@@ -50,7 +52,7 @@ fn test_big_integers_constrained() {
 
 #[test]
 fn test_big_integers_finds_min_boundary() {
-    let generator = gs::big_integers()
+    let generator = gs::integers::<BigInt>()
         .min_value(BigInt::from(-50))
         .max_value(BigInt::from(50));
     find_any(generator, |n| *n == BigInt::from(-50));
@@ -58,7 +60,7 @@ fn test_big_integers_finds_min_boundary() {
 
 #[test]
 fn test_big_integers_finds_max_boundary() {
-    let generator = gs::big_integers()
+    let generator = gs::integers::<BigInt>()
         .min_value(BigInt::from(-50))
         .max_value(BigInt::from(50));
     find_any(generator, |n| *n == BigInt::from(50));
@@ -66,7 +68,7 @@ fn test_big_integers_finds_max_boundary() {
 
 #[test]
 fn test_big_integers_big() {
-    let generator = gs::big_integers()
+    let generator = gs::integers::<BigInt>()
         .min_value(BigInt::one() << 129u32)
         .max_value(BigInt::one() << 130u32);
     find_any(generator, |n| *n >= BigInt::one() << 129u32);
@@ -74,7 +76,7 @@ fn test_big_integers_big() {
 
 #[test]
 fn test_big_integers_small() {
-    let generator = gs::big_integers()
+    let generator = gs::integers::<BigInt>()
         .min_value(-(BigInt::one() << 130u32))
         .max_value(-(BigInt::one() << 129u32));
     find_any(generator, |n| *n >= -(BigInt::one() << 130u32));
@@ -86,24 +88,26 @@ fn test_big_integers_small() {
 #[test]
 fn test_big_uintegers_default_range() {
     let upper = (BigUint::one() << 128u32) - BigUint::one();
-    assert_all_examples(gs::big_uintegers(), move |n| *n <= upper);
+    assert_all_examples(gs::integers::<BigUint>(), move |n| *n <= upper);
 }
 
 #[test]
 fn test_big_uintegers_finds_zero() {
-    find_any(gs::big_uintegers(), |n| n.is_zero());
+    find_any(gs::integers::<BigUint>(), |n| n.is_zero());
 }
 
 #[test]
 fn test_big_uintegers_finds_large() {
-    find_any(gs::big_uintegers(), |n| *n > BigUint::from(1_000_000u64));
+    find_any(gs::integers::<BigUint>(), |n| {
+        *n > BigUint::from(1_000_000u64)
+    });
 }
 
 #[test]
 fn test_big_uintegers_constrained() {
     let min = BigUint::from(10u32);
     let max = BigUint::from(200u32);
-    let generator = gs::big_uintegers()
+    let generator = gs::integers::<BigUint>()
         .min_value(BigUint::from(10u32))
         .max_value(BigUint::from(200u32));
     assert_all_examples(generator, move |n| *n >= min && *n <= max);
@@ -111,7 +115,7 @@ fn test_big_uintegers_constrained() {
 
 #[test]
 fn test_big_uintegers_finds_min_boundary() {
-    let generator = gs::big_uintegers()
+    let generator = gs::integers::<BigUint>()
         .min_value(BigUint::from(5u32))
         .max_value(BigUint::from(100u32));
     find_any(generator, |n| *n == BigUint::from(5u32));
@@ -119,7 +123,7 @@ fn test_big_uintegers_finds_min_boundary() {
 
 #[test]
 fn test_big_uintegers_finds_max_boundary() {
-    let generator = gs::big_uintegers()
+    let generator = gs::integers::<BigUint>()
         .min_value(BigUint::from(5u32))
         .max_value(BigUint::from(100u32));
     find_any(generator, |n| *n == BigUint::from(100u32));

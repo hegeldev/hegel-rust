@@ -218,17 +218,17 @@ where
 
 #[cfg(feature = "num")]
 impl DefaultGenerator for num_bigint::BigInt {
-    type Generator = super::BigIntGenerator;
+    type Generator = IntegerGenerator<num_bigint::BigInt>;
     fn default_generator() -> Self::Generator {
-        super::big_integers()
+        integers()
     }
 }
 
 #[cfg(feature = "num")]
 impl DefaultGenerator for num_bigint::BigUint {
-    type Generator = super::BigUintGenerator;
+    type Generator = IntegerGenerator<num_bigint::BigUint>;
     fn default_generator() -> Self::Generator {
-        super::big_uintegers()
+        integers()
     }
 }
 

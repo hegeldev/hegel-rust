@@ -64,9 +64,6 @@ pub use tuples::{
 };
 
 #[cfg(feature = "num")]
-pub use self::num::{
-    BigIntGenerator, BigUintGenerator, ComplexGenerator, RationalGenerator, big_integers,
-    big_rationals, big_uintegers, complex, rationals,
-};
+pub use self::num::{ComplexGenerator, RationalGenerator, complex, rationals};
 #[cfg(feature = "rand")]
 pub use random::{HegelRandom, RandomsGenerator, randoms};

@@ -4,18 +4,31 @@ use ciborium::Value;
 use std::marker::PhantomData;
 
 /// Trait bound for integer types usable with [`integers()`].
-pub trait Integer: Copy + Ord {
-    /// The minimum value of this type.
-    const MIN: Self;
-    /// The maximum value of this type.
-    const MAX: Self;
+///
+/// Implementations supply the default range, a `one` value for builders,
+/// and the CBOR encode/decode hooks used by the schema protocol. Fixed-width
+/// primitives use serde; arbitrary-precision types use CBOR bignum tags.
+pub trait Integer: Clone + Ord + Send + Sync + 'static {
+    /// Default minimum when `min_value` is not set.
+    fn default_min() -> Self;
+    /// Default maximum when `max_value` is not set.
+    fn default_max() -> Self;
+    /// The value `1` — used by derived builders that need a positive lower bound.
+    fn one() -> Self;
+    /// Encode this value as a CBOR integer or bignum tag for the schema.
+    fn to_cbor(&self) -> Value;
+    /// Decode a CBOR value produced by the server into `Self`.
+    fn from_cbor(v: Value) -> Self;
 }
 
 macro_rules! impl_integer_type {
     ($($t:ty),*) => { $(
         impl Integer for $t {
-            const MIN: Self = <$t>::MIN;
-            const MAX: Self = <$t>::MAX;
+            fn default_min() -> Self { <$t>::MIN }
+            fn default_max() -> Self { <$t>::MAX }
+            fn one() -> Self { 1 }
+            fn to_cbor(&self) -> Value { cbor_serialize(self) }
+            fn from_cbor(v: Value) -> Self { super::deserialize_value(v) }
         }
     )* };
 }
@@ -65,42 +78,36 @@ impl<T> IntegerGenerator<T> {
     }
 }
 
-impl<T: Integer + serde::Serialize> IntegerGenerator<T> {
+impl<T: Integer> IntegerGenerator<T> {
     fn build_schema(&self) -> Value {
-        let min = self.min.unwrap_or(T::MIN);
-        let max = self.max.unwrap_or(T::MAX);
+        let min = self.min.clone().unwrap_or_else(T::default_min);
+        let max = self.max.clone().unwrap_or_else(T::default_max);
         assert!(min <= max, "Cannot have max_value < min_value");
 
         cbor_map! {
             "type" => "integer",
-            "min_value" => cbor_serialize(&min),
-            "max_value" => cbor_serialize(&max)
+            "min_value" => min.to_cbor(),
+            "max_value" => max.to_cbor()
         }
     }
 }
 
-impl<T: Integer + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static>
-    Generator<T> for IntegerGenerator<T>
-{
+impl<T: Integer> Generator<T> for IntegerGenerator<T> {
     fn do_draw(&self, tc: &TestCase) -> T {
-        super::generate_from_schema(tc, &self.build_schema())
+        T::from_cbor(super::generate_raw(tc, &self.build_schema()))
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            super::deserialize_value(raw)
-        }))
+        Some(BasicGenerator::new(self.build_schema(), T::from_cbor))
     }
 }
 
 /// Generate integers of type `T`.
 ///
-/// Bounds default to the full range of `T`. Use the builder methods `min_value`
-/// and `max_value` to constrain the range. See [`IntegerGenerator`] for more
-/// details.
-pub fn integers<
-    T: Integer + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static,
->() -> IntegerGenerator<T> {
+/// Bounds default to the full range of `T` (or `±2^128` for arbitrary-precision
+/// types). Use the builder methods `min_value` and `max_value` to constrain the
+/// range. See [`IntegerGenerator`] for more details.
+pub fn integers<T: Integer>() -> IntegerGenerator<T> {
     IntegerGenerator {
         min: None,
         max: None,
