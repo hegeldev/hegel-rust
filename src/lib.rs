@@ -259,6 +259,10 @@ pub use antithesis::TestLocation;
 #[doc(hidden)]
 pub mod __native_test_internals {
     pub use crate::native::bignum::BigUint;
+    pub use crate::native::cache::{
+        CacheEntry, CacheInvalidArgument, CachePinError, CacheScoring, GenericCache, LRUCache,
+        LRUReusedCache, LRUReusedScoring,
+    };
     pub use crate::native::core::{
         BooleanChoice, BytesChoice, ChoiceValue, FloatChoice, IntegerChoice, NativeTestCase, Span,
         StringChoice,
