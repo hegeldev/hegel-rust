@@ -7,35 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-  - title: '[CI] src/native/shrinker/index_passes.rs uses unstable let-chains (fails MSRV 1.86)'
-    details: |
-      `compile-examples (1.86)` and `test-all-features (1.86)` both fail
-      with E0658: `let` expressions in this position are unstable. The
-      project's MSRV is 1.86 and let-chains are not stabilised there.
-
-      Four occurrences in src/native/shrinker/index_passes.rs:
-
-        error[E0658]: `let` expressions in this position are unstable
-          --> src/native/shrinker/index_passes.rs:49:20
-        49 |                 if let Some(v_prev) = kind_i.from_index(&current_idx - BigUint::from(1u32))
-
-          --> src/native/shrinker/index_passes.rs:91:32
-        91 | ...                   if let Some(bumped) = kind_j.from_index(candidate_idx)
-
-          --> src/native/shrinker/index_passes.rs:139:20
-        139 |                 if let Some(v) = kind.from_index(t)
-
-          --> src/native/shrinker/index_passes.rs:146:16
-        146 |             if let Some(v) = kind.from_index(kind.max_index())
-
-        = note: see issue #53667 <https://github.com/rust-lang/rust/issues/53667>
-        error: could not compile `hegeltest` (lib) due to 4 previous errors
-
-      Failing commands: `just check-tests-all-features` (test-all-features
-      job) and the compile-examples job. Fix by rewriting these `if let`
-      expressions to a form that compiles on Rust 1.86 (e.g. nested
-      `if let` blocks, or extract the let into a preceding statement).
-
   - title: '[CI] check release fails because RELEASE.md already exists on main'
     details: |
       `check release` job fails:
