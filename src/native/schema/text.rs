@@ -302,6 +302,31 @@ fn build_string_alphabet_uncached(schema: &Value) -> StringAlphabet {
         .and_then(as_text)
         .map(|s| s.chars().collect());
 
+    // Validate category names. Mirrors Hypothesis `charmap.as_general_categories`.
+    for cat in categories
+        .iter()
+        .flatten()
+        .chain(exclude_categories.iter().flatten())
+    {
+        if !is_valid_category(cat) {
+            panic!("InvalidArgument: {cat:?} is not a valid Unicode category.");
+        }
+    }
+
+    // Validate no overlap between include_characters and exclude_characters.
+    // Mirrors Hypothesis `strategies/_internal/core.py::characters`.
+    if let (Some(incl), Some(excl)) = (include_chars.as_ref(), exclude_chars.as_ref()) {
+        let overlap: Vec<char> = incl.iter().filter(|c| excl.contains(c)).copied().collect();
+        if !overlap.is_empty() {
+            let incl_str: String = incl.iter().collect();
+            let excl_str: String = excl.iter().collect();
+            panic!(
+                "InvalidArgument: Characters {overlap:?} are present in both \
+                 include_characters={incl_str:?} and exclude_characters={excl_str:?} (overlap)"
+            );
+        }
+    }
+
     // If categories is empty AND include_characters is set: explicit alphabet from include list.
     if let Some(ref cats) = categories {
         if cats.is_empty() {
@@ -396,11 +421,12 @@ fn build_string_alphabet_uncached(schema: &Value) -> StringAlphabet {
         alphabet.push(c);
     }
 
-    // Add include_characters (if not already present).
+    // Add include_characters (if not already present). `include_characters`
+    // is a union override: it adds characters regardless of the codepoint
+    // range. Mirrors Hypothesis `charmap.query` which ORs in the include set.
     if let Some(incl) = include_chars {
         for c in incl {
-            let cp = c as u32;
-            if cp >= cp_min && cp <= cp_max && !is_surrogate(c) && !alphabet.contains(&c) {
+            if !is_surrogate(c) && !alphabet.contains(&c) {
                 alphabet.push(c);
             }
         }
@@ -507,6 +533,54 @@ fn codepoint_at_index(min: u32, max: u32, idx: u32) -> char {
 fn is_surrogate(c: char) -> bool {
     let cp = c as u32;
     is_surrogate_cp(cp)
+}
+
+/// Whether `cat` is a valid Unicode general category name.
+///
+/// Accepts the seven single-letter major classes (`L`, `M`, `N`, `P`, `S`,
+/// `Z`, `C`) and the 29 two-letter codes returned by Python's
+/// `unicodedata.category`. Mirrors Hypothesis's validation in
+/// `charmap.as_general_categories`.
+fn is_valid_category(cat: &str) -> bool {
+    matches!(
+        cat,
+        "L" | "M"
+            | "N"
+            | "P"
+            | "S"
+            | "Z"
+            | "C"
+            | "Lu"
+            | "Ll"
+            | "Lt"
+            | "Lm"
+            | "Lo"
+            | "Mn"
+            | "Mc"
+            | "Me"
+            | "Nd"
+            | "Nl"
+            | "No"
+            | "Pc"
+            | "Pd"
+            | "Ps"
+            | "Pe"
+            | "Pi"
+            | "Pf"
+            | "Po"
+            | "Sm"
+            | "Sc"
+            | "Sk"
+            | "So"
+            | "Zs"
+            | "Zl"
+            | "Zp"
+            | "Cc"
+            | "Cf"
+            | "Cs"
+            | "Co"
+            | "Cn"
+    )
 }
 
 pub(super) fn is_surrogate_cp(cp: u32) -> bool {
