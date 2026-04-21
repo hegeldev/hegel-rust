@@ -348,6 +348,15 @@ Individually-skipped tests (rest of the file is ported):
 - `test_charmap.py` — cherry-pick of worker port conflicted with concurrent changes
   to `src/native/schema/regex.rs` and `text.rs`; deferred for manual conflict resolution.
 
+- `test_simple_characters.py::test_include_exclude_with_multiple_chars_is_invalid`
+  — Python passes a list of strings where each element must be a single
+  character; Rust's `include_characters`/`exclude_characters` take `&str`, so
+  the "one element is a multi-character string" failure mode is unrepresentable.
+- `test_simple_characters.py::test_whitelisted_characters_alone` — asserts that
+  `characters(include_characters=...)` with no other constraint raises. The
+  hegel-rust client always emits `exclude_categories=["Cs"]` to keep strings
+  surrogate-free, so "include alone" is unreachable through the Rust public API.
+
 - `test_executors.py` — all tests exercise Hypothesis's `execute_example` protocol,
   a Python class-method hook that lets classes (e.g. `unittest.TestCase` subclasses)
   customize how `@given`-decorated method bodies are executed. Hegel-rust has no
