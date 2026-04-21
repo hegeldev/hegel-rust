@@ -272,6 +272,7 @@ pub mod __native_test_internals {
     pub use crate::native::shrinker::value_shrinkers::{IntegerShrinker, OrderingShrinker};
     pub use crate::native::tree::CachedTestFunction;
     pub use crate::native::unicodedata;
+    pub use crate::native::with_native_tc;
 }
 
 /// Derive a generator for a struct or enum.

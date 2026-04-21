@@ -35,9 +35,22 @@ pub fn dispatch_request(
             let schema = map_get(payload, "schema").expect("generate command missing schema");
             interpret_schema(ntc, schema)
         }
-        "start_span" | "stop_span" => {
-            // Spans are tracked locally by TestCase for output purposes.
-            // The native backend doesn't need to do anything here yet.
+        "start_span" => {
+            // Spans are tracked locally by TestCase for output purposes;
+            // the native backend has no matching bookkeeping yet.
+            Ok(Value::Null)
+        }
+        "stop_span" => {
+            // Mirror Hypothesis's `has_discards` bookkeeping: a `stop_span`
+            // with `discard=true` means the enclosing block (e.g. a rejected
+            // filter attempt) is dropped from the choice sequence for
+            // shrinking purposes.
+            let discard = map_get(payload, "discard")
+                .and_then(as_bool)
+                .expect("stop_span payload missing discard");
+            if discard {
+                ntc.has_discards = true;
+            }
             Ok(Value::Null)
         }
         "new_collection" => {

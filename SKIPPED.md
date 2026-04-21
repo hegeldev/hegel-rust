@@ -521,6 +521,16 @@ Individually-skipped tests (rest of the file is ported):
   exception annotations) and dynamic typing (strategies as `sampled_from`
   elements); no Rust counterpart.
 
+- `test_filtered_strategy.py::test_filtered_branches_are_all_filtered`,
+  `test_filtered_strategy.py::test_filter_conditions_may_be_empty`,
+  `test_filtered_strategy.py::test_nested_filteredstrategy_flattens_conditions` —
+  all three construct Hypothesis's internal `FilteredStrategy` class directly
+  and inspect `.branches`, `.flat_conditions`, and `.filtered_strategy`.
+  hegel-rust's `Filtered<T, F, G>` is a wrapper generator holding a single
+  predicate: chained `.filter()` calls compose as nested wrappers without
+  flattening, generators expose no `branches`, and a predicate-less `Filtered`
+  is not expressible through the public API.
+
 - `test_reproduce_failure.py` — exercises Hypothesis's
   `encode_failure`/`decode_failure`/`@reproduce_failure` public API for
   serialising a failing choice sequence into a base64+zlib blob that a

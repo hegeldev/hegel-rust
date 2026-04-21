@@ -45,6 +45,6 @@ pub(crate) fn with_current_native_tc<R>(handle: NativeTestCaseHandle, f: impl Fn
 }
 
 /// Run `f` with the current test-case handle, if any.
-pub(crate) fn with_native_tc<R>(f: impl FnOnce(Option<&NativeTestCaseHandle>) -> R) -> R {
+pub fn with_native_tc<R>(f: impl FnOnce(Option<&NativeTestCaseHandle>) -> R) -> R {
     CURRENT_NATIVE_TC.with(|cell| f(cell.borrow().as_ref()))
 }
