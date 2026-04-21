@@ -98,6 +98,30 @@ Shapes that port this way (do NOT skip them — see SKILL.md "NOT reasons to ski
   equivalent is `Status` plus the guards inside `NativeTestCase`
   methods; exercise them from an embedded test.
 
+### Shrinker model divergence: `current.nodes` is not truncated on accept
+
+pbtkit's `Shrinker.consider` routes through `state.test_function`, which
+populates `test_case.nodes` with only the *drawn* prefix; that trimmed
+sequence becomes `current.nodes` on accept. hegel-rust's
+`Shrinker::consider` (see `src/native/shrinker/mod.rs`) stores the full
+input `nodes.to_vec()` verbatim, with no truncation to actually-consumed
+length.
+
+Consequence: several pbtkit regression tests are specifically designed
+around "a previously-accepted candidate leaves `current.nodes` shorter
+than an index pass expects, and the pass must guard against the stale
+index". Those failure modes don't arise in hegel-rust — the indices
+stay valid because the sequence doesn't shrink underneath them. Port
+the general-purpose pass regressions normally (they exercise the same
+deletion / redistribution / sorting logic), but record any test whose
+*whole point* is the stale-index-after-truncation regression as an
+individual skip, naming this divergence.
+
+Known-affected cases from `test_core.py`:
+`test_value_punning_on_type_change`, `test_bind_deletion_valid_but_not_shorter`,
+`test_delete_chunks_stale_index`, `test_shrink_duplicates_with_stale_indices`,
+`test_shrink_duplicates_valid_drops_below_two`.
+
 ## `@pytest.mark.requires(...)` and `pytestmark`
 
 pbtkit's `conftest.py` defines a `requires(module)` marker that skips a
