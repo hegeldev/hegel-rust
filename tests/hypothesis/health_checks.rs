@@ -73,8 +73,7 @@ fn test_slow_generation_inline_fails_a_health_check() {
 #[test]
 fn test_default_health_check_can_weaken_specific() {
     Hegel::new(|tc: TestCase| {
-        let xs: Vec<i64> = tc.draw(gs::vecs(gs::integers::<i64>()).min_size(1));
-        let _ = xs[0];
+        let _: Vec<i64> = tc.draw(gs::vecs(gs::integers::<i64>()).min_size(1));
     })
     .settings(
         Settings::new()
