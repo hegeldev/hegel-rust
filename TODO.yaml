@@ -6,26 +6,3 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-  - title: "[CI] check release — RELEASE.md already exists on main (human intervention required)"
-    details: |
-      Failing job: "check release / Check release" (workflow step runs
-      `python .github/scripts/release.py check "$BASE_REF"` with BASE_REF=main).
-
-      Extracted log:
-        Traceback (most recent call last):
-          File "/home/runner/work/hegel-rust/hegel-rust/.github/scripts/release.py", line 256, in <module>
-            check(args.base_ref)
-          File "/home/runner/work/hegel-rust/hegel-rust/.github/scripts/release.py", line 103, in check
-            raise ValueError(
-        ValueError: RELEASE.md already exists on main. It's possible the CI job responsible for cutting a new release is in progress, or has failed.
-        ##[error]Process completed with exit code 1.
-
-      This is NOT a code bug — release.py is complaining that a RELEASE.md
-      on main hasn't been consumed yet by the release-cutting workflow.
-      Prior triage runs have landed this TODO and a human has removed it
-      (see recent commits "Remove TODO for check-release failure (human
-      intervention required)"). It needs a human to resolve the release
-      state on main, not a fix agent. Skip/remove if the situation
-      persists — do not attempt to "fix" by editing release.py or
-      RELEASE.md.
