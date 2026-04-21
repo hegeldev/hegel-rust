@@ -97,11 +97,10 @@ fn test_wait_for_exit_timeout() {
 
 #[test]
 fn test_startup_error_message_version_mismatch() {
-    let dir = std::env::temp_dir().join("hegel_test_unit_version");
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tempfile::tempdir().unwrap();
     #[cfg(unix)]
     let script = {
-        let s = dir.join("fake_version");
+        let s = dir.path().join("fake_version");
         std::fs::write(&s, "#!/bin/sh\necho 'hegel (version 0.0.0)'\n").unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&s, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -109,7 +108,7 @@ fn test_startup_error_message_version_mismatch() {
     };
     #[cfg(windows)]
     let script = {
-        let s = dir.join("fake_version.bat");
+        let s = dir.path().join("fake_version.bat");
         std::fs::write(&s, "@echo off\r\necho hegel (version 0.0.0)\r\n").unwrap();
         s
     };
@@ -166,9 +165,8 @@ fn test_startup_error_message_includes_server_log() {
 #[cfg(unix)]
 #[should_panic(expected = "not executable")]
 fn test_validate_executable_panics_for_non_executable() {
-    let dir = std::env::temp_dir().join("hegel_test_unit_exec");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("not_exec");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("not_exec");
     std::fs::write(&path, "").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
