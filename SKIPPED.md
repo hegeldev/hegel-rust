@@ -266,6 +266,16 @@ Individually-skipped tests (rest of the file is ported):
   accesses `test.hypothesis._given_kwargs` (Python dunder-adjacent attribute). Neither
   the fuzzer-integration API nor the attribute-access pattern have Rust counterparts.
 
+- `test_functions.py` — every test exercises `st.functions(like=..., returns=..., pure=...)`,
+  a Hypothesis public-API strategy that generates Python callable mocks. The tests
+  depend on Python-specific facilities throughout: generating callables with matching
+  `__name__`, `inspect.signature` parameters, `*args`/`**kwargs`, keyword-only arguments,
+  lambdas, `TypeError` on arity mismatch, `InvalidState` when calling outside `@given`,
+  `hypothesis.reporting.with_reporter` integration, and `hypothesis.find()`. Rust's type
+  system forbids runtime-synthesised callables with arbitrary signatures, and hegel-rust
+  has no `gs::functions()` generator, no `InvalidState` analog, no reporter-context
+  surface, and no standalone `find()` function.
+
 - `test_pretty.py` — tests `hypothesis.vendor.pretty`, a vendored IPython
   pretty-printer that operates entirely on Python object protocols
   (`__repr__`, `_repr_pretty_` dunder dispatch, `id()`-based cycle
