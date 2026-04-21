@@ -791,3 +791,15 @@ fn string_choice_alpha_size_skips_surrogates() {
     };
     assert_eq!(sc.alpha_size(), 0x10000 - 0x800);
 }
+
+#[test]
+#[should_panic(expected = "ChoiceKind::to_index: kind/value mismatch")]
+fn choice_kind_to_index_panics_on_kind_value_mismatch() {
+    // Asking an Integer kind to index a Boolean value is a programmer error;
+    // ChoiceKind::to_index must panic loudly rather than return a bogus index.
+    let kind = ChoiceKind::Integer(IntegerChoice {
+        min_value: 0,
+        max_value: 100,
+    });
+    let _ = kind.to_index(&ChoiceValue::Boolean(true));
+}

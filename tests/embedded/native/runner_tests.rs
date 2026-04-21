@@ -3,7 +3,8 @@
 // These tests need direct access to the private `try_span_mutation` function,
 // so they live here as an embedded submodule of runner.rs.
 
-use crate::native::core::{ChoiceValue, NativeTestCase};
+use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, IntegerChoice, NativeTestCase};
+use crate::native::shrinker::ShrinkRun;
 use crate::native::tree::CachedTestFunction;
 use crate::test_case::TestCase;
 
@@ -63,4 +64,58 @@ fn test_span_mutation_exercises_swaps() {
         }
     }
     panic!("no seed produced span mutation swaps");
+}
+
+#[test]
+fn dispatch_shrink_run_full_routes_to_run_shrink() {
+    use crate::generators as gs;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let observed = Arc::new(AtomicUsize::new(0));
+    let observed_clone = observed.clone();
+    let mut ctf = CachedTestFunction::new(move |tc: TestCase| {
+        let v = tc.draw(gs::integers::<i64>().min_value(0).max_value(100));
+        observed_clone.store(v as usize, Ordering::SeqCst);
+    });
+
+    let kind = ChoiceKind::Integer(IntegerChoice {
+        min_value: 0,
+        max_value: 100,
+    });
+    let nodes = vec![ChoiceNode {
+        kind,
+        value: ChoiceValue::Integer(7),
+        was_forced: false,
+    }];
+
+    let (_interesting, actual) = super::dispatch_shrink_run(ShrinkRun::Full(&nodes), &mut ctf);
+    assert_eq!(observed.load(Ordering::SeqCst), 7);
+    assert_eq!(actual.len(), 1);
+    assert_eq!(actual[0].value, ChoiceValue::Integer(7));
+}
+
+#[test]
+fn dispatch_shrink_run_probe_routes_to_run_probe() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_clone = calls.clone();
+    let mut ctf = CachedTestFunction::new(move |tc: TestCase| {
+        calls_clone.fetch_add(1, Ordering::SeqCst);
+        use crate::generators as gs;
+        let _ = tc.draw(gs::booleans());
+    });
+
+    let prefix: Vec<ChoiceValue> = Vec::new();
+    let (_interesting, _actual) = super::dispatch_shrink_run(
+        ShrinkRun::Probe {
+            prefix: &prefix,
+            seed: 42,
+            max_size: 4,
+        },
+        &mut ctf,
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
