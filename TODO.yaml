@@ -6,3 +6,70 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
+
+- title: Add PartialEq to native database types and port test_database_equal/test_database_not_equal
+  details: |
+    SKIPPED.md notes that test_database_equal and test_database_not_equal in
+    tests/hypothesis/database_backend.rs are skipped because NativeDatabase,
+    InMemoryNativeDatabase, and MultiplexedNativeDatabase don't implement
+    PartialEq. The skip comment in tests/hypothesis/database_backend.rs says
+    "Tracked as TODO.yaml follow-up" but that entry was never added.
+
+    Work to do:
+    - Add PartialEq (and Eq) derives/impls to NativeDatabase (path-equality),
+      InMemoryNativeDatabase (instance-identity or content-equality — pick the
+      semantically correct one), and MultiplexedNativeDatabase (structural
+      equality of its component databases).
+    - Remove the skip comment in database_backend.rs and port the two tests.
+    - Update SKIPPED.md to remove those two bullet points from the
+      test_database_backend.py entry.
+
+- title: Port test_reproduce_failure.py (encoding/decoding half)
+  details: |
+    SKIPPED.md lists test_reproduce_failure.py as skipped due to a cherry-pick
+    conflict. The conflict is now resolved; the question is what can be ported.
+
+    The file has ~20 tests. The portable candidates are the encoding/decoding
+    round-trip tests that don't rely on Python-specific output capture or
+    __notes__:
+      - test_encoding_loop (round-trip encoding of choice sequences)
+      - test_decoding_may_fail (invalid inputs rejected cleanly)
+      - test_invalid_base_64_gives_invalid_argument
+      - test_reproduces_the_failure (replay a stored counterexample)
+      - test_errors_if_provided_example_does_not_reproduce_failure
+      - test_errors_with_did_not_reproduce_if_the_shape_changes
+      - test_errors_with_did_not_reproduce_if_rejected
+      - test_raises_invalid_if_wrong_version
+
+    Tests that are NOT portable (rely on Python output capture, __notes__,
+    verbosity settings, or print_blob): test_prints_reproduction_if_requested,
+    test_does_not_print_reproduction_*, test_does_not_print_reproduction_if_*.
+
+    Check src/native/ and src/lib.rs for the Rust equivalents of
+    encode_failure/decode_failure/reproduce_failure before porting. If the
+    public API surface doesn't exist yet, skip the whole file and update
+    SKIPPED.md with the real reason.
+
+- title: Clean up stale and misleading SKIPPED.md cherry-pick-conflict entries
+  details: |
+    Three entries in SKIPPED.md cite "cherry-pick conflict" as the skip reason,
+    but the real situations are different:
+
+    1. test_flatmap.py (pbtkit) — the upstream file does not exist at
+       resources/pbtkit/tests/test_flatmap.py at all. The SKIPPED.md entry is
+       stale. Remove it.
+
+    2. test_charmap.py (hypothesis) — the tests exercise hypothesis.internal.charmap
+       Python internals (file caching, os.utime, monkeypatching os.path.exists).
+       The real skip reason is "tests Python-internal charmap infrastructure with
+       no Rust counterpart". The IntervalSet union tests (test_union_empty,
+       test_union_handles_totally_overlapped_gap, test_union_handles_partially_overlapped_gap,
+       test_successive_union) could potentially be ported as unit tests of the
+       native IntervalSet. Assess portability and update the rationale.
+
+    3. test_reproduce_failure.py (hypothesis) — handled by the separate TODO above;
+       once that's resolved, update this entry to either remove it (if ported) or
+       give the accurate remaining skip reason.
+
+    Fix: update SKIPPED.md so each entry reflects the true reason, not an
+    incidental historical blocker.
