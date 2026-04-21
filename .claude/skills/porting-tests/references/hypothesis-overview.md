@@ -48,11 +48,12 @@ Hypothesis "strategies" correspond to hegel-rust "generators".
 
 - `@given(st....)` decorator → the test body goes into a closure passed
   to `hegel::Hegel::new(...)` or `assert_all_examples(...)`.
-- `@example(x)` → hegel-rust has no direct analogue on `hegel::Hegel` but
-  the `#[hegel::test(explicit_test_case = ...)]` attribute covers the same
-  idea for named cases. Often it's simpler to convert an `@example` into a
-  standalone `#[test]` that calls `minimal` or `find_any` on the exact
-  value.
+- `@example(x)` → hegel-rust has no direct analogue on `hegel::Hegel`.
+  When a `@given` test is preceded by a stack of `@example`s, split into
+  two `#[test]` functions sharing a check helper — see "@example stack +
+  @given" in `api-mapping.md`. For a single named example,
+  `#[hegel::test(explicit_test_case = ...)]` or a standalone `#[test]`
+  calling `find_any` / `minimal` is fine.
 - `settings(max_examples=N)` → `Settings::new().test_cases(N)`.
 - `settings(deadline=...)` → hegel-rust has no deadline API; drop the
   setting or leave the test as `todo!()` if deadline is load-bearing.
