@@ -60,6 +60,10 @@ normal pbtkit integration test. The embedded-tests mirror at
 - `tc.choice(n)` → `tc.draw(gs::integers::<i64>().min_value(0).max_value(n-1))`
 - `tc.forced_choice(n)` — `forced` is an internal argument on native
   `draw_integer` / `weighted`, not exposed on the public `TestCase`.
+- `tc.draw_silent(gen)` — exists in hegel-rust but bypasses the named-draw
+  machinery entirely (no counter, no printed `let draw_N = …;` line), so
+  tests comparing its output against `tc.draw`'s have no surface to assert
+  on. Tests asserting only "does not panic" port trivially.
 
 ## Engine-harness surfaces — port as embedded tests
 
