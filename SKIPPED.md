@@ -36,6 +36,11 @@ file and treats listed files as "done".
 
 Individually-skipped tests (rest of the file is ported):
 
+- `shrink_quality/test_composite.py::test_lower_and_bump_j_past_end_after_shortening`
+  — invokes pbtkit's `lower_and_bump(shrinker)` shrink pass directly with
+  a pre-seeded `TC.for_choices(...)` and `Shrinker(...)`; hegel-rust's
+  shrinker exposes no public or `__native_test_internals` entry-point
+  for a single shrink pass on a seeded test case.
 - `test_text.py::test_string_sort_key_type_mismatch` — exercises Python's
   dynamically-typed `sort_key(non-string)`; Rust's `sort_key(&str)` signature
   makes the "non-string argument" case unrepresentable at compile time.
