@@ -14,7 +14,7 @@ use crate::native::core::{ChoiceNode, ChoiceValue, NativeTestCase, Span, Status,
 use crate::native::database::{
     ExampleDatabase, NativeDatabase, deserialize_choices, serialize_choices,
 };
-use crate::native::shrinker::Shrinker;
+use crate::native::shrinker::{ShrinkRun, Shrinker};
 use crate::native::tree::CachedTestFunction;
 use crate::runner::{Database, HealthCheck, Settings, Verbosity};
 use crate::test_case::TestCase;
@@ -148,6 +148,21 @@ const TOO_SLOW_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1
 /// valid examples have been observed, the health-check window closes and
 /// later slow or filtered draws no longer trigger a failure.
 const HEALTH_CHECK_MAX_VALID: u64 = 10;
+
+/// Dispatch a [`ShrinkRun`] request to the appropriate cache-backed runner.
+pub(super) fn dispatch_shrink_run<F: FnMut(TestCase)>(
+    req: ShrinkRun,
+    ctf: &mut CachedTestFunction<F>,
+) -> (bool, Vec<ChoiceNode>) {
+    match req {
+        ShrinkRun::Full(nodes) => ctf.run_shrink(nodes),
+        ShrinkRun::Probe {
+            prefix,
+            seed,
+            max_size,
+        } => ctf.run_probe(prefix, seed, max_size),
+    }
+}
 
 /// Entry point for native-backend test execution.
 ///
@@ -349,20 +364,12 @@ pub fn native_run<F>(
             *best_nodes = verify_nodes;
 
             {
-                use crate::native::shrinker::ShrinkRun;
                 let mut shrinker = Shrinker::with_probe(
                     Box::new(|req: ShrinkRun| {
                         if verbosity == Verbosity::Verbose {
                             eprintln!("Trying example: ");
                         }
-                        let result = match req {
-                            ShrinkRun::Full(candidate_nodes) => ctf.run_shrink(candidate_nodes),
-                            ShrinkRun::Probe {
-                                prefix,
-                                seed,
-                                max_size,
-                            } => ctf.run_probe(prefix, seed, max_size),
-                        };
+                        let result = dispatch_shrink_run(req, &mut ctf);
                         calls += 1;
                         result
                     }),

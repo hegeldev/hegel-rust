@@ -1253,3 +1253,73 @@ fn test_database_listener_background_write() {
     })
     .run();
 }
+
+// ── resolve_key disk fallback ──────────────────────────────────────────────
+//
+// `resolve_key` exists to recover from a known inotify race: when a value
+// file's Create event arrives before its metakey file's Create event has
+// been processed, the in-memory `hash_to_key` map doesn't yet know the
+// key. The fallback reads the metakey file directly off disk. That
+// race is hard to reproduce deterministically through the watcher, so
+// drive `resolve_key` directly with a freshly-constructed WatcherCtx
+// whose in-memory map is empty but whose on-disk metakeys file already
+// contains the key.
+
+#[test]
+fn resolve_key_falls_back_to_on_disk_metakey_when_map_is_empty() {
+    use std::collections::HashSet;
+    use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::AtomicBool;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_root = dir.path().to_path_buf();
+    let metakeys_hash = fnv_hex(METAKEYS_NAME);
+
+    // Plant the metakey file on disk: db_root/<metakeys_hash>/<key_hash>
+    // contains the raw key bytes. This mirrors what `add_metakey` writes.
+    let key = b"some-key";
+    let key_hash = fnv_hex(key);
+    let metakeys_dir = db_root.join(&metakeys_hash);
+    std::fs::create_dir_all(&metakeys_dir).unwrap();
+    std::fs::write(metakeys_dir.join(&key_hash), key).unwrap();
+
+    let hash_to_key = Arc::new(StdMutex::new(HashMap::new()));
+    let ctx = WatcherCtx {
+        db_root: db_root.clone(),
+        hash_to_key: Arc::clone(&hash_to_key),
+        metakeys_hash: metakeys_hash.clone(),
+        listeners: Arc::new(Listeners::new()),
+        seen_saves: Arc::new(StdMutex::new(HashSet::new())),
+        shutdown: Arc::new(AtomicBool::new(false)),
+    };
+
+    // Map is empty, so the fallback must read from disk and return the key.
+    assert_eq!(resolve_key(&key_hash, &ctx), Some(key.to_vec()));
+
+    // The map should have been updated as a side-effect, so a second
+    // call hits the in-memory cache without touching the disk again.
+    assert_eq!(
+        hash_to_key.lock().unwrap().get(&key_hash).cloned(),
+        Some(key.to_vec())
+    );
+}
+
+#[test]
+fn resolve_key_returns_none_when_metakey_file_is_absent() {
+    use std::collections::HashSet;
+    use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::AtomicBool;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let metakeys_hash = fnv_hex(METAKEYS_NAME);
+    // Note: deliberately do not create the metakeys directory or any file.
+    let ctx = WatcherCtx {
+        db_root: dir.path().to_path_buf(),
+        hash_to_key: Arc::new(StdMutex::new(HashMap::new())),
+        metakeys_hash,
+        listeners: Arc::new(Listeners::new()),
+        seen_saves: Arc::new(StdMutex::new(HashSet::new())),
+        shutdown: Arc::new(AtomicBool::new(false)),
+    };
+    assert_eq!(resolve_key("no-such-hash", &ctx), None);
+}

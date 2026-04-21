@@ -195,7 +195,7 @@ impl<'a> Shrinker<'a> {
 /// Helper for `lower_and_bump`: replace `{i: new_val, j: bump_val}` if the
 /// kind at j validates `bump_val`. Returns whether the attempt was
 /// interesting.
-fn try_bump_ij(
+pub(super) fn try_bump_ij(
     shrinker: &mut Shrinker<'_>,
     i: usize,
     new_val: &ChoiceValue,

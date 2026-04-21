@@ -7,53 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-  - title: "[CI] coverage: uncovered code in src/native/ (cache.rs, choices.rs, database.rs, index_passes.rs)"
-    details: |
-      The `coverage` job (`just check-coverage` -> `scripts/check-coverage.py`)
-      fails on PR 188 with 42 uncovered code lines. Add tests covering these
-      lines, or, if truly untestable, add `// nocov` annotations (see the
-      `coverage` skill — do NOT bump `.github/coverage-ratchet.json` without
-      explicit human permission).
-
-      Failing run: https://github.com/hegeldev/hegel-rust/actions/runs/24743255068
-      Final error:
-          error: Recipe `check-coverage` failed on line 54 with exit code 1
-
-      Line Coverage Analysis summary:
-          Uncovered closing braces (allowed):           388
-          Uncovered #[cfg(test)] code (allowed):        0
-          Uncovered todo!/unreachable! (allowed):       66
-          Uncovered macro continuations (allowed):      22
-          Uncovered #[ignore]d test bodies (allowed):   0
-          Uncovered #[cfg(windows)] code (allowed):     0
-          Uncovered // nocov lines (allowed):           1455
-          Uncovered code lines:                         42
-
-      Uncovered CODE that requires tests (unique lines; the script lists each
-      twice from two binaries):
-
-          src/native/cache.rs:105: pub fn is_empty(&self) -> bool {
-          src/native/cache.rs:106:     self.data.is_empty()
-          src/native/cache.rs:310: pub fn contains_key(&self, key: &K) -> bool {
-          src/native/cache.rs:311:     self.cache.iter().any(|(k, _)| k == key)
-          src/native/cache.rs:318: pub fn is_empty(&self) -> bool {
-          src/native/cache.rs:319:     self.cache.is_empty()
-          src/native/cache.rs:401: pub fn is_empty(&self) -> bool {
-          src/native/cache.rs:402:     self.inner.is_empty()
-          src/native/cache.rs:405: pub fn clear(&mut self) {
-          src/native/cache.rs:406:     self.inner.clear()
-          src/native/core/choices.rs:898: _ => panic!("ChoiceKind::to_index: kind/value mismatch"),
-          src/native/database.rs:759: let metakey_file = ctx.db_root.join(&ctx.metakeys_hash).join(key_hash);
-          src/native/database.rs:760: let key_bytes = std::fs::read(&metakey_file).ok()?;
-          src/native/database.rs:761: ctx.hash_to_key
-          src/native/database.rs:762:     .lock()
-          src/native/database.rs:763:     .unwrap()
-          src/native/database.rs:764:     .insert(key_hash.to_string(), key_bytes.clone());
-          src/native/database.rs:765: Some(key_bytes)
-          src/native/shrinker/index_passes.rs:179: break;
-          src/native/shrinker/index_passes.rs:207: return false;
-          src/native/shrinker/index_passes.rs:210: return false;
-
   - title: "[CI] check release fails: RELEASE.md already exists on main"
     details: |
       The `check release` job on PR 188 fails because RELEASE.md is present on

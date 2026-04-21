@@ -2039,3 +2039,97 @@ fn sort_values_full_sort_fails_preserves_order() {
     assert_eq!(int_at(&shrinker.current_nodes, 0), 5);
     assert_eq!(int_at(&shrinker.current_nodes, 1), 3);
 }
+
+// ── try_shortening_via_increment ────────────────────────────────────────────
+
+#[test]
+fn try_shortening_via_increment_breaks_inner_loop_when_consider_truncates_nodes() {
+    // When a candidate triggers an `interesting` result whose actual_nodes
+    // is shorter than the index we're iterating at, current_nodes shrinks
+    // mid-loop. The next candidate iteration must observe `i >= len` and
+    // break out, without indexing past the end.
+    //
+    // Setup: two integer nodes; the test fn returns interesting with a
+    // single-node sequence whenever the second node's value is anything
+    // other than its current 0. The first candidate processed for i=1 is
+    // therefore interesting+shorter, which shrinks current_nodes to one
+    // node. The remaining candidates must hit the i-bounds break at the
+    // top of the inner loop.
+    let nodes = vec![int_node(0, 1000, 0), int_node(0, 1000, 0)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            if n.len() < 2 {
+                return (false, n.to_vec());
+            }
+            let ChoiceValue::Integer(v1) = n[1].value else {
+                return (false, n.to_vec());
+            };
+            if v1 != 0 {
+                // Interesting with a single-node sequence — triggers
+                // current_nodes truncation inside the inner candidates loop.
+                return (true, vec![int_node(0, 1000, 0)]);
+            }
+            (false, n.to_vec())
+        }),
+        nodes,
+    );
+    shrinker.try_shortening_via_increment();
+    assert_eq!(shrinker.current_nodes.len(), 1);
+}
+
+// ── try_bump_ij defensive guards ────────────────────────────────────────────
+//
+// `try_bump_ij` is the helper that `lower_and_bump` calls inside its
+// fallback exponential-probe loop. Between successive calls in that loop
+// `current_nodes` may have been mutated by an earlier `consider`, which
+// can leave `j` out of range or change the kind at position `j`. The two
+// early-return guards exist to absorb both shapes of staleness — exercise
+// them directly with a hand-crafted Shrinker, since reproducing the exact
+// fallback-loop sequence through `lower_and_bump` requires very specific
+// nested predicates.
+
+use super::index_passes::try_bump_ij;
+
+#[test]
+fn try_bump_ij_returns_false_when_j_out_of_bounds() {
+    // current_nodes has only one node; calling try_bump_ij with j=1 must
+    // short-circuit at the j-bounds guard without touching the
+    // out-of-range index (a panic would mean the guard regressed).
+    let nodes = vec![int_node(0, 100, 5)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|_n: &[ChoiceNode]| panic!("test_fn must not be called when j is out of bounds")),
+        nodes,
+    );
+    let result = try_bump_ij(
+        &mut shrinker,
+        0,
+        &ChoiceValue::Integer(0),
+        1,
+        &ChoiceValue::Integer(7),
+    );
+    assert!(!result);
+    // Sanity: current_nodes wasn't touched.
+    assert_eq!(shrinker.current_nodes.len(), 1);
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 5);
+}
+
+#[test]
+fn try_bump_ij_returns_false_when_bump_val_does_not_validate() {
+    // bump_val is a Boolean but the kind at j is Integer; validate must
+    // reject it before any test-fn call.
+    let nodes = vec![int_node(0, 100, 5), int_node(0, 100, 5)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|_n: &[ChoiceNode]| {
+            panic!("test_fn must not be called when bump_val fails validate")
+        }),
+        nodes,
+    );
+    let result = try_bump_ij(
+        &mut shrinker,
+        0,
+        &ChoiceValue::Integer(0),
+        1,
+        &ChoiceValue::Boolean(true),
+    );
+    assert!(!result);
+}
