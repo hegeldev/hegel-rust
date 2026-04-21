@@ -64,6 +64,15 @@ normal pbtkit integration test. The embedded-tests mirror at
   machinery so no `let draw_N = …;` line is printed. The "no line" is
   observable via the `draw_lines` helper (assert empty); the "counter not
   incremented" is not (no counter surface).
+- `tc.__draw_named(gen, name, repeatable)` — public entry point to the
+  name-tracking machinery behind draw-output labels. pbtkit tests that
+  manipulate `tc._named_draw_used` directly (e.g. the "repeatable skips
+  taken suffixes" case) *are* portable through this public method; don't
+  skip them as "internal Python attribute, no counterpart". Validation
+  (non-repeatable reuse panics, inconsistent-repeatable-flag panics) runs
+  only at `span_depth == 0`, so it fires at the top-level test body but
+  is silenced inside `#[hegel::composite]` — mirror that gating when the
+  upstream test hinges on it.
 
 ## Engine-harness surfaces — port as embedded tests
 
