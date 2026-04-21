@@ -802,3 +802,20 @@ Individually-skipped tests (rest of the file is ported):
   Python asyncio, hegel-rust has no `execute_example` class-method hook,
   and tests are closures passed to `Hegel::new(|tc| ...).run()` rather
   than methods on a `TestCase` subclass.
+
+- `test_regressions.py` — a parallel-port attempt on branch
+  `port/worker-0` was abandoned after its commits failed to cherry-pick
+  cleanly (SKIPPED.md merge conflict); the branch is preserved for a
+  later human to inspect. The upstream file is a grab-bag of
+  Python-specific regressions with no Rust surface: `pickle.dumps`
+  round-trip on Hypothesis error types (`NoSuchExample`,
+  `DeadlineExceeded`, `RewindRecursive`, `UnsatisfiedAssumption`,
+  `FlakyReplay`, `FlakyFailure`, `BackendCannotProceed`),
+  `vars(errors)` module-dict reflection to enumerate custom-`__init__`
+  exception classes, `unittest.mock.Mock` injection into
+  `@given`-decorated functions, Python global `random` state
+  preservation across `@given` runs (same gap as the whole-file skip
+  of `test_random_module.py`), and `st.composite` / `st.builds(dict,
+  ...)` / `st.fixed_dictionaries` strategies that synthesise
+  heterogeneously-typed Python dicts which Rust's type system can't
+  represent.
