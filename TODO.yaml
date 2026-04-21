@@ -7,26 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-  - title: '[CI] check release fails because RELEASE.md already exists on main'
-    details: |
-      `check release` job fails:
-
-        Traceback (most recent call last):
-          File ".../.github/scripts/release.py", line 256, in <module>
-            check(args.base_ref)
-          File ".../.github/scripts/release.py", line 103, in check
-            raise ValueError(
-        ValueError: RELEASE.md already exists on main. It's possible the
-        CI job responsible for cutting a new release is in progress, or
-        has failed.
-
-      Failing command: `python .github/scripts/release.py check "$BASE_REF"`
-      with BASE_REF=main. Investigate whether the release job stalled
-      mid-cut or if RELEASE.md needs to be cleaned up on main; this is
-      likely an infra/release-pipeline issue rather than a code change
-      on this branch. May resolve on its own once the release job
-      finishes; if not, the release pipeline needs unsticking.
-
   - title: Implement `mutate_and_shrink` in src/native/shrinker/
     details: |
       Port pbtkit's `shrinking/mutation.py` (92 lines) to
