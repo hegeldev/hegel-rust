@@ -87,6 +87,8 @@ adding the feature. Don't invent a workaround in the test.
 - `tc.forced_choice(v)` — direct replay fixture.
 - `gs::nothing()` — the empty generator.
 - `deadline` setting.
+- `phases` / `Phase.generate` / `Phase.shrink` — no phase control. See
+  "Seeded `find()`" below for how to emulate no-shrinking semantics.
 
 ## Replaying fixed choices (`ConjectureData.for_choices`)
 
@@ -297,6 +299,53 @@ values that violate the Python signature — `min_value=math.nan`,
 there is no runtime behaviour to assert. List the dropped categories
 once in the module docstring rather than per-case — a reviewer checking
 the original against the port can see the whole class is accounted for.
+
+## Seeded `find()` (testing determinism)
+
+The default `find(gen, cond)` → `find_any(gen, ...)` mapping drops the
+seed — `find_any` doesn't take one. When the upstream test passes
+`find(..., random=Random(S))` to pin down determinism across runs, drive
+the engine directly:
+
+```rust
+use hegel::{Hegel, Settings};
+use std::panic::AssertUnwindSafe;
+use std::sync::{Arc, Mutex};
+
+let found: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
+let found_c = Arc::clone(&found);
+std::panic::catch_unwind(AssertUnwindSafe(|| {
+    Hegel::new(move |tc| {
+        let v = tc.draw(&gen);
+        if cond(&v) {
+            let mut g = found_c.lock().unwrap();
+            if g.is_none() { *g = Some(v); }
+            drop(g);            // release BEFORE panic — see below
+            panic!("HEGEL_FOUND");
+        }
+    })
+    .settings(Settings::new().test_cases(1000).database(None).seed(Some(S)))
+    .run();
+}))
+.ok();
+let value = found.lock().unwrap().take().unwrap();
+```
+
+Key points:
+
+- **Drop the mutex guard before `panic!`.** Hegel replays the interesting
+  case for shrinking; a held guard poisons the mutex and the replay's
+  `lock().unwrap()` then panics with a poison error instead of
+  `HEGEL_FOUND`, which the engine reports as flaky.
+- `if g.is_none() { … }` pins the captured value to what was *first*
+  found — shrinking doesn't overwrite it. This is how you emulate
+  `phases=[Phase.generate]` (no shrinking) in a framework with no
+  `phases` setting.
+- `database(None)` prevents replayed failing cases from leaking across
+  iterations of the outer loop.
+- `Phase` / `phases=[...]` has no hegel-rust analog — drop the setting
+  and, if the original relied on no-shrinking semantics, use the
+  `if g.is_none()` guard above.
 
 ## Python idiom translations
 
