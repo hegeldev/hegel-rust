@@ -39,24 +39,28 @@
 //!   Python dynamic-int raw-bound API. hegel-rust's typed integer
 //!   generators cap bounds at compile time via `T`; `2**64` as a bound
 //!   is unrepresentable in the public API.
-//! - `test_value_punning_on_type_change`, `test_bind_deletion_valid_but_not_shorter`,
-//!   `test_delete_chunks_stale_index`, `test_bin_search_down_lo_satisfies`,
-//!   `test_shrink_duplicates_with_stale_indices` — drive pbtkit's
-//!   `State(random, tf, max_examples).run()` loop directly and inspect
-//!   `state.result`. hegel-rust's native runner (`native/runner.rs`) has
-//!   no `State`-equivalent handle exposed to tests; the loop is driven
-//!   from `run_native_test` with no intermediate-state accessor.
-//! - `test_delete_chunks_guard_after_decrement`,
+//! - `test_bin_search_down_lo_satisfies`,
+//!   `test_swap_adjacent_blocks_equal_blocks`,
+//!   `test_cache_key_distinguishes_negative_zero`,
+//!   `test_cache_key_distinguishes_nan_variants`,
+//!   `test_delete_chunks_guard_after_decrement`,
 //!   `test_redistribute_integers_stale_indices`,
 //!   `test_bind_deletion_try_deletions_succeeds`,
-//!   `test_sort_values_full_sort_fails`,
-//!   `test_swap_adjacent_blocks_equal_blocks`,
-//!   `test_shrink_duplicates_valid_drops_below_two` — look up an
-//!   individual shrink pass by name from pbtkit's `SHRINK_PASSES` list and
-//!   invoke it on a hand-built `Shrinker`. hegel-rust's shrink passes
-//!   are `pub(super)` methods on `native::shrinker::Shrinker` and are
-//!   reachable only via the all-at-once `Shrinker::shrink()` entry
-//!   point, so the per-pass-by-name surface doesn't exist.
+//!   `test_sort_values_full_sort_fails` — exercise individual shrink
+//!   passes or `_cache_key` directly. Ported as embedded tests in
+//!   `tests/embedded/native/shrinker_tests.rs` and
+//!   `tests/embedded/native/tree_tests.rs` where the `pub(super)` pass
+//!   methods and `ChoiceValueKey` are reachable via `use super::*`.
+//! - `test_value_punning_on_type_change`,
+//!   `test_bind_deletion_valid_but_not_shorter`,
+//!   `test_delete_chunks_stale_index`,
+//!   `test_shrink_duplicates_with_stale_indices`,
+//!   `test_shrink_duplicates_valid_drops_below_two` — depend on pbtkit's
+//!   shrinker truncating `Shrinker.current.nodes` to actually-drawn length
+//!   on every accepted candidate. hegel-rust's `Shrinker::consider` stores
+//!   the full input `nodes.to_vec()`, so the specific "i past the new end"
+//!   / "stale group indices" regressions these guard against don't occur
+//!   in hegel-rust's shrinker.
 //! - `test_redistribute_binary_search` — calls pbtkit's
 //!   `redistribute_sequence_pair` helper directly with a Python callback.
 //!   hegel-rust has no equivalent public function surface.
