@@ -511,9 +511,5 @@ fn test_lru_cache_is_actually_lru() {
     cache.insert(2, 2); // [1, 2]
     cache.get(&1); //     [2, 1]
     cache.insert(3, 2); // [2, 1, 3] -> drop LRU -> [1, 3]
-    let mut ks = cache.keys();
-    // Python asserts insertion order `[1, 3]`. `keys()` returns the
-    // cache's internal order; sort to compare against the set.
-    ks.sort();
-    assert_eq!(ks, vec![1, 3]);
+    assert_eq!(cache.keys(), vec![1, 3]);
 }
