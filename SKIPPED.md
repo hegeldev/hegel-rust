@@ -292,6 +292,16 @@ Individually-skipped tests (rest of the file is ported):
   `collections.deque[Elem]`, `collections.abc.Iterable[Elem]`,
   `re.Match[str]`, etc.) via `@given(...)` with type annotations; neither
   `from_type` nor runtime type-annotation resolution exists in hegel-rust.
+- `test_lookup_py39.py` — tests `from_type()` resolution of Python typing
+  constructs (`typing.Annotated[int, metadata]`, `typing.Union[list[int], int]`,
+  `typing.Protocol[T]` with `typing.runtime_checkable`,
+  `collections.abc.Callable[[None], None]`), `register_type_strategy` /
+  `temp_registered` overrides on builtin and user types, `st.builds()`
+  function-signature introspection, and Python `repr()` assertions on
+  strategies (`repr(st.from_type(...)) == "integers()"`). Neither
+  `from_type`, `register_type_strategy`, nor runtime type-annotation
+  resolution exists in hegel-rust (same family as the other
+  `test_lookup*.py` skips above).
 - `test_typealias_py312.py` — tests `from_type()` resolution of PEP 695
   `type` alias syntax (`type MyInt = int`, parameterized
   `type A[T] = list[T]`, mutually-recursive aliases),
