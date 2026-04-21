@@ -221,6 +221,14 @@ translation:
 - Use Rust types: `Option<T>` for Python `None`-returning paths,
   `Result<T, E>` where pbtkit raises, `&[T]`/`Vec<T>` for Python
   lists, typed enums for string-tagged Python unions.
+- Python subclass-override hooks (e.g. `GenericCache` subclasses that
+  override `new_entry` / `on_access` / `on_evict`) become a strategy
+  trait with default method bodies, and the wrapper type becomes
+  generic over it — e.g. `GenericCache<K, V, S: CacheScoring<K, V>>`
+  in `src/native/cache.rs`. Expose the scoring instance as a `pub`
+  field so tests can inspect per-subclass state after a run. See
+  `.claude/skills/porting-tests/references/api-mapping.md` "Python
+  subclass-override hooks" for the test-side shape.
 - Collapse Python runtime checks that Rust's type system handles at
   compile time. Don't port an `isinstance(x, str)` branch when `x:
   &str`.

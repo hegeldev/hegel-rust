@@ -513,6 +513,81 @@ If the upstream `@given` uses a strategy with no direct Rust analog
 the strategy as a small `tc.draw(...)` block in the property test
 rather than chasing a library helper.
 
+## Python subclass-override hooks → strategy trait on the native type
+
+A common pbtkit/Hypothesis test shape defines a one-off subclass of a
+library class (`GenericCache`, `RuleBasedStateMachine`, a database
+backend, a provider) that overrides a few hook methods to customise
+behaviour for that one test:
+
+```python
+class LFUCache(GenericCache):
+    def new_entry(self, key, value):   return 1
+    def on_access(self, key, value, score):  return score + 1
+
+class ValueScored(GenericCache):
+    def new_entry(self, key, value):   return value
+```
+
+The Rust `src/native/` counterpart doesn't get to use inheritance.
+Factor the hooks into a **strategy trait** with default method bodies,
+make the wrapper type generic over it, and give each test a small
+struct implementing the trait:
+
+```rust
+// In src/native/cache.rs:
+pub trait CacheScoring<K, V> {
+    fn new_entry(&mut self, k: &K, v: &V) -> i64;
+    fn on_access(&mut self, _k: &K, _v: &V, s: i64) -> i64 { s }
+    fn on_evict(&mut self, _k: &K, _v: &V, _s: i64) {}
+}
+pub struct GenericCache<K, V, S: CacheScoring<K, V>> { /* … */ }
+
+// In tests/hypothesis/cache_implementation.rs:
+struct LFUScoring;
+impl<K, V> CacheScoring<K, V> for LFUScoring {
+    fn new_entry(&mut self, _k: &K, _v: &V) -> i64 { 1 }
+    fn on_access(&mut self, _k: &K, _v: &V, s: i64) -> i64 { s + 1 }
+}
+```
+
+Practical points:
+
+- Default method bodies on the trait replace "don't override" on the
+  Python side — give every optional hook a default so test structs only
+  name the ones they customise.
+- Expose the scoring instance as a `pub` field on the wrapper
+  (`cache.scoring`) when the test needs to inspect internal state
+  after the run (`evicted`, `observed`, etc. in
+  `test_always_evicts_the_lowest_scoring_value`). Python subclasses get
+  attribute access for free; Rust needs the field to be reachable.
+- Monomorphise — each test uses a concrete `GenericCache<K, V, MyScoring>`
+  rather than `dyn CacheScoring`. The shared test driver dispatches over
+  a tiny test-local `DictLikeCache` trait (three methods: insert / get /
+  len); one `impl` per wrapper type. See `tests/hypothesis/cache_implementation.rs`.
+
+### `st.data()`-draw inside an overridden hook
+
+When the Python hook body itself calls `data.draw(...)` (e.g. the
+`new_score` closure inside `test_always_evicts_the_lowest_scoring_value`),
+the strategy-trait translation has no `tc` in scope. Pre-draw the
+values the hook will need before constructing the wrapper, and have
+the scoring struct look them up:
+
+```rust
+// Pre-draw one score per candidate key up-front:
+let mut scores: HashMap<i64, i64> = HashMap::new();
+for &k in &distinct_keys {
+    scores.insert(k, tc.draw(gs::integers::<i64>().min_value(0).max_value(1000)));
+}
+// Scoring looks up, doesn't draw:
+let mut target = GenericCache::new(size, PrecomputedScoring { scores, /* … */ }).unwrap();
+```
+
+Behaviourally equivalent — scores are still random per-key values
+chosen during the test run — but the draw happens at the `tc` layer
+where it belongs.
+
 ## Python idiom translations
 
 Common Python patterns that need non-trivial translation in test
