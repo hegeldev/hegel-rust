@@ -1,7 +1,6 @@
 mod common;
 
 use common::project::TempRustProject;
-use common::tempdir::mktemp_dir;
 
 const HEGEL_CODE: &str = r#"
 fn main() {
@@ -23,11 +22,11 @@ fn test_non_hegel_command_gives_informative_error() {
 #[test]
 fn test_wrong_version_hegel_gives_informative_error() {
     // Create a script that pretends to be an old hegel version
-    let script_dir = mktemp_dir("fake_binary");
+    let script_dir = tempfile::tempdir().unwrap();
 
     #[cfg(unix)]
     let script_path = {
-        let p = script_dir.join("fake_hegel");
+        let p = script_dir.path().join("fake_hegel");
         std::fs::write(
             &p,
             "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'hegel (version 0.1.0)'; exit 0; fi\nexit 1\n",
@@ -40,7 +39,7 @@ fn test_wrong_version_hegel_gives_informative_error() {
 
     #[cfg(windows)]
     let script_path = {
-        let p = script_dir.join("fake_hegel.bat");
+        let p = script_dir.path().join("fake_hegel.bat");
         // Avoid nesting echo inside if-block parentheses — the ) in the
         // version string would close the if-block prematurely.
         std::fs::write(
@@ -81,8 +80,8 @@ fn test_bare_name_not_on_path_gives_informative_error() {
 #[test]
 #[cfg(unix)]
 fn test_not_executable_gives_informative_error() {
-    let dir = mktemp_dir("not_executable");
-    let script_path = dir.join("not_executable_hegel");
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("not_executable_hegel");
     std::fs::write(&script_path, "#!/bin/sh\nexit 0\n").unwrap();
 
     use std::os::unix::fs::PermissionsExt;
@@ -99,8 +98,8 @@ fn test_not_executable_gives_informative_error() {
 #[cfg(unix)]
 fn test_server_hangs_gives_bad_virtualenv_message() {
     // Script that closes stdout (so handshake fails) but stays alive
-    let dir = mktemp_dir("hanging");
-    let script_path = dir.join("hanging_hegel");
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("hanging_hegel");
     std::fs::write(&script_path, "#!/bin/sh\nexec 1>&-\nsleep 10\n").unwrap();
 
     use std::os::unix::fs::PermissionsExt;
@@ -116,8 +115,8 @@ fn test_server_hangs_gives_bad_virtualenv_message() {
 #[test]
 #[cfg(unix)]
 fn test_server_log_included_in_error() {
-    let dir = mktemp_dir("stderr");
-    let script_path = dir.join("stderr_hegel");
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("stderr_hegel");
     std::fs::write(
         &script_path,
         "#!/bin/sh\n\
