@@ -148,6 +148,56 @@ Non-replay uses of `NativeTestCase::for_choices` (driving `ntc.draw_bytes`,
 `CachedTestFunction` — see `tests/hypothesis/simple_strings.rs::test_fixed_size_bytes_just_draw_bytes`
 for that simpler shape.
 
+## Health checks
+
+hegel-rust's `HealthCheck` enum has four variants — `FilterTooMuch`,
+`TooSlow`, `TestCasesTooLarge`, `LargeInitialTestCase` — a subset of
+Hypothesis's. When a check fires, the native runner **panics** with a
+message of the form `FailedHealthCheck: …<VariantName>…`. There is no
+dedicated error type to catch.
+
+| Python                                             | Rust                                                                |
+|----------------------------------------------------|---------------------------------------------------------------------|
+| `pytest.raises(FailedHealthCheck)`                 | `expect_panic(\|\| { ... }, "FailedHealthCheck.*<Variant>")`        |
+| `suppress_health_check=list(HealthCheck)`          | `.suppress_health_check(HealthCheck::all())`                        |
+| `suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow]` | `.suppress_health_check([HealthCheck::FilterTooMuch, HealthCheck::TooSlow])` |
+| `HealthCheck.data_too_large`                       | `HealthCheck::TestCasesTooLarge`                                    |
+| `HealthCheck.large_base_example`                   | `HealthCheck::LargeInitialTestCase`                                 |
+
+`HealthCheck::all()` returns `[HealthCheck; 4]`, which satisfies
+`IntoIterator<Item = HealthCheck>` — it plugs straight into
+`.suppress_health_check(...)` without a `.to_vec()`.
+
+### Native-only enforcement
+
+`TooSlow` and `FilterTooMuch` are enforced by the native runner only —
+the Python/server backend does not raise them. A test whose purpose is
+to *trip* one of these checks **must be `#[cfg(feature = "native")]`**;
+a test that only *suppresses* the check can be unconditional. See
+`tests/test_health_check.rs` for the canonical shape and
+`tests/hypothesis/health_checks.rs` for a port that splits the two
+halves accordingly.
+
+### Python variants with no Rust counterpart
+
+These Python `HealthCheck` variants have no analog — tests targeting
+them go to `SKIPPED.md` with a one-line reason:
+
+- `return_value` — Python closures can return non-None; Rust closures
+  have declared return types.
+- `differing_executors` — detects `@given` on instance methods called
+  with different `self`. hegel-rust tests are closures, no class
+  dispatch.
+- `nested_given` — detects `@given` functions called from inside other
+  `@given` functions. hegel-rust has no decorator-based dispatch to
+  nest.
+- Anything `deadline`-related — no `deadline` setting exists.
+
+Dynamic-typing checks such as `test_it_is_an_error_to_suppress_non_iterables`
+(passing a non-iterable / non-`HealthCheck` to `suppress_health_check`)
+are prevented at compile time by Rust's `impl IntoIterator<Item = HealthCheck>`
+bound — skip them.
+
 ## text() with characters() parameters
 
 In Python, `text()` accepts a `characters()` strategy as its alphabet,
