@@ -78,15 +78,10 @@ Individually-skipped tests (rest of the file is ported):
 - `test_core.py::test_error_on_unbounded_test_function` —
   monkeypatches `pbtkit.core.BUFFER_SIZE` at runtime; hegel-rust's
   `BUFFER_SIZE` is a native-only `const` with no runtime-patch surface.
-- `test_core.py::test_function_cache`,
-  `test_core.py::test_cache_distinguishes_negative_zero_in_lookup` —
-  use pbtkit's `CachedTestFunction([values])` / `.lookup([values])`
-  shape; hegel-rust's `CachedTestFunction` takes a `NativeTestCase`
-  and exposes only `run` / `run_shrink` / `run_final`.
-- `test_core.py::test_cache_key_distinguishes_negative_zero`,
-  `test_core.py::test_cache_key_distinguishes_nan_variants` — pbtkit's
-  private `pbtkit.caching._cache_key` helper; no equivalent public
-  hook in hegel-rust.
+- `test_core.py::test_function_cache` — uses pbtkit's
+  `CachedTestFunction([values])` / `.lookup([values])` shape;
+  hegel-rust's `CachedTestFunction` takes a `NativeTestCase` and
+  exposes only `run` / `run_shrink` / `run_final`.
 - `test_core.py::test_prints_a_top_level_weighted` — uses
   `tc.weighted(p)`, no hegel-rust counterpart (same reason as the
   other `weighted` skips).
@@ -128,17 +123,15 @@ Individually-skipped tests (rest of the file is ported):
   `tc.target(score)`, no analog (whole-file skip of
   `test_targeting.py`).
 - `test_core.py::test_note_prints_on_failing_example`,
-  `test_core.py::test_draw_silent_does_not_print` — exercise
-  `tc.note` / `tc.draw_silent` interactions with pbtkit's
-  final-replay stdout formatter; hegel-rust's final-replay format
-  differs (`let draw_1 = ...;`, stderr not stdout) and the behaviour
-  is already covered by `tests/test_combinators.rs` and
-  `tests/test_output.rs`.
-- `test_core.py::test_error_on_too_strict_precondition` — pbtkit
-  raises `Unsatisfiable` when every test case rejects; hegel-rust
-  diverges across modes (server mode silently passes, native mode
-  fires FilterTooMuch). The FilterTooMuch path is already covered
-  by `tests/test_health_check.rs`.
+  `test_core.py::test_draw_silent_does_not_print` — use pbtkit's
+  `capsys` pytest fixture to inspect the final-replay stdout formatter
+  byte-for-byte; hegel-rust's failing-replay output goes to stderr in a
+  different shape (`let draw_1 = ...;`), so a byte-level comparison
+  with pbtkit's format is unportable. The stderr shape is pinned down
+  by the `TempRustProject`-based tests in `tests/test_output.rs`.
+- `test_core.py::test_nothing_core` — uses `gs.nothing()`; hegel-rust
+  has no empty-generator public API (same reason as the existing
+  `test_generators.py::test_cannot_witness_nothing` skip).
 - `test_core.py::test_generator_repr` — Python `repr()` output; no
   analog in hegel-rust (same reason as the `test_generators.py`
   equivalent above).

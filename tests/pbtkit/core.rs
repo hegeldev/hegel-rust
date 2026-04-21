@@ -12,17 +12,12 @@
 //! - `test_error_on_unbounded_test_function` — monkeypatches
 //!   `pbtkit.core.BUFFER_SIZE` on the Python module at runtime; hegel-rust's
 //!   `BUFFER_SIZE` is a native-only `const` with no runtime-patch surface.
-//! - `test_function_cache`, `test_cache_distinguishes_negative_zero_in_lookup`
-//!   — use pbtkit's `CachedTestFunction([values])` / `.lookup([values])`
-//!   interface, which takes a raw choice-value list. hegel-rust's
-//!   `CachedTestFunction` takes a `NativeTestCase` instead and exposes only
-//!   `run` / `run_shrink` / `run_final`; the pbtkit-shape API doesn't exist.
-//! - `test_cache_key_distinguishes_negative_zero`,
-//!   `test_cache_key_distinguishes_nan_variants` — pbtkit's private
-//!   `pbtkit.caching._cache_key` helper. hegel-rust has its own
-//!   `ChoiceValueKey` (private to `src/native/tree.rs`), which does
-//!   preserve the same f64-bits invariants, but there's no equivalent
-//!   public hook to call it from a test.
+//! - `test_function_cache` — uses pbtkit's
+//!   `CachedTestFunction([values])` / `.lookup([values])` interface,
+//!   which takes a raw choice-value list. hegel-rust's
+//!   `CachedTestFunction` takes a `NativeTestCase` instead and exposes
+//!   only `run` / `run_shrink` / `run_final`; the pbtkit-shape API
+//!   doesn't exist.
 //! - `test_prints_a_top_level_weighted` — uses `tc.weighted(p)`, which
 //!   hegel-rust deliberately doesn't expose on `TestCase` (same
 //!   public-API incompatibility as the `test_generators.py` `weighted`
@@ -43,14 +38,16 @@
 //!   `test_swap_adjacent_blocks_equal_blocks`,
 //!   `test_cache_key_distinguishes_negative_zero`,
 //!   `test_cache_key_distinguishes_nan_variants`,
+//!   `test_cache_distinguishes_negative_zero_in_lookup`,
 //!   `test_delete_chunks_guard_after_decrement`,
 //!   `test_redistribute_integers_stale_indices`,
 //!   `test_bind_deletion_try_deletions_succeeds`,
 //!   `test_sort_values_full_sort_fails` — exercise individual shrink
-//!   passes or `_cache_key` directly. Ported as embedded tests in
-//!   `tests/embedded/native/shrinker_tests.rs` and
+//!   passes, `_cache_key`, or `CachedTestFunction` directly. Ported as
+//!   embedded tests in `tests/embedded/native/shrinker_tests.rs` and
 //!   `tests/embedded/native/tree_tests.rs` where the `pub(super)` pass
-//!   methods and `ChoiceValueKey` are reachable via `use super::*`.
+//!   methods, `ChoiceValueKey`, and `CachedTestFunction` internals are
+//!   reachable via `use super::*`.
 //! - `test_value_punning_on_type_change`,
 //!   `test_bind_deletion_valid_but_not_shorter`,
 //!   `test_delete_chunks_stale_index`,
@@ -74,19 +71,15 @@
 //! - `test_targeting_skips_non_integer` — uses `tc.target(score)`, no
 //!   analog (whole-file skip of `test_targeting.py`).
 //! - `test_note_prints_on_failing_example`,
-//!   `test_draw_silent_does_not_print` — exercise `tc.note` /
-//!   `tc.draw_silent` interactions with the final-replay stdout
-//!   formatter. hegel-rust has `tc.note` / `tc.draw_silent`, but the
-//!   final-replay output format is different (`let draw_1 = ...;` prefix,
-//!   stderr not stdout) and the behaviour is already covered by
-//!   `tests/test_combinators.rs::test_draw_silent_non_debug` and
-//!   `tests/test_output.rs`.
-//! - `test_error_on_too_strict_precondition` — pbtkit raises
-//!   `Unsatisfiable` when every test case calls `tc.reject()`. hegel-rust
-//!   diverges across modes: server mode treats "no counterexample found"
-//!   as silent pass, while native mode fires FilterTooMuch. The test is
-//!   unportable in a way that matches both modes; the FilterTooMuch path
-//!   is already covered by `tests/test_health_check.rs`.
+//!   `test_draw_silent_does_not_print` — use pbtkit's `capsys` pytest
+//!   fixture to inspect the final-replay stdout formatter byte-for-byte.
+//!   hegel-rust's failing-replay output goes to stderr in a different
+//!   shape (`let draw_1 = ...;` prefix), so a byte-level comparison with
+//!   pbtkit's format is unportable. The stderr shape itself is pinned
+//!   down by the `TempRustProject`-based tests in `tests/test_output.rs`.
+//! - `test_nothing_core` — uses `gs.nothing()`; hegel-rust has no
+//!   empty-generator public API (same reason as the existing
+//!   `test_generators.py::test_cannot_witness_nothing` skip).
 //! - `test_generator_repr` — Python `repr()` output; hegel-rust
 //!   generators have no repr surface (same reason as the existing
 //!   `test_generators.py::test_generator_repr` skip).
@@ -240,6 +233,25 @@ fn test_weighted_forced_true() {
             .run();
         },
         "forced-true branch reached",
+    );
+}
+
+// Port of pbtkit/tests/test_core.py::test_error_on_too_strict_precondition.
+// pbtkit raises Unsatisfiable when every test case calls `tc.reject()`;
+// hegel-rust's native mode fires a FilterTooMuch health check instead.
+// Server mode silently passes, so this assertion is native-only.
+#[cfg(feature = "native")]
+#[test]
+fn test_error_on_too_strict_precondition() {
+    expect_panic(
+        || {
+            Hegel::new(|tc: TestCase| {
+                tc.draw(gs::integers::<i64>().min_value(0).max_value(10));
+                tc.reject();
+            })
+            .run();
+        },
+        "FilterTooMuch",
     );
 }
 
