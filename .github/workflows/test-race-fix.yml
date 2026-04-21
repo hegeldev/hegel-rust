@@ -58,7 +58,7 @@ jobs:
             }
           done
 
-          echo "All 20 iterations passed without failure"
+          echo "All 20 iterations passed with no failure"
 
       - name: Print server logs
         if: always()
