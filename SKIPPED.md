@@ -334,9 +334,14 @@ Individually-skipped tests (rest of the file is ported):
   exception annotations) and dynamic typing (strategies as `sampled_from`
   elements); no Rust counterpart.
 
-- `test_reproduce_failure.py` — cherry-pick of worker port conflicted with
-  concurrent changes to `src/native/schema/regex.rs` and `text.rs`; deferred
-  for manual conflict resolution.
+- `test_reproduce_failure.py` — exercises Hypothesis's
+  `encode_failure`/`decode_failure`/`@reproduce_failure` public API for
+  serialising a failing choice sequence into a base64+zlib blob that a
+  later `@given` run can replay. Hegel-rust has no counterpart: there is
+  no `encode_failure`/`decode_failure` function, no `@reproduce_failure`
+  decorator, and no `DidNotReproduce` error. The project also pulls in
+  no base64 or zlib dependency. Every test in the file sits on top of
+  that API surface, so nothing is portable today.
 
 - `test_charmap.py` — cherry-pick of worker port conflicted with concurrent changes
   to `src/native/schema/regex.rs` and `text.rs`; deferred for manual conflict resolution.
