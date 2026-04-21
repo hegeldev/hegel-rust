@@ -29,34 +29,17 @@
 //!   being called from inside another `@given` function. hegel-rust has no
 //!   `nested_given` variant and no decorator-based test dispatch to nest.
 
+#[cfg(feature = "native")]
+use crate::common::utils::expect_panic;
 use hegel::generators as gs;
 #[cfg(feature = "native")]
 use hegel::generators::Generator;
 use hegel::{HealthCheck, Hegel, Settings, TestCase};
 
 #[cfg(feature = "native")]
-fn expect_health_check_panic<F, T>(f: F, needle: &str)
-where
-    F: FnOnce() -> T + std::panic::UnwindSafe,
-{
-    let err = std::panic::catch_unwind(f)
-        .err()
-        .expect("expected a FailedHealthCheck panic");
-    let msg = err
-        .downcast_ref::<String>()
-        .map(|s| s.as_str())
-        .or_else(|| err.downcast_ref::<&str>().copied())
-        .unwrap_or("");
-    assert!(
-        msg.contains("FailedHealthCheck") && msg.contains(needle),
-        "expected FailedHealthCheck panic containing {needle:?}, got: {msg}"
-    );
-}
-
-#[cfg(feature = "native")]
 #[test]
 fn test_slow_generation_fails_a_health_check() {
-    expect_health_check_panic(
+    expect_panic(
         || {
             Hegel::new(|tc: TestCase| {
                 let _: i64 = tc.draw(gs::integers::<i64>().map(|x| {
@@ -67,14 +50,14 @@ fn test_slow_generation_fails_a_health_check() {
             .settings(Settings::new().test_cases(11).database(None))
             .run();
         },
-        "TooSlow",
+        "FailedHealthCheck.*TooSlow",
     );
 }
 
 #[cfg(feature = "native")]
 #[test]
 fn test_slow_generation_inline_fails_a_health_check() {
-    expect_health_check_panic(
+    expect_panic(
         || {
             Hegel::new(|tc: TestCase| {
                 let _: i64 = tc.draw(gs::integers::<i64>());
@@ -83,7 +66,7 @@ fn test_slow_generation_inline_fails_a_health_check() {
             .settings(Settings::new().test_cases(11).database(None))
             .run();
         },
-        "TooSlow",
+        "FailedHealthCheck.*TooSlow",
     );
 }
 
@@ -109,7 +92,7 @@ fn test_suppressing_filtering_health_check() {
     // accumulate before any valid case (see `FILTER_TOO_MUCH_THRESHOLD` in
     // `src/native/runner.rs`). Use the default `test_cases = 100`, which
     // allows up to 1000 calls — enough headroom for the threshold to trip.
-    expect_health_check_panic(
+    expect_panic(
         || {
             Hegel::new(|tc: TestCase| {
                 let _: i64 = tc.draw(gs::integers::<i64>().filter(|_| false));
@@ -117,7 +100,7 @@ fn test_suppressing_filtering_health_check() {
             .settings(Settings::new().database(None))
             .run();
         },
-        "FilterTooMuch",
+        "FailedHealthCheck.*FilterTooMuch",
     );
 
     // With FilterTooMuch (and TooSlow, as the Python original does) suppressed,
@@ -139,7 +122,7 @@ fn test_suppressing_filtering_health_check() {
 #[cfg(feature = "native")]
 #[test]
 fn test_filtering_everything_fails_a_health_check() {
-    expect_health_check_panic(
+    expect_panic(
         || {
             Hegel::new(|tc: TestCase| {
                 let _: i64 = tc.draw(gs::integers::<i64>().filter(|_| false));
@@ -147,7 +130,7 @@ fn test_filtering_everything_fails_a_health_check() {
             .settings(Settings::new().database(None))
             .run();
         },
-        "filter",
+        "FailedHealthCheck.*filter",
     );
 }
 
@@ -158,7 +141,7 @@ fn test_filtering_most_things_fails_a_health_check() {
     // acceptance. hegel-rust's FilterTooMuch fires when 200 consecutive
     // invalid cases accumulate with no prior valid case, so any range
     // wide enough to make valid draws vanishingly rare triggers it.
-    expect_health_check_panic(
+    expect_panic(
         || {
             Hegel::new(|tc: TestCase| {
                 let b: u64 = tc.draw(gs::integers::<u64>().min_value(0).max_value(65535));
@@ -167,6 +150,6 @@ fn test_filtering_most_things_fails_a_health_check() {
             .settings(Settings::new().database(None))
             .run();
         },
-        "filter",
+        "FailedHealthCheck.*filter",
     );
 }
