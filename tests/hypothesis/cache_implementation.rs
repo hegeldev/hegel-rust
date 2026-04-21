@@ -203,6 +203,20 @@ where
     C: DictLikeCache + 'static,
     F: Fn(usize) -> C + Send + Sync + 'static,
 {
+    // Explicit regression examples carried over from Hypothesis's `@example`
+    // decorators on `test_behaves_like_a_dict_with_losses`.
+    for (writes, size) in [
+        (
+            vec![(0_i64, 0_i64), (3, 0), (1, 0), (2, 0), (2, 0), (1, 0)],
+            4_usize,
+        ),
+        (vec![(0, 0)], 1),
+        (vec![(1, 0), (2, 0), (0, -1), (1, 0)], 3),
+    ] {
+        let mut target = make(size);
+        run_dict_like_losses(&mut target, &writes, size);
+    }
+
     Hegel::new(move |tc| {
         let writes: Vec<(i64, i64)> = tc.draw(write_pattern(0));
         let size: usize = tc.draw(gs::integers::<usize>().min_value(1).max_value(10));
@@ -254,45 +268,47 @@ fn test_behaves_like_a_dict_with_losses_lru_alt() {
 // -- test_always_evicts_the_lowest_scoring_value --------------------------
 //
 // The Python version uses `st.data()` + a Cache subclass whose
-// `new_entry` calls back into `data.draw(...)`. In hegel-rust this ports
-// as a `Hegel::new(|tc| ...)` test that pre-draws a score for every
-// candidate key up-front, then uses a closure-based scoring that looks
-// them up. Behaviourally equivalent: the scores are still random-ish
-// per-key values chosen during the test run.
+// `new_entry` / `on_access` each call back into `data.draw(...)` to
+// produce a fresh score. The hooks here have no `tc` in scope, so we
+// draw a PRNG seed from `tc` (which Hypothesis can still shrink) and
+// let the scoring struct pull fresh scores from the RNG on every
+// call — exercising the cache's rebalance-after-on_access path that a
+// once-per-key pre-draw would miss.
 
-struct PrecomputedScoring {
+struct DynamicScoring {
+    rng: StdRng,
     scores: HashMap<i64, i64>,
-    observed: HashMap<i64, i64>,
     last_entry: Option<i64>,
     evicted: HashSet<i64>,
 }
 
-impl CacheScoring<i64, i64> for PrecomputedScoring {
+impl DynamicScoring {
+    fn new_score(&mut self, key: i64) -> i64 {
+        let s = (self.rng.next_u64() % 1001) as i64;
+        self.scores.insert(key, s);
+        s
+    }
+}
+
+impl CacheScoring<i64, i64> for DynamicScoring {
     fn new_entry(&mut self, key: &i64, _value: &i64) -> i64 {
         self.last_entry = Some(*key);
         self.evicted.remove(key);
-        assert!(!self.observed.contains_key(key));
-        let score = *self.scores.get(key).unwrap();
-        self.observed.insert(*key, score);
-        score
+        assert!(!self.scores.contains_key(key));
+        self.new_score(*key)
     }
 
     fn on_access(&mut self, key: &i64, _value: &i64, _score: i64) -> i64 {
-        assert!(self.observed.contains_key(key));
-        // New draw on access — mirror Python's `new_score(key)` which
-        // rewrites `scores[key]` via `data.draw(...)`. For the port we
-        // reuse the same pre-drawn score value (still deterministic).
-        let score = *self.scores.get(key).unwrap();
-        self.observed.insert(*key, score);
-        score
+        assert!(self.scores.contains_key(key));
+        self.new_score(*key)
     }
 
     fn on_evict(&mut self, key: &i64, _value: &i64, score: i64) {
-        assert_eq!(score, *self.observed.get(key).unwrap());
-        self.observed.remove(key);
-        if self.observed.len() > 1 {
+        assert_eq!(score, *self.scores.get(key).unwrap());
+        self.scores.remove(key);
+        if self.scores.len() > 1 {
             let min_other = self
-                .observed
+                .scores
                 .iter()
                 .filter(|(k, _)| Some(**k) != self.last_entry)
                 .map(|(_, v)| *v)
@@ -308,20 +324,14 @@ impl CacheScoring<i64, i64> for PrecomputedScoring {
 fn test_always_evicts_the_lowest_scoring_value() {
     Hegel::new(|tc| {
         let writes: Vec<(i64, i64)> = tc.draw(write_pattern(2));
-        let distinct_keys: HashSet<i64> = writes.iter().map(|(k, _)| *k).collect();
-        let n_keys = distinct_keys.len();
+        let n_keys = writes.iter().map(|(k, _)| *k).collect::<HashSet<_>>().len();
         tc.assume(n_keys > 1);
         let size: usize = tc.draw(gs::integers::<usize>().min_value(1).max_value(n_keys - 1));
+        let seed: u64 = tc.draw(gs::integers::<u64>());
 
-        let mut scores: HashMap<i64, i64> = HashMap::new();
-        for &k in &distinct_keys {
-            let s: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(1000));
-            scores.insert(k, s);
-        }
-
-        let scoring = PrecomputedScoring {
-            scores,
-            observed: HashMap::new(),
+        let scoring = DynamicScoring {
+            rng: StdRng::seed_from_u64(seed),
+            scores: HashMap::new(),
             last_entry: None,
             evicted: HashSet::new(),
         };
@@ -335,7 +345,7 @@ fn test_always_evicts_the_lowest_scoring_value() {
 
         assert!(!target.scoring.evicted.is_empty());
         assert_eq!(target.scoring.evicted.len() + target.len(), model.len());
-        assert_eq!(target.scoring.observed.len(), target.len());
+        assert_eq!(target.scoring.scores.len(), target.len());
 
         let evicted_snapshot: HashSet<i64> = target.scoring.evicted.clone();
         for (&k, &v) in &model {
