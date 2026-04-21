@@ -942,6 +942,35 @@ Individually-skipped tests (rest of the file is ported):
   tests are closures passed to `Hegel::new(|tc| ...).run()` with no
   class-based test dispatch or per-test fixture hooks — all Python-specific.
 
+- `test_core.py::test_stops_after_max_examples_if_satisfying`,
+  `test_core.py::test_stops_after_ten_times_max_examples_if_not_satisfying` —
+  both drive `find(strategy, predicate)` and assert exact / bounded
+  call counts on the predicate inside `find()`. hegel-rust has no
+  `find()` public API, and `Hegel::new(...).run()` re-enters the test
+  function for span-mutation attempts (up to 5 per valid case in
+  native), so the predicate-call shape these tests pin down isn't
+  reproducible through the public Rust surface.
+- `test_core.py::test_is_not_normally_default`,
+  `test_core.py::test_settings_are_default_in_given` — both inspect
+  `settings.default`, a Python module-level mutable global. hegel-rust
+  has no `Settings::default` global; settings are constructed
+  per-test via `Settings::new()`.
+- `test_core.py::test_pytest_skip_skips_shrinking` — relies on
+  `pytest.skip()` inside a `@given` body to abort shrinking;
+  hegel-rust has no per-test "skip aborts shrinking" mechanism on its
+  public API.
+- `test_core.py::test_no_such_example` — uses
+  `find(..., database_key=b"...")` and asserts `NoSuchExample`; both
+  are `find()`-API surface (same gap as the `find()` skips above).
+- `test_core.py::test_validates_strategies_for_test_method` — uses
+  `st.lists(st.nothing(), min_size=1)`; hegel-rust has no
+  `gs::nothing()` public API (same gap as
+  `test_given_error_conditions.py::test_raises_unsatisfiable_if_passed_explicit_nothing`).
+- `test_core.py::test_non_executed_tests_raise_skipped` — exercises
+  `Phase.target/shrink/explain/explicit/reuse` settings and the
+  `unittest.SkipTest` raise-on-non-execution behaviour; hegel-rust
+  has no public `Phase`/`phases` setting on `Settings`.
+
 - `test_numerics.py::test_fuzz_fractions_bounds`,
   `test_numerics.py::test_fraction_addition_is_well_behaved` — both use
   the `fractions()` strategy (Python `fractions.Fraction`). hegel-rust

@@ -8,6 +8,7 @@ mod arbitrary_data;
 mod cache_implementation;
 mod composite;
 mod composite_kwonlyargs;
+mod core;
 mod database_backend;
 mod datetimes;
 mod debug_information;
