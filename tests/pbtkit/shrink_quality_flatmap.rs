@@ -114,10 +114,7 @@ fn delete_in_middle_of_a_binding_case(n: usize) {
                     .max_size(k as usize)
             }),
         move |x: &Vec<bool>| {
-            x.len() >= 2
-                && x[0]
-                && *x.last().unwrap()
-                && x.iter().filter(|&&b| !b).count() >= n
+            x.len() >= 2 && x[0] && *x.last().unwrap() && x.iter().filter(|&&b| !b).count() >= n
         },
     );
     let mut expected = vec![false; n + 2];
