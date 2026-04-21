@@ -513,3 +513,56 @@ fn test_lru_cache_is_actually_lru() {
     cache.insert(3, 2); // [2, 1, 3] -> drop LRU -> [1, 3]
     assert_eq!(cache.keys(), vec![1, 3]);
 }
+
+#[test]
+fn test_generic_cache_is_empty_tracks_insertion() {
+    let mut cache: GenericCache<i64, i64, _> = GenericCache::new(2, ValueScored).unwrap();
+    assert!(cache.is_empty());
+    cache.insert(1, 1).unwrap();
+    assert!(!cache.is_empty());
+    cache.clear();
+    assert!(cache.is_empty());
+}
+
+#[test]
+fn test_lru_cache_is_empty_tracks_insertion() {
+    let mut cache = LRUCache::<i64, i64>::new(2);
+    assert!(cache.is_empty());
+    cache.insert(1, 1);
+    assert!(!cache.is_empty());
+}
+
+#[test]
+fn test_lru_cache_contains_key_reflects_membership() {
+    let mut cache = LRUCache::<i64, i64>::new(2);
+    assert!(!cache.contains_key(&1));
+    cache.insert(1, 100);
+    assert!(cache.contains_key(&1));
+    assert!(!cache.contains_key(&2));
+    cache.insert(2, 200);
+    cache.insert(3, 300); // evicts 1 (LRU).
+    assert!(!cache.contains_key(&1));
+    assert!(cache.contains_key(&2));
+    assert!(cache.contains_key(&3));
+}
+
+#[test]
+fn test_lru_reused_cache_is_empty_tracks_insertion() {
+    let mut cache = LRUReusedCache::<i64, i64>::new(2);
+    assert!(cache.is_empty());
+    cache.insert(1, 1).unwrap();
+    assert!(!cache.is_empty());
+}
+
+#[test]
+fn test_lru_reused_cache_clear_empties_cache() {
+    let mut cache = LRUReusedCache::<i64, i64>::new(2);
+    cache.insert(1, 1).unwrap();
+    cache.insert(2, 2).unwrap();
+    assert_eq!(cache.len(), 2);
+    cache.clear();
+    assert_eq!(cache.len(), 0);
+    assert!(cache.is_empty());
+    assert!(!cache.contains_key(&1));
+    assert!(!cache.contains_key(&2));
+}
