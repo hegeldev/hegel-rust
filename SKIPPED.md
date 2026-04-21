@@ -833,3 +833,14 @@ Individually-skipped tests (rest of the file is ported):
   (runtime `inspect.signature` introspection of the target callable) with
   no hegel-rust counterpart. The thread-safety property it guards is
   specific to Hypothesis's per-thread caching of strategy introspection.
+
+- `test_exceptiongroup.py` — every test raises a Python PEP 654
+  `ExceptionGroup` / `BaseExceptionGroup` (Python 3.11+ built-in) from a
+  `@given`-decorated function to pin down how Hypothesis unwraps groups
+  containing its own error types (`Frozen`, `StopTest`, `Flaky`,
+  `FlakyFailure`, `FlakyBackendFailure`); two parametrized tests also
+  exercise `ExceptionGroup.split` / `.derive`. Rust panics are singular
+  (no grouping construct), `Result` is the idiomatic error channel, and
+  hegel-rust has no `Frozen` / `StopTest` / `Flaky*` error types. The
+  whole file sits on Python exception-group semantics with no Rust
+  counterpart.
