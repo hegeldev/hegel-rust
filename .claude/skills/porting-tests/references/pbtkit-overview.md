@@ -166,15 +166,31 @@ re-exported in `hegel::__native_test_internals`. For FloatChoice
 `((1<<63) | (2046<<52) | ((1<<52)-1)) * 2 + 1` (the negative variant of
 the max subnormal lex index, packed through `float_global_rank`).
 
-## Module-constant monkeypatch tests don't port
+## Module-constant monkeypatches — semantic vs coverage-only
 
 pbtkit tests occasionally `monkeypatch.setattr(pbtkit.module, "CONST",
 …)` at runtime to tune a threshold (e.g. `BUFFER_SIZE` in `core.py`,
 `NAN_DRAW_PROBABILITY` in `floats.py`). hegel-rust's equivalents are
 `const` values under `src/native/…` with no runtime-patch surface, so
-these tests are unportable as-is. Record them as individual skips with
-a one-line reason naming the patched constant — list them in both the
-module docstring and `SKIPPED.md`.
+you can't reproduce the patch. But not all patches are equal — read the
+upstream comment next to the `monkeypatch.setattr` call before deciding:
+
+- **Semantic** patches are the point of the test: e.g.
+  `test_error_on_unbounded_test_function` patches `BUFFER_SIZE` tiny to
+  trigger the unbounded-test-function error path, and the test is
+  meaningless without the patch. Skip these — list in both the module
+  docstring and `SKIPPED.md`, naming the patched constant.
+- **Coverage-only** patches just force a low-probability branch so
+  pbtkit's own coverage run hits it: e.g. `test_floats_unbounded`
+  patches `NAN_DRAW_PROBABILITY = 0.5` with the comment "Boost NaN
+  probability so we reliably cover `_draw_nan`." The assertion the test
+  actually makes ("unbounded draws complete without panicking") doesn't
+  depend on the patch. Port the test without the patch and add a
+  one-line comment explaining the upstream patch was coverage-only.
+
+The clue is usually in the upstream comment immediately above the
+`monkeypatch.setattr` line. If it says "reliably cover" / "boost
+probability" / similar, the patch is coverage-only.
 
 ## `@pytest.mark.requires(...)` and `pytestmark`
 
