@@ -4,6 +4,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod bytes;
 mod choice_index;
 mod findability_arithmetic;
 mod findability_collections;
