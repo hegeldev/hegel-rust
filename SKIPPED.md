@@ -347,3 +347,38 @@ Individually-skipped tests (rest of the file is ported):
   customize how `@given`-decorated method bodies are executed. Hegel-rust has no
   class-based test dispatch — tests are closures passed to `Hegel::new(|tc| {...}).run()`,
   so there is no `execute_example` surface or equivalent wrapping mechanism.
+
+- `test_searchstrategy.py::test_or_errors_when_given_non_strategy` — Python `|`
+  operator overloading on strategies; Rust has no operator-overloaded `|` for
+  generators.
+- `test_searchstrategy.py::test_just_strategy_uses_repr`,
+  `test_searchstrategy.py::test_can_map_nameless`,
+  `test_searchstrategy.py::test_can_flatmap_nameless` — Python `repr()` output
+  and `functools.partial`; hegel-rust generators have no repr surface.
+- `test_searchstrategy.py::test_flatmap_with_invalid_expand` — Python dynamic
+  typing; Rust's `.flat_map()` requires its closure to return a generator at
+  compile time, so the "returns a non-strategy" case is unrepresentable.
+- `test_searchstrategy.py::test_use_of_global_random_is_deprecated_in_given`,
+  `test_searchstrategy.py::test_use_of_global_random_is_deprecated_in_interactive_draws`
+  — both tests wrap `random.choice` in a strategy to trigger Hypothesis's
+  deprecation warning for using the Python global PRNG; Rust has no global
+  singleton PRNG and hegel-rust has no deprecation-warning surface.
+- `test_searchstrategy.py::test_jsonable`,
+  `test_searchstrategy.py::test_jsonable_defaultdict`,
+  `test_searchstrategy.py::test_jsonable_namedtuple`,
+  `test_searchstrategy.py::test_jsonable_small_ints_are_ints`,
+  `test_searchstrategy.py::test_jsonable_large_ints_are_floats`,
+  `test_searchstrategy.py::test_jsonable_very_large_ints`,
+  `test_searchstrategy.py::test_jsonable_override`,
+  `test_searchstrategy.py::test_jsonable_to_json_nested`,
+  `test_searchstrategy.py::test_to_jsonable_handles_reference_cycles` — all
+  test `hypothesis.strategies._internal.utils.to_jsonable`, a Python-only
+  observability serialization helper (symbolic realization, Python-specific
+  containers like `defaultdict` / `namedtuple`, reference-cycle detection via
+  `id()`, `@dataclass.to_json` protocol). hegel-rust has no observability /
+  `to_jsonable` counterpart.
+- `test_searchstrategy.py::test_deferred_strategy_draw` — `st.deferred()`
+  (a lazy forward-reference strategy used for recursive definitions) has no
+  hegel-rust analog; Rust's static type system doesn't support
+  forward-referenced recursive strategies without explicit per-use-case
+  enum scaffolding, and `gs::deferred()` doesn't exist.
