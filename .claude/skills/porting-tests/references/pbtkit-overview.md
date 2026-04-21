@@ -128,6 +128,54 @@ Known-affected cases from `test_core.py`:
 `test_delete_chunks_stale_index`, `test_shrink_duplicates_with_stale_indices`,
 `test_shrink_duplicates_valid_drops_below_two`.
 
+### `FloatChoice` ordering divergence: raw vs Hypothesis-lex
+
+pbtkit's `FloatChoice` orders floats by `(exp_rank, mantissa, sign)` on
+their raw IEEE-754 bits. hegel-rust's `FloatChoice` matches
+Hypothesis's lex ordering from `conjecture/floats.py::float_to_lex`,
+which bit-reverses the mantissa of subnormals and re-encodes normals
+via the (exponent_key, mantissa) reorder table. See the
+implementing-native skill's `float_to_lex` note — the divergence is
+deliberate and on the Hypothesis side.
+
+Consequence: pbtkit tests exercising `FloatChoice` internals via
+`simplest`, `unit`, `sort_key`, `to_index`, or `from_index` will often
+assert values that *look* obvious under the raw ordering but land on
+different floats under the lex ordering. Examples from
+`test_floats.py`:
+
+- `FloatChoice(-10.0, 10.0, False, False).unit`: pbtkit returns `-0.0`
+  (raw index 1 is `-0.0`, next to `0.0`); hegel-rust returns `1.0`
+  (lex index after `0.0` is the integer encoding of `1.0`).
+- `FloatChoice(1e-323, 2e-323, False, False).simplest`: pbtkit picks
+  `1e-323` (smaller raw mantissa); hegel-rust picks `2e-323` because
+  lex bit-reverses subnormal mantissas (mantissa 4 → reversed bit
+  `1<<49`, simpler than mantissa 2 → reversed `1<<50`).
+- `test_float_shrinks_across_exponent_boundary`: pbtkit's shrinker
+  finds `-2.0 - 1 ULP`; hegel-rust's stops at the simpler `-3.0`. Both
+  satisfy `-3.0 ≤ v < -2.0` — widen the assertion to the range.
+
+Port the test, but relax the assertion to either (a) the
+hegel-rust-correct value with an in-file note explaining the ordering
+divergence, or (b) the range both orderings satisfy. Don't skip —
+the test is still exercising real behaviour on both sides.
+
+`_MAX_FINITE_INDEX` is exposed as a module constant in pbtkit but not
+re-exported in `hegel::__native_test_internals`. For FloatChoice
+`from_index` tests, compute it locally from the lex-ordering formula
+`((1<<63) | (2046<<52) | ((1<<52)-1)) * 2 + 1` (the negative variant of
+the max subnormal lex index, packed through `float_global_rank`).
+
+## Module-constant monkeypatch tests don't port
+
+pbtkit tests occasionally `monkeypatch.setattr(pbtkit.module, "CONST",
+…)` at runtime to tune a threshold (e.g. `BUFFER_SIZE` in `core.py`,
+`NAN_DRAW_PROBABILITY` in `floats.py`). hegel-rust's equivalents are
+`const` values under `src/native/…` with no runtime-patch surface, so
+these tests are unportable as-is. Record them as individual skips with
+a one-line reason naming the patched constant — list them in both the
+module docstring and `SKIPPED.md`.
+
 ## `@pytest.mark.requires(...)` and `pytestmark`
 
 pbtkit's `conftest.py` defines a `requires(module)` marker that skips a
