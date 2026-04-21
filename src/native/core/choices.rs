@@ -1,21 +1,6 @@
 // Choice types: the recorded decisions a test case makes.
 
-/// Less-than-or-equal comparison that strictly orders `-0.0` below `0.0`.
-///
-/// Port of Hypothesis's `sign_aware_lte` (see
-/// `resources/hypothesis/hypothesis-python/src/hypothesis/internal/floats.py`).
-/// pbtkit's `FloatChoice.validate` uses plain `<=`; this extra discrimination
-/// comes from Hypothesis, which lets users pin the sign of zero via the bound
-/// (e.g. `min_value=0.0` excludes `-0.0`).
-fn sign_aware_lte(x: f64, y: f64) -> bool {
-    if x == 0.0 && y == 0.0 {
-        let sx: f64 = if x.is_sign_negative() { -1.0 } else { 1.0 };
-        let sy: f64 = if y.is_sign_negative() { -1.0 } else { 1.0 };
-        sx <= sy
-    } else {
-        x <= y
-    }
-}
+use crate::native::floats::sign_aware_lte;
 
 /// An integer choice with bounded range.
 #[derive(Clone, Debug, PartialEq, Eq)]
