@@ -71,6 +71,7 @@ Generator transforms (all require `Generator` trait in scope):
 | `@given(gen) def test(x): assert p(x)` | `assert_all_examples(gen, \|x: &T\| p(x))` |
 | `find(gen, cond)`                   | `find_any(gen, \|x: &T\| cond(x))`         |
 | `minimal(gen, cond)`                | `minimal(gen, \|x: &T\| cond(x))`          |
+| `minimal(gen, cond, max_examples=N)` | `Minimal::new(gen, \|x: &T\| cond(x)).test_cases(N).run()` — the one-shot `minimal()` helper hardcodes 500; use the `Minimal` builder when you need a different budget. |
 | `with pytest.raises(X): ...`        | `expect_panic(\|\| { ... }, "regex")`      |
 | `capture_out()` / `capsys` / `capfd` | `TempRustProject::new().main_file(CODE).cargo_run(&[])` — access `.stderr`/`.stdout` on the `RunOutput` |
 | `capture_out() + pytest.raises(X)`  | `TempRustProject::new().main_file(CODE).expect_failure("pattern")` — builds, runs, asserts non-zero exit + pattern in stderr, returns `RunOutput` |
