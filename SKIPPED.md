@@ -157,11 +157,6 @@ Individually-skipped tests (rest of the file is ported):
   dynamic-typing `sort_key("hello")`; Rust's `sort_key(f64)` signature
   makes the non-float case unrepresentable (same pattern as the
   already-skipped `sort_key_type_mismatch` entries).
-- `test_floats.py::test_draw_unbounded_float_rejects_nan` — exercises
-  pbtkit's private `_draw_unbounded_float` helper directly; the Rust
-  equivalent logic is inlined in the native float-choice path with no
-  standalone function surface exposed through
-  `__native_test_internals`.
 
 ## hypothesis (`/tmp/hypothesis/hypothesis-python/tests/cover/`)
 
