@@ -845,6 +845,31 @@ Individually-skipped tests (rest of the file is ported):
   whole file sits on Python exception-group semantics with no Rust
   counterpart.
 
+- `test_given_error_conditions.py::test_raises_unsatisfiable_if_passed_explicit_nothing`
+  — uses `nothing()`, the empty-generator strategy; hegel-rust has no
+  `gs::nothing()` public API (same gap as the `test_core.py::test_nothing_core`
+  and `test_generators.py::test_cannot_witness_nothing` skips).
+- `test_given_error_conditions.py::test_error_if_has_no_hints`,
+  `test_given_error_conditions.py::test_error_if_infer_all_and_has_no_hints`,
+  `test_given_error_conditions.py::test_error_if_infer_is_posarg`,
+  `test_given_error_conditions.py::test_error_if_infer_is_posarg_mixed_with_kwarg`
+  — exercise Python's `@given(a=...)` / `@given(...)` ellipsis syntax for
+  type-hint-based strategy inference; `#[hegel::test]` takes generators
+  directly, so this inference mechanism has no Rust counterpart.
+- `test_given_error_conditions.py::test_given_twice_is_an_error` — stacks
+  two `@given` decorators on one function; `#[hegel::test]` doesn't
+  compose that way.
+- `test_given_error_conditions.py::test_given_is_not_a_class_decorator`
+  — applies `@given` to a Python class; Rust has no analogous
+  class/macro composition.
+- `test_given_error_conditions.py::test_specific_error_for_coroutine_functions`
+  — asserts a specific error for Python `async def` tests; hegel-rust has
+  no async-test dispatch.
+- `test_given_error_conditions.py::test_suggests_at_settings_if_extra_kwarg_matches_setting_name`
+  — inspects `@given` kwarg handling against Python setting names.
+  hegel-rust uses `.settings(Settings::new()...)` rather than kwargs on
+  the test macro.
+
 - `test_stateful.py` — a parallel-port attempt on branch `port/worker-0`
   was abandoned after its commits failed to cherry-pick cleanly
   (SKIPPED.md merge conflict); the branch is preserved for a later
