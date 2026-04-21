@@ -731,7 +731,7 @@ fn test_db_eq_default_and_cross_type() {
     assert!(!tracks.db_eq(&tracks));
 
     let multi = MultiplexedNativeDatabase::new(vec![
-        Arc::new(NativeDatabase::new("a")) as Arc<dyn ExampleDatabase>,
+        Arc::new(NativeDatabase::new("a")) as Arc<dyn ExampleDatabase>
     ]);
     let native = NativeDatabase::new("a");
     assert!(!multi.db_eq(&native));
