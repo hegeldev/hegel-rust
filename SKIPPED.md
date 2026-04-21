@@ -414,6 +414,14 @@ Individually-skipped tests (rest of the file is ported):
   — Python dynamic typing: pass a non-iterable or non-`HealthCheck` to
   `suppress_health_check`. Rust's type system prevents these at compile
   time (`impl IntoIterator<Item = HealthCheck>`).
+- `test_runner_strategy.py` — every test exercises `st.runner()`, a Hypothesis
+  public-API strategy that returns the surrounding `unittest.TestCase` instance
+  (or a supplied default outside a class). Hegel-rust has no class-based test
+  dispatch — tests are closures passed to `Hegel::new(|tc| ...).run()` — so
+  there is no `self` instance to return and no `gs::runner()` counterpart. The
+  stateful case additionally relies on `RuleBasedStateMachine.TestCase`
+  unittest metaclass machinery.
+
 - `test_health_checks.py::test_nested_given_raises_healthcheck`,
   `test_health_checks.py::test_triply_nested_given_raises_healthcheck`,
   `test_health_checks.py::test_can_suppress_nested_given`,
