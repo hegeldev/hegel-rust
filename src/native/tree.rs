@@ -68,6 +68,18 @@ impl TreeNode {
     }
 }
 
+impl Drop for TreeNode {
+    fn drop(&mut self) {
+        // Drop the trie iteratively. Naive recursive Drop overflows the stack
+        // when a generator (e.g. vecs(vecs(vecs(booleans())))) produces long
+        // choice sequences, making the trie's longest branch thousands deep.
+        let mut stack: Vec<TreeNode> = self.children.drain().map(|(_, v)| v).collect();
+        while let Some(mut node) = stack.pop() {
+            stack.extend(node.children.drain().map(|(_, v)| v));
+        }
+    }
+}
+
 /// Wraps the user's test function with a data tree (non-determinism detection)
 /// and a result cache (avoiding redundant calls during shrinking).
 ///
