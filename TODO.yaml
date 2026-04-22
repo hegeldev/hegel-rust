@@ -6,20 +6,3 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-  - title: "[CI] check-release: RELEASE.md already exists on main"
-    details: |
-      Workflow job "check release / Check release" failed. Running
-      `python .github/scripts/release.py check "$BASE_REF"` (BASE_REF=main)
-      raises:
-
-        Traceback (most recent call last):
-          File ".github/scripts/release.py", line 256, in <module>
-            check(args.base_ref)
-          File ".github/scripts/release.py", line 103, in check
-            raise ValueError(
-        ValueError: RELEASE.md already exists on main. It's possible the CI
-        job responsible for cutting a new release is in progress, or has
-        failed.
-
-      Process exited with code 1.
