@@ -259,6 +259,7 @@ pub mod __native_test_internals {
         CacheEntry, CacheInvalidArgument, CachePinError, CacheScoring, GenericCache, LRUCache,
         LRUReusedCache, LRUReusedScoring,
     };
+    pub use crate::native::cathetus::cathetus;
     pub use crate::native::core::{
         BooleanChoice, BytesChoice, ChoiceValue, FloatChoice, IntegerChoice, NativeTestCase, Span,
         StringChoice,
