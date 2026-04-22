@@ -271,7 +271,7 @@ pub mod __native_test_internals {
     pub use crate::native::featureflags::{FeatureFlags, FeatureStrategy};
     pub use crate::native::floats::{
         FloatConstraints, choice_equal_float, choice_permitted_float, count_between_floats,
-        make_float_clamper, next_down, next_up, sign_aware_lte,
+        make_float_clamper, next_down, next_down_normal, next_up, next_up_normal, sign_aware_lte,
     };
     pub use crate::native::intervalsets::IntervalSet;
     pub use crate::native::shrinker::value_shrinkers::{IntegerShrinker, OrderingShrinker};
