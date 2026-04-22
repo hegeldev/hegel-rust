@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0 - 2026-04-22
+
+Add `Mode::SingleTestCase` setting for running exactly one test case with no shrinking or replay. Available via `Settings::mode()`, `#[hegel::test(mode = Mode::SingleTestCase)]`, and the `--single-test-case` CLI flag.
+
+This mode is mostly intended for long-running workloads, so in this mode, `repeat` becomes a simple infinite loop, and stateful testing will keep running rules indefinitely.
+
 ## 0.7.6 - 2026-04-22
 
 This patch adds `generators::deferred()`, which creates a generator that can be declared before it is defined. This enables forward references, which are needed for defining mutually recursive or self-recursive generators.
