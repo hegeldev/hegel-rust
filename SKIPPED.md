@@ -310,6 +310,17 @@ Individually-skipped tests (rest of the file is ported):
   compile-time only with no runtime alias-object surface, and hegel-rust
   has no `from_type` / `register_type_strategy` analog (same family as
   the `test_lookup*.py` skips above).
+- `test_type_lookup.py` — tests `st.from_type()` and
+  `st.register_type_strategy()` resolution of Python typing constructs
+  (`typing.Generic[T]`, `typing.TypeVar`, `Sequence[int]`, `Union[str, int]`,
+  `Callable[..., str]`, `X | Y` union syntax), abstract classes via
+  `abc.ABC` / `@abc.abstractmethod`, `enum.Enum` subclasses, `st.builds()`
+  function-signature introspection, `@given(a=infer)` with runtime
+  `__annotations__` mutation, `inspect.Signature` / `get_type_hints`, and
+  internal attributes (`LazyStrategy`, `_global_type_lookup`,
+  `_all_strategies`). Neither `from_type`, `register_type_strategy`, nor
+  runtime type-annotation resolution exists in hegel-rust (same family as
+  the `test_lookup*.py` skips above).
 - `test_type_lookup_forward_ref.py` — tests `st.builds(fn)` resolution of
   `TypeVar(..., bound="MyType")` string forward references and
   `temp_registered(ForwardRef("MyType"), ...)` overrides. Python's
