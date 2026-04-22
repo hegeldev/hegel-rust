@@ -1032,6 +1032,22 @@ Individually-skipped tests (rest of the file is ported):
   `unittest.SkipTest` raise-on-non-execution behaviour; hegel-rust
   has no public `Phase`/`phases` setting on `Settings`.
 
+- `test_nothing.py::test_list_of_nothing`,
+  `test_nothing.py::test_set_of_nothing`,
+  `test_nothing.py::test_validates_min_size`,
+  `test_nothing.py::test_no_examples` — each uses `st.nothing()`;
+  hegel-rust has no `gs::nothing()` public API (same gap as
+  `test_core.py::test_nothing_core` and
+  `test_generators.py::test_cannot_witness_nothing`).
+- `test_nothing.py::test_function_composition`,
+  `test_nothing.py::test_tuples_detect_empty_elements`,
+  `test_nothing.py::test_fixed_dictionaries_detect_empty_values`,
+  `test_nothing.py::test_empty` — each asserts on `st.nothing()`
+  propagating through combinators via `.is_empty` strategy
+  introspection; hegel-rust has neither `gs::nothing()` nor an
+  `.is_empty` attribute on its typed-wrapper generators. The only
+  portable test in the file (`test_resampling`) is ported natively.
+
 - `test_numerics.py::test_fuzz_fractions_bounds`,
   `test_numerics.py::test_fraction_addition_is_well_behaved` — both use
   the `fractions()` strategy (Python `fractions.Fraction`). hegel-rust
