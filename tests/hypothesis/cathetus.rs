@@ -4,7 +4,7 @@
 
 use hegel::__native_test_internals::cathetus;
 use hegel::generators::{self as gs, Generator};
-use hegel::{HealthCheck, Hegel, Settings};
+use hegel::{Hegel, Settings};
 
 #[test]
 fn test_cathetus_subnormal_underflow() {
@@ -127,11 +127,7 @@ fn test_cathetus_always_leq_hypot() {
         let b = cathetus(h, a);
         assert!(0.0 <= b && b <= h, "cathetus({h:e}, {a:e}) = {b:e}");
     })
-    .settings(
-        Settings::new()
-            .database(None)
-            .suppress_health_check([HealthCheck::FilterTooMuch]),
-    )
+    .settings(Settings::new().database(None))
     .run();
 }
 
