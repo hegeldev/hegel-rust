@@ -36,10 +36,16 @@ impl<T: Send + Sync> Generator<T> for DeferredGenerator<T> {
 /// ```no_run
 /// use hegel::generators::{self as gs, Generator};
 ///
-/// let x = gs::deferred::<i32>();
-/// let x_gen = x.generator();
-/// let y = hegel::one_of!(gs::integers::<i32>(), x_gen);
-/// x.set(y);
+/// enum Tree {
+///     Leaf(i32),
+///     Branch(Box<Tree>, Box<Tree>),
+/// }
+///
+/// let tree = gs::deferred::<Tree>();
+/// let leaf = gs::integers::<i32>().map(Tree::Leaf);
+/// let branch = hegel::tuples!(tree.generator(), tree.generator())
+///     .map(|(l, r)| Tree::Branch(Box::new(l), Box::new(r)));
+/// tree.set(hegel::one_of!(leaf, branch));
 /// ```
 pub struct DeferredGeneratorDefinition<T> {
     inner: Arc<OnceLock<BoxedGenerator<'static, T>>>,
@@ -83,17 +89,16 @@ impl<T: Send + Sync + 'static> DeferredGeneratorDefinition<T> {
 /// ```no_run
 /// use hegel::generators::{self as gs, Generator};
 ///
-/// // Declare both generators
-/// let x = gs::deferred::<i32>();
-/// let y = gs::deferred::<i32>();
+/// enum Tree {
+///     Leaf(i32),
+///     Branch(Box<Tree>, Box<Tree>),
+/// }
 ///
-/// // Get handles for use in definitions
-/// let x_gen = x.generator();
-/// let y_gen = y.generator();
-///
-/// // Define them, referencing each other
-/// y.set(hegel::one_of!(gs::integers::<i32>(), x_gen));
-/// x.set(hegel::one_of!(gs::integers::<i32>(), y_gen));
+/// let tree = gs::deferred::<Tree>();
+/// let leaf = gs::integers::<i32>().map(Tree::Leaf);
+/// let branch = hegel::tuples!(tree.generator(), tree.generator())
+///     .map(|(l, r)| Tree::Branch(Box::new(l), Box::new(r)));
+/// tree.set(hegel::one_of!(leaf, branch));
 /// ```
 pub fn deferred<T>() -> DeferredGeneratorDefinition<T> {
     DeferredGeneratorDefinition {
