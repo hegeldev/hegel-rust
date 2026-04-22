@@ -408,6 +408,22 @@ Individually-skipped tests (rest of the file is ported):
   `_normalize_code`/`_clean_source` (Python bytecode and source-code manipulation),
   `LazyStrategy.__repr__` warnings, `unittest.mock` objects, `sys.path`, and
   `functools.partial/wraps`. None of these have Rust counterparts.
+
+- `test_lambda_formatting.py` — every test exercises
+  `hypothesis.internal.reflection.get_pretty_function_description` against
+  Python `lambda` expressions, verifying the pretty-printer's handling of
+  bracket/whitespace stripping, unicode-in-source, nested lambdas,
+  unparsable source, trailing comments, decorator argument position, line
+  continuations, `eval`-defined callables, module-source mutation across
+  `runpy.run_path` calls, and the `lambda_sources` caches
+  (`LAMBDA_DESCRIPTION_CACHE`, `LAMBDA_DIGEST_DESCRIPTION_CACHE`,
+  `AST_LAMBDAS_CACHE`). The pretty-printer reads Python source with
+  `inspect.getsource`, parses it with `ast.parse`, and inspects
+  `__code__`/`__globals__`/`__defaults__` on lambda objects — all
+  Python-specific facilities with no Rust counterpart. Rust closures have
+  no introspectable source, no AST, and no lambda-description cache,
+  matching the existing whole-file `test_reflection.py` skip.
+
 - `test_fuzz_one_input.py` — all tests exercise `test.hypothesis.fuzz_one_input(buffer)`,
   a Python-specific public API that lets `@given`-decorated tests serve as AFL/libFuzzer
   corpus targets (feeding raw bytes as test input). Hegel-rust has no `fuzz_one_input`
