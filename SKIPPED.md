@@ -371,6 +371,16 @@ Individually-skipped tests (rest of the file is ported):
   `@example` API, `Phase.explicit`, nor `__notes__` have hegel-rust counterparts, and
   hegel-rust's failure output format (`let draw_1 = ...; panicked at...`) is
   completely different from Hypothesis's.
+- `test_phases.py` — every test in the file exercises Hypothesis's `Phase`
+  enum / `@settings(phases=...)` public API (phase ordering / deduping,
+  `Phase.explicit`-only runs, `Phase.generate` / `Phase.reuse` / `Phase.shrink`
+  gating of the generate / database-reuse phases, `settings().phases` default,
+  and `InvalidArgument` on non-Phase members). hegel-rust's `Settings`
+  builder exposes no `phases` method and no `Phase` type (already noted by
+  the `test_core.py::test_non_executed_tests_raise_skipped`,
+  `test_explicit_examples.py`, and `test_falsifying_example_output.py`
+  skips) — phase gating is not a public API surface here, so none of the
+  eight tests are portable.
 - `test_reflection.py` — all tests exercise Python-specific reflection utilities:
   `convert_keyword_arguments`/`convert_positional_arguments`/`define_function_signature`
   (Python `inspect.Signature`/`Parameter` manipulation), `function_digest`/`repr_call`/
