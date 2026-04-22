@@ -708,6 +708,21 @@ predicates:
 | `any(xs) and not all(xs)` on `list[list[T]]` | `xs.iter().any(\|inner\| !inner.is_empty()) && !xs.iter().all(\|inner\| !inner.is_empty())` | Python `bool(list)` = non-empty, so `any/all` test inner-list non-emptiness. Rust `Vec` has no truthiness; translate explicitly to `!inner.is_empty()`. |
 | `type(x) == type(y)` on mixed-type `one_of` draws | `std::mem::discriminant(&x) == std::mem::discriminant(&y)` | After wrapping mixed-type `one_of` branches in a local enum (see SKILL.md), `type()` equality becomes variant equality. `discriminant` compares the variant tag without unpacking payloads and works even when payload types (e.g. `f64`) aren't `Eq`. |
 | `xs.remove(y)` on `list[T]` | `let pos = xs.iter().position(\|v\| *v == y).unwrap(); xs.remove(pos);` | Python's `list.remove` takes a **value** and removes the first match; Rust's `Vec::remove` takes an **index**. Same method name, different semantics — translate via `position` + `remove`. |
+| `min(a, b)` / `max(a, b)` on floats that may be NaN | `if a < b { a } else { b }` / `if a > b { a } else { b }` | **`f64::min` / `f64::max` silently drop NaN in favour of the other operand; Python's `min`/`max` propagate it.** Load-bearing whenever the test asserts that a NaN input stays NaN through a clamp (e.g. `cathetus(h, nan)` = `nan`). Using `f64::min` here will silently break the NaN case and no other test will catch it. |
+
+### Python `math` / `sys.float_info` → Rust f64
+
+| Python                                       | Rust                                 | Notes                                                                 |
+|----------------------------------------------|--------------------------------------|-----------------------------------------------------------------------|
+| `sys.float_info.min`                         | `f64::MIN_POSITIVE`                  | Smallest positive **normal**. **Not** `f64::MIN` — that's `-f64::MAX`. |
+| `sys.float_info.max`                         | `f64::MAX`                           |                                                                       |
+| `sys.float_info.epsilon`                     | `f64::EPSILON`                       |                                                                       |
+| `sys.float_info.min * sys.float_info.epsilon` | `f64::from_bits(1)`                 | Smallest positive **subnormal**. The Python idiom exploits that the multiplication yields exactly bit pattern 1; in Rust skip the arithmetic and name the bit pattern. |
+| `math.inf` / `math.nan`                      | `f64::INFINITY` / `f64::NAN`         |                                                                       |
+| `math.isnan(x)` / `math.isinf(x)` / `math.isfinite(x)` | `x.is_nan()` / `x.is_infinite()` / `x.is_finite()` | Methods, not free functions.                                          |
+| `math.fabs(x)`                               | `x.abs()`                            | Method.                                                               |
+| `math.sqrt(x)`                               | `x.sqrt()`                           | Method.                                                               |
+| `math.hypot(a, b)`                           | `a.hypot(b)`                         | Method on `f64`, not a free function.                                 |
 
 ### Don't sort before asserting order
 
