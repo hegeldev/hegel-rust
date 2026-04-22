@@ -435,8 +435,10 @@ impl ServerTestRunner {
         loop {
             let (event_id, event_payload) = match test_stream.receive_request() {
                 Ok(event) => event,
+                // nocov start
                 Err(_) if connection.server_has_exited() => {
-                    panic!("{}", server_crash_message()); // nocov
+                    panic!("{}", server_crash_message());
+                    // nocov end
                 }
                 Err(e) => unreachable!("Failed to receive event (server still running): {}", e),
             };
