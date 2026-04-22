@@ -33,10 +33,11 @@
 //!   `test_check_strategy_might_suggest_sampled_from` — exercise Python-only
 //!   internal helpers (`hypothesis.internal.validation.check_type`,
 //!   `hypothesis.strategies._internal.strategies.check_strategy`).
-//! - `test_validation_happens_on_draw` — uses `nothing()`, the empty-strategy
-//!   public API; hegel-rust has no `gs::nothing()`.
-//! - `test_warn_on_strings_matching_common_codecs` — `text(codec=...)` codec
-//!   warning; hegel-rust's `gs::text()` doesn't accept a codec argument.
+//! - `test_warn_on_strings_matching_common_codecs` — exercises a Hypothesis
+//!   warning fired when `st.text('ascii')` is called with a codec-like
+//!   positional alphabet string. hegel-rust's `gs::text()` separates
+//!   `.alphabet()` and `.codec()` into distinct methods, so the codec/alphabet
+//!   ambiguity the warning targets doesn't exist.
 
 use crate::common::utils::{check_can_generate_examples, expect_panic};
 use hegel::generators::{self as gs, Generator};
@@ -122,6 +123,18 @@ fn test_filter_validates() {
             .min_value(1)
             .max_value(0)
             .filter(|x: &i64| *x != 0),
+        "max_value < min_value",
+    );
+}
+
+#[test]
+fn test_validation_happens_on_draw() {
+    // Python port uses `nothing()` inside flatmap; hegel-rust has no
+    // `gs::nothing()`, so we use invalid integer bounds as the always-bad
+    // inner generator. The point is the same: the inner strategy produced
+    // by the flat_map callback is only validated when it is drawn.
+    expect_draw_panic(
+        gs::integers::<i64>().flat_map(|_| gs::integers::<i64>().min_value(1).max_value(0)),
         "max_value < min_value",
     );
 }

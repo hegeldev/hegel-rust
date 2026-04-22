@@ -1099,9 +1099,9 @@ Individually-skipped tests (rest of the file is ported):
   — exercise Python-only internal helpers
   (`hypothesis.internal.validation.check_type`,
   `hypothesis.strategies._internal.strategies.check_strategy`).
-- `test_validation.py::test_validation_happens_on_draw` — uses
-  `nothing()`, the empty-strategy public API; hegel-rust has no
-  `gs::nothing()`.
 - `test_validation.py::test_warn_on_strings_matching_common_codecs` —
-  `text(codec=...)` codec-warning behaviour; hegel-rust's `gs::text()`
-  doesn't accept a codec argument.
+  exercises a Hypothesis warning fired when `st.text('ascii')` is
+  called with a codec-like positional alphabet string. hegel-rust's
+  `gs::text()` separates `.alphabet()` and `.codec()` into distinct
+  methods, so the codec/alphabet ambiguity the warning targets doesn't
+  exist.
