@@ -15,6 +15,7 @@ structure.
 | `gs.floats(min_value=inf, ...)` / `gs.floats(max_value=-inf, ...)` | Hypothesis infers `allow_infinity=True` when a bound is infinite; hegel-rust keys `allow_infinity` purely off whether bounds are set and rejects infinite bounds regardless. Filter infinite bounds out with `tc.assume(!b.is_infinite())` when porting fuzz-style bounds tests. Tests that assert on the specific Hypothesis error message for inf-bound + `allow_infinity=False` (e.g. `test_numerics.py::test_floats_message`) can't be ported — hegel-rust's default-bound fill-in (`max_value=f64::MAX` when `allow_infinity=False`) masks the error with a different one. |
 | `gs.booleans()`                            | `gs::booleans()`                                              |
 | `gs.text(min_size=, max_size=, alphabet=)` | `gs::text().min_size(n).max_size(n).alphabet(g)`              |
+| `st.text(codec="utf-8")` / `st.text("ascii")`  | **missing** — `gs::text()` has no `codec` argument. Hypothesis uses it to warn about a common mistake (passing a codec name where an alphabet is expected); skip codec-warning tests with the missing-`codec` rationale. |
 | `gs.binary(min_size=, max_size=)`          | `gs::binary().min_size(n).max_size(n)`                        |
 | `gs.characters(categories=[...])`          | `gs::characters().categories(&["Lu", ...])`                   |
 | `gs.lists(inner, min_size=, max_size=)`    | `gs::vecs(inner).min_size(n).max_size(n)`                     |
@@ -461,6 +462,7 @@ A separate cluster of validation tests asserts on shapes Python's `@given`
 | `@given(...)` on a `class`                         | Rust has no class/decorator composition to reject.                             |
 | `@given(...) async def ...`                        | hegel-rust has no async-test dispatch, so no specific error to assert.         |
 | `@given(a=1, max_examples=5)` (kwarg vs setting collision) | hegel-rust uses `.settings(Settings::new()...)`; no kwarg-merging surface to misuse. |
+| `@given(*args)` / `@given(**kw)` / arity mismatch (`@given(integers(), int, int) def foo(x, y)`) / default-arg override (`@given(x=...) def t(x=1)`) / mixed positional+keyword (`@given(booleans(), y=booleans())`) / type-as-strategy (`@given(bool)`) | hegel-rust binds generators to closure parameters via `Hegel::new(\|tc\| { let x = tc.draw(...); })`, not via decorator-arg ↔ function-signature dispatch. None of these mismatch errors exist to assert on. `test_validation.py` concentrates ~14 of them under one rationale. |
 
 Skip these per-test under the `Individually-skipped tests` policy in
 SKILL.md, naming the specific decorator shape — they are public-API gaps
