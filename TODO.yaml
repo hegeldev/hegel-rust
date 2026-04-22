@@ -6,3 +6,25 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
+
+  - title: "[CI] Check release job fails — RELEASE.md already exists on main"
+    details: |
+      The `Check release` job in workflow run 24758979137 fails during
+      `python .github/scripts/release.py check "$BASE_REF"`:
+
+        Traceback (most recent call last):
+          File "/home/runner/work/hegel-rust/hegel-rust/.github/scripts/release.py", line 256, in <module>
+            check(args.base_ref)
+          File "/home/runner/work/hegel-rust/hegel-rust/.github/scripts/release.py", line 103, in check
+            raise ValueError(
+        ValueError: RELEASE.md already exists on main. It's possible the CI job responsible for cutting a new release is in progress, or has failed.
+        ##[error]Process completed with exit code 1.
+
+      NOTE: commit 14d3207 ("Remove TODO for check-release failure (human
+      intervention required)") previously removed this same TODO because it
+      requires human intervention — the release-cutting CI on main must
+      either complete or be repaired, or RELEASE.md on main must be cleaned
+      up by a maintainer. A port-loop agent cannot resolve this on the PR
+      branch. If this TODO reaches the top of the queue again, the fix
+      agent should simply remove it with a commit message noting that
+      human intervention is required, as before.
