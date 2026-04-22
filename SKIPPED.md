@@ -1060,3 +1060,48 @@ Individually-skipped tests (rest of the file is ported):
   cleanly onto the supervisor branch (conflicting concurrent edits to
   `tests/hypothesis/main.rs` plus an untracked `tests/hypothesis/flakiness.rs`);
   left for human inspection on branch `port/worker-0`.
+
+- `test_validation.py::test_errors_when_given_varargs`,
+  `test_validation.py::test_varargs_without_positional_arguments_allowed`,
+  `test_validation.py::test_errors_when_given_varargs_and_kwargs_with_positional_arguments`,
+  `test_validation.py::test_varargs_and_kwargs_without_positional_arguments_allowed`,
+  `test_validation.py::test_bare_given_errors`,
+  `test_validation.py::test_errors_on_unwanted_kwargs`,
+  `test_validation.py::test_errors_on_too_many_positional_args`,
+  `test_validation.py::test_errors_on_any_varargs`,
+  `test_validation.py::test_can_put_arguments_in_the_middle`,
+  `test_validation.py::test_stuff_keyword`,
+  `test_validation.py::test_stuff_positional`,
+  `test_validation.py::test_too_many_positional`,
+  `test_validation.py::test_given_warns_on_use_of_non_strategies`,
+  `test_validation.py::test_given_warns_when_mixing_positional_with_keyword`
+  — all exercise Python `@given(*args, **kwargs)` argument-passing
+  semantics (varargs, default kwargs, mixed positional/keyword,
+  type-as-strategy via `@given(bool)`). `#[hegel::test]` takes generators
+  directly, so this validation surface has no Rust counterpart.
+- `test_validation.py::test_list_unique_and_unique_by_cannot_both_be_enabled`
+  — uses `unique_by=key_fn`; hegel-rust's `VecGenerator::unique` only
+  accepts a `bool`, so the `unique`/`unique_by` conflict cannot be
+  expressed.
+- `test_validation.py::test_recursion_validates_base_case`,
+  `test_validation.py::test_recursion_validates_recursive_step` —
+  `st.recursive()` has no hegel-rust equivalent (already covered by the
+  whole-file skip of `test_recursive.py`).
+- `test_validation.py::test_cannot_find_non_strategies` — uses Python
+  `find()` and treats `bool` as a type-as-strategy; neither has a Rust
+  counterpart.
+- `test_validation.py::test_valid_sizes` — passes `min_size="0"` /
+  `max_size="10"` (strings); Rust's typed `min_size: usize` rejects them
+  at compile time, so there is nothing to assert at runtime.
+- `test_validation.py::test_check_type_with_tuple_of_length_two`,
+  `test_validation.py::test_check_type_suggests_check_strategy`,
+  `test_validation.py::test_check_strategy_might_suggest_sampled_from`
+  — exercise Python-only internal helpers
+  (`hypothesis.internal.validation.check_type`,
+  `hypothesis.strategies._internal.strategies.check_strategy`).
+- `test_validation.py::test_validation_happens_on_draw` — uses
+  `nothing()`, the empty-strategy public API; hegel-rust has no
+  `gs::nothing()`.
+- `test_validation.py::test_warn_on_strings_matching_common_codecs` —
+  `text(codec=...)` codec-warning behaviour; hegel-rust's `gs::text()`
+  doesn't accept a codec argument.

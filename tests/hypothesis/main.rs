@@ -37,4 +37,5 @@ mod simple_strings;
 mod testdecorators;
 mod threading;
 mod uuids;
+mod validation;
 mod verbosity;
