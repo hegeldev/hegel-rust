@@ -27,6 +27,7 @@ mod one_of;
 mod permutations;
 mod regex;
 mod replay_logic;
+mod reporting;
 mod sampled_from;
 mod searchstrategy;
 mod shrink_budgeting;
