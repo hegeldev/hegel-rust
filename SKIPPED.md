@@ -1139,3 +1139,43 @@ Individually-skipped tests (rest of the file is ported):
   `gs::text()` separates `.alphabet()` and `.codec()` into distinct
   methods, so the codec/alphabet ambiguity the warning targets doesn't
   exist.
+
+- `test_control.py::test_cannot_cleanup_with_no_context`,
+  `test_control.py::test_cannot_event_with_no_context`,
+  `test_control.py::test_cleanup_executes_on_leaving_build_context`,
+  `test_control.py::test_can_nest_build_context`,
+  `test_control.py::test_does_not_suppress_exceptions`,
+  `test_control.py::test_suppresses_exceptions_in_teardown`,
+  `test_control.py::test_runs_multiple_cleanup_with_teardown`,
+  `test_control.py::test_raises_error_if_cleanup_fails_but_block_does_not`,
+  `test_control.py::test_raises_if_current_build_context_out_of_context`,
+  `test_control.py::test_current_build_context_is_current` — exercise
+  Hypothesis's `BuildContext` context-manager and the `cleanup()` /
+  `current_build_context()` public functions; hegel-rust manages test
+  context via a thread-local bool flag with no openable/nestable
+  context-manager surface, no cleanup-hook registry, and no
+  `current_build_context` accessor.
+- `test_control.py::test_raises_if_note_out_of_context` — standalone
+  `hypothesis.note()` is a free function that checks for an active
+  context at call time; in hegel-rust `note` is `TestCase::note`, so
+  calling it outside a test context is prevented by the type system
+  (no `TestCase` to call it on), leaving nothing to assert at runtime.
+- `test_control.py::test_deprecation_warning_if_assume_out_of_context`,
+  `test_control.py::test_deprecation_warning_if_reject_out_of_context`
+  — standalone `assume()` / `reject()` are free functions in
+  Hypothesis; in hegel-rust they are `TestCase::assume` / `TestCase::reject`
+  methods, so the out-of-context deprecation path is unreachable.
+- `test_control.py::test_prints_all_notes_in_verbose_mode`,
+  `test_control.py::test_note_pretty_prints` — both depend on
+  `hypothesis.reporting.with_reporter` to redirect note output into a
+  list or captured stream during generation; hegel-rust's `tc.note()`
+  is verbosity-independent and only prints on the final failing replay
+  (same gap as the individually-skipped `test_reporting.py` tests
+  above), and there is no public reporter-override API. `test_note_pretty_prints`
+  also relies on Python `@dataclass` auto-derived `__repr__` for the
+  "pretty-printed" output, which has no Rust counterpart.
+- `test_control.py::test_can_convert_non_weakref_types_to_event_strings`
+  — exercises the internal `_event_to_string` helper's handling of
+  Python weak-reference semantics; hegel-rust has no `event()` public
+  API (see `test_cannot_event_with_no_context` above) and no
+  weakref-based event cache.

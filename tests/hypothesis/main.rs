@@ -9,6 +9,7 @@ mod cache_implementation;
 mod cathetus;
 mod composite;
 mod composite_kwonlyargs;
+mod control;
 mod core;
 mod database_backend;
 mod datetimes;
