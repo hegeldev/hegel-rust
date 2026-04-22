@@ -333,6 +333,17 @@ Individually-skipped tests (rest of the file is ported):
   — depends on `report_multiple_bugs=True` (no equivalent setting in
   hegel-rust) and the reported failure arriving as a Python
   `ExceptionGroup`; hegel-rust always surfaces a single panic per run.
+- `test_reporting.py::test_does_not_print_debug_in_verbose`,
+  `test_reporting.py::test_does_print_debug_in_debug`,
+  `test_reporting.py::test_does_print_verbose_in_debug` — exercise
+  `hypothesis.reporting.debug_report` / `verbose_report`, public APIs
+  for verbosity-gated user logging that hegel-rust does not expose. The
+  closest analog, `tc.note()`, is verbosity-independent and only fires
+  on the final failing-test replay.
+- `test_reporting.py::test_can_report_when_system_locale_is_ascii` —
+  uses Python `monkeypatch.setattr(sys, "stdout", ...)` and `os.pipe()`
+  to swap the process stdout for an ASCII-only stream. Both are
+  Python-specific facilities with no Rust counterpart.
 - `test_compat.py` — tests `hypothesis.internal.compat`, a Python-language
   compatibility layer: `floor`/`ceil` on Python numeric types,
   `get_type_hints` over `inspect.Signature`/`ForwardRef`/`typing.Union`,
