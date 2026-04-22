@@ -310,6 +310,13 @@ Individually-skipped tests (rest of the file is ported):
   compile-time only with no runtime alias-object surface, and hegel-rust
   has no `from_type` / `register_type_strategy` analog (same family as
   the `test_lookup*.py` skips above).
+- `test_type_lookup_forward_ref.py` — tests `st.builds(fn)` resolution of
+  `TypeVar(..., bound="MyType")` string forward references and
+  `temp_registered(ForwardRef("MyType"), ...)` overrides. Python's
+  `TypeVar` / `ForwardRef` / runtime type-annotation introspection have
+  no Rust counterpart, and hegel-rust has no `st.builds()` /
+  `register_type_strategy` analog (same family as the `test_lookup*.py`
+  skips above).
 - `test_example.py` — tests the fluent `.via("...")` and `.xfail(...)`
   methods chained onto `@example(...)`; hegel-rust's
   `#[hegel::explicit_test_case]` has no equivalent of either.
