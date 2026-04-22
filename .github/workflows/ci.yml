@@ -67,14 +67,8 @@ jobs:
         with:
           tools: just uv
 
-      # TODO: remove once hegeldev/hegel-core#97 is released
-      - name: Install hegel-core from branch
-        shell: bash
-        run: uv tool install 'hegel-core @ git+https://github.com/hegeldev/hegel-core@DRMacIver/one-shot'
-
       - name: Run tests
-        shell: bash
-        run: HEGEL_SERVER_COMMAND=$(which hegel) just check-tests
+        run: just check-tests
 
   test-all-features:
     name: test-all-features (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
@@ -112,14 +106,8 @@ jobs:
         with:
           tools: just uv
 
-      # TODO: remove once hegeldev/hegel-core#97 is released
-      - name: Install hegel-core from branch
-        shell: bash
-        run: uv tool install 'hegel-core @ git+https://github.com/hegeldev/hegel-core@DRMacIver/one-shot'
-
       - name: Run tests
-        shell: bash
-        run: HEGEL_SERVER_COMMAND=$(which hegel) just ${{ matrix.recipe }}
+        run: just ${{ matrix.recipe }}
 
   test-min-protocol:
     name: test-min-protocol
@@ -150,10 +138,11 @@ jobs:
           echo "Minimum hegel-core version: $MIN_CORE"
           echo "min_core=$MIN_CORE" >> "$GITHUB_OUTPUT"
 
-      # TODO: revert to MIN_CORE once hegeldev/hegel-core#97 is released
       - name: Run tests with minimum protocol version
+        env:
+          MIN_CORE: ${{ steps.min-version.outputs.min_core }}
         run: |
-          uv tool install 'hegel-core @ git+https://github.com/hegeldev/hegel-core@DRMacIver/one-shot'
+          uv tool install "hegel-core==$MIN_CORE"
           HEGEL_SERVER_COMMAND=$(which hegel) just check-tests
 
   docs:
@@ -196,14 +185,10 @@ jobs:
         with:
           tools: just uv
 
-      # TODO: remove once hegeldev/hegel-core#97 is released
-      - name: Install hegel-core from branch
-        run: uv tool install 'hegel-core @ git+https://github.com/hegeldev/hegel-core@DRMacIver/one-shot'
-
       - name: Generate lockfile
         run: cargo generate-lockfile -Z minimal-versions
       - name: Run tests
-        run: HEGEL_SERVER_COMMAND=$(which hegel) just check-tests-minimal-versions
+        run: just check-tests-minimal-versions
 
   compile-examples:
     name: compile-examples (${{ matrix.rust }})
@@ -263,12 +248,8 @@ jobs:
         with:
           tools: just uv
 
-      # TODO: remove once hegeldev/hegel-core#97 is released
-      - name: Install hegel-core from branch
-        run: uv tool install 'hegel-core @ git+https://github.com/hegeldev/hegel-core@DRMacIver/one-shot'
-
       - name: Run coverage
-        run: HEGEL_SERVER_COMMAND=$(which hegel) just check-coverage
+        run: just check-coverage
 
       - name: Auto-update coverage annotations and ratchet
         if: success() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
