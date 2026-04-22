@@ -1179,3 +1179,25 @@ Individually-skipped tests (rest of the file is ported):
   Python weak-reference semantics; hegel-rust has no `event()` public
   API (see `test_cannot_event_with_no_context` above) and no
   weakref-based event cache.
+
+- `test_randoms.py` — every test exercises Python's stdlib `random.Random`
+  interface, which `HypothesisRandom` inherits from: distribution methods
+  (`betavariate`, `gauss`, `normalvariate`, `lognormvariate`,
+  `vonmisesvariate`, `paretovariate`, `weibullvariate`, `binomialvariate`,
+  `gammavariate`, `expovariate`, `triangular`, `uniform`), sequence
+  helpers (`choice`, `choices`, `sample`, `shuffle`, `randrange`,
+  `randint`), bit/byte helpers (`getrandbits`, `randbytes`, `_randbelow`,
+  `random` returning a float in `[0, 1)`), state-serialization methods
+  (`seed`, `getstate`, `setstate`), Python `copy.copy()` semantics, and
+  Hypothesis-specific extensions to that class hierarchy
+  (`isinstance(rnd, TrueRandom)`, `note_method_calls=True` to capture the
+  method-call log, `ArtificialRandom`/`HypothesisRandom` class
+  introspection via `dir()`/`__module__`, internal
+  `ConjectureData.for_choices([])` plus `data.states_for_ids` setup).
+  hegel-rust's `gs::randoms()` produces `HegelRandom`, which only
+  implements the `rand` crate's `TryRng` trait (`next_u32` / `next_u64`
+  / `fill_bytes`); none of the Python stdlib `Random` distribution,
+  sequence, state, or bit-level methods exist on it, and there is no
+  `note_method_calls` / Hypothesis-class-hierarchy surface. The
+  rand-crate-shaped equivalent is already exercised by
+  `tests/test_randoms.rs`.
