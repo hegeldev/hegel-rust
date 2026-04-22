@@ -484,6 +484,19 @@ Individually-skipped tests (rest of the file is ported):
   tests Python module-loading side-effect detection during entrypoint loading,
   a concept with no Rust counterpart.
 
+- `test_setup_teardown.py` — every test exercises Hypothesis's public
+  `setup_example(self)` / `teardown_example(self, ex)` hook protocol on
+  test classes, combined with Python multiple inheritance
+  (`class HasSetupAndTeardown(HasSetup, HasTeardown, SomeGivens)`) to mix
+  setup/teardown mixins with `@given`-decorated method bodies. The hook
+  contract is that Hypothesis calls `self.setup_example()` before, and
+  `self.teardown_example(ex)` after, each example of a class-bound
+  `@given` method — driven by Python method dispatch on the test
+  instance. Hegel-rust exposes a closure-based API
+  (`Hegel::new(|tc| ...).run()`) with no class harness and no
+  per-example hook surface at any level, so neither the hook API nor
+  the inheritance-mixing pattern it relies on has a Rust counterpart.
+
 - `test_mock.py` — all tests exercise Python's `unittest.mock` integration
   (`mock.patch`, `mock.MagicMock`) and pytest fixtures (`pytestconfig`,
   `pytest.Config`) interacting with Hypothesis's `@given` decorator. Neither
