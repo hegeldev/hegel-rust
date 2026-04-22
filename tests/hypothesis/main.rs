@@ -6,6 +6,7 @@ mod common;
 
 mod arbitrary_data;
 mod cache_implementation;
+mod cathetus;
 mod composite;
 mod composite_kwonlyargs;
 mod core;
