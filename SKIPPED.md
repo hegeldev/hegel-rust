@@ -846,6 +846,13 @@ Individually-skipped tests (rest of the file is ported):
   the `frozenset` parametrize rows are dropped; there is no
   `gs::frozensets()`. The `list` and `set` rows are ported.
 
+- `test_subnormal_floats.py::test_subnormal_validation`,
+  `test_subnormal_floats.py::test_allow_subnormal_defaults_correctly` —
+  both depend on `floats(allow_subnormal=...)`, a public-API kwarg with
+  no counterpart on hegel-rust's `gs::floats()` builder (no
+  `.allow_subnormal(bool)` method). The `test_next_float_normal` test
+  in the same file is ported natively.
+
 - `test_settings.py` — every test sits on Hypothesis's Python-specific
   settings framework, none of which hegel-rust exposes. Profile
   machinery (`settings.register_profile`, `load_profile`, `get_profile`,

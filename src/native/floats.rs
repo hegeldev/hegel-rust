@@ -52,6 +52,25 @@ pub fn next_down(value: f64) -> f64 {
     -next_up(-value)
 }
 
+/// `next_down`, but skipping the subnormal range when `allow_subnormal` is
+/// false. Port of Hypothesis `internal/floats.py::next_down_normal` for
+/// `width=64`.
+pub fn next_down_normal(value: f64, allow_subnormal: bool) -> f64 {
+    let value = next_down(value);
+    if !allow_subnormal && 0.0 < value.abs() && value.abs() < f64::MIN_POSITIVE {
+        if value > 0.0 { 0.0 } else { -f64::MIN_POSITIVE }
+    } else {
+        value
+    }
+}
+
+/// `next_up`, but skipping the subnormal range when `allow_subnormal` is
+/// false. Port of Hypothesis `internal/floats.py::next_up_normal` for
+/// `width=64`.
+pub fn next_up_normal(value: f64, allow_subnormal: bool) -> f64 {
+    -next_down_normal(-value, allow_subnormal)
+}
+
 /// Number of distinct `f64` bit patterns in the closed interval `[x, y]`.
 pub fn count_between_floats(x: f64, y: f64) -> u64 {
     assert!(x <= y);
