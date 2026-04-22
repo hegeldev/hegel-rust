@@ -2896,12 +2896,38 @@ def gate_sync_with_origin() -> tuple[bool, str, bool]:
             print(msg, end="")
             combined.append(msg)
 
-    if origin_branch is None:
-        push = _run_git(["push", "--set-upstream", "origin", "HEAD"])
+    # Push, retrying up to 3 times on --force-with-lease rejection.
+    # Workers may push to the remote while we are rebasing, causing a
+    # lease mismatch; a re-fetch + re-rebase usually resolves it without
+    # needing to dispatch an agent.
+    _PUSH_RETRIES = 3
+    for _attempt in range(_PUSH_RETRIES):
+        if origin_branch is None:
+            push = _run_git(["push", "--set-upstream", "origin", "HEAD"])
+        else:
+            push = _run_git(["push", "--force-with-lease", "origin", "HEAD"])
+        _record(push)
+        if push.returncode == 0:
+            break
+        if _attempt < _PUSH_RETRIES - 1:
+            print(
+                f"\n[port-loop] push attempt {_attempt + 1} failed "
+                f"(force-with-lease mismatch?); re-fetching and retrying.",
+                flush=True,
+            )
+            retry_fetch = _run_git(["fetch", "origin"])
+            _record(retry_fetch)
+            if retry_fetch.returncode != 0:
+                return False, "".join(combined), False
+            if origin_main is not None:
+                retry_rebase = _run_git(["rebase", "origin/main"])
+                _record(retry_rebase)
+                if retry_rebase.returncode != 0:
+                    abort = _run_git(["rebase", "--abort"])
+                    _record(abort)
+                    return False, "".join(combined), False
+            origin_branch = _rev_parse(f"origin/{branch}")
     else:
-        push = _run_git(["push", "--force-with-lease", "origin", "HEAD"])
-    _record(push)
-    if push.returncode != 0:
         return False, "".join(combined), False
     _record_push_now()
 
