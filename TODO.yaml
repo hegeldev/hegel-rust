@@ -6,3 +6,24 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
+
+  - title: "[CI] Check release: RELEASE.md already exists on main (human intervention required)"
+    details: |
+      The `Check release` CI job on PR 188 fails because RELEASE.md exists on
+      main, indicating the release-cutting job on main has stalled or failed.
+      This is NOT fixable by a port-loop agent on a PR branch — a maintainer
+      must either complete/repair the release CI on main or clean up
+      RELEASE.md there.
+
+      This TODO has been added and removed multiple times (commits 541f06f,
+      527635d, 14d3207, f24573a, 4bc367c, ...). If you are the fix agent
+      picking this up: do NOT attempt a code fix. Remove the TODO with a
+      commit message of "Remove TODO for check-release failure (human
+      intervention required)" matching prior precedent.
+
+      Failing log:
+        check release  Check release  ValueError: RELEASE.md already exists on
+        main. It's possible the CI job responsible for cutting a new release
+        is in progress, or has failed.
+        File ".github/scripts/release.py", line 103, in check
+        ##[error]Process completed with exit code 1.
