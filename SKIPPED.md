@@ -1214,3 +1214,18 @@ Individually-skipped tests (rest of the file is ported):
   `note_method_calls` / Hypothesis-class-hierarchy surface. The
   rand-crate-shaped equivalent is already exercised by
   `tests/test_randoms.rs`.
+
+- `test_provisional_strategies.py::test_url_fragments_contain_legal_chars`
+  — imports the private `_url_fragments_strategy` object and the
+  `FRAGMENT_SAFE_CHARACTERS` constant from `hypothesis.provisional`;
+  hegel-rust exposes neither a URL-fragment generator nor the
+  fragment-safe-characters set as public API.
+- `test_provisional_strategies.py::test_invalid_domain_arguments` rows
+  with `max_length ∈ {-1, 4.0}` or any `max_element_length` value —
+  hegel-rust's `DomainGenerator::max_length` takes `usize` (so negative
+  and float values are unrepresentable) and exposes no
+  `max_element_length` setter; only `max_length ∈ {0, 3, 256}` invalid
+  rows port.
+- `test_provisional_strategies.py::test_valid_domains_arguments` rows
+  with any `max_element_length` value — same gap; only
+  `max_length ∈ {None, 4, 8, 255}` is portable.
