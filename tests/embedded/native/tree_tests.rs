@@ -233,3 +233,31 @@ fn cache_distinguishes_negative_zero_in_lookup() {
     // Lookup with -0.0 should miss because we only stored +0.0.
     assert!(ctf.cache_lookup(&neg_zero).is_none());
 }
+
+#[test]
+fn tree_drop_does_not_overflow_stack_for_deep_sequences() {
+    // Regression: generators like vecs(vecs(vecs(booleans()))) produce long
+    // choice sequences, which grow the TreeNode trie to matching depth.
+    // A naive recursive Drop then overflows the stack when CachedTestFunction
+    // is dropped at end of native_run.
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let mut ctf = CachedTestFunction::new(dummy_test);
+            let nodes: Vec<ChoiceNode> = (0..5_000)
+                .map(|i| ChoiceNode {
+                    kind: ChoiceKind::Integer(IntegerChoice {
+                        min_value: 0,
+                        max_value: 1 << 20,
+                    }),
+                    value: ChoiceValue::Integer(i as i128),
+                    was_forced: false,
+                })
+                .collect();
+            ctf.record(&nodes);
+            drop(ctf);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
