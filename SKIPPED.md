@@ -38,9 +38,9 @@ file and treats listed files as "done".
   (Cargo.toml, src/lib.rs, src/native/mod.rs, src/native/runner.rs,
   src/runner.rs, tests/test_native.rs). Abandoned pending human review of
   the workers' `port/worker-0` and `port/worker-1` branches.
-- `shrink_quality/test_flatmap.py` — port-loop worker produced commits that
-  conflicted irreconcilably with the `src/native/` backend on integration
-  (Cargo.toml, src/lib.rs, src/native/mod.rs, src/native/runner.rs,
+- `test_flatmap.py` (in `shrink_quality/`) — port-loop worker produced
+  commits that conflicted irreconcilably with the `src/native/` backend on
+  integration (Cargo.toml, src/lib.rs, src/native/mod.rs, src/native/runner.rs,
   src/runner.rs, tests/test_native.rs). Abandoned pending human review of
   the worker's `port/worker-1` branch.
 - `test_composite.py` — port-loop worker produced commits that conflicted
