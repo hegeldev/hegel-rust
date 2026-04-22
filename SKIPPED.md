@@ -1010,3 +1010,9 @@ Individually-skipped tests (rest of the file is ported):
   left unset, which masks the upstream error with a different "no
   floating-point values between …" message; the exact wording the
   test matches against doesn't appear in hegel-rust's output.
+
+- `test_flakiness.py` — port abandoned: parallel port-loop worker
+  produced commits on `port/worker-0` that could not be cherry-picked
+  cleanly onto the supervisor branch (conflicting concurrent edits to
+  `tests/hypothesis/main.rs` plus an untracked `tests/hypothesis/flakiness.rs`);
+  left for human inspection on branch `port/worker-0`.
