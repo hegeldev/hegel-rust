@@ -393,6 +393,18 @@ impl HegelSession {
 
 // ─── ServerTestRunner ───────────────────────────────────────────────────────
 
+fn receive_event(test_stream: &mut Stream, connection: &Connection) -> (u32, Vec<u8>) {
+    match test_stream.receive_request() {
+        Ok(event) => event,
+        // nocov start
+        Err(_) if connection.server_has_exited() => {
+            panic!("{}", server_crash_message());
+            // nocov end
+        }
+        Err(e) => unreachable!("Failed to receive event (server still running): {}", e),
+    }
+}
+
 /// Test runner that communicates with the hegel-core server.
 pub(crate) struct ServerTestRunner;
 
@@ -433,15 +445,7 @@ impl ServerTestRunner {
         let mut passed = true;
 
         loop {
-            let (event_id, event_payload) = match test_stream.receive_request() {
-                Ok(event) => event,
-                // nocov start
-                Err(_) if connection.server_has_exited() => {
-                    panic!("{}", server_crash_message());
-                    // nocov end
-                }
-                Err(e) => unreachable!("Failed to receive event (server still running): {}", e),
-            };
+            let (event_id, event_payload) = receive_event(&mut test_stream, connection);
 
             let event: Value = cbor_decode(&event_payload);
             let event_type = map_get(&event, "event")
@@ -483,9 +487,7 @@ impl ServerTestRunner {
                         .expect("Failed to ack test_done");
                     break;
                 }
-                _ => {
-                    panic!("unknown event: {}", event_type); // nocov
-                }
+                _ => panic!("unknown event: {}", event_type), // nocov
             }
         }
 
@@ -569,17 +571,7 @@ impl TestRunner for ServerTestRunner {
         let result_data: Value;
         let ack_null = cbor_map! {"result" => Value::Null};
         loop {
-            // Handle the server dying between events: receive_request will
-            // fail with RecvError once the background reader clears the senders.
-            let (event_id, event_payload) = match test_stream.receive_request() {
-                Ok(event) => event,
-                // nocov start
-                Err(_) if connection.server_has_exited() => {
-                    panic!("{}", server_crash_message());
-                    // nocov end
-                }
-                Err(e) => unreachable!("Failed to receive event (server still running): {}", e),
-            };
+            let (event_id, event_payload) = receive_event(&mut test_stream, connection);
 
             let event: Value = cbor_decode(&event_payload);
             let event_type = map_get(&event, "event")
@@ -618,9 +610,7 @@ impl TestRunner for ServerTestRunner {
                     result_data = map_get(&event, "results").cloned().unwrap_or(Value::Null);
                     break;
                 }
-                _ => {
-                    panic!("unknown event: {}", event_type); // nocov
-                }
+                _ => panic!("unknown event: {}", event_type), // nocov
             }
         }
 
