@@ -65,6 +65,15 @@ Generator transforms (all require `Generator` trait in scope):
 | `ConjectureData.for_choices([v, ...])` | `NativeTestCase::for_choices(&[ChoiceValue::…, …], None)` from `hegel::__native_test_internals` (native-only) — see "Replaying fixed choices" below |
 | `tc.reject()`              | `tc.reject()` — public method, equivalent to `assume(false)` but returns `!` so following code is statically unreachable |
 
+## Top-level API
+
+| Python                                    | Rust                                      |
+|-------------------------------------------|-------------------------------------------|
+| `hypothesis.currently_in_test()`          | `hegel::currently_in_test_context()` — re-exported from `hegel::control`. Works in server and native mode, and inside `@rule`s of a `#[hegel::state_machine]`-driven machine (see `tests/hypothesis/control.rs`). |
+| `hypothesis.note(msg)` / `hypothesis.assume(cond)` / `hypothesis.reject()` / `hypothesis.event(msg)` (module-level free functions) | **missing as free functions.** `note` / `assume` / `reject` exist only as `TestCase::` methods, so there is no "out-of-context" call site to validate — tests of the shape `test_raises_if_note_out_of_context`, `test_deprecation_warning_if_{assume,reject}_out_of_context`, `test_cannot_event_with_no_context` are unportable (the type system forecloses the error path). `event()` has no public analog at all. Skip each individually with a one-line "method on `TestCase`, no free-function out-of-context path" rationale. |
+| `hypothesis.control.BuildContext` / `current_build_context()` / `cleanup()` | **missing.** Hypothesis exposes test-context entry/exit as an openable, nestable context-manager with a user-facing cleanup-hook registry and a `current_build_context()` accessor. hegel-rust's test context is a thread-local bool (`currently_in_test_context()`) — no openable object, no nesting, no cleanup hooks, no `BuildContext` accessor. Whole cluster of `test_control.py` tests (`test_can_nest_build_context`, `test_cleanup_executes_on_leaving_build_context`, `test_current_build_context_is_current`, etc.) skip under this. |
+| `hypothesis.reporting.with_reporter(list.append)` | **missing** — there is no reporter-override public API. `tc.note()` output is verbosity-independent and only fires on the final failing replay; tests that capture notes into a list during generation (e.g. `test_prints_all_notes_in_verbose_mode`, `test_note_pretty_prints`) have no observation surface. Same gap that blocks most of `test_reporting.py`. |
+
 ## Settings
 
 | Python                              | Rust                                       |
