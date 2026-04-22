@@ -6,30 +6,3 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-  - title: "[CI] check release: RELEASE.md already exists on main"
-    details: |
-      The "check release" job in CI is failing because RELEASE.md already
-      exists on main. This is reported by `.github/scripts/release.py check`.
-
-      Failing command:
-        python .github/scripts/release.py check "$BASE_REF"   (BASE_REF=main)
-
-      Log extract:
-        Traceback (most recent call last):
-          File ".../release.py", line 256, in <module>
-            check(args.base_ref)
-          File ".../release.py", line 103, in check
-            raise ValueError(
-        ValueError: RELEASE.md already exists on main. It's possible the CI
-        job responsible for cutting a new release is in progress, or has
-        failed.
-
-      Note: this same failure has appeared in the prior two triage cycles
-      and was each time removed with the note "human intervention required"
-      (see commits a307fc7 and 5ce37c9). If on inspection nothing has
-      changed and the failure is still purely an upstream/main-branch state
-      problem (RELEASE.md lingering on main from a stalled release job),
-      delete this entry and commit with a similar "Remove TODO for
-      check-release failure (human intervention required)" message rather
-      than attempting a fix from this branch.
