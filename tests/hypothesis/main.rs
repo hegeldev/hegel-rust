@@ -28,6 +28,7 @@ mod nothing;
 mod numerics;
 mod one_of;
 mod permutations;
+mod provisional_strategies;
 mod regex;
 mod replay_logic;
 mod reporting;
