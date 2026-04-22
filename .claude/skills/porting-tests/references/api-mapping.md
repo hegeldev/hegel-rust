@@ -117,6 +117,14 @@ adding the feature. Don't invent a workaround in the test.
 - `pytest.skip()` inside a `@given` body aborting shrinking —
   hegel-rust has no per-test "skip-aborts-shrinking" mechanism on the
   public API. Skip.
+- `hypothesis.reporting.debug_report(msg)` / `verbose_report(msg)` —
+  verbosity-gated user-logging helpers that print only at
+  `Verbosity.debug` / `Verbosity.verbose`. hegel-rust's nearest
+  analog is `tc.note(msg)`, which is **verbosity-independent** and
+  only fires on the final failing-test replay. Tests that assert
+  "message appears at debug but not at verbose" (or vice versa)
+  cannot be reproduced — skip individually with a rationale naming
+  `debug_report` / `verbose_report`.
 - `@flaky(max_runs=N, min_passes=M)` — Hypothesis's retry-on-failure
   decorator for tests whose predicate depends on external
   nondeterminism (set iteration order, `PYTHONHASHSEED`, etc.).
