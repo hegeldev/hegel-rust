@@ -211,9 +211,12 @@ API (e.g. a client-side invariant the runner adds silently, such as
 because the test asserts on Hypothesis's *strategy-composition class
 structure* — attribute access on a strategy instance like
 `FilteredStrategy(...).branches` / `.flat_conditions` /
-`.filtered_strategy`. hegel-rust composes strategies as Rust generic
-wrappers (`Filtered<T, F, G>`, `Mapped<...>`, etc.) that have no
-introspectable attributes; these are distinct from engine internals
+`.filtered_strategy`, or `.is_empty` on any strategy (a
+`SearchStrategy` property; shows up in `test_nothing.py`'s
+`.map` / `.filter` / `.flatmap` composition checks and in any
+`st.tuples(st.nothing()).is_empty` shape). hegel-rust composes
+strategies as Rust generic wrappers (`Filtered<T, F, G>`,
+`Mapped<...>`, etc.) that have no introspectable attributes; these are distinct from engine internals
 (`ChoiceNode`, `ConjectureData.*`) which *do* have `src/native/`
 counterparts and should be native-gated rather than skipped.
 
