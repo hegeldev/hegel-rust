@@ -91,6 +91,9 @@ pub struct CachedTestFunction<F: FnMut(TestCase)> {
     tree_root: TreeNode,
     /// Cache of test results keyed on complete choice sequences.
     cache: HashMap<Vec<ChoiceValueKey>, (bool, Vec<ChoiceNode>)>,
+    /// Execution mode forwarded to each TestCase. Defaults to `Mode::TestRun`;
+    /// `native_run` overrides via `set_mode` to propagate `Settings::mode`.
+    mode: crate::runner::Mode,
 }
 
 impl<F: FnMut(TestCase)> CachedTestFunction<F> {
@@ -99,7 +102,13 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
             test_fn,
             tree_root: TreeNode::new(),
             cache: HashMap::new(),
+            mode: crate::runner::Mode::TestRun,
         }
+    }
+
+    /// Override the mode forwarded to each executed [`TestCase`].
+    pub fn set_mode(&mut self, mode: crate::runner::Mode) {
+        self.mode = mode;
     }
 
     /// Run a test case during the generation or database-replay phase.
@@ -176,7 +185,7 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
         is_final: bool,
     ) -> (Status, Vec<ChoiceNode>, Vec<Span>, Option<String>) {
         let (data_source, ntc_handle) = NativeDataSource::new(ntc);
-        let tc = TestCase::new(Box::new(data_source), is_final);
+        let tc = TestCase::new(Box::new(data_source), is_final, self.mode);
         let result = with_test_context(|| {
             with_current_native_tc(ntc_handle.clone(), || {
                 catch_unwind(AssertUnwindSafe(|| (self.test_fn)(tc.clone())))

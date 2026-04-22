@@ -455,7 +455,7 @@ pub use cli::CliOutcome;
 pub use cli::apply_cli_args as __apply_cli_args;
 #[doc(hidden)]
 pub use runner::hegel;
-pub use runner::{HealthCheck, Hegel, Settings, Verbosity};
+pub use runner::{HealthCheck, Hegel, Mode, Settings, Verbosity};
 #[cfg(not(feature = "native"))]
 #[doc(hidden)]
 pub use runner::hegel;

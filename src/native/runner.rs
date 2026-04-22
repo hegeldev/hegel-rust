@@ -193,6 +193,7 @@ pub fn native_run<F>(
     // the data tree (for non-determinism detection) and, during shrinking,
     // checked against the result cache.
     let mut ctf = CachedTestFunction::new(test_fn);
+    ctf.set_mode(settings.mode);
 
     let mut result: Option<Vec<ChoiceNode>> = None;
     let mut valid_test_cases: u64 = 0;

@@ -12,6 +12,7 @@ use super::*;
 use crate::native::core::NativeTestCase;
 use crate::native::data_source::NativeDataSource;
 use crate::native::with_current_native_tc;
+use crate::runner::Mode;
 use crate::test_case::TestCase;
 
 #[test]
@@ -61,7 +62,7 @@ fn live_flags_remember_prior_decisions_when_handle_missing() {
         let ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(1));
         let (data_source, handle) = NativeDataSource::new(ntc);
         let strategy = FeatureStrategy::new();
-        let tc = TestCase::new(Box::new(data_source), false);
+        let tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);
         let flags = with_current_native_tc(handle, || strategy.do_draw(&tc));
         // Force a decision while the handle is still live.
         let _ = flags.is_enabled("recorded");
@@ -79,7 +80,7 @@ fn at_least_one_of_single_name_forces_enabled() {
     let ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(42));
     let (data_source, handle) = NativeDataSource::new(ntc);
     let strategy = FeatureStrategy::new().at_least_one_of(["only"]);
-    let tc = TestCase::new(Box::new(data_source), false);
+    let tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);
     with_current_native_tc(handle, || {
         let flags = strategy.do_draw(&tc);
         assert!(flags.is_enabled("only"));
@@ -106,7 +107,7 @@ fn do_draw_panics_stop_test_when_test_case_exhausted() {
     let ntc = NativeTestCase::for_choices(&[], None);
     let (data_source, handle) = NativeDataSource::new(ntc);
     let strategy = FeatureStrategy::new();
-    let tc = TestCase::new(Box::new(data_source), false);
+    let tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);
     with_current_native_tc(handle, || {
         strategy.do_draw(&tc);
     });
@@ -120,6 +121,6 @@ fn do_draw_outside_native_context_panics() {
     let ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(0));
     let (data_source, _handle) = NativeDataSource::new(ntc);
     let strategy = FeatureStrategy::new();
-    let tc = TestCase::new(Box::new(data_source), false);
+    let tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);
     strategy.do_draw(&tc);
 }
