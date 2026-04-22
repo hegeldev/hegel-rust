@@ -16,7 +16,7 @@ use crate::native::database::{
 };
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 use crate::native::tree::CachedTestFunction;
-use crate::runner::{Database, HealthCheck, Settings, Verbosity};
+use crate::runner::{Database, HealthCheck, Mode, Settings, Verbosity};
 use crate::test_case::TestCase;
 
 static NATIVE_PANIC_HOOK_INIT: Once = Once::new();
@@ -179,6 +179,12 @@ pub fn native_run<F>(
     init_native_panic_hook();
 
     let mut rng = create_rng(settings, database_key);
+
+    if settings.mode == Mode::SingleTestCase {
+        native_run_single(test_fn, settings, &mut rng, test_location);
+        return;
+    }
+
     let max_examples = settings.test_cases;
     let verbosity = settings.verbosity;
 
@@ -456,6 +462,49 @@ pub fn native_run<F>(
                  global variables, system time, or external random number generators."
             );
         }
+    }
+}
+// nocov end
+
+/// `Mode::SingleTestCase` implementation for the native backend: run exactly
+/// one test case with no database, generation loop, shrinking, or replay.
+// nocov start
+fn native_run_single<F>(
+    test_fn: F,
+    settings: &Settings,
+    rng: &mut SmallRng,
+    test_location: Option<&TestLocation>,
+) where
+    F: FnMut(TestCase),
+{
+    let mut ctf = CachedTestFunction::new(test_fn);
+    ctf.set_mode(settings.mode);
+
+    let batch_rng = SmallRng::from_rng(rng);
+    let ntc = NativeTestCase::new_random(batch_rng);
+    let (status, _, _) = ctf.run_final(ntc);
+
+    let test_failed = status == Status::Interesting;
+    use crate::antithesis::is_running_in_antithesis;
+    crate::antithesis::require_antithesis_feature(
+        is_running_in_antithesis(),
+        cfg!(feature = "antithesis"),
+    );
+    #[cfg(feature = "antithesis")]
+    if is_running_in_antithesis() {
+        if let Some(loc) = test_location {
+            crate::antithesis::emit_assertion(loc, !test_failed);
+        }
+    }
+    let _ = (test_location, test_failed);
+
+    if status == Status::Interesting {
+        if let Some(payload) = take_panic_payload() {
+            std::panic::resume_unwind(payload);
+        }
+        panic!(
+            "BUG: single-test-case replay was Interesting but no panic payload was stored; this is a bug in the native runner"
+        );
     }
 }
 // nocov end
