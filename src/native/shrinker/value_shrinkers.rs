@@ -293,23 +293,19 @@ impl<T: Ord + Clone + Hash + Eq, F: FnMut(&[T]) -> bool> OrderingShrinker<T, F> 
 
 /// Standalone shrinker for ordered collections.
 ///
-/// Port of `hypothesis.internal.conjecture.shrinking.Collection`. Holds a
-/// value and a `min_size`; `left_is_better` compares two candidate sequences
-/// by length first, then by lexicographic ordering of their elements.
-///
-/// The `run()` body is a stub — the full shrink pipeline (try all-zero,
-/// delete-each, reorder via `Ordering`, minimise duplicates, minimise each
-/// element) is not yet ported. Callers that only need `left_is_better` (for
-/// comparing candidates) don't need `run()`.
+/// Port of `hypothesis.internal.conjecture.shrinking.Collection`. Generic
+/// over the element type `T` for `left_is_better` / `current` / `calls`; the
+/// shrink pipeline itself is only implemented for `CollectionShrinker<usize,
+/// _>` (order-space), which is what `BytesShrinker` and `StringShrinker`
+/// specialise to. Non-`usize` instantiations exist only so callers can
+/// inspect the shrinker's comparison behaviour without running it.
 pub struct CollectionShrinker<T, F>
 where
     T: Clone + Eq + Ord + Hash,
     F: FnMut(&[T]) -> bool,
 {
     current: Vec<T>,
-    #[allow(dead_code)]
     predicate: F,
-    #[allow(dead_code)]
     min_size: usize,
     seen: HashSet<Vec<T>>,
 }
@@ -340,7 +336,9 @@ where
 
     /// Compare two candidates under the collection ordering: shorter is
     /// better; otherwise compare element-wise. Matches Python's
-    /// `Collection.left_is_better`.
+    /// `Collection.left_is_better` with `to_order=identity`; order-space
+    /// shrinkers (`Bytes`, `String`) rely on this by pre-mapping elements
+    /// into `usize` order keys.
     pub fn left_is_better(&self, left: &[T], right: &[T]) -> bool {
         if left.len() < right.len() {
             return true;
@@ -353,119 +351,22 @@ where
         }
         false
     }
+}
 
+/// Order-space shrink pipeline. Port of `Collection.run_step` from
+/// `hypothesis/internal/conjecture/shrinking/collection.py`. Operates on
+/// `Vec<usize>` where each element is an element's position in the caller's
+/// shrink ordering; `BytesShrinker` and `StringShrinker` convert between
+/// their element type and the order key at the boundary.
+impl<F: FnMut(&[usize]) -> bool> CollectionShrinker<usize, F> {
     pub fn run(&mut self) {
-        todo!("CollectionShrinker::run — full Collection shrink pipeline not yet ported")
-    }
-}
-
-/// Standalone shrinker for byte sequences.
-///
-/// Port of `hypothesis.internal.conjecture.shrinking.Bytes`, which wraps
-/// `Collection` with `ElementShrinker=Integer`. The `shrink` entry point
-/// matches the Python class method.
-pub struct BytesShrinker;
-
-impl BytesShrinker {
-    pub fn shrink<F>(initial: &[u8], mut predicate: F, min_size: usize) -> Vec<u8>
-    where
-        F: FnMut(&[u8]) -> bool,
-    {
-        let orders: Vec<usize> = initial.iter().map(|&b| b as usize).collect();
-        let final_orders = run_collection_in_order_space(
-            orders,
-            |cand: &[usize]| {
-                let bytes: Vec<u8> = cand.iter().map(|&o| o as u8).collect();
-                predicate(&bytes)
-            },
-            min_size,
-        );
-        final_orders.into_iter().map(|o| o as u8).collect()
-    }
-}
-
-/// Standalone shrinker for strings over a codepoint `IntervalSet`.
-///
-/// Port of `hypothesis.internal.conjecture.shrinking.String`, which wraps
-/// `Collection` with `ElementShrinker=Integer` and the interval set's
-/// `char_in_shrink_order` / `index_from_char_in_shrink_order` as
-/// `from_order` / `to_order`.
-pub struct StringShrinker;
-
-impl StringShrinker {
-    pub fn shrink<F>(
-        initial: &str,
-        mut predicate: F,
-        intervals: &IntervalSet,
-        min_size: usize,
-    ) -> Vec<char>
-    where
-        F: FnMut(&str) -> bool,
-    {
-        let orders: Vec<usize> = initial
-            .chars()
-            .map(|c| intervals.index_from_char_in_shrink_order(c))
-            .collect();
-        let final_orders = run_collection_in_order_space(
-            orders,
-            |cand: &[usize]| {
-                let s: String = cand
-                    .iter()
-                    .map(|&o| intervals.char_in_shrink_order(o))
-                    .collect();
-                predicate(&s)
-            },
-            min_size,
-        );
-        final_orders
-            .into_iter()
-            .map(|o| intervals.char_in_shrink_order(o))
-            .collect()
-    }
-}
-
-/// Runs `Collection.run` in shrink-order space.
-///
-/// Port of `hypothesis.internal.conjecture.shrinking.Collection.run_step`.
-/// Operates on `Vec<usize>` where each element is an element's position in
-/// the caller's shrink ordering; callers (Bytes, String) convert between
-/// their element type and the order key via `from_order` / `to_order`.
-/// `left_is_better` is length-then-lex on the order keys, matching
-/// Collection's definition when `to_order` is the ordering function.
-fn run_collection_in_order_space<F>(
-    initial: Vec<usize>,
-    predicate: F,
-    min_size: usize,
-) -> Vec<usize>
-where
-    F: FnMut(&[usize]) -> bool,
-{
-    let mut inner = CollectionInOrderSpace::new(initial, predicate);
-    inner.run(min_size);
-    inner.current
-}
-
-/// Inner state for `run_collection_in_order_space`. Separated so the shrink
-/// sub-passes (Ordering, per-element Integer) can take a `&mut self` closure
-/// against the same `current` / `seen`.
-struct CollectionInOrderSpace<F>
-where
-    F: FnMut(&[usize]) -> bool,
-{
-    current: Vec<usize>,
-    predicate: F,
-    seen: HashSet<Vec<usize>>,
-}
-
-impl<F: FnMut(&[usize]) -> bool> CollectionInOrderSpace<F> {
-    fn new(initial: Vec<usize>, predicate: F) -> Self {
-        let mut seen = HashSet::new();
-        seen.insert(initial.clone());
-        CollectionInOrderSpace {
-            current: initial,
-            predicate,
-            seen,
+        // short_circuit: try [from_order(0)] * min_size, i.e. [0; min_size]
+        // in order space.
+        let zeros = vec![0usize; self.min_size];
+        if self.consider(zeros) {
+            return;
         }
+        self.run_step();
     }
 
     fn consider(&mut self, value: Vec<usize>) -> bool {
@@ -475,7 +376,7 @@ impl<F: FnMut(&[usize]) -> bool> CollectionInOrderSpace<F> {
         if !self.seen.insert(value.clone()) {
             return false;
         }
-        if !collection_left_is_better(&value, &self.current) {
+        if !self.left_is_better(&value, &self.current) {
             return false;
         }
         if (self.predicate)(&value) {
@@ -484,16 +385,6 @@ impl<F: FnMut(&[usize]) -> bool> CollectionInOrderSpace<F> {
         } else {
             false
         }
-    }
-
-    fn run(&mut self, min_size: usize) {
-        // short_circuit: try [from_order(0)] * min_size, i.e. [0; min_size]
-        // in order space.
-        let zeros = vec![0usize; min_size];
-        if self.consider(zeros) {
-            return;
-        }
-        self.run_step();
     }
 
     fn run_step(&mut self) {
@@ -571,20 +462,72 @@ impl<F: FnMut(&[usize]) -> bool> CollectionInOrderSpace<F> {
     }
 }
 
-/// Port of `Collection.left_is_better`: shorter wins, otherwise lexicographic
-/// over order keys. We only get here with `left.len() <= right.len()` in
-/// practice (the pipeline never extends).
-fn collection_left_is_better(left: &[usize], right: &[usize]) -> bool {
-    if left.len() < right.len() {
-        return true;
+/// Standalone shrinker for byte sequences.
+///
+/// Port of `hypothesis.internal.conjecture.shrinking.Bytes`, which wraps
+/// `Collection` with `ElementShrinker=Integer`. The `shrink` entry point
+/// matches the Python class method.
+pub struct BytesShrinker;
+
+impl BytesShrinker {
+    pub fn shrink<F>(initial: &[u8], mut predicate: F, min_size: usize) -> Vec<u8>
+    where
+        F: FnMut(&[u8]) -> bool,
+    {
+        let orders: Vec<usize> = initial.iter().map(|&b| b as usize).collect();
+        let mut shrinker = CollectionShrinker::new(
+            orders,
+            |cand: &[usize]| {
+                let bytes: Vec<u8> = cand.iter().map(|&o| o as u8).collect();
+                predicate(&bytes)
+            },
+            min_size,
+        );
+        shrinker.run();
+        shrinker.current().iter().map(|&o| o as u8).collect()
     }
-    for (a, b) in left.iter().zip(right.iter()) {
-        if a == b {
-            continue;
-        }
-        return a < b;
+}
+
+/// Standalone shrinker for strings over a codepoint `IntervalSet`.
+///
+/// Port of `hypothesis.internal.conjecture.shrinking.String`, which wraps
+/// `Collection` with `ElementShrinker=Integer` and the interval set's
+/// `char_in_shrink_order` / `index_from_char_in_shrink_order` as
+/// `from_order` / `to_order`.
+pub struct StringShrinker;
+
+impl StringShrinker {
+    pub fn shrink<F>(
+        initial: &str,
+        mut predicate: F,
+        intervals: &IntervalSet,
+        min_size: usize,
+    ) -> Vec<char>
+    where
+        F: FnMut(&str) -> bool,
+    {
+        let orders: Vec<usize> = initial
+            .chars()
+            .map(|c| intervals.index_from_char_in_shrink_order(c))
+            .collect();
+        let mut shrinker = CollectionShrinker::new(
+            orders,
+            |cand: &[usize]| {
+                let s: String = cand
+                    .iter()
+                    .map(|&o| intervals.char_in_shrink_order(o))
+                    .collect();
+                predicate(&s)
+            },
+            min_size,
+        );
+        shrinker.run();
+        shrinker
+            .current()
+            .iter()
+            .map(|&o| intervals.char_in_shrink_order(o))
+            .collect()
     }
-    false
 }
 
 /// Builds a "gap sort" attempt: sort `current[a..b]` excluding index `i`, then
