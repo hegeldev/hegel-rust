@@ -1255,7 +1255,7 @@ Individually-skipped tests (rest of the file is ported):
   with any `max_element_length` value — same gap; only
   `max_length ∈ {None, 4, 8, 255}` is portable.
 
-- `tests/numpy/test_import.py` — numpy-extra integration tests:
+- `test_import.py` (in `tests/numpy/`) — numpy-extra integration tests:
   `test_hypothesis_is_not_the_first_to_import_numpy` checks Python's
   `sys.modules` to assert Hypothesis defers numpy import, and
   `test_wildcard_import` exercises `from hypothesis.extra.numpy import *`.
