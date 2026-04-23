@@ -17,8 +17,7 @@
 //!
 //! Individually-skipped tests:
 //!
-//! - `test_duplicate_nodes_that_go_away`,
-//!   `test_can_pass_to_an_indirect_descendant`,
+//! - `test_can_pass_to_an_indirect_descendant`,
 //!   `test_shrinking_blocks_from_common_offset`, `test_can_reorder_spans`,
 //!   `test_dependent_block_pairs_is_up_to_shrinking_integers`,
 //!   `test_zig_zags_quickly_with_shrink_towards` (all 4 parametrize rows),
@@ -31,16 +30,15 @@
 //!   `test_redistribute_numeric_pairs_shrink_towards_explicit_combined`,
 //!   `test_redistribute_numeric_pairs_shrink_towards_integer` — each
 //!   depends on a Python-only feature or engine internal not yet in the
-//!   native backend: `draw_integer(min_value=0)` with no upper bound, a
-//!   `shrink_towards` constraint on `draw_integer`, `forced=` on
-//!   `draw_integer`, `stop_span(discard=True)` semantics that the native
-//!   shrinker would have to consult for descendant-passing /
-//!   reorder-spans, or `Sampler` for block-distribution. (The other
-//!   fixate-on-named-pass tests in
-//!   this file, like `test_can_shrink_variable_draws_with_just_deletion`,
-//!   port cleanly by running `Shrinker::shrink()` end-to-end; the full
-//!   pipeline converges on the same minimum as the single pass the
-//!   Python original fixates on.)
+//!   native backend: a `shrink_towards` constraint on `draw_integer`,
+//!   `forced=` on `draw_integer`, `stop_span(discard=True)` semantics
+//!   that the native shrinker would have to consult for descendant-
+//!   passing / reorder-spans, or `Sampler` for block-distribution.
+//!   (The other fixate-on-named-pass tests in this file, like
+//!   `test_can_shrink_variable_draws_with_just_deletion`, port cleanly
+//!   by running `Shrinker::shrink()` end-to-end; the full pipeline
+//!   converges on the same minimum as the single pass the Python
+//!   original fixates on.)
 //!
 //! - `test_deletion_and_lowering_fails_to_shrink`,
 //!   `test_permits_but_ignores_raising_order` — monkey-patch
@@ -464,6 +462,43 @@ fn test_can_quickly_shrink_to_trivial_collection() {
             "n = {n}"
         );
     }
+}
+
+#[test]
+fn test_duplicate_nodes_that_go_away() {
+    // Python uses `draw_integer(min_value=0)` with no upper bound; hegel-rust
+    // requires a concrete max, so we cap at 2^24 which comfortably holds the
+    // initial 1234567. Python fixates on `minimize_duplicated_choices`; the
+    // full native pipeline's `shrink_duplicates` pass drives x=y=0 together,
+    // at which point the trailing 135-byte prefix goes unread.
+    let mut initial = vec![ChoiceValue::Integer(1234567), ChoiceValue::Integer(1234567)];
+    initial.extend(std::iter::repeat_n(
+        ChoiceValue::Bytes(vec![1]),
+        (1234567 & 255) as usize,
+    ));
+    let mut shrinker = shrinking_from(initial, |tc| {
+        let x = match tc.draw_integer(0, (1i128 << 24) - 1) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        let y = match tc.draw_integer(0, (1i128 << 24) - 1) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        if x != y {
+            return false;
+        }
+        let mut bs = Vec::new();
+        for _ in 0..(x & 255) {
+            match tc.draw_bytes(1, 1) {
+                Ok(v) => bs.push(v),
+                Err(_) => return false,
+            }
+        }
+        bs.iter().collect::<std::collections::HashSet<_>>().len() <= 1
+    });
+    shrinker.shrink();
+    assert_eq!(extract_integers(&shrinker.current_nodes), vec![0, 0]);
 }
 
 #[test]

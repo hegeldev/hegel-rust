@@ -1456,9 +1456,6 @@ Individually-skipped tests (rest of the file is ported):
   `draw_integer(min, max)` accepts neither). The remaining `@example`
   rows (`boolean`, `float`) are ported.
 
-- `conjecture/test_shrinker.py::test_duplicate_nodes_that_go_away` —
-  `data.draw_integer(min_value=0)` with no upper bound; the native
-  `draw_integer(min, max)` requires a concrete upper bound.
 - `conjecture/test_shrinker.py::test_can_pass_to_an_indirect_descendant`,
   `::test_can_reorder_spans` — test pass-level behaviour
   (`pass_to_descendant`, `reorder_spans`) that consumes span metadata;
