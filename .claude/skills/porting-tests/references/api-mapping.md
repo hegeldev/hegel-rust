@@ -772,6 +772,28 @@ children. If `keys()` on the Rust side returns a `Vec` in a declared
 order (walks an underlying `VecDeque` / `LinkedList`, or yields
 indices in shrink order), assert that order directly.
 
+## Glob-importing from `hegel`
+
+Python's `from hypothesis import *` / `from hypothesis.strategies import *`
+ports as `use hegel::*;` / `use hegel::generators::*;` — but `hegel::*`
+re-exports the `test` proc macro, which shadows the built-in `#[test]`
+attribute if the glob lives at module scope. Scope the glob imports
+inside the test function body:
+
+```rust
+#[test]
+fn test_can_glob_import_from_hegel() {
+    use hegel::generators::*;
+    use hegel::*;
+    // ...
+}
+```
+
+Only relevant when porting a test file whose *purpose* is to exercise
+the glob surface (e.g. `nocover/test_imports.py`); normal ports should
+keep using the explicit `use hegel::generators::{self as gs, Generator};`
+form per the main SKILL.
+
 ## File naming
 
 Upstream Python filename → Rust module name drops the `test_` prefix:
