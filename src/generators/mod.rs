@@ -10,6 +10,7 @@ mod collections;
 mod combinators;
 mod compose;
 mod default;
+mod deferred;
 #[allow(clippy::module_inception)]
 mod generators;
 mod misc;
@@ -43,6 +44,7 @@ pub use compose::ComposedGenerator;
 #[doc(hidden)]
 pub use compose::fnv1a_hash;
 pub use default::{DefaultGenerator, default};
+pub use deferred::{DeferredGeneratorDefinition, deferred};
 #[doc(hidden)]
 pub use generators::BasicGenerator;
 pub use generators::{BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};

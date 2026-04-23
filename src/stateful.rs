@@ -62,6 +62,7 @@
 
 use crate::TestCase;
 use crate::generators::integers;
+use crate::settings::Mode;
 use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING};
 use std::cmp::min;
 use std::collections::HashMap;
@@ -199,19 +200,23 @@ pub fn run(mut m: impl StateMachine, tc: TestCase) {
     tc.note("Initial invariant check.");
     check_invariants(&mut m, &tc);
 
-    // We generate an unbounded integer as the step cap that hypothesis actually sees. This means
-    // we almost always run the maximum amount of steps, but allows us the possibility of shrinking
-    // to a smaller number of steps.
-    let max_steps = 50;
-    let unbounded_step_cap = tc.draw_silent(integers::<i64>().min_value(1));
-    let step_cap = min(unbounded_step_cap, max_steps);
+    let is_single = tc.mode() == Mode::SingleTestCase;
+
+    let step_cap = if is_single {
+        i64::MAX
+    } else {
+        let max_steps = 50;
+        let unbounded_step_cap = tc.draw_silent(integers::<i64>().min_value(1));
+        min(unbounded_step_cap, max_steps)
+    };
 
     let mut steps_run_successfully = 0;
     let mut steps_attempted = 0;
     let mut step = 0;
 
     while steps_run_successfully < step_cap
-        && (steps_attempted < 10 * step_cap
+        && (is_single
+            || steps_attempted < 10 * step_cap
             || (steps_run_successfully == 0 && steps_attempted < 1000))
     {
         step += 1;

@@ -46,6 +46,17 @@ impl HealthCheck {
     }
 }
 
+/// Controls the test execution mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Run a full test (multiple test cases with shrinking). This is the default.
+    TestRun,
+    /// Run a single test case with no shrinking or replay. Useful for
+    /// Antithesis workloads and other contexts where you want pure data
+    /// generation without property-testing overhead.
+    SingleTestCase,
+}
+
 /// Controls how much output Hegel produces during test runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verbosity {
@@ -98,6 +109,7 @@ pub(crate) enum Database {
 /// and tests are derandomized by default.
 #[derive(Debug, Clone)]
 pub struct Settings {
+    pub(crate) mode: Mode,
     pub(crate) test_cases: u64,
     pub(crate) verbosity: Verbosity,
     pub(crate) seed: Option<u64>,
@@ -111,6 +123,7 @@ impl Settings {
     pub fn new() -> Self {
         let in_ci = is_in_ci();
         Self {
+            mode: Mode::TestRun,
             test_cases: 100,
             verbosity: Verbosity::Normal,
             seed: None,
@@ -122,6 +135,12 @@ impl Settings {
             },
             suppress_health_check: Vec::new(),
         }
+    }
+
+    /// Set the execution mode. Defaults to [`Mode::TestRun`].
+    pub fn mode(mut self, mode: Mode) -> Self {
+        self.mode = mode;
+        self
     }
 
     /// Set the number of test cases to run (default: 100).

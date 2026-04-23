@@ -1,5 +1,6 @@
 pub use crate::backend::{DataSource, DataSourceError};
 use crate::generators::Generator;
+use crate::settings::Mode;
 use ciborium::Value;
 use parking_lot::Mutex;
 use std::any::Any;
@@ -51,6 +52,7 @@ fn panic_on_data_source_error(e: DataSourceError) -> ! {
 
 pub(crate) struct TestCaseGlobalData {
     is_last_run: bool,
+    mode: Mode,
     /// Fine-grained lock over the state shared between clones of a
     /// `TestCase`. Acquired briefly around each individual backend call
     /// and around each mutation of the draw-tracking bookkeeping, not
@@ -218,7 +220,7 @@ fn panic_message(payload: &Box<dyn Any + Send>) -> String {
 }
 
 impl TestCase {
-    pub(crate) fn new(data_source: Box<dyn DataSource>, is_last_run: bool) -> Self {
+    pub(crate) fn new(data_source: Box<dyn DataSource>, is_last_run: bool, mode: Mode) -> Self {
         let override_sink = OUTPUT_OVERRIDE.with(|cell| cell.borrow().clone());
         let on_draw: OutputSink = match override_sink {
             Some(sink) if is_last_run => sink,
@@ -228,6 +230,7 @@ impl TestCase {
         TestCase {
             global: Arc::new(TestCaseGlobalData {
                 is_last_run,
+                mode,
                 shared: Mutex::new(SharedState {
                     data_source,
                     draw_state: DrawState {
@@ -243,6 +246,10 @@ impl TestCase {
                 on_draw,
             }),
         }
+    }
+
+    pub(crate) fn mode(&self) -> Mode {
+        self.global.mode
     }
 
     /// Acquire the shared mutex for the duration of `f`.
@@ -401,18 +408,28 @@ impl TestCase {
     /// }
     /// ```
     pub fn repeat<F: FnMut()>(&self, mut body: F) -> ! {
+        if self.global.mode == Mode::SingleTestCase {
+            self.repeat_single_test_case(&mut body);
+        }
+        self.repeat_property_test(&mut body);
+    }
+
+    fn repeat_single_test_case(&self, body: &mut dyn FnMut()) -> ! {
+        let mut iteration: u64 = 0;
+        loop {
+            iteration += 1;
+            self.note(&format!("// Repetition #{}", iteration));
+
+            let prev_indent = self.local.borrow().indent;
+            self.local.borrow_mut().indent = prev_indent + 2;
+            body();
+            self.local.borrow_mut().indent = prev_indent;
+        }
+    }
+
+    fn repeat_property_test(&self, body: &mut dyn FnMut()) -> ! {
         use crate::generators::{booleans, integers};
 
-        // Draw min_size uniformly over a large range to get good shrinking.
-        //
-        // Most of the time the collection is forced huge (making the loop
-        // behave like an infinite loop), but during shrinking the backend
-        // can reduce min_size to pick a finite iteration count.
-        //
-        // hegel-core's collection machinery hits an internal AssertionError
-        // around float precision when min_size approaches 2^53, so we add a
-        // cap well below that (the backend's data budget runs out long before
-        // this many iterations anyway) without tripping the bug.
         const MAX_SAFE_MIN_SIZE: usize = 1 << 40;
         let min_size = self.draw_silent(integers::<usize>().max_value(MAX_SAFE_MIN_SIZE));
 
@@ -423,12 +440,9 @@ impl TestCase {
             iteration += 1;
             self.note(&format!("// Repetition #{}", iteration));
 
-            // Indent draws inside the body so replay output shows them nested
-            // under their "Loop iteration N" header. Always restored after the
-            // body returns, including on panic.
             let prev_indent = self.local.borrow().indent;
             self.local.borrow_mut().indent = prev_indent + 2;
-            let result = catch_unwind(AssertUnwindSafe(&mut body));
+            let result = catch_unwind(AssertUnwindSafe(&mut *body));
             self.local.borrow_mut().indent = prev_indent;
 
             match result {
@@ -436,22 +450,9 @@ impl TestCase {
                 Err(e) => {
                     let msg = panic_message(&e);
                     if msg == ASSUME_FAIL_STRING {
-                        // Assumption failure inside the body: skip this
-                        // iteration and continue with the next, matching
-                        // stateful testing.
                     } else if msg == STOP_TEST_STRING {
-                        // Backend exhausted: let the outer runner end this
-                        // test case as Overrun rather than falling through
-                        // and running more user code against a dead data
-                        // source.
                         resume_unwind(e);
                     } else {
-                        // Shrinking hack: draw a sentinel boolean before
-                        // re-raising the panic. If the shrinker later picks a
-                        // test case that doesn't trigger this panic, the
-                        // sentinel takes the place of the collection's stop
-                        // draw at this position, so the loop is always seen to
-                        // stop normally in the uninteresting shrunk case.
                         self.draw_silent(booleans());
                         resume_unwind(e);
                     }
@@ -459,11 +460,6 @@ impl TestCase {
             }
         }
 
-        // The collection has decided the loop is "done". There is no
-        // successful-return path for `!`, so end this test case via
-        // LOOP_DONE_STRING — the runner treats that sentinel as a normal
-        // successful completion (Valid), which is the right treatment for a
-        // stateful-style loop that never found a bug.
         panic!("{}", LOOP_DONE_STRING);
     }
 

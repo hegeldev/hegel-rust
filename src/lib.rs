@@ -432,4 +432,4 @@ pub use runner::Hegel;
 pub use runner::format_log_excerpt;
 #[doc(hidden)]
 pub use runner::hegel;
-pub use settings::{HealthCheck, Settings, Verbosity};
+pub use settings::{HealthCheck, Mode, Settings, Verbosity};
