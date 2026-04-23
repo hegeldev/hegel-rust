@@ -58,18 +58,20 @@ fn poisoned(p: f64) -> impl Generator<Poisoned> {
 }
 
 fn linear_lists(p: f64, size: i64) -> impl Generator<Vec<Poisoned>> {
+    let element = poisoned(p);
     compose!(|tc| {
         let length = tc.draw(gs::integers::<i64>().min_value(0).max_value(size));
-        (0..length).map(|_| tc.draw(poisoned(p))).collect()
+        (0..length).map(|_| tc.draw(&element)).collect()
     })
 }
 
 fn matrices(p: f64, size: i64) -> impl Generator<Vec<Poisoned>> {
     let dim = (size as f64).sqrt().ceil() as i64;
+    let element = poisoned(p);
     compose!(|tc| {
         let n = tc.draw(gs::integers::<i64>().min_value(0).max_value(dim));
         let m = tc.draw(gs::integers::<i64>().min_value(0).max_value(dim));
-        (0..n * m).map(|_| tc.draw(poisoned(p))).collect()
+        (0..n * m).map(|_| tc.draw(&element)).collect()
     })
 }
 
