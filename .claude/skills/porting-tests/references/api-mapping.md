@@ -102,6 +102,19 @@ Generator transforms (all require `Generator` trait in scope):
 | `capture_out()` / `capsys` / `capfd` | `TempRustProject::new().main_file(CODE).cargo_run(&[])` — access `.stderr`/`.stdout` on the `RunOutput` |
 | `capture_out() + pytest.raises(X)`  | `TempRustProject::new().main_file(CODE).expect_failure("pattern")` — builds, runs, asserts non-zero exit + pattern in stderr, returns `RunOutput` |
 
+**Derandomised helpers collapse seed-parametrize axes.** Upstream tests
+(especially under `tests/quality/`) routinely stack
+`@pytest.mark.parametrize("seed", [...])` on a `minimal(...)` /
+`find(...)` / `ConjectureRunner(..., random=Random(seed))` call to
+assert the same shrink target is reached from several random starts. In
+hegel-rust, `Minimal` / `FindAny` / `assert_all_examples` all run
+derandomised, so the seed axis carries no information — collapse it to
+one `#[test]` per remaining parametrize row instead of emitting N
+identical assertions. The other parametrize axes still expand normally.
+See `tests/hypothesis/quality_poisoned_lists.rs` for a worked example
+(4 seeds × 3 sizes × 2 probabilities × 2 strategy classes → 12 tests,
+not 48).
+
 ## Features deliberately missing from hegel-rust
 
 These show up in lots of pbtkit/Hypothesis tests. When you hit one, leave
