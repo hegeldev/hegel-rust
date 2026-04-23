@@ -39,10 +39,19 @@ fn take_nodes_and_take_spans_return_recorded_data() {
 
 #[test]
 fn start_and_stop_span_return_ok() {
-    let (ds, _handle) = random_source();
+    let (ds, handle) = random_source();
+    // Two balanced start/stop pairs, covering both the discarded and
+    // non-discarded branches of stop_span. start_span must be matched by
+    // a corresponding stop_span — the native backend tracks open spans on
+    // a stack and records the completed span on stop.
     ds.start_span(42).unwrap();
     ds.stop_span(false).unwrap();
+    ds.start_span(17).unwrap();
     ds.stop_span(true).unwrap();
+
+    // Empty spans (start == end) are not recorded.
+    let spans = NativeDataSource::take_spans(&handle);
+    assert!(spans.is_empty());
 }
 
 #[test]

@@ -118,9 +118,10 @@ impl NativeVariables {
     }
 }
 
-/// A span within the choice sequence, labelled by schema type.
+/// A span within the choice sequence, labelled by schema type or by the
+/// numeric label of an enclosing `start_span` call.
 ///
-/// Recorded by `interpret_schema` to enable span-mutation exploration.
+/// Recorded to enable span-mutation exploration (see `try_span_mutation`).
 #[derive(Clone, Debug)]
 pub struct Span {
     pub start: usize,
@@ -143,6 +144,9 @@ pub struct NativeTestCase {
     next_collection_id: i64,
     pub variable_pools: Vec<NativeVariables>,
     pub spans: Vec<Span>,
+    /// Currently-open spans opened by `start_span` from the client, awaiting
+    /// their matching `stop_span`. Each entry is `(start_position, label)`.
+    pub span_stack: Vec<(usize, String)>,
     /// True iff any `stop_span(discard=true)` has been observed during this test
     /// case. Mirrors Hypothesis's `ConjectureData.has_discards`: filters that
     /// retry mark the rejected attempts as discarded, which the shrinker uses
@@ -163,6 +167,7 @@ impl NativeTestCase {
             next_collection_id: 0,
             variable_pools: Vec::new(),
             spans: Vec::new(),
+            span_stack: Vec::new(),
             has_discards: false,
         }
     }
@@ -179,6 +184,7 @@ impl NativeTestCase {
             next_collection_id: 0,
             variable_pools: Vec::new(),
             spans: Vec::new(),
+            span_stack: Vec::new(),
             has_discards: false,
         }
     }
@@ -202,6 +208,7 @@ impl NativeTestCase {
             next_collection_id: 0,
             variable_pools: Vec::new(),
             spans: Vec::new(),
+            span_stack: Vec::new(),
             has_discards: false,
         }
     }
