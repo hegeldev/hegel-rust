@@ -43,7 +43,7 @@ fn test_exception_propagates_fine() {
     expect_panic(
         || {
             Hegel::new(|tc| {
-                let _x: i64 = tc.draw(&gs::integers());
+                let _x: i64 = tc.draw(gs::integers());
                 panic!("test_exception_propagates_fine_payload");
             })
             .settings(Settings::new().test_cases(100).database(None))
@@ -81,7 +81,7 @@ fn test_baseexception_no_rerun_no_flaky() {
     expect_panic(
         move || {
             Hegel::new(move |tc| {
-                let _x: i64 = tc.draw(&gs::integers());
+                let _x: i64 = tc.draw(gs::integers());
                 let r = runs_outer.fetch_add(1, Ordering::SeqCst) + 1;
                 if r == 3 {
                     panic!("baseexception_no_rerun_payload");
