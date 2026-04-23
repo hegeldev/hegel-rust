@@ -53,6 +53,11 @@ file and treats listed files as "done".
   integration (Cargo.toml, src/lib.rs, src/native/mod.rs, src/native/runner.rs,
   src/runner.rs, tests/test_native.rs). Abandoned pending human review of
   the worker's `port/worker-0` branch.
+- `test_floats.py` (in `shrink_quality/`) — port-loop worker produced
+  commits that conflicted irreconcilably on integration (merge conflict in
+  `.claude/skills/porting-tests/references/pbtkit-overview.md` against the
+  pbtkit-only shrink-pass gating update on the supervisor branch).
+  Abandoned pending human review of the worker's `port/worker-0` branch.
 
 Individually-skipped tests (rest of the file is ported):
 
