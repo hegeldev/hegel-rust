@@ -77,7 +77,7 @@ impl LedgerTest {
 
     #[invariant]
     fn nonnegative_balances(&mut self, _: TestCase) {
-        for (_account, balance) in &self.ledger.balances {
+        for balance in self.ledger.balances.values() {
             assert!(*balance >= 0);
         }
     }

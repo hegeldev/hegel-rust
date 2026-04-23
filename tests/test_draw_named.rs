@@ -397,11 +397,14 @@ fn test_limitation_destructuring_pattern() {
 
 #[test]
 fn test_limitation_chained_method_on_draw() {
-    // `let _x = tc.draw(gen).abs()` — the init expression is `.abs()`, not
-    // `.draw()`, so is_test_case_draw_binding doesn't match.
+    // `let _x = tc.draw(gen).wrapping_abs()` — the init expression is
+    // `.wrapping_abs()`, not `.draw()`, so is_test_case_draw_binding doesn't
+    // match. We use wrapping_abs rather than abs because abs panics on
+    // i32::MIN, which can cause hegel to discover a second bug during
+    // shrinking, producing extra output lines.
     let lines = draw_lines(
         "
-        let x = tc.draw(gs::integers::<i32>()).abs();
+        let x = tc.draw(gs::integers::<i32>()).wrapping_abs();
     ",
     );
     assert_eq!(lines, vec!["let draw_1 = 0;"]);

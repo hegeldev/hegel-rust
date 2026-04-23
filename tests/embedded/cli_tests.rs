@@ -1,5 +1,5 @@
 use super::*;
-use crate::runner::{Database, Settings, Verbosity};
+use crate::runner::{Database, Mode, Settings, Verbosity};
 
 fn s(strs: &[&str]) -> Vec<String> {
     std::iter::once("prog")
@@ -230,6 +230,18 @@ fn test_apply_cli_args_help() {
         CliOutcome::Help(msg) => assert!(msg.contains("Usage:")),
         other => panic!("expected Help, got {other:?}"),
     }
+}
+
+#[test]
+fn test_single_test_case_flag() {
+    let parsed = apply(&["--single-test-case"]);
+    assert_eq!(parsed.mode, Mode::SingleTestCase);
+}
+
+#[test]
+fn test_single_test_case_default_is_test_run() {
+    let parsed = apply(&[]);
+    assert_eq!(parsed.mode, Mode::TestRun);
 }
 
 #[test]

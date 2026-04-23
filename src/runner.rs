@@ -16,7 +16,7 @@ use std::sync::{Arc, LazyLock, Mutex, Once};
 use std::time::{Duration, Instant};
 
 const SUPPORTED_PROTOCOL_VERSIONS: (&str, &str) = ("0.10", "0.10");
-const HEGEL_SERVER_VERSION: &str = "0.4.4";
+const HEGEL_SERVER_VERSION: &str = "0.4.7";
 const HEGEL_SERVER_COMMAND_ENV: &str = "HEGEL_SERVER_COMMAND";
 const HEGEL_SERVER_DIR: &str = ".hegel";
 static SERVER_LOG_PATH: Mutex<Option<String>> = Mutex::new(None);
@@ -393,8 +393,110 @@ impl HegelSession {
 
 // ─── ServerTestRunner ───────────────────────────────────────────────────────
 
+fn receive_event(test_stream: &mut Stream, connection: &Connection) -> (u32, Vec<u8>) {
+    match test_stream.receive_request() {
+        Ok(event) => event,
+        // nocov start
+        Err(_) if connection.server_has_exited() => {
+            panic!("{}", server_crash_message());
+            // nocov end
+        }
+        Err(e) => unreachable!("Failed to receive event (server still running): {}", e),
+    }
+}
+
 /// Test runner that communicates with the hegel-core server.
 pub(crate) struct ServerTestRunner;
+
+impl ServerTestRunner {
+    fn run_single_test_case(
+        &self,
+        settings: &Settings,
+        run_case: &mut dyn FnMut(Box<dyn DataSource>, bool) -> TestCaseResult,
+    ) -> TestRunResult {
+        let session = HegelSession::get();
+        let connection = &session.connection;
+        let verbosity = settings.verbosity;
+
+        let mut test_stream = connection.new_stream();
+
+        let mut msg = cbor_map! {
+            "command" => "single_test_case",
+            "stream_id" => test_stream.stream_id
+        };
+        if let Some(seed) = settings.seed {
+            map_insert(&mut msg, "seed", seed);
+        }
+
+        let response = {
+            let mut control = session.control.lock().unwrap_or_else(|e| e.into_inner());
+            let send_id = control.send_request(cbor_encode(&msg));
+            send_id.and_then(|id| control.receive_reply(id))
+        }
+        .unwrap_or_else(|e| handle_channel_error(e));
+        let _: Value = cbor_decode(&response);
+
+        if verbosity == Verbosity::Debug {
+            eprintln!("single_test_case response received");
+        }
+
+        let ack_null = cbor_map! {"result" => Value::Null};
+        let mut failure_message: Option<String> = None;
+        let mut passed = true;
+
+        loop {
+            let (event_id, event_payload) = receive_event(&mut test_stream, connection);
+
+            let event: Value = cbor_decode(&event_payload);
+            let event_type = map_get(&event, "event")
+                .and_then(as_text)
+                .expect("Expected event in payload");
+
+            if verbosity == Verbosity::Debug {
+                eprintln!("Received event: {:?}", event);
+            }
+
+            match event_type {
+                "test_case" => {
+                    let stream_id = map_get(&event, "stream_id")
+                        .and_then(as_u64)
+                        .expect("Missing stream id") as u32;
+
+                    let test_case_stream = connection.connect_stream(stream_id);
+
+                    test_stream
+                        .write_reply(event_id, cbor_encode(&ack_null))
+                        .expect("Failed to ack test_case");
+
+                    let backend = Box::new(ServerDataSource::new(
+                        Arc::clone(connection),
+                        test_case_stream,
+                        verbosity,
+                    ));
+                    let tc_result = run_case(backend, true);
+
+                    if let TestCaseResult::Interesting { panic_message } = tc_result {
+                        passed = false;
+                        failure_message = Some(panic_message);
+                    }
+                }
+                "test_done" => {
+                    let ack_true = cbor_map! {"result" => true};
+                    test_stream
+                        .write_reply(event_id, cbor_encode(&ack_true))
+                        .expect("Failed to ack test_done");
+                    break;
+                }
+                _ => panic!("unknown event: {}", event_type), // nocov
+            }
+        }
+
+        TestRunResult {
+            passed,
+            failure_message,
+        }
+    }
+}
 
 impl TestRunner for ServerTestRunner {
     fn run(
@@ -403,6 +505,10 @@ impl TestRunner for ServerTestRunner {
         database_key: Option<&str>,
         run_case: &mut dyn FnMut(Box<dyn DataSource>, bool) -> TestCaseResult,
     ) -> TestRunResult {
+        if settings.mode == Mode::SingleTestCase {
+            return self.run_single_test_case(settings, run_case);
+        }
+
         let session = HegelSession::get();
         let connection = &session.connection;
         let verbosity = settings.verbosity;
@@ -465,17 +571,7 @@ impl TestRunner for ServerTestRunner {
         let result_data: Value;
         let ack_null = cbor_map! {"result" => Value::Null};
         loop {
-            // Handle the server dying between events: receive_request will
-            // fail with RecvError once the background reader clears the senders.
-            let (event_id, event_payload) = match test_stream.receive_request() {
-                Ok(event) => event,
-                // nocov start
-                Err(_) if connection.server_has_exited() => {
-                    panic!("{}", server_crash_message());
-                    // nocov end
-                }
-                Err(e) => unreachable!("Failed to receive event (server still running): {}", e),
-            };
+            let (event_id, event_payload) = receive_event(&mut test_stream, connection);
 
             let event: Value = cbor_decode(&event_payload);
             let event_type = map_get(&event, "event")
@@ -514,9 +610,7 @@ impl TestRunner for ServerTestRunner {
                     result_data = map_get(&event, "results").cloned().unwrap_or(Value::Null);
                     break;
                 }
-                _ => {
-                    panic!("unknown event: {}", event_type); // nocov
-                }
+                _ => panic!("unknown event: {}", event_type), // nocov
             }
         }
 
@@ -1060,6 +1154,17 @@ impl HealthCheck {
     }
 }
 
+/// Controls the test execution mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Run a full test (multiple test cases with shrinking). This is the default.
+    TestRun,
+    /// Run a single test case with no shrinking or replay. Useful for
+    /// Antithesis workloads and other contexts where you want pure data
+    /// generation without property-testing overhead.
+    SingleTestCase,
+}
+
 /// Controls how much output Hegel produces during test runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verbosity {
@@ -1082,6 +1187,7 @@ pub enum Verbosity {
 /// and tests are derandomized by default.
 #[derive(Debug, Clone)]
 pub struct Settings {
+    pub(crate) mode: Mode,
     pub(crate) test_cases: u64,
     pub(crate) verbosity: Verbosity,
     pub(crate) seed: Option<u64>,
@@ -1095,6 +1201,7 @@ impl Settings {
     pub fn new() -> Self {
         let in_ci = is_in_ci();
         Self {
+            mode: Mode::TestRun,
             test_cases: 100,
             verbosity: Verbosity::Normal,
             seed: None,
@@ -1106,6 +1213,12 @@ impl Settings {
             },
             suppress_health_check: Vec::new(),
         }
+    }
+
+    /// Set the execution mode. Defaults to [`Mode::TestRun`].
+    pub fn mode(mut self, mode: Mode) -> Self {
+        self.mode = mode;
+        self
     }
 
     /// Set the number of test cases to run (default: 100).
@@ -1264,7 +1377,7 @@ where
             &self.settings,
             self.database_key.as_deref(),
             &mut |backend, is_final| {
-                let tc_result = run_test_case(backend, &mut test_fn, is_final);
+                let tc_result = run_test_case(backend, &mut test_fn, is_final, self.settings.mode);
                 if matches!(&tc_result, TestCaseResult::Interesting { .. }) {
                     got_interesting.store(true, Ordering::SeqCst);
                 }
@@ -1302,8 +1415,9 @@ fn run_test_case(
     data_source: Box<dyn DataSource>,
     test_fn: &mut dyn FnMut(TestCase),
     is_final: bool,
+    mode: Mode,
 ) -> TestCaseResult {
-    let tc = TestCase::new(data_source, is_final);
+    let tc = TestCase::new(data_source, is_final, mode);
 
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
 
