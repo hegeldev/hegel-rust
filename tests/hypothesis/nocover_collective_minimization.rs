@@ -8,11 +8,31 @@
 //! force a list of 10 values with at least 2 distinct debug reprs,
 //! shrink, and verify shrinking collapses to 2-3 distinct values.
 //!
-//! Strategies from `standard_types` that can only ever produce a single
-//! value (`lists(none(), max_size=0)`, `tuples()`, `just("a")`,
-//! `fixed_dictionaries({})`) are omitted: the predicate is vacuously
-//! unsatisfiable, so the Python port reaches `except Unsatisfiable: pass`
-//! and the case carries no signal.
+//! Omissions from `standard_types`, by reason:
+//!
+//! * Predicate is vacuously unsatisfiable (all examples share one repr).
+//!   The Python test catches `Unsatisfiable`; Rust's `Minimal` panics if
+//!   nothing is ever found. Dropped entries:
+//!   `lists(none(), max_size=0)`, `tuples()`, `sets(none(), max_size=0)`,
+//!   `frozensets(none(), max_size=0)`, `fixed_dictionaries({})`,
+//!   `floats(min_value=3.14, max_value=3.14)`,
+//!   `lists(floats(0.0, 0.0))`, `none()`,
+//!   `integers().flatmap(lambda v: lists(just(v)))`.
+//!
+//! * Debug format is not deterministic across equal values. `HashMap`
+//!   and `HashSet` iterate in a seed-dependent order, so two equal maps
+//!   can print differently and the "≤ 3 distinct reprs" assertion would
+//!   fail spuriously. Dropped:
+//!   `dictionaries(booleans(), integers())`,
+//!   `dictionaries(text(), booleans())`,
+//!   `frozensets(integers())`, `sets(frozensets(booleans()))`.
+//!
+//! * No hegel-rust counterpart: `complex_numbers()`, `fractions()`,
+//!   `decimals()`, `recursive(...)`, and
+//!   `booleans().flatmap(lambda x: booleans() if x else complex_numbers())`
+//!   (depends on `complex_numbers()`). `randoms(use_true_random=True)`
+//!   is also omitted — `HegelRandom`'s `Debug` would not produce stable
+//!   repr counts.
 
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -21,22 +41,26 @@ use hegel::generators::{self as gs, Generator};
 
 use crate::common::utils::Minimal;
 
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+enum IntOrBoolTuple {
+    Int(i64),
+    BoolTuple((bool,)),
+}
+
 fn check_collective_minimization<T, G>(spec: G)
 where
     G: Generator<T> + 'static,
     T: Send + Debug + 'static,
 {
     let n = 10;
-    let xs = Minimal::new(
-        gs::vecs(spec).min_size(n).max_size(n),
-        |x: &Vec<T>| {
-            x.iter()
-                .map(|v| format!("{v:?}"))
-                .collect::<HashSet<_>>()
-                .len()
-                >= 2
-        },
-    )
+    let xs = Minimal::new(gs::vecs(spec).min_size(n).max_size(n), |x: &Vec<T>| {
+        x.iter()
+            .map(|v| format!("{v:?}"))
+            .collect::<HashSet<_>>()
+            .len()
+            >= 2
+    })
     .test_cases(2000)
     .run();
     assert_eq!(xs.len(), n);
@@ -55,11 +79,7 @@ fn test_can_collectively_minimize_booleans() {
 
 #[test]
 fn test_can_collectively_minimize_abc_booleans() {
-    check_collective_minimization(gs::tuples!(
-        gs::booleans(),
-        gs::booleans(),
-        gs::booleans()
-    ));
+    check_collective_minimization(gs::tuples!(gs::booleans(), gs::booleans(), gs::booleans()));
 }
 
 #[test]
@@ -79,6 +99,15 @@ fn test_can_collectively_minimize_integers() {
 #[test]
 fn test_can_collectively_minimize_integers_min_3() {
     check_collective_minimization(gs::integers::<i64>().min_value(3));
+}
+
+#[test]
+fn test_can_collectively_minimize_integers_wide_range() {
+    check_collective_minimization(
+        gs::integers::<i128>()
+            .min_value(-(1i128 << 32))
+            .max_value(1i128 << 64),
+    );
 }
 
 #[test]
@@ -104,6 +133,11 @@ fn test_can_collectively_minimize_floats_max_neg_zero() {
 #[test]
 fn test_can_collectively_minimize_floats_min_zero() {
     check_collective_minimization(gs::floats::<f64>().min_value(0.0));
+}
+
+#[test]
+fn test_can_collectively_minimize_floats_full_range() {
+    check_collective_minimization(gs::floats::<f64>().min_value(-f64::MAX).max_value(f64::MAX));
 }
 
 #[test]
@@ -139,4 +173,37 @@ fn test_can_collectively_minimize_lists_of_booleans() {
 #[test]
 fn test_can_collectively_minimize_lists_of_lists_of_booleans() {
     check_collective_minimization(gs::vecs(gs::vecs(gs::booleans())));
+}
+
+#[test]
+fn test_can_collectively_minimize_one_of_int_or_bool_tuple() {
+    check_collective_minimization(gs::one_of(vec![
+        gs::integers::<i64>().map(IntOrBoolTuple::Int).boxed(),
+        gs::tuples!(gs::booleans())
+            .map(IntOrBoolTuple::BoolTuple)
+            .boxed(),
+    ]));
+}
+
+#[test]
+fn test_can_collectively_minimize_one_of_strings() {
+    check_collective_minimization(gs::one_of(vec![
+        gs::just("a".to_string()).boxed(),
+        gs::just("b".to_string()).boxed(),
+        gs::just("c".to_string()).boxed(),
+    ]));
+}
+
+#[test]
+fn test_can_collectively_minimize_flatmap_ordered_pair() {
+    check_collective_minimization(gs::integers::<i64>().flat_map(|right| {
+        gs::integers::<i64>()
+            .min_value(0)
+            .map(move |length| (right.wrapping_sub(length), right))
+    }));
+}
+
+#[test]
+fn test_can_collectively_minimize_filter_large_abs() {
+    check_collective_minimization(gs::integers::<i64>().filter(|x: &i64| *x > 100 || *x < -100));
 }

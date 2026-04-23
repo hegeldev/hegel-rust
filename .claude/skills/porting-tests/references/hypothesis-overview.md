@@ -78,25 +78,49 @@ A heterogeneous `list[SearchStrategy]` defined in
 `@pytest.mark.parametrize("spec", standard_types, ids=repr)`; Rust
 can't, because each entry has a different concrete strategy type.
 
-Port as one `#[test]` per representative strategy, sharing a generic
-check helper. Cover the breadth of the Python list (booleans, bounded
-and unbounded integers, floats with various bound configurations, text,
-binary, tuples, `sampled_from`, nested lists) rather than mirroring
-every entry 1:1 — `standard_types` includes strategies with no hegel-rust
-analog (`complex_numbers()`, `fractions()`, `decimals()`, `randoms()`,
-`frozensets()`, `recursive()`) that you skip per the api-mapping table.
+Port as one `#[test]` per entry, sharing a generic check helper. Dedup
+only the exact duplicates (`standard_types` lists `floats()` four
+times); otherwise port every entry that has a hegel-rust analog —
+`sampled_from`, `one_of`, `fixed_dicts`, `flat_map`, `filter`, bounded
+and unbounded `integers()`/`floats()`, and the various tuples and
+nested lists all have direct counterparts. `tests/hypothesis/draw_example.rs`
+is the reference mapping for how each entry translates.
+
+Entries with no hegel-rust counterpart (skip per the api-mapping table):
+`complex_numbers()`, `fractions()`, `decimals()`, `recursive()`, and
+any flatmap that bottoms out in one of those. `randoms()` is
+feature-gated (`#[cfg(feature = "rand")]`).
 
 ### `try/except Unsatisfiable: pass` in `standard_types` loops
 
 When the test body is wrapped in `try: ... except Unsatisfiable: pass`,
-strategies that can only produce a single value — `just("a")`,
-`tuples()`, `lists(none(), max_size=0)`, `fixed_dictionaries({})`,
-`none()` — hit the `Unsatisfiable` branch because the predicate
-(typically "at least 2 distinct values") is vacuously false. These rows
-carry no signal; omit them from the Rust port with a one-line note in
-the module docstring naming the class of strategies dropped. Don't
-translate the `try/except` guard itself — it was only there to keep
-Python's parametrize sweep from failing on the single-value entries.
+any strategy whose outputs all share one repr hits the `Unsatisfiable`
+branch because the "≥ 2 distinct reprs" predicate is vacuously false.
+These rows carry no signal and must be omitted — Rust's `Minimal::run`
+panics when nothing satisfies the predicate, so translating them
+literally turns a silent skip into a test failure. Categories to drop:
+
+- Always-empty collections: `lists(none(), max_size=0)`, `tuples()`,
+  `sets(none(), max_size=0)`, `frozensets(none(), max_size=0)`,
+  `fixed_dictionaries({})`.
+- Single-point strategies: `just(...)`, `none()`,
+  `floats(min_value=x, max_value=x)`.
+- Strategies whose per-example output is a single repeated value:
+  `lists(floats(0.0, 0.0))`, `integers().flatmap(lambda v: lists(just(v)))`.
+
+Don't translate the `try/except` guard itself — it was only there to
+keep Python's parametrize sweep from failing on the single-value
+entries. List each dropped entry in the module docstring.
+
+### Debug-format determinism in `standard_types` loops
+
+When the test body uses `repr()`/`format!("{:?}", ...)` as the identity
+(as collective-minimization does), strategies that return `HashMap` or
+`HashSet` — `dictionaries(...)`, `frozensets(...)`, `sets(frozensets(...))`
+— must also be dropped: Rust's default hasher randomises iteration
+order, so two equal maps can print differently and the "≤ 3 distinct
+reprs" assertion fails spuriously. Note this in the docstring
+separately from the unsatisfiable drops.
 
 ## Tests to avoid porting
 
