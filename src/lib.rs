@@ -269,6 +269,7 @@ pub mod __native_test_internals {
         ListenerEvent, Listeners, METAKEYS_NAME, MultiplexedNativeDatabase, NativeDatabase,
         ReadOnlyNativeDatabase,
     };
+    pub use crate::native::dynamic_variable::DynamicVariable;
     pub use crate::native::featureflags::{FeatureFlags, FeatureStrategy};
     pub use crate::native::floats::{
         FloatConstraints, choice_equal_float, choice_permitted_float, count_between_floats,
