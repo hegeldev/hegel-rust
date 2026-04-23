@@ -261,8 +261,8 @@ pub mod __native_test_internals {
     };
     pub use crate::native::cathetus::cathetus;
     pub use crate::native::core::{
-        BooleanChoice, BytesChoice, ChoiceValue, FloatChoice, IntegerChoice, NativeTestCase, Span,
-        StringChoice,
+        BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice,
+        IntegerChoice, NativeTestCase, Span, StringChoice,
     };
     pub use crate::native::database::{
         BackgroundWriteNativeDatabase, ExampleDatabase, InMemoryNativeDatabase, Listener,
@@ -277,6 +277,7 @@ pub mod __native_test_internals {
     };
     pub use crate::native::intervalsets::IntervalSet;
     pub use crate::native::shrinker::value_shrinkers::{IntegerShrinker, OrderingShrinker};
+    pub use crate::native::shrinker::{ShrinkRun, Shrinker};
     pub use crate::native::tree::CachedTestFunction;
     pub use crate::native::unicodedata;
     pub use crate::native::with_native_tc;
