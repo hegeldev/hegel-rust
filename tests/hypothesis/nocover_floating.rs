@@ -8,17 +8,13 @@
 //! suppress `filter_too_much`; we mirror both on the finders that filter
 //! to rare values (NaN, infinity).
 //!
-//! Individually-skipped tests:
-//!
-//! - `test_can_find_negative_and_signaling_nans` — the upstream relies on
-//!   Hypothesis's `filter_rewriting` optimisation to turn
-//!   `floats().filter(math.isnan)` into a NaN-only strategy, then hunts
-//!   for each of the four (sign × signaling) bit-pattern variants in
-//!   1000 filtered draws. hegel-rust's `.filter()` is a generic 3-try
-//!   rejection sampler, so within 1000 test cases we see only a handful
-//!   of NaNs total — not enough to hit every signaling/quiet × +/− slot.
-//!   Unskip once `src/native/` grows filter rewriting for `is_nan`-style
-//!   predicates (or a dedicated NaN-only float generator).
+//! `test_can_find_negative_and_signaling_nans` is driven through
+//! `gs::nan_floats()` (hegel-rust's port of Hypothesis's `NanStrategy`)
+//! rather than the `floats().filter(math.isnan)` + filter-rewriting path
+//! that Python uses. hegel-rust's `.filter()` is a generic 3-try rejection
+//! sampler with no `is_nan` special case, so the direct NaN generator is
+//! needed to hit all four (sign × mantissa-pattern) variants inside the
+//! 1000-attempt budget.
 
 use crate::common::utils::{FindAny, assert_all_examples};
 use hegel::generators as gs;
@@ -153,6 +149,55 @@ fn test_can_find_floats_that_do_not_round_trip_through_reprs() {
     .max_attempts(1000)
     .suppress_health_check(HealthCheck::FilterTooMuch)
     .run();
+}
+
+// Upstream parametrises this over (snan, neg) ∈ {False, True}²; port the
+// four cases as separate tests so each runs under its own TRY_HARDER budget.
+// `snan` is true when `abs(x)`'s bit pattern differs from `f64::NAN`'s (i.e.
+// the mantissa has any non-high bit set); `neg` is true when the sign bit
+// is set. Matches `float_to_int(abs(x)) != float_to_int(float("nan"))` and
+// `math.copysign(1, x) == -1` from the upstream.
+
+fn variant_matches(x: f64, snan: bool, neg: bool) -> bool {
+    let abs_bits = x.abs().to_bits();
+    let nan_bits = f64::NAN.to_bits();
+    let is_snan = abs_bits != nan_bits;
+    let is_neg = x.is_sign_negative();
+    snan == is_snan && neg == is_neg
+}
+
+#[test]
+fn test_can_find_negative_and_signaling_nans_quiet_positive() {
+    FindAny::new(gs::nan_floats(), |x: &f64| {
+        variant_matches(*x, false, false)
+    })
+    .max_attempts(1000)
+    .suppress_health_check(HealthCheck::FilterTooMuch)
+    .run();
+}
+
+#[test]
+fn test_can_find_negative_and_signaling_nans_quiet_negative() {
+    FindAny::new(gs::nan_floats(), |x: &f64| variant_matches(*x, false, true))
+        .max_attempts(1000)
+        .suppress_health_check(HealthCheck::FilterTooMuch)
+        .run();
+}
+
+#[test]
+fn test_can_find_negative_and_signaling_nans_signaling_positive() {
+    FindAny::new(gs::nan_floats(), |x: &f64| variant_matches(*x, true, false))
+        .max_attempts(1000)
+        .suppress_health_check(HealthCheck::FilterTooMuch)
+        .run();
+}
+
+#[test]
+fn test_can_find_negative_and_signaling_nans_signaling_negative() {
+    FindAny::new(gs::nan_floats(), |x: &f64| variant_matches(*x, true, true))
+        .max_attempts(1000)
+        .suppress_health_check(HealthCheck::FilterTooMuch)
+        .run();
 }
 
 #[test]

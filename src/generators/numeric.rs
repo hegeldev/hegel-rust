@@ -276,3 +276,37 @@ pub fn floats<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send +
         allow_infinity: None,
     }
 }
+
+/// Generator for NaN `f64` values. Created by [`nan_floats()`].
+///
+/// Port of Hypothesis's `NanStrategy`, the strategy that `filter_rewriting`
+/// substitutes for `floats().filter(math.isnan)`. Emits a mix of sign bits
+/// and mantissa bit-patterns so all four (positive/negative × math.nan /
+/// other-bit-pattern) variants are routinely reachable.
+pub struct NanFloatGenerator;
+
+impl Generator<f64> for NanFloatGenerator {
+    fn do_draw(&self, tc: &TestCase) -> f64 {
+        // Match hypothesis/strategies/_internal/numbers.py::NanStrategy:
+        // sign bit, then 52-bit mantissa. The base `nan_bits` already has
+        // the quiet bit set, so the ORed result is always a valid NaN.
+        let sign: bool = tc.draw_silent(super::booleans());
+        let mantissa: i64 = tc.draw_silent(
+            super::integers::<i64>()
+                .min_value(0)
+                .max_value((1i64 << 52) - 1),
+        );
+        let sign_bit = u64::from(sign) << 63;
+        let nan_bits = f64::NAN.to_bits();
+        f64::from_bits(sign_bit | nan_bits | (mantissa as u64))
+    }
+}
+
+/// Generate NaN `f64` values with a mix of sign and mantissa bit-patterns.
+///
+/// Intended for tests that need to distinguish NaN variants (e.g. finding
+/// a negative NaN or a NaN whose bit-pattern differs from `f64::NAN`).
+/// For generic floats use [`floats()`].
+pub fn nan_floats() -> NanFloatGenerator {
+    NanFloatGenerator
+}
