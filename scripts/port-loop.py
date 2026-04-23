@@ -614,7 +614,6 @@ HYPOTHESIS_DIR = (
     / "hypothesis"
     / "hypothesis-python"
     / "tests"
-    / "cover"
 )
 SESSIONS_DIR = REPO_ROOT / ".porting" / "sessions"
 
