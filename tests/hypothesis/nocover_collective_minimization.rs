@@ -92,6 +92,16 @@ fn test_can_collectively_minimize_abc_bool_bool_int() {
 }
 
 #[test]
+fn test_can_collectively_minimize_fixed_dict_int_bool() {
+    check_collective_minimization(
+        gs::fixed_dicts()
+            .field("a", gs::integers::<i64>())
+            .field("b", gs::booleans())
+            .build(),
+    );
+}
+
+#[test]
 fn test_can_collectively_minimize_integers() {
     check_collective_minimization(gs::integers::<i64>());
 }
