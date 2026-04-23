@@ -155,6 +155,7 @@ impl<'a> Shrinker<'a> {
             self.swap_adjacent_blocks();
             self.shrink_floats();
             self.shrink_bytes();
+            self.redistribute_bytes_pairs();
             self.shrink_strings();
             self.redistribute_string_pairs();
             self.lower_and_bump();
