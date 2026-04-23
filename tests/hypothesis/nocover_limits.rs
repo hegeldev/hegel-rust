@@ -18,7 +18,7 @@ fn test_max_examples_are_respected() {
     let counter = Arc::new(AtomicUsize::new(0));
     let c = Arc::clone(&counter);
     Hegel::new(move |tc: TestCase| {
-        tc.draw(&gs::integers::<i64>());
+        tc.draw(gs::integers::<i64>());
         c.fetch_add(1, Ordering::Relaxed);
     })
     .settings(Settings::new().test_cases(100).database(None))
