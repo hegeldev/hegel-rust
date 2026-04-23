@@ -148,6 +148,21 @@ adding the feature. Don't invent a workaround in the test.
   predicate, skip with a rationale naming the `@flaky` decorator. If it
   comes from a seedable source (a `Random(seed)`, a time-of-day), seed
   it deterministically in the port instead.
+- **`BaseException` parametrize rows** (`KeyboardInterrupt`, `SystemExit`,
+  `GeneratorExit`). Python distinguishes `BaseException` subclasses —
+  which Hypothesis propagates unchanged without catch/shrink/replay —
+  from `Exception` subclasses that go through the normal replay path.
+  Rust panics are singular; there is no `BaseException`/`Exception`
+  split, so every panic travels the catch-shrink-replay path. When an
+  upstream test parametrizes over `[KeyboardInterrupt, SystemExit,
+  GeneratorExit, ValueError]` (or similar), port only the
+  `Exception`-subclass rows (usually `ValueError` → plain `panic!`) and
+  skip the BaseException rows individually with a "Rust panics don't
+  distinguish `BaseException` from `Exception`" rationale. A
+  counter-based "panic on the Nth run" probe still maps to an
+  `Arc<AtomicUsize>` body and `expect_panic(..., "Flaky test detected")`
+  — that's the `ValueError` half of `test_baseexception.py`, ported in
+  `tests/hypothesis/nocover_baseexception.rs`.
 - `LazyStrategy` / `defines_strategy` memoisation — Hypothesis's
   `@defines_strategy` decorator wraps each `st.*` factory in a
   `LazyStrategy` that computes and caches the underlying
