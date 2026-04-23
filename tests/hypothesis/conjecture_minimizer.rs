@@ -161,11 +161,7 @@ fn test_shrink_bytes_always_true() {
 #[test]
 fn test_shrink_bytes_first_byte_one() {
     // Python row: (b"\x01\x10", lambda v: len(v) > 0 and v[0] == 1, b"\x01")
-    let shrunk = BytesShrinker::shrink(
-        &[0x01u8, 0x10],
-        |v: &[u8]| !v.is_empty() && v[0] == 1,
-        1,
-    );
+    let shrunk = BytesShrinker::shrink(&[0x01u8, 0x10], |v: &[u8]| !v.is_empty() && v[0] == 1, 1);
     assert_eq!(shrunk, vec![0x01u8]);
 }
 

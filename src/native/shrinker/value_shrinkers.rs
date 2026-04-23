@@ -1,19 +1,20 @@
 //! Standalone value shrinkers.
 //!
-//! Ports Hypothesis's `hypothesis.internal.conjecture.shrinking.Integer` and
-//! `Ordering` — per-value shrinkers that take an `(initial, predicate)` pair,
-//! track seen values (the `.calls` counter), and attempt to minimise.
+//! Ports Hypothesis's `hypothesis.internal.conjecture.shrinking.{Integer,
+//! Ordering, Collection, Bytes, String}` — per-value shrinkers that take an
+//! `(initial, predicate)` pair, track seen values (the `.calls` counter), and
+//! attempt to minimise.
 //!
 //! These live alongside hegel-rust's node-sequence shrinker (which is a port
 //! of pbtkit's `Shrinker`): the two architectures coexist.
 //!
-//! Ported from hypothesis-python/src/hypothesis/internal/conjecture/shrinking/{integer.py,ordering.py,common.py}.
+//! Ported from hypothesis-python/src/hypothesis/internal/conjecture/shrinking/{integer.py,ordering.py,collection.py,bytes.py,string.py,common.py}.
 //! See also `junkdrawer.find_integer`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-use num_traits::{CheckedSub, One};
+use num_traits::{CheckedSub, One, ToPrimitive};
 
 use crate::native::bignum::BigUint;
 use crate::native::intervalsets::IntervalSet;
@@ -366,11 +367,20 @@ where
 pub struct BytesShrinker;
 
 impl BytesShrinker {
-    pub fn shrink<F>(_initial: &[u8], _predicate: F, _min_size: usize) -> Vec<u8>
+    pub fn shrink<F>(initial: &[u8], mut predicate: F, min_size: usize) -> Vec<u8>
     where
         F: FnMut(&[u8]) -> bool,
     {
-        todo!("BytesShrinker::shrink — not yet ported")
+        let orders: Vec<usize> = initial.iter().map(|&b| b as usize).collect();
+        let final_orders = run_collection_in_order_space(
+            orders,
+            |cand: &[usize]| {
+                let bytes: Vec<u8> = cand.iter().map(|&o| o as u8).collect();
+                predicate(&bytes)
+            },
+            min_size,
+        );
+        final_orders.into_iter().map(|o| o as u8).collect()
     }
 }
 
@@ -384,16 +394,197 @@ pub struct StringShrinker;
 
 impl StringShrinker {
     pub fn shrink<F>(
-        _initial: &str,
-        _predicate: F,
-        _intervals: &IntervalSet,
-        _min_size: usize,
+        initial: &str,
+        mut predicate: F,
+        intervals: &IntervalSet,
+        min_size: usize,
     ) -> Vec<char>
     where
         F: FnMut(&str) -> bool,
     {
-        todo!("StringShrinker::shrink — not yet ported")
+        let orders: Vec<usize> = initial
+            .chars()
+            .map(|c| intervals.index_from_char_in_shrink_order(c))
+            .collect();
+        let final_orders = run_collection_in_order_space(
+            orders,
+            |cand: &[usize]| {
+                let s: String = cand
+                    .iter()
+                    .map(|&o| intervals.char_in_shrink_order(o))
+                    .collect();
+                predicate(&s)
+            },
+            min_size,
+        );
+        final_orders
+            .into_iter()
+            .map(|o| intervals.char_in_shrink_order(o))
+            .collect()
     }
+}
+
+/// Runs `Collection.run` in shrink-order space.
+///
+/// Port of `hypothesis.internal.conjecture.shrinking.Collection.run_step`.
+/// Operates on `Vec<usize>` where each element is an element's position in
+/// the caller's shrink ordering; callers (Bytes, String) convert between
+/// their element type and the order key via `from_order` / `to_order`.
+/// `left_is_better` is length-then-lex on the order keys, matching
+/// Collection's definition when `to_order` is the ordering function.
+fn run_collection_in_order_space<F>(
+    initial: Vec<usize>,
+    predicate: F,
+    min_size: usize,
+) -> Vec<usize>
+where
+    F: FnMut(&[usize]) -> bool,
+{
+    let mut inner = CollectionInOrderSpace::new(initial, predicate);
+    inner.run(min_size);
+    inner.current
+}
+
+/// Inner state for `run_collection_in_order_space`. Separated so the shrink
+/// sub-passes (Ordering, per-element Integer) can take a `&mut self` closure
+/// against the same `current` / `seen`.
+struct CollectionInOrderSpace<F>
+where
+    F: FnMut(&[usize]) -> bool,
+{
+    current: Vec<usize>,
+    predicate: F,
+    seen: HashSet<Vec<usize>>,
+}
+
+impl<F: FnMut(&[usize]) -> bool> CollectionInOrderSpace<F> {
+    fn new(initial: Vec<usize>, predicate: F) -> Self {
+        let mut seen = HashSet::new();
+        seen.insert(initial.clone());
+        CollectionInOrderSpace {
+            current: initial,
+            predicate,
+            seen,
+        }
+    }
+
+    fn consider(&mut self, value: Vec<usize>) -> bool {
+        if value == self.current {
+            return true;
+        }
+        if !self.seen.insert(value.clone()) {
+            return false;
+        }
+        if !collection_left_is_better(&value, &self.current) {
+            return false;
+        }
+        if (self.predicate)(&value) {
+            self.current = value;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn run(&mut self, min_size: usize) {
+        // short_circuit: try [from_order(0)] * min_size, i.e. [0; min_size]
+        // in order space.
+        let zeros = vec![0usize; min_size];
+        if self.consider(zeros) {
+            return;
+        }
+        self.run_step();
+    }
+
+    fn run_step(&mut self) {
+        // 1. Try all-zero at the current length.
+        let all_zero = vec![0usize; self.current.len()];
+        self.consider(all_zero);
+
+        // 2. Try deleting each element from the back.
+        let n = self.current.len();
+        for i in (0..n).rev() {
+            if i >= self.current.len() {
+                continue;
+            }
+            let mut candidate = self.current.clone();
+            candidate.remove(i);
+            self.consider(candidate);
+        }
+
+        // 3. Reorder via OrderingShrinker. Ordering's Ord on usize matches
+        // Collection's by-order element comparison, since we're already in
+        // order space.
+        let current_copy = self.current.clone();
+        {
+            let mut ordering =
+                OrderingShrinker::new(current_copy, |v: &[usize]| self.consider(v.to_vec()));
+            ordering.run();
+        }
+
+        // 4. Minimise each set of duplicated elements together. Snapshot the
+        // duplicates first — Python iterates a set built before the loop.
+        let mut counts: HashMap<usize, usize> = HashMap::new();
+        for &v in &self.current {
+            *counts.entry(v).or_insert(0) += 1;
+        }
+        let duplicates: Vec<usize> = counts
+            .into_iter()
+            .filter_map(|(v, c)| if c > 1 { Some(v) } else { None })
+            .collect();
+        for dup in duplicates {
+            let initial_val = BigUint::from(dup as u64);
+            let mut shrinker = IntegerShrinker::new(initial_val, |bu: &BigUint| {
+                let new_val = match bu.to_u64() {
+                    Some(v) if v <= usize::MAX as u64 => v as usize,
+                    _ => return false,
+                };
+                let candidate: Vec<usize> = self
+                    .current
+                    .iter()
+                    .map(|&x| if x == dup { new_val } else { x })
+                    .collect();
+                self.consider(candidate)
+            });
+            shrinker.run();
+        }
+
+        // 5. Minimise each element in turn. Python captures i and val at
+        // enumerate time, so we snapshot before iterating.
+        let initial_vals: Vec<usize> = self.current.clone();
+        for (i, &val) in initial_vals.iter().enumerate() {
+            let initial_val = BigUint::from(val as u64);
+            let mut shrinker = IntegerShrinker::new(initial_val, |bu: &BigUint| {
+                let new_val = match bu.to_u64() {
+                    Some(v) if v <= usize::MAX as u64 => v as usize,
+                    _ => return false,
+                };
+                if i >= self.current.len() {
+                    return false;
+                }
+                let mut candidate = self.current.clone();
+                candidate[i] = new_val;
+                self.consider(candidate)
+            });
+            shrinker.run();
+        }
+    }
+}
+
+/// Port of `Collection.left_is_better`: shorter wins, otherwise lexicographic
+/// over order keys. We only get here with `left.len() <= right.len()` in
+/// practice (the pipeline never extends).
+fn collection_left_is_better(left: &[usize], right: &[usize]) -> bool {
+    if left.len() < right.len() {
+        return true;
+    }
+    for (a, b) in left.iter().zip(right.iter()) {
+        if a == b {
+            continue;
+        }
+        return a < b;
+    }
+    false
 }
 
 /// Builds a "gap sort" attempt: sort `current[a..b]` excluding index `i`, then
