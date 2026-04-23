@@ -43,9 +43,9 @@ fn test_does_not_error_on_initial_calculation() {
     // Constructing generators with bounds that will fail on draw must not
     // panic at construction time. Mirrors upstream's "creating a broken
     // strategy is allowed; using it is not" contract.
-    let _ = gs::floats::<f64>().max_value(f64::NAN);
-    let _ = gs::vecs(gs::integers::<i64>()).min_size(5).max_size(2);
-    let _ = gs::floats::<f64>().min_value(2.0).max_value(1.0);
+    gs::floats::<f64>().max_value(f64::NAN);
+    gs::vecs(gs::integers::<i64>()).min_size(5).max_size(2);
+    gs::floats::<f64>().min_value(2.0).max_value(1.0);
 }
 
 #[test]
