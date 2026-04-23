@@ -1507,15 +1507,3 @@ Individually-skipped tests (rest of the file is ported):
   no-op `run_step`. Hegel's value-shrinker ports (`IntegerShrinker`,
   `OrderingShrinker`) are concrete structs with fixed `run_step`
   implementations and no subclass-pluggable base class.
-- `conjecture/test_shrinker.py::test_can_zero_subintervals`,
-  `::test_finding_a_minimal_balanced_binary_tree`,
-  `::test_zero_examples_with_variable_min_size`,
-  `::test_zero_contained_examples`, `::test_zero_irregular_examples`,
-  `::test_can_expand_deleted_region` — use span-nested draws
-  (`data.start_span(label)` / `data.stop_span(discard=…)`). The native
-  `NativeTestCase` records spans internally but its public replay path
-  (`for_choices`) does not expose a `start_span` / `stop_span` API to
-  test writers, so porting these via the local `shrinking_from`
-  helper would elide the span structure the shrinker relies on. Two
-  tests from this file that do not use spans (`test_retain_end_of_buffer`,
-  `test_can_expand_zeroed_region`) are ported.
