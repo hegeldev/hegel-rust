@@ -23,20 +23,8 @@
 //! so the empty case cannot be used as a deferred-error witness here.
 
 use crate::common::utils::{check_can_generate_examples, expect_panic, minimal};
-use hegel::generators::{self as gs, Generator};
+use hegel::generators as gs;
 use hegel::{Hegel, Settings};
-
-fn run_draw_once<T, G>(generator: G)
-where
-    G: Generator<T> + 'static,
-    T: std::fmt::Debug + Send + 'static,
-{
-    Hegel::new(move |tc| {
-        tc.draw(&generator);
-    })
-    .settings(Settings::new().test_cases(1).database(None))
-    .run();
-}
 
 #[test]
 fn test_does_not_error_on_initial_calculation() {
@@ -53,7 +41,7 @@ fn test_errors_each_time() {
     for _ in 0..2 {
         expect_panic(
             || {
-                run_draw_once(gs::integers::<i64>().max_value(1).min_value(3));
+                check_can_generate_examples(gs::integers::<i64>().max_value(1).min_value(3));
             },
             "max_value < min_value",
         );
