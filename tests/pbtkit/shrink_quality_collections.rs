@@ -1,16 +1,17 @@
 //! Ported from resources/pbtkit/tests/shrink_quality/test_collections.py.
 //!
+//! `test_swap_adjacent_blocks_identical` is ported as an embedded shrinker
+//! test in `tests/embedded/native/shrinker_tests.rs` (see
+//! `shrink_full_loop_over_identical_adjacent_blocks`).
+//!
 //! Individually-skipped tests:
 //!
-//! - `test_sort_values_insertion_natural_exit` — directly invokes a single
-//!   shrink pass plucked from `core.SHRINK_PASSES` and constructs a
-//!   `Shrinker(...)` over `TC.for_choices(...)`. hegel-rust's shrinker
-//!   exposes no public or `__native_test_internals` entry point for running
-//!   a single named pass against a seeded test case.
-//! - `test_swap_adjacent_blocks_identical` — pre-seeds `state.result`
-//!   directly and calls `state.shrink()` with no test execution. hegel-rust's
-//!   shrinker has no public path that accepts a pre-baked result and runs
-//!   only the shrinker stage.
+//! - `test_sort_values_insertion_natural_exit` — exercises the insertion-sort
+//!   fallback branch of pbtkit's `sort_values` (the full sort `[0,0,1]` fails
+//!   the `a+b>c` predicate, and the test checks that insertion sort then
+//!   lands on `[0,1,0]`). hegel-rust's `sort_values_integers` only performs
+//!   the full sort — it has no insertion-sort fallback — so this specific
+//!   branch cannot be exercised.
 
 use std::collections::{HashMap, HashSet};
 
@@ -89,10 +90,9 @@ fn test_reordering_bytes() {
 
 #[test]
 fn test_minimize_long_list() {
-    let v = minimal(
-        gs::vecs(gs::booleans()).min_size(50),
-        |x: &Vec<bool>| x.len() >= 70,
-    );
+    let v = minimal(gs::vecs(gs::booleans()).min_size(50), |x: &Vec<bool>| {
+        x.len() >= 70
+    });
     assert_eq!(v, vec![false; 70]);
 }
 
@@ -125,17 +125,14 @@ fn test_minimize_list_of_fairly_non_unique_ints() {
 
 #[test]
 fn test_list_with_complex_sorting_structure() {
-    let xs = minimal(
-        gs::vecs(gs::vecs(gs::booleans())),
-        |x: &Vec<Vec<bool>>| {
-            let reversed: Vec<Vec<bool>> = x
-                .iter()
-                .map(|t| t.iter().rev().copied().collect::<Vec<bool>>())
-                .rev()
-                .collect();
-            reversed > *x && x.len() > 3
-        },
-    );
+    let xs = minimal(gs::vecs(gs::vecs(gs::booleans())), |x: &Vec<Vec<bool>>| {
+        let reversed: Vec<Vec<bool>> = x
+            .iter()
+            .map(|t| t.iter().rev().copied().collect::<Vec<bool>>())
+            .rev()
+            .collect();
+        reversed > *x && x.len() > 3
+    });
     assert_eq!(xs.len(), 4);
 }
 
@@ -181,9 +178,7 @@ fn test_minimize_list_of_tuples() {
 fn test_lists_forced_near_top() {
     for n in [0usize, 1, 5, 10] {
         let result = minimal(
-            gs::vecs(gs::integers::<i64>())
-                .min_size(n)
-                .max_size(n + 2),
+            gs::vecs(gs::integers::<i64>()).min_size(n).max_size(n + 2),
             move |t: &Vec<i64>| t.len() == n + 2,
         );
         assert_eq!(result, vec![0i64; n + 2]);
@@ -309,9 +304,8 @@ fn test_sorting_pass_survives_type_changes_from_lists() {
         || {
             Hegel::new(|tc| {
                 let v0: Vec<bool> = tc.draw(gs::vecs(gs::booleans()).max_size(10));
-                let v1: Vec<i64> = tc.draw(
-                    gs::vecs(gs::integers::<i64>().min_value(0).max_value(0)).max_size(10),
-                );
+                let v1: Vec<i64> =
+                    tc.draw(gs::vecs(gs::integers::<i64>().min_value(0).max_value(0)).max_size(10));
                 assert_eq!(v0.len(), v1.len());
             })
             .settings(Settings::new().test_cases(100).database(None))
@@ -328,9 +322,8 @@ fn test_sorting_full_sort_survives_stale_indices() {
     // assertion fires is not the point; just that nothing crashes.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Hegel::new(|tc| {
-            let v0: Vec<i64> = tc.draw(
-                gs::vecs(gs::integers::<i64>().min_value(0).max_value(12)).max_size(10),
-            );
+            let v0: Vec<i64> =
+                tc.draw(gs::vecs(gs::integers::<i64>().min_value(0).max_value(12)).max_size(10));
             let _: bool = tc.draw(gs::booleans());
             if !(v0.is_empty() || v0[0] > 0) {
                 panic!("v0 head zero");
@@ -359,9 +352,8 @@ fn test_sorting_stale_filter_with_punning() {
     for _seed in 0..5 {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Hegel::new(move |tc| {
-                let v0: Vec<i64> = tc.draw(
-                    gs::vecs(gs::integers::<i64>().min_value(0).max_value(0)).max_size(10),
-                );
+                let v0: Vec<i64> =
+                    tc.draw(gs::vecs(gs::integers::<i64>().min_value(0).max_value(0)).max_size(10));
                 let v1: Vec<bool> = tc.draw(
                     gs::integers::<i64>()
                         .min_value(0)

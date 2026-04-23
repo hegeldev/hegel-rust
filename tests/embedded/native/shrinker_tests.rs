@@ -689,6 +689,46 @@ fn swap_adjacent_blocks_skips_equal_blocks() {
     assert_eq!(int_at(&shrinker.current_nodes, 2), 7);
 }
 
+#[test]
+fn shrink_full_loop_over_identical_adjacent_blocks() {
+    // Port of pbtkit/tests/shrink_quality/test_collections.py
+    // ::test_swap_adjacent_blocks_identical. The upstream pre-seeds
+    // `state.result = [1,1,1,1]` and calls `state.shrink()`; the test
+    // passes if every iteration survives the identical-block skip guard in
+    // `swap_adjacent_blocks` and the final result is still `[1, 1, 1, 1]`.
+    // Here we drive the full `Shrinker::shrink()` from the same initial
+    // nodes with a predicate accepting only `a == b == c == d && a > 0`.
+    let nodes = vec![
+        int_node(0, 10, 1),
+        int_node(0, 10, 1),
+        int_node(0, 10, 1),
+        int_node(0, 10, 1),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            if n.len() != 4 {
+                return (false, n.to_vec());
+            }
+            let vals: Vec<i128> = n
+                .iter()
+                .filter_map(|node| match node.value {
+                    ChoiceValue::Integer(v) => Some(v),
+                    _ => None,
+                })
+                .collect();
+            let all_equal_positive =
+                vals.len() == 4 && vals[0] > 0 && vals.windows(2).all(|w| w[0] == w[1]);
+            (all_equal_positive, n.to_vec())
+        }),
+        nodes,
+    );
+    shrinker.shrink();
+    assert_eq!(shrinker.current_nodes.len(), 4);
+    for i in 0..4 {
+        assert_eq!(int_at(&shrinker.current_nodes, i), 1);
+    }
+}
+
 // ── delete_chunks ───────────────────────────────────────────────────────────
 
 #[test]
