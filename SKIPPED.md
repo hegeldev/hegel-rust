@@ -634,6 +634,15 @@ Individually-skipped tests (rest of the file is ported):
   has no `running_under_pytest` equivalent — the whole file is Python/pytest
   plugin integration.
 
+- `test_skipping.py` (in `tests/pytest/`) — both tests drive the `pytester`
+  plugin (`testdir.makepyfile`/`testdir.runpytest`) to spawn pytest subprocesses
+  and assert on how `pytest.skip()` raised inside a `@given`/`@example` test
+  body interacts with Hypothesis's shrinking and reporting (no "Falsifying
+  example" output; `assert_outcomes(skipped=1)`). Depends on `pytest.skip`,
+  `@example` decorator stacking, `-m hypothesis` pytest marker, and
+  `--tb=native` pytest CLI — all pytest-plugin integration with no hegel-rust
+  counterpart.
+
 - `test_sideeffect_warnings.py` — all tests exercise Hypothesis's Python-specific
   import-time initialization infrastructure: `_hypothesis_globals.in_initialization`
   (a Python module attribute tracking import phase), `hypothesis.configuration`
