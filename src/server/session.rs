@@ -1,6 +1,6 @@
 use crate::backend::{DataSource, TestCaseResult, TestRunResult, TestRunner};
-use crate::cbor_utils::{as_bool, as_text, as_u64, cbor_map, map_get};
-use crate::runner::{Database, HealthCheck, Settings, Verbosity};
+use crate::cbor_utils::{as_bool, as_text, as_u64, cbor_map, map_get, map_insert};
+use crate::runner::{Database, HealthCheck, Mode, Settings, Verbosity};
 use crate::server::protocol::{Connection, HANDSHAKE_STRING, Stream};
 use ciborium::Value;
 
@@ -165,6 +165,106 @@ impl HegelSession {
 /// Test runner that communicates with the hegel-core server.
 pub(crate) struct ServerTestRunner;
 
+impl ServerTestRunner {
+    fn run_single_test_case(
+        &self,
+        settings: &Settings,
+        run_case: &mut dyn FnMut(Box<dyn DataSource>, bool) -> TestCaseResult,
+    ) -> TestRunResult {
+        let session = HegelSession::get();
+        let connection = &session.connection;
+        let verbosity = settings.verbosity;
+
+        let mut test_stream = connection.new_stream();
+
+        let mut msg = cbor_map! {
+            "command" => "single_test_case",
+            "stream_id" => test_stream.stream_id
+        };
+        if let Some(seed) = settings.seed {
+            map_insert(&mut msg, "seed", seed);
+        }
+
+        let response = {
+            let mut control = session.control.lock().unwrap_or_else(|e| e.into_inner());
+            let send_id = control.send_request(cbor_encode(&msg));
+            send_id.and_then(|id| control.receive_reply(id))
+        }
+        .unwrap_or_else(|e| handle_channel_error(e));
+        let _: Value = cbor_decode(&response);
+
+        if verbosity == Verbosity::Debug {
+            eprintln!("single_test_case response received");
+        }
+
+        let ack_null = cbor_map! {"result" => Value::Null};
+        let mut failure_message: Option<String> = None;
+        let mut passed = true;
+
+        loop {
+            let (event_id, event_payload) = match test_stream.receive_request() {
+                Ok(event) => event,
+                // nocov start
+                Err(_) if connection.server_has_exited() => {
+                    panic!("{}", server_crash_message());
+                    // nocov end
+                }
+                Err(e) => unreachable!("Failed to receive event (server still running): {}", e),
+            };
+
+            let event: Value = cbor_decode(&event_payload);
+            let event_type = map_get(&event, "event")
+                .and_then(as_text)
+                .expect("Expected event in payload");
+
+            if verbosity == Verbosity::Debug {
+                eprintln!("Received event: {:?}", event);
+            }
+
+            match event_type {
+                "test_case" => {
+                    let stream_id = map_get(&event, "stream_id")
+                        .and_then(as_u64)
+                        .expect("Missing stream id") as u32;
+
+                    let test_case_stream = connection.connect_stream(stream_id);
+
+                    test_stream
+                        .write_reply(event_id, cbor_encode(&ack_null))
+                        .expect("Failed to ack test_case");
+
+                    let backend = Box::new(ServerDataSource::new(
+                        Arc::clone(connection),
+                        test_case_stream,
+                        verbosity,
+                    ));
+                    let tc_result = run_case(backend, true);
+
+                    if let TestCaseResult::Interesting { panic_message } = tc_result {
+                        passed = false;
+                        failure_message = Some(panic_message);
+                    }
+                }
+                "test_done" => {
+                    let ack_true = cbor_map! {"result" => true};
+                    test_stream
+                        .write_reply(event_id, cbor_encode(&ack_true))
+                        .expect("Failed to ack test_done");
+                    break;
+                }
+                _ => {
+                    panic!("unknown event: {}", event_type); // nocov
+                }
+            }
+        }
+
+        TestRunResult {
+            passed,
+            failure_message,
+        }
+    }
+}
+
 impl TestRunner for ServerTestRunner {
     fn run(
         &self,
@@ -172,6 +272,10 @@ impl TestRunner for ServerTestRunner {
         database_key: Option<&str>,
         run_case: &mut dyn FnMut(Box<dyn DataSource>, bool) -> TestCaseResult,
     ) -> TestRunResult {
+        if settings.mode == Mode::SingleTestCase {
+            return self.run_single_test_case(settings, run_case);
+        }
+
         let session = HegelSession::get();
         let connection = &session.connection;
         let verbosity = settings.verbosity;
