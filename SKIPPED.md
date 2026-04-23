@@ -463,9 +463,10 @@ Individually-skipped tests (rest of the file is ported):
 - `nocover/test_deferred_errors.py::test_does_not_recalculate_the_strategy`
   — uses Python's `hypothesis.strategies._internal.core.defines_strategy`
   decorator, which wraps a factory in a `LazyStrategy` that memoises the
-  underlying `SearchStrategy` after the first use. Hegel-rust has no
-  equivalent memoising-factory decorator in its public API, and Rust
-  closures have no introspectable call-count surface.
+  underlying `SearchStrategy` after the first use. Hegel-rust generators
+  are eagerly-constructed structs rather than lazy factory wrappers, so
+  there is no equivalent laziness/memoisation layer to pin down — the
+  behaviour the test describes simply isn't a concept in the Rust API.
 
 - `test_fuzz_one_input.py` — all tests exercise `test.hypothesis.fuzz_one_input(buffer)`,
   a Python-specific public API that lets `@given`-decorated tests serve as AFL/libFuzzer
