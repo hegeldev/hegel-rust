@@ -306,6 +306,20 @@ Don't skip a test just because it uses spans — the shape is portable.
 `stop_span(discard=True)` maps to setting `tc.has_discards = true`
 (the field is `pub`) when the discarded branch is taken.
 
+### The `@run_to_nodes` pytest helper
+
+Several `test_shrinker.py` tests decorate their body with
+`@run_to_nodes`, a module-level pytest helper that runs a
+`ConjectureRunner` to discover an initial interesting choice
+sequence automatically. This is NOT the same as `shrinker.node_program`
+or any other shrinker API — it's test-setup sugar for producing the
+first interesting case. The port usually just hand-seeds an initial
+choice list that exercises the same body path and passes it to
+`shrinking_from(initial, body)`. See `test_handle_empty_draws` in
+`tests/hypothesis/conjecture_shrinker.rs` for a worked example
+(seeded `(1, 0)` plus `has_discards = true` to reproduce a discarded
+first iteration).
+
 ### Tests this shape can't reach
 
 `fixate_shrink_passes([ShrinkPass(pass_name)])` is not by itself a
@@ -341,9 +355,11 @@ The parts of `test_shrinker.py` that genuinely don't port through
   metadata, so these can't reach the Python-test-expected minimum.
 - **Instrumentation the native `Shrinker` lacks.** `shrinker.calls`,
   `shrinker.max_stall`, `StopShrinking`, `initial_coarse_reduction()`,
-  `node_program("X" * i)` / `run_to_nodes`. No counterparts in the
-  native shrinker; termination is bounded by `MAX_SHRINK_ITERATIONS`
-  with no observation hook.
+  `shrinker.node_program("X" * i)` (the adaptive node-program pass
+  called as a method). No counterparts in the native shrinker;
+  termination is bounded by `MAX_SHRINK_ITERATIONS` with no
+  observation hook. (Do NOT conflate this with the `@run_to_nodes`
+  pytest helper — that ports via hand-seeding; see above.)
 - **Monkey-patched runner/shrinker entry points.** Tests that stub
   `ConjectureRunner.generate_new_examples` or `Shrinker.shrink` to
   control the engine's first example or shrink path. No
