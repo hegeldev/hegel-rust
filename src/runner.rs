@@ -1062,6 +1062,10 @@ fn flush_log_indent_run(
     run.clear();
 }
 
+pub fn server_log_path() -> Option<String> {
+    SERVER_LOG_PATH.lock().unwrap().clone()
+}
+
 fn server_log_excerpt() -> Option<String> {
     let log_path = SERVER_LOG_PATH.lock().unwrap().clone()?;
     let content = std::fs::read_to_string(log_path).ok()?;

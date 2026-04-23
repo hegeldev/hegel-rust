@@ -501,6 +501,47 @@ fn main() {
     }
     logger.log("Server ready");
 
+    // Log watcher thread: tails the server log file and streams new lines to stderr
+    let log_logger = Arc::clone(&logger);
+    let log_stop = Arc::new(AtomicBool::new(false));
+    let log_stop_clone = Arc::clone(&log_stop);
+    let log_watcher_handle = std::thread::spawn(move || {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut pos: u64 = 0;
+        let mut last_path: Option<String> = None;
+        let scan = |pos: &mut u64, last_path: &mut Option<String>| {
+            let path = hegel::server_log_path();
+            if path.is_none() {
+                return;
+            }
+            let path = path.unwrap();
+            if last_path.as_ref() != Some(&path) {
+                *pos = 0;
+                *last_path = Some(path.clone());
+            }
+            if let Ok(mut file) = std::fs::File::open(&path) {
+                if let Ok(metadata) = file.metadata() {
+                    let len = metadata.len();
+                    if len > *pos {
+                        let _ = file.seek(SeekFrom::Start(*pos));
+                        let mut buf = String::new();
+                        if let Ok(n) = file.read_to_string(&mut buf) {
+                            *pos += n as u64;
+                            for line in buf.lines() {
+                                log_logger.log(&format!("[server] {line}"));
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        while !log_stop_clone.load(Ordering::Relaxed) {
+            scan(&mut pos, &mut last_path);
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        scan(&mut pos, &mut last_path);
+    });
+
     let (tx, rx) = std::sync::mpsc::channel::<(usize, Instant)>();
 
     // Hang monitor thread
@@ -693,24 +734,10 @@ fn main() {
     scheduler_handle.join().ok();
     monitor_handle.join().ok();
     collector_handle.join().ok();
-
-    // Print server log
-    let log_dir = ".hegel";
-    if let Ok(entries) = std::fs::read_dir(log_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "log") {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if !content.trim().is_empty() {
-                        logger.log(&format!("=== Server log: {} ===", path.display()));
-                        for line in content.lines() {
-                            logger.log(&format!("  {line}"));
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // Give the server a moment to flush logs, then stop the watcher
+    std::thread::sleep(Duration::from_millis(500));
+    log_stop.store(true, Ordering::Relaxed);
+    log_watcher_handle.join().ok();
 
     let total = task_count.load(Ordering::Relaxed);
     let passed = pass_count.load(Ordering::Relaxed);
