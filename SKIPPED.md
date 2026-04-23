@@ -1461,10 +1461,6 @@ Individually-skipped tests (rest of the file is ported):
   (`pass_to_descendant`, `reorder_spans`) that consumes span metadata;
   the native shrinker's passes don't use span structure, so the full
   pipeline won't reach the same minimum.
-- `conjecture/test_shrinker.py::test_shrinking_blocks_from_common_offset`
-  — directly invokes `shrinker.mark_changed(i)` and
-  `shrinker.lower_common_node_offset()`; these pass-level APIs aren't
-  exposed on the native `Shrinker` surface.
 - `conjecture/test_shrinker.py::test_dependent_block_pairs_is_up_to_shrinking_integers`
   — uses `hypothesis.internal.conjecture.utils.Sampler` to pick bit-widths,
   with no native counterpart.
