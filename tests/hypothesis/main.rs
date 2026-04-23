@@ -29,6 +29,7 @@ mod intervalset;
 mod nocover_deferred_errors;
 mod nocover_dynamic_variable;
 mod nocover_imports;
+mod nocover_limits;
 mod nothing;
 mod numerics;
 mod one_of;
