@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -538,6 +540,92 @@ impl Logger {
     }
 }
 
+// ─── Venv management ──────────────────────────────────────────────────────
+
+fn setup_hegel_core_venv(hegel_core_dir: &Path, racy_gil: bool) -> PathBuf {
+    let hegel_core_dir = hegel_core_dir.canonicalize().unwrap_or_else(|e| {
+        eprintln!("Cannot resolve hegel-core path {:?}: {e}", hegel_core_dir);
+        std::process::exit(1);
+    });
+
+    assert!(
+        hegel_core_dir.join("pyproject.toml").exists(),
+        "{:?} does not look like a hegel-core checkout (no pyproject.toml)",
+        hegel_core_dir
+    );
+
+    let venv_dir = hegel_core_dir.join(".stress-test-venv");
+    let python = venv_dir.join("bin/python3");
+    let hegel_bin = venv_dir.join("bin/hegel");
+
+    if !venv_dir.exists() {
+        eprintln!("Creating virtualenv at {venv_dir:?}...");
+        let status = Command::new("python3")
+            .args(["-m", "venv", &venv_dir.to_string_lossy()])
+            .status()
+            .expect("failed to run python3 -m venv");
+        assert!(status.success(), "venv creation failed");
+
+        eprintln!("Installing hegel-core (editable)...");
+        let status = Command::new(&python)
+            .args([
+                "-m",
+                "pip",
+                "install",
+                "-e",
+                &hegel_core_dir.to_string_lossy(),
+            ])
+            .status()
+            .expect("failed to run pip install");
+        assert!(status.success(), "pip install failed");
+    } else {
+        eprintln!("Reusing existing virtualenv at {venv_dir:?}");
+    }
+
+    if racy_gil {
+        let site_packages = find_site_packages(&python);
+        let pth_path = site_packages.join("racy_gil.pth");
+        if !pth_path.exists() {
+            eprintln!("Injecting racy GIL .pth file...");
+            std::fs::write(
+                &pth_path,
+                "import sys; sys.setswitchinterval(0.0000001)\n",
+            )
+            .expect("failed to write .pth file");
+        }
+
+        let output = Command::new(&python)
+            .args(["-c", "import sys; print(sys.getswitchinterval())"])
+            .output()
+            .expect("failed to check switch interval");
+        let interval: f64 = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(1.0);
+        assert!(
+            interval < 0.001,
+            "GIL switch interval not reduced (got {interval})"
+        );
+        eprintln!("GIL switch interval: {interval}s");
+    }
+
+    assert!(
+        hegel_bin.exists(),
+        "hegel binary not found at {hegel_bin:?} — pip install may have failed"
+    );
+
+    eprintln!("Using hegel at {hegel_bin:?}");
+    hegel_bin
+}
+
+fn find_site_packages(python: &Path) -> PathBuf {
+    let output = Command::new(python)
+        .args(["-c", "import site; print(site.getsitepackages()[0])"])
+        .output()
+        .expect("failed to find site-packages");
+    PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())
+}
+
 fn main() {
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -558,6 +646,8 @@ fn main() {
 
     let mut timeout_secs: u64 = 300;
     let mut workers: usize = 4;
+    let mut hegel_core_dir: Option<PathBuf> = None;
+    let mut racy_gil = true;
 
     let mut i = 1;
     while i < args.len() {
@@ -572,10 +662,19 @@ fn main() {
                 i += 1;
                 workers = args[i].parse().expect("--workers requires a number");
             }
+            "--hegel-core" => {
+                i += 1;
+                hegel_core_dir = Some(PathBuf::from(&args[i]));
+            }
+            "--no-racy-gil" => racy_gil = false,
             "--help" | "-h" => {
-                eprintln!("Usage: stress_test [--timeout SECS] [--workers N]");
-                eprintln!("  --timeout  Total runtime in seconds (default: 300)");
-                eprintln!("  --workers  Number of concurrent workers (default: 4)");
+                eprintln!("Usage: stress_test [OPTIONS]");
+                eprintln!();
+                eprintln!("Options:");
+                eprintln!("  --timeout SECS    Total runtime in seconds (default: 300)");
+                eprintln!("  --workers N       Number of concurrent workers (default: 4)");
+                eprintln!("  --hegel-core DIR  Path to hegel-core checkout (manages venv automatically)");
+                eprintln!("  --no-racy-gil     Don't inject low GIL switch interval");
                 std::process::exit(0);
             }
             other => {
@@ -584,6 +683,12 @@ fn main() {
             }
         }
         i += 1;
+    }
+
+    if let Some(ref dir) = hegel_core_dir {
+        let hegel_bin = setup_hegel_core_venv(dir, racy_gil);
+        // SAFETY: This happens before any threads are spawned.
+        unsafe { std::env::set_var("HEGEL_SERVER_COMMAND", &hegel_bin) };
     }
 
     let logger = Arc::new(Logger::new());
