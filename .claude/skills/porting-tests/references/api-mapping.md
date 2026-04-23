@@ -291,7 +291,12 @@ Call `shrinker.shrink()` to run the full pipeline, then assert on
 re-exported via `__native_test_internals`. If a port needs another
 private shrinker API (a specific pass method, a state accessor), add
 the re-export in `src/lib.rs` as part of the same commit — no separate
-source-stub needed.
+source-stub needed. If the underlying item is `pub` but gated on
+`#[cfg(test)]` (as `Shrinker::new` was before this port), **remove
+the gate too** — integration tests compile against the library without
+`--test`, so `#[cfg(test)]` items aren't visible to them. Adding the
+re-export alone produces a misleading "private type in public
+interface" or "function not found" error at the test crate.
 
 ### Spans inside the test body
 
@@ -334,16 +339,25 @@ single-pass invariant that the full pipeline violates — for example,
 `redistribute_numeric_pairs` preserves a `forced=10` node, which the
 full pipeline can still lower via unrelated passes.
 
+Unbounded `data.draw_integer(min_value=0)` / `data.draw_bytes()`
+(no `max`) are NOT by themselves a reason to skip. Native
+`tc.draw_integer(min, max)` and `tc.draw_bytes(min_sz, max_sz)`
+require concrete bounds, but picking a max that comfortably covers
+what the test's initial choice list actually produces works fine —
+common choices are `(1i128 << 24) - 1`, `i32::MAX as i128`, or the
+largest parametrize row for sizes. The shrink assertion still holds
+because shrinking drives towards zero within whatever max you pick.
+Only skip if the test's invariant genuinely depends on the max being
+unbounded (rare).
+
 The parts of `test_shrinker.py` that genuinely don't port through
 `shrinking_from` go to `SKIPPED.md` for one of these concrete reasons:
 
 - **Public `draw` feature missing from the native API.** Examples:
-  `draw_integer(min_value=0)` with no upper bound (native requires a
-  concrete `max`), `draw_integer(..., shrink_towards=N)`,
-  `draw_integer(..., forced=N)` as a public-facing constraint
-  (`draw_integer_forced` exists but takes a different shape),
-  `Sampler` for weighted bit-width pickers. Port once the feature
-  lands, or leave listed.
+  `draw_integer(..., shrink_towards=N)`, `draw_integer(..., forced=N)`
+  as a public-facing constraint (`draw_integer_forced` exists but
+  takes a different shape), `Sampler` for weighted bit-width pickers.
+  Port once the feature lands, or leave listed.
 - **Pass-level mutator API called directly.** Tests that call
   `shrinker.mark_changed(i)` / `shrinker.lower_common_node_offset()` /
   `shrinker.pass_to_descendant()` as methods on the Shrinker, not via
