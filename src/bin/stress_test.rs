@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use hegel::generators::{self as gs, Generator};
-use hegel::{HealthCheck, Hegel, Settings};
+use hegel::{HealthCheck, Hegel, Settings, Verbosity};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -15,6 +15,7 @@ fn settings() -> Settings {
         .test_cases(20)
         .seed(Some(id))
         .database(None)
+        .verbosity(Verbosity::Quiet)
         .suppress_health_check(HealthCheck::all())
 }
 
@@ -171,19 +172,31 @@ fn bad_timing_dependent() {
     .run();
 }
 
-fn bad_concurrent_mutation() {
-    use std::sync::atomic::AtomicI32;
-    static COUNTER: AtomicI32 = AtomicI32::new(0);
-
+fn bad_concurrent_draws() {
     Hegel::new(|tc| {
-        let _: bool = tc.draw(gs::booleans());
-        let val = COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::thread::yield_now();
-        let val2 = COUNTER.load(Ordering::Relaxed);
-        assert!(
-            val2 - val <= 5,
-            "concurrent mutation detected: {val} -> {val2}"
-        );
+        let handles: Vec<_> = [0, 1, 2, 3]
+            .into_iter()
+            .map(|i| {
+                let tc = tc.clone();
+                std::thread::spawn(move || match i {
+                    0 => {
+                        let _: i32 = tc.draw(gs::integers());
+                    }
+                    1 => {
+                        let _: String = tc.draw(gs::text().max_size(10));
+                    }
+                    2 => {
+                        let _: Vec<bool> = tc.draw(gs::vecs(gs::booleans()).max_size(5));
+                    }
+                    _ => {
+                        let _: f64 = tc.draw(gs::floats());
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
     })
     .settings(settings())
     .run();
@@ -272,8 +285,8 @@ const TESTS: &[TestEntry] = &[
         is_flaky: true,
     },
     TestEntry {
-        name: "bad_concurrent_mutation",
-        func: bad_concurrent_mutation,
+        name: "bad_concurrent_draws",
+        func: bad_concurrent_draws,
         is_flaky: true,
     },
     TestEntry {
@@ -301,6 +314,8 @@ impl Logger {
 }
 
 fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+
     let args: Vec<String> = std::env::args().collect();
 
     let mut timeout_secs: u64 = 300;
