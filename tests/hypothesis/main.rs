@@ -29,6 +29,7 @@ mod intervalset;
 mod nocover_collective_minimization;
 mod nocover_deferred_errors;
 mod nocover_dynamic_variable;
+mod nocover_floating;
 mod nocover_imports;
 mod nocover_limits;
 mod nothing;
