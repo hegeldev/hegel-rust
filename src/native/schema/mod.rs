@@ -36,8 +36,13 @@ pub fn dispatch_request(
             interpret_schema(ntc, schema)
         }
         "start_span" => {
-            // Spans are tracked locally by TestCase for output purposes;
-            // the native backend has no matching bookkeeping yet.
+            // Record an open span at the current choice position. The matching
+            // `stop_span` pops this entry and records a completed span so that
+            // span-mutation exploration can find structurally-matching regions.
+            let label = map_get(payload, "label")
+                .and_then(as_u64)
+                .expect("start_span payload missing label");
+            ntc.span_stack.push((ntc.nodes.len(), label.to_string()));
             Ok(Value::Null)
         }
         "stop_span" => {
@@ -51,6 +56,12 @@ pub fn dispatch_request(
             if discard {
                 ntc.has_discards = true;
             }
+            let (start, label) = ntc
+                .span_stack
+                .pop()
+                .expect("stop_span without matching start_span");
+            let end = ntc.nodes.len();
+            ntc.record_span(start, end, label);
             Ok(Value::Null)
         }
         "new_collection" => {
@@ -142,15 +153,15 @@ pub fn dispatch_request(
 /// For leaf schemas (those that don't call `interpret_schema` recursively),
 /// records a span in `ntc.spans` so that span-mutation exploration can find
 /// structurally-duplicate values (e.g. two equal strings in a tuple).
-/// Only leaf schemas are tracked to avoid overlapping spans from nested schemas.
+/// Compound schemas get their spans from the user-level `start_span` /
+/// `stop_span` commands that higher-level generators emit.
 fn interpret_schema(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
     use crate::cbor_utils::as_text;
     let schema_type = map_get(schema, "type")
         .and_then(as_text)
         .expect("Schema must have a \"type\" field");
 
-    // Record spans only for leaf schemas (no recursive interpret_schema calls).
-    // This avoids overlapping spans that would corrupt span-mutation results.
+    // Record spans for leaf schemas (no recursive interpret_schema calls).
     let is_leaf = matches!(
         schema_type,
         "integer" | "boolean" | "float" | "string" | "binary" | "sampled_from"

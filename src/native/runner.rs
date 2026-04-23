@@ -593,12 +593,14 @@ fn format_backtrace_native(bt: &Backtrace, full: bool) -> String {
 }
 // nocov end
 
-/// Try span mutation: find two spans with the same label and replace both with
-/// identical choices from one donor. This makes two independently-generated
-/// structures (like two strings in a tuple) identical, which is how
-/// `test_long_duplicates_strings`-style tests are found.
+/// Try span mutation: find two spans with the same label and either duplicate
+/// the parent's prefix (when one contains the other, e.g. recursive tree
+/// structures) or replace both with identical choices from one donor.
 ///
-/// Port of pbtkit's `span_mutation.py`.
+/// Port of Hypothesis's `generate_mutations_from` in
+/// `internal/conjecture/engine.py`. Matches Hypothesis rather than pbtkit
+/// because pbtkit skips overlapping spans, which prevents the tree-recursion
+/// mutation case (see Hypothesis's `test_can_find_duplicated_subtree`).
 // nocov start
 fn try_span_mutation<F: FnMut(TestCase)>(
     nodes: &[ChoiceNode],
@@ -608,13 +610,26 @@ fn try_span_mutation<F: FnMut(TestCase)>(
 ) -> Option<Vec<ChoiceNode>> {
     use std::collections::HashMap;
 
-    // Group span indices by label.
-    let mut by_label: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (i, span) in spans.iter().enumerate() {
-        by_label.entry(span.label.as_str()).or_default().push(i);
+    // Group span (start, end) pairs by label, deduplicating via a set so that
+    // spans which cover the same range are collapsed. Matches Hypothesis's
+    // `_mutator_groups`, which uses a `set[tuple[int, int]]` per label.
+    let mut by_label: HashMap<&str, std::collections::HashSet<(usize, usize)>> = HashMap::new();
+    for span in spans.iter() {
+        by_label
+            .entry(span.label.as_str())
+            .or_default()
+            .insert((span.start, span.end));
     }
-    // Only keep labels that have at least 2 spans (needed to make two equal).
-    let multi: Vec<Vec<usize>> = by_label.into_values().filter(|v| v.len() >= 2).collect();
+    // Only keep labels that have at least 2 distinct spans.
+    let multi: Vec<Vec<(usize, usize)>> = by_label
+        .into_values()
+        .filter(|v| v.len() >= 2)
+        .map(|v| {
+            let mut items: Vec<(usize, usize)> = v.into_iter().collect();
+            items.sort();
+            items
+        })
+        .collect();
     if multi.is_empty() {
         return None;
     }
@@ -624,36 +639,58 @@ fn try_span_mutation<F: FnMut(TestCase)>(
     for _ in 0..SPAN_MUTATION_ATTEMPTS {
         let group = &multi[rng.random_range(0..multi.len())];
 
-        // Pick two distinct span indices from this group.
+        // Pick two distinct spans from this group.
         let i_a = rng.random_range(0..group.len());
         let mut i_b = rng.random_range(0..group.len() - 1);
         if i_b >= i_a {
             i_b += 1;
         }
 
-        let mut span_a = &spans[group[i_a]];
-        let mut span_b = &spans[group[i_b]];
-        // Ensure span_a comes before span_b in the choice sequence.
-        if span_a.start > span_b.start {
-            std::mem::swap(&mut span_a, &mut span_b);
-        }
-        // Skip overlapping spans.
-        if span_a.end > span_b.start {
-            continue;
+        let (mut start_a, mut end_a) = group[i_a];
+        let (mut start_b, mut end_b) = group[i_b];
+        // Ensure span a comes before span b in the choice sequence.
+        if start_a > start_b {
+            std::mem::swap(&mut start_a, &mut start_b);
+            std::mem::swap(&mut end_a, &mut end_b);
         }
 
-        // Pick one of a/b as donor; replace both with donor's choices.
-        let donor = if rng.random::<bool>() { span_a } else { span_b };
-        let replacement: Vec<ChoiceValue> = values[donor.start..donor.end].to_vec();
-
-        // Build the mutated choice sequence:
-        // values[:a.start] + replacement + values[a.end..b.start] + replacement + values[b.end..]
-        let mut attempt: Vec<ChoiceValue> = Vec::new();
-        attempt.extend_from_slice(&values[..span_a.start]);
-        attempt.extend(replacement.iter().cloned());
-        attempt.extend_from_slice(&values[span_a.end..span_b.start]);
-        attempt.extend(replacement.iter().cloned());
-        attempt.extend_from_slice(&values[span_b.end..]);
+        let attempt: Vec<ChoiceValue> = if start_a <= start_b && end_b <= end_a {
+            // Span a strictly contains span b (e.g. a tree root and one of its
+            // subtrees of the same shape). Duplicate the parent's prefix at
+            // the position where the child starts: the parent's header plus
+            // everything that followed the child gets re-parsed as a nested
+            // copy, producing self-similar structure.
+            //
+            // Matches Hypothesis mutation (1) in `generate_mutations_from`:
+            //   attempt = choices[:start2] + choices[start1:]
+            let mut out = Vec::with_capacity(values.len() + (start_b - start_a));
+            out.extend_from_slice(&values[..start_b]);
+            out.extend_from_slice(&values[start_a..]);
+            out
+        } else {
+            // Non-containment case: pick one span as donor and replace both
+            // with its content. If the spans partially overlap, the middle
+            // slice becomes empty; the resulting choice sequence is still a
+            // valid attempt (the engine will happily reinterpret it).
+            let (donor_start, donor_end) = if rng.random::<bool>() {
+                (start_a, end_a)
+            } else {
+                (start_b, end_b)
+            };
+            let replacement: &[ChoiceValue] = &values[donor_start..donor_end];
+            let mid = if end_a <= start_b {
+                &values[end_a..start_b]
+            } else {
+                &[][..]
+            };
+            let mut out = Vec::new();
+            out.extend_from_slice(&values[..start_a]);
+            out.extend_from_slice(replacement);
+            out.extend_from_slice(mid);
+            out.extend_from_slice(replacement);
+            out.extend_from_slice(&values[end_b..]);
+            out
+        };
 
         let ntc = NativeTestCase::for_choices(&attempt, None);
         let (status, new_nodes, _) = ctf.run(ntc);

@@ -27,8 +27,11 @@ fn test_can_find_duplicated_subtree() {
     let tree = tree_def.generator();
     tree_def.set(hegel::one_of!(
         gs::just(Tree::Leaf),
-        gs::tuples!(gs::integers::<i64>(), tree.clone(), tree.clone())
-            .map(|(v, l, r)| Tree::Node(v, Box::new(l), Box::new(r))),
+        gs::tuples!(gs::integers::<i64>(), tree.clone(), tree.clone()).map(|(v, l, r)| Tree::Node(
+            v,
+            Box::new(l),
+            Box::new(r)
+        )),
     ));
 
     find_any(tree, |v: &Tree| match v {
