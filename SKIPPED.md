@@ -550,6 +550,20 @@ Individually-skipped tests (rest of the file is ported):
   hegel-rust has no scrutineer / branch-coverage infrastructure or
   warning surface.
 
+- `test_scrutineer.py` — all tests exercise Hypothesis's "Explain
+  phase" / scrutineer (`hypothesis.internal.scrutineer.make_report`),
+  which traces Python bytecode via `sys.settrace` / `sys.monitoring`
+  to identify which lines of the user's `@given` test function ran
+  during failing cases and emits a formatted report. The feature is
+  inherently Python-specific: hegel-rust user test code is compiled
+  Rust running out-of-process from Python Hypothesis, so there is no
+  Python bytecode to trace. The tests additionally depend on
+  `pytest.testdir.runpytest_inprocess` (pytest-specific, no Rust
+  counterpart) to spawn pytest as a subprocess and inspect its
+  stdout, and on Python-specific file-path categorisation
+  (local / `site-packages` / stdlib via `sysconfig.get_paths()`) for
+  `test_report_sort`.
+
 - `test_filestorage.py` — all tests exercise Hypothesis's `hypothesis.configuration`
   module (`storage_directory`, `set_hypothesis_home_dir`, the
   `HYPOTHESIS_STORAGE_DIRECTORY` environment variable, and the auto-written
