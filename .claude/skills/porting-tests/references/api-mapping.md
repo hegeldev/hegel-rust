@@ -293,31 +293,52 @@ private shrinker API (a specific pass method, a state accessor), add
 the re-export in `src/lib.rs` as part of the same commit — no separate
 source-stub needed.
 
+### Spans inside the test body
+
+Python `data.start_span(label)` / `data.stop_span()` brackets port to a
+`with_span` helper that captures `tc.nodes.len()` before and after the
+body and calls `NativeTestCase::record_span(start, end, label)`. The
+native shrinker's passes don't consume span metadata (unlike
+Hypothesis's `pass_to_descendant` / `reorder_spans`), so the recorded
+spans are faithfulness-only; the shrink pipeline still runs end-to-end.
+Don't skip a test just because it uses spans — the shape is portable.
+
+`stop_span(discard=True)` maps to setting `tc.has_discards = true`
+(the field is `pub`) when the discarded branch is taken.
+
 ### Tests this shape can't reach
 
-A large fraction of `test_shrinker.py` doesn't port through
-`shrinking_from` and goes to `SKIPPED.md` with one of these rationales:
+`fixate_shrink_passes([ShrinkPass(pass_name)])` is not by itself a
+reason to skip. Running `Shrinker::shrink()` end-to-end usually
+converges on the same minimum as the single Python pass the fixate
+narrows to, so *port the test against the full pipeline and keep the
+minimum-choice assertion*. Drop any incidental call-count or
+`valid_examples` assertions that the native `Shrinker` has no
+counterpart for. Only skip when the test's subject is specifically a
+single-pass invariant that the full pipeline violates — for example,
+`test_redistribute_with_forced_node_integer` asserts that
+`redistribute_numeric_pairs` preserves a `forced=10` node, which the
+full pipeline can still lower via unrelated passes.
 
-- **Fixated on a single named Hypothesis pass.** Tests calling
-  `shrinker.fixate_shrink_passes([ShrinkPass.minimize_individual_choices])`,
-  `shrinker.pass_to_descendant()`, `shrinker.redistribute_numeric_pairs()`,
-  `shrinker.lower_common_node_offset()`, `shrinker.reorder_spans()`,
-  `shrinker.lower_integers_together()`,
-  `shrinker.lower_duplicated_characters()`, etc. The native `Shrinker`
-  only exposes `.shrink()` (the full pipeline); its individual passes
-  are `pub(super)` with different names and factoring
-  (`binary_search_integer_towards_zero`, `redistribute_integers`,
-  `shrink_duplicates`, `redistribute_string_pairs`,
-  `swap_adjacent_blocks`, …). "Exactly this pass did exactly that
-  much" assertions aren't portable without changing the pass API.
-- **Span-nested initial choices.** Tests whose initial choice
-  construction calls `data.start_span(label)` /
-  `data.stop_span(discard=True)`. `NativeTestCase::for_choices`
-  replays values but its public surface has no `start_span` /
-  `stop_span` hook, so span-structured cases elide the span tree the
-  shrinker relies on. Skip until a span-aware replay helper lands.
-  (Affects `test_can_zero_subintervals`, `test_zero_contained_examples`,
-  `test_finding_a_minimal_balanced_binary_tree`, etc.)
+The parts of `test_shrinker.py` that genuinely don't port through
+`shrinking_from` go to `SKIPPED.md` for one of these concrete reasons:
+
+- **Public `draw` feature missing from the native API.** Examples:
+  `draw_integer(min_value=0)` with no upper bound (native requires a
+  concrete `max`), `draw_integer(..., shrink_towards=N)`,
+  `draw_integer(..., forced=N)` as a public-facing constraint
+  (`draw_integer_forced` exists but takes a different shape),
+  `Sampler` for weighted bit-width pickers. Port once the feature
+  lands, or leave listed.
+- **Pass-level mutator API called directly.** Tests that call
+  `shrinker.mark_changed(i)` / `shrinker.lower_common_node_offset()` /
+  `shrinker.pass_to_descendant()` as methods on the Shrinker, not via
+  `fixate_shrink_passes`. The native `Shrinker` doesn't expose these
+  as public methods.
+- **Span-consuming passes.** Tests that exercise `pass_to_descendant`
+  or `reorder_spans` specifically (vs. using spans only as structure
+  in the test body). The native shrinker's passes ignore span
+  metadata, so these can't reach the Python-test-expected minimum.
 - **Instrumentation the native `Shrinker` lacks.** `shrinker.calls`,
   `shrinker.max_stall`, `StopShrinking`, `initial_coarse_reduction()`,
   `node_program("X" * i)` / `run_to_nodes`. No counterparts in the
