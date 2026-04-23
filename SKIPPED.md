@@ -327,6 +327,24 @@ Individually-skipped tests (rest of the file is ported):
   sign-aware `-0.0` / `0.0` / NaN behaviour is already covered through
   `make_float_clamper` in `tests/hypothesis/float_utils.rs`
   (`test_float_clamper_examples` uses the same boundary cases).
+- `test_inquisitor.py` (in `conjecture/`) — every test exercises
+  Hypothesis's "inquisitor" output feature (source-level comments
+  like `# or any other generated value` and `# The test always failed
+  when commented parts were varied together` appended to falsifying
+  examples). hegel-rust has no inquisitor (no references in `src/`
+  or `tests/`) and its failure output format is entirely different
+  (same rationale as the skipped `test_falsifying_example_output.py`).
+  All tests also depend on Python-specific facilities: `__notes__`
+  (PEP 678 exception annotation) via a `fails_with_output` helper
+  that compares the notes text; `st.builds(MyClass, ...)` (Python
+  class construction; hegel-rust's `#[derive(Generate)]` is
+  compile-time only and the failure-report formatter would emit
+  Rust syntax, not `MyClass(0, True)`); `st.fixed_dictionaries({"x":
+  ..., "y": ...})` (Python string-keyed heterogeneous dicts with no
+  Rust analog); and `st.data()` with
+  `data.conjecture_data.draw_boolean(forced=True)` (hegel-rust has
+  no `gs::data()` public entry point for runtime draws and does not
+  expose the internal forced-draw primitive through any strategy).
 - `test_caching.py` — tests Python object identity (`st.text() is
   st.text()`) of Hypothesis's strategy cache; Rust generators are
   builder structs with no `is`-style identity equivalent.
