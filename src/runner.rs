@@ -801,8 +801,9 @@ fn init_panic_hook() {
         let prev_hook = panic::take_hook();
         panic::set_hook(Box::new(move |info| {
             if !currently_in_test_context() {
-                // use actual panic hook outside of tests
-                prev_hook(info);
+                if !crate::control::is_quiet_mode() {
+                    prev_hook(info);
+                }
                 return;
             }
 
@@ -1369,6 +1370,9 @@ where
     pub fn run(self) {
         init_panic_hook();
 
+        let quiet = self.settings.verbosity == Verbosity::Quiet;
+        crate::control::set_quiet_mode(quiet);
+
         let runner = ServerTestRunner;
         let mut test_fn = self.test_fn;
         let got_interesting = AtomicBool::new(false);
@@ -1448,7 +1452,7 @@ fn run_test_case(
                         // nocov end
                     });
 
-                if is_final {
+                if is_final && !crate::control::is_quiet_mode() {
                     eprintln!(
                         "thread '{}' ({}) panicked at {}:",
                         thread_name, thread_id, location

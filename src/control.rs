@@ -2,6 +2,7 @@ use std::cell::Cell;
 
 thread_local! {
     static IN_TEST_CONTEXT: Cell<bool> = const { Cell::new(false) };
+    static QUIET_MODE: Cell<bool> = const { Cell::new(false) };
 }
 
 #[doc(hidden)]
@@ -26,4 +27,12 @@ pub(crate) fn with_test_context<R>(f: impl FnOnce() -> R) -> R {
 /// ```
 pub fn currently_in_test_context() -> bool {
     IN_TEST_CONTEXT.get()
+}
+
+pub(crate) fn set_quiet_mode(quiet: bool) {
+    QUIET_MODE.set(quiet);
+}
+
+pub(crate) fn is_quiet_mode() -> bool {
+    QUIET_MODE.get()
 }

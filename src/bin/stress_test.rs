@@ -314,7 +314,20 @@ impl Logger {
 }
 
 fn main() {
-    std::panic::set_hook(Box::new(|_| {}));
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some(msg) = info.payload().downcast_ref::<&str>() {
+            if msg.contains("__HEGEL_") {
+                return;
+            }
+        }
+        if let Some(msg) = info.payload().downcast_ref::<String>() {
+            if msg.contains("__HEGEL_") {
+                return;
+            }
+        }
+        prev_hook(info);
+    }));
 
     let args: Vec<String> = std::env::args().collect();
 

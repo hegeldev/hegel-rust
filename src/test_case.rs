@@ -221,10 +221,11 @@ fn panic_message(payload: &Box<dyn Any + Send>) -> String {
 
 impl TestCase {
     pub(crate) fn new(data_source: Box<dyn DataSource>, is_last_run: bool, mode: Mode) -> Self {
+        let quiet = crate::control::is_quiet_mode();
         let override_sink = OUTPUT_OVERRIDE.with(|cell| cell.borrow().clone());
         let on_draw: OutputSink = match override_sink {
-            Some(sink) if is_last_run => sink,
-            _ if is_last_run => Arc::new(|msg| eprintln!("{}", msg)),
+            Some(sink) if is_last_run && !quiet => sink,
+            _ if is_last_run && !quiet => Arc::new(|msg| eprintln!("{}", msg)),
             _ => Arc::new(|_| {}),
         };
         TestCase {
