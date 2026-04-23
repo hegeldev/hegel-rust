@@ -28,6 +28,7 @@ mod float_utils;
 mod given_error_conditions;
 mod health_checks;
 mod intervalset;
+mod nocover_baseexception;
 mod nocover_collective_minimization;
 mod nocover_deferred_errors;
 mod nocover_dynamic_variable;
