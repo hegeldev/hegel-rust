@@ -1500,8 +1500,7 @@ Individually-skipped tests (rest of the file is ported):
   `ConjectureRunner.generate_new_examples` / `Shrinker.shrink` to
   control engine first-example and shrink path. No monkey-patching
   entry point in the native engine.
-- `conjecture/test_shrinker.py::test_node_deletion_can_delete_short_ranges`,
-  `::test_node_programs_are_adaptive`,
+- `conjecture/test_shrinker.py::test_node_programs_are_adaptive`,
   `::test_will_let_fixate_shrink_passes_do_a_full_run_through` — use
   `shrinker.node_program("X" * i)` (adaptive deletion pass) or
   `StopShrinking` / `max_stall` control surface. Neither the adaptive

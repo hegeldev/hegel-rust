@@ -46,8 +46,7 @@
 //!   the engine's first example and shrink path. No monkey-patching entry
 //!   point in the native engine.
 //!
-//! - `test_node_deletion_can_delete_short_ranges`,
-//!   `test_node_programs_are_adaptive`,
+//! - `test_node_programs_are_adaptive`,
 //!   `test_will_let_fixate_shrink_passes_do_a_full_run_through` — use
 //!   `shrinker.node_program("X" * i)` (adaptive deletion pass) or the
 //!   `StopShrinking` / `max_stall` control surface. Neither the adaptive
@@ -464,6 +463,40 @@ fn test_can_quickly_shrink_to_trivial_collection() {
             "n = {n}"
         );
     }
+}
+
+#[test]
+fn test_node_deletion_can_delete_short_ranges() {
+    // Python fixates on `[node_program("X" * i) for i in range(1, 5)]`
+    // (contiguous-chunk deletion of sizes 1..=4); the native pipeline's
+    // `delete_chunks` pass achieves the same contiguous deletion and the
+    // full pipeline converges on the `(4,) * 5` block.
+    let mut initial: Vec<i128> = Vec::new();
+    for i in 0..5i128 {
+        for _ in 0..=i {
+            initial.push(i);
+        }
+    }
+    let mut shrinker = shrinking_from(integer_choices(&initial), |tc| {
+        loop {
+            let n = match tc.draw_integer(0, 65535) {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+            for _ in 0..n {
+                match tc.draw_integer(0, 65535) {
+                    Ok(v) if v != n => return false,
+                    Ok(_) => {}
+                    Err(_) => return false,
+                }
+            }
+            if n == 4 {
+                return true;
+            }
+        }
+    });
+    shrinker.shrink();
+    assert_eq!(extract_integers(&shrinker.current_nodes), vec![4i128; 5]);
 }
 
 #[test]
