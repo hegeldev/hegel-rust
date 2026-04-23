@@ -18,7 +18,7 @@
 //! Individually-skipped tests:
 //!
 //! - `test_can_pass_to_an_indirect_descendant`,
-//!   `test_shrinking_blocks_from_common_offset`, `test_can_reorder_spans`,
+//!   `test_can_reorder_spans`,
 //!   `test_dependent_block_pairs_is_up_to_shrinking_integers`,
 //!   `test_zig_zags_quickly_with_shrink_towards` (all 4 parametrize rows),
 //!   `test_can_simultaneously_lower_non_duplicated_nearby_integers` (3
@@ -463,6 +463,31 @@ fn test_can_quickly_shrink_to_trivial_collection() {
             "n = {n}"
         );
     }
+}
+
+#[test]
+fn test_shrinking_blocks_from_common_offset() {
+    // Python calls `shrinker.mark_changed(i)` / `shrinker.lower_common_node_offset()`
+    // directly; the native `Shrinker` doesn't expose those mutator methods,
+    // but the full pipeline's alternating `binary_search_integer_towards_zero`
+    // walks `(11, 10)` → `(9, 10)` → `(9, 8)` → … → `(1, 0)` (or `(0, 1)`).
+    let mut shrinker = shrinking_from(integer_choices(&[11, 10]), |tc| {
+        let m = match tc.draw_integer(0, 255) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        let n = match tc.draw_integer(0, 255) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        (m - n).abs() <= 1 && m.max(n) > 0
+    });
+    shrinker.shrink();
+    let result = extract_integers(&shrinker.current_nodes);
+    assert!(
+        result == vec![0i128, 1] || result == vec![1i128, 0],
+        "unexpected result: {result:?}"
+    );
 }
 
 #[test]
