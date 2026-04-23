@@ -1261,3 +1261,9 @@ Individually-skipped tests (rest of the file is ported):
   `test_wildcard_import` exercises `from hypothesis.extra.numpy import *`.
   Both target the numpy integration and use Python-specific facilities
   (`sys.modules`, wildcard import) with no Rust counterpart.
+
+- `test_series.py` (in `tests/pandas/`) — pandas-extra integration tests.
+  Every test exercises `hypothesis.extra.pandas` (`pdst.series`,
+  `pdst.range_indexes`) and pandas/numpy dtypes (`np.dtype("O")`,
+  `pd.core.arrays.integer.Int8Dtype`). hegel-rust has no pandas
+  integration or counterpart for pandas `Series`/dtype generation.
