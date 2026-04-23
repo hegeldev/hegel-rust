@@ -61,6 +61,14 @@ Individually-skipped tests (rest of the file is ported):
   a pre-seeded `TC.for_choices(...)` and `Shrinker(...)`; hegel-rust's
   shrinker exposes no public or `__native_test_internals` entry-point
   for a single shrink pass on a seeded test case.
+- `shrink_quality/test_collections.py::test_sort_values_insertion_natural_exit`
+  — same shape: directly invokes a single shrink pass plucked from
+  `core.SHRINK_PASSES` and constructs a `Shrinker(...)` over
+  `TC.for_choices(...)`; hegel-rust has no equivalent entry point.
+- `shrink_quality/test_collections.py::test_swap_adjacent_blocks_identical`
+  — pre-seeds `state.result` directly and calls `state.shrink()` with no
+  test execution; hegel-rust's shrinker has no public path that accepts a
+  pre-baked result and runs only the shrinker stage.
 - `test_text.py::test_string_sort_key_type_mismatch` — exercises Python's
   dynamically-typed `sort_key(non-string)`; Rust's `sort_key(&str)` signature
   makes the "non-string argument" case unrepresentable at compile time.
