@@ -302,6 +302,31 @@ Individually-skipped tests (rest of the file is ported):
   `ast.parse` and relies on Python's module-file import system. No
   Rust counterpart — Python-specific facilities (`sys.modules`,
   `monkeypatch`, `ast`).
+- `test_junkdrawer.py` (in `conjecture/`) — every test targets a
+  Python-language-specific utility container or facility in
+  `hypothesis.internal.conjecture.junkdrawer` that exists only to work
+  around Python limitations that don't apply in Rust, or targets a
+  `hypothesis.internal.floats` helper whose behaviour is already
+  exercised through its Rust caller. `LazySequenceCopy` (O(1) list
+  copy via a dict+`SortedList` mask) is redundant in Rust where
+  ownership and `Vec::clone()` / `Cow::Borrowed` handle the same job;
+  `IntList` (auto-upgrading `array.array` typecode storage) is
+  redundant in Rust where typed `Vec<T>` is used directly; the
+  `ensure_free_stackframes` / `stack_depth_of_caller` pair exercise
+  Python's `sys.setrecursionlimit` / `HypothesisWarning` machinery and
+  `sys._getframe` introspection, none of which have Rust counterparts
+  (Rust uses the OS stack with no user-facing limit API, and has no
+  runtime frame-chain API); `startswith` / `endswith` are wrappers
+  around Python `bytes.startswith` / `bytes.endswith` that in Rust are
+  built-in `[T]::starts_with` / `[T]::ends_with`, so the tests reduce
+  to exercising stdlib; `replace_all` and `binary_search` are engine
+  helpers not mirrored in `src/native/` (the native shrinker uses
+  inline logic rather than a standalone helper); and the single
+  `test_clamp` test targets `hypothesis.internal.floats.clamp`, which
+  is already a private helper inside `src/native/floats.rs` and whose
+  sign-aware `-0.0` / `0.0` / NaN behaviour is already covered through
+  `make_float_clamper` in `tests/hypothesis/float_utils.rs`
+  (`test_float_clamper_examples` uses the same boundary cases).
 - `test_caching.py` — tests Python object identity (`st.text() is
   st.text()`) of Hypothesis's strategy cache; Rust generators are
   builder structs with no `is`-style identity equivalent.
