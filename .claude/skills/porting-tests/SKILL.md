@@ -220,6 +220,29 @@ strategies as Rust generic wrappers (`Filtered<T, F, G>`,
 (`ChoiceNode`, `ConjectureData.*`) which *do* have `src/native/`
 counterparts and should be native-gated rather than skipped.
 
+A separate reason for individual skipping is that the test's *subject* is
+a native feature hegel-rust hasn't implemented yet — not a Python-type
+issue, not a missing harness, but a concrete pass / branch / fallback
+that pbtkit (or Hypothesis) has and `src/native/` doesn't. Example:
+pbtkit's `sort_values` insertion-sort fallback (triggered when the full
+sort fails the `replace` predicate) has no counterpart in hegel-rust's
+`sort_values_integers`, so the test exercising that branch can't be
+ported until the fallback lands. For this case:
+
+1. Name the specific missing feature in both the module docstring and
+   the `SKIPPED.md` entry — not "no entry point" or "no counterpart",
+   but the concrete pass/branch/fallback that's absent.
+2. File a `TODO.yaml` entry for implementing the feature with
+   un-skipping the test(s) listed as acceptance criteria, and reference
+   it from the SKIPPED.md entry so the chain is traceable.
+
+This is a frequent mis-diagnosis: a first-pass skip blames "no public
+entry point" when the real barrier is a missing native feature (or, in
+the other direction, the skip rationale is genuine but the test IS
+portable as an embedded `Shrinker::new(...).shrink()` harness call —
+see pbtkit-overview's engine-harness section). Before committing an
+individual skip, re-check which of the three you're actually hitting.
+
 Record these in **both** places:
 
 1. At the top of the Rust module, under an `//! Individually-skipped
