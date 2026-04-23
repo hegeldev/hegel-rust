@@ -12,9 +12,9 @@
 //! - `test_does_not_recalculate_the_strategy` — uses Python's
 //!   `hypothesis.strategies._internal.core.defines_strategy` decorator,
 //!   which wraps a factory in a `LazyStrategy` that memoizes the
-//!   underlying `SearchStrategy` after the first use. Hegel-rust has no
-//!   equivalent memoising-factory decorator in its public API, and Rust
-//!   closures have no introspectable call-count surface.
+//!   underlying `SearchStrategy` after the first use. Hegel-rust
+//!   generators are eagerly-constructed structs rather than lazy factory
+//!   wrappers, so there is no equivalent laziness/memoisation layer.
 //!
 //! The `st.sampled_from([])` line inside
 //! `test_does_not_error_on_initial_calculation` is also omitted:
