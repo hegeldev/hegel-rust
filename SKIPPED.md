@@ -1510,10 +1510,13 @@ Individually-skipped tests (rest of the file is ported):
 - `conjecture/test_shrinker.py::test_will_terminate_stalled_shrinks` —
   asserts `shrinker.calls <= 1 + 2 * shrinker.max_stall`; native
   `Shrinker` has no `calls` counter or `max_stall` knob.
-- `conjecture/test_shrinker.py::test_alternative_shrinking_will_lower_to_alternate_value`,
-  `::test_shrinking_one_of_with_same_shape` — call
-  `shrinker.initial_coarse_reduction()`, a Python-specific
-  coarse-grained pre-pass with no native counterpart.
+- `conjecture/test_shrinker.py::test_alternative_shrinking_will_lower_to_alternate_value`
+  — calls `shrinker.initial_coarse_reduction()`, a Python-specific
+  coarse-grained pre-pass. The asserted final state
+  (`shrinker.choices[0] == 0`) depends on the pre-pass discovering an
+  alternate interesting origin via stateful test-body scratch, which
+  the full `Shrinker::shrink()` pipeline doesn't trigger from the
+  initial `(1, b"hello world")`.
 - `conjecture/test_shrinker.py::test_silly_shrinker_subclass` —
   subclasses the generic base-class
   `hypothesis.internal.conjecture.shrinking.common.Shrinker` with a

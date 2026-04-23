@@ -60,10 +60,12 @@
 //!   covered by `MAX_SHRINK_ITERATIONS` which has no equivalent assertion
 //!   hook.)
 //!
-//! - `test_alternative_shrinking_will_lower_to_alternate_value`,
-//!   `test_shrinking_one_of_with_same_shape` — call
-//!   `shrinker.initial_coarse_reduction()`, a Python-specific coarse-grained
-//!   pre-pass with no native counterpart.
+//! - `test_alternative_shrinking_will_lower_to_alternate_value` — calls
+//!   `shrinker.initial_coarse_reduction()`, a Python-specific
+//!   coarse-grained pre-pass. The asserted final state depends on the
+//!   pre-pass discovering an alternate interesting origin via stateful
+//!   scratch, which the full `Shrinker::shrink()` pipeline doesn't
+//!   trigger from the initial input.
 //!
 //! - `test_silly_shrinker_subclass` — subclasses the generic base-class
 //!   `hypothesis.internal.conjecture.shrinking.common.Shrinker` with a
@@ -462,6 +464,29 @@ fn test_can_quickly_shrink_to_trivial_collection() {
             "n = {n}"
         );
     }
+}
+
+#[test]
+fn test_shrinking_one_of_with_same_shape() {
+    // Python fixates on `shrinker.initial_coarse_reduction()`; the asserted
+    // final sequence `(1, 0)` is the initial value (already minimal, since
+    // `n` must be 1 for interesting and the second draw is already 0), so
+    // the full native pipeline is a strict superset that still preserves
+    // it. Python's second `data.draw_integer()` is unbounded; hegel-rust
+    // requires a concrete max, so we use a wide i32 range.
+    let initial = integer_choices(&[1, 0]);
+    let mut shrinker = shrinking_from(initial, |tc| {
+        let n = match tc.draw_integer(0, 1) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        if tc.draw_integer(i32::MIN as i128, i32::MAX as i128).is_err() {
+            return false;
+        }
+        n == 1
+    });
+    shrinker.shrink();
+    assert_eq!(extract_integers(&shrinker.current_nodes), vec![1, 0]);
 }
 
 #[test]
