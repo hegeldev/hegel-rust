@@ -285,6 +285,12 @@ Individually-skipped tests (rest of the file is ported):
 - `test_constants_ast.py` — tests Hypothesis's Python-AST constant
   extractor (`ConstantVisitor`, `constants_from_module`); parses Python
   source code, no Rust counterpart.
+- `test_codemods.py` (in `codemods/`) — tests
+  `hypothesis.extra.codemods`, a Python source-code refactoring tool
+  built on `libcst` (the LibCST Python CST library) that rewrites legacy
+  Hypothesis API calls. Entire file depends on `libcst.codemod.CodemodTest`
+  and tests Python-syntax transformations (keyword arguments,
+  `HealthCheck.all()` → `list(HealthCheck)`, etc.); no Rust counterpart.
 - `test_local_constants.py` (in `conjecture/`) — tests the consumption
   side of the same Python-AST constant-collection feature as
   `test_constants_ast.py` above. Every test monkey-patches
