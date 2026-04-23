@@ -24,7 +24,6 @@
 //!   `test_zig_zags_quickly_with_shrink_towards` (all 4 parametrize rows),
 //!   `test_can_simultaneously_lower_non_duplicated_nearby_integers` (3
 //!   parametrize rows), `test_redistribute_with_forced_node_integer`,
-//!   `test_can_quickly_shrink_to_trivial_collection` (4 parametrize rows),
 //!   `test_redistribute_numeric_pairs`,
 //!   `test_lower_duplicated_characters_across_choices` (8 parametrize rows),
 //!   `test_redistribute_numeric_pairs_shrink_towards_explicit_integer`,
@@ -36,8 +35,8 @@
 //!   `shrink_towards` constraint on `draw_integer`, `forced=` on
 //!   `draw_integer`, `stop_span(discard=True)` semantics that the native
 //!   shrinker would have to consult for descendant-passing /
-//!   reorder-spans, `Sampler` for block-distribution, or a `.calls`
-//!   counter to bound examples. (The other fixate-on-named-pass tests in
+//!   reorder-spans, or `Sampler` for block-distribution. (The other
+//!   fixate-on-named-pass tests in
 //!   this file, like `test_can_shrink_variable_draws_with_just_deletion`,
 //!   port cleanly by running `Shrinker::shrink()` end-to-end; the full
 //!   pipeline converges on the same minimum as the single pass the
@@ -437,6 +436,34 @@ fn test_zig_zags_quickly() {
     });
     shrinker.shrink();
     assert_eq!(extract_integers(&shrinker.current_nodes), vec![1, 1]);
+}
+
+#[test]
+fn test_can_quickly_shrink_to_trivial_collection() {
+    // Python parametrizes n in [10, 50, 100, 200] and fixates on
+    // `minimize_individual_choices`; we run the full pipeline and drop the
+    // incidental `shrinker.calls < 10` assertion. Python's
+    // `data.draw_bytes()` with no size uses a default max; hegel-rust
+    // requires explicit bounds so we cap at 200 (the largest n in the
+    // parametrize).
+    for n in [10usize, 50, 100, 200] {
+        let initial = vec![ChoiceValue::Bytes(vec![1u8; n])];
+        let mut shrinker = shrinking_from(initial, move |tc| match tc.draw_bytes(0, 200) {
+            Ok(b) => b.len() >= n,
+            Err(_) => false,
+        });
+        shrinker.shrink();
+        let actual: Vec<ChoiceValue> = shrinker
+            .current_nodes
+            .iter()
+            .map(|node| node.value.clone())
+            .collect();
+        assert_eq!(
+            actual,
+            vec![ChoiceValue::Bytes(vec![0u8; n])],
+            "n = {n}"
+        );
+    }
 }
 
 #[test]
