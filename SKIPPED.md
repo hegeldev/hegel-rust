@@ -1456,38 +1456,57 @@ Individually-skipped tests (rest of the file is ported):
   `draw_integer(min, max)` accepts neither). The remaining `@example`
   rows (`boolean`, `float`) are ported.
 
-- `conjecture/test_shrinker.py::test_can_shrink_variable_draws_with_just_deletion`,
-  `::test_duplicate_nodes_that_go_away`, `::test_accidental_duplication`,
-  `::test_can_pass_to_an_indirect_descendant`,
-  `::test_shrinking_blocks_from_common_offset`, `::test_can_reorder_spans`,
-  `::test_dependent_block_pairs_is_up_to_shrinking_integers`,
-  `::test_zig_zags_quickly`,
-  `::test_zig_zags_quickly_with_shrink_towards`,
-  `::test_can_simultaneously_lower_non_duplicated_nearby_integers`,
-  `::test_redistribute_with_forced_node_integer`,
-  `::test_can_quickly_shrink_to_trivial_collection`,
-  `::test_redistribute_numeric_pairs`,
-  `::test_lower_duplicated_characters_across_choices`,
+- `conjecture/test_shrinker.py::test_duplicate_nodes_that_go_away` —
+  `data.draw_integer(min_value=0)` with no upper bound; the native
+  `draw_integer(min, max)` requires a concrete upper bound.
+- `conjecture/test_shrinker.py::test_can_pass_to_an_indirect_descendant`,
+  `::test_can_reorder_spans` — test pass-level behaviour
+  (`pass_to_descendant`, `reorder_spans`) that consumes span metadata;
+  the native shrinker's passes don't use span structure, so the full
+  pipeline won't reach the same minimum.
+- `conjecture/test_shrinker.py::test_shrinking_blocks_from_common_offset`
+  — directly invokes `shrinker.mark_changed(i)` and
+  `shrinker.lower_common_node_offset()`; these pass-level APIs aren't
+  exposed on the native `Shrinker` surface.
+- `conjecture/test_shrinker.py::test_dependent_block_pairs_is_up_to_shrinking_integers`
+  — uses `hypothesis.internal.conjecture.utils.Sampler` to pick bit-widths,
+  with no native counterpart.
+- `conjecture/test_shrinker.py::test_zig_zags_quickly_with_shrink_towards`,
   `::test_redistribute_numeric_pairs_shrink_towards_explicit_integer`,
   `::test_redistribute_numeric_pairs_shrink_towards_explicit_float`,
   `::test_redistribute_numeric_pairs_shrink_towards_explicit_combined`,
   `::test_redistribute_numeric_pairs_shrink_towards_integer` — each
-  fixates a single named Python shrink pass (`minimize_individual_choices`,
-  `minimize_duplicated_choices`, `pass_to_descendant`,
-  `lower_common_node_offset`, `reorder_spans`, `redistribute_numeric_pairs`,
-  `lower_integers_together`, `lower_duplicated_characters`) via
-  `fixate_shrink_passes([ShrinkPass(...)])` or direct method call.
-  Hegel's native shrinker only exposes `Shrinker::shrink()` (the full
-  pipeline); its individual passes are `pub(super)` and the pass names
-  differ, so "exactly this pass did exactly that much" assertions are
-  not portable without changing the pass API.
+  uses `data.draw_integer(..., shrink_towards=...)`; the native
+  `draw_integer(min, max)` accepts no `shrink_towards` constraint.
+- `conjecture/test_shrinker.py::test_can_simultaneously_lower_non_duplicated_nearby_integers`
+  — fixates on `lower_integers_together`; the native shrinker has no
+  equivalent "simultaneously lower adjacent non-duplicated integers"
+  pass, and the full pipeline won't lower them in lock-step.
+- `conjecture/test_shrinker.py::test_redistribute_with_forced_node_integer`
+  — asserts that `redistribute_numeric_pairs` preserves a
+  `forced=10` node; the full native pipeline may lower the non-forced
+  side via unrelated passes, which is the opposite of what the test
+  checks.
+- `conjecture/test_shrinker.py::test_can_quickly_shrink_to_trivial_collection`
+  — asserts `shrinker.calls < 10`; the native `Shrinker` has no
+  `.calls` counter.
+- `conjecture/test_shrinker.py::test_redistribute_numeric_pairs` —
+  uses Hypothesis's `@given(ChoiceNode, ChoiceNode, ...)` with
+  `ChoiceNode` constructed from `type`, `value`, `constraints`
+  dicts. The native `ChoiceNode` shape is a plain struct without the
+  dynamic "constraints-dict" surface, and we have no generator for
+  random node pairs.
+- `conjecture/test_shrinker.py::test_lower_duplicated_characters_across_choices`
+  — fixates on `lower_duplicated_characters`; the native shrinker's
+  `redistribute_string_pairs` has different factoring and the full
+  pipeline doesn't necessarily drive duplicated characters across
+  non-adjacent choices to the same minimum.
 - `conjecture/test_shrinker.py::test_deletion_and_lowering_fails_to_shrink`,
   `::test_permits_but_ignores_raising_order` — monkey-patch
   `ConjectureRunner.generate_new_examples` / `Shrinker.shrink` to
   control engine first-example and shrink path. No monkey-patching
   entry point in the native engine.
-- `conjecture/test_shrinker.py::test_handle_empty_draws`,
-  `::test_node_deletion_can_delete_short_ranges`,
+- `conjecture/test_shrinker.py::test_node_deletion_can_delete_short_ranges`,
   `::test_node_programs_are_adaptive`,
   `::test_will_let_fixate_shrink_passes_do_a_full_run_through` — use
   `shrinker.node_program("X" * i)` (adaptive deletion pass) or
