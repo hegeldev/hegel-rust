@@ -6,23 +6,3 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-- title: Implement sort_values insertion-sort fallback
-  details: |
-    pbtkit's `shrinking/sorting.py::_try_sort_group` falls back to an
-    insertion-sort loop when the full sort fails the `shrinker.replace`
-    predicate, enabled via the `collections` feature flag. hegel-rust's
-    `src/native/shrinker/sequence.rs::sort_values_integers` and
-    `sort_values_booleans` perform only the full sort — no fallback.
-
-    Porting target: the insertion-sort loop (lines 59-85 of sorting.py),
-    including the recompute-indices logic that handles structural changes
-    from prior swaps.
-
-    Acceptance: un-skip
-    `shrink_quality/test_collections.py::test_sort_values_insertion_natural_exit`
-    (currently in SKIPPED.md with this TODO as the reference) and port it
-    as an embedded shrinker test in
-    `tests/embedded/native/shrinker_tests.rs`. The test constructs a
-    Shrinker with initial `[1,0,0]`, predicate `a+b>c`, calls
-    `shrinker.sort_values()`, and asserts `current_nodes == [0,1,0]`.

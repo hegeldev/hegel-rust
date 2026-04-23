@@ -4,14 +4,9 @@
 //! test in `tests/embedded/native/shrinker_tests.rs` (see
 //! `shrink_full_loop_over_identical_adjacent_blocks`).
 //!
-//! Individually-skipped tests:
-//!
-//! - `test_sort_values_insertion_natural_exit` — exercises the insertion-sort
-//!   fallback branch of pbtkit's `sort_values` (the full sort `[0,0,1]` fails
-//!   the `a+b>c` predicate, and the test checks that insertion sort then
-//!   lands on `[0,1,0]`). hegel-rust's `sort_values_integers` only performs
-//!   the full sort — it has no insertion-sort fallback — so this specific
-//!   branch cannot be exercised.
+//! `test_sort_values_insertion_natural_exit` is ported as an embedded shrinker
+//! test in `tests/embedded/native/shrinker_tests.rs` (see
+//! `sort_values_insertion_natural_exit`).
 
 use std::collections::{HashMap, HashSet};
 
