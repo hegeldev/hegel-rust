@@ -243,6 +243,63 @@ yet (e.g. `has_discards` was a no-op before it was wired up to
 change to track it — same shape as any other native-gated port that
 surfaces a missing feature.
 
+## Forced draws (engine-internal, native only)
+
+Hypothesis's `conjecture/test_forced.py` exercises the "pass `forced=X`
+to a draw, the draw returns X, and the emitted choice sequence replays
+back to X without `forced`" invariant. hegel-rust exposes the forcing
+side on `NativeTestCase` via per-type helpers:
+
+| Hypothesis                                              | hegel-rust (native only)                                              |
+|---------------------------------------------------------|------------------------------------------------------------------------|
+| `data.draw_boolean(p, forced=True)`                     | `ntc.weighted(p, Some(v))`                                             |
+| `data.draw_integer(a, b, forced=n)`                     | `ntc.draw_integer_forced(a, b, n)`                                     |
+| `data.draw_float(min, max, nan?, inf?, forced=f)`       | `ntc.draw_float_forced(min, max, allow_nan, allow_infinity, f)`        |
+| `data.draw_bytes(min_sz, max_sz, forced=bs)`            | `ntc.draw_bytes_forced(min_sz, max_sz, bs)`                            |
+| `data.draw_string(lo_cp, hi_cp, min_sz, max_sz, forced=s)` | `ntc.draw_string_forced(lo_cp, hi_cp, min_sz, max_sz, s)`           |
+
+All four panic if `forced` violates the declared constraints (outside
+range, wrong length, disallowed NaN, etc.) — mirroring `weighted`.
+`draw_integer` takes `(min, max)` only; rows with `shrink_towards=` /
+`weights=` are unportable until those constraints land natively.
+
+### Forced → replay roundtrip
+
+The canonical `test_forced_values` shape is:
+
+```rust
+let mut ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(0));
+let drawn = ntc.draw_float_forced(min, max, nan, inf, forced).ok().unwrap();
+assert!(choice_equal_float(drawn, forced));
+
+let choices: Vec<ChoiceValue> = ntc.nodes.iter().map(|n| n.value.clone()).collect();
+let mut replay = NativeTestCase::for_choices(&choices, None);
+let replayed = replay.draw_float(min, max, nan, inf).ok().unwrap();
+assert!(choice_equal_float(replayed, forced));
+```
+
+`choice_equal_float` (re-exported via `__native_test_internals`) is
+bit-exact: `0.0 != -0.0`, distinct NaN payloads compare unequal, etc.
+Use it instead of `==` whenever the test is asserting NaN / zero-sign
+preservation. For plain equality on integers / bytes / strings the
+default `==` / `assert_eq!` is fine.
+
+### Adding a new forced-draw helper
+
+If a port needs a forced-draw shape not in the table above (e.g. a
+future `draw_integer` with `shrink_towards`), follow the pattern in
+`src/native/core/state.rs`:
+
+1. Validate the forced value against the `XChoice { … }` constraint
+   struct (`kind.validate(&forced)`).
+2. `self.pre_choice()?` — same prologue as the non-forced draw.
+3. Push a `ChoiceNode { kind: ChoiceKind::X(kind), value:
+   ChoiceValue::X(forced.clone()), was_forced: true }`.
+4. Return the forced value unchanged.
+
+The `was_forced = true` marker is what makes the choice replay
+deterministically under `for_choices`.
+
 ## Health checks
 
 hegel-rust's `HealthCheck` enum has four variants — `FilterTooMuch`,
@@ -738,6 +795,10 @@ predicates:
 | `sys.float_info.epsilon`                     | `f64::EPSILON`                       |                                                                       |
 | `sys.float_info.min * sys.float_info.epsilon` | `f64::from_bits(1)`                 | Smallest positive **subnormal**. The Python idiom exploits that the multiplication yields exactly bit pattern 1; in Rust skip the arithmetic and name the bit pattern. |
 | `math.inf` / `math.nan`                      | `f64::INFINITY` / `f64::NAN`         |                                                                       |
+| `-math.nan` / `float('-nan')`                | `f64::NAN.copysign(-1.0)`            | Python's unary minus on NaN flips the sign bit deterministically. **`-f64::NAN` in Rust has implementation-defined sign** and cannot be relied on for bit-exact roundtrips — use `copysign` when the test preserves NaN sign. Generalises to `nan.copysign(sign)` for `sign ∈ {-1.0, 1.0}` over a parametrize row. |
+| `1e999` / `-1e999` (Python literal)          | `f64::INFINITY` / `f64::NEG_INFINITY` | Python parses overflowing float literals to infinity at compile time — not an error. An `@example(1e999)` row ports as `f64::INFINITY`, not a panic test. |
+| `hypothesis.internal.floats.SIGNALING_NAN`   | `f64::from_bits(0x7FF4_0000_0000_0000)` | No Rust stdlib constant. Define as a `const SIGNALING_NAN: f64 = f64::from_bits(…);` at the top of the ported file. |
+| `hypothesis.internal.floats.SMALLEST_SUBNORMAL` | `f64::from_bits(1)`               | Same — no stdlib constant. `f64::MIN_POSITIVE` is the smallest *normal*, which is different. |
 | `math.isnan(x)` / `math.isinf(x)` / `math.isfinite(x)` | `x.is_nan()` / `x.is_infinite()` / `x.is_finite()` | Methods, not free functions.                                          |
 | `math.fabs(x)`                               | `x.abs()`                            | Method.                                                               |
 | `math.sqrt(x)`                               | `x.sqrt()`                           | Method.                                                               |
