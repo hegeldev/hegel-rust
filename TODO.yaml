@@ -6,3 +6,34 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
+
+  - title: Support NaN-focused float generation so all (sign × signaling) NaN variants are findable
+    details: |
+      Hypothesis's `filter_rewriting` pass recognises `floats().filter(math.isnan)`
+      and rewrites the strategy to a dedicated `NanStrategy` that emits a mix of
+      positive/negative, quiet/signaling NaN bit patterns. This is what lets
+      `nocover/test_floating.py::test_can_find_negative_and_signaling_nans` hit
+      all four (sign × signaling) variants inside 1000 examples.
+
+      `src/native/floats.rs` has no filter-rewriting layer and no NaN-biased
+      mode on `gs::floats`, so the rewritten strategy doesn't exist. The
+      generic `.filter()` is a 3-try rejection sampler — by the time it has
+      drawn a single NaN it has also burned most of the budget on non-NaN
+      floats, and the four bit-pattern variants do not all turn up.
+
+      Options for the native side:
+      1. Add filter rewriting for `is_nan` / `is_finite` / `is_infinite`
+         predicates on `gs::floats` (full port of Hypothesis's shape).
+      2. Add a narrower `NanStrategy`-equivalent generator (e.g. a dedicated
+         `gs::nan_floats()` or `gs::floats().only_nan(true)` knob) and have
+         `.filter(is_nan)` route through it when callers want it directly.
+
+      Option 2 is smaller and sufficient to unskip the test.
+
+      Acceptance criteria:
+        - Remove the `nocover/test_floating.py::test_can_find_negative_and_signaling_nans`
+          line from `SKIPPED.md` and port the (snan, neg) parametrisation
+          (four cases) into `tests/hypothesis/nocover_floating.rs`, driven
+          through `FindAny` with a NaN-focused generator.
+        - The ported test passes in native mode under the TRY_HARDER budget
+          (1000 attempts, `FilterTooMuch` suppressed).
