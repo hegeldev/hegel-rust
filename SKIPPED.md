@@ -500,6 +500,13 @@ Individually-skipped tests (rest of the file is ported):
   interaction. The seed-reporting UX is fundamentally Python/pytest-specific with no
   hegel-rust counterpart.
 
+- `test_seeding.py` (in `tests/pytest/`) — both tests drive the `pytester` plugin
+  (`testdir.makepyfile`/`testdir.runpytest`) to spawn pytest subprocesses, parse
+  their stdout, and assert on the `--hypothesis-seed=N` pytest CLI flag and the
+  seed-instruction printed on `FailedHealthCheck`. Also uses `monkeypatch.delenv`
+  and `hypothesis._settings._CI_VARS`. The whole file is Hypothesis's pytest-plugin
+  seeding UX, which is Python/pytest-specific with no hegel-rust counterpart.
+
 - `test_sideeffect_warnings.py` — all tests exercise Hypothesis's Python-specific
   import-time initialization infrastructure: `_hypothesis_globals.in_initialization`
   (a Python module attribute tracking import phase), `hypothesis.configuration`
