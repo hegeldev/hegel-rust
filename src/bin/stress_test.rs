@@ -542,7 +542,12 @@ impl Logger {
 
 // ─── Venv management ──────────────────────────────────────────────────────
 
-fn setup_venv(hegel_core_dir: Option<&Path>, racy_gil: bool) -> PathBuf {
+struct VenvInfo {
+    hegel_bin: PathBuf,
+    pth_path: PathBuf,
+}
+
+fn setup_venv(hegel_core_dir: Option<&Path>) -> VenvInfo {
     let (venv_dir, install_spec) = match hegel_core_dir {
         Some(dir) => {
             let dir = dir.canonicalize().unwrap_or_else(|e| {
@@ -588,9 +593,8 @@ fn setup_venv(hegel_core_dir: Option<&Path>, racy_gil: bool) -> PathBuf {
         eprintln!("Reusing existing virtualenv at {venv_dir:?}");
     }
 
-    if racy_gil {
-        inject_racy_gil(&python);
-    }
+    let site_packages = find_site_packages(&python);
+    let pth_path = site_packages.join("stress_test_chaos.pth");
 
     assert!(
         hegel_bin.exists(),
@@ -598,34 +602,10 @@ fn setup_venv(hegel_core_dir: Option<&Path>, racy_gil: bool) -> PathBuf {
     );
 
     eprintln!("Using hegel at {hegel_bin:?}");
-    hegel_bin
-}
-
-fn inject_racy_gil(python: &Path) {
-    let site_packages = find_site_packages(python);
-    let pth_path = site_packages.join("racy_gil.pth");
-    if !pth_path.exists() {
-        eprintln!("Injecting racy GIL .pth file...");
-        std::fs::write(
-            &pth_path,
-            "import sys; sys.setswitchinterval(0.0000001)\n",
-        )
-        .expect("failed to write .pth file");
+    VenvInfo {
+        hegel_bin,
+        pth_path,
     }
-
-    let output = Command::new(python)
-        .args(["-c", "import sys; print(sys.getswitchinterval())"])
-        .output()
-        .expect("failed to check switch interval");
-    let interval: f64 = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse()
-        .unwrap_or(1.0);
-    assert!(
-        interval < 0.001,
-        "GIL switch interval not reduced (got {interval})"
-    );
-    eprintln!("GIL switch interval: {interval}s");
 }
 
 fn find_site_packages(python: &Path) -> PathBuf {
@@ -634,6 +614,125 @@ fn find_site_packages(python: &Path) -> PathBuf {
         .output()
         .expect("failed to find site-packages");
     PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())
+}
+
+// ─── Chaos settings ───────────────────────────────────────────────────────
+
+fn generate_chaos_pth(rng: &mut impl rand::Rng) -> (String, String) {
+    let mut lines = Vec::new();
+    let mut description = Vec::new();
+
+    lines.push("import sys, os, random".to_string());
+
+    // GIL switch interval: always set, vary the aggressiveness
+    let switch_choices = [0.0000001, 0.000001, 0.00001, 0.0001];
+    let switch_interval = switch_choices[rng.random_range(0..switch_choices.len())];
+    lines.push(format!("sys.setswitchinterval({switch_interval})"));
+    description.push(format!("gil={switch_interval}"));
+
+    // CPU affinity: pin to a random subset of cores
+    if rng.random_bool(0.7) {
+        let num_cores: usize = rng.random_range(1..=3);
+        lines.push(format!(
+            "try:\n \
+             cores = list(range(os.cpu_count() or 1))\n \
+             random.shuffle(cores)\n \
+             os.sched_setaffinity(0, set(cores[:{num_cores}]))\n\
+             except (OSError, AttributeError): pass"
+        ));
+        description.push(format!("affinity={num_cores}cores"));
+    }
+
+    // GC pressure
+    if rng.random_bool(0.5) {
+        let gc_mode: u32 = rng.random_range(0..3);
+        match gc_mode {
+            0 => {
+                lines.push("import gc; gc.disable()".to_string());
+                description.push("gc=off".to_string());
+            }
+            1 => {
+                lines.push("import gc; gc.set_threshold(1, 1, 1)".to_string());
+                description.push("gc=aggressive".to_string());
+            }
+            _ => {
+                let t0 = rng.random_range(50..=500);
+                lines.push(format!("import gc; gc.set_threshold({t0}, 5, 5)"));
+                description.push(format!("gc=thresh({t0})"));
+            }
+        }
+    }
+
+    // Signal bombardment (SIGALRM)
+    if rng.random_bool(0.3) {
+        let interval_choices = [0.0001, 0.001, 0.01];
+        let sig_interval = interval_choices[rng.random_range(0..interval_choices.len())];
+        lines.push(format!(
+            "try:\n \
+             import signal\n \
+             signal.signal(signal.SIGALRM, lambda *_: None)\n \
+             signal.setitimer(signal.ITIMER_REAL, {sig_interval}, {sig_interval})\n\
+             except (OSError, AttributeError, ValueError): pass"
+        ));
+        description.push(format!("sigalrm={sig_interval}s"));
+    }
+
+    let pth_content = lines.join("\n") + "\n";
+    let desc = description.join(", ");
+    (pth_content, desc)
+}
+
+fn run_chaos_thread(
+    pth_path: PathBuf,
+    stop: Arc<AtomicBool>,
+    chaos_kill_in_progress: Arc<AtomicBool>,
+    logger: Arc<Logger>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("chaos".to_string())
+        .spawn(move || {
+            let mut rng = rand::rng();
+            let mut cycle = 0u64;
+
+            // Write initial chaos settings
+            let (pth_content, desc) = generate_chaos_pth(&mut rng);
+            std::fs::write(&pth_path, &pth_content).expect("failed to write .pth");
+            logger.log(&format!("[chaos] cycle {cycle}: {desc}"));
+
+            loop {
+                let jitter = rng.random_range(45..=75);
+                for _ in 0..jitter {
+                    if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                cycle += 1;
+                let (pth_content, desc) = generate_chaos_pth(&mut rng);
+                std::fs::write(&pth_path, &pth_content).expect("failed to write .pth");
+
+                // Randomize MALLOC_ARENA_MAX for the next server process
+                let arena_max = rng.random_range(1..=4);
+                // SAFETY: no other thread reads this env var; only the child process will.
+                unsafe {
+                    std::env::set_var("MALLOC_ARENA_MAX", arena_max.to_string());
+                }
+
+                logger.log(&format!(
+                    "[chaos] cycle {cycle}: {desc}, malloc_arenas={arena_max} — killing server"
+                ));
+                chaos_kill_in_progress.store(true, Ordering::SeqCst);
+                hegel::__test_kill_server();
+                // Give workers a moment to see the kill and retry
+                std::thread::sleep(Duration::from_secs(2));
+                chaos_kill_in_progress.store(false, Ordering::SeqCst);
+            }
+        })
+        .unwrap()
 }
 
 fn main() {
@@ -657,7 +756,6 @@ fn main() {
     let mut timeout_secs: u64 = 300;
     let mut workers: usize = 4;
     let mut hegel_core_dir: Option<PathBuf> = None;
-    let mut racy_gil = true;
 
     let mut i = 1;
     while i < args.len() {
@@ -676,7 +774,6 @@ fn main() {
                 i += 1;
                 hegel_core_dir = Some(PathBuf::from(&args[i]));
             }
-            "--no-racy-gil" => racy_gil = false,
             "--help" | "-h" => {
                 eprintln!("Usage: stress_test [OPTIONS]");
                 eprintln!();
@@ -684,7 +781,6 @@ fn main() {
                 eprintln!("  --timeout SECS    Total runtime in seconds (default: 300)");
                 eprintln!("  --workers N       Number of concurrent workers (default: 4)");
                 eprintln!("  --hegel-core DIR  Path to hegel-core checkout (manages venv automatically)");
-                eprintln!("  --no-racy-gil     Don't inject low GIL switch interval");
                 std::process::exit(0);
             }
             other => {
@@ -695,9 +791,9 @@ fn main() {
         i += 1;
     }
 
-    let hegel_bin = setup_venv(hegel_core_dir.as_deref(), racy_gil);
+    let venv = setup_venv(hegel_core_dir.as_deref());
     // SAFETY: This happens before any threads are spawned.
-    unsafe { std::env::set_var("HEGEL_SERVER_COMMAND", &hegel_bin) };
+    unsafe { std::env::set_var("HEGEL_SERVER_COMMAND", &venv.hegel_bin) };
 
     let logger = Arc::new(Logger::new());
     let stop = Arc::new(AtomicBool::new(false));
@@ -709,6 +805,7 @@ fn main() {
     let unexpected_fail_count = Arc::new(AtomicU64::new(0));
     let hang_count = Arc::new(AtomicU64::new(0));
     let server_crashed = Arc::new(AtomicBool::new(false));
+    let chaos_kill_in_progress = Arc::new(AtomicBool::new(false));
 
     logger.log(&format!(
         "Starting stress test: {workers} workers, {timeout_secs}s timeout, {} tests ({} expected-fail)",
@@ -730,6 +827,14 @@ fn main() {
         std::process::exit(1);
     }
     logger.log("Server ready");
+
+    // Chaos thread: periodically randomize server settings and restart
+    let chaos_handle = run_chaos_thread(
+        venv.pth_path,
+        Arc::clone(&stop),
+        Arc::clone(&chaos_kill_in_progress),
+        Arc::clone(&logger),
+    );
 
     // Log watcher thread: tails the server log file and streams new lines to stderr
     let log_logger = Arc::clone(&logger);
@@ -850,6 +955,7 @@ fn main() {
         let expected_fail_count = Arc::clone(&expected_fail_count);
         let unexpected_fail_count = Arc::clone(&unexpected_fail_count);
         let server_crashed = Arc::clone(&server_crashed);
+        let chaos_kill_in_progress = Arc::clone(&chaos_kill_in_progress);
         let pending = Arc::clone(&pending);
         let tx = tx.clone();
         let queue = Arc::clone(&queue);
@@ -910,6 +1016,10 @@ fn main() {
                                     || msg.contains("server failed during startup");
 
                                 if is_server_crash {
+                                    if chaos_kill_in_progress.load(Ordering::SeqCst) {
+                                        expected_fail_count.fetch_add(1, Ordering::Relaxed);
+                                        continue;
+                                    }
                                     logger.log(&format!(
                                         "SERVER CRASH detected during {}: {msg}",
                                         test.name
@@ -961,6 +1071,7 @@ fn main() {
         h.join().ok();
     }
     stop.store(true, Ordering::Relaxed);
+    chaos_handle.join().ok();
     scheduler_handle.join().ok();
     monitor_handle.join().ok();
     collector_handle.join().ok();
