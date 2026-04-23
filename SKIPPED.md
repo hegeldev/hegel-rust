@@ -1386,6 +1386,15 @@ Individually-skipped tests (rest of the file is ported):
   Both target the numpy integration and use Python-specific facilities
   (`sys.modules`, wildcard import) with no Rust counterpart.
 
+- `test_gen_data.py` (in `tests/numpy/`) — numpy-extra integration tests.
+  Every test exercises `hypothesis.extra.numpy` (`nps.arrays`,
+  `nps.array_shapes`, `nps.broadcastable_shapes`, `nps.from_dtype`,
+  `nps.mutually_broadcastable_shapes`, `nps.basic_indices`,
+  `nps.integer_array_indices`, `nps.valid_tuple_axes`, etc.) and numpy
+  dtypes/arrays (`np.dtype`, `np.ndarray`, `np.zeros`, `np.broadcast_to`).
+  hegel-rust has no numpy integration or counterpart for numpy
+  array/dtype/shape/index generation.
+
 - `test_series.py` (in `tests/pandas/`) — pandas-extra integration tests.
   Every test exercises `hypothesis.extra.pandas` (`pdst.series`,
   `pdst.range_indexes`) and pandas/numpy dtypes (`np.dtype("O")`,
