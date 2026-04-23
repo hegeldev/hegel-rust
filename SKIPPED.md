@@ -538,6 +538,16 @@ Individually-skipped tests (rest of the file is ported):
   and `hypothesis._settings._CI_VARS`. The whole file is Hypothesis's pytest-plugin
   seeding UX, which is Python/pytest-specific with no hegel-rust counterpart.
 
+- `test_checks.py` (in `tests/pytest/`) — the single test drives the `pytester`
+  plugin (`testdir.makepyfile`/`testdir.runpytest`) to spawn a pytest subprocess
+  and assert that pytest test functions decorated with `@hypothesis.seed`,
+  `@hypothesis.example`, `@hypothesis.reproduce_failure`, or `@composite` but
+  without `@given` are reported as failed by pytest. This is Hypothesis's
+  pytest-plugin `pytest_collection_modifyitems`-style check against misuse of
+  Python decorators on pytest test functions; hegel-rust is not a pytest plugin
+  and has no decorator-without-`@given` failure path, so the whole concept has
+  no counterpart.
+
 - `test_sideeffect_warnings.py` — all tests exercise Hypothesis's Python-specific
   import-time initialization infrastructure: `_hypothesis_globals.in_initialization`
   (a Python module attribute tracking import phase), `hypothesis.configuration`
