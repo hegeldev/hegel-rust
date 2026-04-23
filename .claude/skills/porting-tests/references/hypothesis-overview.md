@@ -66,6 +66,38 @@ Hypothesis "strategies" correspond to hegel-rust "generators".
   `tests/common/project.rs` to run the body as a subprocess and capture
   stderr (see `tests/test_output.rs` for the pattern).
 
+## Shared test fixtures
+
+### `tests.common.standard_types`
+
+A heterogeneous `list[SearchStrategy]` defined in
+`hypothesis-python/tests/common/__init__.py`, used to parametrize
+"behaves consistently across strategy types" tests (e.g.
+`nocover/test_collective_minimization.py`, `cover/test_draw_example.py`,
+`nocover/test_fixtures.py`). Python iterates it via
+`@pytest.mark.parametrize("spec", standard_types, ids=repr)`; Rust
+can't, because each entry has a different concrete strategy type.
+
+Port as one `#[test]` per representative strategy, sharing a generic
+check helper. Cover the breadth of the Python list (booleans, bounded
+and unbounded integers, floats with various bound configurations, text,
+binary, tuples, `sampled_from`, nested lists) rather than mirroring
+every entry 1:1 — `standard_types` includes strategies with no hegel-rust
+analog (`complex_numbers()`, `fractions()`, `decimals()`, `randoms()`,
+`frozensets()`, `recursive()`) that you skip per the api-mapping table.
+
+### `try/except Unsatisfiable: pass` in `standard_types` loops
+
+When the test body is wrapped in `try: ... except Unsatisfiable: pass`,
+strategies that can only produce a single value — `just("a")`,
+`tuples()`, `lists(none(), max_size=0)`, `fixed_dictionaries({})`,
+`none()` — hit the `Unsatisfiable` branch because the predicate
+(typically "at least 2 distinct values") is vacuously false. These rows
+carry no signal; omit them from the Rust port with a one-line note in
+the module docstring naming the class of strategies dropped. Don't
+translate the `try/except` guard itself — it was only there to keep
+Python's parametrize sweep from failing on the single-value entries.
+
 ## Tests to avoid porting
 
 - Anything that introspects `RuleBasedStateMachine` via Python reflection.
