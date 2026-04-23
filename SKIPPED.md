@@ -547,18 +547,6 @@ Individually-skipped tests (rest of the file is ported):
   there is no equivalent laziness/memoisation layer to pin down — the
   behaviour the test describes simply isn't a concept in the Rust API.
 
-- `nocover/test_floating.py::test_can_find_negative_and_signaling_nans`
-  — upstream relies on Hypothesis's `filter_rewriting` pass, which
-  recognises `floats().filter(math.isnan)` and rewrites the strategy
-  to emit only NaN values; that makes all four (sign × signaling) NaN
-  variants routinely reachable within 1000 examples. Hegel-rust's
-  `.filter()` is a generic 3-try rejection sampler with no `isnan`
-  special case, so the test exhausts its 1000-attempt budget before
-  seeing every bit-pattern variant. Tracked by the `TODO.yaml` entry
-  "Support NaN-focused float generation so all (sign × signaling) NaN
-  variants are findable"; un-skipping this test is in its acceptance
-  criteria.
-
 - `test_fuzz_one_input.py` — all tests exercise `test.hypothesis.fuzz_one_input(buffer)`,
   a Python-specific public API that lets `@given`-decorated tests serve as AFL/libFuzzer
   corpus targets (feeding raw bytes as test input). Hegel-rust has no `fuzz_one_input`
