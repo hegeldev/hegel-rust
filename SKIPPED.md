@@ -342,6 +342,13 @@ Individually-skipped tests (rest of the file is ported):
   `test_caching.py` above); `test_local_types_are_garbage_collected_issue_493`
   uses `weakref.ref` + `gc.collect()` to assert Python garbage-collection
   behaviour on a locally-defined `@given`-decorated class — no Rust analog.
+- `test_eval_as_source.py` (in `nocover/`) — every test exercises
+  `hypothesis.internal.reflection.source_exec_as_module`, which dynamically
+  executes a Python source string as a Python module (via `exec`/`compile`
+  and caches the resulting module object). This is a Python-runtime
+  facility with no Rust counterpart: Rust has no runtime source-evaluation
+  or module-object model, and hegel-rust does not expose any equivalent
+  reflection helper.
 - `test_posonly_args_py38.py` — tests Python 3.8 positional-only arg
   syntax (`/`) on `@st.composite` and `st.builds()`; both are
   Python-syntax / Python-API specific with no Rust counterpart.
