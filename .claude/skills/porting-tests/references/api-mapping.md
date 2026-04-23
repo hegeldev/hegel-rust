@@ -246,6 +246,97 @@ yet (e.g. `has_discards` was a no-op before it was wired up to
 change to track it — same shape as any other native-gated port that
 surfaces a missing feature.
 
+## Driving the native shrinker (`@shrinking_from(initial)`)
+
+Conjecture tests in `hypothesis-python/tests/conjecture/test_shrinker.py`
+use a `@shrinking_from(initial)` fixture that runs a `ConjectureRunner`,
+caches its choice sequence, and hands the test a live `Shrinker` to call
+methods on. In hegel-rust (native only) the same shape is expressed by
+building a `Shrinker` directly from a hand-written initial choice list,
+skipping the runner. Put this helper *in the test file*, not in
+`tests/common/utils.rs` (see SKILL.md "Don't modify"):
+
+```rust
+use hegel::__native_test_internals::{ChoiceNode, ChoiceValue, NativeTestCase, Shrinker};
+
+fn shrinking_from<F>(initial: Vec<ChoiceValue>, user_test_fn: F) -> Shrinker<'static>
+where
+    F: FnMut(&mut NativeTestCase) -> bool + 'static,
+{
+    let mut user_test_fn = user_test_fn;
+
+    let mut ntc = NativeTestCase::for_choices(&initial, None);
+    let is_interesting = user_test_fn(&mut ntc);
+    assert!(is_interesting, "initial choices did not trigger mark_interesting");
+    let initial_nodes = ntc.nodes.clone();
+
+    let test_fn = Box::new(move |candidate: &[ChoiceNode]| {
+        let values: Vec<ChoiceValue> = candidate.iter().map(|n| n.value.clone()).collect();
+        let mut ntc = NativeTestCase::for_choices(&values, Some(candidate));
+        let is_interesting = user_test_fn(&mut ntc);
+        (is_interesting, ntc.nodes)
+    });
+
+    Shrinker::new(test_fn, initial_nodes)
+}
+```
+
+The `user_test_fn` returns `true` for "mark_interesting" (Python's
+implicit `raise InterestingException` in the `@shrinking_from` body).
+Call `shrinker.shrink()` to run the full pipeline, then assert on
+`shrinker.current_nodes` to check the minimal choice sequence. See
+`tests/hypothesis/conjecture_shrinker.rs` for worked examples.
+
+`Shrinker::new`, `ChoiceNode`, `ChoiceKind`, and `ShrinkRun` are
+re-exported via `__native_test_internals`. If a port needs another
+private shrinker API (a specific pass method, a state accessor), add
+the re-export in `src/lib.rs` as part of the same commit — no separate
+source-stub needed.
+
+### Tests this shape can't reach
+
+A large fraction of `test_shrinker.py` doesn't port through
+`shrinking_from` and goes to `SKIPPED.md` with one of these rationales:
+
+- **Fixated on a single named Hypothesis pass.** Tests calling
+  `shrinker.fixate_shrink_passes([ShrinkPass.minimize_individual_choices])`,
+  `shrinker.pass_to_descendant()`, `shrinker.redistribute_numeric_pairs()`,
+  `shrinker.lower_common_node_offset()`, `shrinker.reorder_spans()`,
+  `shrinker.lower_integers_together()`,
+  `shrinker.lower_duplicated_characters()`, etc. The native `Shrinker`
+  only exposes `.shrink()` (the full pipeline); its individual passes
+  are `pub(super)` with different names and factoring
+  (`binary_search_integer_towards_zero`, `redistribute_integers`,
+  `shrink_duplicates`, `redistribute_string_pairs`,
+  `swap_adjacent_blocks`, …). "Exactly this pass did exactly that
+  much" assertions aren't portable without changing the pass API.
+- **Span-nested initial choices.** Tests whose initial choice
+  construction calls `data.start_span(label)` /
+  `data.stop_span(discard=True)`. `NativeTestCase::for_choices`
+  replays values but its public surface has no `start_span` /
+  `stop_span` hook, so span-structured cases elide the span tree the
+  shrinker relies on. Skip until a span-aware replay helper lands.
+  (Affects `test_can_zero_subintervals`, `test_zero_contained_examples`,
+  `test_finding_a_minimal_balanced_binary_tree`, etc.)
+- **Instrumentation the native `Shrinker` lacks.** `shrinker.calls`,
+  `shrinker.max_stall`, `StopShrinking`, `initial_coarse_reduction()`,
+  `node_program("X" * i)` / `run_to_nodes`. No counterparts in the
+  native shrinker; termination is bounded by `MAX_SHRINK_ITERATIONS`
+  with no observation hook.
+- **Monkey-patched runner/shrinker entry points.** Tests that stub
+  `ConjectureRunner.generate_new_examples` or `Shrinker.shrink` to
+  control the engine's first example or shrink path. No
+  monkey-patching surface in the native engine.
+- **Subclass the base `Shrinker` with a custom `run_step`.** The
+  generic base-class `hypothesis.internal.conjecture.shrinking.common.Shrinker`
+  ports to concrete structs (`IntegerShrinker`, `OrderingShrinker`)
+  with fixed `run_step` implementations and no subclass-pluggable
+  base.
+
+When skipping for any of the above, name the concrete missing
+feature in the `SKIPPED.md` entry (not "no counterpart") so the
+gap stays traceable.
+
 ## Forced draws (engine-internal, native only)
 
 Hypothesis's `conjecture/test_forced.py` exercises the "pass `forced=X`
