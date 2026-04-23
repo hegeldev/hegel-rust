@@ -15,6 +15,7 @@ mod findability_pbtsmith_regressions;
 mod findability_types;
 mod floats;
 mod generators;
+mod shrink_quality_collections;
 mod shrink_quality_composite;
 mod shrink_quality_flatmap;
 mod shrink_quality_integers;
