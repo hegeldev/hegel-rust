@@ -53,7 +53,7 @@ fn test_errors_on_test_invocation() {
     expect_panic(
         || {
             Hegel::new(|tc| {
-                let _: i64 = tc.draw(gs::integers::<i64>().max_value(1).min_value(3));
+                tc.draw(gs::integers::<i64>().max_value(1).min_value(3));
             })
             .settings(Settings::new().test_cases(1).database(None))
             .run();
