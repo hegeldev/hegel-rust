@@ -12,7 +12,7 @@ fn test_can_glob_import_from_hegel() {
     use hegel::*;
 
     Hegel::new(|tc| {
-        let xs: Vec<i32> = tc.draw(&vecs(integers::<i32>()));
+        let xs: Vec<i32> = tc.draw(vecs(integers::<i32>()));
         let _ = xs.iter().map(|&x| x as i64).sum::<i64>() > 1;
     })
     .settings(
