@@ -1144,6 +1144,31 @@ Individually-skipped tests (rest of the file is ported):
   no hegel-rust counterpart. The thread-safety property it guards is
   specific to Hypothesis's per-thread caching of strategy introspection.
 
+- `nocover/test_baseexception.py::test_exception_propagates_fine[KeyboardInterrupt]`,
+  `nocover/test_baseexception.py::test_exception_propagates_fine[SystemExit]`,
+  `nocover/test_baseexception.py::test_exception_propagates_fine[GeneratorExit]`,
+  `nocover/test_baseexception.py::test_exception_propagates_fine_from_strategy[KeyboardInterrupt]`,
+  `nocover/test_baseexception.py::test_exception_propagates_fine_from_strategy[SystemExit]`,
+  `nocover/test_baseexception.py::test_exception_propagates_fine_from_strategy[GeneratorExit]`,
+  `nocover/test_baseexception.py::test_baseexception_no_rerun_no_flaky[KeyboardInterrupt]`,
+  `nocover/test_baseexception.py::test_baseexception_in_strategy_no_rerun_no_flaky[KeyboardInterrupt]`,
+  `nocover/test_baseexception.py::test_baseexception_in_strategy_no_rerun_no_flaky[SystemExit]`,
+  `nocover/test_baseexception.py::test_baseexception_in_strategy_no_rerun_no_flaky[GeneratorExit]`
+  — all pin down Python `BaseException`-subclass propagation semantics:
+  Hypothesis treats `KeyboardInterrupt`/`SystemExit`/`GeneratorExit`
+  differently from `Exception` (no catch/shrink/replay, no `Flaky`
+  wrapping). Rust panics are singular — there is no
+  `BaseException`/`Exception` split, so these parametrize rows collapse
+  onto the `ValueError` cases which are ported in
+  `tests/hypothesis/nocover_baseexception.rs`.
+
+- `nocover/test_baseexception.py::test_explanations` — uses pytest's
+  `testdir` fixture plus `runpytest_inprocess` stdout capture to check
+  that the stack-trace explanation includes the drawn input when a
+  `SystemExit` / `GeneratorExit` propagates out of a `@given` body. Both
+  the `BaseException` trigger and the pytest-runtime output surface are
+  Python-specific.
+
 - `test_exceptiongroup.py` — every test raises a Python PEP 654
   `ExceptionGroup` / `BaseExceptionGroup` (Python 3.11+ built-in) from a
   `@given`-decorated function to pin down how Hypothesis unwraps groups

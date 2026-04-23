@@ -359,15 +359,22 @@ pub fn native_run<F>(
                 );
             }
 
-            // Verify the result is still interesting.
+            // Verify the result is still interesting. If the replay is
+            // not interesting, the test is flaky — raise the same
+            // user-facing message as the post-shrink final-replay branch
+            // below (and as the server backend's flaky detector).
             let choices: Vec<ChoiceValue> = best_nodes.iter().map(|n| n.value.clone()).collect();
             let verify_ntc = NativeTestCase::for_choices(&choices, Some(best_nodes));
             let (verify_status, verify_nodes, _) = ctf.run(verify_ntc);
-            assert_eq!(
-                verify_status,
-                Status::Interesting,
-                "Result was not reproducibly interesting"
-            );
+            if verify_status != Status::Interesting {
+                panic!(
+                    "Flaky test detected: Your test produced different outcomes \
+                     when run with the same generated data — it failed when it \
+                     previously succeeded, or succeeded when it previously failed. \
+                     This usually means your test depends on external state such as \
+                     global variables, system time, or external random number generators."
+                );
+            }
             *best_nodes = verify_nodes;
 
             {
