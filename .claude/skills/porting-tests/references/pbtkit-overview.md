@@ -248,40 +248,45 @@ markers also map to an implemented `src/native/shrinker/` pass, so
 port such tests unconditionally — strip the marker and don't record it
 anywhere.
 
-The two exceptions — markers whose named module has **no native
-counterpart yet** — are:
+The exceptions are markers whose named module has **no native
+counterpart yet** in `src/native/shrinker/`. Don't enumerate them here —
+the list rots as each pass gets ported. Check directly: open the pbtkit
+file named by the marker (e.g. `shrinking/advanced_bytes_passes.py` for
+`@pytest.mark.requires("shrinking.advanced_bytes_passes")`) and grep
+`src/native/shrinker/` for its top-level function names. If no
+counterpart exists, the marker is a current exception.
 
-- `@pytest.mark.requires("shrinking.index_passes")` — covers
-  `try_shortening_via_increment` and `lower_and_bump`. No file in
-  `src/native/shrinker/` currently implements them.
-- `@pytest.mark.requires("shrinking.mutation")` — covers
-  `mutate_and_shrink`. Also unimplemented natively.
+For shrink-quality tests (those under `tests/shrink_quality/` asserting
+on the *exact* shrunk minimum), the established pattern is:
 
-Server-side these passes exist (Hypothesis has them), so the right
-shape for a test asserting on their shrink output is:
+1. Port the test normally with its upstream-asserted minimum.
+2. **Native-gate with `#[cfg(feature = "native")]`**. Shrink-quality
+   assertions pin down the native engine's shrink output; the server
+   backend may find a different-but-valid minimum, so running the same
+   assertion in server mode is flaky.
+3. Commit. The test fails in native mode until the pass is ported.
+4. Implement the missing pass in `src/native/shrinker/` as a follow-on
+   commit in the same sub-loop (mirror the closest existing sibling —
+   `redistribute_string_pairs` is the model for `redistribute_bytes_pairs`,
+   etc.). The fixer loop picks up the failing native-mode test and
+   dispatches the implementation automatically.
 
-1. Port the test normally (no stub, no `todo!()` — the shrinker
-   doesn't panic when a pass is missing, it just finds a worse
-   minimum).
-2. Mark it `#[cfg(not(feature = "native"))]` so it only runs against
-   the server backend. Any supporting types (local `enum`s for
-   mixed-type `one_of`) that are only referenced by a gated test must
-   also be gated, or the native build warns on dead code.
-3. File a TODO.yaml entry for implementing the pass, listing the
-   server-gated tests as its acceptance criteria (removing the
-   `#[cfg(not(feature = "native"))]` gate is the "done" signal).
-4. Note the gate at the top of the module docstring so a reviewer
-   diffing against the Python sees which tests are server-only and
-   why.
+Precedents: `tests/pbtkit/shrink_quality_strings.rs::test_string_length_redistribution`
+and `tests/pbtkit/shrink_quality_bytes.rs::test_redistribute_bytes_between_pairs`
+both used this pattern (test lands first, `redistribute_{string,bytes}_pairs`
+land in the follow-on).
 
-This is distinct from the native-gated-plus-stub policy in SKILL.md,
-which handles features missing from *both* sides. Server-gating is
-for the asymmetric case where Hypothesis has the capability but
-hegel-rust's native engine doesn't yet.
+Server-gating with `#[cfg(not(feature = "native"))]` is the alternative
+shape — used when the test is *not* a shrink-quality assertion (the exact
+minimum doesn't matter, only that Hypothesis's behaviour is correct) and
+you want the test running somewhere even before the native pass lands.
+If you go this route, file a TODO.yaml entry listing the server-gated
+tests as acceptance criteria (removing the gate is the "done" signal)
+and note the gate at the top of the module docstring.
 
-If the required feature genuinely has no counterpart on *either* side
-(neither Hypothesis nor hegel-rust implements it), follow the
-native-gated-plus-stub policy instead.
+Neither shape applies if the required feature has no counterpart on
+*either* side (neither Hypothesis nor hegel-rust native implements it) —
+follow the native-gated-plus-stub policy in SKILL.md instead.
 
 ## Findability and shrink-quality tests
 
