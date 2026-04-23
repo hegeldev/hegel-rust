@@ -509,6 +509,20 @@ Individually-skipped tests (rest of the file is ported):
   seeding, and culminates in `repr_is_good` which asserts `" at 0x" not
   in repr(strat)` — a direct test of Python `__repr__` dunder output on
   strategy objects, with no hegel-rust counterpart.
+- `test_modify_inner_test.py` (in `nocover/`) — every test exercises
+  Python-specific attribute-access on a `@given`-decorated function:
+  `test.hypothesis.inner_test = replacement` swaps the wrapped test body
+  in-place (used by shims like pytest-trio's async-to-sync converter).
+  The remaining cases pile on more Python-specific machinery:
+  `functools.wraps` decorator composition, `pytest.mark.parametrize`
+  stacking on top of `@given`, `InvalidArgument` errors raised by
+  `@given` for invalid signatures ("Too many positional arguments",
+  "given must be called with at least one argument"), and
+  `lambda **kw: f(**kw)` kwargs-expansion of the inner test. hegel-rust
+  tests are closures passed to `Hegel::new(|tc| {...})` with no inner
+  function object, no swappable `inner_test` attribute, no kwargs
+  model, and no `InvalidArgument`-at-call-time surface — `#[hegel::test]`
+  signature errors are compile-time macro errors.
 - `test_slices.py` — tests `st.slices(size)`, which generates Python
   `slice` objects (built-in type with `.start`/`.stop`/`.step` attributes
   and a `.indices(size)` resolver used with Python's indexing protocol).
