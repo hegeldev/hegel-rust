@@ -24,6 +24,7 @@ mod float_utils;
 mod given_error_conditions;
 mod health_checks;
 mod intervalset;
+mod nocover_imports;
 mod nothing;
 mod numerics;
 mod one_of;
