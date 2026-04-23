@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use crate::native::core::{ChoiceKind, ChoiceValue};
+use crate::native::core::{BytesChoice, ChoiceKind, ChoiceValue};
 
 use super::{Shrinker, bin_search_down};
 
@@ -117,5 +117,98 @@ impl<'a> Shrinker<'a> {
             ChoiceValue::Bytes(v) => v.clone(),
             _ => unreachable!(),
         }
+    }
+
+    /// Try redistributing length between pairs of bytes values.
+    ///
+    /// Port of pbtkit's `redistribute_bytes_pairs`
+    /// (`shrinking/advanced_bytes_passes.py`). For adjacent and
+    /// skip-one-adjacent pairs of `BytesChoice` nodes, try moving bytes
+    /// from the earlier node's value to the later one's. Useful for
+    /// tests with a total-length constraint across two bytes values,
+    /// where the minimal counterexample has the first as short as
+    /// possible.
+    pub(super) fn redistribute_bytes_pairs(&mut self) {
+        for gap in 1..3usize {
+            let mut idx = 0;
+            loop {
+                let indices = self.bytes_indices();
+                if idx + gap >= indices.len() {
+                    break;
+                }
+                let i = indices[idx];
+                let j = indices[idx + gap];
+                self.redistribute_bytes_pair(i, j);
+                idx += 1;
+            }
+        }
+    }
+
+    fn bytes_indices(&self) -> Vec<usize> {
+        self.current_nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| match &n.kind {
+                ChoiceKind::Bytes(_) => Some(i),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn redistribute_bytes_pair(&mut self, i: usize, j: usize) {
+        let s = self.current_byte_value(i);
+        let t = self.current_byte_value(j);
+        let kind_j = match &self.current_nodes[j].kind {
+            ChoiceKind::Bytes(kj) => kj.clone(),
+            _ => unreachable!(),
+        };
+
+        if s.is_empty() {
+            return;
+        }
+
+        // Port of pbtkit's `redistribute_sequence_pair`.
+
+        // Try moving everything from s to t.
+        let combined: Vec<u8> = s.iter().copied().chain(t.iter().copied()).collect();
+        if self.try_redistribute_bytes(i, j, Vec::new(), combined, &kind_j) {
+            return;
+        }
+
+        // Try moving the last byte of s to the start of t.
+        let (last, s_init) = s.split_last().unwrap();
+        let mut t_prepended = Vec::with_capacity(t.len() + 1);
+        t_prepended.push(*last);
+        t_prepended.extend_from_slice(&t);
+        if !self.try_redistribute_bytes(i, j, s_init.to_vec(), t_prepended, &kind_j) {
+            return;
+        }
+
+        // Binary search for the longest suffix of s that can be moved.
+        let s_len = s.len();
+        bin_search_down(1, s_len as i128, &mut |n| {
+            let n = n as usize;
+            let new_s = s[..s_len - n].to_vec();
+            let mut new_t = s[s_len - n..].to_vec();
+            new_t.extend_from_slice(&t);
+            self.try_redistribute_bytes(i, j, new_s, new_t, &kind_j)
+        });
+    }
+
+    fn try_redistribute_bytes(
+        &mut self,
+        i: usize,
+        j: usize,
+        new_s: Vec<u8>,
+        new_t: Vec<u8>,
+        kind_j: &BytesChoice,
+    ) -> bool {
+        if !kind_j.validate(&new_t) {
+            return false;
+        }
+        self.replace(&HashMap::from([
+            (i, ChoiceValue::Bytes(new_s)),
+            (j, ChoiceValue::Bytes(new_t)),
+        ]))
     }
 }
