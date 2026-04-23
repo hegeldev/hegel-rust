@@ -206,6 +206,98 @@ fn shrink_hashmap() {
     .run();
 }
 
+// --- Flaky-assume tests (trigger FlakyStrategyDefinition) ---
+// Time-based assume() calls produce inconsistent results across runs during
+// shrinking, causing Hypothesis to raise FlakyStrategyDefinition. This error
+// path is what exposed the original race conditions in hegel-core.
+
+fn flaky_integer() {
+    Hegel::new(|tc| {
+        let x: i64 = tc.draw(gs::integers());
+        let time_based = (SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            % 3)
+            == 0;
+        tc.assume(time_based || x.abs() < 1000);
+        assert!(x <= 500);
+    })
+    .settings(settings())
+    .run();
+}
+
+fn flaky_collection() {
+    Hegel::new(|tc| {
+        let numbers: Vec<i32> = tc.draw(gs::vecs(gs::integers::<i32>()));
+        let filter_threshold = (SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_micros()
+            % 100) as i32;
+        tc.assume(numbers.len() < 20);
+        tc.assume(numbers.iter().all(|&n| n.abs() < filter_threshold + 50));
+        let sum: i64 = numbers.iter().map(|&x| x as i64).sum();
+        assert!(sum <= 1000);
+    })
+    .settings(settings())
+    .run();
+}
+
+fn flaky_text() {
+    Hegel::new(|tc| {
+        let text: String = tc.draw(gs::text());
+        let number: i32 = tc.draw(gs::integers::<i32>().min_value(-100).max_value(100));
+        let dynamic_limit = ((SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            / 1000)
+            % 8) as usize
+            + 2;
+        tc.assume(text.len() <= dynamic_limit);
+        assert!(!(text.len() > 5 && number.abs() > 50));
+    })
+    .settings(settings())
+    .run();
+}
+
+fn flaky_boolean() {
+    Hegel::new(|tc| {
+        let flags: Vec<bool> = tc.draw(gs::vecs(gs::booleans()));
+        let time_mod = (SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            % 4)
+            == 0;
+        tc.assume(flags.len() >= 5 && flags.len() <= 15);
+        tc.assume(time_mod || flags.iter().filter(|&&b| b).count() < 8);
+        let true_count = flags.iter().filter(|&&b| b).count();
+        assert!(true_count <= 10);
+    })
+    .settings(settings())
+    .run();
+}
+
+fn flaky_simple() {
+    Hegel::new(|tc| {
+        let x: i32 = tc.draw(gs::integers());
+        let y: String = tc.draw(gs::text());
+        let time_check = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 3
+            == 0;
+        tc.assume(time_check || x.abs() < 100);
+        tc.assume(y.len() < 10);
+        assert!(!(x > 50 && y.len() > 3));
+    })
+    .settings(settings())
+    .run();
+}
+
 // --- Deliberately flaky tests ---
 
 fn bad_external_randomness() {
@@ -375,6 +467,31 @@ const TESTS: &[TestEntry] = &[
     TestEntry {
         name: "shrink_hashmap",
         func: shrink_hashmap,
+        expected_to_fail: true,
+    },
+    TestEntry {
+        name: "flaky_integer",
+        func: flaky_integer,
+        expected_to_fail: true,
+    },
+    TestEntry {
+        name: "flaky_collection",
+        func: flaky_collection,
+        expected_to_fail: true,
+    },
+    TestEntry {
+        name: "flaky_text",
+        func: flaky_text,
+        expected_to_fail: true,
+    },
+    TestEntry {
+        name: "flaky_boolean",
+        func: flaky_boolean,
+        expected_to_fail: true,
+    },
+    TestEntry {
+        name: "flaky_simple",
+        func: flaky_simple,
         expected_to_fail: true,
     },
     TestEntry {
