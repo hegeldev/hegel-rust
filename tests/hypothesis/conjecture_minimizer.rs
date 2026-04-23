@@ -2,10 +2,9 @@
 //!
 //! Exercises the standalone value shrinkers in `src/native/shrinker/value_shrinkers.rs`:
 //! `IntegerShrinker`, `OrderingShrinker`, `CollectionShrinker`, `BytesShrinker`,
-//! and `StringShrinker`. The last three are currently stubbed with `todo!()`
-//! bodies pending a full port of the Python Collection shrink pipeline — those
-//! tests fail at runtime until the stubs are filled in. The `left_is_better`
-//! test on `CollectionShrinker` does not call `run()` and passes cleanly.
+//! and `StringShrinker`. `BytesShrinker` and `StringShrinker` are built on top
+//! of `CollectionShrinker<usize, _>`, which is where the order-space shrink
+//! pipeline lives.
 
 #![cfg(feature = "native")]
 
