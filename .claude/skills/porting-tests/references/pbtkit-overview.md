@@ -117,6 +117,31 @@ Shapes that port this way (do NOT skip them — see SKILL.md "NOT reasons to ski
   the upstream tests care about is almost always the shrinker's output.
   Drive `Shrinker::new(...).shrink()` (or the specific pass) directly
   from an embedded test and assert on `shrinker.current_nodes`.
+  **Exception — "should not crash" regressions with no `state.result`
+  inspection**: pbtkit's shrink-quality file has a cluster of tests whose
+  whole body is `state = State(Random(seed), tf, N); state.run()` (sometimes
+  looped over seeds) with *no* assertion on `state.result`. The test
+  passes by not crashing. Port these as public-API integration tests —
+  `Hegel::new(|tc| { ... }).settings(Settings::new().test_cases(N).database(None)).run()`
+  wrapped in `std::panic::catch_unwind(AssertUnwindSafe(|| { ... }))` —
+  rather than as embedded Shrinker tests. No native-gating, no
+  `Shrinker::new` scaffolding. The `catch_unwind` is essential: the
+  engine may still find a counterexample (causing the test body to
+  panic), which is benign for a "did shrinking survive?" regression.
+  When the test body *does* want the inner counterexample to surface
+  (upstream `with pytest.raises(AssertionError):` over `@run_test`),
+  use `expect_panic(|| { Hegel::new(...).run() }, ".")` — the `.`
+  regex matches any panic message, since the upstream only checked
+  that *something* asserted.
+- **Asserting on `state.result` choice-sequence values**: when the
+  upstream extracts `[n.value for n in state.result if isinstance(n.kind, IntegerChoice)]`
+  (or similar) from a shrunk state, the equivalent for a simple
+  list-generator test is the drawn `Vec<T>` itself. Port with
+  `Minimal::new(...).test_cases(N).run()` and assert on the returned
+  value directly rather than reconstructing the choice sequence
+  (e.g. `sorted == vec![-2, -1, 0, 1, 2]` instead of
+  `int_values == [0, 1, -1, 2, -2]`). Leave a one-line comment noting
+  the upstream asserted on choices; we assert on the equivalent value.
 - `Frozen` exception on a reused completed `TestCase` — hegel-rust's
   equivalent is `Status` plus the guards inside `NativeTestCase`
   methods; exercise them from an embedded test.
