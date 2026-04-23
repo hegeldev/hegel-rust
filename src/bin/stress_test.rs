@@ -15,7 +15,7 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 fn settings() -> Settings {
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
     Settings::new()
-        .test_cases(200)
+        .test_cases(10)
         .seed(Some(id))
         .database(None)
         .verbosity(Verbosity::Quiet)

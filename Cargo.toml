@@ -35,6 +35,10 @@ name = "stress_test"
 path = "src/bin/stress_test.rs"
 required-features = ["rand"]
 
+[[bin]]
+name = "stress_test_2"
+path = "src/bin/stress_test_2.rs"
+
 [[example]]
 name = "stack"
 doc-scrape-examples = true
