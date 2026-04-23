@@ -16,11 +16,9 @@ runs:
           esac
         done
       shell: bash
-    - if: steps.parse.outputs.just == 'true' && runner.os == 'Linux'
-      run: sudo apt-get update && sudo apt-get install -y just
-      shell: bash
-    - if: steps.parse.outputs.just == 'true' && runner.os == 'Windows'
-      run: choco install just -y --no-progress
-      shell: pwsh
+    - if: steps.parse.outputs.just == 'true'
+      uses: taiki-e/install-action@5f57d6cb7cd20b14a8a27f522884c4bc8a187458 # v2.75.19
+      with:
+        tool: just
     - if: steps.parse.outputs.uv == 'true'
       uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
