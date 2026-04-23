@@ -22,7 +22,7 @@
 
 use crate::common::utils::{FindAny, assert_all_examples};
 use hegel::generators as gs;
-use hegel::{Hegel, HealthCheck, Settings};
+use hegel::{HealthCheck, Hegel, Settings};
 
 #[test]
 fn test_is_float() {
@@ -56,7 +56,7 @@ fn test_negation_is_self_inverse() {
     // Not a @fails test, so Hegel::new directly. TRY_HARDER → test_cases(1000)
     // + FilterTooMuch suppression, mirroring the upstream.
     Hegel::new(|tc| {
-        let x: f64 = tc.draw(&gs::floats::<f64>());
+        let x: f64 = tc.draw(gs::floats::<f64>());
         tc.assume(!x.is_nan());
         let y = -x;
         assert!(-y == x);
@@ -83,22 +83,18 @@ fn test_is_not_nan() {
 
 #[test]
 fn test_is_not_positive_infinite() {
-    FindAny::new(gs::floats::<f64>(), |x: &f64| {
-        *x > 0.0 && x.is_infinite()
-    })
-    .max_attempts(1000)
-    .suppress_health_check(HealthCheck::FilterTooMuch)
-    .run();
+    FindAny::new(gs::floats::<f64>(), |x: &f64| *x > 0.0 && x.is_infinite())
+        .max_attempts(1000)
+        .suppress_health_check(HealthCheck::FilterTooMuch)
+        .run();
 }
 
 #[test]
 fn test_is_not_negative_infinite() {
-    FindAny::new(gs::floats::<f64>(), |x: &f64| {
-        *x < 0.0 && x.is_infinite()
-    })
-    .max_attempts(1000)
-    .suppress_health_check(HealthCheck::FilterTooMuch)
-    .run();
+    FindAny::new(gs::floats::<f64>(), |x: &f64| *x < 0.0 && x.is_infinite())
+        .max_attempts(1000)
+        .suppress_health_check(HealthCheck::FilterTooMuch)
+        .run();
 }
 
 #[test]
@@ -162,23 +158,14 @@ fn test_can_find_floats_that_do_not_round_trip_through_reprs() {
 #[test]
 fn test_floats_are_in_range() {
     Hegel::new(|tc| {
-        let x: f64 = tc.draw(
-            &gs::floats::<f64>()
-                .allow_nan(false)
-                .allow_infinity(false),
-        );
-        let y: f64 = tc.draw(
-            &gs::floats::<f64>()
-                .allow_nan(false)
-                .allow_infinity(false),
-        );
+        let x: f64 = tc.draw(gs::floats::<f64>().allow_nan(false).allow_infinity(false));
+        let y: f64 = tc.draw(gs::floats::<f64>().allow_nan(false).allow_infinity(false));
         let (x, y) = if x <= y { (x, y) } else { (y, x) };
         tc.assume(x < y);
 
-        let t: f64 = tc.draw(&gs::floats::<f64>().min_value(x).max_value(y));
+        let t: f64 = tc.draw(gs::floats::<f64>().min_value(x).max_value(y));
         assert!(x <= t && t <= y);
     })
     .settings(Settings::new().test_cases(100).database(None))
     .run();
 }
-
