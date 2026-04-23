@@ -103,7 +103,8 @@ fn test_startup_error_message_version_mismatch() {
         use std::io::Write;
         let s = dir.path().join("fake_version");
         let mut f = std::fs::File::create(&s).unwrap();
-        f.write_all(b"#!/bin/sh\necho 'hegel (version 0.0.0)'\n").unwrap();
+        f.write_all(b"#!/bin/sh\necho 'hegel (version 0.0.0)'\n")
+            .unwrap();
         f.sync_all().unwrap();
         drop(f);
         use std::os::unix::fs::PermissionsExt;

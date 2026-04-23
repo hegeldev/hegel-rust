@@ -15,7 +15,7 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 fn settings() -> Settings {
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
     Settings::new()
-        .test_cases(20)
+        .test_cases(200)
         .seed(Some(id))
         .database(None)
         .verbosity(Verbosity::Quiet)
@@ -131,6 +131,81 @@ fn test_optional_and_sampled() {
     .run();
 }
 
+// --- Tests that always find a failure (triggers shrinking) ---
+
+fn shrink_integers() {
+    Hegel::new(|tc| {
+        let n: i32 = tc.draw(gs::integers::<i32>().min_value(0).max_value(10000));
+        assert!(n < 100);
+    })
+    .settings(settings())
+    .run();
+}
+
+fn shrink_vec_length() {
+    Hegel::new(|tc| {
+        let v: Vec<i32> = tc.draw(gs::vecs(gs::integers::<i32>()).min_size(1).max_size(50));
+        assert!(v.len() < 5);
+    })
+    .settings(settings())
+    .run();
+}
+
+fn shrink_nested() {
+    Hegel::new(|tc| {
+        let v: Vec<Vec<i32>> = tc.draw(
+            gs::vecs(gs::vecs(gs::integers::<i32>().min_value(0).max_value(100)).max_size(10))
+                .min_size(1)
+                .max_size(10),
+        );
+        let total: i32 = v.iter().flat_map(|inner| inner.iter()).sum();
+        assert!(total < 50);
+    })
+    .settings(settings())
+    .run();
+}
+
+fn shrink_text() {
+    Hegel::new(|tc| {
+        let s: String = tc.draw(gs::text().min_size(1).max_size(100));
+        assert!(s.len() < 3);
+    })
+    .settings(settings())
+    .run();
+}
+
+fn shrink_filter_map() {
+    Hegel::new(|tc| {
+        let n: i32 = tc.draw(
+            gs::integers::<i32>()
+                .min_value(0)
+                .max_value(10000)
+                .filter(|&x| x % 3 == 0)
+                .map(|x| x * 2),
+        );
+        assert!(n < 100);
+    })
+    .settings(settings())
+    .run();
+}
+
+fn shrink_hashmap() {
+    Hegel::new(|tc| {
+        let m: std::collections::HashMap<i32, i32> = tc.draw(
+            gs::hashmaps(
+                gs::integers::<i32>().min_value(0).max_value(100),
+                gs::integers::<i32>().min_value(0).max_value(100),
+            )
+            .min_size(1)
+            .max_size(20),
+        );
+        let total: i32 = m.values().sum();
+        assert!(total < 50);
+    })
+    .settings(settings())
+    .run();
+}
+
 // --- Deliberately flaky tests ---
 
 fn bad_external_randomness() {
@@ -218,84 +293,114 @@ fn bad_assume_heavy() {
 struct TestEntry {
     name: &'static str,
     func: fn(),
-    is_flaky: bool,
+    expected_to_fail: bool,
 }
 
 const TESTS: &[TestEntry] = &[
     TestEntry {
         name: "integers_basic",
         func: test_integers_basic,
-        is_flaky: false,
+        expected_to_fail: false,
     },
     TestEntry {
         name: "bounded_integers",
         func: test_bounded_integers,
-        is_flaky: false,
+        expected_to_fail: false,
     },
     TestEntry {
         name: "vec_properties",
         func: test_vec_properties,
-        is_flaky: false,
+        expected_to_fail: false,
     },
     TestEntry {
         name: "text_generation",
         func: test_text_generation,
-        is_flaky: false,
+        expected_to_fail: false,
     },
     TestEntry {
         name: "hashmap_generation",
         func: test_hashmap_generation,
-        is_flaky: false,
+        expected_to_fail: false,
     },
     TestEntry {
         name: "filter_and_map",
         func: test_filter_and_map,
-        is_flaky: false,
+        expected_to_fail: false,
     },
     TestEntry {
         name: "one_of_combinator",
         func: test_one_of_combinator,
-        is_flaky: false,
+        expected_to_fail: false,
     },
     TestEntry {
         name: "nested_collections",
         func: test_nested_collections,
-        is_flaky: false,
+        expected_to_fail: false,
     },
     TestEntry {
         name: "floats",
         func: test_floats,
-        is_flaky: false,
+        expected_to_fail: false,
     },
     TestEntry {
         name: "optional_and_sampled",
         func: test_optional_and_sampled,
-        is_flaky: false,
+        expected_to_fail: false,
+    },
+    TestEntry {
+        name: "shrink_integers",
+        func: shrink_integers,
+        expected_to_fail: true,
+    },
+    TestEntry {
+        name: "shrink_vec_length",
+        func: shrink_vec_length,
+        expected_to_fail: true,
+    },
+    TestEntry {
+        name: "shrink_nested",
+        func: shrink_nested,
+        expected_to_fail: true,
+    },
+    TestEntry {
+        name: "shrink_text",
+        func: shrink_text,
+        expected_to_fail: true,
+    },
+    TestEntry {
+        name: "shrink_filter_map",
+        func: shrink_filter_map,
+        expected_to_fail: true,
+    },
+    TestEntry {
+        name: "shrink_hashmap",
+        func: shrink_hashmap,
+        expected_to_fail: true,
     },
     TestEntry {
         name: "bad_external_randomness",
         func: bad_external_randomness,
-        is_flaky: true,
+        expected_to_fail: true,
     },
     TestEntry {
         name: "bad_shared_state",
         func: bad_shared_state,
-        is_flaky: true,
+        expected_to_fail: true,
     },
     TestEntry {
         name: "bad_timing_dependent",
         func: bad_timing_dependent,
-        is_flaky: true,
+        expected_to_fail: true,
     },
     TestEntry {
         name: "bad_concurrent_draws",
         func: bad_concurrent_draws,
-        is_flaky: true,
+        expected_to_fail: true,
     },
     TestEntry {
         name: "bad_assume_heavy",
         func: bad_assume_heavy,
-        is_flaky: true,
+        expected_to_fail: true,
     },
 ];
 
@@ -376,9 +481,9 @@ fn main() {
     let server_crashed = Arc::new(AtomicBool::new(false));
 
     logger.log(&format!(
-        "Starting stress test: {workers} workers, {timeout_secs}s timeout, {} tests ({} flaky)",
+        "Starting stress test: {workers} workers, {timeout_secs}s timeout, {} tests ({} expected-fail)",
         TESTS.len(),
-        TESTS.iter().filter(|t| t.is_flaky).count()
+        TESTS.iter().filter(|t| t.expected_to_fail).count()
     ));
 
     // Warm up the server with a single test before going concurrent
@@ -441,10 +546,8 @@ fn main() {
     // Swarm scheduler thread: picks 1-5 tests, enqueues 100-1000 of them
     let sched_queue = Arc::clone(&queue);
     let sched_stop = Arc::clone(&stop);
-    let sched_logger = Arc::clone(&logger);
     let scheduler_handle = std::thread::spawn(move || {
         let mut rng = rand::rng();
-        let mut swarm_id = 0u64;
         while !sched_stop.load(Ordering::Relaxed) {
             let pool_size = rng.random_range(1..=5);
             let batch_size = rng.random_range(100..=1000);
@@ -452,11 +555,6 @@ fn main() {
             let pool: Vec<usize> = (0..pool_size)
                 .map(|_| rng.random_range(0..TESTS.len()))
                 .collect();
-
-            let names: Vec<&str> = pool.iter().map(|&i| TESTS[i].name).collect();
-            sched_logger.log(&format!(
-                "Swarm {swarm_id}: pool={names:?}, batch_size={batch_size}"
-            ));
 
             let (lock, cvar) = &*sched_queue;
             for batch_i in 0..batch_size {
@@ -468,8 +566,6 @@ fn main() {
                 q.push_back(test_idx);
                 cvar.notify_one();
             }
-
-            swarm_id += 1;
         }
     });
 
@@ -552,7 +648,7 @@ fn main() {
                                     break;
                                 }
 
-                                let is_expected = test.is_flaky
+                                let is_expected = test.expected_to_fail
                                     || msg.contains("Property test failed")
                                     || msg.contains("Flaky test detected")
                                     || msg.contains("Health check failure");
