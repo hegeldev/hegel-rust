@@ -604,6 +604,15 @@ Individually-skipped tests (rest of the file is ported):
   and has no decorator-without-`@given` failure path, so the whole concept has
   no counterpart.
 
+- `test_pytest_detection.py` (in `tests/pytest/`) — every test exercises
+  Hypothesis's `hypothesis.core.running_under_pytest` module-level flag (set by
+  the pytest plugin) and the `pytester` plugin (`testdir.makepyfile`/
+  `testdir.runpytest_subprocess`) to assert the hypothesis pytest plugin does
+  not import `hypothesis` when pytest loads it. Also uses `sys.modules`
+  inspection via a `python` subprocess. hegel-rust is not a pytest plugin and
+  has no `running_under_pytest` equivalent — the whole file is Python/pytest
+  plugin integration.
+
 - `test_sideeffect_warnings.py` — all tests exercise Hypothesis's Python-specific
   import-time initialization infrastructure: `_hypothesis_globals.in_initialization`
   (a Python module attribute tracking import phase), `hypothesis.configuration`
