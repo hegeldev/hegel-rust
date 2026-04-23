@@ -460,6 +460,13 @@ Individually-skipped tests (rest of the file is ported):
   no introspectable source, no AST, and no lambda-description cache,
   matching the existing whole-file `test_reflection.py` skip.
 
+- `nocover/test_deferred_errors.py::test_does_not_recalculate_the_strategy`
+  — uses Python's `hypothesis.strategies._internal.core.defines_strategy`
+  decorator, which wraps a factory in a `LazyStrategy` that memoises the
+  underlying `SearchStrategy` after the first use. Hegel-rust has no
+  equivalent memoising-factory decorator in its public API, and Rust
+  closures have no introspectable call-count surface.
+
 - `test_fuzz_one_input.py` — all tests exercise `test.hypothesis.fuzz_one_input(buffer)`,
   a Python-specific public API that lets `@given`-decorated tests serve as AFL/libFuzzer
   corpus targets (feeding raw bytes as test input). Hegel-rust has no `fuzz_one_input`
