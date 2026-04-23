@@ -641,6 +641,114 @@ impl NativeTestCase {
         Ok(codepoints_to_string(&v))
     }
 
+    /// Draw an integer, forced to `forced`. Panics if `forced` is outside `[min_value, max_value]`.
+    ///
+    /// Forcing counterpart of [`draw_integer`]. Records a `ChoiceNode` with
+    /// `was_forced = true` so the written sequence replays to the same value
+    /// under [`NativeTestCase::for_choices`]. Mirrors the pattern of
+    /// [`weighted`] for boolean forcing.
+    pub fn draw_integer_forced(
+        &mut self,
+        min_value: i128,
+        max_value: i128,
+        forced: i128,
+    ) -> Result<i128, StopTest> {
+        assert!(
+            min_value <= max_value,
+            "Invalid range [{min_value}, {max_value}]"
+        );
+        let kind = IntegerChoice {
+            min_value,
+            max_value,
+        };
+        assert!(kind.validate(forced), "forced value outside range");
+        self.pre_choice()?;
+        self.nodes.push(ChoiceNode {
+            kind: ChoiceKind::Integer(kind),
+            value: ChoiceValue::Integer(forced),
+            was_forced: true,
+        });
+        Ok(forced)
+    }
+
+    /// Draw a float, forced to `forced`. Panics if `forced` is not permitted by
+    /// the constraints. Bit-exact: `-0.0` and `0.0`, distinct NaN payloads, etc.
+    /// are preserved.
+    pub fn draw_float_forced(
+        &mut self,
+        min_value: f64,
+        max_value: f64,
+        allow_nan: bool,
+        allow_infinity: bool,
+        forced: f64,
+    ) -> Result<f64, StopTest> {
+        let kind = FloatChoice {
+            min_value,
+            max_value,
+            allow_nan,
+            allow_infinity,
+        };
+        assert!(kind.validate(forced), "forced value outside constraints");
+        self.pre_choice()?;
+        self.nodes.push(ChoiceNode {
+            kind: ChoiceKind::Float(kind),
+            value: ChoiceValue::Float(forced),
+            was_forced: true,
+        });
+        Ok(forced)
+    }
+
+    /// Draw bytes, forced to `forced`. Panics if the length is outside bounds.
+    pub fn draw_bytes_forced(
+        &mut self,
+        min_size: usize,
+        max_size: usize,
+        forced: Vec<u8>,
+    ) -> Result<Vec<u8>, StopTest> {
+        assert!(min_size <= max_size);
+        let kind = BytesChoice { min_size, max_size };
+        assert!(kind.validate(&forced), "forced bytes outside length bounds");
+        self.pre_choice()?;
+        self.nodes.push(ChoiceNode {
+            kind: ChoiceKind::Bytes(kind),
+            value: ChoiceValue::Bytes(forced.clone()),
+            was_forced: true,
+        });
+        Ok(forced)
+    }
+
+    /// Draw a string, forced to `forced`. Panics if any codepoint is outside
+    /// the codepoint range or the length is outside bounds.
+    pub fn draw_string_forced(
+        &mut self,
+        min_codepoint: u32,
+        max_codepoint: u32,
+        min_size: usize,
+        max_size: usize,
+        forced: &str,
+    ) -> Result<String, StopTest> {
+        assert!(min_codepoint <= max_codepoint);
+        assert!(min_size <= max_size);
+        let kind = StringChoice {
+            min_codepoint,
+            max_codepoint,
+            min_size,
+            max_size,
+        };
+        let codepoints: Vec<u32> = forced.chars().map(|c| c as u32).collect();
+        assert!(
+            kind.validate(&codepoints),
+            "forced string outside constraints"
+        );
+        self.pre_choice()?;
+        self.nodes.push(ChoiceNode {
+            kind: ChoiceKind::String(kind),
+            value: ChoiceValue::String(codepoints.clone()),
+            was_forced: true,
+        });
+        Ok(codepoints_to_string(&codepoints))
+    }
+
     // nocov start
     fn pre_choice(&mut self) -> Result<(), StopTest> {
         if self.status.is_some() {
