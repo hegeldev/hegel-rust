@@ -1455,3 +1455,67 @@ Individually-skipped tests (rest of the file is ported):
   `draw_integer` with `shrink_towards` / `weights` constraints (native
   `draw_integer(min, max)` accepts neither). The remaining `@example`
   rows (`boolean`, `float`) are ported.
+
+- `conjecture/test_shrinker.py::test_can_shrink_variable_draws_with_just_deletion`,
+  `::test_duplicate_nodes_that_go_away`, `::test_accidental_duplication`,
+  `::test_can_pass_to_an_indirect_descendant`,
+  `::test_shrinking_blocks_from_common_offset`, `::test_can_reorder_spans`,
+  `::test_dependent_block_pairs_is_up_to_shrinking_integers`,
+  `::test_zig_zags_quickly`,
+  `::test_zig_zags_quickly_with_shrink_towards`,
+  `::test_can_simultaneously_lower_non_duplicated_nearby_integers`,
+  `::test_redistribute_with_forced_node_integer`,
+  `::test_can_quickly_shrink_to_trivial_collection`,
+  `::test_redistribute_numeric_pairs`,
+  `::test_lower_duplicated_characters_across_choices`,
+  `::test_redistribute_numeric_pairs_shrink_towards_explicit_integer`,
+  `::test_redistribute_numeric_pairs_shrink_towards_explicit_float`,
+  `::test_redistribute_numeric_pairs_shrink_towards_explicit_combined`,
+  `::test_redistribute_numeric_pairs_shrink_towards_integer` — each
+  fixates a single named Python shrink pass (`minimize_individual_choices`,
+  `minimize_duplicated_choices`, `pass_to_descendant`,
+  `lower_common_node_offset`, `reorder_spans`, `redistribute_numeric_pairs`,
+  `lower_integers_together`, `lower_duplicated_characters`) via
+  `fixate_shrink_passes([ShrinkPass(...)])` or direct method call.
+  Hegel's native shrinker only exposes `Shrinker::shrink()` (the full
+  pipeline); its individual passes are `pub(super)` and the pass names
+  differ, so "exactly this pass did exactly that much" assertions are
+  not portable without changing the pass API.
+- `conjecture/test_shrinker.py::test_deletion_and_lowering_fails_to_shrink`,
+  `::test_permits_but_ignores_raising_order` — monkey-patch
+  `ConjectureRunner.generate_new_examples` / `Shrinker.shrink` to
+  control engine first-example and shrink path. No monkey-patching
+  entry point in the native engine.
+- `conjecture/test_shrinker.py::test_handle_empty_draws`,
+  `::test_node_deletion_can_delete_short_ranges`,
+  `::test_node_programs_are_adaptive`,
+  `::test_will_let_fixate_shrink_passes_do_a_full_run_through` — use
+  `shrinker.node_program("X" * i)` (adaptive deletion pass) or
+  `StopShrinking` / `max_stall` control surface. Neither the adaptive
+  node-program pass nor the `max_stall`/`StopShrinking` API exists in
+  the native shrinker.
+- `conjecture/test_shrinker.py::test_will_terminate_stalled_shrinks` —
+  asserts `shrinker.calls <= 1 + 2 * shrinker.max_stall`; native
+  `Shrinker` has no `calls` counter or `max_stall` knob.
+- `conjecture/test_shrinker.py::test_alternative_shrinking_will_lower_to_alternate_value`,
+  `::test_shrinking_one_of_with_same_shape` — call
+  `shrinker.initial_coarse_reduction()`, a Python-specific
+  coarse-grained pre-pass with no native counterpart.
+- `conjecture/test_shrinker.py::test_silly_shrinker_subclass` —
+  subclasses the generic base-class
+  `hypothesis.internal.conjecture.shrinking.common.Shrinker` with a
+  no-op `run_step`. Hegel's value-shrinker ports (`IntegerShrinker`,
+  `OrderingShrinker`) are concrete structs with fixed `run_step`
+  implementations and no subclass-pluggable base class.
+- `conjecture/test_shrinker.py::test_can_zero_subintervals`,
+  `::test_finding_a_minimal_balanced_binary_tree`,
+  `::test_zero_examples_with_variable_min_size`,
+  `::test_zero_contained_examples`, `::test_zero_irregular_examples`,
+  `::test_can_expand_deleted_region` — use span-nested draws
+  (`data.start_span(label)` / `data.stop_span(discard=…)`). The native
+  `NativeTestCase` records spans internally but its public replay path
+  (`for_choices`) does not expose a `start_span` / `stop_span` API to
+  test writers, so porting these via the local `shrinking_from`
+  helper would elide the span structure the shrinker relies on. Two
+  tests from this file that do not use spans (`test_retain_end_of_buffer`,
+  `test_can_expand_zeroed_region`) are ported.

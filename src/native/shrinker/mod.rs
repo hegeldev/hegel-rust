@@ -60,7 +60,6 @@ impl<'a> Shrinker<'a> {
     /// `mutate_and_shrink`) are no-ops with this constructor: the wrapped
     /// closure ignores the probe and returns `(false, vec![])`. Use
     /// [`Shrinker::with_probe`] when probe support is needed.
-    #[cfg(test)]
     pub fn new<F>(mut test_fn: Box<F>, initial_nodes: Vec<ChoiceNode>) -> Self
     where
         F: FnMut(&[ChoiceNode]) -> (bool, Vec<ChoiceNode>) + ?Sized + 'a,
