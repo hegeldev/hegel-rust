@@ -1325,3 +1325,23 @@ Individually-skipped tests (rest of the file is ported):
   `__init__.py` layout) and emits Python Hypothesis test source.
   hegel-rust has no ghostwriter CLI / test-scaffold generator
   counterpart.
+
+- `conjecture/test_forced.py::test_forced_many` — exercises
+  `cu.many(data, min_size=…, max_size=…, forced=N)` where `forced` sets
+  the total collection count. Native `ManyState::new(min_size, max_size)`
+  has no forced-count parameter, and `schema::many_more` only forces the
+  per-step boolean based on min/max bounds; there is no public entry
+  point for constructing a forced-count `ManyState`.
+- `conjecture/test_forced.py::test_forced_with_large_magnitude_integers`
+  — uses `2**127 + 1` as a bound and forced value, which exceeds
+  `i128::MAX`. Native `draw_integer` takes `i128` bounds and cannot
+  represent the Python-bignum range this test exercises.
+- `conjecture/test_forced.py::test_forced_values` (the
+  `@given(choice_types_constraints(use_forced=True))` branch and the
+  four `@example("integer", {"shrink_towards":…, "weights":{…}, "forced":…})`
+  rows) — requires porting
+  `hypothesis.internal.conjecture.provider_conformance.choice_types_constraints`
+  / `constraints_strategy` (no native counterpart) and extending
+  `draw_integer` with `shrink_towards` / `weights` constraints (native
+  `draw_integer(min, max)` accepts neither). The remaining `@example`
+  rows (`boolean`, `float`) are ported.
