@@ -493,6 +493,22 @@ Individually-skipped tests (rest of the file is ported):
   a nested `@given`, plus `HealthCheck.nested_given` suppression — neither
   the `random_module()` strategy nor the nested-given health check exists
   in hegel-rust.
+- `test_strategy_state.py` (in `nocover/`) — the entire file is a single
+  `HypothesisSpec(RuleBasedStateMachine)` whose design is predicated on
+  Python's dynamic typing of strategy objects: `strategies = Bundle("strategy")`
+  holds heterogeneously-typed Hypothesis strategy values (integers, booleans,
+  floats, text, binary, tuples of strategies, etc.), which are then
+  dynamically composed by rules that call `tuples(*spec)`, `source.filter(...)`,
+  `source | right`, `source.flatmap(...)`, `sampled_from(values)`, and
+  `lists(elements)` on bundle members. hegel-rust's `Variables<T>` is
+  strictly monomorphic and `gs::one_of` / `gs::sampled_from` require a
+  single static element type, so a bundle of arbitrary generators cannot
+  be expressed in Rust's type system. The rule set also draws Python-only
+  numeric strategies (`complex_numbers()`, `fractions()`, `decimals()`),
+  uses `Random(hashlib.sha384(...).digest())` for deterministic predicate
+  seeding, and culminates in `repr_is_good` which asserts `" at 0x" not
+  in repr(strat)` — a direct test of Python `__repr__` dunder output on
+  strategy objects, with no hegel-rust counterpart.
 - `test_slices.py` — tests `st.slices(size)`, which generates Python
   `slice` objects (built-in type with `.start`/`.stop`/`.step` attributes
   and a `.indices(size)` resolver used with Python's indexing protocol).
