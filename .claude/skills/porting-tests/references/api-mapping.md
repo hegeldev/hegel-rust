@@ -60,7 +60,7 @@ Generator transforms (all require `Generator` trait in scope):
 | `tc.assume(cond)`          | `tc.assume(cond)`                        |
 | `tc.note(msg)`              | `tc.note(msg)`                           |
 | `tc.choice(n)`             | `tc.draw(gs::integers::<i64>().min_value(0).max_value(n-1))` |
-| `tc.weighted(p)`            | **missing** (no public API) — `todo!()`  |
+| `tc.weighted(p)`            | **missing** from the public API. For `p ∈ {0.0, 1.0}` substitute `gs::just(false)` / `gs::just(true)`. For rare probabilities, a **native-gated** port can drive `NativeTestCase::weighted(p, None)` directly via `with_native_tc` from inside a `compose!` body — see "Calling native draws from a `compose!` body" below. |
 | `tc.mark_status(INTERESTING)` | `panic!(...)` to signal failure        |
 | `tc.target(score)`         | **missing** — `todo!()`                  |
 | `ConjectureData.for_choices([v, ...])` | `NativeTestCase::for_choices(&[ChoiceValue::…, …], None)` from `hegel::__native_test_internals` (native-only) — see "Replaying fixed choices" below |
@@ -108,7 +108,9 @@ These show up in lots of pbtkit/Hypothesis tests. When you hit one, leave
 the test as `todo!()` with a clear comment and **add a TODO.md entry** for
 adding the feature. Don't invent a workaround in the test.
 
-- `tc.weighted(p)` — weighted booleans.
+- `tc.weighted(p)` — weighted booleans. (Native-gated tests have an
+  escape hatch via `with_native_tc`; see "Calling native draws from a
+  `compose!` body" below. The *public* API gap is still real.)
 - `tc.target(score)` — score-directed search.
 - `tc.reject()` distinguished from `tc.assume(false)`.
 - `tc.forced_choice(v)` — direct replay fixture.
@@ -260,6 +262,55 @@ yet (e.g. `has_discards` was a no-op before it was wired up to
 `stop_span(discard=true)`), the native backend needs a small bookkeeping
 change to track it — same shape as any other native-gated port that
 surfaces a missing feature.
+
+### Calling native draws from a `compose!` body
+
+When an upstream strategy needs an engine-level primitive the public API
+doesn't expose — the usual case is `data.draw_boolean(p)` for a rare `p`
+— reach through `with_native_tc` to the live `NativeTestCase` from
+inside a `compose!` closure. The whole test file goes
+`#![cfg(feature = "native")]`:
+
+```rust
+#![cfg(feature = "native")]
+
+use hegel::__native_test_internals::with_native_tc;
+use hegel::compose;
+use hegel::generators::{self as gs, Generator};
+
+// STOP_TEST_STRING is pub(crate); reproduce the literal here.
+const STOP_TEST_STRING: &str = "__HEGEL_STOP_TEST";
+
+fn weighted_boolean(p: f64) -> bool {
+    with_native_tc(|handle| {
+        match handle
+            .expect("weighted_boolean called outside native test context")
+            .lock()
+            .unwrap()
+            .weighted(p, None)
+        {
+            Ok(v) => v,
+            Err(_) => panic!("{STOP_TEST_STRING}"),
+        }
+    })
+}
+
+fn poisoned(p: f64) -> impl Generator<Poisoned> {
+    compose!(|tc| {
+        if weighted_boolean(p) { Poisoned::Poison }
+        else { Poisoned::Value(tc.draw(gs::integers::<i64>())) }
+    })
+}
+```
+
+The `Err(_) => panic!("{STOP_TEST_STRING}")` bridge is load-bearing: the
+handle returns `DataSourceError::StopTest` when the replay buffer is
+exhausted, and the engine's outer loop recognises only the exact panic
+payload `__HEGEL_STOP_TEST` as "end of replay, not a real test failure."
+Returning `Result::Err` up through a `compose!` body or letting the
+underlying `StopTest` bubble as anything else gets classified as a real
+assertion failure and the shrinker chases a phantom bug. `src/native/featureflags.rs`
+uses the same pattern; mirror it rather than inventing a variant.
 
 ## Driving the native shrinker (`@shrinking_from(initial)`)
 
