@@ -1268,11 +1268,14 @@ def unported_pool() -> list[Path]:
         for path in upstream_files(kind):
             if path.name in skipped:
                 continue
-            # Use the destination stem (which includes subdirectory prefix,
-            # e.g. "findability_pbtsmith_regressions") so that files from
-            # subdirectories match their already-ported Rust counterparts.
+            # Check both the destination stem (which includes the subdirectory
+            # prefix for pbtkit, e.g. "findability_pbtsmith_regressions") and
+            # the plain stem (e.g. "pbtsmith_regressions"), because hypothesis
+            # ports were created without subdirectory prefixes while pbtkit
+            # ports include them.
             dest_stem = destination_for(path).stem
-            if dest_stem in ported:
+            plain_stem = path.stem.removeprefix("test_")
+            if dest_stem in ported or plain_stem in ported:
                 continue
             pool.append(path)
     return pool
