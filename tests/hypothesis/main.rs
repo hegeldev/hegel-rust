@@ -40,6 +40,7 @@ mod numerics;
 mod one_of;
 mod permutations;
 mod provisional_strategies;
+mod quality_poisoned_lists;
 mod regex;
 mod replay_logic;
 mod reporting;
