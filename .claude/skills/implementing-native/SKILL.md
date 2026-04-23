@@ -240,6 +240,25 @@ translation:
   field so tests can inspect per-subclass state after a run. See
   `.claude/skills/porting-tests/references/api-mapping.md` "Python
   subclass-override hooks" for the test-side shape.
+- Python class generic over a type parameter that's **monomorphic in
+  practice** (always instantiated one way) — put the operational
+  pipeline on a specialised `impl` block, not a generic one. Keep
+  inspection methods generic so tests can still exercise them for
+  arbitrary `T`. Precedent:
+  `hypothesis.internal.conjecture.shrinking.Collection` is nominally
+  generic over `ElementShrinker` but always uses `Integer` in
+  practice, and its `left_is_better` / `current` / `calls` don't need
+  element semantics. Port as
+  `CollectionShrinker<T: Clone + Eq + Ord + Hash, F>` with
+  inspection-only methods in the generic `impl`, and the `run` /
+  `run_step` pipeline in a separate `impl<F: FnMut(&[usize]) -> bool>
+  CollectionShrinker<usize, F>`. Wrapper types (`BytesShrinker`,
+  `StringShrinker`) do the element↔`usize` order-key conversion at
+  the call boundary. Avoid the alternatives: don't introduce an
+  `ElementShrinker` trait for a single implementor, and don't drop
+  the generic struct in favour of `Vec<usize>`-only, which makes the
+  inspection methods unreachable for the element types the Python
+  tests cover.
 - Collapse Python runtime checks that Rust's type system handles at
   compile time. Don't port an `isinstance(x, str)` branch when `x:
   &str`.
