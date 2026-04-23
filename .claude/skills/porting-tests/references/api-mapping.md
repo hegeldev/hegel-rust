@@ -388,6 +388,72 @@ When skipping for any of the above, name the concrete missing
 feature in the `SKIPPED.md` entry (not "no counterpart") so the
 gap stays traceable.
 
+## Standalone value shrinkers (`conjecture/shrinking/*.py`)
+
+Distinct from the node-sequence `Shrinker` above, Hypothesis's
+`hypothesis.internal.conjecture.shrinking` subpackage ships per-value
+minimisers — `Integer`, `Ordering`, `Collection`, `Bytes`, `String` —
+each a `Shrinker` subclass exposing an `(initial, predicate)` →
+minimised-value API. hegel-rust ports them as concrete structs in
+`src/native/shrinker/value_shrinkers.rs`, re-exported via
+`__native_test_internals`:
+
+| Hypothesis                                           | hegel-rust (native only)                                                    |
+|------------------------------------------------------|------------------------------------------------------------------------------|
+| `Integer.shrink(n, lambda x: pred(x))`               | `let mut s = IntegerShrinker::new(n, pred); s.run(); s.current().clone()`    |
+| `Ordering.shrink(xs, pred)`                          | `let mut s = OrderingShrinker::new(xs, pred); s.run(); s.current().to_vec()` |
+| `Ordering.shrink(xs, pred, full=True)`               | `OrderingShrinker::new(xs, pred).full(true)` — kwargs become builder methods |
+| `Bytes.shrink(initial, pred, min_size=n)`            | `BytesShrinker::shrink(initial, pred, n)` — classmethod → unit struct assoc. fn |
+| `String.shrink(initial, pred, intervals=iv, min_size=n)` | `StringShrinker::shrink(initial, pred, &iv, n)` — returns `Vec<char>`    |
+| `Collection(xs, pred, ElementShrinker=Integer, min_size=n)` | `CollectionShrinker::new(xs, pred, n)` — `ElementShrinker` is implicit (always Integer for now) |
+| `shrinker.left_is_better(a, b)` (bool)               | same name on the Rust shrinker                                               |
+| `shrinker.calls` (int)                               | `shrinker.calls()` — counts distinct inputs seen, same semantics             |
+
+Classmethod-style `.shrink(...)` entry points (`Bytes`, `String`) map
+to **unit structs with an associated `shrink` function**, not to a
+`::new(...).run()` pair — mirroring the Python one-shot API so test
+bodies read the same way. Instance-style ones (`Integer`, `Ordering`,
+`Collection`) use `::new(...)` because the tests also observe
+`current` / `calls` / `left_is_better` between steps.
+
+**Python predicate idioms.** Closures in these tests routinely call
+`set(x)` or `Counter(x)` on a byte/int sequence to express "same
+multiset of elements". Translate with small local helpers — don't add
+them to `tests/common/utils.rs`:
+
+```rust
+fn bytes_set(v: &[u8]) -> std::collections::HashSet<u8> { v.iter().copied().collect() }
+fn bytes_counter(v: &[u8]) -> std::collections::HashMap<u8, usize> {
+    let mut m = std::collections::HashMap::new();
+    for &b in v { *m.entry(b).or_insert(0) += 1; }
+    m
+}
+```
+
+The closures capture the expected `HashSet`/`HashMap` up front (built
+from `start`) and compare against it inside the predicate. Rust's
+`move` closure + `HashMap: Eq` handles it cleanly.
+
+**`IntervalSet.from_string("abcdefg")`** maps to
+`IntervalSet::new(vec![('a' as u32, 'g' as u32)])` — the public
+constructor takes a sorted `Vec<(u32, u32)>` of inclusive ranges. For
+disjoint characters pass one singleton range each: `vec![('a' as u32,
+'a' as u32), ('z' as u32, 'z' as u32)]`.
+
+**`@pytest.mark.parametrize` with lambda predicates** over shrinker
+inputs: expand to one `#[test]` per row (lambdas are not first-class
+enough across threads to loop over a `Vec<Box<dyn Fn>>` with `FnMut`
+shrinker predicates). Name each test after what the row is checking
+— `test_shrink_bytes_sum_at_least_nine`, not `test_shrink_bytes_case_4`.
+
+**Missing pieces to skip when porting these files.** `debug=True`,
+`random=Random(0)`, `name="…"`, `__repr__` assertions, and direct
+calls to `shrinker.run_step()` (as opposed to `.run()`) are all
+Hypothesis-only surface. `test_shrinking_interface.py` is unportable
+for this reason alone. The `Collection` shrink pipeline (delete /
+reorder / minimise-duplicates / minimise-each-element) **is** ported;
+earlier skip rationales about "no Collection port" no longer apply.
+
 ## Forced draws (engine-internal, native only)
 
 Hypothesis's `conjecture/test_forced.py` exercises the "pass `forced=X`
