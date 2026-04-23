@@ -542,19 +542,29 @@ impl Logger {
 
 // ─── Venv management ──────────────────────────────────────────────────────
 
-fn setup_hegel_core_venv(hegel_core_dir: &Path, racy_gil: bool) -> PathBuf {
-    let hegel_core_dir = hegel_core_dir.canonicalize().unwrap_or_else(|e| {
-        eprintln!("Cannot resolve hegel-core path {:?}: {e}", hegel_core_dir);
-        std::process::exit(1);
-    });
+fn setup_venv(hegel_core_dir: Option<&Path>, racy_gil: bool) -> PathBuf {
+    let (venv_dir, install_spec) = match hegel_core_dir {
+        Some(dir) => {
+            let dir = dir.canonicalize().unwrap_or_else(|e| {
+                eprintln!("Cannot resolve hegel-core path {:?}: {e}", dir);
+                std::process::exit(1);
+            });
+            assert!(
+                dir.join("pyproject.toml").exists(),
+                "{dir:?} does not look like a hegel-core checkout (no pyproject.toml)",
+            );
+            let venv = dir.join(".stress-test-venv");
+            let spec = format!("-e {}", dir.display());
+            (venv, spec)
+        }
+        None => {
+            let version = hegel::hegel_server_version();
+            let venv = PathBuf::from(".stress-test-venv");
+            let spec = format!("hegel-core=={version}");
+            (venv, spec)
+        }
+    };
 
-    assert!(
-        hegel_core_dir.join("pyproject.toml").exists(),
-        "{:?} does not look like a hegel-core checkout (no pyproject.toml)",
-        hegel_core_dir
-    );
-
-    let venv_dir = hegel_core_dir.join(".stress-test-venv");
     let python = venv_dir.join("bin/python3");
     let hegel_bin = venv_dir.join("bin/hegel");
 
@@ -566,47 +576,20 @@ fn setup_hegel_core_venv(hegel_core_dir: &Path, racy_gil: bool) -> PathBuf {
             .expect("failed to run python3 -m venv");
         assert!(status.success(), "venv creation failed");
 
-        eprintln!("Installing hegel-core (editable)...");
-        let status = Command::new(&python)
-            .args([
-                "-m",
-                "pip",
-                "install",
-                "-e",
-                &hegel_core_dir.to_string_lossy(),
-            ])
-            .status()
-            .expect("failed to run pip install");
+        eprintln!("Installing {install_spec}...");
+        let mut cmd = Command::new(&python);
+        cmd.args(["-m", "pip", "install"]);
+        for arg in install_spec.split_whitespace() {
+            cmd.arg(arg);
+        }
+        let status = cmd.status().expect("failed to run pip install");
         assert!(status.success(), "pip install failed");
     } else {
         eprintln!("Reusing existing virtualenv at {venv_dir:?}");
     }
 
     if racy_gil {
-        let site_packages = find_site_packages(&python);
-        let pth_path = site_packages.join("racy_gil.pth");
-        if !pth_path.exists() {
-            eprintln!("Injecting racy GIL .pth file...");
-            std::fs::write(
-                &pth_path,
-                "import sys; sys.setswitchinterval(0.0000001)\n",
-            )
-            .expect("failed to write .pth file");
-        }
-
-        let output = Command::new(&python)
-            .args(["-c", "import sys; print(sys.getswitchinterval())"])
-            .output()
-            .expect("failed to check switch interval");
-        let interval: f64 = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .parse()
-            .unwrap_or(1.0);
-        assert!(
-            interval < 0.001,
-            "GIL switch interval not reduced (got {interval})"
-        );
-        eprintln!("GIL switch interval: {interval}s");
+        inject_racy_gil(&python);
     }
 
     assert!(
@@ -616,6 +599,33 @@ fn setup_hegel_core_venv(hegel_core_dir: &Path, racy_gil: bool) -> PathBuf {
 
     eprintln!("Using hegel at {hegel_bin:?}");
     hegel_bin
+}
+
+fn inject_racy_gil(python: &Path) {
+    let site_packages = find_site_packages(python);
+    let pth_path = site_packages.join("racy_gil.pth");
+    if !pth_path.exists() {
+        eprintln!("Injecting racy GIL .pth file...");
+        std::fs::write(
+            &pth_path,
+            "import sys; sys.setswitchinterval(0.0000001)\n",
+        )
+        .expect("failed to write .pth file");
+    }
+
+    let output = Command::new(python)
+        .args(["-c", "import sys; print(sys.getswitchinterval())"])
+        .output()
+        .expect("failed to check switch interval");
+    let interval: f64 = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .unwrap_or(1.0);
+    assert!(
+        interval < 0.001,
+        "GIL switch interval not reduced (got {interval})"
+    );
+    eprintln!("GIL switch interval: {interval}s");
 }
 
 fn find_site_packages(python: &Path) -> PathBuf {
@@ -685,11 +695,9 @@ fn main() {
         i += 1;
     }
 
-    if let Some(ref dir) = hegel_core_dir {
-        let hegel_bin = setup_hegel_core_venv(dir, racy_gil);
-        // SAFETY: This happens before any threads are spawned.
-        unsafe { std::env::set_var("HEGEL_SERVER_COMMAND", &hegel_bin) };
-    }
+    let hegel_bin = setup_venv(hegel_core_dir.as_deref(), racy_gil);
+    // SAFETY: This happens before any threads are spawned.
+    unsafe { std::env::set_var("HEGEL_SERVER_COMMAND", &hegel_bin) };
 
     let logger = Arc::new(Logger::new());
     let stop = Arc::new(AtomicBool::new(false));

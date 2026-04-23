@@ -1066,6 +1066,11 @@ pub fn server_log_path() -> Option<String> {
     SERVER_LOG_PATH.lock().unwrap().clone()
 }
 
+#[doc(hidden)]
+pub fn hegel_server_version() -> &'static str {
+    HEGEL_SERVER_VERSION
+}
+
 fn server_log_excerpt() -> Option<String> {
     let log_path = SERVER_LOG_PATH.lock().unwrap().clone()?;
     let content = std::fs::read_to_string(log_path).ok()?;
