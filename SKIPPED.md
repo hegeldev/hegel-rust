@@ -1464,6 +1464,17 @@ Individually-skipped tests (rest of the file is ported):
   `pd.core.arrays.integer.Int8Dtype`). hegel-rust has no pandas
   integration or counterpart for pandas `Series`/dtype generation.
 
+- `test_given_models.py` (in `tests/django/toystore/`) — django-extra
+  integration tests. Every test exercises `hypothesis.extra.django`
+  (`from_model`, `register_field_strategy`, `TestCase`,
+  `TransactionTestCase`) to construct Django ORM model instances
+  (`Company`, `Store`, `Customer`, `ManyNumerics`, `OddFields`, `User`,
+  etc.), calls `instance.full_clean()` / `instance.pk` /
+  `Model.objects.all()`, and drives Django's test-case transaction
+  rollback machinery. hegel-rust has no Django (or Python ORM)
+  integration — no `from_model` equivalent, no ORM-aware model/field
+  generator, and no Django-settings/transaction harness.
+
 - `test_attrs.py` (in `tests/attrs/`) — port abandoned: parallel
   port-loop worker produced commits on `port/worker-0` that could not
   be cherry-picked cleanly onto the supervisor branch (post-rebase
