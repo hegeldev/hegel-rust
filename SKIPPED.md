@@ -299,6 +299,18 @@ Individually-skipped tests (rest of the file is ported):
 - `test_caching.py` — tests Python object identity (`st.text() is
   st.text()`) of Hypothesis's strategy cache; Rust generators are
   builder structs with no `is`-style identity equivalent.
+- `test_cacheable.py` (in `nocover/`) — every test depends on Python-specific
+  strategy facilities with no Rust counterpart:
+  `test_is_cacheable` / `test_is_not_cacheable` read the
+  `SearchStrategy.is_cacheable` introspection attribute (same family as
+  `.is_empty` / `.branches` strategy-class introspection which
+  hegel-rust's typed-wrapper generators don't expose);
+  `test_non_cacheable_things_are_not_cached` /
+  `test_cacheable_things_are_cached` compare strategy instances with
+  `==`/`!=` to pin down Hypothesis's strategy cache (same gap as
+  `test_caching.py` above); `test_local_types_are_garbage_collected_issue_493`
+  uses `weakref.ref` + `gc.collect()` to assert Python garbage-collection
+  behaviour on a locally-defined `@given`-decorated class — no Rust analog.
 - `test_posonly_args_py38.py` — tests Python 3.8 positional-only arg
   syntax (`/`) on `@st.composite` and `st.builds()`; both are
   Python-syntax / Python-API specific with no Rust counterpart.
