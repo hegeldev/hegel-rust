@@ -1466,7 +1466,7 @@ Individually-skipped tests (rest of the file is ported):
   hegel-rust has no ghostwriter CLI / test-scaffold generator
   counterpart.
 
-- `conjecture/test_provider.py` — every test exercises Hypothesis's
+- `test_provider.py` (in `conjecture/`) — every test exercises Hypothesis's
   public backend/provider registration system: the `PrimitiveProvider`
   base class that users subclass to supply custom data generation
   (`PrngProvider`, `TrivialProvider`, `RealizeProvider`, etc.), the
