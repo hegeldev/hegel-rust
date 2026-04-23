@@ -44,16 +44,12 @@ fn test_can_find_nan_in_list() {
 
 #[test]
 fn test_can_find_positive_infinity() {
-    find_any(gs::floats::<f64>(), |x: &f64| {
-        *x > 0.0 && x.is_infinite()
-    });
+    find_any(gs::floats::<f64>(), |x: &f64| *x > 0.0 && x.is_infinite());
 }
 
 #[test]
 fn test_can_find_negative_infinity() {
-    find_any(gs::floats::<f64>(), |x: &f64| {
-        *x < 0.0 && x.is_infinite()
-    });
+    find_any(gs::floats::<f64>(), |x: &f64| *x < 0.0 && x.is_infinite());
 }
 
 #[test]
