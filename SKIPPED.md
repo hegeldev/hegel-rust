@@ -1487,9 +1487,6 @@ Individually-skipped tests (rest of the file is ported):
   `forced=10` node; the full native pipeline may lower the non-forced
   side via unrelated passes, which is the opposite of what the test
   checks.
-- `conjecture/test_shrinker.py::test_can_quickly_shrink_to_trivial_collection`
-  — asserts `shrinker.calls < 10`; the native `Shrinker` has no
-  `.calls` counter.
 - `conjecture/test_shrinker.py::test_redistribute_numeric_pairs` —
   uses Hypothesis's `@given(ChoiceNode, ChoiceNode, ...)` with
   `ChoiceNode` constructed from `type`, `value`, `constraints`
