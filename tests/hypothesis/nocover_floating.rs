@@ -53,8 +53,8 @@ fn test_largest_range() {
 
 #[test]
 fn test_negation_is_self_inverse() {
-    // Python's @TRY_HARDER raises max_examples to 1000; our default 100
-    // already exercises the property thoroughly for non-NaN floats.
+    // Not a @fails test, so Hegel::new directly. TRY_HARDER → test_cases(1000)
+    // + FilterTooMuch suppression, mirroring the upstream.
     Hegel::new(|tc| {
         let x: f64 = tc.draw(&gs::floats::<f64>());
         tc.assume(!x.is_nan());
