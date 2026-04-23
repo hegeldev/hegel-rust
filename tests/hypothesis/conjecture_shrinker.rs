@@ -457,11 +457,7 @@ fn test_can_quickly_shrink_to_trivial_collection() {
             .iter()
             .map(|node| node.value.clone())
             .collect();
-        assert_eq!(
-            actual,
-            vec![ChoiceValue::Bytes(vec![0u8; n])],
-            "n = {n}"
-        );
+        assert_eq!(actual, vec![ChoiceValue::Bytes(vec![0u8; n])], "n = {n}");
     }
 }
 
