@@ -481,6 +481,18 @@ Individually-skipped tests (rest of the file is ported):
   Rust has no global singleton PRNG, no `register_random` analog, and no
   equivalent GC-based weak-reference semantics; hegel-rust's `gs::randoms()`
   is a shrinkable RNG value, a different concept.
+- `test_randomization.py` (in `nocover/`) — both tests rely on the same
+  Python-specific global-PRNG integration skipped above in
+  `test_random_module.py`. `test_seeds_off_internal_random` reaches into
+  `hypothesis.core.threadlocal._hypothesis_global_random` (a private Python
+  `random.Random` instance used as Hypothesis's global seed source) and
+  drives it via `Random().getstate()` / `setstate()`; hegel-rust seeds come
+  from `Settings::seed` / `derandomize`, with no global `Random` singleton
+  to introspect or reset. `test_nesting_with_control_passes_health_check`
+  uses `st.random_module()` to seed Python's global `random` module inside
+  a nested `@given`, plus `HealthCheck.nested_given` suppression — neither
+  the `random_module()` strategy nor the nested-given health check exists
+  in hegel-rust.
 - `test_slices.py` — tests `st.slices(size)`, which generates Python
   `slice` objects (built-in type with `.start`/`.stop`/`.step` attributes
   and a `.indices(size)` resolver used with Python's indexing protocol).
