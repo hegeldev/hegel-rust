@@ -6,6 +6,7 @@ use super::{
 };
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Trait for types that have a default generator.
@@ -200,6 +201,72 @@ impl DefaultGenerator for Duration {
     type Generator = DurationGenerator;
     fn default_generator() -> Self::Generator {
         durations()
+    }
+}
+
+/// Generates filesystem paths covering common edge cases.
+///
+/// The generator produces paths from 0 to 8 segments joined with the
+/// platform path separator. Segments are drawn from a mix of:
+///
+/// - Short alphanumeric text (the common case)
+/// - `.` and `..` (traversal)
+/// - Empty string (consecutive separators / trailing slash)
+/// - Dot-prefixed names (`.hidden`)
+/// - Long names near the typical 255-byte NAME_MAX limit
+/// - Whitespace-only names
+///
+/// Roughly 10% of generated paths are absolute (prefixed with `/` on
+/// Unix, `C:\` on Windows). An empty segment vector produces `""`,
+/// the empty path.
+impl DefaultGenerator for PathBuf {
+    type Generator = BoxedGenerator<'static, PathBuf>;
+    fn default_generator() -> Self::Generator {
+        use super::{just, one_of};
+
+        let segment = one_of([
+            // common short text
+            text().max_size(12).boxed(),
+            // traversal
+            just(".".to_string()).boxed(),
+            just("..".to_string()).boxed(),
+            // empty segment (trailing/consecutive separators)
+            just(String::new()).boxed(),
+            // dot-prefixed
+            text()
+                .min_size(1)
+                .max_size(8)
+                .map(|s| format!(".{s}"))
+                .boxed(),
+            // long segment near NAME_MAX
+            text().min_size(200).max_size(255).boxed(),
+            // whitespace-only
+            just(" ".to_string()).boxed(),
+        ]);
+
+        vecs(segment)
+            .max_size(8)
+            .map(|segs| {
+                let rel: PathBuf = segs.iter().collect();
+                // ~10% absolute paths
+                if segs.first().is_some_and(|s| s.len() % 10 == 0) {
+                    #[cfg(unix)]
+                    {
+                        PathBuf::from("/").join(rel)
+                    }
+                    #[cfg(windows)]
+                    {
+                        PathBuf::from("C:\\").join(rel)
+                    }
+                    #[cfg(not(any(unix, windows)))]
+                    {
+                        PathBuf::from("/").join(rel)
+                    }
+                } else {
+                    rel
+                }
+            })
+            .boxed()
     }
 }
 
