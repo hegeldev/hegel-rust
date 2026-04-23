@@ -30,6 +30,10 @@ name = "hegel"
 # because doing so would pull in dev-dependencies. Enabling doc-scrape-examples
 # for one example is enough to lift this restriction. See
 # https://doc.rust-lang.org/cargo/reference/unstable.html#scrape-examples
+[[bin]]
+name = "stress_test"
+path = "src/bin/stress_test.rs"
+
 [[example]]
 name = "stack"
 doc-scrape-examples = true
