@@ -84,14 +84,16 @@ fn forced_float_roundtrip(
     let mut ntc = fresh();
     let drawn = ntc
         .draw_float_forced(min_value, max_value, allow_nan, allow_infinity, forced)
-        .ok().unwrap();
+        .ok()
+        .unwrap();
     assert!(choice_equal_float(drawn, forced));
 
     let choices = choices_of(&ntc);
     let mut replay = NativeTestCase::for_choices(&choices, None);
     let replayed = replay
         .draw_float(min_value, max_value, allow_nan, allow_infinity)
-        .ok().unwrap();
+        .ok()
+        .unwrap();
     assert!(choice_equal_float(replayed, forced));
 }
 
@@ -213,7 +215,8 @@ fn forced_float_nan(sign: f64, min_value: f64, max_value: f64) {
     let mut ntc = fresh();
     let drawn = ntc
         .draw_float_forced(min_value, max_value, true, true, forced)
-        .ok().unwrap();
+        .ok()
+        .unwrap();
     assert!(drawn.is_nan());
 }
 
@@ -299,7 +302,8 @@ fn test_forced_integer_boundary_roundtrip() {
     let mut ntc = fresh();
     let v = ntc
         .draw_integer_forced(i128::MIN, i128::MAX, i128::MAX)
-        .ok().unwrap();
+        .ok()
+        .unwrap();
     assert_eq!(v, i128::MAX);
 
     let choices = choices_of(&ntc);
@@ -325,10 +329,16 @@ fn test_forced_bytes_roundtrip() {
 #[test]
 fn test_forced_string_roundtrip() {
     let mut ntc = fresh();
-    let v = ntc.draw_string_forced(0, 0x10FFFF, 0, 16, "héllo").ok().unwrap();
+    let v = ntc
+        .draw_string_forced(0, 0x10FFFF, 0, 16, "héllo")
+        .ok()
+        .unwrap();
     assert_eq!(v, "héllo");
 
     let choices = choices_of(&ntc);
     let mut replay = NativeTestCase::for_choices(&choices, None);
-    assert_eq!(replay.draw_string(0, 0x10FFFF, 0, 16).ok().unwrap(), "héllo");
+    assert_eq!(
+        replay.draw_string(0, 0x10FFFF, 0, 16).ok().unwrap(),
+        "héllo"
+    );
 }
