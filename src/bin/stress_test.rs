@@ -1,8 +1,11 @@
+use std::collections::VecDeque;
 use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
+
+use rand::RngExt;
 
 use hegel::generators::{self as gs, Generator};
 use hegel::{HealthCheck, Hegel, Settings, Verbosity};
@@ -431,6 +434,45 @@ fn main() {
         }
     });
 
+    // Swarm work queue: scheduler fills it, workers drain it
+    let queue: Arc<(Mutex<VecDeque<usize>>, Condvar)> =
+        Arc::new((Mutex::new(VecDeque::new()), Condvar::new()));
+
+    // Swarm scheduler thread: picks 1-5 tests, enqueues 100-1000 of them
+    let sched_queue = Arc::clone(&queue);
+    let sched_stop = Arc::clone(&stop);
+    let sched_logger = Arc::clone(&logger);
+    let scheduler_handle = std::thread::spawn(move || {
+        let mut rng = rand::rng();
+        let mut swarm_id = 0u64;
+        while !sched_stop.load(Ordering::Relaxed) {
+            let pool_size = rng.random_range(1..=5);
+            let batch_size = rng.random_range(100..=1000);
+
+            let pool: Vec<usize> = (0..pool_size)
+                .map(|_| rng.random_range(0..TESTS.len()))
+                .collect();
+
+            let names: Vec<&str> = pool.iter().map(|&i| TESTS[i].name).collect();
+            sched_logger.log(&format!(
+                "Swarm {swarm_id}: pool={names:?}, batch_size={batch_size}"
+            ));
+
+            let (lock, cvar) = &*sched_queue;
+            for batch_i in 0..batch_size {
+                if sched_stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                let test_idx = pool[batch_i % pool.len()];
+                let mut q = lock.lock().unwrap();
+                q.push_back(test_idx);
+                cvar.notify_one();
+            }
+
+            swarm_id += 1;
+        }
+    });
+
     // Worker threads
     let mut handles = Vec::new();
     for worker_id in 0..workers {
@@ -443,14 +485,34 @@ fn main() {
         let server_crashed = Arc::clone(&server_crashed);
         let pending = Arc::clone(&pending);
         let tx = tx.clone();
+        let queue = Arc::clone(&queue);
 
         handles.push(
             std::thread::Builder::new()
                 .name(format!("worker-{worker_id}"))
                 .spawn(move || {
                     while !stop.load(Ordering::Relaxed) {
+                        let test_idx = {
+                            let (lock, cvar) = &*queue;
+                            let mut q = lock.lock().unwrap();
+                            loop {
+                                if let Some(idx) = q.pop_front() {
+                                    break idx;
+                                }
+                                if stop.load(Ordering::Relaxed) {
+                                    return;
+                                }
+                                let (guard, timeout_result) =
+                                    cvar.wait_timeout(q, Duration::from_millis(100)).unwrap();
+                                q = guard;
+                                if timeout_result.timed_out() && stop.load(Ordering::Relaxed) {
+                                    return;
+                                }
+                            }
+                        };
+
                         let task_id = task_count.fetch_add(1, Ordering::Relaxed) as usize;
-                        let test = &TESTS[task_id % TESTS.len()];
+                        let test = &TESTS[test_idx];
                         let task_start = Instant::now();
 
                         {
@@ -527,10 +589,12 @@ fn main() {
         std::thread::sleep(Duration::from_millis(100));
     }
 
+    queue.1.notify_all();
     for h in handles {
         h.join().ok();
     }
     stop.store(true, Ordering::Relaxed);
+    scheduler_handle.join().ok();
     monitor_handle.join().ok();
     collector_handle.join().ok();
 

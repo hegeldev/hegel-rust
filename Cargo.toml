@@ -33,6 +33,7 @@ name = "hegel"
 [[bin]]
 name = "stress_test"
 path = "src/bin/stress_test.rs"
+required-features = ["rand"]
 
 [[example]]
 name = "stack"
