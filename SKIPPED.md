@@ -1466,6 +1466,24 @@ Individually-skipped tests (rest of the file is ported):
   hegel-rust has no ghostwriter CLI / test-scaffold generator
   counterpart.
 
+- `conjecture/test_provider.py` — every test exercises Hypothesis's
+  public backend/provider registration system: the `PrimitiveProvider`
+  base class that users subclass to supply custom data generation
+  (`PrngProvider`, `TrivialProvider`, `RealizeProvider`, etc.), the
+  `with_register_backend(name, cls)` / `AVAILABLE_PROVIDERS` name-based
+  registry, the `backend="name"` `@settings` parameter that selects a
+  registered provider at runtime, and the associated provider-plugin
+  surface (`provider.realize`, `provider.lifetime` = `"test_case"` /
+  `"test_function"`, `observe_test_case` / `observe_information_messages`,
+  `per_test_case_context_manager` / `on_observation`,
+  `BackendCannotProceed`, `FlakyBackendFailure`, `run_conformance_test`,
+  `ConjectureData(provider=..., provider_kw=...)`). hegel-rust picks its
+  backend at compile time (server vs `feature = "native"`) and exposes no
+  pluggable-provider public API: no `backend=` setting (same gap noted in
+  the `test_settings.py` skip), no `register_backend` entry point, no
+  `PrimitiveProvider` class to subclass, and no provider-lifetime /
+  realize / observe / conformance machinery.
+
 - `conjecture/test_forced.py::test_forced_many` — exercises
   `cu.many(data, min_size=…, max_size=…, forced=N)` where `forced` sets
   the total collection count. Native `ManyState::new(min_size, max_size)`
