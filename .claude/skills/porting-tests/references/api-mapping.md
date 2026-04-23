@@ -145,6 +145,17 @@ adding the feature. Don't invent a workaround in the test.
   predicate, skip with a rationale naming the `@flaky` decorator. If it
   comes from a seedable source (a `Random(seed)`, a time-of-day), seed
   it deterministically in the port instead.
+- `LazyStrategy` / `defines_strategy` memoisation — Hypothesis's
+  `@defines_strategy` decorator wraps each `st.*` factory in a
+  `LazyStrategy` that computes and caches the underlying
+  `SearchStrategy` on first use. Tests that pin down this caching
+  behaviour (e.g. `nocover/test_deferred_errors.py::test_does_not_recalculate_the_strategy`,
+  which mutates a captured list between draws and asserts subsequent
+  draws see the *original* strategy rather than a freshly-recomputed
+  one) have no Rust counterpart: `gs::*` factories return eagerly-constructed
+  generator structs, so there is no laziness/memoisation layer to
+  observe. Skip individually with a rationale naming `LazyStrategy` /
+  `defines_strategy`.
 
 ## Replaying fixed choices (`ConjectureData.for_choices`)
 
