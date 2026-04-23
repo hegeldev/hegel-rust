@@ -10,6 +10,7 @@ mod core;
 mod draw_names;
 mod findability_arithmetic;
 mod findability_collections;
+mod findability_floats;
 mod findability_pbtsmith_regressions;
 mod findability_types;
 mod floats;
