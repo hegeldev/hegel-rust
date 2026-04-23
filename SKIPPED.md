@@ -1274,3 +1274,9 @@ Individually-skipped tests (rest of the file is ported):
   `pdst.range_indexes`) and pandas/numpy dtypes (`np.dtype("O")`,
   `pd.core.arrays.integer.Int8Dtype`). hegel-rust has no pandas
   integration or counterpart for pandas `Series`/dtype generation.
+
+- `test_attrs.py` (in `tests/attrs/`) — port abandoned: parallel
+  port-loop worker produced commits on `port/worker-0` that could not
+  be cherry-picked cleanly onto the supervisor branch (post-rebase
+  integration failed); left for human inspection on branch
+  `port/worker-0`.
