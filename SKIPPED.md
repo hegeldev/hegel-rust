@@ -1254,3 +1254,10 @@ Individually-skipped tests (rest of the file is ported):
 - `test_provisional_strategies.py::test_valid_domains_arguments` rows
   with any `max_element_length` value — same gap; only
   `max_length ∈ {None, 4, 8, 255}` is portable.
+
+- `tests/numpy/test_import.py` — numpy-extra integration tests:
+  `test_hypothesis_is_not_the_first_to_import_numpy` checks Python's
+  `sys.modules` to assert Hypothesis defers numpy import, and
+  `test_wildcard_import` exercises `from hypothesis.extra.numpy import *`.
+  Both target the numpy integration and use Python-specific facilities
+  (`sys.modules`, wildcard import) with no Rust counterpart.
