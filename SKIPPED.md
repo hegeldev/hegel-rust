@@ -1395,6 +1395,14 @@ Individually-skipped tests (rest of the file is ported):
   hegel-rust has no numpy integration or counterpart for numpy
   array/dtype/shape/index generation.
 
+- `test_gufunc.py` (in `tests/numpy/`) — numpy-extra integration tests
+  for generalized ufunc signatures. Every test exercises
+  `hypothesis.extra.numpy` (`nps.mutually_broadcastable_shapes`,
+  `nps.arrays`) and the internal `_hypothesis_parse_gufunc_signature`
+  on numpy gufunc signatures, and asserts on results of `np.matmul`
+  and `np.einsum`. hegel-rust has no numpy integration or counterpart
+  for gufunc-signature / broadcastable-shape generation.
+
 - `test_series.py` (in `tests/pandas/`) — pandas-extra integration tests.
   Every test exercises `hypothesis.extra.pandas` (`pdst.series`,
   `pdst.range_indexes`) and pandas/numpy dtypes (`np.dtype("O")`,
