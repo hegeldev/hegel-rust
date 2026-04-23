@@ -61,13 +61,6 @@ Individually-skipped tests (rest of the file is ported):
   a pre-seeded `TC.for_choices(...)` and `Shrinker(...)`; hegel-rust's
   shrinker exposes no public or `__native_test_internals` entry-point
   for a single shrink pass on a seeded test case.
-- `shrink_quality/test_collections.py::test_sort_values_insertion_natural_exit`
-  — exercises the insertion-sort fallback branch of pbtkit's `sort_values`
-  (full sort `[0,0,1]` fails the `a+b>c` predicate; upstream checks that
-  insertion sort then lands on `[0,1,0]`). hegel-rust's `sort_values_integers`
-  only performs the full sort — no insertion-sort fallback — so the branch
-  isn't exercised. See TODO.yaml entry "Implement sort_values insertion-sort
-  fallback" for the follow-up.
 - `test_text.py::test_string_sort_key_type_mismatch` — exercises Python's
   dynamically-typed `sort_key(non-string)`; Rust's `sort_key(&str)` signature
   makes the "non-string argument" case unrepresentable at compile time.

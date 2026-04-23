@@ -11,7 +11,12 @@ impl<'a> Shrinker<'a> {
     ///
     /// Port of pbtkit's `sort_values`. Groups choices by type and tries
     /// sorting each group so simpler values come first, enabling other
-    /// passes to further reduce the leading choices.
+    /// passes to further reduce the leading choices. First attempts a
+    /// full sort; if that fails the `consider` predicate, falls back to
+    /// an insertion-sort loop where each adjacent swap is validated
+    /// individually. The fallback matters when earlier swaps cause
+    /// structural changes (e.g. value punning on collection-bearing
+    /// kinds) that would make the full sort's replace unreachable.
     pub(super) fn sort_values(&mut self) {
         // Sort integer choices by absolute value.
         self.sort_values_integers();
@@ -20,89 +25,88 @@ impl<'a> Shrinker<'a> {
     }
 
     pub(super) fn sort_values_integers(&mut self) {
-        let int_indices: Vec<usize> = self
-            .current_nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, n)| {
-                if matches!(n.kind, ChoiceKind::Integer(_)) {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if int_indices.len() < 2 {
-            return;
-        }
-
-        let values: Vec<ChoiceValue> = int_indices
-            .iter()
-            .map(|&i| self.current_nodes[i].value.clone())
-            .collect();
-        let mut sorted = values.clone();
-        sorted.sort_by(|a, b| {
-            let ChoiceValue::Integer(va) = a else {
-                unreachable!()
-            };
-            let ChoiceValue::Integer(vb) = b else {
-                unreachable!()
-            };
-            va.unsigned_abs().cmp(&vb.unsigned_abs())
-        });
-
-        if sorted != values {
-            let replacements: HashMap<usize, ChoiceValue> = int_indices
-                .iter()
-                .zip(sorted.iter())
-                .map(|(&i, v)| (i, v.clone()))
-                .collect();
-            self.replace(&replacements);
-        }
+        self.try_sort_group(|k| matches!(k, ChoiceKind::Integer(_)));
     }
 
     pub(super) fn sort_values_booleans(&mut self) {
-        let bool_indices: Vec<usize> = self
+        self.try_sort_group(|k| matches!(k, ChoiceKind::Boolean(_)));
+    }
+
+    fn try_sort_group<F>(&mut self, matches_kind: F)
+    where
+        F: Fn(&ChoiceKind) -> bool,
+    {
+        let indices: Vec<usize> = self
             .current_nodes
             .iter()
             .enumerate()
-            .filter_map(|(i, n)| {
-                if matches!(n.kind, ChoiceKind::Boolean(_)) {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
+            .filter_map(|(i, n)| if matches_kind(&n.kind) { Some(i) } else { None })
             .collect();
 
-        if bool_indices.len() < 2 {
+        if indices.len() < 2 {
             return;
         }
 
-        let values: Vec<ChoiceValue> = bool_indices
+        let values: Vec<ChoiceValue> = indices
             .iter()
             .map(|&i| self.current_nodes[i].value.clone())
             .collect();
-        let mut sorted = values.clone();
-        // Sort: false (0) before true (1).
-        sorted.sort_by(|a, b| {
-            let ChoiceValue::Boolean(va) = a else {
-                unreachable!()
-            };
-            let ChoiceValue::Boolean(vb) = b else {
-                unreachable!()
-            };
-            u8::from(*va).cmp(&u8::from(*vb))
-        });
+        let mut keyed: Vec<_> = indices
+            .iter()
+            .map(|&i| {
+                (
+                    self.current_nodes[i].sort_key(),
+                    self.current_nodes[i].value.clone(),
+                )
+            })
+            .collect();
+        keyed.sort_by(|a, b| a.0.cmp(&b.0));
+        let sorted_values: Vec<ChoiceValue> = keyed.into_iter().map(|(_, v)| v).collect();
 
-        if sorted != values {
-            let replacements: HashMap<usize, ChoiceValue> = bool_indices
+        if sorted_values != values {
+            let replacements: HashMap<usize, ChoiceValue> = indices
                 .iter()
-                .zip(sorted.iter())
+                .zip(sorted_values.iter())
                 .map(|(&i, v)| (i, v.clone()))
                 .collect();
-            self.replace(&replacements);
+            if self.replace(&replacements) {
+                return;
+            }
+        }
+
+        // Insertion-sort fallback (pbtkit's `feature_enabled("collections")`
+        // branch of `_try_sort_group`). Each iteration refreshes the valid
+        // indices because a prior successful swap can shorten current_nodes
+        // or change kinds at fixed positions via value punning.
+        for pos in 1..indices.len() {
+            let mut j = pos;
+            while j > 0 {
+                let valid: Vec<usize> = indices
+                    .iter()
+                    .copied()
+                    .filter(|&i| {
+                        i < self.current_nodes.len() && matches_kind(&self.current_nodes[i].kind)
+                    })
+                    .collect();
+                if j >= valid.len() {
+                    break;
+                }
+                let idx_j = valid[j];
+                let idx_prev = valid[j - 1];
+                if self.current_nodes[idx_prev].sort_key() <= self.current_nodes[idx_j].sort_key() {
+                    break;
+                }
+                let v_j = self.current_nodes[idx_j].value.clone();
+                let v_prev = self.current_nodes[idx_prev].value.clone();
+                let mut swap = HashMap::new();
+                swap.insert(idx_prev, v_j);
+                swap.insert(idx_j, v_prev);
+                if self.replace(&swap) {
+                    j -= 1;
+                    continue;
+                }
+                break;
+            }
         }
     }
 

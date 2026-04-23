@@ -2080,6 +2080,101 @@ fn sort_values_full_sort_fails_preserves_order() {
     assert_eq!(int_at(&shrinker.current_nodes, 1), 3);
 }
 
+#[test]
+fn sort_values_insertion_natural_exit() {
+    // Port of pbtkit shrink_quality/test_collections.py::
+    // test_sort_values_insertion_natural_exit. Exercises the insertion-sort
+    // fallback's happy path: the full sort fails the predicate, pos=1 swaps
+    // successfully and `j` decrements to 0 (natural while-exit), pos=2 swap
+    // fails and breaks out. Final state is [0, 1, 0].
+    //
+    //   Initial: [1, 0, 0], predicate a+b > c.
+    //   Full sort (abs-ascending) → [0, 0, 1]: 0+0 > 1 is false → full sort fails.
+    //   pos=1, j=1: swap idx0(1) ↔ idx1(0) → [0, 1, 0]: 0+1 > 0 is true → success.
+    //                j=0, while-exit.
+    //   pos=2, j=2: swap idx1(1) ↔ idx2(0) → [0, 0, 1]: 0+0 > 1 is false → break.
+    let nodes = vec![int_node(0, 10, 1), int_node(0, 10, 0), int_node(0, 10, 0)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let (ChoiceValue::Integer(a), ChoiceValue::Integer(b), ChoiceValue::Integer(c)) =
+                (&n[0].value, &n[1].value, &n[2].value)
+            else {
+                return (false, n.to_vec());
+            };
+            (a + b > *c, n.to_vec())
+        }),
+        nodes,
+    );
+    shrinker.sort_values();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+    assert_eq!(int_at(&shrinker.current_nodes, 1), 1);
+    assert_eq!(int_at(&shrinker.current_nodes, 2), 0);
+}
+
+#[test]
+fn sort_values_insertion_breaks_on_already_ordered_pair() {
+    // Exercises the `sort_key(prev) <= sort_key(j)` early-break inside the
+    // insertion-sort fallback: after the full sort and the pos=1 swap both
+    // fail, pos=2's pair is already in order so the while loop breaks without
+    // attempting a replace.
+    //
+    //   Initial: [5, 1, 2], predicate a > b (first > second).
+    //   Full sort → [1, 2, 5]: 1 > 2 is false → full sort fails.
+    //   pos=1, j=1: idx0(5) > idx1(1), attempt swap → [1, 5, 2]: 1 > 5 is false → break.
+    //   pos=2, j=2: idx1(1) ≤ idx2(2) → break on the sort_key-order guard.
+    let nodes = vec![int_node(0, 10, 5), int_node(0, 10, 1), int_node(0, 10, 2)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let (ChoiceValue::Integer(a), ChoiceValue::Integer(b)) = (&n[0].value, &n[1].value)
+            else {
+                return (false, n.to_vec());
+            };
+            (a > b, n.to_vec())
+        }),
+        nodes,
+    );
+    shrinker.sort_values();
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 5);
+    assert_eq!(int_at(&shrinker.current_nodes, 1), 1);
+    assert_eq!(int_at(&shrinker.current_nodes, 2), 2);
+}
+
+#[test]
+fn sort_values_insertion_breaks_when_index_becomes_stale() {
+    // Exercises the `j >= valid.len()` stale-index break inside the
+    // insertion-sort fallback. A successful swap returns a shorter actual_nodes
+    // from the test fn, so current_nodes shrinks and the subsequent outer-loop
+    // iteration finds fewer valid indices than `j`.
+    //
+    //   Initial: [3, 0, 2].
+    //   Full sort → [0, 2, 3]: predicate returns not-interesting → full sort fails.
+    //   pos=1, j=1: swap idx0(3) ↔ idx1(0) → candidate [0, 3, 2]: test fn reports
+    //               interesting with a single-node actual sequence [0]. consider()
+    //               updates current_nodes to [0]. j=0, while-exit.
+    //   pos=2, j=2: filtered valid indices = [0] (positions 1 and 2 no longer in bounds).
+    //                j=2 ≥ 1 → break via stale-index guard.
+    let nodes = vec![int_node(0, 10, 3), int_node(0, 10, 0), int_node(0, 10, 2)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let vals: Vec<i128> = n
+                .iter()
+                .map(|nd| match nd.value {
+                    ChoiceValue::Integer(v) => v,
+                    _ => -1,
+                })
+                .collect();
+            if vals == vec![0, 3, 2] {
+                return (true, vec![int_node(0, 10, 0)]);
+            }
+            (false, n.to_vec())
+        }),
+        nodes,
+    );
+    shrinker.sort_values();
+    assert_eq!(shrinker.current_nodes.len(), 1);
+    assert_eq!(int_at(&shrinker.current_nodes, 0), 0);
+}
+
 // ── try_shortening_via_increment ────────────────────────────────────────────
 
 #[test]
