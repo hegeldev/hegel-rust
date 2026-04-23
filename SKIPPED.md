@@ -504,6 +504,15 @@ Individually-skipped tests (rest of the file is ported):
   `@example` API, `Phase.explicit`, nor `__notes__` have hegel-rust counterparts, and
   hegel-rust's failure output format (`let draw_1 = ...; panicked at...`) is
   completely different from Hypothesis's.
+- `test_patching.py` (in `tests/patching/`) — tests
+  `hypothesis.extra._patching` (`get_patch_for`, `make_patch`, `FAIL_MSG`,
+  `HEADER`, `indent`), a public API that generates Python source code
+  patches inserting `@example(...)` decorators into failing test files
+  (`@given`/`@example` are Python decorator syntax). Also depends on
+  `pytester` (pytest plugin integration) to assert patch-file location
+  output, and includes a numpy `UNDEF_NAME` case. No hegel-rust counterpart:
+  hegel-rust does not emit Python source patches, is not a pytest plugin,
+  and has no `@example`-decorator API.
 - `test_phases.py` — every test in the file exercises Hypothesis's `Phase`
   enum / `@settings(phases=...)` public API (phase ordering / deduping,
   `Phase.explicit`-only runs, `Phase.generate` / `Phase.reuse` / `Phase.shrink`
