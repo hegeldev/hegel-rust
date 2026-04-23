@@ -285,6 +285,17 @@ Individually-skipped tests (rest of the file is ported):
 - `test_constants_ast.py` — tests Hypothesis's Python-AST constant
   extractor (`ConstantVisitor`, `constants_from_module`); parses Python
   source code, no Rust counterpart.
+- `test_local_constants.py` (in `conjecture/`) — tests the consumption
+  side of the same Python-AST constant-collection feature as
+  `test_constants_ast.py` above. Every test monkey-patches
+  module-level attributes on
+  `hypothesis.internal.conjecture.providers` (`_get_local_constants`,
+  `_sys_modules_len`, `_seen_modules`, `is_local_module_file`) or
+  `sys.modules` itself (`monkeypatch.setitem(sys.modules, ...,
+  SimpleNamespace())`); the feature scans Python source via
+  `ast.parse` and relies on Python's module-file import system. No
+  Rust counterpart — Python-specific facilities (`sys.modules`,
+  `monkeypatch`, `ast`).
 - `test_caching.py` — tests Python object identity (`st.text() is
   st.text()`) of Hypothesis's strategy cache; Rust generators are
   builder structs with no `is`-style identity equivalent.
