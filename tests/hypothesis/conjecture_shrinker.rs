@@ -17,12 +17,10 @@
 //!
 //! Individually-skipped tests:
 //!
-//! - `test_can_shrink_variable_draws_with_just_deletion`,
-//!   `test_duplicate_nodes_that_go_away`, `test_accidental_duplication`,
+//! - `test_duplicate_nodes_that_go_away`,
 //!   `test_can_pass_to_an_indirect_descendant`,
 //!   `test_shrinking_blocks_from_common_offset`, `test_can_reorder_spans`,
 //!   `test_dependent_block_pairs_is_up_to_shrinking_integers`,
-//!   `test_zig_zags_quickly`,
 //!   `test_zig_zags_quickly_with_shrink_towards` (all 4 parametrize rows),
 //!   `test_can_simultaneously_lower_non_duplicated_nearby_integers` (3
 //!   parametrize rows), `test_redistribute_with_forced_node_integer`,
@@ -32,18 +30,18 @@
 //!   `test_redistribute_numeric_pairs_shrink_towards_explicit_integer`,
 //!   `test_redistribute_numeric_pairs_shrink_towards_explicit_float`,
 //!   `test_redistribute_numeric_pairs_shrink_towards_explicit_combined`,
-//!   `test_redistribute_numeric_pairs_shrink_towards_integer` —
-//!   all fixate on a single named Python shrink pass
-//!   (`minimize_individual_choices`, `minimize_duplicated_choices`,
-//!   `pass_to_descendant`, `lower_common_node_offset`, `reorder_spans`,
-//!   `redistribute_numeric_pairs`, `lower_integers_together`,
-//!   `lower_duplicated_characters`) via `fixate_shrink_passes` or a direct
-//!   method call. Hegel's native shrinker only exposes `Shrinker::shrink()`
-//!   (the full pipeline); its individual passes are `pub(super)` and the pass
-//!   names differ (`binary_search_integer_towards_zero`,
-//!   `redistribute_integers`, `shrink_duplicates`, `redistribute_string_pairs`,
-//!   `swap_adjacent_blocks`, …) so asserting "exactly this pass did exactly
-//!   that much" is not portable without exposing the pass API.
+//!   `test_redistribute_numeric_pairs_shrink_towards_integer` — each
+//!   depends on a Python-only feature or engine internal not yet in the
+//!   native backend: `draw_integer(min_value=0)` with no upper bound, a
+//!   `shrink_towards` constraint on `draw_integer`, `forced=` on
+//!   `draw_integer`, `stop_span(discard=True)` semantics that the native
+//!   shrinker would have to consult for descendant-passing /
+//!   reorder-spans, `Sampler` for block-distribution, or a `.calls`
+//!   counter to bound examples. (The other fixate-on-named-pass tests in
+//!   this file, like `test_can_shrink_variable_draws_with_just_deletion`,
+//!   port cleanly by running `Shrinker::shrink()` end-to-end; the full
+//!   pipeline converges on the same minimum as the single pass the
+//!   Python original fixates on.)
 //!
 //! - `test_deletion_and_lowering_fails_to_shrink`,
 //!   `test_permits_but_ignores_raising_order` — monkey-patch
@@ -51,12 +49,13 @@
 //!   the engine's first example and shrink path. No monkey-patching entry
 //!   point in the native engine.
 //!
-//! - `test_handle_empty_draws`, `test_node_deletion_can_delete_short_ranges`,
+//! - `test_node_deletion_can_delete_short_ranges`,
 //!   `test_node_programs_are_adaptive`,
 //!   `test_will_let_fixate_shrink_passes_do_a_full_run_through` — use
-//!   `node_program("X" * i)` / `run_to_nodes`, or the `StopShrinking`
-//!   / `max_stall` control surface. Neither the adaptive node-program pass
-//!   nor the `max_stall`/`StopShrinking` API exists in the native shrinker.
+//!   `shrinker.node_program("X" * i)` (adaptive deletion pass) or the
+//!   `StopShrinking` / `max_stall` control surface. Neither the adaptive
+//!   node-program pass nor the `max_stall`/`StopShrinking` API exists in
+//!   the native shrinker.
 //!
 //! - `test_will_terminate_stalled_shrinks` — asserts
 //!   `shrinker.calls <= 1 + 2 * shrinker.max_stall`; native `Shrinker` has
@@ -359,4 +358,119 @@ fn test_finding_a_minimal_balanced_binary_tree() {
         extract_booleans(&shrinker.current_nodes),
         vec![true, false, true, false, true, false, false]
     );
+}
+
+#[test]
+fn test_can_shrink_variable_draws_with_just_deletion() {
+    // Python parametrizes n in [1, 5, 8, 15]; the Python original fixates on
+    // `minimize_individual_choices`. The full native pipeline includes
+    // deletion + integer shrinking, which converges on the same minimum.
+    for n in [1usize, 5, 8, 15] {
+        let mut initial = vec![n as i128];
+        initial.extend(std::iter::repeat_n(0i128, n - 1));
+        initial.push(1);
+        let mut shrinker = shrinking_from(integer_choices(&initial), |tc| {
+            let k = match tc.draw_integer(0, (1i128 << 4) - 1) {
+                Ok(v) => v as usize,
+                Err(_) => return false,
+            };
+            let mut bs = Vec::with_capacity(k);
+            for _ in 0..k {
+                match tc.draw_integer(0, 255) {
+                    Ok(v) => bs.push(v),
+                    Err(_) => return false,
+                }
+            }
+            bs.iter().any(|&v| v != 0)
+        });
+        shrinker.shrink();
+        assert_eq!(
+            extract_integers(&shrinker.current_nodes),
+            vec![1i128, 1],
+            "n = {n}"
+        );
+    }
+}
+
+#[test]
+fn test_handle_empty_draws() {
+    // Python uses `run_to_nodes` to let ConjectureRunner find the initial
+    // interesting case; we seed `(1, 0)` which exercises the same body
+    // (discarded first iteration, then n=0 break).
+    let mut shrinker = shrinking_from(integer_choices(&[1, 0]), |tc| {
+        loop {
+            let n = match tc.draw_integer(0, 1) {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+            if n > 0 {
+                tc.has_discards = true;
+            }
+            if n == 0 {
+                return true;
+            }
+        }
+    });
+    shrinker.shrink();
+    assert_eq!(extract_integers(&shrinker.current_nodes), vec![0]);
+}
+
+#[test]
+fn test_zig_zags_quickly() {
+    // Python fixates on `minimize_individual_choices` and additionally
+    // asserts `shrinker.engine.valid_examples <= 100`; our native
+    // `Shrinker` has no valid_examples counter, so we drop that clause
+    // and keep the minimum-choice assertion.
+    let mut shrinker = shrinking_from(integer_choices(&[255; 4]), |tc| {
+        let m = match tc.draw_integer(0, 65535) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        let n = match tc.draw_integer(0, 65535) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        if m == 0 || n == 0 {
+            return false;
+        }
+        (m - n).abs() <= 1 || (m - n).abs() <= 10
+    });
+    shrinker.shrink();
+    assert_eq!(extract_integers(&shrinker.current_nodes), vec![1, 1]);
+}
+
+#[test]
+fn test_accidental_duplication() {
+    let mut initial = vec![ChoiceValue::Integer(12), ChoiceValue::Integer(12)];
+    initial.extend(std::iter::repeat_n(ChoiceValue::Bytes(vec![2]), 12));
+    let mut shrinker = shrinking_from(initial, |tc| {
+        let x = match tc.draw_integer(0, 255) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        let y = match tc.draw_integer(0, 255) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        if x != y || x < 5 {
+            return false;
+        }
+        let mut bs = Vec::with_capacity(x as usize);
+        for _ in 0..x {
+            match tc.draw_bytes(1, 1) {
+                Ok(v) => bs.push(v),
+                Err(_) => return false,
+            }
+        }
+        bs.iter().collect::<std::collections::HashSet<_>>().len() == 1
+    });
+    shrinker.shrink();
+    let mut expected = vec![ChoiceValue::Integer(5), ChoiceValue::Integer(5)];
+    expected.extend(std::iter::repeat_n(ChoiceValue::Bytes(vec![0]), 5));
+    let actual: Vec<ChoiceValue> = shrinker
+        .current_nodes
+        .iter()
+        .map(|n| n.value.clone())
+        .collect();
+    assert_eq!(actual, expected);
 }
