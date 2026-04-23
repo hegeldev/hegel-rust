@@ -16,6 +16,7 @@ use std::hash::Hash;
 use num_traits::{CheckedSub, One};
 
 use crate::native::bignum::BigUint;
+use crate::native::intervalsets::IntervalSet;
 
 /// Finds a (hopefully large) integer such that `f(n)` is true and `f(n+1)` is
 /// false. `f(0)` is assumed to be true and is not checked.
@@ -162,6 +163,8 @@ pub struct OrderingShrinker<T: Ord + Clone + Hash + Eq, F: FnMut(&[T]) -> bool> 
     current: Vec<T>,
     predicate: F,
     seen: HashSet<Vec<T>>,
+    full: bool,
+    changes: usize,
 }
 
 impl<T: Ord + Clone + Hash + Eq, F: FnMut(&[T]) -> bool> OrderingShrinker<T, F> {
@@ -172,7 +175,16 @@ impl<T: Ord + Clone + Hash + Eq, F: FnMut(&[T]) -> bool> OrderingShrinker<T, F> 
             current: initial,
             predicate,
             seen,
+            full: false,
+            changes: 0,
         }
+    }
+
+    /// Set the `full` flag — when true, `run()` iterates `run_step` until no
+    /// more improvements are found, matching Python's `Shrinker(full=True)`.
+    pub fn full(mut self, full: bool) -> Self {
+        self.full = full;
+        self
     }
 
     pub fn calls(&self) -> usize {
@@ -194,6 +206,7 @@ impl<T: Ord + Clone + Hash + Eq, F: FnMut(&[T]) -> bool> OrderingShrinker<T, F> 
         // left_is_better: lexicographic < on key(x); key is identity here.
         if (self.predicate)(&value) && value < self.current {
             self.current = value;
+            self.changes += 1;
             true
         } else {
             false
@@ -204,7 +217,15 @@ impl<T: Ord + Clone + Hash + Eq, F: FnMut(&[T]) -> bool> OrderingShrinker<T, F> 
         if self.short_circuit() {
             return;
         }
-        self.run_step();
+        if self.full {
+            let mut prev = usize::MAX;
+            while self.changes != prev {
+                prev = self.changes;
+                self.run_step();
+            }
+        } else {
+            self.run_step();
+        }
     }
 
     fn short_circuit(&mut self) -> bool {
@@ -266,6 +287,112 @@ impl<T: Ord + Clone + Hash + Eq, F: FnMut(&[T]) -> bool> OrderingShrinker<T, F> 
             });
             i += 1;
         }
+    }
+}
+
+/// Standalone shrinker for ordered collections.
+///
+/// Port of `hypothesis.internal.conjecture.shrinking.Collection`. Holds a
+/// value and a `min_size`; `left_is_better` compares two candidate sequences
+/// by length first, then by lexicographic ordering of their elements.
+///
+/// The `run()` body is a stub — the full shrink pipeline (try all-zero,
+/// delete-each, reorder via `Ordering`, minimise duplicates, minimise each
+/// element) is not yet ported. Callers that only need `left_is_better` (for
+/// comparing candidates) don't need `run()`.
+pub struct CollectionShrinker<T, F>
+where
+    T: Clone + Eq + Ord + Hash,
+    F: FnMut(&[T]) -> bool,
+{
+    current: Vec<T>,
+    #[allow(dead_code)]
+    predicate: F,
+    #[allow(dead_code)]
+    min_size: usize,
+    seen: HashSet<Vec<T>>,
+}
+
+impl<T, F> CollectionShrinker<T, F>
+where
+    T: Clone + Eq + Ord + Hash,
+    F: FnMut(&[T]) -> bool,
+{
+    pub fn new(initial: Vec<T>, predicate: F, min_size: usize) -> Self {
+        let mut seen = HashSet::new();
+        seen.insert(initial.clone());
+        CollectionShrinker {
+            current: initial,
+            predicate,
+            min_size,
+            seen,
+        }
+    }
+
+    pub fn current(&self) -> &[T] {
+        &self.current
+    }
+
+    pub fn calls(&self) -> usize {
+        self.seen.len()
+    }
+
+    /// Compare two candidates under the collection ordering: shorter is
+    /// better; otherwise compare element-wise. Matches Python's
+    /// `Collection.left_is_better`.
+    pub fn left_is_better(&self, left: &[T], right: &[T]) -> bool {
+        if left.len() < right.len() {
+            return true;
+        }
+        for (v1, v2) in left.iter().zip(right.iter()) {
+            if v1 == v2 {
+                continue;
+            }
+            return v1 < v2;
+        }
+        false
+    }
+
+    pub fn run(&mut self) {
+        todo!("CollectionShrinker::run — full Collection shrink pipeline not yet ported")
+    }
+}
+
+/// Standalone shrinker for byte sequences.
+///
+/// Port of `hypothesis.internal.conjecture.shrinking.Bytes`, which wraps
+/// `Collection` with `ElementShrinker=Integer`. The `shrink` entry point
+/// matches the Python class method.
+pub struct BytesShrinker;
+
+impl BytesShrinker {
+    pub fn shrink<F>(_initial: &[u8], _predicate: F, _min_size: usize) -> Vec<u8>
+    where
+        F: FnMut(&[u8]) -> bool,
+    {
+        todo!("BytesShrinker::shrink — not yet ported")
+    }
+}
+
+/// Standalone shrinker for strings over a codepoint `IntervalSet`.
+///
+/// Port of `hypothesis.internal.conjecture.shrinking.String`, which wraps
+/// `Collection` with `ElementShrinker=Integer` and the interval set's
+/// `char_in_shrink_order` / `index_from_char_in_shrink_order` as
+/// `from_order` / `to_order`.
+pub struct StringShrinker;
+
+impl StringShrinker {
+    pub fn shrink<F>(
+        _initial: &str,
+        _predicate: F,
+        _intervals: &IntervalSet,
+        _min_size: usize,
+    ) -> Vec<char>
+    where
+        F: FnMut(&str) -> bool,
+    {
+        todo!("StringShrinker::shrink — not yet ported")
     }
 }
 
