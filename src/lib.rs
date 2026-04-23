@@ -276,7 +276,9 @@ pub mod __native_test_internals {
         make_float_clamper, next_down, next_down_normal, next_up, next_up_normal, sign_aware_lte,
     };
     pub use crate::native::intervalsets::IntervalSet;
-    pub use crate::native::shrinker::value_shrinkers::{IntegerShrinker, OrderingShrinker};
+    pub use crate::native::shrinker::value_shrinkers::{
+        BytesShrinker, CollectionShrinker, IntegerShrinker, OrderingShrinker, StringShrinker,
+    };
     pub use crate::native::shrinker::{ShrinkRun, Shrinker};
     pub use crate::native::tree::CachedTestFunction;
     pub use crate::native::unicodedata;
