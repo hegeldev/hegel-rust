@@ -732,6 +732,25 @@ predicates:
 | `math.fabs(x)`                               | `x.abs()`                            | Method.                                                               |
 | `math.sqrt(x)`                               | `x.sqrt()`                           | Method.                                                               |
 | `math.hypot(a, b)`                           | `a.hypot(b)`                         | Method on `f64`, not a free function.                                 |
+| `int(x)` where `x: float` and the result is compared back as a float (e.g. `x == int(x)`, `x + 1 != x`) | `x.trunc()` | Stay in float-space. **Do not** translate as `x as i64` — the cast saturates at `i64::{MIN,MAX}` on large-magnitude floats, silently swallowing the `x + 1 == x` / `x == trunc(x)` regressions that `findability/test_floats.py` exists to surface. |
+| `isinstance(x, float)` as a test assertion   | trivially true                       | `gs::floats::<f64>()` is statically typed, so there is no runtime type-check to assert. Port the test body as a smoke test that draws from the generator (mirrors the upstream surface without a contentful assertion). |
+
+### `str(x)` / `repr(x)` collapse for floats
+
+Python has two distinct float formatters — `str(x)` produces the shorter
+common form, `repr(x)` is the round-trip-guaranteeing form — and tests
+such as `test_can_find_float_that_does_not_round_trip_through_str` vs
+`..._through_repr` exist because the two paths have separate
+counterexamples in Python.
+
+In Rust, both `format!("{x}")` and `format!("{x:?}")` produce
+round-trippable representations for `f64`, so the two tests collapse
+into the same assertion. Both **still fail as expected** — the
+counterexample both paths find is NaN (`NaN != NaN`), which is not a
+formatter property. Port both tests to mirror the upstream surface,
+and add a one-line comment on the `{:?}` variant noting the distinction
+is vestigial in Rust so a future reader isn't left wondering why the
+two are redundant.
 
 ### Don't sort before asserting order
 
