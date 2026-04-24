@@ -389,6 +389,19 @@ Individually-skipped tests (rest of the file is ported):
   facility with no Rust counterpart: Rust has no runtime source-evaluation
   or module-object model, and hegel-rust does not expose any equivalent
   reflection helper.
+- `test_integer_ranges.py` (in `nocover/`) — the sole test
+  (`test_bounded_integers_distribution_of_bit_width_issue_1387_regression`)
+  draws from `integers(0, 1e100)` (upper bound ≈ 332 bits) and observes
+  that the distribution is shaped for ~7/8 of draws within a 128-bit
+  window and uniform across the full range for the remaining ~1/8.
+  hegel-rust's public `gs::integers::<T>()` takes a fixed-size type via
+  the `Integer` trait (`i8..=i128`, `u8..=u128`), capping `max_value` at
+  `i128::MAX` ≈ 1.7e38, so a range wider than 128 bits cannot be
+  expressed. The native backend saturates at i128 too — `interpret_integer`
+  routes `bignum_overflows_i128(max_cbor)` to a u128 selector + two-halves
+  draw, with no arbitrary-precision path. With any expressible range the
+  test's distribution-shape assertion (`huge = sum(x > 1e97 ...)`,
+  `assert huge != 0 or len(values) < 800`) is unobservable.
 - `test_interesting_origin.py` (in `nocover/`) — the sole test,
   parametrized over three `go_wrong_*` helpers that raise `ValueError`
   with different Python exception-chaining patterns (naive, `raise X from
