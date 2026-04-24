@@ -7,39 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Un-ignore conjecture_engine::test_one_dead_branch
-  details: |
-    `tests/hypothesis/conjecture_engine.rs::test_one_dead_branch` is
-    currently `#[ignore = "requires datatree-guided dead-branch
-    avoidance"]`. Upstream's test marks `i > 0` as invalid and then
-    relies on Hypothesis's `DataTree.simulate_test_function` /
-    `generate_novel_prefix` to stop re-sampling the dead branch —
-    without that, every random first byte has a ~255/256 chance of
-    being invalid and the seen-set never grows enough to trigger
-    `mark_interesting(origin)` within the default call budget.
-
-    Two pieces of work unblock this:
-      - Implement `NativeConjectureData::mark_invalid` (currently a
-        `todo!()` stub in `src/native/conjecture_runner.rs`).  The
-        existing `mark_interesting` path (panic-payload `MarkPanic
-        { data_id }` + `Status::Interesting` arm in `run_test_fn`)
-        is the template — add a mirror `MarkKind::Invalid` variant
-        and Status::Invalid arm.
-      - Teach `NativeConjectureRunner`'s generation phase to avoid
-        the dead branch, either by seeding `NativeTestCase` with a
-        novel-prefix walk over a `DataTree` (port of
-        `internal/conjecture/datatree.py::DataTree.generate_novel_prefix`)
-        or by observing that the first choice position has only one
-        remaining-live child and forcing subsequent generation
-        there.
-
-    Then remove the `#[ignore]` attribute.
-
-    Acceptance criteria:
-      - `cargo test --features native --test hypothesis
-        conjecture_engine::test_one_dead_branch` passes without
-        `--ignored`.
-
 - title: Port conjecture/test_engine.py runner-bookkeeping cluster
   details: |
     Port the following tests from `conjecture/test_engine.py` into

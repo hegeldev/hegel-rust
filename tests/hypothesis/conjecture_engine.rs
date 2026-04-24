@@ -16,14 +16,6 @@
 //! `.claude/skills/porting-tests/SKILL.md` under "`test_engine.py`-shape"
 //! for the port path.
 //!
-//! Individually-ignored tests:
-//! - `test_one_dead_branch` — needs datatree-guided dead-branch
-//!   avoidance (novel-prefix generation) in
-//!   `NativeConjectureRunner`'s generation phase.  Without it, the
-//!   first-byte `> 0 → mark_invalid` predicate starves generation of
-//!   distinct second-byte values and `mark_interesting` never fires
-//!   within budget.  TODO entry in `TODO.yaml`.
-
 #![cfg(feature = "native")]
 
 use crate::common::utils::{expect_panic, minimal};
@@ -297,7 +289,6 @@ fn test_no_read_no_shrink() {
 }
 
 #[test]
-#[ignore = "requires datatree-guided dead-branch avoidance — see TODO.yaml"]
 fn test_one_dead_branch() {
     let seen: Rc<RefCell<std::collections::HashSet<u8>>> =
         Rc::new(RefCell::new(std::collections::HashSet::new()));

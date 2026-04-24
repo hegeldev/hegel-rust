@@ -25,11 +25,15 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use rand::RngExt;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
+use rand::seq::SliceRandom;
 
+use crate::native::bignum::BigUint;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Status};
 use crate::native::database::ExampleDatabase;
+use crate::native::datatree::compute_max_children;
 use crate::native::shrinker::Shrinker;
 
 /// Re-export of [`crate::native::database::serialize_choices`] under
@@ -213,13 +217,14 @@ const STOP_TEST_PANIC: &str = "__hegel_conjecture_stop_test__";
 /// candidate that in Hypothesis would Overrun.
 const CONJECTURE_BUFFER_SIZE: usize = 8 * 1024;
 
-/// Kind of mark recorded on a `NativeConjectureData`.  Only the
-/// `Interesting` mark is currently modelled; `mark_invalid` remains a
-/// `todo!()` stub pending a test that exercises the Invalid-status
-/// path.
+/// Kind of mark recorded on a `NativeConjectureData`.  Either
+/// `Interesting` (the test function called `mark_interesting`) or
+/// `Invalid` (the test function called `mark_invalid`, signalling that
+/// this draw sequence should not be counted as a valid example).
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum MarkKind {
     Interesting,
+    Invalid,
 }
 
 /// Panic payload raised by [`NativeConjectureData::mark_interesting`] and
@@ -314,7 +319,9 @@ impl NativeConjectureData {
     }
 
     pub fn mark_invalid(&mut self) -> ! {
-        todo!("NativeConjectureData::mark_invalid")
+        self.mark = Some((MarkKind::Invalid, None));
+        let data_id = self.data_id;
+        std::panic::panic_any(MarkPanic { data_id })
     }
 
     pub fn start_span(&mut self, label: u64) {
@@ -410,42 +417,221 @@ impl From<&ChoiceValue> for ChoiceValueKey {
     }
 }
 
-/// Minimal data tree used for non-determinism detection — a port of the
-/// check in `crate::native::tree::CachedTestFunction::record`.  Each
-/// node stores the observed [`ChoiceKind`] at its position (fixed on
-/// first visit) and child subtrees keyed by the choice value drawn.
+/// Minimal data tree used for non-determinism detection and
+/// novel-prefix generation — a port of the subset of Hypothesis's
+/// `internal/conjecture/datatree.py::DataTree` that's needed to avoid
+/// re-sampling dead branches.  Each node stores the observed
+/// [`ChoiceKind`] at its position (fixed on first visit), child
+/// subtrees keyed by the choice value drawn, an optional terminal
+/// `Status` if the test concluded at this position, and a cached
+/// `is_exhausted` flag.
 #[derive(Default)]
 struct DataTreeNode {
     kind: Option<ChoiceKind>,
     children: HashMap<ChoiceValueKey, Box<DataTreeNode>>,
+    /// Terminal status if the test case ended at this node.  Only set
+    /// when the recording run concluded with `Status >= Invalid`
+    /// (an EarlyStop / overrun is not treated as exhausting a path).
+    conclusion: Option<Status>,
+    /// Cached: true iff the subtree rooted here has been fully
+    /// explored — either because this is a terminal (conclusion is
+    /// set) or because every possible child has been observed and is
+    /// itself exhausted.
+    is_exhausted: bool,
+}
+
+impl DataTreeNode {
+    /// Recompute `is_exhausted` based on current state.  Mirrors
+    /// Hypothesis's `TreeNode.check_exhausted`.
+    fn check_exhausted(&mut self) -> bool {
+        if self.is_exhausted {
+            return true;
+        }
+        if self.conclusion.is_some() {
+            self.is_exhausted = true;
+            return true;
+        }
+        if let Some(ref kind) = self.kind {
+            let max_c = compute_max_children(kind);
+            if BigUint::from(self.children.len() as u64) >= max_c {
+                let all_exhausted = self.children.values_mut().all(|c| c.check_exhausted());
+                if all_exhausted {
+                    self.is_exhausted = true;
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 /// Walk `nodes` through `tree_root`, asserting that the schema at every
 /// position matches what was observed on previous runs.  A mismatch
 /// panics with the same "non-deterministic" wording as the rest of the
 /// native engine so `test_erratic_draws`-shape tests can `expect_panic`
-/// on it.
-fn record_tree(tree_root: &mut DataTreeNode, nodes: &[ChoiceNode]) {
-    let mut current = tree_root;
-    for node in nodes {
-        if let Some(ref expected_kind) = current.kind {
-            if *expected_kind != node.kind {
-                panic!(
-                    "Your data generation is non-deterministic: at the same choice \
-                     position with the same prefix, the schema changed from {:?} to {:?}. \
-                     This usually means a generator depends on global mutable state.",
-                    expected_kind, node.kind
-                );
+/// on it.  Records the terminal `status` at the leaf (if the test
+/// concluded cleanly) and propagates exhaustion up the path so the
+/// runner's `generate_novel_prefix` walk can avoid dead branches.
+fn record_tree(tree_root: &mut DataTreeNode, nodes: &[ChoiceNode], status: Status) {
+    fn walk(node: &mut DataTreeNode, nodes: &[ChoiceNode], status: Status) {
+        if let Some((first, rest)) = nodes.split_first() {
+            if let Some(ref expected_kind) = node.kind {
+                if *expected_kind != first.kind {
+                    panic!(
+                        "Your data generation is non-deterministic: at the same choice \
+                         position with the same prefix, the schema changed from {:?} to {:?}. \
+                         This usually means a generator depends on global mutable state.",
+                        expected_kind, first.kind
+                    );
+                }
+            } else {
+                node.kind = Some(first.kind.clone());
             }
-        } else {
-            current.kind = Some(node.kind.clone());
+            let key = ChoiceValueKey::from(&first.value);
+            let child = node
+                .children
+                .entry(key)
+                .or_insert_with(|| Box::new(DataTreeNode::default()));
+            walk(child, rest, status);
+        } else if status >= Status::Invalid {
+            node.conclusion = Some(status);
         }
-        let key = ChoiceValueKey::from(&node.value);
-        current = current
-            .children
-            .entry(key)
-            .or_insert_with(|| Box::new(DataTreeNode::default()));
+        node.check_exhausted();
     }
+    walk(tree_root, nodes, status);
+}
+
+/// Small-domain cap for enumeration fallback in
+/// `pick_non_exhausted_value`.  Only kinds with at most this many total
+/// children can be enumerated directly.
+const ENUMERATION_CAP: u64 = 1024;
+
+/// Draw a single random value of `kind`.  Deliberately simple — uniform
+/// where possible; the runner only needs this for novel-prefix walks,
+/// where hitting a boundary special isn't important.  Returns `None` for
+/// kinds the novel-prefix walker has no bespoke sampler for (strings,
+/// floats): the caller then truncates the prefix at that position and
+/// falls back to fresh-RNG sampling in the actual test run.
+fn random_choice_value(kind: &ChoiceKind, rng: &mut SmallRng) -> Option<ChoiceValue> {
+    match kind {
+        ChoiceKind::Integer(ic) => Some(ChoiceValue::Integer(
+            rng.random_range(ic.min_value..=ic.max_value),
+        )),
+        ChoiceKind::Boolean(_) => Some(ChoiceValue::Boolean(rng.random::<bool>())),
+        ChoiceKind::Bytes(bc) => {
+            let len = if bc.min_size == bc.max_size {
+                bc.min_size
+            } else {
+                rng.random_range(bc.min_size..=bc.max_size)
+            };
+            let bytes: Vec<u8> = (0..len).map(|_| rng.random::<u8>()).collect();
+            Some(ChoiceValue::Bytes(bytes))
+        }
+        ChoiceKind::String(_) | ChoiceKind::Float(_) => None,
+    }
+}
+
+/// Enumerate every possible value of `kind`, provided the total count
+/// fits under [`ENUMERATION_CAP`].  Returns `None` for large or
+/// unsupported kinds, signalling the caller should fall back to random
+/// sampling.
+fn enumerate_choice_values(kind: &ChoiceKind) -> Option<Vec<ChoiceValue>> {
+    let max_c = compute_max_children(kind);
+    if max_c > BigUint::from(ENUMERATION_CAP) {
+        return None;
+    }
+    match kind {
+        ChoiceKind::Integer(ic) => {
+            let mut v = Vec::new();
+            let mut n = ic.min_value;
+            loop {
+                v.push(ChoiceValue::Integer(n));
+                if n == ic.max_value {
+                    break;
+                }
+                n += 1;
+            }
+            Some(v)
+        }
+        ChoiceKind::Boolean(_) => Some(vec![
+            ChoiceValue::Boolean(false),
+            ChoiceValue::Boolean(true),
+        ]),
+        ChoiceKind::Bytes(bc) => {
+            let max_idx: u64 = max_c.try_into().ok()?;
+            let mut v = Vec::with_capacity(max_idx as usize);
+            for i in 0..max_idx {
+                let bytes = bc.from_index(BigUint::from(i))?;
+                v.push(ChoiceValue::Bytes(bytes));
+            }
+            Some(v)
+        }
+        _ => None,
+    }
+}
+
+/// Pick a choice value whose subtree is either absent from `children`
+/// or present but not marked exhausted.  Returns `None` only when the
+/// parent's children set is already complete and all marked exhausted,
+/// which the caller should treat as an exhausted-subtree signal.
+fn pick_non_exhausted_value(
+    kind: &ChoiceKind,
+    children: &HashMap<ChoiceValueKey, Box<DataTreeNode>>,
+    rng: &mut SmallRng,
+) -> Option<ChoiceValue> {
+    for _ in 0..10 {
+        let value = random_choice_value(kind, rng)?;
+        let key = ChoiceValueKey::from(&value);
+        match children.get(&key) {
+            Some(child) if child.is_exhausted => continue,
+            _ => return Some(value),
+        }
+    }
+    let candidates = enumerate_choice_values(kind)?;
+    let mut untried: Vec<ChoiceValue> = candidates
+        .into_iter()
+        .filter(|v| {
+            let key = ChoiceValueKey::from(v);
+            children.get(&key).is_none_or(|c| !c.is_exhausted)
+        })
+        .collect();
+    if untried.is_empty() {
+        return None;
+    }
+    untried.shuffle(rng);
+    untried.into_iter().next()
+}
+
+/// Walk the data tree and return a prefix of choice values that stops
+/// at the first novel (never-before-seen) position.  Port of the
+/// `DataTree.generate_novel_prefix` walk in Hypothesis's
+/// `internal/conjecture/datatree.py`, simplified to hegel's tree shape
+/// (no radix-node compaction, no float-bit hashing, no children cache).
+///
+/// The caller feeds the returned prefix to `NativeTestCase::for_probe`
+/// so early draws replay the deterministic walk and later draws pick up
+/// fresh RNG sampling.  Returning an empty prefix means "just draw
+/// everything at random" — correct for the first call in a run, when
+/// the tree is still empty.
+fn generate_novel_prefix(tree_root: &DataTreeNode, rng: &mut SmallRng) -> Vec<ChoiceValue> {
+    if tree_root.is_exhausted {
+        return Vec::new();
+    }
+    let mut prefix = Vec::new();
+    let mut current = tree_root;
+    while let Some(ref kind) = current.kind {
+        let Some(value) = pick_non_exhausted_value(kind, &current.children, rng) else {
+            break;
+        };
+        let key = ChoiceValueKey::from(&value);
+        let next = current.children.get(&key);
+        prefix.push(value);
+        match next {
+            Some(child) if !child.is_exhausted => current = child,
+            _ => break,
+        }
+    }
+    prefix
 }
 
 /// Run the caller-supplied test function on a freshly-constructed
@@ -472,6 +658,7 @@ fn run_test_fn(
                 if mp.data_id == my_id {
                     match &data.mark {
                         Some((MarkKind::Interesting, _)) => Status::Interesting,
+                        Some((MarkKind::Invalid, _)) => Status::Invalid,
                         None => unreachable!("MarkPanic matched but data.mark is None"),
                     }
                 } else {
@@ -569,15 +756,17 @@ impl NativeConjectureRunner {
             while self.call_count < max_calls
                 && self.valid_examples < max_examples
                 && self.interesting_examples.is_empty()
+                && !tree_root.is_exhausted
             {
-                let batch_rng = SmallRng::from_rng(&mut self.rng);
-                let ntc = NativeTestCase::new_random(batch_rng);
+                let mut batch_rng = SmallRng::from_rng(&mut self.rng);
+                let prefix = generate_novel_prefix(&tree_root, &mut batch_rng);
+                let ntc = NativeTestCase::for_probe(&prefix, batch_rng, CONJECTURE_BUFFER_SIZE);
                 let (status, nodes, origin) = run_test_fn(&mut self.test_fn, ntc);
                 self.call_count += 1;
 
-                // Non-determinism detection.  Panics on schema mismatch,
-                // mirroring the check in `CachedTestFunction::record`.
-                record_tree(&mut tree_root, &nodes);
+                // Non-determinism detection (schema mismatch panics) plus
+                // exhaustion bookkeeping for the next novel-prefix walk.
+                record_tree(&mut tree_root, &nodes, status);
 
                 if status >= Status::Valid {
                     self.valid_examples += 1;
