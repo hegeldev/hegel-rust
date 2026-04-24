@@ -63,7 +63,7 @@ use std::sync::{Arc, Mutex};
 #[cfg(not(feature = "native"))]
 use hegel::generators::{self as gs};
 #[cfg(not(feature = "native"))]
-use hegel::{Hegel, HealthCheck, Settings};
+use hegel::{HealthCheck, Hegel, Settings};
 
 #[cfg(not(feature = "native"))]
 #[test]
