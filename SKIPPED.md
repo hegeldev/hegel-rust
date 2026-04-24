@@ -371,6 +371,17 @@ Individually-skipped tests (rest of the file is ported):
   type. `UniqueIdentifier` is a Python-only marker used as a default-arg
   sentinel that prints as its own name; hegel-rust has no `UniqueIdentifier`
   type and no `__repr__` dunder surface to test.
+- `test_drypython_returns.py` (in `nocover/`) — regression test for
+  Hypothesis's integration with the third-party `returns` Python library
+  (issue #3060). Every test exercises Python-only type-introspection
+  facilities: `typing.Generic[T]` / `TypeVar` subclasses, `__mro__` dunder
+  access on user classes, `isinstance(mappable, MappableN)` checks on
+  generic types, `st.builds(target_func)` / `st.builds(type_)`
+  function-signature introspection, and `temp_registered(T, strategy)`
+  to override `from_type` resolution for a class. Neither `from_type`,
+  `register_type_strategy`, nor runtime type-annotation resolution
+  exists in hegel-rust (same family as the `test_lookup*.py` /
+  `test_type_lookup*.py` skips).
 - `test_eval_as_source.py` (in `nocover/`) — every test exercises
   `hypothesis.internal.reflection.source_exec_as_module`, which dynamically
   executes a Python source string as a Python module (via `exec`/`compile`
