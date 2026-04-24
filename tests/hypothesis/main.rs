@@ -37,6 +37,7 @@ mod nocover_floating;
 mod nocover_imports;
 mod nocover_limits;
 mod nocover_nesting;
+mod nocover_unusual_settings_configs;
 mod nothing;
 mod numerics;
 mod one_of;
