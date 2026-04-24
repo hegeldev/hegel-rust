@@ -265,6 +265,43 @@ Do **not** add the whole file to SKIPPED.md's whole-file section —
 that tells the unported-gate the file is done and stops it dispatching
 further work on it.
 
+### Partial ports: when an upstream test bundles two invariants
+
+Occasionally a single upstream test function asserts two independent
+invariants and native models only one. Example:
+`test_trivial_nodes` asserts both `node.trivial == True` *and*
+`minimal(values()) == node.value` in the same body; native
+`ChoiceNode::trivial` is a faithful port, but the
+`minimal(values())` half needs a shrinking/generator harness that
+doesn't exist yet. Don't skip the whole test — port the invariant
+that's expressible, drop the other, and record it explicitly:
+
+- Module docstring: "`test_trivial_nodes`: the `.trivial` half ports;
+  the `minimal(values()) == value` shrinking-invariant half needs a
+  shrinking harness." Name the skipped invariant, not the test.
+- SKIPPED.md entry keeps the test name and spells out which half was
+  ported and which wasn't ("Tests ported in full: X. Tests partially
+  ported: Y's `.trivial` half — Z's shrinking-invariant half not
+  ported.").
+
+A reviewer should be able to see at a glance that the test is *not*
+fully ported without opening the Rust file, and future agents should
+see what work un-blocks the rest.
+
+### When un-skipping, clean up stale references
+
+When you re-port a test that was previously in `SKIPPED.md` (or listed
+as "no counterpart" in `references/api-mapping.md`), grep both files
+for references to that test's name and the cluster it was bundled
+with, and delete the stale entries. A dangling SKIPPED.md entry after
+a successful port silently misleads the next agent into thinking the
+feature's still blocked. Precedent: commit `37582546` removed
+`test_nodes` entries from `SKIPPED.md` and `api-mapping.md` after the
+test was re-ported in `f22b7df2`; the module docstring had been
+updated at port time but the skip records had not. Fold the cleanup
+into the re-porting commit, or push a separate focused follow-up with
+a message like "Remove stale X skip entries".
+
 ### Think harder before skipping
 
 Agents have a strong bias to mark anything unfamiliar as unportable.
