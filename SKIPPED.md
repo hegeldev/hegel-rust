@@ -1669,6 +1669,17 @@ Individually-skipped tests (rest of the file is ported):
   hegel-rust has no Array API integration or counterpart for
   array/dtype/shape-aware array generation.
 
+- `test_indices.py` (in `tests/array_api/`) — array-api-extra
+  integration tests. Every test requires the `xp` / `xps` fixtures (an
+  Array-API-conforming array module and the strategies namespace built
+  by `hypothesis.extra.array_api.make_strategies_namespace(xp)`), and
+  exercises `xps.indices` (with `xps.array_shapes`) to generate
+  array-module indexers; `test_generate_valid_indices` additionally
+  constructs and indexes into array-module arrays via `xp.zeros`,
+  `xp.reshape`, `xp.arange` and `array[indexer]`. hegel-rust has no
+  Array API integration or counterpart for array-shape-aware indexer
+  generation tied to an external array module.
+
 - `test_gen_data.py` (in `tests/numpy/`) — numpy-extra integration tests.
   Every test exercises `hypothesis.extra.numpy` (`nps.arrays`,
   `nps.array_shapes`, `nps.broadcastable_shapes`, `nps.from_dtype`,
