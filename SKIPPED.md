@@ -733,6 +733,19 @@ Individually-skipped tests (rest of the file is ported):
   integration — all via Hypothesis's pytest plugin output. hegel-rust is not a
   pytest plugin and has no `--show-statistics` CLI surface.
 
+- `test_parametrized_db_keys.py` (in `tests/pytest/`) — the first test drives
+  the `pytester` plugin (`testdir.makepyfile`/`testdir.runpytest`) to spawn a
+  pytest subprocess and assert on `assert_outcomes(xfailed=3, passed=1)` for a
+  script using `@pytest.mark.parametrize` / `@pytest.mark.xfail` to verify that
+  `InMemoryExampleDatabase` keys differ per parametrize row. The remaining
+  tests (`TestNoDifferingExecutorsHealthCheck`) exercise
+  `@pytest.mark.parametrize`, `@pytest.fixture(params=...)`, and
+  `HealthCheck.function_scoped_fixture` suppression — the pytest-fixture /
+  parametrize-per-test-function identity machinery that Hypothesis's pytest
+  plugin hooks into. hegel-rust is not a pytest plugin and has no
+  parametrize/fixture surface, so the whole file is pytest-plugin integration
+  with no hegel-rust counterpart.
+
 - `test_sideeffect_warnings.py` — all tests exercise Hypothesis's Python-specific
   import-time initialization infrastructure: `_hypothesis_globals.in_initialization`
   (a Python module attribute tracking import phase), `hypothesis.configuration`
