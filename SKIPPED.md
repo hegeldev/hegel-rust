@@ -900,6 +900,11 @@ Individually-skipped tests (rest of the file is ported):
   flattening, generators expose no `branches`, and a predicate-less `Filtered`
   is not expressible through the public API.
 
+- `nocover/test_filtering.py::test_chained_filters_repr` — asserts
+  `repr(base.filter(foo).filter(bar)) == f"{base!r}.filter(foo).filter(bar)"`.
+  Python `repr()` on strategies has no Rust counterpart; hegel-rust's
+  `Filtered<T, F, G>` wrapper exposes no repr-style introspection surface.
+
 - `test_reproduce_failure.py` — exercises Hypothesis's
   `encode_failure`/`decode_failure`/`@reproduce_failure` public API for
   serialising a failing choice sequence into a base64+zlib blob that a
