@@ -443,6 +443,33 @@ If a test calls a native-mode feature that isn't implemented yet, do NOT
 3. Commit. The test will compile and (if the source was stubbed) fail at
    runtime — that's expected; a fixer-task invocation will pick it up.
 
+### `#[ignore = "..."]` vs. skipping: which to use
+
+`#[ignore = "reason"]` is for tests that *compile and run but don't pass*
+against the current engine — typically because a semantic gap between
+hegel-rust's `src/native/` and Hypothesis hides behind an otherwise
+working feature. Two shapes seen so far:
+
+- The feature is implemented and the rest of the test-file's tests
+  pass, but one case's assertion depends on a sub-behaviour the native
+  port simplifies away — e.g. `test_targeting_can_drive_length_very_high`
+  needs Hypothesis's 3-retry loop inside `attempt_replace`, which the
+  initial optimiser port collapses to single-attempt + span fixup.
+- The test is known-flaky upstream (`@pytest.mark.xfail(..., strict=False)`
+  or a comment saying "depends on random seed"); Rust's deterministic
+  seeding pattern doesn't reliably hit the same witness. Mirror the
+  upstream xfail with `#[ignore]` — see
+  `tests/pbtkit/findability_pbtsmith_regressions.rs` for precedent.
+
+For either shape: `#[ignore = "short reason — tracked in TODO.yaml"]`,
+file a corresponding TODO.yaml entry with un-ignoring as acceptance
+criteria, and leave the test body asserting the correct (future)
+behaviour. Do NOT degrade the assertion to match the current engine.
+Do NOT move the test to SKIPPED.md — SKIPPED.md is for whole files and
+individually-skipped (commented-out / absent) tests; `#[ignore]` tests
+live in the source tree and re-light automatically when the gap is
+closed.
+
 ## Coverage witnesses the Python original doesn't have
 
 If your port adds or pulls in `src/native/` code with a defensive
