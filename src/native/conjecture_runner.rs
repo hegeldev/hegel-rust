@@ -21,12 +21,16 @@
 // `.claude/skills/porting-tests/SKILL.md` under "`test_engine.py`-shape".
 
 use std::collections::HashMap;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
+use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
-use crate::native::core::{ChoiceNode, ChoiceValue};
+use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Status};
 use crate::native::database::ExampleDatabase;
+use crate::native::shrinker::Shrinker;
 
 /// Re-export of [`crate::native::database::serialize_choices`] under
 /// Hypothesis's public name.  Mirrors
@@ -187,22 +191,106 @@ pub enum Phase {
     Explain,
 }
 
-/// Test-case surface passed to the user's runner callback.  Stubbed:
-/// each method's body is `todo!()` and is to be filled in as the
-/// specific test that exercises it is ported.  Mirrors the subset of
-/// `ConjectureData` methods used by `test_engine.py`.
+/// Unique-per-`NativeConjectureData` id used as the panic payload for
+/// `mark_interesting` / `mark_invalid`.  When runners are nested (the
+/// `test_interleaving_engines` shape), the inner runner's `catch_unwind`
+/// inspects the captured id; a mismatch means some outer data raised
+/// the mark and the panic resumes unwinding.
+static NEXT_DATA_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Sentinel panic raised by a `draw_*` call whose underlying
+/// `NativeTestCase` draw returned `StopTest` (buffer exhausted).
+const STOP_TEST_PANIC: &str = "__hegel_conjecture_stop_test__";
+
+/// Byte-size limit for a single test's accumulated `draw_bytes` calls.
+/// Mirrors Hypothesis's `BUFFER_SIZE` in `conjecture/engine.py`:
+/// when a `draw_bytes(n, n)` call would push the running count past
+/// this limit, the draw triggers `StopTest` / Overrun instead of
+/// returning a value.  The native `NativeTestCase::max_size` only
+/// caps *choice count*, not bytes, so without this check the
+/// `test_draw_to_overrun` shape would wrongly accept a
+/// `first_byte = 0 → d = 248 → draw_bytes(31744, 31744)` shrink
+/// candidate that in Hypothesis would Overrun.
+const CONJECTURE_BUFFER_SIZE: usize = 8 * 1024;
+
+/// Kind of mark recorded on a `NativeConjectureData`.  Only the
+/// `Interesting` mark is currently modelled; `mark_invalid` remains a
+/// `todo!()` stub pending a test that exercises the Invalid-status
+/// path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum MarkKind {
+    Interesting,
+}
+
+/// Panic payload raised by [`NativeConjectureData::mark_interesting`] and
+/// [`NativeConjectureData::mark_invalid`].  Carries the `data_id` of the
+/// originating data so nested runners can tell "mine" from "someone
+/// else's" and propagate the latter.
+#[derive(Debug)]
+struct MarkPanic {
+    data_id: u64,
+}
+
+/// Test-case surface passed to the user's runner callback.  Mirrors the
+/// subset of Hypothesis's `ConjectureData` used by `test_engine.py`
+/// ports.
 #[non_exhaustive]
 pub struct NativeConjectureData {
-    _private: (),
+    ntc: NativeTestCase,
+    data_id: u64,
+    mark: Option<(MarkKind, Option<InterestingOrigin>)>,
+    bytes_drawn: usize,
 }
 
 impl NativeConjectureData {
-    pub fn draw_bytes(&mut self, _min_size: usize, _max_size: usize) -> Vec<u8> {
-        todo!("NativeConjectureData::draw_bytes")
+    fn new(ntc: NativeTestCase) -> Self {
+        NativeConjectureData {
+            ntc,
+            data_id: NEXT_DATA_ID.fetch_add(1, Ordering::Relaxed),
+            mark: None,
+            bytes_drawn: 0,
+        }
     }
 
-    pub fn draw_integer(&mut self, _min_value: i128, _max_value: i128) -> i128 {
-        todo!("NativeConjectureData::draw_integer")
+    pub fn draw_bytes(&mut self, min_size: usize, max_size: usize) -> Vec<u8> {
+        if self.bytes_drawn.saturating_add(min_size) > CONJECTURE_BUFFER_SIZE {
+            std::panic::panic_any(STOP_TEST_PANIC);
+        }
+        match self.ntc.draw_bytes(min_size, max_size) {
+            Ok(v) => {
+                self.bytes_drawn += v.len();
+                v
+            }
+            Err(_) => std::panic::panic_any(STOP_TEST_PANIC),
+        }
+    }
+
+    /// Forced variant of [`draw_bytes`]: the draw returns `forced`
+    /// verbatim and records a `was_forced` choice node.  Mirrors
+    /// Hypothesis's `data.draw_bytes(..., forced=value)`.
+    pub fn draw_bytes_forced(
+        &mut self,
+        min_size: usize,
+        max_size: usize,
+        forced: Vec<u8>,
+    ) -> Vec<u8> {
+        if self.bytes_drawn.saturating_add(forced.len()) > CONJECTURE_BUFFER_SIZE {
+            std::panic::panic_any(STOP_TEST_PANIC);
+        }
+        match self.ntc.draw_bytes_forced(min_size, max_size, forced) {
+            Ok(v) => {
+                self.bytes_drawn += v.len();
+                v
+            }
+            Err(_) => std::panic::panic_any(STOP_TEST_PANIC),
+        }
+    }
+
+    pub fn draw_integer(&mut self, min_value: i128, max_value: i128) -> i128 {
+        match self.ntc.draw_integer(min_value, max_value) {
+            Ok(v) => v,
+            Err(_) => std::panic::panic_any(STOP_TEST_PANIC),
+        }
     }
 
     pub fn draw_boolean(&mut self, _p: f64) -> bool {
@@ -219,24 +307,30 @@ impl NativeConjectureData {
         todo!("NativeConjectureData::draw_float")
     }
 
-    pub fn mark_interesting(&mut self, _origin: InterestingOrigin) -> ! {
-        todo!("NativeConjectureData::mark_interesting")
+    pub fn mark_interesting(&mut self, origin: InterestingOrigin) -> ! {
+        self.mark = Some((MarkKind::Interesting, Some(origin)));
+        let data_id = self.data_id;
+        std::panic::panic_any(MarkPanic { data_id })
     }
 
     pub fn mark_invalid(&mut self) -> ! {
         todo!("NativeConjectureData::mark_invalid")
     }
 
-    pub fn start_span(&mut self, _label: u64) {
-        todo!("NativeConjectureData::start_span")
+    pub fn start_span(&mut self, label: u64) {
+        self.ntc
+            .span_stack
+            .push((self.ntc.nodes.len(), label.to_string()));
     }
 
     pub fn stop_span(&mut self) {
-        todo!("NativeConjectureData::stop_span")
+        if let Some((start, label)) = self.ntc.span_stack.pop() {
+            self.ntc.record_span(start, self.ntc.nodes.len(), label);
+        }
     }
 
     pub fn nodes(&self) -> &[ChoiceNode] {
-        todo!("NativeConjectureData::nodes")
+        &self.ntc.nodes
     }
 
     pub fn choices(&self) -> Vec<ChoiceValue> {
@@ -246,7 +340,7 @@ impl NativeConjectureData {
     /// Accessor for the status recorded on the underlying test case.
     /// Used by `new_shrinker` predicates (`|d| d.status() ==
     /// Status::Interesting`).
-    pub fn status(&self) -> crate::native::core::Status {
+    pub fn status(&self) -> Status {
         todo!("NativeConjectureData::status")
     }
 }
@@ -291,6 +385,113 @@ impl NativeShrinker {
 }
 
 type RunnerTestFn = Box<dyn FnMut(&mut NativeConjectureData)>;
+
+/// Hashable choice-value key, mirroring [`crate::native::tree`]'s
+/// internal tree.  Kept local so we don't force the private tree node
+/// type to be `pub`.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum ChoiceValueKey {
+    Integer(i128),
+    Boolean(bool),
+    Float(u64),
+    Bytes(Vec<u8>),
+    String(Vec<u32>),
+}
+
+impl From<&ChoiceValue> for ChoiceValueKey {
+    fn from(v: &ChoiceValue) -> Self {
+        match v {
+            ChoiceValue::Integer(n) => ChoiceValueKey::Integer(*n),
+            ChoiceValue::Boolean(b) => ChoiceValueKey::Boolean(*b),
+            ChoiceValue::Float(f) => ChoiceValueKey::Float(f.to_bits()),
+            ChoiceValue::Bytes(b) => ChoiceValueKey::Bytes(b.clone()),
+            ChoiceValue::String(s) => ChoiceValueKey::String(s.clone()),
+        }
+    }
+}
+
+/// Minimal data tree used for non-determinism detection — a port of the
+/// check in `crate::native::tree::CachedTestFunction::record`.  Each
+/// node stores the observed [`ChoiceKind`] at its position (fixed on
+/// first visit) and child subtrees keyed by the choice value drawn.
+#[derive(Default)]
+struct DataTreeNode {
+    kind: Option<ChoiceKind>,
+    children: HashMap<ChoiceValueKey, Box<DataTreeNode>>,
+}
+
+/// Walk `nodes` through `tree_root`, asserting that the schema at every
+/// position matches what was observed on previous runs.  A mismatch
+/// panics with the same "non-deterministic" wording as the rest of the
+/// native engine so `test_erratic_draws`-shape tests can `expect_panic`
+/// on it.
+fn record_tree(tree_root: &mut DataTreeNode, nodes: &[ChoiceNode]) {
+    let mut current = tree_root;
+    for node in nodes {
+        if let Some(ref expected_kind) = current.kind {
+            if *expected_kind != node.kind {
+                panic!(
+                    "Your data generation is non-deterministic: at the same choice \
+                     position with the same prefix, the schema changed from {:?} to {:?}. \
+                     This usually means a generator depends on global mutable state.",
+                    expected_kind, node.kind
+                );
+            }
+        } else {
+            current.kind = Some(node.kind.clone());
+        }
+        let key = ChoiceValueKey::from(&node.value);
+        current = current
+            .children
+            .entry(key)
+            .or_insert_with(|| Box::new(DataTreeNode::default()));
+    }
+}
+
+/// Run the caller-supplied test function on a freshly-constructed
+/// [`NativeConjectureData`] wrapping `ntc`, unwrap the panic taxonomy
+/// into a [`Status`], and surface the recorded
+/// `mark_interesting(origin)` if any.  Pulled out of the runner struct
+/// so the generation and shrink paths can both invoke it without
+/// running into overlapping-self-borrow issues.
+fn run_test_fn(
+    test_fn: &mut RunnerTestFn,
+    ntc: NativeTestCase,
+) -> (Status, Vec<ChoiceNode>, Option<InterestingOrigin>) {
+    let mut data = NativeConjectureData::new(ntc);
+    let my_id = data.data_id;
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        test_fn(&mut data);
+    }));
+
+    let status = match result {
+        Ok(()) => Status::Valid,
+        Err(payload) => {
+            if let Some(mp) = payload.downcast_ref::<MarkPanic>() {
+                if mp.data_id == my_id {
+                    match &data.mark {
+                        Some((MarkKind::Interesting, _)) => Status::Interesting,
+                        None => unreachable!("MarkPanic matched but data.mark is None"),
+                    }
+                } else {
+                    std::panic::resume_unwind(payload)
+                }
+            } else if payload.downcast_ref::<&'static str>().copied() == Some(STOP_TEST_PANIC) {
+                Status::EarlyStop
+            } else {
+                std::panic::resume_unwind(payload)
+            }
+        }
+    };
+
+    let origin = match data.mark {
+        Some((MarkKind::Interesting, o)) => o,
+        _ => None,
+    };
+    let nodes = std::mem::take(&mut data.ntc.nodes);
+    (status, nodes, origin)
+}
 
 /// Port of Hypothesis's `ConjectureRunner` for the subset of
 /// `test_engine.py` that doesn't already live under the
@@ -351,7 +552,94 @@ impl NativeConjectureRunner {
     /// completion and populates `interesting_examples` / `exit_reason`
     /// / `shrinks` / `call_count` / `valid_examples`.
     pub fn run(&mut self) {
-        todo!("NativeConjectureRunner::run — generation + shrink loop")
+        let phases = self
+            .settings
+            .phases
+            .clone()
+            .unwrap_or_else(|| vec![Phase::Generate, Phase::Shrink]);
+        let do_generate = phases.contains(&Phase::Generate);
+        let do_shrink = phases.contains(&Phase::Shrink);
+
+        let max_examples = self.settings.max_examples;
+        let max_calls = max_examples.saturating_mul(10);
+
+        // --- Generation phase ---
+        if do_generate {
+            let mut tree_root = DataTreeNode::default();
+            while self.call_count < max_calls
+                && self.valid_examples < max_examples
+                && self.interesting_examples.is_empty()
+            {
+                let batch_rng = SmallRng::from_rng(&mut self.rng);
+                let ntc = NativeTestCase::new_random(batch_rng);
+                let (status, nodes, origin) = run_test_fn(&mut self.test_fn, ntc);
+                self.call_count += 1;
+
+                // Non-determinism detection.  Panics on schema mismatch,
+                // mirroring the check in `CachedTestFunction::record`.
+                record_tree(&mut tree_root, &nodes);
+
+                if status >= Status::Valid {
+                    self.valid_examples += 1;
+                }
+
+                if status == Status::Interesting {
+                    let origin = origin.expect("Interesting status carries an origin");
+                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                    self.interesting_examples
+                        .entry(origin.clone())
+                        .or_insert(InterestingExample {
+                            nodes,
+                            choices,
+                            origin,
+                        });
+                }
+            }
+        }
+
+        // --- Shrink phase ---
+        if do_shrink {
+            let origins: Vec<InterestingOrigin> =
+                self.interesting_examples.keys().cloned().collect();
+            for origin in origins {
+                let initial = self.interesting_examples[&origin].nodes.clone();
+                // Nothing to shrink if no choices were recorded (e.g.
+                // `test_no_read_no_shrink`).
+                if initial.is_empty() {
+                    continue;
+                }
+
+                let test_fn = &mut self.test_fn;
+                let call_count = &mut self.call_count;
+                let shrunk = {
+                    let mut shrinker = Shrinker::new(
+                        Box::new(|candidate: &[ChoiceNode]| {
+                            *call_count += 1;
+                            let choices: Vec<ChoiceValue> =
+                                candidate.iter().map(|n| n.value.clone()).collect();
+                            let ntc = NativeTestCase::for_choices(&choices, Some(candidate));
+                            let (status, actual_nodes, _) = run_test_fn(test_fn, ntc);
+                            (status == Status::Interesting, actual_nodes)
+                        }),
+                        initial,
+                    );
+                    shrinker.shrink();
+                    shrinker.current_nodes
+                };
+
+                let choices: Vec<ChoiceValue> = shrunk.iter().map(|n| n.value.clone()).collect();
+                self.interesting_examples.insert(
+                    origin.clone(),
+                    InterestingExample {
+                        nodes: shrunk,
+                        choices,
+                        origin,
+                    },
+                );
+            }
+        }
+
+        self.exit_reason = Some(ExitReason::Finished);
     }
 
     /// Run only the shrink phase against an already-populated

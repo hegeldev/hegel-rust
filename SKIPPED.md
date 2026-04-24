@@ -2180,15 +2180,6 @@ attributes are `todo!()` stubs in
 entry names the attributes its port lands. Removing each bullet below
 is acceptance for the corresponding follow-up.
 
-- `conjecture/test_engine.py::test_non_cloneable_intervals`,
-  `::test_deletable_draws`, `::test_variadic_draw`, `::test_draw_to_overrun`,
-  `::test_erratic_draws`, `::test_no_read_no_shrink`, `::test_one_dead_branch`,
-  `::test_returns_forced`, `::test_run_nothing`, `::test_interleaving_engines`
-  — each uses the `run_to_nodes(f)` fixture from
-  `tests/conjecture/common.py`, which runs a `ConjectureRunner` to
-  completion on `f` and returns the shrunk `data.nodes` of the sole
-  interesting example. `__native_test_internals::TargetedRunner` has no
-  interesting-example tracking or post-shrink-nodes accessor.
 - `conjecture/test_engine.py::test_can_load_data_from_a_corpus`,
   `::test_detects_flakiness`, `::test_recursion_error_is_not_flaky`,
   `::test_can_navigate_to_a_valid_example`,

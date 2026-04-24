@@ -7,44 +7,38 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Port conjecture/test_engine.py `run_to_nodes` cluster
+- title: Un-ignore conjecture_engine::test_one_dead_branch
   details: |
-    Port the following tests from
-    `resources/hypothesis/hypothesis-python/tests/conjecture/test_engine.py`
-    into `tests/hypothesis/conjecture_engine.rs`, native-gated
-    (`#[cfg(feature = "native")]`):
-      - `test_non_cloneable_intervals`
-      - `test_deletable_draws`
-      - `test_variadic_draw`
-      - `test_draw_to_overrun`
-      - `test_erratic_draws`
-      - `test_no_read_no_shrink`
-      - `test_one_dead_branch`
-      - `test_returns_forced`
-      - `test_run_nothing`
-      - `test_interleaving_engines`
+    `tests/hypothesis/conjecture_engine.rs::test_one_dead_branch` is
+    currently `#[ignore = "requires datatree-guided dead-branch
+    avoidance"]`. Upstream's test marks `i > 0` as invalid and then
+    relies on Hypothesis's `DataTree.simulate_test_function` /
+    `generate_novel_prefix` to stop re-sampling the dead branch —
+    without that, every random first byte has a ~255/256 chance of
+    being invalid and the seen-set never grows enough to trigger
+    `mark_interesting(origin)` within the default call budget.
 
-    Each uses the `run_to_nodes(f)` fixture from
-    `tests/conjecture/common.py`. Port each via the
-    `hegel::__native_test_internals::run_to_nodes` free function and
-    the `NativeConjectureData` draw surface. Filling in the
-    `NativeConjectureRunner::run` /
-    `NativeConjectureData::{draw_bytes, draw_integer, draw_boolean,
-    draw_float, mark_interesting, mark_invalid, start_span, stop_span,
-    nodes}` stubs in `src/native/conjecture_runner.rs` is part of
-    landing this cluster — see `.claude/skills/implementing-native/SKILL.md`
-    for the wrapper port process. The existing `native_run` loop in
-    `src/native/runner.rs` is the starting point; the bookkeeping
-    fields on `NativeConjectureRunner` need to be populated alongside
-    the existing `result` computation so the caller can read
-    `interesting_examples` / `call_count` / `valid_examples`.
+    Two pieces of work unblock this:
+      - Implement `NativeConjectureData::mark_invalid` (currently a
+        `todo!()` stub in `src/native/conjecture_runner.rs`).  The
+        existing `mark_interesting` path (panic-payload `MarkPanic
+        { data_id }` + `Status::Interesting` arm in `run_test_fn`)
+        is the template — add a mirror `MarkKind::Invalid` variant
+        and Status::Invalid arm.
+      - Teach `NativeConjectureRunner`'s generation phase to avoid
+        the dead branch, either by seeding `NativeTestCase` with a
+        novel-prefix walk over a `DataTree` (port of
+        `internal/conjecture/datatree.py::DataTree.generate_novel_prefix`)
+        or by observing that the first choice position has only one
+        remaining-live child and forcing subsequent generation
+        there.
+
+    Then remove the `#[ignore]` attribute.
 
     Acceptance criteria:
-      - All 10 tests compile and pass under
-        `cargo test --features native --test hypothesis conjecture_engine::`.
-      - The `::test_non_cloneable_intervals` through
-        `::test_interleaving_engines` bullet in `SKIPPED.md`'s
-        `conjecture/test_engine.py::*` cluster is removed.
+      - `cargo test --features native --test hypothesis
+        conjecture_engine::test_one_dead_branch` passes without
+        `--ignored`.
 
 - title: Port conjecture/test_engine.py runner-bookkeeping cluster
   details: |
