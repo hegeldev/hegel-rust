@@ -1581,6 +1581,20 @@ Individually-skipped tests (rest of the file is ported):
   `PrimitiveProvider` class to subclass, and no provider-lifetime /
   realize / observe / conformance machinery.
 
+- `test_shrinking_interface.py` (in `conjecture/`) — all three tests
+  target the Python-specific introspection/formatting surface of the
+  `Integer` shrinker rather than its shrinking behaviour.
+  `test_includes_name_in_repr_if_set` and
+  `test_normally_contains_no_space_for_name` assert on Python `__repr__`
+  dunder output (`"Integer('hi there', initial=10, current=10)"` /
+  `"Integer(initial=10, current=10)"`); `test_debug_output` uses
+  `capture_out` to check that `Integer.shrink(..., debug=True)` prints
+  Python-formatted log lines containing `"initial=10"` and
+  `"shrinking to 0"` to stdout. hegel-rust's `IntegerShrinker` in
+  `src/native/shrinker/value_shrinkers.rs` has no `name=` / `debug=`
+  constructor keywords, no `__repr__`-equivalent surface, and no reason
+  to emit the exact Python debug-log format.
+
 - `conjecture/test_forced.py::test_forced_many` — exercises
   `cu.many(data, min_size=…, max_size=…, forced=N)` where `forced` sets
   the total collection count. Native `ManyState::new(min_size, max_size)`
