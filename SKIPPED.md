@@ -1686,6 +1686,20 @@ Individually-skipped tests (rest of the file is ported):
   case harness, and no `hypothesis.extra.django`-style
   `@given`-compatible test-case base class to validate against.
 
+- `test_redis_exampledatabase.py` (in `tests/redis/`) — redis-extra
+  integration tests. Every test exercises
+  `hypothesis.extra.redis.RedisExampleDatabase`, which wraps a
+  `redis.Redis` / `fakeredis.FakeRedis` client to persist failing examples
+  in a Redis server (`save`/`fetch`/`move`/`delete`, pub/sub listener
+  notifications via `db._pubsub.get_message`, `expire_after` timedelta,
+  `key_prefix`/`listener_channel` configuration). The file imports
+  `fakeredis.FakeRedis` for its test server, and the stateful
+  `DatabaseComparison` machine drives the Redis-backed database side by
+  side with `InMemoryExampleDatabase` to cross-check behaviour.
+  hegel-rust has no redis / fakeredis integration and no
+  `RedisExampleDatabase` counterpart — the only persistent database
+  backend is `Database::Path(...)` filesystem storage.
+
 - `test_attrs.py` (in `tests/attrs/`) — port abandoned: parallel
   port-loop worker produced commits on `port/worker-0` that could not
   be cherry-picked cleanly onto the supervisor branch (post-rebase
