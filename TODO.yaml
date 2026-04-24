@@ -7,37 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Port conjecture/test_engine.py ExitReason cluster
-  details: |
-    Port the following tests from `conjecture/test_engine.py` into
-    `tests/hypothesis/conjecture_engine.rs`, native-gated. Each asserts
-    on `runner.exit_reason` values that the current
-    `NativeConjectureRunner::run()` doesn't set — it unconditionally
-    exits with `ExitReason::Finished`:
-      - `test_detects_flakiness`
-      - `test_recursion_error_is_not_flaky`
-      - `test_exit_because_max_iterations`
-      - `test_max_iterations_with_all_invalid`
-      - `test_max_iterations_with_some_valid`
-      - `test_exit_because_shrink_phase_timeout`
-
-    Port path: extend `NativeConjectureRunner::run()` to set
-    `exit_reason = Flaky` on a re-run mismatch (for
-    `test_detects_flakiness`), `MaxIterations` when the invalid-run
-    budget trips, and `VerySlowShrinking` + `statistics` on the
-    shrink-phase wall-clock budget trip. `INVALID_THRESHOLD_BASE` /
-    `INVALID_PER_VALID` constants need to mirror Hypothesis's
-    engine.py defaults (the `test_max_iterations_with_*` tests
-    assert the exact call count). `test_recursion_error_is_not_flaky`
-    is likely skip-worthy (Python-only stack trickery) — add a
-    SKIPPED.md entry if so.
-
-    Acceptance criteria:
-      - All 6 tests compile and pass (or `test_recursion_error_is_not_flaky`
-        is added to SKIPPED.md with a rationale naming CPython's stack
-        tricks).
-      - The matching bullet in `SKIPPED.md` is removed.
-
 - title: Port conjecture/test_engine.py database-replay cluster
   details: |
     Port the following tests from `conjecture/test_engine.py` into

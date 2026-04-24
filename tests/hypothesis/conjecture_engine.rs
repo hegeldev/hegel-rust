@@ -16,12 +16,17 @@
 //! `.claude/skills/porting-tests/SKILL.md` under "`test_engine.py`-shape"
 //! for the port path.
 //!
+//! Individually-skipped tests:
+//! - `test_recursion_error_is_not_flaky`: relies on CPython's
+//!   `RecursionError` stack-depth tricks (Python-only, skipped
+//!   upstream on PyPy and under coverage). No Rust analog.
+//!
 #![cfg(feature = "native")]
 
 use crate::common::utils::{expect_panic, minimal};
 use hegel::__native_test_internals::{
-    ChoiceValue, NativeConjectureData, NativeConjectureRunner, NativeRunnerSettings, RunnerPhase,
-    interesting_origin, run_to_nodes,
+    ChoiceValue, ExitReason, HealthCheckLabel, NativeConjectureData, NativeConjectureRunner,
+    NativeRunnerSettings, RunnerPhase, interesting_origin, run_to_nodes,
 };
 use hegel::TestCase;
 use hegel::generators as gs;
@@ -427,4 +432,178 @@ fn test_interleaving_engines() {
     assert_eq!(nodes.len(), 1);
     assert_eq!(node_bytes(&nodes[0].value), vec![0u8]);
     assert!(children_interesting.borrow().iter().all(|b| !b));
+}
+
+// Mirrors engine.py's `MIN_TEST_CALLS`; duplicated here so the assertion
+// reads like the Python original.
+const MIN_TEST_CALLS: usize = 10;
+// Mirrors engine.py's `_invalid_thresholds(r=0.01, c=0.99)` output.
+const INVALID_THRESHOLD_BASE: usize = 458;
+const INVALID_PER_VALID: usize = 100;
+
+#[test]
+fn test_detects_flakiness() {
+    // tf raises interesting on its first call, then never again; the
+    // shrink phase re-plays the stored interesting example and finds
+    // it no longer reproduces, exiting with Flaky.  The generation
+    // phase keeps running after the first bug up to MIN_TEST_CALLS,
+    // so the user's tf is called exactly `MIN_TEST_CALLS + 1` times
+    // total (10 generation calls + 1 shrink-phase re-validation).
+    let count = Rc::new(RefCell::new(0usize));
+    let count_clone = count.clone();
+    let failed_once = Rc::new(RefCell::new(false));
+    let failed_once_clone = failed_once.clone();
+    let rng = SmallRng::seed_from_u64(0);
+    let mut runner = NativeConjectureRunner::new(
+        move |data: &mut NativeConjectureData| {
+            data.draw_bytes(1, 1);
+            *count_clone.borrow_mut() += 1;
+            let mut fo = failed_once_clone.borrow_mut();
+            if !*fo {
+                *fo = true;
+                data.mark_interesting(interesting_origin(None));
+            }
+        },
+        NativeRunnerSettings::new(),
+        rng,
+    );
+    runner.run();
+    assert_eq!(runner.exit_reason, Some(ExitReason::Flaky));
+    assert_eq!(*count.borrow(), MIN_TEST_CALLS + 1);
+}
+
+#[test]
+fn test_exit_because_max_iterations() {
+    // tf marks invalid on every call; with `max_examples=1` the runner
+    // must exit with MaxIterations once the invalid-call budget
+    // (INVALID_THRESHOLD_BASE) trips, not spin for 10 * max_examples
+    // iterations.
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(1)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            data.draw_integer(0, (1_i128 << 64) - 1);
+            data.mark_invalid();
+        },
+        settings,
+        rng,
+    );
+    runner.run();
+    assert!(runner.call_count <= 1000, "call_count = {}", runner.call_count);
+    assert_eq!(runner.exit_reason, Some(ExitReason::MaxIterations));
+}
+
+#[test]
+fn test_max_iterations_with_all_invalid() {
+    // assume(False) on every example: stop after INVALID_THRESHOLD_BASE + 1
+    // invalid attempts.  The `>` (strict) check means the threshold is
+    // tripped on call INVALID_THRESHOLD_BASE + 1, so call_count lands
+    // on exactly that number.
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(10_000)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            data.draw_integer(0, (1_i128 << 64) - 1);
+            data.mark_invalid();
+        },
+        settings,
+        rng,
+    );
+    runner.run();
+    assert_eq!(runner.call_count, INVALID_THRESHOLD_BASE + 1);
+    assert_eq!(runner.exit_reason, Some(ExitReason::MaxIterations));
+}
+
+fn check_max_iterations_with_some_valid(n_valid: usize) {
+    let valid_count = Rc::new(RefCell::new(0usize));
+    let valid_count_clone = valid_count.clone();
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(10_000)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        move |data: &mut NativeConjectureData| {
+            data.draw_integer(0, (1_i128 << 64) - 1);
+            let mut vc = valid_count_clone.borrow_mut();
+            if *vc < n_valid {
+                *vc += 1;
+            } else {
+                drop(vc);
+                data.mark_invalid();
+            }
+        },
+        settings,
+        rng,
+    );
+    runner.run();
+    let expected = n_valid + INVALID_THRESHOLD_BASE + n_valid * INVALID_PER_VALID + 1;
+    assert_eq!(runner.call_count, expected);
+    assert_eq!(runner.exit_reason, Some(ExitReason::MaxIterations));
+}
+
+#[test]
+fn test_max_iterations_with_some_valid_1() {
+    check_max_iterations_with_some_valid(1);
+}
+
+#[test]
+fn test_max_iterations_with_some_valid_2() {
+    check_max_iterations_with_some_valid(2);
+}
+
+#[test]
+fn test_max_iterations_with_some_valid_5() {
+    check_max_iterations_with_some_valid(5);
+}
+
+#[test]
+fn test_exit_because_shrink_phase_timeout() {
+    // Python monkey-patches `time.perf_counter` to advance by 1000
+    // seconds on every call; the native port injects the same clock
+    // via `with_time_source`.  The shrink phase's deadline fires on
+    // the first re-validation call, so the runner exits with
+    // VerySlowShrinking and records the matching statistics entry.
+    let val = Rc::new(RefCell::new(0i64));
+    let val_clone = val.clone();
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new().max_examples(100_000);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            if data.draw_integer(0, (1_i128 << 64) - 1) > (1_i128 << 33) {
+                data.mark_interesting(interesting_origin(None));
+            }
+        },
+        settings,
+        rng,
+    )
+    .with_time_source(move || {
+        let mut v = val_clone.borrow_mut();
+        *v += 1000;
+        *v as f64
+    });
+    runner.run();
+    assert_eq!(runner.exit_reason, Some(ExitReason::VerySlowShrinking));
+    assert_eq!(
+        runner.statistics.get("stopped-because").map(String::as_str),
+        Some("shrinking was very slow"),
+    );
 }
