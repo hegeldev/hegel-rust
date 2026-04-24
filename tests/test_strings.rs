@@ -17,6 +17,9 @@ fn test_characters_ascii() {
 fn test_characters_codepoint_range(tc: hegel::TestCase) {
     let lo = tc.draw(gs::integers::<u32>().min_value(0).max_value(0x10FFFF));
     let hi = tc.draw(gs::integers::<u32>().min_value(lo).max_value(0x10FFFF));
+    // Rust strings cannot contain surrogates (0xD800..=0xDFFF), so a range
+    // entirely within the surrogate block has no valid characters.
+    tc.assume(lo < 0xD800 || hi > 0xDFFF);
     let c: char = tc.draw(gs::characters().min_codepoint(lo).max_codepoint(hi));
     let cp = c as u32;
     assert!(cp >= lo && cp <= hi);
@@ -82,6 +85,9 @@ fn test_text_codec_ascii() {
 fn test_text_codepoint_range(tc: hegel::TestCase) {
     let lo = tc.draw(gs::integers::<u32>().min_value(0).max_value(0x10FFFF));
     let hi = tc.draw(gs::integers::<u32>().min_value(lo).max_value(0x10FFFF));
+    // Rust strings cannot contain surrogates (0xD800..=0xDFFF), so a range
+    // entirely within the surrogate block has no valid characters.
+    tc.assume(lo < 0xD800 || hi > 0xDFFF);
     let s: String = tc.draw(gs::text().min_codepoint(lo).max_codepoint(hi));
     assert!(s.chars().all(|c| {
         let cp = c as u32;
