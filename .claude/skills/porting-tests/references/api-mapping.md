@@ -115,6 +115,43 @@ See `tests/hypothesis/quality_poisoned_lists.rs` for a worked example
 (4 seeds × 3 sizes × 2 probabilities × 2 strategy classes → 12 tests,
 not 48).
 
+**Parametrize rows that are different strategies → `BoxedGenerator<'static, T>`.**
+When the parametrize axis is a *list of strategies* producing the same element
+type (e.g. `@pytest.mark.parametrize("base", [st.integers(1, 20),
+st.integers(0, 19).map(lambda x: x + 1), st.sampled_from(range(1, 21)), ...])`),
+the four rows have four different Rust generator types. Python erases the
+difference dynamically; Rust needs an explicit `BoxedGenerator<'static, T>` to
+unify them. Split into one `#[test]` per row, each calling a shared driver:
+
+```rust
+fn run_chained_filters_agree(base: BoxedGenerator<'static, i64>) { /* ... */ }
+
+#[test]
+fn test_chained_filters_agree_integers_1_20() {
+    run_chained_filters_agree(gs::integers::<i64>().min_value(1).max_value(20).boxed());
+}
+#[test]
+fn test_chained_filters_agree_sampled_from_0_19_mapped() {
+    let values: Vec<i64> = (0..20).collect();
+    run_chained_filters_agree(gs::sampled_from(values).map(|x| x + 1).boxed());
+}
+```
+
+The same type-erasure is the fix for **growing a generator chain in a loop**
+(`for x in xs: s = s.filter(lambda y: y != x)` in Python). Each `.filter(...)`
+produces a new concrete Rust type; re-binding `s` across iterations requires
+`BoxedGenerator<'static, T>` and a trailing `.boxed()`:
+
+```rust
+let mut s: BoxedGenerator<'static, i64> = base.clone();
+for f in &forbidden {
+    let f = *f;
+    s = s.filter(move |x: &i64| *x != f).boxed();
+}
+```
+
+See `tests/hypothesis/nocover_filtering.rs` for both shapes together.
+
 ## Features deliberately missing from hegel-rust
 
 These show up in lots of pbtkit/Hypothesis tests. When you hit one, leave
