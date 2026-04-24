@@ -899,8 +899,7 @@ impl NativeConjectureRunner {
             // matching Python's call order.
             for origin in &origins {
                 let initial = self.interesting_examples[origin].nodes.clone();
-                let choices: Vec<ChoiceValue> =
-                    initial.iter().map(|n| n.value.clone()).collect();
+                let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value.clone()).collect();
                 let ntc = NativeTestCase::for_choices(&choices, Some(&initial));
                 let (status, _, _) = run_test_fn(&mut self.test_fn, ntc);
                 self.call_count += 1;

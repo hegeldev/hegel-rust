@@ -496,7 +496,11 @@ fn test_exit_because_max_iterations() {
         rng,
     );
     runner.run();
-    assert!(runner.call_count <= 1000, "call_count = {}", runner.call_count);
+    assert!(
+        runner.call_count <= 1000,
+        "call_count = {}",
+        runner.call_count
+    );
     assert_eq!(runner.exit_reason, Some(ExitReason::MaxIterations));
 }
 
