@@ -16,18 +16,14 @@
 //! check, it collapses to the minimum-correctness assertion already
 //! exercised by the 11 explicit `@example` cases below.
 //!
-//! Six of the eleven explicit examples are `#[ignore]`d pending an
-//! engine enhancement — see TODO.yaml, "Pair-locked zig-zag shrink for
-//! linked integer choices". The native shrinker's integer passes
-//! (`binary_search_integer_towards_zero`, `redistribute_integers`) walk
-//! each integer individually; when two integers are pinned together by
-//! a `|m - n| == 1` constraint and `lower_bound > 0`, the shrinker can
-//! only step `(m, n)` down by one at a time and hits
-//! `MAX_SHRINK_ITERATIONS = 500` before converging on `(lb, lb - 1)`.
-//! Python's shrinker has a pair-locked binary-search pass that does this
-//! in `O(log n_bits)` outer iterations. Cases where `lower_bound == 0`
-//! (examples 7, 10) or the gap is small (examples 8, 9, 11) converge
-//! under the current passes and pass today.
+//! The pair-locked shrink is provided by the `lower_integers_together`
+//! pass (port of Hypothesis's `lower_integers_together`), which drives
+//! linked pairs from `(m_init, m_init + 1)` down to `(lb, lb + 1)` in
+//! `O(log(m_init - lb))` probes. The individual integer pass then hops
+//! `(lb, lb + 1)` to `(lb, lb - 1)` via a `shrink_by_multiples(2)`-style
+//! probe (otherwise `binary_search_integer_towards_zero` never tries
+//! `cur - 2`, which is the only single-step move that keeps
+//! `|m - n| == 1` once `m` is fixed at the lower bound).
 
 #![cfg(feature = "native")]
 
@@ -116,37 +112,31 @@ fn check(m: u128, marker: &[u8], lower_bound: u128) {
 }
 
 #[test]
-#[ignore = "pair-locked zig-zag shrink — tracked in TODO.yaml"]
 fn test_avoids_zig_zag_trap_example_1() {
     check(4503599627370496, b"", 2861143707951135);
 }
 
 #[test]
-#[ignore = "pair-locked zig-zag shrink — tracked in TODO.yaml"]
 fn test_avoids_zig_zag_trap_example_2() {
     check(88305152, b"%\x1b\xa0\xfa", 12394667);
 }
 
 #[test]
-#[ignore = "pair-locked zig-zag shrink — tracked in TODO.yaml"]
 fn test_avoids_zig_zag_trap_example_3() {
     check(99742672384, b"\xf5|", 24300326997);
 }
 
 #[test]
-#[ignore = "pair-locked zig-zag shrink — tracked in TODO.yaml"]
 fn test_avoids_zig_zag_trap_example_4() {
     check(1454610481571840, b"", 1076887621690235);
 }
 
 #[test]
-#[ignore = "pair-locked zig-zag shrink — tracked in TODO.yaml"]
 fn test_avoids_zig_zag_trap_example_5() {
     check(15616, b"", 2508);
 }
 
 #[test]
-#[ignore = "pair-locked zig-zag shrink — tracked in TODO.yaml"]
 fn test_avoids_zig_zag_trap_example_6() {
     check(65536, b"", 20048);
 }

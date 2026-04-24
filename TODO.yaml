@@ -6,31 +6,3 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-- title: Pair-locked zig-zag shrink for linked integer choices
-  details: |
-    The native shrinker's integer passes
-    (`binary_search_integer_towards_zero`, `redistribute_integers`) walk
-    each integer individually. When two integer choices are pinned
-    together by a `|m - n| == 1`-style predicate and the lower bound on
-    `m` is positive, the shrinker can only step `(m, n)` down by one at
-    a time and exhausts `MAX_SHRINK_ITERATIONS = 500` long before
-    converging on the minimum. Python's shrinker handles this in
-    `O(log n_bits)` outer iterations via a pair-locked binary-search
-    pass (see Hypothesis `minimize_individual_choices` and the
-    `attempt_shrink_towards` / `try_shrinking_blocks` machinery).
-
-    Acceptance criteria:
-    - Implement a pass in `src/native/shrinker/` that shrinks linked
-      integer pairs (e.g. two integer choices whose difference is held
-      constant by the predicate) via a simultaneous reduction — Python's
-      approach is to attempt `m -= k`, `n -= k` for `k` growing
-      geometrically until rejection, then binary-search between the
-      last accepted and first rejected `k`.
-    - Un-ignore the six `#[ignore]`d cases in
-      `tests/hypothesis/quality_zig_zagging.rs`
-      (`test_avoids_zig_zag_trap_example_1` … `_6`). They assert the
-      shrinker reaches `m == lower_bound, n == lower_bound - 1` from an
-      initial `(m, m + 1, marker)`.
-    - The pbtkit reference for this is the `redistribute` / pair-
-      shrink logic in `resources/pbtkit/src/pbtkit/shrinking/`.

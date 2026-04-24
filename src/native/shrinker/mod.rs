@@ -149,6 +149,7 @@ impl<'a> Shrinker<'a> {
             self.binary_search_integer_towards_zero();
             self.bind_deletion();
             self.redistribute_integers();
+            self.lower_integers_together();
             self.shrink_duplicates();
             self.sort_values();
             self.swap_adjacent_blocks();
@@ -183,6 +184,44 @@ pub(super) fn bin_search_down(lo: i128, hi: i128, f: &mut impl FnMut(i128) -> bo
         }
     }
     hi
+}
+
+/// Finds a (hopefully large) integer `n >= 0` such that `f(n)` is true and
+/// `f(n+1)` is false. `f(0)` is assumed to be true and is not checked.
+///
+/// Port of Hypothesis's `junkdrawer.find_integer`. Used by shrink passes that
+/// want to maximise a step size — e.g. "lower both nodes by k" needs the
+/// largest k for which the joint replacement is still interesting.
+///
+/// Uses `checked_mul` on the exponential probe and `lo + (hi - lo) / 2` on
+/// the binary-search midpoint: in Python this is arbitrary-precision, but in
+/// Rust a predicate that accepts an unbounded range (e.g. a `lower_integers_together`
+/// pass over full-range `i128` nodes) would otherwise walk `hi` off the end
+/// of `usize`.
+pub(super) fn find_integer(mut f: impl FnMut(usize) -> bool) -> usize {
+    for i in 1..5 {
+        if !f(i) {
+            return i - 1;
+        }
+    }
+    let mut lo = 4;
+    let mut hi = 5;
+    while f(hi) {
+        lo = hi;
+        let Some(next) = hi.checked_mul(2) else {
+            return lo;
+        };
+        hi = next;
+    }
+    while lo + 1 < hi {
+        let mid = lo + (hi - lo) / 2;
+        if f(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
 }
 
 #[cfg(test)]
