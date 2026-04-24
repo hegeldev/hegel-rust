@@ -1516,6 +1516,17 @@ Individually-skipped tests (rest of the file is ported):
   API integration or counterpart for array/dtype/shape-generation tied
   to an external array-module namespace.
 
+- `test_scalar_dtypes.py` (in `tests/array_api/`) — array-api-extra
+  integration tests. Every test requires the `xp` / `xps` fixtures (an
+  Array-API-conforming array module and the strategies namespace built
+  by `hypothesis.extra.array_api.make_strategies_namespace(xp)`), and
+  exercises the dtype strategies on that namespace
+  (`xps.integer_dtypes`, `xps.unsigned_integer_dtypes`,
+  `xps.floating_dtypes`, `xps.real_dtypes`, `xps.complex_dtypes`,
+  `xps.scalar_dtypes`, `xps.numeric_dtypes`) against array-module
+  dtypes (`xp.bool`, `xp.int8`, …). hegel-rust has no Array API
+  integration or counterpart for array-module dtype generation.
+
 - `test_gen_data.py` (in `tests/numpy/`) — numpy-extra integration tests.
   Every test exercises `hypothesis.extra.numpy` (`nps.arrays`,
   `nps.array_shapes`, `nps.broadcastable_shapes`, `nps.from_dtype`,
