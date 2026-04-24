@@ -1657,5 +1657,5 @@ Individually-skipped tests (rest of the file is ported):
   `tests/conjecture/common.py`, generates random `ChoiceNode` instances)
   and `compute_max_children` (from
   `hypothesis.internal.conjecture.datatree`) — neither is ported to
-  hegel-rust yet. Un-skipping is part of the same "Implement native
-  targeting/optimiser" TODO that un-stubs `TargetedRunner`.
+  hegel-rust yet. Tracked in TODO.yaml "Port test_optimising_all_nodes
+  @given(nodes()) body".
