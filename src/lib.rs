@@ -260,6 +260,9 @@ pub mod __native_test_internals {
         LRUReusedCache, LRUReusedScoring,
     };
     pub use crate::native::cathetus::cathetus;
+    pub use crate::native::choicetree::{
+        ChoiceTree, Chooser, DeadBranch, prefix_selection_order, random_selection_order,
+    };
     pub use crate::native::core::{
         BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice,
         IntegerChoice, NativeTestCase, Span, Status, StringChoice, decode_exponent,
