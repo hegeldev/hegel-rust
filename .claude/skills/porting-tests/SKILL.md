@@ -498,19 +498,27 @@ native entry point:
   `runner.save_choices(...)`, plus fixtures like `run_to_nodes(f)` from
   `tests/conjecture/common.py` (the `conftest.py` fixture that returns
   the shrunk `data.nodes` of the sole interesting example — distinct
-  from the `@run_to_nodes` decorator in `test_shrinker.py`). `TargetedRunner`
-  is *not* this surface — it exposes only `cached_test_function` /
+  from the `@run_to_nodes` decorator in `test_shrinker.py`). Port these
+  through the `NativeConjectureRunner` wrapper in
+  `__native_test_internals`: `NativeConjectureRunner::new(test_fn,
+  settings, rng).with_database_key(key).run()`, then read back
+  `runner.interesting_examples` / `runner.exit_reason` /
+  `runner.shrinks` / `runner.call_count` / `runner.valid_examples` /
+  `runner.pareto_front()` / `runner.secondary_key()` /
+  `runner.pareto_key()` / `runner.generate_novel_prefix()` /
+  `runner.tree().is_exhausted()`. The `run_to_nodes(f)` fixture has a
+  free-function port of the same name. The `fails_health_check(label,
+  build)` decorator has a free-function port that asserts the runner's
+  panic message carries the `HealthCheckLabel`. `TargetedRunner` is
+  *not* this surface — it exposes only `cached_test_function` /
   `optimise_targets` / `best_observed_targets`, not interesting-example
-  tracking, exit reasons, shrink counters, or pareto bookkeeping. The
-  correct port path is a `NativeConjectureRunner` wrapper under
-  `__native_test_internals`; until that lands,
-  `tests/hypothesis/conjecture_engine.rs` holds only the
-  `minimal()`-expressible shrink-quality subset and the remaining
-  ~80 tests are parked in `SKIPPED.md` under the TODO.yaml entry
-  naming that wrapper as its acceptance gate (missing-native-feature
-  individual-skip path — see the "missing-native-feature" carveout in
-  the individual-skipping section, which requires a TODO.yaml link
-  precisely so this doesn't become invisible debt).
+  tracking, exit reasons, shrink counters, or pareto bookkeeping.
+  Individual `NativeConjectureRunner` attributes may still be `todo!()`
+  stubs in `src/native/conjecture_runner.rs` when you start porting;
+  the runtime `todo!()` panic on first use tells the port-loop which
+  attribute the next test exercises, and subsequent cycles fill them
+  in one test at a time. Don't bundle several attribute fills into one
+  port — keep each commit focused on the test that landed.
 
 **Don't skip `test_engine.py`-shape files wholesale.** Inside such
 files there's usually a subset of shrink-quality tests — the
