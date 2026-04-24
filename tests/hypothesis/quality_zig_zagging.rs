@@ -37,12 +37,7 @@ fn bit_length(n: u128) -> u32 {
     128 - n.leading_zeros()
 }
 
-fn run_once(
-    tc: &mut NativeTestCase,
-    max_draw: i128,
-    lower_bound: i128,
-    marker: &[u8],
-) -> bool {
+fn run_once(tc: &mut NativeTestCase, max_draw: i128, lower_bound: i128, marker: &[u8]) -> bool {
     let m = match tc.draw_integer(0, max_draw) {
         Ok(v) => v,
         Err(_) => return false,
