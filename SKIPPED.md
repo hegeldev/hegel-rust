@@ -451,6 +451,16 @@ Individually-skipped tests (rest of the file is ported):
   no Rust counterpart, and hegel-rust has no `st.builds()` /
   `register_type_strategy` analog (same family as the `test_lookup*.py`
   skips above).
+- `test_annotated_types.py` — tests `st.from_type()` resolution of
+  `typing.Annotated[T, ...]` metadata using the third-party Python
+  `annotated_types` library (`at.Gt`, `at.Ge`, `at.Lt`, `at.Le`,
+  `at.Interval`, `at.Len`, `at.Predicate`, `at.Timezone`, `at.MultipleOf`,
+  `__is_annotated_types_grouped_metadata__`), plus `typing.TypedDict` with
+  `NotRequired`, Python `slice` objects as metadata, and internal
+  attributes (`unwrap_strategies`, `FilteredStrategy.flat_conditions`,
+  `_get_constraints`). Neither `from_type`, `typing.Annotated`
+  introspection, nor the `annotated_types` library has any Rust
+  counterpart (same family as the `test_lookup*.py` skips above).
 - `test_example.py` — tests the fluent `.via("...")` and `.xfail(...)`
   methods chained onto `@example(...)`; hegel-rust's
   `#[hegel::explicit_test_case]` has no equivalent of either.
