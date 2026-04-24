@@ -309,6 +309,18 @@ Specific shapes that *look* skip-worthy but aren't:
 
   The test body then matches on `Value` to exercise each branch. The
   enum is scaffolding for the port, not a new public API.
+- **Upstream PBT with a leading `assume(...)` filter** — the filter
+  restricts the test body's assertions to a subset of the input space,
+  so the test may still port even if the *un-filtered* behaviour
+  doesn't. Concrete case: `test_copy_choice_node` has
+  `assume(not node.was_forced)` at the top, making it a test of the
+  non-forced branch only; the raise-on-forced behaviour lives in a
+  separately-named test (`test_cannot_modify_forced_nodes`). Before
+  skipping a test on the grounds that "native X doesn't raise on Y",
+  read the upstream body for `assume`/`event`/filter predicates that
+  carve the scope down to something native *does* model. The two
+  Python tests often look like one blurry "X behaviour" to a first
+  pass, but port as one skip plus one successful port.
 
 ## Don't add `suppress_health_check` that wasn't in the original
 
