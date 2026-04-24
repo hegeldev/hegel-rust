@@ -1146,6 +1146,21 @@ without the budget check it collapses to the same
 minimum-correctness assertion as the explicit rows and adds no
 coverage. Note the drop in the module docstring.
 
+Same outcome — same fix — when the `@given` body itself calls a
+derandomised helper (`minimal(...)`, `find_any(...)`) rather than
+asserting `runner.shrinks <= budget`. The upstream signal is
+`@settings(suppress_health_check=[HealthCheck.nested_given])` sitting
+above a `@given` whose body is one `minimal(...)` call: each random
+input re-runs the full 500-case derandomised shrink, the assertion
+is just "the shrink reaches `ceil(f)`", and the `@example` rows
+already cover the representative boundaries. Port only the `@example`
+rows as individual `#[test]`s and drop the outer `@given` loop.
+`HealthCheck.nested_given` has no hegel-rust analog (see the
+Health-check section), so the `suppress_health_check` setting also
+drops. Note both drops in the module docstring. Precedent:
+`tests/hypothesis/quality_float_shrinking.rs` ports the two
+`@given`-over-`minimal` tests in `test_float_shrinking.py` this way.
+
 ### `@example` + `@given` under `@pytest.mark.parametrize`
 
 When a `parametrize` over N implementations sits on top of the
