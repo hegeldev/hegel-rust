@@ -1739,10 +1739,11 @@ Individually-skipped tests (rest of the file is ported):
 - `conjecture/test_choice.py::test_compute_max_children_and_all_children_agree`,
   `::test_compute_max_children_unbounded_integer_ranges`,
   `::test_all_children_are_permitted_values`,
-  `::test_choice_to_index_injective`,
-  `::test_choice_from_value_injective` — iterate every valid value for a
+  `::test_choice_to_index_injective` — iterate every valid value for a
   `ChoiceKind` via `datatree.all_children`. `compute_max_children` is
   ported but the enumerator is not; no `src/native/` counterpart exists.
+  (`test_choice_from_value_injective` is *not* in this cluster — it
+  iterates `range(cap)` via `from_index` only, and is ported.)
 - `conjecture/test_choice.py::test_cannot_modify_forced_nodes` — asserts
   that `ChoiceNode.copy(with_value=…)` on a forced node raises
   `AssertionError`. The native `ChoiceNode::with_value` propagates

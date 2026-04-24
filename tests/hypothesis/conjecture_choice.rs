@@ -9,11 +9,12 @@
 //! - `test_compute_max_children_and_all_children_agree`,
 //!   `test_compute_max_children_unbounded_integer_ranges`,
 //!   `test_all_children_are_permitted_values`,
-//!   `test_choice_to_index_injective`,
-//!   `test_choice_from_value_injective` — require iterating every valid value
+//!   `test_choice_to_index_injective` — require iterating every valid value
 //!   for a `ChoiceKind` (`all_children` in upstream's `datatree.py`), which
 //!   has no `src/native/` counterpart. `compute_max_children` is ported, but
-//!   not the enumerator.
+//!   not the enumerator. (`test_choice_from_value_injective` iterates
+//!   `range(cap)` via `from_index` only, not `all_children`, so it ports
+//!   below.)
 //! - `test_cannot_modify_forced_nodes` — asserts that calling
 //!   `ChoiceNode.copy(with_value=…)` on a forced node raises
 //!   `AssertionError`. Native `ChoiceNode::with_value` propagates
@@ -769,6 +770,82 @@ fn test_integer_choice_index_semibounded_below() {
 fn test_integer_choice_index_semibounded_above() {
     // Upstream: integer_constr(max_value=-3), (-3, -4, -5, -6, -7).
     assert_integer_choice_index(-1000, -3, &[-3, -4, -5, -6, -7]);
+}
+
+#[test]
+fn test_integer_choice_index_semibounded_below_spans_zero() {
+    // Upstream: integer_constr(min_value=-3), (0, 1, -1, 2, -2, 3, -3, 4, 5, 6).
+    // simplest=0 because 0 is in range; enumeration alternates around 0 until
+    // it exhausts the negative side, then continues upward.
+    assert_integer_choice_index(-3, 1000, &[0, 1, -1, 2, -2, 3, -3, 4, 5, 6]);
+}
+
+#[test]
+fn test_integer_choice_index_semibounded_above_spans_zero() {
+    // Upstream: integer_constr(max_value=3), (0, 1, -1, 2, -2, 3, -3, -4, -5, -6).
+    assert_integer_choice_index(-1000, 3, &[0, 1, -1, 2, -2, 3, -3, -4, -5, -6]);
+}
+
+// -- test_choice_from_value_injective -----------------------------------------
+//
+// Upstream iterates `for index in range(cap)`, calls `choice_from_index`,
+// and asserts each result is distinct. Uses `from_index` only — no
+// `all_children` — so it ports directly despite upstream being grouped with
+// the `all_children` tests. Upstream excludes floats via `assume`.
+
+#[test]
+fn test_choice_from_value_injective_integer() {
+    let ic = IntegerChoice {
+        min_value: -10,
+        max_value: 10,
+    };
+    let cap = 21_u64;
+    let mut seen = std::collections::HashSet::new();
+    for i in 0..cap {
+        let v = ic.from_index(BigUint::from(i)).unwrap();
+        assert!(seen.insert(v), "duplicate value {v} at index {i}");
+    }
+}
+
+#[test]
+fn test_choice_from_value_injective_boolean() {
+    let bc = BooleanChoice;
+    let mut seen = std::collections::HashSet::new();
+    for i in 0..2_u64 {
+        let v = bc.from_index(BigUint::from(i)).unwrap();
+        assert!(seen.insert(v), "duplicate value {v} at index {i}");
+    }
+}
+
+#[test]
+fn test_choice_from_value_injective_bytes_small() {
+    let bc = BytesChoice {
+        min_size: 0,
+        max_size: 2,
+    };
+    let cap: u64 = (0..=2u32).map(|k| 256u64.pow(k)).sum();
+    let mut seen = std::collections::HashSet::new();
+    for i in 0..cap {
+        let v = bc.from_index(BigUint::from(i)).unwrap();
+        assert!(seen.insert(v.clone()), "duplicate value {v:?} at index {i}");
+    }
+}
+
+#[test]
+fn test_choice_from_value_injective_string_small() {
+    // Upstream's @example row: min_size=0, max_size=10, alphabet="a" → 11 values.
+    let sc = StringChoice {
+        min_codepoint: b'a' as u32,
+        max_codepoint: b'a' as u32,
+        min_size: 0,
+        max_size: 10,
+    };
+    let cap = 11_u64;
+    let mut seen = std::collections::HashSet::new();
+    for i in 0..cap {
+        let v = sc.from_index(BigUint::from(i)).unwrap();
+        assert!(seen.insert(v.clone()), "duplicate value {v:?} at index {i}");
+    }
 }
 
 // -- test_drawing_directly_matches_for_choices --------------------------------
