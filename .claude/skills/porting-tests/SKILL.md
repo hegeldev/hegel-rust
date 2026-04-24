@@ -456,6 +456,34 @@ at the top, following the native-gated-plus-source-stub rules above.
 - Don't bind unused return values to `_`.
 - Minimal comments — only when a translation choice is non-obvious.
 - Don't add new helpers to `tests/common/utils.rs`.
+- **Closures consumed synchronously don't need `move` or cloned
+  captures.** When the function being called takes `F: FnOnce(...)` or
+  `F: FnMut(...)` and runs the closure inside the same call (e.g.
+  `tree.step(order, |chooser| ...)`, `assert_all_examples(gen, |v| ...)`),
+  the closure can borrow its captures directly — no `move`, no
+  `.clone()` on the captured `Vec`, no `Rc<RefCell<...>>` wrapper for
+  a mutable result. The Python closure-with-captured-list shape
+  (`lambda chooser: results.append(f(chooser))`) looks like it needs
+  these wrappers, but doesn't: ports Rust-side to a plain
+  `|chooser| results.push(f(chooser))`. Reach for `move` + owned
+  captures only when the closure outlives the call that receives it —
+  e.g. a builder returning `Box<dyn FnMut>` (see
+  `random_selection_order` in `src/native/choicetree.rs`) or a
+  `tokio::spawn`-style hand-off. If you find yourself writing `let x =
+  x.clone(); tree.step(order, move |...| { ... x ... })`, try dropping
+  both the `clone` and `move` first — the compiler will usually accept
+  it.
+- **Python `@helper` decorators applied to a `def foo(args): ...`
+  often port as an inline closure call, not a named function.** In
+  Python, `@exhaust` on `def nested(chooser): ...` rebinds `nested`
+  to `exhaust(nested_fn)` — the decorator is just sugar for an
+  immediate call with the body as its argument. The Rust port is
+  `let nested = exhaust(|chooser| { ... });`, not a free `fn nested`
+  plus an `exhaust(nested)` call. Same idiom shows up as
+  `@shrinking_from(initial)` in `test_shrinker.py` (see api-mapping);
+  the fix is the same. If the decorator takes arguments, those become
+  positional arguments to the helper: `@helper(x) def foo(...)` → `let
+  foo = helper(x, |...| { ... });`.
 
 ## Verification step (REQUIRED before commit)
 
