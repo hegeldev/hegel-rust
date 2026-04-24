@@ -1580,6 +1580,14 @@ Individually-skipped tests (rest of the file is ported):
   or numpy integration or counterpart for pandas `Index`/`RangeIndex`
   generation.
 
+- `test_contracts.py` (in `tests/dpcontracts/`) — dpcontracts-extra
+  integration tests. Every test exercises `hypothesis.extra.dpcontracts`
+  (`fulfill`), which wraps functions decorated with the third-party
+  Python `dpcontracts` library's `@require(...)` precondition decorator
+  so Hypothesis can filter inputs that violate the contract. hegel-rust
+  has no `dpcontracts` integration or counterpart for design-by-contract
+  precondition-aware generation.
+
 - `test_given_models.py` (in `tests/django/toystore/`) — django-extra
   integration tests. Every test exercises `hypothesis.extra.django`
   (`from_model`, `register_field_strategy`, `TestCase`,
