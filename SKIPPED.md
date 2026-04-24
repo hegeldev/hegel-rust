@@ -1534,6 +1534,16 @@ Individually-skipped tests (rest of the file is ported):
   `pd.core.arrays.integer.Int8Dtype`). hegel-rust has no pandas
   integration or counterpart for pandas `Series`/dtype generation.
 
+- `test_indexes.py` (in `tests/pandas/`) — pandas-extra integration tests.
+  Every test exercises `hypothesis.extra.pandas` (`pdst.indexes`,
+  `pdst.range_indexes`) and pandas/numpy dtypes (`np.dtype("int64")`,
+  `np.dtype("int32")`, `pandas.RangeIndex`, `pandas.Index`), and
+  `hypothesis.extra.numpy` (`npst.boolean_dtypes`, `npst.integer_dtypes`,
+  `npst.floating_dtypes`, `npst.datetime64_dtypes`,
+  `npst.timedelta64_dtypes`, `npst.from_dtype`). hegel-rust has no pandas
+  or numpy integration or counterpart for pandas `Index`/`RangeIndex`
+  generation.
+
 - `test_given_models.py` (in `tests/django/toystore/`) — django-extra
   integration tests. Every test exercises `hypothesis.extra.django`
   (`from_model`, `register_field_strategy`, `TestCase`,
