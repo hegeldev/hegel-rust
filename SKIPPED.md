@@ -1666,6 +1666,17 @@ Individually-skipped tests (rest of the file is ported):
   integration — no `from_model` equivalent, no ORM-aware model/field
   generator, and no Django-settings/transaction harness.
 
+- `test_basic_configuration.py` (in `tests/django/toystore/`) — django-extra
+  integration tests. Every test subclasses `hypothesis.extra.django`'s
+  `SimpleTestCase` / `TestCase` / `TransactionTestCase`, creates
+  `Company` ORM model rows via `Company.objects.create(...)`, relies on
+  Django's transaction-rollback test-case machinery to keep the DB a
+  blank slate across `@given` replays, and asserts that `@given` raises
+  `InvalidArgument` when used on a non-Hypothesis Django `TestCase`
+  subclass. hegel-rust has no Django integration, no ORM model / test-
+  case harness, and no `hypothesis.extra.django`-style
+  `@given`-compatible test-case base class to validate against.
+
 - `test_attrs.py` (in `tests/attrs/`) — port abandoned: parallel
   port-loop worker produced commits on `port/worker-0` that could not
   be cherry-picked cleanly onto the supervisor branch (post-rebase
