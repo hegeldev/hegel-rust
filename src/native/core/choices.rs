@@ -945,6 +945,44 @@ impl ChoiceNode {
         }
     }
 
+    /// Whether this node is at its simplest value and cannot be simplified
+    /// further in isolation.
+    ///
+    /// Port of Hypothesis's `ChoiceNode.trivial` from
+    /// `hypothesis.internal.conjecture.choice`. The float path is
+    /// deliberately conservative (sound but not complete): it matches
+    /// upstream's "value equals 0 clamped into the interval's integer span"
+    /// test, not native's richer `FloatChoice::simplest`. Some values that
+    /// are actually trivial in shrinking will be reported as non-trivial
+    /// here.
+    #[allow(dead_code)]
+    pub fn trivial(&self) -> bool {
+        if self.was_forced {
+            return true;
+        }
+        if let (ChoiceKind::Float(fc), ChoiceValue::Float(v)) = (&self.kind, &self.value) {
+            let min_value = fc.min_value;
+            let max_value = fc.max_value;
+            let mut shrink_towards = 0.0_f64;
+
+            if min_value == f64::NEG_INFINITY && max_value == f64::INFINITY {
+                return v.to_bits() == shrink_towards.to_bits();
+            }
+
+            if !min_value.is_infinite()
+                && !max_value.is_infinite()
+                && min_value.ceil() <= max_value.floor()
+            {
+                shrink_towards = min_value.ceil().max(shrink_towards);
+                shrink_towards = max_value.floor().min(shrink_towards);
+                return v.to_bits() == shrink_towards.to_bits();
+            }
+
+            return false;
+        }
+        self.kind.simplest() == self.value
+    }
+
     pub fn sort_key(&self) -> NodeSortKey {
         match (&self.kind, &self.value) {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {

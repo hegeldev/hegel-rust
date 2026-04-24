@@ -26,10 +26,13 @@
 //! - `test_choice_node_equality` — asserts `node != 42` (cross-type). Rust
 //!   `PartialEq` rejects mixed-type comparison at the type level, so this
 //!   case is unrepresentable in Rust.
-//! - `test_forced_nodes_are_trivial`, `test_trivial_nodes`,
-//!   `test_nontrivial_nodes`, `test_conservative_nontrivial_nodes` — rely
-//!   on `ChoiceNode.trivial`, a per-node property with no counterpart in
-//!   `src/native/core/choices.rs`.
+//! - Rows of `test_trivial_nodes` constrained by `shrink_towards` — native
+//!   `IntegerChoice` has no `shrink_towards` field, so those rows don't
+//!   port. The rows that depend only on `[min, max]` (plus one unbounded
+//!   row using the full `i128` range as "bounded unbounded") are ported.
+//!   Upstream also covers the `minimal(values()) == value` shrinking
+//!   invariant in the same test; that half requires a shrinking/generator
+//!   harness not built here, so only the `.trivial` half ports.
 //! - `test_choice_node_is_hashable` — `ChoiceNode` does not implement
 //!   `std::hash::Hash`.
 //! - `test_choices_size_positive` — `choices_size([values])` (byte-width of
@@ -934,5 +937,488 @@ fn test_copy_choice_node_string() {
         }),
         ChoiceValue::String("abc".chars().map(|c| c as u32).collect()),
         ChoiceValue::String("xyz".chars().map(|c| c as u32).collect()),
+    );
+}
+
+// -- test_forced_nodes_are_trivial / test_trivial_nodes /
+//    test_nontrivial_nodes / test_conservative_nontrivial_nodes -------------
+//
+// `ChoiceNode.trivial` is ported to native; these tests exercise the
+// `.trivial` half of the upstream tests. The `minimal(values()) ==
+// node.value` shrinking invariant that accompanies each row in upstream
+// is NOT ported — it needs a shrinking/generator harness we don't have
+// here.
+
+fn node(kind: ChoiceKind, value: ChoiceValue, was_forced: bool) -> ChoiceNode {
+    ChoiceNode {
+        kind,
+        value,
+        was_forced,
+    }
+}
+
+#[test]
+fn test_forced_nodes_are_trivial_integer() {
+    // Any forced node is trivial regardless of value/constraints.
+    assert!(
+        node(
+            ChoiceKind::Integer(IntegerChoice {
+                min_value: -10,
+                max_value: 10,
+            }),
+            ChoiceValue::Integer(7),
+            true,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_forced_nodes_are_trivial_float_unbounded() {
+    assert!(
+        node(
+            ChoiceKind::Float(FloatChoice {
+                min_value: f64::NEG_INFINITY,
+                max_value: f64::INFINITY,
+                allow_nan: true,
+                allow_infinity: true,
+            }),
+            ChoiceValue::Float(12345.0),
+            true,
+        )
+        .trivial()
+    );
+}
+
+// test_trivial_nodes rows (value is trivial). Shrink_towards-constrained
+// rows dropped; boolean rows that depend on `p` dropped.
+
+#[test]
+fn test_trivial_nodes_float_integer_in_interval() {
+    assert!(
+        node(
+            ChoiceKind::Float(FloatChoice {
+                min_value: 5.0,
+                max_value: 10.0,
+                allow_nan: false,
+                allow_infinity: false,
+            }),
+            ChoiceValue::Float(5.0),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_trivial_nodes_float_zero_in_interval() {
+    assert!(
+        node(
+            ChoiceKind::Float(FloatChoice {
+                min_value: -5.0,
+                max_value: 5.0,
+                allow_nan: false,
+                allow_infinity: false,
+            }),
+            ChoiceValue::Float(0.0),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_trivial_nodes_float_unbounded_zero() {
+    assert!(
+        node(
+            ChoiceKind::Float(FloatChoice {
+                min_value: f64::NEG_INFINITY,
+                max_value: f64::INFINITY,
+                allow_nan: true,
+                allow_infinity: true,
+            }),
+            ChoiceValue::Float(0.0),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_trivial_nodes_boolean_false() {
+    assert!(
+        node(
+            ChoiceKind::Boolean(BooleanChoice),
+            ChoiceValue::Boolean(false),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_trivial_nodes_string_empty() {
+    assert!(
+        node(
+            ChoiceKind::String(StringChoice {
+                min_codepoint: b'a' as u32,
+                max_codepoint: b'd' as u32,
+                min_size: 0,
+                max_size: LARGE_MAX_SIZE,
+            }),
+            ChoiceValue::String(vec![]),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_trivial_nodes_string_all_simplest_codepoints() {
+    // Alphabet b-d-a: simplest codepoint is 'a' (remapped to key 0 under
+    // codepoint_key's digits/letters reorder). min_size=4 forces length 4.
+    assert!(
+        node(
+            ChoiceKind::String(StringChoice {
+                min_codepoint: b'a' as u32,
+                max_codepoint: b'd' as u32,
+                min_size: 4,
+                max_size: LARGE_MAX_SIZE,
+            }),
+            ChoiceValue::String(vec![b'a' as u32; 4]),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_trivial_nodes_bytes_zeroed_fixed() {
+    assert!(
+        node(
+            ChoiceKind::Bytes(BytesChoice {
+                min_size: 8,
+                max_size: 8,
+            }),
+            ChoiceValue::Bytes(vec![0u8; 8]),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_trivial_nodes_bytes_zeroed_range() {
+    assert!(
+        node(
+            ChoiceKind::Bytes(BytesChoice {
+                min_size: 2,
+                max_size: LARGE_MAX_SIZE,
+            }),
+            ChoiceValue::Bytes(vec![0u8; 2]),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_trivial_nodes_integer_simplest_is_lower_bound() {
+    // simplest() for [50, 100] is 50 (the endpoint closest to zero).
+    assert!(
+        node(
+            ChoiceKind::Integer(IntegerChoice {
+                min_value: 50,
+                max_value: 100,
+            }),
+            ChoiceValue::Integer(50),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_trivial_nodes_integer_zero_in_range() {
+    assert!(
+        node(
+            ChoiceKind::Integer(IntegerChoice {
+                min_value: -10,
+                max_value: 10,
+            }),
+            ChoiceValue::Integer(0),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_trivial_nodes_integer_full_i128_range() {
+    // Native's "bounded unbounded" — the full i128 range, simplest=0.
+    assert!(
+        node(
+            ChoiceKind::Integer(IntegerChoice {
+                min_value: i128::MIN,
+                max_value: i128::MAX,
+            }),
+            ChoiceValue::Integer(0),
+            false,
+        )
+        .trivial()
+    );
+}
+
+// test_nontrivial_nodes rows (value is NOT trivial).
+
+#[test]
+fn test_nontrivial_nodes_float_off_integer() {
+    assert!(
+        !node(
+            ChoiceKind::Float(FloatChoice {
+                min_value: 5.0,
+                max_value: 10.0,
+                allow_nan: false,
+                allow_infinity: false,
+            }),
+            ChoiceValue::Float(6.0),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_nontrivial_nodes_float_off_zero() {
+    assert!(
+        !node(
+            ChoiceKind::Float(FloatChoice {
+                min_value: -5.0,
+                max_value: 5.0,
+                allow_nan: false,
+                allow_infinity: false,
+            }),
+            ChoiceValue::Float(-5.0),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_nontrivial_nodes_float_unbounded_nonzero() {
+    assert!(
+        !node(
+            ChoiceKind::Float(FloatChoice {
+                min_value: f64::NEG_INFINITY,
+                max_value: f64::INFINITY,
+                allow_nan: true,
+                allow_infinity: true,
+            }),
+            ChoiceValue::Float(1.0),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_nontrivial_nodes_boolean_true() {
+    assert!(
+        !node(
+            ChoiceKind::Boolean(BooleanChoice),
+            ChoiceValue::Boolean(true),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_nontrivial_nodes_string_off_simplest() {
+    // Alphabet a-d with min_size=1: simplest is vec!['a']; "d" is nontrivial.
+    assert!(
+        !node(
+            ChoiceKind::String(StringChoice {
+                min_codepoint: b'a' as u32,
+                max_codepoint: b'd' as u32,
+                min_size: 1,
+                max_size: LARGE_MAX_SIZE,
+            }),
+            ChoiceValue::String(vec![b'd' as u32]),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_nontrivial_nodes_bytes_nonzero_fixed() {
+    assert!(
+        !node(
+            ChoiceKind::Bytes(BytesChoice {
+                min_size: 1,
+                max_size: 1,
+            }),
+            ChoiceValue::Bytes(vec![1u8]),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_nontrivial_nodes_bytes_nonempty_optional() {
+    // min_size=0 → simplest is vec![]. vec![0] is nontrivial because it's
+    // longer than the minimum.
+    assert!(
+        !node(
+            ChoiceKind::Bytes(BytesChoice {
+                min_size: 0,
+                max_size: LARGE_MAX_SIZE,
+            }),
+            ChoiceValue::Bytes(vec![0u8]),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_nontrivial_nodes_bytes_longer_than_min() {
+    // min_size=1 → simplest is b"\x00" (length 1). b"\x00\x00" is longer.
+    assert!(
+        !node(
+            ChoiceKind::Bytes(BytesChoice {
+                min_size: 1,
+                max_size: 10,
+            }),
+            ChoiceValue::Bytes(vec![0u8, 0u8]),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_nontrivial_nodes_integer_at_bound() {
+    assert!(
+        !node(
+            ChoiceKind::Integer(IntegerChoice {
+                min_value: -10,
+                max_value: 10,
+            }),
+            ChoiceValue::Integer(-10),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_nontrivial_nodes_integer_unbounded_nonzero() {
+    assert!(
+        !node(
+            ChoiceKind::Integer(IntegerChoice {
+                min_value: i128::MIN,
+                max_value: i128::MAX,
+            }),
+            ChoiceValue::Integer(42),
+            false,
+        )
+        .trivial()
+    );
+}
+
+// test_conservative_nontrivial_nodes rows — these are actually trivial
+// under richer analysis, but upstream's `trivial` (and our port) is
+// conservative and reports them as non-trivial.
+
+#[test]
+fn test_conservative_nontrivial_nodes_float_interval_no_integer() {
+    // [1.1, 1.6] contains no integer; conservative returns false.
+    assert!(
+        !node(
+            ChoiceKind::Float(FloatChoice {
+                min_value: 1.1,
+                max_value: 1.6,
+                allow_nan: false,
+                allow_infinity: false,
+            }),
+            ChoiceValue::Float(1.5),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_conservative_nontrivial_nodes_float_semi_unbounded_positive() {
+    // [f64::MAX - 1, +inf] — one infinite bound, conservative returns false.
+    let max_f = f64::MAX;
+    assert!(
+        !node(
+            ChoiceKind::Float(FloatChoice {
+                min_value: max_f - 1.0,
+                max_value: f64::INFINITY,
+                allow_nan: false,
+                allow_infinity: true,
+            }),
+            ChoiceValue::Float(max_f.floor()),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_conservative_nontrivial_nodes_float_semi_unbounded_negative() {
+    let max_f = f64::MAX;
+    assert!(
+        !node(
+            ChoiceKind::Float(FloatChoice {
+                min_value: f64::NEG_INFINITY,
+                max_value: -max_f + 1.0,
+                allow_nan: false,
+                allow_infinity: true,
+            }),
+            ChoiceValue::Float((-max_f).ceil()),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_conservative_nontrivial_nodes_float_only_pos_infinity() {
+    assert!(
+        !node(
+            ChoiceKind::Float(FloatChoice {
+                min_value: f64::INFINITY,
+                max_value: f64::INFINITY,
+                allow_nan: false,
+                allow_infinity: true,
+            }),
+            ChoiceValue::Float(f64::INFINITY),
+            false,
+        )
+        .trivial()
+    );
+}
+
+#[test]
+fn test_conservative_nontrivial_nodes_float_only_neg_infinity() {
+    assert!(
+        !node(
+            ChoiceKind::Float(FloatChoice {
+                min_value: f64::NEG_INFINITY,
+                max_value: f64::NEG_INFINITY,
+                allow_nan: false,
+                allow_infinity: true,
+            }),
+            ChoiceValue::Float(f64::NEG_INFINITY),
+            false,
+        )
+        .trivial()
     );
 }
