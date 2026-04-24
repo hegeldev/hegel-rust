@@ -1855,3 +1855,13 @@ Individually-skipped tests (rest of the file is ported):
   no-op `run_step`. Hegel's value-shrinker ports (`IntegerShrinker`,
   `OrderingShrinker`) are concrete structs with fixed `run_step`
   implementations and no subclass-pluggable base class.
+- `test_crosshair.py` (in `crosshair/`) — entire file exercises Hypothesis's
+  `backend="crosshair"` integration with the third-party `crosshair`
+  symbolic-execution library (`import crosshair`,
+  `from hypothesis_crosshair_provider.crosshair_provider import
+  CrossHairPrimitiveProvider`). Tests assert on
+  `crosshair.statespace.context_statespace().choices_made` to verify
+  the provider doesn't add symbolic path constraints. hegel-rust has
+  no alternative-backend plumbing and no crosshair counterpart — this
+  is a Python-library integration (same rationale as the numpy /
+  pandas / django skips).
