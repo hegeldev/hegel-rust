@@ -20,7 +20,10 @@ pub(super) fn as_integer_ratio(v: f64) -> Option<(u128, u128)> {
     let (mut num, mut exp) = if biased_exp == 0 {
         (u128::from(mantissa_bits), -1074i32)
     } else {
-        (u128::from((1u64 << 52) | mantissa_bits), biased_exp - 1023 - 52)
+        (
+            u128::from((1u64 << 52) | mantissa_bits),
+            biased_exp - 1023 - 52,
+        )
     };
     let trailing = num.trailing_zeros() as i32;
     num >>= trailing;
@@ -196,15 +199,16 @@ impl<'a> Shrinker<'a> {
                             bin_search_down(0, k_init as i128, &mut |k| {
                                 let num_sum = (k as u128) * n + r;
                                 let candidate_abs = (num_sum as f64) / (n as f64);
-                                let candidate = if is_neg { -candidate_abs } else { candidate_abs };
+                                let candidate = if is_neg {
+                                    -candidate_abs
+                                } else {
+                                    candidate_abs
+                                };
                                 if !fc.validate(candidate) {
                                     return false;
                                 }
                                 let prev_key = sort_key(&self.current_nodes);
-                                self.replace(&HashMap::from([(
-                                    i,
-                                    ChoiceValue::Float(candidate),
-                                )]));
+                                self.replace(&HashMap::from([(i, ChoiceValue::Float(candidate))]));
                                 sort_key(&self.current_nodes) < prev_key
                             });
                         }
