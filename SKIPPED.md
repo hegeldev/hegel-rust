@@ -1893,3 +1893,13 @@ Individually-skipped tests (rest of the file is ported):
   no alternative-backend plumbing and no crosshair counterpart — this
   is a Python-library integration (same rationale as the numpy /
   pandas / django skips).
+
+- `test_grammar.py` (in `tests/lark/`) — every test exercises Hypothesis's
+  `hypothesis.extra.lark.from_lark(...)` integration with the third-party
+  `lark` parser library (`from lark.lark import Lark`); the strategy
+  consumes an EBNF `Lark` grammar object and generates strings that parse
+  against it, with keyword arguments (`start=`, `explicit=`, `alphabet=`)
+  routed through lark's rule/terminal machinery. hegel-rust has no lark
+  integration and no grammar-driven string generator — this is a
+  Python-library integration (same rationale as the numpy / pandas /
+  django / crosshair skips).
