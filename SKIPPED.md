@@ -733,6 +733,15 @@ Individually-skipped tests (rest of the file is ported):
   integration — all via Hypothesis's pytest plugin output. hegel-rust is not a
   pytest plugin and has no `--show-statistics` CLI surface.
 
+- `test_collection_warning.py` (in `tests/pytest/`) — the single test drives the
+  `pytester` plugin (`pytester.runpytest_subprocess`) to spawn a pytest
+  subprocess and assert that the Hypothesis pytest plugin emits a warning
+  containing `"Skipping collection of '.hypothesis'"` when pytest tries to
+  collect tests from the `.hypothesis` directory. This is Hypothesis's
+  pytest-plugin `pytest_collectstart` hook behaviour; hegel-rust is not a
+  pytest plugin and has no `.hypothesis` collection surface, so the whole
+  concept has no counterpart.
+
 - `test_parametrized_db_keys.py` (in `tests/pytest/`) — the first test drives
   the `pytester` plugin (`testdir.makepyfile`/`testdir.runpytest`) to spawn a
   pytest subprocess and assert on `assert_outcomes(xfailed=3, passed=1)` for a
