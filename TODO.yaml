@@ -61,9 +61,13 @@
       Acceptance criteria:
         - Replace the `todo!()` bodies in `src/native/optimiser.rs` with a
           working `TargetedRunner` / `TargetedTestCase` / `BufferSizeLimit`.
-        - All 17 ported `tests/hypothesis/conjecture_optimiser.rs` tests
-          pass in `cargo test --features native --test hypothesis
-          conjecture_optimiser`.
+          (Done: initial minimal port landed. 16 of 17 ported tests pass.)
+        - Un-`#[ignore]` `test_targeting_can_drive_length_very_high` by
+          adding data-tree-backed `cached_test_function` semantics so that
+          repeated `extend="full"` calls with the same prefix return
+          distinct random tails over the 3-retry loop in
+          `Optimiser.attempt_replace`. Our current single-attempt variant
+          plateaus around 60-70 for this seed.
         - Port the upstream `test_optimising_all_nodes` `@given(nodes())`
           body and remove the corresponding individually-skipped entry
           from `SKIPPED.md` (requires porting the `nodes()` strategy and
