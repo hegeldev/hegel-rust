@@ -15,12 +15,35 @@
 //! fills in the attribute it touches. See
 //! `.claude/skills/porting-tests/SKILL.md` under "`test_engine.py`-shape"
 //! for the port path.
+//!
+//! Individually-ignored tests:
+//! - `test_one_dead_branch` — needs datatree-guided dead-branch
+//!   avoidance (novel-prefix generation) in
+//!   `NativeConjectureRunner`'s generation phase.  Without it, the
+//!   first-byte `> 0 → mark_invalid` predicate starves generation of
+//!   distinct second-byte values and `mark_interesting` never fires
+//!   within budget.  TODO entry in `TODO.yaml`.
 
 #![cfg(feature = "native")]
 
-use crate::common::utils::minimal;
+use crate::common::utils::{expect_panic, minimal};
+use hegel::__native_test_internals::{
+    ChoiceValue, NativeConjectureData, NativeConjectureRunner, NativeRunnerSettings,
+    interesting_origin, run_to_nodes,
+};
 use hegel::TestCase;
 use hegel::generators as gs;
+use rand::SeedableRng;
+use rand::rngs::SmallRng;
+use std::cell::RefCell;
+use std::rc::Rc;
+
+/// Label used by `test_variadic_draw`'s `start_span(SOME_LABEL)` calls.
+/// Mirrors `tests/conjecture/common.py::SOME_LABEL` which is
+/// `calc_label_from_name("some label")`.  The exact numeric value
+/// doesn't matter to the assertions — the spans only need to share a
+/// label.
+const SOME_LABEL: u64 = 1;
 
 // Port of the `@st.composite strategy(draw)` defined inline in
 // `test_can_shrink_variable_draws`. Draws a variable `n ∈ [0, 15]` and
@@ -138,4 +161,233 @@ fn test_mildly_complicated_strategies_unique_text_list() {
         gs::vecs(gs::text()).min_size(2).unique(true),
         |_: &Vec<String>| true,
     );
+}
+
+// -----------------------------------------------------------------------
+// `run_to_nodes` cluster.  Each of the tests below ports a
+// `test_engine.py` test that decorates its body with
+// `@run_to_nodes` and inspects the shrunk `data.nodes` — we go
+// through the `hegel::__native_test_internals::run_to_nodes` free
+// function that wraps a `NativeConjectureRunner`.
+// -----------------------------------------------------------------------
+
+fn node_bytes(v: &ChoiceValue) -> &[u8] {
+    match v {
+        ChoiceValue::Bytes(b) => b,
+        other => panic!("expected Bytes, got {other:?}"),
+    }
+}
+
+fn node_integer(v: &ChoiceValue) -> i128 {
+    match v {
+        ChoiceValue::Integer(n) => *n,
+        other => panic!("expected Integer, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_non_cloneable_intervals() {
+    let nodes = run_to_nodes(|data: &mut NativeConjectureData| {
+        data.draw_bytes(10, 10);
+        data.draw_bytes(9, 9);
+        data.mark_interesting(interesting_origin(None));
+    });
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(node_bytes(&nodes[0].value), vec![0u8; 10]);
+    assert_eq!(node_bytes(&nodes[1].value), vec![0u8; 9]);
+}
+
+#[test]
+fn test_deletable_draws() {
+    let nodes = run_to_nodes(|data: &mut NativeConjectureData| {
+        loop {
+            let x = data.draw_bytes(2, 2);
+            if x[0] == 255 {
+                data.mark_interesting(interesting_origin(None));
+            }
+        }
+    });
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(node_bytes(&nodes[0].value), vec![0xff, 0x00]);
+}
+
+#[test]
+fn test_variadic_draw() {
+    let nodes = run_to_nodes(|data: &mut NativeConjectureData| {
+        let mut all_nonzero_found = false;
+        loop {
+            data.start_span(SOME_LABEL);
+            let n = data.draw_integer(0, 2) as usize;
+            let drawn = if n > 0 {
+                Some(data.draw_bytes(n, n))
+            } else {
+                None
+            };
+            data.stop_span();
+            if let Some(bytes) = drawn {
+                if !bytes.is_empty() && bytes.iter().all(|&b| b != 0) {
+                    all_nonzero_found = true;
+                }
+            }
+            if n == 0 {
+                break;
+            }
+        }
+        if all_nonzero_found {
+            data.mark_interesting(interesting_origin(None));
+        }
+    });
+    assert_eq!(nodes.len(), 3);
+    assert_eq!(node_integer(&nodes[0].value), 1);
+    assert_eq!(node_bytes(&nodes[1].value), vec![0x01]);
+    assert_eq!(node_integer(&nodes[2].value), 0);
+}
+
+#[test]
+fn test_draw_to_overrun() {
+    let nodes = run_to_nodes(|data: &mut NativeConjectureData| {
+        let first = data.draw_bytes(1, 1);
+        let d = (first[0].wrapping_sub(8)) as usize;
+        data.draw_bytes(128 * d, 128 * d);
+        if d >= 2 {
+            data.mark_interesting(interesting_origin(None));
+        }
+    });
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(node_bytes(&nodes[0].value), vec![10u8]);
+    assert_eq!(node_bytes(&nodes[1].value), vec![0u8; 128 * 2]);
+}
+
+#[test]
+fn test_erratic_draws() {
+    // Mirrors `with pytest.raises(FlakyStrategyDefinition)`: the data
+    // generation produces a different schema on every call (different
+    // `min_size`/`max_size` on `draw_bytes`), so the runner's
+    // non-determinism check fires during generation.
+    let n = Rc::new(RefCell::new(0usize));
+    let n_clone = n.clone();
+    expect_panic(
+        std::panic::AssertUnwindSafe(move || {
+            run_to_nodes(move |data: &mut NativeConjectureData| {
+                let current = *n_clone.borrow();
+                data.draw_bytes(current, current);
+                let second = 255usize.saturating_sub(current);
+                data.draw_bytes(second, second);
+                if current == 255 {
+                    data.mark_interesting(interesting_origin(None));
+                } else {
+                    *n_clone.borrow_mut() += 1;
+                }
+            });
+        }),
+        "non-deterministic",
+    );
+}
+
+#[test]
+fn test_no_read_no_shrink() {
+    let count = Rc::new(RefCell::new(0u32));
+    let count_clone = count.clone();
+    let nodes = run_to_nodes(move |data: &mut NativeConjectureData| {
+        *count_clone.borrow_mut() += 1;
+        data.mark_interesting(interesting_origin(None));
+    });
+    assert!(nodes.is_empty());
+    assert_eq!(*count.borrow(), 1);
+}
+
+#[test]
+#[ignore = "requires datatree-guided dead-branch avoidance — see TODO.yaml"]
+fn test_one_dead_branch() {
+    let seen: Rc<RefCell<std::collections::HashSet<u8>>> =
+        Rc::new(RefCell::new(std::collections::HashSet::new()));
+    let seen_clone = seen.clone();
+    run_to_nodes(move |data: &mut NativeConjectureData| {
+        let i = data.draw_bytes(1, 1)[0];
+        if i > 0 {
+            data.mark_invalid();
+        }
+        let j = data.draw_bytes(1, 1)[0];
+        let mut seen_ref = seen_clone.borrow_mut();
+        if seen_ref.len() < 255 {
+            seen_ref.insert(j);
+        } else if !seen_ref.contains(&j) {
+            drop(seen_ref);
+            data.mark_interesting(interesting_origin(None));
+        }
+    });
+}
+
+#[test]
+fn test_returns_forced() {
+    let value: Vec<u8> = vec![0, 1, 2, 3];
+    let value_clone = value.clone();
+    let nodes = run_to_nodes(move |data: &mut NativeConjectureData| {
+        data.draw_bytes_forced(value_clone.len(), value_clone.len(), value_clone.clone());
+        data.mark_interesting(interesting_origin(None));
+    });
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(node_bytes(&nodes[0].value), value.as_slice());
+}
+
+#[test]
+fn test_run_nothing() {
+    // `phases=()` disables generation, reuse, and shrink.  The runner
+    // must exit without ever calling the test function.
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new().phases(Vec::new());
+    let mut runner = NativeConjectureRunner::new(
+        |_: &mut NativeConjectureData| {
+            panic!("AssertionError");
+        },
+        settings,
+        rng,
+    );
+    runner.run();
+    assert_eq!(runner.call_count, 0);
+}
+
+#[test]
+fn test_interleaving_engines() {
+    // The outer test's `g` callback calls `outer.mark_interesting(...)`
+    // from inside a nested `NativeConjectureRunner`.  The only way to
+    // reach the outer data from a `'static` inner closure is via a
+    // raw pointer captured by value; the outer data is guaranteed to
+    // outlive every call to `g` because the inner runner runs entirely
+    // inside the outer test function's body.
+    let children_interesting: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
+    let children_ref = children_interesting.clone();
+
+    let nodes = run_to_nodes(move |data: &mut NativeConjectureData| {
+        let seed_bytes = data.draw_bytes(1, 1);
+        let mut seed = 0u64;
+        for &b in &seed_bytes {
+            seed = seed.wrapping_mul(256).wrapping_add(u64::from(b));
+        }
+
+        let outer_ptr: *mut NativeConjectureData = data as *mut _;
+        let g = move |d2: &mut NativeConjectureData| {
+            d2.draw_bytes(1, 1);
+            // Safety: `outer_ptr` points to the outer
+            // `NativeConjectureData`, which is live for the entire
+            // execution of the outer test function.  The inner
+            // runner's `run()` is called from within that function,
+            // so every invocation of `g` happens while the outer
+            // data is still on the stack above us.
+            unsafe { (*outer_ptr).mark_interesting(interesting_origin(None)) };
+        };
+
+        let rng = SmallRng::seed_from_u64(seed);
+        let mut runner = NativeConjectureRunner::new(g, NativeRunnerSettings::new(), rng);
+        runner.run();
+        let had_interesting = !runner.interesting_examples.is_empty();
+        children_ref.borrow_mut().push(had_interesting);
+
+        if had_interesting {
+            data.mark_interesting(interesting_origin(None));
+        }
+    });
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(node_bytes(&nodes[0].value), vec![0u8]);
+    assert!(children_interesting.borrow().iter().all(|b| !b));
 }
