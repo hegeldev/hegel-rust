@@ -843,6 +843,15 @@ Individually-skipped tests (rest of the file is ported):
   injection surface — the whole file is pytest-plugin integration with
   no hegel-rust counterpart.
 
+- `test_mark.py` (in `tests/pytest/`) — port abandoned after a
+  parallel port-loop worker's port could not be cherry-picked onto the
+  supervisor branch due to a SKIPPED.md merge conflict; the file drives
+  the `testdir`/`pytester` plugin to assert pytest's `-m hypothesis`
+  marker filter (via the automatic `@pytest.mark.hypothesis` marker
+  Hypothesis's pytest plugin adds to `@given` tests) deselects
+  non-hypothesis tests, which is pytest-plugin integration with no
+  hegel-rust counterpart.
+
 - `test_sideeffect_warnings.py` — all tests exercise Hypothesis's Python-specific
   import-time initialization infrastructure: `_hypothesis_globals.in_initialization`
   (a Python module attribute tracking import phase), `hypothesis.configuration`
