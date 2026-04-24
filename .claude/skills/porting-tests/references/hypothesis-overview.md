@@ -18,6 +18,13 @@ Tests live under `hypothesis-python/tests/`:
   port into `tests/test_shrink_quality/` when the pattern overlaps.
 - `nocover/` — tests that are intentionally excluded from Hypothesis's
   own coverage measurement. Port judgmentally.
+- `pytest/` — tests for Hypothesis's pytest plugin (conftest hooks,
+  fixture ordering, `capsys`-based output capture, subprocess-invoked
+  pytest runs). Most skip with "pytest plugin integration — hegel-rust
+  has no pytest plugin" rationale. Occasional files here are just
+  generic `@given` / `@fails` smoke tests that happen to live in this
+  directory (e.g. `test_runs.py`) — those port trivially. Read each
+  file before deciding; don't bulk-skip the directory.
 - Python-specific dirs (`django/`, `numpy/`, `pandas/`, `attrs/`, …) —
   **skip** unless the dependency has a Rust analogue, which it usually
   doesn't.
