@@ -1742,6 +1742,19 @@ Individually-skipped tests (rest of the file is ported):
   Array API integration or counterpart for array-shape-aware indexer
   generation tied to an external array module.
 
+- `test_partial_adoptors.py` (in `tests/array_api/`) — array-api-extra
+  integration tests. Every test builds a mock array-module via
+  `copy(hypothesis.extra.array_api.mock_xp)` with attributes selectively
+  removed, then passes it to
+  `hypothesis.extra.array_api.make_strategies_namespace(xp, api_version=...)`
+  and asserts on the resulting `HypothesisWarning` / `InvalidArgument`
+  behaviour of `xps.from_dtype`, `xps.arrays`, `xps.scalar_dtypes`,
+  `xps.numeric_dtypes`, `xps.integer_dtypes`, `xps.unsigned_integer_dtypes`,
+  `xps.floating_dtypes`, `xps.real_dtypes`, `xps.complex_dtypes` against
+  a partially-adopting Array API namespace. hegel-rust has no Array API
+  integration or counterpart for strategy-namespace construction over an
+  external array module.
+
 - `test_gen_data.py` (in `tests/numpy/`) — numpy-extra integration tests.
   Every test exercises `hypothesis.extra.numpy` (`nps.arrays`,
   `nps.array_shapes`, `nps.broadcastable_shapes`, `nps.from_dtype`,
