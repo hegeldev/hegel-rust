@@ -1904,6 +1904,16 @@ Individually-skipped tests (rest of the file is ported):
   tzinfo concept, and hegel-rust has no `dateutil` integration or
   counterpart for zoneinfo-backed timezone-aware datetime generation.
 
+- `test_zoneinfo_timezones.py` (in `tests/datetime/`) — zoneinfo-backed
+  timezone tests. Every test exercises `st.timezones()` (which yields
+  `zoneinfo.ZoneInfo` instances), `st.timezone_keys()` (with the
+  `allow_prefix` argument), and `st.datetimes(..., timezones=...)` for
+  timezone-aware `datetime` values, plus Python's stdlib `zoneinfo`
+  module and `InvalidArgument` validation on `.validate()`. hegel-rust's
+  `gs::datetimes()` produces plain ISO 8601 strings with no `timezones`
+  parameter and no tzinfo concept, and has no `timezones()` /
+  `timezone_keys()` generator counterpart.
+
 - `test_given_models.py` (in `tests/django/toystore/`) — django-extra
   integration tests. Every test exercises `hypothesis.extra.django`
   (`from_model`, `register_field_strategy`, `TestCase`,
