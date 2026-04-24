@@ -517,6 +517,17 @@ verify it's still interesting), then `Shrinker::new(test_fn, ntc.nodes)
 .shrink()` it. To find leaf-node indices to splice at, walk
 `shrunk_nodes` filtering on `ChoiceKind::Integer(k) if k.max_value == …`.
 
+**Assertions on the shrunk *generated value*, not the seed.** If the
+upstream test asserts on a property of the generated value after
+shrinking (e.g. `assert len(tree) == size`, "the shrunk tree has exactly
+the minimum leaves"), the equivalent in a hand-seeded port is to replay
+the shrunk choices through your `draw_*` function and assert on *that*:
+`NativeTestCase::for_choices(&values_of(&shrinker.current_nodes), None)`
+then re-run the draw. Do **not** apply the assertion to the initial
+hand-seeded draw — by construction the seed already satisfies the
+shape, so the assertion is tautological and silently stops being a
+regression check.
+
 **Recursive `SearchStrategy.do_draw` → iterative pre-order traversal.**
 Python lets `do_draw` call `data.draw(self) + data.draw(self)` recursively,
 but a Rust port can't nest `ntc.draw_*` calls inside a closure that holds
