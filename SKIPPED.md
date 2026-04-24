@@ -1940,3 +1940,11 @@ Individually-skipped tests (rest of the file is ported):
   `src/runner.rs`, and `tests/test_native.rs` (worker branched before
   the native backend feature landed). Skipping pending human review of
   the stashed worker branch.
+
+- `test_sets.py` (in `nocover/`) — parallel port-loop worker produced a
+  port on `port/worker-1`, but cherry-picking onto the supervisor branch
+  failed with conflicts across `Cargo.toml`, `src/lib.rs`,
+  `src/native/mod.rs`, `src/native/runner.rs`, `src/runner.rs`, and
+  `tests/test_native.rs` (worker branched before the native backend
+  feature landed). Skipping pending human review of the stashed worker
+  branch.
