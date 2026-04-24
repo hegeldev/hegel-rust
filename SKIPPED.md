@@ -1284,6 +1284,36 @@ Individually-skipped tests (rest of the file is ported):
   the `BaseException` trigger and the pytest-runtime output surface are
   Python-specific.
 
+- `nocover/test_conjecture_engine.py::test_saves_data_while_shrinking`,
+  `nocover/test_conjecture_engine.py::test_can_discard` — both
+  `monkeypatch.setattr(ConjectureRunner, "generate_new_examples",
+  ...)` to seed a specific starting buffer (`[bytes([255] * 10)]` /
+  `n` pairs of byte-choices respectively). No public
+  seed-a-specific-initial-buffer entry point on the native engine;
+  `NativeDatabase::save` only primes database replay (full serialised
+  choice sequences), which isn't the same hook. `test_saves_data_while_shrinking`
+  additionally depends on `choices_from_bytes` +
+  `non_covering_examples(db)`, both tied to Hypothesis's database
+  metakey layout. Rest of the file ported in
+  `tests/hypothesis/nocover_conjecture_engine.rs`.
+- `nocover/test_conjecture_engine.py::test_cached_with_masked_byte_agrees_with_results`
+  — uses `runner.cached_test_function([a])`,
+  `ConjectureData.for_choices([b], observer=runner.tree.new_observer())`,
+  and `runner.test_function(data_b)` to compare cache identity
+  (`cached_a is cached_b`) with node-sequence equality. Native
+  `TargetedRunner::cached_test_function` returns a fresh
+  `CachedTestResult { status }` each call with no `nodes` field and
+  no identity semantics, and `CachedTestFunction` takes no pluggable
+  observer. Rest of the file ported.
+- `nocover/test_conjecture_engine.py::test_node_programs_fail_efficiently`
+  — fixates on `shrinker.node_program("XX")` and asserts
+  `Shrinker.run_node_program.calls` via `counts_calls`. The
+  `node_program` deletion pass is absent from the native shrinker
+  (same gap as the block of `node_program` tests already
+  individually-skipped in `tests/hypothesis/conjecture_shrinker.rs`),
+  and there is no `max_stall` / `fixate_shrink_passes` /
+  call-counter surface on `Shrinker`. Rest of the file ported.
+
 - `test_exceptiongroup.py` — every test raises a Python PEP 654
   `ExceptionGroup` / `BaseExceptionGroup` (Python 3.11+ built-in) from a
   `@given`-decorated function to pin down how Hypothesis unwraps groups
