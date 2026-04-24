@@ -206,6 +206,27 @@ For tests that only use the public generator API (`gs::integers`,
 `gs::vecs`, `Hegel::new(...).run()`, etc.) — just port them. No
 native-gating, no stubs.
 
+### Port — server-only (`#[cfg(not(feature = "native"))]`)
+
+The mirror image of native-gating: a test uses only the public API
+but passes only against the Python server, because the native backend
+is less sophisticated on a specific point. Don't skip these — gate them
+with `#[cfg(not(feature = "native"))]` and name the native-backend gap
+concretely in the module docstring. Known gap categories:
+
+| Gap | Symptom | Example |
+|-----|---------|---------|
+| Different shrink target | `minimal()` converges on a different value than Hypothesis does | `test_simplifies_towards_millenium` in `tests/hypothesis/datetimes.rs` (Python → 2000-01-01, native → 1970-01-01) |
+| Missing input validation | Invalid constraint combos that Hypothesis rejects with `InvalidArgument` run silently in native | the `InvalidArgument` cluster in `tests/hypothesis/float_nastiness.rs` |
+| Missing engine-internal pruning / bias | `Hegel::new(...).run()` can't navigate a dense `assume`-reject tree that Hypothesis's `DataTree` novel-prefix walk finds | `test_lot_of_dead_nodes` in `tests/hypothesis/nocover_conjecture_engine.rs` (one-in-128⁴ witness unreachable from `NativeTestCase::new_random`) |
+
+Only use this gate when the test body itself is public-API-only. If it
+reaches into Python-specific engine internals
+(`ConjectureRunner.generate_new_examples`, `tree.new_observer`,
+`cached_test_function` identity, `Shrinker.run_node_program` call
+counters, etc.), it's an individual skip per the policy below — not a
+server-only gate.
+
 ### Skipping individual tests within an otherwise-ported file
 
 Occasionally one test (or one parametrize row) in an otherwise
