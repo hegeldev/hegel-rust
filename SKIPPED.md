@@ -2190,16 +2190,22 @@ is acceptance for the corresponding follow-up.
   corpus-replay phase (`reuse_existing_examples` / `save_choices`).
   `NativeConjectureRunner` has stubs for these; the database-replay
   follow-up TODO fills them in.
-- `conjecture/test_engine.py::test_detects_flakiness`,
-  `::test_recursion_error_is_not_flaky`,
-  `::test_exit_because_max_iterations`,
-  `::test_max_iterations_with_all_invalid`,
-  `::test_max_iterations_with_some_valid`,
-  `::test_exit_because_shrink_phase_timeout` — each asserts on
-  `runner.exit_reason` values (`flaky`, `max_iterations`,
-  `very_slow_shrinking`) or on `runner.statistics` that the current
-  `NativeConjectureRunner::run()` doesn't set — it unconditionally
-  exits with `ExitReason::Finished`.
+- `conjecture/test_engine.py::test_recursion_error_is_not_flaky` —
+  relies on CPython's `RecursionError` stack-depth tricks and
+  `hypothesis.internal.compat.ensure_free_stackframes` to probe a
+  specific interaction between Python's recursion limit and the
+  engine's flakiness detector. Rust has no equivalent surface: the
+  test upstream is itself skipped under PyPy and under coverage
+  instrumentation, and the native-engine port has no reason to
+  simulate the RecursionError shape (native `run_test_fn` catches
+  `MarkPanic` / `STOP_TEST_PANIC` sentinels and resumes unwinding on
+  anything else, which is the right behaviour). The other five tests
+  in this cluster (`test_detects_flakiness`,
+  `test_exit_because_max_iterations`,
+  `test_max_iterations_with_all_invalid`,
+  `test_max_iterations_with_some_valid`,
+  `test_exit_because_shrink_phase_timeout`) are ported in
+  `tests/hypothesis/conjecture_engine.rs`.
 - `conjecture/test_engine.py::test_does_not_shrink_multiple_bugs_when_told_not_to`,
   `::test_does_not_keep_generating_when_multiple_bugs`,
   `::test_shrink_after_max_examples`, `::test_shrink_after_max_iterations`,

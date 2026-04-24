@@ -217,6 +217,27 @@ const STOP_TEST_PANIC: &str = "__hegel_conjecture_stop_test__";
 /// candidate that in Hypothesis would Overrun.
 const CONJECTURE_BUFFER_SIZE: usize = 8 * 1024;
 
+/// Minimum number of test calls before the generation phase is
+/// allowed to stop after finding an interesting example.  Mirrors
+/// `engine.py::MIN_TEST_CALLS`.
+const MIN_TEST_CALLS: usize = 10;
+
+/// Base invalid-call budget before the generation phase exits with
+/// `MaxIterations`.  Derived in `engine.py` from
+/// `_invalid_thresholds(r=0.01, c=0.99)` — stop once we're 99%
+/// confident the true valid rate is below 1%.  Hard-coded here to
+/// match the Python value exactly (the `test_max_iterations_with_*`
+/// tests assert on the exact call count).
+const INVALID_THRESHOLD_BASE: usize = 458;
+
+/// Per-valid-example increment to the invalid-call budget.  From the
+/// same `_invalid_thresholds(r=0.01, c=0.99)` formula in `engine.py`.
+const INVALID_PER_VALID: usize = 100;
+
+/// Wall-clock budget for the shrink phase, in seconds.  Mirrors
+/// `engine.py::MAX_SHRINKING_SECONDS` (5 minutes).
+const MAX_SHRINKING_SECONDS: f64 = 5.0 * 60.0;
+
 /// Kind of mark recorded on a `NativeConjectureData`.  Either
 /// `Interesting` (the test function called `mark_interesting`) or
 /// `Invalid` (the test function called `mark_invalid`, signalling that
@@ -694,6 +715,12 @@ pub struct NativeConjectureRunner {
     #[allow(dead_code)]
     rng: SmallRng,
     database_key: Option<Vec<u8>>,
+    /// Monotonic clock used for the shrink-phase wall-clock budget,
+    /// in seconds.  Defaults to `Instant::now()`-derived elapsed time;
+    /// tests override via [`NativeConjectureRunner::with_time_source`]
+    /// to simulate a mocked clock (mirrors Python's
+    /// `monkeypatch.setattr(time, "perf_counter", ...)` pattern).
+    time_source: Box<dyn FnMut() -> f64>,
 
     /// Externally-visible bookkeeping.  `run()` populates these; tests
     /// read them back.  All `todo!()` accessors lift from here once the
@@ -703,6 +730,8 @@ pub struct NativeConjectureRunner {
     pub shrinks: usize,
     pub call_count: usize,
     pub valid_examples: usize,
+    pub invalid_examples: usize,
+    pub overrun_examples: usize,
     pub statistics: HashMap<String, String>,
     /// When true, `run()` keeps generating past `max_examples` /
     /// `max_iterations`.  Mirrors `runner.ignore_limits`; flipped by
@@ -715,16 +744,20 @@ impl NativeConjectureRunner {
     where
         F: FnMut(&mut NativeConjectureData) + 'static,
     {
+        let start = std::time::Instant::now();
         NativeConjectureRunner {
             test_fn: Box::new(test_fn),
             settings,
             rng,
             database_key: None,
+            time_source: Box::new(move || start.elapsed().as_secs_f64()),
             interesting_examples: HashMap::new(),
             exit_reason: None,
             shrinks: 0,
             call_count: 0,
             valid_examples: 0,
+            invalid_examples: 0,
+            overrun_examples: 0,
             statistics: HashMap::new(),
             ignore_limits: false,
         }
@@ -735,9 +768,38 @@ impl NativeConjectureRunner {
         self
     }
 
+    /// Replace the runner's clock.  The callback returns the elapsed
+    /// time in seconds; it is called at the start of the shrink phase
+    /// to set the deadline, then once per re-validated interesting
+    /// example and once per origin-shrink iteration.  Mirrors the
+    /// `monkeypatch.setattr(time, "perf_counter", ...)` pattern used
+    /// by `test_exit_because_shrink_phase_timeout`.
+    pub fn with_time_source<F>(mut self, f: F) -> Self
+    where
+        F: FnMut() -> f64 + 'static,
+    {
+        self.time_source = Box::new(f);
+        self
+    }
+
+    /// Mirror of `engine.py::should_generate_more`.  Before an
+    /// interesting example is found the in-loop termination check at
+    /// the bottom of `run()` handles max-examples / max-iterations
+    /// exits; this helper only controls the post-bug continuation
+    /// window (up to `MIN_TEST_CALLS`) that lets flakiness detection
+    /// land.  With shrinking disabled there's no flakiness detection
+    /// path, so stop at the first interesting example.
+    fn should_generate_more(&self, do_shrink: bool) -> bool {
+        if self.interesting_examples.is_empty() {
+            return true;
+        }
+        do_shrink && self.call_count < MIN_TEST_CALLS
+    }
+
     /// Main entry point.  Runs the generation + shrink phases to
     /// completion and populates `interesting_examples` / `exit_reason`
-    /// / `shrinks` / `call_count` / `valid_examples`.
+    /// / `shrinks` / `call_count` / `valid_examples` / `invalid_examples`
+    /// / `overrun_examples` / `statistics`.
     pub fn run(&mut self) {
         let phases = self
             .settings
@@ -747,17 +809,22 @@ impl NativeConjectureRunner {
         let do_generate = phases.contains(&Phase::Generate);
         let do_shrink = phases.contains(&Phase::Shrink);
 
-        let max_examples = self.settings.max_examples;
-        let max_calls = max_examples.saturating_mul(10);
-
         // --- Generation phase ---
         if do_generate {
             let mut tree_root = DataTreeNode::default();
-            while self.call_count < max_calls
-                && self.valid_examples < max_examples
-                && self.interesting_examples.is_empty()
-                && !tree_root.is_exhausted
-            {
+            loop {
+                // Mirrors engine.py line 744: `exit_with(Finished)` when
+                // the tree has no novel prefixes left.  Handled here as a
+                // break so the shrink phase is skipped entirely, matching
+                // Python's `RunIsComplete` unwind.
+                if tree_root.is_exhausted {
+                    self.exit_reason = Some(ExitReason::Finished);
+                    break;
+                }
+                if !self.should_generate_more(do_shrink) {
+                    break;
+                }
+
                 let mut batch_rng = SmallRng::from_rng(&mut self.rng);
                 let prefix = generate_novel_prefix(&tree_root, &mut batch_rng);
                 let ntc = NativeTestCase::for_probe(&prefix, batch_rng, CONJECTURE_BUFFER_SIZE);
@@ -768,67 +835,137 @@ impl NativeConjectureRunner {
                 // exhaustion bookkeeping for the next novel-prefix walk.
                 record_tree(&mut tree_root, &nodes, status);
 
-                if status >= Status::Valid {
-                    self.valid_examples += 1;
+                match status {
+                    Status::Valid => self.valid_examples += 1,
+                    Status::Invalid => self.invalid_examples += 1,
+                    Status::EarlyStop => self.overrun_examples += 1,
+                    Status::Interesting => {
+                        let origin = origin.expect("Interesting status carries an origin");
+                        let choices: Vec<ChoiceValue> =
+                            nodes.iter().map(|n| n.value.clone()).collect();
+                        self.interesting_examples.entry(origin.clone()).or_insert(
+                            InterestingExample {
+                                nodes,
+                                choices,
+                                origin,
+                            },
+                        );
+                    }
                 }
 
-                if status == Status::Interesting {
-                    let origin = origin.expect("Interesting status carries an origin");
-                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
-                    self.interesting_examples
-                        .entry(origin.clone())
-                        .or_insert(InterestingExample {
-                            nodes,
-                            choices,
-                            origin,
-                        });
+                // Termination checks only apply while we have no interesting
+                // examples — if we've found a bug we want to proceed to the
+                // shrink phase rather than exit outright.  Mirrors engine.py
+                // lines 732-742.
+                if self.interesting_examples.is_empty() {
+                    let max_examples = self.settings.max_examples;
+                    if self.valid_examples >= max_examples {
+                        self.exit_reason = Some(ExitReason::MaxExamples);
+                        self.statistics.insert(
+                            "stopped-because".into(),
+                            format!("settings.max_examples={max_examples}"),
+                        );
+                        break;
+                    }
+                    let invalid_threshold =
+                        INVALID_THRESHOLD_BASE + INVALID_PER_VALID * self.valid_examples;
+                    if self.invalid_examples + self.overrun_examples > invalid_threshold {
+                        self.exit_reason = Some(ExitReason::MaxIterations);
+                        self.statistics.insert(
+                            "stopped-because".into(),
+                            format!(
+                                "settings.max_examples={max_examples}, \
+                                 but < 1% of examples satisfied assumptions"
+                            ),
+                        );
+                        break;
+                    }
                 }
             }
         }
 
         // --- Shrink phase ---
-        if do_shrink {
+        if do_shrink && self.exit_reason.is_none() && !self.interesting_examples.is_empty() {
+            let deadline = (self.time_source)() + MAX_SHRINKING_SECONDS;
             let origins: Vec<InterestingOrigin> =
                 self.interesting_examples.keys().cloned().collect();
-            for origin in origins {
-                let initial = self.interesting_examples[&origin].nodes.clone();
-                // Nothing to shrink if no choices were recorded (e.g.
-                // `test_no_read_no_shrink`).
-                if initial.is_empty() {
-                    continue;
+            let mut done = false;
+
+            // Re-validation pass: mirrors `shrink_interesting_examples`
+            // lines 1588-1595.  Each re-run checks the deadline at the
+            // bottom (engine.py's test_function postscript, lines 716-730)
+            // and then the Flaky-when-not-interesting check
+            // (line 1594-1595).  Deadline takes priority over flakiness,
+            // matching Python's call order.
+            for origin in &origins {
+                let initial = self.interesting_examples[origin].nodes.clone();
+                let choices: Vec<ChoiceValue> =
+                    initial.iter().map(|n| n.value.clone()).collect();
+                let ntc = NativeTestCase::for_choices(&choices, Some(&initial));
+                let (status, _, _) = run_test_fn(&mut self.test_fn, ntc);
+                self.call_count += 1;
+
+                if (self.time_source)() > deadline {
+                    self.exit_reason = Some(ExitReason::VerySlowShrinking);
+                    self.statistics
+                        .insert("stopped-because".into(), "shrinking was very slow".into());
+                    done = true;
+                    break;
                 }
 
-                let test_fn = &mut self.test_fn;
-                let call_count = &mut self.call_count;
-                let shrunk = {
-                    let mut shrinker = Shrinker::new(
-                        Box::new(|candidate: &[ChoiceNode]| {
-                            *call_count += 1;
-                            let choices: Vec<ChoiceValue> =
-                                candidate.iter().map(|n| n.value.clone()).collect();
-                            let ntc = NativeTestCase::for_choices(&choices, Some(candidate));
-                            let (status, actual_nodes, _) = run_test_fn(test_fn, ntc);
-                            (status == Status::Interesting, actual_nodes)
-                        }),
-                        initial,
-                    );
-                    shrinker.shrink();
-                    shrinker.current_nodes
-                };
+                if status != Status::Interesting {
+                    self.exit_reason = Some(ExitReason::Flaky);
+                    self.statistics
+                        .insert("stopped-because".into(), "test was flaky".into());
+                    done = true;
+                    break;
+                }
+            }
 
-                let choices: Vec<ChoiceValue> = shrunk.iter().map(|n| n.value.clone()).collect();
-                self.interesting_examples.insert(
-                    origin.clone(),
-                    InterestingExample {
-                        nodes: shrunk,
-                        choices,
-                        origin,
-                    },
-                );
+            if !done {
+                for origin in origins {
+                    let initial = self.interesting_examples[&origin].nodes.clone();
+                    // Nothing to shrink if no choices were recorded (e.g.
+                    // `test_no_read_no_shrink`).
+                    if initial.is_empty() {
+                        continue;
+                    }
+
+                    let test_fn = &mut self.test_fn;
+                    let call_count = &mut self.call_count;
+                    let shrunk = {
+                        let mut shrinker = Shrinker::new(
+                            Box::new(|candidate: &[ChoiceNode]| {
+                                *call_count += 1;
+                                let choices: Vec<ChoiceValue> =
+                                    candidate.iter().map(|n| n.value.clone()).collect();
+                                let ntc = NativeTestCase::for_choices(&choices, Some(candidate));
+                                let (status, actual_nodes, _) = run_test_fn(test_fn, ntc);
+                                (status == Status::Interesting, actual_nodes)
+                            }),
+                            initial,
+                        );
+                        shrinker.shrink();
+                        shrinker.current_nodes
+                    };
+
+                    let choices: Vec<ChoiceValue> =
+                        shrunk.iter().map(|n| n.value.clone()).collect();
+                    self.interesting_examples.insert(
+                        origin.clone(),
+                        InterestingExample {
+                            nodes: shrunk,
+                            choices,
+                            origin,
+                        },
+                    );
+                }
             }
         }
 
-        self.exit_reason = Some(ExitReason::Finished);
+        if self.exit_reason.is_none() {
+            self.exit_reason = Some(ExitReason::Finished);
+        }
     }
 
     /// Run only the shrink phase against an already-populated
