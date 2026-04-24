@@ -1784,6 +1784,21 @@ Individually-skipped tests (rest of the file is ported):
   `draw_integer(min, max)` accepts neither). The remaining `@example`
   rows (`boolean`, `float`) are ported.
 
+- `conjecture/test_provider_contract.py::test_provider_contract_bytestring`
+  — drives a `ConjectureData` via `BytestringProvider` (feeds raw bytes
+  to power the draws). No `src/native/` counterpart: native's
+  prefix-based constructor `NativeTestCase::for_choices` takes concrete
+  `ChoiceValue`s, not a byte string, and there is no pluggable-provider
+  surface. The `HypothesisProvider` contract (`draw_*(constraints)` →
+  value satisfies `choice_permitted(value, constraints)`) is ported
+  in `tests/hypothesis/conjecture_provider_contract.rs`.
+- `conjecture/test_provider_contract.py::test_provider_contract[URandomProvider]`
+  — the `URandomProvider` parametrize row reads bytes from
+  `/dev/urandom` to drive draws. No `src/native/` counterpart
+  (no pluggable-provider surface, and no urandom-backed
+  `NativeTestCase` constructor). The `HypothesisProvider` row is
+  ported.
+
 - `conjecture/test_choice.py::test_compute_max_children_and_all_children_agree`,
   `::test_compute_max_children_unbounded_integer_ranges`,
   `::test_all_children_are_permitted_values`,
