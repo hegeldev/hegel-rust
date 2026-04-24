@@ -512,6 +512,73 @@ fn shrink_floats_mantissa_reduction_converges() {
     assert!(x + (y - x) != y);
 }
 
+#[test]
+fn shrink_floats_step5_tolerates_subnormal_start() {
+    // Subnormals overflow `as_integer_ratio` (2^1074 denominator). Step 5
+    // must take the `None` branch and leave the value in place rather than
+    // panic or corrupt current_nodes.
+    let subnormal = f64::from_bits(1);
+    let fc = FloatChoice {
+        min_value: 0.0,
+        max_value: subnormal,
+        allow_nan: false,
+        allow_infinity: false,
+    };
+    let nodes = vec![float_node(fc, subnormal)];
+    let mut shrinker = Shrinker::new(
+        Box::new(move |n: &[ChoiceNode]| {
+            let ChoiceValue::Float(f) = n[0].value else {
+                unreachable!()
+            };
+            (f == subnormal, n.to_vec())
+        }),
+        nodes,
+    );
+    shrinker.shrink_floats();
+    assert_eq!(float_at(&shrinker.current_nodes, 0), subnormal);
+}
+
+#[test]
+fn as_integer_ratio_exact_integer() {
+    // Normal range, exp >= 0: reproduces `(m, 1)` for integer floats.
+    use super::floats::as_integer_ratio;
+    assert_eq!(as_integer_ratio(1.0), Some((1, 1)));
+    assert_eq!(as_integer_ratio(1024.0), Some((1024, 1)));
+    assert_eq!(as_integer_ratio(3.0), Some((3, 1)));
+}
+
+#[test]
+fn as_integer_ratio_simple_fraction() {
+    // Normal range, exp < 0: reproduces Python's `Fraction.from_float`.
+    use super::floats::as_integer_ratio;
+    assert_eq!(as_integer_ratio(2.5), Some((5, 2)));
+    assert_eq!(as_integer_ratio(1.5), Some((3, 2)));
+    assert_eq!(as_integer_ratio(0.5), Some((1, 2)));
+    assert_eq!(as_integer_ratio(0.75), Some((3, 4)));
+}
+
+#[test]
+fn as_integer_ratio_rejects_subnormal() {
+    // Subnormals have biased_exp == 0, forcing exp = -1074 and a
+    // 2^1074 denominator that overflows u128.
+    use super::floats::as_integer_ratio;
+    assert_eq!(as_integer_ratio(f64::MIN_POSITIVE / 2.0), None);
+    assert_eq!(
+        as_integer_ratio(f64::from_bits(1)),
+        None,
+        "smallest subnormal overflows the denominator"
+    );
+}
+
+#[test]
+fn as_integer_ratio_rejects_huge_normal() {
+    // Large normals with exp > 127 - log2(num) overflow the numerator.
+    use super::floats::as_integer_ratio;
+    assert_eq!(as_integer_ratio(f64::MAX), None);
+    // 2^200 is representable as f64 but (1 << 200) overflows u128.
+    assert_eq!(as_integer_ratio(2f64.powi(200)), None);
+}
+
 // ── sort_values / swap_adjacent_blocks ──────────────────────────────────────
 
 fn int_node(min: i128, max: i128, value: i128) -> ChoiceNode {
