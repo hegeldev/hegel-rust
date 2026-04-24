@@ -338,9 +338,24 @@ fn test_can_shrink_downwards_inf_2() {
 }
 
 #[test]
-#[ignore = "shrinker can't step from inf to f64::MAX — tracked in TODO.yaml (shrink-inf-to-max)"]
 fn test_can_shrink_downwards_inf_max() {
     shrink_downward_case(f64::INFINITY, f64::MAX);
+}
+
+#[test]
+fn test_can_shrink_upwards_neg_inf_to_neg_max() {
+    // Mirror of inf→MAX for the negative side: the shrinker's special-value
+    // step should step -inf down to -f64::MAX when +inf is rejected. Rules
+    // out a regression where the -inf branch silently stops replacing once
+    // -inf → +inf fails.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    let cond = |x: f64| !(x > -f64::MAX);
+    let result = minimal_from(f64::NEG_INFINITY, cond, FloatConstr::default());
+    assert_eq!(
+        result.to_bits(),
+        (-f64::MAX).to_bits(),
+        "shrink from -inf with condition !(x > -MAX) should yield -f64::MAX, got {result}"
+    );
 }
 
 #[test]

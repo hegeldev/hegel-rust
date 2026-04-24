@@ -11,8 +11,12 @@ impl<'a> Shrinker<'a> {
     ///
     /// Steps per float node:
     /// 1. Try replacing with simplest().
-    /// 2. If sign-negative, try negating (positive is simpler).
-    /// 3. Binary search on absolute-value lex index from 0 toward current value.
+    /// 2. From ±inf, try ±f64::MAX (and -inf → +inf). Needed because the
+    ///    later integer search saturates well below f64::MAX (i128::MAX as
+    ///    f64 ≪ f64::MAX) and the lex-index bisection never lands on MAX's
+    ///    all-ones mantissa.
+    /// 3. If sign-negative, try negating (positive is simpler).
+    /// 4. Binary search on absolute-value lex index from 0 toward current value.
     ///    Searching from 0 ensures we can find "nice" integer floats (like 2.0)
     ///    even when they have smaller lex indices than the boundary values.
     pub(super) fn shrink_floats(&mut self) {
@@ -31,13 +35,29 @@ impl<'a> Shrinker<'a> {
 
                 let v = self.float_at(i);
 
+                // Step 2: Special-value transitions out of ±inf.
+                if v.is_infinite() {
+                    if v < 0.0 && fc.validate(f64::INFINITY) {
+                        self.replace(&HashMap::from([(i, ChoiceValue::Float(f64::INFINITY))]));
+                    }
+                    let v = self.float_at(i);
+                    if v.is_infinite() {
+                        let cand = if v > 0.0 { f64::MAX } else { -f64::MAX };
+                        if fc.validate(cand) {
+                            self.replace(&HashMap::from([(i, ChoiceValue::Float(cand))]));
+                        }
+                    }
+                }
+
+                let v = self.float_at(i);
+
                 // Skip NaN — can't binary search on NaN.
                 if v.is_nan() {
                     i += 1;
                     continue;
                 }
 
-                // Step 2: Try negating if sign-negative (positive is simpler).
+                // Step 3: Try negating if sign-negative (positive is simpler).
                 if v.is_sign_negative() {
                     let neg = -v;
                     if fc.validate(neg) {
@@ -50,7 +70,7 @@ impl<'a> Shrinker<'a> {
                 // (finite non-NaN) value in place.
                 let v = self.float_at(i);
 
-                // Step 3a: When current is a non-integer, explicitly search the
+                // Step 4a: When current is a non-integer, explicitly search the
                 // integer-float range.  In our ordering, integer floats 0, 1, 2, …
                 // have indices 0, 1, 2, … (much smaller than any non-integer).
                 // The existing binary search below misses them because it jumps
@@ -94,7 +114,7 @@ impl<'a> Shrinker<'a> {
                     }
                 }
 
-                // Step 3b: Binary search on absolute-value lex index toward 0.
+                // Step 4b: Binary search on absolute-value lex index toward 0.
                 // Integer replacement above only produces finite non-NaN values.
                 let v = self.float_at(i);
                 let v_abs = v.abs();
