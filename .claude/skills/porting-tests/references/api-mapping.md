@@ -492,6 +492,50 @@ choice list that exercises the same body path and passes it to
 (seeded `(1, 0)` plus `has_discards = true` to reproduce a discarded
 first iteration).
 
+### Quality tests that inspect or splice choice sequences
+
+`tests/quality/` files that run `ConjectureRunner.generate_new_examples()`
++ `shrink_interesting_examples()` and then read `data.choices` /
+`data.nodes` (rather than just asserting on a generated value) port
+through the same `Shrinker::new(...).shrink()` shape as `@shrinking_from`,
+skipping the generate phase. Hand-seed a deterministic initial choice
+sequence that exercises the body, shrink it, and assert on
+`shrinker.current_nodes`. Use `Minimal` only when the test asserts on a
+*generated value*; use the `Shrinker` shape when it asserts on the
+choice sequence or splices new choices into it.
+
+Because the generate phase is skipped, the `@pytest.mark.parametrize("seed", ...)`
+axis collapses — extending the rule from the seed-collapse note above to
+the `ConjectureRunner`-style shape (`quality_poisoned_trees.rs` goes from
+2 seeds × 3 sizes to 3 tests).
+
+**Splice + re-shrink** (the
+`runner.cached_test_function(choices[:i] + new_choices + choices[i+k:])`
+idiom): hand-build a `Vec<ChoiceValue>` with the spliced region, pass it
+to `NativeTestCase::for_choices(&spliced, None)` to replay once (and
+verify it's still interesting), then `Shrinker::new(test_fn, ntc.nodes)
+.shrink()` it. To find leaf-node indices to splice at, walk
+`shrunk_nodes` filtering on `ChoiceKind::Integer(k) if k.max_value == …`.
+
+**Recursive `SearchStrategy.do_draw` → iterative pre-order traversal.**
+Python lets `do_draw` call `data.draw(self) + data.draw(self)` recursively,
+but a Rust port can't nest `ntc.draw_*` calls inside a closure that holds
+`&mut NativeTestCase`. Rewrite as a single loop with a pending-leaves
+counter:
+
+```rust
+let mut pending = 1usize;
+while pending > 0 {
+    pending -= 1;
+    if ntc.weighted(p, None).ok()? { pending += 2; }
+    else { /* draw leaf, push result */ }
+}
+```
+
+This preserves the Python pre-order choice ordering (split node, then
+left subtree before right subtree) — the invariant the shrinker relies
+on for the splice-at-leaf-index pattern to land at the right place.
+
 ### Tests this shape can't reach
 
 `fixate_shrink_passes([ShrinkPass(pass_name)])` is not by itself a
