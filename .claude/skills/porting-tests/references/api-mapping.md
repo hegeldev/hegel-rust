@@ -658,6 +658,113 @@ future `draw_integer` with `shrink_towards`), follow the pattern in
 The `was_forced = true` marker is what makes the choice replay
 deterministically under `for_choices`.
 
+## `ChoiceKind` / `ChoiceValue` direct API (`test_choice.py`)
+
+Separate from the `for_choices` replay surface, Hypothesis's
+`conjecture/test_choice.py` exercises the **value-level** choice API
+directly: `compute_max_children(constraints)`, `choice_permitted(value,
+constraints)`, and per-kind `to_index` / `from_index` round-trips used
+by `datatree`. hegel-rust exposes the same surface as methods on the
+per-kind constraint struct, re-exported via `__native_test_internals`:
+
+| Hypothesis (Python)                          | hegel-rust (native only)                                                    |
+|----------------------------------------------|------------------------------------------------------------------------------|
+| `compute_max_children(kind, constraints)`    | `compute_max_children(&ChoiceKind::X(XChoice { … }))` — free function       |
+| `choice_permitted(value, constraints)`       | `ChoiceKind::X(XChoice { … }).validate(&ChoiceValue::X(v))`                 |
+| `choice_to_index(v, constraints)`            | `XChoice { … }.to_index(v)` — returns `BigUint`                             |
+| `choice_from_index(i, "kind", constraints)`  | `XChoice { … }.from_index(BigUint::from(i))` — returns `Option<V>`          |
+| `choice_from_index(0, "kind", constraints)`  | equivalently `XChoice { … }.simplest()` — the sort-order anchor             |
+| `MAX_CHILDREN_EFFECTIVELY_INFINITE`          | same name, re-exported via `__native_test_internals`                        |
+| `next_down(f)` / `next_up(f)`                | same names, re-exported via `__native_test_internals`                       |
+
+`BigUint` (from `num-bigint`) is re-exported too. Use `BigUint::from(n)`
+(with `n: u64`) for literals; the derive-equality `assert_eq!` works
+directly.
+
+**Empty alphabet via the surrogate range.** Python's `intervals=""`
+(zero-char alphabet, used to test `compute_max_children` collapsing to
+1) has no `StringChoice` equivalent — `min_codepoint` / `max_codepoint`
+define a range, not an arbitrary set. Use the surrogate block
+`[0xD800, 0xDFFF]` to get `alpha_size() == 0`: every codepoint in that
+range is filtered out as invalid UTF-16. Port bytes-alphabet-zero the
+same way (`min_size=0, max_size=0` → empty range of length zero).
+
+**Native absent fields and which rows survive.** Several Python
+constraint fields have no slot on the native `XChoice` structs; the
+parametrized rows keying on them must be dropped (not skipped — they
+aren't representable):
+
+- `IntegerChoice`: no `weights`, no `shrink_towards`. The
+  `shrink_towards=N` invariant degenerates to `to_index(simplest()) == 0`
+  (anchor is the range-endpoint nearest zero).
+- `FloatChoice`: no `smallest_nonzero_magnitude`.
+- `BooleanChoice`: no `p`. `compute_max_children(BooleanChoice) == 2`
+  always; Python's `p=0.0` / `p=1.0` rows (which collapse to 1) are
+  unrepresentable. The `p=0.5` / `p=0.001` / `p=0.999` rows all collapse
+  to 2 — port those.
+
+Name the dropped fields concretely in both the module docstring and the
+SKIPPED.md entry so a reviewer can see what happened to the missing
+rows.
+
+**`Status::OVERRUN` → `Status::EarlyStop`.** Python asserts
+`data.status is Status.OVERRUN` after drawing from an empty
+`for_choices([])` prefix. Native has no distinct `Overrun`; `pre_choice`
+sets `Status::EarlyStop` on the same path. Assert
+`data.status == Some(Status::EarlyStop)`.
+
+### Engine surfaces with no native counterpart
+
+`test_choice.py` exercises a cluster of `ChoiceNode` / datatree helpers
+that simply aren't on native. Don't waste time looking — the list
+below was charted on this port. Individually-skip each test (with
+SKIPPED.md entries) rather than trying to stub them:
+
+- `all_children(kind, constraints)` — iterator over every valid value
+  of a `ChoiceKind`. `compute_max_children` is ported but the
+  enumerator is not. Blocks `*_and_all_children_agree`,
+  `*_are_permitted_values`, `*_injective`, `*_from_value_injective`.
+- `ChoiceTemplate("simplest", count=n)` — prefix primitive that tells
+  `for_choices` to produce the simplest value of each step's kind.
+  `NativeTestCase::for_choices` takes only concrete `ChoiceValue`s.
+- `ChoiceNode.trivial` — per-node "at minimum" bool. Blocks the
+  `trivial_nodes` / `nontrivial_nodes` / `forced_nodes_are_trivial`
+  cluster.
+- `ChoiceNode.copy(with_value=…)` **raising on forced nodes** — native
+  `ChoiceNode::with_value` propagates `was_forced` through rather than
+  panicking. The non-raising behaviour is still useful; the *assertion*
+  that copying a forced node errors is what doesn't port.
+- `choices_size([values])` — byte-width of a choice sequence.
+- `choices_key([values])` — dedup key distinguishing `True` from `1`,
+  etc. Rust's `Vec<ChoiceValue>` already distinguishes by enum variant,
+  so the *invariant* ports (as `assert_ne!` on vectors); the *helper*
+  doesn't.
+- `data.freeze()` + user-driven `data.start_span` / `data.stop_span` —
+  `NativeTestCase` has no public `freeze()`, and spans are recorded by
+  internal drivers, not the test body. Blocks `test_nodes`.
+- Cross-type `PartialEq` (`node != 42`) — Rust's type system forbids
+  the comparison at compile time. Unrepresentable.
+- Assertions trivially satisfied by Rust types —
+  `ChoiceKind::{to,from}_index` returns `BigUint` (unsigned), so
+  `index >= 0` is a tautology with no observable behaviour. Skip
+  `test_choice_indices_are_positive`-shape tests with that rationale.
+
+### Porting shape
+
+The file is dominated by `@pytest.mark.parametrize` rows and
+`@example` stacks on `@given(choice_types_constraints())` PBTs. The
+conjecture-file convention (`conjecture_*.rs`) is to split each row
+into its own `#[test]` with a name encoding the row — e.g.
+`test_compute_max_children_string_empty_alphabet`,
+`test_choice_permitted_integer_in_range`. See
+`tests/hypothesis/conjecture_choice.rs` for the worked expansion.
+
+The PBT bodies of `@given(choice_types_constraints())` port as a
+handful of hand-picked `#[test]` witnesses (integer full-range,
+boolean, bytes-unbounded, string-full-unicode) — enough to exercise
+the mainline branches of `compute_max_children` / `validate` /
+`to_index` without an enumerator.
+
 ## Health checks
 
 hegel-rust's `HealthCheck` enum has four variants — `FilterTooMuch`,
