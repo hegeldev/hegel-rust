@@ -20,9 +20,13 @@
 //! the public `minimal(strategy, condition)` surface. The remaining tests
 //! are listed in the individually-skipped section below, each tagged with
 //! the specific engine-internals surface that would need to be exposed
-//! through `__native_test_internals` before they can be ported. A later
-//! commit to this file extends the native test-harness surface and lights
-//! up the next batch.
+//! through `__native_test_internals` before they can be ported. These are
+//! parked under the missing-native-feature individual-skip path
+//! (`.claude/skills/porting-tests/SKILL.md`); the concrete missing feature
+//! is a `NativeConjectureRunner` wrapper, tracked in `TODO.yaml` under
+//! "Expose a NativeConjectureRunner wrapper in `__native_test_internals`".
+//! That entry's acceptance criteria include removing every individually-
+//! skipped test named below.
 //!
 //! Individually-skipped tests (rest of the file is ported):
 //!
