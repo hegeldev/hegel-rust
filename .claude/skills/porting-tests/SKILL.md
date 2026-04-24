@@ -220,12 +220,11 @@ concretely in the module docstring. Known gap categories:
 | Missing input validation | Invalid constraint combos that Hypothesis rejects with `InvalidArgument` run silently in native | the `InvalidArgument` cluster in `tests/hypothesis/float_nastiness.rs` |
 | Missing engine-internal pruning / bias | `Hegel::new(...).run()` can't navigate a dense `assume`-reject tree that Hypothesis's `DataTree` novel-prefix walk finds | `test_lot_of_dead_nodes` in `tests/hypothesis/nocover_conjecture_engine.rs` (one-in-128⁴ witness unreachable from `NativeTestCase::new_random`) |
 
-Only use this gate when the test body itself is public-API-only. If it
-reaches into Python-specific engine internals
-(`ConjectureRunner.generate_new_examples`, `tree.new_observer`,
-`cached_test_function` identity, `Shrinker.run_node_program` call
-counters, etc.), it's an individual skip per the policy below — not a
-server-only gate.
+Only use this gate when the test body itself is public-API-only. If
+the test reaches into `src/native/`-level engine internals
+(`CachedTestFunction`, `Shrinker`, `NativeTestCase`, etc.), follow the
+native-gated-plus-source-stub route above instead — that's not a
+server-only situation.
 
 ### Skipping individual tests within an otherwise-ported file
 
