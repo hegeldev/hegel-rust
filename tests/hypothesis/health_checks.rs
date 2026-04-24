@@ -163,12 +163,17 @@ fn test_filtering_everything_fails_a_health_check() {
 fn test_filtering_most_things_fails_a_health_check() {
     // The Python original draws 16 bits and `assume(b == 3)` — ~1/65536
     // acceptance. hegel-rust's FilterTooMuch fires when 200 consecutive
-    // invalid cases accumulate with no prior valid case, so any range
-    // wide enough to make valid draws vanishingly rare triggers it.
+    // invalid cases accumulate with no prior valid case, so we need the
+    // range wide enough that a valid draw in the first 200 calls is
+    // vanishingly unlikely. A `u16`-sized range would occasionally draw
+    // `3` within the health-check window (≈0.2% of runs) and the check
+    // would never fire; using the full `u64` range makes that impossible
+    // (3 is not among the "nasty" boundary candidates, so uniform draws
+    // dominate and P(3) ≈ 2^-64).
     expect_panic(
         || {
             Hegel::new(|tc: TestCase| {
-                let b: u64 = tc.draw(gs::integers::<u64>().min_value(0).max_value(65535));
+                let b: u64 = tc.draw(gs::integers::<u64>());
                 tc.assume(b == 3);
             })
             .settings(Settings::new().database(None))
