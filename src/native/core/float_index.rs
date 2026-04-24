@@ -29,7 +29,7 @@ pub fn decode_exponent(enc: u64) -> u64 {
 }
 
 /// Reverse the lowest `n` bits of `v`.
-fn reverse_bits_n(v: u64, n: u64) -> u64 {
+pub fn reverse_bits_n(v: u64, n: u64) -> u64 {
     v.reverse_bits() >> (64 - n)
 }
 
