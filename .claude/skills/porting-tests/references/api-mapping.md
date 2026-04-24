@@ -746,9 +746,6 @@ SKIPPED.md entries) rather than trying to stub them:
   etc. Rust's `Vec<ChoiceValue>` already distinguishes by enum variant,
   so the *invariant* ports (as `assert_ne!` on vectors); the *helper*
   doesn't.
-- `data.freeze()` + user-driven `data.start_span` / `data.stop_span` —
-  `NativeTestCase` has no public `freeze()`, and spans are recorded by
-  internal drivers, not the test body. Blocks `test_nodes`.
 - Cross-type `PartialEq` (`node != 42`) — Rust's type system forbids
   the comparison at compile time. Unrepresentable.
 - Assertions trivially satisfied by Rust types —
