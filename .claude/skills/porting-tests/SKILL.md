@@ -501,9 +501,16 @@ native entry point:
   from the `@run_to_nodes` decorator in `test_shrinker.py`). `TargetedRunner`
   is *not* this surface — it exposes only `cached_test_function` /
   `optimise_targets` / `best_observed_targets`, not interesting-example
-  tracking, exit reasons, shrink counters, or pareto bookkeeping. Most
-  of `test_engine.py` ends up individually-skipped today, each with a
-  rationale citing the specific missing attribute.
+  tracking, exit reasons, shrink counters, or pareto bookkeeping. The
+  correct port path is a `NativeConjectureRunner` wrapper under
+  `__native_test_internals`; until that lands,
+  `tests/hypothesis/conjecture_engine.rs` holds only the
+  `minimal()`-expressible shrink-quality subset and the remaining
+  ~80 tests are parked in `SKIPPED.md` under the TODO.yaml entry
+  naming that wrapper as its acceptance gate (missing-native-feature
+  individual-skip path — see the "missing-native-feature" carveout in
+  the individual-skipping section, which requires a TODO.yaml link
+  precisely so this doesn't become invisible debt).
 
 **Don't skip `test_engine.py`-shape files wholesale.** Inside such
 files there's usually a subset of shrink-quality tests — the

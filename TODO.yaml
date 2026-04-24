@@ -6,3 +6,47 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
+
+- title: Expose a NativeConjectureRunner wrapper in __native_test_internals
+  details: |
+    `tests/hypothesis/conjecture_engine.rs` currently ports only the 8
+    shrink-quality tests that fit the public `minimal()` surface. The
+    remaining ~80 tests from
+    `resources/hypothesis/hypothesis-python/tests/conjecture/test_engine.py`
+    assert on `ConjectureRunner` runtime bookkeeping — `interesting_examples`,
+    `exit_reason`, `shrinks`, `call_count`, `valid_examples`,
+    `save_choices`, `secondary_key`, `pareto_key`, `reuse_existing_examples`,
+    `clear_secondary_key`, `new_shrinker` / `fixate_shrink_passes`,
+    `pareto_front` / `dominance`, `tree.is_exhausted`,
+    `generate_novel_prefix`, `ignore_limits`, `statistics` — plus the
+    `run_to_nodes(f)` conftest fixture and a `FailedHealthCheck`-label-
+    bearing panic variant. These are native-engine internals, not
+    public-API incompatibilities; per
+    `.claude/skills/porting-tests/SKILL.md`'s skip policy they should
+    be ported native-gated, not skipped.
+
+    `src/native/optimiser.rs::TargetedRunner` exposes only the
+    `cached_test_function` / `optimise_targets` / `best_observed_targets`
+    slice; it is not this surface. `InMemoryNativeDatabase` and
+    `BufferSizeLimit` already exist and are exported from
+    `__native_test_internals`, so the database-introspection and
+    buffer-size-limit tests are unblocked once the runner wrapper lands;
+    `serialize_choices` / `deserialize_choices` in
+    `src/native/database.rs` already cover the
+    `choices_to_bytes` / `choices_from_bytes` round-trip.
+
+    Acceptance criteria:
+      - A `NativeConjectureRunner` (or similarly-named) type is exported
+        from `__native_test_internals` with the runner-bookkeeping
+        attributes listed above. Individual attributes may start as
+        `todo!()` stubs; the subsequent port-loop cycles will fill them
+        in as each native-gated test lands.
+      - All `conjecture/test_engine.py::*` entries in SKIPPED.md's
+        `Individually-skipped tests` section are removed — the
+        corresponding tests land native-gated in
+        `tests/hypothesis/conjecture_engine.rs`, with the module
+        docstring's "Individually-skipped tests" list pruned to match.
+      - The `test_engine.py`-shape paragraph in
+        `.claude/skills/porting-tests/SKILL.md` is updated to describe
+        the runner-wrapper port path rather than the
+        "most-of-file-is-skipped" interim state.

@@ -2172,6 +2172,22 @@ Individually-skipped tests (rest of the file is ported):
   `OrderingShrinker`) are concrete structs with fixed `run_step`
   implementations and no subclass-pluggable base class.
 
+The `conjecture/test_engine.py::*` entries below are individually
+skipped under the missing-native-feature carveout (see
+`.claude/skills/porting-tests/SKILL.md`'s individual-skipping section).
+The concrete missing feature is a `NativeConjectureRunner` wrapper in
+`__native_test_internals` that exposes the runner-bookkeeping surface
+(`interesting_examples`, `exit_reason`, `shrinks`, `call_count`,
+`valid_examples`, `save_choices`, `secondary_key`, `pareto_key`,
+`reuse_existing_examples`, `clear_secondary_key`, `new_shrinker` /
+`fixate_shrink_passes`, `pareto_front` / `dominance`,
+`tree.is_exhausted`, `generate_novel_prefix`, `ignore_limits`,
+`statistics`) plus the `run_to_nodes(f)` conftest fixture and a
+`FailedHealthCheck`-label-bearing panic variant. `TODO.yaml` has an
+entry titled "Expose a NativeConjectureRunner wrapper in
+`__native_test_internals`" whose acceptance criteria include removing
+every entry in this cluster.
+
 - `conjecture/test_engine.py::test_non_cloneable_intervals`,
   `::test_deletable_draws`, `::test_variadic_draw`, `::test_draw_to_overrun`,
   `::test_erratic_draws`, `::test_no_read_no_shrink`, `::test_one_dead_branch`,
