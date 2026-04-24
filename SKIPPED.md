@@ -1743,10 +1743,6 @@ Individually-skipped tests (rest of the file is ported):
   `::test_choice_from_value_injective` — iterate every valid value for a
   `ChoiceKind` via `datatree.all_children`. `compute_max_children` is
   ported but the enumerator is not; no `src/native/` counterpart exists.
-- `conjecture/test_choice.py::test_nodes` — builds a forced-node tree via
-  `data.freeze()` + user-driven `data.start_span` / `data.stop_span`.
-  `NativeTestCase` exposes no public `freeze()` and no start/stop-span
-  API (spans are recorded by internal drivers, not the test body).
 - `conjecture/test_choice.py::test_cannot_modify_forced_nodes` — asserts
   that `ChoiceNode.copy(with_value=…)` on a forced node raises
   `AssertionError`. The native `ChoiceNode::with_value` propagates
