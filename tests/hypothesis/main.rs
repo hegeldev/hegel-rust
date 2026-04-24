@@ -44,6 +44,7 @@ mod one_of;
 mod permutations;
 mod provisional_strategies;
 mod quality_poisoned_lists;
+mod quality_zig_zagging;
 mod regex;
 mod replay_logic;
 mod reporting;
