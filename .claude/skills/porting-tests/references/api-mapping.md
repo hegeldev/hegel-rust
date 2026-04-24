@@ -949,6 +949,30 @@ If the upstream `@given` uses a strategy with no direct Rust analog
 the strategy as a small `tc.draw(...)` block in the property test
 rather than chasing a library helper.
 
+### Shrink-quality stacks where rows gap individually
+
+An exception to "consolidate into one `_examples` test": shrink-quality
+tests where each `@example` row asserts the shrinker converges on a
+specific minimum, and the native `Shrinker` reaches that minimum on
+some rows but hits `MAX_SHRINK_ITERATIONS` on others (engine gap —
+single-choice passes can't follow a predicate that couples two
+choices, etc.). In that shape, **split each `@example` row into its
+own `#[test]`** so the gapping rows can be `#[ignore]`d individually
+and the passing rows stay as regression coverage. A consolidated
+`_examples` test would have to be ignored wholesale, losing the
+passing rows. All ignored rows share one TODO.yaml entry (acceptance
+criteria: un-ignore `test_foo_1` … `test_foo_k`). See
+`tests/hypothesis/quality_zig_zagging.rs` for the shape — five rows
+pass today, six are `#[ignore]`d under a single
+`pair-locked-zig-zag-shrink` TODO.
+
+Related: if the `@given` random-fuzz pass in the same test only
+asserts on a counter the native `Shrinker` doesn't expose (the usual
+case is `runner.shrinks <= budget`), drop the `@given` entirely —
+without the budget check it collapses to the same
+minimum-correctness assertion as the explicit rows and adds no
+coverage. Note the drop in the module docstring.
+
 ### `@example` + `@given` under `@pytest.mark.parametrize`
 
 When a `parametrize` over N implementations sits on top of the
