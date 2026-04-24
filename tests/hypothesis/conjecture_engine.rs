@@ -25,8 +25,9 @@
 
 use crate::common::utils::{expect_panic, minimal};
 use hegel::__native_test_internals::{
-    ChoiceValue, ExitReason, HealthCheckLabel, NativeConjectureData, NativeConjectureRunner,
-    NativeRunnerSettings, RunnerPhase, interesting_origin, run_to_nodes,
+    ChoiceValue, ExampleDatabase, ExitReason, HealthCheckLabel, InMemoryNativeDatabase,
+    NativeConjectureData, NativeConjectureRunner, NativeRunnerSettings, RunnerPhase,
+    choices_to_bytes, interesting_origin, run_to_nodes,
 };
 use hegel::TestCase;
 use hegel::generators as gs;
@@ -34,6 +35,7 @@ use rand::SeedableRng;
 use rand::rngs::SmallRng;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Label used by `test_variadic_draw`'s `start_span(SOME_LABEL)` calls.
 /// Mirrors `tests/conjecture/common.py::SOME_LABEL` which is
@@ -610,4 +612,143 @@ fn test_exit_because_shrink_phase_timeout() {
         runner.statistics.get("stopped-because").map(String::as_str),
         Some("shrinking was very slow"),
     );
+}
+
+// -----------------------------------------------------------------------
+// Database-replay cluster.  Each of the tests below exercises the
+// reuse-phase path on `NativeConjectureRunner`, which fetches entries
+// stored under `database_key` and replays them as seeded test cases.
+// `test_does_not_save_on_interrupt` and
+// `test_saves_on_skip_exceptions_to_reraise` are Python-specific
+// (`KeyboardInterrupt` / `pytest.skip()`) and live in SKIPPED.md; they
+// have no Rust analog.
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_can_load_data_from_a_corpus() {
+    // A pre-populated primary-corpus entry that the test function's
+    // predicate recognises should be replayed during the reuse phase
+    // and end up in `interesting_examples` with its original choices
+    // preserved.  The DB entry itself must survive the run.
+    let key = b"hi there".to_vec();
+    let value: Vec<u8> = vec![
+        0x3d, 0xc3, 0xe4, 0x6c, 0x81, 0xe1, 0xc2, 0x48, 0xc9, 0xfb, 0x1a, 0xb6, 0x62, 0x4d, 0xa8,
+        0x7f,
+    ];
+    let db: Arc<InMemoryNativeDatabase> = Arc::new(InMemoryNativeDatabase::new());
+    let stored = choices_to_bytes(&[ChoiceValue::Bytes(value.clone())]);
+    db.save(&key, &stored);
+
+    let db_dyn: Arc<dyn ExampleDatabase> = db.clone();
+    let settings = NativeRunnerSettings::new().database(Some(db_dyn));
+    let rng = SmallRng::seed_from_u64(0);
+    let value_clone = value.clone();
+    let mut runner = NativeConjectureRunner::new(
+        move |data: &mut NativeConjectureData| {
+            let drawn = data.draw_bytes(0, 64);
+            if drawn == value_clone {
+                data.mark_interesting(interesting_origin(None));
+            }
+        },
+        settings,
+        rng,
+    )
+    .with_database_key(key.clone());
+    runner.run();
+
+    assert_eq!(runner.interesting_examples.len(), 1);
+    let last_data = runner.interesting_examples.values().next().unwrap();
+    assert_eq!(last_data.choices, vec![ChoiceValue::Bytes(value)]);
+    assert_eq!(db.fetch(&key).len(), 1);
+}
+
+#[test]
+fn test_stops_after_max_examples_when_reading() {
+    // Ten malformed DB entries (raw single bytes) get deleted by the
+    // reuse phase (their `choices_from_bytes` returns None) without
+    // invoking the test function.  Generation then runs exactly once
+    // before hitting the `max_examples=1` limit.
+    let key = b"key".to_vec();
+    let db: Arc<InMemoryNativeDatabase> = Arc::new(InMemoryNativeDatabase::new());
+    for i in 0u8..10 {
+        db.save(&key, &[i]);
+    }
+    let db_dyn: Arc<dyn ExampleDatabase> = db.clone();
+
+    let seen: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+    let seen_clone = seen.clone();
+    let settings = NativeRunnerSettings::new()
+        .max_examples(1)
+        .database(Some(db_dyn));
+    let rng = SmallRng::seed_from_u64(0);
+    let mut runner = NativeConjectureRunner::new(
+        move |data: &mut NativeConjectureData| {
+            let bytes = data.draw_bytes(1, 1);
+            seen_clone.borrow_mut().push(bytes);
+        },
+        settings,
+        rng,
+    )
+    .with_database_key(key);
+    runner.run();
+
+    assert_eq!(seen.borrow().len(), 1);
+}
+
+#[test]
+fn test_reuse_phase_runs_for_max_examples_if_generation_is_disabled() {
+    // 256 entries, `phases=[Reuse]`, `max_examples=100`.  The reuse
+    // phase replays entries in shortlex order until `valid_examples`
+    // hits the budget.
+    let key = b"key".to_vec();
+    let db: Arc<InMemoryNativeDatabase> = Arc::new(InMemoryNativeDatabase::new());
+    for i in 0i128..256 {
+        let entry = choices_to_bytes(&[ChoiceValue::Integer(i)]);
+        db.save(&key, &entry);
+    }
+    let db_dyn: Arc<dyn ExampleDatabase> = db.clone();
+
+    let seen: Rc<RefCell<std::collections::HashSet<i128>>> =
+        Rc::new(RefCell::new(std::collections::HashSet::new()));
+    let seen_clone = seen.clone();
+    let settings = NativeRunnerSettings::new()
+        .max_examples(100)
+        .database(Some(db_dyn))
+        .phases(vec![RunnerPhase::Reuse]);
+    let rng = SmallRng::seed_from_u64(0);
+    let mut runner = NativeConjectureRunner::new(
+        move |data: &mut NativeConjectureData| {
+            let n = data.draw_integer(0, 255);
+            seen_clone.borrow_mut().insert(n);
+        },
+        settings,
+        rng,
+    )
+    .with_database_key(key);
+    runner.run();
+
+    assert_eq!(seen.borrow().len(), 100);
+}
+
+#[test]
+fn test_runs_full_set_of_examples() {
+    // Empty DB — reuse is a no-op.  Generation must produce exactly
+    // `max_examples` valid examples before exiting.
+    let db: Arc<InMemoryNativeDatabase> = Arc::new(InMemoryNativeDatabase::new());
+    let db_dyn: Arc<dyn ExampleDatabase> = db.clone();
+    let settings = NativeRunnerSettings::new()
+        .max_examples(100)
+        .database(Some(db_dyn));
+    let rng = SmallRng::seed_from_u64(0);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            data.draw_integer(0, (1_i128 << 64) - 1);
+        },
+        settings,
+        rng,
+    )
+    .with_database_key(b"stuff".to_vec());
+    runner.run();
+
+    assert_eq!(runner.valid_examples, 100);
 }

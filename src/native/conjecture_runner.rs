@@ -805,12 +805,18 @@ impl NativeConjectureRunner {
             .settings
             .phases
             .clone()
-            .unwrap_or_else(|| vec![Phase::Generate, Phase::Shrink]);
+            .unwrap_or_else(|| vec![Phase::Reuse, Phase::Generate, Phase::Shrink]);
+        let do_reuse = phases.contains(&Phase::Reuse);
         let do_generate = phases.contains(&Phase::Generate);
         let do_shrink = phases.contains(&Phase::Shrink);
 
+        // --- Reuse phase ---
+        if do_reuse {
+            self.reuse_existing_examples_internal();
+        }
+
         // --- Generation phase ---
-        if do_generate {
+        if self.exit_reason.is_none() && do_generate {
             let mut tree_root = DataTreeNode::default();
             loop {
                 // Mirrors engine.py line 744: `exit_with(Finished)` when
@@ -1024,15 +1030,91 @@ impl NativeConjectureRunner {
 
     /// Save a choice sequence under the primary database key.  Mirrors
     /// `ConjectureRunner.save_choices`.
-    pub fn save_choices(&mut self, _choices: &[ChoiceValue]) {
-        todo!("NativeConjectureRunner::save_choices")
+    pub fn save_choices(&mut self, choices: &[ChoiceValue]) {
+        if let (Some(db), Some(key)) = (
+            self.settings.database.as_ref(),
+            self.database_key.as_deref(),
+        ) {
+            let bytes = crate::native::database::serialize_choices(choices);
+            db.save(key, &bytes);
+        }
     }
 
     /// Load every stored value for `database_key` and replay them as
     /// the first phase of generation.  Mirrors
-    /// `ConjectureRunner.reuse_existing_examples`.
-    pub fn reuse_existing_examples(&mut self) {
-        todo!("NativeConjectureRunner::reuse_existing_examples")
+    /// `engine.py::reuse_existing_examples` — the primary-corpus
+    /// loop only; secondary / pareto corpora are not yet modelled (a
+    /// later TODO cluster adds them).
+    ///
+    /// Unparseable entries are deleted.  Entries that replay as
+    /// non-interesting are also deleted.  An interesting entry populates
+    /// [`Self::interesting_examples`] and (being stored via
+    /// [`Self::save_choices`]) re-saves itself so a later shrink phase
+    /// can re-read it; since the stored choice sequence survives any
+    /// shrink attempts whose candidates' replay doesn't match, the
+    /// "previously shrunk" fast-path from Hypothesis's
+    /// `reused_previously_shrunk_test_case` isn't needed to preserve
+    /// the original entry.
+    fn reuse_existing_examples_internal(&mut self) {
+        let (db, key) = match (self.settings.database.clone(), self.database_key.clone()) {
+            (Some(d), Some(k)) => (d, k),
+            _ => return,
+        };
+
+        let mut corpus = db.fetch(&key);
+        // Shortlex: length first, then lexicographic byte order.
+        corpus.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+
+        for existing in corpus.iter() {
+            let Some(choices) = choices_from_bytes(existing) else {
+                db.delete(&key, existing);
+                continue;
+            };
+            let ntc = NativeTestCase::for_choices(&choices, None);
+            let (status, nodes, origin) = run_test_fn(&mut self.test_fn, ntc);
+            self.call_count += 1;
+
+            // `Status::Invalid` / `Status::EarlyStop` aren't tracked into
+            // `self.invalid_examples` / `overrun_examples` here — the
+            // database-replay cluster doesn't distinguish them, and a
+            // later TODO cluster lands tests that do.
+            if matches!(status, Status::Valid) {
+                self.valid_examples += 1;
+            }
+            if matches!(status, Status::Interesting) {
+                let origin = origin.expect("Interesting status carries an origin");
+                let replay_choices: Vec<ChoiceValue> =
+                    nodes.iter().map(|n| n.value.clone()).collect();
+                if !self.interesting_examples.contains_key(&origin) {
+                    self.save_choices(&replay_choices);
+                    self.interesting_examples.insert(
+                        origin.clone(),
+                        InterestingExample {
+                            nodes,
+                            choices: replay_choices,
+                            origin,
+                        },
+                    );
+                }
+            } else {
+                db.delete(&key, existing);
+            }
+
+            // Termination checks only apply while we have no interesting
+            // examples.  Mirrors the per-call exit conditions at the
+            // bottom of `engine.py::test_function`.
+            if self.interesting_examples.is_empty()
+                && self.valid_examples >= self.settings.max_examples
+            {
+                let max_examples = self.settings.max_examples;
+                self.exit_reason = Some(ExitReason::MaxExamples);
+                self.statistics.insert(
+                    "stopped-because".into(),
+                    format!("settings.max_examples={max_examples}"),
+                );
+                return;
+            }
+        }
     }
 
     /// Delete every stored value under `secondary_key`.  Mirrors

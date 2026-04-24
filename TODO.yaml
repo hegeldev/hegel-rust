@@ -7,32 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Port conjecture/test_engine.py database-replay cluster
-  details: |
-    Port the following tests from `conjecture/test_engine.py` into
-    `tests/hypothesis/conjecture_engine.rs`, native-gated. Each relies
-    on Hypothesis's `InMemoryExampleDatabase` plus the runner's
-    corpus-replay phase (`reuse_existing_examples` / `save_choices`):
-      - `test_can_load_data_from_a_corpus`
-      - `test_stops_after_max_examples_when_reading`
-      - `test_reuse_phase_runs_for_max_examples_if_generation_is_disabled`
-      - `test_runs_full_set_of_examples`
-      - `test_does_not_save_on_interrupt`
-      - `test_saves_on_skip_exceptions_to_reraise`
-
-    Port path: use `InMemoryNativeDatabase` as the DB; implement
-    `NativeConjectureRunner`'s reuse phase so it reads entries via
-    `ExampleDatabase::fetch(key)` and replays them as seeded test
-    runs before the generation phase. `test_does_not_save_on_interrupt`
-    and `test_saves_on_skip_exceptions_to_reraise` may be skip-worthy
-    (Python-specific `KeyboardInterrupt` / `pytest.skip()`) — add
-    SKIPPED.md entries if so.
-
-    Acceptance criteria:
-      - All 6 tests compile and pass (or any Python-specific
-        exceptions tests are added to SKIPPED.md with a rationale).
-      - The matching bullet in `SKIPPED.md` is removed.
-
 - title: Port conjecture/test_engine.py multiple-bugs / shrink-entry cluster
   details: |
     Port the following tests from `conjecture/test_engine.py` into

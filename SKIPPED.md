@@ -2180,16 +2180,20 @@ attributes are `todo!()` stubs in
 entry names the attributes its port lands. Removing each bullet below
 is acceptance for the corresponding follow-up.
 
-- `conjecture/test_engine.py::test_can_load_data_from_a_corpus`,
-  `::test_stops_after_max_examples_when_reading`,
-  `::test_reuse_phase_runs_for_max_examples_if_generation_is_disabled`,
-  `::test_runs_full_set_of_examples`,
-  `::test_does_not_save_on_interrupt`,
-  `::test_saves_on_skip_exceptions_to_reraise` — each relies on
-  Hypothesis's `InMemoryExampleDatabase` plus the runner's
-  corpus-replay phase (`reuse_existing_examples` / `save_choices`).
-  `NativeConjectureRunner` has stubs for these; the database-replay
-  follow-up TODO fills them in.
+- `conjecture/test_engine.py::test_does_not_save_on_interrupt` —
+  asserts the runner does not persist to the database when the test
+  function raises `KeyboardInterrupt`. Rust has no direct
+  `KeyboardInterrupt` analog (panics are distinct from interrupts,
+  and the native engine's `run_test_fn` deliberately resumes
+  unwinding on anything that isn't a `MarkPanic` / `STOP_TEST_PANIC`
+  sentinel, which matches Python's behaviour of propagating
+  unexpected exceptions). No Rust counterpart to exercise.
+- `conjecture/test_engine.py::test_saves_on_skip_exceptions_to_reraise`
+  — asserts the runner saves `pytest.skip()`-style exceptions to the
+  database so they short-circuit future runs. Rust tests don't have
+  a `pytest.skip`-equivalent propagating through the engine; the
+  native runner treats every non-sentinel panic as a hard failure
+  rather than distinguishing a skip. No Rust counterpart to exercise.
 - `conjecture/test_engine.py::test_recursion_error_is_not_flaky` —
   relies on CPython's `RecursionError` stack-depth tricks and
   `hypothesis.internal.compat.ensure_free_stackframes` to probe a
