@@ -30,25 +30,22 @@ fn exhaust<T, F>(mut f: F) -> Vec<T>
 where
     F: FnMut(&mut Chooser) -> Result<T, DeadBranch>,
 {
-    let results: RefCell<Vec<T>> = RefCell::new(Vec::new());
+    let mut results: Vec<T> = Vec::new();
     let mut tree = ChoiceTree::new();
     let mut prefix: Vec<usize> = Vec::new();
     while !tree.exhausted() {
         prefix = tree.step(prefix_selection_order(&prefix), |chooser| {
-            let v = f(chooser)?;
-            results.borrow_mut().push(v);
+            results.push(f(chooser)?);
             Ok(())
         });
     }
-    results.into_inner()
+    results
 }
 
 #[test]
 fn test_can_enumerate_a_shallow_set() {
     assert_all_examples(gs::vecs(gs::integers::<i64>()), |ls: &Vec<i64>| {
-        let ls = ls.clone();
-        let results = exhaust(|chooser| chooser.choose(&ls, |_| true));
-        let mut got = results.clone();
+        let mut got = exhaust(|chooser| chooser.choose(ls, |_| true));
         got.sort();
         let mut want = ls.clone();
         want.sort();
@@ -93,15 +90,12 @@ fn test_all_filtered_child() {
 
 #[test]
 fn test_skips_over_exhausted_children() {
-    let results: Rc<RefCell<Vec<(i64, i64)>>> = Rc::new(RefCell::new(Vec::new()));
+    let results: RefCell<Vec<(i64, i64)>> = RefCell::new(Vec::new());
     let three: Vec<i64> = (0..3).collect();
     let two: Vec<i64> = (0..2).collect();
 
     let run = |tree: &mut ChoiceTree, prefix: &[usize]| {
-        let results = Rc::clone(&results);
-        let three = three.clone();
-        let two = two.clone();
-        tree.step(select(prefix), move |chooser| {
+        tree.step(select(prefix), |chooser| {
             let x = chooser.choose(&three, |x| *x > 0)?;
             let y = chooser.choose(&two, |_| true)?;
             results.borrow_mut().push((x, y));
@@ -114,7 +108,7 @@ fn test_skips_over_exhausted_children() {
     run(&mut tree, &[1, 1]);
     run(&mut tree, &[0, 0]);
 
-    assert_eq!(*results.borrow(), vec![(1, 0), (1, 1), (2, 0)]);
+    assert_eq!(results.into_inner(), vec![(1, 0), (1, 1), (2, 0)]);
 }
 
 #[test]
@@ -143,15 +137,12 @@ fn test_starts_from_the_end() {
 fn test_skips_over_exhausted_subtree() {
     let ten: Vec<i64> = (0..10).collect();
     let mut tree = ChoiceTree::new();
-    let first = {
-        let ten = ten.clone();
-        tree.step(select(&[8]), move |chooser| {
-            chooser.choose(&ten, |_| true)?;
-            Ok(())
-        })
-    };
+    let first = tree.step(select(&[8]), |chooser| {
+        chooser.choose(&ten, |_| true)?;
+        Ok(())
+    });
     assert_eq!(first, vec![8]);
-    let second = tree.step(select(&[8]), move |chooser| {
+    let second = tree.step(select(&[8]), |chooser| {
         chooser.choose(&ten, |_| true)?;
         Ok(())
     });
@@ -165,8 +156,7 @@ fn test_exhausts_randomly() {
     let rng = Rc::new(RefCell::new(SmallRng::seed_from_u64(0)));
     let mut seen: HashSet<Vec<usize>> = HashSet::new();
     for _ in 0..10 {
-        let ten = ten.clone();
-        let prefix = tree.step(random_selection_order(Rc::clone(&rng)), move |chooser| {
+        let prefix = tree.step(random_selection_order(Rc::clone(&rng)), |chooser| {
             chooser.choose(&ten, |_| true)?;
             Ok(())
         });
@@ -181,7 +171,7 @@ fn test_exhausts_randomly_when_filtering() {
     let ten: Vec<i64> = (0..10).collect();
     let mut tree = ChoiceTree::new();
     let rng = Rc::new(RefCell::new(SmallRng::seed_from_u64(0)));
-    tree.step(random_selection_order(rng), move |chooser| {
+    tree.step(random_selection_order(rng), |chooser| {
         chooser.choose(&ten, |_| false)?;
         Ok(())
     });
