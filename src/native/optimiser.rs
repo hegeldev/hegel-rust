@@ -263,12 +263,19 @@ pub struct TargetedRunner {
     /// Hypothesis stores full `ConjectureResult`s here; we re-run to recover
     /// nodes when needed, trading a few extra calls for a smaller type.
     best_choices_for_target: HashMap<String, Vec<ChoiceValue>>,
-    /// Cache of test-run results keyed by input choices. Mirrors
-    /// `ConjectureRunner.__data_cache`. Only records "exact prefix" runs (no
-    /// random extension beyond the prefix), since `extend="full"` runs with
-    /// random tails are non-deterministic.
+    /// Cache of test-run results keyed by the input's "used prefix" — the
+    /// first `nodes.len()` choices of the input that produced the cached
+    /// result. Mirrors what `ConjectureRunner.__data_cache` +
+    /// `DataTree.simulate_test_function` buy upstream: any later input whose
+    /// prefix matches a cached key is guaranteed to replay identically up to
+    /// the termination point, so its result can be returned without re-running
+    /// the test.
     cache: HashMap<CacheKey, CachedRun>,
-    calls: usize,
+    /// Count of valid examples that have been produced. Matches upstream's
+    /// `valid_examples` counter, which is what gates `max_examples` in
+    /// `ConjectureRunner.should_generate_more`. Invalid or EarlyStop runs
+    /// are not counted against the budget.
+    valid_examples: usize,
 }
 
 impl TargetedRunner {
@@ -283,7 +290,7 @@ impl TargetedRunner {
             best_observed_targets: HashMap::new(),
             best_choices_for_target: HashMap::new(),
             cache: HashMap::new(),
-            calls: 0,
+            valid_examples: 0,
         }
     }
 
@@ -294,8 +301,6 @@ impl TargetedRunner {
         &mut self,
         ntc: NativeTestCase,
     ) -> (Status, Vec<ChoiceNode>, Vec<Span>, HashMap<String, f64>) {
-        self.calls += 1;
-
         let mut tc = TargetedTestCase {
             ntc,
             target_observations: HashMap::new(),
@@ -328,6 +333,7 @@ impl TargetedRunner {
         let observations = tc.target_observations;
 
         if status >= Status::Valid {
+            self.valid_examples += 1;
             let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
             for (k, v) in &observations {
                 let entry = self
@@ -359,6 +365,29 @@ impl TargetedRunner {
         (status, nodes, spans, observations)
     }
 
+    /// Look for a cached run whose input is a proper prefix of `choices`.
+    /// A cache entry is reusable for a longer input iff the cached test run
+    /// didn't draw past its own prefix (`cached.nodes.len() <= cached_input_len`),
+    /// since in that case the test body would terminate at exactly the same
+    /// node count on the longer input.
+    ///
+    /// `self.cache` only stores entries satisfying that invariant (see the
+    /// caching guards in [`run_extend_full`] and [`run_exact`]), so any hit
+    /// on a prefix key is safe to return.
+    ///
+    /// Runs in O(choices.len()) in the worst case, but hits fast for the
+    /// common hill-climb pattern where many probes diverge at a shallow
+    /// position and terminate quickly.
+    fn lookup_prefix_cache(&self, choices: &[ChoiceValue]) -> Option<CachedRun> {
+        for l in (1..choices.len()).rev() {
+            let key = encode_choice_key(&choices[..l]);
+            if let Some(cached) = self.cache.get(&key) {
+                return Some(cached.clone());
+            }
+        }
+        None
+    }
+
     pub fn cached_test_function(&mut self, choices: &[ChoiceValue]) -> CachedTestResult {
         let (status, _, _, _) = self.run_exact(choices);
         CachedTestResult { status }
@@ -375,7 +404,12 @@ impl TargetedRunner {
         let rng = SmallRng::seed_from_u64(seed);
         let max_size = (choices.len() + extend).min(current_buffer_size());
         let ntc = NativeTestCase::for_probe(choices, rng, max_size);
-        let (status, _, _, _) = self.run_on(ntc);
+        let (status, nodes, spans, observations) = self.run_on(ntc);
+        // Cache the seed run under the actual choices it generated. This makes
+        // later hill-climb probes that happen to replay the same prefix hit
+        // the cache instead of paying another test call.
+        let drawn: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+        self.try_cache(&drawn, &status, &nodes, &spans, &observations);
         CachedTestResult { status }
     }
 
@@ -383,6 +417,15 @@ impl TargetedRunner {
     /// buffer size. Used internally by the hill-climber. Results from runs
     /// that didn't need to draw past the prefix are cached for reuse;
     /// extensions are nondeterministic and never cached.
+    ///
+    /// Cache lookup also covers PREFIX matches: if some proper prefix
+    /// `choices[..L]` was previously run and produced a deterministic result
+    /// (i.e. `nodes.len() <= L`, the test didn't draw past `L`), the same
+    /// result applies to any longer input starting with that prefix. This
+    /// lets us skip re-running the test in the common hill-climb pattern
+    /// where we probe variants that terminate before they reach the modified
+    /// choice. Conceptually mirrors what Hypothesis gets "for free" from
+    /// `DataTree.simulate_test_function`.
     fn run_extend_full(
         &mut self,
         choices: &[ChoiceValue],
@@ -396,25 +439,20 @@ impl TargetedRunner {
                 cached.observations,
             );
         }
+        if let Some(cached) = self.lookup_prefix_cache(choices) {
+            return (
+                cached.status,
+                cached.nodes,
+                cached.spans,
+                cached.observations,
+            );
+        }
         let seed: u64 = self.rng.random();
         let rng = SmallRng::seed_from_u64(seed);
         let max_size = current_buffer_size();
         let ntc = NativeTestCase::for_probe(choices, rng, max_size);
         let (status, nodes, spans, observations) = self.run_on(ntc);
-        // Cache only if the produced choice sequence exactly matches the
-        // input prefix — i.e. the test body didn't draw past the prefix, so
-        // the result is deterministic and safe to reuse.
-        if nodes.len() == choices.len() && nodes.iter().zip(choices).all(|(n, c)| n.value == *c) {
-            self.cache.insert(
-                key,
-                CachedRun {
-                    status,
-                    nodes: nodes.clone(),
-                    spans: spans.clone(),
-                    observations: observations.clone(),
-                },
-            );
-        }
+        self.try_cache(choices, &status, &nodes, &spans, &observations);
         (status, nodes, spans, observations)
     }
 
@@ -434,18 +472,45 @@ impl TargetedRunner {
                 cached.observations,
             );
         }
+        if let Some(cached) = self.lookup_prefix_cache(choices) {
+            return (
+                cached.status,
+                cached.nodes,
+                cached.spans,
+                cached.observations,
+            );
+        }
         let ntc = NativeTestCase::for_choices(choices, None);
         let (status, nodes, spans, observations) = self.run_on(ntc);
+        self.try_cache(choices, &status, &nodes, &spans, &observations);
+        (status, nodes, spans, observations)
+    }
+
+    /// Cache a deterministic test run (one where `nodes.len() <= choices.len()`,
+    /// i.e. the test didn't draw past the supplied prefix). We key by the
+    /// input's first `nodes.len()` entries — the "used prefix" — so any later
+    /// input whose first draws match replays identically and hits the cache.
+    fn try_cache(
+        &mut self,
+        choices: &[ChoiceValue],
+        status: &Status,
+        nodes: &[ChoiceNode],
+        spans: &[Span],
+        observations: &HashMap<String, f64>,
+    ) {
+        if nodes.len() > choices.len() {
+            return;
+        }
+        let key = encode_choice_key(&choices[..nodes.len()]);
         self.cache.insert(
             key,
             CachedRun {
-                status,
-                nodes: nodes.clone(),
-                spans: spans.clone(),
+                status: *status,
+                nodes: nodes.to_vec(),
+                spans: spans.to_vec(),
                 observations: observations.clone(),
             },
         );
-        (status, nodes, spans, observations)
     }
 
     /// Port of `ConjectureRunner.optimise_targets`: run `Optimiser` for each
@@ -454,12 +519,12 @@ impl TargetedRunner {
     pub fn optimise_targets(&mut self) -> Result<(), RunIsComplete> {
         let mut max_improvements: usize = 10;
         loop {
-            let prev_calls = self.calls;
+            let prev_calls = self.valid_examples;
             let mut any_improvements = false;
 
             let targets: Vec<String> = self.best_observed_targets.keys().cloned().collect();
             for target in &targets {
-                if self.calls >= self.max_examples {
+                if self.valid_examples >= self.max_examples {
                     return Err(RunIsComplete);
                 }
                 let imps = self.hill_climb(target, max_improvements)?;
@@ -473,7 +538,7 @@ impl TargetedRunner {
             if any_improvements {
                 continue;
             }
-            if prev_calls == self.calls {
+            if prev_calls == self.valid_examples {
                 break;
             }
         }
@@ -503,7 +568,7 @@ impl TargetedRunner {
         let mut prev_len = current_nodes.len();
 
         while i >= 0 && improvements <= max_improvements {
-            if self.calls >= self.max_examples {
+            if self.valid_examples >= self.max_examples {
                 return Err(RunIsComplete);
             }
             if current_nodes.len() != prev_len {
@@ -528,6 +593,7 @@ impl TargetedRunner {
                         | ChoiceKind::Float(_)
                 )
             {
+                let len_before = current_nodes.len();
                 self.find_integer(
                     target,
                     &mut current_nodes,
@@ -539,7 +605,13 @@ impl TargetedRunner {
                     idx,
                     1,
                 )?;
-                if idx < current_nodes.len() {
+                // If the `+1` direction grew current_nodes, the `idx` we were
+                // examining is no longer at a "frontier" position — trying
+                // `-1` there almost always shrinks the sequence back to a
+                // lower score. Upstream calls it regardless but gets it for
+                // free from the data tree; we pay a test call each time, so
+                // skip when we can clearly see the probe won't pay off.
+                if idx < current_nodes.len() && current_nodes.len() == len_before {
                     self.find_integer(
                         target,
                         &mut current_nodes,
@@ -575,7 +647,7 @@ impl TargetedRunner {
         sign: i64,
     ) -> Result<(), RunIsComplete> {
         for k in 1..5i64 {
-            if self.calls >= self.max_examples {
+            if self.valid_examples >= self.max_examples {
                 return Err(RunIsComplete);
             }
             if *improvements > max_improvements {
@@ -598,7 +670,7 @@ impl TargetedRunner {
         let mut lo = 4i64;
         let mut hi = 5i64;
         loop {
-            if self.calls >= self.max_examples {
+            if self.valid_examples >= self.max_examples {
                 return Err(RunIsComplete);
             }
             if *improvements > max_improvements {
@@ -624,7 +696,7 @@ impl TargetedRunner {
         }
 
         while lo + 1 < hi {
-            if self.calls >= self.max_examples {
+            if self.valid_examples >= self.max_examples {
                 return Err(RunIsComplete);
             }
             if *improvements > max_improvements {
@@ -657,9 +729,11 @@ impl TargetedRunner {
     /// attempt's span contents into the current prefix + tail).
     ///
     /// Hypothesis wraps this in a 3-retry loop per `k` to let the random
-    /// extension resample; the port does single-attempt + span-fixup, which
-    /// passes every ported test except
-    /// `test_targeting_can_drive_length_very_high` (see `#[ignore]` + TODO).
+    /// extension resample (via data-tree-backed novel-prefix sampling). We
+    /// match the retry structure: up to 3 attempts per `k`, with early-outs
+    /// on `EarlyStop` and on "no growth" (same node count as current), both
+    /// of which signal that a fresh extension won't change anything. Each
+    /// retry pulls a fresh seed from `self.rng` so the tail differs.
     #[allow(clippy::too_many_arguments)]
     fn try_replace(
         &mut self,
@@ -745,66 +819,11 @@ impl TargetedRunner {
             })
             .collect();
 
-        if self.calls >= self.max_examples {
-            return false;
-        }
-        let (status, new_nodes, new_spans, new_obs) = self.run_extend_full(&choices);
-        if Self::consider_new_data(
-            target,
-            current_nodes,
-            current_spans,
-            current_obs,
-            current_score,
-            improvements,
-            status,
-            new_nodes.clone(),
-            new_spans.clone(),
-            new_obs,
-        ) {
-            return true;
-        }
-        if status == Status::EarlyStop {
-            return false;
-        }
-        if new_nodes.len() == current_nodes.len() {
-            return false;
-        }
-        // Span-fixup: for each current span that brackets `idx`, if the
-        // attempt's same-index span covers a different number of choices,
-        // splice the attempt's span contents into the current prefix and
-        // keep current's tail past the span. Port of the loop at the end
-        // of Hypothesis's `Optimiser.attempt_replace`.
-        let current_spans_snapshot = current_spans.clone();
-        let current_values_snapshot: Vec<ChoiceValue> =
-            current_nodes.iter().map(|n| n.value.clone()).collect();
-        for (j, ex) in current_spans_snapshot.iter().enumerate() {
-            if ex.start > idx {
-                break;
-            }
-            if ex.end <= idx {
-                continue;
-            }
-            let ex_attempt = match new_spans.get(j) {
-                Some(s) => s.clone(),
-                None => continue,
-            };
-            if ex.end - ex.start == ex_attempt.end - ex_attempt.start {
-                continue;
-            }
-            let replacement: Vec<ChoiceValue> = new_nodes[ex_attempt.start..ex_attempt.end]
-                .iter()
-                .map(|n| n.value.clone())
-                .collect();
-            let mut spliced: Vec<ChoiceValue> = Vec::new();
-            spliced.extend_from_slice(&current_values_snapshot[..idx]);
-            spliced.extend(replacement);
-            if ex.end < current_values_snapshot.len() {
-                spliced.extend_from_slice(&current_values_snapshot[ex.end..]);
-            }
-            if self.calls >= self.max_examples {
+        for _ in 0..3 {
+            if self.valid_examples >= self.max_examples {
                 return false;
             }
-            let (s_status, s_nodes, s_spans, s_obs) = self.run_exact(&spliced);
+            let (status, new_nodes, new_spans, new_obs) = self.run_extend_full(&choices);
             if Self::consider_new_data(
                 target,
                 current_nodes,
@@ -812,12 +831,77 @@ impl TargetedRunner {
                 current_obs,
                 current_score,
                 improvements,
-                s_status,
-                s_nodes,
-                s_spans,
-                s_obs,
+                status,
+                new_nodes.clone(),
+                new_spans.clone(),
+                new_obs,
             ) {
                 return true;
+            }
+            if status == Status::EarlyStop {
+                return false;
+            }
+            if new_nodes.len() == current_nodes.len() {
+                return false;
+            }
+            // Span-fixup: for each current span that brackets `idx`, if the
+            // attempt's same-index span covers a different number of choices,
+            // splice the attempt's span contents into the current prefix and
+            // keep current's tail past the span. Port of the loop at the end
+            // of Hypothesis's `Optimiser.attempt_replace`.
+            let current_spans_snapshot = current_spans.clone();
+            let current_values_snapshot: Vec<ChoiceValue> =
+                current_nodes.iter().map(|n| n.value.clone()).collect();
+            for (j, ex) in current_spans_snapshot.iter().enumerate() {
+                if ex.start > idx {
+                    break;
+                }
+                if ex.end <= idx {
+                    continue;
+                }
+                let ex_attempt = match new_spans.get(j) {
+                    Some(s) => s.clone(),
+                    None => continue,
+                };
+                if ex.end - ex.start == ex_attempt.end - ex_attempt.start {
+                    continue;
+                }
+                let replacement: Vec<ChoiceValue> = new_nodes[ex_attempt.start..ex_attempt.end]
+                    .iter()
+                    .map(|n| n.value.clone())
+                    .collect();
+                let mut spliced: Vec<ChoiceValue> = Vec::new();
+                spliced.extend_from_slice(&current_values_snapshot[..idx]);
+                spliced.extend(replacement);
+                if ex.end < current_values_snapshot.len() {
+                    spliced.extend_from_slice(&current_values_snapshot[ex.end..]);
+                }
+                if self.valid_examples >= self.max_examples {
+                    return false;
+                }
+                let (s_status, s_nodes, s_spans, s_obs) = self.run_exact(&spliced);
+                if Self::consider_new_data(
+                    target,
+                    current_nodes,
+                    current_spans,
+                    current_obs,
+                    current_score,
+                    improvements,
+                    s_status,
+                    s_nodes,
+                    s_spans,
+                    s_obs,
+                ) {
+                    return true;
+                }
+            }
+            // Retrying with a fresh random tail only makes sense when the
+            // attempt's random extension past the input prefix might resample
+            // to a luckier outcome. If the attempt was SHORTER than current
+            // (test mark_invalid'd before finishing) the test didn't draw past
+            // the prefix, so there's no tail to resample.
+            if new_nodes.len() < current_nodes.len() {
+                return false;
             }
         }
         false
