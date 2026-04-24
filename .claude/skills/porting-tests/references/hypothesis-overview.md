@@ -59,7 +59,14 @@ Hypothesis "strategies" correspond to hegel-rust "generators".
   setting or leave the test as `todo!()` if deadline is load-bearing.
 - `assume(cond)` → `tc.assume(cond)` (same spelling).
 - `note(msg)` → `tc.note(msg)`.
-- `target(score)` → no hegel-rust API yet; leave as `todo!()`.
+- `target(score)` on the public `TestCase` → still no hegel-rust API;
+  leave user-facing `tc.target(...)` calls as `todo!()`. For
+  `conjecture/test_optimiser.py`-shape tests that build their own
+  runner and assert on `target_observations` /
+  `best_observed_targets` / `optimise_targets`, use the native-only
+  `TargetedRunner` / `TargetedTestCase` / `BufferSizeLimit` surface
+  exposed via `__native_test_internals` — see
+  `tests/hypothesis/conjecture_optimiser.rs`.
 - `find(strategy, predicate)` → `minimal(generator, predicate)` from
   `crate::common::utils`.
 - `capsys` / `capfd` fixtures → use `TempRustProject` from
