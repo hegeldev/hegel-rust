@@ -115,7 +115,6 @@ pub struct Chooser {
     selection_order: SelectionOrder,
     node_trail: Vec<TreeNode>,
     choices: Vec<usize>,
-    finished: bool,
 }
 
 impl Chooser {
@@ -124,7 +123,6 @@ impl Chooser {
             selection_order,
             node_trail: vec![root],
             choices: Vec::new(),
-            finished: false,
         }
     }
 
@@ -136,7 +134,6 @@ impl Chooser {
         T: Clone,
         F: Fn(&T) -> bool,
     {
-        assert!(!self.finished);
         let node = self.node_trail.last().unwrap().clone();
 
         {
@@ -171,7 +168,6 @@ impl Chooser {
     }
 
     fn finish(mut self) -> Vec<usize> {
-        self.finished = true;
         let result = self.choices.clone();
         self.node_trail
             .last()
