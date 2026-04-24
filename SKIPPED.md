@@ -755,6 +755,15 @@ Individually-skipped tests (rest of the file is ported):
   parametrize/fixture surface, so the whole file is pytest-plugin integration
   with no hegel-rust counterpart.
 
+- `test__pytest.py` (in `tests/pytest/`) — the single test drives the
+  `pytester` plugin (`testdir.makepyfile`) to spawn a Python subprocess
+  running a script that imports pytest's private `_pytest` module and
+  verifies Hypothesis does not rely on `_pytest`'s submodules
+  (`_pytest.outcomes`) being pre-imported by checking `sys.modules`.
+  Python subprocess + `sys.modules` introspection + pytest's private
+  module layout — all Python/pytest-specific facilities with no
+  hegel-rust counterpart.
+
 - `test_sideeffect_warnings.py` — all tests exercise Hypothesis's Python-specific
   import-time initialization infrastructure: `_hypothesis_globals.in_initialization`
   (a Python module attribute tracking import phase), `hypothesis.configuration`
