@@ -681,6 +681,13 @@ per-kind constraint struct, re-exported via `__native_test_internals`:
 (with `n: u64`) for literals; the derive-equality `assert_eq!` works
 directly.
 
+**`ChoiceValue::String` wraps `Vec<u32>`, not `String`.** The string
+variant stores a codepoint sequence so replay can round-trip codepoints
+outside the UTF-8 range. Convert Python string literals at
+construction: `ChoiceValue::String("abc".chars().map(|c| c as u32).collect())`.
+The other variants are unsurprising — `Integer(i128)`, `Float(f64)`,
+`Bytes(Vec<u8>)`, `Boolean(bool)`.
+
 **Empty alphabet via the surrogate range.** Python's `intervals=""`
 (zero-char alphabet, used to test `compute_max_children` collapsing to
 1) has no `StringChoice` equivalent — `min_codepoint` / `max_codepoint`
