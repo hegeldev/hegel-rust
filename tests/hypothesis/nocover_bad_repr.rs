@@ -14,7 +14,7 @@ use hegel::generators as gs;
 #[test]
 fn test_sampled_from_bad_repr() {
     check_can_generate_examples(gs::sampled_from(vec![
-        "✐", "✑", "✒", "✓", "✔", "✕", "✖", "✗", "✘", "✙", "✚", "✛", "✜", "✝",
-        "✞", "✟", "✠", "✡", "✢", "✣",
+        "✐", "✑", "✒", "✓", "✔", "✕", "✖", "✗", "✘", "✙", "✚", "✛", "✜", "✝", "✞", "✟", "✠", "✡",
+        "✢", "✣",
     ]));
 }
