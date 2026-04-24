@@ -415,6 +415,20 @@ Individually-skipped tests (rest of the file is ported):
   `test_replay_logic.py::test_does_not_shrink_on_replay_with_multiple_bugs`,
   `test_exceptiongroup.py`, `test_slippage.py`, and `test_escalation.py`
   skips), and `src/native/` has no `InterestingOrigin` counterpart.
+- `test_pretty_repr.py` (in `nocover/`) — both tests exercise Python's
+  `repr()` / `eval()` round-trip on strategy objects.
+  `test_repr_evals_to_thing_with_same_repr` asserts `repr(eval(repr(s)))
+  == repr(s)`, i.e. that a strategy's `__repr__` produces Python source
+  that evaluates back to an equivalent strategy via `eval(r,
+  strategy_globals)`. `test_sampled_transform_reprs` asserts
+  `repr(eval("sampled_from([1, 2, 3]).filter(foo).map(bar)")) ==
+  "sampled_from([1, 2, 3]).filter(foo).map(bar)"` across three
+  parametrize rows. Both depend on Python's `__repr__` dunder,
+  `eval()` of source, and function-name introspection (module-level
+  `foo`/`bar`/`baz` referenced by name in the repr). hegel-rust
+  generators are Rust builder structs with no repr surface and no
+  runtime source-evaluation path (same family as the `test_bad_repr.py`
+  repr skips, `test_custom_reprs.py`, and `test_eval_as_source.py`).
 - `test_posonly_args_py38.py` — tests Python 3.8 positional-only arg
   syntax (`/`) on `@st.composite` and `st.builds()`; both are
   Python-syntax / Python-API specific with no Rust counterpart.
