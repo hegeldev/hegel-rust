@@ -448,7 +448,7 @@ If a test calls a native-mode feature that isn't implemented yet, do NOT
 `#[ignore = "reason"]` is for tests that *compile and run but don't pass*
 against the current engine — typically because a semantic gap between
 hegel-rust's `src/native/` and Hypothesis hides behind an otherwise
-working feature. Two shapes seen so far:
+working feature. Three shapes seen so far:
 
 - The feature is implemented and the rest of the test-file's tests
   pass, but one case's assertion depends on a sub-behaviour the native
@@ -460,8 +460,16 @@ working feature. Two shapes seen so far:
   seeding pattern doesn't reliably hit the same witness. Mirror the
   upstream xfail with `#[ignore]` — see
   `tests/pbtkit/findability_pbtsmith_regressions.rs` for precedent.
+- The file is a shrink-quality test whose `@example` rows exercise
+  the same assertion under different inputs, and the native shrinker
+  converges on some rows but gaps on others. Split each row into its
+  own `#[test]` and `#[ignore]` only the gapping ones under a single
+  shared TODO entry — see the "Shrink-quality stacks where rows gap
+  individually" subsection of `references/api-mapping.md` for the
+  shape, and `tests/hypothesis/quality_zig_zagging.rs` for a
+  precedent.
 
-For either shape: `#[ignore = "short reason — tracked in TODO.yaml"]`,
+For any of these: `#[ignore = "short reason — tracked in TODO.yaml"]`,
 file a corresponding TODO.yaml entry with un-ignoring as acceptance
 criteria, and leave the test body asserting the correct (future)
 behaviour. Do NOT degrade the assertion to match the current engine.
