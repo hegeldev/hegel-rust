@@ -501,7 +501,6 @@ impl TargetedRunner {
         let mut nodes_examined: HashSet<usize> = HashSet::new();
         let mut i: isize = current_nodes.len() as isize - 1;
         let mut prev_len = current_nodes.len();
-        let mut dirty = false;
 
         while i >= 0 && improvements <= max_improvements {
             if self.calls >= self.max_examples {
@@ -536,7 +535,6 @@ impl TargetedRunner {
                     &mut current_obs,
                     &mut current_score,
                     &mut improvements,
-                    &mut dirty,
                     max_improvements,
                     idx,
                     1,
@@ -549,7 +547,6 @@ impl TargetedRunner {
                         &mut current_obs,
                         &mut current_score,
                         &mut improvements,
-                        &mut dirty,
                         max_improvements,
                         idx,
                         -1,
@@ -559,7 +556,6 @@ impl TargetedRunner {
 
             i -= 1;
         }
-        let _ = dirty;
         Ok(improvements)
     }
 
@@ -574,7 +570,6 @@ impl TargetedRunner {
         current_obs: &mut HashMap<String, f64>,
         current_score: &mut f64,
         improvements: &mut usize,
-        dirty: &mut bool,
         max_improvements: usize,
         idx: usize,
         sign: i64,
@@ -593,7 +588,6 @@ impl TargetedRunner {
                 current_obs,
                 current_score,
                 improvements,
-                dirty,
                 idx,
                 sign * k,
             ) {
@@ -617,7 +611,6 @@ impl TargetedRunner {
                 current_obs,
                 current_score,
                 improvements,
-                dirty,
                 idx,
                 sign * hi,
             ) {
@@ -645,7 +638,6 @@ impl TargetedRunner {
                 current_obs,
                 current_score,
                 improvements,
-                dirty,
                 idx,
                 sign * mid,
             ) {
@@ -659,12 +651,15 @@ impl TargetedRunner {
 
     /// Port of `Optimiser.attempt_replace` + `consider_new_data`: build a
     /// candidate choice sequence by shifting `current_nodes[idx]` by `k`, run
-    /// it extend="full", and commit if the target score did not decrease.
+    /// it extend="full", and commit if the target score did not decrease. If
+    /// the raw attempt fails but the perturbation changed the size of a span
+    /// covering `idx`, fall through to the span-fixup pass (splice the
+    /// attempt's span contents into the current prefix + tail).
     ///
-    /// Hypothesis retries up to 3 times per `k` with fresh random extension;
-    /// a still-failed attempt falls through to the span-fixup pass, which
-    /// patches up the trailing choices when the perturbation changed a span's
-    /// size.
+    /// Hypothesis wraps this in a 3-retry loop per `k` to let the random
+    /// extension resample; the port does single-attempt + span-fixup, which
+    /// passes every ported test except
+    /// `test_targeting_can_drive_length_very_high` (see `#[ignore]` + TODO).
     #[allow(clippy::too_many_arguments)]
     fn try_replace(
         &mut self,
@@ -674,7 +669,6 @@ impl TargetedRunner {
         current_obs: &mut HashMap<String, f64>,
         current_score: &mut f64,
         improvements: &mut usize,
-        dirty: &mut bool,
         idx: usize,
         k: i64,
     ) -> bool {
@@ -762,7 +756,6 @@ impl TargetedRunner {
             current_obs,
             current_score,
             improvements,
-            dirty,
             status,
             new_nodes.clone(),
             new_spans.clone(),
@@ -819,7 +812,6 @@ impl TargetedRunner {
                 current_obs,
                 current_score,
                 improvements,
-                dirty,
                 s_status,
                 s_nodes,
                 s_spans,
@@ -833,9 +825,7 @@ impl TargetedRunner {
 
     /// Port of `Optimiser.consider_new_data`. Returns true iff the candidate
     /// overwrites the current state (either strict improvement or a lateral
-    /// move that does not grow the node count). `dirty` is set whenever the
-    /// current state was replaced so `hill_climb` can rewind its cursor on
-    /// the next iteration.
+    /// move that does not grow the node count).
     #[allow(clippy::too_many_arguments)]
     fn consider_new_data(
         target: &str,
@@ -844,7 +834,6 @@ impl TargetedRunner {
         current_obs: &mut HashMap<String, f64>,
         current_score: &mut f64,
         improvements: &mut usize,
-        dirty: &mut bool,
         new_status: Status,
         new_nodes: Vec<ChoiceNode>,
         new_spans: Vec<Span>,
@@ -863,14 +852,12 @@ impl TargetedRunner {
             *current_spans = new_spans;
             *current_obs = new_obs;
             *improvements += 1;
-            *dirty = true;
             return true;
         }
         if new_nodes.len() <= current_nodes.len() {
             *current_nodes = new_nodes;
             *current_spans = new_spans;
             *current_obs = new_obs;
-            *dirty = true;
             return true;
         }
         false
