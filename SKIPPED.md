@@ -424,6 +424,21 @@ Individually-skipped tests (rest of the file is ported):
   `test_replay_logic.py::test_does_not_shrink_on_replay_with_multiple_bugs`,
   `test_exceptiongroup.py`, `test_slippage.py`, and `test_escalation.py`
   skips), and `src/native/` has no `InterestingOrigin` counterpart.
+- `test_labels.py` (in `nocover/`) — every test asserts on Hypothesis's
+  per-strategy `SearchStrategy.label` attribute (`st.integers().label is
+  st.integers().label`, `st.integers().label != st.text().label`,
+  `st.one_of(a, b).label != st.one_of(b, a).label`, etc.) plus
+  `ConjectureData.for_choices([0])` / `cd.spans[1].label` span-label
+  introspection and `st.deferred(...)`. hegel-rust has no per-strategy
+  `.label()` on generators — span labels in `src/test_case.rs::labels`
+  are per-span-*type* u64 constants (`LIST`, `TUPLE`, `FILTER`, etc.),
+  not per-strategy identifiers derived from composition. `st.deferred`
+  has no analog either (same gap as the individually-skipped
+  `test_searchstrategy.py::test_deferred_strategy_draw`), and hegel-rust
+  generators are Rust generic wrappers with no runtime introspection
+  surface to derive a Hypothesis-style per-strategy label from (same
+  strategy-class-structure family as `.is_cacheable` / `.branches` /
+  `.is_empty` skips).
 - `test_pretty_repr.py` (in `nocover/`) — both tests exercise Python's
   `repr()` / `eval()` round-trip on strategy objects.
   `test_repr_evals_to_thing_with_same_repr` asserts `repr(eval(repr(s)))
