@@ -1817,6 +1817,14 @@ Individually-skipped tests (rest of the file is ported):
   Rust's native i128/u64 types have no analogous rounding pitfall to
   guard against.
 
+- `test_randomness.py` (in `tests/numpy/`) — numpy-extra integration
+  test. The single test calls `np.random.get_state()`,
+  `np.random.bytes(10)`, and `np.testing.assert_array_equal` to assert
+  that Hypothesis restores numpy's global PRNG state around a `@given`
+  run. The test's subject is the numpy PRNG-seeding hook in Hypothesis;
+  hegel-rust has no numpy integration and no global numpy-PRNG state to
+  seed/restore.
+
 - `test_series.py` (in `tests/pandas/`) — pandas-extra integration tests.
   Every test exercises `hypothesis.extra.pandas` (`pdst.series`,
   `pdst.range_indexes`) and pandas/numpy dtypes (`np.dtype("O")`,
