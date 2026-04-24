@@ -46,6 +46,7 @@ mod numerics;
 mod one_of;
 mod permutations;
 mod provisional_strategies;
+mod quality_float_shrinking;
 mod quality_poisoned_lists;
 mod quality_zig_zagging;
 mod regex;
