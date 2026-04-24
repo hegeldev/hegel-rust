@@ -702,6 +702,16 @@ Individually-skipped tests (rest of the file is ported):
   `--tb=native` pytest CLI — all pytest-plugin integration with no hegel-rust
   counterpart.
 
+- `test_statistics.py` (in `tests/pytest/`) — all tests drive the `pytester`
+  plugin (`testdir.makepyfile`/`testdir.runpytest`) to spawn pytest subprocesses
+  and assert on the `--hypothesis-show-statistics` pytest CLI flag
+  (`_hypothesis_pytestplugin.PRINT_STATISTICS_OPTION`) output
+  ("Hypothesis Statistics", "max_examples=100", "< 1% of examples satisfied
+  assumptions"). Also exercises xdist (`-n 2`), JUnit XML (`--junit-xml=out.xml`),
+  `unittest.TestCase` integration, and `hypothesis.stateful.RuleBasedStateMachine`
+  integration — all via Hypothesis's pytest plugin output. hegel-rust is not a
+  pytest plugin and has no `--show-statistics` CLI surface.
+
 - `test_sideeffect_warnings.py` — all tests exercise Hypothesis's Python-specific
   import-time initialization infrastructure: `_hypothesis_globals.in_initialization`
   (a Python module attribute tracking import phase), `hypothesis.configuration`
