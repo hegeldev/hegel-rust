@@ -477,6 +477,46 @@ test Hypothesis's engine internals. Place these at
 `tests/hypothesis/conjecture_*.rs` with `#![cfg(feature = "native")]`
 at the top, following the native-gated-plus-source-stub rules above.
 
+Three distinct *shapes* appear in this directory, each with a different
+native entry point:
+
+- **`test_shrinker.py`-shape** — body decorated with `@shrinking_from(initial)`
+  or `@run_to_nodes`, asserts on the shrunk choice sequence. Port via
+  hand-seeded `Shrinker::new(test_fn, nodes).shrink()` plus
+  `current_nodes` assertions (see `api-mapping.md`'s `@shrinking_from`
+  and `@run_to_nodes` sections).
+- **`test_optimiser.py`-shape** — body builds a `ConjectureRunner` and
+  calls `optimise_targets()`, asserts on `target_observations` /
+  `best_observed_targets`. Port via the native
+  `TargetedRunner` / `TargetedTestCase` / `BufferSizeLimit` surface in
+  `__native_test_internals` (see `tests/hypothesis/conjecture_optimiser.rs`).
+- **`test_engine.py`-shape** — body builds
+  `ConjectureRunner(f, settings=, random=, database_key=)`, calls
+  `runner.run()`, and asserts on runner-level bookkeeping:
+  `runner.interesting_examples`, `runner.exit_reason`, `runner.shrinks`,
+  `runner.call_count`, `runner.pareto_front`, `runner.secondary_key`,
+  `runner.save_choices(...)`, plus fixtures like `run_to_nodes(f)` from
+  `tests/conjecture/common.py` (the `conftest.py` fixture that returns
+  the shrunk `data.nodes` of the sole interesting example — distinct
+  from the `@run_to_nodes` decorator in `test_shrinker.py`). `TargetedRunner`
+  is *not* this surface — it exposes only `cached_test_function` /
+  `optimise_targets` / `best_observed_targets`, not interesting-example
+  tracking, exit reasons, shrink counters, or pareto bookkeeping. Most
+  of `test_engine.py` ends up individually-skipped today, each with a
+  rationale citing the specific missing attribute.
+
+**Don't skip `test_engine.py`-shape files wholesale.** Inside such
+files there's usually a subset of shrink-quality tests — the
+`test_can_shrink_variable_draws` / `test_can_shrink_variable_string_draws` /
+`test_variable_size_string_increasing` / `test_mildly_complicated_strategies`
+cluster in `test_engine.py` is the worked example — that assert on a
+shrunk *generated value* rather than runner bookkeeping, and port
+unchanged through the public `minimal(generator, predicate)` API (no
+`#![cfg(feature = "native")]` needed for these specific tests, though
+the file as a whole is native-gated because the rest of the module
+references `__native_test_internals`). Port those; skip the
+runner-attribute subset individually.
+
 ## Style
 
 - Keep each `#[test]` close in spirit to the Python original, with a similar
