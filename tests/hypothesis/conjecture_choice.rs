@@ -18,12 +18,11 @@
 //!   to form a labelled tree of forced nodes. `NativeTestCase` has no public
 //!   `freeze()` and no user-driven `start_span`/`stop_span` API; spans are
 //!   recorded internally by collections / schema drivers.
-//! - `test_copy_choice_node`, `test_cannot_modify_forced_nodes` — use
-//!   `ChoiceNode.copy(with_value=…)` to produce a value-swapped node.
-//!   `ChoiceNode` in `src/native/core/choices.rs` has `with_value` but the
-//!   test asserts that copying a forced node raises `AssertionError`, a
-//!   behaviour the Rust `with_value` does not enforce (forced propagation
-//!   is carried through unchanged).
+//! - `test_cannot_modify_forced_nodes` — asserts that calling
+//!   `ChoiceNode.copy(with_value=…)` on a forced node raises
+//!   `AssertionError`. Native `ChoiceNode::with_value` propagates
+//!   `was_forced` unchanged rather than panicking. (The non-forced
+//!   branch of `test_copy_choice_node` IS ported below.)
 //! - `test_choice_node_equality` — asserts `node != 42` (cross-type). Rust
 //!   `PartialEq` rejects mixed-type comparison at the type level, so this
 //!   case is unrepresentable in Rust.
@@ -56,9 +55,9 @@
 #![cfg(feature = "native")]
 
 use hegel::__native_test_internals::{
-    BigUint, BooleanChoice, BytesChoice, ChoiceKind, ChoiceValue, FloatChoice, IntegerChoice,
-    MAX_CHILDREN_EFFECTIVELY_INFINITE, NativeTestCase, Status, StringChoice, compute_max_children,
-    next_down, next_up,
+    BigUint, BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice,
+    IntegerChoice, MAX_CHILDREN_EFFECTIVELY_INFINITE, NativeTestCase, Status, StringChoice,
+    compute_max_children, next_down, next_up,
 };
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -857,4 +856,83 @@ fn test_choices_key_distinguishes_pos_zero_and_neg_zero_float() {
     let a = vec![ChoiceValue::Float(0.0)];
     let b = vec![ChoiceValue::Float(-0.0)];
     assert_ne!(a, b);
+}
+
+// -- test_copy_choice_node ----------------------------------------------------
+//
+// Upstream: for a non-forced node, `copy(with_value=v) == node` iff
+// `v == node.value`. Ported as explicit rows per kind. (The forced-node
+// branch — upstream's `test_cannot_modify_forced_nodes`, which asserts
+// that copying a forced node raises — doesn't port; native
+// `ChoiceNode::with_value` propagates `was_forced` unchanged.)
+
+fn assert_copy_choice_node(kind: ChoiceKind, value: ChoiceValue, other: ChoiceValue) {
+    let node = ChoiceNode {
+        kind,
+        value: value.clone(),
+        was_forced: false,
+    };
+    assert_eq!(node.with_value(value), node);
+    assert_ne!(node.with_value(other), node);
+}
+
+#[test]
+fn test_copy_choice_node_integer() {
+    assert_copy_choice_node(
+        ChoiceKind::Integer(IntegerChoice {
+            min_value: -10,
+            max_value: 10,
+        }),
+        ChoiceValue::Integer(5),
+        ChoiceValue::Integer(-3),
+    );
+}
+
+#[test]
+fn test_copy_choice_node_boolean() {
+    assert_copy_choice_node(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(true),
+        ChoiceValue::Boolean(false),
+    );
+}
+
+#[test]
+fn test_copy_choice_node_float() {
+    assert_copy_choice_node(
+        ChoiceKind::Float(FloatChoice {
+            min_value: -10.0,
+            max_value: 10.0,
+            allow_nan: false,
+            allow_infinity: false,
+        }),
+        ChoiceValue::Float(1.5),
+        ChoiceValue::Float(-2.25),
+    );
+}
+
+#[test]
+fn test_copy_choice_node_bytes() {
+    assert_copy_choice_node(
+        ChoiceKind::Bytes(BytesChoice {
+            min_size: 0,
+            max_size: 16,
+        }),
+        ChoiceValue::Bytes(b"abc".to_vec()),
+        ChoiceValue::Bytes(b"xyz".to_vec()),
+    );
+}
+
+#[test]
+fn test_copy_choice_node_string() {
+    assert_copy_choice_node(
+        ChoiceKind::String(StringChoice {
+            min_codepoint: b'a' as u32,
+            max_codepoint: b'z' as u32,
+            min_size: 0,
+            max_size: 16,
+        }),
+        ChoiceValue::String("abc".chars().map(|c| c as u32).collect()),
+        ChoiceValue::String("xyz".chars().map(|c| c as u32).collect()),
+    );
 }

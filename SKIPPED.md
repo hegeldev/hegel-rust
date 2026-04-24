@@ -1747,10 +1747,11 @@ Individually-skipped tests (rest of the file is ported):
   `data.freeze()` + user-driven `data.start_span` / `data.stop_span`.
   `NativeTestCase` exposes no public `freeze()` and no start/stop-span
   API (spans are recorded by internal drivers, not the test body).
-- `conjecture/test_choice.py::test_copy_choice_node`,
-  `::test_cannot_modify_forced_nodes` — rely on `ChoiceNode.copy(with_value=…)`
-  raising on forced nodes. The native `ChoiceNode::with_value` propagates
-  `was_forced` unchanged rather than panicking.
+- `conjecture/test_choice.py::test_cannot_modify_forced_nodes` — asserts
+  that `ChoiceNode.copy(with_value=…)` on a forced node raises
+  `AssertionError`. The native `ChoiceNode::with_value` propagates
+  `was_forced` unchanged rather than panicking. (The non-forced branch of
+  `test_copy_choice_node` is ported.)
 - `conjecture/test_choice.py::test_choice_node_equality` — asserts
   `node != 42` (cross-type). Rust `PartialEq` is type-restricted at compile
   time, so mixed-type comparison is unrepresentable.
