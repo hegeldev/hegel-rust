@@ -7,51 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-  - title: Un-ignore test_targeting_can_drive_length_very_high via data-tree retry semantics
-    details: |
-      `tests/hypothesis/conjecture_optimiser.rs::test_targeting_can_drive_length_very_high`
-      is `#[ignore]`d. The test drives a geometric run of booleans
-      (`while data.draw_boolean(0.25)`) and expects the optimiser to
-      reach `count.min(100) == 100` within a 100-example budget. Our
-      optimiser plateaus around 60-70 for this seed; upstream Hypothesis
-      reaches 100 because its `cached_test_function(..., extend="full")`
-      returns distinct random tails on repeat calls (the data tree
-      remembers visited extensions), feeding the 3-retry loop inside
-      `Optimiser.attempt_replace`
-      (`hypothesis-python/src/hypothesis/internal/conjecture/optimiser.py`).
-
-      The current `src/native/optimiser.rs::try_replace` is a
-      single-attempt + span-fixup port with no retry loop. A naive
-      wrapping-in-a-3-retry-loop fix was tried and regressed
-      `test_can_patch_up_examples` (converged to 54 instead of 63) —
-      the extra calls consume budget and shift the deterministic RNG
-      sequence for subsequent hill-climbs.
-
-      A proper fix likely needs:
-
-      1. A data-tree-like structure in `TargetedRunner` that remembers
-         which extension tails it has already produced for each prefix,
-         so retries actually explore novel tails rather than relying on
-         a fresh RNG seed each call.
-      2. Or: a budget-aware retry loop that only retries when the
-         first attempt's node count grew significantly (signal that
-         the tail matters), and accounts for retry cost against
-         `max_examples`.
-
-      Either approach needs regression checking against the other 16
-      ported tests (especially `test_can_patch_up_examples`, which is
-      the most retry-sensitive).
-
-      Acceptance criteria:
-        - Remove `#[ignore = "..."]` from
-          `test_targeting_can_drive_length_very_high` and have it pass
-          deterministically with the existing `SmallRng::seed_from_u64(0)`.
-        - All 17 tests in `tests/hypothesis/conjecture_optimiser.rs`
-          pass under `cargo test --features native --test hypothesis
-          conjecture_optimiser` without introducing flakiness.
-        - Remove the matching line from the module docstring at the top
-          of `tests/hypothesis/conjecture_optimiser.rs` if appropriate.
-
   - title: Port test_optimising_all_nodes @given(nodes()) body (requires nodes() strategy + compute_max_children)
     details: |
       `tests/hypothesis/conjecture_optimiser.rs` already ports the three

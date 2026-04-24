@@ -2,11 +2,9 @@
 //!
 //! Every test in this file exercises Hypothesis's targeted property-based
 //! testing machinery — `data.target_observations`, `runner.optimise_targets()`,
-//! and `runner.best_observed_targets` — via the stubbed native surface
-//! exposed through `hegel::__native_test_internals::TargetedRunner` /
-//! `TargetedTestCase`. That surface currently panics with `todo!()` at
-//! runtime; see TODO.yaml "Implement native targeting/optimiser" for the
-//! implementation sketch. Tests are native-gated so the test binary still
+//! and `runner.best_observed_targets` — via the native surface exposed
+//! through `hegel::__native_test_internals::TargetedRunner` /
+//! `TargetedTestCase`. Tests are native-gated so the test binary still
 //! compiles and links under both `--features native` and the default
 //! (server-only) build.
 //!
@@ -194,15 +192,6 @@ fn test_can_find_endpoints_of_a_range_1000_65535_score_up() {
     check_find_endpoints(1000, (1i128 << 16) - 1, true);
 }
 
-// Probabilistic climb over a geometric run of boolean trues — each
-// attempt_replace extension is a fresh random tail, and reaching
-// `count.min(100) == 100` within the 100-example budget depends on
-// Hypothesis's data-tree-backed cached_test_function returning multiple
-// distinct extensions per prefix across the 3-retry loop. Our optimiser
-// does single-attempt + span fixup and plateaus around 60–70 for this
-// seed; passing the assertion needs the richer retry semantics tracked
-// under TODO.yaml "Implement native targeting/optimiser".
-#[ignore = "needs data-tree-backed retry semantics; tracked in TODO.yaml"]
 #[test]
 fn test_targeting_can_drive_length_very_high() {
     let mut runner = TargetedRunner::new(
