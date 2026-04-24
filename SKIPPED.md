@@ -684,6 +684,18 @@ Individually-skipped tests (rest of the file is ported):
   and has no decorator-without-`@given` failure path, so the whole concept has
   no counterpart.
 
+- `test_constant_collection_timing.py` (in `tests/pytest/`) — both parametrize rows
+  drive the `pytester` plugin (`testdir.makeconftest`/`testdir.makepyfile`/
+  `testdir.runpytest`) to spawn a pytest subprocess and parse `--durations=0`
+  output (`re.search(r"([\d.]+)s call\s+\S+::test_first", output)`) to assert
+  whether the Hypothesis pytest plugin deferred constant collection away from
+  `test_first` — toggled with `-p no:hypothesispytest`. Also patches Hypothesis
+  internals (`providers._get_local_constants`, `providers._local_constants`,
+  `providers._sys_modules_len`) that have no native counterpart. The whole
+  concept — pytest-plugin-driven deferred constant collection observed via
+  pytest's duration output — is pytest-plugin integration with no hegel-rust
+  counterpart.
+
 - `test_pytest_detection.py` (in `tests/pytest/`) — every test exercises
   Hypothesis's `hypothesis.core.running_under_pytest` module-level flag (set by
   the pytest plugin) and the `pytester` plugin (`testdir.makepyfile`/
