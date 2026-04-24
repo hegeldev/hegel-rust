@@ -291,6 +291,12 @@ Individually-skipped tests (rest of the file is ported):
   Hypothesis API calls. Entire file depends on `libcst.codemod.CodemodTest`
   and tests Python-syntax transformations (keyword arguments,
   `HealthCheck.all()` → `list(HealthCheck)`, etc.); no Rust counterpart.
+- `test_codemod_cli.py` (in `codemods/`) — tests the `hypothesis codemod`
+  CLI entry point that drives the same `hypothesis.extra.codemods` tool
+  over Python source files (single-file, multi-file, and stdin modes).
+  Runs `hypothesis codemod ...` as a subprocess and asserts the Python
+  file contents get rewritten; no Rust counterpart to either the CLI or
+  the Python-syntax transformation.
 - `test_local_constants.py` (in `conjecture/`) — tests the consumption
   side of the same Python-AST constant-collection feature as
   `test_constants_ast.py` above. Every test monkey-patches
