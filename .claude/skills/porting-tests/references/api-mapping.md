@@ -256,6 +256,26 @@ adding the feature. Don't invent a workaround in the test.
   generator structs, so there is no laziness/memoisation layer to
   observe. Skip individually with a rationale naming `LazyStrategy` /
   `defines_strategy`.
+- **Pluggable `Provider`s** (`BytestringProvider`, `URandomProvider`).
+  Hypothesis `ConjectureData` takes a `provider=...` arg that swaps the
+  draw-source — `BytestringProvider` drives draws from a raw byte string,
+  `URandomProvider` from `/dev/urandom`. `src/native/` has one provider:
+  the `SmallRng` embedded in `NativeTestCase::new_random`, i.e. only
+  `HypothesisProvider`'s analog. `NativeTestCase::for_choices` takes
+  concrete `ChoiceValue`s, not bytes, so `BytestringProvider`-driven
+  tests have no port. When a `conjecture/test_provider_contract.py`-shape
+  file parametrizes over providers, port only the `HypothesisProvider`
+  row (see `tests/hypothesis/conjecture_provider_contract.rs`) and
+  individually-skip the `BytestringProvider` / `URandomProvider` rows
+  with a "no pluggable-provider surface in `src/native/`" rationale.
+  When the Python row is `@given(st.randoms())` — i.e. the property is
+  "for any RNG seed, draws satisfy the invariant" — port as a small
+  fixed seed array (`const SEEDS: &[u64] = &[0, 1, 2, 3, 17, 42, 12345, u64::MAX];`)
+  iterated inside one `#[test]` per constraint shape, each constructing
+  `NativeTestCase::new_random(SmallRng::seed_from_u64(seed))`. A handful
+  of seeds exercises the random-draw path without re-plumbing an
+  `@given`-over-RNG wrapper that hegel-rust's derandomised helpers don't
+  have.
 
 ## Replaying fixed choices (`ConjectureData.for_choices`)
 
