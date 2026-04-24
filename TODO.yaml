@@ -7,42 +7,46 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-  - title: Port test_optimising_all_nodes @given(nodes()) body (requires nodes() strategy + compute_max_children)
+  - title: Un-skip test_optimising_all_nodes @given(nodes()) body — needs nodes() ChoiceKind strategy + hegel-driven test
     details: |
-      `tests/hypothesis/conjecture_optimiser.rs` already ports the three
-      `@example` rows of upstream's `test_optimising_all_nodes` as
-      independent `#[test]`s (`test_optimising_all_nodes_bytes_example`,
+      `compute_max_children` is now ported (see `src/native/datatree.rs`),
+      so half of the prerequisite for un-skipping this test is in place.
+      The remaining work is the `nodes()` strategy and the test itself.
+
+      The three `@example` rows of upstream's `test_optimising_all_nodes`
+      are already ported as independent `#[test]`s in
+      `tests/hypothesis/conjecture_optimiser.rs`
+      (`test_optimising_all_nodes_bytes_example`,
       `test_optimising_all_nodes_string_example`,
       `test_optimising_all_nodes_integer_example`). The `@given(nodes())`
-      body is still individually-skipped — see the entry in
-      `SKIPPED.md` under `conjecture/test_optimiser.py::test_optimising_all_nodes`.
-
-      To un-skip it we need two Hypothesis primitives that have no
-      hegel-rust analog yet:
-
-      1. `nodes()` strategy (in
-         `resources/hypothesis/hypothesis-python/tests/conjecture/common.py`):
-         generates a random `ChoiceNode` across every choice kind
-         (integer / boolean / float / bytes / string) with valid
-         `constraints` dicts. Needs to be ported as a hegel strategy
-         that produces `hegel::__native_test_internals::ChoiceNode`.
-      2. `compute_max_children(choice_type, constraints)` (in
-         `resources/hypothesis/hypothesis-python/src/hypothesis/internal/conjecture/datatree.py`):
-         returns the cardinality of the choice space described by
-         `(type, constraints)`. The upstream test guards on
-         `compute_max_children(node.type, node.constraints) > 50`
-         to skip nodes with tiny choice spaces where hill climbing
-         can't produce many distinct values.
+      body is still individually-skipped — see `SKIPPED.md` under
+      `conjecture/test_optimiser.py::test_optimising_all_nodes`.
 
       Acceptance criteria:
-        - Port `nodes()` and `compute_max_children` into hegel-rust
-          (probably under `src/native/datatree.rs` and the test
-          helpers module).
-        - Add a `@given(nodes())`-style `#[test]` in
-          `tests/hypothesis/conjecture_optimiser.rs` (or as a
-          hegel-driven property test) that replaces the three fixed
-          `@example` rows with a single property body.
+        - Port the `nodes()` strategy from upstream
+          `hypothesis-python/tests/conjecture/common.py`. In hegel this
+          naturally shapes up as a hegel generator (or composite) that
+          produces a `ChoiceKind` plus a concrete seed value — hegel's
+          native `ChoiceKind` is a simpler, concrete representation than
+          upstream's `(choice_type, constraints dict)` pair, so the port
+          can produce `ChoiceKind` directly rather than opaque dicts.
+          The `constraints_strategy` / `integer_constraints` /
+          `boolean_constraints` / `float_constraints` /
+          `bytes_constraints` / `string_constraints` building blocks
+          from `provider_conformance.py` translate into the per-kind
+          generators that feed into the combined `nodes()` strategy.
+        - Add a `@given(nodes())`-style `#[hegel::test]` in
+          `tests/hypothesis/conjecture_optimiser.rs` (native-gated) that
+          replaces the three fixed `@example` rows with a single body:
+            * draw a `ChoiceKind` + seed value via the `nodes()` strategy,
+            * `tc.assume(compute_max_children(&kind) > 50.into())`
+              (using `hegel::__native_test_internals::compute_max_children`,
+              already exported),
+            * build a `TargetedRunner` whose callback does
+              `draw_<kind>(...)` and observes size per upstream's
+              `size_function`, run `optimise_targets`.
         - Remove the corresponding individually-skipped entry from
           `SKIPPED.md` (the one at line ~1654 ending
           "Un-skipping is part of the same ... TODO that un-stubs
-          `TargetedRunner`.").
+          `TargetedRunner`."). Update any cross-reference lines in the
+          SKIPPED.md entry that still mention "neither is ported".

@@ -269,6 +269,7 @@ pub mod __native_test_internals {
         ListenerEvent, Listeners, METAKEYS_NAME, MultiplexedNativeDatabase, NativeDatabase,
         ReadOnlyNativeDatabase,
     };
+    pub use crate::native::datatree::{MAX_CHILDREN_EFFECTIVELY_INFINITE, compute_max_children};
     pub use crate::native::dynamic_variable::DynamicVariable;
     pub use crate::native::featureflags::{FeatureFlags, FeatureStrategy};
     pub use crate::native::floats::{

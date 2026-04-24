@@ -15,9 +15,10 @@
 //!   `ChoiceNode` instances across every choice kind and tandem-constraint
 //!   shape, and the test guards on `compute_max_children(node.type,
 //!   node.constraints) > 50` from
-//!   `hypothesis.internal.conjecture.datatree`. Neither the node strategy
-//!   nor `compute_max_children` is ported to hegel-rust yet; the three
-//!   `@example` rows of that test *are* ported below.
+//!   `hypothesis.internal.conjecture.datatree`. `compute_max_children` is
+//!   now ported (see `hegel::__native_test_internals::compute_max_children`);
+//!   the `nodes()` strategy is not. The three `@example` rows of that test
+//!   *are* ported below.
 
 #![cfg(feature = "native")]
 
