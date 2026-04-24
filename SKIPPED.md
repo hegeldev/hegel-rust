@@ -1598,6 +1598,13 @@ Individually-skipped tests (rest of the file is ported):
   and `np.einsum`. hegel-rust has no numpy integration or counterpart
   for gufunc-signature / broadcastable-shape generation.
 
+- `test_narrow_floats.py` (in `tests/numpy/`) — numpy-extra integration
+  tests. Every test exercises `hypothesis.extra.numpy` (`arrays`,
+  `from_dtype`, `integer_dtypes`) and numpy dtypes (`np.float16`,
+  `np.float32`, `np.float64`, `np.dtype(...).itemsize`, `np.isnan`,
+  `np.all`). hegel-rust has no numpy integration or counterpart for
+  numpy-dtype-aware array/scalar generation.
+
 - `test_series.py` (in `tests/pandas/`) — pandas-extra integration tests.
   Every test exercises `hypothesis.extra.pandas` (`pdst.series`,
   `pdst.range_indexes`) and pandas/numpy dtypes (`np.dtype("O")`,
