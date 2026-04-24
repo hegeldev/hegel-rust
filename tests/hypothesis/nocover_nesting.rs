@@ -14,11 +14,11 @@ use hegel::{Hegel, Settings};
 #[test]
 fn test_nesting_1() {
     Hegel::new(|tc| {
-        let x: i64 = tc.draw(&gs::integers::<i64>().min_value(0).max_value(100));
+        let x: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(100));
         expect_panic(
             move || {
                 Hegel::new(move |tc_inner| {
-                    let y: i64 = tc_inner.draw(&gs::integers::<i64>());
+                    let y: i64 = tc_inner.draw(gs::integers::<i64>());
                     if y >= x {
                         panic!("inner_panic");
                     }
