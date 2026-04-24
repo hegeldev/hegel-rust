@@ -1652,10 +1652,10 @@ Individually-skipped tests (rest of the file is ported):
   implementations and no subclass-pluggable base class.
 
 - `conjecture/test_optimiser.py::test_optimising_all_nodes` `@given(nodes())`
-  branch — the three `@example` rows of that test are ported, but the
-  `@given(nodes())` body needs the `nodes()` strategy (from
-  `tests/conjecture/common.py`, generates random `ChoiceNode` instances)
-  and `compute_max_children` (from
-  `hypothesis.internal.conjecture.datatree`) — neither is ported to
-  hegel-rust yet. Tracked in TODO.yaml "Port test_optimising_all_nodes
+  branch — the three `@example` rows of that test are ported, and
+  `compute_max_children` is now available via
+  `hegel::__native_test_internals::compute_max_children` (see
+  `src/native/datatree.rs`). The remaining gap is the `nodes()` strategy
+  from `tests/conjecture/common.py`, which generates random `ChoiceNode`
+  instances. Tracked in TODO.yaml "Un-skip test_optimising_all_nodes
   @given(nodes()) body".
