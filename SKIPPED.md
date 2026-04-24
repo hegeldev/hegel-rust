@@ -1659,12 +1659,3 @@ Individually-skipped tests (rest of the file is ported):
   `hypothesis.internal.conjecture.datatree`) — neither is ported to
   hegel-rust yet. Un-skipping is part of the same "Implement native
   targeting/optimiser" TODO that un-stubs `TargetedRunner`.
-
-- `conjecture/test_optimiser.py::test_targeting_can_drive_length_very_high`
-  — reaching `best == 100` within the 100-example budget requires
-  Hypothesis's data-tree-backed `cached_test_function`, which returns
-  distinct random extensions for the same prefix across
-  `Optimiser.attempt_replace`'s 3-retry loop. Our minimal optimiser
-  does single-attempt + span-fixup and plateaus around 60-70 for this
-  seed. Marked `#[ignore]` in the ported test; un-ignoring is tracked
-  under the same "Implement native targeting/optimiser" TODO.
