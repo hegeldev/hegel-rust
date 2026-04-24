@@ -39,6 +39,7 @@ mod nocover_conjecture_engine;
 mod nocover_deferred_errors;
 mod nocover_dynamic_variable;
 mod nocover_filtering;
+mod nocover_flatmap;
 mod nocover_floating;
 mod nocover_imports;
 mod nocover_limits;

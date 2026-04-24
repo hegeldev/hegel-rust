@@ -1314,6 +1314,16 @@ Individually-skipped tests (rest of the file is ported):
   and there is no `max_stall` / `fixate_shrink_passes` /
   call-counter surface on `Shrinker`. Rest of the file ported.
 
+- `nocover/test_flatmap.py::test_flatmap_does_not_reuse_strategies` —
+  `find_any(s) is not find_any(s)` is a Python object-identity check
+  (the `is not` operator). hegel-rust draws return owned/cloned values,
+  so identity-distinctness across draws is structural rather than
+  observable. Rest of the file ported in
+  `tests/hypothesis/nocover_flatmap.rs`.
+- `nocover/test_flatmap.py::test_flatmap_has_original_strategy_repr` —
+  asserts `repr(ints) in repr(ints_up)` on a `.flatmap`-composed
+  strategy. hegel-rust generators have no repr surface.
+
 - `test_exceptiongroup.py` — every test raises a Python PEP 654
   `ExceptionGroup` / `BaseExceptionGroup` (Python 3.11+ built-in) from a
   `@given`-decorated function to pin down how Hypothesis unwraps groups
