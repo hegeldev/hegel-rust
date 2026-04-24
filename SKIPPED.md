@@ -360,6 +360,12 @@ Individually-skipped tests (rest of the file is ported):
   `test_caching.py` above); `test_local_types_are_garbage_collected_issue_493`
   uses `weakref.ref` + `gc.collect()` to assert Python garbage-collection
   behaviour on a locally-defined `@given`-decorated class — no Rust analog.
+- `test_conventions.py` (in `nocover/`) — the sole test asserts
+  `repr(UniqueIdentifier("hello_world")) == "hello_world"`, exercising
+  Python's `__repr__` dunder on a `hypothesis.utils.conventions` sentinel
+  type. `UniqueIdentifier` is a Python-only marker used as a default-arg
+  sentinel that prints as its own name; hegel-rust has no `UniqueIdentifier`
+  type and no `__repr__` dunder surface to test.
 - `test_eval_as_source.py` (in `nocover/`) — every test exercises
   `hypothesis.internal.reflection.source_exec_as_module`, which dynamically
   executes a Python source string as a Python module (via `exec`/`compile`
