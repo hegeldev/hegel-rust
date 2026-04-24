@@ -14,10 +14,9 @@ use std::collections::HashSet;
 
 #[test]
 fn test_filter_correctly_integers_gt_one() {
-    assert_all_examples(
-        gs::integers::<i64>().filter(|x: &i64| *x > 1),
-        |x: &i64| *x > 1,
-    );
+    assert_all_examples(gs::integers::<i64>().filter(|x: &i64| *x > 1), |x: &i64| {
+        *x > 1
+    });
 }
 
 #[test]
@@ -30,9 +29,8 @@ fn test_filter_correctly_nonempty_lists() {
 
 fn run_chained_filters_agree(base: BoxedGenerator<'static, i64>) {
     Hegel::new(move |tc| {
-        let forbidden: HashSet<i64> = tc.draw(
-            gs::hashsets(gs::integers::<i64>().min_value(1).max_value(20)).max_size(19),
-        );
+        let forbidden: HashSet<i64> =
+            tc.draw(gs::hashsets(gs::integers::<i64>().min_value(1).max_value(20)).max_size(19));
 
         let mut s: BoxedGenerator<'static, i64> = base.clone();
         for f in &forbidden {
