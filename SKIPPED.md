@@ -389,6 +389,15 @@ Individually-skipped tests (rest of the file is ported):
   facility with no Rust counterpart: Rust has no runtime source-evaluation
   or module-object model, and hegel-rust does not expose any equivalent
   reflection helper.
+- `test_fancy_repr.py` (in `nocover/`) — every test asserts Python's
+  `repr()` of a strategy against a literal string
+  (`repr(st.floats()) == "floats()"`,
+  `repr(st.integers().map(lambda x: x * 2)) == "integers().map(lambda x: x * 2)"`,
+  etc.), including lambda-source reconstruction via
+  `get_pretty_function_description`. hegel-rust generators are Rust
+  builder structs with no repr surface (same family as `test_bad_repr.py`
+  repr skips, `test_custom_reprs.py`, `test_pretty_repr.py`, and
+  `test_eval_as_source.py`).
 - `test_integer_ranges.py` (in `nocover/`) — the sole test
   (`test_bounded_integers_distribution_of_bit_width_issue_1387_regression`)
   draws from `integers(0, 1e100)` (upper bound ≈ 332 bits) and observes
