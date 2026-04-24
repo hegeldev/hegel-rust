@@ -262,6 +262,27 @@ translation:
 - Collapse Python runtime checks that Rust's type system handles at
   compile time. Don't port an `isinstance(x, str)` branch when `x:
   &str`.
+- Python aliased-mutable state (tree / DAG nodes where multiple
+  parents hold a handle to the same child and mutate it through any
+  of them; `defaultdict(Node)` where lookup auto-materialises a node
+  other code then keeps a handle to) becomes a `Rc<RefCell<…>>`
+  newtype wrapper — `struct Node(Rc<RefCell<NodeInner>>)` with all
+  interior state on `NodeInner` and `impl Node` methods borrowing
+  through the `RefCell`. `defaultdict(Node)` maps to
+  `inner.children.entry(i).or_insert_with(Node::new).clone()`; the
+  `clone()` is on the `Rc`, so all callers see the same node.
+  Precedent: `src/native/choicetree.rs` (port of
+  `conjecture/shrinking/choicetree.py`). Don't reach for alternatives
+  that look safer but aren't — `Vec<NodeInner>` with integer handles
+  works for a static tree but not when mixed insertion / pruning is
+  aliased, and `Arc<Mutex<…>>` is unnecessary overhead when the
+  native engine is single-threaded.
+- A Python generator function returning `Iterable[T]` (a `def foo(…):
+  yield …` whose caller does `for x in foo(…)`) ports to a
+  `Box<dyn FnMut(…) -> Vec<T>>` — build the vec in the order the
+  Python code would yield and return it eagerly. Hypothesis's
+  `LazySequenceCopy.pop(i)` idiom (swap index `i` with the last
+  element, pop) ports as `v.swap(i, v.len() - 1); v.pop()`.
 - Preserve names where they help a cross-reading reader: a function
   called `_codepoint_key` in pbtkit should be `codepoint_key` (or
   `codepoint_sort_key`) in Rust, not `char_rank`.
