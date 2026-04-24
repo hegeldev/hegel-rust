@@ -51,6 +51,37 @@ Hypothesis "strategies" correspond to hegel-rust "generators".
 | `st.from_regex(pat, fullmatch=True)` | `gs::from_regex(pat).fullmatch(true)` |
 | `st.characters(categories=..., whitelist_categories=..., ...)` | `gs::characters().categories(&[...])` |
 
+## `tests/snapshots/` — syrupy `.ambr` snapshot tests
+
+Every file in `hypothesis-python/tests/snapshots/` uses syrupy to pin
+Hypothesis's `Falsifying example: inner(arg=...)` stderr output with a
+corresponding `__snapshots__/<file>.ambr` file. The body is always
+shaped:
+
+```python
+def test_X(snapshot):
+    @SNAPSHOT_SETTINGS  # generate + shrink phases, derandomize, no DB
+    @given(arg=st.whatever())
+    def inner(arg):
+        assert <invariant>
+
+    assert run_test_for_falsifying_example(inner) == snapshot
+```
+
+The underlying claim is about the **shrunk counterexample**, not the
+stderr format. Port as `minimal(gen, |v: &T| !<invariant>(v))` and
+assert on the returned value directly against the `arg=...` shown in
+the `.ambr` file. No `TempRustProject` / stderr capture is needed.
+
+Backend-divergent shrink targets are common here: the native engine
+shrinks one way, the server engine's choice protocol shrinks another.
+If both find valid (but different) minima, branch with inline
+`#[cfg(feature = "native")]` inside the test and assert each target
+rather than skipping either backend — see
+`tests/hypothesis/snapshots_shrinking.rs::test_shrunk_string` (native
+→ `'A'` matches upstream, server → `'À'`). Skipping or gating to one
+backend here discards real coverage.
+
 ## Test-side fixtures that *don't* port
 
 - `@given(st....)` decorator → the test body goes into a closure passed
