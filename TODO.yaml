@@ -7,69 +7,87 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-  - title: Implement native targeting/optimiser (target_observations, optimise_targets, best_observed_targets)
+  - title: Un-ignore test_targeting_can_drive_length_very_high via data-tree retry semantics
     details: |
-      Hypothesis's targeted property-based testing lets a test body record
-      a floating-point "target score" under a named key
-      (`data.target_observations["m"] = value`). After the generation
-      phase, `ConjectureRunner.optimise_targets()` runs a hill-climbing
-      pass that mutates choice values to drive those targets higher,
-      recording the cross-test-case best under `best_observed_targets`.
-      See `hypothesis-python/src/hypothesis/internal/conjecture/optimiser.py`
-      for the pass and `tests/conjecture/test_optimiser.py` for the
-      behavioural contract.
+      `tests/hypothesis/conjecture_optimiser.rs::test_targeting_can_drive_length_very_high`
+      is `#[ignore]`d. The test drives a geometric run of booleans
+      (`while data.draw_boolean(0.25)`) and expects the optimiser to
+      reach `count.min(100) == 100` within a 100-example budget. Our
+      optimiser plateaus around 60-70 for this seed; upstream Hypothesis
+      reaches 100 because its `cached_test_function(..., extend="full")`
+      returns distinct random tails on repeat calls (the data tree
+      remembers visited extensions), feeding the 3-retry loop inside
+      `Optimiser.attempt_replace`
+      (`hypothesis-python/src/hypothesis/internal/conjecture/optimiser.py`).
 
-      hegel-rust's native engine has none of this. `src/native/optimiser.rs`
-      currently holds a stub `TargetedRunner` / `TargetedTestCase` surface
-      with every method `todo!()` so that
-      `tests/hypothesis/conjecture_optimiser.rs` compiles in both modes.
-      The ported tests panic at runtime on the first `TargetedRunner::new`
-      call; implementing this TODO is what makes them pass.
+      The current `src/native/optimiser.rs::try_replace` is a
+      single-attempt + span-fixup port with no retry loop. A naive
+      wrapping-in-a-3-retry-loop fix was tried and regressed
+      `test_can_patch_up_examples` (converged to 54 instead of 63) —
+      the extra calls consume budget and shift the deterministic RNG
+      sequence for subsequent hill-climbs.
 
-      - `NativeTestCase` (in `src/native/core/state.rs`) has no
-        `target_observations` field and no `observe_target` accessor.
-      - `CachedTestFunction` (in `src/native/tree.rs`) does not surface
-        per-test-case target observations through its `run` /
-        `run_shrink` / `run_probe` return values.
-      - `src/native/runner.rs::native_run` has no post-generation
-        optimiser loop; there is no equivalent of Hypothesis's `Optimiser`
-        class.
+      A proper fix likely needs:
 
-      A minimal port is probably:
+      1. A data-tree-like structure in `TargetedRunner` that remembers
+         which extension tails it has already produced for each prefix,
+         so retries actually explore novel tails rather than relying on
+         a fresh RNG seed each call.
+      2. Or: a budget-aware retry loop that only retries when the
+         first attempt's node count grew significantly (signal that
+         the tail matters), and accounts for retry cost against
+         `max_examples`.
 
-      1. Add `target_observations: HashMap<String, f64>` to
-         `NativeTestCase` plus an `observe_target(&mut self, key: &str,
-         value: f64)` method.
-      2. Surface target observations through `CachedTestFunction`'s
-         execute path (alongside `nodes` and `spans`) so a runner can
-         read them after each call.
-      3. Port Hypothesis's `Optimiser` (single-target hill climber over
-         integer / boolean / float / bytes / string choices) into
-         `src/native/optimiser.rs`, replacing the current stubs.
-         Iterate across target keys to cover the multi-target case.
-      4. Wire `TargetedRunner` (in `src/native/optimiser.rs`) to drive
-         generation + optimise + shrink against a user-supplied test
-         function, matching the surface already consumed by
-         `tests/hypothesis/conjecture_optimiser.rs`.
-      5. Back `BufferSizeLimit` with an actual thread-local override of
-         `native::core::BUFFER_SIZE` (currently `todo!()`).
-
-      The matching pbtkit file `test_targeting.py` is also whole-file
-      skipped ("no targeting surface on hegel-rust's `TestCase`"); the
-      same implementation will likely unblock both.
+      Either approach needs regression checking against the other 16
+      ported tests (especially `test_can_patch_up_examples`, which is
+      the most retry-sensitive).
 
       Acceptance criteria:
-        - Replace the `todo!()` bodies in `src/native/optimiser.rs` with a
-          working `TargetedRunner` / `TargetedTestCase` / `BufferSizeLimit`.
-          (Done: initial minimal port landed. 16 of 17 ported tests pass.)
-        - Un-`#[ignore]` `test_targeting_can_drive_length_very_high` by
-          adding data-tree-backed `cached_test_function` semantics so that
-          repeated `extend="full"` calls with the same prefix return
-          distinct random tails over the 3-retry loop in
-          `Optimiser.attempt_replace`. Our current single-attempt variant
-          plateaus around 60-70 for this seed.
-        - Port the upstream `test_optimising_all_nodes` `@given(nodes())`
-          body and remove the corresponding individually-skipped entry
-          from `SKIPPED.md` (requires porting the `nodes()` strategy and
-          `compute_max_children` from
-          `hypothesis.internal.conjecture.datatree`).
+        - Remove `#[ignore = "..."]` from
+          `test_targeting_can_drive_length_very_high` and have it pass
+          deterministically with the existing `SmallRng::seed_from_u64(0)`.
+        - All 17 tests in `tests/hypothesis/conjecture_optimiser.rs`
+          pass under `cargo test --features native --test hypothesis
+          conjecture_optimiser` without introducing flakiness.
+        - Remove the matching line from the module docstring at the top
+          of `tests/hypothesis/conjecture_optimiser.rs` if appropriate.
+
+  - title: Port test_optimising_all_nodes @given(nodes()) body (requires nodes() strategy + compute_max_children)
+    details: |
+      `tests/hypothesis/conjecture_optimiser.rs` already ports the three
+      `@example` rows of upstream's `test_optimising_all_nodes` as
+      independent `#[test]`s (`test_optimising_all_nodes_bytes_example`,
+      `test_optimising_all_nodes_string_example`,
+      `test_optimising_all_nodes_integer_example`). The `@given(nodes())`
+      body is still individually-skipped — see the entry in
+      `SKIPPED.md` under `conjecture/test_optimiser.py::test_optimising_all_nodes`.
+
+      To un-skip it we need two Hypothesis primitives that have no
+      hegel-rust analog yet:
+
+      1. `nodes()` strategy (in
+         `resources/hypothesis/hypothesis-python/tests/conjecture/common.py`):
+         generates a random `ChoiceNode` across every choice kind
+         (integer / boolean / float / bytes / string) with valid
+         `constraints` dicts. Needs to be ported as a hegel strategy
+         that produces `hegel::__native_test_internals::ChoiceNode`.
+      2. `compute_max_children(choice_type, constraints)` (in
+         `resources/hypothesis/hypothesis-python/src/hypothesis/internal/conjecture/datatree.py`):
+         returns the cardinality of the choice space described by
+         `(type, constraints)`. The upstream test guards on
+         `compute_max_children(node.type, node.constraints) > 50`
+         to skip nodes with tiny choice spaces where hill climbing
+         can't produce many distinct values.
+
+      Acceptance criteria:
+        - Port `nodes()` and `compute_max_children` into hegel-rust
+          (probably under `src/native/datatree.rs` and the test
+          helpers module).
+        - Add a `@given(nodes())`-style `#[test]` in
+          `tests/hypothesis/conjecture_optimiser.rs` (or as a
+          hegel-driven property test) that replaces the three fixed
+          `@example` rows with a single property body.
+        - Remove the corresponding individually-skipped entry from
+          `SKIPPED.md` (the one at line ~1654 ending
+          "Un-skipping is part of the same ... TODO that un-stubs
+          `TargetedRunner`.").
