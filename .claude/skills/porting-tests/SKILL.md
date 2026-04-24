@@ -219,6 +219,7 @@ concretely in the module docstring. Known gap categories:
 | Different shrink target | `minimal()` converges on a different value than Hypothesis does | `test_simplifies_towards_millenium` in `tests/hypothesis/datetimes.rs` (Python → 2000-01-01, native → 1970-01-01) |
 | Missing input validation | Invalid constraint combos that Hypothesis rejects with `InvalidArgument` run silently in native | the `InvalidArgument` cluster in `tests/hypothesis/float_nastiness.rs` |
 | Missing engine-internal pruning / bias | `Hegel::new(...).run()` can't navigate a dense `assume`-reject tree that Hypothesis's `DataTree` novel-prefix walk finds | `test_lot_of_dead_nodes` in `tests/hypothesis/nocover_conjecture_engine.rs` (one-in-128⁴ witness unreachable from `NativeTestCase::new_random`) |
+| Missing nasty-value injection | A "do we reliably hit these special values?" test expects the provider to seed near-boundary constants (powers of 10 and their ±1 neighbours from Hypothesis's `GLOBAL_CONSTANTS` in `hypothesis/internal/conjecture/providers.py`); native's bounded-integer provider only seeds the exact `min_value` / `max_value` | `test_biases_towards_boundary_values` in `tests/hypothesis/quality_integers.rs` (Python hits all four of `{-T, -T+1, T-1, T}` in 1000 draws; native hits only two) |
 
 Only use this gate when the test body itself is public-API-only. If
 the test reaches into `src/native/`-level engine internals
