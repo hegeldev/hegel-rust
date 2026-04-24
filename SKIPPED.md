@@ -1641,6 +1641,13 @@ Individually-skipped tests (rest of the file is ported):
   Both target the numpy integration and use Python-specific facilities
   (`sys.modules`, wildcard import) with no Rust counterpart.
 
+- `test_deprecation.py` (in `tests/numpy/`) — numpy-extra integration
+  tests. Every test exercises `hypothesis.extra.numpy`
+  (`nps.basic_indices` with an array shape and `min_dims`/`max_dims`
+  bounds) and asserts that misusing it emits a
+  `HypothesisDeprecationWarning`. hegel-rust has no numpy integration
+  or counterpart for numpy basic-index generation.
+
 - `test_argument_validation.py` (in `tests/array_api/`) — array-api-extra
   integration tests. Every parametrized case calls a strategy on the
   `xps` namespace built by `hypothesis.extra.array_api.make_strategies_namespace(xp)`
