@@ -3,17 +3,17 @@
 //! The Python test uses `@given(st.data())` + `data.draw(st.booleans(), ...)`
 //! inside the predicate to supply an arbitrary-but-consistent boolean for
 //! each input, and catches `Unsatisfiable` from `minimal()` via `reject()`.
-//! hegel-rust's `minimal()` helper (`crate::common::utils::minimal`) spawns
-//! its own nested run, so we draw a PRNG seed from the outer `tc` and use
-//! it as the source of the arbitrary oracle — the same pattern used in
+//! hegel-rust's `minimal()` helper spawns its own nested run, so we draw a
+//! PRNG seed from the outer `tc` and use it as the source of the arbitrary
+//! oracle — the same pattern used in
 //! `test_always_evicts_the_lowest_scoring_value` in `cache_implementation`.
 //! A `minimal()` that can't find any witness panics with "Could not find
 //! any examples…"; we catch that panic (the Rust analog of
 //! `except Unsatisfiable: reject()`).
 
-use crate::common::utils::minimal;
+use crate::common::utils::Minimal;
 use hegel::generators as gs;
-use hegel::{Hegel, Settings};
+use hegel::{HealthCheck, Hegel, Settings};
 use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -38,10 +38,16 @@ fn test_explore_arbitrary_function() {
         };
 
         catch_unwind(AssertUnwindSafe(|| {
-            minimal(gs::text().min_size(5), predicate);
+            Minimal::new(gs::text().min_size(5), predicate)
+                .test_cases(10)
+                .run();
         }))
         .ok();
     })
-    .settings(Settings::new().test_cases(10).database(None))
+    .settings(
+        Settings::new()
+            .database(None)
+            .suppress_health_check(HealthCheck::all()),
+    )
     .run();
 }
