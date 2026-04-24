@@ -373,6 +373,19 @@ Individually-skipped tests (rest of the file is ported):
   facility with no Rust counterpart: Rust has no runtime source-evaluation
   or module-object model, and hegel-rust does not expose any equivalent
   reflection helper.
+- `test_interesting_origin.py` (in `nocover/`) — the sole test,
+  parametrized over three `go_wrong_*` helpers that raise `ValueError`
+  with different Python exception-chaining patterns (naive, `raise X from
+  err`, `raise X from None`), asserts that `@given` surfaces an
+  `ExceptionGroup` under `settings(report_multiple_bugs=True)` — i.e. it
+  pins down that `InterestingOrigin.from_exception` distinguishes the
+  three chain shapes via `__cause__` / `__context__` traversal and
+  Hypothesis groups them into one PEP 654 `ExceptionGroup`. Rust panics
+  are singular with no chaining construct, hegel-rust's `Settings`
+  exposes no `report_multiple_bugs` setting (same gap as the
+  `test_replay_logic.py::test_does_not_shrink_on_replay_with_multiple_bugs`,
+  `test_exceptiongroup.py`, `test_slippage.py`, and `test_escalation.py`
+  skips), and `src/native/` has no `InterestingOrigin` counterpart.
 - `test_posonly_args_py38.py` — tests Python 3.8 positional-only arg
   syntax (`/`) on `@st.composite` and `st.builds()`; both are
   Python-syntax / Python-API specific with no Rust counterpart.
