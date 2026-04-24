@@ -19,7 +19,12 @@
       for the pass and `tests/conjecture/test_optimiser.py` for the
       behavioural contract.
 
-      hegel-rust's native engine has none of this:
+      hegel-rust's native engine has none of this. `src/native/optimiser.rs`
+      currently holds a stub `TargetedRunner` / `TargetedTestCase` surface
+      with every method `todo!()` so that
+      `tests/hypothesis/conjecture_optimiser.rs` compiles in both modes.
+      The ported tests panic at runtime on the first `TargetedRunner::new`
+      call; implementing this TODO is what makes them pass.
 
       - `NativeTestCase` (in `src/native/core/state.rs`) has no
         `target_observations` field and no `observe_target` accessor.
@@ -29,39 +34,38 @@
       - `src/native/runner.rs::native_run` has no post-generation
         optimiser loop; there is no equivalent of Hypothesis's `Optimiser`
         class.
-      - No public / `__native_test_internals` API corresponds to
-        `ConjectureRunner` (engine-internal harness with
-        `cached_test_function(choices)`, `optimise_targets()`, and a
-        `best_observed_targets` accessor).
 
       A minimal port is probably:
 
       1. Add `target_observations: HashMap<String, f64>` to
          `NativeTestCase` plus an `observe_target(&mut self, key: &str,
-         value: f64)` method. Expose it through
-         `__native_test_internals`.
+         value: f64)` method.
       2. Surface target observations through `CachedTestFunction`'s
          execute path (alongside `nodes` and `spans`) so a runner can
          read them after each call.
       3. Port Hypothesis's `Optimiser` (single-target hill climber over
-         integer / boolean / float / bytes / string choices) to a new
-         `src/native/optimiser.rs`. Iterate across target keys to cover
-         the multi-target case.
-      4. Wrap generation + optimise + shrink in a `NativeRunner` struct
-         (or extend `native_run`) that exposes `cached_test_function`,
-         `optimise_targets`, and `best_observed_targets` to
-         `__native_test_internals` so
-         `tests/hypothesis/conjecture_optimiser.rs` can test it.
+         integer / boolean / float / bytes / string choices) into
+         `src/native/optimiser.rs`, replacing the current stubs.
+         Iterate across target keys to cover the multi-target case.
+      4. Wire `TargetedRunner` (in `src/native/optimiser.rs`) to drive
+         generation + optimise + shrink against a user-supplied test
+         function, matching the surface already consumed by
+         `tests/hypothesis/conjecture_optimiser.rs`.
+      5. Back `BufferSizeLimit` with an actual thread-local override of
+         `native::core::BUFFER_SIZE` (currently `todo!()`).
 
       The matching pbtkit file `test_targeting.py` is also whole-file
       skipped ("no targeting surface on hegel-rust's `TestCase`"); the
       same implementation will likely unblock both.
 
       Acceptance criteria:
-        - Remove the `conjecture/test_optimiser.py::*` bullet from
-          `SKIPPED.md` and port all 10 tests (including the 6
-          parametrize rows of `test_can_find_endpoints_of_a_range`) into
-          `tests/hypothesis/conjecture_optimiser.rs`, native-gated, via
-          the new `NativeRunner` (or equivalent) API.
-        - All ported tests pass in `cargo test --features native
-          --test hypothesis conjecture_optimiser`.
+        - Replace the `todo!()` bodies in `src/native/optimiser.rs` with a
+          working `TargetedRunner` / `TargetedTestCase` / `BufferSizeLimit`.
+        - All 17 ported `tests/hypothesis/conjecture_optimiser.rs` tests
+          pass in `cargo test --features native --test hypothesis
+          conjecture_optimiser`.
+        - Port the upstream `test_optimising_all_nodes` `@given(nodes())`
+          body and remove the corresponding individually-skipped entry
+          from `SKIPPED.md` (requires porting the `nodes()` strategy and
+          `compute_max_children` from
+          `hypothesis.internal.conjecture.datatree`).

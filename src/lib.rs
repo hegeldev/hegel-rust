@@ -262,7 +262,7 @@ pub mod __native_test_internals {
     pub use crate::native::cathetus::cathetus;
     pub use crate::native::core::{
         BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice,
-        IntegerChoice, NativeTestCase, Span, StringChoice,
+        IntegerChoice, NativeTestCase, Span, Status, StringChoice,
     };
     pub use crate::native::database::{
         BackgroundWriteNativeDatabase, ExampleDatabase, InMemoryNativeDatabase, Listener,
@@ -276,6 +276,10 @@ pub mod __native_test_internals {
         make_float_clamper, next_down, next_down_normal, next_up, next_up_normal, sign_aware_lte,
     };
     pub use crate::native::intervalsets::IntervalSet;
+    pub use crate::native::optimiser::{
+        BufferSizeLimit, CachedTestResult, RunIsComplete, TargetedRunner, TargetedRunnerSettings,
+        TargetedTestCase,
+    };
     pub use crate::native::shrinker::value_shrinkers::{
         BytesShrinker, CollectionShrinker, IntegerShrinker, OrderingShrinker, StringShrinker,
     };
