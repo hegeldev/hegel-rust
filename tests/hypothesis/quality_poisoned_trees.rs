@@ -80,7 +80,7 @@ fn check_can_reduce_poison_from_any_subtree(size: usize) {
     // Phase 1: seed a size-`size` no-poison tree and shrink to the minimum.
     let initial = leftmost_tree_choices(size);
     let mut ntc = NativeTestCase::for_choices(&initial, None);
-    draw_tree(&mut ntc, p).expect("initial draw should succeed");
+    draw_tree(&mut ntc, p).unwrap();
     let initial_nodes = ntc.nodes.clone();
 
     let phase1_fn: Box<dyn FnMut(&[ChoiceNode]) -> (bool, Vec<ChoiceNode>)> =
@@ -101,7 +101,7 @@ fn check_can_reduce_poison_from_any_subtree(size: usize) {
     // Upstream asserts the shrinker converges to a tree of exactly `size`
     // leaves (the minimum satisfying `len >= size`).
     let mut replay = NativeTestCase::for_choices(&shrunk_values, None);
-    let shrunk_tree = draw_tree(&mut replay, p).expect("shrunk replay should succeed");
+    let shrunk_tree = draw_tree(&mut replay, p).unwrap();
     assert_eq!(shrunk_tree.len(), size);
 
     // Find each integer leaf node (max_value == 2^16 - 1) in order.
@@ -146,7 +146,7 @@ fn check_can_reduce_poison_from_any_subtree(size: usize) {
 
         let shrunk_poison_values = values_of(&poison_shrinker.current_nodes);
         let mut replay = NativeTestCase::for_choices(&shrunk_poison_values, None);
-        let final_tree = draw_tree(&mut replay, p).expect("shrunk poisoned replay should succeed");
+        let final_tree = draw_tree(&mut replay, p).unwrap();
         assert_eq!(
             final_tree,
             vec![POISON_LEAF],
