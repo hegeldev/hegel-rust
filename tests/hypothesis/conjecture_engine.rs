@@ -20,7 +20,7 @@
 
 use crate::common::utils::{expect_panic, minimal};
 use hegel::__native_test_internals::{
-    ChoiceValue, NativeConjectureData, NativeConjectureRunner, NativeRunnerSettings,
+    ChoiceValue, NativeConjectureData, NativeConjectureRunner, NativeRunnerSettings, RunnerPhase,
     interesting_origin, run_to_nodes,
 };
 use hegel::TestCase;
@@ -336,6 +336,52 @@ fn test_run_nothing() {
     );
     runner.run();
     assert_eq!(runner.call_count, 0);
+}
+
+#[test]
+fn test_stops_after_max_examples_when_generating() {
+    // `max_examples=1` and no interesting mark: runner must run the
+    // test function exactly once before stopping on the valid-example
+    // budget.
+    let seen: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+    let seen_clone = seen.clone();
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new().max_examples(1);
+    let mut runner = NativeConjectureRunner::new(
+        move |data: &mut NativeConjectureData| {
+            let bytes = data.draw_bytes(1, 1);
+            seen_clone.borrow_mut().push(bytes);
+        },
+        settings,
+        rng,
+    );
+    runner.run();
+    assert_eq!(seen.borrow().len(), 1);
+}
+
+#[test]
+fn test_phases_can_disable_shrinking() {
+    // `phases=(reuse, generate)` omits `Shrink`.  The test function
+    // marks interesting on its first call, so with shrinking disabled
+    // only that single call is made and `seen` collects exactly one
+    // 32-byte value.
+    let seen: Rc<RefCell<std::collections::HashSet<Vec<u8>>>> =
+        Rc::new(RefCell::new(std::collections::HashSet::new()));
+    let seen_clone = seen.clone();
+    let rng = SmallRng::seed_from_u64(0);
+    let settings =
+        NativeRunnerSettings::new().phases(vec![RunnerPhase::Reuse, RunnerPhase::Generate]);
+    let mut runner = NativeConjectureRunner::new(
+        move |data: &mut NativeConjectureData| {
+            let bytes = data.draw_bytes(32, 32);
+            seen_clone.borrow_mut().insert(bytes);
+            data.mark_interesting(interesting_origin(None));
+        },
+        settings,
+        rng,
+    );
+    runner.run();
+    assert_eq!(seen.borrow().len(), 1);
 }
 
 #[test]

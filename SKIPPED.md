@@ -2181,37 +2181,46 @@ entry names the attributes its port lands. Removing each bullet below
 is acceptance for the corresponding follow-up.
 
 - `conjecture/test_engine.py::test_can_load_data_from_a_corpus`,
-  `::test_detects_flakiness`, `::test_recursion_error_is_not_flaky`,
-  `::test_can_navigate_to_a_valid_example`,
   `::test_stops_after_max_examples_when_reading`,
-  `::test_stops_after_max_examples_when_generating`,
-  `::test_stops_after_max_examples_when_generating_more_bugs`,
-  `::test_phases_can_disable_shrinking`,
   `::test_reuse_phase_runs_for_max_examples_if_generation_is_disabled`,
+  `::test_runs_full_set_of_examples`,
   `::test_does_not_save_on_interrupt`,
-  `::test_saves_on_skip_exceptions_to_reraise`,
+  `::test_saves_on_skip_exceptions_to_reraise` — each relies on
+  Hypothesis's `InMemoryExampleDatabase` plus the runner's
+  corpus-replay phase (`reuse_existing_examples` / `save_choices`).
+  `NativeConjectureRunner` has stubs for these; the database-replay
+  follow-up TODO fills them in.
+- `conjecture/test_engine.py::test_detects_flakiness`,
+  `::test_recursion_error_is_not_flaky`,
   `::test_exit_because_max_iterations`,
   `::test_max_iterations_with_all_invalid`,
   `::test_max_iterations_with_some_valid`,
-  `::test_exit_because_shrink_phase_timeout`,
-  `::test_does_not_shrink_multiple_bugs_when_told_not_to`,
+  `::test_exit_because_shrink_phase_timeout` — each asserts on
+  `runner.exit_reason` values (`flaky`, `max_iterations`,
+  `very_slow_shrinking`) or on `runner.statistics` that the current
+  `NativeConjectureRunner::run()` doesn't set — it unconditionally
+  exits with `ExitReason::Finished`.
+- `conjecture/test_engine.py::test_does_not_shrink_multiple_bugs_when_told_not_to`,
   `::test_does_not_keep_generating_when_multiple_bugs`,
   `::test_shrink_after_max_examples`, `::test_shrink_after_max_iterations`,
-  `::test_runs_full_set_of_examples`,
-  `::test_does_not_shrink_if_replaying_from_database`,
+  `::test_stops_if_hits_interesting_early_and_only_want_one_bug` —
+  each relies on `report_multiple_bugs=False`, the standalone
+  `runner.shrink_interesting_examples()` entry point, or
+  cached-test-function replay. None of these exist on the runner yet.
+- `conjecture/test_engine.py::test_does_not_shrink_if_replaying_from_database`,
   `::test_does_shrink_if_replaying_inexact_from_database`,
-  `::test_stops_if_hits_interesting_early_and_only_want_one_bug`,
   `::test_skips_secondary_if_interesting_is_found`,
   `::test_discards_invalid_db_entries`,
-  `::test_discards_invalid_db_entries_pareto` — each constructs a
-  `ConjectureRunner(f, settings=, random=, database_key=)`, calls
-  `runner.run()`, and asserts on `runner.interesting_examples` /
-  `runner.exit_reason` / `runner.shrinks` / `runner.call_count` /
+  `::test_discards_invalid_db_entries_pareto` — each uses
   `runner.save_choices(...)` / `runner.secondary_key` /
-  `runner.pareto_key`. `__native_test_internals::TargetedRunner` is
-  the optimiser-facing slice (`cached_test_function` /
-  `optimise_targets` / `best_observed_targets`); it does not model
-  any of these attributes.
+  `runner.pareto_key` / `runner.reuse_existing_examples()` /
+  `runner.clear_secondary_key()`, all currently `todo!()` stubs on
+  `NativeConjectureRunner`.
+- `conjecture/test_engine.py::test_can_navigate_to_a_valid_example`,
+  `::test_stops_after_max_examples_when_generating_more_bugs` — each
+  needs an engine-side facility that isn't wired up yet
+  (`buffer_size_limit` context manager for the former; panic-from-user-code
+  captured as an interesting example for the latter).
 - `conjecture/test_engine.py::test_terminates_shrinks`,
   `::test_shrinks_both_interesting_examples`, `::test_discarding`,
   `::test_shrinking_from_mostly_zero`,

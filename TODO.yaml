@@ -7,58 +7,140 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Port conjecture/test_engine.py runner-bookkeeping cluster
+- title: Port conjecture/test_engine.py ExitReason cluster
   details: |
     Port the following tests from `conjecture/test_engine.py` into
-    `tests/hypothesis/conjecture_engine.rs`, native-gated. Each
-    constructs a `ConjectureRunner(f, settings=, random=, database_key=)`,
-    calls `runner.run()`, and asserts on `runner.interesting_examples`
-    / `runner.exit_reason` / `runner.shrinks` / `runner.call_count` /
-    `runner.valid_examples` / `runner.save_choices(...)` /
-    `runner.secondary_key` / `runner.pareto_key`:
-      - `test_can_load_data_from_a_corpus`
+    `tests/hypothesis/conjecture_engine.rs`, native-gated. Each asserts
+    on `runner.exit_reason` values that the current
+    `NativeConjectureRunner::run()` doesn't set — it unconditionally
+    exits with `ExitReason::Finished`:
       - `test_detects_flakiness`
       - `test_recursion_error_is_not_flaky`
-      - `test_can_navigate_to_a_valid_example`
-      - `test_stops_after_max_examples_when_reading`
-      - `test_stops_after_max_examples_when_generating`
-      - `test_stops_after_max_examples_when_generating_more_bugs`
-      - `test_phases_can_disable_shrinking`
-      - `test_reuse_phase_runs_for_max_examples_if_generation_is_disabled`
-      - `test_does_not_save_on_interrupt`
-      - `test_saves_on_skip_exceptions_to_reraise`
       - `test_exit_because_max_iterations`
       - `test_max_iterations_with_all_invalid`
       - `test_max_iterations_with_some_valid`
       - `test_exit_because_shrink_phase_timeout`
+
+    Port path: extend `NativeConjectureRunner::run()` to set
+    `exit_reason = Flaky` on a re-run mismatch (for
+    `test_detects_flakiness`), `MaxIterations` when the invalid-run
+    budget trips, and `VerySlowShrinking` + `statistics` on the
+    shrink-phase wall-clock budget trip. `INVALID_THRESHOLD_BASE` /
+    `INVALID_PER_VALID` constants need to mirror Hypothesis's
+    engine.py defaults (the `test_max_iterations_with_*` tests
+    assert the exact call count). `test_recursion_error_is_not_flaky`
+    is likely skip-worthy (Python-only stack trickery) — add a
+    SKIPPED.md entry if so.
+
+    Acceptance criteria:
+      - All 6 tests compile and pass (or `test_recursion_error_is_not_flaky`
+        is added to SKIPPED.md with a rationale naming CPython's stack
+        tricks).
+      - The matching bullet in `SKIPPED.md` is removed.
+
+- title: Port conjecture/test_engine.py database-replay cluster
+  details: |
+    Port the following tests from `conjecture/test_engine.py` into
+    `tests/hypothesis/conjecture_engine.rs`, native-gated. Each relies
+    on Hypothesis's `InMemoryExampleDatabase` plus the runner's
+    corpus-replay phase (`reuse_existing_examples` / `save_choices`):
+      - `test_can_load_data_from_a_corpus`
+      - `test_stops_after_max_examples_when_reading`
+      - `test_reuse_phase_runs_for_max_examples_if_generation_is_disabled`
+      - `test_runs_full_set_of_examples`
+      - `test_does_not_save_on_interrupt`
+      - `test_saves_on_skip_exceptions_to_reraise`
+
+    Port path: use `InMemoryNativeDatabase` as the DB; implement
+    `NativeConjectureRunner`'s reuse phase so it reads entries via
+    `ExampleDatabase::fetch(key)` and replays them as seeded test
+    runs before the generation phase. `test_does_not_save_on_interrupt`
+    and `test_saves_on_skip_exceptions_to_reraise` may be skip-worthy
+    (Python-specific `KeyboardInterrupt` / `pytest.skip()`) — add
+    SKIPPED.md entries if so.
+
+    Acceptance criteria:
+      - All 6 tests compile and pass (or any Python-specific
+        exceptions tests are added to SKIPPED.md with a rationale).
+      - The matching bullet in `SKIPPED.md` is removed.
+
+- title: Port conjecture/test_engine.py multiple-bugs / shrink-entry cluster
+  details: |
+    Port the following tests from `conjecture/test_engine.py` into
+    `tests/hypothesis/conjecture_engine.rs`, native-gated. Each relies
+    on `report_multiple_bugs=False` behaviour, the standalone
+    `runner.shrink_interesting_examples()` entry point, or
+    cached-test-function replay:
       - `test_does_not_shrink_multiple_bugs_when_told_not_to`
       - `test_does_not_keep_generating_when_multiple_bugs`
       - `test_shrink_after_max_examples`
       - `test_shrink_after_max_iterations`
-      - `test_runs_full_set_of_examples`
+      - `test_stops_if_hits_interesting_early_and_only_want_one_bug`
+
+    Port path: extend `NativeRunnerSettings` with
+    `report_multiple_bugs: bool` (default `true`); fill in
+    `NativeConjectureRunner::shrink_interesting_examples()` to run
+    only the shrink phase on the current `interesting_examples`; wire
+    `NativeConjectureRunner::cached_test_function(choices)` to replay
+    a seeded test case. The upstream `Mock(...)` on
+    `shrink_interesting_examples` in `test_shrink_after_max_*` ports
+    as a boolean flag captured inside a wrapped closure.
+
+    Acceptance criteria:
+      - All 5 tests compile and pass.
+      - The matching bullet in `SKIPPED.md` is removed.
+
+- title: Port conjecture/test_engine.py save_choices / secondary_key / pareto_key cluster
+  details: |
+    Port the following tests from `conjecture/test_engine.py` into
+    `tests/hypothesis/conjecture_engine.rs`, native-gated. Each uses
+    `runner.save_choices(...)` / `runner.secondary_key` /
+    `runner.pareto_key` / `runner.reuse_existing_examples()` /
+    `runner.clear_secondary_key()`, all currently `todo!()` stubs:
       - `test_does_not_shrink_if_replaying_from_database`
       - `test_does_shrink_if_replaying_inexact_from_database`
-      - `test_stops_if_hits_interesting_early_and_only_want_one_bug`
       - `test_skips_secondary_if_interesting_is_found`
       - `test_discards_invalid_db_entries`
       - `test_discards_invalid_db_entries_pareto`
 
-    Use `NativeConjectureRunner::new(f, NativeRunnerSettings::new()
-    .max_examples(n).database(Some(db)).derandomize(true), rng)
-    .with_database_key(key).run()`. Fill in the stubs in
-    `src/native/conjecture_runner.rs` as each test lands — the
-    runtime `todo!()` panic tells the port-loop which attribute is
-    still missing. This cluster may land as several narrower commits
-    (grouped by attribute) rather than one mega-commit; split as you
-    go if the set feels too large for one invocation.
+    Port path: fill in `NativeConjectureRunner::{save_choices,
+    secondary_key, pareto_key, reuse_existing_examples,
+    clear_secondary_key}` per Hypothesis's `engine.py`. Use the
+    already-exported `InMemoryNativeDatabase` / `choices_to_bytes`
+    / `choices_from_bytes`. The "discard invalid entries" behaviour
+    needs the reuse phase to delete DB entries whose bytes don't
+    round-trip through `choices_from_bytes`.
 
     Acceptance criteria:
-      - All 26 tests compile and pass under
-        `cargo test --features native --test hypothesis conjecture_engine::`.
-      - The `::test_can_load_data_from_a_corpus` through
-        `::test_discards_invalid_db_entries_pareto` bullet in
-        `SKIPPED.md`'s `conjecture/test_engine.py::*` cluster is
-        removed.
+      - All 5 tests compile and pass.
+      - The matching bullet in `SKIPPED.md` is removed.
+
+- title: Port conjecture/test_engine.py remaining bookkeeping tests
+  details: |
+    Port the following tests from `conjecture/test_engine.py` into
+    `tests/hypothesis/conjecture_engine.rs`, native-gated. Each needs
+    a small engine-side facility not covered by the other follow-up
+    clusters:
+      - `test_can_navigate_to_a_valid_example` — uses
+        `buffer_size_limit(4)` as a context manager around
+        `runner.run()` to cap a single test case's total byte draws.
+        Port path: add a per-runner override on
+        `NativeRunnerSettings` / `NativeConjectureData` that caps
+        `draw_bytes` to a configurable total rather than the fixed
+        `CONJECTURE_BUFFER_SIZE`.
+      - `test_stops_after_max_examples_when_generating_more_bugs`
+        (parametrized on `examples ∈ {1, 5, 20, 50}`) — the test
+        function `raise`s arbitrary Python exceptions; Hypothesis
+        catches them and records each distinct traceback as an
+        interesting example. Port path: wrap the test function in
+        `catch_unwind`; map non-MarkPanic / non-STOP_TEST_PANIC
+        payloads to `Status::Interesting` with a per-panic
+        `InterestingOrigin` derived from the panic payload's type-id
+        or downcast string.
+
+    Acceptance criteria:
+      - Both tests (1 + 4 parametrized rows) compile and pass.
+      - The matching bullet in `SKIPPED.md` is removed.
 
 - title: Port conjecture/test_engine.py monkeypatch cluster
   details: |
