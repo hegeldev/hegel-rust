@@ -2210,13 +2210,6 @@ is acceptance for the corresponding follow-up.
   `test_max_iterations_with_some_valid`,
   `test_exit_because_shrink_phase_timeout`) are ported in
   `tests/hypothesis/conjecture_engine.rs`.
-- `conjecture/test_engine.py::test_does_not_shrink_multiple_bugs_when_told_not_to`,
-  `::test_does_not_keep_generating_when_multiple_bugs`,
-  `::test_shrink_after_max_examples`, `::test_shrink_after_max_iterations`,
-  `::test_stops_if_hits_interesting_early_and_only_want_one_bug` —
-  each relies on `report_multiple_bugs=False`, the standalone
-  `runner.shrink_interesting_examples()` entry point, or
-  cached-test-function replay. None of these exist on the runner yet.
 - `conjecture/test_engine.py::test_does_not_shrink_if_replaying_from_database`,
   `::test_does_shrink_if_replaying_inexact_from_database`,
   `::test_skips_secondary_if_interesting_is_found`,
