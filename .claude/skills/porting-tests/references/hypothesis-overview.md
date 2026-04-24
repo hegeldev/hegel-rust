@@ -110,6 +110,12 @@ backend here discards real coverage.
 - `capsys` / `capfd` fixtures → use `TempRustProject` from
   `tests/common/project.rs` to run the body as a subprocess and capture
   stderr (see `tests/test_output.rs` for the pattern).
+- `@skipif_threading` / `@skipif_time_unpatched` (from
+  `tests.common.utils`) → elide. The guard skips the test under
+  Hypothesis's free-threaded-Python (`PYTHON_GIL=0`) test profile, a
+  CPython-only concern with no hegel-rust analogue. Don't try to mirror
+  it — porting a `@skipif_threading`-decorated test means dropping the
+  decorator entirely.
 
 ## Shared test fixtures
 
