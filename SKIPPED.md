@@ -1736,6 +1736,50 @@ Individually-skipped tests (rest of the file is ported):
   `draw_integer(min, max)` accepts neither). The remaining `@example`
   rows (`boolean`, `float`) are ported.
 
+- `conjecture/test_choice.py::test_compute_max_children_and_all_children_agree`,
+  `::test_compute_max_children_unbounded_integer_ranges`,
+  `::test_all_children_are_permitted_values`,
+  `::test_choice_to_index_injective`,
+  `::test_choice_from_value_injective` — iterate every valid value for a
+  `ChoiceKind` via `datatree.all_children`. `compute_max_children` is
+  ported but the enumerator is not; no `src/native/` counterpart exists.
+- `conjecture/test_choice.py::test_nodes` — builds a forced-node tree via
+  `data.freeze()` + user-driven `data.start_span` / `data.stop_span`.
+  `NativeTestCase` exposes no public `freeze()` and no start/stop-span
+  API (spans are recorded by internal drivers, not the test body).
+- `conjecture/test_choice.py::test_copy_choice_node`,
+  `::test_cannot_modify_forced_nodes` — rely on `ChoiceNode.copy(with_value=…)`
+  raising on forced nodes. The native `ChoiceNode::with_value` propagates
+  `was_forced` unchanged rather than panicking.
+- `conjecture/test_choice.py::test_choice_node_equality` — asserts
+  `node != 42` (cross-type). Rust `PartialEq` is type-restricted at compile
+  time, so mixed-type comparison is unrepresentable.
+- `conjecture/test_choice.py::test_forced_nodes_are_trivial`,
+  `::test_trivial_nodes`, `::test_nontrivial_nodes`,
+  `::test_conservative_nontrivial_nodes` — depend on `ChoiceNode.trivial`,
+  which has no counterpart on native `ChoiceNode`.
+- `conjecture/test_choice.py::test_choice_node_is_hashable` — native
+  `ChoiceNode` does not implement `std::hash::Hash`.
+- `conjecture/test_choice.py::test_choices_size_positive` —
+  `choices_size([values])` (byte-width of a choice sequence) has no
+  `src/native/` counterpart.
+- `conjecture/test_choice.py::test_node_template_count`,
+  `::test_node_template_to_overrun`, `::test_node_template_single_node_overruns`,
+  `::test_node_template_simplest_is_actually_trivial`,
+  `::test_node_template_overrun` — use `ChoiceTemplate("simplest", count=n)`
+  as a prefix primitive. `NativeTestCase::for_choices` accepts only concrete
+  `ChoiceValue`s; there is no template variant in native.
+- `conjecture/test_choice.py::test_choice_indices_are_positive` —
+  trivially satisfied by Rust's type system: `ChoiceKind::{to,from}_index`
+  returns `BigUint` (unsigned), so the non-negativity assertion is a
+  tautology with no observable behaviour to check.
+- `conjecture/test_choice.py::test_compute_max_children` /
+  `::test_compute_max_children_is_positive` (rows parameterised on
+  `smallest_nonzero_magnitude`, `weights`, or `shrink_towards`) — native
+  `FloatChoice` has no `smallest_nonzero_magnitude`, and native
+  `IntegerChoice` has no `weights` / `shrink_towards`. The remaining
+  rows are ported.
+
 - `conjecture/test_shrinker.py::test_can_pass_to_an_indirect_descendant`,
   `::test_can_reorder_spans` — test pass-level behaviour
   (`pass_to_descendant`, `reorder_spans`) that consumes span metadata;
