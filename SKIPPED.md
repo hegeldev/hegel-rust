@@ -831,6 +831,18 @@ Individually-skipped tests (rest of the file is ported):
   module layout — all Python/pytest-specific facilities with no
   hegel-rust counterpart.
 
+- `test_fixtures.py` (in `tests/pytest/`) — every test exercises pytest
+  fixture injection into `@given` test functions: `@pytest.fixture`
+  (session/module/function scope), positional and keyword mixing of
+  fixtures and strategies in `@given` signatures, `Mock`/`create_autospec`
+  injection via fixtures, and the `pytester`/`testdir` plugin
+  (`testdir.makepyfile`/`testdir.makeconftest`/`testdir.runpytest`) to
+  assert on `HealthCheck.function_scoped_fixture`, `settings.register_profile`
+  + `--hypothesis-profile`, and `@given`/`@pytest.fixture` decorator
+  ordering errors. hegel-rust is not a pytest plugin and has no fixture
+  injection surface — the whole file is pytest-plugin integration with
+  no hegel-rust counterpart.
+
 - `test_sideeffect_warnings.py` — all tests exercise Hypothesis's Python-specific
   import-time initialization infrastructure: `_hypothesis_globals.in_initialization`
   (a Python module attribute tracking import phase), `hypothesis.configuration`
