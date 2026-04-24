@@ -262,7 +262,8 @@ pub mod __native_test_internals {
     pub use crate::native::cathetus::cathetus;
     pub use crate::native::core::{
         BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice,
-        IntegerChoice, NativeTestCase, Span, Status, StringChoice,
+        IntegerChoice, NativeTestCase, Span, Status, StringChoice, decode_exponent,
+        encode_exponent, float_to_index, index_to_float, reverse_bits_n,
     };
     pub use crate::native::database::{
         BackgroundWriteNativeDatabase, ExampleDatabase, InMemoryNativeDatabase, Listener,

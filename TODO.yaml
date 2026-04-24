@@ -6,3 +6,69 @@
 #   - title: one-line summary
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
+
+  - title: shrink-inf-to-max — shrinker should step from +inf to f64::MAX
+    details: |
+      `test_can_shrink_downwards_inf_max` in
+      tests/hypothesis/conjecture_float_encoding.rs is `#[ignore]`'d because
+      `src/native/shrinker/floats.rs::shrink_floats` can't step from
+      `f64::INFINITY` down to `f64::MAX` under the condition `!(x < f64::MAX)`
+      (which admits only `f64::MAX` and `f64::INFINITY`).
+
+      Cause: step 3a's integer bin-search over [0, int_hi] with
+      `int_hi = f64::MAX.floor() as i128` saturates to `i128::MAX`, but no
+      `n as f64` for `n <= i128::MAX` reaches `f64::MAX` (`i128::MAX as f64 ≈ 2^127 ≪ f64::MAX`).
+      Step 3b's bin-search over `[0, float_to_index(inf)]` also misses
+      `float_to_index(f64::MAX)` because midpoints skip past it.
+
+      Hypothesis's float shrinker has "next_down" / exponent-adjustment
+      passes that systematically try the previous float. Porting those
+      into `src/native/shrinker/floats.rs` is the expected fix.
+
+      Acceptance criteria: remove the `#[ignore]` on
+      `tests/hypothesis/conjecture_float_encoding.rs::test_can_shrink_downwards_inf_max`
+      and the test passes.
+
+  - title: shrink-fractional-part — shrinker should find 1.5 from 2.5 under `fract == 0.5`
+    details: |
+      `test_shrink_fractional_part` in
+      tests/hypothesis/conjecture_float_encoding.rs is `#[ignore]`'d because
+      `shrink_floats` can't walk from 2.5 to 1.5 under the condition
+      `(x - floor(x)) == 0.5`. The float lex index of 1.5 is
+      `(1<<63) | 1` and of 2.5 is `(1<<63) | (1<<52) | 1`; bin-search from
+      `[0, index(2.5)]` doesn't visit index `(1<<63) | 1` because
+      the midpoints are all of the form `2^k`, whose lex decodings
+      don't satisfy the fract==0.5 predicate.
+
+      Hypothesis does this with mantissa-level shrinking: once the
+      exponent is fixed at 1 (value in [1,2)), the shrinker adjusts the
+      fractional bits directly rather than index-bisecting.
+
+      Acceptance criteria: remove the `#[ignore]` on
+      `tests/hypothesis/conjecture_float_encoding.rs::test_shrink_fractional_part`
+      and the test passes.
+
+  - title: shrink-canonical-nan — shrinker should canonicalize NaN starting points
+    details: |
+      `src/native/shrinker/floats.rs::shrink_floats` has
+      `if v.is_nan() { continue; }`, so a starting value of `-NaN`,
+      `SIGNALING_NAN`, or `-SIGNALING_NAN` is left as-is. Hypothesis's
+      Python shrinker canonicalizes NaN to a positive quiet NaN with a
+      single-bit payload.
+
+      The following `#[ignore]`'d tests in
+      `tests/hypothesis/conjecture_float_encoding.rs` should pass once
+      NaN canonicalization is implemented:
+
+      - test_can_shrink_downwards_nan_1, _nan_2, _nan_max, _nan_inf
+      - test_shrinks_to_canonical_nan_neg_nan, _signaling, _neg_signaling
+
+      Fix sketch: in `shrink_floats`, when the node is a NaN, try
+      replacing it with `f64::NAN` (positive canonical) first, then
+      with any other value the shrinker would normally attempt (e.g.
+      `simplest()`, the positive/negative bounds). Clearing the sign
+      bit and the mantissa payload (except the high bit) matches
+      Hypothesis's canonicalization.
+
+      Acceptance criteria: all seven `#[ignore]`'d NaN tests above
+      pass without the `#[ignore]` attribute.
