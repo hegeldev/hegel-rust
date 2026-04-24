@@ -1752,6 +1752,13 @@ Individually-skipped tests (rest of the file is ported):
   `np.all`). hegel-rust has no numpy integration or counterpart for
   numpy-dtype-aware array/scalar generation.
 
+- `test_fill_values.py` (in `tests/numpy/`) — numpy-extra integration
+  tests. Every test exercises `hypothesis.extra.numpy` (`arrays` with
+  `object`/`"uint64"`/`float` dtypes and `fill=`/`elements=` strategies)
+  to generate numpy arrays, asserting on `set`/`.all()` over array
+  contents. hegel-rust has no numpy integration or counterpart for
+  numpy array generation with fill-value semantics.
+
 - `test_floor_ceil.py` (in `tests/numpy/`) — numpy-extra integration
   test. The single parametrized test constructs `np.array(eval(value))`
   for large ±2**53/63/64 integer cases and asserts that
