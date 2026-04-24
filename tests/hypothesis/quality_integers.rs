@@ -18,8 +18,9 @@ use std::sync::{Arc, Mutex};
 #[test]
 fn test_biases_towards_boundary_values() {
     let trillion: i64 = 10i64.pow(12);
-    let boundary_vals: HashSet<i64> =
-        [-trillion, -trillion + 1, trillion - 1, trillion].into_iter().collect();
+    let boundary_vals: HashSet<i64> = [-trillion, -trillion + 1, trillion - 1, trillion]
+        .into_iter()
+        .collect();
     let seen = Arc::new(Mutex::new(boundary_vals));
     let seen_clone = Arc::clone(&seen);
 
