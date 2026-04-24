@@ -14,10 +14,6 @@
 //!   for a `ChoiceKind` (`all_children` in upstream's `datatree.py`), which
 //!   has no `src/native/` counterpart. `compute_max_children` is ported, but
 //!   not the enumerator.
-//! - `test_nodes` — uses `data.freeze()` + `data.start_span` / `data.stop_span`
-//!   to form a labelled tree of forced nodes. `NativeTestCase` has no public
-//!   `freeze()` and no user-driven `start_span`/`stop_span` API; spans are
-//!   recorded internally by collections / schema drivers.
 //! - `test_cannot_modify_forced_nodes` — asserts that calling
 //!   `ChoiceNode.copy(with_value=…)` on a forced node raises
 //!   `AssertionError`. Native `ChoiceNode::with_value` propagates
@@ -297,6 +293,73 @@ fn test_draw_string_single_interval_with_equal_bounds_q_fifty() {
 fn test_draw_string_single_interval_with_equal_bounds_hiragana_seven() {
     // Non-ASCII codepoint (HIRAGANA LETTER A).
     string_single_interval(0x3042, 7);
+}
+
+// -- test_nodes ---------------------------------------------------------------
+//
+// Upstream makes a sequence of forced draws and asserts that `data.nodes`
+// matches an explicit list of `ChoiceNode` values. `NativeTestCase` exposes
+// `nodes` publicly; upstream's `start_span(42) / stop_span()` pair around
+// two of the draws is incidental to the node-list assertion (spans are a
+// separate tree) so we port without it.
+
+#[test]
+fn test_nodes() {
+    let mut data = fresh();
+    data.draw_float_forced(-10.0, 10.0, true, true, 5.0)
+        .ok()
+        .unwrap();
+    data.weighted(0.5, Some(true)).ok().unwrap();
+    data.draw_string_forced(b'a' as u32, b'd' as u32, 0, LARGE_MAX_SIZE, "abbcccdddd")
+        .ok()
+        .unwrap();
+    data.draw_bytes_forced(8, 8, vec![0u8; 8]).ok().unwrap();
+    data.draw_integer_forced(0, 100, 50).ok().unwrap();
+
+    let expected = vec![
+        ChoiceNode {
+            kind: ChoiceKind::Float(FloatChoice {
+                min_value: -10.0,
+                max_value: 10.0,
+                allow_nan: true,
+                allow_infinity: true,
+            }),
+            value: ChoiceValue::Float(5.0),
+            was_forced: true,
+        },
+        ChoiceNode {
+            kind: ChoiceKind::Boolean(BooleanChoice),
+            value: ChoiceValue::Boolean(true),
+            was_forced: true,
+        },
+        ChoiceNode {
+            kind: ChoiceKind::String(StringChoice {
+                min_codepoint: b'a' as u32,
+                max_codepoint: b'd' as u32,
+                min_size: 0,
+                max_size: LARGE_MAX_SIZE,
+            }),
+            value: ChoiceValue::String("abbcccdddd".chars().map(|c| c as u32).collect()),
+            was_forced: true,
+        },
+        ChoiceNode {
+            kind: ChoiceKind::Bytes(BytesChoice {
+                min_size: 8,
+                max_size: 8,
+            }),
+            value: ChoiceValue::Bytes(vec![0u8; 8]),
+            was_forced: true,
+        },
+        ChoiceNode {
+            kind: ChoiceKind::Integer(IntegerChoice {
+                min_value: 0,
+                max_value: 100,
+            }),
+            value: ChoiceValue::Integer(50),
+            was_forced: true,
+        },
+    ];
+    assert_eq!(data.nodes, expected);
 }
 
 // -- test_data_with_empty_choices_is_overrun ----------------------------------
