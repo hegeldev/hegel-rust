@@ -1601,6 +1601,19 @@ Individually-skipped tests (rest of the file is ported):
   has no `dpcontracts` integration or counterpart for design-by-contract
   precondition-aware generation.
 
+- `test_dateutil_timezones.py` (in `tests/datetime/`) — dateutil-extra
+  integration tests. Every test exercises `hypothesis.extra.dateutil`
+  (`timezones`), the `datetimes(timezones=...)` / `times(timezones=...)`
+  keyword argument that yields timezone-aware `datetime.time` /
+  `datetime.datetime` values, and the third-party Python `dateutil`
+  library's `tz.UTC`, `tz.gettz`, `tz.datetime_exists`, and
+  `zoneinfo.get_zonefile_instance` APIs, plus the internal
+  `hypothesis.strategies._internal.datetime.datetime_does_not_exist`
+  helper. hegel-rust's `gs::datetimes()` / `gs::times()` generators
+  produce plain ISO 8601 strings with no `timezones` parameter and no
+  tzinfo concept, and hegel-rust has no `dateutil` integration or
+  counterpart for zoneinfo-backed timezone-aware datetime generation.
+
 - `test_given_models.py` (in `tests/django/toystore/`) — django-extra
   integration tests. Every test exercises `hypothesis.extra.django`
   (`from_model`, `register_field_strategy`, `TestCase`,
