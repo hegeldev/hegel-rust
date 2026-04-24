@@ -358,6 +358,20 @@ Specific shapes that *look* skip-worthy but aren't:
   carve the scope down to something native *does* model. The two
   Python tests often look like one blurry "X behaviour" to a first
   pass, but port as one skip plus one successful port.
+- **Bundle-skipping by name similarity** — when a first-pass port
+  groups several tests under one skip rationale ("these five
+  `*_injective` tests all need `all_children`", "these four `*_trivial`
+  tests all need `ChoiceNode.trivial`"), open each test body before
+  the bundle sticks. Naming similarity is a fast clustering heuristic,
+  not a dependency proof — individual members often have different
+  (smaller) dependencies than the cluster's worst case. Concrete case:
+  `test_choice_from_value_injective` was bundled with
+  `test_choice_to_index_injective` on the `_injective` suffix, but
+  the former iterates `range(cap)` via `from_index` only — no
+  `all_children` dependency — and ported in a follow-up commit
+  (`9dc893f5`). When you catch one of these, un-cluster the skip
+  entry by name so the next reader sees which individual tests are
+  blocked on what.
 
 ## Don't add `suppress_health_check` that wasn't in the original
 
