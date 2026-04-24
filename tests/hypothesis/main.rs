@@ -58,6 +58,7 @@ mod pytest_runs;
 mod quality_float_shrinking;
 mod quality_integers;
 mod quality_poisoned_lists;
+mod quality_poisoned_trees;
 mod quality_zig_zagging;
 mod regex;
 mod replay_logic;
