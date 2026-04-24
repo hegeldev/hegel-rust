@@ -84,14 +84,30 @@ fn test_provider_contract_hypothesis_integer_semibounded() {
     assert_integer_permitted(i128::MIN, 0);
 }
 
-#[test]
-fn test_provider_contract_hypothesis_boolean() {
+fn assert_boolean_permitted(p: f64) {
     let kind = ChoiceKind::Boolean(BooleanChoice);
     for &seed in SEEDS {
         let mut data = seeded(seed);
-        let v = data.weighted(0.5, None).ok().unwrap();
-        assert!(kind.validate(&ChoiceValue::Boolean(v)));
+        let v = data.weighted(p, None).ok().unwrap();
+        assert!(
+            kind.validate(&ChoiceValue::Boolean(v)),
+            "weighted({p}) -> {v} not permitted (seed {seed})"
+        );
     }
+}
+
+#[test]
+fn test_provider_contract_hypothesis_boolean() {
+    assert_boolean_permitted(0.5);
+}
+
+#[test]
+fn test_provider_contract_hypothesis_boolean_degenerate() {
+    // Upstream @example rows pin down the p=0/p=1 boundaries (forced to the
+    // only possible value) and p near zero (forcing false is still valid).
+    assert_boolean_permitted(0.0);
+    assert_boolean_permitted(1.0);
+    assert_boolean_permitted(1e-99);
 }
 
 fn assert_float_permitted(min_value: f64, max_value: f64, allow_nan: bool, allow_infinity: bool) {
