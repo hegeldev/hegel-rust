@@ -1311,7 +1311,7 @@ pub(super) fn fnv_hex(s: &[u8]) -> String {
 ///       surrogates — the engine's internal codepoint model preserves them;
 ///       the no-surrogate filter lives at the user-facing boundary).
 // nocov start
-pub(super) fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
+pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + choices.len() * 17);
     let count = choices.len() as u32;
     buf.extend_from_slice(&count.to_le_bytes());
@@ -1354,7 +1354,7 @@ pub(super) fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
 /// Returns `None` if the data is truncated, malformed, or contains an
 /// unknown type tag (defensive against filesystem corruption).
 // nocov start
-pub(super) fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
+pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
     if bytes.len() < 4 {
         return None;
     }

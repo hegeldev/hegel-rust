@@ -7,46 +7,295 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Expose a NativeConjectureRunner wrapper in __native_test_internals
+- title: Port conjecture/test_engine.py `run_to_nodes` cluster
   details: |
-    `tests/hypothesis/conjecture_engine.rs` currently ports only the 8
-    shrink-quality tests that fit the public `minimal()` surface. The
-    remaining ~80 tests from
+    Port the following tests from
     `resources/hypothesis/hypothesis-python/tests/conjecture/test_engine.py`
-    assert on `ConjectureRunner` runtime bookkeeping — `interesting_examples`,
-    `exit_reason`, `shrinks`, `call_count`, `valid_examples`,
-    `save_choices`, `secondary_key`, `pareto_key`, `reuse_existing_examples`,
-    `clear_secondary_key`, `new_shrinker` / `fixate_shrink_passes`,
-    `pareto_front` / `dominance`, `tree.is_exhausted`,
-    `generate_novel_prefix`, `ignore_limits`, `statistics` — plus the
-    `run_to_nodes(f)` conftest fixture and a `FailedHealthCheck`-label-
-    bearing panic variant. These are native-engine internals, not
-    public-API incompatibilities; per
-    `.claude/skills/porting-tests/SKILL.md`'s skip policy they should
-    be ported native-gated, not skipped.
+    into `tests/hypothesis/conjecture_engine.rs`, native-gated
+    (`#[cfg(feature = "native")]`):
+      - `test_non_cloneable_intervals`
+      - `test_deletable_draws`
+      - `test_variadic_draw`
+      - `test_draw_to_overrun`
+      - `test_erratic_draws`
+      - `test_no_read_no_shrink`
+      - `test_one_dead_branch`
+      - `test_returns_forced`
+      - `test_run_nothing`
+      - `test_interleaving_engines`
 
-    `src/native/optimiser.rs::TargetedRunner` exposes only the
-    `cached_test_function` / `optimise_targets` / `best_observed_targets`
-    slice; it is not this surface. `InMemoryNativeDatabase` and
-    `BufferSizeLimit` already exist and are exported from
-    `__native_test_internals`, so the database-introspection and
-    buffer-size-limit tests are unblocked once the runner wrapper lands;
-    `serialize_choices` / `deserialize_choices` in
-    `src/native/database.rs` already cover the
-    `choices_to_bytes` / `choices_from_bytes` round-trip.
+    Each uses the `run_to_nodes(f)` fixture from
+    `tests/conjecture/common.py`. Port each via the
+    `hegel::__native_test_internals::run_to_nodes` free function and
+    the `NativeConjectureData` draw surface. Filling in the
+    `NativeConjectureRunner::run` /
+    `NativeConjectureData::{draw_bytes, draw_integer, draw_boolean,
+    draw_float, mark_interesting, mark_invalid, start_span, stop_span,
+    nodes}` stubs in `src/native/conjecture_runner.rs` is part of
+    landing this cluster — see `.claude/skills/implementing-native/SKILL.md`
+    for the wrapper port process. The existing `native_run` loop in
+    `src/native/runner.rs` is the starting point; the bookkeeping
+    fields on `NativeConjectureRunner` need to be populated alongside
+    the existing `result` computation so the caller can read
+    `interesting_examples` / `call_count` / `valid_examples`.
 
     Acceptance criteria:
-      - A `NativeConjectureRunner` (or similarly-named) type is exported
-        from `__native_test_internals` with the runner-bookkeeping
-        attributes listed above. Individual attributes may start as
-        `todo!()` stubs; the subsequent port-loop cycles will fill them
-        in as each native-gated test lands.
-      - All `conjecture/test_engine.py::*` entries in SKIPPED.md's
-        `Individually-skipped tests` section are removed — the
-        corresponding tests land native-gated in
-        `tests/hypothesis/conjecture_engine.rs`, with the module
-        docstring's "Individually-skipped tests" list pruned to match.
-      - The `test_engine.py`-shape paragraph in
-        `.claude/skills/porting-tests/SKILL.md` is updated to describe
-        the runner-wrapper port path rather than the
-        "most-of-file-is-skipped" interim state.
+      - All 10 tests compile and pass under
+        `cargo test --features native --test hypothesis conjecture_engine::`.
+      - The `::test_non_cloneable_intervals` through
+        `::test_interleaving_engines` bullet in `SKIPPED.md`'s
+        `conjecture/test_engine.py::*` cluster is removed.
+
+- title: Port conjecture/test_engine.py runner-bookkeeping cluster
+  details: |
+    Port the following tests from `conjecture/test_engine.py` into
+    `tests/hypothesis/conjecture_engine.rs`, native-gated. Each
+    constructs a `ConjectureRunner(f, settings=, random=, database_key=)`,
+    calls `runner.run()`, and asserts on `runner.interesting_examples`
+    / `runner.exit_reason` / `runner.shrinks` / `runner.call_count` /
+    `runner.valid_examples` / `runner.save_choices(...)` /
+    `runner.secondary_key` / `runner.pareto_key`:
+      - `test_can_load_data_from_a_corpus`
+      - `test_detects_flakiness`
+      - `test_recursion_error_is_not_flaky`
+      - `test_can_navigate_to_a_valid_example`
+      - `test_stops_after_max_examples_when_reading`
+      - `test_stops_after_max_examples_when_generating`
+      - `test_stops_after_max_examples_when_generating_more_bugs`
+      - `test_phases_can_disable_shrinking`
+      - `test_reuse_phase_runs_for_max_examples_if_generation_is_disabled`
+      - `test_does_not_save_on_interrupt`
+      - `test_saves_on_skip_exceptions_to_reraise`
+      - `test_exit_because_max_iterations`
+      - `test_max_iterations_with_all_invalid`
+      - `test_max_iterations_with_some_valid`
+      - `test_exit_because_shrink_phase_timeout`
+      - `test_does_not_shrink_multiple_bugs_when_told_not_to`
+      - `test_does_not_keep_generating_when_multiple_bugs`
+      - `test_shrink_after_max_examples`
+      - `test_shrink_after_max_iterations`
+      - `test_runs_full_set_of_examples`
+      - `test_does_not_shrink_if_replaying_from_database`
+      - `test_does_shrink_if_replaying_inexact_from_database`
+      - `test_stops_if_hits_interesting_early_and_only_want_one_bug`
+      - `test_skips_secondary_if_interesting_is_found`
+      - `test_discards_invalid_db_entries`
+      - `test_discards_invalid_db_entries_pareto`
+
+    Use `NativeConjectureRunner::new(f, NativeRunnerSettings::new()
+    .max_examples(n).database(Some(db)).derandomize(true), rng)
+    .with_database_key(key).run()`. Fill in the stubs in
+    `src/native/conjecture_runner.rs` as each test lands — the
+    runtime `todo!()` panic tells the port-loop which attribute is
+    still missing. This cluster may land as several narrower commits
+    (grouped by attribute) rather than one mega-commit; split as you
+    go if the set feels too large for one invocation.
+
+    Acceptance criteria:
+      - All 26 tests compile and pass under
+        `cargo test --features native --test hypothesis conjecture_engine::`.
+      - The `::test_can_load_data_from_a_corpus` through
+        `::test_discards_invalid_db_entries_pareto` bullet in
+        `SKIPPED.md`'s `conjecture/test_engine.py::*` cluster is
+        removed.
+
+- title: Port conjecture/test_engine.py monkeypatch cluster
+  details: |
+    Port the following tests from `conjecture/test_engine.py`,
+    native-gated. Each uses `monkeypatch.setattr(ConjectureRunner,
+    "generate_new_examples", ...)` to seed a specific initial buffer
+    or `monkeypatch.setattr(engine_module, "MAX_SHRINKS"|"CACHE_SIZE",
+    n)` to cap the shrink/cache loop:
+      - `test_terminates_shrinks`
+      - `test_shrinks_both_interesting_examples`
+      - `test_discarding`
+      - `test_shrinking_from_mostly_zero`
+      - `test_handles_nesting_of_discard_correctly`
+      - `test_prefix_cannot_exceed_buffer_size`
+      - `test_will_evict_entries_from_the_cache`
+      - `test_simulate_to_evicted_data`
+
+    Port path: call `runner.cached_test_function(seed_choices)`
+    explicitly before `runner.run()` to seed the initial buffer; use
+    `NativeRunnerSettings::max_shrinks(n)` for the MAX_SHRINKS
+    override. Extend `NativeRunnerSettings` with a `cache_size(n)`
+    override if needed by `test_will_evict_entries_from_the_cache`;
+    don't add Python-style attribute injection.
+
+    Acceptance criteria:
+      - All 8 tests compile and pass under
+        `cargo test --features native --test hypothesis conjecture_engine::`.
+      - The `::test_terminates_shrinks` through
+        `::test_simulate_to_evicted_data` bullet in `SKIPPED.md` is
+        removed.
+
+- title: Port conjecture/test_engine.py FailedHealthCheck cluster
+  details: |
+    Port the following tests from `conjecture/test_engine.py`,
+    native-gated. Each wraps a `ConjectureRunner.run()` in
+    `pytest.raises(FailedHealthCheck)` and asserts
+    `str(HealthCheck.xxx) in str(e.value)`:
+      - `test_fails_health_check_for_all_invalid`
+      - `test_fails_health_check_for_large_base`
+      - `test_fails_health_check_for_large_non_base`
+      - `test_fails_health_check_for_slow_draws`
+      - `test_health_check_too_slow_with_invalid_examples`
+      - `test_health_check_too_slow_with_overrun_examples`
+      - `test_too_slow_report`
+
+    Port path: use the
+    `hegel::__native_test_internals::fails_health_check(label, build)`
+    free function (stub in `src/native/conjecture_runner.rs`) — fill
+    it in to `catch_unwind` the build+run and assert the panic
+    payload's string matches a per-label panic prefix. The native
+    engine's `panic!("FailedHealthCheck: TooSlow …")` / `"…
+    FilterTooMuch …"` strings already exist in
+    `src/native/runner.rs`; extend them to cover
+    `LargeBaseExample` / `DataTooLarge` as the tests require.
+
+    Acceptance criteria:
+      - All 7 tests compile and pass under
+        `cargo test --features native --test hypothesis conjecture_engine::`.
+      - The `::test_fails_health_check_for_all_invalid` through
+        `::test_too_slow_report` bullet in `SKIPPED.md` is removed.
+
+- title: Port conjecture/test_engine.py database-introspection cluster
+  details: |
+    Port the following tests from `conjecture/test_engine.py`,
+    native-gated:
+      - `test_clears_out_its_database_on_shrinking`
+      - `test_database_clears_secondary_key`
+      - `test_database_uses_values_from_secondary_key`
+
+    Each uses `InMemoryExampleDatabase` with `.save(key, choices)` /
+    `.fetch(key)` introspection plus `choices_to_bytes` /
+    `choices_from_bytes`. The native analogs are
+    `hegel::__native_test_internals::{InMemoryNativeDatabase,
+    choices_to_bytes, choices_from_bytes}` — all are already exported.
+    Fill in `NativeConjectureRunner::{save_choices, secondary_key,
+    clear_secondary_key, reuse_existing_examples}` as needed.
+
+    Acceptance criteria:
+      - All 3 tests compile and pass.
+      - The `::test_clears_out_its_database_on_shrinking` through
+        `::test_database_uses_values_from_secondary_key` bullet in
+        `SKIPPED.md` is removed.
+
+- title: Port conjecture/test_engine.py new_shrinker cluster
+  details: |
+    Port the following tests from `conjecture/test_engine.py`,
+    native-gated. Each seeds an initial buffer via
+    `runner.cached_test_function(start)` then builds
+    `runner.new_shrinker(last_data, lambda d: d.status == INTERESTING)`
+    and drives a single named shrink pass via
+    `fixate_shrink_passes([pass_name])`:
+      - `test_can_remove_discarded_data`
+      - `test_discarding_iterates_to_fixed_point`
+      - `test_discarding_is_not_fooled_by_empty_discards`
+      - `test_discarding_can_fail`
+      - `test_can_write_bytes_towards_the_end`
+      - `test_uniqueness_is_preserved_when_writing_at_beginning`
+      - `test_dependent_block_pairs_can_lower_to_zero`
+      - `test_handle_size_too_large_during_dependent_lowering`
+      - `test_block_may_grow_during_lexical_shrinking`
+      - `test_lower_common_node_offset_does_nothing_when_changed_blocks_are_zero`
+      - `test_lower_common_node_offset_ignores_zeros`
+      - `test_cached_test_function_returns_right_value`
+      - `test_cached_test_function_does_not_reinvoke_on_prefix`
+      - `test_branch_ending_in_write`
+      - `test_exhaust_space`
+      - `test_discards_kill_branches`
+      - `test_number_of_examples_in_integer_range_is_bounded`
+      - `test_does_not_cache_extended_prefix`
+      - `test_does_cache_if_extend_is_not_used`
+      - `test_does_result_for_reuse`
+      - `test_does_not_use_cached_overrun_if_extending`
+      - `test_uses_cached_overrun_if_not_extending`
+      - `test_can_be_set_to_ignore_limits`
+      - `test_overruns_with_extend_are_not_cached`
+
+    Port path: fill in `NativeConjectureRunner::{cached_test_function,
+    new_shrinker, generate_novel_prefix, tree}`, plus
+    `NativeShrinker::{shrink, fixate_shrink_passes, current_nodes}`.
+    Named pass strings (e.g. `"minimize_individual_blocks"`,
+    `"lower_common_node_offset"`) map to entries in
+    `src/native/shrinker/mod.rs`'s pass table — thread the single-pass
+    entry point through rather than duplicating the full shrink loop.
+
+    Like the runner-bookkeeping cluster this may land as several
+    narrower commits; split if the set feels too large.
+
+    Acceptance criteria:
+      - All 24 tests compile and pass under
+        `cargo test --features native --test hypothesis conjecture_engine::`.
+      - The `::test_can_remove_discarded_data` through
+        `::test_overruns_with_extend_are_not_cached` bullet in
+        `SKIPPED.md` is removed.
+
+- title: Port conjecture/test_engine.py pareto-front cluster
+  details: |
+    Port the following tests from `conjecture/test_engine.py`,
+    native-gated. Each asserts on `runner.pareto_front` /
+    `dominance` / `runner.optimise_calls_count`:
+      - `test_populates_the_pareto_front`
+      - `test_pareto_front_contains_smallest_valid`
+      - `test_replaces_all_dominated`
+      - `test_does_not_duplicate_elements`
+      - `test_includes_right_hand_side_targets_in_dominance`
+      - `test_smaller_interesting_dominates_larger_valid`
+      - `test_runs_optimisation_even_if_not_generating`
+      - `test_runs_optimisation_once_when_generating`
+      - `test_does_not_run_optimisation_when_max_examples_is_small`
+
+    Port path: fill in `NativeConjectureRunner::pareto_front` and the
+    `dominance` free function. Pareto bookkeeping lives in Hypothesis's
+    `internal/conjecture/pareto.py` — mirror the `ParetoFront` /
+    `DominanceRelation` structure there. `src/native/optimiser.rs`
+    already covers the hill-climb side; extend it (or add
+    `src/native/pareto.rs`) for the front-tracking side.
+
+    Acceptance criteria:
+      - All 9 tests compile and pass.
+      - The `::test_populates_the_pareto_front` through
+        `::test_does_not_run_optimisation_when_max_examples_is_small`
+        bullet in `SKIPPED.md` is removed.
+
+- title: Port conjecture/test_engine.py::test_debug_data
+  details: |
+    Port `test_debug_data` from
+    `resources/hypothesis/hypothesis-python/tests/conjecture/test_engine.py`.
+    Upstream uses `capsys` to capture stdout and assert on
+    `Verbosity.debug` diagnostic output from a
+    `ConjectureRunner.run()` call.
+
+    Port path: use `TempRustProject` (see `tests/test_output.rs` and
+    `tests/test_draw_named.rs`) to run a test with
+    `Verbosity::Debug` in a subprocess and capture stderr, then
+    assert on the expected diagnostic lines. The
+    `NativeConjectureRunner` wrapper doesn't need additional stubs
+    for this — the existing `native_run` debug output already covers
+    the content. This test may end up native-gated or not depending
+    on whether the `TempRustProject` path works on both backends.
+
+    Acceptance criteria:
+      - `test_debug_data` compiles and passes.
+      - The `::test_debug_data` bullet in `SKIPPED.md` is removed.
+
+- title: Port conjecture/test_engine.py::test_mildly_complicated_strategies LargeFlag row
+  details: |
+    The `st.sampled_from(enum.Flag("LargeFlag", ...))` row of
+    `test_mildly_complicated_strategies` in
+    `resources/hypothesis/hypothesis-python/tests/conjecture/test_engine.py`
+    is currently skipped because Python's `enum.Flag` has no direct
+    Rust analog. Build a small local bitflags-style type (e.g. via
+    the `bitflags!` crate already in use, or a plain `#[derive(Clone,
+    Copy)] struct LargeFlag(u64)`) with 64 distinct flag values, wrap
+    it in `gs::sampled_from(all_flag_combinations)`, and port the
+    `minimal(gen, |f| bit_count(f.value) > 1)` shape. No new native
+    wrapper functionality needed.
+
+    Acceptance criteria:
+      - The port compiles and passes under
+        `cargo test --test hypothesis conjecture_engine::`.
+      - The `::test_mildly_complicated_strategies` (LargeFlag row)
+        bullet in `SKIPPED.md` is removed.

@@ -11,6 +11,7 @@ pub mod bignum;
 pub mod cache;
 pub mod cathetus;
 pub mod choicetree;
+pub mod conjecture_runner;
 pub mod core;
 pub mod data_source;
 pub mod database;
