@@ -727,13 +727,13 @@ SKIPPED.md entries) rather than trying to stub them:
 - `ChoiceTemplate("simplest", count=n)` — prefix primitive that tells
   `for_choices` to produce the simplest value of each step's kind.
   `NativeTestCase::for_choices` takes only concrete `ChoiceValue`s.
-- `ChoiceNode.trivial` — per-node "at minimum" bool. Blocks the
-  `trivial_nodes` / `nontrivial_nodes` / `forced_nodes_are_trivial`
-  cluster.
-- `ChoiceNode.copy(with_value=…)` **raising on forced nodes** — native
+- `ChoiceNode.copy(with_value=…)` **raising on forced nodes** (blocks
+  `test_cannot_modify_forced_nodes` only) — native
   `ChoiceNode::with_value` propagates `was_forced` through rather than
-  panicking. The non-raising behaviour is still useful; the *assertion*
-  that copying a forced node errors is what doesn't port.
+  panicking. The non-forced branch of `test_copy_choice_node` (which
+  has `assume(not node.was_forced)` filtering) ports fine against
+  `ChoiceNode::with_value`; only the assertion that copying a *forced*
+  node errors is unrepresentable.
 - `choices_size([values])` — byte-width of a choice sequence.
 - `choices_key([values])` — dedup key distinguishing `True` from `1`,
   etc. Rust's `Vec<ChoiceValue>` already distinguishes by enum variant,
