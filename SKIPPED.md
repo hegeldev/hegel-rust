@@ -1650,12 +1650,3 @@ Individually-skipped tests (rest of the file is ported):
   no-op `run_step`. Hegel's value-shrinker ports (`IntegerShrinker`,
   `OrderingShrinker`) are concrete structs with fixed `run_step`
   implementations and no subclass-pluggable base class.
-
-- `conjecture/test_optimiser.py::test_optimising_all_nodes` `@given(nodes())`
-  branch — the three `@example` rows of that test are ported, and
-  `compute_max_children` is now available via
-  `hegel::__native_test_internals::compute_max_children` (see
-  `src/native/datatree.rs`). The remaining gap is the `nodes()` strategy
-  from `tests/conjecture/common.py`, which generates random `ChoiceNode`
-  instances. Tracked in TODO.yaml "Un-skip test_optimising_all_nodes
-  @given(nodes()) body".
