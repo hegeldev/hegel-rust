@@ -261,7 +261,14 @@ translation:
   tests cover.
 - Collapse Python runtime checks that Rust's type system handles at
   compile time. Don't port an `isinstance(x, str)` branch when `x:
-  &str`.
+  &str`. A Python `self.finished = False` → `self.finished = True`
+  lifecycle flag guarded by `assert not self.finished` in other methods
+  ports cleanly as a *consuming* finishing method: `fn finish(mut self)
+  -> T { ... }` drops `self`, so later calls to the other methods fail
+  to compile rather than trip a runtime assert. Same for "used / not
+  used" / "opened / closed" / "run / finalized" flags. Precedent:
+  `Chooser::finish` in `src/native/choicetree.rs` — `ChoiceTree.py`'s
+  `Chooser.finished` flag fell away once `finish` took `self` by value.
 - Python aliased-mutable state (tree / DAG nodes where multiple
   parents hold a handle to the same child and mutate it through any
   of them; `defaultdict(Node)` where lookup auto-materialises a node
