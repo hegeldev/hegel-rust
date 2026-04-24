@@ -6,7 +6,7 @@ use hegel::{Hegel, Settings};
 #[test]
 fn test_ints_are_ints() {
     Hegel::new(|tc| {
-        tc.draw(&gs::integers::<i64>());
+        tc.draw(gs::integers::<i64>());
     })
     .settings(Settings::new().test_cases(100).database(None))
     .run();
@@ -19,7 +19,7 @@ fn test_ints_are_floats() {
     // port is a guaranteed-failing property; we verify Hegel reports failure.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Hegel::new(|tc| {
-            tc.draw(&gs::integers::<i64>());
+            tc.draw(gs::integers::<i64>());
             panic!("x is not a float");
         })
         .settings(Settings::new().test_cases(100).database(None))
