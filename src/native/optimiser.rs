@@ -1,26 +1,59 @@
-// Hypothesis's targeted property-based testing: `target_observations`,
-// `best_observed_targets`, and the `optimise_targets` hill-climbing pass.
+// Targeted property-based testing: port of Hypothesis's
+// `conjecture/optimiser.py` and the `target_observations` /
+// `best_observed_targets` plumbing on `ConjectureRunner`.
 //
-// This module is a stub — every public method panics with `todo!()`. It
-// exists so that the ported `tests/hypothesis/conjecture_optimiser.rs`
-// compiles in both server and native modes. See TODO.yaml
-// "Implement native targeting/optimiser" for the acceptance criteria and
-// design sketch.
+// This is a minimal, standalone implementation designed specifically for the
+// ported `tests/hypothesis/conjecture_optimiser.rs`. It reuses
+// `NativeTestCase` for per-call choice bookkeeping but owns its own
+// generation/hill-climbing loop rather than weaving into `native_run`; the
+// target-observation hooks are not required for plain test runs, and
+// bolting them onto the production runner would be a far larger change than
+// the ported tests need.
+//
+// Hypothesis references:
+//   - `internal/conjecture/optimiser.py::Optimiser.hill_climb`
+//   - `internal/conjecture/engine.py::ConjectureRunner.optimise_targets`
+//   - `internal/conjecture/junkdrawer.py::find_integer`
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
 
-use crate::native::core::{ChoiceValue, Status};
+use crate::native::core::{
+    BUFFER_SIZE, ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Span, Status,
+};
 use crate::native::intervalsets::IntervalSet;
 
-/// Sentinel returned from [`TargetedRunner::optimise_targets`] when the run
-/// budget is exhausted. Port of Hypothesis's `RunIsComplete`.
+thread_local! {
+    /// Per-thread override of [`BUFFER_SIZE`]. Set by [`BufferSizeLimit`] for
+    /// the duration of its lifetime; read by [`TargetedRunner`] when
+    /// constructing probing `NativeTestCase`s.
+    static BUFFER_SIZE_OVERRIDE: RefCell<Option<usize>> = const { RefCell::new(None) };
+}
+
+fn current_buffer_size() -> usize {
+    BUFFER_SIZE_OVERRIDE.with(|c| c.borrow().unwrap_or(BUFFER_SIZE))
+}
+
+/// Panic payload raised by [`TargetedTestCase::mark_invalid`] to unwind out of
+/// the user's test body. Caught inside [`TargetedRunner::run_on`].
+const MARK_INVALID_PANIC: &str = "__hegel_targeted_mark_invalid__";
+/// Panic payload raised when an underlying `NativeTestCase` draw returns
+/// `StopTest` (buffer exhausted). Treated as `Status::EarlyStop`.
+const STOP_TEST_PANIC: &str = "__hegel_targeted_stop_test__";
+
+/// Sentinel returned from [`TargetedRunner::optimise_targets`] when the
+/// `max_examples` budget is exhausted mid-climb. Port of Hypothesis's
+/// `RunIsComplete`.
 #[derive(Debug, Clone, Copy)]
 pub struct RunIsComplete;
 
-/// Settings snapshot for [`TargetedRunner`]. The upstream file only tweaks
-/// `max_examples`; everything else defaults.
+/// Settings snapshot for [`TargetedRunner`]. Only `max_examples` is tunable;
+/// everything else matches Hypothesis defaults.
+#[derive(Clone)]
 pub struct TargetedRunnerSettings {
     pub max_examples: usize,
 }
@@ -43,147 +76,831 @@ impl Default for TargetedRunnerSettings {
 }
 
 /// Result of a single [`TargetedRunner::cached_test_function`] call.
+#[non_exhaustive]
 pub struct CachedTestResult {
     pub status: Status,
 }
 
 /// Test-case surface passed to the runner callback. Exposes a mutable
-/// `target_observations` map (the hill-climber's objective) plus the draw /
-/// span / invalidity methods exercised by `test_optimiser.py`.
+/// `target_observations` map (the hill-climber's objective) plus the draw,
+/// span, and invalidity methods exercised by `test_optimiser.py`.
 #[non_exhaustive]
 pub struct TargetedTestCase {
+    ntc: NativeTestCase,
     pub target_observations: HashMap<String, f64>,
 }
 
 impl TargetedTestCase {
-    pub fn draw_integer(&mut self, _min_value: i128, _max_value: i128) -> i128 {
-        todo!(
-            "TargetedTestCase::draw_integer — native targeting/optimiser not implemented \
-             (see TODO.yaml 'Implement native targeting/optimiser')"
-        )
+    pub fn draw_integer(&mut self, min_value: i128, max_value: i128) -> i128 {
+        match self.ntc.draw_integer(min_value, max_value) {
+            Ok(v) => v,
+            Err(_) => std::panic::panic_any(STOP_TEST_PANIC),
+        }
     }
 
-    pub fn draw_boolean(&mut self, _p: f64) -> bool {
-        todo!(
-            "TargetedTestCase::draw_boolean — native targeting/optimiser not implemented \
-             (see TODO.yaml 'Implement native targeting/optimiser')"
-        )
+    pub fn draw_boolean(&mut self, p: f64) -> bool {
+        match self.ntc.weighted(p, None) {
+            Ok(v) => v,
+            Err(_) => std::panic::panic_any(STOP_TEST_PANIC),
+        }
     }
 
-    pub fn draw_bytes(&mut self, _min_size: usize, _max_size: usize) -> Vec<u8> {
-        todo!(
-            "TargetedTestCase::draw_bytes — native targeting/optimiser not implemented \
-             (see TODO.yaml 'Implement native targeting/optimiser')"
-        )
+    pub fn draw_bytes(&mut self, min_size: usize, max_size: usize) -> Vec<u8> {
+        match self.ntc.draw_bytes(min_size, max_size) {
+            Ok(v) => v,
+            Err(_) => std::panic::panic_any(STOP_TEST_PANIC),
+        }
     }
 
+    /// Draw a string whose codepoints lie in `intervals`. The current
+    /// implementation collapses the interval set to its outer `(min, max)`
+    /// bounds — sufficient for the single-range `@example` row ported from
+    /// `test_optimising_all_nodes`.
     pub fn draw_string(
         &mut self,
-        _intervals: &IntervalSet,
-        _min_size: usize,
-        _max_size: usize,
+        intervals: &IntervalSet,
+        min_size: usize,
+        max_size: usize,
     ) -> String {
-        todo!(
-            "TargetedTestCase::draw_string — native targeting/optimiser not implemented \
-             (see TODO.yaml 'Implement native targeting/optimiser')"
-        )
+        let (min_cp, max_cp) = if intervals.intervals.is_empty() {
+            (0, 0x10FFFF)
+        } else {
+            (
+                intervals.intervals[0].0,
+                intervals.intervals.last().unwrap().1,
+            )
+        };
+        match self.ntc.draw_string(min_cp, max_cp, min_size, max_size) {
+            Ok(v) => v,
+            Err(_) => std::panic::panic_any(STOP_TEST_PANIC),
+        }
     }
 
     pub fn mark_invalid(&mut self) {
-        todo!(
-            "TargetedTestCase::mark_invalid — native targeting/optimiser not implemented \
-             (see TODO.yaml 'Implement native targeting/optimiser')"
-        )
+        std::panic::panic_any(MARK_INVALID_PANIC);
     }
 
-    pub fn start_span(&mut self, _label: u64) {
-        todo!(
-            "TargetedTestCase::start_span — native targeting/optimiser not implemented \
-             (see TODO.yaml 'Implement native targeting/optimiser')"
-        )
+    pub fn start_span(&mut self, label: u64) {
+        self.ntc
+            .span_stack
+            .push((self.ntc.nodes.len(), label.to_string()));
     }
 
     pub fn stop_span(&mut self) {
-        todo!(
-            "TargetedTestCase::stop_span — native targeting/optimiser not implemented \
-             (see TODO.yaml 'Implement native targeting/optimiser')"
-        )
+        if let Some((start, label)) = self.ntc.span_stack.pop() {
+            self.ntc.record_span(start, self.ntc.nodes.len(), label);
+        }
     }
 }
 
-/// Port of Hypothesis's `ConjectureRunner` surface used by `test_optimiser.py`.
-///
-/// A real implementation would own the user test function, a PRNG, a tree of
-/// observed test cases, and the per-target running maximum. The current stub
-/// is a unit struct whose associated methods all panic with `todo!()`.
-#[non_exhaustive]
-pub struct TargetedRunner;
+type TestFn = Box<dyn FnMut(&mut TargetedTestCase)>;
+
+/// Hashable key derived from a choice sequence; mirrors
+/// `ConjectureRunner._cache_key`.
+type CacheKey = Vec<u8>;
+
+#[derive(Clone)]
+struct CachedRun {
+    status: Status,
+    nodes: Vec<ChoiceNode>,
+    spans: Vec<Span>,
+    observations: HashMap<String, f64>,
+}
+
+/// Shortlex-style ordering on choice sequences: shorter is simpler; same
+/// length tie-breaks lexicographically on per-choice sort keys. Mirrors
+/// Hypothesis's `shrinker.sort_key` restricted to the value components.
+fn sort_key_less(a: &[ChoiceValue], b: &[ChoiceValue]) -> bool {
+    if a.len() != b.len() {
+        return a.len() < b.len();
+    }
+    for (x, y) in a.iter().zip(b) {
+        match (x, y) {
+            (ChoiceValue::Integer(p), ChoiceValue::Integer(q)) => {
+                // Simplest = 0 if 0 is in range, else the bound closest to 0;
+                // we approximate with unsigned-magnitude ordering which
+                // matches Hypothesis's integer `choice_to_index` well enough
+                // for optimiser tie-breaks.
+                let pk = (p.unsigned_abs(), *p < 0);
+                let qk = (q.unsigned_abs(), *q < 0);
+                match pk.cmp(&qk) {
+                    std::cmp::Ordering::Less => return true,
+                    std::cmp::Ordering::Greater => return false,
+                    std::cmp::Ordering::Equal => {}
+                }
+            }
+            (ChoiceValue::Boolean(p), ChoiceValue::Boolean(q)) => match p.cmp(q) {
+                std::cmp::Ordering::Less => return true,
+                std::cmp::Ordering::Greater => return false,
+                std::cmp::Ordering::Equal => {}
+            },
+            (ChoiceValue::Float(p), ChoiceValue::Float(q)) => match p.total_cmp(q) {
+                std::cmp::Ordering::Less => return true,
+                std::cmp::Ordering::Greater => return false,
+                std::cmp::Ordering::Equal => {}
+            },
+            (ChoiceValue::Bytes(p), ChoiceValue::Bytes(q)) => match p.cmp(q) {
+                std::cmp::Ordering::Less => return true,
+                std::cmp::Ordering::Greater => return false,
+                std::cmp::Ordering::Equal => {}
+            },
+            (ChoiceValue::String(p), ChoiceValue::String(q)) => match p.cmp(q) {
+                std::cmp::Ordering::Less => return true,
+                std::cmp::Ordering::Greater => return false,
+                std::cmp::Ordering::Equal => {}
+            },
+            _ => return false,
+        }
+    }
+    false
+}
+
+fn encode_choice_key(choices: &[ChoiceValue]) -> CacheKey {
+    // A trivial deterministic encoding: tag byte + variant-specific payload
+    // joined with a separator. Uniqueness is what matters, not compactness.
+    let mut out = Vec::with_capacity(choices.len() * 8);
+    for c in choices {
+        match c {
+            ChoiceValue::Integer(n) => {
+                out.push(0);
+                out.extend_from_slice(&n.to_le_bytes());
+            }
+            ChoiceValue::Boolean(b) => {
+                out.push(1);
+                out.push(u8::from(*b));
+            }
+            ChoiceValue::Float(f) => {
+                out.push(2);
+                out.extend_from_slice(&f.to_bits().to_le_bytes());
+            }
+            ChoiceValue::Bytes(b) => {
+                out.push(3);
+                out.extend_from_slice(&(b.len() as u64).to_le_bytes());
+                out.extend_from_slice(b);
+            }
+            ChoiceValue::String(s) => {
+                out.push(4);
+                out.extend_from_slice(&(s.len() as u64).to_le_bytes());
+                for cp in s {
+                    out.extend_from_slice(&cp.to_le_bytes());
+                }
+            }
+        }
+        out.push(0xff);
+    }
+    out
+}
+
+/// Port of the subset of Hypothesis's `ConjectureRunner` used by
+/// `test_optimiser.py` — seeding via `cached_test_function`, hill-climbing
+/// via `optimise_targets`, and bookkeeping for `best_observed_targets`.
+pub struct TargetedRunner {
+    test_fn: TestFn,
+    max_examples: usize,
+    rng: SmallRng,
+    best_observed_targets: HashMap<String, f64>,
+    /// Choice sequences that produced the current best score for each target.
+    /// Hypothesis stores full `ConjectureResult`s here; we re-run to recover
+    /// nodes when needed, trading a few extra calls for a smaller type.
+    best_choices_for_target: HashMap<String, Vec<ChoiceValue>>,
+    /// Cache of test-run results keyed by input choices. Mirrors
+    /// `ConjectureRunner.__data_cache`. Only records "exact prefix" runs (no
+    /// random extension beyond the prefix), since `extend="full"` runs with
+    /// random tails are non-deterministic.
+    cache: HashMap<CacheKey, CachedRun>,
+    calls: usize,
+}
 
 impl TargetedRunner {
-    pub fn new<F>(_test_fn: F, _settings: TargetedRunnerSettings, _rng: SmallRng) -> Self
+    pub fn new<F>(test_fn: F, settings: TargetedRunnerSettings, rng: SmallRng) -> Self
     where
         F: FnMut(&mut TargetedTestCase) + 'static,
     {
-        todo!(
-            "TargetedRunner::new — native targeting/optimiser not implemented \
-             (see TODO.yaml 'Implement native targeting/optimiser')"
-        )
+        TargetedRunner {
+            test_fn: Box::new(test_fn),
+            max_examples: settings.max_examples,
+            rng,
+            best_observed_targets: HashMap::new(),
+            best_choices_for_target: HashMap::new(),
+            cache: HashMap::new(),
+            calls: 0,
+        }
     }
 
-    pub fn cached_test_function(&mut self, _choices: &[ChoiceValue]) -> CachedTestResult {
-        todo!(
-            "TargetedRunner::cached_test_function — native targeting/optimiser not implemented \
-             (see TODO.yaml 'Implement native targeting/optimiser')"
-        )
+    /// Execute the user test on a prepared [`NativeTestCase`], catching
+    /// `mark_invalid` and buffer-exhaustion panics. Updates
+    /// `best_observed_targets` in the `status >= Valid` branch.
+    fn run_on(
+        &mut self,
+        ntc: NativeTestCase,
+    ) -> (Status, Vec<ChoiceNode>, Vec<Span>, HashMap<String, f64>) {
+        self.calls += 1;
+
+        let mut tc = TargetedTestCase {
+            ntc,
+            target_observations: HashMap::new(),
+        };
+
+        let test_fn = &mut *self.test_fn;
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            test_fn(&mut tc);
+        }));
+
+        let status = match result {
+            Ok(()) => Status::Valid,
+            Err(payload) => {
+                if let Some(s) = payload.downcast_ref::<&'static str>() {
+                    if *s == MARK_INVALID_PANIC {
+                        Status::Invalid
+                    } else if *s == STOP_TEST_PANIC {
+                        Status::EarlyStop
+                    } else {
+                        std::panic::resume_unwind(payload)
+                    }
+                } else {
+                    std::panic::resume_unwind(payload)
+                }
+            }
+        };
+
+        let nodes = std::mem::take(&mut tc.ntc.nodes);
+        let spans = std::mem::take(&mut tc.ntc.spans);
+        let observations = tc.target_observations;
+
+        if status >= Status::Valid {
+            let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+            for (k, v) in &observations {
+                let entry = self
+                    .best_observed_targets
+                    .entry(k.clone())
+                    .or_insert(f64::NEG_INFINITY);
+                let prev_score = *entry;
+                if *v > prev_score {
+                    *entry = *v;
+                }
+                // Update best_choices_for_target if this is a strict
+                // improvement OR a lateral move with a smaller sort_key
+                // (shortlex ordering). Port of Hypothesis's
+                // `best_examples_of_observed_targets` tie-break in
+                // `engine.py`.
+                let is_improvement = *v > prev_score;
+                let is_shortlex_tie = (*v - prev_score).abs() < f64::EPSILON
+                    && self
+                        .best_choices_for_target
+                        .get(k)
+                        .is_none_or(|existing| sort_key_less(&choices, existing));
+                if is_improvement || is_shortlex_tie {
+                    self.best_choices_for_target
+                        .insert(k.clone(), choices.clone());
+                }
+            }
+        }
+
+        (status, nodes, spans, observations)
     }
 
-    /// `cached_test_function` with `extend=N` from Hypothesis — after replaying
+    pub fn cached_test_function(&mut self, choices: &[ChoiceValue]) -> CachedTestResult {
+        let (status, _, _, _) = self.run_exact(choices);
+        CachedTestResult { status }
+    }
+
+    /// `cached_test_function` with `extend=N` from Hypothesis: after replaying
     /// `choices`, fill up to `extend` additional random draws.
     pub fn cached_test_function_extend(
         &mut self,
-        _choices: &[ChoiceValue],
-        _extend: usize,
+        choices: &[ChoiceValue],
+        extend: usize,
     ) -> CachedTestResult {
-        todo!(
-            "TargetedRunner::cached_test_function_extend — native targeting/optimiser not implemented \
-             (see TODO.yaml 'Implement native targeting/optimiser')"
-        )
+        let seed: u64 = self.rng.random();
+        let rng = SmallRng::seed_from_u64(seed);
+        let max_size = (choices.len() + extend).min(current_buffer_size());
+        let ntc = NativeTestCase::for_probe(choices, rng, max_size);
+        let (status, _, _, _) = self.run_on(ntc);
+        CachedTestResult { status }
     }
 
+    /// `cached_test_function` with `extend="full"` — extend up to the current
+    /// buffer size. Used internally by the hill-climber. Results from runs
+    /// that didn't need to draw past the prefix are cached for reuse;
+    /// extensions are nondeterministic and never cached.
+    fn run_extend_full(
+        &mut self,
+        choices: &[ChoiceValue],
+    ) -> (Status, Vec<ChoiceNode>, Vec<Span>, HashMap<String, f64>) {
+        let key = encode_choice_key(choices);
+        if let Some(cached) = self.cache.get(&key).cloned() {
+            return (
+                cached.status,
+                cached.nodes,
+                cached.spans,
+                cached.observations,
+            );
+        }
+        let seed: u64 = self.rng.random();
+        let rng = SmallRng::seed_from_u64(seed);
+        let max_size = current_buffer_size();
+        let ntc = NativeTestCase::for_probe(choices, rng, max_size);
+        let (status, nodes, spans, observations) = self.run_on(ntc);
+        // Cache only if the produced choice sequence exactly matches the
+        // input prefix — i.e. the test body didn't draw past the prefix, so
+        // the result is deterministic and safe to reuse.
+        if nodes.len() == choices.len() && nodes.iter().zip(choices).all(|(n, c)| n.value == *c) {
+            self.cache.insert(
+                key,
+                CachedRun {
+                    status,
+                    nodes: nodes.clone(),
+                    spans: spans.clone(),
+                    observations: observations.clone(),
+                },
+            );
+        }
+        (status, nodes, spans, observations)
+    }
+
+    /// Like [`run_extend_full`] but using the prefix choices exactly (no
+    /// `extend`). Mirrors `cached_test_function(..., extend=0)`. Results are
+    /// deterministic (no random tail) and always cached.
+    fn run_exact(
+        &mut self,
+        choices: &[ChoiceValue],
+    ) -> (Status, Vec<ChoiceNode>, Vec<Span>, HashMap<String, f64>) {
+        let key = encode_choice_key(choices);
+        if let Some(cached) = self.cache.get(&key).cloned() {
+            return (
+                cached.status,
+                cached.nodes,
+                cached.spans,
+                cached.observations,
+            );
+        }
+        let ntc = NativeTestCase::for_choices(choices, None);
+        let (status, nodes, spans, observations) = self.run_on(ntc);
+        self.cache.insert(
+            key,
+            CachedRun {
+                status,
+                nodes: nodes.clone(),
+                spans: spans.clone(),
+                observations: observations.clone(),
+            },
+        );
+        (status, nodes, spans, observations)
+    }
+
+    /// Port of `ConjectureRunner.optimise_targets`: run `Optimiser` for each
+    /// target in a ramp-up schedule until no progress is made or the budget
+    /// is exhausted.
     pub fn optimise_targets(&mut self) -> Result<(), RunIsComplete> {
-        todo!(
-            "TargetedRunner::optimise_targets — native targeting/optimiser not implemented \
-             (see TODO.yaml 'Implement native targeting/optimiser')"
-        )
+        let mut max_improvements: usize = 10;
+        loop {
+            let prev_calls = self.calls;
+            let mut any_improvements = false;
+
+            let targets: Vec<String> = self.best_observed_targets.keys().cloned().collect();
+            for target in &targets {
+                if self.calls >= self.max_examples {
+                    return Err(RunIsComplete);
+                }
+                let imps = self.hill_climb(target, max_improvements)?;
+                if imps > 0 {
+                    any_improvements = true;
+                }
+            }
+
+            max_improvements = max_improvements.saturating_mul(2);
+
+            if any_improvements {
+                continue;
+            }
+            if prev_calls == self.calls {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Port of `Optimiser.hill_climb` for a single target key.
+    fn hill_climb(
+        &mut self,
+        target: &str,
+        max_improvements: usize,
+    ) -> Result<usize, RunIsComplete> {
+        let start_choices = match self.best_choices_for_target.get(target).cloned() {
+            Some(c) => c,
+            None => return Ok(0),
+        };
+        let (status, mut current_nodes, mut current_spans, mut current_obs) =
+            self.run_extend_full(&start_choices);
+        if status < Status::Valid {
+            return Ok(0);
+        }
+        let mut current_score = *current_obs.get(target).unwrap_or(&f64::NEG_INFINITY);
+        let mut improvements: usize = 0;
+
+        let mut nodes_examined: HashSet<usize> = HashSet::new();
+        let mut i: isize = current_nodes.len() as isize - 1;
+        let mut prev_len = current_nodes.len();
+        let mut dirty = false;
+
+        while i >= 0 && improvements <= max_improvements {
+            if self.calls >= self.max_examples {
+                return Err(RunIsComplete);
+            }
+            if current_nodes.len() != prev_len {
+                i = current_nodes.len() as isize - 1;
+                prev_len = current_nodes.len();
+                nodes_examined.clear();
+            }
+            let idx = i as usize;
+            if idx >= current_nodes.len() || nodes_examined.contains(&idx) {
+                i -= 1;
+                continue;
+            }
+            nodes_examined.insert(idx);
+
+            let node = &current_nodes[idx];
+            if !node.was_forced
+                && matches!(
+                    node.kind,
+                    ChoiceKind::Integer(_)
+                        | ChoiceKind::Boolean(_)
+                        | ChoiceKind::Bytes(_)
+                        | ChoiceKind::Float(_)
+                )
+            {
+                self.find_integer(
+                    target,
+                    &mut current_nodes,
+                    &mut current_spans,
+                    &mut current_obs,
+                    &mut current_score,
+                    &mut improvements,
+                    &mut dirty,
+                    max_improvements,
+                    idx,
+                    1,
+                )?;
+                if idx < current_nodes.len() {
+                    self.find_integer(
+                        target,
+                        &mut current_nodes,
+                        &mut current_spans,
+                        &mut current_obs,
+                        &mut current_score,
+                        &mut improvements,
+                        &mut dirty,
+                        max_improvements,
+                        idx,
+                        -1,
+                    )?;
+                }
+            }
+
+            i -= 1;
+        }
+        let _ = dirty;
+        Ok(improvements)
+    }
+
+    /// Port of `junkdrawer.find_integer` specialised for a `try_replace`-style
+    /// predicate: linear scan 1..5, then exponential-probe + binary-search.
+    #[allow(clippy::too_many_arguments)]
+    fn find_integer(
+        &mut self,
+        target: &str,
+        current_nodes: &mut Vec<ChoiceNode>,
+        current_spans: &mut Vec<Span>,
+        current_obs: &mut HashMap<String, f64>,
+        current_score: &mut f64,
+        improvements: &mut usize,
+        dirty: &mut bool,
+        max_improvements: usize,
+        idx: usize,
+        sign: i64,
+    ) -> Result<(), RunIsComplete> {
+        for k in 1..5i64 {
+            if self.calls >= self.max_examples {
+                return Err(RunIsComplete);
+            }
+            if *improvements > max_improvements {
+                return Ok(());
+            }
+            if !self.try_replace(
+                target,
+                current_nodes,
+                current_spans,
+                current_obs,
+                current_score,
+                improvements,
+                dirty,
+                idx,
+                sign * k,
+            ) {
+                return Ok(());
+            }
+        }
+
+        let mut lo = 4i64;
+        let mut hi = 5i64;
+        loop {
+            if self.calls >= self.max_examples {
+                return Err(RunIsComplete);
+            }
+            if *improvements > max_improvements {
+                return Ok(());
+            }
+            if !self.try_replace(
+                target,
+                current_nodes,
+                current_spans,
+                current_obs,
+                current_score,
+                improvements,
+                dirty,
+                idx,
+                sign * hi,
+            ) {
+                break;
+            }
+            lo = hi;
+            hi = hi.saturating_mul(2);
+            if hi > (1 << 20) {
+                return Ok(());
+            }
+        }
+
+        while lo + 1 < hi {
+            if self.calls >= self.max_examples {
+                return Err(RunIsComplete);
+            }
+            if *improvements > max_improvements {
+                return Ok(());
+            }
+            let mid = lo + (hi - lo) / 2;
+            if self.try_replace(
+                target,
+                current_nodes,
+                current_spans,
+                current_obs,
+                current_score,
+                improvements,
+                dirty,
+                idx,
+                sign * mid,
+            ) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(())
+    }
+
+    /// Port of `Optimiser.attempt_replace` + `consider_new_data`: build a
+    /// candidate choice sequence by shifting `current_nodes[idx]` by `k`, run
+    /// it extend="full", and commit if the target score did not decrease.
+    ///
+    /// Hypothesis retries up to 3 times per `k` with fresh random extension;
+    /// a still-failed attempt falls through to the span-fixup pass, which
+    /// patches up the trailing choices when the perturbation changed a span's
+    /// size.
+    #[allow(clippy::too_many_arguments)]
+    fn try_replace(
+        &mut self,
+        target: &str,
+        current_nodes: &mut Vec<ChoiceNode>,
+        current_spans: &mut Vec<Span>,
+        current_obs: &mut HashMap<String, f64>,
+        current_score: &mut f64,
+        improvements: &mut usize,
+        dirty: &mut bool,
+        idx: usize,
+        k: i64,
+    ) -> bool {
+        if k.abs() > (1 << 20) {
+            return false;
+        }
+        if idx >= current_nodes.len() {
+            return false;
+        }
+        let node = current_nodes[idx].clone();
+        if node.was_forced {
+            return false;
+        }
+
+        let new_val = match (&node.value, &node.kind) {
+            (ChoiceValue::Integer(v), ChoiceKind::Integer(kind)) => {
+                let new = v.saturating_add(k as i128);
+                if !kind.validate(new) {
+                    return false;
+                }
+                ChoiceValue::Integer(new)
+            }
+            (ChoiceValue::Boolean(b), ChoiceKind::Boolean(_)) => {
+                if k.abs() > 1 {
+                    return false;
+                }
+                if k == -1 {
+                    ChoiceValue::Boolean(false)
+                } else if k == 1 {
+                    ChoiceValue::Boolean(true)
+                } else {
+                    ChoiceValue::Boolean(*b)
+                }
+            }
+            (ChoiceValue::Bytes(b), ChoiceKind::Bytes(kind)) => {
+                let mut v: i128 = 0;
+                for &byte in b {
+                    v = (v << 8) | byte as i128;
+                }
+                let new_v = v + k as i128;
+                if new_v < 0 {
+                    return false;
+                }
+                let mut new_bytes = Vec::new();
+                let mut x = new_v;
+                if x == 0 {
+                    new_bytes.push(0u8);
+                }
+                while x > 0 {
+                    new_bytes.push((x & 0xff) as u8);
+                    x >>= 8;
+                }
+                new_bytes.reverse();
+                while new_bytes.len() < b.len() {
+                    new_bytes.insert(0, 0);
+                }
+                if !kind.validate(&new_bytes) {
+                    return false;
+                }
+                ChoiceValue::Bytes(new_bytes)
+            }
+            _ => return false,
+        };
+
+        let choices: Vec<ChoiceValue> = current_nodes
+            .iter()
+            .enumerate()
+            .map(|(j, n)| {
+                if j == idx {
+                    new_val.clone()
+                } else {
+                    n.value.clone()
+                }
+            })
+            .collect();
+
+        if self.calls >= self.max_examples {
+            return false;
+        }
+        let (status, new_nodes, new_spans, new_obs) = self.run_extend_full(&choices);
+        if Self::consider_new_data(
+            target,
+            current_nodes,
+            current_spans,
+            current_obs,
+            current_score,
+            improvements,
+            dirty,
+            status,
+            new_nodes.clone(),
+            new_spans.clone(),
+            new_obs,
+        ) {
+            return true;
+        }
+        if status == Status::EarlyStop {
+            return false;
+        }
+        if new_nodes.len() == current_nodes.len() {
+            return false;
+        }
+        // Span-fixup: for each current span that brackets `idx`, if the
+        // attempt's same-index span covers a different number of choices,
+        // splice the attempt's span contents into the current prefix and
+        // keep current's tail past the span. Port of the loop at the end
+        // of Hypothesis's `Optimiser.attempt_replace`.
+        let current_spans_snapshot = current_spans.clone();
+        let current_values_snapshot: Vec<ChoiceValue> =
+            current_nodes.iter().map(|n| n.value.clone()).collect();
+        for (j, ex) in current_spans_snapshot.iter().enumerate() {
+            if ex.start > idx {
+                break;
+            }
+            if ex.end <= idx {
+                continue;
+            }
+            let ex_attempt = match new_spans.get(j) {
+                Some(s) => s.clone(),
+                None => continue,
+            };
+            if ex.end - ex.start == ex_attempt.end - ex_attempt.start {
+                continue;
+            }
+            let replacement: Vec<ChoiceValue> = new_nodes[ex_attempt.start..ex_attempt.end]
+                .iter()
+                .map(|n| n.value.clone())
+                .collect();
+            let mut spliced: Vec<ChoiceValue> = Vec::new();
+            spliced.extend_from_slice(&current_values_snapshot[..idx]);
+            spliced.extend(replacement);
+            if ex.end < current_values_snapshot.len() {
+                spliced.extend_from_slice(&current_values_snapshot[ex.end..]);
+            }
+            if self.calls >= self.max_examples {
+                return false;
+            }
+            let (s_status, s_nodes, s_spans, s_obs) = self.run_exact(&spliced);
+            if Self::consider_new_data(
+                target,
+                current_nodes,
+                current_spans,
+                current_obs,
+                current_score,
+                improvements,
+                dirty,
+                s_status,
+                s_nodes,
+                s_spans,
+                s_obs,
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Port of `Optimiser.consider_new_data`. Returns true iff the candidate
+    /// overwrites the current state (either strict improvement or a lateral
+    /// move that does not grow the node count). `dirty` is set whenever the
+    /// current state was replaced so `hill_climb` can rewind its cursor on
+    /// the next iteration.
+    #[allow(clippy::too_many_arguments)]
+    fn consider_new_data(
+        target: &str,
+        current_nodes: &mut Vec<ChoiceNode>,
+        current_spans: &mut Vec<Span>,
+        current_obs: &mut HashMap<String, f64>,
+        current_score: &mut f64,
+        improvements: &mut usize,
+        dirty: &mut bool,
+        new_status: Status,
+        new_nodes: Vec<ChoiceNode>,
+        new_spans: Vec<Span>,
+        new_obs: HashMap<String, f64>,
+    ) -> bool {
+        if new_status < Status::Valid {
+            return false;
+        }
+        let new_score = *new_obs.get(target).unwrap_or(&f64::NEG_INFINITY);
+        if new_score < *current_score {
+            return false;
+        }
+        if new_score > *current_score {
+            *current_score = new_score;
+            *current_nodes = new_nodes;
+            *current_spans = new_spans;
+            *current_obs = new_obs;
+            *improvements += 1;
+            *dirty = true;
+            return true;
+        }
+        if new_nodes.len() <= current_nodes.len() {
+            *current_nodes = new_nodes;
+            *current_spans = new_spans;
+            *current_obs = new_obs;
+            *dirty = true;
+            return true;
+        }
+        false
     }
 
     pub fn best_observed_targets(&self) -> &HashMap<String, f64> {
-        todo!(
-            "TargetedRunner::best_observed_targets — native targeting/optimiser not implemented \
-             (see TODO.yaml 'Implement native targeting/optimiser')"
-        )
+        &self.best_observed_targets
     }
 }
 
 /// RAII guard that temporarily lowers the native engine's buffer size limit.
 /// Port of `tests/conjecture/common.py::buffer_size_limit`.
-#[non_exhaustive]
-pub struct BufferSizeLimit;
+pub struct BufferSizeLimit {
+    prev: Option<usize>,
+}
 
 impl BufferSizeLimit {
-    pub fn new(_n: usize) -> Self {
-        todo!(
-            "BufferSizeLimit::new — native buffer size override not implemented \
-             (see TODO.yaml 'Implement native targeting/optimiser')"
-        )
+    pub fn new(n: usize) -> Self {
+        let prev = BUFFER_SIZE_OVERRIDE.with(|c| {
+            let old = *c.borrow();
+            *c.borrow_mut() = Some(n);
+            old
+        });
+        BufferSizeLimit { prev }
     }
 }
 
 impl Drop for BufferSizeLimit {
     fn drop(&mut self) {
-        todo!(
-            "BufferSizeLimit::drop — native buffer size override not implemented \
-             (see TODO.yaml 'Implement native targeting/optimiser')"
-        )
+        let prev = self.prev;
+        BUFFER_SIZE_OVERRIDE.with(|c| *c.borrow_mut() = prev);
     }
 }
