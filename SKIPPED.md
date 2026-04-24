@@ -2200,6 +2200,20 @@ Individually-skipped tests (rest of the file is ported):
   the native backend feature landed). Skipping pending human review of
   the stashed worker branch.
 
+- `test_explain.py` (in `tests/snapshots/`) — every test exercises
+  Hypothesis's `Phase.explain` (via `EXPLAIN_SETTINGS = settings(phases=[Phase.generate, Phase.shrink, Phase.explain], ...)`)
+  and snapshot-tests the resulting human-readable "Falsifying example"
+  output, including the explain-phase "# The test always failed when
+  commented parts were varied together." / "# or any other generated
+  value" comments. Both halves are Python-specific public API with no
+  hegel-rust counterpart: hegel-rust has no public `Phase`/`phases`
+  setting on `Settings` (same gap cited by the `test_core.py::test_non_executed_tests_raise_skipped`
+  skip), and the snapshots pin Python `__repr__` formatting of class
+  instances (`MyClass(x=0, y=True)`, `Outer(inner=Inner(x=0), ...)`)
+  and dict literals (`{'x': 0, 'y': True}`). Unlike `test_shrinking.py`,
+  which was portable by asserting on the shrunk value via `minimal()`,
+  the whole subject of this file is the explain-phase output format.
+
 - `test_sets.py` (in `nocover/`) — parallel port-loop worker produced a
   port on `port/worker-1`, but cherry-picking onto the supervisor branch
   failed with conflicts across `Cargo.toml`, `src/lib.rs`,
