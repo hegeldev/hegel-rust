@@ -431,10 +431,13 @@ fn test_does_not_shrink_across_one() {
     assert_eq!(g, 1.1);
 }
 
-// Signaling NaN: maxed exponent, mantissa's high bit clear, payload nonzero.
-// Quiet NaN (`f64::NAN.to_bits() == 0x7FF8_0000_0000_0000`) has the high
-// mantissa bit set; a signaling NaN has it cleared.
-const SIGNALING_NAN: u64 = 0x7FF0_0000_0000_0001;
+// Matches Hypothesis's `hypothesis.internal.floats.SIGNALING_NAN` exactly.
+// IEEE's signaling NaN convention clears the mantissa's high bit, but
+// Hypothesis's constant actually sets it (`0x7FF8_…_0001`) — a quiet NaN
+// with a nonzero low payload bit, despite the name. Mirror the upstream
+// bits so tests parametrized over `[nan, -nan, SIGNALING_NAN, -SIGNALING_NAN]`
+// exercise the same four start points.
+const SIGNALING_NAN: u64 = 0x7FF8_0000_0000_0001;
 
 fn shrinks_to_canonical_nan_case(nan_bits: u64) {
     let shrunk = minimal_from(
