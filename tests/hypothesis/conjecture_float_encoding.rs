@@ -364,25 +364,21 @@ fn test_can_shrink_downwards_nan_0() {
 }
 
 #[test]
-#[ignore = "shrinker doesn't canonicalize NaN starting points — tracked in TODO.yaml (shrink-canonical-nan)"]
 fn test_can_shrink_downwards_nan_1() {
     shrink_downward_case(f64::NAN, 1.0);
 }
 
 #[test]
-#[ignore = "shrinker doesn't canonicalize NaN starting points — tracked in TODO.yaml (shrink-canonical-nan)"]
 fn test_can_shrink_downwards_nan_2() {
     shrink_downward_case(f64::NAN, 2.0);
 }
 
 #[test]
-#[ignore = "shrinker doesn't canonicalize NaN starting points — tracked in TODO.yaml (shrink-canonical-nan)"]
 fn test_can_shrink_downwards_nan_max() {
     shrink_downward_case(f64::NAN, f64::MAX);
 }
 
 #[test]
-#[ignore = "shrinker doesn't canonicalize NaN starting points — tracked in TODO.yaml (shrink-canonical-nan)"]
 fn test_can_shrink_downwards_nan_inf() {
     shrink_downward_case(f64::NAN, f64::INFINITY);
 }
@@ -463,19 +459,16 @@ fn shrinks_to_canonical_nan_case(nan_bits: u64) {
 }
 
 #[test]
-#[ignore = "shrinker doesn't canonicalize NaN starting points — tracked in TODO.yaml (shrink-canonical-nan)"]
 fn test_shrinks_to_canonical_nan_neg_nan() {
     shrinks_to_canonical_nan_case(f64::NAN.to_bits() | (1u64 << 63));
 }
 
 #[test]
-#[ignore = "shrinker doesn't canonicalize NaN starting points — tracked in TODO.yaml (shrink-canonical-nan)"]
 fn test_shrinks_to_canonical_nan_signaling() {
     shrinks_to_canonical_nan_case(SIGNALING_NAN);
 }
 
 #[test]
-#[ignore = "shrinker doesn't canonicalize NaN starting points — tracked in TODO.yaml (shrink-canonical-nan)"]
 fn test_shrinks_to_canonical_nan_neg_signaling() {
     shrinks_to_canonical_nan_case(SIGNALING_NAN | (1u64 << 63));
 }

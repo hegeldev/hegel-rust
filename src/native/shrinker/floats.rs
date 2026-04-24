@@ -2,9 +2,11 @@
 
 use std::collections::HashMap;
 
-use crate::native::core::{ChoiceKind, ChoiceValue, float_to_index, index_to_float, sort_key};
+use crate::native::core::{
+    ChoiceKind, ChoiceNode, ChoiceValue, float_to_index, index_to_float, sort_key,
+};
 
-use super::{Shrinker, bin_search_down};
+use super::{ShrinkRun, Shrinker, bin_search_down};
 
 /// Decompose a positive finite float into `(m, n)` with `value == m / n`.
 ///
@@ -80,6 +82,47 @@ impl<'a> Shrinker<'a> {
                         let cand = if v > 0.0 { f64::MAX } else { -f64::MAX };
                         if fc.validate(cand) {
                             self.replace(&HashMap::from([(i, ChoiceValue::Float(cand))]));
+                        }
+                    }
+                }
+
+                let v = self.float_at(i);
+
+                // NaN canonicalization. Mirrors Python's
+                // `Float.short_circuit`, which considers
+                // `[sys.float_info.max, inf, nan]` when current is NaN so
+                // that unconstrained predicates escape to a finite value and
+                // `is_nan`-style predicates converge on the positive
+                // canonical NaN (`0x7ff8_0000_0000_0000`, smallest mantissa
+                // in lex order). The non-NaN candidates go through
+                // `replace`/`consider` unchanged; the canonical-NaN
+                // fallback has to bypass `consider`'s sort-key shortcut,
+                // since all NaN bit patterns share
+                // `sort_index = (u64::MAX, false)` and `consider` would
+                // otherwise return true without rewriting `current_nodes[i]`.
+                if v.is_nan() {
+                    let mut stepped = false;
+                    for cand in [f64::MAX, f64::INFINITY] {
+                        if fc.validate(cand)
+                            && self.replace(&HashMap::from([(i, ChoiceValue::Float(cand))]))
+                        {
+                            stepped = true;
+                            break;
+                        }
+                    }
+                    if !stepped && v.to_bits() != f64::NAN.to_bits() && fc.validate(f64::NAN) {
+                        let mut attempt: Vec<ChoiceNode> = self.current_nodes.clone();
+                        attempt[i] = attempt[i].with_value(ChoiceValue::Float(f64::NAN));
+                        let (is_interesting, actual_nodes) =
+                            (self.test_fn)(ShrinkRun::Full(&attempt));
+                        // Accept as a lateral move: all NaN bit patterns
+                        // share sort_key so `<` alone would reject, but
+                        // guard against a (hypothetical) test that
+                        // produces a strictly worse sequence.
+                        if is_interesting
+                            && sort_key(&actual_nodes) <= sort_key(&self.current_nodes)
+                        {
+                            self.current_nodes = actual_nodes;
                         }
                     }
                 }
