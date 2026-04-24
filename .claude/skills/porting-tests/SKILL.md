@@ -121,6 +121,14 @@ For tuples: `|(x, y): &(i64, i64)| ...`. For floats: `|f: &f64| ...` (note
 it's passed by `&T`). If unsure about element types, make them explicit with
 `gs::integers::<i64>()` rather than `gs::integers()` bare.
 
+**Sum-based predicates on full-range integers overflow during
+shrinking.** `assert sum(xs) <= 1000` on `gs::vecs(gs::integers::<i64>())`
+literally translates to `xs.iter().sum::<i64>() > 1000`, but the
+shrinker probes at the bounds (including `i64::MIN`/`i64::MAX`) and
+`sum::<i64>()` panics on overflow — masking the real witness. Fold
+into a wider type: `xs.iter().map(|&x| i128::from(x)).sum::<i128>() > 1000`.
+Same pattern for `product`, `max`/`min` deltas, etc.
+
 ## Skip vs. port decision
 
 Default: **port**. The skip-list is narrow and strict; redundancy is fine,
