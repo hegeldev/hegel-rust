@@ -35,6 +35,7 @@ mod health_checks;
 mod intervalset;
 mod nocover_baseexception;
 mod nocover_collective_minimization;
+mod nocover_conjecture_engine;
 mod nocover_deferred_errors;
 mod nocover_dynamic_variable;
 mod nocover_filtering;
