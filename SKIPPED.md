@@ -1486,6 +1486,18 @@ Individually-skipped tests (rest of the file is ported):
   Both target the numpy integration and use Python-specific facilities
   (`sys.modules`, wildcard import) with no Rust counterpart.
 
+- `test_argument_validation.py` (in `tests/array_api/`) — array-api-extra
+  integration tests. Every parametrized case calls a strategy on the
+  `xps` namespace built by `hypothesis.extra.array_api.make_strategies_namespace(xp)`
+  (`xps.arrays`, `xps.array_shapes`, `xps.from_dtype`, `xps.integer_dtypes`,
+  `xps.floating_dtypes`, `xps.complex_dtypes`, `xps.valid_tuple_axes`,
+  `xps.broadcastable_shapes`, `xps.mutually_broadcastable_shapes`,
+  `xps.indices`) against an Array-API-conforming array module (`mock_xp`,
+  `numpy.array_api`, or `array-api-strict`); the standalone test also
+  validates `make_strategies_namespace` itself. hegel-rust has no Array
+  API integration or counterpart for array/dtype/shape-generation tied
+  to an external array-module namespace.
+
 - `test_gen_data.py` (in `tests/numpy/`) — numpy-extra integration tests.
   Every test exercises `hypothesis.extra.numpy` (`nps.arrays`,
   `nps.array_shapes`, `nps.broadcastable_shapes`, `nps.from_dtype`,
