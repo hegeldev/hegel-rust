@@ -7,28 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-  - title: shrink-inf-to-max — shrinker should step from +inf to f64::MAX
-    details: |
-      `test_can_shrink_downwards_inf_max` in
-      tests/hypothesis/conjecture_float_encoding.rs is `#[ignore]`'d because
-      `src/native/shrinker/floats.rs::shrink_floats` can't step from
-      `f64::INFINITY` down to `f64::MAX` under the condition `!(x < f64::MAX)`
-      (which admits only `f64::MAX` and `f64::INFINITY`).
-
-      Cause: step 3a's integer bin-search over [0, int_hi] with
-      `int_hi = f64::MAX.floor() as i128` saturates to `i128::MAX`, but no
-      `n as f64` for `n <= i128::MAX` reaches `f64::MAX` (`i128::MAX as f64 ≈ 2^127 ≪ f64::MAX`).
-      Step 3b's bin-search over `[0, float_to_index(inf)]` also misses
-      `float_to_index(f64::MAX)` because midpoints skip past it.
-
-      Hypothesis's float shrinker has "next_down" / exponent-adjustment
-      passes that systematically try the previous float. Porting those
-      into `src/native/shrinker/floats.rs` is the expected fix.
-
-      Acceptance criteria: remove the `#[ignore]` on
-      `tests/hypothesis/conjecture_float_encoding.rs::test_can_shrink_downwards_inf_max`
-      and the test passes.
-
   - title: shrink-fractional-part — shrinker should find 1.5 from 2.5 under `fract == 0.5`
     details: |
       `test_shrink_fractional_part` in
