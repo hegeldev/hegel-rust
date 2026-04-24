@@ -1755,10 +1755,14 @@ Individually-skipped tests (rest of the file is ported):
 - `conjecture/test_choice.py::test_choice_node_equality` — asserts
   `node != 42` (cross-type). Rust `PartialEq` is type-restricted at compile
   time, so mixed-type comparison is unrepresentable.
-- `conjecture/test_choice.py::test_forced_nodes_are_trivial`,
-  `::test_trivial_nodes`, `::test_nontrivial_nodes`,
-  `::test_conservative_nontrivial_nodes` — depend on `ChoiceNode.trivial`,
-  which has no counterpart on native `ChoiceNode`.
+- `conjecture/test_choice.py::test_trivial_nodes`,
+  `::test_nontrivial_nodes`, `::test_conservative_nontrivial_nodes` —
+  the `.trivial` half of these tests is ported (native
+  `ChoiceNode::trivial` is a faithful port of upstream). The
+  `minimal(values()) == node.value` shrinking-invariant half is NOT
+  ported — it needs a shrinking/generator harness beyond what's built.
+  Rows parametrised on `shrink_towards` are dropped (no native field).
+  Tests ported in full: `test_forced_nodes_are_trivial`.
 - `conjecture/test_choice.py::test_choice_node_is_hashable` — native
   `ChoiceNode` does not implement `std::hash::Hash`.
 - `conjecture/test_choice.py::test_choices_size_positive` —
