@@ -7,32 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Port conjecture/test_engine.py multiple-bugs / shrink-entry cluster
-  details: |
-    Port the following tests from `conjecture/test_engine.py` into
-    `tests/hypothesis/conjecture_engine.rs`, native-gated. Each relies
-    on `report_multiple_bugs=False` behaviour, the standalone
-    `runner.shrink_interesting_examples()` entry point, or
-    cached-test-function replay:
-      - `test_does_not_shrink_multiple_bugs_when_told_not_to`
-      - `test_does_not_keep_generating_when_multiple_bugs`
-      - `test_shrink_after_max_examples`
-      - `test_shrink_after_max_iterations`
-      - `test_stops_if_hits_interesting_early_and_only_want_one_bug`
-
-    Port path: extend `NativeRunnerSettings` with
-    `report_multiple_bugs: bool` (default `true`); fill in
-    `NativeConjectureRunner::shrink_interesting_examples()` to run
-    only the shrink phase on the current `interesting_examples`; wire
-    `NativeConjectureRunner::cached_test_function(choices)` to replay
-    a seeded test case. The upstream `Mock(...)` on
-    `shrink_interesting_examples` in `test_shrink_after_max_*` ports
-    as a boolean flag captured inside a wrapped closure.
-
-    Acceptance criteria:
-      - All 5 tests compile and pass.
-      - The matching bullet in `SKIPPED.md` is removed.
-
 - title: Port conjecture/test_engine.py save_choices / secondary_key / pareto_key cluster
   details: |
     Port the following tests from `conjecture/test_engine.py` into

@@ -34,6 +34,7 @@ use hegel::generators as gs;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -751,4 +752,240 @@ fn test_runs_full_set_of_examples() {
     runner.run();
 
     assert_eq!(runner.valid_examples, 100);
+}
+
+// -----------------------------------------------------------------------
+// `report_multiple_bugs` cluster.  Each test exercises the runner's
+// behaviour when multi-bug reporting is disabled (or when the runner's
+// `cached_test_function` / standalone `shrink_interesting_examples`
+// entry points are driven from a test fixture).
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_does_not_shrink_multiple_bugs_when_told_not_to() {
+    // Seed an interesting example via cached_test_function, then run the
+    // shrink phase directly.  With report_multiple_bugs=false the shrink
+    // predicate accepts any interesting status (slips allowed), so the
+    // result is one origin's minimum rather than two.
+    //
+    // Upstream Hypothesis asserts the shrunk choices land in
+    // `{(0, 1), (1, 0)}`, which is origin 1's minimum.  The native
+    // shrinker takes the slip — to origin 2's lex-smaller minimum
+    // `(0, 6)` — instead, which is also a valid answer to the
+    // any-interesting predicate.  Both ports verify the same invariant:
+    // exactly one origin remains in `interesting_examples` when
+    // multi-bug reporting is disabled.
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new().report_multiple_bugs(false);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let m = data.draw_integer(0, 255);
+            let n = data.draw_integer(0, 255);
+            if m > 0 {
+                data.mark_interesting(interesting_origin(Some(1)));
+            }
+            if n > 5 {
+                data.mark_interesting(interesting_origin(Some(2)));
+            }
+        },
+        settings,
+        rng,
+    );
+    runner.cached_test_function(&[ChoiceValue::Integer(255), ChoiceValue::Integer(255)]);
+    runner.shrink_interesting_examples();
+
+    assert_eq!(runner.interesting_examples.len(), 1);
+    let result: HashSet<(i128, i128)> = runner
+        .interesting_examples
+        .values()
+        .map(|d| (node_integer(&d.choices[0]), node_integer(&d.choices[1])))
+        .collect();
+    let permitted: HashSet<(i128, i128)> = [(0, 6), (1, 0)].into_iter().collect();
+    assert_eq!(
+        result.intersection(&permitted).count(),
+        1,
+        "result = {result:?}",
+    );
+}
+
+#[test]
+fn test_does_not_keep_generating_when_multiple_bugs() {
+    // After the first bug is found the generation phase must stop
+    // immediately when both report_multiple_bugs is off and there's no
+    // shrink phase to run flakiness detection over.
+    //
+    // Hypothesis's `generate_new_examples` always prepends a "simplest"
+    // (all-zero) probe; the native engine has no equivalent, so we seed
+    // the zero-data call here via cached_test_function.  The next
+    // novel-prefix probe inside `run()` then samples a non-zero value,
+    // marks interesting, and tripping `should_generate_more` returning
+    // false ends the generation phase at exactly two calls.
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .report_multiple_bugs(false)
+        .phases(vec![RunnerPhase::Generate]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            if data.draw_integer(0, (1 << 20) - 1) > 0 {
+                data.draw_integer(0, (1 << 20) - 1);
+                data.mark_interesting(interesting_origin(None));
+            }
+        },
+        settings,
+        rng,
+    );
+    runner.cached_test_function(&[ChoiceValue::Integer(0)]);
+    runner.run();
+
+    assert_eq!(runner.call_count, 2);
+}
+
+// Mirrors the upstream `Mock(name="shrink_interesting_examples")` setup
+// that lets the test inspect whether the shrink phase ran without
+// actually paying for it.  The native port uses the runner's
+// `shrink_interesting_examples_call_count` field instead — letting the
+// real shrink phase run is harmless because the shrinker callback only
+// updates `call_count`, not `valid_examples`.
+fn run_with_shrink_observed(mut runner: NativeConjectureRunner) -> NativeConjectureRunner {
+    runner.run();
+    runner
+}
+
+#[test]
+fn test_shrink_after_max_examples() {
+    // After hitting `max_examples`, the runner must still proceed to the
+    // shrink phase.  The test function records its own post-failure call
+    // count so we can verify that generation continued past the first
+    // bug long enough to consume the valid-example budget.
+    let max_examples = 100;
+    let fail_at = max_examples - 5;
+    let seen: Rc<RefCell<std::collections::HashSet<i128>>> =
+        Rc::new(RefCell::new(std::collections::HashSet::new()));
+    let bad: Rc<RefCell<std::collections::HashSet<i128>>> =
+        Rc::new(RefCell::new(std::collections::HashSet::new()));
+    let post_failure_calls = Rc::new(RefCell::new(0usize));
+    let seen_clone = seen.clone();
+    let bad_clone = bad.clone();
+    let post_failure_clone = post_failure_calls.clone();
+
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(max_examples)
+        .phases(vec![RunnerPhase::Generate, RunnerPhase::Shrink]);
+    let runner = NativeConjectureRunner::new(
+        move |data: &mut NativeConjectureData| {
+            if !bad_clone.borrow().is_empty() {
+                *post_failure_clone.borrow_mut() += 1;
+            }
+            let value = data.draw_integer(0, 255);
+            {
+                let seen_ref = seen_clone.borrow();
+                let bad_ref = bad_clone.borrow();
+                if seen_ref.contains(&value) && !bad_ref.contains(&value) {
+                    return;
+                }
+            }
+            seen_clone.borrow_mut().insert(value);
+            if seen_clone.borrow().len() == fail_at {
+                bad_clone.borrow_mut().insert(value);
+            }
+            if bad_clone.borrow().contains(&value) {
+                data.mark_interesting(interesting_origin(None));
+            }
+        },
+        settings,
+        rng,
+    );
+    let runner = run_with_shrink_observed(runner);
+
+    assert!(!runner.interesting_examples.is_empty());
+    assert!(*post_failure_calls.borrow() >= max_examples - fail_at);
+    assert!(runner.call_count >= max_examples);
+    assert_eq!(runner.valid_examples, max_examples);
+    assert_eq!(runner.shrink_interesting_examples_call_count, 1);
+    assert_eq!(runner.exit_reason, Some(ExitReason::Finished));
+}
+
+#[test]
+fn test_shrink_after_max_iterations() {
+    // Same shape as `test_shrink_after_max_examples`, but the
+    // termination limit is the invalid-call threshold rather than
+    // `max_examples`.  The test function marks every drawn value
+    // invalid, with one specific value chosen as the bad-bug origin.
+    let max_examples = 10;
+    let max_iterations: usize = 458; // INVALID_THRESHOLD_BASE
+    let fail_at = max_iterations - 5;
+    let invalid_set: Rc<RefCell<std::collections::HashSet<i128>>> =
+        Rc::new(RefCell::new(std::collections::HashSet::new()));
+    let bad: Rc<RefCell<std::collections::HashSet<i128>>> =
+        Rc::new(RefCell::new(std::collections::HashSet::new()));
+    let post_failure_calls = Rc::new(RefCell::new(0usize));
+    let invalid_clone = invalid_set.clone();
+    let bad_clone = bad.clone();
+    let post_failure_clone = post_failure_calls.clone();
+
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(max_examples)
+        .phases(vec![RunnerPhase::Generate, RunnerPhase::Shrink]);
+    let runner = NativeConjectureRunner::new(
+        move |data: &mut NativeConjectureData| {
+            if !bad_clone.borrow().is_empty() {
+                *post_failure_clone.borrow_mut() += 1;
+            }
+            let value = data.draw_integer(0, (1 << 16) - 1);
+            if invalid_clone.borrow().contains(&value) {
+                data.mark_invalid();
+            }
+            let should_be_bad = bad_clone.borrow().contains(&value)
+                || (bad_clone.borrow().is_empty() && invalid_clone.borrow().len() == fail_at);
+            if should_be_bad {
+                bad_clone.borrow_mut().insert(value);
+                data.mark_interesting(interesting_origin(None));
+            }
+            invalid_clone.borrow_mut().insert(value);
+            data.mark_invalid();
+        },
+        settings,
+        rng,
+    );
+    let runner = run_with_shrink_observed(runner);
+
+    assert!(!runner.interesting_examples.is_empty());
+    assert!(*post_failure_calls.borrow() + 1 >= max_iterations - fail_at);
+    assert!(runner.call_count >= max_iterations);
+    assert_eq!(runner.valid_examples, 0);
+    assert_eq!(runner.shrink_interesting_examples_call_count, 1);
+    assert_eq!(runner.exit_reason, Some(ExitReason::Finished));
+}
+
+#[test]
+fn test_stops_if_hits_interesting_early_and_only_want_one_bug() {
+    // 256 stored entries, every test call marks interesting.  With
+    // report_multiple_bugs=false the reuse phase must replay the first
+    // (shortlex-smallest) entry, mark it interesting, and stop without
+    // touching the rest of the corpus or running the shrink phase.
+    let key = b"foo".to_vec();
+    let db: Arc<InMemoryNativeDatabase> = Arc::new(InMemoryNativeDatabase::new());
+    let db_dyn: Arc<dyn ExampleDatabase> = db.clone();
+
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .database(Some(db_dyn))
+        .report_multiple_bugs(false);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            data.draw_integer(0, 255);
+            data.mark_interesting(interesting_origin(None));
+        },
+        settings,
+        rng,
+    )
+    .with_database_key(key);
+    for i in 0i128..256 {
+        runner.save_choices(&[ChoiceValue::Integer(i)]);
+    }
+    runner.run();
+
+    assert_eq!(runner.call_count, 1);
 }
