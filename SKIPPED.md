@@ -1316,6 +1316,15 @@ Individually-skipped tests (rest of the file is ported):
   the `BaseException` trigger and the pytest-runtime output surface are
   Python-specific.
 
+- `nocover/test_characters.py::test_can_constrain_characters_to_codec` —
+  parametrizes over Python's `encodings.aliases.aliases` dict (100+ codec
+  names like `cp1252`, `shift_jis`, `koi8-r`) and asserts the generated
+  string encodes via Python's `str.encode(codec)`. Both the codec-list
+  source and the verification step are Python-stdlib integrations with
+  no Rust counterpart; hegel-rust's `codec` support in `src/native/` is
+  limited to `ascii` / `latin-1` / `utf-8`. Rest of the file ported in
+  `tests/hypothesis/nocover_characters.rs`.
+
 - `nocover/test_conjecture_engine.py::test_saves_data_while_shrinking`,
   `nocover/test_conjecture_engine.py::test_can_discard` — both
   `monkeypatch.setattr(ConjectureRunner, "generate_new_examples",
