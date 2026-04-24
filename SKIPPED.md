@@ -2171,6 +2171,129 @@ Individually-skipped tests (rest of the file is ported):
   no-op `run_step`. Hegel's value-shrinker ports (`IntegerShrinker`,
   `OrderingShrinker`) are concrete structs with fixed `run_step`
   implementations and no subclass-pluggable base class.
+
+- `conjecture/test_engine.py::test_non_cloneable_intervals`,
+  `::test_deletable_draws`, `::test_variadic_draw`, `::test_draw_to_overrun`,
+  `::test_erratic_draws`, `::test_no_read_no_shrink`, `::test_one_dead_branch`,
+  `::test_returns_forced`, `::test_run_nothing`, `::test_interleaving_engines`
+  — each uses the `run_to_nodes(f)` fixture from
+  `tests/conjecture/common.py`, which runs a `ConjectureRunner` to
+  completion on `f` and returns the shrunk `data.nodes` of the sole
+  interesting example. `__native_test_internals::TargetedRunner` has no
+  interesting-example tracking or post-shrink-nodes accessor.
+- `conjecture/test_engine.py::test_can_load_data_from_a_corpus`,
+  `::test_detects_flakiness`, `::test_recursion_error_is_not_flaky`,
+  `::test_can_navigate_to_a_valid_example`,
+  `::test_stops_after_max_examples_when_reading`,
+  `::test_stops_after_max_examples_when_generating`,
+  `::test_stops_after_max_examples_when_generating_more_bugs`,
+  `::test_phases_can_disable_shrinking`,
+  `::test_reuse_phase_runs_for_max_examples_if_generation_is_disabled`,
+  `::test_does_not_save_on_interrupt`,
+  `::test_saves_on_skip_exceptions_to_reraise`,
+  `::test_exit_because_max_iterations`,
+  `::test_max_iterations_with_all_invalid`,
+  `::test_max_iterations_with_some_valid`,
+  `::test_exit_because_shrink_phase_timeout`,
+  `::test_does_not_shrink_multiple_bugs_when_told_not_to`,
+  `::test_does_not_keep_generating_when_multiple_bugs`,
+  `::test_shrink_after_max_examples`, `::test_shrink_after_max_iterations`,
+  `::test_runs_full_set_of_examples`,
+  `::test_does_not_shrink_if_replaying_from_database`,
+  `::test_does_shrink_if_replaying_inexact_from_database`,
+  `::test_stops_if_hits_interesting_early_and_only_want_one_bug`,
+  `::test_skips_secondary_if_interesting_is_found`,
+  `::test_discards_invalid_db_entries`,
+  `::test_discards_invalid_db_entries_pareto` — each constructs a
+  `ConjectureRunner(f, settings=, random=, database_key=)`, calls
+  `runner.run()`, and asserts on `runner.interesting_examples` /
+  `runner.exit_reason` / `runner.shrinks` / `runner.call_count` /
+  `runner.save_choices(...)` / `runner.secondary_key` /
+  `runner.pareto_key`. `__native_test_internals::TargetedRunner` is
+  the optimiser-facing slice (`cached_test_function` /
+  `optimise_targets` / `best_observed_targets`); it does not model
+  any of these attributes.
+- `conjecture/test_engine.py::test_terminates_shrinks`,
+  `::test_shrinks_both_interesting_examples`, `::test_discarding`,
+  `::test_shrinking_from_mostly_zero`,
+  `::test_handles_nesting_of_discard_correctly`,
+  `::test_prefix_cannot_exceed_buffer_size`,
+  `::test_will_evict_entries_from_the_cache`,
+  `::test_simulate_to_evicted_data` — each uses
+  `monkeypatch.setattr(ConjectureRunner, "generate_new_examples",
+  ...)` to seed a specific initial buffer or `monkeypatch.setattr
+  (engine_module, "MAX_SHRINKS" / "CACHE_SIZE", n)` to cap the
+  shrink loop. No attribute-injection entry point in the native
+  engine.
+- `conjecture/test_engine.py::test_fails_health_check_for_all_invalid`,
+  `::test_fails_health_check_for_large_base`,
+  `::test_fails_health_check_for_large_non_base`,
+  `::test_fails_health_check_for_slow_draws`,
+  `::test_health_check_too_slow_with_invalid_examples`,
+  `::test_health_check_too_slow_with_overrun_examples`,
+  `::test_too_slow_report` — each wraps a `ConjectureRunner.run()` in
+  `pytest.raises(FailedHealthCheck) as e` and asserts
+  `str(HealthCheck.xxx) in str(e.value)`. Native panics with a
+  free-form string (`"FailedHealthCheck: TooSlow — …"`) and has no
+  structured `FailedHealthCheck` exception or label enum.
+- `conjecture/test_engine.py::test_clears_out_its_database_on_shrinking`,
+  `::test_database_clears_secondary_key`,
+  `::test_database_uses_values_from_secondary_key` — each uses
+  `InMemoryExampleDatabase` with `.data` / `.save(key, choices)` /
+  `.fetch(key)` introspection and `choices_to_bytes` /
+  `choices_from_bytes`. Native has a path-backed `NativeDatabase`
+  only; there is no in-memory variant exposed for tests and no
+  choice-bytes codec helpers.
+- `conjecture/test_engine.py::test_can_remove_discarded_data`,
+  `::test_discarding_iterates_to_fixed_point`,
+  `::test_discarding_is_not_fooled_by_empty_discards`,
+  `::test_discarding_can_fail`,
+  `::test_can_write_bytes_towards_the_end`,
+  `::test_uniqueness_is_preserved_when_writing_at_beginning`,
+  `::test_dependent_block_pairs_can_lower_to_zero`,
+  `::test_handle_size_too_large_during_dependent_lowering`,
+  `::test_block_may_grow_during_lexical_shrinking`,
+  `::test_lower_common_node_offset_does_nothing_when_changed_blocks_are_zero`,
+  `::test_lower_common_node_offset_ignores_zeros`,
+  `::test_cached_test_function_returns_right_value`,
+  `::test_cached_test_function_does_not_reinvoke_on_prefix`,
+  `::test_branch_ending_in_write`, `::test_exhaust_space`,
+  `::test_discards_kill_branches`,
+  `::test_number_of_examples_in_integer_range_is_bounded`,
+  `::test_does_not_cache_extended_prefix`,
+  `::test_does_cache_if_extend_is_not_used`,
+  `::test_does_result_for_reuse`,
+  `::test_does_not_use_cached_overrun_if_extending`,
+  `::test_uses_cached_overrun_if_not_extending`,
+  `::test_can_be_set_to_ignore_limits`,
+  `::test_overruns_with_extend_are_not_cached` — each seeds an initial
+  buffer via `runner.cached_test_function(start)` then builds a
+  `runner.new_shrinker(last_data, lambda d: d.status == INTERESTING)`
+  and drives a single named shrink pass
+  (`fixate_shrink_passes([pass_name])`). `TargetedRunner` exposes
+  `cached_test_function` but not `new_shrinker`, and the native
+  `Shrinker` has no fixate-on-one-pass entry point.
+- `conjecture/test_engine.py::test_populates_the_pareto_front`,
+  `::test_pareto_front_contains_smallest_valid`,
+  `::test_replaces_all_dominated`, `::test_does_not_duplicate_elements`,
+  `::test_includes_right_hand_side_targets_in_dominance`,
+  `::test_smaller_interesting_dominates_larger_valid`,
+  `::test_runs_optimisation_even_if_not_generating`,
+  `::test_runs_optimisation_once_when_generating`,
+  `::test_does_not_run_optimisation_when_max_examples_is_small` —
+  each asserts on `runner.pareto_front` / `dominance` /
+  `runner.optimise_calls_count`. Pareto-front bookkeeping is not in
+  `src/native/optimiser.rs`; only the hill-climb side is ported.
+- `conjecture/test_engine.py::test_debug_data` — Python
+  `capsys`-based stdout capture of `Verbosity.debug` diagnostic
+  output. Covered in spirit by `tests/hypothesis/verbosity.rs`.
+- `conjecture/test_engine.py::test_mildly_complicated_strategies`
+  (the `st.sampled_from(enum.Flag("LargeFlag", ...))` row) —
+  Python's `enum.Flag` factory builds a runtime flag type with a
+  bit-valued `.value` attribute; no direct Rust analog. The other
+  two rows (`st.lists(st.integers(), min_size=5)` and
+  `st.lists(st.text(), min_size=2, unique=True)`) are ported.
+
 - `test_crosshair.py` (in `crosshair/`) — entire file exercises Hypothesis's
   `backend="crosshair"` integration with the third-party `crosshair`
   symbolic-execution library (`import crosshair`,
