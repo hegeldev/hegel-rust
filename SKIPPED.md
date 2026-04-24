@@ -1438,6 +1438,11 @@ Individually-skipped tests (rest of the file is ported):
   `tests/hypothesis/main.rs`); left for human inspection on branch
   `port/worker-0`.
 
+- `test_utils.py` (in `conjecture/`) — port abandoned: parallel port-loop
+  worker produced commits on `port/worker-0` that could not be cherry-picked
+  cleanly onto the supervisor branch (merge conflicts in `src/lib.rs` and
+  `src/native/mod.rs`); left for human inspection on branch `port/worker-0`.
+
 - `test_validation.py::test_errors_when_given_varargs`,
   `test_validation.py::test_varargs_without_positional_arguments_allowed`,
   `test_validation.py::test_errors_when_given_varargs_and_kwargs_with_positional_arguments`,
