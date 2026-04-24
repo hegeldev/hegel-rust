@@ -152,6 +152,31 @@ for f in &forbidden {
 
 See `tests/hypothesis/nocover_filtering.rs` for both shapes together.
 
+**Large scalar-axis parametrize → `for`-loop inside one `#[test]`.** When the
+parametrize axis is just a list of scalars (numeric boundaries, powers of ten,
+bit patterns) and every row applies the *same* assertion logic, don't emit one
+`#[test]` per row — loop inside a single `#[test]` and label failures with the
+axis value:
+
+```rust
+for boundary in boundaries() {
+    assert_eq!(
+        minimal(gs::integers::<i64>(), move |x: &i64| *x >= boundary),
+        boundary,
+        "boundary = {boundary}"
+    );
+}
+```
+
+Rule of thumb: >5-6 rows → loop; ≤4 rows → one `#[test]` per row (names can
+encode the axis, e.g. `..._straddle_zero` vs `..._subnormal_pair`). Unlike the
+seed-axis collapse above, each iteration here is a genuinely distinct
+assertion — the `"boundary = {..}"` message is load-bearing because the loop
+hides which value tripped. Move-captured loop variables need `move` on the
+inner closure. See `tests/hypothesis/nocover_simple_numbers.rs` for 3×axes
+collapsed this way (boundaries, k∈0..10) next to a 4-row axis given one
+`#[test]` per row.
+
 ## Features deliberately missing from hegel-rust
 
 These show up in lots of pbtkit/Hypothesis tests. When you hit one, leave
