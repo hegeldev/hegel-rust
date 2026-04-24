@@ -17,6 +17,7 @@ pub mod dynamic_variable;
 pub mod featureflags;
 pub mod floats;
 pub mod intervalsets;
+pub mod optimiser;
 pub mod re;
 pub mod runner;
 pub mod schema;

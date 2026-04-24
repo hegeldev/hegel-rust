@@ -1651,22 +1651,11 @@ Individually-skipped tests (rest of the file is ported):
   `OrderingShrinker`) are concrete structs with fixed `run_step`
   implementations and no subclass-pluggable base class.
 
-- `conjecture/test_optimiser.py::test_optimises_to_maximum`,
-  `::test_optimises_multiple_targets`,
-  `::test_optimises_when_last_element_is_empty`,
-  `::test_can_optimise_last_with_following_empty`,
-  `::test_can_find_endpoints_of_a_range` (6 parametrize rows),
-  `::test_targeting_can_drive_length_very_high`,
-  `::test_optimiser_when_test_grows_buffer_to_invalid`,
-  `::test_can_patch_up_examples`,
-  `::test_optimiser_when_test_grows_buffer_to_overflow`,
-  `::test_optimising_all_nodes` — every test in the upstream file
-  exercises `ConjectureData.target_observations`,
-  `ConjectureRunner.best_observed_targets`, and
-  `ConjectureRunner.optimise_targets()` (the hill-climbing
-  target-score optimisation pass). hegel-rust's native engine has no
-  counterpart: `NativeTestCase` has no `target_observations` surface,
-  `CachedTestFunction` has no `best_observed_targets` tracker, and
-  `src/native/` has no optimiser pass. See the matching TODO.yaml
-  entry "Implement native targeting/optimiser" — un-skipping these
-  tests is in its acceptance criteria.
+- `conjecture/test_optimiser.py::test_optimising_all_nodes` `@given(nodes())`
+  branch — the three `@example` rows of that test are ported, but the
+  `@given(nodes())` body needs the `nodes()` strategy (from
+  `tests/conjecture/common.py`, generates random `ChoiceNode` instances)
+  and `compute_max_children` (from
+  `hypothesis.internal.conjecture.datatree`) — neither is ported to
+  hegel-rust yet. Un-skipping is part of the same "Implement native
+  targeting/optimiser" TODO that un-stubs `TargetedRunner`.
