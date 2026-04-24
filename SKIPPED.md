@@ -371,6 +371,22 @@ Individually-skipped tests (rest of the file is ported):
   `test_caching.py` above); `test_local_types_are_garbage_collected_issue_493`
   uses `weakref.ref` + `gc.collect()` to assert Python garbage-collection
   behaviour on a locally-defined `@given`-decorated class — no Rust analog.
+- `test_conjecture_int_list.py` (in `nocover/`) — the sole stateful test
+  (`IntListRules(RuleBasedStateMachine)` + `TestIntList = IntListRules.TestCase`)
+  targets `hypothesis.internal.conjecture.junkdrawer.IntList`, a
+  Python-language-specific compact-integer container that stores values in
+  an `array.array` with a dynamically-upgrading typecode (`B`/`H`/`I`/`L`/`Q`/`O`)
+  to save memory on small non-negative integers and fall back to unbounded
+  Python `int` via a `list[int]` when a value overflows the largest
+  fixed-width code. Same rationale as the already-skipped `test_junkdrawer.py`
+  (in `conjecture/`): `IntList` is redundant in Rust where typed `Vec<u64>`
+  / `Vec<u128>` / `Vec<BigUint>` is used directly and there is no
+  auto-upgrading typecode machinery to model. The upstream state machine
+  also uses `st.runner()` (Hypothesis's `@st.composite` hook that returns
+  the currently-running `RuleBasedStateMachine` instance so a sampling
+  strategy can see the model), which hegel-rust's `hegel::stateful` does
+  not expose — there is no equivalent way for a strategy used inside a
+  `#[rule]` to observe the state-machine struct it is running against.
 - `test_conventions.py` (in `nocover/`) — the sole test asserts
   `repr(UniqueIdentifier("hello_world")) == "hello_world"`, exercising
   Python's `__repr__` dunder on a `hypothesis.utils.conventions` sentinel
