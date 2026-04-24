@@ -58,7 +58,12 @@ normal pbtkit integration test. The embedded-tests mirror at
 
 - `tc.for_choices([...])` (pbtkit-internal replay shim)
 - `tc.weighted(p)` (no equivalent public API in hegel-rust)
-- `tc.target(score)` (no public API)
+- `tc.target(score)` (no public API). A native-only test-harness
+  surface exists for porting Hypothesis-style optimiser tests —
+  `TargetedRunner` / `TargetedTestCase` / `BufferSizeLimit` via
+  `__native_test_internals`, worked in
+  `tests/hypothesis/conjecture_optimiser.rs`. `test_targeting.py`-shape
+  ports that build their own runner drive through this.
 - `tc.mark_status(Status.INTERESTING)` (no public API; `panic!` is the
   hegel-rust equivalent)
 - `tc.choice(n)` → `tc.draw(gs::integers::<i64>().min_value(0).max_value(n-1))`

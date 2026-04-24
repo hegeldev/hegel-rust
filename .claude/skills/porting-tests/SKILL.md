@@ -170,8 +170,14 @@ Tests that exercise pbtkit / Hypothesis *engine internals* —
 `ChoiceNode`, `PbtkitState`, `ConjectureRunner`, `SHRINK_PASSES`,
 `CachedTestFunction`, `IntegerChoice`, `FloatChoice`, `StringChoice`,
 `TC.for_choices`, `to_index`/`from_index`, database serialization tags,
-span introspection, etc. — have counterparts under `src/native/` and
-are reachable only in native mode. Port these; do NOT skip them.
+span introspection, `ConjectureData.target_observations`,
+`ConjectureRunner.best_observed_targets` / `optimise_targets`,
+`Optimiser.hill_climb`, etc. — have counterparts under `src/native/` and
+are reachable only in native mode. Port these; do NOT skip them. An
+engine internal visibly absent from `src/native/` is the cue to *add*
+the stub and port, not to skip with "no counterpart"; the targeting /
+optimiser surface in `src/native/optimiser.rs` was added exactly this
+way while porting `conjecture/test_optimiser.py`.
 
 1. Write the test in its usual destination (`tests/<kind>/<module>.rs`),
    or as an embedded test in `tests/embedded/native/...` if it needs
