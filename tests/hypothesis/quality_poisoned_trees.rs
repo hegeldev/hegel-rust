@@ -83,16 +83,15 @@ fn check_can_reduce_poison_from_any_subtree(size: usize) {
     draw_tree(&mut ntc, p).unwrap();
     let initial_nodes = ntc.nodes.clone();
 
-    let phase1_fn: Box<dyn FnMut(&[ChoiceNode]) -> (bool, Vec<ChoiceNode>)> =
-        Box::new(move |candidate: &[ChoiceNode]| {
-            let values = values_of(candidate);
-            let mut ntc = NativeTestCase::for_choices(&values, Some(candidate));
-            let interesting = match draw_tree(&mut ntc, p) {
-                Some(t) => t.len() >= size,
-                None => false,
-            };
-            (interesting, ntc.nodes.clone())
-        });
+    let phase1_fn = Box::new(move |candidate: &[ChoiceNode]| {
+        let values = values_of(candidate);
+        let mut ntc = NativeTestCase::for_choices(&values, Some(candidate));
+        let interesting = match draw_tree(&mut ntc, p) {
+            Some(t) => t.len() >= size,
+            None => false,
+        };
+        (interesting, ntc.nodes.clone())
+    });
     let mut shrinker = Shrinker::new(phase1_fn, initial_nodes);
     shrinker.shrink();
     let shrunk_nodes = shrinker.current_nodes.clone();
@@ -134,13 +133,12 @@ fn check_can_reduce_poison_from_any_subtree(size: usize) {
         let poison_initial_nodes = ntc.nodes.clone();
 
         let marker_for_shrinker = marker.clone();
-        let phase2_fn: Box<dyn FnMut(&[ChoiceNode]) -> (bool, Vec<ChoiceNode>)> =
-            Box::new(move |candidate: &[ChoiceNode]| {
-                let values = values_of(candidate);
-                let mut ntc = NativeTestCase::for_choices(&values, Some(candidate));
-                let interesting = run_poison(&mut ntc, p, &marker_for_shrinker);
-                (interesting, ntc.nodes.clone())
-            });
+        let phase2_fn = Box::new(move |candidate: &[ChoiceNode]| {
+            let values = values_of(candidate);
+            let mut ntc = NativeTestCase::for_choices(&values, Some(candidate));
+            let interesting = run_poison(&mut ntc, p, &marker_for_shrinker);
+            (interesting, ntc.nodes.clone())
+        });
         let mut poison_shrinker = Shrinker::new(phase2_fn, poison_initial_nodes);
         poison_shrinker.shrink();
 
