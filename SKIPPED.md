@@ -1653,6 +1653,16 @@ Individually-skipped tests (rest of the file is ported):
   `np.all`). hegel-rust has no numpy integration or counterpart for
   numpy-dtype-aware array/scalar generation.
 
+- `test_floor_ceil.py` (in `tests/numpy/`) — numpy-extra integration
+  test. The single parametrized test constructs `np.array(eval(value))`
+  for large ±2**53/63/64 integer cases and asserts that
+  `hypothesis.internal.compat.floor` / `ceil` return exact Python `int`
+  (avoiding numpy's float rounding) where `math.floor` / `math.ceil`
+  would not. The test's subject is the numpy-specific wrapper in
+  `hypothesis.internal.compat`; hegel-rust has no numpy integration and
+  Rust's native i128/u64 types have no analogous rounding pitfall to
+  guard against.
+
 - `test_series.py` (in `tests/pandas/`) — pandas-extra integration tests.
   Every test exercises `hypothesis.extra.pandas` (`pdst.series`,
   `pdst.range_indexes`) and pandas/numpy dtypes (`np.dtype("O")`,
