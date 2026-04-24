@@ -345,6 +345,11 @@ Individually-skipped tests (rest of the file is ported):
   `data.conjecture_data.draw_boolean(forced=True)` (hegel-rust has
   no `gs::data()` public entry point for runtime draws and does not
   expose the internal forced-draw primitive through any strategy).
+- `test_intlist.py` (in `conjecture/`) — port-loop worker produced
+  commits that conflicted irreconcilably with the `src/native/` backend
+  on integration (Cargo.toml, src/lib.rs, src/native/mod.rs,
+  src/native/runner.rs, src/runner.rs, tests/test_native.rs).
+  Abandoned pending human review of the worker's `port/worker-0` branch.
 - `test_caching.py` — tests Python object identity (`st.text() is
   st.text()`) of Hypothesis's strategy cache; Rust generators are
   builder structs with no `is`-style identity equivalent.
