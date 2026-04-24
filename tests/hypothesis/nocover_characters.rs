@@ -14,8 +14,7 @@ use crate::common::utils::assert_all_examples;
 use hegel::generators as gs;
 use hegel::{Hegel, Settings};
 
-const IDENTIFIER_CHARS: &str =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_";
+const IDENTIFIER_CHARS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_";
 
 #[test]
 fn test_large_blacklist() {
