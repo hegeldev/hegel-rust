@@ -3,6 +3,8 @@
 //! These tests exercise the lifetime logic in BasicGenerator<'a, T> and
 //! the phantom type parameters on composite generators.
 
+mod common;
+
 use hegel::TestCase;
 use hegel::generators::{self as gs, Generator};
 

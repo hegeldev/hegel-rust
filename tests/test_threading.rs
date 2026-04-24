@@ -9,6 +9,8 @@
 //! thread work but does not race — that is, one thread does work, another
 //! picks up after it, and the outcome is independent of scheduling.
 
+mod common;
+
 use hegel::TestCase;
 use hegel::generators as gs;
 use std::sync::{Arc, Mutex};

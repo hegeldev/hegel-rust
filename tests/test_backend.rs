@@ -1,3 +1,5 @@
+mod common;
+
 use hegel::backend::DataSourceError;
 
 #[test]

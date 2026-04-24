@@ -1,3 +1,5 @@
+mod common;
+
 use hegel::TestCase;
 use hegel::generators::{self as gs, Generator};
 
