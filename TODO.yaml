@@ -7,25 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-  - title: shrink-fractional-part — shrinker should find 1.5 from 2.5 under `fract == 0.5`
-    details: |
-      `test_shrink_fractional_part` in
-      tests/hypothesis/conjecture_float_encoding.rs is `#[ignore]`'d because
-      `shrink_floats` can't walk from 2.5 to 1.5 under the condition
-      `(x - floor(x)) == 0.5`. The float lex index of 1.5 is
-      `(1<<63) | 1` and of 2.5 is `(1<<63) | (1<<52) | 1`; bin-search from
-      `[0, index(2.5)]` doesn't visit index `(1<<63) | 1` because
-      the midpoints are all of the form `2^k`, whose lex decodings
-      don't satisfy the fract==0.5 predicate.
-
-      Hypothesis does this with mantissa-level shrinking: once the
-      exponent is fixed at 1 (value in [1,2)), the shrinker adjusts the
-      fractional bits directly rather than index-bisecting.
-
-      Acceptance criteria: remove the `#[ignore]` on
-      `tests/hypothesis/conjecture_float_encoding.rs::test_shrink_fractional_part`
-      and the test passes.
-
   - title: shrink-canonical-nan — shrinker should canonicalize NaN starting points
     details: |
       `src/native/shrinker/floats.rs::shrink_floats` has

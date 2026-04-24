@@ -2,9 +2,37 @@
 
 use std::collections::HashMap;
 
-use crate::native::core::{ChoiceKind, ChoiceValue, float_to_index, index_to_float};
+use crate::native::core::{ChoiceKind, ChoiceValue, float_to_index, index_to_float, sort_key};
 
 use super::{Shrinker, bin_search_down};
+
+/// Decompose a positive finite float into `(m, n)` with `value == m / n`.
+///
+/// Mirrors Python's `float.as_integer_ratio`. Returns `None` for values whose
+/// numerator or denominator doesn't fit in `u128`: subnormals (denominator
+/// `2^1074`) and huge normals (numerator > `2^127`) both overflow. Callers
+/// skip the integer-ratio shrink step for those.
+pub(super) fn as_integer_ratio(v: f64) -> Option<(u128, u128)> {
+    debug_assert!(v.is_finite() && v > 0.0);
+    let bits = v.to_bits();
+    let biased_exp = ((bits >> 52) & 0x7FF) as i32;
+    let mantissa_bits = bits & ((1u64 << 52) - 1);
+    let (mut num, mut exp) = if biased_exp == 0 {
+        (u128::from(mantissa_bits), -1074i32)
+    } else {
+        (u128::from((1u64 << 52) | mantissa_bits), biased_exp - 1023 - 52)
+    };
+    let trailing = num.trailing_zeros() as i32;
+    num >>= trailing;
+    exp += trailing;
+    if exp >= 0 {
+        let shifted = num.checked_shl(exp as u32)?;
+        Some((shifted, 1))
+    } else {
+        let n = 1u128.checked_shl((-exp) as u32)?;
+        Some((num, n))
+    }
+}
 
 impl<'a> Shrinker<'a> {
     /// Shrink float choices toward simpler values using Hypothesis lex ordering.
@@ -19,6 +47,10 @@ impl<'a> Shrinker<'a> {
     /// 4. Binary search on absolute-value lex index from 0 toward current value.
     ///    Searching from 0 ensures we can find "nice" integer floats (like 2.0)
     ///    even when they have smaller lex indices than the boundary values.
+    /// 5. Integer-ratio reduction: decompose v = k + r/n and shrink k toward
+    ///    zero while holding the fractional remainder r/n fixed. Catches
+    ///    shrinks like 2.5 → 1.5 under predicates that constrain the
+    ///    fractional part.
     pub(super) fn shrink_floats(&mut self) {
         let mut i = 0;
         while i < self.current_nodes.len() {
@@ -134,6 +166,49 @@ impl<'a> Shrinker<'a> {
                             false
                         }
                     });
+                }
+
+                // Step 5: Integer-ratio numeric reduction.
+                //
+                // Port of Hypothesis `conjecture/shrinking/floats.py::Float.run_step`
+                // tail: decompose v = m/n exactly and binary-search the integer
+                // part k of `divmod(m, n)` toward zero, keeping the fractional
+                // remainder r/n fixed. Catches shrinks like 2.5 → 1.5 under
+                // `fract(x) == 0.5` where neither the integer-range search
+                // (Step 4a) nor the lex-index bisection (Step 4b) visit 1.5:
+                // integer candidates have fract 0, and lex-bisection midpoints
+                // are powers of 2 whose decoded values sit near 1.0 without
+                // preserving the fractional half.
+                //
+                // Uses strict `sort_key`-reduction as the accept predicate so a
+                // candidate that is merely interesting but lex-larger than
+                // current (e.g. 0.5 vs 2.5: both satisfy fract==0.5, but
+                // float_to_index(0.5) > float_to_index(2.5)) does not
+                // short-circuit `bin_search_down` at k=0 and skip lex-smaller
+                // values at larger k (1.5 at k=1).
+                let v = self.float_at(i);
+                if v.is_finite() && v != 0.0 {
+                    let is_neg = v.is_sign_negative();
+                    if let Some((m, n)) = as_integer_ratio(v.abs()) {
+                        let k_init = m / n;
+                        let r = m % n;
+                        if k_init > 0 {
+                            bin_search_down(0, k_init as i128, &mut |k| {
+                                let num_sum = (k as u128) * n + r;
+                                let candidate_abs = (num_sum as f64) / (n as f64);
+                                let candidate = if is_neg { -candidate_abs } else { candidate_abs };
+                                if !fc.validate(candidate) {
+                                    return false;
+                                }
+                                let prev_key = sort_key(&self.current_nodes);
+                                self.replace(&HashMap::from([(
+                                    i,
+                                    ChoiceValue::Float(candidate),
+                                )]));
+                                sort_key(&self.current_nodes) < prev_key
+                            });
+                        }
+                    }
                 }
             }
             i += 1;

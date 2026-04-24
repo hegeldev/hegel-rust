@@ -426,7 +426,6 @@ fn test_shrink_down_to_half() {
 }
 
 #[test]
-#[ignore = "shrinker's float pass doesn't converge on 1.5 from 2.5 under fract==0.5 — tracked in TODO.yaml (shrink-fractional-part)"]
 fn test_shrink_fractional_part() {
     let g = minimal_from(2.5, |x| (x - x.floor()) == 0.5, FloatConstr::default());
     assert_eq!(g, 1.5);
