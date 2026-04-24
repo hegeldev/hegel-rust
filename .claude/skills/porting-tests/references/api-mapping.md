@@ -98,6 +98,7 @@ Generator transforms (all require `Generator` trait in scope):
 | `find(gen, cond)`                   | `find_any(gen, \|x: &T\| cond(x))`         |
 | `minimal(gen, cond)`                | `minimal(gen, \|x: &T\| cond(x))`          |
 | `minimal(gen, cond, max_examples=N)` | `Minimal::new(gen, \|x: &T\| cond(x)).test_cases(N).run()` — the one-shot `minimal()` helper hardcodes 500; use the `Minimal` builder when you need a different budget. |
+| `try: minimal(gen, cond) except Unsatisfiable: reject()` (or `: pass`) | `catch_unwind(AssertUnwindSafe(\|\| { minimal(gen, \|v: &T\| cond(v)); })).ok();` — `minimal()` panics with `"Could not find any examples"` when its budget can't satisfy `cond`. Catching the panic translates Python's tolerate-and-skip idiom; the outer `Hegel::new(...).run()` moves on to the next test case. **Not the same as the `FilterTooMuch` row in the Health checks section** — that's for tests that *assert* Unsatisfiable fires, while this is for tests that *tolerate* a nested `minimal()` occasionally being unsatisfiable. Use when satisfiability depends on runtime input (a per-test-case RNG seed, a generated element); when satisfiability is static per parametrize row, drop the row instead (see `tests/hypothesis/nocover_collective_minimization.rs`, which lists the vacuously-unsatisfiable rows it dropped). If the outer test has work after the `minimal()` call, match on `catch_unwind(...)` and call `tc.reject()` in the `Err` arm so later assertions don't run on stale state. |
 | `with pytest.raises(X): ...`        | `expect_panic(\|\| { ... }, "regex")`      |
 | `capture_out()` / `capsys` / `capfd` | `TempRustProject::new().main_file(CODE).cargo_run(&[])` — access `.stderr`/`.stdout` on the `RunOutput` |
 | `capture_out() + pytest.raises(X)`  | `TempRustProject::new().main_file(CODE).expect_failure("pattern")` — builds, runs, asserts non-zero exit + pattern in stderr, returns `RunOutput` |
@@ -1353,6 +1354,36 @@ static per key and `on_access` collapses into a no-op, which is why
 `test_always_evicts_the_lowest_scoring_value` uses the seeded-RNG form
 above. Reserve pre-drawing for cases where the hook draws at most
 once per key.
+
+The same seeded-PRNG-from-outer-`tc` technique applies any time a
+closure needs dynamic oracle values but has no `tc` in scope — the
+other frequent case is a **predicate passed to `minimal()` /
+`find_any()`**. Those helpers spawn their own nested runner, so the
+predicate is called with no outer `tc` visible. A `@given(st.data())`
+upstream whose predicate body reads `data.draw(st.booleans())` (e.g.
+`nocover/test_boundary_exploration.py`'s `predicate` for an
+arbitrary-but-consistent oracle per input) ports to the same seed +
+`StdRng` pattern, with a `RefCell<HashMap<Input, Value>>` cache inside
+the closure when the Python version uses `cache.setdefault` to keep
+the oracle consistent per input:
+
+```rust
+let seed: u64 = tc.draw(gs::integers::<u64>());
+let rng = RefCell::new(StdRng::seed_from_u64(seed));
+let cache: RefCell<HashMap<String, bool>> = RefCell::new(HashMap::new());
+let predicate = move |x: &String| -> bool {
+    if let Some(&v) = cache.borrow().get(x) { return v; }
+    let v = rng.borrow_mut().next_u64() & 1 == 0;
+    cache.borrow_mut().insert(x.clone(), v);
+    v
+};
+minimal(gs::text().min_size(5), predicate);
+```
+
+If the seeded oracle sometimes makes the predicate unsatisfiable,
+wrap the `minimal()` call in `catch_unwind(...).ok()` per the
+`try: minimal(...) except Unsatisfiable` row in the Helpers table
+above.
 
 ## Python idiom translations
 
