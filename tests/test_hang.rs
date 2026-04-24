@@ -1,3 +1,5 @@
+mod common;
+
 use hegel::generators as gs;
 use hegel::{HealthCheck, TestCase};
 

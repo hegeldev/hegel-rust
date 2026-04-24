@@ -1,3 +1,5 @@
+mod common;
+
 use hegel::TestCase;
 use hegel::generators as gs;
 use std::sync::atomic::{AtomicI32, Ordering};

@@ -1,5 +1,7 @@
 #![cfg(feature = "rand")]
 
+mod common;
+
 use hegel::TestCase;
 use hegel::generators as gs;
 use rand::RngExt;

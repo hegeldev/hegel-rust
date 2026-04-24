@@ -7,6 +7,8 @@
 //! named-variable rewriting that `#[hegel::test]` performs — this is what
 //! makes `let x_1 = ...` appear in the snapshots instead of `let draw_1 = ...`.
 
+mod common;
+
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
