@@ -9,6 +9,7 @@ mod cache_implementation;
 mod cathetus;
 mod composite;
 mod composite_kwonlyargs;
+mod conjecture_choice;
 mod conjecture_forced;
 mod conjecture_minimizer;
 mod conjecture_mutations;
