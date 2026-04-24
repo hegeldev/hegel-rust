@@ -112,6 +112,22 @@ impl TargetedTestCase {
         }
     }
 
+    pub fn draw_float(
+        &mut self,
+        min_value: f64,
+        max_value: f64,
+        allow_nan: bool,
+        allow_infinity: bool,
+    ) -> f64 {
+        match self
+            .ntc
+            .draw_float(min_value, max_value, allow_nan, allow_infinity)
+        {
+            Ok(v) => v,
+            Err(_) => std::panic::panic_any(STOP_TEST_PANIC),
+        }
+    }
+
     /// Draw a string whose codepoints lie in `intervals`. The current
     /// implementation collapses the interval set to its outer `(min, max)`
     /// bounds — sufficient for the single-range `@example` row ported from

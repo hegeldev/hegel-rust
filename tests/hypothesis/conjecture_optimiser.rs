@@ -7,25 +7,16 @@
 //! `TargetedTestCase`. Tests are native-gated so the test binary still
 //! compiles and links under both `--features native` and the default
 //! (server-only) build.
-//!
-//! Individually-skipped tests:
-//!
-//! - `test_optimising_all_nodes` @given(nodes()) branch — the upstream's
-//!   `nodes()` strategy (from `tests/conjecture/common.py`) generates random
-//!   `ChoiceNode` instances across every choice kind and tandem-constraint
-//!   shape, and the test guards on `compute_max_children(node.type,
-//!   node.constraints) > 50` from
-//!   `hypothesis.internal.conjecture.datatree`. `compute_max_children` is
-//!   now ported (see `hegel::__native_test_internals::compute_max_children`);
-//!   the `nodes()` strategy is not. The three `@example` rows of that test
-//!   *are* ported below.
 
 #![cfg(feature = "native")]
 
 use hegel::__native_test_internals::{
-    BufferSizeLimit, ChoiceValue, IntervalSet, RunIsComplete, Status, TargetedRunner,
-    TargetedRunnerSettings, TargetedTestCase,
+    BigUint, BooleanChoice, BufferSizeLimit, BytesChoice, ChoiceKind, ChoiceValue, FloatChoice,
+    IntegerChoice, IntervalSet, RunIsComplete, Status, StringChoice, TargetedRunner,
+    TargetedRunnerSettings, TargetedTestCase, compute_max_children,
 };
+use hegel::TestCase;
+use hegel::generators::{self as gs};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -285,9 +276,9 @@ fn test_optimiser_when_test_grows_buffer_to_overflow() {
 }
 
 // The upstream `test_optimising_all_nodes` has three `@example` rows plus a
-// `@given(nodes())` body. The three fixed examples are ported below as
-// independent `#[test]`s; the `@given` branch is individually-skipped
-// (see module docstring).
+// `@given(nodes())` body. Both are ported below: the three fixed examples
+// as independent `#[test]`s, and the `@given` branch as
+// `test_optimising_all_nodes` driven by the `nodes()` composite generator.
 
 fn run_optimise_all_nodes_bytes(initial: Vec<u8>, min_size: usize, max_size: usize) {
     let mut runner = TargetedRunner::new(
@@ -355,4 +346,201 @@ fn test_optimising_all_nodes_integer_example() {
     // @example(ChoiceNode(type="integer", value=1,
     //                      constraints=integer_constr(0, 200)))
     run_optimise_all_nodes_integer(1, 0, 200);
+}
+
+// ── nodes() strategy ──────────────────────────────────────────────────────
+//
+// Port of upstream's `nodes()` strategy from
+// `hypothesis-python/tests/conjecture/common.py`, adapted to hegel's
+// concrete `ChoiceKind` representation. Each per-kind composite draws a
+// valid `(ChoiceKind, ChoiceValue)` pair; `nodes()` picks one uniformly at
+// random. The per-kind bounds mirror the `constraints_strategy` /
+// `*_constraints` building blocks from
+// `hypothesis/internal/conjecture/provider_conformance.py`, trimmed to
+// ranges that keep `compute_max_children` workable without frequent overruns.
+
+#[hegel::composite]
+fn integer_node(tc: TestCase) -> (ChoiceKind, ChoiceValue) {
+    let lo: i64 = tc.draw(
+        gs::integers::<i64>()
+            .min_value(-(1_i64 << 32))
+            .max_value(1_i64 << 32),
+    );
+    let extra: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(1_i64 << 32));
+    let kind = IntegerChoice {
+        min_value: i128::from(lo),
+        max_value: i128::from(lo + extra),
+    };
+    let value: i64 = tc.draw(gs::integers::<i64>().min_value(lo).max_value(lo + extra));
+    (
+        ChoiceKind::Integer(kind),
+        ChoiceValue::Integer(i128::from(value)),
+    )
+}
+
+#[hegel::composite]
+fn boolean_node(tc: TestCase) -> (ChoiceKind, ChoiceValue) {
+    let value: bool = tc.draw(gs::booleans());
+    (
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(value),
+    )
+}
+
+#[hegel::composite]
+fn float_node(tc: TestCase) -> (ChoiceKind, ChoiceValue) {
+    let lo: f64 = tc.draw(gs::floats::<f64>().min_value(-1e9).max_value(1e9));
+    let hi: f64 = tc.draw(gs::floats::<f64>().min_value(lo).max_value(lo + 1e9));
+    let allow_nan: bool = tc.draw(gs::booleans());
+    let allow_infinity: bool = tc.draw(gs::booleans());
+    let kind = FloatChoice {
+        min_value: lo,
+        max_value: hi,
+        allow_nan,
+        allow_infinity,
+    };
+    let value: f64 = tc.draw(gs::floats::<f64>().min_value(lo).max_value(hi));
+    (ChoiceKind::Float(kind), ChoiceValue::Float(value))
+}
+
+#[hegel::composite]
+fn bytes_node(tc: TestCase) -> (ChoiceKind, ChoiceValue) {
+    let min_size: usize = tc.draw(gs::integers::<usize>().min_value(0).max_value(4));
+    let extra: usize = tc.draw(gs::integers::<usize>().min_value(0).max_value(8));
+    let max_size = min_size + extra;
+    let kind = BytesChoice { min_size, max_size };
+    let length: usize = tc.draw(
+        gs::integers::<usize>()
+            .min_value(min_size)
+            .max_value(max_size),
+    );
+    let value: Vec<u8> = tc.draw(gs::binary().min_size(length).max_size(length));
+    (ChoiceKind::Bytes(kind), ChoiceValue::Bytes(value))
+}
+
+#[hegel::composite]
+fn string_node(tc: TestCase) -> (ChoiceKind, ChoiceValue) {
+    // Keep the codepoint range inside ASCII so `draw_string`'s
+    // collapsed-interval approximation is faithful to the requested bounds.
+    let min_cp: u32 = tc.draw(gs::integers::<u32>().min_value(32).max_value(100));
+    let max_cp: u32 = tc.draw(
+        gs::integers::<u32>()
+            .min_value(min_cp)
+            .max_value((min_cp + 30).min(126)),
+    );
+    let min_size: usize = tc.draw(gs::integers::<usize>().min_value(0).max_value(3));
+    let extra: usize = tc.draw(gs::integers::<usize>().min_value(0).max_value(8));
+    let max_size = min_size + extra;
+    let kind = StringChoice {
+        min_codepoint: min_cp,
+        max_codepoint: max_cp,
+        min_size,
+        max_size,
+    };
+    let length: usize = tc.draw(
+        gs::integers::<usize>()
+            .min_value(min_size)
+            .max_value(max_size),
+    );
+    let value: String = tc.draw(
+        gs::text()
+            .min_codepoint(min_cp)
+            .max_codepoint(max_cp)
+            .min_size(length)
+            .max_size(length),
+    );
+    let cps: Vec<u32> = value.chars().map(|c| c as u32).collect();
+    (ChoiceKind::String(kind), ChoiceValue::String(cps))
+}
+
+#[hegel::composite]
+fn nodes(tc: TestCase) -> (ChoiceKind, ChoiceValue) {
+    // Upstream's `choice_types_constraints` picks one of the five kinds
+    // uniformly via `st.one_of`. Dispatch on a small integer index to match.
+    let which: u8 = tc.draw(gs::integers::<u8>().min_value(0).max_value(4));
+    match which {
+        0 => tc.draw(integer_node()),
+        1 => tc.draw(boolean_node()),
+        2 => tc.draw(float_node()),
+        3 => tc.draw(bytes_node()),
+        _ => tc.draw(string_node()),
+    }
+}
+
+fn float_size(f: f64) -> f64 {
+    if f.is_finite() { f } else { 0.0 }
+}
+
+#[hegel::test(test_cases = 50)]
+fn test_optimising_all_nodes(tc: TestCase) {
+    let (kind, value) = tc.draw(nodes());
+    tc.assume(compute_max_children(&kind) > BigUint::from(50u32));
+
+    match kind {
+        ChoiceKind::Integer(ic) => {
+            let (lo, hi) = (ic.min_value, ic.max_value);
+            let mut runner = TargetedRunner::new(
+                move |data| {
+                    let v = data.draw_integer(lo, hi);
+                    observe(data, "v", v as f64);
+                },
+                runner_settings().max_examples(50),
+                rng(),
+            );
+            runner.cached_test_function(&[value]);
+            ignore_run_is_complete(runner.optimise_targets());
+        }
+        ChoiceKind::Boolean(_) => {
+            let mut runner = TargetedRunner::new(
+                move |data| {
+                    let v = data.draw_boolean(0.5);
+                    observe(data, "v", if v { 1.0 } else { 0.0 });
+                },
+                runner_settings().max_examples(50),
+                rng(),
+            );
+            runner.cached_test_function(&[value]);
+            ignore_run_is_complete(runner.optimise_targets());
+        }
+        ChoiceKind::Float(fc) => {
+            let (lo, hi, nan, inf) = (fc.min_value, fc.max_value, fc.allow_nan, fc.allow_infinity);
+            let mut runner = TargetedRunner::new(
+                move |data| {
+                    let v = data.draw_float(lo, hi, nan, inf);
+                    observe(data, "v", float_size(v));
+                },
+                runner_settings().max_examples(50),
+                rng(),
+            );
+            runner.cached_test_function(&[value]);
+            ignore_run_is_complete(runner.optimise_targets());
+        }
+        ChoiceKind::Bytes(bc) => {
+            let (min_size, max_size) = (bc.min_size, bc.max_size);
+            let mut runner = TargetedRunner::new(
+                move |data| {
+                    let v = data.draw_bytes(min_size, max_size);
+                    observe(data, "v", v.len() as f64);
+                },
+                runner_settings().max_examples(50),
+                rng(),
+            );
+            runner.cached_test_function(&[value]);
+            ignore_run_is_complete(runner.optimise_targets());
+        }
+        ChoiceKind::String(sc) => {
+            let intervals = IntervalSet::new(vec![(sc.min_codepoint, sc.max_codepoint)]);
+            let (min_size, max_size) = (sc.min_size, sc.max_size);
+            let mut runner = TargetedRunner::new(
+                move |data| {
+                    let v = data.draw_string(&intervals, min_size, max_size);
+                    observe(data, "v", v.chars().count() as f64);
+                },
+                runner_settings().max_examples(50),
+                rng(),
+            );
+            runner.cached_test_function(&[value]);
+            ignore_run_is_complete(runner.optimise_targets());
+        }
+    }
 }
