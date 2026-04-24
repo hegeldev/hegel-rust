@@ -705,6 +705,15 @@ Individually-skipped tests (rest of the file is ported):
   has no `running_under_pytest` equivalent — the whole file is Python/pytest
   plugin integration.
 
+- `test_profiles.py` (in `tests/pytest/`) — both tests drive the `pytester`
+  plugin (`testdir.makeconftest`/`testdir.makepyfile`/`testdir.runpytest`) to
+  spawn a pytest subprocess and assert on the Hypothesis pytest plugin's
+  `--hypothesis-profile` CLI flag (`_hypothesis_pytestplugin.LOAD_PROFILE_OPTION`)
+  and `--hypothesis-verbosity=verbose` CLI flag output ("hypothesis profile",
+  "max_examples=1"). Exercises `settings.register_profile` wired to the pytest
+  plugin's profile-loading hook. hegel-rust is not a pytest plugin and has no
+  `--hypothesis-profile`/`--hypothesis-verbosity` CLI surface.
+
 - `test_skipping.py` (in `tests/pytest/`) — both tests drive the `pytester`
   plugin (`testdir.makepyfile`/`testdir.runpytest`) to spawn pytest subprocesses
   and assert on how `pytest.skip()` raised inside a `@given`/`@example` test
