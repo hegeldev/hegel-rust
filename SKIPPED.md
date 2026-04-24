@@ -1952,6 +1952,18 @@ Individually-skipped tests (rest of the file is ported):
   hegel-rust has no ghostwriter CLI / test-scaffold generator
   counterpart.
 
+- `test_ghostwriter.py` (in `tests/ghostwriter/`) — every test drives
+  the `hypothesis.extra.ghostwriter` Python library directly
+  (`ghostwriter.fuzz`, `magic`, `binary_operation`, `idempotent`,
+  `equivalent`, `roundtrip`, `_check_except`, `_check_style`,
+  `_valid_syntax_repr`) and asserts on the emitted Python source (parsed
+  via `ast`, `exec`'d into a namespace, inspected for `@given(...)`
+  clauses and import lines). The ghostwriter inspects Python function
+  signatures (type hints, defaults, `attr.s` classes, `re.Pattern`,
+  `KeysView`, `ForwardRef`, unittest-style scaffolding, etc.) and emits
+  Python Hypothesis test source; hegel-rust has no ghostwriter /
+  test-scaffold generator counterpart.
+
 - `test_provider.py` (in `conjecture/`) — every test exercises Hypothesis's
   public backend/provider registration system: the `PrimitiveProvider`
   base class that users subclass to supply custom data generation
