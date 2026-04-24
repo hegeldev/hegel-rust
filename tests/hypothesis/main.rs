@@ -33,6 +33,7 @@ mod float_utils;
 mod given_error_conditions;
 mod health_checks;
 mod intervalset;
+mod nocover_bad_repr;
 mod nocover_baseexception;
 mod nocover_collective_minimization;
 mod nocover_conjecture_engine;

@@ -1277,6 +1277,14 @@ Individually-skipped tests (rest of the file is ported):
   onto the `ValueError` cases which are ported in
   `tests/hypothesis/nocover_baseexception.rs`.
 
+- `nocover/test_bad_repr.py::test_just_frosty`,
+  `nocover/test_bad_repr.py::test_sampling_snowmen` — both assert the
+  Python `repr()` of `st.just(Frosty)` / `st.sampled_from((Frosty, 'hi'))`
+  against a literal string, where `Frosty`'s `__repr__` returns `"☃"`.
+  hegel-rust generators have no repr surface. Third test
+  (`test_sampled_from_bad_repr`) ported in
+  `tests/hypothesis/nocover_bad_repr.rs`.
+
 - `nocover/test_baseexception.py::test_explanations` — uses pytest's
   `testdir` fixture plus `runpytest_inprocess` stdout capture to check
   that the stack-trace explanation includes the drawn input when a
