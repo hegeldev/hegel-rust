@@ -477,7 +477,7 @@ test Hypothesis's engine internals. Place these at
 `tests/hypothesis/conjecture_*.rs` with `#![cfg(feature = "native")]`
 at the top, following the native-gated-plus-source-stub rules above.
 
-Three distinct *shapes* appear in this directory, each with a different
+Four distinct *shapes* appear in this directory, each with a different
 native entry point:
 
 - **`test_shrinker.py`-shape** — body decorated with `@shrinking_from(initial)`
@@ -519,6 +519,23 @@ native entry point:
   attribute the next test exercises, and subsequent cycles fill them
   in one test at a time. Don't bundle several attribute fills into one
   port — keep each commit focused on the test that landed.
+- **`test_test_data.py`-shape** — body builds
+  `ConjectureData.for_choices(...)` directly (no runner, no shrinker)
+  and asserts on per-choice / per-span bookkeeping (`data.nodes[i].trivial`,
+  `data.examples`, `data.frozen`, `data.status`, `data.events`). Port
+  via `NativeTestCase::for_choices(&[ChoiceValue::…], None)` plus direct
+  `weighted` / `draw_bytes_forced` / `record_span` calls and
+  `nodes[i].trivial()` reads. The portable subset is small (3 of 33
+  upstream tests in `test_test_data.py`); most of the file relies on
+  `freeze()`, `mark_*`, `note`/`output`/`events`, draw-by-strategy with
+  auto-recorded spans, `Span.parent`/`.children`/`.depth`, `DataObserver`,
+  `MAX_DEPTH`, `as_result()`, `structural_coverage()`, or the
+  prefix-plus-`max_choices` constructor — none of which `NativeTestCase`
+  exposes. See `api-mapping.md`'s `test_test_data.py` section for the
+  per-API gap table and the auto-span-mirroring caveat (Hypothesis wraps
+  every `data.draw(strategy)` call in a span; native primitives don't,
+  so port-time `record_span(start, end, label)` calls are needed for
+  `(start, end)`-keyed lookups to find a match).
 
 **Don't skip `test_engine.py`-shape files wholesale.** Inside such
 files there's usually a subset of shrink-quality tests — the
