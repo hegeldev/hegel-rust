@@ -235,7 +235,7 @@ impl<T: Ord + Clone + Hash + Eq, F: FnMut(&[T]) -> bool> OrderingShrinker<T, F> 
         self.consider(sorted)
     }
 
-    fn run_step(&mut self) {
+    pub fn run_step(&mut self) {
         self.sort_regions();
         self.sort_regions_with_gaps();
     }
