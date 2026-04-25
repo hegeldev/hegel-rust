@@ -2210,15 +2210,6 @@ is acceptance for the corresponding follow-up.
   `test_max_iterations_with_some_valid`,
   `test_exit_because_shrink_phase_timeout`) are ported in
   `tests/hypothesis/conjecture_engine.rs`.
-- `conjecture/test_engine.py::test_does_not_shrink_if_replaying_from_database`,
-  `::test_does_shrink_if_replaying_inexact_from_database`,
-  `::test_skips_secondary_if_interesting_is_found`,
-  `::test_discards_invalid_db_entries`,
-  `::test_discards_invalid_db_entries_pareto` — each uses
-  `runner.save_choices(...)` / `runner.secondary_key` /
-  `runner.pareto_key` / `runner.reuse_existing_examples()` /
-  `runner.clear_secondary_key()`, all currently `todo!()` stubs on
-  `NativeConjectureRunner`.
 - `conjecture/test_engine.py::test_can_navigate_to_a_valid_example`,
   `::test_stops_after_max_examples_when_generating_more_bugs` — each
   needs an engine-side facility that isn't wired up yet

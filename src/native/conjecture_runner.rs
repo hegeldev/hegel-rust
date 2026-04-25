@@ -711,6 +711,22 @@ fn run_test_fn(
     (status, nodes, origin)
 }
 
+/// Concatenate `database_key + b"." + sub` to derive a sub-corpus key.
+/// Mirrors `ConjectureRunner.sub_key` (`b".".join((database_key, sub))`).
+fn sub_key(database_key: &[u8], sub: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(database_key.len() + 1 + sub.len());
+    out.extend_from_slice(database_key);
+    out.push(b'.');
+    out.extend_from_slice(sub);
+    out
+}
+
+/// Order two byte slices by shortlex: length first, then lexicographically.
+/// Mirrors Hypothesis's `shortlex(s) -> (len(s), s)` sort key.
+fn shortlex_cmp(a: &Vec<u8>, b: &Vec<u8>) -> std::cmp::Ordering {
+    a.len().cmp(&b.len()).then_with(|| a.cmp(b))
+}
+
 /// Port of Hypothesis's `ConjectureRunner` for the subset of
 /// `test_engine.py` that doesn't already live under the
 /// targeting/optimiser surface.
@@ -863,7 +879,7 @@ impl NativeConjectureRunner {
 
         // --- Reuse phase ---
         if do_reuse {
-            self.reuse_existing_examples_internal();
+            self.reuse_existing_examples();
         }
 
         // Fast path: every primary-corpus replay was an exact-match
@@ -1105,13 +1121,23 @@ impl NativeConjectureRunner {
     /// Key under which the runner stores not-yet-shrunk candidates.
     /// Mirrors `ConjectureRunner.secondary_key`.
     pub fn secondary_key(&self) -> Vec<u8> {
-        todo!("NativeConjectureRunner::secondary_key")
+        sub_key(
+            self.database_key
+                .as_deref()
+                .expect("secondary_key requires database_key"),
+            b"secondary",
+        )
     }
 
     /// Key under which the runner stores the pareto front.  Mirrors
     /// `ConjectureRunner.pareto_key`.
     pub fn pareto_key(&self) -> Vec<u8> {
-        todo!("NativeConjectureRunner::pareto_key")
+        sub_key(
+            self.database_key
+                .as_deref()
+                .expect("pareto_key requires database_key"),
+            b"pareto",
+        )
     }
 
     /// Primary database key (as passed to `with_database_key`).
@@ -1131,47 +1157,78 @@ impl NativeConjectureRunner {
         }
     }
 
-    /// Load every stored value for `database_key` and replay them as
-    /// the first phase of generation.  Mirrors
-    /// `engine.py::reuse_existing_examples` — the primary-corpus
-    /// loop only; secondary / pareto corpora are not yet modelled (a
-    /// later TODO cluster adds them).
+    /// Load existing examples from the database and replay them as the
+    /// first phase of generation.  Mirrors
+    /// `engine.py::reuse_existing_examples`: the primary corpus
+    /// (`database_key`) is replayed in full; if it falls short of the
+    /// target size, a sample of the secondary corpus is appended;
+    /// once both are processed and no interesting example was found,
+    /// a sample of the pareto corpus is replayed too.
     ///
-    /// Unparseable entries are deleted.  Entries that replay as
-    /// non-interesting are also deleted.  An interesting entry populates
-    /// [`Self::interesting_examples`] and (being stored via
-    /// [`Self::save_choices`]) re-saves itself so a later shrink phase
-    /// can re-read it; since the stored choice sequence survives any
-    /// shrink attempts whose candidates' replay doesn't match, the
-    /// "previously shrunk" fast-path from Hypothesis's
-    /// `reused_previously_shrunk_test_case` isn't needed to preserve
-    /// the original entry.
-    fn reuse_existing_examples_internal(&mut self) {
-        let (db, key) = match (self.settings.database.clone(), self.database_key.clone()) {
+    /// Bookkeeping mirrors upstream: `choices_from_bytes`-failures get
+    /// deleted from the corpus they were drawn from; a non-interesting
+    /// replay is also deleted from both primary and secondary; an
+    /// interesting replay saves itself into the primary and (if it came
+    /// from primary and matched the stored choices exactly) lights up
+    /// `reused_previously_shrunk_test_case`.
+    pub fn reuse_existing_examples(&mut self) {
+        let (db, db_key) = match (self.settings.database.clone(), self.database_key.clone()) {
             (Some(d), Some(k)) => (d, k),
             _ => return,
         };
 
-        let mut corpus = db.fetch(&key);
-        // Shortlex: length first, then lexicographic byte order.
-        corpus.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+        let phases = self
+            .settings
+            .phases
+            .clone()
+            .unwrap_or_else(|| vec![Phase::Reuse, Phase::Generate, Phase::Shrink]);
+        let factor: f64 = if phases.contains(&Phase::Generate) {
+            0.1
+        } else {
+            1.0
+        };
+        let desired_size = std::cmp::max(
+            2,
+            (factor * self.settings.max_examples as f64).ceil() as usize,
+        );
+
+        let mut corpus = db.fetch(&db_key);
+        corpus.sort_by(shortlex_cmp);
+        let primary_corpus_size = corpus.len();
+
+        let secondary_key = sub_key(&db_key, b"secondary");
+
+        if corpus.len() < desired_size {
+            let mut extra_corpus = db.fetch(&secondary_key);
+            let shortfall = desired_size - corpus.len();
+            if extra_corpus.len() > shortfall {
+                extra_corpus.shuffle(&mut self.rng);
+                extra_corpus.truncate(shortfall);
+            }
+            extra_corpus.sort_by(shortlex_cmp);
+            corpus.extend(extra_corpus);
+        }
 
         let mut found_interesting_in_primary = false;
         let mut all_interesting_in_primary_were_exact = true;
 
-        for existing in corpus.iter() {
+        for (i, existing) in corpus.iter().enumerate() {
+            // Once we've found a bug in the primary corpus we don't keep
+            // re-running secondary entries — they're a fallback.
+            if i >= primary_corpus_size && found_interesting_in_primary {
+                break;
+            }
             let Some(choices) = choices_from_bytes(existing) else {
-                db.delete(&key, existing);
+                // `choices_from_bytes`-failures are only purged from the
+                // corpus the entry came from — secondary deletes happen in
+                // `clear_secondary_key`, not here.
+                db.delete(&db_key, existing);
                 continue;
             };
             let ntc = NativeTestCase::for_choices(&choices, None);
             let (status, nodes, origin) = run_test_fn(&mut self.test_fn, ntc);
             self.call_count += 1;
 
-            // `Status::Invalid` / `Status::EarlyStop` aren't tracked into
-            // `self.invalid_examples` / `overrun_examples` here — the
-            // database-replay cluster doesn't distinguish them, and a
-            // later TODO cluster lands tests that do.
             if matches!(status, Status::Valid) {
                 self.valid_examples += 1;
             }
@@ -1190,20 +1247,20 @@ impl NativeConjectureRunner {
                         },
                     );
                 }
-                found_interesting_in_primary = true;
-                if replay_choices != choices {
-                    all_interesting_in_primary_were_exact = false;
+                if i < primary_corpus_size {
+                    found_interesting_in_primary = true;
+                    if replay_choices != choices {
+                        all_interesting_in_primary_were_exact = false;
+                    }
                 }
                 if !self.settings.report_multiple_bugs {
                     break;
                 }
             } else {
-                db.delete(&key, existing);
+                db.delete(&db_key, existing);
+                db.delete(&secondary_key, existing);
             }
 
-            // Termination checks only apply while we have no interesting
-            // examples.  Mirrors the per-call exit conditions at the
-            // bottom of `engine.py::test_function`.
             if self.interesting_examples.is_empty()
                 && self.valid_examples >= self.settings.max_examples
             {
@@ -1220,12 +1277,91 @@ impl NativeConjectureRunner {
         if found_interesting_in_primary && all_interesting_in_primary_were_exact {
             self.reused_previously_shrunk_test_case = true;
         }
+
+        // Pareto corpus: only consulted when we still have budget left
+        // and no interesting example has been found.  Mirrors
+        // `engine.py::reuse_existing_examples` lines 1066-1082.
+        if corpus.len() < desired_size && self.interesting_examples.is_empty() {
+            let pareto_key = sub_key(&db_key, b"pareto");
+            let mut pareto_corpus = db.fetch(&pareto_key);
+            let desired_extra = desired_size - corpus.len();
+            if pareto_corpus.len() > desired_extra {
+                pareto_corpus.shuffle(&mut self.rng);
+                pareto_corpus.truncate(desired_extra);
+            }
+            pareto_corpus.sort_by(shortlex_cmp);
+
+            for existing in &pareto_corpus {
+                let Some(choices) = choices_from_bytes(existing) else {
+                    db.delete(&pareto_key, existing);
+                    continue;
+                };
+                let ntc = NativeTestCase::for_choices(&choices, None);
+                let (status, nodes, origin) = run_test_fn(&mut self.test_fn, ntc);
+                self.call_count += 1;
+                // The native runner doesn't yet track a pareto front, so
+                // every replayed pareto entry is treated as "no longer in
+                // the front" and deleted.  Matches upstream's behaviour
+                // for any entry whose `data not in self.pareto_front`
+                // branch fires.
+                db.delete(&pareto_key, existing);
+                self.record_test_result(status, nodes, origin);
+                if matches!(status, Status::Interesting) {
+                    break;
+                }
+            }
+        }
     }
 
     /// Delete every stored value under `secondary_key`.  Mirrors
-    /// `ConjectureRunner.clear_secondary_key`.
+    /// `ConjectureRunner.clear_secondary_key`: replays each secondary
+    /// entry through `cached_test_function` (skipped here when the entry
+    /// matches a known interesting example, mimicking upstream's LRU-cache
+    /// hit) and then deletes it.  Stops at the first entry whose
+    /// shortlex order exceeds every interesting-example bytestring.
     pub fn clear_secondary_key(&mut self) {
-        todo!("NativeConjectureRunner::clear_secondary_key")
+        let (db, db_key) = match (self.settings.database.clone(), self.database_key.clone()) {
+            (Some(d), Some(k)) => (d, k),
+            _ => return,
+        };
+        let secondary = sub_key(&db_key, b"secondary");
+
+        let mut corpus = db.fetch(&secondary);
+        corpus.sort_by(shortlex_cmp);
+
+        let primary_set: std::collections::HashSet<Vec<u8>> = self
+            .interesting_examples
+            .values()
+            .map(|e| choices_to_bytes(&e.choices))
+            .collect();
+        // `max_primary` is the shortlex-largest primary entry; entries
+        // worse than it can't be useful as shrinks.
+        let max_primary = primary_set
+            .iter()
+            .max_by(|a, b| shortlex_cmp(a, b))
+            .cloned();
+
+        for c in &corpus {
+            let Some(choices) = choices_from_bytes(c) else {
+                db.delete(&secondary, c);
+                continue;
+            };
+            if let Some(ref m) = max_primary {
+                if shortlex_cmp(c, m).is_gt() {
+                    break;
+                }
+            }
+            // Skip the replay if we've already seen these exact choices
+            // as an interesting example — upstream's LRU cache returns the
+            // stored result without bumping `call_count`, and our minimal
+            // port mimics that for the common "primary entry already
+            // matches" case the test_discards_invalid_db_entries cluster
+            // hits.
+            if !primary_set.contains(c) {
+                self.cached_test_function(&choices);
+            }
+            db.delete(&secondary, c);
+        }
     }
 
     /// Pareto front snapshot.  Mirrors `ConjectureRunner.pareto_front`
