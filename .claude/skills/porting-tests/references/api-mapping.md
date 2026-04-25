@@ -212,6 +212,22 @@ adding the feature. Don't invent a workaround in the test.
   valid case in native), so the predicate-call shape Python's `find()`
   pins down isn't reproducible through the public Rust surface. Skip
   with a rationale naming the span-mutation re-entry.
+- `find()` + database-accumulation assertions — tests that drive
+  `find(strategy, predicate, settings=settings(database=db))` and assert
+  that `db` accumulates more than one entry (`len(all_values(db)) > 1`,
+  `len(non_covering_examples(db)) > 0`, or that the count shrinks back
+  to zero across runs as the predicate becomes always-false / always-
+  invalid) are unportable. Hypothesis's `find()` driver auto-saves every
+  distinct interesting example reached during search and shrinking, plus
+  pareto-front entries; `NativeConjectureRunner::run()` only mutates the
+  database via the reuse phase (delete-invalid + replay-existing), and
+  `pareto_front()` is `todo!()`. The public `Hegel::new(...).run()` path
+  saves only the final shrunk counterexample, never intermediates. Skip
+  with a rationale naming the missing auto-save side; the cluster in
+  `nocover/test_database_usage.py` (`test_saves_incremental_steps_*`,
+  `test_clears_out_database_*`, `test_trashes_invalid_examples`) is the
+  worked example. Becomes portable once the native engine grows
+  pareto / interesting-example auto-save.
 - `pytest.skip()` inside a `@given` body aborting shrinking —
   hegel-rust has no per-test "skip-aborts-shrinking" mechanism on the
   public API. Skip.

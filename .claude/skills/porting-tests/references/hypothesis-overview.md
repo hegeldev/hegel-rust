@@ -116,6 +116,24 @@ backend here discards real coverage.
   CPython-only concern with no hegel-rust analogue. Don't try to mirror
   it — porting a `@skipif_threading`-decorated test means dropping the
   decorator entirely.
+- pytest's `monkeypatch` fixture used to swap a Hypothesis
+  module-level global or a runtime attribute on a strategy/database
+  instance — `monkeypatch.setattr(hypothesis.core, "global_force_seed",
+  N)`, `database.fetch = None`, `monkeypatch.setattr(ConjectureRunner,
+  "generate_new_examples", ...)`, etc. These tests exploit Python's
+  module-mutability and dunder-attribute-assignment to override
+  internal references for a single test. Rust has no equivalent
+  surface: there's no writable module-level `global_force_seed`
+  (seeds go through `Settings::new().seed(Some(n))`), no runtime
+  attribute reassignment on `NativeDatabase` / generator structs,
+  and no swap-this-method-on-a-class-instance hook. The test usually
+  asserts a *negative* (e.g. "`fetch` was not called" via assigning a
+  non-callable sentinel and observing no error) which has no Rust-side
+  observation either. Skip with a rationale naming the patched
+  reference. `pbtkit-overview.md`'s "Module-constant monkeypatches"
+  section covers a related but distinct pattern (threshold/probability
+  patches for coverage, where the patch is sometimes droppable);
+  Hypothesis-side patches are typically semantic and skip wholesale.
 
 ## Shared test fixtures
 
