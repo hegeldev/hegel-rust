@@ -1466,6 +1466,33 @@ Individually-skipped tests (rest of the file is ported):
   and there is no `max_stall` / `fixate_shrink_passes` /
   call-counter surface on `Shrinker`. Rest of the file ported.
 
+- `nocover/test_database_usage.py::test_saves_incremental_steps_in_database`,
+  `nocover/test_database_usage.py::test_clears_out_database_as_things_get_boring`,
+  `nocover/test_database_usage.py::test_trashes_invalid_examples`,
+  `nocover/test_database_usage.py::test_respects_max_examples_in_database_usage`
+  — all drive `find(strategy, predicate, settings=settings(database=...),
+  database_key=b"...")` and assert on what `InMemoryExampleDatabase`
+  accumulates across the search. hegel-rust has no `find()` public API
+  (same gap as the `test_core.py::test_no_such_example` and
+  `test_verbosity.py::test_prints_initial_attempts_on_find` skips), so
+  the predicate-driven incremental-save / invalid-trash / max-examples
+  behaviour these tests pin down isn't reachable from the Rust runner
+  surface.
+- `nocover/test_database_usage.py::test_does_not_use_database_when_seed_is_forced`
+  — uses pytest's `monkeypatch` fixture to set
+  `hypothesis.core.global_force_seed` (a Python module-level global) and
+  then overrides `database.fetch = None` via dunder-attribute assignment
+  to assert `fetch` was not called. Both facilities are Python-specific:
+  hegel-rust has no `global_force_seed` equivalent (seeds go through
+  `Settings::new().seed(Some(n))`) and no runtime-attribute-assignment
+  surface on `NativeDatabase`.
+- `nocover/test_database_usage.py::test_ga_database_not_created_when_not_used`
+  — constructs `ReadOnlyDatabase(GitHubArtifactDatabase("mock", "mock",
+  path=path))`. `GitHubArtifactDatabase` has no Rust counterpart (same
+  gap documented for the `test_database_backend.py` `test_ga_*` skips).
+  The remaining `test_database_not_created_when_not_used` ports in
+  `tests/hypothesis/nocover_database_usage.rs`.
+
 - `nocover/test_flatmap.py::test_flatmap_does_not_reuse_strategies` —
   `find_any(s) is not find_any(s)` is a Python object-identity check
   (the `is not` operator). hegel-rust draws return owned/cloned values,
