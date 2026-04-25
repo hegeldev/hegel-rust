@@ -2157,11 +2157,13 @@ _SPAWN_STAGGER_SECS = 30.0  # minimum gap between successive worker spawns
 
 
 def _pool_admission_ok() -> tuple[bool, str]:
-    """Check whether new workers may be spawned right now.
+    """Check whether new port workers may be spawned right now.
 
-    Admission is denied if TODO.yaml has any entries or if PR CI has
-    already-failing checks (either completed-failed or pending-with-fails).
-    Returns `(ok, reason)` — the reason is useful for logging.
+    Admission is denied only when PR CI has already-failing checks
+    (either completed-failed or pending-with-fails). TODO.yaml entries
+    no longer block admission — the dedicated TODO worker drains them
+    in parallel. Returns `(ok, reason)` — the reason is useful for
+    logging.
 
     Result is cached for `_POOL_ADMISSION_TTL` seconds to avoid hitting
     `gh api` on every 1 s pool tick; the outer loop re-evaluates
@@ -2171,17 +2173,13 @@ def _pool_admission_ok() -> tuple[bool, str]:
     cached = _POOL_ADMISSION_CACHE["result"]
     if cached is not None and now - _POOL_ADMISSION_CACHE["ts"] < _POOL_ADMISSION_TTL:
         return cached
-    todos = read_todos()
-    if todos:
-        result = (False, f"{len(todos)} TODO entry(ies) pending")
+    status, summary, _detail, failing = _pr_check_status(fetch_logs=False)
+    if status == "failure":
+        result = (False, f"PR CI failure: {summary}")
+    elif failing > 0:
+        result = (False, f"PR CI has {failing} failing check(s): {summary}")
     else:
-        status, summary, _detail, failing = _pr_check_status(fetch_logs=False)
-        if status == "failure":
-            result = (False, f"PR CI failure: {summary}")
-        elif failing > 0:
-            result = (False, f"PR CI has {failing} failing check(s): {summary}")
-        else:
-            result = (True, status or "ok")
+        result = (True, status or "ok")
     _POOL_ADMISSION_CACHE["ts"] = now
     _POOL_ADMISSION_CACHE["result"] = result
     return result
@@ -2333,6 +2331,64 @@ def _spawn_worker(
     return subprocess.Popen(cmd, env=env, start_new_session=True)
 
 
+def _spawn_todo_worker(
+    picked: tuple[dict, int, int, int, str],
+    base_sha: str,
+    supervisor_branch: str,
+    args: argparse.Namespace,
+) -> subprocess.Popen:
+    """Reset the todo-worker worktree to `base_sha` and spawn it.
+
+    `picked` is the tuple returned by `_pick_todo_for_dispatch` — entry,
+    attempts, remaining, idx, hash. Only the first three are passed to
+    the worker (idx/hash aren't needed once the entry is captured).
+    """
+    entry, attempts, remaining, _idx, _entry_hash = picked
+    worktree = _ensure_todo_worktree(base_sha)
+    script = worktree / "scripts" / "port-loop.py"
+    if not script.exists():
+        raise RuntimeError(
+            f"todo-worker worktree {worktree} is missing scripts/port-loop.py"
+        )
+    # Stash the picked entry under .porting/ (gitignored) so writing it
+    # doesn't dirty the worktree.
+    payload_dir = worktree / ".porting"
+    payload_dir.mkdir(parents=True, exist_ok=True)
+    payload = payload_dir / "todo-payload.yaml"
+    payload.write_text(
+        yaml.safe_dump(
+            {"entry": entry, "attempts": attempts, "remaining": remaining},
+            sort_keys=False,
+        )
+    )
+    env = os.environ.copy()
+    env["CARGO_TARGET_DIR"] = str(_todo_worker_target_dir())
+    env["PORT_LOOP_RESOURCES_BASE"] = str(REPO_ROOT)
+    cmd = [
+        str(script),
+        "--todo-worker-mode",
+        "--worktree", str(worktree),
+        "--supervisor-branch", supervisor_branch,
+        "--todo-payload", str(payload),
+        "--log-prefix", "worker-todo",
+        "--model", args.model,
+        "--timeout", str(args.timeout),
+        "--max-iterations", str(args.max_iterations),
+    ]
+    if args.max_budget_usd:
+        cmd += ["--max-budget-usd", str(args.max_budget_usd)]
+    if args.skip_permissions:
+        cmd.append("--dangerously-skip-permissions")
+    title = str(entry.get("title", "")) or format_todo(entry).splitlines()[0]
+    print(
+        f"\n[port-loop] pool: spawning todo worker for {title!r} "
+        f"(attempt {attempts + 1}/5, base {base_sha[:12]}, worktree "
+        f"{worktree}).",
+        flush=True,
+    )
+    return subprocess.Popen(cmd, env=env, start_new_session=True)
+
+
 def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
     """Supervisor: run up to `args.max_workers` porting tasks in parallel.
 
@@ -2355,12 +2411,18 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
     # slot -> {proc, file, dest, base_sha, started_at}
     in_flight: dict[int, dict] = {}
     assigned: set[Path] = set()
+    # The single TODO worker runs in parallel with the port workers and
+    # uses its own dedicated worktree (`port/worker-todo`). At most one
+    # TODO worker is in flight at any time. Wrapped in a list so the
+    # signal-handler closures below can mutate it.
+    todo_in_flight: list[dict | None] = [None]
     stop = [False]
     # SIGUSR1 sets drain=True: no new workers admitted, but in-flight workers
     # are left running and the pool waits for them to finish naturally.
     drain = [False]
     # Stagger spawns: allow first spawn immediately, then enforce the gap.
     last_spawn_at = time.monotonic() - _SPAWN_STAGGER_SECS
+    last_todo_spawn_at = time.monotonic() - _SPAWN_STAGGER_SECS
     # Start with a fresh admission check so the outer loop's stale cache
     # (if any) doesn't let us enter under false-negative admission.
     _pool_admission_invalidate()
@@ -2383,22 +2445,27 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
         except (ProcessLookupError, PermissionError):
             pass
 
+    def _live_count() -> int:
+        return len(in_flight) + (1 if todo_in_flight[0] is not None else 0)
+
     def _handle_sigint(_signum, _frame):
         if not stop[0]:
             print(
                 "\n[port-loop] pool: SIGINT received; propagating to "
-                f"{len(in_flight)} worker(s) and draining.",
+                f"{_live_count()} worker(s) and draining.",
                 flush=True,
             )
         stop[0] = True
         for info in in_flight.values():
             _signal_worker_group(info["proc"], signal.SIGINT)
+        if todo_in_flight[0] is not None:
+            _signal_worker_group(todo_in_flight[0]["proc"], signal.SIGINT)
 
     def _handle_sigusr1(_signum, _frame):
         if not drain[0]:
             print(
                 "\n[port-loop] pool: SIGUSR1 received; draining gracefully "
-                f"({len(in_flight)} worker(s) will finish, no new spawns).",
+                f"({_live_count()} worker(s) will finish, no new spawns).",
                 flush=True,
             )
         drain[0] = True
@@ -2415,12 +2482,51 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
             # above the BLOCKING threshold.
             disk_ok = _emergency_disk_cleanup(set(in_flight.keys()), N)
 
-            # Admit into every free slot we can. Admission is re-checked
-            # here so a TODO or CI-failure that appears mid-pool stops
-            # new spawns without interrupting in-flight ones.
+            # Try to spawn the TODO worker if it's idle and there's a
+            # pickable entry in TODO.yaml. The TODO worker runs in
+            # parallel with port workers and is independent of port
+            # admission — it only stops on stop/drain/disk and on the
+            # entry queue running dry. Skipped silently when the picker
+            # returns None (queue empty, or every entry has exhausted
+            # its retry budget).
+            if (
+                not stop[0]
+                and not drain[0]
+                and disk_ok
+                and todo_in_flight[0] is None
+                and time.monotonic() - last_todo_spawn_at >= _SPAWN_STAGGER_SECS
+            ):
+                picked = _pick_todo_for_dispatch()
+                if picked is not None:
+                    base_sha = git_head()
+                    try:
+                        proc = _spawn_todo_worker(
+                            picked, base_sha, supervisor_branch, args,
+                        )
+                    except Exception as e:
+                        print(
+                            f"\n[port-loop] pool: failed to spawn todo "
+                            f"worker: {e}"
+                        )
+                    else:
+                        todo_in_flight[0] = {
+                            "proc": proc,
+                            "picked": picked,
+                            "base_sha": base_sha,
+                            "started_at": time.monotonic(),
+                        }
+                        last_todo_spawn_at = time.monotonic()
+
+            # Admit into every free port-worker slot we can. Admission
+            # is re-checked here so a CI-failure that appears mid-pool
+            # stops new spawns without interrupting in-flight ones.
             if not stop[0] and not drain[0] and disk_ok:
                 adm_ok, adm_reason = _pool_admission_ok()
-                if not adm_ok and not in_flight:
+                if (
+                    not adm_ok
+                    and not in_flight
+                    and todo_in_flight[0] is None
+                ):
                     print(
                         f"\n[port-loop] pool: admission denied "
                         f"({adm_reason}) and no workers in flight; "
@@ -2486,7 +2592,7 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
                         assigned.add(file)
                         last_spawn_at = time.monotonic()
 
-            if not in_flight:
+            if not in_flight and todo_in_flight[0] is None:
                 if stop[0] or drain[0]:
                     label = "stop requested" if stop[0] else "graceful drain complete"
                     print(
@@ -2501,23 +2607,28 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
                         "loop."
                     )
                     return
-                if not unported_pool():
+                if not unported_pool() and not read_todos():
                     print(
-                        "\n[port-loop] pool: unported pool is empty; "
-                        "returning to outer loop."
+                        "\n[port-loop] pool: unported pool and TODO "
+                        "queue are both empty; returning to outer loop."
                     )
                     return
                 # Otherwise the only reason we admitted nothing is
-                # admission denial — handled at top of next iteration.
+                # admission denial or staggered re-spawn — handled at
+                # top of next iteration.
                 time.sleep(1.0)
                 continue
 
-            # Poll for any completed worker.
+            # Poll for any completed port worker plus the TODO worker.
             completed: list[int] = []
             for slot, info in in_flight.items():
                 if info["proc"].poll() is not None:
                     completed.append(slot)
-            if not completed:
+            todo_done = (
+                todo_in_flight[0] is not None
+                and todo_in_flight[0]["proc"].poll() is not None
+            )
+            if not completed and not todo_done:
                 time.sleep(1.0)
                 continue
 
@@ -2534,21 +2645,36 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
                 _handle_worker_exit(
                     slot, info, rc, supervisor_branch, args, state,
                 )
+
+            if todo_done:
+                info = todo_in_flight[0]
+                todo_in_flight[0] = None
+                rc = info["proc"].returncode
+                elapsed = time.monotonic() - info["started_at"]
+                print(
+                    f"\n[port-loop] pool: todo worker exited rc={rc} "
+                    f"after {elapsed:.1f}s."
+                )
+                _handle_todo_worker_exit(info, rc, supervisor_branch, state)
+
             # A worker completion may have added a TODO entry or pushed
             # commits that affect PR CI; force a fresh admission check.
             _pool_admission_invalidate()
     finally:
         # Escalate: SIGTERM → wait 30s → SIGKILL, all signaling the
         # worker's process group so `claude` under the worker also dies.
-        for info in in_flight.values():
-            _signal_worker_group(info["proc"], signal.SIGTERM)
-        for info in in_flight.values():
+        live_procs = [info["proc"] for info in in_flight.values()]
+        if todo_in_flight[0] is not None:
+            live_procs.append(todo_in_flight[0]["proc"])
+        for proc in live_procs:
+            _signal_worker_group(proc, signal.SIGTERM)
+        for proc in live_procs:
             try:
-                info["proc"].wait(timeout=30)
+                proc.wait(timeout=30)
             except Exception:
-                _signal_worker_group(info["proc"], signal.SIGKILL)
+                _signal_worker_group(proc, signal.SIGKILL)
                 try:
-                    info["proc"].wait(timeout=5)
+                    proc.wait(timeout=5)
                 except Exception:
                     pass
         signal.signal(signal.SIGINT, prev_handler)
@@ -2620,6 +2746,51 @@ def _handle_worker_exit(
     )
 
 
+def _handle_todo_worker_exit(
+    info: dict,
+    rc: int,
+    supervisor_branch: str,
+    state: IterCounter,
+) -> None:
+    """Integrate the TODO worker's output.
+
+    The TODO worker is single-shot: it dispatches one claude agent on a
+    pre-picked entry and exits. On rc=0 we cherry-pick whatever commits
+    landed on `port/worker-todo`. The supervisor's attempt counter for
+    this entry was already bumped when the entry was picked, so any
+    failure mode here just leaves the entry in the queue for next time.
+    Cherry-pick conflicts are reported but not escalated to a rescue
+    agent — the next pool tick will simply pick the next pickable
+    entry, and the loop's outer repair will surface persistent issues.
+    """
+    base_sha = info["base_sha"]
+    entry = info["picked"][0]
+    title = str(entry.get("title", "")) or format_todo(entry).splitlines()[0]
+    if rc == 0:
+        ok, detail = _integrate_todo_worker(supervisor_branch, base_sha)
+        if ok:
+            print(
+                f"[port-loop] pool: integrated todo worker ({title!r}): "
+                f"{detail}"
+            )
+        else:
+            print(
+                f"[port-loop] pool: todo worker integration failed for "
+                f"{title!r}: {detail}"
+            )
+        return
+    if rc < 0:
+        print(
+            f"[port-loop] pool: todo worker killed by signal "
+            f"{-rc}; no integration attempted."
+        )
+        return
+    print(
+        f"[port-loop] pool: todo worker exited {rc} ({title!r}); "
+        f"skipping integration."
+    )
+
+
 def repair(state: IterCounter, run_server_tests: bool = False) -> None:
     any_failures = True
     while any_failures:
@@ -2679,33 +2850,16 @@ def drive_todos(state: IterCounter) -> bool:
     if not todos:
         return False
 
-    attempts_map = _load_todo_attempts()
-    hashes = [_todo_hash(t) for t in todos]
-    attempts_map = _prune_todo_attempts(attempts_map, set(hashes))
-
-    # Rank (attempts_so_far, original_index) ascending.
-    ranked = sorted(
-        range(len(todos)),
-        key=lambda i: (attempts_map.get(hashes[i], 0), i),
-    )
-    # Skip entries that have exhausted the budget (5 normal + 1 recovery).
-    pickable = [i for i in ranked if attempts_map.get(hashes[i], 0) < 6]
-    if not pickable:
+    picked = _pick_todo_for_dispatch()
+    if picked is None:
         print(
             f"\n[port-loop] all {len(todos)} TODO entry(ies) have exhausted "
             f"their attempt budget; blocking porting until a human intervenes."
         )
         return True
 
-    idx = pickable[0]
-    entry = todos[idx]
-    entry_hash = hashes[idx]
+    entry, attempts, remaining, idx, entry_hash = picked
     title = str(entry.get("title", "")) or format_todo(entry).splitlines()[0]
-    attempts = attempts_map.get(entry_hash, 0)
-    remaining = len(todos) - 1
-
-    attempts_map[entry_hash] = attempts + 1
-    _save_todo_attempts(attempts_map)
 
     if attempts >= 4:
         print(
@@ -2734,6 +2888,49 @@ def drive_todos(state: IterCounter) -> bool:
         )
         repair(state)
     return True
+
+
+def _pick_todo_for_dispatch() -> (
+    tuple[dict, int, int, int, str] | None
+):
+    """Pick the next TODO entry to dispatch, bumping its attempt counter.
+
+    Returns `(entry, attempts_before_bump, remaining, idx, entry_hash)` —
+    the same fields `drive_todos` and the parallel TODO worker need.
+    Returns `None` if TODO.yaml is empty or every entry has exhausted
+    its attempt budget (5 normal + 1 recovery).
+
+    Bumps the picked entry's counter and persists it immediately so
+    concurrent calls (e.g. supervisor re-pick after a worker crash)
+    don't re-pick the same entry on the same attempt.
+    """
+    todos = read_todos()
+    if not todos:
+        return None
+
+    attempts_map = _load_todo_attempts()
+    hashes = [_todo_hash(t) for t in todos]
+    attempts_map = _prune_todo_attempts(attempts_map, set(hashes))
+
+    # Rank (attempts_so_far, original_index) ascending.
+    ranked = sorted(
+        range(len(todos)),
+        key=lambda i: (attempts_map.get(hashes[i], 0), i),
+    )
+    pickable = [i for i in ranked if attempts_map.get(hashes[i], 0) < 6]
+    if not pickable:
+        return None
+
+    idx = pickable[0]
+    entry = todos[idx]
+    entry_hash = hashes[idx]
+    attempts = attempts_map.get(entry_hash, 0)
+    remaining = len(todos) - 1
+
+    attempts_map[entry_hash] = attempts + 1
+    _save_todo_attempts(attempts_map)
+
+    return entry, attempts, remaining, idx, entry_hash
 
 
 def _run_git(args: list[str]) -> subprocess.CompletedProcess:
@@ -3136,14 +3333,14 @@ def _run_capture(args: list[str], *, cwd: Path | None = None) -> subprocess.Comp
     )
 
 
-def _ensure_worktree(i: int, base_sha: str) -> Path:
-    """Create worker `i`'s worktree pinned to `base_sha` (reuses if present)."""
-    path = _worker_path(i)
-    branch = _worker_branch(i)
+def _ensure_worktree_at(
+    path: Path, branch: str, base_sha: str, label: str
+) -> Path:
+    """Create the worktree at `path` pinned to `base_sha` (reuses if present)."""
     WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
 
     if path.exists() and (path / ".git").exists():
-        _reset_worktree(i, base_sha)
+        _reset_worktree_at(path, branch, base_sha)
         return path
 
     if path.exists():
@@ -3171,21 +3368,19 @@ def _ensure_worktree(i: int, base_sha: str) -> Path:
         )
         if add.returncode != 0:
             raise RuntimeError(
-                f"failed to create worktree for worker {i} at {path}: "
+                f"failed to create worktree for {label} at {path}: "
                 f"{add.stdout}\n{add.stderr}"
             )
     return path
 
 
-def _reset_worktree(i: int, base_sha: str) -> None:
-    """Reset worker `i`'s branch to `base_sha` and clean untracked files.
+def _reset_worktree_at(path: Path, branch: str, base_sha: str) -> None:
+    """Reset `path`'s branch to `base_sha` and clean untracked files.
 
-    Keeps the worker's `.port-loop-cache.json`, the porting sessions dir,
-    and the per-worker Cargo target (which lives outside the worktree
-    anyway) so successive ports don't start from cold every time.
+    Keeps `.port-loop-cache.json`, the porting sessions dir, and the
+    Cargo target (which lives outside the worktree anyway) so successive
+    runs don't start from cold every time.
     """
-    path = _worker_path(i)
-    branch = _worker_branch(i)
     ck = _run_capture(
         ["git", "checkout", "-B", branch, base_sha],
         cwd=path,
@@ -3209,6 +3404,25 @@ def _reset_worktree(i: int, base_sha: str) -> None:
             "-e", ".porting/",
         ],
         cwd=path,
+    )
+
+
+def _ensure_worktree(i: int, base_sha: str) -> Path:
+    """Create worker `i`'s worktree pinned to `base_sha` (reuses if present)."""
+    return _ensure_worktree_at(
+        _worker_path(i), _worker_branch(i), base_sha, f"worker {i}"
+    )
+
+
+def _reset_worktree(i: int, base_sha: str) -> None:
+    """Reset worker `i`'s branch to `base_sha` and clean untracked files."""
+    _reset_worktree_at(_worker_path(i), _worker_branch(i), base_sha)
+
+
+def _ensure_todo_worktree(base_sha: str) -> Path:
+    """Create the TODO worker's worktree pinned to `base_sha`."""
+    return _ensure_worktree_at(
+        _todo_worker_path(), _todo_worker_branch(), base_sha, "todo worker"
     )
 
 
@@ -3265,26 +3479,21 @@ def _cleanup_remote_worker_branches() -> None:
             )
 
 
-def _integrate_worker(
-    i: int, supervisor_branch: str, base_sha: str
+def _integrate_branch(
+    branch: str, supervisor_branch: str, base_sha: str, label: str
 ) -> tuple[bool, str]:
-    """Replay worker `i`'s commits onto the supervisor branch.
-
-    `base_sha` is the supervisor-branch HEAD that was in effect when the
-    worker was spawned. Anything the worker committed since then is in
-    the range `base_sha..port/worker-{i}`.
+    """Replay `branch`'s commits onto the supervisor branch.
 
     Uses `git cherry-pick` so the supervisor branch linearly accumulates
     every worker's commits without needing fast-forward. Returns
     `(ok, detail)` — on conflict the cherry-pick is aborted and the
     caller is expected to dispatch a merge-rescue agent.
     """
-    branch = _worker_branch(i)
     worker_sha = _rev_parse(branch)
     if worker_sha is None:
-        return False, f"worker branch {branch} is missing"
+        return False, f"{label} branch {branch} is missing"
     if worker_sha == base_sha:
-        return True, "worker produced no commits; nothing to integrate"
+        return True, f"{label} produced no commits; nothing to integrate"
     head_branch = _current_branch()
     if head_branch != supervisor_branch:
         return False, (
@@ -3305,6 +3514,24 @@ def _integrate_worker(
     _run_capture(["git", "cherry-pick", "--abort"], cwd=REPO_ROOT)
     return False, (
         f"cherry-pick {range_spec} failed:\n{pick.stdout}\n{pick.stderr}"
+    )
+
+
+def _integrate_worker(
+    i: int, supervisor_branch: str, base_sha: str
+) -> tuple[bool, str]:
+    """Replay worker `i`'s commits onto the supervisor branch."""
+    return _integrate_branch(
+        _worker_branch(i), supervisor_branch, base_sha, f"worker {i}"
+    )
+
+
+def _integrate_todo_worker(
+    supervisor_branch: str, base_sha: str
+) -> tuple[bool, str]:
+    """Replay the TODO worker's commits onto the supervisor branch."""
+    return _integrate_branch(
+        _todo_worker_branch(), supervisor_branch, base_sha, "todo worker"
     )
 
 
@@ -3761,6 +3988,19 @@ def main() -> None:
         help=argparse.SUPPRESS,
     )
     parser.add_argument(
+        "--todo-worker-mode",
+        action="store_true",
+        dest="todo_worker_mode",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--todo-payload",
+        type=str,
+        default=None,
+        dest="todo_payload",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--worktree",
         type=str,
         default=None,
@@ -3794,6 +4034,8 @@ def main() -> None:
             parser.error("--finalize is incompatible with --worker-mode.")
     if args.max_workers < 1:
         parser.error("--max-workers must be >= 1.")
+    if args.worker_mode and args.todo_worker_mode:
+        parser.error("--worker-mode and --todo-worker-mode are mutually exclusive.")
     if args.worker_mode:
         if not args.worktree:
             parser.error("--worker-mode requires --worktree.")
@@ -3803,6 +4045,17 @@ def main() -> None:
             parser.error("--worker-mode requires --supervisor-branch.")
         if args.max_workers != 1:
             parser.error("--worker-mode is incompatible with --max-workers>1.")
+    elif args.todo_worker_mode:
+        if not args.worktree:
+            parser.error("--todo-worker-mode requires --worktree.")
+        if not args.todo_payload:
+            parser.error("--todo-worker-mode requires --todo-payload.")
+        if not args.supervisor_branch:
+            parser.error("--todo-worker-mode requires --supervisor-branch.")
+        if args.max_workers != 1:
+            parser.error(
+                "--todo-worker-mode is incompatible with --max-workers>1."
+            )
     elif args.max_workers > 1:
         if args.port:
             parser.error("--max-workers>1 is incompatible with --port.")
@@ -3863,6 +4116,46 @@ def main() -> None:
             sys.exit(43)
         print(
             f"\n[port-loop] --worker-mode: green; exiting 0 after "
+            f"{state.n} iteration(s)."
+        )
+        return
+
+    if args.todo_worker_mode:
+        # Single-shot: dispatch one claude agent on the supervisor's
+        # pre-picked TODO entry, then exit. The supervisor cherry-picks
+        # whatever commits the agent made onto the supervisor branch.
+        os.chdir(args.worktree)
+        _install_log_prefix(args.log_prefix)
+        payload_path = Path(args.todo_payload)
+        if not payload_path.is_file():
+            sys.exit(
+                f"[port-loop] --todo-worker-mode: payload file not found: "
+                f"{payload_path}"
+            )
+        payload = yaml.safe_load(payload_path.read_text())
+        entry = payload["entry"]
+        attempts = int(payload["attempts"])
+        remaining = int(payload["remaining"])
+        title = str(entry.get("title", "")) or format_todo(entry).splitlines()[0]
+        if attempts >= 4:
+            print(
+                f"\n[port-loop] --todo-worker-mode: recovery dispatch for "
+                f"{title!r} (attempt {attempts + 1})."
+            )
+            prompt = TODO_RECOVERY_PROMPT.format(
+                entry=format_todo(entry), attempts=attempts
+            )
+        else:
+            print(
+                f"\n[port-loop] --todo-worker-mode: dispatch for {title!r} "
+                f"(attempt {attempts + 1}/5)."
+            )
+            prompt = TODO_PROMPT.format(
+                entry=format_todo(entry), remaining=remaining
+            )
+        state.dispatch(prompt)
+        print(
+            f"\n[port-loop] --todo-worker-mode: done after "
             f"{state.n} iteration(s)."
         )
         return
@@ -3937,11 +4230,17 @@ def main() -> None:
         if drive_pr_ci(state, just_pushed=pushed):
             continue
 
-        if drive_todos(state):
+        # Serial mode (max-workers=1): drain TODOs in the foreground
+        # before porting, preserving the original behaviour. Parallel
+        # mode skips this — the dedicated TODO worker inside the pool
+        # drains TODO.yaml concurrently with port workers.
+        if args.max_workers == 1 and drive_todos(state):
             continue
 
         pool = unported_pool()
-        if not pool:
+        todos_pending = read_todos() if args.max_workers > 1 else []
+
+        if not pool and not todos_pending:
             print(
                 f"\n[port-loop] TODO.yaml empty and every upstream file is "
                 f"ported or skipped; done after {state.n} iteration(s)."
@@ -3950,7 +4249,8 @@ def main() -> None:
 
         if args.max_workers > 1:
             print(
-                f"\n[port-loop] {len(pool)} files remain; entering "
+                f"\n[port-loop] {len(pool)} file(s) and "
+                f"{len(todos_pending)} TODO entry(ies) remain; entering "
                 f"parallel pool with max-workers={args.max_workers}."
             )
             drive_port_pool(state, args)
