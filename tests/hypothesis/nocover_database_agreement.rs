@@ -51,35 +51,35 @@ impl DatabaseAgreementMachine {
     }
 
     fn rule_save(&mut self, _tc: TestCase) {
-        let k = self.keys.draw().clone();
-        let v = self.values.draw().clone();
+        let k = self.keys.draw();
+        let v = self.values.draw();
         for db in &self.dbs {
-            db.save(&k, &v);
+            db.save(k, v);
         }
     }
 
     fn rule_delete(&mut self, _tc: TestCase) {
-        let k = self.keys.draw().clone();
-        let v = self.values.draw().clone();
+        let k = self.keys.draw();
+        let v = self.values.draw();
         for db in &self.dbs {
-            db.delete(&k, &v);
+            db.delete(k, v);
         }
     }
 
     fn rule_move(&mut self, _tc: TestCase) {
-        let k1 = self.keys.draw().clone();
-        let k2 = self.keys.draw().clone();
-        let v = self.values.draw().clone();
+        let k1 = self.keys.draw();
+        let k2 = self.keys.draw();
+        let v = self.values.draw();
         for db in &self.dbs {
-            db.move_value(&k1, &k2, &v);
+            db.move_value(k1, k2, v);
         }
     }
 
     fn rule_values_agree(&mut self, _tc: TestCase) {
-        let k = self.keys.draw().clone();
+        let k = self.keys.draw();
         let mut last: Option<HashSet<Vec<u8>>> = None;
         for db in &self.dbs {
-            let entries: HashSet<Vec<u8>> = db.fetch(&k).into_iter().collect();
+            let entries: HashSet<Vec<u8>> = db.fetch(k).into_iter().collect();
             if let Some(prev) = &last {
                 assert_eq!(prev, &entries);
             }
