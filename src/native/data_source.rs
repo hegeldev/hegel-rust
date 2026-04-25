@@ -57,6 +57,7 @@ impl NativeDataSource {
             .unwrap_or_else(|e| e.into_inner())
             .spans
             .clone()
+            .into_vec()
     }
 
     fn dispatch(&self, command: &str, payload: &Value) -> Result<Value, DataSourceError> {

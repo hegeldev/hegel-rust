@@ -157,15 +157,11 @@ impl TargetedTestCase {
     }
 
     pub fn start_span(&mut self, label: u64) {
-        self.ntc
-            .span_stack
-            .push((self.ntc.nodes.len(), label.to_string()));
+        self.ntc.start_span(label);
     }
 
     pub fn stop_span(&mut self) {
-        if let Some((start, label)) = self.ntc.span_stack.pop() {
-            self.ntc.record_span(start, self.ntc.nodes.len(), label);
-        }
+        self.ntc.stop_span(false);
     }
 }
 
@@ -345,7 +341,7 @@ impl TargetedRunner {
         };
 
         let nodes = std::mem::take(&mut tc.ntc.nodes);
-        let spans = std::mem::take(&mut tc.ntc.spans);
+        let spans = std::mem::take(&mut tc.ntc.spans).into_vec();
         let observations = tc.target_observations;
 
         if status >= Status::Valid {

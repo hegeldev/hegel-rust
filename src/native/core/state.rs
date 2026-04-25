@@ -121,12 +121,162 @@ impl NativeVariables {
 /// A span within the choice sequence, labelled by schema type or by the
 /// numeric label of an enclosing `start_span` call.
 ///
-/// Recorded to enable span-mutation exploration (see `try_span_mutation`).
+/// Recorded to enable span-mutation exploration (see `try_span_mutation`)
+/// and to expose the structure of a test case to the shrinker, mutator,
+/// and assertion-style tests.  Mirrors Hypothesis's `Span` in
+/// `internal/conjecture/data.py`.
 #[derive(Clone, Debug)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
     pub label: String,
+    /// Depth of this span in the span tree. The top-level span has depth 0.
+    pub depth: u32,
+    /// Index of the directly-enclosing span, or `None` for the top-level span.
+    pub parent: Option<usize>,
+    /// True iff this span's `stop_span` was called with `discard=true`.
+    pub discarded: bool,
+}
+
+impl Span {
+    /// Number of choice nodes covered by this span.
+    pub fn choice_count(&self) -> usize {
+        self.end - self.start
+    }
+}
+
+/// Maximum nested span depth before the engine marks the test case
+/// `Status::Invalid`.  Mirrors Hypothesis's
+/// `internal/conjecture/data.py::MAX_DEPTH`.
+pub const MAX_DEPTH: u32 = 100;
+
+/// A collection of spans recorded during a single test case, with
+/// Python-style indexing semantics on top of [`Vec<Span>`].
+///
+/// Indexing accepts negative indices (`-1` is the last span) and panics
+/// with an "out of range" message on out-of-bounds access, matching the
+/// `IndexError` raised by Python's [`Spans`][1].
+///
+/// [1]: https://github.com/HypothesisWorks/hypothesis/blob/master/hypothesis-python/src/hypothesis/internal/conjecture/data.py
+#[derive(Clone, Debug, Default)]
+pub struct Spans {
+    inner: Vec<Span>,
+}
+
+impl Spans {
+    /// Construct an empty `Spans` collection.
+    pub fn new() -> Self {
+        Spans { inner: Vec::new() }
+    }
+
+    /// Number of recorded spans.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// True if no spans have been recorded.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Iterate spans in order.
+    pub fn iter(&self) -> std::slice::Iter<'_, Span> {
+        self.inner.iter()
+    }
+
+    /// Append a span (interior bookkeeping; pushes after any
+    /// already-recorded spans).
+    pub fn push(&mut self, span: Span) {
+        self.inner.push(span);
+    }
+
+    /// Mutable access to a span by raw index.
+    pub fn get_mut(&mut self, i: usize) -> Option<&mut Span> {
+        self.inner.get_mut(i)
+    }
+
+    /// Access by raw (non-negative) index, returning `None` on
+    /// out-of-bounds.  Mirrors `Vec::get`.
+    pub fn get(&self, i: usize) -> Option<&Span> {
+        self.inner.get(i)
+    }
+
+    /// Access by signed index (Python-style: `-1` = last).  Returns
+    /// `None` for any out-of-range index.
+    pub fn get_signed(&self, i: i64) -> Option<&Span> {
+        let n = self.inner.len() as i64;
+        if i < -n || i >= n {
+            return None;
+        }
+        let idx = if i < 0 { (i + n) as usize } else { i as usize };
+        self.inner.get(idx)
+    }
+
+    /// Indices of the direct children of the span at `i`, in
+    /// preorder (the order in which they were started).
+    ///
+    /// Computed from each span's `parent` field; runs in O(n) over the
+    /// span list.
+    pub fn children(&self, i: usize) -> Vec<usize> {
+        self.inner
+            .iter()
+            .enumerate()
+            .filter_map(|(j, s)| (s.parent == Some(i)).then_some(j))
+            .collect()
+    }
+
+    /// View as a slice, for code that wants raw indexing.
+    pub fn as_slice(&self) -> &[Span] {
+        &self.inner
+    }
+
+    /// Mutable slice access.
+    pub fn as_mut_slice(&mut self) -> &mut [Span] {
+        &mut self.inner
+    }
+
+    /// Consume the collection and return the underlying `Vec`.
+    pub fn into_vec(self) -> Vec<Span> {
+        self.inner
+    }
+}
+
+impl From<Vec<Span>> for Spans {
+    fn from(inner: Vec<Span>) -> Self {
+        Spans { inner }
+    }
+}
+
+impl std::ops::Deref for Spans {
+    type Target = [Span];
+    fn deref(&self) -> &[Span] {
+        &self.inner
+    }
+}
+
+impl<'a> IntoIterator for &'a Spans {
+    type Item = &'a Span;
+    type IntoIter = std::slice::Iter<'a, Span>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.iter()
+    }
+}
+
+impl std::ops::Index<usize> for Spans {
+    type Output = Span;
+    fn index(&self, i: usize) -> &Span {
+        &self.inner[i]
+    }
+}
+
+impl std::ops::Index<i64> for Spans {
+    type Output = Span;
+    fn index(&self, i: i64) -> &Span {
+        let n = self.inner.len();
+        self.get_signed(i).unwrap_or_else(|| {
+            panic!("Index {i} out of range [-{n}, {n})");
+        })
+    }
 }
 
 /// A test case backed by a sequence of typed choices.
@@ -149,10 +299,11 @@ pub struct NativeTestCase {
     pub collections: HashMap<i64, ManyState>,
     next_collection_id: i64,
     pub variable_pools: Vec<NativeVariables>,
-    pub spans: Vec<Span>,
-    /// Currently-open spans opened by `start_span` from the client, awaiting
-    /// their matching `stop_span`. Each entry is `(start_position, label)`.
-    pub span_stack: Vec<(usize, String)>,
+    pub spans: Spans,
+    /// Indices into `spans` for currently-open spans, in nesting order.
+    /// Each entry was pushed by `start_span` and is awaiting a matching
+    /// `stop_span` call.
+    pub span_stack: Vec<usize>,
     /// True iff any `stop_span(discard=true)` has been observed during this test
     /// case. Mirrors Hypothesis's `ConjectureData.has_discards`: filters that
     /// retry mark the rejected attempts as discarded, which the shrinker uses
@@ -173,7 +324,7 @@ impl NativeTestCase {
             collections: HashMap::new(),
             next_collection_id: 0,
             variable_pools: Vec::new(),
-            spans: Vec::new(),
+            spans: Spans::new(),
             span_stack: Vec::new(),
             has_discards: false,
         }
@@ -191,7 +342,7 @@ impl NativeTestCase {
             collections: HashMap::new(),
             next_collection_id: 0,
             variable_pools: Vec::new(),
-            spans: Vec::new(),
+            spans: Spans::new(),
             span_stack: Vec::new(),
             has_discards: false,
         }
@@ -215,7 +366,7 @@ impl NativeTestCase {
             collections: HashMap::new(),
             next_collection_id: 0,
             variable_pools: Vec::new(),
-            spans: Vec::new(),
+            spans: Spans::new(),
             span_stack: Vec::new(),
             has_discards: false,
         }
@@ -240,16 +391,81 @@ impl NativeTestCase {
             collections: HashMap::new(),
             next_collection_id: 0,
             variable_pools: Vec::new(),
-            spans: Vec::new(),
+            spans: Spans::new(),
             span_stack: Vec::new(),
             has_discards: false,
         }
     }
 
-    /// Record a span covering choice nodes [start, end) with the given label.
+    /// Record a finished span covering choice nodes `[start, end)` with the
+    /// given label.  The span is assigned a parent (the innermost
+    /// currently-open span, if any) and a depth (one greater than that
+    /// parent's depth, or 0 if there is no enclosing span).
+    ///
+    /// Used by leaf-schema interpretation in `schema/mod.rs` and by
+    /// `feature_flag` draws.  Higher-level callers should prefer
+    /// [`Self::start_span`] / [`Self::stop_span`], which preserve span-tree
+    /// structure for nested draws.
     pub fn record_span(&mut self, start: usize, end: usize, label: String) {
         if end > start {
-            self.spans.push(Span { start, end, label });
+            let parent = self.span_stack.last().copied();
+            let depth = self.span_stack.len() as u32;
+            self.spans.push(Span {
+                start,
+                end,
+                label,
+                depth,
+                parent,
+                discarded: false,
+            });
+        }
+    }
+
+    /// Open a new span at the current choice position, labelled with `label`.
+    ///
+    /// Returns the index assigned to the span in `self.spans`.  The span's
+    /// `end` is set to `self.nodes.len()` as a placeholder and overwritten
+    /// when [`Self::stop_span`] is called.
+    ///
+    /// If opening this span would push depth past [`MAX_DEPTH`], the test
+    /// case is marked invalid and `start_span` returns the assigned index
+    /// without further bookkeeping; subsequent draws on a frozen test case
+    /// will trip the existing freeze guard.
+    pub fn start_span(&mut self, label: u64) -> usize {
+        let parent = self.span_stack.last().copied();
+        let depth = self.span_stack.len() as u32;
+        let idx = self.spans.len();
+        let start = self.nodes.len();
+        self.spans.push(Span {
+            start,
+            end: start,
+            label: label.to_string(),
+            depth,
+            parent,
+            discarded: false,
+        });
+        self.span_stack.push(idx);
+        if depth + 1 > MAX_DEPTH && self.status.is_none() {
+            self.status = Some(Status::Invalid);
+        }
+        idx
+    }
+
+    /// Close the innermost currently-open span.
+    ///
+    /// `discard=true` marks the span as discarded (used by filter retries
+    /// to flag rejected attempts) and sets `has_discards` on the test case.
+    pub fn stop_span(&mut self, discard: bool) {
+        let Some(idx) = self.span_stack.pop() else {
+            return;
+        };
+        let end = self.nodes.len();
+        if let Some(span) = self.spans.get_mut(idx) {
+            span.end = end;
+            span.discarded = discard;
+        }
+        if discard {
+            self.has_discards = true;
         }
     }
 
@@ -269,8 +485,19 @@ impl NativeTestCase {
     /// Idempotent: calling `freeze()` on an already-frozen test case is
     /// a no-op, mirroring `ConjectureData.freeze`'s early return on
     /// `self.frozen` in `conjecture/data.py`.
+    ///
+    /// Closes any currently-open spans, setting their `end` to the final
+    /// choice position (matching Hypothesis's behaviour where freeze
+    /// implicitly closes intervals left open by an exception or overrun).
     pub fn freeze(&mut self) {
-        if self.status.is_none() {
+        let already_frozen = self.status.is_some();
+        let end = self.nodes.len();
+        while let Some(idx) = self.span_stack.pop() {
+            if let Some(span) = self.spans.get_mut(idx) {
+                span.end = end;
+            }
+        }
+        if !already_frozen {
             self.status = Some(Status::Valid);
         }
     }
