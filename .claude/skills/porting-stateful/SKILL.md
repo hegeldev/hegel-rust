@@ -63,37 +63,18 @@ imperative code in the rule body or the test body (see the table above).
 
 `#[hegel::state_machine]` is sugar for an `impl hegel::stateful::StateMachine`
 that returns `Vec<Rule<Self>>` from `rules()` and `invariants()`. You can write
-that impl by hand instead, using `Rule::new("name", Self::method_ptr)`. Reach
-for the manual form when:
+that impl by hand instead, using `Rule::new("name", Self::method_ptr)`.
 
-- **The machine struct needs a runtime-built constructor argument**, e.g. a
-  tempdir path created in the test body, or any resource whose lifetime the
-  test owns. Define `fn new(tc: &TestCase, path: &str) -> Self` and call it
-  from inside `Hegel::new(|tc| { … })`. The macro form expects the struct to
-  be constructed from the test body too, but reads more cleanly when there
-  *are* such args.
-- **A rule's display name is a Rust keyword** (`move`, `match`, `type`, `ref`,
-  `loop`, `box`, `where`, `mod`, `impl`, `trait`, `unsafe`, `pub`, …). The
-  macro form derives the rule name from the function name, forcing you to
-  rename the function (`fn move(…)` won't compile). The trait form
-  decouples them: `Rule::new("move", Self::rule_move)` keeps the original
-  Hypothesis rule name in shrink output (`tc.note` prints
-  `"Step N: move"`) while the Rust method is `rule_move`.
-- **Settings overrides are needed** (`test_cases(20)`, `database(None)`,
-  etc.) — `Hegel::new(|tc| { … }).settings(Settings::new().…).run()` is the
-  natural shape, and the manual `impl StateMachine` reads more naturally
-  inside that closure than the macro form.
-
-Sketch:
+Default to the macro form. The one case that forces the manual form is
+**a rule whose display name is a Rust keyword** (`move`, `match`, `type`,
+`ref`, `loop`, `box`, `where`, `mod`, `impl`, `trait`, `unsafe`, `pub`, …).
+The macro derives the rule name from `method.sig.ident.to_string()`, so a
+raw identifier like `r#move` surfaces as `"r#move"` in shrink output rather
+than the upstream `"move"`. The trait form decouples the two: name the
+Rust method `rule_move` and the rule `"move"`:
 
 ```rust
-struct Machine {
-    dbs: Vec<Arc<dyn ExampleDatabase>>,
-    keys: Variables<Vec<u8>>,
-}
-
 impl Machine {
-    fn new(tc: &TestCase, path: &str) -> Self { … }
     fn rule_move(&mut self, _tc: TestCase) { … }
 }
 
@@ -103,20 +84,12 @@ impl StateMachine for Machine {
     }
     fn invariants(&self) -> Vec<Rule<Self>> { vec![] }
 }
-
-#[test]
-fn test_thing() {
-    Hegel::new(|tc: TestCase| {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let m = Machine::new(&tc, tmp.path().to_str().unwrap());
-        hegel::stateful::run(m, tc);
-    })
-    .settings(Settings::new().test_cases(20).database(None))
-    .run();
-}
 ```
 
-Default to the macro form; only switch when one of the above bites.
+Settings overrides (`test_cases`, `database`, etc.) and runtime-built
+constructor arguments do NOT force the manual form: both are equally
+expressible with `#[hegel::test(test_cases = 20, database = None)]` and
+constructing the struct in the test body before `hegel::stateful::run`.
 
 ### Rule / invariant signatures
 
@@ -377,13 +350,13 @@ body — its `Drop` removes the directory automatically, no explicit
 post-`run` cleanup needed:
 
 ```rust
-Hegel::new(|tc: TestCase| {
+#[hegel::test]
+fn test_thing(tc: TestCase) {
     let tmp = tempfile::TempDir::new().unwrap();
-    let path = tmp.path().join("examples");
-    let m = Machine::new(&tc, path.to_str().unwrap());
+    let m = Machine::new(tmp.path().join("examples").to_str().unwrap());
     hegel::stateful::run(m, tc);
     // tmp drops here, recursively removing the tempdir.
-}).run();
+}
 ```
 
 ## What cannot be ported today
