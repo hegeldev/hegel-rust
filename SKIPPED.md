@@ -916,6 +916,21 @@ Individually-skipped tests (rest of the file is ported):
   `composite`-as-test-collection surface — the whole file is
   pytest-plugin integration with no hegel-rust counterpart.
 
+- `test_junit.py` (in `tests/pytest/`) — both tests drive the
+  `pytester` plugin (`testdir.makepyfile`/`testdir.runpytest`) to
+  spawn a pytest subprocess with `--junit-xml=out.xml` (and `-n2` for
+  the xdist variant), then parse the JUnit XML output with
+  `xml.etree.ElementTree` to assert that Hypothesis's pytest plugin
+  emits `hypothesis-statistics-...` entries as `<properties>` under
+  `<testsuite>` rather than `<testcase>` (xunit2 compatibility), and
+  that pytest-xdist's well-known shortfall here doesn't regress.
+  Depends on the `pytester` plugin, pytest's `--junit-xml` CLI flag,
+  pytest-xdist's `-n` flag, and Hypothesis's pytest-plugin
+  statistics-as-junit-properties output. hegel-rust is not a pytest
+  plugin and has no JUnit XML / xdist / statistics-properties surface
+  — the whole file is pytest-plugin integration with no hegel-rust
+  counterpart.
+
 - `test_sideeffect_warnings.py` — all tests exercise Hypothesis's Python-specific
   import-time initialization infrastructure: `_hypothesis_globals.in_initialization`
   (a Python module attribute tracking import phase), `hypothesis.configuration`
