@@ -540,6 +540,14 @@ Individually-skipped tests (rest of the file is ported):
   no Rust counterpart, and hegel-rust has no `st.builds()` /
   `register_type_strategy` analog (same family as the `test_lookup*.py`
   skips above).
+- `test_type_lookup_future_annotations.py` (in `nocover/`) — tests
+  `st.from_type(B)` resolution of `typing.TypedDict` subclasses with
+  forward-referenced field types under `from __future__ import
+  annotations` (PEP 563 stringified annotations), `int | str` PEP 604
+  union syntax, and `InvalidArgument` raised on locally-scoped aliases.
+  `from_type`, `TypedDict`, runtime annotation evaluation, and PEP 604
+  unions all have no Rust counterpart (same family as the
+  `test_lookup*.py` skips above).
 - `test_annotated_types.py` — tests `st.from_type()` resolution of
   `typing.Annotated[T, ...]` metadata using the third-party Python
   `annotated_types` library (`at.Gt`, `at.Ge`, `at.Lt`, `at.Le`,
