@@ -120,10 +120,27 @@ impl<'a> Shrinker<'a> {
     }
 
     /// Try replacing values at specific indices.
+    ///
+    /// Returns `false` (replacement impossible) if any index is past the end
+    /// of `current_nodes`, or if a proposed value's variant doesn't match the
+    /// kind variant at that index. Many callers loop across passes that
+    /// successively shrink `current_nodes` and pun kinds at fixed positions —
+    /// e.g. `bind_deletion` runs `bin_search_down` with a callback that
+    /// passes the same captured `i` to `replace` on each probe; the first
+    /// probe can shorten the sequence past `i`, or change the kind at `j` so
+    /// an Integer value no longer fits the (now Boolean) node. Treating both
+    /// as a failed replacement (rather than panicking later in `sort_key`)
+    /// matches the semantic invariant: a value that doesn't fit the node's
+    /// schema can't be assigned to it.
     pub fn replace(&mut self, values: &HashMap<usize, ChoiceValue>) -> bool {
         let mut attempt: Vec<ChoiceNode> = self.current_nodes.clone();
         for (&i, v) in values {
-            assert!(i < attempt.len());
+            if i >= attempt.len() {
+                return false;
+            }
+            if !attempt[i].kind.validate(v) {
+                return false;
+            }
             attempt[i] = attempt[i].with_value(v.clone());
         }
         self.consider(&attempt)
@@ -175,7 +192,12 @@ pub(super) fn bin_search_down(lo: i128, hi: i128, f: &mut impl FnMut(i128) -> bo
     }
     let mut lo = lo;
     let mut hi = hi;
-    while lo + 1 < hi {
+    // `lo + 1` overflows when `lo == i128::MAX`. The float shrinker can
+    // reach that bound by saturating-casting `f64::MAX as i128` from a
+    // generator with `min_value(f64::MAX)`. The search range is
+    // degenerate in that case (since `hi >= lo`, both must equal
+    // `i128::MAX`), so bail with `hi`.
+    while lo.checked_add(1).is_some_and(|n| n < hi) {
         let mid = lo + (hi - lo) / 2;
         if f(mid) {
             hi = mid;
