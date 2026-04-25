@@ -611,6 +611,19 @@ Individually-skipped tests (rest of the file is ported):
   a nested `@given`, plus `HealthCheck.nested_given` suppression — neither
   the `random_module()` strategy nor the nested-given health check exists
   in hegel-rust.
+- `test_reusable_values.py` (in `nocover/`) — every test asserts on
+  Hypothesis's `SearchStrategy.has_reusable_values` introspection
+  attribute (`assert s.has_reusable_values`,
+  `assert not s.filter(...).has_reusable_values`,
+  `assert not s.map(...).has_reusable_values`,
+  `assert not s.flatmap(...).has_reusable_values`,
+  `assert not st.lists(...).has_reusable_values`, etc.). hegel-rust
+  generators are Rust generic-wrapper types (`Filtered<T, F, G>`,
+  `Mapped<...>`, etc.) with no introspectable `.has_reusable_values`
+  surface — same strategy-class-structure family as the `.is_empty` /
+  `.branches` / `.is_cacheable` / `.label` skips above. The file also
+  uses `st.deferred(lambda: ...)` for the recursion test, which has no
+  `gs::deferred()` counterpart (same gap as `test_deferred_strategies.py`).
 - `test_strategy_state.py` (in `nocover/`) — the entire file is a single
   `HypothesisSpec(RuleBasedStateMachine)` whose design is predicated on
   Python's dynamic typing of strategy objects: `strategies = Bundle("strategy")`
