@@ -253,6 +253,28 @@ impl NativeTestCase {
         }
     }
 
+    /// Whether the test case has been frozen and may no longer accept draws.
+    ///
+    /// Hypothesis's `ConjectureData.frozen` flag is its own boolean; the
+    /// native engine collapses that flag onto the post-completion
+    /// `status` value, so any non-`None` status means the test case is
+    /// frozen.
+    pub fn frozen(&self) -> bool {
+        self.status.is_some()
+    }
+
+    /// Mark the test case as completed, defaulting to `Status::Valid` when
+    /// no terminal status was set during the run.
+    ///
+    /// Idempotent: calling `freeze()` on an already-frozen test case is
+    /// a no-op, mirroring `ConjectureData.freeze`'s early return on
+    /// `self.frozen` in `conjecture/data.py`.
+    pub fn freeze(&mut self) {
+        if self.status.is_none() {
+            self.status = Some(Status::Valid);
+        }
+    }
+
     /// Allocate a new collection ID and store the given state.
     pub fn new_collection(&mut self, state: ManyState) -> i64 {
         let id = self.next_collection_id;

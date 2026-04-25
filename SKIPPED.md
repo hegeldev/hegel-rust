@@ -2437,12 +2437,10 @@ TODO.yaml entry names the native API additions its port lands;
 removing each bullet below is acceptance for the corresponding
 follow-up.
 
-- `conjecture/test_test_data.py::test_cannot_draw_after_freeze`,
-  `::test_can_double_freeze`, `::test_calls_concluded_implicitly` —
-  `NativeTestCase` has no public `freeze()` method or `frozen` flag
-  distinct from `status`. Adding a `freeze()` that conditionally
-  promotes `status` to `Valid` plus a `DataObserver`-style
-  `conclude_test` callback is the unblock.
+- `conjecture/test_test_data.py::test_calls_concluded_implicitly` —
+  asserts the registered `DataObserver.conclude_test(status, reason)`
+  callback fires from inside `freeze()`. Bundled with
+  `::test_can_observe_draws`; needs the `DataObserver` hook to land.
 - `conjecture/test_test_data.py::test_can_mark_interesting`,
   `::test_can_mark_invalid`, `::test_can_mark_invalid_with_why` —
   `mark_interesting` / `mark_invalid` live on the higher-level
