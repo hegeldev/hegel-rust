@@ -27,3 +27,5 @@ Op::default_generator()
 ```
 
 Thanks to Rain for providing feedback on enum ergonomics!
+
+This release also implements `DefaultGenerator` for `PathBuf`.

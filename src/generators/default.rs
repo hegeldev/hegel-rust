@@ -6,6 +6,7 @@ use super::{
 };
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Trait for types that have a default generator.
@@ -200,6 +201,13 @@ impl DefaultGenerator for Duration {
     type Generator = DurationGenerator;
     fn default_generator() -> Self::Generator {
         durations()
+    }
+}
+
+impl DefaultGenerator for PathBuf {
+    type Generator = BoxedGenerator<'static, PathBuf>;
+    fn default_generator() -> Self::Generator {
+        text().map(PathBuf::from).boxed()
     }
 }
 
