@@ -27,7 +27,7 @@ use crate::common::utils::{expect_panic, minimal};
 use hegel::__native_test_internals::{
     ChoiceValue, ExampleDatabase, ExitReason, HealthCheckLabel, InMemoryNativeDatabase,
     NativeConjectureData, NativeConjectureRunner, NativeRunnerSettings, RunnerPhase,
-    choices_to_bytes, interesting_origin, run_to_nodes,
+    choices_from_bytes, choices_to_bytes, interesting_origin, run_to_nodes,
 };
 use hegel::TestCase;
 use hegel::generators as gs;
@@ -988,4 +988,193 @@ fn test_stops_if_hits_interesting_early_and_only_want_one_bug() {
     runner.run();
 
     assert_eq!(runner.call_count, 1);
+}
+
+#[test]
+fn test_does_not_shrink_if_replaying_from_database() {
+    // A primary-corpus entry whose replay reproduces the bug exactly
+    // (same choices in, same choices out) lights up the
+    // `reused_previously_shrunk_test_case` fast-path, so `run()` exits
+    // without ever entering the shrink phase.  Upstream achieves the same
+    // by setting `runner.shrink_interesting_examples = None`; the native
+    // port doesn't need that hack because the fast-path is structural.
+    let key = b"foo".to_vec();
+    let db: Arc<InMemoryNativeDatabase> = Arc::new(InMemoryNativeDatabase::new());
+    let db_dyn: Arc<dyn ExampleDatabase> = db.clone();
+
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new().database(Some(db_dyn));
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            if data.draw_integer(0, 255) == 123 {
+                data.mark_interesting(interesting_origin(None));
+            }
+        },
+        settings,
+        rng,
+    )
+    .with_database_key(key);
+    let choices = [ChoiceValue::Integer(123)];
+    runner.save_choices(&choices);
+    runner.run();
+
+    assert_eq!(runner.interesting_examples.len(), 1);
+    let last_data = runner.interesting_examples.values().next().unwrap();
+    assert_eq!(last_data.choices, choices.to_vec());
+}
+
+#[test]
+fn test_does_shrink_if_replaying_inexact_from_database() {
+    // The stored entry has more choices than the test function actually
+    // draws, so the replay's recorded choices won't match the saved bytes.
+    // That trips `all_interesting_in_primary_were_exact = false`, the
+    // fast-path stays off, and `run()` proceeds into the shrink phase
+    // which minimises the integer to zero.
+    let key = b"foo".to_vec();
+    let db: Arc<InMemoryNativeDatabase> = Arc::new(InMemoryNativeDatabase::new());
+    let db_dyn: Arc<dyn ExampleDatabase> = db.clone();
+
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new().database(Some(db_dyn));
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            data.draw_integer(0, 255);
+            data.mark_interesting(interesting_origin(None));
+        },
+        settings,
+        rng,
+    )
+    .with_database_key(key);
+    runner.save_choices(&[ChoiceValue::Integer(123), ChoiceValue::Integer(2)]);
+    runner.run();
+
+    assert_eq!(runner.interesting_examples.len(), 1);
+    let last_data = runner.interesting_examples.values().next().unwrap();
+    assert_eq!(last_data.choices, vec![ChoiceValue::Integer(0)]);
+}
+
+#[test]
+fn test_skips_secondary_if_interesting_is_found() {
+    // Primary corpus has 10 entries (all of which mark interesting),
+    // secondary corpus has 246.  Reuse must replay every primary entry
+    // (driving call_count to 10 since each matches a fresh integer
+    // choice) and then break before consulting the secondary corpus —
+    // there's no point exploring fallbacks once the primary corpus has
+    // already produced a bug.
+    let key = b"foo".to_vec();
+    let db: Arc<InMemoryNativeDatabase> = Arc::new(InMemoryNativeDatabase::new());
+    let db_dyn: Arc<dyn ExampleDatabase> = db.clone();
+
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(1000)
+        .database(Some(db_dyn))
+        .report_multiple_bugs(true);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            data.draw_integer(0, 255);
+            data.mark_interesting(interesting_origin(None));
+        },
+        settings,
+        rng,
+    )
+    .with_database_key(key);
+    let secondary = runner.secondary_key();
+    let primary_key = runner.database_key().unwrap().to_vec();
+    for i in 0i128..256 {
+        let entry = choices_to_bytes(&[ChoiceValue::Integer(i)]);
+        let target_key = if i < 10 { &primary_key } else { &secondary };
+        db.save(target_key, &entry);
+    }
+    runner.reuse_existing_examples();
+    assert_eq!(runner.call_count, 10);
+}
+
+fn run_discards_invalid_db_entries(use_secondary: bool) {
+    // 1 valid + 5 invalid entries are stored under the chosen key; reuse
+    // and clear-secondary must between them leave only the valid entry
+    // (in the primary corpus) and call the test function exactly once.
+    let key = b"stuff".to_vec();
+    let db: Arc<InMemoryNativeDatabase> = Arc::new(InMemoryNativeDatabase::new());
+    let db_dyn: Arc<dyn ExampleDatabase> = db.clone();
+
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(100)
+        .database(Some(db_dyn));
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            data.draw_integer(i128::MIN, i128::MAX);
+            data.mark_interesting(interesting_origin(None));
+        },
+        settings,
+        rng,
+    )
+    .with_database_key(key.clone());
+    let target = if use_secondary {
+        runner.secondary_key()
+    } else {
+        key.clone()
+    };
+    let valid = choices_to_bytes(&[ChoiceValue::Integer(1)]);
+    db.save(&target, &valid);
+    for n in 0u8..5 {
+        let b = vec![255u8, n];
+        assert!(choices_from_bytes(&b).is_none());
+        db.save(&target, &b);
+    }
+    assert_eq!(db.fetch(&target).len(), 6);
+
+    runner.reuse_existing_examples();
+    runner.clear_secondary_key();
+
+    let primary: HashSet<Vec<u8>> = db.fetch(&key).into_iter().collect();
+    assert_eq!(primary, [valid].into_iter().collect());
+    assert_eq!(runner.call_count, 1);
+}
+
+#[test]
+fn test_discards_invalid_db_entries_primary() {
+    run_discards_invalid_db_entries(false);
+}
+
+#[test]
+fn test_discards_invalid_db_entries_secondary() {
+    run_discards_invalid_db_entries(true);
+}
+
+#[test]
+fn test_discards_invalid_db_entries_pareto() {
+    // All entries are invalid pareto-corpus bytes; reuse must scrub them
+    // without ever calling the test function.
+    let key = b"stuff".to_vec();
+    let db: Arc<InMemoryNativeDatabase> = Arc::new(InMemoryNativeDatabase::new());
+    let db_dyn: Arc<dyn ExampleDatabase> = db.clone();
+
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(100)
+        .database(Some(db_dyn));
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            data.draw_integer(i128::MIN, i128::MAX);
+            data.mark_interesting(interesting_origin(None));
+        },
+        settings,
+        rng,
+    )
+    .with_database_key(key.clone());
+    let pareto = runner.pareto_key();
+    for n in 0u8..5 {
+        let b = vec![255u8, n];
+        assert!(choices_from_bytes(&b).is_none());
+        db.save(&pareto, &b);
+    }
+    assert_eq!(db.fetch(&pareto).len(), 5);
+
+    runner.reuse_existing_examples();
+
+    assert!(db.fetch(&key).is_empty());
+    assert!(db.fetch(&pareto).is_empty());
+    assert_eq!(runner.call_count, 0);
 }
