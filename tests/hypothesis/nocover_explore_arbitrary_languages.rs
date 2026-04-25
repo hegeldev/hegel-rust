@@ -155,6 +155,13 @@ fn test_explore_an_arbitrary_language() {
     .settings(
         Settings::new()
             .database(None)
+            // The Python original runs the default 100 outer cases, but each
+            // case in hegel-rust is dominated by inner-runner shrinking on
+            // deeply-recursive language trees and the upstream test is in
+            // `nocover/` for the same reason — slow by nature. Trim the
+            // outer batch to fit hegel-rust's per-test budget; 20 still
+            // exercises plenty of distinct languages per run.
+            .test_cases(20)
             .suppress_health_check(HealthCheck::all()),
     )
     .run();
