@@ -8,10 +8,10 @@
 
 #![cfg(feature = "native")]
 
-use hegel::TestCase;
 use hegel::__native_test_internals::{
     BackgroundWriteNativeDatabase, ExampleDatabase, InMemoryNativeDatabase, NativeDatabase,
 };
+use hegel::TestCase;
 use hegel::generators as gs;
 use hegel::stateful::{Rule, StateMachine, Variables, run as run_state_machine, variables};
 use std::collections::HashSet;

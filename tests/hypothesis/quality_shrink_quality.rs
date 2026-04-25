@@ -55,10 +55,7 @@ fn test_integers_from_minimizes_leftwards() {
 
 #[test]
 fn test_minimize_bounded_integers_to_zero() {
-    let v: i64 = minimal(
-        gs::integers::<i64>().min_value(-10).max_value(10),
-        |_| true,
-    );
+    let v: i64 = minimal(gs::integers::<i64>().min_value(-10).max_value(10), |_| true);
     assert_eq!(v, 0);
 }
 
@@ -226,10 +223,8 @@ fn test_flatmap_rectangles() {
 
 #[test]
 fn test_dictionary_empty() {
-    let t: HashMap<i64, String> = minimal(
-        gs::hashmaps(gs::integers::<i64>(), gs::text()),
-        |_| true,
-    );
+    let t: HashMap<i64, String> =
+        minimal(gs::hashmaps(gs::integers::<i64>(), gs::text()), |_| true);
     assert!(t.is_empty());
 }
 
@@ -409,16 +404,13 @@ fn test_minimize_list_of_fairly_non_unique_ints() {
 
 #[test]
 fn test_list_with_complex_sorting_structure() {
-    let xs: Vec<Vec<bool>> = minimal(
-        gs::vecs(gs::vecs(gs::booleans())),
-        |x: &Vec<Vec<bool>>| {
-            let reversed: Vec<Vec<bool>> = x
-                .iter()
-                .map(|t| t.iter().rev().copied().collect())
-                .collect();
-            reversed > *x && x.len() > 3
-        },
-    );
+    let xs: Vec<Vec<bool>> = minimal(gs::vecs(gs::vecs(gs::booleans())), |x: &Vec<Vec<bool>>| {
+        let reversed: Vec<Vec<bool>> = x
+            .iter()
+            .map(|t| t.iter().rev().copied().collect())
+            .collect();
+        reversed > *x && x.len() > 3
+    });
     assert_eq!(xs.len(), 4);
 }
 
@@ -761,10 +753,8 @@ fn test_calculator_benchmark() {
     let expr = def.generator();
     def.set(hegel::one_of!(
         gs::integers::<i64>().map(Expr::Int),
-        gs::tuples!(expr.clone(), expr.clone())
-            .map(|(l, r)| Expr::Add(Box::new(l), Box::new(r))),
-        gs::tuples!(expr.clone(), expr.clone())
-            .map(|(l, r)| Expr::Div(Box::new(l), Box::new(r))),
+        gs::tuples!(expr.clone(), expr.clone()).map(|(l, r)| Expr::Add(Box::new(l), Box::new(r))),
+        gs::tuples!(expr.clone(), expr.clone()).map(|(l, r)| Expr::Div(Box::new(l), Box::new(r))),
     ));
 
     let x = Minimal::new(expr, |e: &Expr| {
@@ -787,10 +777,7 @@ fn test_calculator_benchmark() {
 fn test_one_of_slip() {
     let v: i64 = minimal(
         gs::one_of(vec![
-            gs::integers::<i64>()
-                .min_value(101)
-                .max_value(200)
-                .boxed(),
+            gs::integers::<i64>().min_value(101).max_value(200).boxed(),
             gs::integers::<i64>().min_value(0).max_value(100).boxed(),
         ]),
         |_| true,
@@ -942,9 +929,11 @@ fn test_minimize_duplicated_characters_within_a_choice() {
 #[cfg(not(feature = "native"))]
 #[test]
 fn test_nasty_string_shrinks() {
-    let s = Minimal::new(gs::text(), |s: &String| s.contains("\u{1d57f}\u{1d58d}\u{1d58a}"))
-        .test_cases(10000)
-        .run();
+    let s = Minimal::new(gs::text(), |s: &String| {
+        s.contains("\u{1d57f}\u{1d58d}\u{1d58a}")
+    })
+    .test_cases(10000)
+    .run();
     assert_eq!(s, "\u{1d57f}\u{1d58d}\u{1d58a}");
 }
 
@@ -952,8 +941,7 @@ type Bound5 = (Vec<i64>, Vec<i64>, Vec<i64>, Vec<i64>, Vec<i64>);
 
 #[test]
 fn test_bound5() {
-    let bounded_ints =
-        || gs::vecs(gs::integers::<i64>().min_value(-100).max_value(0)).max_size(1);
+    let bounded_ints = || gs::vecs(gs::integers::<i64>().min_value(-100).max_value(0)).max_size(1);
 
     let result: Bound5 = minimal(
         gs::tuples!(
