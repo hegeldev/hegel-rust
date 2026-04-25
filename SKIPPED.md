@@ -2251,17 +2251,23 @@ is acceptance for the corresponding follow-up.
   `test_exit_because_shrink_phase_timeout`) are ported in
   `tests/hypothesis/conjecture_engine.rs`.
 - `conjecture/test_engine.py::test_terminates_shrinks`,
-  `::test_shrinks_both_interesting_examples`, `::test_discarding`,
-  `::test_shrinking_from_mostly_zero`,
-  `::test_handles_nesting_of_discard_correctly`,
-  `::test_prefix_cannot_exceed_buffer_size`,
-  `::test_will_evict_entries_from_the_cache`,
-  `::test_simulate_to_evicted_data` — each uses
-  `monkeypatch.setattr(ConjectureRunner, "generate_new_examples",
-  ...)` to seed a specific initial buffer or `monkeypatch.setattr
-  (engine_module, "MAX_SHRINKS" / "CACHE_SIZE", n)` to cap the
-  shrink loop. No attribute-injection entry point in the native
-  engine.
+  `::test_handles_nesting_of_discard_correctly` — both depend on
+  upstream-only Shrinker monkeypatching that the native engine
+  doesn't have a public counterpart for.
+  `test_terminates_shrinks` patches `engine_module.MAX_SHRINKS` plus
+  ports `tests/common/strategies.py::HardToShrink`, and asserts on a
+  per-shrink secondary-database write that the native runner doesn't
+  do yet.  `test_handles_nesting_of_discard_correctly` patches
+  `Shrinker.shrink = Shrinker.remove_discarded` so only the
+  remove-discarded pass runs; without that constraint the native
+  full-shrinker finds the lex-smaller `(True, False)` minimum
+  rather than upstream's `(True, True)`.
+  The remaining six members of this cluster
+  (`test_shrinks_both_interesting_examples`, `test_discarding`,
+  `test_shrinking_from_mostly_zero`, `test_prefix_cannot_exceed_buffer_size`,
+  `test_will_evict_entries_from_the_cache`,
+  `test_simulate_to_evicted_data`) are ported in
+  `tests/hypothesis/conjecture_engine.rs`.
 - `conjecture/test_engine.py::test_fails_health_check_for_all_invalid`,
   `::test_fails_health_check_for_large_base`,
   `::test_fails_health_check_for_large_non_base`,

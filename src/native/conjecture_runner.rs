@@ -32,6 +32,7 @@ use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 
 use crate::native::bignum::BigUint;
+use crate::native::cache::LRUCache;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Status};
 use crate::native::database::ExampleDatabase;
 use crate::native::datatree::compute_max_children;
@@ -178,6 +179,11 @@ pub struct NativeRunnerSettings {
     /// `engine.BUFFER_SIZE` for the lifetime of a single
     /// `runner.run()` call.
     pub buffer_size_limit: Option<usize>,
+    /// Override for `engine_module.CACHE_SIZE` — the maximum number of
+    /// entries kept in the runner's `cached_test_function` LRU before
+    /// the oldest is evicted.  `None` falls back to the default
+    /// [`CACHE_SIZE`].
+    pub cache_size: Option<usize>,
 }
 
 impl NativeRunnerSettings {
@@ -191,6 +197,7 @@ impl NativeRunnerSettings {
             max_shrinks: None,
             report_multiple_bugs: true,
             buffer_size_limit: None,
+            cache_size: None,
         }
     }
 
@@ -231,6 +238,11 @@ impl NativeRunnerSettings {
 
     pub fn buffer_size_limit(mut self, n: usize) -> Self {
         self.buffer_size_limit = Some(n);
+        self
+    }
+
+    pub fn cache_size(mut self, n: usize) -> Self {
+        self.cache_size = Some(n);
         self
     }
 }
@@ -289,6 +301,11 @@ const INVALID_THRESHOLD_BASE: usize = 458;
 /// Per-valid-example increment to the invalid-call budget.  From the
 /// same `_invalid_thresholds(r=0.01, c=0.99)` formula in `engine.py`.
 const INVALID_PER_VALID: usize = 100;
+
+/// Default capacity for the runner's `cached_test_function` LRU.
+/// Mirrors `engine.py::CACHE_SIZE`; per-runner overrides flow through
+/// [`NativeRunnerSettings::cache_size`].
+const CACHE_SIZE: usize = 10_000;
 
 /// Wall-clock budget for the shrink phase, in seconds.  Mirrors
 /// `engine.py::MAX_SHRINKING_SECONDS` (5 minutes).
@@ -381,8 +398,23 @@ impl NativeConjectureData {
         }
     }
 
-    pub fn draw_boolean(&mut self, _p: f64) -> bool {
-        todo!("NativeConjectureData::draw_boolean")
+    pub fn draw_boolean(&mut self, p: f64) -> bool {
+        // Each boolean choice contributes one byte to Hypothesis's
+        // `data.length` (its `choices_to_bytes` encoding is a single
+        // tag-and-payload byte).  Mirror that so a per-test-case
+        // `buffer_size_limit` bound on choice-byte cost — the upstream
+        // `engine_module.BUFFER_SIZE` knob — caps boolean-only paths
+        // too, not just `draw_bytes` accumulation.
+        if self.bytes_drawn.saturating_add(1) > self.buffer_size_limit {
+            std::panic::panic_any(STOP_TEST_PANIC);
+        }
+        match self.ntc.weighted(p, None) {
+            Ok(v) => {
+                self.bytes_drawn += 1;
+                v
+            }
+            Err(_) => std::panic::panic_any(STOP_TEST_PANIC),
+        }
     }
 
     pub fn draw_float(
@@ -414,8 +446,19 @@ impl NativeConjectureData {
     }
 
     pub fn stop_span(&mut self) {
+        self.stop_span_with_discard(false);
+    }
+
+    /// Variant of `stop_span` that flags the span as discarded.  Mirrors
+    /// `data.stop_span(discard=True)` in Hypothesis: filter-style retry
+    /// loops use it to mark unsuccessful attempts so the shrinker's
+    /// `remove_discarded` pass can prune them.
+    pub fn stop_span_with_discard(&mut self, discard: bool) {
         if let Some((start, label)) = self.ntc.span_stack.pop() {
             self.ntc.record_span(start, self.ntc.nodes.len(), label);
+            if discard {
+                self.ntc.has_discards = true;
+            }
         }
     }
 
@@ -438,12 +481,33 @@ impl NativeConjectureData {
 /// Data-tree accessor for `runner.tree.is_exhausted`.
 #[non_exhaustive]
 pub struct NativeDataTreeView<'a> {
-    _runner: std::marker::PhantomData<&'a NativeConjectureRunner>,
+    runner: &'a NativeConjectureRunner,
 }
 
 impl<'a> NativeDataTreeView<'a> {
     pub fn is_exhausted(&self) -> bool {
         todo!("NativeConjectureRunner::tree::is_exhausted")
+    }
+
+    /// Walk the data tree along `choices` and return `true` when the
+    /// path terminates at a recorded leaf.  Mirrors
+    /// `DataTree.simulate_test_function(data)`: a `true` return is the
+    /// "no `PreviouslyUnseenBehaviour`" path; `false` is upstream's
+    /// raise.  Simulation, like upstream, does not bump `call_count`
+    /// or repopulate the runner's `test_cache`, so a successful
+    /// simulation followed by `cached_test_function(choices)` against
+    /// an evicted cache entry will still re-execute the test
+    /// function.
+    pub fn simulate_test_function(&self, choices: &[ChoiceValue]) -> bool {
+        let mut current = &self.runner.tree_root;
+        for value in choices {
+            let key = ChoiceValueKey::from(value);
+            match current.children.get(&key) {
+                Some(child) => current = child,
+                None => return false,
+            }
+        }
+        current.conclusion.is_some()
     }
 }
 
@@ -475,6 +539,22 @@ impl NativeShrinker {
 }
 
 type RunnerTestFn = Box<dyn FnMut(&mut NativeConjectureData)>;
+
+/// Cached outcome of a [`NativeConjectureRunner::cached_test_function`]
+/// invocation.  Mirrors `engine.py`'s `__data_cache` entries: the
+/// terminal status plus enough state to refuse to re-run the test
+/// function on a repeat call with the same choice prefix.  Fields are
+/// kept against future cache-hit return surfaces (upstream returns the
+/// stored `ConjectureResult` so callers can inspect status / nodes /
+/// origin without re-running the test); the native runner currently
+/// uses the cache only for hit/miss bookkeeping.
+#[derive(Clone)]
+#[allow(dead_code)]
+struct CachedRun {
+    status: Status,
+    nodes: Vec<ChoiceNode>,
+    origin: Option<InterestingOrigin>,
+}
 
 /// Hashable choice-value key, mirroring [`crate::native::tree`]'s
 /// internal tree.  Kept local so we don't force the private tree node
@@ -886,6 +966,13 @@ pub struct NativeConjectureRunner {
     /// `max_iterations`.  Mirrors `runner.ignore_limits`; flipped by
     /// the `test_can_be_set_to_ignore_limits` cluster.
     pub ignore_limits: bool,
+    /// LRU cache for `cached_test_function` keyed by `choices_to_bytes`
+    /// of the input choices.  Mirrors `engine.py`'s `__data_cache`: a
+    /// repeat call with the same choice prefix returns the previously
+    /// recorded outcome without re-executing the user's test function
+    /// or bumping `call_count`.  Capacity is
+    /// `settings.cache_size.unwrap_or(CACHE_SIZE)`.
+    test_cache: LRUCache<Vec<u8>, CachedRun>,
 }
 
 impl NativeConjectureRunner {
@@ -894,6 +981,7 @@ impl NativeConjectureRunner {
         F: FnMut(&mut NativeConjectureData) + 'static,
     {
         let start = std::time::Instant::now();
+        let cache_capacity = settings.cache_size.unwrap_or(CACHE_SIZE);
         NativeConjectureRunner {
             test_fn: Box::new(test_fn),
             settings,
@@ -914,6 +1002,7 @@ impl NativeConjectureRunner {
             statistics: HashMap::new(),
             shrink_interesting_examples_call_count: 0,
             ignore_limits: false,
+            test_cache: LRUCache::new(cache_capacity),
         }
     }
 
@@ -1192,6 +1281,8 @@ impl NativeConjectureRunner {
 
             let test_fn = &mut self.test_fn;
             let call_count = &mut self.call_count;
+            let report_multiple_bugs = self.settings.report_multiple_bugs;
+            let target = origin.clone();
             let shrunk = {
                 let mut shrinker = Shrinker::new(
                     Box::new(|candidate: &[ChoiceNode]| {
@@ -1199,9 +1290,23 @@ impl NativeConjectureRunner {
                         let choices: Vec<ChoiceValue> =
                             candidate.iter().map(|n| n.value.clone()).collect();
                         let ntc = NativeTestCase::for_choices(&choices, Some(candidate));
-                        let (status, actual_nodes, _) =
+                        let (status, actual_nodes, found_origin) =
                             run_test_fn(test_fn, ntc, buffer_size_limit);
-                        (status == Status::Interesting, actual_nodes)
+                        // Mirrors `engine.py`'s per-target predicate
+                        // (`d.interesting_origin == target`): when
+                        // `report_multiple_bugs` is on, slipping to a
+                        // different origin's minimum is rejected.
+                        // Slips are only allowed when the user has
+                        // opted in via `report_multiple_bugs=false`.
+                        let matches_target = match (&found_origin, report_multiple_bugs) {
+                            (Some(o), true) => *o == target,
+                            (_, false) => true,
+                            (None, true) => false,
+                        };
+                        (
+                            status == Status::Interesting && matches_target,
+                            actual_nodes,
+                        )
                     }),
                     initial,
                 );
@@ -1227,7 +1332,16 @@ impl NativeConjectureRunner {
     /// forced prefix, update the runner's call / status / bug counters,
     /// and feed the resulting `nodes` into the data tree so the
     /// novel-prefix walker won't re-pick the same prefix later.
+    ///
+    /// A repeat call with a choice prefix that's already in the LRU
+    /// returns its prior outcome without re-running the test function;
+    /// `call_count` and the status counters are only bumped on cache
+    /// miss, matching `engine.py::cached_test_function`.
     pub fn cached_test_function(&mut self, choices: &[ChoiceValue]) {
+        let key = crate::native::database::serialize_choices(choices);
+        if self.test_cache.get(&key).is_some() {
+            return;
+        }
         let buffer_size_limit = self
             .settings
             .buffer_size_limit
@@ -1236,6 +1350,14 @@ impl NativeConjectureRunner {
         let (status, nodes, origin) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
         self.call_count += 1;
         record_tree(&mut self.tree_root, &nodes, status);
+        self.test_cache.insert(
+            key,
+            CachedRun {
+                status,
+                nodes: nodes.clone(),
+                origin: origin.clone(),
+            },
+        );
         self.record_test_result(status, nodes, origin);
     }
 
@@ -1253,9 +1375,7 @@ impl NativeConjectureRunner {
     /// View of the internal data tree for `runner.tree.is_exhausted`
     /// assertions.
     pub fn tree(&self) -> NativeDataTreeView<'_> {
-        NativeDataTreeView {
-            _runner: std::marker::PhantomData,
-        }
+        NativeDataTreeView { runner: self }
     }
 
     /// Produce a novel choice-sequence prefix.  Mirrors
