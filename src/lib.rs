@@ -269,6 +269,9 @@ pub mod __native_test_internals {
         NativeShrinker, Phase as RunnerPhase, choices_from_bytes, choices_to_bytes, dominance,
         fails_health_check, interesting_origin, run_to_nodes,
     };
+    pub use crate::native::conjecture_utils::{
+        SMALLEST_POSITIVE_FLOAT, Sampler, calc_p_continue, p_continue_to_avg,
+    };
     pub use crate::native::core::{
         BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice,
         IntegerChoice, NativeTestCase, Span, Status, StringChoice, decode_exponent,
