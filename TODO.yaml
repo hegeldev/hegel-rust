@@ -7,35 +7,78 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Port conjecture/test_engine.py monkeypatch cluster
+- title: Port conjecture/test_engine.py::test_handles_nesting_of_discard_correctly
   details: |
-    Port the following tests from `conjecture/test_engine.py`,
-    native-gated. Each uses `monkeypatch.setattr(ConjectureRunner,
-    "generate_new_examples", ...)` to seed a specific initial buffer
-    or `monkeypatch.setattr(engine_module, "MAX_SHRINKS"|"CACHE_SIZE",
-    n)` to cap the shrink/cache loop:
-      - `test_terminates_shrinks`
-      - `test_shrinks_both_interesting_examples`
-      - `test_discarding`
-      - `test_shrinking_from_mostly_zero`
-      - `test_handles_nesting_of_discard_correctly`
-      - `test_prefix_cannot_exceed_buffer_size`
-      - `test_will_evict_entries_from_the_cache`
-      - `test_simulate_to_evicted_data`
+    Port `test_handles_nesting_of_discard_correctly` from
+    `conjecture/test_engine.py`.  Upstream uses
+    `monkeypatch.setattr(Shrinker, "shrink", Shrinker.remove_discarded)`
+    to constrain the shrink loop to a single named pass — without that
+    constraint the native full-shrinker finds the lex-smaller
+    `(True, False)` minimum rather than the upstream-asserted
+    `(True, True)`, because the discarded-span boundary information
+    isn't tracked along the choice sequence.
 
-    Port path: call `runner.cached_test_function(seed_choices)`
-    explicitly before `runner.run()` to seed the initial buffer; use
-    `NativeRunnerSettings::max_shrinks(n)` for the MAX_SHRINKS
-    override. Extend `NativeRunnerSettings` with a `cache_size(n)`
-    override if needed by `test_will_evict_entries_from_the_cache`;
-    don't add Python-style attribute injection.
+    Port path: extend `Span` with a `discarded: bool` field and
+    propagate it through `NativeConjectureData::stop_span_with_discard`
+    into the shrinker's view of the test case (the existing
+    `NativeTestCase.has_discards` flag is enough at the data level;
+    the shrinker callback needs to see per-span discarded state too).
+    Add a `remove_discarded` shrink pass to `src/native/shrinker/mod.rs`
+    that mirrors `internal/conjecture/shrinker.py::remove_discarded`:
+    collect non-overlapping discarded spans, delete their choice
+    ranges in reverse, and `consider` the result.  Then either expose
+    a way to run only that pass (e.g. via `NativeShrinker::fixate_shrink_passes`,
+    coming with the new_shrinker cluster) or seed via
+    `cached_test_function` plus an additional explicit
+    `runner.shrinker_remove_discarded()` driver — pick whichever
+    matches the new_shrinker port best so the two land coherently.
 
     Acceptance criteria:
-      - All 8 tests compile and pass under
-        `cargo test --features native --test hypothesis conjecture_engine::`.
-      - The `::test_terminates_shrinks` through
-        `::test_simulate_to_evicted_data` bullet in `SKIPPED.md` is
-        removed.
+      - `test_handles_nesting_of_discard_correctly` compiles and
+        passes under `cargo test --features native --test hypothesis
+        conjecture_engine::`.
+      - The matching bullet in `SKIPPED.md` is updated to drop this
+        test from the still-skipped list.
+
+- title: Port conjecture/test_engine.py::test_terminates_shrinks
+  details: |
+    Port `test_terminates_shrinks` (parametrised on `n=1` and `n=5`)
+    from `conjecture/test_engine.py`.  Upstream uses
+    `monkeypatch.setattr(engine_module, "MAX_SHRINKS", n)` to cap the
+    shrink loop and a long-running `HardToShrink` strategy (from
+    `tests/common/strategies.py`) so the runner racks up exactly `n`
+    successful shrinks before bailing with `ExitReason.max_shrinks`,
+    persisting each pre-shrink intermediate as a `secondary_key` DB
+    entry along the way.
+
+    Port path:
+      1. Track `runner.shrinks` — increment whenever
+         `shrink_interesting_examples`'s callback observes a
+         strictly-smaller interesting result for the current target,
+         mirroring `engine.py` lines 698-704.
+      2. Hook `MAX_SHRINKS` enforcement: when `shrinks >= max_shrinks`,
+         raise an internal `RunIsComplete` sentinel that
+         `shrink_interesting_examples` catches, sets
+         `exit_reason = ExitReason::MaxShrinks`, and returns from the
+         shrink loop.
+      3. On each successful shrink: `save_choices(new)` to the
+         primary DB key and `db.move_value(primary, secondary, old)` to
+         demote the previous best to the secondary corpus, mirroring
+         `engine.py::downgrade_choices`.
+      4. Port `tests/common/strategies.py::HardToShrink` as a small
+         Rust strategy (probably under `tests/hypothesis/common/`)
+         that draws 100 bytes and only accepts a sequence one byte
+         lower than the previously-accepted one — this gives the
+         shrinker a long monotone descent so the `n=1` / `n=5`
+         budgets land exactly.
+
+    Acceptance criteria:
+      - `test_terminates_shrinks` (both parameter rows, e.g.
+        `_1` and `_5`) compiles and passes under
+        `cargo test --features native --test hypothesis
+        conjecture_engine::`.
+      - The matching bullet in `SKIPPED.md` is updated to drop this
+        test from the still-skipped list.
 
 - title: Port conjecture/test_engine.py FailedHealthCheck cluster
   details: |

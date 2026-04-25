@@ -1262,3 +1262,209 @@ fn test_discards_invalid_db_entries_pareto() {
     assert!(db.fetch(&pareto).is_empty());
     assert_eq!(runner.call_count, 0);
 }
+
+// -----------------------------------------------------------------------
+// Monkeypatch cluster — upstream replaces
+// `ConjectureRunner.generate_new_examples` with a single
+// `cached_test_function(seed)` call to seed the initial buffer, or
+// patches `engine_module.MAX_SHRINKS` / `CACHE_SIZE` to cap a loop.
+// The native port replaces those monkeypatches with explicit
+// `runner.cached_test_function(seed)` before `runner.run()` and with
+// `NativeRunnerSettings::max_shrinks(n)` / `cache_size(n)` overrides.
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_shrinks_both_interesting_examples() {
+    // Seed `(1,)` and a test function that records `interesting_origin(n & 1)`
+    // for the drawn integer.  The all-simplest probe at the head of run()'s
+    // generation phase finds the n=0 case (origin 0); seeding finds the
+    // n=1 case (origin 1).  Both shrink to their respective minima.
+    let rng = SmallRng::seed_from_u64(0);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let n = data.draw_integer(0, 255);
+            data.mark_interesting(interesting_origin(Some((n & 1) as i64)));
+        },
+        NativeRunnerSettings::new(),
+        rng,
+    );
+    runner.cached_test_function(&[ChoiceValue::Integer(1)]);
+    runner.run();
+
+    let origin0 = runner
+        .interesting_examples
+        .get(&interesting_origin(Some(0)))
+        .expect("origin 0 should be recorded");
+    let origin1 = runner
+        .interesting_examples
+        .get(&interesting_origin(Some(1)))
+        .expect("origin 1 should be recorded");
+    assert_eq!(origin0.choices, vec![ChoiceValue::Integer(0)]);
+    assert_eq!(origin1.choices, vec![ChoiceValue::Integer(1)]);
+}
+
+#[test]
+fn test_shrinking_from_mostly_zero() {
+    // Seed buffer `(0,)*5 + (2,)`.  Test function draws six integers and
+    // marks interesting when any is non-zero.  Shrinker should reduce the
+    // last value from 2 to 1 while leaving the leading zeros alone.
+    let rng = SmallRng::seed_from_u64(0);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let mut s = [0i128; 6];
+            for slot in &mut s {
+                *slot = data.draw_integer(0, 255);
+            }
+            if s.iter().any(|&x| x != 0) {
+                data.mark_interesting(interesting_origin(None));
+            }
+        },
+        NativeRunnerSettings::new(),
+        rng,
+    );
+    let seed: Vec<ChoiceValue> = std::iter::repeat_n(ChoiceValue::Integer(0), 5)
+        .chain(std::iter::once(ChoiceValue::Integer(2)))
+        .collect();
+    runner.cached_test_function(&seed);
+    runner.run();
+
+    let example = runner
+        .interesting_examples
+        .values()
+        .next()
+        .expect("at least one interesting example");
+    let expected: Vec<ChoiceValue> = std::iter::repeat_n(ChoiceValue::Integer(0), 5)
+        .chain(std::iter::once(ChoiceValue::Integer(1)))
+        .collect();
+    assert_eq!(example.choices, expected);
+}
+
+#[test]
+fn test_discarding() {
+    // Seed buffer `(False, True) * 10` and a test function that wraps
+    // each boolean in a span flagged as discarded when False.  The
+    // shrinker reduces the choice sequence to ten Trues — the minimum
+    // count that still satisfies the `count == 10` exit condition.
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(300)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let mut count = 0;
+            while count < 10 {
+                data.start_span(SOME_LABEL);
+                let b = data.draw_boolean(0.5);
+                if b {
+                    count += 1;
+                }
+                data.stop_span_with_discard(!b);
+            }
+            data.mark_interesting(interesting_origin(None));
+        },
+        settings,
+        rng,
+    );
+    let mut seed: Vec<ChoiceValue> = Vec::with_capacity(20);
+    for _ in 0..10 {
+        seed.push(ChoiceValue::Boolean(false));
+        seed.push(ChoiceValue::Boolean(true));
+    }
+    runner.cached_test_function(&seed);
+    runner.run();
+
+    let example = runner
+        .interesting_examples
+        .values()
+        .next()
+        .expect("at least one interesting example");
+    let expected: Vec<ChoiceValue> = std::iter::repeat_n(ChoiceValue::Boolean(true), 10).collect();
+    assert_eq!(example.choices, expected);
+}
+
+#[test]
+fn test_prefix_cannot_exceed_buffer_size() {
+    // `buffer_size_limit(10)` caps a single test case's choice-byte
+    // cost to 10 bytes.  The test function draws booleans until one is
+    // False; each boolean contributes 1 byte to `data.length`, so paths
+    // of length 10 (all True) overrun and stop early.  The runner's
+    // data tree exhausts after generating each of the 10 valid paths
+    // (lengths 0–9, i.e. zero or more Trues followed by a False).
+    let rng = SmallRng::seed_from_u64(0);
+    let buffer_size = 10;
+    let settings = NativeRunnerSettings::new()
+        .max_examples(500)
+        .buffer_size_limit(buffer_size);
+    let mut runner = NativeConjectureRunner::new(
+        move |data: &mut NativeConjectureData| {
+            while data.draw_boolean(0.5) {}
+        },
+        settings,
+        rng,
+    );
+    runner.run();
+    assert_eq!(runner.valid_examples, buffer_size);
+}
+
+#[test]
+fn test_will_evict_entries_from_the_cache() {
+    // `cache_size(5)` caps the LRU.  Each outer iteration of 10
+    // distinct keys evicts the entries from the previous iteration's
+    // tail (only the last 5 inserted survive into the next round), so
+    // every one of the 30 calls misses the cache and `count` lands at
+    // 30.  Without the eviction (e.g. with cache_size large enough to
+    // hold all 10 keys) the second and third iterations would all hit
+    // the cache and `count` would stay at 10.
+    let count = Rc::new(RefCell::new(0usize));
+    let count_clone = count.clone();
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new().cache_size(5);
+    let mut runner = NativeConjectureRunner::new(
+        move |data: &mut NativeConjectureData| {
+            data.draw_integer(0, 255);
+            *count_clone.borrow_mut() += 1;
+        },
+        settings,
+        rng,
+    );
+    for _ in 0..3 {
+        for n in 0i128..10 {
+            runner.cached_test_function(&[ChoiceValue::Integer(n)]);
+        }
+    }
+    assert_eq!(*count.borrow(), 30);
+}
+
+#[test]
+fn test_simulate_to_evicted_data() {
+    // `cache_size(1)` so the second `cached_test_function` evicts the
+    // first.  Tree simulation walks the recorded data tree without
+    // touching the LRU or `call_count`, so the trailing
+    // `cached_test_function([0])` still misses the (evicted) cache and
+    // re-executes — bumping `call_count` to 3 even though the tree
+    // already knows the [0] path.
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new().cache_size(1);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            data.draw_integer(i128::MIN, i128::MAX);
+        },
+        settings,
+        rng,
+    );
+    runner.cached_test_function(&[ChoiceValue::Integer(0)]);
+    runner.cached_test_function(&[ChoiceValue::Integer(1)]);
+    assert_eq!(runner.call_count, 2);
+
+    let sim = runner
+        .tree()
+        .simulate_test_function(&[ChoiceValue::Integer(0)]);
+    assert!(sim, "tree should still know about choice [0]");
+    runner.cached_test_function(&[ChoiceValue::Integer(0)]);
+    assert_eq!(runner.call_count, 3);
+}
