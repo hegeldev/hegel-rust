@@ -532,6 +532,63 @@ the file as a whole is native-gated because the rest of the module
 references `__native_test_internals`). Port those; skip the
 runner-attribute subset individually.
 
+### Outer `@given` driving an inner `NativeConjectureRunner`
+
+A small but distinct shape (canonical example:
+`nocover/test_explore_arbitrary_languages.py`): the upstream test is
+decorated `@given(st.data())` with a body that draws an arbitrary
+"language" (recursive enum tree), constructs a `ConjectureRunner` with
+`max_examples=1` plus a test function that walks the tree, and runs
+it. The outer `@given` is *fuzzing the engine itself* across diverse
+choice-graph shapes; the inner runner's bookkeeping isn't asserted on,
+only `assume(runner.interesting_examples)`.
+
+Port shape:
+
+- Outer is `Hegel::new(|tc| { ... }).run()`. Generators are public.
+- Inner is `NativeConjectureRunner::new(test_fn, NativeRunnerSettings::new()
+  .max_examples(1).suppress_health_check(...), SmallRng::seed_from_u64(seed)).run()`.
+- The inner test fn needs `'static`, so capture cloned generator
+  handles and `let outer_tc = tc.clone();` (`TestCase: Clone`) up
+  front. From inside the inner closure, `outer_tc.draw(handle.clone())`
+  extends the language tree on demand, mirroring the Python
+  `data.draw(nodes)` inside the inner runner's body. The outer `tc` is
+  alive for the whole outer test function and the inner runner runs
+  synchronously, so the clone's references stay valid. (Distinct from
+  `tests/hypothesis/conjecture_engine.rs::test_interleaving_engines`,
+  whose *outer* is itself a `NativeConjectureRunner` and which captures
+  by raw pointer.)
+- After `runner.run()`, gate with
+  `tc.assume(!runner.interesting_examples.is_empty())` so cases that
+  didn't reach an interesting outcome don't count.
+- `phases=set(default) - {Phase.shrink}` on the outer test has no
+  analog (no `Phase` knob); drop it. The tested behaviour — the inner
+  runner not crashing on arbitrary languages — is independent of
+  outer-shrink.
+- The outer 100-case default may dominate per-test budget when each
+  case shrinks deeply-recursive trees. `Settings::new().test_cases(20)`
+  is fine — note in the docstring that the upstream is `nocover/` for
+  the same slow-by-nature reason.
+
+Tests of this shape are also a useful surfacer of latent native-engine
+panics: they reach choice-graph shapes hand-coded test fns don't. When
+a shrinker pass in `src/native/shrinker/` panics under such a port, the
+fix is usually one of two:
+
+- **Arithmetic overflow on a saturating-cast value the new test
+  reaches** (`bin_search_down`'s `lo + 1` at `i128::MAX` from a
+  `f64::MAX as i128` cast). Switch to `checked_add` / `saturating_*`.
+- **A precondition assert that's no longer true mid-pass** (e.g.
+  `Shrinker::replace`'s `assert!(i < attempt.len())` after an earlier
+  pass shortened `current_nodes`, or a kind-mismatch when the index now
+  points at a different `ChoiceKind`). Treat the impossible
+  replacement as a failed attempt and `return false` rather than
+  panicking — the surrounding `bin_search_down` / `consider` callers
+  are written to retry on `false`.
+
+Commit the engine fix separately from the test port, with a regression
+rationale naming the test that surfaced it.
+
 ## Style
 
 - Keep each `#[test]` close in spirit to the Python original, with a similar
