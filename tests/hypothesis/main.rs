@@ -42,6 +42,7 @@ mod nocover_characters;
 mod nocover_collective_minimization;
 mod nocover_conjecture_engine;
 mod nocover_conjecture_utils;
+mod nocover_database_agreement;
 mod nocover_database_usage;
 mod nocover_deferred_errors;
 mod nocover_dynamic_variable;
