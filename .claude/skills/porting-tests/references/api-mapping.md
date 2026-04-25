@@ -1527,6 +1527,68 @@ children. If `keys()` on the Rust side returns a `Vec` in a declared
 order (walks an underlying `VecDeque` / `LinkedList`, or yields
 indices in shrink order), assert that order directly.
 
+## Recursive `gs::deferred` outputs: tame the Rust stack
+
+Native-mode generation through `gs::deferred` produces much deeper
+recursive trees than the Hypothesis server (whose wire protocol bounds
+depth) and lacks the leaf-bias for high-branching grammars that
+Hypothesis applies in `ConjectureData.draw`. Python tests that walk
+those trees recursively port literally just fine on the server backend
+but blow the Rust stack on debug builds under `--features native`,
+*before* the shrinker has a chance to converge. Two distinct sites
+need iterative rewrites:
+
+1. **User-side recursive predicates and evaluators.** A
+   `match self; recurse children` walk is the natural Python port and
+   the natural Rust port, but it overflows on the deep
+   trees native generation reaches. Rewrite as a `Vec<&Node>`
+   work-stack loop. For boolean predicates (e.g. `div_subterms`),
+   one stack suffices. For post-order combiners (e.g. `evaluate`
+   that adds / divides children), push two-phase commands —
+   `Eval(node)` / `ReduceAdd` / `ReduceDiv` — onto a work stack and
+   accumulate intermediate values onto a separate `Vec<i128>`.
+   See `tests/hypothesis/quality_shrink_quality.rs::evaluate` for the
+   shape.
+
+2. **Auto-derived `Drop` for `Box<…>`-recursive enums.** Rust's
+   default `Drop` for `enum Expr { Add(Box<Expr>, Box<Expr>), … }`
+   is itself recursive: `Box::drop` runs the inner `Expr`'s `Drop`,
+   which runs its children's `Box::drop`, and so on. Deep trees from
+   native `gs::deferred` overflow on free, *even when the test body
+   is `#[ignore]`d* (Drop runs as the value goes out of scope at the
+   end of `minimal()`). Add an explicit `impl Drop` that pulls
+   children into a `Vec<Expr>` work-stack, replacing each
+   pulled-out child with a leaf so the post-loop auto-drop only
+   walks leaves:
+
+   ```rust
+   impl Drop for Expr {
+       fn drop(&mut self) {
+           let mut stack: Vec<Expr> = Vec::new();
+           if let Expr::Add(l, r) | Expr::Div(l, r) = self {
+               stack.push(std::mem::replace(l.as_mut(), Expr::Int(0)));
+               stack.push(std::mem::replace(r.as_mut(), Expr::Int(0)));
+           }
+           while let Some(mut node) = stack.pop() {
+               if let Expr::Add(l, r) | Expr::Div(l, r) = &mut node {
+                   stack.push(std::mem::replace(l.as_mut(), Expr::Int(0)));
+                   stack.push(std::mem::replace(r.as_mut(), Expr::Int(0)));
+               }
+           }
+       }
+   }
+   ```
+
+If the test's witness pattern actually depends on the missing
+leaf-bias (the calculator-benchmark fixed-point shape — N-of-M
+recursive vs leaf branches, M > 1), the shrinker still won't
+converge under native. `#[ignore]` it with
+`#[cfg_attr(feature = "native", ignore = "...")]` and file the
+`gs::deferred` leaf-bias TODO. The iterative-drop and iterative-walk
+shapes above are still required so the file *compiles and links*
+without crashing during teardown — they're independent of whether
+the test asserts.
+
 ## Glob-importing from `hegel`
 
 Python's `from hypothesis import *` / `from hypothesis.strategies import *`
