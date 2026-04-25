@@ -887,6 +887,23 @@ Individually-skipped tests (rest of the file is ported):
   non-hypothesis tests, which is pytest-plugin integration with no
   hegel-rust counterpart.
 
+- `test_capture.py` (in `tests/pytest/`) — every test drives the
+  `pytester` plugin (`testdir.makepyfile`/`testdir.runpytest`/
+  `testdir.runpytest_subprocess`) to spawn pytest subprocesses and
+  assert on pytest-specific behaviour: the `--capture={no,fd}` pytest
+  CLI flag's effect on Hypothesis verbose output ("Trying example"
+  visibility), `LC_ALL`/`LANG` `monkeypatch` interaction with pytest's
+  unicode emission, pytest's `__tracebackhide__` line-number framing
+  around `FailedHealthCheck` reporting, and pytest's deprecation
+  reporting when a `@composite`-decorated function is collected as a
+  test (`assert_outcomes(failed=1)`). Also imports `_CI_VARS` and
+  `escape_unicode_characters` from `hypothesis._settings` /
+  `hypothesis.internal.compat` and uses `pytest.mark.parametrize` /
+  `pytest.mark.xfail`. hegel-rust is not a pytest plugin and has no
+  pytest-capture / `--capture` / `__tracebackhide__` /
+  `composite`-as-test-collection surface — the whole file is
+  pytest-plugin integration with no hegel-rust counterpart.
+
 - `test_sideeffect_warnings.py` — all tests exercise Hypothesis's Python-specific
   import-time initialization infrastructure: `_hypothesis_globals.in_initialization`
   (a Python module attribute tracking import phase), `hypothesis.configuration`
