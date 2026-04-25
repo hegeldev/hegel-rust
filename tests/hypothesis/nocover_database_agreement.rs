@@ -14,7 +14,6 @@ use hegel::__native_test_internals::{
 };
 use hegel::generators as gs;
 use hegel::stateful::{Rule, StateMachine, Variables, run as run_state_machine, variables};
-use hegel::{Hegel, Settings};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -104,14 +103,10 @@ impl StateMachine for DatabaseAgreementMachine {
     }
 }
 
-#[test]
-fn test_database_equivalence() {
-    Hegel::new(|tc: TestCase| {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let exampledir = tmp.path().join("examples");
-        let machine = DatabaseAgreementMachine::new(&tc, exampledir.to_str().unwrap());
-        run_state_machine(machine, tc);
-    })
-    .settings(Settings::new().test_cases(20).database(None))
-    .run();
+#[hegel::test(test_cases = 20, database = None)]
+fn test_database_equivalence(tc: TestCase) {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let exampledir = tmp.path().join("examples");
+    let machine = DatabaseAgreementMachine::new(&tc, exampledir.to_str().unwrap());
+    run_state_machine(machine, tc);
 }
