@@ -42,7 +42,7 @@ pub fn dispatch_request(
             let label = map_get(payload, "label")
                 .and_then(as_u64)
                 .expect("start_span payload missing label");
-            ntc.span_stack.push((ntc.nodes.len(), label.to_string()));
+            ntc.start_span(label);
             Ok(Value::Null)
         }
         "stop_span" => {
@@ -53,15 +53,7 @@ pub fn dispatch_request(
             let discard = map_get(payload, "discard")
                 .and_then(as_bool)
                 .expect("stop_span payload missing discard");
-            if discard {
-                ntc.has_discards = true;
-            }
-            let (start, label) = ntc
-                .span_stack
-                .pop()
-                .expect("stop_span without matching start_span");
-            let end = ntc.nodes.len();
-            ntc.record_span(start, end, label);
+            ntc.stop_span(discard);
             Ok(Value::Null)
         }
         "new_collection" => {

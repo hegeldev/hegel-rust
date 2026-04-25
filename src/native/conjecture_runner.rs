@@ -440,9 +440,7 @@ impl NativeConjectureData {
     }
 
     pub fn start_span(&mut self, label: u64) {
-        self.ntc
-            .span_stack
-            .push((self.ntc.nodes.len(), label.to_string()));
+        self.ntc.start_span(label);
     }
 
     pub fn stop_span(&mut self) {
@@ -454,12 +452,7 @@ impl NativeConjectureData {
     /// loops use it to mark unsuccessful attempts so the shrinker's
     /// `remove_discarded` pass can prune them.
     pub fn stop_span_with_discard(&mut self, discard: bool) {
-        if let Some((start, label)) = self.ntc.span_stack.pop() {
-            self.ntc.record_span(start, self.ntc.nodes.len(), label);
-            if discard {
-                self.ntc.has_discards = true;
-            }
-        }
+        self.ntc.stop_span(discard);
     }
 
     pub fn nodes(&self) -> &[ChoiceNode] {
