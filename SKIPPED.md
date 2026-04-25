@@ -2427,6 +2427,70 @@ is acceptance for the corresponding follow-up.
   two rows (`st.lists(st.integers(), min_size=5)` and
   `st.lists(st.text(), min_size=2, unique=True)`) are ported.
 
+The `conjecture/test_test_data.py::*` entries below are parked
+awaiting follow-up additions to `NativeTestCase` /
+`NativeConjectureData` in `src/native/`. The three tests that map to
+the existing `NativeTestCase::for_choices` / `weighted` /
+`draw_bytes_forced` / `record_span` surface are ported in
+`tests/hypothesis/conjecture_test_data.rs`.
+
+- `conjecture/test_test_data.py::test_cannot_draw_after_freeze`,
+  `::test_can_double_freeze`, `::test_calls_concluded_implicitly` —
+  `NativeTestCase` has no public `freeze()` method or `frozen` flag
+  distinct from `status`. Adding a `freeze()` that conditionally
+  promotes `status` to `Valid` plus a `DataObserver`-style
+  `conclude_test` callback is the unblock.
+- `conjecture/test_test_data.py::test_can_mark_interesting`,
+  `::test_can_mark_invalid`, `::test_can_mark_invalid_with_why` —
+  `mark_interesting` / `mark_invalid` live on the higher-level
+  `NativeConjectureData`, whose `for_choices` constructor is private.
+  A public `NativeConjectureData::for_choices` (or moving the marks
+  down to `NativeTestCase`) is the unblock.
+- `conjecture/test_test_data.py::test_notes_repr`,
+  `::test_can_note_non_str`, `::test_can_note_str_as_non_repr`,
+  `::test_events_are_noted` — no `note()` / `output` / `events` API
+  on the native test-case types.
+- `conjecture/test_test_data.py::test_examples_show_up_as_discarded`,
+  `::test_can_override_label`,
+  `::test_examples_support_negative_indexing`,
+  `::test_examples_out_of_bounds_index`, `::test_child_indices`,
+  `::test_example_equality`, `::test_example_depth_marking`,
+  `::test_has_examples_even_when_empty`,
+  `::test_has_cached_examples_even_when_overrun` —
+  `NativeTestCase` has no draw-by-strategy method that auto-creates
+  spans. `Span` is a flat struct with no `parent` / `children` /
+  `depth` / `choice_count` / `discarded` fields, and `spans` is a
+  plain `Vec` rather than a `Spans` collection wrapping
+  negative-indexing / out-of-bounds-error semantics.
+- `conjecture/test_test_data.py::test_can_observe_draws` — no
+  `DataObserver` API on `NativeTestCase` / `NativeConjectureData`.
+- `conjecture/test_test_data.py::test_will_mark_too_deep_examples_as_invalid`
+  — uses Hypothesis's `MAX_DEPTH` constant and recursive `.map`
+  strategy nesting; native engine has no MAX_DEPTH analog and
+  `NativeTestCase` has no draw-by-strategy method.
+- `conjecture/test_test_data.py::test_empty_strategy_is_invalid` —
+  uses `st.nothing()`; no native counterpart at the
+  `NativeTestCase.draw(strategy)` layer.
+- `conjecture/test_test_data.py::test_result_is_overrun` — no
+  `as_result()` method on `NativeTestCase`. The closest analog
+  (`status == Some(EarlyStop)`) is already covered by the ported
+  `test_draw_past_end_sets_overflow`.
+- `conjecture/test_test_data.py::test_structural_coverage_is_cached`,
+  `::test_examples_create_structural_coverage`,
+  `::test_discarded_examples_do_not_create_structural_coverage`,
+  `::test_children_of_discarded_examples_do_not_create_structural_coverage`
+  — no `structural_coverage()` / `tags` API on the native engine.
+- `conjecture/test_test_data.py::test_overruns_at_exactly_max_length`
+  — uses `ConjectureData(prefix=..., random=None, max_choices=1)`
+  together with `buffer_size_limit(1)`; `NativeTestCase` exposes only
+  the `for_choices` and `new_random` constructors, with no
+  prefix-plus-`max_choices`-but-no-RNG combination.
+- `conjecture/test_test_data.py::test_closes_interval_on_error_in_strategy`,
+  `::test_does_not_double_freeze_in_interval_close` — assume that
+  `NativeTestCase` exposes a `draw(strategy)` method that closes open
+  spans on exception. Native routes strategy draws through
+  Hegel-side `Generator::do_draw`, not the native test case.
+
 - `test_crosshair.py` (in `crosshair/`) — entire file exercises Hypothesis's
   `backend="crosshair"` integration with the third-party `crosshair`
   symbolic-execution library (`import crosshair`,
