@@ -20,6 +20,7 @@ mod conjecture_optimiser;
 mod conjecture_order_shrinking;
 mod conjecture_provider_contract;
 mod conjecture_shrinker;
+mod conjecture_test_data;
 mod control;
 mod core;
 mod database_backend;
