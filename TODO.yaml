@@ -282,3 +282,228 @@
         `cargo test --features native --test hypothesis
         quality_shrink_quality::test_calculator_benchmark` without the
         `#[cfg_attr(feature = "native", ignore = "...")]` gate.
+
+- title: Add NativeTestCase freeze() + concluded-callback surface
+  details: |
+    Port `test_cannot_draw_after_freeze`, `test_can_double_freeze`, and
+    `test_calls_concluded_implicitly` from
+    `conjecture/test_test_data.py`. All three exercise Hypothesis's
+    explicit `data.freeze()` / `data.frozen` flag; the third also
+    asserts that the registered `DataObserver.conclude_test(status,
+    reason)` callback fires from inside `freeze()`.
+
+    Port path: add `pub fn freeze(&mut self)` on `NativeTestCase` that
+    sets `status = Some(Status::Valid)` if currently `None` (and is
+    idempotent on re-call — Hypothesis's freeze is). `pre_choice()` in
+    `src/native/core/state.rs` already panics with `"Frozen: ..."` when
+    `status.is_some()`, so post-freeze draws will fail correctly. For
+    `test_calls_concluded_implicitly`, fold the `DataObserver` work
+    into the separate observer TODO below and gate that test there.
+
+    Acceptance criteria:
+      - `test_cannot_draw_after_freeze`, `test_can_double_freeze`, and
+        `test_calls_concluded_implicitly` compile and pass under
+        `cargo test --features native --test hypothesis
+        conjecture_test_data::`.
+      - The matching bullets in `SKIPPED.md` (under
+        `conjecture/test_test_data.py::test_cannot_draw_after_freeze`,
+        `::test_can_double_freeze`, `::test_calls_concluded_implicitly`)
+        are removed.
+
+- title: Expose NativeConjectureData::for_choices + mark_* via __native_test_internals
+  details: |
+    Port `test_can_mark_interesting`, `test_can_mark_invalid`, and
+    `test_can_mark_invalid_with_why` from
+    `conjecture/test_test_data.py`. All three need to construct a
+    `NativeConjectureData` from a fixed choice prefix and then call
+    `mark_interesting(origin)` or `mark_invalid()` (with optional
+    "why") on the test case.
+
+    Port path: `NativeConjectureData::new(ntc, buffer_size_limit)` is
+    private in `src/native/conjecture_runner.rs`. Add a public
+    `pub fn for_choices(choices: &[ChoiceValue]) -> Self` that wraps
+    `NativeTestCase::for_choices(choices, None)` with the default
+    `CONJECTURE_BUFFER_SIZE`. Extend `mark_invalid` to accept an
+    optional `why: Option<String>` and stash it on the data so a
+    new `pub fn events(&self) -> &HashMap<String, String>` accessor
+    can mirror Hypothesis's `data.events == {"invalid because": why}`.
+    The test catches the `MarkPanic` payload via
+    `std::panic::catch_unwind` plus `AssertUnwindSafe`.
+
+    Acceptance criteria:
+      - `test_can_mark_interesting`, `test_can_mark_invalid`, and
+        `test_can_mark_invalid_with_why` compile and pass under
+        `cargo test --features native --test hypothesis
+        conjecture_test_data::`.
+      - The matching bullets in `SKIPPED.md` are removed.
+
+- title: Add NativeTestCase note() / output / events surface
+  details: |
+    Port the four note/event tests from
+    `conjecture/test_test_data.py`:
+      - `test_notes_repr` — `d.note(b"hi")` then `repr(b"hi") in d.output`
+      - `test_can_note_non_str` — `d.note(object())` then
+        `repr(x) in d.output`
+      - `test_can_note_str_as_non_repr` — `d.note("foo")` then
+        `d.output == "foo"`
+      - `test_events_are_noted` — `d.events["hello"] = ""` then
+        `"hello" in d.events`
+
+    Port path: add `output: String` and `events: HashMap<String,
+    String>` fields plus `pub fn note<T: Debug>(&mut self, x: T)` and
+    `pub fn output(&self) / events(&mut self)` accessors on
+    `NativeTestCase`. `note(&str)` should append the string verbatim;
+    other types should `format!("{:?}", x)` (the closest analog of
+    Python's `repr`). Two of the four tests assert on Python `repr`
+    formatting (`repr(b"hi")` = `"b'hi'"`, `repr(<object>)` = `"<object
+    at 0x...>"`); those don't translate exactly, so port them as
+    "`note` of a non-string yields *some* `Debug` rendering containing
+    the value's content" rather than asserting Python's exact repr.
+
+    Acceptance criteria:
+      - All four tests compile and pass.
+      - The matching bullets in `SKIPPED.md` are removed.
+
+- title: Add NativeTestCase draw-by-strategy + span tree surface
+  details: |
+    Port the strategy-driven span-introspection cluster from
+    `conjecture/test_test_data.py`:
+      - `test_examples_show_up_as_discarded`
+      - `test_can_override_label`
+      - `test_examples_support_negative_indexing`
+      - `test_examples_out_of_bounds_index`
+      - `test_child_indices`
+      - `test_example_equality`
+      - `test_example_depth_marking`
+      - `test_has_examples_even_when_empty`
+      - `test_has_cached_examples_even_when_overrun`
+      - `test_closes_interval_on_error_in_strategy`
+      - `test_does_not_double_freeze_in_interval_close`
+      - `test_will_mark_too_deep_examples_as_invalid` (bundled — also
+        needs `MAX_DEPTH`)
+
+    Port path: add `pub fn draw<G: Generator<T>, T>(&mut self, g: G)
+    -> T` on `NativeTestCase` (or on a higher-level data wrapper) that
+    auto-records a span around each draw and closes open spans on
+    panic. Extend `Span` (in `src/native/core/state.rs`) with
+    `parent: Option<usize>`, `children: Vec<usize>`, `depth: u32`,
+    `choice_count: usize`, and `discarded: bool` fields, and replace
+    `pub spans: Vec<Span>` with a `Spans` newtype that supports
+    Python-style negative indexing and out-of-bounds error semantics
+    via accessor methods. Add a `MAX_DEPTH` constant matching
+    Hypothesis's recursion-depth limit and trip `Status::Invalid` when
+    nested `.map`/`.flat_map` strategies exceed it.
+
+    This is a substantial native-engine expansion; split into smaller
+    commits if the PR feels too large. The natural split is
+    (1) Span tree fields + draw-by-strategy auto-span recording,
+    (2) Spans newtype with index semantics,
+    (3) MAX_DEPTH enforcement.
+
+    Acceptance criteria:
+      - All 12 tests compile and pass under
+        `cargo test --features native --test hypothesis
+        conjecture_test_data::`.
+      - The matching bullets in `SKIPPED.md` are removed.
+
+- title: Add NativeTestCase DataObserver hook
+  details: |
+    Port `test_can_observe_draws` from
+    `conjecture/test_test_data.py`. The test installs a
+    `LoggingObserver(DataObserver)` on `ConjectureData.for_choices`
+    and asserts that `draw_boolean`, `draw_integer`, and
+    `conclude_test` callbacks fire in order with the expected
+    `(value, was_forced, constraints)` / `(status, origin)` payloads.
+
+    Port path: add a `DataObserver` trait under
+    `src/native/core/state.rs` with `draw_boolean`, `draw_integer`,
+    `draw_float`, `draw_bytes`, `draw_string`, and `conclude_test`
+    methods (all default-no-op). Thread an
+    `Option<Box<dyn DataObserver>>` field through `NativeTestCase`,
+    populated by an extra constructor parameter on
+    `for_choices`. Each draw method calls the observer hook after
+    appending the choice node; `freeze()` (see the freeze TODO above)
+    calls `conclude_test`.
+
+    Acceptance criteria:
+      - `test_can_observe_draws` compiles and passes.
+      - The matching bullet in `SKIPPED.md` is removed.
+
+- title: Add NativeTestCase as_result() / Overrun sentinel
+  details: |
+    Port `test_result_is_overrun` from
+    `conjecture/test_test_data.py`. The test draws past the prefix
+    end and asserts `d.as_result() is Overrun`.
+
+    Port path: add `pub fn as_result(&self) -> NativeResult` on
+    `NativeTestCase` (or a free function) returning a
+    `NativeResult::Overrun` when `status == Some(Status::EarlyStop)`
+    and a `NativeResult::Conjecture(...)` snapshot otherwise. Mirror
+    Hypothesis's `_Overrun` singleton via a unit-struct or enum
+    variant exported from `__native_test_internals`. The existing
+    `test_draw_past_end_sets_overflow` asserts on the underlying
+    `status` directly; this test asserts the same condition through
+    the higher-level `as_result()` accessor.
+
+    Acceptance criteria:
+      - `test_result_is_overrun` compiles and passes.
+      - The matching bullet in `SKIPPED.md` is removed.
+
+- title: Add NativeTestCase prefix-plus-max_choices constructor
+  details: |
+    Port `test_overruns_at_exactly_max_length` from
+    `conjecture/test_test_data.py`. Upstream constructs
+    `ConjectureData(prefix=[True], random=None, max_choices=1)`
+    inside `buffer_size_limit(1)` and asserts that drawing past
+    `max_choices` sets status to `OVERRUN`.
+
+    Port path: add `NativeTestCase::for_prefix_with_max(prefix:
+    &[ChoiceValue], max_choices: usize) -> Self` (a no-RNG variant
+    of the existing `for_probe` constructor that takes both prefix
+    and max_size without requiring an RNG). `pre_choice()` already
+    enforces `max_size`-based overrun, so the rest of the path is
+    in place.
+
+    Acceptance criteria:
+      - `test_overruns_at_exactly_max_length` compiles and passes.
+      - The matching bullet in `SKIPPED.md` is removed.
+
+- title: Add NativeTestCase structural_coverage + tags surface
+  details: |
+    Port the four `structural_coverage` tests from
+    `conjecture/test_test_data.py`:
+      - `test_structural_coverage_is_cached`
+      - `test_examples_create_structural_coverage`
+      - `test_discarded_examples_do_not_create_structural_coverage`
+      - `test_children_of_discarded_examples_do_not_create_structural_coverage`
+
+    Port path: add a `structural_coverage(label: u64) -> CoverageTag`
+    free function (cached so equal labels return the same `Arc<...>`
+    or `&'static` token) and a `tags: HashSet<CoverageTag>` field on
+    `NativeTestCase` populated when a non-discarded span closes.
+    Mirrors Hypothesis's `structural_coverage` interning and the
+    `discard` propagation rule (a discarded ancestor suppresses every
+    child label too — `test_children_of_discarded_examples_*` pins
+    that exact rule).
+
+    Acceptance criteria:
+      - All 4 tests compile and pass.
+      - The matching bullets in `SKIPPED.md` are removed.
+
+- title: Add NativeTestCase st.nothing() / draw-by-strategy invalid path
+  details: |
+    Port `test_empty_strategy_is_invalid` from
+    `conjecture/test_test_data.py`. Upstream calls
+    `d.draw(st.nothing())` and asserts `status == Status.INVALID`.
+    Bundled with the draw-by-strategy TODO above (a `nothing()`
+    strategy is meaningless without a draw-by-strategy entry point on
+    `NativeTestCase`), so this entry only completes once that TODO's
+    draw-by-strategy work lands.
+
+    Port path: ensure the draw-by-strategy method translates a
+    `gs::nothing()`-equivalent (an always-empty strategy) into a
+    `mark_invalid()` call on the test case.
+
+    Acceptance criteria:
+      - `test_empty_strategy_is_invalid` compiles and passes.
+      - The matching bullet in `SKIPPED.md` is removed.
