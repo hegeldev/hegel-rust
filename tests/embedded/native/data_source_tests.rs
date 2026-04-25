@@ -49,9 +49,17 @@ fn start_and_stop_span_return_ok() {
     ds.start_span(17).unwrap();
     ds.stop_span(true).unwrap();
 
-    // Empty spans (start == end) are not recorded.
+    // Both spans are recorded even though no choices were drawn between
+    // start and stop, mirroring Hypothesis's `ConjectureData.spans` which
+    // keeps empty spans (see `test_has_examples_even_when_empty`).
     let spans = NativeDataSource::take_spans(&handle);
-    assert!(spans.is_empty());
+    assert_eq!(spans.len(), 2);
+    assert_eq!(spans[0].label, "42");
+    assert_eq!(spans[0].start, spans[0].end);
+    assert!(!spans[0].discarded);
+    assert_eq!(spans[1].label, "17");
+    assert_eq!(spans[1].start, spans[1].end);
+    assert!(spans[1].discarded);
 }
 
 #[test]
