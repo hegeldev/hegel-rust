@@ -1150,9 +1150,10 @@ def destination_has_tests(dest: Path) -> bool:
     if not dest.exists():
         return False
     try:
-        return "#[test]" in dest.read_text()
+        text = dest.read_text()
     except OSError:
         return False
+    return "#[test]" in text or "#[hegel::test" in text
 
 
 def gate_clean_tree() -> tuple[bool, str]:
