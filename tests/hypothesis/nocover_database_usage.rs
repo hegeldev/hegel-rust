@@ -1,25 +1,35 @@
 //! Ported from hypothesis-python/tests/nocover/test_database_usage.py
 //!
-//! Only `test_database_not_created_when_not_used` ports at the public
-//! surface — and only natively, since `NativeDatabase` is exposed via
-//! `__native_test_internals`. The other six tests in the file drive
-//! Python-specific or `find()`-surface behaviour with no Rust analog;
-//! they are listed below and under `SKIPPED.md`.
+//! Only `test_database_not_created_when_not_used` ports — natively,
+//! since `NativeDatabase` is exposed via `__native_test_internals`.
+//! The other six tests in the file all turn on engine database
+//! accumulation behaviour that hegel-rust's native runner doesn't
+//! produce: the upstream `find()` driver saves every distinct
+//! interesting example reached during search and shrinking, plus
+//! pareto-front entries; `NativeConjectureRunner::run()` only mutates
+//! the database via the reuse phase (which deletes invalid entries
+//! and replays existing ones), never auto-saving during generation
+//! or shrinking, and `pareto_front()` is `todo!()`.
 //!
 //! Individually-skipped tests:
 //!
 //! - `test_saves_incremental_steps_in_database`,
 //!   `test_clears_out_database_as_things_get_boring`,
-//!   `test_trashes_invalid_examples`,
-//!   `test_respects_max_examples_in_database_usage` — all drive
-//!   `find(strategy, predicate, settings=settings(database=...),
-//!   database_key=b"...")` and assert on what `InMemoryExampleDatabase`
-//!   accumulates across the search. hegel-rust has no `find()` public
-//!   API (same gap noted by the `test_core.py::test_no_such_example`
-//!   and `test_verbosity.py::test_prints_initial_attempts_on_find`
-//!   skips), so the predicate-driven incremental-save / invalid-trash
-//!   / max-examples behaviour these tests pin down isn't reachable
-//!   from the Rust runner surface.
+//!   `test_trashes_invalid_examples` — assert on `all_values(db)` /
+//!   `non_covering_examples(db)` accumulating multiple distinct
+//!   entries (or shrinking back to zero) over the course of one or
+//!   more `find()` runs. Even at the `NativeConjectureRunner` surface
+//!   the engine doesn't save during generation/shrinking, so the
+//!   accumulation these tests pin down isn't observable. They become
+//!   portable once the native engine grows the auto-save side of
+//!   `pareto_front` / interesting-example saves.
+//!
+//! - `test_respects_max_examples_in_database_usage` — counts
+//!   predicate invocations against `max_examples=10`. Falls under the
+//!   documented `find()` + predicate-call-count skip in
+//!   `porting-tests/references/api-mapping.md`: native re-enters the
+//!   test function for span-mutation attempts, so the predicate-call
+//!   shape Python's `find()` pins down isn't reproducible.
 //!
 //! - `test_does_not_use_database_when_seed_is_forced` — uses pytest's
 //!   `monkeypatch` fixture to set `hypothesis.core.global_force_seed`

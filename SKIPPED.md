@@ -1468,16 +1468,25 @@ Individually-skipped tests (rest of the file is ported):
 
 - `nocover/test_database_usage.py::test_saves_incremental_steps_in_database`,
   `nocover/test_database_usage.py::test_clears_out_database_as_things_get_boring`,
-  `nocover/test_database_usage.py::test_trashes_invalid_examples`,
-  `nocover/test_database_usage.py::test_respects_max_examples_in_database_usage`
-  — all drive `find(strategy, predicate, settings=settings(database=...),
-  database_key=b"...")` and assert on what `InMemoryExampleDatabase`
-  accumulates across the search. hegel-rust has no `find()` public API
-  (same gap as the `test_core.py::test_no_such_example` and
-  `test_verbosity.py::test_prints_initial_attempts_on_find` skips), so
-  the predicate-driven incremental-save / invalid-trash / max-examples
-  behaviour these tests pin down isn't reachable from the Rust runner
-  surface.
+  `nocover/test_database_usage.py::test_trashes_invalid_examples`
+  — assert that `find(strategy, predicate, ...)` accumulates multiple
+  distinct entries in the supplied database (or shrinks them back to
+  zero across runs as the predicate becomes always-false / always-
+  invalid). The native engine doesn't auto-save during generation or
+  shrinking — `NativeConjectureRunner::run()` only mutates the database
+  through the reuse phase (which deletes invalid entries and replays
+  existing ones), and `pareto_front()` is `todo!()`. The public
+  `Hegel::new(...).run()` path saves only the final shrunk
+  counterexample, never intermediates. So the multi-value accumulation
+  these tests pin down isn't observable at either surface; they become
+  portable once the native engine grows the auto-save side of
+  `pareto_front` / interesting-example saves.
+- `nocover/test_database_usage.py::test_respects_max_examples_in_database_usage`
+  — counts predicate invocations against `max_examples=10`. Falls
+  under the documented `find()` + predicate-call-count skip in
+  `porting-tests/references/api-mapping.md`: native re-enters the
+  test function for span-mutation attempts, so the predicate-call
+  shape Python's `find()` pins down isn't reproducible.
 - `nocover/test_database_usage.py::test_does_not_use_database_when_seed_is_forced`
   — uses pytest's `monkeypatch` fixture to set
   `hypothesis.core.global_force_seed` (a Python module-level global) and
