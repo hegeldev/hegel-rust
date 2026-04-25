@@ -2028,6 +2028,22 @@ Individually-skipped tests (rest of the file is ported):
   case harness, and no `hypothesis.extra.django`-style
   `@given`-compatible test-case base class to validate against.
 
+- `test_given_forms.py` (in `tests/django/toystore/`) — django-extra
+  integration tests. Every test exercises `hypothesis.extra.django`
+  (`from_form`, `from_field`, `register_field_strategy`, `TestCase`)
+  against `django.forms` `Form` subclasses (`CustomerForm`,
+  `ManyNumericsForm`, `BasicFieldForm`, `EmailFieldForm`,
+  `URLFieldForm`, `RegexFieldForm`, `UUIDFieldForm`,
+  `ChoiceFieldForm`, `FileFieldsForm`, `StoreForm`,
+  `MultipleCompaniesForm`, etc.), asserting `form.is_valid()` and
+  drilling into `form.data` / `form.files`. The
+  `TestFormsWithModelChoices` class additionally creates `Company`
+  ORM model rows via `Company.objects.create(...)` and uses
+  `forms.ModelChoiceField` / `forms.ModelMultipleChoiceField` against
+  a Django queryset. hegel-rust has no Django integration, no
+  `from_form` / `from_field` form-strategy generator, and no
+  `register_field_strategy` hook for custom Django form fields.
+
 - `test_redis_exampledatabase.py` (in `tests/redis/`) — redis-extra
   integration tests. Every test exercises
   `hypothesis.extra.redis.RedisExampleDatabase`, which wraps a
