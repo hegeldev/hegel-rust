@@ -7,33 +7,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Port conjecture/test_engine.py remaining bookkeeping tests
-  details: |
-    Port the following tests from `conjecture/test_engine.py` into
-    `tests/hypothesis/conjecture_engine.rs`, native-gated. Each needs
-    a small engine-side facility not covered by the other follow-up
-    clusters:
-      - `test_can_navigate_to_a_valid_example` — uses
-        `buffer_size_limit(4)` as a context manager around
-        `runner.run()` to cap a single test case's total byte draws.
-        Port path: add a per-runner override on
-        `NativeRunnerSettings` / `NativeConjectureData` that caps
-        `draw_bytes` to a configurable total rather than the fixed
-        `CONJECTURE_BUFFER_SIZE`.
-      - `test_stops_after_max_examples_when_generating_more_bugs`
-        (parametrized on `examples ∈ {1, 5, 20, 50}`) — the test
-        function `raise`s arbitrary Python exceptions; Hypothesis
-        catches them and records each distinct traceback as an
-        interesting example. Port path: wrap the test function in
-        `catch_unwind`; map non-MarkPanic / non-STOP_TEST_PANIC
-        payloads to `Status::Interesting` with a per-panic
-        `InterestingOrigin` derived from the panic payload's type-id
-        or downcast string.
-
-    Acceptance criteria:
-      - Both tests (1 + 4 parametrized rows) compile and pass.
-      - The matching bullet in `SKIPPED.md` is removed.
-
 - title: Port conjecture/test_engine.py monkeypatch cluster
   details: |
     Port the following tests from `conjecture/test_engine.py`,

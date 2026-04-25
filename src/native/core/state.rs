@@ -138,6 +138,12 @@ pub struct NativeTestCase {
     prefix_nodes: Option<Vec<ChoiceNode>>,
     rng: Option<SmallRng>,
     max_size: usize,
+    /// When true, every draw beyond `prefix` resolves to the kind's
+    /// simplest value rather than panicking on a missing RNG.  Mirrors
+    /// Hypothesis's `ChoiceTemplate("simplest", count=None)` template
+    /// used by `generate_new_examples` to probe the all-zero leaf of
+    /// the choice tree at the start of each generation phase.
+    force_simplest: bool,
     pub nodes: Vec<ChoiceNode>,
     pub status: Option<Status>,
     pub collections: HashMap<i64, ManyState>,
@@ -161,6 +167,7 @@ impl NativeTestCase {
             prefix_nodes: None,
             rng: Some(rng),
             max_size: BUFFER_SIZE,
+            force_simplest: false,
             nodes: Vec::new(),
             status: None,
             collections: HashMap::new(),
@@ -178,6 +185,31 @@ impl NativeTestCase {
             prefix_nodes: prefix_nodes.map(|n| n.to_vec()),
             rng: None,
             max_size: choices.len(),
+            force_simplest: false,
+            nodes: Vec::new(),
+            status: None,
+            collections: HashMap::new(),
+            next_collection_id: 0,
+            variable_pools: Vec::new(),
+            spans: Vec::new(),
+            span_stack: Vec::new(),
+            has_discards: false,
+        }
+    }
+
+    /// A test case that resolves every draw to the kind's simplest
+    /// value, up to `max_size` choices.  Mirrors Hypothesis's
+    /// `cached_test_function((ChoiceTemplate("simplest", count=None),))`
+    /// at the head of `generate_new_examples`: a one-shot probe of the
+    /// all-simplest leaf so the runner discovers tiny counterexamples
+    /// before random exploration kicks in.
+    pub fn for_simplest(max_size: usize) -> Self {
+        NativeTestCase {
+            prefix: Vec::new(),
+            prefix_nodes: None,
+            rng: None,
+            max_size,
+            force_simplest: true,
             nodes: Vec::new(),
             status: None,
             collections: HashMap::new(),
@@ -202,6 +234,7 @@ impl NativeTestCase {
             prefix_nodes: None,
             rng: Some(rng),
             max_size,
+            force_simplest: false,
             nodes: Vec::new(),
             status: None,
             collections: HashMap::new(),
@@ -801,6 +834,8 @@ impl NativeTestCase {
                     Ok((unit(), false))
                 }
             }
+        } else if self.force_simplest {
+            Ok((simplest(), false))
         } else {
             let rng = self
                 .rng
