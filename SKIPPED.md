@@ -2432,7 +2432,10 @@ awaiting follow-up additions to `NativeTestCase` /
 `NativeConjectureData` in `src/native/`. The three tests that map to
 the existing `NativeTestCase::for_choices` / `weighted` /
 `draw_bytes_forced` / `record_span` surface are ported in
-`tests/hypothesis/conjecture_test_data.rs`.
+`tests/hypothesis/conjecture_test_data.rs`. Each cluster's follow-up
+TODO.yaml entry names the native API additions its port lands;
+removing each bullet below is acceptance for the corresponding
+follow-up.
 
 - `conjecture/test_test_data.py::test_cannot_draw_after_freeze`,
   `::test_can_double_freeze`, `::test_calls_concluded_implicitly` —
