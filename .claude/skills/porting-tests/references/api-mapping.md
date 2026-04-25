@@ -869,6 +869,53 @@ boolean, bytes-unbounded, string-full-unicode) — enough to exercise
 the mainline branches of `compute_max_children` / `validate` /
 `to_index` without an enumerator.
 
+## `ConjectureData` direct API (`test_test_data.py`)
+
+`conjecture/test_test_data.py` exercises Hypothesis's `ConjectureData`
+test object directly. Most of its tests rely on engine surface that
+has no native counterpart; the portable subset is small. Read the
+upstream cluster *before* committing to a port — three of 33 tests
+ported on the first pass.
+
+What ports through `NativeTestCase::for_choices(&[...], None)` plus
+direct `weighted` / `draw_bytes_forced` / `record_span` calls and
+`nodes[i].trivial()` reads:
+
+- Status-after-overrun: an extra draw past the end sets
+  `status == Some(Status::EarlyStop)` and `weighted(...)` returns `Err`.
+- Pre/post-freeze comparisons: native has no separate `freeze()`
+  step, so `[trivial() before freeze == trivial() after freeze]`
+  collapses to a single read of `nodes[i].trivial()`.
+- Triviality lookups by `(start, end)`: replay the choice sequence,
+  then `d.spans.iter().find(|s| s.start == u && s.end == v)`.
+  **Hypothesis auto-creates a span around each `data.draw(strategy)`
+  call; native primitives (`ntc.weighted`, `ntc.draw_bytes_forced`,
+  etc.) do NOT.** Mirror the auto-spans by calling
+  `record_span(start, end, label)` after each "logical draw" — without
+  it the `(start, end)` lookup misses and the test fails for the wrong
+  reason.
+
+What does NOT port (individually-skip with a gap-named rationale):
+
+| Hypothesis API used                                  | Native gap                                                                 |
+|------------------------------------------------------|----------------------------------------------------------------------------|
+| `data.freeze()` / `data.frozen` flag                 | no public `freeze()` on `NativeTestCase`; status is the only freeze marker |
+| `data.mark_interesting()` / `data.mark_invalid()`    | live on `NativeConjectureData`, whose `for_choices` constructor is private |
+| `data.note(...)`, `data.output`, `data.events`       | no `note`/`output`/`events` API on either native test-case type            |
+| `data.draw(strategy)` auto-recording spans           | no draw-by-strategy method on `NativeTestCase`; strategies route through `Generator::do_draw` Hegel-side |
+| `data.examples` / `Span.parent`/`.children`/`.depth` | `Span` is `{ start, end, label }` (`src/native/core/state.rs`); no tree shape, no `discarded` flag |
+| `DataObserver`                                       | no observer hook on native draw paths                                      |
+| `MAX_DEPTH` recursion-depth limit                    | no depth limit on native (and no draw-by-strategy method to bound)         |
+| `data.as_result()` / `data.is_overrun`               | no `as_result`; closest analog is `status == Some(Status::EarlyStop)`      |
+| `data.structural_coverage()` / `tags`                | no coverage-tag tracking                                                   |
+| `ConjectureData(prefix=…, random=None, max_choices=N)` | only `for_choices(...)` and `new_random(...)` constructors exist         |
+
+When porting this file, list each skipped test by name in **both**
+the module docstring and `SKIPPED.md` (under "Individually-skipped
+tests") so the unported-gate sees them and a future agent can pick
+them up as each native gap closes — the gap names above are the
+acceptance criteria for un-skipping.
+
 ## Conjecture utilities (`conjecture/utils.py`)
 
 A small native-only surface for the `nocover/test_conjecture_utils.py`
