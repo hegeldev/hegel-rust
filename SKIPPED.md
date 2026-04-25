@@ -1883,6 +1883,16 @@ Individually-skipped tests (rest of the file is ported):
   hegel-rust has no numpy integration and no global numpy-PRNG state to
   seed/restore.
 
+- `test_from_type.py` (in `tests/numpy/`) — numpy-extra integration
+  tests. Every test exercises `st.from_type(...)` against numpy and
+  `hypothesis.extra.numpy` types (`np.dtype`, `np.object_`, `np.void`,
+  `np.ndarray[typ]`, `NDArray`, `ArrayLike`, `_NestedSequence`,
+  `_SupportsArray`) and asserts numpy-specific shape / dtype / coercion
+  behaviour (`isinstance(x, np.ndarray)`, `arr.dtype.type == typ`,
+  `np.array(arr_like)`, `np.asarray(arr).dtype.kind`). hegel-rust has
+  no numpy integration or counterpart for resolving numpy types via
+  `from_type`.
+
 - `test_series.py` (in `tests/pandas/`) — pandas-extra integration tests.
   Every test exercises `hypothesis.extra.pandas` (`pdst.series`,
   `pdst.range_indexes`) and pandas/numpy dtypes (`np.dtype("O")`,
