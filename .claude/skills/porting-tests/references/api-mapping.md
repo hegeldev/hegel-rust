@@ -686,12 +686,20 @@ shrinker predicates). Name each test after what the row is checking
 — `test_shrink_bytes_sum_at_least_nine`, not `test_shrink_bytes_case_4`.
 
 **Missing pieces to skip when porting these files.** `debug=True`,
-`random=Random(0)`, `name="…"`, `__repr__` assertions, and direct
-calls to `shrinker.run_step()` (as opposed to `.run()`) are all
+`random=Random(0)`, `name="…"`, and `__repr__` assertions are all
 Hypothesis-only surface. `test_shrinking_interface.py` is unportable
 for this reason alone. The `Collection` shrink pipeline (delete /
 reorder / minimise-duplicates / minimise-each-element) **is** ported;
 earlier skip rationales about "no Collection port" no longer apply.
+
+**Direct `shrinker.run_step()` calls ARE portable** — promote
+`run_step` from `fn` to `pub fn` in `src/native/shrinker/value_shrinkers.rs`
+as a one-line source change and call it the same way the Python test
+does. `test_order_shrinking.py` ports this way (see
+`tests/hypothesis/conjecture_order_shrinking.rs` and the `pub fn
+run_step` on `OrderingShrinker`). Don't skip a test on the grounds
+that "run_step isn't exposed"; expose it. Same applies to the other
+value shrinkers if a test reaches for their `run_step`.
 
 ## Forced draws (engine-internal, native only)
 
