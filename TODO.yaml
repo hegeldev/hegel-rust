@@ -250,3 +250,27 @@
         `cargo test --test hypothesis conjecture_engine::`.
       - The `::test_mildly_complicated_strategies` (LargeFlag row)
         bullet in `SKIPPED.md` is removed.
+
+- title: Add depth-bias to native gs::deferred generation
+  details: |
+    Native-mode generation through `gs::deferred` recurses through the
+    user-defined alternatives without any depth bias toward leaf
+    branches. For high-branching grammars (e.g. the calculator
+    benchmark in `tests/quality/test_shrink_quality.py`, where two of
+    three alternatives recurse and only one is a leaf), random
+    generation produces unboundedly-deep trees that overflow the Rust
+    stack before the shrinker converges. Hypothesis's Python engine
+    has implicit size biasing in `ConjectureData.draw` that prefers
+    leaves at greater depth; the native port lacks the equivalent.
+
+    See `src/native/runner.rs` (and the `gs::deferred` machinery in
+    `src/generators/deferred.rs`) for where the bias would land.
+    Reference: `internal/conjecture/data.py`'s
+    `_should_draw_more_examples` heuristic.
+
+    Acceptance criteria:
+      - `test_calculator_benchmark` in
+        `tests/hypothesis/quality_shrink_quality.rs` passes under
+        `cargo test --features native --test hypothesis
+        quality_shrink_quality::test_calculator_benchmark` without the
+        `#[cfg_attr(feature = "native", ignore = "...")]` gate.
