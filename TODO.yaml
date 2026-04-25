@@ -283,33 +283,6 @@
         quality_shrink_quality::test_calculator_benchmark` without the
         `#[cfg_attr(feature = "native", ignore = "...")]` gate.
 
-- title: Add NativeTestCase freeze() + concluded-callback surface
-  details: |
-    Port `test_cannot_draw_after_freeze`, `test_can_double_freeze`, and
-    `test_calls_concluded_implicitly` from
-    `conjecture/test_test_data.py`. All three exercise Hypothesis's
-    explicit `data.freeze()` / `data.frozen` flag; the third also
-    asserts that the registered `DataObserver.conclude_test(status,
-    reason)` callback fires from inside `freeze()`.
-
-    Port path: add `pub fn freeze(&mut self)` on `NativeTestCase` that
-    sets `status = Some(Status::Valid)` if currently `None` (and is
-    idempotent on re-call — Hypothesis's freeze is). `pre_choice()` in
-    `src/native/core/state.rs` already panics with `"Frozen: ..."` when
-    `status.is_some()`, so post-freeze draws will fail correctly. For
-    `test_calls_concluded_implicitly`, fold the `DataObserver` work
-    into the separate observer TODO below and gate that test there.
-
-    Acceptance criteria:
-      - `test_cannot_draw_after_freeze`, `test_can_double_freeze`, and
-        `test_calls_concluded_implicitly` compile and pass under
-        `cargo test --features native --test hypothesis
-        conjecture_test_data::`.
-      - The matching bullets in `SKIPPED.md` (under
-        `conjecture/test_test_data.py::test_cannot_draw_after_freeze`,
-        `::test_can_double_freeze`, `::test_calls_concluded_implicitly`)
-        are removed.
-
 - title: Expose NativeConjectureData::for_choices + mark_* via __native_test_internals
   details: |
     Port `test_can_mark_interesting`, `test_can_mark_invalid`, and
@@ -408,12 +381,14 @@
 
 - title: Add NativeTestCase DataObserver hook
   details: |
-    Port `test_can_observe_draws` from
-    `conjecture/test_test_data.py`. The test installs a
-    `LoggingObserver(DataObserver)` on `ConjectureData.for_choices`
-    and asserts that `draw_boolean`, `draw_integer`, and
-    `conclude_test` callbacks fire in order with the expected
+    Port `test_can_observe_draws` and `test_calls_concluded_implicitly`
+    from `conjecture/test_test_data.py`. The first installs a
+    `LoggingObserver(DataObserver)` on `ConjectureData.for_choices` and
+    asserts that `draw_boolean`, `draw_integer`, and `conclude_test`
+    callbacks fire in order with the expected
     `(value, was_forced, constraints)` / `(status, origin)` payloads.
+    The second asserts that calling `freeze()` invokes
+    `conclude_test(Status::Valid, None)` on the registered observer.
 
     Port path: add a `DataObserver` trait under
     `src/native/core/state.rs` with `draw_boolean`, `draw_integer`,
@@ -422,12 +397,17 @@
     `Option<Box<dyn DataObserver>>` field through `NativeTestCase`,
     populated by an extra constructor parameter on
     `for_choices`. Each draw method calls the observer hook after
-    appending the choice node; `freeze()` (see the freeze TODO above)
-    calls `conclude_test`.
+    appending the choice node; the existing `freeze()` (in
+    `src/native/core/state.rs`) calls `conclude_test` with the
+    finalised `(status, interesting_origin)` after promoting `status`
+    to `Status::Valid`.
 
     Acceptance criteria:
-      - `test_can_observe_draws` compiles and passes.
-      - The matching bullet in `SKIPPED.md` is removed.
+      - `test_can_observe_draws` and `test_calls_concluded_implicitly`
+        compile and pass under
+        `cargo test --features native --test hypothesis
+        conjecture_test_data::`.
+      - The matching bullets in `SKIPPED.md` are removed.
 
 - title: Add NativeTestCase as_result() / Overrun sentinel
   details: |

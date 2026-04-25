@@ -12,9 +12,8 @@
 //!
 //! Individually-skipped tests:
 //!
-//! - `test_cannot_draw_after_freeze`, `test_can_double_freeze`,
-//!   `test_calls_concluded_implicitly` — `NativeTestCase` has no public
-//!   `freeze()` method or `frozen` flag distinct from `status`.
+//! - `test_calls_concluded_implicitly` — needs a `DataObserver` hook that
+//!   `freeze()` invokes; bundled with the `test_can_observe_draws` port.
 //! - `test_can_mark_interesting`, `test_can_mark_invalid`,
 //!   `test_can_mark_invalid_with_why` — `NativeTestCase` has no
 //!   `mark_interesting` / `mark_invalid` methods. Those live on the
@@ -62,6 +61,26 @@
 #![cfg(feature = "native")]
 
 use hegel::__native_test_internals::{ChoiceValue, NativeTestCase, Status};
+
+#[test]
+fn test_cannot_draw_after_freeze() {
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None);
+    d.weighted(0.5, None).ok().unwrap();
+    d.freeze();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        d.weighted(0.5, None).ok();
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_can_double_freeze() {
+    let mut d = NativeTestCase::for_choices(&[], None);
+    d.freeze();
+    assert!(d.frozen());
+    d.freeze();
+    assert!(d.frozen());
+}
 
 #[test]
 fn test_draw_past_end_sets_overflow() {
@@ -119,8 +138,9 @@ fn test_triviality() {
 #[test]
 fn test_trivial_before_force_agrees_with_trivial_after() {
     // prefix=(False, True, True); the middle draw forces True over the
-    // prefix. With native there is no separate `freeze()` step, so the
-    // pre/post-freeze comparison collapses to a single read.
+    // prefix. Upstream computes node-trivial both before and after
+    // `freeze()` and asserts they agree; native node-trivial is invariant
+    // under freeze, so the pre/post comparison collapses to a single read.
     let mut d = NativeTestCase::for_choices(
         &[
             ChoiceValue::Boolean(false),
