@@ -2435,6 +2435,19 @@ is acceptance for the corresponding follow-up.
   feature landed). Skipping pending human review of the stashed worker
   branch.
 
+- `test_sharing.py` (in `nocover/`) — every test exercises
+  `st.shared(strategy, key=...)`, a public Hypothesis strategy that
+  produces the same value across multiple draw sites within a single
+  test case (optionally keyed). hegel-rust has no `gs::shared()`
+  counterpart — the gap is already documented in the
+  `tests/hypothesis/direct_strategies.rs` module docstring alongside
+  the other missing public-API strategies. Without a `shared()`
+  surface, none of the seven tests (instance-by-default sharing,
+  same-key sharing, distinct-instance non-sharing, distinct-key
+  non-sharing, key-vs-default non-sharing, shrink-simplification of
+  shared lists, shrink-simplification of size-linked shared sums)
+  can be expressed.
+
 - `test_database.py` (in `tests/watchdog/`) — every test exercises
   Hypothesis's database filesystem-listener API
   (`db.add_listener(listener)` / `db.remove_listener(listener)`,
