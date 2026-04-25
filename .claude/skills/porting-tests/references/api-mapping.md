@@ -579,8 +579,8 @@ The parts of `test_shrinker.py` that genuinely don't port through
 - **Public `draw` feature missing from the native API.** Examples:
   `draw_integer(..., shrink_towards=N)`, `draw_integer(..., forced=N)`
   as a public-facing constraint (`draw_integer_forced` exists but
-  takes a different shape), `Sampler` for weighted bit-width pickers.
-  Port once the feature lands, or leave listed.
+  takes a different shape). Port once the feature lands, or leave
+  listed. (`Sampler` *is* available — see the section below.)
 - **Pass-level mutator API called directly.** Tests that call
   `shrinker.mark_changed(i)` / `shrinker.lower_common_node_offset()` /
   `shrinker.pass_to_descendant()` as methods on the Shrinker, not via
@@ -844,6 +844,49 @@ handful of hand-picked `#[test]` witnesses (integer full-range,
 boolean, bytes-unbounded, string-full-unicode) — enough to exercise
 the mainline branches of `compute_max_children` / `validate` /
 `to_index` without an enumerator.
+
+## Conjecture utilities (`conjecture/utils.py`)
+
+A small native-only surface for the `nocover/test_conjecture_utils.py`
+shape (and any future tests that reach into Hypothesis's `cu.*`
+helpers). Re-exported via `__native_test_internals` from
+`src/native/conjecture_utils.rs`:
+
+| Hypothesis (`hypothesis.internal.conjecture.utils`) | hegel-rust (native only)                                    |
+|------------------------------------------------------|--------------------------------------------------------------|
+| `Sampler(weights)`                                   | `Sampler::new(&weights)` — `weights: &[f64]`                |
+| `sampler.sample(data)`                               | `sampler.sample(&mut ntc) -> Result<usize, StopTest>`        |
+| `cu._calc_p_continue(avg, max)`                      | `calc_p_continue(avg, max) -> f64`                           |
+| `cu._p_continue_to_avg(p, max)`                      | `p_continue_to_avg(p, max) -> f64`                           |
+| `cu.SMALLEST_POSITIVE_FLOAT`                         | same name; `f64::from_bits(1)`                               |
+
+`Sampler::sample` follows the standard native draw shape — takes
+`&mut NativeTestCase`, returns `Result<usize, StopTest>`, and consumes
+choice nodes (one `draw_integer` for the table index, one `weighted`
+for the alternate-or-base coin). The Python-side `forced=` /
+`observe=` kwargs are not exposed; no port has needed them yet.
+
+The Hypothesis test uses `provider_conformance.integer_weights()` to
+generate `dict[int, float]` inputs for `Sampler`. Only the dict
+*values* matter — `Sampler` ignores keys — and the values are arbitrary
+positive floats whose absolute magnitudes don't matter (`Sampler`
+normalises internally). When porting such a strategy, generate
+integer "buckets" and divide by the sum so the inputs shrink as
+integers rather than via the float-shrinker:
+
+```rust
+gs::vecs(gs::integers::<u64>().min_value(1).max_value(1000))
+    .min_size(1).max_size(20)
+    .map(|buckets: Vec<u64>| {
+        let total: f64 = buckets.iter().map(|&b| b as f64).sum();
+        buckets.iter().map(|&b| b as f64 / total).collect()
+    })
+```
+
+This generalises: any `dict[K, float]` / `list[float]` strategy whose
+*distribution* is the only observable input (weights, normalised
+probabilities, score arrays) ports cleanly via integer-buckets-then-
+normalise rather than chaining `gs::floats()`.
 
 ## Health checks
 
