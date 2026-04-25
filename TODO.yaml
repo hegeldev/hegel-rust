@@ -4,10 +4,16 @@
 #
 # Schema per entry:
 #   - title: one-line summary
+#     blocked_by:           # optional; list of titles that must be cleared
+#       - Other entry title #   first. Blocked entries are kept in the queue
+#                           #   but skipped by the dispatcher until every
+#                           #   listed blocker is removed from TODO.yaml.
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
 - title: Port conjecture/test_engine.py::test_handles_nesting_of_discard_correctly
+  blocked_by:
+    - Port conjecture/test_engine.py new_shrinker cluster
   details: |
     Port `test_handles_nesting_of_discard_correctly` from
     `conjecture/test_engine.py`.  Upstream uses
@@ -41,6 +47,8 @@
         test from the still-skipped list.
 
 - title: Port conjecture/test_engine.py::test_terminates_shrinks
+  blocked_by:
+    - Port conjecture/test_engine.py database-introspection cluster
   details: |
     Port `test_terminates_shrinks` (parametrised on `n=1` and `n=5`)
     from `conjecture/test_engine.py`.  Upstream uses
