@@ -3186,6 +3186,22 @@ def _worker_target_dir(i: int) -> Path:
     return REPO_ROOT / f"target-worker-{i}"
 
 
+# Single dedicated worktree for the TODO worker. Named `worker-todo` so the
+# branch (`port/worker-todo`) and target dir (`target-worker-todo`) match
+# the existing `worker-*` cleanup glob and `target-worker-*` gitignore
+# entry; no new patterns needed.
+def _todo_worker_path() -> Path:
+    return WORKTREE_ROOT / "worker-todo"
+
+
+def _todo_worker_branch() -> str:
+    return "port/worker-todo"
+
+
+def _todo_worker_target_dir() -> Path:
+    return REPO_ROOT / "target-worker-todo"
+
+
 # Per-worker CARGO_TARGET_DIR size above which we nuke-and-rebuild before
 # spawning the next task in that slot. Test-binary artifacts accumulate
 # as ports land fast. Four workers at 4 GiB each + supervisor `target/`
