@@ -2434,3 +2434,17 @@ is acceptance for the corresponding follow-up.
   `tests/test_native.rs` (worker branched before the native backend
   feature landed). Skipping pending human review of the stashed worker
   branch.
+
+- `test_database.py` (in `tests/watchdog/`) — every test exercises
+  Hypothesis's database filesystem-listener API
+  (`db.add_listener(listener)` / `db.remove_listener(listener)`,
+  `("save", (k, v))` / `("delete", (k, v))` event tuples,
+  `MultiplexedDatabase`, `InMemoryExampleDatabase`, `db.move(k1, k2, v)`)
+  layered on top of the third-party Python `watchdog` library for
+  cross-platform filesystem inotify/FSEvents/ReadDirectoryChanges. The
+  entire file is `pytestmark = pytest.mark.skip(reason="see comment")`
+  upstream because the listener tests are flaky against watchdog itself.
+  hegel-rust's `Database::Path(...)` exposes no listener / event
+  callback / multiplexed-database API and has no watchdog counterpart —
+  this is a Python-library integration (same rationale as the
+  redis-extra / numpy / pandas / django / crosshair / lark skips).
