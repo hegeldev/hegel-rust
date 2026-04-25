@@ -4,6 +4,7 @@ use common::utils::check_can_generate_examples;
 use hegel::TestCase;
 use hegel::generators as gs;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[test]
 fn test_default_bool() {
@@ -68,6 +69,11 @@ fn test_default_array() {
 fn test_default_hashmap() {
     check_can_generate_examples(gs::default::<HashMap<String, i32>>());
     check_can_generate_examples(gs::default::<HashMap<String, bool>>());
+}
+
+#[test]
+fn test_default_pathbuf() {
+    check_can_generate_examples(gs::default::<PathBuf>());
 }
 
 #[test]
