@@ -85,11 +85,7 @@ fn build_generators() -> (BoxedGenerator<'static, Node>, BoxedGenerator<'static,
             })
             .boxed();
 
-    nodes_def.set(hegel::one_of!(
-        terminals,
-        writes.clone(),
-        branches.clone()
-    ));
+    nodes_def.set(hegel::one_of!(terminals, writes.clone(), branches.clone()));
 
     let writes_or_branches: BoxedGenerator<'static, Node> =
         hegel::one_of!(writes, branches).boxed();
