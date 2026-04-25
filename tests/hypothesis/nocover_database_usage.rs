@@ -47,8 +47,8 @@
 
 #![cfg(feature = "native")]
 
-use hegel::TestCase;
 use hegel::__native_test_internals::{ExampleDatabase, NativeDatabase};
+use hegel::TestCase;
 use hegel::generators as gs;
 use hegel::{Hegel, Settings};
 
