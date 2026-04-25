@@ -1,11 +1,11 @@
 //! Port of `hypothesis.internal.conjecture.utils`: small helpers shared
 //! across the engine, exposed for tests via `__native_test_internals`.
 //!
-//! Currently covers `_calc_p_continue`, `_p_continue_to_avg`, and
-//! `SMALLEST_POSITIVE_FLOAT`. `Sampler` (Vose's alias method) is stubbed —
-//! the existing native engine doesn't use it on a hot path, but the
-//! upstream `nocover/test_conjecture_utils.py` covers it, so it's wired in
-//! pending an implementation pass.
+//! Currently covers `_calc_p_continue`, `_p_continue_to_avg`,
+//! `SMALLEST_POSITIVE_FLOAT`, and `Sampler` (Vose's alias method).
+
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
 use crate::native::core::{NativeTestCase, StopTest};
 
@@ -62,35 +62,110 @@ pub fn calc_p_continue(desired_avg: f64, max_size: f64) -> f64 {
     p_continue
 }
 
-/// Sampler based on Vose's alias method. Port of `cu.Sampler`.
+/// Build the Vose alias-method table for `weights`.
 ///
-/// The general idea is that we store a table of triples
-/// `(base, alternate, alternate_chance)`. Picking a triple uniformly at
-/// random and then choosing its `alternate` value with probability
-/// `alternate_chance` (else the `base`) reproduces the input distribution.
+/// Port of `hypothesis.internal.conjecture.utils.compute_sampler_table`.
+/// Returns triples `(base, alternate, alternate_chance)` sorted
+/// lexicographically, with the invariant `base <= alternate` so that
+/// shrinking the sampler's index choice always shrinks the chosen element.
+pub(crate) fn compute_sampler_table(weights: &[f64]) -> Vec<(usize, usize, f64)> {
+    let n = weights.len();
+    let total: f64 = weights.iter().sum();
+
+    let mut alternates: Vec<Option<usize>> = vec![None; n];
+    let mut alt_chances: Vec<Option<f64>> = vec![None; n];
+
+    let mut small: BinaryHeap<Reverse<usize>> = BinaryHeap::new();
+    let mut large: BinaryHeap<Reverse<usize>> = BinaryHeap::new();
+
+    let mut scaled_probabilities: Vec<f64> = Vec::with_capacity(n);
+    for (i, &w) in weights.iter().enumerate() {
+        let scaled = (w / total) * (n as f64);
+        scaled_probabilities.push(scaled);
+        if scaled == 1.0 {
+            alt_chances[i] = Some(0.0);
+        } else if scaled < 1.0 {
+            small.push(Reverse(i));
+        } else {
+            large.push(Reverse(i));
+        }
+    }
+
+    while !small.is_empty() && !large.is_empty() {
+        let Reverse(lo) = small.pop().unwrap();
+        let Reverse(hi) = large.pop().unwrap();
+
+        assert!(lo != hi);
+        assert!(scaled_probabilities[hi] > 1.0);
+        assert!(alternates[lo].is_none());
+        alternates[lo] = Some(hi);
+        alt_chances[lo] = Some(1.0 - scaled_probabilities[lo]);
+        scaled_probabilities[hi] = (scaled_probabilities[hi] + scaled_probabilities[lo]) - 1.0;
+
+        if scaled_probabilities[hi] < 1.0 {
+            small.push(Reverse(hi));
+        } else if scaled_probabilities[hi] == 1.0 {
+            alt_chances[hi] = Some(0.0);
+        } else {
+            large.push(Reverse(hi));
+        }
+    }
+    while let Some(Reverse(i)) = large.pop() {
+        alt_chances[i] = Some(0.0);
+    }
+    while let Some(Reverse(i)) = small.pop() {
+        alt_chances[i] = Some(0.0);
+    }
+
+    let mut new_table: Vec<(usize, usize, f64)> = Vec::with_capacity(n);
+    for base in 0..n {
+        let alternate_chance = alt_chances[base].expect("alternate_chance was set above");
+        match alternates[base] {
+            None => new_table.push((base, base, alternate_chance)),
+            Some(alternate) if alternate < base => {
+                new_table.push((alternate, base, 1.0 - alternate_chance));
+            }
+            Some(alternate) => new_table.push((base, alternate, alternate_chance)),
+        }
+    }
+    new_table.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.total_cmp(&b.2)));
+    new_table
+}
+
+/// Sampler based on Vose's alias method.
 ///
-/// The alias-method table construction (`compute_sampler_table`) and
-/// `sample` are not yet ported; the constructor stores raw weights so
-/// callers can hold a `Sampler` while we wait for the implementation.
+/// Port of `hypothesis.internal.conjecture.utils.Sampler`. We store a table
+/// of triples `(base, alternate, alternate_chance)`. To draw, pick a triple
+/// uniformly and choose its `alternate` value with probability
+/// `alternate_chance` (else `base`); the table is constructed so the
+/// resulting mixture matches the input weight distribution.
 pub struct Sampler {
-    pub weights: Vec<f64>,
+    /// Vose alias-method table: `(base, alternate, alternate_chance)`.
+    pub table: Vec<(usize, usize, f64)>,
 }
 
 impl Sampler {
     /// Build a sampler from a sequence of non-negative weights.
     pub fn new(weights: &[f64]) -> Self {
         Sampler {
-            weights: weights.to_vec(),
+            table: compute_sampler_table(weights),
         }
     }
 
     /// Draw a sample. Returns an index in `0..weights.len()`.
-    pub fn sample(&self, _data: &mut NativeTestCase) -> Result<usize, StopTest> {
-        todo!(
-            "port hypothesis.internal.conjecture.utils.Sampler.sample: build the \
-             Vose alias-method table from self.weights (compute_sampler_table), \
-             then pick a triple via data.draw_integer and data.weighted on \
-             alternate_chance to choose between base and alternate"
-        );
+    ///
+    /// Mirrors `Sampler.sample` in Hypothesis: uniformly pick a table entry,
+    /// then with probability `alternate_chance` return `alternate`, else
+    /// return `base`. Hypothesis additionally supports `forced` and
+    /// `observe`; neither is needed by current callers, so they're omitted.
+    pub fn sample(&self, data: &mut NativeTestCase) -> Result<usize, StopTest> {
+        let idx = data.draw_integer(0, (self.table.len() - 1) as i128)? as usize;
+        let (base, alternate, alternate_chance) = self.table[idx];
+        let use_alternate = data.weighted(alternate_chance, None)?;
+        Ok(if use_alternate { alternate } else { base })
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/embedded/native/conjecture_utils_tests.rs"]
+mod tests;
