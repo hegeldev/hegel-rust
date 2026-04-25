@@ -2451,6 +2451,19 @@ is acceptance for the corresponding follow-up.
   which was portable by asserting on the shrunk value via `minimal()`,
   the whole subject of this file is the explain-phase output format.
 
+- `test_combinators.py::test_sampled_from_enum_flag`,
+  `test_combinators.py::test_sampled_from_module_level_enum_flag`
+  (in `tests/snapshots/`) — both rely on Python's `enum.Flag` and
+  Hypothesis's special-case handling of `sampled_from(EnumFlag)`,
+  which generates the power-set of flag combinations via `Flag`
+  bitwise OR semantics. `enum.Flag` is a Python-specific facility
+  with no Rust analog, and hegel-rust's `gs::sampled_from` has no
+  flag-set integration. Snapshots also pin Python `__repr__` of
+  enum-flag values (`<locals>.Color.RED`, `Direction.NORTH`). The
+  third test in the file (`test_data_draw`) was ported via
+  `minimal()` on the shrunk-value claim, same approach as
+  `test_shrinking.py`.
+
 - `test_sets.py` (in `nocover/`) — parallel port-loop worker produced a
   port on `port/worker-1`, but cherry-picking onto the supervisor branch
   failed with conflicts across `Cargo.toml`, `src/lib.rs`,
