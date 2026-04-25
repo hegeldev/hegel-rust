@@ -347,6 +347,33 @@ fn test_run_nothing() {
 }
 
 #[test]
+fn test_can_navigate_to_a_valid_example() {
+    // `buffer_size_limit(4)` caps a single test case's accumulated
+    // `draw_bytes` to 4 bytes total.  The test draws 2 bytes for `i`
+    // (the high byte forces `i` to be either 0, 1, or 2 since anything
+    // larger overflows the remaining 2-byte budget), then `i` more
+    // bytes; only `i ∈ {0, 1, 2}` reaches `mark_interesting`.  The
+    // assertion just checks the runner *can* navigate to one of those
+    // examples within `max_examples=5000`.
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(5000)
+        .buffer_size_limit(4);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let bytes = data.draw_bytes(2, 2);
+            let i = ((bytes[0] as usize) << 8) | (bytes[1] as usize);
+            data.draw_bytes(i, i);
+            data.mark_interesting(interesting_origin(None));
+        },
+        settings,
+        rng,
+    );
+    runner.run();
+    assert!(!runner.interesting_examples.is_empty());
+}
+
+#[test]
 fn test_stops_after_max_examples_when_generating() {
     // `max_examples=1` and no interesting mark: runner must run the
     // test function exactly once before stopping on the valid-example
@@ -365,6 +392,67 @@ fn test_stops_after_max_examples_when_generating() {
     );
     runner.run();
     assert_eq!(seen.borrow().len(), 1);
+}
+
+// Port of `test_stops_after_max_examples_when_generating_more_bugs`.
+// Each test function call draws an i32-shaped integer and `panic!`s
+// with one of two messages depending on the drawn value, mirroring
+// the upstream `raise ValueError` / `raise Exception` branch.  The
+// runner must catch both panic types and treat them as interesting
+// examples (the panic-payload origin distinguishes the two), and
+// honour `max_examples` so `seen.len()` stays bounded.
+fn check_stops_after_max_examples_when_generating_more_bugs(examples: usize) {
+    let seen: Rc<RefCell<Vec<i128>>> = Rc::new(RefCell::new(Vec::new()));
+    let seen_clone = seen.clone();
+    let err_common: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
+    let err_rare: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
+    let err_common_c = err_common.clone();
+    let err_rare_c = err_rare.clone();
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(examples)
+        .phases(vec![RunnerPhase::Generate]);
+    let mut runner = NativeConjectureRunner::new(
+        move |data: &mut NativeConjectureData| {
+            let v = data.draw_integer(0, (1i128 << 32) - 1);
+            seen_clone.borrow_mut().push(v);
+            if v > (1i128 << 31) {
+                *err_rare_c.borrow_mut() = true;
+                panic!("ValueError");
+            }
+            *err_common_c.borrow_mut() = true;
+            panic!("Exception");
+        },
+        settings,
+        rng,
+    );
+    runner.run();
+    let n_seen = seen.borrow().len();
+    let bound = examples + (*err_common.borrow() as usize) + (*err_rare.borrow() as usize);
+    assert!(
+        n_seen <= bound,
+        "examples={examples}, seen.len()={n_seen}, bound={bound}"
+    );
+}
+
+#[test]
+fn test_stops_after_max_examples_when_generating_more_bugs_1() {
+    check_stops_after_max_examples_when_generating_more_bugs(1);
+}
+
+#[test]
+fn test_stops_after_max_examples_when_generating_more_bugs_5() {
+    check_stops_after_max_examples_when_generating_more_bugs(5);
+}
+
+#[test]
+fn test_stops_after_max_examples_when_generating_more_bugs_20() {
+    check_stops_after_max_examples_when_generating_more_bugs(20);
+}
+
+#[test]
+fn test_stops_after_max_examples_when_generating_more_bugs_50() {
+    check_stops_after_max_examples_when_generating_more_bugs(50);
 }
 
 #[test]
@@ -812,14 +900,11 @@ fn test_does_not_shrink_multiple_bugs_when_told_not_to() {
 fn test_does_not_keep_generating_when_multiple_bugs() {
     // After the first bug is found the generation phase must stop
     // immediately when both report_multiple_bugs is off and there's no
-    // shrink phase to run flakiness detection over.
-    //
-    // Hypothesis's `generate_new_examples` always prepends a "simplest"
-    // (all-zero) probe; the native engine has no equivalent, so we seed
-    // the zero-data call here via cached_test_function.  The next
-    // novel-prefix probe inside `run()` then samples a non-zero value,
-    // marks interesting, and tripping `should_generate_more` returning
-    // false ends the generation phase at exactly two calls.
+    // shrink phase to run flakiness detection over.  The runner's own
+    // all-simplest probe handles the zero-data call (drawing 0 takes
+    // the no-mark branch); the subsequent novel-prefix probe samples a
+    // non-zero value, marks interesting, and `should_generate_more`
+    // returning false ends the generation phase at exactly two calls.
     let rng = SmallRng::seed_from_u64(0);
     let settings = NativeRunnerSettings::new()
         .report_multiple_bugs(false)
@@ -834,7 +919,6 @@ fn test_does_not_keep_generating_when_multiple_bugs() {
         settings,
         rng,
     );
-    runner.cached_test_function(&[ChoiceValue::Integer(0)]);
     runner.run();
 
     assert_eq!(runner.call_count, 2);

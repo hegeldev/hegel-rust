@@ -20,6 +20,7 @@
 // test exercises, as per the design captured in
 // `.claude/skills/porting-tests/SKILL.md` under "`test_engine.py`-shape".
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -72,6 +73,13 @@ pub struct InterestingOrigin {
     /// "the default origin" (call site of `mark_interesting()` with
     /// no argument).
     pub id: Option<i64>,
+    /// Label derived from a panic payload that escaped the test
+    /// function without a `mark_interesting` call.  Two panic-derived
+    /// origins compare equal iff their labels match, mirroring
+    /// Hypothesis's "distinct traceback ⇒ distinct interesting
+    /// example" behaviour for arbitrary user exceptions.  `None` for
+    /// the explicit-call path.
+    pub panic_label: Option<String>,
 }
 
 /// Construct an `InterestingOrigin` with the given stable id, so
@@ -79,7 +87,33 @@ pub struct InterestingOrigin {
 /// Mirrors the `tests/conjecture/common.py::interesting_origin`
 /// fixture.
 pub fn interesting_origin(n: Option<i64>) -> InterestingOrigin {
-    InterestingOrigin { id: n }
+    InterestingOrigin {
+        id: n,
+        panic_label: None,
+    }
+}
+
+impl InterestingOrigin {
+    /// Synthesise an origin from a panic payload that escaped the test
+    /// function.  Used by [`run_test_fn`] to map non-mark / non-stop
+    /// panics to a [`Status::Interesting`] result, mirroring the way
+    /// Hypothesis records each distinct user-thrown traceback as its
+    /// own interesting example.  Two payloads with the same downcast
+    /// string (or, failing that, the same concrete type) hash to the
+    /// same origin.
+    fn from_panic_payload(payload: &(dyn Any + Send)) -> Self {
+        let label = if let Some(s) = payload.downcast_ref::<&'static str>() {
+            format!("&str:{s}")
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            format!("String:{s}")
+        } else {
+            format!("type-id:{:?}", payload.type_id())
+        };
+        InterestingOrigin {
+            id: None,
+            panic_label: Some(label),
+        }
+    }
 }
 
 /// A single interesting (failing) test case observed by the runner.
@@ -138,6 +172,12 @@ pub struct NativeRunnerSettings {
     /// only the first one found.  Mirrors Hypothesis's
     /// `settings(report_multiple_bugs=...)`.  Defaults to `true`.
     pub report_multiple_bugs: bool,
+    /// Per-test-case byte budget for `draw_bytes`.  `None` = use the
+    /// default `CONJECTURE_BUFFER_SIZE`.  Mirrors Hypothesis's
+    /// `buffer_size_limit(n)` context manager which monkeypatches
+    /// `engine.BUFFER_SIZE` for the lifetime of a single
+    /// `runner.run()` call.
+    pub buffer_size_limit: Option<usize>,
 }
 
 impl NativeRunnerSettings {
@@ -150,6 +190,7 @@ impl NativeRunnerSettings {
             suppress_health_check: Vec::new(),
             max_shrinks: None,
             report_multiple_bugs: true,
+            buffer_size_limit: None,
         }
     }
 
@@ -185,6 +226,11 @@ impl NativeRunnerSettings {
 
     pub fn report_multiple_bugs(mut self, b: bool) -> Self {
         self.report_multiple_bugs = b;
+        self
+    }
+
+    pub fn buffer_size_limit(mut self, n: usize) -> Self {
+        self.buffer_size_limit = Some(n);
         self
     }
 }
@@ -276,20 +322,26 @@ pub struct NativeConjectureData {
     data_id: u64,
     mark: Option<(MarkKind, Option<InterestingOrigin>)>,
     bytes_drawn: usize,
+    /// Per-test-case byte budget enforced by [`Self::draw_bytes`] /
+    /// [`Self::draw_bytes_forced`].  Pulled from
+    /// [`NativeRunnerSettings::buffer_size_limit`] for runner-driven
+    /// invocations; defaults to [`CONJECTURE_BUFFER_SIZE`] otherwise.
+    buffer_size_limit: usize,
 }
 
 impl NativeConjectureData {
-    fn new(ntc: NativeTestCase) -> Self {
+    fn new(ntc: NativeTestCase, buffer_size_limit: usize) -> Self {
         NativeConjectureData {
             ntc,
             data_id: NEXT_DATA_ID.fetch_add(1, Ordering::Relaxed),
             mark: None,
             bytes_drawn: 0,
+            buffer_size_limit,
         }
     }
 
     pub fn draw_bytes(&mut self, min_size: usize, max_size: usize) -> Vec<u8> {
-        if self.bytes_drawn.saturating_add(min_size) > CONJECTURE_BUFFER_SIZE {
+        if self.bytes_drawn.saturating_add(min_size) > self.buffer_size_limit {
             std::panic::panic_any(STOP_TEST_PANIC);
         }
         match self.ntc.draw_bytes(min_size, max_size) {
@@ -310,7 +362,7 @@ impl NativeConjectureData {
         max_size: usize,
         forced: Vec<u8>,
     ) -> Vec<u8> {
-        if self.bytes_drawn.saturating_add(forced.len()) > CONJECTURE_BUFFER_SIZE {
+        if self.bytes_drawn.saturating_add(forced.len()) > self.buffer_size_limit {
             std::panic::panic_any(STOP_TEST_PANIC);
         }
         match self.ntc.draw_bytes_forced(min_size, max_size, forced) {
@@ -471,6 +523,19 @@ struct DataTreeNode {
     is_exhausted: bool,
 }
 
+/// Iterative drop so a thousands-deep single-path tree (built when the
+/// all-simplest probe runs an infinite-loop test fn) doesn't blow the
+/// thread's stack via the default recursive `Box<DataTreeNode>` drop.
+impl Drop for DataTreeNode {
+    fn drop(&mut self) {
+        let mut stack: Vec<Box<DataTreeNode>> =
+            self.children.drain().map(|(_, child)| child).collect();
+        while let Some(mut node) = stack.pop() {
+            stack.extend(node.children.drain().map(|(_, child)| child));
+        }
+    }
+}
+
 impl DataTreeNode {
     /// Recompute `is_exhausted` based on current state.  Mirrors
     /// Hypothesis's `TreeNode.check_exhausted`.
@@ -504,32 +569,62 @@ impl DataTreeNode {
 /// concluded cleanly) and propagates exhaustion up the path so the
 /// runner's `generate_novel_prefix` walk can avoid dead branches.
 fn record_tree(tree_root: &mut DataTreeNode, nodes: &[ChoiceNode], status: Status) {
-    fn walk(node: &mut DataTreeNode, nodes: &[ChoiceNode], status: Status) {
-        if let Some((first, rest)) = nodes.split_first() {
-            if let Some(ref expected_kind) = node.kind {
-                if *expected_kind != first.kind {
-                    panic!(
-                        "Your data generation is non-deterministic: at the same choice \
-                         position with the same prefix, the schema changed from {:?} to {:?}. \
-                         This usually means a generator depends on global mutable state.",
-                        expected_kind, first.kind
-                    );
-                }
-            } else {
+    // Iterative descent: a single-path walk can be thousands of nodes
+    // deep (e.g. an infinite-loop test under the all-simplest probe),
+    // and a recursive walk would blow the thread's stack.  We track
+    // the descent as a chain of raw mutable pointers; only one is
+    // dereferenced at a time, so no two `&mut DataTreeNode` references
+    // overlap.
+    let mut path: Vec<*mut DataTreeNode> = Vec::with_capacity(nodes.len() + 1);
+    path.push(tree_root as *mut _);
+
+    for first in nodes {
+        let parent_ptr = *path.last().unwrap();
+        // SAFETY: `parent_ptr` was either the original `tree_root`
+        // pointer (whose backing `&mut` outlives this function) or a
+        // pointer derived in the previous iteration from a unique
+        // `entry().or_insert_with(...)` borrow.  No other live `&mut`
+        // aliases this node.
+        let node = unsafe { &mut *parent_ptr };
+        match &node.kind {
+            Some(expected_kind) if *expected_kind != first.kind => {
+                panic!(
+                    "Your data generation is non-deterministic: at the same choice \
+                     position with the same prefix, the schema changed from {:?} to {:?}. \
+                     This usually means a generator depends on global mutable state.",
+                    expected_kind, first.kind
+                );
+            }
+            None => {
                 node.kind = Some(first.kind.clone());
             }
-            let key = ChoiceValueKey::from(&first.value);
-            let child = node
-                .children
-                .entry(key)
-                .or_insert_with(|| Box::new(DataTreeNode::default()));
-            walk(child, rest, status);
-        } else if status >= Status::Invalid {
-            node.conclusion = Some(status);
+            _ => {}
         }
+        let key = ChoiceValueKey::from(&first.value);
+        let child = node
+            .children
+            .entry(key)
+            .or_insert_with(|| Box::new(DataTreeNode::default()));
+        path.push(child.as_mut() as *mut _);
+    }
+
+    if status >= Status::Invalid {
+        // SAFETY: same as above — leaf pointer is the only live
+        // reference into this subtree.
+        let leaf = unsafe { &mut **path.last().unwrap() };
+        leaf.conclusion = Some(status);
+    }
+
+    // Ascend, calling `check_exhausted` on each node bottom-up so an
+    // exhausted leaf can propagate up the chain.  We can pop one
+    // pointer at a time because each node has a unique parent and we
+    // only touch one node at each step.
+    while let Some(p) = path.pop() {
+        // SAFETY: `p` is the pointer we just popped, no other live
+        // reference exists to the same node at this point.
+        let node = unsafe { &mut *p };
         node.check_exhausted();
     }
-    walk(tree_root, nodes, status);
 }
 
 /// Small-domain cap for enumeration fallback in
@@ -674,8 +769,9 @@ fn generate_novel_prefix(tree_root: &DataTreeNode, rng: &mut SmallRng) -> Vec<Ch
 fn run_test_fn(
     test_fn: &mut RunnerTestFn,
     ntc: NativeTestCase,
+    buffer_size_limit: usize,
 ) -> (Status, Vec<ChoiceNode>, Option<InterestingOrigin>) {
-    let mut data = NativeConjectureData::new(ntc);
+    let mut data = NativeConjectureData::new(ntc, buffer_size_limit);
     let my_id = data.data_id;
 
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -698,7 +794,13 @@ fn run_test_fn(
             } else if payload.downcast_ref::<&'static str>().copied() == Some(STOP_TEST_PANIC) {
                 Status::EarlyStop
             } else {
-                std::panic::resume_unwind(payload)
+                // Arbitrary panic from user test code.  Mirror Hypothesis's
+                // behaviour of treating each distinct user exception as an
+                // interesting example with a per-traceback origin so the
+                // runner records the bug rather than aborting the whole run.
+                let origin = InterestingOrigin::from_panic_payload(payload.as_ref());
+                data.mark = Some((MarkKind::Interesting, Some(origin)));
+                Status::Interesting
             }
         }
     };
@@ -876,6 +978,10 @@ impl NativeConjectureRunner {
         let do_reuse = phases.contains(&Phase::Reuse);
         let do_generate = phases.contains(&Phase::Generate);
         let do_shrink = phases.contains(&Phase::Shrink);
+        let buffer_size_limit = self
+            .settings
+            .buffer_size_limit
+            .unwrap_or(CONJECTURE_BUFFER_SIZE);
 
         // --- Reuse phase ---
         if do_reuse {
@@ -891,7 +997,28 @@ impl NativeConjectureRunner {
 
         // --- Generation phase ---
         if self.exit_reason.is_none() && do_generate {
+            // One-shot "all simplest" probe.  Mirrors Hypothesis's
+            // `cached_test_function((ChoiceTemplate("simplest", count=None),))`
+            // call at the head of `generate_new_examples`: every draw
+            // resolves to its kind's simplest value, so the runner gets
+            // a fast-path attempt at the all-zero leaf before random
+            // exploration starts.  Without this, `buffer_size_limit`
+            // tests like `test_can_navigate_to_a_valid_example` rely
+            // on hitting the boundary-probability path within the
+            // invalid-threshold budget — too unreliable.
+            if self.should_generate_more(do_shrink) && !self.tree_root.is_exhausted {
+                let ntc = NativeTestCase::for_simplest(CONJECTURE_BUFFER_SIZE);
+                let (status, nodes, origin) =
+                    run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+                self.call_count += 1;
+                record_tree(&mut self.tree_root, &nodes, status);
+                self.record_test_result(status, nodes, origin);
+            }
+
             loop {
+                if self.set_exit_reason_if_done() {
+                    break;
+                }
                 // Mirrors engine.py line 744: `exit_with(Finished)` when
                 // the tree has no novel prefixes left.  Handled here as a
                 // break so the shrink phase is skipped entirely, matching
@@ -907,7 +1034,8 @@ impl NativeConjectureRunner {
                 let mut batch_rng = SmallRng::from_rng(&mut self.rng);
                 let prefix = generate_novel_prefix(&self.tree_root, &mut batch_rng);
                 let ntc = NativeTestCase::for_probe(&prefix, batch_rng, CONJECTURE_BUFFER_SIZE);
-                let (status, nodes, origin) = run_test_fn(&mut self.test_fn, ntc);
+                let (status, nodes, origin) =
+                    run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
                 self.call_count += 1;
 
                 // Non-determinism detection (schema mismatch panics) plus
@@ -916,33 +1044,8 @@ impl NativeConjectureRunner {
 
                 self.record_test_result(status, nodes, origin);
 
-                // Termination checks only apply while we have no interesting
-                // examples — if we've found a bug we want to proceed to the
-                // shrink phase rather than exit outright.  Mirrors engine.py
-                // lines 732-742.
-                if self.interesting_examples.is_empty() {
-                    let max_examples = self.settings.max_examples;
-                    if self.valid_examples >= max_examples {
-                        self.exit_reason = Some(ExitReason::MaxExamples);
-                        self.statistics.insert(
-                            "stopped-because".into(),
-                            format!("settings.max_examples={max_examples}"),
-                        );
-                        break;
-                    }
-                    let invalid_threshold =
-                        INVALID_THRESHOLD_BASE + INVALID_PER_VALID * self.valid_examples;
-                    if self.invalid_examples + self.overrun_examples > invalid_threshold {
-                        self.exit_reason = Some(ExitReason::MaxIterations);
-                        self.statistics.insert(
-                            "stopped-because".into(),
-                            format!(
-                                "settings.max_examples={max_examples}, \
-                                 but < 1% of examples satisfied assumptions"
-                            ),
-                        );
-                        break;
-                    }
+                if self.set_exit_reason_if_done() {
+                    break;
                 }
             }
         }
@@ -955,6 +1058,40 @@ impl NativeConjectureRunner {
         if self.exit_reason.is_none() {
             self.exit_reason = Some(ExitReason::Finished);
         }
+    }
+
+    /// Pre-iteration termination check for the generation loop.
+    /// Mirrors `engine.py` lines 732-742: when no interesting example
+    /// has been observed yet, exhausting `max_examples` exits with
+    /// `MaxExamples` and exhausting the `invalid_examples +
+    /// overrun_examples` budget exits with `MaxIterations`.  Returns
+    /// `true` if the loop should break.
+    fn set_exit_reason_if_done(&mut self) -> bool {
+        if !self.interesting_examples.is_empty() {
+            return false;
+        }
+        let max_examples = self.settings.max_examples;
+        if self.valid_examples >= max_examples {
+            self.exit_reason = Some(ExitReason::MaxExamples);
+            self.statistics.insert(
+                "stopped-because".into(),
+                format!("settings.max_examples={max_examples}"),
+            );
+            return true;
+        }
+        let invalid_threshold = INVALID_THRESHOLD_BASE + INVALID_PER_VALID * self.valid_examples;
+        if self.invalid_examples + self.overrun_examples > invalid_threshold {
+            self.exit_reason = Some(ExitReason::MaxIterations);
+            self.statistics.insert(
+                "stopped-because".into(),
+                format!(
+                    "settings.max_examples={max_examples}, \
+                     but < 1% of examples satisfied assumptions"
+                ),
+            );
+            return true;
+        }
+        false
     }
 
     /// Update the runner's call-count / status counters and bug-tracking
@@ -1009,6 +1146,10 @@ impl NativeConjectureRunner {
         if !phases.contains(&Phase::Shrink) || self.interesting_examples.is_empty() {
             return;
         }
+        let buffer_size_limit = self
+            .settings
+            .buffer_size_limit
+            .unwrap_or(CONJECTURE_BUFFER_SIZE);
 
         let deadline = (self.time_source)() + MAX_SHRINKING_SECONDS;
         let origins: Vec<InterestingOrigin> = self.interesting_examples.keys().cloned().collect();
@@ -1023,7 +1164,7 @@ impl NativeConjectureRunner {
             let initial = self.interesting_examples[origin].nodes.clone();
             let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value.clone()).collect();
             let ntc = NativeTestCase::for_choices(&choices, Some(&initial));
-            let (status, _, _) = run_test_fn(&mut self.test_fn, ntc);
+            let (status, _, _) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             self.call_count += 1;
 
             if (self.time_source)() > deadline {
@@ -1058,7 +1199,8 @@ impl NativeConjectureRunner {
                         let choices: Vec<ChoiceValue> =
                             candidate.iter().map(|n| n.value.clone()).collect();
                         let ntc = NativeTestCase::for_choices(&choices, Some(candidate));
-                        let (status, actual_nodes, _) = run_test_fn(test_fn, ntc);
+                        let (status, actual_nodes, _) =
+                            run_test_fn(test_fn, ntc, buffer_size_limit);
                         (status == Status::Interesting, actual_nodes)
                     }),
                     initial,
@@ -1086,8 +1228,12 @@ impl NativeConjectureRunner {
     /// and feed the resulting `nodes` into the data tree so the
     /// novel-prefix walker won't re-pick the same prefix later.
     pub fn cached_test_function(&mut self, choices: &[ChoiceValue]) {
+        let buffer_size_limit = self
+            .settings
+            .buffer_size_limit
+            .unwrap_or(CONJECTURE_BUFFER_SIZE);
         let ntc = NativeTestCase::for_choices(choices, None);
-        let (status, nodes, origin) = run_test_fn(&mut self.test_fn, ntc);
+        let (status, nodes, origin) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
         self.call_count += 1;
         record_tree(&mut self.tree_root, &nodes, status);
         self.record_test_result(status, nodes, origin);
@@ -1176,6 +1322,10 @@ impl NativeConjectureRunner {
             (Some(d), Some(k)) => (d, k),
             _ => return,
         };
+        let buffer_size_limit = self
+            .settings
+            .buffer_size_limit
+            .unwrap_or(CONJECTURE_BUFFER_SIZE);
 
         let phases = self
             .settings
@@ -1226,7 +1376,7 @@ impl NativeConjectureRunner {
                 continue;
             };
             let ntc = NativeTestCase::for_choices(&choices, None);
-            let (status, nodes, origin) = run_test_fn(&mut self.test_fn, ntc);
+            let (status, nodes, origin) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             self.call_count += 1;
 
             if matches!(status, Status::Valid) {
@@ -1297,7 +1447,8 @@ impl NativeConjectureRunner {
                     continue;
                 };
                 let ntc = NativeTestCase::for_choices(&choices, None);
-                let (status, nodes, origin) = run_test_fn(&mut self.test_fn, ntc);
+                let (status, nodes, origin) =
+                    run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
                 self.call_count += 1;
                 // The native runner doesn't yet track a pareto front, so
                 // every replayed pareto entry is treated as "no longer in

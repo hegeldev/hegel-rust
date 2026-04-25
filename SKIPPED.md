@@ -2220,11 +2220,6 @@ is acceptance for the corresponding follow-up.
   `test_max_iterations_with_some_valid`,
   `test_exit_because_shrink_phase_timeout`) are ported in
   `tests/hypothesis/conjecture_engine.rs`.
-- `conjecture/test_engine.py::test_can_navigate_to_a_valid_example`,
-  `::test_stops_after_max_examples_when_generating_more_bugs` — each
-  needs an engine-side facility that isn't wired up yet
-  (`buffer_size_limit` context manager for the former; panic-from-user-code
-  captured as an interesting example for the latter).
 - `conjecture/test_engine.py::test_terminates_shrinks`,
   `::test_shrinks_both_interesting_examples`, `::test_discarding`,
   `::test_shrinking_from_mostly_zero`,
