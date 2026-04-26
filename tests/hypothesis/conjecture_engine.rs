@@ -142,11 +142,13 @@ fn test_variable_size_string_increasing() {
 
 // Coverage tests for engine.py / shrinker.py code paths that are
 // exercised by shrinking any mildly-complicated strategy. Upstream is
-// a single parametrised test with three rows; the third
-// (`st.sampled_from(enum.Flag(...))` → `bit_count(f.value) > 1`) uses
-// Python's `enum.Flag` factory which has no direct Rust analogue — it
-// builds a 64-bit flag type at runtime. The two `st.lists(...)` rows
-// port directly.
+// a single parametrised test with three rows. The third row uses
+// `st.sampled_from(enum.Flag("LargeFlag", {bit0..bit63}))`; Hypothesis
+// has a special-case for `enum.Flag` that generates OR-combinations
+// of the named bits dynamically. We don't have an analogue, so this
+// port enumerates 64 distinct flag values directly and feeds them
+// through `gs::sampled_from`, preserving the test's spirit (a
+// sampled-from over a longish list, with a multi-bit predicate).
 #[test]
 fn test_mildly_complicated_strategies_integers_list() {
     minimal(
@@ -161,6 +163,18 @@ fn test_mildly_complicated_strategies_unique_text_list() {
         gs::vecs(gs::text()).min_size(2).unique(true),
         |_: &Vec<String>| true,
     );
+}
+
+#[test]
+fn test_mildly_complicated_strategies_large_flag() {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    struct LargeFlag(u64);
+
+    let all_flag_combinations: Vec<LargeFlag> = (0..64u64).map(LargeFlag).collect();
+
+    minimal(gs::sampled_from(all_flag_combinations), |f: &LargeFlag| {
+        f.0.count_ones() > 1
+    });
 }
 
 // -----------------------------------------------------------------------
