@@ -318,28 +318,6 @@
         conjecture_test_data::`.
       - The matching bullets in `SKIPPED.md` are removed.
 
-- title: Add NativeTestCase structural_coverage + tags surface
-  details: |
-    Port the four `structural_coverage` tests from
-    `conjecture/test_test_data.py`:
-      - `test_structural_coverage_is_cached`
-      - `test_examples_create_structural_coverage`
-      - `test_discarded_examples_do_not_create_structural_coverage`
-      - `test_children_of_discarded_examples_do_not_create_structural_coverage`
-
-    Port path: add a `structural_coverage(label: u64) -> CoverageTag`
-    free function (cached so equal labels return the same `Arc<...>`
-    or `&'static` token) and a `tags: HashSet<CoverageTag>` field on
-    `NativeTestCase` populated when a non-discarded span closes.
-    Mirrors Hypothesis's `structural_coverage` interning and the
-    `discard` propagation rule (a discarded ancestor suppresses every
-    child label too — `test_children_of_discarded_examples_*` pins
-    that exact rule).
-
-    Acceptance criteria:
-      - All 4 tests compile and pass.
-      - The matching bullets in `SKIPPED.md` are removed.
-
 - title: Add NativeTestCase st.nothing() / draw-by-strategy invalid path
   blocked_by:
     - Add NativeTestCase draw-by-strategy + span tree surface

@@ -2450,11 +2450,6 @@ follow-up.
 - `conjecture/test_test_data.py::test_empty_strategy_is_invalid` —
   uses `st.nothing()`; no native counterpart at the
   `NativeTestCase.draw(strategy)` layer.
-- `conjecture/test_test_data.py::test_structural_coverage_is_cached`,
-  `::test_examples_create_structural_coverage`,
-  `::test_discarded_examples_do_not_create_structural_coverage`,
-  `::test_children_of_discarded_examples_do_not_create_structural_coverage`
-  — no `structural_coverage()` / `tags` API on the native engine.
 - `conjecture/test_test_data.py::test_closes_interval_on_error_in_strategy`,
   `::test_does_not_double_freeze_in_interval_close` — assume that
   `NativeTestCase` exposes a `draw(strategy)` method that closes open
