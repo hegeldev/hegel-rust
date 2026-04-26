@@ -1191,26 +1191,67 @@ impl NativeConjectureRunner {
             Status::EarlyStop => self.overrun_examples += 1,
             Status::Interesting => {
                 let origin = origin.expect("Interesting status carries an origin");
-                let new_origin = !self.interesting_examples.contains_key(&origin);
                 let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
-                self.interesting_examples
-                    .entry(origin.clone())
-                    .or_insert(InterestingExample {
-                        nodes,
-                        choices,
-                        origin,
-                    });
-                // Mirrors `engine.py` lines 690-697: `first_bug_found_at`
-                // / `last_bug_found_at` only advance on a *new* origin so
-                // the post-bug continuation heuristic doesn't reset the
-                // budget every time we re-discover the same bug.
-                if new_origin {
-                    if self.first_bug_found_at.is_none() {
-                        self.first_bug_found_at = Some(self.call_count);
+                // Mirrors `engine.py::test_function` lines 685-712:
+                //   * a fresh origin saves to primary and inserts;
+                //   * an existing origin compares `sort_key(nodes)` and,
+                //     when the new candidate is strictly smaller,
+                //     downgrades the old primary entry to secondary,
+                //     saves the new choices, replaces the stored example,
+                //     and increments `shrinks`.
+                let changed = match self.interesting_examples.get(&origin) {
+                    None => true,
+                    Some(existing) => {
+                        if crate::native::core::sort_key(&nodes)
+                            < crate::native::core::sort_key(&existing.nodes)
+                        {
+                            self.shrinks += 1;
+                            self.downgrade_choices(&existing.choices);
+                            true
+                        } else {
+                            false
+                        }
                     }
-                    self.last_bug_found_at = Some(self.call_count);
+                };
+                if changed {
+                    let new_origin = !self.interesting_examples.contains_key(&origin);
+                    self.save_choices(&choices);
+                    self.interesting_examples.insert(
+                        origin.clone(),
+                        InterestingExample {
+                            nodes,
+                            choices,
+                            origin,
+                        },
+                    );
+                    // Mirrors `engine.py` lines 690-697: `first_bug_found_at`
+                    // / `last_bug_found_at` only advance on a *new* origin so
+                    // the post-bug continuation heuristic doesn't reset the
+                    // budget every time we re-discover the same bug.
+                    if new_origin {
+                        if self.first_bug_found_at.is_none() {
+                            self.first_bug_found_at = Some(self.call_count);
+                        }
+                        self.last_bug_found_at = Some(self.call_count);
+                    }
                 }
             }
+        }
+    }
+
+    /// Mirrors `engine.py::downgrade_choices`: move the stored bytes for
+    /// `choices` from the primary key to the secondary key.  Used when a
+    /// smaller interesting example arrives for an origin already in
+    /// `interesting_examples` — the previous best is no longer minimal
+    /// but is still worth keeping as a fallback shrink target.
+    fn downgrade_choices(&self, choices: &[ChoiceValue]) {
+        if let (Some(db), Some(key)) = (
+            self.settings.database.as_ref(),
+            self.database_key.as_deref(),
+        ) {
+            let bytes = crate::native::database::serialize_choices(choices);
+            let secondary = sub_key(key, b"secondary");
+            db.move_value(key, &secondary, &bytes);
         }
     }
 
@@ -1263,6 +1304,15 @@ impl NativeConjectureRunner {
                 return;
             }
         }
+
+        // Mirrors `engine.py::shrink_interesting_examples` line 1597:
+        // before the per-origin shrink loop, replay any leftover
+        // secondary-key entries through `cached_test_function` and
+        // delete them.  This both narrows the saved corpus to entries
+        // that are still useful and exercises the
+        // `record_test_result` replace+downgrade path on entries
+        // whose `sort_key` is smaller than the current best.
+        self.clear_secondary_key();
 
         for origin in origins {
             let initial = self.interesting_examples[&origin].nodes.clone();
@@ -1593,23 +1643,25 @@ impl NativeConjectureRunner {
         let mut corpus = db.fetch(&secondary);
         corpus.sort_by(shortlex_cmp);
 
-        let primary_set: std::collections::HashSet<Vec<u8>> = self
-            .interesting_examples
-            .values()
-            .map(|e| choices_to_bytes(&e.choices))
-            .collect();
-        // `max_primary` is the shortlex-largest primary entry; entries
-        // worse than it can't be useful as shrinks.
-        let max_primary = primary_set
-            .iter()
-            .max_by(|a, b| shortlex_cmp(a, b))
-            .cloned();
-
         for c in &corpus {
             let Some(choices) = choices_from_bytes(c) else {
                 db.delete(&secondary, c);
                 continue;
             };
+            // `max_primary` is the shortlex-largest entry currently in
+            // `interesting_examples`; a `cached_test_function` call may
+            // have just replaced an entry via the `record_test_result`
+            // shrink path, so it must be recomputed inside the loop to
+            // mirror upstream's `clear_secondary_key`.
+            let primary_set: std::collections::HashSet<Vec<u8>> = self
+                .interesting_examples
+                .values()
+                .map(|e| choices_to_bytes(&e.choices))
+                .collect();
+            let max_primary = primary_set
+                .iter()
+                .max_by(|a, b| shortlex_cmp(a, b))
+                .cloned();
             if let Some(ref m) = max_primary {
                 if shortlex_cmp(c, m).is_gt() {
                     break;
