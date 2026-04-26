@@ -74,9 +74,18 @@ import yaml
 
 COMMON_SYSTEM_PROMPT = """\
 You are driven by scripts/port-loop.py — a non-interactive loop that
-invokes you with one focused task per call. Do the task, commit, exit.
-The loop re-runs its gates after you return; a partial fix is fine, the
-next invocation picks up from the next failing gate.
+invokes you with one focused task per call.
+
+How partial work is treated depends on the task type:
+- Gate-failure dispatches (lint, server tests, native tests, port
+  sub-loop steps): the loop runs a chain of gates after you return and
+  re-dispatches on the next failing one. A partial fix is fine — fix
+  what you can, commit, exit.
+- TODO.yaml dispatches: each invocation is independent. The next agent
+  has no memory of what you did, so a half-finished entry counts as a
+  failed attempt. Land the entry's full body of work in this dispatch —
+  multiple focused commits are expected for non-trivial entries — and
+  remove the entry on the final commit.
 
 Ground rules:
 - TDD when fixing bugs: regression test first.
@@ -486,9 +495,8 @@ Commits under review:
 """ + SKIP_POLICY
 
 TODO_PROMPT = """\
-Clear the following TODO entry from TODO.yaml (at the repo root). The port
-loop dispatches TODO entries one at a time; each invocation is expected to
-handle ONE entry.
+You own this TODO entry from TODO.yaml. Drive the entire body of work it
+describes to completion in this invocation.
 
 Entry:
 
@@ -501,60 +509,103 @@ are already satisfied. Port-loop agents have touched this repo many times
 and some TODO entries describe work that has since landed under a different
 framing. Grep for the files/functions/tests the entry names, check recent
 git log, and check SKIPPED.md. If the work is already done, delete the
-entry from TODO.yaml with a one-line commit explaining what you observed.
+entry from TODO.yaml with a one-line commit explaining what you observed
+and exit.
 
-When the work is done:
-- Remove THIS entry (and only this entry) from TODO.yaml.
-- Commit the code changes and the TODO.yaml edit together. Multiple focused
-  commits are fine if the work naturally splits; just make sure the final
-  commit removes the entry so the loop knows it's cleared.
+Otherwise: do the work. All of it. In this dispatch.
 
-If the work is larger than one invocation, replace this entry in TODO.yaml
-with one or more narrower follow-ups that together cover the remaining
-work. Don't leave the original entry in place.
+How big the entry is does NOT change what you do — it changes how many
+commits you make. A cluster of 24 tests is 24-ish focused commits in this
+one invocation; a single test is one. There is no "this is too large for
+one invocation" off-ramp. The next agent dispatched on this entry has zero
+memory of what you did and starts from scratch, so a half-finished entry
+is wasted work that counts as a failed attempt against the entry's retry
+budget.
 
-If you realise the TODO is wrong, already done, or a bad idea, remove it
-anyway with a commit that explains the decision.
+You have the full per-dispatch budget; use it. Keep going across as many
+turns and commits as the work needs. Stop only when:
+
+- Every acceptance criterion in the entry is met, AND
+- The final commit removes this entry from TODO.yaml.
+
+Each commit should be focused (one logical change), not a megacommit. Make
+many of them. The supervisor cherry-picks them all back to the main branch
+in order.
+
+The only valid early exits (other than "already done"):
+
+- The entry is genuinely wrong, obsolete, or a bad idea. Remove it with
+  a commit that explains the decision.
+
+- A real blocker exists that isn't already a TODO entry. Add a new TODO
+  for the blocker AND add it to this entry's `blocked_by` list, then
+  commit. The loop will skip this entry until the blocker resolves.
+
+- The entry truly contains independent sub-pieces, you have committed
+  every piece you can finish in this invocation, and a leftover remainder
+  exists. Then — and only then — replace this entry with narrower
+  follow-ups for what's left. Splitting an entry without doing any of
+  the work is a no-op and counts as a failed attempt; don't do that.
 
 You may also add new TODO entries if you notice things that should be done
 along the way — anywhere in the list, not just at the end. Keep new entries
-focused and use the same `title` / `details` schema as existing ones.
+focused and use the same `title` / `details` / `blocked_by` schema as
+existing ones.
 """
 
 TODO_RECOVERY_PROMPT = """\
-Recovery task: the port loop has dispatched {attempts} previous attempts at
-the following TODO entry from TODO.yaml, and the entry is still in the
-queue. Something is wrong with the entry itself, or with how agents keep
-approaching it.
+Recovery task: the port loop has dispatched {attempts} previous attempts
+at the following TODO entry from TODO.yaml, and the entry is still in the
+queue. The likely cause is that prior agents bailed instead of grinding
+through the work — every dispatch starts fresh, so a half-finished entry
+looks identical to one nobody touched.
 
 Entry:
 
 {entry}
 
-Figure out what's going on and act on it. Options (pick whichever fits):
+Read `git log -n 30 --oneline` first; that's the clearest signal for what
+prior attempts actually committed (if anything) and why they stalled.
 
-1. The entry is too broad / badly framed — rewrite it in place, or replace
-   it with one or more narrower follow-ups that each fit in a single
-   invocation. Commit the TODO.yaml edit with a message explaining the
-   rewrite.
+Then act. In order of preference:
 
-2. The entry is already (partly) done and prior attempts couldn't find a
-   natural commit to make — remove or rewrite the entry accordingly, and
-   commit.
+1. Prior agents under-delivered, and the work is still valid. DO IT.
+   Make the focused commits the entry describes — as many as it takes.
+   Use your full per-dispatch budget. Multiple commits are expected. The
+   final commit removes this entry from TODO.yaml. "It's too big for one
+   invocation" is not a reason to stop; the next agent will start from
+   scratch and the entry will exhaust.
 
-3. The work is genuinely not worth doing (wrong, obsolete, or a bad idea) —
-   remove the entry with a commit message explaining the decision.
+2. The entry is partly done already (prior commits closed some of it).
+   Finish the remainder in this invocation, with as many commits as
+   needed, and remove the entry on the final commit.
 
-4. The work is blocked by something not capturable as a TODO — move the
-   affected piece to SKIPPED.md (under the appropriate section, with a
-   one-line rationale), shrink or drop the TODO entry to match, and
-   commit.
+3. The entry is misframed (ambiguous criteria, conflates unrelated work,
+   wrong file paths, etc.) but the work is still wanted. Rewrite it in
+   place — clearer scope, sharper acceptance criteria — and commit. The
+   rewrite resets the retry budget so a future dispatch can pick it up
+   fresh.
 
-Read the recent git log (`git log -n 20 --oneline`) to see what the
-previous attempts actually committed; that's often the clearest signal
-for why they stalled. Whatever you choose, the TODO.yaml state MUST
-change in this invocation so the loop doesn't keep hammering the same
-unchanged entry.
+4. The entry is genuinely already complete. Remove it with a commit
+   explaining what's now in place.
+
+5. The entry is genuinely wrong, obsolete, or a bad idea. Remove it with
+   a commit explaining the decision.
+
+6. A real blocker exists that isn't already a TODO. Add a new TODO for
+   the blocker, add it to this entry's `blocked_by`, commit. (If the
+   blocker is fundamentally outside this codebase, move the affected
+   piece to SKIPPED.md instead and shrink/remove the TODO entry.)
+
+7. The entry has truly independent sub-pieces. Replace it with narrower
+   follow-ups — but ONLY if you have already done every piece you could
+   finish in this invocation. Splitting without doing the work is a
+   no-op and counts as another failed attempt.
+
+Whatever you choose, TODO.yaml state MUST change in this invocation
+(either by removing the entry, by code changes that close it, or by
+rewriting it). Refusing to act is itself a failed attempt and the next
+agent will be back here.
 """
 
 # ---- finalize-mode prompts ---------------------------------------------------
