@@ -16,7 +16,9 @@ pub use choices::{
 pub use float_index::{
     decode_exponent, encode_exponent, float_to_index, index_to_float, reverse_bits_n,
 };
-pub use state::{ManyState, NativeTestCase, NativeVariables, Span};
+pub use state::{
+    ManyState, NativeConjectureResult, NativeResult, NativeTestCase, NativeVariables, Span,
+};
 
 /// Maximum number of choices a single test case can make.
 pub const BUFFER_SIZE: usize = 8 * 1024;

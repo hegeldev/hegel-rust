@@ -280,6 +280,35 @@ impl std::ops::Index<i64> for Spans {
     }
 }
 
+/// Snapshot of a completed `NativeTestCase`'s observable state.
+///
+/// Mirrors the relevant subset of Hypothesis's `ConjectureResult`
+/// (`internal/conjecture/data.py`).  Returned from
+/// [`NativeTestCase::as_result`] for any test case that did not overrun.
+#[derive(Clone, Debug)]
+pub struct NativeConjectureResult {
+    pub status: Status,
+    pub nodes: Vec<ChoiceNode>,
+    pub length: usize,
+    pub output: String,
+    pub has_discards: bool,
+    pub spans: Spans,
+}
+
+/// Result of executing a `NativeTestCase`.
+///
+/// Mirrors Hypothesis's `ConjectureResult | _Overrun` union returned from
+/// `ConjectureData.as_result()` (`internal/conjecture/data.py`).
+/// `NativeResult::Overrun` is the analog of Hypothesis's `_Overrun`
+/// singleton: the test case ran out of buffer (`Status::EarlyStop`)
+/// before completing.  `NativeResult::Conjecture` carries an immutable
+/// snapshot of the completed test case.
+#[derive(Clone, Debug)]
+pub enum NativeResult {
+    Overrun,
+    Conjecture(NativeConjectureResult),
+}
+
 /// A test case backed by a sequence of typed choices.
 ///
 /// During random generation, choices are drawn from the RNG.
@@ -543,6 +572,31 @@ impl NativeTestCase {
         }
         if !already_frozen {
             self.status = Some(Status::Valid);
+        }
+    }
+
+    /// Snapshot the test case as a [`NativeResult`].
+    ///
+    /// Mirrors `ConjectureData.as_result()` from
+    /// `hypothesis-python/.../conjecture/data.py`: an `EarlyStop` test
+    /// case (Hypothesis's `Status.OVERRUN`) becomes
+    /// [`NativeResult::Overrun`]; anything else returns a snapshot of
+    /// the completed run.  For an in-progress test case (no terminal
+    /// status set), the snapshot reports `Status::Valid` to match
+    /// Hypothesis's behaviour where `as_result()` is only called after
+    /// `freeze()` has settled the status.
+    pub fn as_result(&self) -> NativeResult {
+        if self.status == Some(Status::EarlyStop) {
+            NativeResult::Overrun
+        } else {
+            NativeResult::Conjecture(NativeConjectureResult {
+                status: self.status.unwrap_or(Status::Valid),
+                nodes: self.nodes.clone(),
+                length: self.nodes.len(),
+                output: self.output.clone(),
+                has_discards: self.has_discards,
+                spans: self.spans.clone(),
+            })
         }
     }
 
