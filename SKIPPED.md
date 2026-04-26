@@ -2420,12 +2420,6 @@ is acceptance for the corresponding follow-up.
 - `conjecture/test_engine.py::test_debug_data` — Python
   `capsys`-based stdout capture of `Verbosity.debug` diagnostic
   output. Covered in spirit by `tests/hypothesis/verbosity.rs`.
-- `conjecture/test_engine.py::test_mildly_complicated_strategies`
-  (the `st.sampled_from(enum.Flag("LargeFlag", ...))` row) —
-  Python's `enum.Flag` factory builds a runtime flag type with a
-  bit-valued `.value` attribute; no direct Rust analog. The other
-  two rows (`st.lists(st.integers(), min_size=5)` and
-  `st.lists(st.text(), min_size=2, unique=True)`) are ported.
 
 The `conjecture/test_test_data.py::*` entries below are parked
 awaiting follow-up additions to `NativeTestCase` /
