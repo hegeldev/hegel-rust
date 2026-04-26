@@ -28,9 +28,6 @@
 //!
 //! Native-mode gates (server-only or ignored under `feature = "native"`):
 //!
-//! - `test_calculator_benchmark` — `#[ignore]` under native: high-branching
-//!   `gs::deferred` grammar overflows the stack on generation. Tracked
-//!   in TODO.yaml.
 //! - `test_sum_of_pair_float`, `test_sum_of_pair_mixed_float_int`,
 //!   `test_sum_of_pair_separated_float` — server-only: native's float
 //!   shrinker doesn't drive bounded floats down to integer 1.0 through
@@ -741,12 +738,6 @@ impl Drop for Expr {
     }
 }
 
-#[cfg_attr(
-    feature = "native",
-    ignore = "native engine's gs::deferred generation lacks Hypothesis's depth bias; \
-              two of three branches recurse vs one leaf, so generation overflows the stack \
-              before the shrinker converges. Tracked in TODO.yaml."
-)]
 #[test]
 fn test_calculator_benchmark() {
     let def = gs::deferred::<Expr>();
