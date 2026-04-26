@@ -410,25 +410,6 @@
       - `test_result_is_overrun` compiles and passes.
       - The matching bullet in `SKIPPED.md` is removed.
 
-- title: Add NativeTestCase prefix-plus-max_choices constructor
-  details: |
-    Port `test_overruns_at_exactly_max_length` from
-    `conjecture/test_test_data.py`. Upstream constructs
-    `ConjectureData(prefix=[True], random=None, max_choices=1)`
-    inside `buffer_size_limit(1)` and asserts that drawing past
-    `max_choices` sets status to `OVERRUN`.
-
-    Port path: add `NativeTestCase::for_prefix_with_max(prefix:
-    &[ChoiceValue], max_choices: usize) -> Self` (a no-RNG variant
-    of the existing `for_probe` constructor that takes both prefix
-    and max_size without requiring an RNG). `pre_choice()` already
-    enforces `max_size`-based overrun, so the rest of the path is
-    in place.
-
-    Acceptance criteria:
-      - `test_overruns_at_exactly_max_length` compiles and passes.
-      - The matching bullet in `SKIPPED.md` is removed.
-
 - title: Add NativeTestCase structural_coverage + tags surface
   details: |
     Port the four `structural_coverage` tests from

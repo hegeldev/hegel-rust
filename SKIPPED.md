@@ -2475,11 +2475,6 @@ follow-up.
   `::test_discarded_examples_do_not_create_structural_coverage`,
   `::test_children_of_discarded_examples_do_not_create_structural_coverage`
   — no `structural_coverage()` / `tags` API on the native engine.
-- `conjecture/test_test_data.py::test_overruns_at_exactly_max_length`
-  — uses `ConjectureData(prefix=..., random=None, max_choices=1)`
-  together with `buffer_size_limit(1)`; `NativeTestCase` exposes only
-  the `for_choices` and `new_random` constructors, with no
-  prefix-plus-`max_choices`-but-no-RNG combination.
 - `conjecture/test_test_data.py::test_closes_interval_on_error_in_strategy`,
   `::test_does_not_double_freeze_in_interval_close` — assume that
   `NativeTestCase` exposes a `draw(strategy)` method that closes open

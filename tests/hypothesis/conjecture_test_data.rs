@@ -47,11 +47,6 @@
 //!   `test_discarded_examples_do_not_create_structural_coverage`,
 //!   `test_children_of_discarded_examples_do_not_create_structural_coverage`
 //!   — no `structural_coverage()` / `tags` API on the native engine.
-//! - `test_overruns_at_exactly_max_length` — uses
-//!   `ConjectureData(prefix=..., random=None, max_choices=1)` together
-//!   with `buffer_size_limit(1)`; `NativeTestCase` exposes only the
-//!   `for_choices` and `new_random` constructors, with no
-//!   prefix-plus-`max_choices`-but-no-RNG combination.
 //! - `test_closes_interval_on_error_in_strategy`,
 //!   `test_does_not_double_freeze_in_interval_close` — assume that
 //!   `NativeTestCase` exposes a `draw(strategy)` method that closes
@@ -91,6 +86,17 @@ fn test_draw_past_end_sets_overflow() {
 
     let r = d.weighted(0.5, None);
     assert!(r.is_err()); // StopTest equivalent
+    assert_eq!(d.status, Some(Status::EarlyStop)); // OVERRUN equivalent
+}
+
+#[test]
+fn test_overruns_at_exactly_max_length() {
+    // Upstream uses `ConjectureData(prefix=[True], random=None, max_choices=1)`
+    // inside `buffer_size_limit(1)`; the native equivalent is the
+    // `for_prefix_with_max` constructor with `max_choices=1`.
+    let mut d = NativeTestCase::for_prefix_with_max(&[ChoiceValue::Boolean(true)], 1);
+    d.weighted(0.5, None).ok().unwrap();
+    let _ = d.weighted(0.5, None);
     assert_eq!(d.status, Some(Status::EarlyStop)); // OVERRUN equivalent
 }
 
