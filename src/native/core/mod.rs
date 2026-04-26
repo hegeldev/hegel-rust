@@ -17,7 +17,8 @@ pub use float_index::{
     decode_exponent, encode_exponent, float_to_index, index_to_float, reverse_bits_n,
 };
 pub use state::{
-    ManyState, NativeConjectureResult, NativeResult, NativeTestCase, NativeVariables, Span,
+    CoverageTag, ManyState, NativeConjectureResult, NativeResult, NativeTestCase, NativeVariables,
+    Span, structural_coverage,
 };
 
 /// Maximum number of choices a single test case can make.
