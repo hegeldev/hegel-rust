@@ -291,33 +291,6 @@
         conjecture_test_data::`.
       - The matching bullets in `SKIPPED.md` are removed.
 
-- title: Add NativeTestCase note() / output / events surface
-  details: |
-    Port the four note/event tests from
-    `conjecture/test_test_data.py`:
-      - `test_notes_repr` — `d.note(b"hi")` then `repr(b"hi") in d.output`
-      - `test_can_note_non_str` — `d.note(object())` then
-        `repr(x) in d.output`
-      - `test_can_note_str_as_non_repr` — `d.note("foo")` then
-        `d.output == "foo"`
-      - `test_events_are_noted` — `d.events["hello"] = ""` then
-        `"hello" in d.events`
-
-    Port path: add `output: String` and `events: HashMap<String,
-    String>` fields plus `pub fn note<T: Debug>(&mut self, x: T)` and
-    `pub fn output(&self) / events(&mut self)` accessors on
-    `NativeTestCase`. `note(&str)` should append the string verbatim;
-    other types should `format!("{:?}", x)` (the closest analog of
-    Python's `repr`). Two of the four tests assert on Python `repr`
-    formatting (`repr(b"hi")` = `"b'hi'"`, `repr(<object>)` = `"<object
-    at 0x...>"`); those don't translate exactly, so port them as
-    "`note` of a non-string yields *some* `Debug` rendering containing
-    the value's content" rather than asserting Python's exact repr.
-
-    Acceptance criteria:
-      - All four tests compile and pass.
-      - The matching bullets in `SKIPPED.md` are removed.
-
 - title: Add NativeTestCase draw-by-strategy + span tree surface
   details: |
     Port the strategy-driven span-introspection cluster from
