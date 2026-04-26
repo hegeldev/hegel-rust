@@ -19,9 +19,6 @@
 //!   `mark_interesting` / `mark_invalid` methods. Those live on the
 //!   higher-level `NativeConjectureData` whose `for_choices` constructor
 //!   is private.
-//! - `test_notes_repr`, `test_can_note_non_str`,
-//!   `test_can_note_str_as_non_repr`, `test_events_are_noted` — no
-//!   `note()` / `output` / `events` API on `NativeTestCase`.
 //! - `test_examples_show_up_as_discarded`, `test_can_override_label`,
 //!   `test_examples_support_negative_indexing`,
 //!   `test_examples_out_of_bounds_index`, `test_child_indices`,
@@ -166,4 +163,47 @@ fn test_trivial_before_force_agrees_with_trivial_after() {
     // simplest(boolean) is False; node 0 is False (trivial), node 1 is True
     // forced (trivial), node 2 is True unforced (not trivial).
     assert_eq!(t1, vec![true, true, false]);
+}
+
+#[test]
+fn test_notes_repr() {
+    // Upstream notes `b"hi"` and asserts `repr(b"hi")` is in `d.output`.
+    // Native renders the bytes via `{:?}` (Rust's closest analog to Python's
+    // `repr`), which yields `"[104, 105]"` rather than `"b'hi'"`; the port
+    // weakens the assertion to "the Debug rendering of the value lands in
+    // d.output", which is the property the upstream test is really checking.
+    let mut d = NativeTestCase::for_choices(&[], None);
+    let bytes: &[u8] = b"hi";
+    d.note(bytes);
+    assert!(d.output().contains(&format!("{bytes:?}")));
+}
+
+#[test]
+fn test_can_note_non_str() {
+    // Upstream notes a fresh `object()` and asserts `repr(x)` is in
+    // `d.output`.  Rust has no `object()` analog, but any `Debug` type works
+    // for the underlying property: notes carry the value's Debug rendering
+    // through to the output buffer.
+    #[derive(Debug)]
+    struct Marker;
+    let mut d = NativeTestCase::for_choices(&[], None);
+    d.note(Marker);
+    assert!(d.output().contains(&format!("{:?}", Marker)));
+}
+
+#[test]
+fn test_can_note_str_as_non_repr() {
+    // Upstream's `data.note("foo")` short-circuits the `repr()` formatting
+    // and appends "foo" verbatim.  Native exposes that branch as
+    // `note_str` (since `note(<str>)` would Debug-format to `"\"foo\""`).
+    let mut d = NativeTestCase::for_choices(&[], None);
+    d.note_str("foo");
+    assert_eq!(d.output(), "foo");
+}
+
+#[test]
+fn test_events_are_noted() {
+    let mut d = NativeTestCase::for_choices(&[], None);
+    d.events_mut().insert("hello".to_string(), String::new());
+    assert!(d.events().contains_key("hello"));
 }
