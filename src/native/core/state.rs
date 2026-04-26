@@ -397,6 +397,30 @@ impl NativeTestCase {
         }
     }
 
+    /// A test case that replays `prefix` for the first positions and has
+    /// no RNG to fall back on, capping the total number of choices at
+    /// `max_choices`.  Mirrors Hypothesis's
+    /// `ConjectureData(prefix=..., random=None, max_choices=...)`
+    /// construction: any draw past either the prefix or `max_choices`
+    /// sets `status = OVERRUN` and returns `StopTest`.
+    pub fn for_prefix_with_max(prefix: &[ChoiceValue], max_choices: usize) -> Self {
+        NativeTestCase {
+            prefix: prefix.to_vec(),
+            prefix_nodes: None,
+            rng: None,
+            max_size: max_choices,
+            force_simplest: false,
+            nodes: Vec::new(),
+            status: None,
+            collections: HashMap::new(),
+            next_collection_id: 0,
+            variable_pools: Vec::new(),
+            spans: Spans::new(),
+            span_stack: Vec::new(),
+            has_discards: false,
+        }
+    }
+
     /// Record a finished span covering choice nodes `[start, end)` with the
     /// given label.  The span is assigned a parent (the innermost
     /// currently-open span, if any) and a depth (one greater than that
