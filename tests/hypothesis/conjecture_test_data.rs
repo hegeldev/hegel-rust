@@ -64,13 +64,13 @@ use hegel::__native_test_internals::{ChoiceValue, NativeTestCase, Status};
 
 #[test]
 fn test_cannot_draw_after_freeze() {
+    // Hypothesis raises `Frozen` for this; the native engine collapses
+    // `Frozen` and `StopTest` onto the same error path (both surface as
+    // `Err(StopTest)` from a draw, since `frozen()` is just `status.is_some()`).
     let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None);
     d.weighted(0.5, None).ok().unwrap();
     d.freeze();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        d.weighted(0.5, None).ok();
-    }));
-    assert!(result.is_err());
+    assert!(d.weighted(0.5, None).is_err());
 }
 
 #[test]

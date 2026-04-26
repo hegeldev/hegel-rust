@@ -1038,10 +1038,13 @@ impl NativeTestCase {
         Ok(codepoints_to_string(&codepoints))
     }
 
-    // nocov start
     fn pre_choice(&mut self) -> Result<(), StopTest> {
+        // A test case can become frozen mid-execution when `start_span`
+        // exceeds `MAX_DEPTH` and sets `status = Some(Status::Invalid)`,
+        // mirroring Hypothesis's `mark_invalid` from `ConjectureData.draw`.
+        // Subsequent draws must propagate `StopTest` so the test halts.
         if self.status.is_some() {
-            panic!("Frozen: attempted choice on completed test case");
+            return Err(StopTest);
         }
         if self.nodes.len() >= self.max_size {
             self.status = Some(Status::EarlyStop);
@@ -1049,7 +1052,6 @@ impl NativeTestCase {
         }
         Ok(())
     }
-    // nocov end
 
     /// Resolve a choice value from forced, prefix, or random.
     ///
