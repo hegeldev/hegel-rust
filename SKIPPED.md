@@ -2458,10 +2458,6 @@ follow-up.
 - `conjecture/test_test_data.py::test_empty_strategy_is_invalid` —
   uses `st.nothing()`; no native counterpart at the
   `NativeTestCase.draw(strategy)` layer.
-- `conjecture/test_test_data.py::test_result_is_overrun` — no
-  `as_result()` method on `NativeTestCase`. The closest analog
-  (`status == Some(EarlyStop)`) is already covered by the ported
-  `test_draw_past_end_sets_overflow`.
 - `conjecture/test_test_data.py::test_structural_coverage_is_cached`,
   `::test_examples_create_structural_coverage`,
   `::test_discarded_examples_do_not_create_structural_coverage`,
