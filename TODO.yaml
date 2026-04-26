@@ -47,8 +47,6 @@
         test from the still-skipped list.
 
 - title: Port conjecture/test_engine.py::test_terminates_shrinks
-  blocked_by:
-    - Port conjecture/test_engine.py database-introspection cluster
   details: |
     Port `test_terminates_shrinks` (parametrised on `n=1` and `n=5`)
     from `conjecture/test_engine.py`.  Upstream uses
@@ -117,28 +115,6 @@
         `cargo test --features native --test hypothesis conjecture_engine::`.
       - The `::test_fails_health_check_for_all_invalid` through
         `::test_too_slow_report` bullet in `SKIPPED.md` is removed.
-
-- title: Port conjecture/test_engine.py database-introspection cluster
-  details: |
-    Port the following tests from `conjecture/test_engine.py`,
-    native-gated:
-      - `test_clears_out_its_database_on_shrinking`
-      - `test_database_clears_secondary_key`
-      - `test_database_uses_values_from_secondary_key`
-
-    Each uses `InMemoryExampleDatabase` with `.save(key, choices)` /
-    `.fetch(key)` introspection plus `choices_to_bytes` /
-    `choices_from_bytes`. The native analogs are
-    `hegel::__native_test_internals::{InMemoryNativeDatabase,
-    choices_to_bytes, choices_from_bytes}` — all are already exported.
-    Fill in `NativeConjectureRunner::{save_choices, secondary_key,
-    clear_secondary_key, reuse_existing_examples}` as needed.
-
-    Acceptance criteria:
-      - All 3 tests compile and pass.
-      - The `::test_clears_out_its_database_on_shrinking` through
-        `::test_database_uses_values_from_secondary_key` bullet in
-        `SKIPPED.md` is removed.
 
 - title: Port conjecture/test_engine.py new_shrinker cluster
   details: |
