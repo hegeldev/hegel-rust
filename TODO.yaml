@@ -219,27 +219,6 @@
         `::test_does_not_run_optimisation_when_max_examples_is_small`
         bullet in `SKIPPED.md` is removed.
 
-- title: Port conjecture/test_engine.py::test_debug_data
-  details: |
-    Port `test_debug_data` from
-    `resources/hypothesis/hypothesis-python/tests/conjecture/test_engine.py`.
-    Upstream uses `capsys` to capture stdout and assert on
-    `Verbosity.debug` diagnostic output from a
-    `ConjectureRunner.run()` call.
-
-    Port path: use `TempRustProject` (see `tests/test_output.rs` and
-    `tests/test_draw_named.rs`) to run a test with
-    `Verbosity::Debug` in a subprocess and capture stderr, then
-    assert on the expected diagnostic lines. The
-    `NativeConjectureRunner` wrapper doesn't need additional stubs
-    for this — the existing `native_run` debug output already covers
-    the content. This test may end up native-gated or not depending
-    on whether the `TempRustProject` path works on both backends.
-
-    Acceptance criteria:
-      - `test_debug_data` compiles and passes.
-      - The `::test_debug_data` bullet in `SKIPPED.md` is removed.
-
 - title: Add depth-bias to native gs::deferred generation
   details: |
     Native-mode generation through `gs::deferred` recurses through the
