@@ -1,7 +1,8 @@
 // Stateful types: NativeTestCase, ManyState, NativeVariables, Span.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Write};
+use std::sync::{LazyLock, Mutex};
 
 use rand::RngExt;
 use rand::rngs::SmallRng;
@@ -150,6 +151,33 @@ impl Span {
 /// `Status::Invalid`.  Mirrors Hypothesis's
 /// `internal/conjecture/data.py::MAX_DEPTH`.
 pub const MAX_DEPTH: u32 = 100;
+
+/// A tag identifying a structural-coverage class for a span label.
+///
+/// Mirrors Hypothesis's `StructuralCoverageTag` in
+/// `internal/conjecture/data.py`.  Two tags compare equal iff they
+/// were produced from the same label, and [`structural_coverage`]
+/// interns them so that callers also get pointer-equal results for
+/// equal labels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CoverageTag {
+    pub label: u64,
+}
+
+static STRUCTURAL_COVERAGE_CACHE: LazyLock<Mutex<HashMap<u64, &'static CoverageTag>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Look up (or insert) the [`CoverageTag`] for `label`.
+///
+/// Repeated calls with the same `label` return the same `&'static`
+/// reference; this is the Rust analog of Hypothesis's
+/// `STRUCTURAL_COVERAGE_CACHE` interning in `data.py`.
+pub fn structural_coverage(label: u64) -> &'static CoverageTag {
+    let mut cache = STRUCTURAL_COVERAGE_CACHE.lock().unwrap();
+    cache
+        .entry(label)
+        .or_insert_with(|| Box::leak(Box::new(CoverageTag { label })))
+}
 
 /// A collection of spans recorded during a single test case, with
 /// Python-style indexing semantics on top of [`Vec<Span>`].
@@ -348,6 +376,21 @@ pub struct NativeTestCase {
     /// stash arbitrary key/value annotations the way Hypothesis tests do
     /// with `data.events[key] = value`.
     events: HashMap<String, String>,
+    /// Structural-coverage tags accumulated by closing non-discarded
+    /// spans.  Mirrors `ConjectureData.tags` in `data.py`: when a span
+    /// closes without `discard`, every label collected by it (including
+    /// its non-discarded descendants) is added here as a
+    /// [`structural_coverage`] tag.  Discarded spans drop their labels
+    /// (and their descendants' labels) on the floor.
+    pub tags: HashSet<&'static CoverageTag>,
+    /// Per-open-span sets of labels awaiting promotion into [`Self::tags`].
+    ///
+    /// Each `start_span` pushes a fresh `{label}` frame; `stop_span`
+    /// pops it and either merges the frame into its parent (non-discard)
+    /// or discards it (discard).  When the outermost frame closes
+    /// without discard, its labels are converted to [`CoverageTag`]s
+    /// and added to `tags`.  Mirrors `ConjectureData.labels_for_structure_stack`.
+    labels_for_structure_stack: Vec<HashSet<u64>>,
 }
 
 impl NativeTestCase {
@@ -368,6 +411,8 @@ impl NativeTestCase {
             has_discards: false,
             output: String::new(),
             events: HashMap::new(),
+            tags: HashSet::new(),
+            labels_for_structure_stack: Vec::new(),
         }
     }
 
@@ -388,6 +433,8 @@ impl NativeTestCase {
             has_discards: false,
             output: String::new(),
             events: HashMap::new(),
+            tags: HashSet::new(),
+            labels_for_structure_stack: Vec::new(),
         }
     }
 
@@ -414,6 +461,8 @@ impl NativeTestCase {
             has_discards: false,
             output: String::new(),
             events: HashMap::new(),
+            tags: HashSet::new(),
+            labels_for_structure_stack: Vec::new(),
         }
     }
 
@@ -441,6 +490,8 @@ impl NativeTestCase {
             has_discards: false,
             output: String::new(),
             events: HashMap::new(),
+            tags: HashSet::new(),
+            labels_for_structure_stack: Vec::new(),
         }
     }
 
@@ -467,6 +518,8 @@ impl NativeTestCase {
             has_discards: false,
             output: String::new(),
             events: HashMap::new(),
+            tags: HashSet::new(),
+            labels_for_structure_stack: Vec::new(),
         }
     }
 
@@ -518,6 +571,9 @@ impl NativeTestCase {
             discarded: false,
         });
         self.span_stack.push(idx);
+        let mut frame = HashSet::new();
+        frame.insert(label);
+        self.labels_for_structure_stack.push(frame);
         if depth + 1 > MAX_DEPTH && self.status.is_none() {
             self.status = Some(Status::Invalid);
         }
@@ -539,6 +595,15 @@ impl NativeTestCase {
         }
         if discard {
             self.has_discards = true;
+        }
+        let labels = self.labels_for_structure_stack.pop().unwrap_or_default();
+        if !discard {
+            if let Some(parent) = self.labels_for_structure_stack.last_mut() {
+                parent.extend(labels);
+            } else {
+                self.tags
+                    .extend(labels.into_iter().map(structural_coverage));
+            }
         }
     }
 

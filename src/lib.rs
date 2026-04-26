@@ -273,10 +273,10 @@ pub mod __native_test_internals {
         SMALLEST_POSITIVE_FLOAT, Sampler, calc_p_continue, p_continue_to_avg,
     };
     pub use crate::native::core::{
-        BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice,
+        BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, CoverageTag, FloatChoice,
         IntegerChoice, NativeConjectureResult, NativeResult, NativeTestCase, Span, Status,
         StringChoice, decode_exponent, encode_exponent, float_to_index, index_to_float,
-        reverse_bits_n,
+        reverse_bits_n, structural_coverage,
     };
     pub use crate::native::database::{
         BackgroundWriteNativeDatabase, ExampleDatabase, InMemoryNativeDatabase, Listener,
