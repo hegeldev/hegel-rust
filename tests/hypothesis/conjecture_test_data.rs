@@ -36,11 +36,6 @@
 //!   draw-by-strategy method.
 //! - `test_empty_strategy_is_invalid` — uses `st.nothing()`, no native
 //!   counterpart at this layer.
-//! - `test_structural_coverage_is_cached`,
-//!   `test_examples_create_structural_coverage`,
-//!   `test_discarded_examples_do_not_create_structural_coverage`,
-//!   `test_children_of_discarded_examples_do_not_create_structural_coverage`
-//!   — no `structural_coverage()` / `tags` API on the native engine.
 //! - `test_closes_interval_on_error_in_strategy`,
 //!   `test_does_not_double_freeze_in_interval_close` — assume that
 //!   `NativeTestCase` exposes a `draw(strategy)` method that closes
@@ -49,7 +44,9 @@
 
 #![cfg(feature = "native")]
 
-use hegel::__native_test_internals::{ChoiceValue, NativeResult, NativeTestCase, Status};
+use hegel::__native_test_internals::{
+    ChoiceValue, NativeResult, NativeTestCase, Status, structural_coverage,
+};
 
 #[test]
 fn test_cannot_draw_after_freeze() {
@@ -215,4 +212,45 @@ fn test_events_are_noted() {
     let mut d = NativeTestCase::for_choices(&[], None);
     d.events_mut().insert("hello".to_string(), String::new());
     assert!(d.events().contains_key("hello"));
+}
+
+#[test]
+fn test_structural_coverage_is_cached() {
+    // Upstream uses Python's `is` to assert pointer-equality through
+    // the interning cache.  Native returns `&'static CoverageTag` from
+    // a `LazyLock<Mutex<HashMap>>`, so pointer equality is exposed
+    // directly via raw-pointer comparison (and `==` works as well).
+    let a: *const _ = structural_coverage(50);
+    let b: *const _ = structural_coverage(50);
+    assert_eq!(a, b);
+}
+
+#[test]
+fn test_examples_create_structural_coverage() {
+    let mut d = NativeTestCase::for_choices(&[], None);
+    d.start_span(42);
+    d.stop_span(false);
+    d.freeze();
+    assert!(d.tags.contains(structural_coverage(42)));
+}
+
+#[test]
+fn test_discarded_examples_do_not_create_structural_coverage() {
+    let mut d = NativeTestCase::for_choices(&[], None);
+    d.start_span(42);
+    d.stop_span(true);
+    d.freeze();
+    assert!(!d.tags.contains(structural_coverage(42)));
+}
+
+#[test]
+fn test_children_of_discarded_examples_do_not_create_structural_coverage() {
+    let mut d = NativeTestCase::for_choices(&[], None);
+    d.start_span(10);
+    d.start_span(42);
+    d.stop_span(false);
+    d.stop_span(true);
+    d.freeze();
+    assert!(!d.tags.contains(structural_coverage(42)));
+    assert!(!d.tags.contains(structural_coverage(10)));
 }
