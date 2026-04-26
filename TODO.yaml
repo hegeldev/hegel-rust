@@ -240,25 +240,6 @@
       - `test_debug_data` compiles and passes.
       - The `::test_debug_data` bullet in `SKIPPED.md` is removed.
 
-- title: Port conjecture/test_engine.py::test_mildly_complicated_strategies LargeFlag row
-  details: |
-    The `st.sampled_from(enum.Flag("LargeFlag", ...))` row of
-    `test_mildly_complicated_strategies` in
-    `resources/hypothesis/hypothesis-python/tests/conjecture/test_engine.py`
-    is currently skipped because Python's `enum.Flag` has no direct
-    Rust analog. Build a small local bitflags-style type (e.g. via
-    the `bitflags!` crate already in use, or a plain `#[derive(Clone,
-    Copy)] struct LargeFlag(u64)`) with 64 distinct flag values, wrap
-    it in `gs::sampled_from(all_flag_combinations)`, and port the
-    `minimal(gen, |f| bit_count(f.value) > 1)` shape. No new native
-    wrapper functionality needed.
-
-    Acceptance criteria:
-      - The port compiles and passes under
-        `cargo test --test hypothesis conjecture_engine::`.
-      - The `::test_mildly_complicated_strategies` (LargeFlag row)
-        bullet in `SKIPPED.md` is removed.
-
 - title: Add depth-bias to native gs::deferred generation
   details: |
     Native-mode generation through `gs::deferred` recurses through the
