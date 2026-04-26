@@ -23,6 +23,7 @@
 //!
 #![cfg(feature = "native")]
 
+use crate::common::project::TempRustProject;
 use crate::common::utils::{expect_panic, minimal};
 use hegel::__native_test_internals::{
     ChoiceValue, ExampleDatabase, ExitReason, HealthCheckLabel, InMemoryNativeDatabase,
@@ -1481,4 +1482,46 @@ fn test_simulate_to_evicted_data() {
     assert!(sim, "tree should still know about choice [0]");
     runner.cached_test_function(&[ChoiceValue::Integer(0)]);
     assert_eq!(runner.call_count, 3);
+}
+
+// Upstream uses `capsys` to capture stdout from a `ConjectureRunner.run()`
+// call with `Verbosity.debug` and asserts on `\d+ choices -> ` and
+// `INTERESTING`. The Rust analog runs a hegel test in a subprocess with
+// `Verbosity::Debug` (via `TempRustProject`) and asserts on the equivalent
+// `native_run` debug output: the per-test-case `... choices = N` line and
+// the `Interesting` status.
+const DEBUG_DATA_CODE: &str = r#"
+use hegel::{Hegel, Settings, Verbosity};
+use hegel::generators as gs;
+
+fn main() {
+    Hegel::new(|tc| {
+        let _: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(100));
+        panic!("debug-data-failure");
+    })
+    .settings(Settings::new()
+        .test_cases(5000)
+        .verbosity(Verbosity::Debug)
+        .database(None))
+    .run();
+}
+"#;
+
+#[test]
+fn test_debug_data() {
+    let output = TempRustProject::new()
+        .main_file(DEBUG_DATA_CODE)
+        .expect_failure("debug-data-failure")
+        .cargo_run(&[]);
+
+    let stderr = &output.stderr;
+    let re = regex::Regex::new(r"choices = \d+").unwrap();
+    assert!(
+        re.is_match(stderr),
+        "Expected `choices = \\d+` in debug output. stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Interesting"),
+        "Expected `Interesting` status in debug output. stderr:\n{stderr}"
+    );
 }

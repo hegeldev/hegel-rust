@@ -2417,10 +2417,6 @@ is acceptance for the corresponding follow-up.
   each asserts on `runner.pareto_front` / `dominance` /
   `runner.optimise_calls_count`. Pareto-front bookkeeping is not in
   `src/native/optimiser.rs`; only the hill-climb side is ported.
-- `conjecture/test_engine.py::test_debug_data` — Python
-  `capsys`-based stdout capture of `Verbosity.debug` diagnostic
-  output. Covered in spirit by `tests/hypothesis/verbosity.rs`.
-
 The `conjecture/test_test_data.py::*` entries below are parked
 awaiting follow-up additions to `NativeTestCase` /
 `NativeConjectureData` in `src/native/`. The three tests that map to
