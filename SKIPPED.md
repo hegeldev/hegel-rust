@@ -2441,10 +2441,6 @@ follow-up.
   `NativeConjectureData`, whose `for_choices` constructor is private.
   A public `NativeConjectureData::for_choices` (or moving the marks
   down to `NativeTestCase`) is the unblock.
-- `conjecture/test_test_data.py::test_notes_repr`,
-  `::test_can_note_non_str`, `::test_can_note_str_as_non_repr`,
-  `::test_events_are_noted` — no `note()` / `output` / `events` API
-  on the native test-case types.
 - `conjecture/test_test_data.py::test_examples_show_up_as_discarded`,
   `::test_can_override_label`,
   `::test_examples_support_negative_indexing`,
