@@ -1,6 +1,7 @@
 // Stateful types: NativeTestCase, ManyState, NativeVariables, Span.
 
 use std::collections::HashMap;
+use std::fmt::{Debug, Write};
 
 use rand::RngExt;
 use rand::rngs::SmallRng;
@@ -309,6 +310,15 @@ pub struct NativeTestCase {
     /// retry mark the rejected attempts as discarded, which the shrinker uses
     /// to prioritise removing them.
     pub has_discards: bool,
+    /// Free-form text accumulated by `note()` calls during a run.  Mirrors
+    /// `ConjectureData.output`: the runner surfaces this in counterexample
+    /// reproducers so user-visible context survives shrinking.
+    output: String,
+    /// User-defined event labels, mirroring `ConjectureData.events`.  Hegel
+    /// hands callers mutable access via [`Self::events_mut`] so they can
+    /// stash arbitrary key/value annotations the way Hypothesis tests do
+    /// with `data.events[key] = value`.
+    events: HashMap<String, String>,
 }
 
 impl NativeTestCase {
@@ -327,6 +337,8 @@ impl NativeTestCase {
             spans: Spans::new(),
             span_stack: Vec::new(),
             has_discards: false,
+            output: String::new(),
+            events: HashMap::new(),
         }
     }
 
@@ -345,6 +357,8 @@ impl NativeTestCase {
             spans: Spans::new(),
             span_stack: Vec::new(),
             has_discards: false,
+            output: String::new(),
+            events: HashMap::new(),
         }
     }
 
@@ -369,6 +383,8 @@ impl NativeTestCase {
             spans: Spans::new(),
             span_stack: Vec::new(),
             has_discards: false,
+            output: String::new(),
+            events: HashMap::new(),
         }
     }
 
@@ -394,6 +410,8 @@ impl NativeTestCase {
             spans: Spans::new(),
             span_stack: Vec::new(),
             has_discards: false,
+            output: String::new(),
+            events: HashMap::new(),
         }
     }
 
@@ -524,6 +542,39 @@ impl NativeTestCase {
         if !already_frozen {
             self.status = Some(Status::Valid);
         }
+    }
+
+    /// Append `value`'s `Debug` rendering to [`Self::output`].  Mirrors
+    /// `ConjectureData.note` for non-string inputs (`format!("{:?}", x)` is
+    /// the closest Rust analog of Python's `repr`); use [`Self::note_str`]
+    /// for the verbatim string case.
+    pub fn note<T: Debug>(&mut self, value: T) {
+        let _ = write!(&mut self.output, "{value:?}");
+    }
+
+    /// Append `value` verbatim to [`Self::output`], without surrounding
+    /// quotes or escaping.  Mirrors `ConjectureData.note(<str>)`, which
+    /// short-circuits the `repr()` formatting for `str` inputs.
+    pub fn note_str(&mut self, value: &str) {
+        self.output.push_str(value);
+    }
+
+    /// Read-only view of the text accumulated by `note*` calls.
+    pub fn output(&self) -> &str {
+        &self.output
+    }
+
+    /// Mutable access to the event annotations map.  Mirrors
+    /// `ConjectureData.events`: tests stash arbitrary key/value pairs via
+    /// `data.events[key] = value`, and the runner surfaces them in
+    /// post-run statistics.
+    pub fn events_mut(&mut self) -> &mut HashMap<String, String> {
+        &mut self.events
+    }
+
+    /// Read-only view of the event annotations map.
+    pub fn events(&self) -> &HashMap<String, String> {
+        &self.events
     }
 
     /// Allocate a new collection ID and store the given state.
