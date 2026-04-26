@@ -2597,6 +2597,10 @@ def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
                                     f"\n[port-loop] pool: failed to spawn "
                                     f"todo worker in slot {slot}: {e}"
                                 )
+                                # The pick optimistically bumped the
+                                # attempt counter — roll it back since
+                                # no agent actually ran.
+                                _rollback_todo_attempt(todo_picked)
                                 stop[0] = True
                                 break
                             in_flight[slot] = {
@@ -3023,6 +3027,24 @@ def _has_pickable_todo() -> bool:
     return bool(_pickable_todo_indices(todos, attempts_map, hashes))
 
 
+def _rollback_todo_attempt(
+    picked: tuple[dict, int, int, int, str],
+) -> None:
+    """Undo the `_pick_todo_for_dispatch` bump when no agent actually ran.
+
+    Use only on dispatch-pipeline failures (e.g. worker subprocess
+    failed to spawn) where the picked entry never reached an agent. A
+    transient infra error must not consume the entry's retry budget.
+    Real agent failures — agent ran but didn't clear the entry — keep
+    the bump.
+    """
+    _, attempts_before, _, _, entry_hash = picked
+    attempts_map = _load_todo_attempts()
+    if attempts_map.get(entry_hash) == attempts_before + 1:
+        attempts_map[entry_hash] = attempts_before
+        _save_todo_attempts(attempts_map)
+
+
 def _run_git(args: list[str]) -> subprocess.CompletedProcess:
     """Run a git subcommand, capturing output and echoing it live."""
     cmd = ["git", *args]
@@ -3141,7 +3163,11 @@ def gate_sync_with_origin() -> tuple[bool, str, bool]:
             "\n[port-loop] no origin/main to rebase onto; skipping rebase."
         )
     else:
-        rebase = _run_git(["rebase", "origin/main"])
+        # --autostash: tolerate uncommitted changes (e.g. an in-progress
+        # edit to scripts/port-loop.py, which `is_tree_clean()` filters
+        # out so the gate-clean check passes but `git rebase` doesn't).
+        # On rebase failure, the stash is preserved for human recovery.
+        rebase = _run_git(["rebase", "--autostash", "origin/main"])
         _record(rebase)
         if rebase.returncode != 0:
             abort = _run_git(["rebase", "--abort"])
@@ -3212,7 +3238,9 @@ def gate_sync_with_origin() -> tuple[bool, str, bool]:
             if retry_fetch.returncode != 0:
                 return False, "".join(combined), False
             if origin_main is not None:
-                retry_rebase = _run_git(["rebase", "origin/main"])
+                retry_rebase = _run_git(
+                    ["rebase", "--autostash", "origin/main"]
+                )
                 _record(retry_rebase)
                 if retry_rebase.returncode != 0:
                     abort = _run_git(["rebase", "--abort"])
@@ -3426,12 +3454,30 @@ def _run_capture(args: list[str], *, cwd: Path | None = None) -> subprocess.Comp
 def _ensure_worktree_at(
     path: Path, branch: str, base_sha: str, label: str
 ) -> Path:
-    """Create the worktree at `path` pinned to `base_sha` (reuses if present)."""
+    """Create the worktree at `path` pinned to `base_sha` (reuses if present).
+
+    Reuse requires that git itself still recognises the worktree —
+    `.port-worktrees/worker-N/.git` is a pointer file into
+    `.git/worktrees/worker-N/`, and if that side has been pruned (or
+    the supervisor's repo `.git` was rewritten) the pointer goes stale
+    and any git command in the worktree dies with `not a git
+    repository`. Verify with `rev-parse --git-dir` before reusing; on
+    failure, fall through to the rm+recreate path.
+    """
     WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
 
     if path.exists() and (path / ".git").exists():
-        _reset_worktree_at(path, branch, base_sha)
-        return path
+        check = _run_capture(
+            ["git", "rev-parse", "--git-dir"], cwd=path,
+        )
+        if check.returncode == 0:
+            _reset_worktree_at(path, branch, base_sha)
+            return path
+        print(
+            f"[port-loop] worktree {path} has a stale .git pointer "
+            f"(git-dir missing); recreating from scratch.",
+            flush=True,
+        )
 
     if path.exists():
         # Stale filesystem leftover — rm -rf via subprocess (no Python
