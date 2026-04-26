@@ -36,9 +36,6 @@
 //!   draw-by-strategy method.
 //! - `test_empty_strategy_is_invalid` — uses `st.nothing()`, no native
 //!   counterpart at this layer.
-//! - `test_result_is_overrun` — no `as_result()` method on
-//!   `NativeTestCase`; the closest analog (`status == Some(EarlyStop)`)
-//!   is already covered by `test_draw_past_end_sets_overflow`.
 //! - `test_structural_coverage_is_cached`,
 //!   `test_examples_create_structural_coverage`,
 //!   `test_discarded_examples_do_not_create_structural_coverage`,
@@ -52,7 +49,7 @@
 
 #![cfg(feature = "native")]
 
-use hegel::__native_test_internals::{ChoiceValue, NativeTestCase, Status};
+use hegel::__native_test_internals::{ChoiceValue, NativeResult, NativeTestCase, Status};
 
 #[test]
 fn test_cannot_draw_after_freeze() {
@@ -84,6 +81,18 @@ fn test_draw_past_end_sets_overflow() {
     let r = d.weighted(0.5, None);
     assert!(r.is_err()); // StopTest equivalent
     assert_eq!(d.status, Some(Status::EarlyStop)); // OVERRUN equivalent
+}
+
+#[test]
+fn test_result_is_overrun() {
+    // Upstream draws past an empty prefix, then asserts
+    // `d.as_result() is Overrun`.  Native uses the `NativeResult`
+    // enum: `EarlyStop` (the `OVERRUN` analog) becomes
+    // `NativeResult::Overrun`.
+    let mut d = NativeTestCase::for_choices(&[], None);
+    let r = d.weighted(0.5, None);
+    assert!(r.is_err());
+    assert!(matches!(d.as_result(), NativeResult::Overrun));
 }
 
 #[test]
