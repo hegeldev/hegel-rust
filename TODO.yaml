@@ -342,26 +342,6 @@
         conjecture_test_data::`.
       - The matching bullets in `SKIPPED.md` are removed.
 
-- title: Add NativeTestCase as_result() / Overrun sentinel
-  details: |
-    Port `test_result_is_overrun` from
-    `conjecture/test_test_data.py`. The test draws past the prefix
-    end and asserts `d.as_result() is Overrun`.
-
-    Port path: add `pub fn as_result(&self) -> NativeResult` on
-    `NativeTestCase` (or a free function) returning a
-    `NativeResult::Overrun` when `status == Some(Status::EarlyStop)`
-    and a `NativeResult::Conjecture(...)` snapshot otherwise. Mirror
-    Hypothesis's `_Overrun` singleton via a unit-struct or enum
-    variant exported from `__native_test_internals`. The existing
-    `test_draw_past_end_sets_overflow` asserts on the underlying
-    `status` directly; this test asserts the same condition through
-    the higher-level `as_result()` accessor.
-
-    Acceptance criteria:
-      - `test_result_is_overrun` compiles and passes.
-      - The matching bullet in `SKIPPED.md` is removed.
-
 - title: Add NativeTestCase structural_coverage + tags surface
   details: |
     Port the four `structural_coverage` tests from
