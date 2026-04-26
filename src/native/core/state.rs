@@ -436,6 +436,8 @@ impl NativeTestCase {
             spans: Spans::new(),
             span_stack: Vec::new(),
             has_discards: false,
+            output: String::new(),
+            events: HashMap::new(),
         }
     }
 
