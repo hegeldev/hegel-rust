@@ -452,6 +452,8 @@
       - The matching bullets in `SKIPPED.md` are removed.
 
 - title: Add NativeTestCase st.nothing() / draw-by-strategy invalid path
+  blocked_by:
+    - Add NativeTestCase draw-by-strategy + span tree surface
   details: |
     Port `test_empty_strategy_is_invalid` from
     `conjecture/test_test_data.py`. Upstream calls
