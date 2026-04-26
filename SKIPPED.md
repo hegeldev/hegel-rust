@@ -2369,14 +2369,6 @@ is acceptance for the corresponding follow-up.
   `str(HealthCheck.xxx) in str(e.value)`. Native panics with a
   free-form string (`"FailedHealthCheck: TooSlow — …"`) and has no
   structured `FailedHealthCheck` exception or label enum.
-- `conjecture/test_engine.py::test_clears_out_its_database_on_shrinking`,
-  `::test_database_clears_secondary_key`,
-  `::test_database_uses_values_from_secondary_key` — each uses
-  `InMemoryExampleDatabase` with `.data` / `.save(key, choices)` /
-  `.fetch(key)` introspection and `choices_to_bytes` /
-  `choices_from_bytes`. Native has a path-backed `NativeDatabase`
-  only; there is no in-memory variant exposed for tests and no
-  choice-bytes codec helpers.
 - `conjecture/test_engine.py::test_can_remove_discarded_data`,
   `::test_discarding_iterates_to_fixed_point`,
   `::test_discarding_is_not_fooled_by_empty_discards`,
