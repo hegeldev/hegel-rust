@@ -27,8 +27,8 @@ use crate::common::project::TempRustProject;
 use crate::common::utils::{expect_panic, minimal};
 use hegel::__native_test_internals::{
     ChoiceValue, ExampleDatabase, ExitReason, HealthCheckLabel, InMemoryNativeDatabase,
-    NativeConjectureData, NativeConjectureRunner, NativeRunnerSettings, RunnerPhase,
-    choices_from_bytes, choices_to_bytes, interesting_origin, run_to_nodes,
+    InterestingExample, NativeConjectureData, NativeConjectureRunner, NativeRunnerSettings,
+    RunnerPhase, choices_from_bytes, choices_to_bytes, interesting_origin, run_to_nodes,
 };
 use hegel::TestCase;
 use hegel::generators as gs;
@@ -1276,6 +1276,203 @@ fn test_discards_invalid_db_entries_pareto() {
     assert!(db.fetch(&key).is_empty());
     assert!(db.fetch(&pareto).is_empty());
     assert_eq!(runner.call_count, 0);
+}
+
+// -----------------------------------------------------------------------
+// Database introspection cluster.  Each test pre-populates the secondary
+// corpus with a known set of entries, drives the runner enough to seed
+// or shrink an interesting example, and asserts on the final
+// primary/secondary database contents.  Upstream relies on
+// `monkeypatch.setattr(ConjectureRunner, "generate_new_examples", ...)`
+// to replace generation with a single `cached_test_function(seed)` call;
+// the native port mirrors that by pre-seeding via
+// `runner.cached_test_function(seed)` and then driving
+// `runner.shrink_interesting_examples()` directly.  The validation pass
+// in the native shrink phase calls `clear_secondary_key()`, which is
+// what filters the secondary corpus down to entries the runner still
+// considers worth keeping.
+// -----------------------------------------------------------------------
+
+fn run_clears_out_its_database_on_shrinking(initial_attempt: i128, skip_target: bool) {
+    let key = b"key".to_vec();
+    let db: Arc<InMemoryNativeDatabase> = Arc::new(InMemoryNativeDatabase::new());
+    let db_dyn: Arc<dyn ExampleDatabase> = db.clone();
+
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(256)
+        .database(Some(db_dyn));
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            if data.draw_integer(0, 255) >= 127 {
+                data.mark_interesting(interesting_origin(None));
+            }
+        },
+        settings,
+        rng,
+    )
+    .with_database_key(key.clone());
+
+    let secondary = runner.secondary_key();
+    for n in 0i128..256 {
+        if n != 127 || !skip_target {
+            let entry = choices_to_bytes(&[ChoiceValue::Integer(n)]);
+            db.save(&secondary, &entry);
+        }
+    }
+
+    // Upstream monkeypatches `generate_new_examples` so that the
+    // generation phase is just a single `cached_test_function(initial)`
+    // call.  We replicate that by pre-seeding directly and then running
+    // only the shrink phase.
+    runner.cached_test_function(&[ChoiceValue::Integer(initial_attempt)]);
+    runner.shrink_interesting_examples();
+
+    assert_eq!(runner.interesting_examples.len(), 1);
+    for b in db.fetch(&secondary) {
+        let choices = choices_from_bytes(&b).unwrap();
+        match choices[0] {
+            ChoiceValue::Integer(n) => assert!(n >= 127, "secondary entry {n} < 127"),
+            ref c => panic!("expected integer in secondary, got {c:?}"),
+        }
+    }
+    assert_eq!(db.fetch(&key).len(), 1);
+}
+
+#[test]
+fn test_clears_out_its_database_on_shrinking_127_no_skip() {
+    run_clears_out_its_database_on_shrinking(127, false);
+}
+
+#[test]
+fn test_clears_out_its_database_on_shrinking_127_skip() {
+    run_clears_out_its_database_on_shrinking(127, true);
+}
+
+#[test]
+fn test_clears_out_its_database_on_shrinking_128_no_skip() {
+    run_clears_out_its_database_on_shrinking(128, false);
+}
+
+#[test]
+fn test_clears_out_its_database_on_shrinking_128_skip() {
+    run_clears_out_its_database_on_shrinking(128, true);
+}
+
+#[test]
+fn test_database_clears_secondary_key() {
+    // Test fn marks `(10,)` interesting and rejects everything else as
+    // invalid.  Pre-populate the secondary corpus with `0..9` (none of
+    // which the test fn finds interesting), seed the interesting
+    // example via `cached_test_function((10,))`, then call
+    // `clear_secondary_key()` directly.  Every secondary entry replays
+    // as `Status::Invalid`, so the loop deletes them all without
+    // disturbing the single primary entry.
+    let key = b"key".to_vec();
+    let db: Arc<InMemoryNativeDatabase> = Arc::new(InMemoryNativeDatabase::new());
+    let db_dyn: Arc<dyn ExampleDatabase> = db.clone();
+
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(1)
+        .database(Some(db_dyn));
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            if data.draw_integer(i128::MIN, i128::MAX) == 10 {
+                data.mark_interesting(interesting_origin(None));
+            } else {
+                data.mark_invalid();
+            }
+        },
+        settings,
+        rng,
+    )
+    .with_database_key(key.clone());
+
+    let secondary = runner.secondary_key();
+    for i in 0i128..10 {
+        let entry = choices_to_bytes(&[ChoiceValue::Integer(i)]);
+        db.save(&secondary, &entry);
+    }
+
+    runner.cached_test_function(&[ChoiceValue::Integer(10)]);
+    assert!(!runner.interesting_examples.is_empty());
+
+    let primary: HashSet<Vec<u8>> = db.fetch(&key).into_iter().collect();
+    assert_eq!(primary.len(), 1);
+    let secondary_set: HashSet<Vec<u8>> = db.fetch(&secondary).into_iter().collect();
+    assert_eq!(secondary_set.len(), 10);
+
+    runner.clear_secondary_key();
+
+    let primary: HashSet<Vec<u8>> = db.fetch(&key).into_iter().collect();
+    assert_eq!(primary.len(), 1);
+    let secondary_set: HashSet<Vec<u8>> = db.fetch(&secondary).into_iter().collect();
+    assert!(secondary_set.is_empty());
+}
+
+#[test]
+fn test_database_uses_values_from_secondary_key() {
+    // Test fn marks any integer >= 5 as interesting.  Pre-populate
+    // secondary with `0..9`, seed `(10,)` as the initial bug, then call
+    // `clear_secondary_key()`.  The secondary replay finds smaller
+    // interesting values (`5..9`); each one triggers the
+    // `record_test_result` replace+downgrade path: `(5,)` becomes the
+    // new primary and the previous best `(10,)` is downgraded to
+    // secondary.  After the loop breaks at `bytes(6) > bytes(5)`, the
+    // secondary corpus contains exactly `{6, 7, 8, 9, 10}`.
+    let key = b"key".to_vec();
+    let db: Arc<InMemoryNativeDatabase> = Arc::new(InMemoryNativeDatabase::new());
+    let db_dyn: Arc<dyn ExampleDatabase> = db.clone();
+
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(1)
+        .database(Some(db_dyn));
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            if data.draw_integer(i128::MIN, i128::MAX) >= 5 {
+                data.mark_interesting(interesting_origin(None));
+            } else {
+                data.mark_invalid();
+            }
+        },
+        settings,
+        rng,
+    )
+    .with_database_key(key.clone());
+
+    let secondary = runner.secondary_key();
+    for i in 0i128..10 {
+        let entry = choices_to_bytes(&[ChoiceValue::Integer(i)]);
+        db.save(&secondary, &entry);
+    }
+
+    runner.cached_test_function(&[ChoiceValue::Integer(10)]);
+    assert!(!runner.interesting_examples.is_empty());
+
+    let primary: HashSet<Vec<u8>> = db.fetch(&key).into_iter().collect();
+    assert_eq!(primary.len(), 1);
+    let secondary_set: HashSet<Vec<u8>> = db.fetch(&secondary).into_iter().collect();
+    assert_eq!(secondary_set.len(), 10);
+
+    runner.clear_secondary_key();
+
+    let primary: HashSet<Vec<u8>> = db.fetch(&key).into_iter().collect();
+    assert_eq!(primary.len(), 1);
+    let secondary_choices: HashSet<i128> = db
+        .fetch(&secondary)
+        .into_iter()
+        .map(|b| match choices_from_bytes(&b).unwrap()[0] {
+            ChoiceValue::Integer(n) => n,
+            ref c => panic!("expected integer in secondary, got {c:?}"),
+        })
+        .collect();
+    assert_eq!(secondary_choices, (6i128..=10).collect());
+
+    let values: Vec<&InterestingExample> = runner.interesting_examples.values().collect();
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0].choices, vec![ChoiceValue::Integer(5)]);
 }
 
 // -----------------------------------------------------------------------
