@@ -221,12 +221,10 @@ pub(crate) mod cli;
 pub(crate) mod control;
 pub mod explicit_test_case;
 pub mod generators;
-pub(crate) mod protocol;
 pub(crate) mod runner;
+pub(crate) mod server;
 pub mod stateful;
 mod test_case;
-pub(crate) mod utils;
-mod uv;
 
 #[doc(hidden)]
 pub use control::currently_in_test_context;
@@ -421,9 +419,9 @@ pub use cli::CliOutcome;
 #[doc(hidden)]
 pub use cli::apply_cli_args as __apply_cli_args;
 #[doc(hidden)]
-pub use runner::__test_kill_server;
-#[doc(hidden)]
-pub use runner::format_log_excerpt;
-#[doc(hidden)]
 pub use runner::hegel;
 pub use runner::{HealthCheck, Hegel, Mode, Settings, Verbosity};
+#[doc(hidden)]
+pub use server::process::__test_kill_server;
+#[doc(hidden)]
+pub use server::process::format_log_excerpt;
