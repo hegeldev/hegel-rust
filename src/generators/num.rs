@@ -1,7 +1,7 @@
 use super::{BasicGenerator, Generator, TestCase};
 use crate::utils::cbor_utils::{cbor_map, cbor_serialize, map_insert};
 use crate::utils::num::{
-    HEGEL_COMPLEX_TAG, HEGEL_RATIONAL_TAG, cbor_to_bigint, cbor_to_biguint, int_to_cbor,
+    HEGEL_COMPLEX_TAG, HEGEL_FRACTION_TAG, cbor_to_bigint, cbor_to_biguint, int_to_cbor,
 };
 use ciborium::Value;
 use num_bigint::{BigInt, BigUint};
@@ -108,7 +108,7 @@ impl<T: NumInteger + super::Integer + CheckedMul> RationalGenerator<T> {
         );
 
         cbor_map! {
-            "type" => "rational",
+            "type" => "fraction",
             "min_value" => min.to_cbor(),
             "max_value" => max.to_cbor(),
             "max_denominator" => max_denom.to_cbor()
@@ -121,8 +121,8 @@ fn parse_ratio<T: super::Integer + NumInteger>(v: Value) -> Ratio<T> {
         panic!("expected CBOR Tag for rational, got {v:?}");
     };
     assert_eq!(
-        tag, HEGEL_RATIONAL_TAG,
-        "expected rational tag {HEGEL_RATIONAL_TAG}, got {tag}"
+        tag, HEGEL_FRACTION_TAG,
+        "expected rational tag {HEGEL_FRACTION_TAG}, got {tag}"
     );
     let Value::Array(items) = *inner else {
         panic!("expected Array inside rational tag, got {inner:?}");
@@ -193,6 +193,7 @@ pub struct ComplexGenerator<T> {
     max_magnitude: Option<T>,
     allow_nan: bool,
     allow_infinity: bool,
+    allow_subnormal: bool,
 }
 
 impl<T> ComplexGenerator<T> {
@@ -219,6 +220,12 @@ impl<T> ComplexGenerator<T> {
         self.allow_infinity = allow;
         self
     }
+
+    /// Whether subnormal values are allowed in either component.
+    pub fn allow_subnormal(mut self, allow: bool) -> Self {
+        self.allow_subnormal = allow;
+        self
+    }
 }
 
 impl<T: super::Float + serde::Serialize> ComplexGenerator<T> {
@@ -228,6 +235,7 @@ impl<T: super::Float + serde::Serialize> ComplexGenerator<T> {
             "type" => "complex",
             "allow_nan" => self.allow_nan,
             "allow_infinity" => self.allow_infinity,
+            "allow_subnormal" => self.allow_subnormal,
             "width" => width,
         };
         if let Some(ref min) = self.min_magnitude {
