@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1 - 2026-04-25
+
+This release implements `DefaultGenerator` for `PathBuf`.
+
 ## 0.8.0 - 2026-04-22
 
 Add `Mode::SingleTestCase` setting for running exactly one test case with no shrinking or replay. Available via `Settings::mode()`, `#[hegel::test(mode = Mode::SingleTestCase)]`, and the `--single-test-case` CLI flag.
