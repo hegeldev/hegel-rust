@@ -90,11 +90,7 @@ impl DataSource for NativeDataSource {
         Ok(())
     }
 
-    fn new_collection(
-        &self,
-        min_size: u64,
-        max_size: Option<u64>,
-    ) -> Result<i64, DataSourceError> {
+    fn new_collection(&self, min_size: u64, max_size: Option<u64>) -> Result<i64, DataSourceError> {
         use crate::cbor_utils::{cbor_map, map_insert};
         let mut payload = cbor_map! { "min_size" => min_size };
         if let Some(max) = max_size {
