@@ -78,7 +78,7 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
     // Generate the do_draw() fallback fields
     let generate_fields = field_names.iter().map(|name| {
         quote! {
-            #name: self.#name.do_draw(__data)
+            #name: self.#name.do_draw(__tc)
         }
     });
 
@@ -153,15 +153,15 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
             }
 
             impl<'a> hegel::generators::Generator<#name> for #generator_name<'a> {
-                fn do_draw(&self, __data: &hegel::TestCase) -> #name {
+                fn do_draw(&self, __tc: &hegel::TestCase) -> #name {
                     if let Some(basic) = self.as_basic() {
-                        basic.parse_raw(hegel::generate_raw(__data, basic.schema()))
+                        basic.parse_raw(hegel::generate_raw(__tc, basic.schema()))
                     } else {
-                        __data.start_span(hegel::generators::labels::FIXED_DICT);
+                        __tc.start_span(hegel::generators::labels::FIXED_DICT);
                         let __result = #name {
                             #(#generate_fields,)*
                         };
-                        __data.stop_span(false);
+                        __tc.stop_span(false);
                         __result
                     }
                 }

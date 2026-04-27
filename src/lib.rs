@@ -1,12 +1,8 @@
 //! Hegel is a property-based testing library for Rust. Hegel is based on [Hypothesis](https://github.com/hypothesisworks/hypothesis), using the [Hegel](https://hegel.dev/) protocol.
 //!
-//! # Getting started with Hegel for Rust
+//! # Getting started
 //!
 //! This guide walks you through the basics of installing Hegel and writing your first tests.
-//!
-//! ## Prerequisites
-//!
-//! You will need [`uv`](https://docs.astral.sh/uv/) installed and on your PATH.
 //!
 //! ## Install Hegel
 //!
