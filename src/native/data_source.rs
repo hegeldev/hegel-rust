@@ -94,7 +94,7 @@ impl DataSource for NativeDataSource {
         &self,
         min_size: u64,
         max_size: Option<u64>,
-    ) -> Result<String, DataSourceError> {
+    ) -> Result<i64, DataSourceError> {
         use crate::cbor_utils::{cbor_map, map_insert};
         let mut payload = cbor_map! { "min_size" => min_size };
         if let Some(max) = max_size {
@@ -103,13 +103,11 @@ impl DataSource for NativeDataSource {
         let Value::Integer(i) = self.dispatch("new_collection", &payload)? else {
             unreachable!("new_collection always returns Value::Integer")
         };
-        let n: i128 = i.into();
-        Ok(n.to_string())
+        Ok(i128::from(i) as i64)
     }
 
-    fn collection_more(&self, collection: &str) -> Result<bool, DataSourceError> {
+    fn collection_more(&self, collection_id: i64) -> Result<bool, DataSourceError> {
         use crate::cbor_utils::cbor_map;
-        let collection_id: i64 = collection.parse().unwrap();
         let response = self.dispatch(
             "collection_more",
             &cbor_map! { "collection_id" => collection_id },
@@ -122,11 +120,10 @@ impl DataSource for NativeDataSource {
 
     fn collection_reject(
         &self,
-        collection: &str,
+        collection_id: i64,
         why: Option<&str>,
     ) -> Result<(), DataSourceError> {
         use crate::cbor_utils::{cbor_map, map_insert};
-        let collection_id: i64 = collection.parse().unwrap();
         let mut payload = cbor_map! { "collection_id" => collection_id };
         if let Some(reason) = why {
             map_insert(&mut payload, "why", reason.to_string());
