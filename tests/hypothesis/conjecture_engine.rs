@@ -319,7 +319,7 @@ fn test_one_dead_branch() {
     run_to_nodes(move |data: &mut NativeConjectureData| {
         let i = data.draw_bytes(1, 1)[0];
         if i > 0 {
-            data.mark_invalid();
+            data.mark_invalid(None);
         }
         let j = data.draw_bytes(1, 1)[0];
         let mut seen_ref = seen_clone.borrow_mut();
@@ -596,7 +596,7 @@ fn test_exit_because_max_iterations() {
     let mut runner = NativeConjectureRunner::new(
         |data: &mut NativeConjectureData| {
             data.draw_integer(0, (1_i128 << 64) - 1);
-            data.mark_invalid();
+            data.mark_invalid(None);
         },
         settings,
         rng,
@@ -628,7 +628,7 @@ fn test_max_iterations_with_all_invalid() {
     let mut runner = NativeConjectureRunner::new(
         |data: &mut NativeConjectureData| {
             data.draw_integer(0, (1_i128 << 64) - 1);
-            data.mark_invalid();
+            data.mark_invalid(None);
         },
         settings,
         rng,
@@ -658,7 +658,7 @@ fn check_max_iterations_with_some_valid(n_valid: usize) {
                 *vc += 1;
             } else {
                 drop(vc);
-                data.mark_invalid();
+                data.mark_invalid(None);
             }
         },
         settings,
@@ -1034,7 +1034,7 @@ fn test_shrink_after_max_iterations() {
             }
             let value = data.draw_integer(0, (1 << 16) - 1);
             if invalid_clone.borrow().contains(&value) {
-                data.mark_invalid();
+                data.mark_invalid(None);
             }
             let should_be_bad = bad_clone.borrow().contains(&value)
                 || (bad_clone.borrow().is_empty() && invalid_clone.borrow().len() == fail_at);
@@ -1043,7 +1043,7 @@ fn test_shrink_after_max_iterations() {
                 data.mark_interesting(interesting_origin(None));
             }
             invalid_clone.borrow_mut().insert(value);
-            data.mark_invalid();
+            data.mark_invalid(None);
         },
         settings,
         rng,
@@ -1381,7 +1381,7 @@ fn test_database_clears_secondary_key() {
             if data.draw_integer(i128::MIN, i128::MAX) == 10 {
                 data.mark_interesting(interesting_origin(None));
             } else {
-                data.mark_invalid();
+                data.mark_invalid(None);
             }
         },
         settings,
@@ -1434,7 +1434,7 @@ fn test_database_uses_values_from_secondary_key() {
             if data.draw_integer(i128::MIN, i128::MAX) >= 5 {
                 data.mark_interesting(interesting_origin(None));
             } else {
-                data.mark_invalid();
+                data.mark_invalid(None);
             }
         },
         settings,

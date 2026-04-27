@@ -108,7 +108,7 @@ fn test_explore_an_arbitrary_language() {
             loop {
                 let next = match node {
                     Node::Terminal(Status::Valid) => return,
-                    Node::Terminal(Status::Invalid) => local_data.mark_invalid(),
+                    Node::Terminal(Status::Invalid) => local_data.mark_invalid(None),
                     Node::Terminal(Status::Interesting(p)) => {
                         local_data.mark_interesting(interesting_origin(Some(p)))
                     }
