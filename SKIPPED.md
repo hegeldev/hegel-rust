@@ -2423,12 +2423,6 @@ follow-up.
   asserts the registered `DataObserver.conclude_test(status, reason)`
   callback fires from inside `freeze()`. Bundled with
   `::test_can_observe_draws`; needs the `DataObserver` hook to land.
-- `conjecture/test_test_data.py::test_can_mark_interesting`,
-  `::test_can_mark_invalid`, `::test_can_mark_invalid_with_why` —
-  `mark_interesting` / `mark_invalid` live on the higher-level
-  `NativeConjectureData`, whose `for_choices` constructor is private.
-  A public `NativeConjectureData::for_choices` (or moving the marks
-  down to `NativeTestCase`) is the unblock.
 - `conjecture/test_test_data.py::test_examples_show_up_as_discarded`,
   `::test_can_override_label`,
   `::test_examples_support_negative_indexing`,
