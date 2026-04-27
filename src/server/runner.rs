@@ -2,7 +2,7 @@ use crate::antithesis::TestLocation;
 use crate::antithesis::is_running_in_antithesis;
 use crate::backend::{DataSource, TestCaseResult, TestRunner};
 use crate::control::{currently_in_test_context, with_test_context};
-use crate::runner::Settings;
+use crate::runner::{Mode, Settings};
 use crate::test_case::TestCase;
 use crate::test_case::{ASSUME_FAIL_STRING, LOOP_DONE_STRING, STOP_TEST_STRING};
 
@@ -157,8 +157,9 @@ fn run_test_case(
     data_source: Box<dyn DataSource>,
     test_fn: &mut dyn FnMut(TestCase),
     is_final: bool,
+    mode: Mode,
 ) -> TestCaseResult {
-    let tc = TestCase::new(data_source, is_final);
+    let tc = TestCase::new(data_source, is_final, mode);
 
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
 
@@ -272,11 +273,12 @@ pub fn server_run<F>(
     let mut test_fn = test_fn;
     let got_interesting = AtomicBool::new(false);
 
+    let mode = settings.mode;
     let result = runner.run(
         settings,
         database_key,
         &mut |backend, is_final| {
-            let tc_result = run_test_case(backend, &mut test_fn, is_final);
+            let tc_result = run_test_case(backend, &mut test_fn, is_final, mode);
             if matches!(&tc_result, TestCaseResult::Interesting { .. }) {
                 got_interesting.store(true, Ordering::SeqCst);
             }
