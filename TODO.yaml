@@ -195,33 +195,6 @@
         `::test_does_not_run_optimisation_when_max_examples_is_small`
         bullet in `SKIPPED.md` is removed.
 
-- title: Expose NativeConjectureData::for_choices + mark_* via __native_test_internals
-  details: |
-    Port `test_can_mark_interesting`, `test_can_mark_invalid`, and
-    `test_can_mark_invalid_with_why` from
-    `conjecture/test_test_data.py`. All three need to construct a
-    `NativeConjectureData` from a fixed choice prefix and then call
-    `mark_interesting(origin)` or `mark_invalid()` (with optional
-    "why") on the test case.
-
-    Port path: `NativeConjectureData::new(ntc, buffer_size_limit)` is
-    private in `src/native/conjecture_runner.rs`. Add a public
-    `pub fn for_choices(choices: &[ChoiceValue]) -> Self` that wraps
-    `NativeTestCase::for_choices(choices, None)` with the default
-    `CONJECTURE_BUFFER_SIZE`. Extend `mark_invalid` to accept an
-    optional `why: Option<String>` and stash it on the data so a
-    new `pub fn events(&self) -> &HashMap<String, String>` accessor
-    can mirror Hypothesis's `data.events == {"invalid because": why}`.
-    The test catches the `MarkPanic` payload via
-    `std::panic::catch_unwind` plus `AssertUnwindSafe`.
-
-    Acceptance criteria:
-      - `test_can_mark_interesting`, `test_can_mark_invalid`, and
-        `test_can_mark_invalid_with_why` compile and pass under
-        `cargo test --features native --test hypothesis
-        conjecture_test_data::`.
-      - The matching bullets in `SKIPPED.md` are removed.
-
 - title: Add NativeTestCase draw-by-strategy + span tree surface
   details: |
     Port the strategy-driven span-introspection cluster from
