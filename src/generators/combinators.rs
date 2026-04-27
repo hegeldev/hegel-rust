@@ -42,7 +42,7 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<T> for SampledFromGenerator<'a, 
     }
 }
 
-/// Pick uniformly from a fixed list of values.
+/// Pick from a fixed list of values.
 ///
 /// Accepts anything convertible into `Cow<[T]>`, including:
 /// - `Vec<T>` (consumed without re-allocation)

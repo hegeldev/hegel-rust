@@ -13,6 +13,7 @@ target/
 result
 .claude-reliability/
 .claude/reliability-config.yml
+CLAUDE.local.md
 
 lcov.info
 

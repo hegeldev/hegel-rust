@@ -150,11 +150,7 @@ impl DataSource for ServerDataSource {
         Ok(())
     }
 
-    fn new_collection(
-        &self,
-        min_size: u64,
-        max_size: Option<u64>,
-    ) -> Result<String, DataSourceError> {
+    fn new_collection(&self, min_size: u64, max_size: Option<u64>) -> Result<i64, DataSourceError> {
         let mut payload = cbor_map! {
             "min_size" => min_size
         };
@@ -165,7 +161,7 @@ impl DataSource for ServerDataSource {
         match response {
             Value::Integer(i) => {
                 let n: i128 = i.into();
-                Ok(n.to_string())
+                Ok(n as i64)
             }
             // nocov start
             _ => panic!(
@@ -176,8 +172,7 @@ impl DataSource for ServerDataSource {
         }
     }
 
-    fn collection_more(&self, collection: &str) -> Result<bool, DataSourceError> {
-        let collection_id: i64 = collection.parse().unwrap();
+    fn collection_more(&self, collection_id: i64) -> Result<bool, DataSourceError> {
         let response = self.send_request(
             "collection_more",
             &cbor_map! { "collection_id" => collection_id },
@@ -191,10 +186,9 @@ impl DataSource for ServerDataSource {
     // nocov start
     fn collection_reject(
         &self,
-        collection: &str,
+        collection_id: i64,
         why: Option<&str>,
     ) -> Result<(), DataSourceError> {
-        let collection_id: i64 = collection.parse().unwrap();
         let mut payload = cbor_map! {
             "collection_id" => collection_id
         };
