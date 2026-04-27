@@ -14,11 +14,6 @@
 //!
 //! - `test_calls_concluded_implicitly` — needs a `DataObserver` hook that
 //!   `freeze()` invokes; bundled with the `test_can_observe_draws` port.
-//! - `test_can_mark_interesting`, `test_can_mark_invalid`,
-//!   `test_can_mark_invalid_with_why` — `NativeTestCase` has no
-//!   `mark_interesting` / `mark_invalid` methods. Those live on the
-//!   higher-level `NativeConjectureData` whose `for_choices` constructor
-//!   is private.
 //! - `test_examples_show_up_as_discarded`, `test_can_override_label`,
 //!   `test_examples_support_negative_indexing`,
 //!   `test_examples_out_of_bounds_index`, `test_child_indices`,
@@ -45,7 +40,8 @@
 #![cfg(feature = "native")]
 
 use hegel::__native_test_internals::{
-    ChoiceValue, NativeResult, NativeTestCase, Status, structural_coverage,
+    ChoiceValue, NativeConjectureData, NativeResult, NativeTestCase, Status, interesting_origin,
+    structural_coverage,
 };
 
 #[test]
@@ -253,4 +249,32 @@ fn test_children_of_discarded_examples_do_not_create_structural_coverage() {
     d.freeze();
     assert!(!d.tags.contains(structural_coverage(42)));
     assert!(!d.tags.contains(structural_coverage(10)));
+}
+
+#[test]
+fn test_can_mark_interesting() {
+    let mut d = NativeConjectureData::for_choices(&[]);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        d.mark_interesting(interesting_origin(None));
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_can_mark_invalid() {
+    let mut d = NativeConjectureData::for_choices(&[]);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        d.mark_invalid(None);
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_can_mark_invalid_with_why() {
+    let mut d = NativeConjectureData::for_choices(&[]);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        d.mark_invalid(Some("some reason".to_string()));
+    }));
+    assert!(result.is_err());
+    assert_eq!(d.events()["invalid because"], "some reason");
 }
