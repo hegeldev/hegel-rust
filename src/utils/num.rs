@@ -2,6 +2,11 @@ use ciborium::Value;
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, ToPrimitive};
 
+/// CBOR tag for rational numbers. See https://peteroupc.github.io/CBOR/rational.html.
+pub const HEGEL_RATIONAL_TAG: u64 = 30;
+/// CBOR tag for complex numbers. See https://www.iana.org/assignments/cbor-tags/template/43000.
+pub const HEGEL_COMPLEX_TAG: u64 = 43000;
+
 /// Convert a `BigInt` or `BigUint` to a `ciborium::Value` (integer or bignum tag).
 pub fn int_to_cbor(n: impl Into<BigInt>) -> Value {
     let n: BigInt = n.into();

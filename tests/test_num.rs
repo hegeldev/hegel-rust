@@ -37,7 +37,10 @@ fn test_big_integers_finds_positive() {
 
 #[test]
 fn test_big_integers_finds_negative() {
-    find_any(gs::integers::<BigInt>(), |n| *n < BigInt::from(-1_000_000));
+    find_any(
+        gs::integers::<BigInt>().min_value(BigInt::from(-BigInt::one() << 64u32)),
+        |n| *n < BigInt::from(-1_000_000),
+    );
 }
 
 #[test]
@@ -243,39 +246,39 @@ fn test_default_biguint() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_complex_i64() {
-    let generator = gs::complex(
-        gs::integers::<i64>().min_value(-100).max_value(100),
-        gs::integers::<i64>().min_value(-100).max_value(100),
-    );
+fn test_complex_f64_bounded_magnitude() {
+    let generator = gs::complex::<f64>().max_magnitude(100.0);
     assert_all_examples(generator, |c| {
-        c.re >= -100 && c.re <= 100 && c.im >= -100 && c.im <= 100
+        c.re * c.re + c.im * c.im <= 100.0 * 100.0 + 1e-9
     });
 }
 
 #[test]
-fn test_complex_finds_zero() {
-    let generator = gs::complex(
-        gs::integers::<i64>().min_value(-100).max_value(100),
-        gs::integers::<i64>().min_value(-100).max_value(100),
-    );
-    find_any(generator, |c| c.re == 0 && c.im == 0);
+fn test_complex_f64_finite() {
+    assert_all_examples(gs::complex::<f64>(), |c| {
+        c.re.is_finite() && c.im.is_finite()
+    });
 }
 
 #[test]
-fn test_complex_finds_purely_real() {
-    let generator = gs::complex(
-        gs::integers::<i64>().min_value(-100).max_value(100),
-        gs::integers::<i64>().min_value(-100).max_value(100),
-    );
-    find_any(generator, |c| c.re != 0 && c.im == 0);
+fn test_complex_f64_finds_zero() {
+    find_any(gs::complex::<f64>(), |c| c.re == 0.0 && c.im == 0.0);
 }
 
 #[test]
-fn test_complex_finds_purely_imaginary() {
-    let generator = gs::complex(
-        gs::integers::<i64>().min_value(-100).max_value(100),
-        gs::integers::<i64>().min_value(-100).max_value(100),
-    );
-    find_any(generator, |c| c.re == 0 && c.im != 0);
+fn test_complex_f64_finds_purely_real() {
+    find_any(gs::complex::<f64>(), |c| c.re != 0.0 && c.im == 0.0);
+}
+
+#[test]
+fn test_complex_f64_finds_purely_imaginary() {
+    find_any(gs::complex::<f64>(), |c| c.re == 0.0 && c.im != 0.0);
+}
+
+#[test]
+fn test_complex_f32_bounded_magnitude() {
+    let generator = gs::complex::<f32>().max_magnitude(100.0);
+    assert_all_examples(generator, |c| {
+        c.re * c.re + c.im * c.im <= 100.0 * 100.0 + 1e-3
+    });
 }
