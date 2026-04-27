@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.3 - 2026-04-27
+
+This release just contains internal refactoring and should have no user visible changes.
+
 ## 0.8.2 - 2026-04-27
 
 Small internal refactors.

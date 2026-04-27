@@ -194,7 +194,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hegeltest"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "ciborium",
  "crc32fast",
@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "hegeltest-macros"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "proc-macro2",
  "quote",
