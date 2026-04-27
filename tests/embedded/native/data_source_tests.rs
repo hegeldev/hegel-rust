@@ -63,13 +63,13 @@ fn start_and_stop_span_return_ok() {
 }
 
 #[test]
-fn new_collection_returns_stringified_id() {
+fn new_collection_returns_sequential_id() {
     let (ds, _handle) = random_source();
     let id_a = ds.new_collection(0, None).unwrap();
     let id_b = ds.new_collection(1, Some(3)).unwrap();
-    // IDs are allocated sequentially as i64 and returned as decimal strings.
-    assert_eq!(id_a, "0");
-    assert_eq!(id_b, "1");
+    // IDs are allocated sequentially as i64.
+    assert_eq!(id_a, 0);
+    assert_eq!(id_b, 1);
 }
 
 #[test]
@@ -77,12 +77,12 @@ fn collection_more_and_reject_round_trip() {
     let (ds, _handle) = random_source();
     let id = ds.new_collection(2, Some(4)).unwrap();
     // First call: min_size not met, so forced true.
-    assert!(ds.collection_more(&id).unwrap());
+    assert!(ds.collection_more(id).unwrap());
     // Reject the element we just "drew" — exercises the no-reason path.
-    ds.collection_reject(&id, None).unwrap();
+    ds.collection_reject(id, None).unwrap();
     // Another more → reject cycle exercising the "with reason" branch.
-    assert!(ds.collection_more(&id).unwrap());
-    ds.collection_reject(&id, Some("nope")).unwrap();
+    assert!(ds.collection_more(id).unwrap());
+    ds.collection_reject(id, Some("nope")).unwrap();
 }
 
 #[test]
@@ -126,8 +126,8 @@ fn generate_stoptest_sets_aborted_and_short_circuits() {
     assert!(ds.start_span(0).is_err());
     assert!(ds.stop_span(false).is_err());
     assert!(ds.new_collection(0, None).is_err());
-    assert!(ds.collection_more("0").is_err());
-    assert!(ds.collection_reject("0", None).is_err());
+    assert!(ds.collection_more(0).is_err());
+    assert!(ds.collection_reject(0, None).is_err());
     assert!(ds.new_pool().is_err());
     assert!(ds.pool_add(0).is_err());
     assert!(ds.pool_generate(0, false).is_err());
