@@ -344,6 +344,7 @@ pub struct NativeConjectureData {
     /// [`NativeRunnerSettings::buffer_size_limit`] for runner-driven
     /// invocations; defaults to [`CONJECTURE_BUFFER_SIZE`] otherwise.
     buffer_size_limit: usize,
+    events: HashMap<String, String>,
 }
 
 impl NativeConjectureData {
@@ -354,7 +355,16 @@ impl NativeConjectureData {
             mark: None,
             bytes_drawn: 0,
             buffer_size_limit,
+            events: HashMap::new(),
         }
+    }
+
+    /// Construct a `NativeConjectureData` from a fixed choice prefix, using
+    /// the default `CONJECTURE_BUFFER_SIZE`.  Mirrors Hypothesis's
+    /// `ConjectureData.for_choices(choices)`.
+    pub fn for_choices(choices: &[ChoiceValue]) -> Self {
+        let ntc = NativeTestCase::for_choices(choices, None);
+        Self::new(ntc, CONJECTURE_BUFFER_SIZE)
     }
 
     pub fn draw_bytes(&mut self, min_size: usize, max_size: usize) -> Vec<u8> {
@@ -433,10 +443,17 @@ impl NativeConjectureData {
         std::panic::panic_any(MarkPanic { data_id })
     }
 
-    pub fn mark_invalid(&mut self) -> ! {
+    pub fn mark_invalid(&mut self, why: Option<String>) -> ! {
+        if let Some(reason) = why {
+            self.events.insert("invalid because".to_string(), reason);
+        }
         self.mark = Some((MarkKind::Invalid, None));
         let data_id = self.data_id;
         std::panic::panic_any(MarkPanic { data_id })
+    }
+
+    pub fn events(&self) -> &HashMap<String, String> {
+        &self.events
     }
 
     pub fn start_span(&mut self, label: u64) {
