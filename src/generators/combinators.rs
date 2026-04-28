@@ -91,38 +91,36 @@ impl<T> Generator<T> for OneOfGenerator<'_, T> {
             .map(|g| g.as_basic())
             .collect::<Option<Vec<_>>>()?;
 
-        let tagged_schemas: Vec<Value> = basics
-            .iter()
-            .enumerate()
-            .map(|(i, b)| {
-                cbor_map! {
-                    "type" => "tuple",
-                    "elements" => cbor_array![
-                        cbor_map!{"type" => "constant", "value" => Value::Integer(ciborium::value::Integer::from(i as i64))},
-                        b.schema().clone()
-                    ]
-                }
-            })
-            .collect();
-
-        let schema = cbor_map! {"type" => "one_of", "generators" => Value::Array(tagged_schemas)};
+        let schemas: Vec<Value> = basics.iter().map(|b| b.schema().clone()).collect();
+        let schema = cbor_map! {"type" => "one_of", "generators" => Value::Array(schemas)};
 
         Some(BasicGenerator::new(schema, move |raw| {
-            let arr = match raw {
-                Value::Array(arr) => arr,
-                _ => panic!("Expected array from tagged tuple, got {:?}", raw), // nocov
-            };
-            let tag = match &arr[0] {
-                Value::Integer(i) => {
-                    let val: i128 = (*i).into();
-                    val as usize
-                }
-                _ => panic!("Expected integer tag, got {:?}", arr[0]), // nocov
-            };
-            let value = arr.into_iter().nth(1).unwrap();
-            basics[tag].parse_raw(value)
+            let (index, value) = unpack_one_of_response(raw);
+            basics[index].parse_raw(value)
         }))
     }
+}
+
+/// Unpack a `[index, value]` response from a `one_of` schema.
+///
+/// Exposed for the `#[derive(Generate)]` macro, which emits code that decodes
+/// the same wire shape; not part of the public API.
+#[doc(hidden)]
+pub fn unpack_one_of_response(raw: Value) -> (usize, Value) {
+    let arr = match raw {
+        Value::Array(arr) => arr,
+        _ => panic!("Expected [index, value] array from one_of, got {:?}", raw), // nocov
+    };
+    let mut iter = arr.into_iter();
+    let index = match iter.next().expect("missing index in one_of response") {
+        Value::Integer(i) => {
+            let val: i128 = i.into();
+            val as usize
+        }
+        other => panic!("Expected integer index from one_of, got {:?}", other), // nocov
+    };
+    let value = iter.next().expect("missing value in one_of response");
+    (index, value)
 }
 
 /// Choose from multiple generators of the same type.
@@ -201,41 +199,15 @@ where
         let inner_basic = self.inner.as_basic()?;
         let inner_schema = inner_basic.schema().clone();
 
-        let null_schema = cbor_map! {
-            "type" => "tuple",
-            "elements" => cbor_array![
-                cbor_map!{"type" => "constant", "value" => Value::Integer(0.into())},
-                cbor_map!{"type" => "null"}
-            ]
-        };
-        let value_schema = cbor_map! {
-            "type" => "tuple",
-            "elements" => cbor_array![
-                cbor_map!{"type" => "constant", "value" => Value::Integer(1.into())},
-                inner_schema
-            ]
-        };
-
+        let null_schema = cbor_map! {"type" => "null"};
         let schema =
-            cbor_map! {"type" => "one_of", "generators" => cbor_array![null_schema, value_schema]};
+            cbor_map! {"type" => "one_of", "generators" => cbor_array![null_schema, inner_schema]};
 
         Some(BasicGenerator::new(schema, move |raw| {
-            let arr = match raw {
-                Value::Array(arr) => arr,
-                _ => panic!("Expected array from tagged tuple, got {:?}", raw), // nocov
-            };
-            let tag = match &arr[0] {
-                Value::Integer(i) => {
-                    let val: i128 = (*i).into();
-                    val as usize
-                }
-                _ => panic!("Expected integer tag, got {:?}", arr[0]), // nocov
-            };
-
-            if tag == 0 {
+            let (index, value) = unpack_one_of_response(raw);
+            if index == 0 {
                 None
             } else {
-                let value = arr.into_iter().nth(1).unwrap();
                 Some(inner_basic.parse_raw(value))
             }
         }))
@@ -249,3 +221,7 @@ pub fn optional<T, G: Generator<T>>(inner: G) -> OptionalGenerator<G, T> {
         _phantom: PhantomData,
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/embedded/generators/combinators_tests.rs"]
+mod tests;

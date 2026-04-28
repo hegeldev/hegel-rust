@@ -4,10 +4,44 @@
 use std::panic::{UnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
+use hegel::ciborium::Value;
 use hegel::generators::Generator;
 use hegel::{Hegel, Settings};
 use regex::Regex;
 use std::fmt::Debug;
+
+/// Lookup the value of a key in a CBOR-encoded schema map.
+///
+/// Panics if `value` is not a `Value::Map` or if `key` is not present.
+pub fn schema_get<'a>(value: &'a Value, key: &str) -> &'a Value {
+    let Value::Map(entries) = value else {
+        panic!("expected map, got {value:?}");
+    };
+    for (k, v) in entries {
+        if let Value::Text(s) = k
+            && s == key
+        {
+            return v;
+        }
+    }
+    panic!("key {key:?} not found in map: {value:?}");
+}
+
+/// Read the `"type"` field of a CBOR-encoded schema as a string.
+pub fn schema_type(schema: &Value) -> &str {
+    let Value::Text(s) = schema_get(schema, "type") else {
+        panic!("expected type to be a string");
+    };
+    s
+}
+
+/// Read the `"generators"` array of a `one_of` schema.
+pub fn one_of_children(schema: &Value) -> &[Value] {
+    let Value::Array(items) = schema_get(schema, "generators") else {
+        panic!("expected generators to be an array");
+    };
+    items
+}
 
 // some of our tests differ in behavior in our nightly rust job.
 pub fn is_nightly() -> bool {

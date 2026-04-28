@@ -6,10 +6,6 @@ use crate::utils::{
     cbor_array, cbor_map, cbor_text, cbor_to_iter, default_gen_bounds, tuple_schema,
 };
 
-fn cbor_int(val: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
-    quote! { hegel::ciborium::Value::Integer(hegel::ciborium::value::Integer::from(#val)) }
-}
-
 enum VariantKind<'a> {
     /// Unit variant like `Pending`
     Unit,
@@ -282,33 +278,15 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
             }
         }
     } else {
-        // Mixed enum: try schema-based, fall back to compositional
-        // Build one_of schema from unit const schemas + data variant schemas (tagged)
-        let unit_variant_const_schemas: Vec<proc_macro2::TokenStream> = variants
-            .iter()
-            .filter(|v| matches!(classify_variant(v), VariantKind::Unit))
-            .enumerate()
-            .map(|(i, variant)| {
-                let variant_name_str = variant.ident.to_string();
-                tuple_schema(vec![
-                    cbor_map(vec![
-                        (cbor_text("type"), cbor_text("constant")),
-                        (cbor_text("value"), cbor_int(quote! { #i as i64 })),
-                    ]),
-                    cbor_map(vec![
-                        (cbor_text("type"), cbor_text("constant")),
-                        (cbor_text("value"), cbor_text(&variant_name_str)),
-                    ]),
-                ])
-            })
-            .collect();
+        // Mixed enum: try schema-based, fall back to compositional.
+        //
+        // Schema is `{"type": "one_of", "generators": [s_0, s_1, ...]}` with one
+        // child per variant in declaration order. The server's response is
+        // `[index, value]` where `index` selects the variant; for unit variants
+        // the corresponding child schema is `{"type": "null"}` and the value is
+        // discarded, for data variants it's the variant generator's schema.
 
-        let num_unit_variants = variants
-            .iter()
-            .filter(|v| matches!(classify_variant(v), VariantKind::Unit))
-            .count();
-
-        // Generate tagged data variant basic bindings for as_basic
+        // Bind data variant basic generators (must succeed for all data variants).
         let data_variant_basic_bindings: Vec<proc_macro2::TokenStream> = data_variants
             .iter()
             .map(|variant| {
@@ -320,46 +298,31 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
             })
             .collect();
 
-        // Generate tagged data variant schema pushes
-        let data_variant_schema_pushes: Vec<proc_macro2::TokenStream> = data_variants
+        // Build schema entries and parse arms in declaration order so the wire
+        // index matches the variant order.
+        let null_schema = cbor_map(vec![(cbor_text("type"), cbor_text("null"))]);
+        let one_of_schema_entries: Vec<proc_macro2::TokenStream> = variants
             .iter()
-            .enumerate()
-            .map(|(i, variant)| {
-                let variant_name = &variant.ident;
-                let basic_name = format_ident!("basic_{}", variant_name);
-                let tag_idx = num_unit_variants + i;
-                let tagged = tuple_schema(vec![
-                    cbor_map(vec![
-                        (cbor_text("type"), cbor_text("constant")),
-                        (cbor_text("value"), cbor_int(quote! { #tag_idx as i64 })),
-                    ]),
-                    quote! { #basic_name.schema().clone() },
-                ]);
-                quote! { one_of_schemas.push(#tagged); }
+            .map(|variant| match classify_variant(variant) {
+                VariantKind::Unit => null_schema.clone(),
+                _ => {
+                    let basic_name = format_ident!("basic_{}", variant.ident);
+                    quote! { #basic_name.schema().clone() }
+                }
             })
             .collect();
 
-        // Generate parse_raw match arms for unit variants
-        let parse_raw_unit_arms: Vec<proc_macro2::TokenStream> = variants
-            .iter()
-            .filter(|v| matches!(classify_variant(v), VariantKind::Unit))
-            .enumerate()
-            .map(|(i, variant)| {
-                let variant_name = &variant.ident;
-                quote! { #i => #enum_name::#variant_name }
-            })
-            .collect();
-
-        // Generate parse_raw match arms for data variants
-        let parse_raw_data_arms: Vec<proc_macro2::TokenStream> = data_variants
+        let parse_arms: Vec<proc_macro2::TokenStream> = variants
             .iter()
             .enumerate()
             .map(|(i, variant)| {
                 let variant_name = &variant.ident;
-                let basic_name = format_ident!("basic_{}", variant_name);
-                let tag_idx = num_unit_variants + i;
-                quote! {
-                    #tag_idx => #basic_name.parse_raw(value)
+                match classify_variant(variant) {
+                    VariantKind::Unit => quote! { #i => #enum_name::#variant_name },
+                    _ => {
+                        let basic_name = format_ident!("basic_{}", variant_name);
+                        quote! { #i => #basic_name.parse_raw(value) }
+                    }
                 }
             })
             .collect();
@@ -387,11 +350,9 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                 fn as_basic(&self) -> Option<hegel::generators::BasicGenerator<'_, #enum_name>> {
                     #(#data_variant_basic_bindings)*
 
-                    let mut one_of_schemas: Vec<hegel::ciborium::Value> = vec![
-                        #(#unit_variant_const_schemas,)*
+                    let one_of_schemas: Vec<hegel::ciborium::Value> = vec![
+                        #(#one_of_schema_entries,)*
                     ];
-
-                    #(#data_variant_schema_pushes)*
 
                     let schema = hegel::ciborium::Value::Map(vec![
                         (
@@ -405,24 +366,11 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                     ]);
 
                     Some(hegel::generators::BasicGenerator::new(schema, move |raw| {
-                        // raw is a tagged tuple [tag, value]
-                        let arr = match raw {
-                            hegel::ciborium::Value::Array(arr) => arr,
-                            _ => panic!("Expected tagged tuple array for enum, got {:?}", raw),
-                        };
-                        let tag = match &arr[0] {
-                            hegel::ciborium::Value::Integer(i) => {
-                                let val: i128 = (*i).into();
-                                val as usize
-                            }
-                            _ => panic!("Expected integer tag, got {:?}", arr[0]),
-                        };
-                        let value = arr.into_iter().nth(1).unwrap();
-
-                        match tag {
-                            #(#parse_raw_unit_arms,)*
-                            #(#parse_raw_data_arms,)*
-                            _ => panic!("Unknown variant tag: {}", tag),
+                        // The server returns `[index, value]` for one_of schemas.
+                        let (index, value) = hegel::generators::unpack_one_of_response(raw);
+                        match index {
+                            #(#parse_arms,)*
+                            _ => panic!("Unknown variant index: {}", index),
                         }
                     }))
                 }

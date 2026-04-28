@@ -5,7 +5,9 @@
 
 mod common;
 
-use common::utils::{assert_all_examples, check_can_generate_examples, find_any};
+use common::utils::{
+    assert_all_examples, check_can_generate_examples, find_any, one_of_children, schema_type,
+};
 use hegel::DefaultGenerator as DeriveGenerator;
 use hegel::generators::{self as gs, DefaultGenerator, Generator};
 
@@ -518,4 +520,50 @@ fn test_derive_struct_builder_chaining_order_irrelevant() {
 fn test_derive_struct_override_field_twice_takes_last() {
     let g = Point::default_generator().x(gs::just(1)).x(gs::just(99));
     assert_all_examples(g, |p: &Point| p.x == 99);
+}
+
+// ============================================================================
+// Schema shape: enums emit a flat one_of with no tagged-tuple wrapping
+// ============================================================================
+
+#[test]
+fn test_derive_mixed_enum_emits_flat_one_of() {
+    // MixedEnum has Empty (unit), WithValue(i32), WithFields { x, y }.
+    let g = MixedEnum::default_generator();
+    let basic = g
+        .as_basic()
+        .expect("MixedEnum default generator should be basic");
+    let schema = basic.schema();
+
+    assert_eq!(schema_type(schema), "one_of");
+
+    let children = one_of_children(schema);
+    assert_eq!(children.len(), 3);
+
+    // Children appear in declaration order. Crucially, no `[constant(i), child]`
+    // wrapping — each child is the variant generator's schema directly:
+    //   Empty            -> {"type": "null"}
+    //   WithValue(i32)   -> the i32 schema (TupleSingle uses the inner schema)
+    //   WithFields {..}  -> {"type": "tuple", ...}
+    assert_eq!(schema_type(&children[0]), "null");
+    assert_eq!(schema_type(&children[1]), "integer");
+    assert_eq!(schema_type(&children[2]), "tuple");
+}
+
+#[test]
+fn test_derive_complex_enum_emits_flat_one_of_in_declaration_order() {
+    // ComplexEnum: Unit, Single(bool), Named { value }, Multi(i32, String).
+    let g = ComplexEnum::default_generator();
+    let basic = g.as_basic().unwrap();
+    let schema = basic.schema();
+
+    assert_eq!(schema_type(schema), "one_of");
+
+    let children = one_of_children(schema);
+    assert_eq!(children.len(), 4);
+    assert_eq!(schema_type(&children[0]), "null"); // Unit
+    // Single(bool): tuple-single uses the inner basic schema directly.
+    assert_eq!(schema_type(&children[1]), "boolean");
+    assert_eq!(schema_type(&children[2]), "tuple"); // Named
+    assert_eq!(schema_type(&children[3]), "tuple"); // Multi
 }
