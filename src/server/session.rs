@@ -80,7 +80,7 @@ impl HegelSession {
 
     fn init() -> HegelSession {
         let mut cmd = hegel_command();
-        cmd.arg("--stdio").arg("--verbosity").arg("normal");
+        cmd.arg("--verbosity").arg("normal");
 
         cmd.env("PYTHONUNBUFFERED", "1");
         let log_file = server_log_file();
