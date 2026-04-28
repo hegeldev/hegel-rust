@@ -1,5 +1,5 @@
 use crate::Settings;
-use crate::runner::PanicInfo;
+use crate::server::runner::PanicInfo;
 use ciborium::Value;
 
 /// Error returned by [`DataSource`] methods when an operation cannot complete.
@@ -47,18 +47,17 @@ pub trait DataSource: Send + Sync {
     fn stop_span(&self, discard: bool) -> Result<(), DataSourceError>;
 
     /// Create a new collection. Returns an opaque handle.
-    fn new_collection(
-        &self,
-        min_size: u64,
-        max_size: Option<u64>,
-    ) -> Result<String, DataSourceError>;
+    fn new_collection(&self, min_size: u64, max_size: Option<u64>) -> Result<i64, DataSourceError>;
 
     /// Ask whether the collection should produce another element.
-    fn collection_more(&self, collection: &str) -> Result<bool, DataSourceError>;
+    fn collection_more(&self, collection_id: i64) -> Result<bool, DataSourceError>;
 
     /// Reject the last element drawn from a collection.
-    fn collection_reject(&self, collection: &str, why: Option<&str>)
-    -> Result<(), DataSourceError>;
+    fn collection_reject(
+        &self,
+        collection_id: i64,
+        why: Option<&str>,
+    ) -> Result<(), DataSourceError>;
 
     /// Create a new variable pool. Returns an opaque pool id.
     fn new_pool(&self) -> Result<i128, DataSourceError>;

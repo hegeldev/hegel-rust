@@ -1,4 +1,7 @@
 use super::*;
+use std::panic::AssertUnwindSafe;
+use std::process::Command;
+use std::time::Duration;
 
 fn exit_failure_status() -> std::process::ExitStatus {
     #[cfg(unix)]
@@ -26,57 +29,10 @@ fn spawn_long_running() -> std::process::Child {
     #[cfg(unix)]
     return Command::new("sleep").arg("100").spawn().unwrap();
     #[cfg(windows)]
-    return Command::new("powershell")
-        .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 100"])
+    return Command::new("cmd")
+        .args(["/C", "ping -n 100 127.0.0.1 >nul"])
         .spawn()
         .unwrap();
-}
-
-#[test]
-fn test_settings_verbosity() {
-    let _ = Settings::new().verbosity(Verbosity::Debug);
-}
-
-#[test]
-fn test_is_in_ci_some_expected_variant() {
-    // Removing "CI" (a None-type entry) forces the iterator to continue and
-    // evaluate the Some("true") entries such as TF_BUILD and GITHUB_ACTIONS,
-    // exercising the `Some(expected)` match arm in is_in_ci().
-    let ci = std::env::var_os("CI");
-    unsafe {
-        std::env::remove_var("CI");
-        std::env::set_var("TF_BUILD", "true");
-    }
-    let result = crate::settings::is_in_ci();
-    unsafe {
-        std::env::remove_var("TF_BUILD");
-        if let Some(val) = ci {
-            std::env::set_var("CI", val);
-        }
-    }
-    assert!(
-        result,
-        "TF_BUILD=true should be detected as a CI environment"
-    );
-}
-
-#[test]
-fn test_settings_new_in_ci_disables_database() {
-    // Temporarily set a CI env var so is_in_ci() returns true.
-    // Using TEAMCITY_VERSION (checked with None, i.e. any value suffices).
-    let key = "TEAMCITY_VERSION";
-    let had_key = std::env::var_os(key).is_some();
-    unsafe {
-        std::env::set_var(key, "1");
-    }
-    let settings = Settings::new();
-    if !had_key {
-        unsafe {
-            std::env::remove_var(key);
-        }
-    }
-    assert_eq!(settings.database, Database::Disabled);
-    assert!(settings.derandomize);
 }
 
 #[test]
@@ -95,25 +51,42 @@ fn test_wait_for_exit_timeout() {
     let _ = child.wait();
 }
 
+fn exit_success_status() -> std::process::ExitStatus {
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
+    std::process::ExitStatus::from_raw(0)
+}
+
+fn fake_output(status: std::process::ExitStatus, stdout: &str) -> std::process::Output {
+    std::process::Output {
+        status,
+        stdout: stdout.as_bytes().to_vec(),
+        stderr: Vec::new(),
+    }
+}
+
+#[test]
+fn test_version_check_message_mismatch() {
+    let output = fake_output(exit_success_status(), "hegel (version 0.0.0)\n");
+    let msg = version_check_message("/fake/path", Ok(output)).unwrap();
+    assert!(msg.contains("Version mismatch"), "Message: {msg}");
+}
+
+#[test]
+fn test_version_check_message_match() {
+    let expected = format!("hegel (version {HEGEL_SERVER_VERSION})\n");
+    let output = fake_output(exit_success_status(), &expected);
+    assert!(version_check_message("/fake/path", Ok(output)).is_none());
+}
+
 #[test]
 fn test_startup_error_message_version_mismatch() {
-    let dir = tempfile::tempdir().unwrap();
-    #[cfg(unix)]
-    let script = {
-        let s = dir.path().join("fake_version");
-        std::fs::write(&s, "#!/bin/sh\necho 'hegel (version 0.0.0)'\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&s, std::fs::Permissions::from_mode(0o755)).unwrap();
-        s
-    };
-    #[cfg(windows)]
-    let script = {
-        let s = dir.path().join("fake_version.bat");
-        std::fs::write(&s, "@echo off\r\necho hegel (version 0.0.0)\r\n").unwrap();
-        s
-    };
     let exit_status = exit_failure_status();
-    let msg = startup_error_message(Some(script.to_str().unwrap()), exit_status);
+    let version_output = fake_output(exit_success_status(), "hegel (version 0.0.0)\n");
+    let msg =
+        startup_error_message_from_version(Some(("/fake/path", Ok(version_output))), exit_status);
     assert!(msg.contains("Version mismatch"), "Message: {msg}");
 }
 
@@ -159,18 +132,6 @@ fn test_startup_error_message_includes_server_log() {
     assert!(msg.contains("Server log"), "Message: {msg}");
     assert!(msg.contains("for full output"), "Message: {msg}");
     remove_server_log();
-}
-
-#[test]
-#[cfg(unix)]
-#[should_panic(expected = "not executable")]
-fn test_validate_executable_panics_for_non_executable() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("not_exec");
-    std::fs::write(&path, "").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-    crate::utils::validate_executable(path.to_str().unwrap());
 }
 
 #[test]
@@ -234,60 +195,6 @@ fn test_handle_handshake_failure_child_exited() {
 fn test_handle_handshake_failure_child_hangs() {
     let mut child = spawn_long_running();
     handle_handshake_failure(&mut child, None, "test error");
-}
-
-#[test]
-fn test_parse_version_valid() {
-    assert!(parse_version("0.1") < parse_version("0.2"));
-    assert!(parse_version("0.2") > parse_version("0.1"));
-    assert_eq!(parse_version("1.0"), parse_version("1.0"));
-    assert!(parse_version("2.0") > parse_version("1.9"));
-    assert!(parse_version("1.9") < parse_version("2.0"));
-}
-
-#[test]
-#[should_panic(expected = "expected 'major.minor' format")]
-fn test_parse_version_no_dot() {
-    parse_version("1");
-}
-
-#[test]
-#[should_panic(expected = "expected 'major.minor' format")]
-fn test_parse_version_too_many_parts() {
-    parse_version("1.2.3");
-}
-
-#[test]
-#[should_panic(expected = "invalid major version")]
-fn test_parse_version_non_numeric_major() {
-    parse_version("abc.1");
-}
-
-#[test]
-#[should_panic(expected = "invalid minor version")]
-fn test_parse_version_non_numeric_minor() {
-    parse_version("1.abc");
-}
-
-#[test]
-#[should_panic(expected = "expected 'major.minor' format")]
-fn test_parse_version_empty_string() {
-    parse_version("");
-}
-
-#[test]
-fn test_protocol_debug_true_when_env_set() {
-    // Set the env var BEFORE the LazyLock is first accessed in this binary.
-    // No other test in the lib binary touches PROTOCOL_DEBUG, so this is the
-    // first access and the closure evaluates with the env var present.
-    // This exercises the "1" | "true" arm of the matches! macro.
-    unsafe {
-        std::env::set_var("HEGEL_PROTOCOL_DEBUG", "true");
-    }
-    assert!(*PROTOCOL_DEBUG);
-    unsafe {
-        std::env::remove_var("HEGEL_PROTOCOL_DEBUG");
-    }
 }
 
 // Serialize tests that read/write the server log to prevent interference

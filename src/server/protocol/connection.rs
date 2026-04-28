@@ -120,5 +120,5 @@ impl Connection {
 }
 
 #[cfg(all(test, unix))]
-#[path = "../../tests/embedded/protocol/connection_tests.rs"]
+#[path = "../../../tests/embedded/server/protocol/connection_tests.rs"]
 mod tests;

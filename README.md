@@ -30,11 +30,11 @@ Here's a quick example of how to write a Hegel test:
 use hegel::generators as gs;
 use hegel::TestCase;
 
-fn my_sort(ls: &[i32]) -> Vec<i32> {                                                                 
-    let mut result: Vec<i32> = ls.to_vec(); 
-    result.sort();                         
+fn my_sort(ls: &[i32]) -> Vec<i32> {
+    let mut result: Vec<i32> = ls.to_vec();
+    result.sort();
     result.dedup();
-    result                                                                                           
+    result
 }
 
 #[hegel::test]
@@ -56,4 +56,4 @@ assertion `left == right` failed
  right: [0]
 ```
 
-Hegel reports the minimal example showing that our sort is incorrectly dropping duplicates. If we remove `result.dedup()` from `my_sort()`, this test will then pass (because it's just comparing the standard sort against itself). 
+Hegel reports the minimal example showing that our sort is incorrectly dropping duplicates. If we remove `result.dedup()` from `my_sort()`, this test will then pass (because it's just comparing the standard sort against itself).

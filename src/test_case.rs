@@ -618,7 +618,7 @@ pub struct Collection<'a> {
     tc: &'a TestCase,
     min_size: usize,
     max_size: Option<usize>,
-    handle: Option<String>,
+    handle: Option<i64>,
     finished: bool,
 }
 
@@ -634,18 +634,18 @@ impl<'a> Collection<'a> {
         }
     }
 
-    fn ensure_initialized(&mut self) -> &str {
+    fn ensure_initialized(&mut self) -> i64 {
         if self.handle.is_none() {
             let result = self.tc.with_data_source(|ds| {
                 ds.new_collection(self.min_size as u64, self.max_size.map(|m| m as u64))
             });
-            let name = match result {
-                Ok(name) => name,
+            let id = match result {
+                Ok(id) => id,
                 Err(e) => panic_on_data_source_error(e), // nocov
             };
-            self.handle = Some(name);
+            self.handle = Some(id);
         }
-        self.handle.as_ref().unwrap()
+        self.handle.unwrap()
     }
 
     /// Ask the backend whether to produce another element.
@@ -653,8 +653,8 @@ impl<'a> Collection<'a> {
         if self.finished {
             return false; // nocov
         }
-        let handle = self.ensure_initialized().to_string();
-        let result = match self.tc.with_data_source(|ds| ds.collection_more(&handle)) {
+        let handle = self.ensure_initialized();
+        let result = match self.tc.with_data_source(|ds| ds.collection_more(handle)) {
             Ok(b) => b,
             Err(e) => {
                 self.finished = true;
@@ -673,10 +673,10 @@ impl<'a> Collection<'a> {
         if self.finished {
             return;
         }
-        let handle = self.ensure_initialized().to_string();
+        let handle = self.ensure_initialized();
         let _ = self
             .tc
-            .with_data_source(|ds| ds.collection_reject(&handle, why));
+            .with_data_source(|ds| ds.collection_reject(handle, why));
         // nocov end
     }
 }

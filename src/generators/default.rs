@@ -302,10 +302,10 @@ macro_rules! derive_generator {
                 }
 
                 impl<'a> $crate::generators::Generator<$struct_name> for [<$struct_name Generator>]<'a> {
-                    fn do_draw(&self, __data: &$crate::TestCase) -> $struct_name {
+                    fn do_draw(&self, __tc: &$crate::TestCase) -> $struct_name {
                         use $crate::generators::Generator;
                         $struct_name {
-                            $($field_name: self.$field_name.do_draw(__data),)*
+                            $($field_name: self.$field_name.do_draw(__tc),)*
                         }
                     }
                 }

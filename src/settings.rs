@@ -35,15 +35,6 @@ impl HealthCheck {
             HealthCheck::LargeInitialTestCase,
         ]
     }
-
-    pub(crate) fn as_str(&self) -> &'static str {
-        match self {
-            HealthCheck::FilterTooMuch => "filter_too_much",
-            HealthCheck::TooSlow => "too_slow",
-            HealthCheck::TestCasesTooLarge => "test_cases_too_large",
-            HealthCheck::LargeInitialTestCase => "large_initial_test_case",
-        }
-    }
 }
 
 /// Controls the test execution mode.
@@ -69,8 +60,6 @@ pub enum Verbosity {
     /// Show protocol-level debug information.
     Debug,
 }
-
-impl Verbosity {}
 
 pub(crate) fn is_in_ci() -> bool {
     const CI_VARS: &[(&str, Option<&str>)] = &[
@@ -200,9 +189,11 @@ impl Settings {
 }
 
 impl Default for Settings {
-    // nocov start
     fn default() -> Self {
         Self::new()
-        // nocov end
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/embedded/settings_tests.rs"]
+mod tests;

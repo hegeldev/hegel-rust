@@ -1,12 +1,8 @@
 //! Hegel is a property-based testing library for Rust. Hegel is based on [Hypothesis](https://github.com/hypothesisworks/hypothesis), using the [Hegel](https://hegel.dev/) protocol.
 //!
-//! # Getting started with Hegel for Rust
+//! # Getting started
 //!
 //! This guide walks you through the basics of installing Hegel and writing your first tests.
-//!
-//! ## Prerequisites
-//!
-//! You will need [`uv`](https://docs.astral.sh/uv/) installed and on your PATH.
 //!
 //! ## Install Hegel
 //!
@@ -225,13 +221,11 @@ pub(crate) mod cli;
 pub(crate) mod control;
 pub mod explicit_test_case;
 pub mod generators;
-pub(crate) mod protocol;
 pub(crate) mod runner;
+pub(crate) mod server;
 pub(crate) mod settings;
 pub mod stateful;
 mod test_case;
-pub(crate) mod utils;
-mod uv;
 
 #[doc(hidden)]
 pub use control::currently_in_test_context;
@@ -426,10 +420,10 @@ pub use cli::CliOutcome;
 #[doc(hidden)]
 pub use cli::apply_cli_args as __apply_cli_args;
 #[doc(hidden)]
-pub use runner::__test_kill_server;
 pub use runner::Hegel;
-#[doc(hidden)]
-pub use runner::format_log_excerpt;
-#[doc(hidden)]
 pub use runner::hegel;
+#[doc(hidden)]
+pub use server::process::__test_kill_server;
+#[doc(hidden)]
+pub use server::process::format_log_excerpt;
 pub use settings::{HealthCheck, Mode, Settings, Verbosity};
