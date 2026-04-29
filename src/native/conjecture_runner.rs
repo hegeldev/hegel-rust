@@ -1984,14 +1984,67 @@ impl NativeConjectureRunner {
             .max(10);
         let mut ran_optimisations = false;
 
+        // Health-check window state.  Mirrors `engine.py::record_for_health_check`:
+        // counts are tracked for the first `hc_max_valid` valid examples, then the
+        // window closes.  Hypothesis uses 10/50/20 as the valid/invalid/overrun caps.
+        let hc_max_valid: usize = 10;
+        let hc_max_invalid: usize = 50;
+        let hc_max_overrun: usize = 20;
+        // Threshold mirrors `max(1.0, 5 * deadline)` with the default 200 ms deadline.
+        let hc_too_slow_threshold = std::time::Duration::from_secs(1);
+        let mut hc_valid: usize = 0;
+        let mut hc_invalid: usize = 0;
+        let mut hc_overrun: usize = 0;
+        let mut hc_draw_time = std::time::Duration::ZERO;
+
         // One-shot "all simplest" probe.
         if self.should_generate_more(do_shrink) && !self.tree_root.is_exhausted {
             let ntc = NativeTestCase::for_simplest(CONJECTURE_BUFFER_SIZE);
+            let probe_start = std::time::Instant::now();
             let (status, nodes, origin, target_obs) =
                 run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+            let probe_elapsed = probe_start.elapsed();
             self.call_count += 1;
             record_tree(&mut self.tree_root, &nodes, status);
             self.record_test_result(status, nodes, origin, target_obs);
+
+            // LargeBaseExample: the simplest possible input already overruns
+            // the byte budget.  Mirrors `engine.py` lines 1163-1187.
+            if status == Status::EarlyStop
+                && self.interesting_examples.is_empty()
+                && !self
+                    .settings
+                    .suppress_health_check
+                    .contains(&HealthCheckLabel::LargeBaseExample)
+            {
+                panic!(
+                    "FailedHealthCheck: LargeBaseExample — the smallest natural \
+                     input for this test is very large. This makes it difficult \
+                     for Hegel to generate good inputs, especially when trying to \
+                     shrink failing inputs. Consider reducing the amount of data \
+                     generated. If this is expected, suppress with \
+                     suppress_health_check = [HealthCheck::LargeBaseExample]."
+                );
+            }
+
+            // Update health-check window counters.
+            if self.interesting_examples.is_empty() {
+                match status {
+                    Status::Valid => {
+                        hc_valid += 1;
+                        hc_draw_time += probe_elapsed;
+                    }
+                    Status::Invalid => {
+                        hc_invalid += 1;
+                        hc_draw_time += probe_elapsed;
+                    }
+                    Status::EarlyStop => {
+                        hc_overrun += 1;
+                        hc_draw_time += probe_elapsed;
+                    }
+                    Status::Interesting => {}
+                }
+            }
         }
 
         loop {
@@ -2009,11 +2062,85 @@ impl NativeConjectureRunner {
             let mut batch_rng = SmallRng::from_rng(&mut self.rng);
             let prefix = generate_novel_prefix(&self.tree_root, &mut batch_rng);
             let ntc = NativeTestCase::for_probe(&prefix, batch_rng, CONJECTURE_BUFFER_SIZE);
+            let tc_start = std::time::Instant::now();
             let (status, nodes, origin, target_obs) =
                 run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+            let tc_elapsed = tc_start.elapsed();
             self.call_count += 1;
             record_tree(&mut self.tree_root, &nodes, status);
             self.record_test_result(status, nodes, origin, target_obs);
+
+            // Update health-check window and fire any triggered checks.
+            // Once an interesting example is found (bug detected), the window
+            // closes — mirrors `record_for_health_check`'s early return on INTERESTING.
+            if self.interesting_examples.is_empty() && hc_valid < hc_max_valid {
+                match status {
+                    Status::Valid => {
+                        hc_valid += 1;
+                        hc_draw_time += tc_elapsed;
+                    }
+                    Status::Invalid => {
+                        hc_invalid += 1;
+                        hc_draw_time += tc_elapsed;
+                        if hc_invalid >= hc_max_invalid
+                            && !self
+                                .settings
+                                .suppress_health_check
+                                .contains(&HealthCheckLabel::FilterTooMuch)
+                        {
+                            panic!(
+                                "FailedHealthCheck: FilterTooMuch — it looks like \
+                                 this test is filtering out too many inputs. \
+                                 {hc_valid} valid inputs were generated, while \
+                                 {hc_invalid} inputs were filtered out by assume(). \
+                                 If this is expected, suppress with \
+                                 suppress_health_check = [HealthCheck::FilterTooMuch]."
+                            );
+                        }
+                    }
+                    Status::EarlyStop => {
+                        hc_overrun += 1;
+                        hc_draw_time += tc_elapsed;
+                        if hc_overrun >= hc_max_overrun
+                            && !self
+                                .settings
+                                .suppress_health_check
+                                .contains(&HealthCheckLabel::DataTooLarge)
+                        {
+                            panic!(
+                                "FailedHealthCheck: DataTooLarge — generated inputs \
+                                 routinely consumed more than the maximum allowed \
+                                 entropy: {hc_valid} inputs were generated successfully, \
+                                 while {hc_overrun} inputs exceeded the maximum allowed \
+                                 entropy during generation. Try decreasing the amount \
+                                 of data generated. If this is expected, suppress with \
+                                 suppress_health_check = [HealthCheck::DataTooLarge]."
+                            );
+                        }
+                    }
+                    Status::Interesting => {}
+                }
+
+                // TooSlow: cumulative draw time in the health-check window
+                // exceeds the threshold.  Mirrors `record_for_health_check`
+                // lines 840-888 in `engine.py`.
+                if hc_draw_time > hc_too_slow_threshold
+                    && !self
+                        .settings
+                        .suppress_health_check
+                        .contains(&HealthCheckLabel::TooSlow)
+                {
+                    panic!(
+                        "FailedHealthCheck: TooSlow — input generation is slow: \
+                         only {hc_valid} valid inputs after {:.2}s (threshold \
+                         {:.2}s). Slow generation makes property testing much less \
+                         effective. If this is expected, suppress with \
+                         suppress_health_check = [HealthCheck::TooSlow].",
+                        hc_draw_time.as_secs_f64(),
+                        hc_too_slow_threshold.as_secs_f64(),
+                    );
+                }
+            }
 
             if self.set_exit_reason_if_done() {
                 break;
@@ -2195,9 +2322,40 @@ where
 /// Assert that constructing the runner from `build` and calling
 /// `.run()` raises a `FailedHealthCheck` whose message carries
 /// `label`.  Port of `test_engine.py::fails_health_check`.
-pub fn fails_health_check<B>(_label: HealthCheckLabel, _build: B)
+pub fn fails_health_check<B>(label: HealthCheckLabel, build: B)
 where
     B: FnOnce() -> NativeConjectureRunner,
 {
-    todo!("fails_health_check: assert FailedHealthCheck panic with label")
+    let prefix = match label {
+        HealthCheckLabel::FilterTooMuch => "FailedHealthCheck: FilterTooMuch",
+        HealthCheckLabel::TooSlow => "FailedHealthCheck: TooSlow",
+        HealthCheckLabel::LargeBaseExample => "FailedHealthCheck: LargeBaseExample",
+        HealthCheckLabel::DataTooLarge => "FailedHealthCheck: DataTooLarge",
+    };
+    let mut runner = build();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runner.run()));
+    let payload = match result {
+        Ok(()) => panic!(
+            "expected a FailedHealthCheck panic with {prefix:?}, but run() returned normally"
+        ),
+        Err(p) => p,
+    };
+    let msg = if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = payload.downcast_ref::<&str>() {
+        s.to_string()
+    } else {
+        panic!(
+            "expected a FailedHealthCheck panic with {prefix:?}, \
+             but got a non-string panic payload"
+        )
+    };
+    assert!(
+        msg.contains(prefix),
+        "expected panic message to contain {prefix:?}, but got: {msg:?}"
+    );
+    assert!(
+        runner.interesting_examples.is_empty(),
+        "expected no interesting examples after FailedHealthCheck"
+    );
 }
