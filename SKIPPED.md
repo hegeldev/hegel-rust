@@ -2340,17 +2340,6 @@ is acceptance for the corresponding follow-up.
   `test_max_iterations_with_some_valid`,
   `test_exit_because_shrink_phase_timeout`) are ported in
   `tests/hypothesis/conjecture_engine.rs`.
-- `conjecture/test_engine.py::test_handles_nesting_of_discard_correctly` —
-  patches `Shrinker.shrink = Shrinker.remove_discarded` so only the
-  remove-discarded pass runs; without that constraint the native
-  full-shrinker finds the lex-smaller `(True, False)` minimum
-  rather than upstream's `(True, True)`.
-  The remaining seven members of this cluster
-  (`test_shrinks_both_interesting_examples`, `test_discarding`,
-  `test_shrinking_from_mostly_zero`, `test_prefix_cannot_exceed_buffer_size`,
-  `test_will_evict_entries_from_the_cache`,
-  `test_simulate_to_evicted_data`, `test_terminates_shrinks`) are ported in
-  `tests/hypothesis/conjecture_engine.rs`.
 The `conjecture/test_test_data.py::*` entries below are parked
 awaiting follow-up additions to `NativeTestCase` /
 `NativeConjectureData` in `src/native/`. The three tests that map to
