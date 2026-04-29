@@ -941,6 +941,13 @@ impl NativeShrinker {
 }
 
 type RunnerTestFn = Box<dyn FnMut(&mut NativeConjectureData)>;
+type TestFnResult = (
+    Status,
+    Vec<ChoiceNode>,
+    Option<InterestingOrigin>,
+    HashMap<String, f64>,
+    Vec<usize>,
+);
 
 /// Cached outcome of a [`NativeConjectureRunner::cached_test_function`]
 /// invocation.  Mirrors `engine.py`'s `__data_cache` entries: the
@@ -1266,13 +1273,7 @@ fn run_test_fn(
     test_fn: &mut RunnerTestFn,
     ntc: NativeTestCase,
     buffer_size_limit: usize,
-) -> (
-    Status,
-    Vec<ChoiceNode>,
-    Option<InterestingOrigin>,
-    HashMap<String, f64>,
-    Vec<usize>, // kill_depths: choice indices where discarded spans end
-) {
+) -> TestFnResult {
     let mut data = NativeConjectureData::new(ntc, buffer_size_limit);
     let my_id = data.data_id;
 
