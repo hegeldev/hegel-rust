@@ -2374,6 +2374,15 @@ follow-up.
   is a Python-library integration (same rationale as the numpy /
   pandas / django skips).
 
+- `test_conformance.py` (in `crosshair/`) — entire file tests provider
+  conformance of `CrossHairPrimitiveProvider` (from
+  `hypothesis_crosshair_provider.crosshair_provider`) using
+  `run_conformance_test`. Depends on `crosshair.core` exceptions
+  (`IgnoreAttempt`, `UnexploredPath`, `NotDeterministic`) and the
+  CrossHair Python symbolic-execution library. hegel-rust has no
+  CrossHair integration — same rationale as the `test_crosshair.py`
+  skip above.
+
 - `test_grammar.py` (in `tests/lark/`) — every test exercises Hypothesis's
   `hypothesis.extra.lark.from_lark(...)` integration with the third-party
   `lark` parser library (`from lark.lark import Lark`); the strategy
