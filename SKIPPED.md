@@ -1936,6 +1936,16 @@ Individually-skipped tests (rest of the file is ported):
   integration or counterpart for dtype-aware scalar generation tied to
   an external array module.
 
+- `test_strategies_namespace.py` (in `tests/array_api/`) — array-api-extra
+  integration tests. All three tests exercise `hypothesis.extra.array_api`
+  internals (`make_strategies_namespace`, `mock_xp`, `NOMINAL_VERSIONS`,
+  `_args_to_xps` `WeakValueDictionary` cache) and rely on pytest's
+  `monkeypatch` fixture to swap module-level state. The tests assert on
+  `SearchStrategy` instances returned by `xps.complex_dtypes()` on a
+  namespace backed by a mock Array API module. hegel-rust has no Array API
+  integration or counterpart for strategy-namespace construction or caching
+  over an external array module.
+
 - `test_gen_data.py` (in `tests/numpy/`) — numpy-extra integration tests.
   Every test exercises `hypothesis.extra.numpy` (`nps.arrays`,
   `nps.array_shapes`, `nps.broadcastable_shapes`, `nps.from_dtype`,
