@@ -88,16 +88,6 @@
     Tests precise shrink-to-minimum behaviour for integers, floats, alternatives,
     and blocked shrinking. All native-engine territory; use #[cfg(feature = "native")].
 
-- title: Port nocover/test_sets.py
-  details: |
-    Upstream: resources/hypothesis/hypothesis-python/tests/nocover/test_sets.py
-    Destination: tests/hypothesis/nocover_sets.rs
-
-    Only 3 tests. Abandoned due to merge conflict (worker branched before native
-    backend feature landed). Remove from SKIPPED.md when porting.
-
-    Tests: can draw sets of rare-probability elements, empty sets, bounded-size sets.
-    Should be straightforward with gs::sets() / gs::unique_collections().
 
 - title: Port cover/test_flakiness.py
   details: |

@@ -2585,13 +2585,6 @@ follow-up.
   `minimal()` on the shrunk-value claim, same approach as
   `test_shrinking.py`.
 
-- `test_sets.py` (in `nocover/`) — parallel port-loop worker produced a
-  port on `port/worker-1`, but cherry-picking onto the supervisor branch
-  failed with conflicts across `Cargo.toml`, `src/lib.rs`,
-  `src/native/mod.rs`, `src/native/runner.rs`, `src/runner.rs`, and
-  `tests/test_native.rs` (worker branched before the native backend
-  feature landed). Skipping pending human review of the stashed worker
-  branch.
 
 - `test_sharing.py` (in `nocover/`) — every test exercises
   `st.shared(strategy, key=...)`, a public Hypothesis strategy that
