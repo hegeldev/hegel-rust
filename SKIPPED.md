@@ -2351,35 +2351,6 @@ is acceptance for the corresponding follow-up.
   `test_will_evict_entries_from_the_cache`,
   `test_simulate_to_evicted_data`, `test_terminates_shrinks`) are ported in
   `tests/hypothesis/conjecture_engine.rs`.
-- `conjecture/test_engine.py::test_can_remove_discarded_data`,
-  `::test_discarding_iterates_to_fixed_point`,
-  `::test_discarding_is_not_fooled_by_empty_discards`,
-  `::test_discarding_can_fail`,
-  `::test_can_write_bytes_towards_the_end`,
-  `::test_uniqueness_is_preserved_when_writing_at_beginning`,
-  `::test_dependent_block_pairs_can_lower_to_zero`,
-  `::test_handle_size_too_large_during_dependent_lowering`,
-  `::test_block_may_grow_during_lexical_shrinking`,
-  `::test_lower_common_node_offset_does_nothing_when_changed_blocks_are_zero`,
-  `::test_lower_common_node_offset_ignores_zeros`,
-  `::test_cached_test_function_returns_right_value`,
-  `::test_cached_test_function_does_not_reinvoke_on_prefix`,
-  `::test_branch_ending_in_write`, `::test_exhaust_space`,
-  `::test_discards_kill_branches`,
-  `::test_number_of_examples_in_integer_range_is_bounded`,
-  `::test_does_not_cache_extended_prefix`,
-  `::test_does_cache_if_extend_is_not_used`,
-  `::test_does_result_for_reuse`,
-  `::test_does_not_use_cached_overrun_if_extending`,
-  `::test_uses_cached_overrun_if_not_extending`,
-  `::test_can_be_set_to_ignore_limits`,
-  `::test_overruns_with_extend_are_not_cached` — each seeds an initial
-  buffer via `runner.cached_test_function(start)` then builds a
-  `runner.new_shrinker(last_data, lambda d: d.status == INTERESTING)`
-  and drives a single named shrink pass
-  (`fixate_shrink_passes([pass_name])`). `TargetedRunner` exposes
-  `cached_test_function` but not `new_shrinker`, and the native
-  `Shrinker` has no fixate-on-one-pass entry point.
 The `conjecture/test_test_data.py::*` entries below are parked
 awaiting follow-up additions to `NativeTestCase` /
 `NativeConjectureData` in `src/native/`. The three tests that map to
