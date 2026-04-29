@@ -127,7 +127,7 @@ impl NativeVariables {
 /// and to expose the structure of a test case to the shrinker, mutator,
 /// and assertion-style tests.  Mirrors Hypothesis's `Span` in
 /// `internal/conjecture/data.py`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
