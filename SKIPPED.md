@@ -2454,6 +2454,13 @@ follow-up.
   this is a Python-library integration (same rationale as the
   redis-extra / numpy / pandas / django / crosshair / lark skips).
 
+- `test_build_signature.py` (in `nocover/`) — every test exercises either
+  `st.builds(cls)` or `st.from_type(cls)` against custom Python classes
+  that override `__signature__` and `__annotations__` via
+  `inspect.signature` / `typing.get_type_hints`. hegel-rust has no
+  `st.builds()` / `st.from_type()` counterpart and no runtime
+  type-annotation resolution.
+
 - `test_from_type_recipe.py` (in `nocover/`) — port was abandoned due to
   a cherry-pick conflict in `src/native/conjecture_runner.rs` between the
   worker branch and the supervisor branch; defer to a human to resolve.
