@@ -46,36 +46,6 @@
       - The matching bullet in `SKIPPED.md` is updated to drop this
         test from the still-skipped list.
 
-- title: Port conjecture/test_engine.py FailedHealthCheck cluster
-  details: |
-    Port the following tests from `conjecture/test_engine.py`,
-    native-gated. Each wraps a `ConjectureRunner.run()` in
-    `pytest.raises(FailedHealthCheck)` and asserts
-    `str(HealthCheck.xxx) in str(e.value)`:
-      - `test_fails_health_check_for_all_invalid`
-      - `test_fails_health_check_for_large_base`
-      - `test_fails_health_check_for_large_non_base`
-      - `test_fails_health_check_for_slow_draws`
-      - `test_health_check_too_slow_with_invalid_examples`
-      - `test_health_check_too_slow_with_overrun_examples`
-      - `test_too_slow_report`
-
-    Port path: use the
-    `hegel::__native_test_internals::fails_health_check(label, build)`
-    free function (stub in `src/native/conjecture_runner.rs`) — fill
-    it in to `catch_unwind` the build+run and assert the panic
-    payload's string matches a per-label panic prefix. The native
-    engine's `panic!("FailedHealthCheck: TooSlow …")` / `"…
-    FilterTooMuch …"` strings already exist in
-    `src/native/runner.rs`; extend them to cover
-    `LargeBaseExample` / `DataTooLarge` as the tests require.
-
-    Acceptance criteria:
-      - All 7 tests compile and pass under
-        `cargo test --features native --test hypothesis conjecture_engine::`.
-      - The `::test_fails_health_check_for_all_invalid` through
-        `::test_too_slow_report` bullet in `SKIPPED.md` is removed.
-
 - title: Port conjecture/test_engine.py new_shrinker cluster
   details: |
     Port the following tests from `conjecture/test_engine.py`,
