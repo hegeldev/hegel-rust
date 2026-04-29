@@ -2174,6 +2174,18 @@ Individually-skipped tests (rest of the file is ported):
   Python Hypothesis test source; hegel-rust has no ghostwriter /
   test-scaffold generator counterpart.
 
+- `test_expected_output.py` (in `tests/ghostwriter/`) — golden-master
+  tests for `hypothesis.extra.ghostwriter`: each parametrised case calls
+  `ghostwriter.fuzz`, `ghostwriter.magic`, `ghostwriter.idempotent`,
+  `ghostwriter.equivalent`, `ghostwriter.binary_operation`, or
+  `ghostwriter.roundtrip`, compares the emitted string to a stored
+  `.txt` file, then `exec()`s the generated Python source to check for
+  `SyntaxError`/`NameError`. The tests also drive numpy ufunc/gufunc
+  signatures and use `black` to re-format the output. The entire file
+  exercises Python-only facilities (ghostwriter, `exec`, `ast`, `black`,
+  `numpy`); hegel-rust has no ghostwriter / test-scaffold generator
+  counterpart.
+
 - `test_provider.py` (in `conjecture/`) — every test exercises Hypothesis's
   public backend/provider registration system: the `PrimitiveProvider`
   base class that users subclass to supply custom data generation
