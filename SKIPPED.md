@@ -2023,6 +2023,19 @@ Individually-skipped tests (rest of the file is ported):
   tzinfo concept, and hegel-rust has no `dateutil` integration or
   counterpart for zoneinfo-backed timezone-aware datetime generation.
 
+- `test_pytz_timezones.py` (in `tests/datetime/`) — pytz-extra integration
+  tests. Every test exercises `hypothesis.extra.pytz.timezones()` (which
+  yields `pytz` timezone objects), the `datetimes(timezones=...)` /
+  `times(timezones=...)` keyword argument that yields timezone-aware
+  `datetime.datetime` / `datetime.time` values, and the third-party Python
+  `pytz` library's `pytz.UTC`, `pytz.timezone()`, and `pytz.all_timezones`
+  APIs, plus the internal
+  `hypothesis.strategies._internal.datetime.datetime_does_not_exist` helper.
+  hegel-rust's `gs::datetimes()` / `gs::times()` generators produce plain ISO
+  8601 strings with no `timezones` parameter and no tzinfo concept, and
+  hegel-rust has no `pytz` integration or counterpart for pytz-backed
+  timezone-aware datetime generation.
+
 - `test_zoneinfo_timezones.py` (in `tests/datetime/`) — zoneinfo-backed
   timezone tests. Every test exercises `st.timezones()` (which yields
   `zoneinfo.ZoneInfo` instances), `st.timezone_keys()` (with the
