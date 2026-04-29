@@ -492,7 +492,7 @@ impl TargetedRunner {
                 cached.observations,
             );
         }
-        let ntc = NativeTestCase::for_choices(choices, None);
+        let ntc = NativeTestCase::for_choices(choices, None, None);
         let (status, nodes, spans, observations) = self.run_on(ntc);
         self.try_cache(choices, &status, &nodes, &spans, &observations);
         (status, nodes, spans, observations)

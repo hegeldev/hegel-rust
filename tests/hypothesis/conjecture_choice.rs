@@ -372,7 +372,7 @@ fn test_nodes() {
 
 #[test]
 fn test_data_with_empty_choices_is_overrun() {
-    let mut data = NativeTestCase::for_choices(&[], None);
+    let mut data = NativeTestCase::for_choices(&[], None, None);
     assert!(data.draw_integer(0, 100).is_err());
     assert_eq!(data.status, Some(Status::EarlyStop));
 }
@@ -384,13 +384,13 @@ fn test_data_with_empty_choices_is_overrun() {
 
 #[test]
 fn test_data_with_changed_forced_value_integer() {
-    let mut data = NativeTestCase::for_choices(&[ChoiceValue::Integer(10)], None);
+    let mut data = NativeTestCase::for_choices(&[ChoiceValue::Integer(10)], None, None);
     assert_eq!(data.draw_integer_forced(0, 100, 42).ok().unwrap(), 42);
 }
 
 #[test]
 fn test_data_with_changed_forced_value_bytes() {
-    let mut data = NativeTestCase::for_choices(&[ChoiceValue::Bytes(b"aaa".to_vec())], None);
+    let mut data = NativeTestCase::for_choices(&[ChoiceValue::Bytes(b"aaa".to_vec())], None, None);
     assert_eq!(
         data.draw_bytes_forced(0, 16, b"hello".to_vec())
             .ok()
@@ -401,7 +401,7 @@ fn test_data_with_changed_forced_value_bytes() {
 
 #[test]
 fn test_data_with_changed_forced_value_float() {
-    let mut data = NativeTestCase::for_choices(&[ChoiceValue::Float(0.0)], None);
+    let mut data = NativeTestCase::for_choices(&[ChoiceValue::Float(0.0)], None, None);
     let drawn = data
         .draw_float_forced(f64::NEG_INFINITY, f64::INFINITY, true, true, 3.5)
         .ok()
@@ -411,7 +411,7 @@ fn test_data_with_changed_forced_value_float() {
 
 #[test]
 fn test_data_with_changed_forced_value_string() {
-    let mut data = NativeTestCase::for_choices(&[ChoiceValue::String(vec![b'a' as u32])], None);
+    let mut data = NativeTestCase::for_choices(&[ChoiceValue::String(vec![b'a' as u32])], None, None);
     let drawn = data
         .draw_string_forced(0, 0x10FFFF, 0, 16, "world")
         .ok()
@@ -426,13 +426,13 @@ fn test_data_with_changed_forced_value_string() {
 
 #[test]
 fn test_data_with_same_forced_value_is_valid_integer() {
-    let mut data = NativeTestCase::for_choices(&[ChoiceValue::Integer(50)], None);
+    let mut data = NativeTestCase::for_choices(&[ChoiceValue::Integer(50)], None, None);
     assert_eq!(data.draw_integer_forced(0, 100, 50).ok().unwrap(), 50);
 }
 
 #[test]
 fn test_data_with_same_forced_value_is_valid_bytes() {
-    let mut data = NativeTestCase::for_choices(&[ChoiceValue::Bytes(vec![0u8; 8])], None);
+    let mut data = NativeTestCase::for_choices(&[ChoiceValue::Bytes(vec![0u8; 8])], None, None);
     assert_eq!(
         data.draw_bytes_forced(8, 8, vec![0u8; 8]).ok().unwrap(),
         vec![0u8; 8]
@@ -441,7 +441,7 @@ fn test_data_with_same_forced_value_is_valid_bytes() {
 
 #[test]
 fn test_data_with_same_forced_value_is_valid_float() {
-    let mut data = NativeTestCase::for_choices(&[ChoiceValue::Float(0.0)], None);
+    let mut data = NativeTestCase::for_choices(&[ChoiceValue::Float(0.0)], None, None);
     let drawn = data
         .draw_float_forced(f64::NEG_INFINITY, f64::INFINITY, true, true, 0.0)
         .ok()
@@ -857,13 +857,13 @@ fn test_choice_from_value_injective_string_small() {
 
 #[test]
 fn test_drawing_directly_matches_for_choices_integer() {
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Integer(42)], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Integer(42)], None, None);
     assert_eq!(d.draw_integer(-100, 100).ok().unwrap(), 42);
 }
 
 #[test]
 fn test_drawing_directly_matches_for_choices_bytes() {
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Bytes(b"hello".to_vec())], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Bytes(b"hello".to_vec())], None, None);
     assert_eq!(d.draw_bytes(0, 16).ok().unwrap(), b"hello".to_vec());
 }
 
@@ -874,13 +874,14 @@ fn test_drawing_directly_matches_for_choices_string() {
             "abc".chars().map(|c| c as u32).collect(),
         )],
         None,
+        None,
     );
     assert_eq!(d.draw_string(0, 0x10FFFF, 0, 16).ok().unwrap(), "abc");
 }
 
 #[test]
 fn test_drawing_directly_matches_for_choices_float() {
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Float(1.5)], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Float(1.5)], None, None);
     assert_eq!(d.draw_float(0.0, 10.0, false, false).ok().unwrap(), 1.5);
 }
 
@@ -893,6 +894,7 @@ fn test_drawing_directly_matches_for_choices_multiple() {
             ChoiceValue::Bytes(b"xy".to_vec()),
             ChoiceValue::Float(2.5),
         ],
+        None,
         None,
     );
     assert_eq!(d.draw_integer(0, 100).ok().unwrap(), 7);
@@ -907,37 +909,37 @@ fn test_drawing_directly_matches_for_choices_multiple() {
 
 #[test]
 fn test_draw_directly_explicit_string() {
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::String(vec![b'a' as u32])], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::String(vec![b'a' as u32])], None, None);
     assert_eq!(d.draw_string(0, 127, 1, LARGE_MAX_SIZE).ok().unwrap(), "a");
 }
 
 #[test]
 fn test_draw_directly_explicit_bytes() {
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Bytes(b"a".to_vec())], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Bytes(b"a".to_vec())], None, None);
     assert_eq!(d.draw_bytes(0, LARGE_MAX_SIZE).ok().unwrap(), b"a".to_vec());
 }
 
 #[test]
 fn test_draw_directly_explicit_float() {
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Float(1.0)], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Float(1.0)], None, None);
     assert_eq!(d.draw_float(0.0, 2.0, false, true).ok().unwrap(), 1.0);
 }
 
 #[test]
 fn test_draw_directly_explicit_boolean() {
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None, None);
     assert!(d.weighted(0.3, None).ok().unwrap());
 }
 
 #[test]
 fn test_draw_directly_explicit_integer_unbounded() {
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Integer(42)], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Integer(42)], None, None);
     assert_eq!(d.draw_integer(i128::MIN, i128::MAX).ok().unwrap(), 42);
 }
 
 #[test]
 fn test_draw_directly_explicit_integer_bounded() {
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Integer(-42)], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Integer(-42)], None, None);
     assert_eq!(d.draw_integer(-50, 0).ok().unwrap(), -42);
 }
 
@@ -945,7 +947,7 @@ fn test_draw_directly_explicit_integer_bounded() {
 // (no weights), but the forced-in-prefix invariant is the same:
 #[test]
 fn test_draw_directly_explicit_integer_small_range() {
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Integer(10)], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Integer(10)], None, None);
     assert_eq!(d.draw_integer(10, 11).ok().unwrap(), 10);
 }
 

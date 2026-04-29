@@ -53,7 +53,7 @@ fn test_just_strategy_does_not_draw() {
         let v: String = tc.draw(gs::just("hello".to_string()));
         *seen_clone.lock().unwrap() = Some(v);
     });
-    let ntc = NativeTestCase::for_choices(&[], None);
+    let ntc = NativeTestCase::for_choices(&[], None, None);
     let (_, nodes, _) = ctf.run(ntc);
 
     assert_eq!(seen.lock().unwrap().as_deref(), Some("hello"));
@@ -73,7 +73,7 @@ fn test_none_strategy_does_not_draw() {
         tc.draw(gs::unit());
         *seen_clone.lock().unwrap() = true;
     });
-    let ntc = NativeTestCase::for_choices(&[], None);
+    let ntc = NativeTestCase::for_choices(&[], None, None);
     let (_, nodes, _) = ctf.run(ntc);
 
     assert!(*seen.lock().unwrap());

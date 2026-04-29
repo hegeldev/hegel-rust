@@ -61,7 +61,7 @@ fn interpret_time_produces_hh_mm_ss() {
 #[test]
 fn interpret_time_midnight_is_reachable() {
     // Forcing total_secs = 0 should give "00:00:00".
-    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(0)], None);
+    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(0)], None, None);
     let s = decode_tagged(&interpret_time(&mut ntc).ok().unwrap());
     assert_eq!(s, "00:00:00");
 }
@@ -160,6 +160,7 @@ fn interpret_domain_with_two_subdomains() {
             ChoiceValue::Integer(0),
         ],
         None,
+        None,
     );
     let schema = cbor_map! { "type" => "domain" };
     let s = decode_tagged(&interpret_domain(&mut ntc, &schema).ok().unwrap());
@@ -209,6 +210,7 @@ fn interpret_url_https_with_no_path_components() {
             ChoiceValue::Integer(0), // n_components
         ],
         None,
+        None,
     );
     let s = decode_tagged(&interpret_url(&mut ntc).ok().unwrap());
     assert_eq!(s, "https://aaa.aa");
@@ -235,6 +237,7 @@ fn interpret_url_http_with_path_components() {
             ChoiceValue::Integer(0),
             ChoiceValue::Integer(0),
         ],
+        None,
         None,
     );
     let s = decode_tagged(&interpret_url(&mut ntc).ok().unwrap());

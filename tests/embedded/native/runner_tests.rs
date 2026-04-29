@@ -16,7 +16,7 @@ fn test_span_mutation_noop_without_spans() {
 
     let mut ctf = CachedTestFunction::new(|_: TestCase| {});
     let choices = vec![ChoiceValue::Integer(0)];
-    let ntc = NativeTestCase::for_choices(&choices, None);
+    let ntc = NativeTestCase::for_choices(&choices, None, None);
     let (_, nodes, spans) = ctf.run(ntc);
 
     assert!(spans.is_empty());

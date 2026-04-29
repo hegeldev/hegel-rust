@@ -15,7 +15,7 @@ fn random_source() -> (NativeDataSource, NativeTestCaseHandle) {
 }
 
 fn exhausted_source() -> (NativeDataSource, NativeTestCaseHandle) {
-    let ntc = NativeTestCase::for_choices(&[], None);
+    let ntc = NativeTestCase::for_choices(&[], None, None);
     NativeDataSource::new(ntc)
 }
 

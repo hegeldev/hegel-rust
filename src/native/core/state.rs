@@ -9,7 +9,7 @@ use rand::rngs::SmallRng;
 
 use super::choices::{
     BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice,
-    Status, StopTest, StringChoice,
+    InterestingOrigin, Status, StopTest, StringChoice,
 };
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
 
@@ -308,6 +308,21 @@ impl std::ops::Index<i64> for Spans {
     }
 }
 
+/// Observer hook called by [`NativeTestCase`] after each draw and on
+/// conclusion.  All methods have default no-op implementations so
+/// concrete observers only need to override the callbacks they care
+/// about.
+///
+/// Mirrors `hypothesis.internal.conjecture.data.DataObserver`.
+pub trait DataObserver: Send {
+    fn draw_boolean(&mut self, _value: bool, _was_forced: bool) {}
+    fn draw_integer(&mut self, _value: i128, _was_forced: bool) {}
+    fn draw_float(&mut self, _value: f64, _was_forced: bool) {}
+    fn draw_bytes(&mut self, _value: &[u8], _was_forced: bool) {}
+    fn draw_string(&mut self, _value: &str, _was_forced: bool) {}
+    fn conclude_test(&mut self, _status: Status, _origin: Option<InterestingOrigin>) {}
+}
+
 /// Snapshot of a completed `NativeTestCase`'s observable state.
 ///
 /// Mirrors the relevant subset of Hypothesis's `ConjectureResult`
@@ -391,6 +406,14 @@ pub struct NativeTestCase {
     /// without discard, its labels are converted to [`CoverageTag`]s
     /// and added to `tags`.  Mirrors `ConjectureData.labels_for_structure_stack`.
     labels_for_structure_stack: Vec<HashSet<u64>>,
+    /// Optional observer notified after each draw and on conclusion.
+    /// Set by [`Self::for_choices`] and called by each draw method and
+    /// by [`Self::freeze`].  Mirrors `ConjectureData._observer`.
+    observer: Option<Box<dyn DataObserver>>,
+    /// The interesting origin set by [`Self::conclude_test`], if any.
+    /// `None` for test cases concluded by [`Self::freeze`] directly
+    /// (`Status::Valid`).  Mirrors `ConjectureData.interesting_origin`.
+    interesting_origin: Option<InterestingOrigin>,
 }
 
 impl NativeTestCase {
@@ -413,10 +436,21 @@ impl NativeTestCase {
             events: HashMap::new(),
             tags: HashSet::new(),
             labels_for_structure_stack: Vec::new(),
+            observer: None,
+            interesting_origin: None,
         }
     }
 
-    pub fn for_choices(choices: &[ChoiceValue], prefix_nodes: Option<&[ChoiceNode]>) -> Self {
+    /// Construct a `NativeTestCase` that replays `choices` in order,
+    /// notifying `observer` after each draw and on conclusion.
+    ///
+    /// Mirrors `ConjectureData.for_choices(choices, observer=observer)`
+    /// from `hypothesis.internal.conjecture.data`.
+    pub fn for_choices(
+        choices: &[ChoiceValue],
+        prefix_nodes: Option<&[ChoiceNode]>,
+        observer: Option<Box<dyn DataObserver>>,
+    ) -> Self {
         NativeTestCase {
             prefix: choices.to_vec(),
             prefix_nodes: prefix_nodes.map(|n| n.to_vec()),
@@ -435,6 +469,8 @@ impl NativeTestCase {
             events: HashMap::new(),
             tags: HashSet::new(),
             labels_for_structure_stack: Vec::new(),
+            observer,
+            interesting_origin: None,
         }
     }
 
@@ -463,6 +499,8 @@ impl NativeTestCase {
             events: HashMap::new(),
             tags: HashSet::new(),
             labels_for_structure_stack: Vec::new(),
+            observer: None,
+            interesting_origin: None,
         }
     }
 
@@ -492,6 +530,8 @@ impl NativeTestCase {
             events: HashMap::new(),
             tags: HashSet::new(),
             labels_for_structure_stack: Vec::new(),
+            observer: None,
+            interesting_origin: None,
         }
     }
 
@@ -520,6 +560,8 @@ impl NativeTestCase {
             events: HashMap::new(),
             tags: HashSet::new(),
             labels_for_structure_stack: Vec::new(),
+            observer: None,
+            interesting_origin: None,
         }
     }
 
@@ -638,6 +680,30 @@ impl NativeTestCase {
         if !already_frozen {
             self.status = Some(Status::Valid);
         }
+        if !already_frozen {
+            if let Some(ref mut obs) = self.observer {
+                let origin = self.interesting_origin.clone();
+                obs.conclude_test(self.status.unwrap(), origin);
+            }
+        }
+    }
+
+    /// Explicitly conclude the test case with a given status and optional
+    /// interesting origin, then raise `StopTest`.
+    ///
+    /// Mirrors `ConjectureData.conclude_test(status, interesting_origin)` from
+    /// `hypothesis.internal.conjecture.data`: sets the status and origin on the
+    /// test case, calls `freeze()` (which notifies the observer), then returns
+    /// `Err(StopTest)` so callers can propagate the stop signal with `?`.
+    pub fn conclude_test(
+        &mut self,
+        status: Status,
+        origin: Option<InterestingOrigin>,
+    ) -> Result<(), StopTest> {
+        self.status = Some(status);
+        self.interesting_origin = origin;
+        self.freeze();
+        Err(StopTest)
     }
 
     /// Snapshot the test case as a [`NativeResult`].
@@ -809,6 +875,10 @@ impl NativeTestCase {
             was_forced,
         });
 
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_integer(v, was_forced);
+        }
+
         Ok(v)
     }
 
@@ -848,6 +918,10 @@ impl NativeTestCase {
             value: ChoiceValue::Boolean(v),
             was_forced,
         });
+
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_boolean(v, was_forced);
+        }
 
         Ok(v)
     }
@@ -962,6 +1036,10 @@ impl NativeTestCase {
             was_forced,
         });
 
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_float(v, was_forced);
+        }
+
         Ok(v)
     }
 
@@ -1015,6 +1093,10 @@ impl NativeTestCase {
             value: ChoiceValue::Bytes(v.clone()),
             was_forced,
         });
+
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_bytes(&v, was_forced);
+        }
 
         Ok(v)
     }
@@ -1123,7 +1205,11 @@ impl NativeTestCase {
         // surrogates here — generation rejection-samples them and `validate`
         // rejects them — but a user-supplied prefix could feed one in, so we
         // drop rather than panic.
-        Ok(codepoints_to_string(&v))
+        let s = codepoints_to_string(&v);
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_string(&s, was_forced);
+        }
+        Ok(s)
     }
 
     /// Draw an integer, forced to `forced`. Panics if `forced` is outside `[min_value, max_value]`.
@@ -1153,6 +1239,9 @@ impl NativeTestCase {
             value: ChoiceValue::Integer(forced),
             was_forced: true,
         });
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_integer(forced, true);
+        }
         Ok(forced)
     }
 
@@ -1180,6 +1269,9 @@ impl NativeTestCase {
             value: ChoiceValue::Float(forced),
             was_forced: true,
         });
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_float(forced, true);
+        }
         Ok(forced)
     }
 
@@ -1199,6 +1291,9 @@ impl NativeTestCase {
             value: ChoiceValue::Bytes(forced.clone()),
             was_forced: true,
         });
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_bytes(&forced, true);
+        }
         Ok(forced)
     }
 
@@ -1231,7 +1326,11 @@ impl NativeTestCase {
             value: ChoiceValue::String(codepoints.clone()),
             was_forced: true,
         });
-        Ok(codepoints_to_string(&codepoints))
+        let s = codepoints_to_string(&codepoints);
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_string(&s, true);
+        }
+        Ok(s)
     }
 
     fn pre_choice(&mut self) -> Result<(), StopTest> {

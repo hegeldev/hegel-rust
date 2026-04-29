@@ -233,7 +233,7 @@ fn minimal_from(
     let initial = vec![ChoiceValue::Float(start)];
 
     let cond_for_init = condition.clone();
-    let mut ntc = NativeTestCase::for_choices(&initial, None);
+    let mut ntc = NativeTestCase::for_choices(&initial, None, None);
     let f = match ntc.draw_float(
         constraints.min_value,
         constraints.max_value,
@@ -251,7 +251,7 @@ fn minimal_from(
 
     let test_fn = Box::new(move |candidate: &[ChoiceNode]| {
         let values: Vec<ChoiceValue> = candidate.iter().map(|n| n.value.clone()).collect();
-        let mut ntc = NativeTestCase::for_choices(&values, Some(candidate));
+        let mut ntc = NativeTestCase::for_choices(&values, Some(candidate), None);
         let f = match ntc.draw_float(
             constraints.min_value,
             constraints.max_value,

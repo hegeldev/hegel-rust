@@ -9,7 +9,7 @@ use super::*;
 #[test]
 #[should_panic(expected = "Invalid codepoint range")]
 fn draw_string_invalid_codepoint_range_panics() {
-    let mut tc = NativeTestCase::for_choices(&[], None);
+    let mut tc = NativeTestCase::for_choices(&[], None, None);
     let _ = tc.draw_string(200, 100, 0, 5);
 }
 
@@ -23,7 +23,7 @@ fn draw_string_invalid_codepoint_range_panics() {
 // case". Recursive `gs::deferred` generators trip this regularly.
 #[test]
 fn draw_after_max_depth_returns_stop_test() {
-    let mut tc = NativeTestCase::for_choices(&[], None);
+    let mut tc = NativeTestCase::for_choices(&[], None, None);
     for _ in 0..=MAX_DEPTH {
         tc.start_span(0);
     }
