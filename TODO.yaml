@@ -195,48 +195,6 @@
         `::test_does_not_run_optimisation_when_max_examples_is_small`
         bullet in `SKIPPED.md` is removed.
 
-- title: Add NativeTestCase draw-by-strategy + span tree surface
-  details: |
-    Port the strategy-driven span-introspection cluster from
-    `conjecture/test_test_data.py`:
-      - `test_examples_show_up_as_discarded`
-      - `test_can_override_label`
-      - `test_examples_support_negative_indexing`
-      - `test_examples_out_of_bounds_index`
-      - `test_child_indices`
-      - `test_example_equality`
-      - `test_example_depth_marking`
-      - `test_has_examples_even_when_empty`
-      - `test_has_cached_examples_even_when_overrun`
-      - `test_closes_interval_on_error_in_strategy`
-      - `test_does_not_double_freeze_in_interval_close`
-      - `test_will_mark_too_deep_examples_as_invalid` (bundled — also
-        needs `MAX_DEPTH`)
-
-    Port path: add `pub fn draw<G: Generator<T>, T>(&mut self, g: G)
-    -> T` on `NativeTestCase` (or on a higher-level data wrapper) that
-    auto-records a span around each draw and closes open spans on
-    panic. Extend `Span` (in `src/native/core/state.rs`) with
-    `parent: Option<usize>`, `children: Vec<usize>`, `depth: u32`,
-    `choice_count: usize`, and `discarded: bool` fields, and replace
-    `pub spans: Vec<Span>` with a `Spans` newtype that supports
-    Python-style negative indexing and out-of-bounds error semantics
-    via accessor methods. Add a `MAX_DEPTH` constant matching
-    Hypothesis's recursion-depth limit and trip `Status::Invalid` when
-    nested `.map`/`.flat_map` strategies exceed it.
-
-    This is a substantial native-engine expansion; split into smaller
-    commits if the PR feels too large. The natural split is
-    (1) Span tree fields + draw-by-strategy auto-span recording,
-    (2) Spans newtype with index semantics,
-    (3) MAX_DEPTH enforcement.
-
-    Acceptance criteria:
-      - All 12 tests compile and pass under
-        `cargo test --features native --test hypothesis
-        conjecture_test_data::`.
-      - The matching bullets in `SKIPPED.md` are removed.
-
 - title: Add NativeTestCase DataObserver hook
   details: |
     Port `test_can_observe_draws` and `test_calls_concluded_implicitly`
@@ -268,8 +226,6 @@
       - The matching bullets in `SKIPPED.md` are removed.
 
 - title: Add NativeTestCase st.nothing() / draw-by-strategy invalid path
-  blocked_by:
-    - Add NativeTestCase draw-by-strategy + span tree surface
   details: |
     Port `test_empty_strategy_is_invalid` from
     `conjecture/test_test_data.py`. Upstream calls
