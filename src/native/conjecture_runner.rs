@@ -668,14 +668,18 @@ impl NativeConjectureData {
     }
 
     pub fn choices(&self) -> Vec<ChoiceValue> {
-        todo!("NativeConjectureData::choices")
+        self.ntc.nodes.iter().map(|n| n.value.clone()).collect()
     }
 
     /// Accessor for the status recorded on the underlying test case.
     /// Used by `new_shrinker` predicates (`|d| d.status() ==
     /// Status::Interesting`).
     pub fn status(&self) -> Status {
-        todo!("NativeConjectureData::status")
+        match &self.mark {
+            Some((MarkKind::Interesting, _)) => Status::Interesting,
+            Some((MarkKind::Invalid, _)) => Status::Invalid,
+            None => Status::Valid,
+        }
     }
 }
 
@@ -687,7 +691,7 @@ pub struct NativeDataTreeView<'a> {
 
 impl<'a> NativeDataTreeView<'a> {
     pub fn is_exhausted(&self) -> bool {
-        todo!("NativeConjectureRunner::tree::is_exhausted")
+        self.runner.tree_root.is_exhausted
     }
 
     /// Walk the data tree along `choices` and return `true` when the
@@ -1666,6 +1670,95 @@ impl NativeConjectureRunner {
         result
     }
 
+    /// Variant of [`cached_test_function`] that allows the test to draw
+    /// `extend` extra choices beyond the forced prefix.  Mirrors
+    /// `engine.py::cached_test_function(..., extend=n)`.
+    ///
+    /// Key differences from the no-extend version:
+    /// - A cached `OVERRUN` for this prefix is **not** re-used (the test
+    ///   may succeed with additional choices).
+    /// - The result is **not** cached if the test drew beyond the prefix
+    ///   (i.e. `nodes.len() > choices.len()`).
+    pub fn cached_test_function_extend(
+        &mut self,
+        choices: &[ChoiceValue],
+        extend: usize,
+    ) -> ConjectureRunResult {
+        self.cached_test_function_with_extend(choices, Some(extend))
+    }
+
+    /// Variant of [`cached_test_function`] where the test can draw an
+    /// unlimited number of extra choices beyond the forced prefix.
+    /// Mirrors `engine.py::cached_test_function(..., extend="full")`.
+    pub fn cached_test_function_full(&mut self, choices: &[ChoiceValue]) -> ConjectureRunResult {
+        self.cached_test_function_with_extend(choices, None)
+    }
+
+    /// Internal implementation shared by `cached_test_function_extend` and
+    /// `cached_test_function_full`.  `max_extend` of `None` = unlimited
+    /// (`extend="full"`); `Some(n)` = at most `n` extra choices.
+    fn cached_test_function_with_extend(
+        &mut self,
+        choices: &[ChoiceValue],
+        max_extend: Option<usize>,
+    ) -> ConjectureRunResult {
+        let key = crate::native::database::serialize_choices(choices);
+        // Re-use cached result only if it's NOT an Overrun (per Hypothesis
+        // semantics: a cached overrun might succeed when extended).
+        if let Some(cached) = self.test_cache.get(&key) {
+            let cached = cached.clone();
+            if cached.status != Status::EarlyStop {
+                let result_choices: Vec<ChoiceValue> =
+                    cached.nodes.iter().map(|n| n.value.clone()).collect();
+                return ConjectureRunResult {
+                    status: cached.status,
+                    nodes: cached.nodes,
+                    choices: result_choices,
+                    target_observations: cached.target_observations,
+                    origin: cached.origin,
+                };
+            }
+        }
+        let buffer_size_limit = self
+            .settings
+            .buffer_size_limit
+            .unwrap_or(CONJECTURE_BUFFER_SIZE);
+        // Use a probe NTC so draws beyond the prefix use the runner's RNG.
+        let max_size = match max_extend {
+            Some(ext) => choices.len() + ext,
+            None => CONJECTURE_BUFFER_SIZE,
+        };
+        let probe_rng = SmallRng::seed_from_u64(self.rng.random::<u64>());
+        let ntc = NativeTestCase::for_probe(choices, probe_rng, max_size);
+        let (status, nodes, origin, target_observations) =
+            run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+        self.call_count += 1;
+        record_tree(&mut self.tree_root, &nodes, status);
+        let result_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+        // Only cache if extend was NOT consumed (test stayed within forced prefix).
+        let extend_consumed = nodes.len() > choices.len();
+        if !extend_consumed {
+            self.test_cache.insert(
+                key,
+                CachedRun {
+                    status,
+                    nodes: nodes.clone(),
+                    origin: origin.clone(),
+                    target_observations: target_observations.clone(),
+                },
+            );
+        }
+        let result = ConjectureRunResult {
+            status,
+            nodes: nodes.clone(),
+            choices: result_choices,
+            target_observations: target_observations.clone(),
+            origin: origin.clone(),
+        };
+        self.record_test_result(status, nodes, origin, target_observations);
+        result
+    }
+
     /// Hill-climb from the current best interesting example and return
     /// a `Shrinker`-like handle the test can drive with
     /// `fixate_shrink_passes`.  Mirrors
@@ -1686,7 +1779,7 @@ impl NativeConjectureRunner {
     /// Produce a novel choice-sequence prefix.  Mirrors
     /// `ConjectureRunner.generate_novel_prefix`.
     pub fn generate_novel_prefix(&mut self) -> Vec<ChoiceValue> {
-        todo!("NativeConjectureRunner::generate_novel_prefix")
+        generate_novel_prefix(&self.tree_root, &mut self.rng)
     }
 
     /// Key under which the runner stores not-yet-shrunk candidates.
