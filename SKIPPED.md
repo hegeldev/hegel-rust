@@ -465,6 +465,8 @@ Individually-skipped tests (rest of the file is ported):
   surface to derive a Hypothesis-style per-strategy label from (same
   strategy-class-structure family as `.is_cacheable` / `.branches` /
   `.is_empty` skips).
+- `test_large_examples.py` (in `nocover/`) — port abandoned due to
+  integration conflict when cherry-picking onto the supervisor branch.
 - `test_pretty_repr.py` (in `nocover/`) — both tests exercise Python's
   `repr()` / `eval()` round-trip on strategy objects.
   `test_repr_evals_to_thing_with_same_repr` asserts `repr(eval(repr(s)))
