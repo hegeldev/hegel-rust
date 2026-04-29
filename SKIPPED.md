@@ -732,6 +732,10 @@ Individually-skipped tests (rest of the file is ported):
   Python-specific facilities with no Rust counterpart. Rust closures have
   no introspectable source, no AST, and no lambda-description cache,
   matching the existing whole-file `test_reflection.py` skip.
+- `test_lambda_inlining.py` — every test exercises `hypothesis.vendor.pretty._try_inline_lambda`,
+  a Python-specific repr helper that reconstructs lambda source via `ast.parse`; no Rust counterpart.
+  Port abandoned due to integration conflict in `src/native/conjecture_runner.rs` (cherry-pick of
+  `port/worker-2` onto the supervisor branch failed).
 
 - `nocover/test_deferred_errors.py::test_does_not_recalculate_the_strategy`
   — uses Python's `hypothesis.strategies._internal.core.defines_strategy`
