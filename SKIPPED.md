@@ -1404,6 +1404,111 @@ Individually-skipped tests (rest of the file is ported):
   require `Verbosity: Ord`, which hegel-rust deliberately does not
   derive.
 
+- `test_stateful.py::test_multiple_rules_same_func` — uses `TestCase().runTest()` and
+  `capture_out`; Python unittest API with no hegel-rust counterpart.
+- `test_stateful.py::test_picks_up_settings_at_first_use_of_testcase`,
+  `test_stateful.py::test_can_get_test_case_off_machine_instance` — Python `.TestCase`
+  class-attribute and `settings` class-attribute API with no hegel-rust counterpart.
+- `test_stateful.py::test_flaky_draw_less_raises_flaky`,
+  `test_stateful.py::test_flaky_draw_in_rule_no_precondition_note` — both use
+  `current_build_context().is_final`; no hegel-rust public counterpart.
+- `test_stateful.py::test_result_is_added_to_target` — uses `lists(nodes)` (bundle
+  inside strategy), which hegel-rust's `Variables<T>` doesn't support.
+- `test_stateful.py::test_flaky_precondition_error_message` — `FlakyPreconditionMachine`
+  uses `@precondition` decorator; hegel-rust maps `@precondition` to `tc.assume()` in
+  rule body and does not emit a "flaky precondition" note.
+- `test_stateful.py::test_get_state_machine_test_is_importable` — tests Hypothesis
+  public API `get_state_machine_test`; no hegel-rust counterpart.
+- `test_stateful.py::test_ratchetting_raises_flaky` — uses `data()` strategy in rules
+  (draws data objects inside the rule body); no hegel-rust `data()` strategy.
+- `test_stateful.py::test_multiple`,
+  `test_stateful.py::MachineWithConsumingRule`,
+  `test_stateful.py::MachineUsingMultiple`,
+  `test_stateful.py::test_multiple_variables_printed`,
+  `test_stateful.py::test_multiple_variables_printed_single_element`,
+  `test_stateful.py::test_no_variables_printed` — all exercise `multiple()` return
+  values and/or `self.bundle("name")` introspection; neither is supported in hegel-rust.
+- `test_stateful.py::test_consumes_typecheck` — Python `TypeError` on `consumes(non-Bundle)`;
+  Rust's type system makes this unrepresentable at compile time.
+- `test_stateful.py::test_empty_machine_is_invalid`,
+  `test_stateful.py::test_machine_with_no_terminals_is_invalid` — both check for
+  `InvalidDefinition`; hegel-rust panics with a different message (no `InvalidDefinition`
+  exception type).
+- `test_stateful.py::test_minimizes_errors_in_teardown` — relies on `@initialize` +
+  teardown + nonlocal Python closure interaction with no direct hegel-rust analog.
+- `test_stateful.py::test_can_explicitly_pass_settings`,
+  `test_stateful.py::test_settings_argument_is_validated`,
+  `test_stateful.py::test_runner_that_checks_factory_produced_a_machine`,
+  `test_stateful.py::test_settings_attribute_is_validated` — test Hypothesis
+  `run_state_machine_as_test(factory, settings=...)` API semantics; hegel-rust
+  uses `Hegel::new(...).settings(...).run()` instead.
+- `test_stateful.py::test_stateful_double_rule_is_forbidden`,
+  `test_stateful.py::test_no_double_invariant`,
+  `test_stateful.py::test_invariant_and_rule_are_incompatible`,
+  `test_stateful.py::test_invalid_rule_argument`,
+  `test_stateful.py::test_invalid_initialize_argument` — Python decorator-composition
+  validation; hegel-rust's proc macro enforces these at compile time differently.
+- `test_stateful.py::test_can_explicitly_call_functions_when_precondition_not_satisfied`,
+  `test_stateful.py::test_invariant_precondition`,
+  `test_stateful.py::test_explicit_invariant_call_with_precondition`,
+  `test_stateful.py::test_precondition_cannot_be_used_without_rule` — all rely on
+  `@precondition` decorator; hegel-rust uses `tc.assume()` in rule bodies instead.
+- `test_stateful.py::test_invariant_present_in_falsifying_example`,
+  `test_stateful.py::test_invariant_failling_present_in_falsifying_example`,
+  `test_stateful.py::test_invariant_checks_during_init_steps`,
+  `test_stateful.py::test_check_during_init_must_be_boolean` — rely on
+  `check_during_init=True`/`False` kwarg on `@invariant`; hegel-rust has no
+  `check_during_init` support (invariants always run after each step, not during
+  `@initialize` steps which don't exist in hegel-rust).
+- `test_stateful.py::test_initialize_rule`,
+  `test_stateful.py::test_initialize_rule_populate_bundle`,
+  `test_stateful.py::test_initialize_rule_dont_mix_with_precondition`,
+  `test_stateful.py::test_initialize_rule_dont_mix_with_regular_rule`,
+  `test_stateful.py::test_initialize_rule_cannot_be_double_applied`,
+  `test_stateful.py::test_initialize_rule_in_state_machine_with_inheritance`,
+  `test_stateful.py::test_can_manually_call_initialize_rule`,
+  `test_stateful.py::test_arguments_do_not_use_names_of_return_values` — all test
+  `@initialize` rules (output format, ordering, inheritance); hegel-rust has no
+  `@initialize` — the setup runs in the test body before `run()` and does not appear
+  as a named step in the output.
+- `test_stateful.py::test_steps_printed_despite_pytest_fail`,
+  `test_stateful.py::test_steps_not_printed_with_pytest_skip` — use `pytest.fail()`
+  / `pytest.skip()` which raise Python-specific exception types; no Rust counterpart.
+- `test_stateful.py::test_rule_deprecation_targets_and_target`,
+  `test_stateful.py::test_rule_deprecation_bundle_by_name`,
+  `test_stateful.py::test_rule_non_bundle_target`,
+  `test_stateful.py::test_rule_non_bundle_target_oneof`,
+  `test_stateful.py::test_deprecated_target_consumes_bundle` — Hypothesis deprecation
+  and runtime rule-argument validation; hegel-rust's macro enforces these at compile time.
+- `test_stateful.py::test_uses_seed` — uses `@seed` decorator; hegel-rust has no
+  `@seed`-equivalent decorator (seed is set via `Settings::new().seed(...)`).
+- `test_stateful.py::test_reproduce_failure_works`,
+  `test_stateful.py::test_reproduce_failure_fails_if_no_error` — use
+  `@reproduce_failure`; no hegel-rust counterpart.
+- `test_stateful.py::test_cannot_have_zero_steps`,
+  `test_stateful.py::test_min_steps_argument`,
+  `test_stateful.py::test_fails_on_settings_class_attribute` — test Hypothesis-specific
+  settings attributes (`stateful_step_count`, `_min_steps`, class-level settings);
+  no hegel-rust counterpart.
+- `test_stateful.py::test_single_target_multiple`,
+  `test_stateful.py::test_targets_repr`,
+  `test_stateful.py::test_multiple_targets`,
+  `test_stateful.py::test_multiple_common_targets` — test output format for `multiple()`
+  return values and multi-target bundles; hegel-rust has no `multiple()` and the
+  output format differs.
+- `test_stateful.py::test_removes_needless_steps`,
+  `test_stateful.py::test_prints_equal_values_with_correct_variable_name` — output
+  format tests; hegel-rust's falsifying-example step output format differs from
+  Hypothesis's (no "state = Machine()" / "state.step_name()" format).
+- `test_stateful.py::test_flatmap`,
+  `test_stateful.py::test_use_bundle_within_other_strategies` — both use a bundle as
+  a strategy argument (`buns.flatmap(...)`, `st.builds(Class, my_bundle)`); hegel-rust's
+  `Variables<T>` is not a `Generator` and cannot be composed with other generators.
+- `test_stateful.py::test_lots_of_entropy` — hegel-rust raises `TestCasesTooLarge` when
+  a stateful rule draws 512 bytes per step; Python Hypothesis handles large-entropy
+  stateful rules without triggering this health check (fix from GH-3618), but hegel-rust
+  has not implemented the equivalent data-budget exemption for stateful rule draws.
+
 - `test_traceback_elision.py` — exercises Python's traceback module
   (`traceback.extract_tb`, `e.__traceback__`) and counts frames to verify
   Hypothesis's internal-frame-trimming behaviour (gated on the
@@ -1631,11 +1736,6 @@ Individually-skipped tests (rest of the file is ported):
   — inspects `@given` kwarg handling against Python setting names.
   hegel-rust uses `.settings(Settings::new()...)` rather than kwargs on
   the test macro.
-
-- `test_stateful.py` — a parallel-port attempt on branch `port/worker-0`
-  was abandoned after its commits failed to cherry-pick cleanly
-  (SKIPPED.md merge conflict); the branch is preserved for a later
-  human to inspect.
 
 - `test_unittest.py` — every test exercises Python's `unittest` module
   integration: `test_subTest` builds a `unittest.TestSuite` around a

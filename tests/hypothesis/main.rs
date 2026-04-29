@@ -81,6 +81,7 @@ mod simple_collections;
 mod simple_strings;
 mod snapshots_combinators;
 mod snapshots_shrinking;
+mod stateful;
 mod subnormal_floats;
 mod testdecorators;
 mod threading;
