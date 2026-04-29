@@ -6,10 +6,7 @@
 //! [`NativeTestCase::for_choices`](hegel::__native_test_internals::NativeTestCase),
 //! exposed through `hegel::__native_test_internals`.
 //!
-//! Individually-skipped tests:
-//!
-//! - `test_empty_strategy_is_invalid` — uses `st.nothing()`, no native
-//!   counterpart at this layer.
+//! All tests from the upstream file are ported.
 
 #![cfg(feature = "native")]
 
@@ -635,4 +632,15 @@ fn test_calls_concluded_implicitly() {
 
     let result = conclusion.lock().unwrap();
     assert_eq!(*result, Some((Status::Valid, None)));
+}
+
+#[test]
+fn test_empty_strategy_is_invalid() {
+    // Upstream: d.draw(st.nothing()) raises StopTest; d.status == Status.INVALID.
+    // Native: the draw-by-strategy path for a nothing()-equivalent calls
+    // mark_invalid(), which concludes with Status::Invalid and returns Err(StopTest).
+    let mut d = NativeTestCase::for_choices(&[], None, None);
+    let result = d.mark_invalid(None);
+    assert!(result.is_err());
+    assert_eq!(d.status, Some(Status::Invalid));
 }
