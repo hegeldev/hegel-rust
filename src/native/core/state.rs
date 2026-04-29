@@ -369,6 +369,11 @@ pub struct NativeTestCase {
     force_simplest: bool,
     pub nodes: Vec<ChoiceNode>,
     pub status: Option<Status>,
+    /// Set to `true` by [`Self::freeze`] on the first call; subsequent calls
+    /// are no-ops.  Mirrors `ConjectureData.frozen` in Python, which is a
+    /// dedicated boolean so that `conclude_test` can set `self.status` before
+    /// calling `freeze()` without triggering the idempotency early-return.
+    frozen: bool,
     pub collections: HashMap<i64, ManyState>,
     next_collection_id: i64,
     pub variable_pools: Vec<NativeVariables>,
@@ -426,6 +431,7 @@ impl NativeTestCase {
             force_simplest: false,
             nodes: Vec::new(),
             status: None,
+            frozen: false,
             collections: HashMap::new(),
             next_collection_id: 0,
             variable_pools: Vec::new(),
@@ -459,6 +465,7 @@ impl NativeTestCase {
             force_simplest: false,
             nodes: Vec::new(),
             status: None,
+            frozen: false,
             collections: HashMap::new(),
             next_collection_id: 0,
             variable_pools: Vec::new(),
@@ -489,6 +496,7 @@ impl NativeTestCase {
             force_simplest: true,
             nodes: Vec::new(),
             status: None,
+            frozen: false,
             collections: HashMap::new(),
             next_collection_id: 0,
             variable_pools: Vec::new(),
@@ -520,6 +528,7 @@ impl NativeTestCase {
             force_simplest: false,
             nodes: Vec::new(),
             status: None,
+            frozen: false,
             collections: HashMap::new(),
             next_collection_id: 0,
             variable_pools: Vec::new(),
@@ -550,6 +559,7 @@ impl NativeTestCase {
             force_simplest: false,
             nodes: Vec::new(),
             status: None,
+            frozen: false,
             collections: HashMap::new(),
             next_collection_id: 0,
             variable_pools: Vec::new(),
@@ -656,7 +666,7 @@ impl NativeTestCase {
     /// `status` value, so any non-`None` status means the test case is
     /// frozen.
     pub fn frozen(&self) -> bool {
-        self.status.is_some()
+        self.frozen
     }
 
     /// Mark the test case as completed, defaulting to `Status::Valid` when
@@ -670,21 +680,22 @@ impl NativeTestCase {
     /// choice position (matching Hypothesis's behaviour where freeze
     /// implicitly closes intervals left open by an exception or overrun).
     pub fn freeze(&mut self) {
-        let already_frozen = self.status.is_some();
+        if self.frozen {
+            return;
+        }
+        self.frozen = true;
         let end = self.nodes.len();
         while let Some(idx) = self.span_stack.pop() {
             if let Some(span) = self.spans.get_mut(idx) {
                 span.end = end;
             }
         }
-        if !already_frozen {
+        if self.status.is_none() {
             self.status = Some(Status::Valid);
         }
-        if !already_frozen {
-            if let Some(ref mut obs) = self.observer {
-                let origin = self.interesting_origin.clone();
-                obs.conclude_test(self.status.unwrap(), origin);
-            }
+        if let Some(ref mut obs) = self.observer {
+            let origin = self.interesting_origin.clone();
+            obs.conclude_test(self.status.unwrap(), origin);
         }
     }
 
