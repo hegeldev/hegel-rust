@@ -4,38 +4,15 @@
 //! (constructing it via `ConjectureData.for_choices(...)` rather than via
 //! a runner). The native counterpart is
 //! [`NativeTestCase::for_choices`](hegel::__native_test_internals::NativeTestCase),
-//! exposed through `hegel::__native_test_internals`. `NativeTestCase`
-//! covers only the choice-level draw operations and span recording;
-//! many of the tests in this file rely on engine surface that has not
-//! yet been ported into the native API and are listed below as
-//! individually-skipped.
+//! exposed through `hegel::__native_test_internals`.
 //!
 //! Individually-skipped tests:
 //!
 //! - `test_calls_concluded_implicitly` — needs a `DataObserver` hook that
 //!   `freeze()` invokes; bundled with the `test_can_observe_draws` port.
-//! - `test_examples_show_up_as_discarded`, `test_can_override_label`,
-//!   `test_examples_support_negative_indexing`,
-//!   `test_examples_out_of_bounds_index`, `test_child_indices`,
-//!   `test_example_equality`, `test_example_depth_marking`,
-//!   `test_has_examples_even_when_empty`,
-//!   `test_has_cached_examples_even_when_overrun` — `NativeTestCase`
-//!   has no draw-by-strategy method that auto-creates spans.
-//!   `Span` is a flat struct with no `parent` / `children` / `depth` /
-//!   `choice_count` / `discarded` fields, and `spans` is a plain `Vec`
-//!   without negative-indexing or out-of-bounds-error semantics.
 //! - `test_can_observe_draws` — no `DataObserver` API.
-//! - `test_will_mark_too_deep_examples_as_invalid` — uses Hypothesis's
-//!   `MAX_DEPTH` constant and recursive `.map` strategy nesting; native
-//!   engine has no MAX_DEPTH analog and `NativeTestCase` has no
-//!   draw-by-strategy method.
 //! - `test_empty_strategy_is_invalid` — uses `st.nothing()`, no native
 //!   counterpart at this layer.
-//! - `test_closes_interval_on_error_in_strategy`,
-//!   `test_does_not_double_freeze_in_interval_close` — assume that
-//!   `NativeTestCase` exposes a `draw(strategy)` method that closes
-//!   open spans on exception. Native routes strategy draws through
-//!   Hegel-side `Generator::do_draw`, not the native test case.
 
 #![cfg(feature = "native")]
 
