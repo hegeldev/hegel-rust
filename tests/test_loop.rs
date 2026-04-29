@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use hegel::generators as gs;
-use hegel::{Hegel, Settings};
+use hegel::{HealthCheck, Hegel, Settings};
 
 /// Run `body` as a Hegel property test and return the lines captured during
 /// the final replay of the shrunk failing case. `body` is expected to trigger
@@ -168,7 +168,8 @@ fn loop_terminates_when_body_never_panics() {
                 Settings::new()
                     .test_cases(3)
                     .database(None)
-                    .derandomize(true),
+                    .derandomize(true)
+                    .suppress_health_check([HealthCheck::TooSlow]),
             )
             .run();
         })
