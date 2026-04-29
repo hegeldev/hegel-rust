@@ -119,7 +119,8 @@ impl<'a> Shrinker<'a> {
         }
         let (is_interesting, actual_nodes) = (self.test_fn)(ShrinkRun::Full(nodes));
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
-            let old: Vec<ChoiceValue> = self.current_nodes.iter().map(|n| n.value.clone()).collect();
+            let old: Vec<ChoiceValue> =
+                self.current_nodes.iter().map(|n| n.value.clone()).collect();
             self.downgraded.push(old);
             self.improvements += 1;
             self.current_nodes = actual_nodes;
@@ -145,7 +146,8 @@ impl<'a> Shrinker<'a> {
             max_size,
         });
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
-            let old: Vec<ChoiceValue> = self.current_nodes.iter().map(|n| n.value.clone()).collect();
+            let old: Vec<ChoiceValue> =
+                self.current_nodes.iter().map(|n| n.value.clone()).collect();
             self.downgraded.push(old);
             self.improvements += 1;
             self.current_nodes = actual_nodes;

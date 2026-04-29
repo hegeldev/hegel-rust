@@ -264,10 +264,11 @@ pub mod __native_test_internals {
         ChoiceTree, Chooser, DeadBranch, prefix_selection_order, random_selection_order,
     };
     pub use crate::native::conjecture_runner::{
-        DominanceRelation, ExitReason, HealthCheckLabel, InterestingExample, InterestingOrigin,
-        NativeConjectureData, NativeConjectureRunner, NativeDataTreeView, NativeRunnerSettings,
-        NativeShrinker, Phase as RunnerPhase, choices_from_bytes, choices_to_bytes, dominance,
-        fails_health_check, interesting_origin, run_to_nodes,
+        ConjectureRunResult, DominanceRelation, ExitReason, HealthCheckLabel, InterestingExample,
+        InterestingOrigin, NativeConjectureData, NativeConjectureRunner, NativeDataTreeView,
+        NativeRunnerSettings, NativeShrinker, ParetoFront, Phase as RunnerPhase,
+        choices_from_bytes, choices_to_bytes, dominance, fails_health_check, interesting_origin,
+        run_to_nodes,
     };
     pub use crate::native::conjecture_utils::{
         SMALLEST_POSITIVE_FLOAT, Sampler, calc_p_continue, p_continue_to_avg,

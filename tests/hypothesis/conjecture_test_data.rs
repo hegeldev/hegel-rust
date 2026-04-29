@@ -377,8 +377,11 @@ fn test_example_depth_marking() {
     d.freeze(); // closes top span
 
     assert_eq!(d.spans.len(), 6);
-    let depths: Vec<(usize, u32)> =
-        d.spans.iter().map(|ex| (ex.choice_count(), ex.depth)).collect();
+    let depths: Vec<(usize, u32)> = d
+        .spans
+        .iter()
+        .map(|ex| (ex.choice_count(), ex.depth))
+        .collect();
     assert_eq!(
         depths,
         vec![
@@ -411,7 +414,11 @@ fn test_has_cached_examples_even_when_overrun() {
     // Draw past end → overrun.
     let _ = d.weighted(0.5, None);
     assert_eq!(d.status, Some(Status::EarlyStop));
-    assert!(d.spans.iter().any(|ex| ex.label == "3" && ex.choice_count() == 1));
+    assert!(
+        d.spans
+            .iter()
+            .any(|ex| ex.label == "3" && ex.choice_count() == 1)
+    );
     // d.spans is d.spans — in Rust, spans is a plain field so the address is
     // always the same; confirmed by pointer equality.
     let ptr1: *const _ = &d.spans;

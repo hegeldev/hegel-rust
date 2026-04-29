@@ -149,10 +149,221 @@ pub enum DominanceRelation {
     Equal,
 }
 
-/// Stub for `pareto.dominance(a, b)` — compares two test cases'
-/// target-observation vectors.
-pub fn dominance(_left: &InterestingExample, _right: &InterestingExample) -> DominanceRelation {
-    todo!("NativeConjectureRunner: implement dominance (pareto.py)")
+/// Full result of running a single test case through the runner.
+/// Mirrors `ConjectureResult` from `internal/conjecture/data.py`.
+/// Used by `dominance` and `ParetoFront`.
+#[derive(Clone, Debug)]
+pub struct ConjectureRunResult {
+    pub status: Status,
+    pub nodes: Vec<ChoiceNode>,
+    pub choices: Vec<ChoiceValue>,
+    pub target_observations: HashMap<String, f64>,
+    pub origin: Option<InterestingOrigin>,
+}
+
+impl PartialEq for ConjectureRunResult {
+    fn eq(&self, other: &Self) -> bool {
+        self.nodes == other.nodes
+    }
+}
+
+impl Eq for ConjectureRunResult {}
+
+/// Compare two test results' target observations to determine which
+/// dominates the other.  Mirrors `internal/conjecture/pareto.py::dominance`.
+pub fn dominance(left: &ConjectureRunResult, right: &ConjectureRunResult) -> DominanceRelation {
+    let left_key = crate::native::core::sort_key(&left.nodes);
+    let right_key = crate::native::core::sort_key(&right.nodes);
+
+    if left_key == right_key {
+        return DominanceRelation::Equal;
+    }
+
+    // Ensure we process left_key < right_key (left is simpler).
+    // If right is actually simpler, recurse with swapped args and flip the result.
+    if right_key < left_key {
+        let result = dominance(right, left);
+        return match result {
+            DominanceRelation::LeftDominates => DominanceRelation::RightDominates,
+            other => other,
+        };
+    }
+
+    // left_key < right_key: left is simpler.  Check if left dominates right.
+
+    // right has higher status → left cannot dominate
+    if left.status < right.status {
+        return DominanceRelation::NoDominance;
+    }
+
+    // right is interesting for a different origin → no dominance
+    if left.status == Status::Interesting && right.origin.is_some() && left.origin != right.origin {
+        return DominanceRelation::NoDominance;
+    }
+
+    // For each target, right must not score strictly higher than left
+    let all_targets: std::collections::HashSet<&String> = left
+        .target_observations
+        .keys()
+        .chain(right.target_observations.keys())
+        .collect();
+    for target in all_targets {
+        let left_score = left
+            .target_observations
+            .get(target)
+            .copied()
+            .unwrap_or(f64::NEG_INFINITY);
+        let right_score = right
+            .target_observations
+            .get(target)
+            .copied()
+            .unwrap_or(f64::NEG_INFINITY);
+        if right_score > left_score {
+            return DominanceRelation::NoDominance;
+        }
+    }
+
+    DominanceRelation::LeftDominates
+}
+
+/// Approximate Pareto front of test results.  Mirrors
+/// `internal/conjecture/pareto.py::ParetoFront`.
+pub struct ParetoFront {
+    /// Results kept sorted by `sort_key(nodes)` (ascending).
+    front: Vec<ConjectureRunResult>,
+    rng: SmallRng,
+}
+
+impl ParetoFront {
+    pub fn new(rng: SmallRng) -> Self {
+        ParetoFront {
+            front: Vec::new(),
+            rng,
+        }
+    }
+
+    /// Add `data` to the front.  Returns `true` if `data` is now in
+    /// the front.  Mirrors `ParetoFront.add`.
+    pub fn add(&mut self, data: ConjectureRunResult) -> bool {
+        if data.status < Status::Valid {
+            return false;
+        }
+        if self.front.is_empty() {
+            self.front.push(data);
+            return true;
+        }
+        // Already present (by node equality)?
+        if self.front.contains(&data) {
+            return true;
+        }
+
+        let data_key = crate::native::core::sort_key(&data.nodes);
+
+        // Find insertion position (sorted by sort_key ascending).
+        let insert_pos = self
+            .front
+            .partition_point(|e| crate::native::core::sort_key(&e.nodes) < data_key);
+        self.front.insert(insert_pos, data.clone());
+
+        let mut to_remove: Vec<usize> = Vec::new();
+        let n = self.front.len();
+
+        // Randomised cleanup to the right (larger sort_key entries).
+        let mut failures = 0;
+        let mut i = insert_pos + 1;
+        while i < n && failures < 10 {
+            let j = if i + 1 < n {
+                i + self.rng.random_range(0..(n - i))
+            } else {
+                i
+            };
+            let candidate = &self.front[j];
+            let dom = dominance(&data, candidate);
+            debug_assert_ne!(dom, DominanceRelation::RightDominates);
+            if dom == DominanceRelation::LeftDominates {
+                to_remove.push(j);
+                failures = 0;
+            } else {
+                failures += 1;
+            }
+            i += 1;
+        }
+
+        // Check elements to the left (smaller sort_key) for dominance
+        // of `data`.
+        let mut dominators: Vec<usize> = vec![insert_pos];
+        let mut done = insert_pos == 0;
+        let mut i = if insert_pos > 0 { insert_pos - 1 } else { 0 };
+        while !done && dominators.len() < 10 {
+            let candidate_idx = i;
+            let mut dominated_by_some = false;
+            let mut j = 0;
+            while j < dominators.len() {
+                let v_idx = dominators[j];
+                // We need temporary immutable borrows to call dominance().
+                // Clone the slice indices to avoid borrow conflicts.
+                let (candidate_clone, v_clone) = {
+                    let c = self.front[candidate_idx].clone();
+                    let v = self.front[v_idx].clone();
+                    (c, v)
+                };
+                let dom = dominance(&candidate_clone, &v_clone);
+                match dom {
+                    DominanceRelation::LeftDominates => {
+                        to_remove.push(v_idx);
+                        dominators[j] = candidate_idx;
+                        dominated_by_some = false;
+                        j += 1;
+                    }
+                    DominanceRelation::RightDominates => {
+                        to_remove.push(candidate_idx);
+                        dominated_by_some = true;
+                        break;
+                    }
+                    DominanceRelation::Equal => {
+                        dominated_by_some = true;
+                        break;
+                    }
+                    DominanceRelation::NoDominance => {
+                        j += 1;
+                    }
+                }
+            }
+            if !dominated_by_some {
+                dominators.push(candidate_idx);
+            }
+            if i == 0 {
+                done = true;
+            } else {
+                i -= 1;
+            }
+        }
+
+        // Remove dominated entries (in reverse index order to preserve indices).
+        to_remove.sort_unstable();
+        to_remove.dedup();
+        for &idx in to_remove.iter().rev() {
+            self.front.remove(idx);
+        }
+
+        // Return true iff `data` survived the purge.
+        self.front.contains(&data)
+    }
+
+    pub fn len(&self) -> usize {
+        self.front.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.front.is_empty()
+    }
+}
+
+impl std::ops::Index<usize> for ParetoFront {
+    type Output = ConjectureRunResult;
+    fn index(&self, i: usize) -> &ConjectureRunResult {
+        &self.front[i]
+    }
 }
 
 /// Settings snapshot for a `NativeConjectureRunner`.  The fields
@@ -261,6 +472,9 @@ pub enum Phase {
     Shrink,
     Reuse,
     Explain,
+    /// Targeting / hill-climbing phase.  Mirrors `Phase.target` in
+    /// Hypothesis's `phases.py`.
+    Target,
 }
 
 /// Unique-per-`NativeConjectureData` id used as the panic payload for
@@ -349,6 +563,9 @@ pub struct NativeConjectureData {
     /// invocations; defaults to [`CONJECTURE_BUFFER_SIZE`] otherwise.
     buffer_size_limit: usize,
     events: HashMap<String, String>,
+    /// Per-test-case targeting observations: maps target label to score.
+    /// Mirrors `ConjectureData.target_observations`.
+    pub target_observations: HashMap<String, f64>,
 }
 
 impl NativeConjectureData {
@@ -360,6 +577,7 @@ impl NativeConjectureData {
             bytes_drawn: 0,
             buffer_size_limit,
             events: HashMap::new(),
+            target_observations: HashMap::new(),
         }
     }
 
@@ -557,17 +775,13 @@ type RunnerTestFn = Box<dyn FnMut(&mut NativeConjectureData)>;
 /// Cached outcome of a [`NativeConjectureRunner::cached_test_function`]
 /// invocation.  Mirrors `engine.py`'s `__data_cache` entries: the
 /// terminal status plus enough state to refuse to re-run the test
-/// function on a repeat call with the same choice prefix.  Fields are
-/// kept against future cache-hit return surfaces (upstream returns the
-/// stored `ConjectureResult` so callers can inspect status / nodes /
-/// origin without re-running the test); the native runner currently
-/// uses the cache only for hit/miss bookkeeping.
+/// function on a repeat call with the same choice prefix.
 #[derive(Clone)]
-#[allow(dead_code)]
 struct CachedRun {
     status: Status,
     nodes: Vec<ChoiceNode>,
     origin: Option<InterestingOrigin>,
+    target_observations: HashMap<String, f64>,
 }
 
 /// Hashable choice-value key, mirroring [`crate::native::tree`]'s
@@ -864,7 +1078,12 @@ fn run_test_fn(
     test_fn: &mut RunnerTestFn,
     ntc: NativeTestCase,
     buffer_size_limit: usize,
-) -> (Status, Vec<ChoiceNode>, Option<InterestingOrigin>) {
+) -> (
+    Status,
+    Vec<ChoiceNode>,
+    Option<InterestingOrigin>,
+    HashMap<String, f64>,
+) {
     let mut data = NativeConjectureData::new(ntc, buffer_size_limit);
     let my_id = data.data_id;
 
@@ -903,8 +1122,9 @@ fn run_test_fn(
         Some((MarkKind::Interesting, o)) => o,
         _ => None,
     };
+    let target_observations = std::mem::take(&mut data.target_observations);
     let nodes = std::mem::take(&mut data.ntc.nodes);
-    (status, nodes, origin)
+    (status, nodes, origin, target_observations)
 }
 
 /// Concatenate `database_key + b"." + sub` to derive a sub-corpus key.
@@ -930,11 +1150,8 @@ fn shortlex_cmp(a: &Vec<u8>, b: &Vec<u8>) -> std::cmp::Ordering {
 /// Most methods are `todo!()` stubs.  Subsequent port-loop cycles
 /// land tests that fill in the attributes they exercise.
 pub struct NativeConjectureRunner {
-    #[allow(dead_code)]
     test_fn: RunnerTestFn,
-    #[allow(dead_code)]
     settings: NativeRunnerSettings,
-    #[allow(dead_code)]
     rng: SmallRng,
     database_key: Option<Vec<u8>>,
     /// Monotonic clock used for the shrink-phase wall-clock budget,
@@ -987,15 +1204,25 @@ pub struct NativeConjectureRunner {
     /// or bumping `call_count`.  Capacity is
     /// `settings.cache_size.unwrap_or(CACHE_SIZE)`.
     test_cache: LRUCache<Vec<u8>, CachedRun>,
+    /// Approximate Pareto front of valid (and interesting) test results.
+    pareto_front: ParetoFront,
+    /// Best score seen per target label.
+    pub best_observed_targets: HashMap<String, f64>,
+    /// Best choice sequence seen per target label (for hill-climbing).
+    best_choices_for_target: HashMap<String, Vec<ChoiceValue>>,
+    /// How many times `optimise_targets()` has been called during
+    /// `generate_new_examples()`.
+    pub optimise_targets_call_count: usize,
 }
 
 impl NativeConjectureRunner {
-    pub fn new<F>(test_fn: F, settings: NativeRunnerSettings, rng: SmallRng) -> Self
+    pub fn new<F>(test_fn: F, settings: NativeRunnerSettings, mut rng: SmallRng) -> Self
     where
         F: FnMut(&mut NativeConjectureData) + 'static,
     {
         let start = std::time::Instant::now();
         let cache_capacity = settings.cache_size.unwrap_or(CACHE_SIZE);
+        let pareto_rng = SmallRng::seed_from_u64(rng.random::<u64>());
         NativeConjectureRunner {
             test_fn: Box::new(test_fn),
             settings,
@@ -1017,6 +1244,10 @@ impl NativeConjectureRunner {
             shrink_interesting_examples_call_count: 0,
             ignore_limits: false,
             test_cache: LRUCache::new(cache_capacity),
+            pareto_front: ParetoFront::new(pareto_rng),
+            best_observed_targets: HashMap::new(),
+            best_choices_for_target: HashMap::new(),
+            optimise_targets_call_count: 0,
         }
     }
 
@@ -1109,48 +1340,7 @@ impl NativeConjectureRunner {
             // tests like `test_can_navigate_to_a_valid_example` rely
             // on hitting the boundary-probability path within the
             // invalid-threshold budget — too unreliable.
-            if self.should_generate_more(do_shrink) && !self.tree_root.is_exhausted {
-                let ntc = NativeTestCase::for_simplest(CONJECTURE_BUFFER_SIZE);
-                let (status, nodes, origin) =
-                    run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
-                self.call_count += 1;
-                record_tree(&mut self.tree_root, &nodes, status);
-                self.record_test_result(status, nodes, origin);
-            }
-
-            loop {
-                if self.set_exit_reason_if_done() {
-                    break;
-                }
-                // Mirrors engine.py line 744: `exit_with(Finished)` when
-                // the tree has no novel prefixes left.  Handled here as a
-                // break so the shrink phase is skipped entirely, matching
-                // Python's `RunIsComplete` unwind.
-                if self.tree_root.is_exhausted {
-                    self.exit_reason = Some(ExitReason::Finished);
-                    break;
-                }
-                if !self.should_generate_more(do_shrink) {
-                    break;
-                }
-
-                let mut batch_rng = SmallRng::from_rng(&mut self.rng);
-                let prefix = generate_novel_prefix(&self.tree_root, &mut batch_rng);
-                let ntc = NativeTestCase::for_probe(&prefix, batch_rng, CONJECTURE_BUFFER_SIZE);
-                let (status, nodes, origin) =
-                    run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
-                self.call_count += 1;
-
-                // Non-determinism detection (schema mismatch panics) plus
-                // exhaustion bookkeeping for the next novel-prefix walk.
-                record_tree(&mut self.tree_root, &nodes, status);
-
-                self.record_test_result(status, nodes, origin);
-
-                if self.set_exit_reason_if_done() {
-                    break;
-                }
-            }
+            self.generate_new_examples(do_shrink, buffer_size_limit);
         }
 
         // --- Shrink phase ---
@@ -1205,9 +1395,34 @@ impl NativeConjectureRunner {
         status: Status,
         nodes: Vec<ChoiceNode>,
         origin: Option<InterestingOrigin>,
+        target_observations: HashMap<String, f64>,
     ) {
         match status {
-            Status::Valid => self.valid_examples += 1,
+            Status::Valid => {
+                self.valid_examples += 1;
+                let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                // Update best observed targets.
+                for (k, &v) in &target_observations {
+                    let entry = self
+                        .best_observed_targets
+                        .entry(k.clone())
+                        .or_insert(f64::NEG_INFINITY);
+                    if v > *entry {
+                        *entry = v;
+                        self.best_choices_for_target
+                            .insert(k.clone(), choices.clone());
+                    }
+                }
+                // Add to pareto front.
+                let result = ConjectureRunResult {
+                    status: Status::Valid,
+                    nodes,
+                    choices,
+                    target_observations,
+                    origin: None,
+                };
+                self.pareto_front.add(result);
+            }
             Status::Invalid => self.invalid_examples += 1,
             Status::EarlyStop => self.overrun_examples += 1,
             Status::Interesting => {
@@ -1237,6 +1452,15 @@ impl NativeConjectureRunner {
                 if changed {
                     let new_origin = !self.interesting_examples.contains_key(&origin);
                     self.save_choices(&choices);
+                    // Add to pareto front (interesting status >= valid).
+                    let pareto_result = ConjectureRunResult {
+                        status: Status::Interesting,
+                        nodes: nodes.clone(),
+                        choices: choices.clone(),
+                        target_observations,
+                        origin: Some(origin.clone()),
+                    };
+                    self.pareto_front.add(pareto_result);
                     self.interesting_examples.insert(
                         origin.clone(),
                         InterestingExample {
@@ -1308,7 +1532,7 @@ impl NativeConjectureRunner {
             let initial = self.interesting_examples[origin].nodes.clone();
             let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value.clone()).collect();
             let ntc = NativeTestCase::for_choices(&choices, Some(&initial));
-            let (status, _, _) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+            let (status, _, _, _) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             self.call_count += 1;
 
             if (self.time_source)() > deadline {
@@ -1357,7 +1581,7 @@ impl NativeConjectureRunner {
                         let choices: Vec<ChoiceValue> =
                             candidate.iter().map(|n| n.value.clone()).collect();
                         let ntc = NativeTestCase::for_choices(&choices, Some(candidate));
-                        let (status, actual_nodes, found_origin) =
+                        let (status, actual_nodes, found_origin, _target_obs) =
                             run_test_fn(test_fn, ntc, buffer_size_limit);
                         // Mirrors `engine.py`'s per-target predicate
                         // (`d.interesting_origin == target`): when
@@ -1379,7 +1603,11 @@ impl NativeConjectureRunner {
                 );
                 shrinker.max_improvements = Some(remaining);
                 shrinker.shrink();
-                (shrinker.current_nodes, shrinker.improvements, shrinker.downgraded)
+                (
+                    shrinker.current_nodes,
+                    shrinker.improvements,
+                    shrinker.downgraded,
+                )
             };
 
             // Mirrors `engine.py::test_function` lines 698-714:
@@ -1427,17 +1655,30 @@ impl NativeConjectureRunner {
     /// returns its prior outcome without re-running the test function;
     /// `call_count` and the status counters are only bumped on cache
     /// miss, matching `engine.py::cached_test_function`.
-    pub fn cached_test_function(&mut self, choices: &[ChoiceValue]) {
+    ///
+    /// Returns a [`ConjectureRunResult`] describing the outcome (either
+    /// freshly computed or reconstructed from the LRU cache).
+    pub fn cached_test_function(&mut self, choices: &[ChoiceValue]) -> ConjectureRunResult {
         let key = crate::native::database::serialize_choices(choices);
-        if self.test_cache.get(&key).is_some() {
-            return;
+        if let Some(cached) = self.test_cache.get(&key) {
+            let cached = cached.clone();
+            let result_choices: Vec<ChoiceValue> =
+                cached.nodes.iter().map(|n| n.value.clone()).collect();
+            return ConjectureRunResult {
+                status: cached.status,
+                nodes: cached.nodes,
+                choices: result_choices,
+                target_observations: cached.target_observations,
+                origin: cached.origin,
+            };
         }
         let buffer_size_limit = self
             .settings
             .buffer_size_limit
             .unwrap_or(CONJECTURE_BUFFER_SIZE);
         let ntc = NativeTestCase::for_choices(choices, None);
-        let (status, nodes, origin) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+        let (status, nodes, origin, target_observations) =
+            run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
         self.call_count += 1;
         record_tree(&mut self.tree_root, &nodes, status);
         self.test_cache.insert(
@@ -1446,9 +1687,19 @@ impl NativeConjectureRunner {
                 status,
                 nodes: nodes.clone(),
                 origin: origin.clone(),
+                target_observations: target_observations.clone(),
             },
         );
-        self.record_test_result(status, nodes, origin);
+        let result_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+        let result = ConjectureRunResult {
+            status,
+            nodes: nodes.clone(),
+            choices: result_choices,
+            target_observations: target_observations.clone(),
+            origin: origin.clone(),
+        };
+        self.record_test_result(status, nodes, origin, target_observations);
+        result
     }
 
     /// Hill-climb from the current best interesting example and return
@@ -1586,7 +1837,8 @@ impl NativeConjectureRunner {
                 continue;
             };
             let ntc = NativeTestCase::for_choices(&choices, None);
-            let (status, nodes, origin) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+            let (status, nodes, origin, _target_obs) =
+                run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             self.call_count += 1;
 
             if matches!(status, Status::Valid) {
@@ -1657,16 +1909,23 @@ impl NativeConjectureRunner {
                     continue;
                 };
                 let ntc = NativeTestCase::for_choices(&choices, None);
-                let (status, nodes, origin) =
+                let (status, nodes, origin, target_obs) =
                     run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
                 self.call_count += 1;
-                // The native runner doesn't yet track a pareto front, so
-                // every replayed pareto entry is treated as "no longer in
-                // the front" and deleted.  Matches upstream's behaviour
-                // for any entry whose `data not in self.pareto_front`
-                // branch fires.
-                db.delete(&pareto_key, existing);
-                self.record_test_result(status, nodes, origin);
+                // Check if this replayed entry is still in the pareto front.
+                // If not, delete it from the database.
+                let pareto_result = ConjectureRunResult {
+                    status,
+                    nodes: nodes.clone(),
+                    choices: nodes.iter().map(|n| n.value.clone()).collect(),
+                    target_observations: target_obs.clone(),
+                    origin: origin.clone(),
+                };
+                let still_in_front = self.pareto_front.add(pareto_result);
+                if !still_in_front {
+                    db.delete(&pareto_key, existing);
+                }
+                self.record_test_result(status, nodes, origin, target_obs);
                 if matches!(status, Status::Interesting) {
                     break;
                 }
@@ -1727,10 +1986,207 @@ impl NativeConjectureRunner {
         }
     }
 
-    /// Pareto front snapshot.  Mirrors `ConjectureRunner.pareto_front`
+    /// Pareto front accessor.  Mirrors `ConjectureRunner.pareto_front`
     /// (the `ParetoFront` object).
-    pub fn pareto_front(&self) -> Vec<InterestingExample> {
-        todo!("NativeConjectureRunner::pareto_front")
+    pub fn pareto_front(&self) -> &ParetoFront {
+        &self.pareto_front
+    }
+
+    /// Mutable accessor for the pareto front.
+    pub fn pareto_front_mut(&mut self) -> &mut ParetoFront {
+        &mut self.pareto_front
+    }
+
+    /// Generate new test examples (generation phase).  Mirrors the
+    /// generation loop from `engine.py::generate_new_examples`.
+    /// Extracted so it can be called independently (e.g. by tests that
+    /// need to run targeting without the full `run()` lifecycle) and so
+    /// `optimise_targets` can be triggered mid-generation.
+    pub fn generate_new_examples(&mut self, do_shrink: bool, buffer_size_limit: usize) {
+        let small_example_cap = (self.settings.max_examples / 10).min(50);
+        let optimise_at = (self.settings.max_examples / 2)
+            .max(small_example_cap + 1)
+            .max(10);
+        let mut ran_optimisations = false;
+
+        // One-shot "all simplest" probe.
+        if self.should_generate_more(do_shrink) && !self.tree_root.is_exhausted {
+            let ntc = NativeTestCase::for_simplest(CONJECTURE_BUFFER_SIZE);
+            let (status, nodes, origin, target_obs) =
+                run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+            self.call_count += 1;
+            record_tree(&mut self.tree_root, &nodes, status);
+            self.record_test_result(status, nodes, origin, target_obs);
+        }
+
+        loop {
+            if self.set_exit_reason_if_done() {
+                break;
+            }
+            if self.tree_root.is_exhausted {
+                self.exit_reason = Some(ExitReason::Finished);
+                break;
+            }
+            if !self.should_generate_more(do_shrink) {
+                break;
+            }
+
+            let mut batch_rng = SmallRng::from_rng(&mut self.rng);
+            let prefix = generate_novel_prefix(&self.tree_root, &mut batch_rng);
+            let ntc = NativeTestCase::for_probe(&prefix, batch_rng, CONJECTURE_BUFFER_SIZE);
+            let (status, nodes, origin, target_obs) =
+                run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+            self.call_count += 1;
+            record_tree(&mut self.tree_root, &nodes, status);
+            self.record_test_result(status, nodes, origin, target_obs);
+
+            if self.set_exit_reason_if_done() {
+                break;
+            }
+
+            // Trigger optimise_targets once we've accumulated enough valid examples.
+            if !ran_optimisations
+                && self.valid_examples >= optimise_at.max(small_example_cap)
+                && self
+                    .settings
+                    .phases
+                    .as_deref()
+                    .is_some_and(|p| p.contains(&Phase::Target))
+            {
+                ran_optimisations = true;
+                self.optimise_targets_call_count += 1;
+                self.optimise_targets();
+            }
+        }
+    }
+
+    /// Optimise all observed targets by hill-climbing from the best
+    /// known choice sequence for each target.  Mirrors
+    /// `engine.py::optimise_targets`.
+    pub fn optimise_targets(&mut self) {
+        let targets: Vec<String> = self.best_observed_targets.keys().cloned().collect();
+        if targets.is_empty() {
+            return;
+        }
+        let mut max_improvements: usize = 10;
+        loop {
+            let prev_valid = self.valid_examples;
+            let mut any_improvements = false;
+            for target in targets.clone() {
+                let improvements = self.hill_climb(&target, max_improvements);
+                if improvements > 0 {
+                    any_improvements = true;
+                }
+            }
+            max_improvements = max_improvements.saturating_mul(2);
+            if !any_improvements || prev_valid == self.valid_examples {
+                break;
+            }
+        }
+    }
+
+    /// Hill-climb from the best known choices for `target`, trying to
+    /// increase the target score.  Returns the number of improvements
+    /// found.  Mirrors `engine.py::_optimise_target`.
+    fn hill_climb(&mut self, target: &str, max_improvements: usize) -> usize {
+        let start_choices = match self.best_choices_for_target.get(target).cloned() {
+            Some(c) => c,
+            None => return 0,
+        };
+        let result = self.cached_test_function(&start_choices);
+        if result.status < Status::Valid {
+            return 0;
+        }
+        let mut current_choices = start_choices;
+        let mut current_nodes = result.nodes.clone();
+        let mut current_score = *result
+            .target_observations
+            .get(target)
+            .unwrap_or(&f64::NEG_INFINITY);
+        let mut improvements = 0;
+
+        let mut i = current_nodes.len() as isize - 1;
+        while i >= 0 && improvements <= max_improvements {
+            let idx = i as usize;
+            let node = &current_nodes[idx];
+            if !node.was_forced {
+                if let (ChoiceValue::Integer(_), ChoiceKind::Integer(_)) = (&node.value, &node.kind)
+                {
+                    improvements += self.find_integer_for_target(
+                        target,
+                        &mut current_choices,
+                        &mut current_nodes,
+                        &mut current_score,
+                        max_improvements.saturating_sub(improvements),
+                        idx,
+                        1,
+                    );
+                }
+            }
+            i -= 1;
+        }
+        improvements
+    }
+
+    /// Try incrementing the integer at position `idx` in `current_choices`
+    /// to increase the target score, using linear + exponential probing.
+    /// Returns the number of improvements made.
+    #[allow(clippy::too_many_arguments)]
+    fn find_integer_for_target(
+        &mut self,
+        target: &str,
+        current_choices: &mut Vec<ChoiceValue>,
+        current_nodes: &mut Vec<ChoiceNode>,
+        current_score: &mut f64,
+        max_improvements: usize,
+        idx: usize,
+        step: i128,
+    ) -> usize {
+        let mut improvements = 0;
+        let mut step = step;
+        loop {
+            if improvements >= max_improvements {
+                break;
+            }
+            let current_val = match &current_choices[idx] {
+                ChoiceValue::Integer(n) => *n,
+                _ => break,
+            };
+            // Check integer constraint
+            let max_val = match &current_nodes[idx].kind {
+                ChoiceKind::Integer(ic) => ic.max_value,
+                _ => break,
+            };
+            let new_val = current_val.saturating_add(step);
+            if new_val > max_val {
+                break;
+            }
+            let mut trial_choices = current_choices.clone();
+            trial_choices[idx] = ChoiceValue::Integer(new_val);
+            let result = self.cached_test_function(&trial_choices);
+            if result.status < Status::Valid {
+                break;
+            }
+            let new_score = *result
+                .target_observations
+                .get(target)
+                .unwrap_or(&f64::NEG_INFINITY);
+            if new_score > *current_score {
+                *current_score = new_score;
+                *current_choices = trial_choices;
+                *current_nodes = result.nodes;
+                // Update best for target
+                self.best_observed_targets
+                    .insert(target.to_string(), new_score);
+                self.best_choices_for_target
+                    .insert(target.to_string(), current_choices.clone());
+                improvements += 1;
+                step = step.saturating_mul(2);
+            } else {
+                break;
+            }
+        }
+        improvements
     }
 }
 
