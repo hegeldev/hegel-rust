@@ -1312,10 +1312,6 @@ impl NativeConjectureRunner {
         let do_reuse = phases.contains(&Phase::Reuse);
         let do_generate = phases.contains(&Phase::Generate);
         let do_shrink = phases.contains(&Phase::Shrink);
-        let buffer_size_limit = self
-            .settings
-            .buffer_size_limit
-            .unwrap_or(CONJECTURE_BUFFER_SIZE);
 
         // --- Reuse phase ---
         if do_reuse {
@@ -1331,16 +1327,15 @@ impl NativeConjectureRunner {
 
         // --- Generation phase ---
         if self.exit_reason.is_none() && do_generate {
-            // One-shot "all simplest" probe.  Mirrors Hypothesis's
-            // `cached_test_function((ChoiceTemplate("simplest", count=None),))`
-            // call at the head of `generate_new_examples`: every draw
-            // resolves to its kind's simplest value, so the runner gets
-            // a fast-path attempt at the all-zero leaf before random
-            // exploration starts.  Without this, `buffer_size_limit`
-            // tests like `test_can_navigate_to_a_valid_example` rely
-            // on hitting the boundary-probability path within the
-            // invalid-threshold budget — too unreliable.
-            self.generate_new_examples(do_shrink, buffer_size_limit);
+            self.generate_new_examples();
+        }
+
+        // --- Target phase (when generate is skipped) ---
+        // Mirrors `engine.py::_run` lines 1543-1546: if Phase.generate is
+        // not active but Phase.target is, call optimise_targets() directly.
+        let do_target = phases.contains(&Phase::Target);
+        if self.exit_reason.is_none() && do_target && !do_generate {
+            self.optimise_targets();
         }
 
         // --- Shrink phase ---
@@ -2002,7 +1997,18 @@ impl NativeConjectureRunner {
     /// Extracted so it can be called independently (e.g. by tests that
     /// need to run targeting without the full `run()` lifecycle) and so
     /// `optimise_targets` can be triggered mid-generation.
-    pub fn generate_new_examples(&mut self, do_shrink: bool, buffer_size_limit: usize) {
+    pub fn generate_new_examples(&mut self) {
+        let phases = self
+            .settings
+            .phases
+            .clone()
+            .unwrap_or_else(|| vec![Phase::Reuse, Phase::Generate, Phase::Shrink]);
+        let do_shrink = phases.contains(&Phase::Shrink);
+        let buffer_size_limit = self
+            .settings
+            .buffer_size_limit
+            .unwrap_or(CONJECTURE_BUFFER_SIZE);
+
         let small_example_cap = (self.settings.max_examples / 10).min(50);
         let optimise_at = (self.settings.max_examples / 2)
             .max(small_example_cap + 1)
@@ -2044,15 +2050,11 @@ impl NativeConjectureRunner {
                 break;
             }
 
-            // Trigger optimise_targets once we've accumulated enough valid examples.
-            if !ran_optimisations
-                && self.valid_examples >= optimise_at.max(small_example_cap)
-                && self
-                    .settings
-                    .phases
-                    .as_deref()
-                    .is_some_and(|p| p.contains(&Phase::Target))
-            {
+            // Trigger optimise_targets once we've accumulated enough valid
+            // examples.  Mirrors Hypothesis's `generate_new_examples` line
+            // 1317-1323: fires unconditionally (regardless of phases) when
+            // the valid-example budget crosses `optimise_at`.
+            if !ran_optimisations && self.valid_examples >= optimise_at.max(small_example_cap) {
                 ran_optimisations = true;
                 self.optimise_targets_call_count += 1;
                 self.optimise_targets();
