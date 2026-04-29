@@ -11,7 +11,8 @@ mod state;
 
 pub use choices::{
     BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice,
-    NodeSortKey, Status, StopTest, StringChoice, codepoint_key, sort_key,
+    InterestingOrigin, NodeSortKey, Status, StopTest, StringChoice, codepoint_key,
+    interesting_origin, sort_key,
 };
 pub use float_index::{
     decode_exponent, encode_exponent, float_to_index, index_to_float, reverse_bits_n,
