@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.6 - 2026-04-29
+
+Internal refactor of `one_of`.
+
+## 0.8.5 - 2026-04-28
+
+Bump our pinned hegel-core to `0.4.14`.
+
+## 0.8.4 - 2026-04-27
+
+This patch fixes a flaky test. There are no user visible changes.
+
+## 0.8.3 - 2026-04-27
+
+This release just contains internal refactoring and should have no user visible changes.
+
+## 0.8.2 - 2026-04-27
+
+Small internal refactors.
+
 ## 0.8.1 - 2026-04-25
 
 This release implements `DefaultGenerator` for `PathBuf`.
