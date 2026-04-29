@@ -46,46 +46,6 @@
       - The matching bullet in `SKIPPED.md` is updated to drop this
         test from the still-skipped list.
 
-- title: Port conjecture/test_engine.py::test_terminates_shrinks
-  details: |
-    Port `test_terminates_shrinks` (parametrised on `n=1` and `n=5`)
-    from `conjecture/test_engine.py`.  Upstream uses
-    `monkeypatch.setattr(engine_module, "MAX_SHRINKS", n)` to cap the
-    shrink loop and a long-running `HardToShrink` strategy (from
-    `tests/common/strategies.py`) so the runner racks up exactly `n`
-    successful shrinks before bailing with `ExitReason.max_shrinks`,
-    persisting each pre-shrink intermediate as a `secondary_key` DB
-    entry along the way.
-
-    Port path:
-      1. Track `runner.shrinks` — increment whenever
-         `shrink_interesting_examples`'s callback observes a
-         strictly-smaller interesting result for the current target,
-         mirroring `engine.py` lines 698-704.
-      2. Hook `MAX_SHRINKS` enforcement: when `shrinks >= max_shrinks`,
-         raise an internal `RunIsComplete` sentinel that
-         `shrink_interesting_examples` catches, sets
-         `exit_reason = ExitReason::MaxShrinks`, and returns from the
-         shrink loop.
-      3. On each successful shrink: `save_choices(new)` to the
-         primary DB key and `db.move_value(primary, secondary, old)` to
-         demote the previous best to the secondary corpus, mirroring
-         `engine.py::downgrade_choices`.
-      4. Port `tests/common/strategies.py::HardToShrink` as a small
-         Rust strategy (probably under `tests/hypothesis/common/`)
-         that draws 100 bytes and only accepts a sequence one byte
-         lower than the previously-accepted one — this gives the
-         shrinker a long monotone descent so the `n=1` / `n=5`
-         budgets land exactly.
-
-    Acceptance criteria:
-      - `test_terminates_shrinks` (both parameter rows, e.g.
-        `_1` and `_5`) compiles and passes under
-        `cargo test --features native --test hypothesis
-        conjecture_engine::`.
-      - The matching bullet in `SKIPPED.md` is updated to drop this
-        test from the still-skipped list.
-
 - title: Port conjecture/test_engine.py FailedHealthCheck cluster
   details: |
     Port the following tests from `conjecture/test_engine.py`,
