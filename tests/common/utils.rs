@@ -18,10 +18,10 @@ pub fn schema_get<'a>(value: &'a Value, key: &str) -> &'a Value {
         panic!("expected map, got {value:?}");
     };
     for (k, v) in entries {
-        if let Value::Text(s) = k
-            && s == key
-        {
-            return v;
+        if let Value::Text(s) = k {
+            if s == key {
+                return v;
+            }
         }
     }
     panic!("key {key:?} not found in map: {value:?}");
