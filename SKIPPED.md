@@ -2423,32 +2423,11 @@ follow-up.
   asserts the registered `DataObserver.conclude_test(status, reason)`
   callback fires from inside `freeze()`. Bundled with
   `::test_can_observe_draws`; needs the `DataObserver` hook to land.
-- `conjecture/test_test_data.py::test_examples_show_up_as_discarded`,
-  `::test_can_override_label`,
-  `::test_examples_support_negative_indexing`,
-  `::test_examples_out_of_bounds_index`, `::test_child_indices`,
-  `::test_example_equality`, `::test_example_depth_marking`,
-  `::test_has_examples_even_when_empty`,
-  `::test_has_cached_examples_even_when_overrun` —
-  `NativeTestCase` has no draw-by-strategy method that auto-creates
-  spans. `Span` is a flat struct with no `parent` / `children` /
-  `depth` / `choice_count` / `discarded` fields, and `spans` is a
-  plain `Vec` rather than a `Spans` collection wrapping
-  negative-indexing / out-of-bounds-error semantics.
 - `conjecture/test_test_data.py::test_can_observe_draws` — no
   `DataObserver` API on `NativeTestCase` / `NativeConjectureData`.
-- `conjecture/test_test_data.py::test_will_mark_too_deep_examples_as_invalid`
-  — uses Hypothesis's `MAX_DEPTH` constant and recursive `.map`
-  strategy nesting; native engine has no MAX_DEPTH analog and
-  `NativeTestCase` has no draw-by-strategy method.
 - `conjecture/test_test_data.py::test_empty_strategy_is_invalid` —
   uses `st.nothing()`; no native counterpart at the
   `NativeTestCase.draw(strategy)` layer.
-- `conjecture/test_test_data.py::test_closes_interval_on_error_in_strategy`,
-  `::test_does_not_double_freeze_in_interval_close` — assume that
-  `NativeTestCase` exposes a `draw(strategy)` method that closes open
-  spans on exception. Native routes strategy draws through
-  Hegel-side `Generator::do_draw`, not the native test case.
 
 - `test_crosshair.py` (in `crosshair/`) — entire file exercises Hypothesis's
   `backend="crosshair"` integration with the third-party `crosshair`
