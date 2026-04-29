@@ -71,7 +71,7 @@ fn test_does_not_simplify_into_surrogates() {
     let f = minimal(gs::text(), |s: &String| s.as_str() >= "\u{e000}");
     assert_eq!(f, "\u{e000}");
 
-    let size: usize = 5;
+    let size: usize = 2;
     let f = minimal(gs::text().min_size(size), move |s: &String| {
         s.chars().filter(|&c| c >= '\u{e000}').count() >= size
     });
