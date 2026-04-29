@@ -127,36 +127,6 @@
         `::test_overruns_with_extend_are_not_cached` bullet in
         `SKIPPED.md` is removed.
 
-- title: Add NativeTestCase DataObserver hook
-  details: |
-    Port `test_can_observe_draws` and `test_calls_concluded_implicitly`
-    from `conjecture/test_test_data.py`. The first installs a
-    `LoggingObserver(DataObserver)` on `ConjectureData.for_choices` and
-    asserts that `draw_boolean`, `draw_integer`, and `conclude_test`
-    callbacks fire in order with the expected
-    `(value, was_forced, constraints)` / `(status, origin)` payloads.
-    The second asserts that calling `freeze()` invokes
-    `conclude_test(Status::Valid, None)` on the registered observer.
-
-    Port path: add a `DataObserver` trait under
-    `src/native/core/state.rs` with `draw_boolean`, `draw_integer`,
-    `draw_float`, `draw_bytes`, `draw_string`, and `conclude_test`
-    methods (all default-no-op). Thread an
-    `Option<Box<dyn DataObserver>>` field through `NativeTestCase`,
-    populated by an extra constructor parameter on
-    `for_choices`. Each draw method calls the observer hook after
-    appending the choice node; the existing `freeze()` (in
-    `src/native/core/state.rs`) calls `conclude_test` with the
-    finalised `(status, interesting_origin)` after promoting `status`
-    to `Status::Valid`.
-
-    Acceptance criteria:
-      - `test_can_observe_draws` and `test_calls_concluded_implicitly`
-        compile and pass under
-        `cargo test --features native --test hypothesis
-        conjecture_test_data::`.
-      - The matching bullets in `SKIPPED.md` are removed.
-
 - title: Add NativeTestCase st.nothing() / draw-by-strategy invalid path
   details: |
     Port `test_empty_strategy_is_invalid` from

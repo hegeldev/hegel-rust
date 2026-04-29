@@ -8,17 +8,14 @@
 //!
 //! Individually-skipped tests:
 //!
-//! - `test_calls_concluded_implicitly` — needs a `DataObserver` hook that
-//!   `freeze()` invokes; bundled with the `test_can_observe_draws` port.
-//! - `test_can_observe_draws` — no `DataObserver` API.
 //! - `test_empty_strategy_is_invalid` — uses `st.nothing()`, no native
 //!   counterpart at this layer.
 
 #![cfg(feature = "native")]
 
 use hegel::__native_test_internals::{
-    ChoiceValue, MAX_DEPTH, NativeConjectureData, NativeResult, NativeTestCase, Span, Status,
-    interesting_origin, structural_coverage,
+    ChoiceValue, DataObserver, InterestingOrigin, MAX_DEPTH, NativeConjectureData, NativeResult,
+    NativeTestCase, Span, Status, interesting_origin, structural_coverage,
 };
 
 #[test]
@@ -509,4 +506,133 @@ fn test_child_indices() {
         let parent_idx = d.spans[i].parent.unwrap();
         assert!(d.spans.children(parent_idx).contains(&i));
     }
+}
+
+#[test]
+fn test_can_observe_draws() {
+    // Port of test_can_observe_draws from test_test_data.py.
+    // Installs a LoggingObserver and asserts that draw_boolean, draw_integer,
+    // and conclude_test callbacks fire in order with the expected payloads.
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Debug, PartialEq)]
+    enum Event {
+        Boolean {
+            value: bool,
+            was_forced: bool,
+        },
+        Integer {
+            value: i128,
+            was_forced: bool,
+        },
+        Concluded {
+            status: Status,
+            origin: Option<InterestingOrigin>,
+        },
+    }
+
+    let log: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
+
+    struct LoggingObserver {
+        log: Arc<Mutex<Vec<Event>>>,
+    }
+    impl DataObserver for LoggingObserver {
+        fn draw_boolean(&mut self, value: bool, was_forced: bool) {
+            self.log
+                .lock()
+                .unwrap()
+                .push(Event::Boolean { value, was_forced });
+        }
+        fn draw_integer(&mut self, value: i128, was_forced: bool) {
+            self.log
+                .lock()
+                .unwrap()
+                .push(Event::Integer { value, was_forced });
+        }
+        fn conclude_test(&mut self, status: Status, origin: Option<InterestingOrigin>) {
+            self.log
+                .lock()
+                .unwrap()
+                .push(Event::Concluded { status, origin });
+        }
+    }
+
+    let origin = interesting_origin(None);
+    let mut d = NativeTestCase::for_choices(
+        &[
+            ChoiceValue::Boolean(true),
+            ChoiceValue::Integer(1),
+            ChoiceValue::Integer(3),
+        ],
+        None,
+        Some(Box::new(LoggingObserver {
+            log: Arc::clone(&log),
+        })),
+    );
+
+    d.weighted(0.5, None).ok().unwrap();
+    d.draw_integer_forced(0, 127, 10).ok().unwrap();
+    d.draw_integer(0, 255).ok().unwrap();
+    assert!(
+        d.conclude_test(Status::Interesting, Some(origin.clone()))
+            .is_err()
+    );
+    assert!(d.frozen());
+
+    let observed = log.lock().unwrap();
+    assert_eq!(
+        *observed,
+        vec![
+            Event::Boolean {
+                value: true,
+                was_forced: false
+            },
+            Event::Integer {
+                value: 10,
+                was_forced: true
+            },
+            Event::Integer {
+                value: 3,
+                was_forced: false
+            },
+            Event::Concluded {
+                status: Status::Interesting,
+                origin: Some(origin)
+            },
+        ]
+    );
+}
+
+#[test]
+fn test_calls_concluded_implicitly() {
+    // Port of test_calls_concluded_implicitly from test_test_data.py.
+    // Asserts that freeze() invokes conclude_test(Status::Valid, None)
+    // on the registered observer.
+    use std::sync::{Arc, Mutex};
+    type ConclusionCell = Arc<Mutex<Option<(Status, Option<InterestingOrigin>)>>>;
+
+    let conclusion: ConclusionCell = Arc::new(Mutex::new(None));
+
+    struct NoteConcluded {
+        conclusion: ConclusionCell,
+    }
+    impl DataObserver for NoteConcluded {
+        fn conclude_test(&mut self, status: Status, origin: Option<InterestingOrigin>) {
+            *self.conclusion.lock().unwrap() = Some((status, origin));
+        }
+    }
+
+    let mut d = NativeTestCase::for_choices(
+        &[ChoiceValue::Boolean(true)],
+        None,
+        Some(Box::new(NoteConcluded {
+            conclusion: Arc::clone(&conclusion),
+        })),
+    );
+    d.weighted(0.5, None).ok().unwrap();
+    d.freeze();
+    assert!(d.frozen());
+
+    let result = conclusion.lock().unwrap();
+    assert_eq!(*result, Some((Status::Valid, None)));
 }
