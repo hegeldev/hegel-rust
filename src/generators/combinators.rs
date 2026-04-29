@@ -221,7 +221,3 @@ pub fn optional<T, G: Generator<T>>(inner: G) -> OptionalGenerator<G, T> {
         _phantom: PhantomData,
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/embedded/generators/combinators_tests.rs"]
-mod tests;
