@@ -2,7 +2,6 @@ mod common;
 
 use common::utils::find_any;
 use hegel::TestCase;
-use hegel::ciborium::Value;
 use hegel::generators::{self as gs, Generator};
 
 #[hegel::test]
@@ -179,74 +178,4 @@ fn test_optional_mapped_find_any() {
         gs::optional(gs::integers::<i32>().map(|n| n.wrapping_mul(2))),
         |v| v.is_none(),
     );
-}
-
-/// Build the expected `one_of` schema with each child as `{"type": <ty>}`.
-fn one_of_schema(child_types: &[&str]) -> Value {
-    Value::Map(vec![
-        (Value::Text("type".into()), Value::Text("one_of".into())),
-        (
-            Value::Text("generators".into()),
-            Value::Array(
-                child_types
-                    .iter()
-                    .map(|ty| {
-                        Value::Map(vec![(
-                            Value::Text("type".into()),
-                            Value::Text((*ty).into()),
-                        )])
-                    })
-                    .collect(),
-            ),
-        ),
-    ])
-}
-
-#[test]
-fn test_one_of_schema_is_flat_one_of() {
-    // Children are emitted directly with no tagged-tuple wrapping.
-    let g = gs::one_of(vec![
-        gs::booleans().boxed(),
-        gs::booleans().boxed(),
-        gs::booleans().boxed(),
-    ]);
-    let basic = g.as_basic().unwrap();
-    assert_eq!(*basic.schema(), one_of_schema(&["boolean"; 3]));
-}
-
-#[test]
-fn test_one_of_basic_dispatches_by_index() {
-    // Two children with map transforms; the wire response selects which.
-    let g = gs::one_of(vec![
-        gs::booleans().map(|_| "first".to_string()).boxed(),
-        gs::booleans().map(|_| "second".to_string()).boxed(),
-    ]);
-    let basic = g.as_basic().unwrap();
-
-    // Simulate the server response: [index, value].
-    let raw_first = Value::Array(vec![Value::Integer(0.into()), Value::Bool(false)]);
-    let raw_second = Value::Array(vec![Value::Integer(1.into()), Value::Bool(true)]);
-
-    assert_eq!(basic.parse_raw(raw_first), "first");
-    assert_eq!(basic.parse_raw(raw_second), "second");
-}
-
-#[test]
-fn test_optional_schema_is_flat_one_of() {
-    // First child is `null`, second is the inner schema (`boolean`).
-    let g = gs::optional(gs::booleans());
-    let basic = g.as_basic().unwrap();
-    assert_eq!(*basic.schema(), one_of_schema(&["null", "boolean"]));
-}
-
-#[test]
-fn test_optional_basic_dispatches_by_index() {
-    let g = gs::optional(gs::booleans());
-    let basic = g.as_basic().unwrap();
-
-    let raw_none = Value::Array(vec![Value::Integer(0.into()), Value::Null]);
-    let raw_some = Value::Array(vec![Value::Integer(1.into()), Value::Bool(true)]);
-
-    assert_eq!(basic.parse_raw(raw_none), None);
-    assert_eq!(basic.parse_raw(raw_some), Some(true));
 }

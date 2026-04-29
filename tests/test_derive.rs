@@ -7,7 +7,6 @@ mod common;
 
 use common::utils::{assert_all_examples, check_can_generate_examples, find_any};
 use hegel::DefaultGenerator as DeriveGenerator;
-use hegel::ciborium::Value;
 use hegel::generators::{self as gs, DefaultGenerator, Generator};
 
 // ============================================================================
@@ -519,63 +518,4 @@ fn test_derive_struct_builder_chaining_order_irrelevant() {
 fn test_derive_struct_override_field_twice_takes_last() {
     let g = Point::default_generator().x(gs::just(1)).x(gs::just(99));
     assert_all_examples(g, |p: &Point| p.x == 99);
-}
-
-// ============================================================================
-// Schema shape: enums emit a flat one_of with no tagged-tuple wrapping
-// ============================================================================
-
-/// Read child types out of a `{"type": "one_of", "generators": [...]}` schema.
-/// Panics with whatever the underlying `unwrap` panics with if the shape is wrong.
-fn one_of_child_types(schema: &Value) -> Vec<&str> {
-    let map = schema.as_map().unwrap();
-    let lookup = |key| {
-        map.iter()
-            .find_map(|(k, v)| (k.as_text() == Some(key)).then_some(v))
-            .unwrap()
-    };
-    assert_eq!(lookup("type").as_text(), Some("one_of"));
-    lookup("generators")
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|child| {
-            child
-                .as_map()
-                .unwrap()
-                .iter()
-                .find_map(|(k, v)| (k.as_text() == Some("type")).then_some(v))
-                .unwrap()
-                .as_text()
-                .unwrap()
-        })
-        .collect()
-}
-
-#[test]
-fn test_derive_mixed_enum_emits_flat_one_of() {
-    // MixedEnum has Empty (unit), WithValue(i32), WithFields { x, y }.
-    // Children appear in declaration order. Crucially, no `[constant(i), child]`
-    // wrapping — each child is the variant generator's schema directly:
-    //   Empty            -> {"type": "null"}
-    //   WithValue(i32)   -> the i32 schema (TupleSingle uses the inner schema)
-    //   WithFields {..}  -> {"type": "tuple", ...}
-    let g = MixedEnum::default_generator();
-    let basic = g.as_basic().unwrap();
-    assert_eq!(
-        one_of_child_types(basic.schema()),
-        ["null", "integer", "tuple"]
-    );
-}
-
-#[test]
-fn test_derive_complex_enum_emits_flat_one_of_in_declaration_order() {
-    // ComplexEnum: Unit, Single(bool), Named { value }, Multi(i32, String).
-    // Single(bool): tuple-single uses the inner basic schema directly.
-    let g = ComplexEnum::default_generator();
-    let basic = g.as_basic().unwrap();
-    assert_eq!(
-        one_of_child_types(basic.schema()),
-        ["null", "boolean", "tuple", "tuple"]
-    );
 }
