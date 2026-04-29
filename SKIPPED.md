@@ -2451,3 +2451,7 @@ follow-up.
   callback / multiplexed-database API and has no watchdog counterpart —
   this is a Python-library integration (same rationale as the
   redis-extra / numpy / pandas / django / crosshair / lark skips).
+
+- `test_from_type_recipe.py` (in `nocover/`) — port was abandoned due to
+  a cherry-pick conflict in `src/native/conjecture_runner.rs` between the
+  worker branch and the supervisor branch; defer to a human to resolve.
