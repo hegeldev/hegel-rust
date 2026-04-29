@@ -52,6 +52,17 @@ pub type TestFn<'a> = dyn FnMut(ShrinkRun) -> (bool, Vec<ChoiceNode>) + 'a;
 pub struct Shrinker<'a> {
     test_fn: Box<TestFn<'a>>,
     pub current_nodes: Vec<ChoiceNode>,
+    /// Count of times `current_nodes` was replaced by a strictly smaller candidate.
+    /// Mirrors `engine.py::ConjectureRunner.shrinks` increments inside `test_function`.
+    pub improvements: usize,
+    /// The choice sequences that were displaced each time `current_nodes` improved.
+    /// Used by `shrink_interesting_examples` to downgrade each predecessor to the
+    /// secondary key, mirroring `engine.py::downgrade_choices`.
+    pub downgraded: Vec<Vec<ChoiceValue>>,
+    /// Optional cap on `improvements`.  When `improvements >= max_improvements`,
+    /// `consider` and `probe` return `false` without running the test function,
+    /// causing the shrinker to stall and exit naturally.
+    pub max_improvements: Option<usize>,
 }
 
 impl<'a> Shrinker<'a> {
@@ -70,6 +81,9 @@ impl<'a> Shrinker<'a> {
                 ShrinkRun::Probe { .. } => (false, Vec::new()),
             }),
             current_nodes: initial_nodes,
+            improvements: 0,
+            downgraded: Vec::new(),
+            max_improvements: None,
         }
     }
 
@@ -80,6 +94,9 @@ impl<'a> Shrinker<'a> {
         Shrinker {
             test_fn,
             current_nodes: initial_nodes,
+            improvements: 0,
+            downgraded: Vec::new(),
+            max_improvements: None,
         }
     }
 
@@ -95,8 +112,16 @@ impl<'a> Shrinker<'a> {
         if sort_key(nodes) == sort_key(&self.current_nodes) {
             return true;
         }
+        if let Some(max) = self.max_improvements {
+            if self.improvements >= max {
+                return false;
+            }
+        }
         let (is_interesting, actual_nodes) = (self.test_fn)(ShrinkRun::Full(nodes));
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
+            let old: Vec<ChoiceValue> = self.current_nodes.iter().map(|n| n.value.clone()).collect();
+            self.downgraded.push(old);
+            self.improvements += 1;
             self.current_nodes = actual_nodes;
         }
         is_interesting
@@ -109,12 +134,20 @@ impl<'a> Shrinker<'a> {
     ///
     /// Port of pbtkit's `shrinker.test_function(TestCase(prefix=..., random=...))`.
     pub(super) fn probe(&mut self, prefix: &[ChoiceValue], seed: u64, max_size: usize) {
+        if let Some(max) = self.max_improvements {
+            if self.improvements >= max {
+                return;
+            }
+        }
         let (is_interesting, actual_nodes) = (self.test_fn)(ShrinkRun::Probe {
             prefix,
             seed,
             max_size,
         });
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
+            let old: Vec<ChoiceValue> = self.current_nodes.iter().map(|n| n.value.clone()).collect();
+            self.downgraded.push(old);
+            self.improvements += 1;
             self.current_nodes = actual_nodes;
         }
     }
