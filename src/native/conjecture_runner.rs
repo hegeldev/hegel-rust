@@ -64,35 +64,7 @@ pub enum ExitReason {
     VerySlowShrinking,
 }
 
-/// Hypothesis's `InterestingOrigin` reduced to what the ported tests
-/// observe: an opaque lineno-like tag used as a dict key so distinct
-/// failure points don't collide.  Mirrors
-/// `internal/escalation.py::InterestingOrigin`.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct InterestingOrigin {
-    /// Stable id assigned by `interesting_origin(n)`.  `None` means
-    /// "the default origin" (call site of `mark_interesting()` with
-    /// no argument).
-    pub id: Option<i64>,
-    /// Label derived from a panic payload that escaped the test
-    /// function without a `mark_interesting` call.  Two panic-derived
-    /// origins compare equal iff their labels match, mirroring
-    /// Hypothesis's "distinct traceback ⇒ distinct interesting
-    /// example" behaviour for arbitrary user exceptions.  `None` for
-    /// the explicit-call path.
-    pub panic_label: Option<String>,
-}
-
-/// Construct an `InterestingOrigin` with the given stable id, so
-/// `interesting_origin(n) == interesting_origin(m) iff n == m`.
-/// Mirrors the `tests/conjecture/common.py::interesting_origin`
-/// fixture.
-pub fn interesting_origin(n: Option<i64>) -> InterestingOrigin {
-    InterestingOrigin {
-        id: n,
-        panic_label: None,
-    }
-}
+pub use crate::native::core::{InterestingOrigin, interesting_origin};
 
 impl InterestingOrigin {
     /// Synthesise an origin from a panic payload that escaped the test
