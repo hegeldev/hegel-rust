@@ -47,6 +47,7 @@ mod nocover_database_agreement;
 mod nocover_database_usage;
 mod nocover_deferred_errors;
 mod nocover_dynamic_variable;
+mod nocover_emails;
 mod nocover_explore_arbitrary_languages;
 mod nocover_filtering;
 mod nocover_flatmap;

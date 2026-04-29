@@ -1529,6 +1529,11 @@ Individually-skipped tests (rest of the file is ported):
   The remaining `test_database_not_created_when_not_used` ports in
   `tests/hypothesis/nocover_database_usage.rs`.
 
+- `nocover/test_emails.py::test_can_restrict_email_domains` —
+  `emails(domains=just("mydomain.com"))` has no counterpart; hegel-rust's
+  `EmailGenerator` exposes no `domains` parameter. Rest of the file ported
+  in `tests/hypothesis/nocover_emails.rs`.
+
 - `nocover/test_flatmap.py::test_flatmap_does_not_reuse_strategies` —
   `find_any(s) is not find_any(s)` is a Python object-identity check
   (the `is not` operator). hegel-rust draws return owned/cloned values,
