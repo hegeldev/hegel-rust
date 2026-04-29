@@ -2351,17 +2351,6 @@ is acceptance for the corresponding follow-up.
   `test_will_evict_entries_from_the_cache`,
   `test_simulate_to_evicted_data`, `test_terminates_shrinks`) are ported in
   `tests/hypothesis/conjecture_engine.rs`.
-- `conjecture/test_engine.py::test_fails_health_check_for_all_invalid`,
-  `::test_fails_health_check_for_large_base`,
-  `::test_fails_health_check_for_large_non_base`,
-  `::test_fails_health_check_for_slow_draws`,
-  `::test_health_check_too_slow_with_invalid_examples`,
-  `::test_health_check_too_slow_with_overrun_examples`,
-  `::test_too_slow_report` — each wraps a `ConjectureRunner.run()` in
-  `pytest.raises(FailedHealthCheck) as e` and asserts
-  `str(HealthCheck.xxx) in str(e.value)`. Native panics with a
-  free-form string (`"FailedHealthCheck: TooSlow — …"`) and has no
-  structured `FailedHealthCheck` exception or label enum.
 - `conjecture/test_engine.py::test_can_remove_discarded_data`,
   `::test_discarding_iterates_to_fixed_point`,
   `::test_discarding_is_not_fooled_by_empty_discards`,
