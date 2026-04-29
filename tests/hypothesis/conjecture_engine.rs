@@ -28,9 +28,8 @@ use crate::common::utils::{expect_panic, minimal};
 use hegel::__native_test_internals::{
     ChoiceValue, DominanceRelation, ExampleDatabase, ExitReason, HealthCheckLabel,
     InMemoryNativeDatabase, InterestingExample, NativeConjectureData, NativeConjectureRunner,
-    NativeRunnerSettings, NativeShrinker, RunnerPhase, Status,
-    choices_from_bytes, choices_to_bytes, dominance, fails_health_check, interesting_origin,
-    run_to_nodes,
+    NativeRunnerSettings, NativeShrinker, RunnerPhase, Status, choices_from_bytes,
+    choices_to_bytes, dominance, fails_health_check, interesting_origin, run_to_nodes,
 };
 use hegel::TestCase;
 use hegel::generators as gs;
@@ -2207,8 +2206,7 @@ fn test_can_remove_discarded_data() {
     // mark_interesting()
     // shrinker.remove_discarded()
     // assert shrinker.choices == (11,)
-    let initial: Vec<ChoiceValue> = std::iter::repeat(ChoiceValue::Integer(0))
-        .take(10)
+    let initial: Vec<ChoiceValue> = std::iter::repeat_n(ChoiceValue::Integer(0), 10)
         .chain(std::iter::once(ChoiceValue::Integer(11)))
         .collect();
     let mut shrinker = shrinking_from(initial, |data| {
@@ -2285,7 +2283,10 @@ fn test_discarding_can_fail() {
     shrinker.remove_discarded();
     let target = shrinker.shrink_target();
     assert!(
-        target.spans.iter().any(|e| e.discarded && e.choice_count > 0),
+        target
+            .spans
+            .iter()
+            .any(|e| e.discarded && e.choice_count > 0),
         "expected at least one non-empty discarded span"
     );
 }
@@ -2567,7 +2568,11 @@ fn test_cached_test_function_does_not_reinvoke_on_prefix() {
     for n in [2, 1, 0] {
         let choices: Vec<ChoiceValue> = d.choices[..n].to_vec();
         let d2 = runner.cached_test_function(&choices);
-        assert_eq!(d2.status, Status::EarlyStop, "expected EarlyStop for prefix len {n}");
+        assert_eq!(
+            d2.status,
+            Status::EarlyStop,
+            "expected EarlyStop for prefix len {n}"
+        );
     }
     assert_eq!(*call_count.borrow(), 1);
 }
@@ -2651,7 +2656,7 @@ fn test_number_of_examples_in_integer_range_is_bounded() {
         let n_val = n as i128;
         let mut runner = NativeConjectureRunner::new(
             move |data: &mut NativeConjectureData| {
-                assert!(*cc2.borrow() <= 2 * n as usize);
+                assert!(*cc2.borrow() <= 2 * n);
                 data.draw_integer(0, n_val);
             },
             NativeRunnerSettings::new().max_examples(500),
@@ -2659,7 +2664,11 @@ fn test_number_of_examples_in_integer_range_is_bounded() {
         );
         // Count calls via the runner field (runner.call_count tracks it).
         runner.run();
-        assert!(runner.call_count <= 2 * n, "n={n} call_count={}", runner.call_count);
+        assert!(
+            runner.call_count <= 2 * n,
+            "n={n} call_count={}",
+            runner.call_count
+        );
     }
 }
 

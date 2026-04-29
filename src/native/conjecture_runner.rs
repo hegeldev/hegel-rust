@@ -21,10 +21,10 @@
 // `.claude/skills/porting-tests/SKILL.md` under "`test_engine.py`-shape".
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
-use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -799,8 +799,7 @@ impl NativeShrinker {
 
         // Seed: run initial choices to get initial nodes + span data.
         let ntc = NativeTestCase::for_choices(&initial, None, None);
-        let (ok, initial_nodes, spans, has_discards) =
-            run_shrinker_user_fn(&mut user_fn, ntc);
+        let (ok, initial_nodes, spans, has_discards) = run_shrinker_user_fn(&mut user_fn, ntc);
         assert!(ok, "initial choices did not trigger mark_interesting");
         {
             let mut s = snapshot.borrow_mut();
@@ -868,7 +867,11 @@ impl NativeShrinker {
 
     /// Current choice values (values from current_nodes).
     pub fn choices(&self) -> Vec<ChoiceValue> {
-        self.inner.current_nodes.iter().map(|n| n.value.clone()).collect()
+        self.inner
+            .current_nodes
+            .iter()
+            .map(|n| n.value.clone())
+            .collect()
     }
 
     /// Mark node index `i` as changed.  Mirrors `Shrinker.mark_changed(i)`.
@@ -916,9 +919,7 @@ impl NativeShrinker {
             for span in &spans {
                 if span.choice_count() > 0
                     && span.discarded
-                    && discarded
-                        .last()
-                        .is_none_or(|(_, end)| span.start >= *end)
+                    && discarded.last().is_none_or(|(_, end)| span.start >= *end)
                 {
                     discarded.push((span.start, span.end));
                 }
