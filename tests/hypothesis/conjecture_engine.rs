@@ -2291,6 +2291,50 @@ fn test_discarding_can_fail() {
 }
 
 #[test]
+fn test_handles_nesting_of_discard_correctly() {
+    // @shrinking_from((False, False, True, True))
+    // while True:
+    //     start_span(SOME_LABEL)
+    //     succeeded = draw_boolean()
+    //     start_span(SOME_LABEL)
+    //     draw_boolean()
+    //     stop_span(discard=not succeeded)  -- inner
+    //     stop_span(discard=not succeeded)  -- outer
+    //     if succeeded: mark_interesting()
+    // shrinker.remove_discarded()
+    // assert shrinker.choices == (True, True)
+    //
+    // Upstream patches `Shrinker.shrink = Shrinker.remove_discarded` so only the
+    // remove-discarded pass runs.  The full shrinker finds the lex-smaller
+    // (True, False) minimum instead; we mirror the upstream by calling
+    // `remove_discarded()` directly.
+    let initial = vec![
+        ChoiceValue::Boolean(false),
+        ChoiceValue::Boolean(false),
+        ChoiceValue::Boolean(true),
+        ChoiceValue::Boolean(true),
+    ];
+    let mut shrinker = shrinking_from(initial, |data| {
+        loop {
+            data.start_span(SOME_LABEL);
+            let succeeded = data.draw_boolean(0.5);
+            data.start_span(SOME_LABEL);
+            data.draw_boolean(0.5);
+            data.stop_span_with_discard(!succeeded);
+            data.stop_span_with_discard(!succeeded);
+            if succeeded {
+                data.mark_interesting(interesting_origin(None));
+            }
+        }
+    });
+    shrinker.remove_discarded();
+    assert_eq!(
+        shrinker.choices(),
+        vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)]
+    );
+}
+
+#[test]
 fn test_can_write_bytes_towards_the_end() {
     let buf = vec![1u8, 2, 3];
     let buf2 = buf.clone();
