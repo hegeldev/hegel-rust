@@ -564,6 +564,14 @@ Individually-skipped tests (rest of the file is ported):
   `_get_constraints`). Neither `from_type`, `typing.Annotated`
   introspection, nor the `annotated_types` library has any Rust
   counterpart (same family as the `test_lookup*.py` skips above).
+- `test_backported_types.py` (in `tests/typing_extensions/`) — every test exercises
+  `st.from_type()` or `st.register_type_strategy()` against `typing_extensions` types:
+  `Literal`, `TypedDict` subclasses (with `Required`, `NotRequired`, `ReadOnly`,
+  `Annotated` field qualifiers and multi-level inheritance), `TypeVar` (bound,
+  constraints, and default), `ParamSpec`, `Concatenate`, `TypeGuard`, `TypeIs`,
+  `LiteralString`, `NewType`, and `DefaultDict`. Neither `from_type` nor
+  `register_type_strategy` exists in hegel-rust (same family as the
+  `test_lookup*.py` skips above).
 - `test_example.py` — tests the fluent `.via("...")` and `.xfail(...)`
   methods chained onto `@example(...)`; hegel-rust's
   `#[hegel::explicit_test_case]` has no equivalent of either.
