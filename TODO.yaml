@@ -10,39 +10,3 @@
 #                           #   listed blocker is removed from TODO.yaml.
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-- title: Port conjecture/test_engine.py::test_handles_nesting_of_discard_correctly
-  blocked_by:
-    - Port conjecture/test_engine.py new_shrinker cluster
-  details: |
-    Port `test_handles_nesting_of_discard_correctly` from
-    `conjecture/test_engine.py`.  Upstream uses
-    `monkeypatch.setattr(Shrinker, "shrink", Shrinker.remove_discarded)`
-    to constrain the shrink loop to a single named pass — without that
-    constraint the native full-shrinker finds the lex-smaller
-    `(True, False)` minimum rather than the upstream-asserted
-    `(True, True)`, because the discarded-span boundary information
-    isn't tracked along the choice sequence.
-
-    Port path: extend `Span` with a `discarded: bool` field and
-    propagate it through `NativeConjectureData::stop_span_with_discard`
-    into the shrinker's view of the test case (the existing
-    `NativeTestCase.has_discards` flag is enough at the data level;
-    the shrinker callback needs to see per-span discarded state too).
-    Add a `remove_discarded` shrink pass to `src/native/shrinker/mod.rs`
-    that mirrors `internal/conjecture/shrinker.py::remove_discarded`:
-    collect non-overlapping discarded spans, delete their choice
-    ranges in reverse, and `consider` the result.  Then either expose
-    a way to run only that pass (e.g. via `NativeShrinker::fixate_shrink_passes`,
-    coming with the new_shrinker cluster) or seed via
-    `cached_test_function` plus an additional explicit
-    `runner.shrinker_remove_discarded()` driver — pick whichever
-    matches the new_shrinker port best so the two land coherently.
-
-    Acceptance criteria:
-      - `test_handles_nesting_of_discard_correctly` compiles and
-        passes under `cargo test --features native --test hypothesis
-        conjecture_engine::`.
-      - The matching bullet in `SKIPPED.md` is updated to drop this
-        test from the still-skipped list.
-
