@@ -397,6 +397,8 @@ Individually-skipped tests (rest of the file is ported):
   type. `UniqueIdentifier` is a Python-only marker used as a default-arg
   sentinel that prints as its own name; hegel-rust has no `UniqueIdentifier`
   type and no `__repr__` dunder surface to test.
+- `test_duplication.py` (in `nocover/`) — port abandoned due to
+  integration conflict when cherry-picking onto the supervisor branch.
 - `test_drypython_returns.py` (in `nocover/`) — regression test for
   Hypothesis's integration with the third-party `returns` Python library
   (issue #3060). Every test exercises Python-only type-introspection
