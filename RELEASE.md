@@ -1,3 +1,3 @@
-RELEASE_TYPE: minor
+RELEASE_TYPE: patch
 
 Internal refactor of `one_of`.
