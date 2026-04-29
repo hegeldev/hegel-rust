@@ -730,7 +730,8 @@ impl NativeTestCase {
     /// which panics to signal the runner).
     pub fn mark_invalid(&mut self, why: Option<String>) -> Result<(), StopTest> {
         if let Some(reason) = why {
-            self.events_mut().insert("invalid because".to_string(), reason);
+            self.events_mut()
+                .insert("invalid because".to_string(), reason);
         }
         self.conclude_test(Status::Invalid, None)
     }

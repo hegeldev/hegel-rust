@@ -24,7 +24,9 @@ pub mod value_shrinkers;
 
 use std::collections::{HashMap, HashSet};
 
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, MAX_SHRINK_ITERATIONS, NodeSortKey, sort_key};
+use crate::native::core::{
+    ChoiceKind, ChoiceNode, ChoiceValue, MAX_SHRINK_ITERATIONS, NodeSortKey, sort_key,
+};
 
 /// Request passed to the shrinker's test function.
 ///
