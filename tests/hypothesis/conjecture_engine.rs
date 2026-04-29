@@ -1722,3 +1722,114 @@ fn test_debug_data() {
         "Expected `Interesting` status in debug output. stderr:\n{stderr}"
     );
 }
+
+// -----------------------------------------------------------------------
+// Port of `test_terminates_shrinks` (parametrised on n=1 and n=5) from
+// `conjecture/test_engine.py`.
+//
+// Upstream patches `MAX_SHRINKS` and replaces `generate_new_examples`
+// with a single `cached_test_function((255,)*1000)` call.  The native
+// port pre-seeds the interesting example via `cached_test_function`
+// before `run()` and uses `NativeRunnerSettings::max_shrinks(n)` plus
+// `phases([Shrink])` to skip the generation phase entirely (avoiding
+// interference with the stateful `HardToShrink` predicate).
+// -----------------------------------------------------------------------
+
+/// Port of `tests/common/strategies.py::HardToShrink`.
+///
+/// Draws 100 integers in [0, 255] and accepts a sequence only when:
+/// - it has been accepted before (re-test stability), or
+/// - no prior sequence was accepted and all bytes are non-zero (first
+///   acceptance: all-255), or
+/// - exactly one byte differs from the last accepted sequence and that
+///   byte is one lower (monotone descent by one step at a time).
+///
+/// This gives the shrinker a long chain of valid improvements so the
+/// `max_shrinks` budget lands exactly.
+fn hard_to_shrink_test_fn(
+    last: &mut Option<Vec<i128>>,
+    accepted: &mut std::collections::HashSet<Vec<i128>>,
+    data: &mut NativeConjectureData,
+) {
+    let x: Vec<i128> = (0..100).map(|_| data.draw_integer(0, 255)).collect();
+    let pass = if accepted.contains(&x) {
+        true
+    } else if let Some(ref ls) = *last {
+        let diffs: Vec<usize> = (0..100).filter(|&i| x[i] != ls[i]).collect();
+        if diffs.len() == 1 {
+            let i = diffs[0];
+            if x[i] + 1 == ls[i] {
+                *last = Some(x.clone());
+                accepted.insert(x);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    } else if x.iter().all(|&b| b != 0) {
+        *last = Some(x.clone());
+        accepted.insert(x);
+        true
+    } else {
+        false
+    };
+    if pass {
+        data.mark_interesting(interesting_origin(None));
+    }
+}
+
+fn check_terminates_shrinks(n: usize) {
+    let key = b"key".to_vec();
+    let db: Arc<InMemoryNativeDatabase> = Arc::new(InMemoryNativeDatabase::new());
+    let db_dyn: Arc<dyn ExampleDatabase> = db.clone();
+
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(5000)
+        .max_shrinks(n)
+        // Skip generation phase to avoid random draws interfering with
+        // the stateful HardToShrink predicate (mirrors the monkeypatch
+        // that replaces generate_new_examples with a no-op).
+        .phases(vec![RunnerPhase::Shrink])
+        .database(Some(db_dyn));
+
+    let mut last: Option<Vec<i128>> = None;
+    let mut accepted: std::collections::HashSet<Vec<i128>> = std::collections::HashSet::new();
+
+    let mut runner = NativeConjectureRunner::new(
+        move |data: &mut NativeConjectureData| {
+            hard_to_shrink_test_fn(&mut last, &mut accepted, data);
+        },
+        settings,
+        rng,
+    )
+    .with_database_key(key.clone());
+
+    // Mirrors the patched `generate_new_examples` which always calls
+    // `self.cached_test_function((255,) * 1000)`.
+    runner.cached_test_function(&vec![ChoiceValue::Integer(255); 100]);
+    assert!(!runner.interesting_examples.is_empty());
+
+    runner.run();
+
+    let (_, last_data) = runner.interesting_examples.iter().next().unwrap();
+    assert_eq!(last_data.choices.len(), 100);
+    assert_eq!(runner.exit_reason, Some(ExitReason::MaxShrinks));
+    assert_eq!(runner.shrinks, n);
+
+    let secondary = runner.secondary_key();
+    let in_db: HashSet<Vec<u8>> = db.fetch(&secondary).into_iter().collect();
+    assert_eq!(in_db.len(), n);
+}
+
+#[test]
+fn test_terminates_shrinks_1() {
+    check_terminates_shrinks(1);
+}
+
+#[test]
+fn test_terminates_shrinks_5() {
+    check_terminates_shrinks(5);
+}
