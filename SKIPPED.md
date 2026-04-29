@@ -814,6 +814,13 @@ Individually-skipped tests (rest of the file is ported):
   pytest's duration output — is pytest-plugin integration with no hegel-rust
   counterpart.
 
+- `test_doctest.py` (in `tests/pytest/`) — the single test drives the `pytester`
+  plugin (`testdir.makepyfile`/`testdir.runpytest`) to spawn a pytest subprocess
+  with `--doctest-modules` on a Python file containing doctest syntax (`>>>` in
+  triple-quoted docstrings). This is Python doctest integration with pytest; both
+  the pytester plugin and Python doctest syntax are Python-specific facilities with
+  no hegel-rust counterpart.
+
 - `test_pytest_detection.py` (in `tests/pytest/`) — every test exercises
   Hypothesis's `hypothesis.core.running_under_pytest` module-level flag (set by
   the pytest plugin) and the `pytester` plugin (`testdir.makepyfile`/
