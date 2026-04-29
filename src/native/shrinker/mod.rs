@@ -22,9 +22,9 @@ mod sequence;
 mod strings;
 pub mod value_shrinkers;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINK_ITERATIONS, NodeSortKey, sort_key};
+use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, MAX_SHRINK_ITERATIONS, NodeSortKey, sort_key};
 
 /// Request passed to the shrinker's test function.
 ///
@@ -63,6 +63,10 @@ pub struct Shrinker<'a> {
     /// `consider` and `probe` return `false` without running the test function,
     /// causing the shrinker to stall and exit naturally.
     pub max_improvements: Option<usize>,
+    /// Indices of choice nodes that have changed since `clear_change_tracking`.
+    /// Used by `lower_common_node_offset` to find candidate nodes to jointly lower.
+    /// Mirrors `Shrinker.__all_changed_nodes` / `Shrinker.mark_changed` in Hypothesis.
+    changed_nodes: HashSet<usize>,
 }
 
 impl<'a> Shrinker<'a> {
@@ -84,6 +88,7 @@ impl<'a> Shrinker<'a> {
             improvements: 0,
             downgraded: Vec::new(),
             max_improvements: None,
+            changed_nodes: HashSet::new(),
         }
     }
 
@@ -97,6 +102,7 @@ impl<'a> Shrinker<'a> {
             improvements: 0,
             downgraded: Vec::new(),
             max_improvements: None,
+            changed_nodes: HashSet::new(),
         }
     }
 
@@ -214,6 +220,91 @@ impl<'a> Shrinker<'a> {
             self.try_shortening_via_increment();
             self.mutate_and_shrink();
         }
+    }
+
+    /// Mark node index `i` as changed.  Mirrors `Shrinker.mark_changed(i)`.
+    /// Used before calling `lower_common_node_offset` to specify which nodes
+    /// the caller has already observed changing.
+    pub fn mark_changed(&mut self, i: usize) {
+        self.changed_nodes.insert(i);
+    }
+
+    /// Clear the set of changed nodes.  Mirrors `Shrinker.clear_change_tracking`.
+    pub fn clear_change_tracking(&mut self) {
+        self.changed_nodes.clear();
+    }
+
+    /// Run one named shrink pass.  Used by `NativeShrinker::fixate_shrink_passes`.
+    /// Panics on unrecognised pass names.
+    pub fn run_named_pass(&mut self, name: &str) {
+        match name {
+            "minimize_individual_choices" => {
+                self.zero_choices();
+                self.binary_search_integer_towards_zero();
+            }
+            "remove_discarded" => {
+                // no-op at Shrinker level (span data needed);
+                // NativeShrinker.remove_discarded handles the actual logic.
+            }
+            _ => panic!("unknown shrink pass: {name:?}"),
+        }
+    }
+
+    /// Jointly lower a common offset across changed integer nodes.
+    /// Mirrors `Shrinker.lower_common_node_offset` in Hypothesis.
+    ///
+    /// Considers every index in `changed_nodes` that holds a non-trivial
+    /// non-zero integer, finds the minimum absolute value, and binary-searches
+    /// the largest delta `k` in `[0, min_abs]` such that replacing each node's
+    /// value with `value - k` (or `value + k`) still satisfies the test.
+    pub fn lower_common_node_offset(&mut self) {
+        if self.changed_nodes.len() <= 1 {
+            return;
+        }
+
+        // Collect non-trivial integer nodes from changed indices.
+        let mut changed: Vec<(usize, i128)> = Vec::new();
+        for &i in &self.changed_nodes.clone() {
+            if i >= self.current_nodes.len() {
+                continue;
+            }
+            let node = &self.current_nodes[i];
+            match (&node.kind, &node.value) {
+                (ChoiceKind::Integer(_), ChoiceValue::Integer(v)) if *v != 0 => {
+                    changed.push((i, *v));
+                }
+                _ => {}
+            }
+        }
+
+        if changed.is_empty() {
+            return;
+        }
+
+        let offset = changed.iter().map(|(_, v)| v.unsigned_abs()).min().unwrap();
+        if offset == 0 {
+            return;
+        }
+
+        // Try lowering each value by `k` (binary-search downward from offset).
+        let changed_clone = changed.clone();
+        let result = bin_search_down(0, offset as i128, &mut |k| {
+            if k == 0 {
+                return true;
+            }
+            let replacements: HashMap<usize, ChoiceValue> = changed_clone
+                .iter()
+                .map(|(i, v)| {
+                    let new_val = if *v > 0 { v - k } else { v + k };
+                    (*i, ChoiceValue::Integer(new_val))
+                })
+                .collect();
+            self.replace(&replacements)
+        });
+        // If the binary search found k=0 we did nothing useful; that's fine.
+        let _ = result;
+
+        self.changed_nodes.clear();
     }
 }
 

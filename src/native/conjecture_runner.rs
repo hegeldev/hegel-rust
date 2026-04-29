@@ -23,6 +23,8 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::rc::Rc;
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -33,7 +35,7 @@ use rand::seq::SliceRandom;
 
 use crate::native::bignum::BigUint;
 use crate::native::cache::LRUCache;
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Status};
+use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Span, Status};
 use crate::native::database::ExampleDatabase;
 use crate::native::datatree::compute_max_children;
 use crate::native::shrinker::Shrinker;
@@ -716,30 +718,224 @@ impl<'a> NativeDataTreeView<'a> {
     }
 }
 
-/// Shrinker handle returned by `runner.new_shrinker(data,
-/// predicate)`.  Opaque stub; each port-loop cycle that lands a test
-/// calling `fixate_shrink_passes` wires this to the concrete
-/// `src/native/shrinker/Shrinker` internals.
-#[non_exhaustive]
+/// Run a shrinker user function (one that uses the `NativeConjectureData`
+/// API) on a `NativeTestCase`, catching panic-based marks.  Returns
+/// `(is_interesting, nodes, spans, has_discards)`.  Used by
+/// `NativeShrinker::from_choices` to avoid duplicating the run-and-catch
+/// logic.
+fn run_shrinker_user_fn(
+    user_fn: &mut dyn FnMut(&mut NativeConjectureData),
+    ntc: NativeTestCase,
+) -> (bool, Vec<ChoiceNode>, Vec<Span>, bool) {
+    let mut data = NativeConjectureData::new(ntc, CONJECTURE_BUFFER_SIZE);
+    let my_id = data.data_id;
+    let res = catch_unwind(AssertUnwindSafe(|| user_fn(&mut data)));
+    let interesting = match res {
+        Ok(()) => false,
+        Err(p) => {
+            if let Some(mp) = p.downcast_ref::<MarkPanic>() {
+                if mp.data_id == my_id {
+                    matches!(&data.mark, Some((MarkKind::Interesting, _)))
+                } else {
+                    std::panic::resume_unwind(p)
+                }
+            } else if p.downcast_ref::<&'static str>().copied() == Some(STOP_TEST_PANIC) {
+                false
+            } else {
+                // Arbitrary user panic → treat as interesting.
+                true
+            }
+        }
+    };
+    let spans: Vec<Span> = data.ntc.spans.iter().cloned().collect();
+    let has_discards = data.ntc.has_discards;
+    let nodes = std::mem::take(&mut data.ntc.nodes);
+    (interesting, nodes, spans, has_discards)
+}
+
+/// Span snapshot shared between `NativeShrinker` and the closure inside
+/// its `Shrinker`.  Updated on every interesting test run so
+/// `remove_discarded` can inspect the latest span structure.
+#[derive(Default, Clone)]
+struct SpanSnapshot {
+    spans: Vec<Span>,
+    has_discards: bool,
+}
+
+/// Shrinker handle returned by `runner.new_shrinker(data, predicate)` or
+/// by the local `shrinking_from` helper in conjecture engine tests.  Wraps
+/// a concrete [`Shrinker`] plus span bookkeeping needed by
+/// `remove_discarded`.
 pub struct NativeShrinker {
-    _private: (),
+    inner: Shrinker<'static>,
+    /// Spans from the last interesting test run; updated by the
+    /// closure baked into `inner.test_fn`.
+    span_snapshot: Rc<RefCell<SpanSnapshot>>,
+}
+
+/// Span view for `NativeShrinker::shrink_target()`.
+pub struct NativeShrinkTarget {
+    pub has_discards: bool,
+    pub spans: Vec<NativeShrinkSpan>,
+}
+
+/// A span entry as visible to tests: just the fields they assert on.
+pub struct NativeShrinkSpan {
+    pub discarded: bool,
+    pub choice_count: usize,
 }
 
 impl NativeShrinker {
+    /// Build a `NativeShrinker` from initial choices and a user test function.
+    /// The `user_fn` uses the same `NativeConjectureData` API as a runner
+    /// callback: call `data.mark_interesting(...)` to flag an interesting case.
+    /// Used by the local `shrinking_from` helper inside engine tests.
+    pub fn from_choices<F>(initial: Vec<ChoiceValue>, mut user_fn: F) -> Self
+    where
+        F: FnMut(&mut NativeConjectureData) + 'static,
+    {
+        let snapshot = Rc::new(RefCell::new(SpanSnapshot::default()));
+        let snapshot_clone = Rc::clone(&snapshot);
+
+        // Seed: run initial choices to get initial nodes + span data.
+        let ntc = NativeTestCase::for_choices(&initial, None, None);
+        let (ok, initial_nodes, spans, has_discards) =
+            run_shrinker_user_fn(&mut user_fn, ntc);
+        assert!(ok, "initial choices did not trigger mark_interesting");
+        {
+            let mut s = snapshot.borrow_mut();
+            s.spans = spans;
+            s.has_discards = has_discards;
+        }
+
+        let test_fn = Box::new(move |candidate: &[ChoiceNode]| {
+            let values: Vec<ChoiceValue> = candidate.iter().map(|n| n.value.clone()).collect();
+            let ntc = NativeTestCase::for_choices(&values, Some(candidate), None);
+            let (is_interesting, nodes, spans, has_discards) =
+                run_shrinker_user_fn(&mut user_fn, ntc);
+            if is_interesting {
+                let mut s = snapshot_clone.borrow_mut();
+                s.spans = spans;
+                s.has_discards = has_discards;
+            }
+            (is_interesting, nodes)
+        });
+
+        NativeShrinker {
+            inner: Shrinker::new(test_fn, initial_nodes),
+            span_snapshot: snapshot,
+        }
+    }
+
     /// Run the full shrink loop.  Mirrors `Shrinker.shrink()`.
     pub fn shrink(&mut self) {
-        todo!("NativeShrinker::shrink")
+        self.inner.shrink();
     }
 
-    /// Run a named subset of shrink passes to fixation.  Mirrors
-    /// `Shrinker.fixate_shrink_passes(passes)`.
-    pub fn fixate_shrink_passes(&mut self, _passes: &[&str]) {
-        todo!("NativeShrinker::fixate_shrink_passes")
+    /// Run named shrink passes to fixation (loop until stable).
+    /// Mirrors `Shrinker.fixate_shrink_passes(passes)`.
+    ///
+    /// Pass names: `"minimize_individual_choices"`, `"lower_common_node_offset"`,
+    /// `"remove_discarded"`.
+    pub fn fixate_shrink_passes(&mut self, passes: &[&str]) {
+        use crate::native::core::sort_key;
+        loop {
+            let prev = sort_key(&self.inner.current_nodes);
+            for &name in passes {
+                match name {
+                    "remove_discarded" => {
+                        self.remove_discarded();
+                    }
+                    "lower_common_node_offset" => {
+                        self.inner.lower_common_node_offset();
+                    }
+                    _ => {
+                        self.inner.run_named_pass(name);
+                    }
+                }
+            }
+            let curr = sort_key(&self.inner.current_nodes);
+            if curr == prev {
+                break;
+            }
+        }
     }
 
-    /// Accessor for the current shrink result.
+    /// Accessor for the current shrink result nodes.
     pub fn current_nodes(&self) -> &[ChoiceNode] {
-        todo!("NativeShrinker::current_nodes")
+        &self.inner.current_nodes
+    }
+
+    /// Current choice values (values from current_nodes).
+    pub fn choices(&self) -> Vec<ChoiceValue> {
+        self.inner.current_nodes.iter().map(|n| n.value.clone()).collect()
+    }
+
+    /// Mark node index `i` as changed.  Mirrors `Shrinker.mark_changed(i)`.
+    pub fn mark_changed(&mut self, i: usize) {
+        self.inner.mark_changed(i);
+    }
+
+    /// Joint-lower changed integer nodes by their common offset.
+    /// Mirrors `Shrinker.lower_common_node_offset()`.
+    pub fn lower_common_node_offset(&mut self) {
+        self.inner.lower_common_node_offset();
+    }
+
+    /// Snapshot of the current shrink target's discard metadata.
+    pub fn shrink_target(&self) -> NativeShrinkTarget {
+        let s = self.span_snapshot.borrow();
+        NativeShrinkTarget {
+            has_discards: s.has_discards,
+            spans: s
+                .spans
+                .iter()
+                .map(|sp| NativeShrinkSpan {
+                    discarded: sp.discarded,
+                    choice_count: sp.choice_count(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Remove discarded spans from `current_nodes`.  Returns `true` if no
+    /// discards remain after the pass, `false` if removing a discarded span
+    /// produced a non-interesting result (the span can't be dropped).
+    /// Mirrors `Shrinker.remove_discarded()`.
+    pub fn remove_discarded(&mut self) -> bool {
+        loop {
+            let (spans, has_discards) = {
+                let s = self.span_snapshot.borrow();
+                (s.spans.clone(), s.has_discards)
+            };
+            if !has_discards {
+                return true;
+            }
+            // Collect non-overlapping discarded spans with at least one choice.
+            let mut discarded: Vec<(usize, usize)> = Vec::new();
+            for span in &spans {
+                if span.choice_count() > 0
+                    && span.discarded
+                    && discarded
+                        .last()
+                        .is_none_or(|(_, end)| span.start >= *end)
+                {
+                    discarded.push((span.start, span.end));
+                }
+            }
+            if discarded.is_empty() {
+                // All discards are zero-length — can't remove anything.
+                return true;
+            }
+            let mut attempt: Vec<ChoiceNode> = self.inner.current_nodes.clone();
+            for (start, end) in discarded.iter().rev() {
+                attempt.drain(*start..*end);
+            }
+            if !self.inner.consider(&attempt) {
+                return false;
+            }
+            // After consider(), span_snapshot is updated by the test fn closure.
+        }
     }
 }
 
