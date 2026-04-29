@@ -10,3 +10,143 @@
 #                           #   listed blocker is removed from TODO.yaml.
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
+
+- title: Expose target() in the public hegel API
+  details: |
+    The native engine already has full target_observations infrastructure
+    (src/native/optimiser.rs: TargetedRunner, TargetedTestCase.target_observations,
+    src/native/conjecture_runner.rs). The server backend communicates scores via the
+    protocol. But hegel-rust's public API exposes no way for test authors to call
+    target(score, label).
+
+    Hypothesis's public API is:
+      from hypothesis import target
+      target(observation: float, label: str = "")  # call inside @given body
+
+    hegel-rust should expose an equivalent free function:
+      pub fn target(score: f64, label: impl Into<String>)  # call inside test closure
+
+    Implementation sketch:
+    - Add `pub fn target(score: f64, label: impl Into<String>)` in src/lib.rs, similar
+      to how `assume()` and `note()` are implemented (reads TEST_CASE_DATA thread-local,
+      sends a protocol message or updates target_observations directly).
+    - For the server backend: check what protocol message Hypothesis uses for
+      target_observations and send it on the current stream.
+    - For the native backend: update the thread-local TargetedTestCase's
+      target_observations map directly.
+    - Export `target` from the crate root so it's usable as `hegel::target(score, label)`.
+
+    Acceptance criteria:
+    - `hegel::target(score, "label")` compiles and can be called inside a test closure.
+    - tests/hypothesis/test_targeting.rs ports and passes in both server and native mode.
+
+- title: Port tests/cover/test_targeting.py
+  blocked_by:
+    - Expose target() in the public hegel API
+  details: |
+    Upstream: resources/hypothesis/hypothesis-python/tests/cover/test_targeting.py
+    Destination: tests/hypothesis/targeting.rs
+
+    Currently in SKIPPED.md with rationale "every test calls Hypothesis's public
+    target(observation, label=...) API" — valid once target() is implemented.
+
+    Remove test_targeting.py from SKIPPED.md when porting.
+
+    The file tests:
+    - target() accepts float observations and optional string labels
+    - multiple target() calls per test case
+    - label uniqueness / duplicate-label behaviour
+    - target() outside a test raises an error (if Hypothesis enforces this)
+    Port all tests faithfully; native-gate any that require the optimiser.
+
+- title: Port conjecture/test_pareto.py
+  blocked_by:
+    - Expose target() in the public hegel API
+  details: |
+    Upstream: resources/hypothesis/hypothesis-python/tests/conjecture/test_pareto.py
+    Destination: tests/hypothesis/conjecture_pareto.rs
+
+    Was abandoned due to a cherry-pick conflict (worker branched before native backend
+    feature landed — that conflict is now resolved). Remove test_pareto.py from
+    SKIPPED.md when porting.
+
+    The file exercises:
+    - ParetoFront mechanics (add/contains/dominates)
+    - ConjectureRunner with target_observations + multiple interesting origins
+    - Pareto-front preservation across shrinking
+    All of these live in src/native/optimiser.rs and src/native/conjecture_runner.rs.
+    Tests should be #[cfg(feature = "native")].
+
+- title: Port cover/test_stateful.py
+  details: |
+    Upstream: resources/hypothesis/hypothesis-python/tests/cover/test_stateful.py
+    Destination: tests/hypothesis/stateful.rs
+
+    SKIPPED purely due to a parallel worker merge conflict — no portability issue
+    was identified. Remove test_stateful.py from SKIPPED.md when porting.
+
+    Read .claude/skills/porting-stateful/SKILL.md before starting. The file is
+    1537 lines of RuleBasedStateMachine tests. Port all tests; native-gate any
+    that require native-mode engine features.
+
+- title: Port nocover/test_precise_shrinking.py
+  details: |
+    Upstream: resources/hypothesis/hypothesis-python/tests/nocover/test_precise_shrinking.py
+    Destination: tests/hypothesis/nocover_precise_shrinking.rs
+
+    Abandoned due to a merge conflict in tests/hypothesis/main.rs (worker raced
+    ahead of supervisor). No portability issue stated. Remove from SKIPPED.md when porting.
+
+    Tests precise shrink-to-minimum behaviour for integers, floats, alternatives,
+    and blocked shrinking. All native-engine territory; use #[cfg(feature = "native")].
+
+- title: Port nocover/test_sets.py
+  details: |
+    Upstream: resources/hypothesis/hypothesis-python/tests/nocover/test_sets.py
+    Destination: tests/hypothesis/nocover_sets.rs
+
+    Only 3 tests. Abandoned due to merge conflict (worker branched before native
+    backend feature landed). Remove from SKIPPED.md when porting.
+
+    Tests: can draw sets of rare-probability elements, empty sets, bounded-size sets.
+    Should be straightforward with gs::sets() / gs::unique_collections().
+
+- title: Port cover/test_flakiness.py
+  details: |
+    Upstream: resources/hypothesis/hypothesis-python/tests/cover/test_flakiness.py
+    Destination: tests/hypothesis/flakiness.rs
+
+    Abandoned due to merge conflict in tests/hypothesis/main.rs and an untracked
+    flakiness.rs. No portability issue. Remove from SKIPPED.md when porting.
+
+    7 tests covering flaky-test detection: fails-only-once, fails-differently,
+    flaky-assumption. These pin down native engine behaviour (FlakyError / status
+    tracking). Tests that require Python ExceptionGroup specifics should be skipped
+    or adapted; the core flakiness-detection logic is portable.
+
+- title: Port quality/test_discovery_ability.py
+  details: |
+    Upstream: resources/hypothesis/hypothesis-python/tests/quality/test_discovery_ability.py
+    Destination: tests/hypothesis/quality_discovery_ability.rs
+
+    Abandoned due to a cherry-pick conflict (TODO.yaml merge conflict during parallel
+    run). No portability issue. Remove from SKIPPED.md when porting.
+
+    ~60 statistical tests that assert generator distributions produce specific values
+    with a minimum probability (e.g. "integers() produces values > 1000 at least 50%
+    of the time"). The test harness uses ConjectureRunner directly, which maps to
+    src/native/conjecture_runner.rs. All tests should be #[cfg(feature = "native")].
+    These are important distribution-quality regression tests.
+
+- title: Port conjecture/test_utils.py
+  details: |
+    Upstream: resources/hypothesis/hypothesis-python/tests/conjecture/test_utils.py
+    Destination: tests/hypothesis/conjecture_utils.rs
+
+    Abandoned due to merge conflicts in src/lib.rs and src/native/mod.rs (native
+    backend landed after the worker branched). No portability issue. Remove from
+    SKIPPED.md when porting.
+
+    Tests hypothesis.internal.conjecture.utils (integer encoding, weighted coin,
+    biased bits, etc.) — these map directly to src/native/ draw helpers.
+    Use #[cfg(feature = "native")] throughout. Skip any tests that require numpy.
