@@ -59,6 +59,7 @@ import json
 import os
 import random
 import re
+import resource
 import shutil
 import signal
 import subprocess
@@ -820,6 +821,85 @@ SCRIPT_MTIME_AT_STARTUP = SCRIPT_PATH.stat().st_mtime
 ORIGINAL_ARGV: list[str] = list(sys.argv)
 
 
+def _set_resource_limits() -> None:
+    """Called as preexec_fn in every subprocess: apply conservative rlimits.
+
+    - RLIMIT_CORE=0: suppress core dumps so a crashing rustc/cargo doesn't
+      fill the disk with a multi-GB coredump file.
+    - RLIMIT_FSIZE=4 GiB: cap any single file a child writes (logs, build
+      artefacts) to 4 GiB; runaway output beyond that raises SIGXFSZ rather
+      than silently exhausting the disk.
+    - RLIMIT_NOFILE=65536: raise the open-fd soft limit to a value that
+      covers large parallel builds while bounding runaway fd leaks.
+
+    All limits are set conservatively — never above the inherited hard limit —
+    so the function is a no-op if the OS already enforces tighter caps.
+    """
+    _4GIB = 4 * 1024 * 1024 * 1024
+    _NOFILE = 65536
+
+    # Core dumps off.
+    try:
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    except (ValueError, resource.error):
+        pass
+
+    # File size cap.
+    try:
+        _soft, _hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+        _new = min(_4GIB, _hard) if _hard != resource.RLIM_INFINITY else _4GIB
+        resource.setrlimit(resource.RLIMIT_FSIZE, (_new, _hard))
+    except (ValueError, resource.error):
+        pass
+
+    # Open file descriptors.
+    try:
+        _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        _new = min(_NOFILE, _hard) if _hard != resource.RLIM_INFINITY else _NOFILE
+        resource.setrlimit(resource.RLIMIT_NOFILE, (_new, _hard))
+    except (ValueError, resource.error):
+        pass
+
+
+DISK_KILL_THRESHOLD_PCT = 80.0
+_DISK_WATCHER_INTERVAL_S = 15.0
+
+
+def _start_disk_watcher() -> None:
+    """Spawn a daemon thread that hard-kills the port loop if disk exceeds 80%.
+
+    Polls every `_DISK_WATCHER_INTERVAL_S` seconds. When usage hits the
+    threshold it logs a message, sends SIGKILL to the whole process group
+    (taking down all workers and subprocesses with it), and falls back to
+    os._exit(1) in case the signal doesn't reach itself.
+    """
+    def _watch() -> None:
+        while True:
+            time.sleep(_DISK_WATCHER_INTERVAL_S)
+            try:
+                usage = shutil.disk_usage(str(REPO_ROOT))
+                pct = 100.0 * usage.used / usage.total
+            except OSError:
+                continue
+            if pct < DISK_KILL_THRESHOLD_PCT:
+                continue
+            print(
+                f"\n[port-loop] DISK EMERGENCY: {pct:.1f}% of volume used "
+                f"(threshold {DISK_KILL_THRESHOLD_PCT:.0f}%); "
+                f"hard-killing entire port loop to prevent EC2 death.",
+                flush=True,
+            )
+            try:
+                os.killpg(os.getpgrp(), signal.SIGKILL)
+            except Exception:
+                pass
+            os._exit(1)
+
+    t = threading.Thread(target=_watch, daemon=True)
+    t.name = "disk-watcher"
+    t.start()
+
+
 class _LinePrefixStream:
     """Wrap a text stream, prefixing every output line with `prefix`.
 
@@ -934,6 +1014,7 @@ def run_gate(
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        preexec_fn=_set_resource_limits,
     )
     captured: list[str] = []
     assert proc.stdout is not None
@@ -1660,6 +1741,7 @@ def dispatch_claude(
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        preexec_fn=_set_resource_limits,
     )
 
     timed_out = False
@@ -2380,7 +2462,9 @@ def _spawn_worker(
         f"(base {base_sha[:12]}, worktree {worktree}).",
         flush=True,
     )
-    return subprocess.Popen(cmd, env=env, start_new_session=True)
+    return subprocess.Popen(
+        cmd, env=env, start_new_session=True, preexec_fn=_set_resource_limits
+    )
 
 
 def _spawn_todo_worker(
@@ -2445,7 +2529,9 @@ def _spawn_todo_worker(
         f"worktree {worktree}).",
         flush=True,
     )
-    return subprocess.Popen(cmd, env=env, start_new_session=True)
+    return subprocess.Popen(
+        cmd, env=env, start_new_session=True, preexec_fn=_set_resource_limits
+    )
 
 
 def drive_port_pool(state: IterCounter, args: argparse.Namespace) -> None:
@@ -3088,27 +3174,6 @@ def _rev_parse(rev: str) -> str | None:
     return r.stdout.strip()
 
 
-PUSH_MIN_INTERVAL_SECONDS = 60 * 60  # at most one push per hour
-LAST_PUSH_PATH = REPO_ROOT / ".port-loop-last-push"
-
-
-def _seconds_since_last_push() -> float | None:
-    """Seconds since the most recent successful push recorded by this script.
-
-    Returns None if no push has been recorded (e.g. first run, or the
-    timestamp file was cleared).
-    """
-    try:
-        ts = float(LAST_PUSH_PATH.read_text().strip())
-    except (FileNotFoundError, ValueError, OSError):
-        return None
-    return time.time() - ts
-
-
-def _record_push_now() -> None:
-    LAST_PUSH_PATH.write_text(f"{time.time():.0f}\n")
-
-
 def gate_sync_with_origin() -> tuple[bool, str, bool]:
     """Fetch, rebase onto origin/main, push. Returns (ok, output, pushed).
 
@@ -3117,17 +3182,8 @@ def gate_sync_with_origin() -> tuple[bool, str, bool]:
     `--force`. Refuses to operate on the `main`/`master` branch itself
     (the loop should run on a feature branch).
 
-    Pushes are rate-limited to at most one every
-    `PUSH_MIN_INTERVAL_SECONDS` *while CI is green*: if a push would
-    happen sooner than that, the fetch/rebase still runs but the push
-    is deferred to the next sync cycle that falls outside the
-    cooldown. This keeps CI from churning on every committed port
-    when workers are landing commits rapidly.
-
-    The throttle is bypassed when CI is currently broken (status
-    `"failure"`, or any already-completed check is failing) — push
-    fixes immediately. First-publish pushes (no existing upstream
-    branch) also bypass the throttle.
+    Every sync that has new commits to push pushes immediately — there is
+    no throttle. This ensures work is never lost on an EC2 crash.
 
     On any failure, aborts any in-progress rebase and returns (False,
     combined_output, False) so the caller can dispatch a recovery agent.
@@ -3183,37 +3239,6 @@ def gate_sync_with_origin() -> tuple[bool, str, bool]:
     if not needs_push:
         return True, "".join(combined), False
 
-    # Rate-limit: skip if we pushed recently AND CI isn't broken.
-    # New-upstream pushes (origin_branch is None) bypass the throttle
-    # so a fresh branch gets its initial publish without delay.
-    # Broken CI also bypasses — fixes should go out immediately.
-    if origin_branch is not None:
-        elapsed = _seconds_since_last_push()
-        if elapsed is not None and elapsed < PUSH_MIN_INTERVAL_SECONDS:
-            ci_status, ci_summary, _d, ci_failing = _pr_check_status(
-                fetch_logs=False
-            )
-            ci_broken = ci_status == "failure" or ci_failing > 0
-            if not ci_broken:
-                remaining = PUSH_MIN_INTERVAL_SECONDS - elapsed
-                msg = (
-                    f"[port-loop] push throttle: last push "
-                    f"{int(elapsed)}s ago, next push in {int(remaining)}s "
-                    f"(min interval {PUSH_MIN_INTERVAL_SECONDS}s, "
-                    f"CI={ci_status}/{ci_summary}). "
-                    f"Deferring push of {after_sha[:12]}.\n"
-                )
-                print(msg, end="")
-                combined.append(msg)
-                return True, "".join(combined), False
-            msg = (
-                f"[port-loop] push throttle bypassed: CI broken "
-                f"({ci_status}, {ci_failing} failing), "
-                f"pushing {after_sha[:12]} immediately.\n"
-            )
-            print(msg, end="")
-            combined.append(msg)
-
     # Push, retrying up to 3 times on --force-with-lease rejection.
     # Workers may push to the remote while we are rebasing, causing a
     # lease mismatch; a re-fetch + re-rebase usually resolves it without
@@ -3249,7 +3274,6 @@ def gate_sync_with_origin() -> tuple[bool, str, bool]:
             origin_branch = _rev_parse(f"origin/{branch}")
     else:
         return False, "".join(combined), False
-    _record_push_now()
 
     rebased = origin_main is not None and before_sha != after_sha
     if rebased:
@@ -3999,6 +4023,9 @@ def main() -> None:
         sys.stderr.reconfigure(line_buffering=True)
     except (AttributeError, ValueError):
         pass
+    # Start disk watcher before anything else — even argument parsing — so
+    # a disk-full condition is caught regardless of which mode we enter.
+    _start_disk_watcher()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--max-iterations",

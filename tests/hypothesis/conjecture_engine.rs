@@ -1903,8 +1903,10 @@ fn test_replaces_all_dominated() {
         |data: &mut NativeConjectureData| {
             let m = data.draw_integer(0, 3);
             let n = data.draw_integer(0, 3);
-            data.target_observations.insert("m".to_string(), (3 - m) as f64);
-            data.target_observations.insert("n".to_string(), (3 - n) as f64);
+            data.target_observations
+                .insert("m".to_string(), (3 - m) as f64);
+            data.target_observations
+                .insert("n".to_string(), (3 - n) as f64);
         },
         settings,
         rng,
