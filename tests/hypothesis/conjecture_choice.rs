@@ -411,7 +411,8 @@ fn test_data_with_changed_forced_value_float() {
 
 #[test]
 fn test_data_with_changed_forced_value_string() {
-    let mut data = NativeTestCase::for_choices(&[ChoiceValue::String(vec![b'a' as u32])], None, None);
+    let mut data =
+        NativeTestCase::for_choices(&[ChoiceValue::String(vec![b'a' as u32])], None, None);
     let drawn = data
         .draw_string_forced(0, 0x10FFFF, 0, 16, "world")
         .ok()

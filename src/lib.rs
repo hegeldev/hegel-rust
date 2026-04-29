@@ -275,9 +275,9 @@ pub mod __native_test_internals {
     };
     pub use crate::native::core::{
         BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, CoverageTag, DataObserver,
-        FloatChoice, IntegerChoice, MAX_DEPTH, NativeConjectureResult, NativeResult, NativeTestCase,
-        Span, Spans, Status, StringChoice, decode_exponent, encode_exponent, float_to_index,
-        index_to_float, reverse_bits_n, structural_coverage,
+        FloatChoice, IntegerChoice, MAX_DEPTH, NativeConjectureResult, NativeResult,
+        NativeTestCase, Span, Spans, Status, StringChoice, decode_exponent, encode_exponent,
+        float_to_index, index_to_float, reverse_bits_n, structural_coverage,
     };
     pub use crate::native::database::{
         BackgroundWriteNativeDatabase, ExampleDatabase, InMemoryNativeDatabase, Listener,

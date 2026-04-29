@@ -34,8 +34,11 @@ fn test_filter_iterations_are_marked_as_discarded() {
         *hd_clone.lock().unwrap() = hd;
     });
 
-    let ntc =
-        NativeTestCase::for_choices(&[ChoiceValue::Integer(1), ChoiceValue::Integer(0)], None, None);
+    let ntc = NativeTestCase::for_choices(
+        &[ChoiceValue::Integer(1), ChoiceValue::Integer(0)],
+        None,
+        None,
+    );
     ctf.run(ntc);
 
     assert_eq!(*drawn.lock().unwrap(), Some(0));
