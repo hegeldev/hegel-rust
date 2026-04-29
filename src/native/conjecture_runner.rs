@@ -1045,7 +1045,13 @@ impl DataTreeNode {
 /// on it.  Records the terminal `status` at the leaf (if the test
 /// concluded cleanly) and propagates exhaustion up the path so the
 /// runner's `generate_novel_prefix` walk can avoid dead branches.
-fn record_tree(tree_root: &mut DataTreeNode, nodes: &[ChoiceNode], status: Status) {
+/// Walk `nodes` through `tree_root` ... (see full doc below)
+fn record_tree(
+    tree_root: &mut DataTreeNode,
+    nodes: &[ChoiceNode],
+    status: Status,
+    kill_depths: &[usize],
+) {
     // Iterative descent: a single-path walk can be thousands of nodes
     // deep (e.g. an infinite-loop test under the all-simplest probe),
     // and a recursive walk would blow the thread's stack.  We track
@@ -1090,6 +1096,18 @@ fn record_tree(tree_root: &mut DataTreeNode, nodes: &[ChoiceNode], status: Statu
         // reference into this subtree.
         let leaf = unsafe { &mut **path.last().unwrap() };
         leaf.conclusion = Some(status);
+    }
+
+    // Mark kill depths as exhausted.  Mirrors Python's kill_branch():
+    // when a span is closed with discard=True, the tree node at that
+    // depth is marked exhausted so novel-prefix generation won't
+    // re-explore it.
+    for &depth in kill_depths {
+        if depth < path.len() {
+            // SAFETY: path[depth] is the only live reference to that node.
+            let node = unsafe { &mut *path[depth] };
+            node.is_exhausted = true;
+        }
     }
 
     // Ascend, calling `check_exhausted` on each node bottom-up so an
@@ -1252,6 +1270,7 @@ fn run_test_fn(
     Vec<ChoiceNode>,
     Option<InterestingOrigin>,
     HashMap<String, f64>,
+    Vec<usize>, // kill_depths: choice indices where discarded spans end
 ) {
     let mut data = NativeConjectureData::new(ntc, buffer_size_limit);
     let my_id = data.data_id;
@@ -1292,8 +1311,38 @@ fn run_test_fn(
         _ => None,
     };
     let target_observations = std::mem::take(&mut data.target_observations);
+    // Collect kill depths from discarded spans (each discarded span kills the
+    // tree node at its end position, mirroring Python's kill_branch()).
+    let kill_depths: Vec<usize> = data
+        .ntc
+        .spans
+        .iter()
+        .filter_map(|s| if s.discarded { Some(s.end) } else { None })
+        .collect();
     let nodes = std::mem::take(&mut data.ntc.nodes);
-    (status, nodes, origin, target_observations)
+    (status, nodes, origin, target_observations, kill_depths)
+}
+
+/// Return `true` if `choices` is a strict prefix of some path already
+/// recorded in `tree_root`.  Mirrors Python's `simulate_best_attempt`
+/// logic: if the choices walk into the tree but end at a non-terminal
+/// node (one with known continuations), the call would result in an
+/// EarlyStop without re-running the test function.
+fn is_prefix_of_known_path(tree_root: &DataTreeNode, choices: &[ChoiceValue]) -> bool {
+    let mut current = tree_root;
+    for choice in choices {
+        let key = ChoiceValueKey::from(choice);
+        match current.children.get(&key) {
+            Some(child) => current = child.as_ref(),
+            None => return false, // novel choice value, not in tree
+        }
+        if current.conclusion.is_some() {
+            // The path terminates here; `choices` extends beyond a known path.
+            return false;
+        }
+    }
+    // All choices consumed at a non-terminal node with known children.
+    !current.children.is_empty()
 }
 
 /// Concatenate `database_key + b"." + sub` to derive a sub-corpus key.
@@ -1696,7 +1745,7 @@ impl NativeConjectureRunner {
             let initial = self.interesting_examples[origin].nodes.clone();
             let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value.clone()).collect();
             let ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
-            let (status, _, _, _) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+            let (status, _, _, _, _) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             self.call_count += 1;
 
             if (self.time_source)() > deadline {
@@ -1745,7 +1794,7 @@ impl NativeConjectureRunner {
                         let choices: Vec<ChoiceValue> =
                             candidate.iter().map(|n| n.value.clone()).collect();
                         let ntc = NativeTestCase::for_choices(&choices, Some(candidate), None);
-                        let (status, actual_nodes, found_origin, _target_obs) =
+                        let (status, actual_nodes, found_origin, _target_obs, _kill_depths) =
                             run_test_fn(test_fn, ntc, buffer_size_limit);
                         // Mirrors `engine.py`'s per-target predicate
                         // (`d.interesting_origin == target`): when
@@ -1836,15 +1885,28 @@ impl NativeConjectureRunner {
                 origin: cached.origin,
             };
         }
+        // If `choices` is a strict prefix of a known path in the tree,
+        // return EarlyStop without re-running the test.  Mirrors Python's
+        // `simulate_best_attempt` which returns `Overrun` for incomplete
+        // prefixes without invoking the test function.
+        if is_prefix_of_known_path(&self.tree_root, choices) {
+            return ConjectureRunResult {
+                status: Status::EarlyStop,
+                nodes: vec![],
+                choices: choices.to_vec(),
+                target_observations: HashMap::new(),
+                origin: None,
+            };
+        }
         let buffer_size_limit = self
             .settings
             .buffer_size_limit
             .unwrap_or(CONJECTURE_BUFFER_SIZE);
         let ntc = NativeTestCase::for_choices(choices, None, None);
-        let (status, nodes, origin, target_observations) =
+        let (status, nodes, origin, target_observations, kill_depths) =
             run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
         self.call_count += 1;
-        record_tree(&mut self.tree_root, &nodes, status);
+        record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
         self.test_cache.insert(
             key,
             CachedRun {
@@ -1903,7 +1965,7 @@ impl NativeConjectureRunner {
         // semantics: a cached overrun might succeed when extended).
         if let Some(cached) = self.test_cache.get(&key) {
             let cached = cached.clone();
-            if cached.status != Status::EarlyStop {
+            if cached.status != Status::EarlyStop || max_extend == Some(0) {
                 let result_choices: Vec<ChoiceValue> =
                     cached.nodes.iter().map(|n| n.value.clone()).collect();
                 return ConjectureRunResult {
@@ -1926,10 +1988,10 @@ impl NativeConjectureRunner {
         };
         let probe_rng = SmallRng::seed_from_u64(self.rng.random::<u64>());
         let ntc = NativeTestCase::for_probe(choices, probe_rng, max_size);
-        let (status, nodes, origin, target_observations) =
+        let (status, nodes, origin, target_observations, kill_depths) =
             run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
         self.call_count += 1;
-        record_tree(&mut self.tree_root, &nodes, status);
+        record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
         let result_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
         // Only cache if extend was NOT consumed (test stayed within forced prefix).
         let extend_consumed = nodes.len() > choices.len();
@@ -2090,7 +2152,7 @@ impl NativeConjectureRunner {
                 continue;
             };
             let ntc = NativeTestCase::for_choices(&choices, None, None);
-            let (status, nodes, origin, _target_obs) =
+            let (status, nodes, origin, _target_obs, _kill_depths) =
                 run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             self.call_count += 1;
 
@@ -2162,7 +2224,7 @@ impl NativeConjectureRunner {
                     continue;
                 };
                 let ntc = NativeTestCase::for_choices(&choices, None, None);
-                let (status, nodes, origin, target_obs) =
+                let (status, nodes, origin, target_obs, _kill_depths) =
                     run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
                 self.call_count += 1;
                 // Check if this replayed entry is still in the pareto front.
@@ -2290,11 +2352,11 @@ impl NativeConjectureRunner {
         if self.should_generate_more(do_shrink) && !self.tree_root.is_exhausted {
             let ntc = NativeTestCase::for_simplest(CONJECTURE_BUFFER_SIZE);
             let probe_start = std::time::Instant::now();
-            let (status, nodes, origin, target_obs) =
+            let (status, nodes, origin, target_obs, kill_depths) =
                 run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             let probe_elapsed = probe_start.elapsed();
             self.call_count += 1;
-            record_tree(&mut self.tree_root, &nodes, status);
+            record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
             self.record_test_result(status, nodes, origin, target_obs);
 
             // LargeBaseExample: the simplest possible input already overruns
@@ -2352,11 +2414,11 @@ impl NativeConjectureRunner {
             let prefix = generate_novel_prefix(&self.tree_root, &mut batch_rng);
             let ntc = NativeTestCase::for_probe(&prefix, batch_rng, CONJECTURE_BUFFER_SIZE);
             let tc_start = std::time::Instant::now();
-            let (status, nodes, origin, target_obs) =
+            let (status, nodes, origin, target_obs, kill_depths) =
                 run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             let tc_elapsed = tc_start.elapsed();
             self.call_count += 1;
-            record_tree(&mut self.tree_root, &nodes, status);
+            record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
             self.record_test_result(status, nodes, origin, target_obs);
 
             // Update health-check window and fire any triggered checks.

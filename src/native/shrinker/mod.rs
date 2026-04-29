@@ -286,12 +286,14 @@ impl<'a> Shrinker<'a> {
             return;
         }
 
-        // Try lowering each value by `k` (binary-search downward from offset).
+        // Find the maximum k in [0, offset] such that lowering each value by k
+        // is still interesting. `find_integer` returns the largest k where f(k)=true.
         let changed_clone = changed.clone();
-        let result = bin_search_down(0, offset as i128, &mut |k| {
+        find_integer(|k| {
             if k == 0 {
                 return true;
             }
+            let k = k as i128;
             let replacements: HashMap<usize, ChoiceValue> = changed_clone
                 .iter()
                 .map(|(i, v)| {
@@ -301,8 +303,6 @@ impl<'a> Shrinker<'a> {
                 .collect();
             self.replace(&replacements)
         });
-        // If the binary search found k=0 we did nothing useful; that's fine.
-        let _ = result;
 
         self.changed_nodes.clear();
     }
