@@ -628,6 +628,7 @@ impl NativeTestCase {
         self.labels_for_structure_stack.push(frame);
         if depth + 1 > MAX_DEPTH && self.status.is_none() {
             self.status = Some(Status::Invalid);
+            self.freeze();
         }
         idx
     }
