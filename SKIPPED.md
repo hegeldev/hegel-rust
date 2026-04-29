@@ -2002,6 +2002,13 @@ Individually-skipped tests (rest of the file is ported):
   or numpy integration or counterpart for pandas `Index`/`RangeIndex`
   generation.
 
+- `test_data_frame.py` (in `tests/pandas/`) — pandas-extra integration tests.
+  Every test exercises `hypothesis.extra.pandas` (`pdst.data_frames`,
+  `pdst.columns`, `pdst.column`, `pdst.range_indexes`) and pandas/numpy
+  types (`np.dtype`, `pd.core.arrays.integer.Int8Dtype`, `np.nan`,
+  `hypothesis.extra.numpy` scalar dtypes). hegel-rust has no pandas or
+  numpy integration or counterpart for pandas `DataFrame`/dtype generation.
+
 - `test_contracts.py` (in `tests/dpcontracts/`) — dpcontracts-extra
   integration tests. Every test exercises `hypothesis.extra.dpcontracts`
   (`fulfill`), which wraps functions decorated with the third-party
