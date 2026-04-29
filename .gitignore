@@ -12,14 +12,19 @@ __pycache__
 target/
 result
 .claude-reliability/
-.claude/reliability-config.yml
 CLAUDE.local.md
 
 lcov.info
 
-.claude/bin/
-.claude/*.local.md
-.claude/*.local.json
-.claude/*.local
+# whitelist .claude files, rather than blacklist. Some local claude files
+# (skills, agents) have to live in .claude - as opposed to eg CLAUDE.local.md,
+# which we gitignore at the top level.
+.claude/*
+!.claude/CLAUDE.md
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/changelog/
+!.claude/skills/coverage/
+!.claude/skills/self-review/
 
 docs/superpowers
