@@ -29,7 +29,7 @@ use hegel::__native_test_internals::{
     ChoiceValue, DominanceRelation, ExampleDatabase, ExitReason, HealthCheckLabel,
     InMemoryNativeDatabase, InterestingExample, NativeConjectureData, NativeConjectureRunner,
     NativeRunnerSettings, RunnerPhase, choices_from_bytes, choices_to_bytes, dominance,
-    interesting_origin, run_to_nodes,
+    fails_health_check, interesting_origin, run_to_nodes,
 };
 use hegel::TestCase;
 use hegel::generators as gs;
@@ -1025,9 +1025,16 @@ fn test_shrink_after_max_iterations() {
     let post_failure_clone = post_failure_calls.clone();
 
     let rng = SmallRng::seed_from_u64(0);
+    // Python's runner_settings includes suppress_health_check=list(HealthCheck).
     let settings = NativeRunnerSettings::new()
         .max_examples(max_examples)
-        .phases(vec![RunnerPhase::Generate, RunnerPhase::Shrink]);
+        .phases(vec![RunnerPhase::Generate, RunnerPhase::Shrink])
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
     let runner = NativeConjectureRunner::new(
         move |data: &mut NativeConjectureData| {
             if !bad_clone.borrow().is_empty() {
@@ -2032,4 +2039,142 @@ fn test_does_not_run_optimisation_when_max_examples_is_small() {
     );
     runner.generate_new_examples();
     assert_eq!(runner.optimise_targets_call_count, 0);
+}
+
+// ── FailedHealthCheck cluster ────────────────────────────────────────────────
+// Ported from `conjecture/test_engine.py` via the
+// `fails_health_check(label, build)` free function.
+
+/// Helper: runner settings for health-check tests — no shrink phase,
+/// no database (mirrors Python `fails_health_check`'s
+/// `phases=no_shrink, database=None`).
+fn hc_settings(max_examples: usize) -> NativeRunnerSettings {
+    NativeRunnerSettings::new()
+        .max_examples(max_examples)
+        .phases(vec![RunnerPhase::Generate])
+}
+
+/// Port of `test_fails_health_check_for_all_invalid`.
+/// A callback that always calls `mark_invalid()` should trip FilterTooMuch.
+#[test]
+fn test_fails_health_check_for_all_invalid() {
+    fails_health_check(HealthCheckLabel::FilterTooMuch, || {
+        NativeConjectureRunner::new(
+            |data: &mut NativeConjectureData| {
+                data.draw_bytes(2, 2);
+                data.mark_invalid(None);
+            },
+            hc_settings(100),
+            SmallRng::seed_from_u64(0),
+        )
+    });
+}
+
+/// Port of `test_fails_health_check_for_large_base`.
+/// Drawing 1 MB on every call exceeds the buffer from the very first
+/// (simplest) probe, triggering LargeBaseExample.
+#[test]
+fn test_fails_health_check_for_large_base() {
+    fails_health_check(HealthCheckLabel::LargeBaseExample, || {
+        NativeConjectureRunner::new(
+            |data: &mut NativeConjectureData| {
+                data.draw_bytes(1_000_000, 1_000_000);
+            },
+            hc_settings(100),
+            SmallRng::seed_from_u64(0),
+        )
+    });
+}
+
+/// Port of `test_fails_health_check_for_large_non_base`.
+/// The simplest case (draw_boolean → false) is fine, but the true
+/// branch draws 10 000 bytes and overruns.  After enough overruns
+/// DataTooLarge fires.
+#[test]
+fn test_fails_health_check_for_large_non_base() {
+    fails_health_check(HealthCheckLabel::DataTooLarge, || {
+        NativeConjectureRunner::new(
+            |data: &mut NativeConjectureData| {
+                if data.draw_boolean(0.5) {
+                    data.draw_bytes(10_000, 10_000);
+                }
+            },
+            hc_settings(100),
+            SmallRng::seed_from_u64(0),
+        )
+    });
+}
+
+/// Port of `test_fails_health_check_for_slow_draws`.
+/// Sleeping 1.01 s per draw exceeds the 1 s TooSlow threshold.
+#[test]
+fn test_fails_health_check_for_slow_draws() {
+    fails_health_check(HealthCheckLabel::TooSlow, || {
+        NativeConjectureRunner::new(
+            |data: &mut NativeConjectureData| {
+                std::thread::sleep(std::time::Duration::from_millis(1_010));
+                data.draw_bytes(2, 2);
+            },
+            hc_settings(100),
+            SmallRng::seed_from_u64(0),
+        )
+    });
+}
+
+/// Port of `test_health_check_too_slow_with_invalid_examples`.
+/// Slow draws that sometimes also filter via mark_invalid — TooSlow still fires.
+#[test]
+fn test_health_check_too_slow_with_invalid_examples() {
+    fails_health_check(HealthCheckLabel::TooSlow, || {
+        NativeConjectureRunner::new(
+            |data: &mut NativeConjectureData| {
+                let n = data.draw_integer(0, 10);
+                if n > 0 {
+                    data.mark_invalid(None);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1_010));
+                data.draw_bytes(2, 2);
+            },
+            hc_settings(100),
+            SmallRng::seed_from_u64(0),
+        )
+    });
+}
+
+/// Port of `test_health_check_too_slow_with_overrun_examples`.
+/// Slow draws that sometimes also overrun — TooSlow still fires.
+#[test]
+fn test_health_check_too_slow_with_overrun_examples() {
+    fails_health_check(HealthCheckLabel::TooSlow, || {
+        NativeConjectureRunner::new(
+            |data: &mut NativeConjectureData| {
+                let n = data.draw_integer(0, 10);
+                if n > 0 {
+                    data.draw_bytes(1_000_000, 1_000_000);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1_010));
+                data.draw_bytes(2, 2);
+            },
+            hc_settings(100),
+            SmallRng::seed_from_u64(0),
+        )
+    });
+}
+
+/// Port of `test_too_slow_report`.
+/// Upstream tests `HealthCheckState.timing_report()`, a Python-internal
+/// formatting helper; our port verifies that the TooSlow health check
+/// fires (with the correct label prefix) when draws are consistently slow.
+#[test]
+fn test_too_slow_report() {
+    fails_health_check(HealthCheckLabel::TooSlow, || {
+        NativeConjectureRunner::new(
+            |data: &mut NativeConjectureData| {
+                std::thread::sleep(std::time::Duration::from_millis(1_010));
+                data.draw_bytes(2, 2);
+            },
+            hc_settings(100),
+            SmallRng::seed_from_u64(0),
+        )
+    });
 }
