@@ -1383,14 +1383,21 @@ impl NativeConjectureRunner {
             };
 
             // Mirrors `engine.py::test_function` lines 698-714:
-            // each improvement the shrinker found increments `shrinks` and
-            // downgrades the displaced best to the secondary corpus.
+            // each improvement the shrinker found increments `shrinks`,
+            // downgrades the displaced best to the secondary corpus, and
+            // saves the new best to the primary corpus.
             self.shrinks += improvements;
             for old_choices in &downgraded {
                 self.downgrade_choices(old_choices);
             }
 
             let choices: Vec<ChoiceValue> = shrunk.iter().map(|n| n.value.clone()).collect();
+            // Save the final minimum to primary.  Mirrors the
+            // `save_choices(data.choices)` call in `engine.py::test_function`
+            // line 703 that follows each `downgrade_choices`.
+            if improvements > 0 {
+                self.save_choices(&choices);
+            }
             self.interesting_examples.insert(
                 origin.clone(),
                 InterestingExample {
