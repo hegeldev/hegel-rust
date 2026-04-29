@@ -37,8 +37,6 @@ pub use collections::{
     ArrayGenerator, FixedDictBuilder, FixedDictGenerator, HashMapGenerator, HashSetGenerator,
     VecGenerator, arrays, fixed_dicts, hashmaps, hashsets, vecs,
 };
-#[doc(hidden)]
-pub use combinators::unpack_one_of_response;
 pub use combinators::{
     OneOfGenerator, OptionalGenerator, SampledFromGenerator, one_of, optional, sampled_from,
 };

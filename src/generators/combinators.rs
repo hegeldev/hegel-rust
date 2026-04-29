@@ -95,32 +95,12 @@ impl<T> Generator<T> for OneOfGenerator<'_, T> {
         let schema = cbor_map! {"type" => "one_of", "generators" => Value::Array(schemas)};
 
         Some(BasicGenerator::new(schema, move |raw| {
-            let (index, value) = unpack_one_of_response(raw);
+            // The server returns `[index, value]` for one_of schemas.
+            let [idx, value]: [Value; 2] = raw.into_array().unwrap().try_into().unwrap();
+            let index = i128::from(idx.into_integer().unwrap()) as usize;
             basics[index].parse_raw(value)
         }))
     }
-}
-
-/// Unpack a `[index, value]` response from a `one_of` schema.
-///
-/// Exposed for the `#[derive(Generate)]` macro, which emits code that decodes
-/// the same wire shape; not part of the public API.
-#[doc(hidden)]
-pub fn unpack_one_of_response(raw: Value) -> (usize, Value) {
-    let arr = match raw {
-        Value::Array(arr) => arr,
-        _ => panic!("Expected [index, value] array from one_of, got {:?}", raw), // nocov
-    };
-    let mut iter = arr.into_iter();
-    let index = match iter.next().expect("missing index in one_of response") {
-        Value::Integer(i) => {
-            let val: i128 = i.into();
-            val as usize
-        }
-        other => panic!("Expected integer index from one_of, got {:?}", other), // nocov
-    };
-    let value = iter.next().expect("missing value in one_of response");
-    (index, value)
 }
 
 /// Choose from multiple generators of the same type.
@@ -204,8 +184,10 @@ where
             cbor_map! {"type" => "one_of", "generators" => cbor_array![null_schema, inner_schema]};
 
         Some(BasicGenerator::new(schema, move |raw| {
-            let (index, value) = unpack_one_of_response(raw);
-            if index == 0 {
+            // The server returns `[index, value]` for one_of schemas; index 0
+            // selects the null branch (None), 1 selects the inner generator (Some).
+            let [idx, value]: [Value; 2] = raw.into_array().unwrap().try_into().unwrap();
+            if i128::from(idx.into_integer().unwrap()) == 0 {
                 None
             } else {
                 Some(inner_basic.parse_raw(value))

@@ -367,7 +367,9 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
 
                     Some(hegel::generators::BasicGenerator::new(schema, move |raw| {
                         // The server returns `[index, value]` for one_of schemas.
-                        let (index, value) = hegel::generators::unpack_one_of_response(raw);
+                        let [idx, value]: [hegel::ciborium::Value; 2] =
+                            raw.into_array().unwrap().try_into().unwrap();
+                        let index = i128::from(idx.into_integer().unwrap()) as usize;
                         match index {
                             #(#parse_arms,)*
                             _ => panic!("Unknown variant index: {}", index),
