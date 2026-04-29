@@ -3542,12 +3542,12 @@ def _reset_worktree_at(path: Path, branch: str, base_sha: str) -> None:
     runs don't start from cold every time.
     """
     ck = _run_capture(
-        ["git", "checkout", "-B", branch, base_sha],
+        ["git", "checkout", "-f", "-B", branch, base_sha],
         cwd=path,
     )
     if ck.returncode != 0:
         raise RuntimeError(
-            f"checkout -B {branch} {base_sha} failed in {path}: "
+            f"checkout -f -B {branch} {base_sha} failed in {path}: "
             f"{ck.stdout}\n{ck.stderr}"
         )
     rs = _run_capture(["git", "reset", "--hard", base_sha], cwd=path)
