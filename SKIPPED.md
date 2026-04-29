@@ -2401,12 +2401,6 @@ TODO.yaml entry names the native API additions its port lands;
 removing each bullet below is acceptance for the corresponding
 follow-up.
 
-- `conjecture/test_test_data.py::test_calls_concluded_implicitly` —
-  asserts the registered `DataObserver.conclude_test(status, reason)`
-  callback fires from inside `freeze()`. Bundled with
-  `::test_can_observe_draws`; needs the `DataObserver` hook to land.
-- `conjecture/test_test_data.py::test_can_observe_draws` — no
-  `DataObserver` API on `NativeTestCase` / `NativeConjectureData`.
 - `conjecture/test_test_data.py::test_empty_strategy_is_invalid` —
   uses `st.nothing()`; no native counterpart at the
   `NativeTestCase.draw(strategy)` layer.
