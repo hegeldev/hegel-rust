@@ -718,6 +718,23 @@ impl NativeTestCase {
         Err(StopTest)
     }
 
+    /// Mark the test case as invalid, optionally recording why.
+    ///
+    /// Native analog of Hypothesis's `ConjectureData.mark_invalid(reason)`:
+    /// records the reason in events (under `"invalid because"`) and concludes
+    /// the test with `Status::Invalid`, returning `Err(StopTest)`.
+    ///
+    /// This is the draw-by-strategy result for a `nothing()`-equivalent
+    /// strategy: a strategy that can never produce a value marks the test case
+    /// invalid rather than panicking (unlike `NativeConjectureData::mark_invalid`,
+    /// which panics to signal the runner).
+    pub fn mark_invalid(&mut self, why: Option<String>) -> Result<(), StopTest> {
+        if let Some(reason) = why {
+            self.events_mut().insert("invalid because".to_string(), reason);
+        }
+        self.conclude_test(Status::Invalid, None)
+    }
+
     /// Snapshot the test case as a [`NativeResult`].
     ///
     /// Mirrors `ConjectureData.as_result()` from

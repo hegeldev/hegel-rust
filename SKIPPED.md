@@ -2401,10 +2401,6 @@ TODO.yaml entry names the native API additions its port lands;
 removing each bullet below is acceptance for the corresponding
 follow-up.
 
-- `conjecture/test_test_data.py::test_empty_strategy_is_invalid` —
-  uses `st.nothing()`; no native counterpart at the
-  `NativeTestCase.draw(strategy)` layer.
-
 - `test_crosshair.py` (in `crosshair/`) — entire file exercises Hypothesis's
   `backend="crosshair"` integration with the third-party `crosshair`
   symbolic-execution library (`import crosshair`,

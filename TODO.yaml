@@ -127,20 +127,3 @@
         `::test_overruns_with_extend_are_not_cached` bullet in
         `SKIPPED.md` is removed.
 
-- title: Add NativeTestCase st.nothing() / draw-by-strategy invalid path
-  details: |
-    Port `test_empty_strategy_is_invalid` from
-    `conjecture/test_test_data.py`. Upstream calls
-    `d.draw(st.nothing())` and asserts `status == Status.INVALID`.
-    Bundled with the draw-by-strategy TODO above (a `nothing()`
-    strategy is meaningless without a draw-by-strategy entry point on
-    `NativeTestCase`), so this entry only completes once that TODO's
-    draw-by-strategy work lands.
-
-    Port path: ensure the draw-by-strategy method translates a
-    `gs::nothing()`-equivalent (an always-empty strategy) into a
-    `mark_invalid()` call on the test case.
-
-    Acceptance criteria:
-      - `test_empty_strategy_is_invalid` compiles and passes.
-      - The matching bullet in `SKIPPED.md` is removed.
