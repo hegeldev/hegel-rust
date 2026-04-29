@@ -86,7 +86,7 @@ where
 {
     let mut user_test_fn = user_test_fn;
 
-    let mut ntc = NativeTestCase::for_choices(&initial, None);
+    let mut ntc = NativeTestCase::for_choices(&initial, None, None);
     let is_interesting = user_test_fn(&mut ntc);
     assert!(
         is_interesting,
@@ -96,7 +96,7 @@ where
 
     let test_fn = Box::new(move |candidate: &[ChoiceNode]| {
         let values: Vec<ChoiceValue> = candidate.iter().map(|n| n.value.clone()).collect();
-        let mut ntc = NativeTestCase::for_choices(&values, Some(candidate));
+        let mut ntc = NativeTestCase::for_choices(&values, Some(candidate), None);
         let is_interesting = user_test_fn(&mut ntc);
         (is_interesting, ntc.nodes)
     });

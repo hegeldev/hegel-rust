@@ -93,7 +93,7 @@ fn is_enabled_panics_stop_test_when_test_case_exhausted() {
     // An empty-prefix NativeTestCase with no RNG has max_size == 0; the first
     // draw returns StopTest, which is_enabled converts to a STOP_TEST_STRING
     // panic (caught by the runner to mark the test invalid).
-    let ntc = NativeTestCase::for_choices(&[], None);
+    let ntc = NativeTestCase::for_choices(&[], None, None);
     let (_data_source, handle) = NativeDataSource::new(ntc);
     let flags = FeatureFlags::live(0.5, HashSet::new());
     with_current_native_tc(handle, || {
@@ -104,7 +104,7 @@ fn is_enabled_panics_stop_test_when_test_case_exhausted() {
 #[test]
 #[should_panic(expected = "__HEGEL_STOP_TEST")]
 fn do_draw_panics_stop_test_when_test_case_exhausted() {
-    let ntc = NativeTestCase::for_choices(&[], None);
+    let ntc = NativeTestCase::for_choices(&[], None, None);
     let (data_source, handle) = NativeDataSource::new(ntc);
     let strategy = FeatureStrategy::new();
     let tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);

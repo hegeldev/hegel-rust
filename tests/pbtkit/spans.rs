@@ -17,7 +17,7 @@ fn test_draw_records_spans() {
         tc.draw(gs::integers::<i64>().min_value(0).max_value(10));
     });
     let choices = vec![ChoiceValue::Integer(3), ChoiceValue::Integer(5)];
-    let ntc = NativeTestCase::for_choices(&choices, None);
+    let ntc = NativeTestCase::for_choices(&choices, None, None);
     let (_, nodes, spans) = ctf.run(ntc);
 
     assert_eq!(nodes.len(), 2);
@@ -50,7 +50,7 @@ fn test_nested_spans() {
         ));
     });
     let choices = vec![ChoiceValue::Integer(1), ChoiceValue::Integer(2)];
-    let ntc = NativeTestCase::for_choices(&choices, None);
+    let ntc = NativeTestCase::for_choices(&choices, None, None);
     let (_, nodes, spans) = ctf.run(ntc);
 
     assert_eq!(nodes.len(), 2);
@@ -78,7 +78,7 @@ fn test_list_draw_has_spans() {
         ChoiceValue::Integer(3),
         ChoiceValue::Boolean(false),
     ];
-    let ntc = NativeTestCase::for_choices(&choices, None);
+    let ntc = NativeTestCase::for_choices(&choices, None, None);
     let (_, nodes, spans) = ctf.run(ntc);
 
     assert_eq!(nodes.len(), 3);

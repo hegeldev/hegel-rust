@@ -79,13 +79,13 @@ fn check_can_reduce_poison_from_any_subtree(size: usize) {
 
     // Phase 1: seed a size-`size` no-poison tree and shrink to the minimum.
     let initial = leftmost_tree_choices(size);
-    let mut ntc = NativeTestCase::for_choices(&initial, None);
+    let mut ntc = NativeTestCase::for_choices(&initial, None, None);
     draw_tree(&mut ntc, p).unwrap();
     let initial_nodes = ntc.nodes.clone();
 
     let phase1_fn = Box::new(move |candidate: &[ChoiceNode]| {
         let values = values_of(candidate);
-        let mut ntc = NativeTestCase::for_choices(&values, Some(candidate));
+        let mut ntc = NativeTestCase::for_choices(&values, Some(candidate), None);
         let interesting = match draw_tree(&mut ntc, p) {
             Some(t) => t.len() >= size,
             None => false,
@@ -99,7 +99,7 @@ fn check_can_reduce_poison_from_any_subtree(size: usize) {
 
     // Upstream asserts the shrinker converges to a tree of exactly `size`
     // leaves (the minimum satisfying `len >= size`).
-    let mut replay = NativeTestCase::for_choices(&shrunk_values, None);
+    let mut replay = NativeTestCase::for_choices(&shrunk_values, None, None);
     let shrunk_tree = draw_tree(&mut replay, p).unwrap();
     assert_eq!(shrunk_tree.len(), size);
 
@@ -125,7 +125,7 @@ fn check_can_reduce_poison_from_any_subtree(size: usize) {
         poisoned.extend_from_slice(&shrunk_values[node_index + 2..]);
         poisoned.push(ChoiceValue::Bytes(marker.clone()));
 
-        let mut ntc = NativeTestCase::for_choices(&poisoned, None);
+        let mut ntc = NativeTestCase::for_choices(&poisoned, None, None);
         assert!(
             run_poison(&mut ntc, p, &marker),
             "poison splice at {node_index} should be interesting"
@@ -135,7 +135,7 @@ fn check_can_reduce_poison_from_any_subtree(size: usize) {
         let marker_for_shrinker = marker.clone();
         let phase2_fn = Box::new(move |candidate: &[ChoiceNode]| {
             let values = values_of(candidate);
-            let mut ntc = NativeTestCase::for_choices(&values, Some(candidate));
+            let mut ntc = NativeTestCase::for_choices(&values, Some(candidate), None);
             let interesting = run_poison(&mut ntc, p, &marker_for_shrinker);
             (interesting, ntc.nodes.clone())
         });
@@ -143,7 +143,7 @@ fn check_can_reduce_poison_from_any_subtree(size: usize) {
         poison_shrinker.shrink();
 
         let shrunk_poison_values = values_of(&poison_shrinker.current_nodes);
-        let mut replay = NativeTestCase::for_choices(&shrunk_poison_values, None);
+        let mut replay = NativeTestCase::for_choices(&shrunk_poison_values, None, None);
         let final_tree = draw_tree(&mut replay, p).unwrap();
         assert_eq!(
             final_tree,

@@ -58,7 +58,7 @@ fn test_forced_values_boolean_64bit_p() {
     assert!(v);
 
     let choices = choices_of(&ntc);
-    let mut replay = NativeTestCase::for_choices(&choices, None);
+    let mut replay = NativeTestCase::for_choices(&choices, None, None);
     assert!(replay.weighted(1e-19, None).ok().unwrap());
 }
 
@@ -70,7 +70,7 @@ fn test_forced_values_boolean_62bit_p() {
     assert!(v);
 
     let choices = choices_of(&ntc);
-    let mut replay = NativeTestCase::for_choices(&choices, None);
+    let mut replay = NativeTestCase::for_choices(&choices, None, None);
     assert!(replay.weighted(3e-19, None).ok().unwrap());
 }
 
@@ -89,7 +89,7 @@ fn forced_float_roundtrip(
     assert!(choice_equal_float(drawn, forced));
 
     let choices = choices_of(&ntc);
-    let mut replay = NativeTestCase::for_choices(&choices, None);
+    let mut replay = NativeTestCase::for_choices(&choices, None, None);
     let replayed = replay
         .draw_float(min_value, max_value, allow_nan, allow_infinity)
         .ok()
@@ -293,7 +293,7 @@ fn test_forced_integer_roundtrip() {
     assert_eq!(v, 42);
 
     let choices = choices_of(&ntc);
-    let mut replay = NativeTestCase::for_choices(&choices, None);
+    let mut replay = NativeTestCase::for_choices(&choices, None, None);
     assert_eq!(replay.draw_integer(-1000, 1000).ok().unwrap(), 42);
 }
 
@@ -307,7 +307,7 @@ fn test_forced_integer_boundary_roundtrip() {
     assert_eq!(v, i128::MAX);
 
     let choices = choices_of(&ntc);
-    let mut replay = NativeTestCase::for_choices(&choices, None);
+    let mut replay = NativeTestCase::for_choices(&choices, None, None);
     assert_eq!(
         replay.draw_integer(i128::MIN, i128::MAX).ok().unwrap(),
         i128::MAX
@@ -322,7 +322,7 @@ fn test_forced_bytes_roundtrip() {
     assert_eq!(v, forced);
 
     let choices = choices_of(&ntc);
-    let mut replay = NativeTestCase::for_choices(&choices, None);
+    let mut replay = NativeTestCase::for_choices(&choices, None, None);
     assert_eq!(replay.draw_bytes(0, 16).ok().unwrap(), forced);
 }
 
@@ -336,7 +336,7 @@ fn test_forced_string_roundtrip() {
     assert_eq!(v, "héllo");
 
     let choices = choices_of(&ntc);
-    let mut replay = NativeTestCase::for_choices(&choices, None);
+    let mut replay = NativeTestCase::for_choices(&choices, None, None);
     assert_eq!(
         replay.draw_string(0, 0x10FFFF, 0, 16).ok().unwrap(),
         "héllo"

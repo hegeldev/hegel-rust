@@ -136,7 +136,7 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
         }
 
         let choices: Vec<ChoiceValue> = candidate_nodes.iter().map(|n| n.value.clone()).collect();
-        let ntc = NativeTestCase::for_choices(&choices, Some(candidate_nodes));
+        let ntc = NativeTestCase::for_choices(&choices, Some(candidate_nodes), None);
         let (status, new_nodes, _, _) = self.execute(ntc, false);
         self.record(&new_nodes);
 

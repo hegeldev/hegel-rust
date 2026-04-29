@@ -26,7 +26,7 @@ fn test_cannot_draw_after_freeze() {
     // Hypothesis raises `Frozen` for this; the native engine collapses
     // `Frozen` and `StopTest` onto the same error path (both surface as
     // `Err(StopTest)` from a draw, since `frozen()` is just `status.is_some()`).
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None, None);
     d.weighted(0.5, None).ok().unwrap();
     d.freeze();
     assert!(d.weighted(0.5, None).is_err());
@@ -34,7 +34,7 @@ fn test_cannot_draw_after_freeze() {
 
 #[test]
 fn test_can_double_freeze() {
-    let mut d = NativeTestCase::for_choices(&[], None);
+    let mut d = NativeTestCase::for_choices(&[], None, None);
     d.freeze();
     assert!(d.frozen());
     d.freeze();
@@ -43,7 +43,7 @@ fn test_can_double_freeze() {
 
 #[test]
 fn test_draw_past_end_sets_overflow() {
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None, None);
 
     let v = d.weighted(0.5, None).ok().unwrap();
     assert!(v);
@@ -59,7 +59,7 @@ fn test_result_is_overrun() {
     // `d.as_result() is Overrun`.  Native uses the `NativeResult`
     // enum: `EarlyStop` (the `OVERRUN` analog) becomes
     // `NativeResult::Overrun`.
-    let mut d = NativeTestCase::for_choices(&[], None);
+    let mut d = NativeTestCase::for_choices(&[], None, None);
     let r = d.weighted(0.5, None);
     assert!(r.is_err());
     assert!(matches!(d.as_result(), NativeResult::Overrun));
@@ -87,6 +87,7 @@ fn test_triviality() {
             ChoiceValue::Boolean(false),
             ChoiceValue::Bytes(vec![1]),
         ],
+        None,
         None,
     );
 
@@ -130,6 +131,7 @@ fn test_trivial_before_force_agrees_with_trivial_after() {
             ChoiceValue::Boolean(true),
         ],
         None,
+        None,
     );
     d.weighted(0.5, None).ok().unwrap();
     d.weighted(0.5, Some(true)).ok().unwrap();
@@ -151,7 +153,7 @@ fn test_notes_repr() {
     // `repr`), which yields `"[104, 105]"` rather than `"b'hi'"`; the port
     // weakens the assertion to "the Debug rendering of the value lands in
     // d.output", which is the property the upstream test is really checking.
-    let mut d = NativeTestCase::for_choices(&[], None);
+    let mut d = NativeTestCase::for_choices(&[], None, None);
     let bytes: &[u8] = b"hi";
     d.note(bytes);
     assert!(d.output().contains(&format!("{bytes:?}")));
@@ -165,7 +167,7 @@ fn test_can_note_non_str() {
     // through to the output buffer.
     #[derive(Debug)]
     struct Marker;
-    let mut d = NativeTestCase::for_choices(&[], None);
+    let mut d = NativeTestCase::for_choices(&[], None, None);
     d.note(Marker);
     assert!(d.output().contains(&format!("{:?}", Marker)));
 }
@@ -175,14 +177,14 @@ fn test_can_note_str_as_non_repr() {
     // Upstream's `data.note("foo")` short-circuits the `repr()` formatting
     // and appends "foo" verbatim.  Native exposes that branch as
     // `note_str` (since `note(<str>)` would Debug-format to `"\"foo\""`).
-    let mut d = NativeTestCase::for_choices(&[], None);
+    let mut d = NativeTestCase::for_choices(&[], None, None);
     d.note_str("foo");
     assert_eq!(d.output(), "foo");
 }
 
 #[test]
 fn test_events_are_noted() {
-    let mut d = NativeTestCase::for_choices(&[], None);
+    let mut d = NativeTestCase::for_choices(&[], None, None);
     d.events_mut().insert("hello".to_string(), String::new());
     assert!(d.events().contains_key("hello"));
 }
@@ -200,7 +202,7 @@ fn test_structural_coverage_is_cached() {
 
 #[test]
 fn test_examples_create_structural_coverage() {
-    let mut d = NativeTestCase::for_choices(&[], None);
+    let mut d = NativeTestCase::for_choices(&[], None, None);
     d.start_span(42);
     d.stop_span(false);
     d.freeze();
@@ -209,7 +211,7 @@ fn test_examples_create_structural_coverage() {
 
 #[test]
 fn test_discarded_examples_do_not_create_structural_coverage() {
-    let mut d = NativeTestCase::for_choices(&[], None);
+    let mut d = NativeTestCase::for_choices(&[], None, None);
     d.start_span(42);
     d.stop_span(true);
     d.freeze();
@@ -218,7 +220,7 @@ fn test_discarded_examples_do_not_create_structural_coverage() {
 
 #[test]
 fn test_children_of_discarded_examples_do_not_create_structural_coverage() {
-    let mut d = NativeTestCase::for_choices(&[], None);
+    let mut d = NativeTestCase::for_choices(&[], None, None);
     d.start_span(10);
     d.start_span(42);
     d.stop_span(false);
@@ -267,6 +269,7 @@ fn test_examples_show_up_as_discarded() {
             ChoiceValue::Boolean(true),
         ],
         None,
+        None,
     );
     d.start_span(1);
     d.weighted(0.5, None).ok().unwrap();
@@ -283,6 +286,7 @@ fn test_examples_support_negative_indexing() {
     let mut d = NativeTestCase::for_choices(
         &[ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)],
         None,
+        None,
     );
     d.start_span(1);
     d.weighted(0.5, None).ok().unwrap();
@@ -296,7 +300,7 @@ fn test_examples_support_negative_indexing() {
 
 #[test]
 fn test_examples_out_of_bounds_index() {
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(false)], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(false)], None, None);
     d.start_span(1);
     d.weighted(0.5, None).ok().unwrap();
     d.stop_span(false);
@@ -310,7 +314,7 @@ fn test_examples_out_of_bounds_index() {
 
 #[test]
 fn test_can_override_label() {
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(false)], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(false)], None, None);
     d.start_span(7);
     d.weighted(0.5, None).ok().unwrap();
     d.stop_span(false);
@@ -322,6 +326,7 @@ fn test_can_override_label() {
 fn test_example_equality() {
     let mut d = NativeTestCase::for_choices(
         &[ChoiceValue::Boolean(false), ChoiceValue::Boolean(false)],
+        None,
         None,
     );
     d.start_span(0);
@@ -353,7 +358,7 @@ fn test_example_depth_marking() {
     // Add an explicit top-level span (Hypothesis's ConjectureData.__init__
     // opens one automatically via self.start_span(TOP_LABEL)).
     let choices: Vec<ChoiceValue> = (0..6).map(|_| ChoiceValue::Integer(0)).collect();
-    let mut d = NativeTestCase::for_choices(&choices, None);
+    let mut d = NativeTestCase::for_choices(&choices, None, None);
     d.start_span(0); // top span, depth=0
     // v1: draw(st.integers())
     d.start_span(1); // depth=1
@@ -398,7 +403,7 @@ fn test_example_depth_marking() {
 #[test]
 fn test_has_examples_even_when_empty() {
     // st.just(False) makes no choices; the span exists but covers 0 nodes.
-    let mut d = NativeTestCase::for_choices(&[], None);
+    let mut d = NativeTestCase::for_choices(&[], None, None);
     d.start_span(1);
     d.stop_span(false);
     d.freeze();
@@ -407,7 +412,7 @@ fn test_has_examples_even_when_empty() {
 
 #[test]
 fn test_has_cached_examples_even_when_overrun() {
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(false)], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(false)], None, None);
     d.start_span(3);
     d.weighted(0.5, None).ok().unwrap();
     d.stop_span(false);
@@ -432,7 +437,7 @@ fn test_closes_interval_on_error_in_strategy() {
     // raises ValueError; draw()'s `finally: stop_span()` closes the span.
     // In native, freeze() drains span_stack and sets end on all open spans,
     // which is the equivalent guarantee.
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None, None);
     d.start_span(1);
     d.weighted(0.5, None).ok().unwrap();
     // Span left open (simulates strategy panicking before stop_span).
@@ -446,7 +451,7 @@ fn test_does_not_double_freeze_in_interval_close() {
     // (freezing via mark_overrun()), then draw()'s finally: stop_span() is a
     // no-op (frozen guard).  In native, freeze() is idempotent on an already-
     // frozen (EarlyStop) test case and closes any unclosed spans.
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(false)], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(false)], None, None);
     d.start_span(1);
     d.weighted(0.5, None).ok().unwrap();
     // Overrun: draw past end of prefix (only 1 choice supplied).
@@ -460,7 +465,7 @@ fn test_does_not_double_freeze_in_interval_close() {
 
 #[test]
 fn test_will_mark_too_deep_examples_as_invalid() {
-    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Integer(0)], None);
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Integer(0)], None, None);
     // Open MAX_DEPTH + 1 spans: the 101st call (stack_len == MAX_DEPTH == 100)
     // triggers the depth limit and sets Status::Invalid.
     for _ in 0..=MAX_DEPTH {
@@ -474,7 +479,7 @@ fn test_will_mark_too_deep_examples_as_invalid() {
 #[test]
 fn test_child_indices() {
     let choices: Vec<ChoiceValue> = (0..4).map(|_| ChoiceValue::Boolean(true)).collect();
-    let mut d = NativeTestCase::for_choices(&choices, None);
+    let mut d = NativeTestCase::for_choices(&choices, None, None);
     // Add a top-level span so indices match Python (span 0 = top).
     d.start_span(0); // span 0: top
     d.start_span(0); // span 1: examples[1]

@@ -123,7 +123,7 @@ fn test_can_restrict_to_ascii_only() {
 #[test]
 fn test_fixed_size_bytes_just_draw_bytes() {
     use hegel::__native_test_internals::{ChoiceValue, NativeTestCase};
-    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Bytes(b"foo".to_vec())], None);
+    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Bytes(b"foo".to_vec())], None, None);
     let result = ntc.draw_bytes(3, 3).ok().unwrap();
     assert_eq!(result, b"foo");
 }

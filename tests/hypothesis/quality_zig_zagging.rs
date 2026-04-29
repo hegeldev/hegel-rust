@@ -67,7 +67,7 @@ fn check(m: u128, marker: &[u8], lower_bound: u128) {
         ChoiceValue::Bytes(marker_vec.clone()),
     ];
 
-    let mut ntc = NativeTestCase::for_choices(&initial, None);
+    let mut ntc = NativeTestCase::for_choices(&initial, None, None);
     let seeded_interesting = run_once(&mut ntc, max_draw, lb, &marker_vec);
     assert!(
         seeded_interesting,
@@ -78,7 +78,7 @@ fn check(m: u128, marker: &[u8], lower_bound: u128) {
     let marker_for_closure = marker_vec.clone();
     let test_fn = Box::new(move |candidate: &[ChoiceNode]| {
         let values: Vec<ChoiceValue> = candidate.iter().map(|n| n.value.clone()).collect();
-        let mut ntc = NativeTestCase::for_choices(&values, Some(candidate));
+        let mut ntc = NativeTestCase::for_choices(&values, Some(candidate), None);
         let is_interesting = run_once(&mut ntc, max_draw, lb, &marker_for_closure);
         (is_interesting, ntc.nodes)
     });

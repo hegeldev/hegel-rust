@@ -554,7 +554,7 @@ impl NativeConjectureData {
     /// the default `CONJECTURE_BUFFER_SIZE`.  Mirrors Hypothesis's
     /// `ConjectureData.for_choices(choices)`.
     pub fn for_choices(choices: &[ChoiceValue]) -> Self {
-        let ntc = NativeTestCase::for_choices(choices, None);
+        let ntc = NativeTestCase::for_choices(choices, None, None);
         Self::new(ntc, CONJECTURE_BUFFER_SIZE)
     }
 
@@ -1495,7 +1495,7 @@ impl NativeConjectureRunner {
         for origin in &origins {
             let initial = self.interesting_examples[origin].nodes.clone();
             let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value.clone()).collect();
-            let ntc = NativeTestCase::for_choices(&choices, Some(&initial));
+            let ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
             let (status, _, _, _) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             self.call_count += 1;
 
@@ -1544,7 +1544,7 @@ impl NativeConjectureRunner {
                         *call_count += 1;
                         let choices: Vec<ChoiceValue> =
                             candidate.iter().map(|n| n.value.clone()).collect();
-                        let ntc = NativeTestCase::for_choices(&choices, Some(candidate));
+                        let ntc = NativeTestCase::for_choices(&choices, Some(candidate), None);
                         let (status, actual_nodes, found_origin, _target_obs) =
                             run_test_fn(test_fn, ntc, buffer_size_limit);
                         // Mirrors `engine.py`'s per-target predicate
@@ -1640,7 +1640,7 @@ impl NativeConjectureRunner {
             .settings
             .buffer_size_limit
             .unwrap_or(CONJECTURE_BUFFER_SIZE);
-        let ntc = NativeTestCase::for_choices(choices, None);
+        let ntc = NativeTestCase::for_choices(choices, None, None);
         let (status, nodes, origin, target_observations) =
             run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
         self.call_count += 1;
@@ -1800,7 +1800,7 @@ impl NativeConjectureRunner {
                 db.delete(&db_key, existing);
                 continue;
             };
-            let ntc = NativeTestCase::for_choices(&choices, None);
+            let ntc = NativeTestCase::for_choices(&choices, None, None);
             let (status, nodes, origin, _target_obs) =
                 run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             self.call_count += 1;
@@ -1872,7 +1872,7 @@ impl NativeConjectureRunner {
                     db.delete(&pareto_key, existing);
                     continue;
                 };
-                let ntc = NativeTestCase::for_choices(&choices, None);
+                let ntc = NativeTestCase::for_choices(&choices, None, None);
                 let (status, nodes, origin, target_obs) =
                     run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
                 self.call_count += 1;

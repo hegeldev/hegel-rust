@@ -231,7 +231,7 @@ pub fn native_run<F>(
                 db_ref.delete(key_bytes, &raw);
                 continue;
             };
-            let ntc = NativeTestCase::for_choices(&stored_choices, None);
+            let ntc = NativeTestCase::for_choices(&stored_choices, None, None);
             let (status, nodes, _) = ctf.run(ntc);
             if status == Status::Interesting {
                 replay_aligned = nodes.len() == stored_choices.len();
@@ -364,7 +364,7 @@ pub fn native_run<F>(
             // user-facing message as the post-shrink final-replay branch
             // below (and as the server backend's flaky detector).
             let choices: Vec<ChoiceValue> = best_nodes.iter().map(|n| n.value.clone()).collect();
-            let verify_ntc = NativeTestCase::for_choices(&choices, Some(best_nodes));
+            let verify_ntc = NativeTestCase::for_choices(&choices, Some(best_nodes), None);
             let (verify_status, verify_nodes, _) = ctf.run(verify_ntc);
             if verify_status != Status::Interesting {
                 panic!(
@@ -441,7 +441,7 @@ pub fn native_run<F>(
     if let Some(ref best_nodes) = result {
         // Final replay with output enabled: prints draw labels and panic info.
         let choices: Vec<ChoiceValue> = best_nodes.iter().map(|n| n.value.clone()).collect();
-        let ntc = NativeTestCase::for_choices(&choices, Some(best_nodes));
+        let ntc = NativeTestCase::for_choices(&choices, Some(best_nodes), None);
         let (status, _, _) = ctf.run_final(ntc);
 
         if status == Status::Interesting {
@@ -699,7 +699,7 @@ fn try_span_mutation<F: FnMut(TestCase)>(
             out
         };
 
-        let ntc = NativeTestCase::for_choices(&attempt, None);
+        let ntc = NativeTestCase::for_choices(&attempt, None, None);
         let (status, new_nodes, _) = ctf.run(ntc);
 
         if status == Status::Interesting {
