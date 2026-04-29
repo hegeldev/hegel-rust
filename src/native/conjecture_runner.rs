@@ -311,6 +311,10 @@ const CACHE_SIZE: usize = 10_000;
 /// `engine.py::MAX_SHRINKING_SECONDS` (5 minutes).
 const MAX_SHRINKING_SECONDS: f64 = 5.0 * 60.0;
 
+/// Default cap on the number of successful shrinks per interesting example.
+/// Mirrors `engine.py::MAX_SHRINKS`.
+const MAX_SHRINKS: usize = 500;
+
 /// Kind of mark recorded on a `NativeConjectureData`.  Either
 /// `Interesting` (the test function called `mark_interesting`) or
 /// `Invalid` (the test function called `mark_invalid`, signalling that
@@ -1339,11 +1343,14 @@ impl NativeConjectureRunner {
                 continue;
             }
 
+            let max_shrinks = self.settings.max_shrinks.unwrap_or(MAX_SHRINKS);
+            let remaining = max_shrinks.saturating_sub(self.shrinks);
+
             let test_fn = &mut self.test_fn;
             let call_count = &mut self.call_count;
             let report_multiple_bugs = self.settings.report_multiple_bugs;
             let target = origin.clone();
-            let shrunk = {
+            let (shrunk, improvements, downgraded) = {
                 let mut shrinker = Shrinker::new(
                     Box::new(|candidate: &[ChoiceNode]| {
                         *call_count += 1;
@@ -1370,9 +1377,18 @@ impl NativeConjectureRunner {
                     }),
                     initial,
                 );
+                shrinker.max_improvements = Some(remaining);
                 shrinker.shrink();
-                shrinker.current_nodes
+                (shrinker.current_nodes, shrinker.improvements, shrinker.downgraded)
             };
+
+            // Mirrors `engine.py::test_function` lines 698-714:
+            // each improvement the shrinker found increments `shrinks` and
+            // downgrades the displaced best to the secondary corpus.
+            self.shrinks += improvements;
+            for old_choices in &downgraded {
+                self.downgrade_choices(old_choices);
+            }
 
             let choices: Vec<ChoiceValue> = shrunk.iter().map(|n| n.value.clone()).collect();
             self.interesting_examples.insert(
@@ -1383,6 +1399,13 @@ impl NativeConjectureRunner {
                     origin,
                 },
             );
+
+            // Mirrors `engine.py` lines 713-714: stop shrinking when the
+            // budget is exhausted.
+            if self.shrinks >= max_shrinks {
+                self.exit_reason = Some(ExitReason::MaxShrinks);
+                return;
+            }
         }
     }
 
