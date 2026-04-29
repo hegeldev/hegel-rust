@@ -26,9 +26,10 @@
 use crate::common::project::TempRustProject;
 use crate::common::utils::{expect_panic, minimal};
 use hegel::__native_test_internals::{
-    ChoiceValue, ExampleDatabase, ExitReason, HealthCheckLabel, InMemoryNativeDatabase,
-    InterestingExample, NativeConjectureData, NativeConjectureRunner, NativeRunnerSettings,
-    RunnerPhase, choices_from_bytes, choices_to_bytes, interesting_origin, run_to_nodes,
+    ChoiceValue, DominanceRelation, ExampleDatabase, ExitReason, HealthCheckLabel,
+    InMemoryNativeDatabase, InterestingExample, NativeConjectureData, NativeConjectureRunner,
+    NativeRunnerSettings, RunnerPhase, choices_from_bytes, choices_to_bytes, dominance,
+    interesting_origin, run_to_nodes,
 };
 use hegel::TestCase;
 use hegel::generators as gs;
@@ -1832,4 +1833,201 @@ fn test_terminates_shrinks_1() {
 #[test]
 fn test_terminates_shrinks_5() {
     check_terminates_shrinks(5);
+}
+
+// ---- pareto-front cluster ----
+// Ported from test_engine.py lines 1321-1495.
+
+fn runner_settings() -> NativeRunnerSettings {
+    NativeRunnerSettings::new()
+        .max_examples(100)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ])
+}
+
+#[test]
+fn test_populates_the_pareto_front() {
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(5000)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let v = data.draw_integer(0, 15);
+            data.target_observations.insert("".to_string(), v as f64);
+        },
+        settings,
+        rng,
+    );
+    runner.run();
+    assert_eq!(runner.pareto_front().len(), 16);
+}
+
+#[test]
+fn test_pareto_front_contains_smallest_valid() {
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = NativeRunnerSettings::new()
+        .max_examples(5000)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            data.target_observations.insert("".to_string(), 1.0);
+            data.draw_integer(0, 15);
+        },
+        settings,
+        rng,
+    );
+    runner.run();
+    assert_eq!(runner.pareto_front().len(), 1);
+}
+
+#[test]
+fn test_replaces_all_dominated() {
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = runner_settings();
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let m = data.draw_integer(0, 3);
+            let n = data.draw_integer(0, 3);
+            data.target_observations.insert("m".to_string(), (3 - m) as f64);
+            data.target_observations.insert("n".to_string(), (3 - n) as f64);
+        },
+        settings,
+        rng,
+    );
+
+    let d1 = runner.cached_test_function(&[ChoiceValue::Integer(0), ChoiceValue::Integer(1)]);
+    let d2 = runner.cached_test_function(&[ChoiceValue::Integer(1), ChoiceValue::Integer(0)]);
+
+    assert_eq!(runner.pareto_front().len(), 2);
+    assert_eq!(runner.pareto_front()[0], d1);
+    assert_eq!(runner.pareto_front()[1], d2);
+
+    let d3 = runner.cached_test_function(&[ChoiceValue::Integer(0), ChoiceValue::Integer(0)]);
+    assert_eq!(runner.pareto_front().len(), 1);
+    assert_eq!(runner.pareto_front()[0], d3);
+}
+
+#[test]
+fn test_does_not_duplicate_elements() {
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = runner_settings();
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let m = data.draw_integer(0, 255);
+            data.target_observations.insert("m".to_string(), m as f64);
+        },
+        settings,
+        rng,
+    );
+
+    let d1 = runner.cached_test_function(&[ChoiceValue::Integer(1)]);
+    assert_eq!(runner.pareto_front().len(), 1);
+    assert!(runner.pareto_front_mut().add(d1));
+    assert_eq!(runner.pareto_front().len(), 1);
+}
+
+#[test]
+fn test_includes_right_hand_side_targets_in_dominance() {
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = runner_settings();
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let v = data.draw_integer(0, 255);
+            if v != 0 {
+                data.target_observations.insert("".to_string(), 10.0);
+            }
+        },
+        settings,
+        rng,
+    );
+
+    let d1 = runner.cached_test_function(&[ChoiceValue::Integer(0)]);
+    let d2 = runner.cached_test_function(&[ChoiceValue::Integer(1)]);
+
+    assert_eq!(dominance(&d1, &d2), DominanceRelation::NoDominance);
+}
+
+#[test]
+fn test_smaller_interesting_dominates_larger_valid() {
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = runner_settings();
+    let origin = interesting_origin(None);
+    let mut runner = NativeConjectureRunner::new(
+        move |data: &mut NativeConjectureData| {
+            let v = data.draw_integer(0, 255);
+            if v == 0 {
+                data.mark_interesting(origin.clone());
+            }
+        },
+        settings,
+        rng,
+    );
+
+    let d1 = runner.cached_test_function(&[ChoiceValue::Integer(0)]);
+    let d2 = runner.cached_test_function(&[ChoiceValue::Integer(1)]);
+    assert_eq!(dominance(&d1, &d2), DominanceRelation::LeftDominates);
+}
+
+#[test]
+fn test_runs_optimisation_even_if_not_generating() {
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = runner_settings().phases(vec![RunnerPhase::Target]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let n = data.draw_integer(0, 65535);
+            data.target_observations.insert("n".to_string(), n as f64);
+        },
+        settings,
+        rng,
+    );
+    runner.cached_test_function(&[ChoiceValue::Integer(0)]);
+    runner.run();
+    assert_eq!(runner.best_observed_targets["n"], 65535.0);
+}
+
+#[test]
+fn test_runs_optimisation_once_when_generating() {
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = runner_settings().max_examples(100);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let n = data.draw_integer(0, 65535);
+            data.target_observations.insert("n".to_string(), n as f64);
+        },
+        settings,
+        rng,
+    );
+    runner.generate_new_examples();
+    assert_eq!(runner.optimise_targets_call_count, 1);
+}
+
+#[test]
+fn test_does_not_run_optimisation_when_max_examples_is_small() {
+    let rng = SmallRng::seed_from_u64(0);
+    let settings = runner_settings().max_examples(10);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let n = data.draw_integer(0, 65535);
+            data.target_observations.insert("n".to_string(), n as f64);
+        },
+        settings,
+        rng,
+    );
+    runner.generate_new_examples();
+    assert_eq!(runner.optimise_targets_call_count, 0);
 }

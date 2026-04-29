@@ -127,34 +127,6 @@
         `::test_overruns_with_extend_are_not_cached` bullet in
         `SKIPPED.md` is removed.
 
-- title: Port conjecture/test_engine.py pareto-front cluster
-  details: |
-    Port the following tests from `conjecture/test_engine.py`,
-    native-gated. Each asserts on `runner.pareto_front` /
-    `dominance` / `runner.optimise_calls_count`:
-      - `test_populates_the_pareto_front`
-      - `test_pareto_front_contains_smallest_valid`
-      - `test_replaces_all_dominated`
-      - `test_does_not_duplicate_elements`
-      - `test_includes_right_hand_side_targets_in_dominance`
-      - `test_smaller_interesting_dominates_larger_valid`
-      - `test_runs_optimisation_even_if_not_generating`
-      - `test_runs_optimisation_once_when_generating`
-      - `test_does_not_run_optimisation_when_max_examples_is_small`
-
-    Port path: fill in `NativeConjectureRunner::pareto_front` and the
-    `dominance` free function. Pareto bookkeeping lives in Hypothesis's
-    `internal/conjecture/pareto.py` — mirror the `ParetoFront` /
-    `DominanceRelation` structure there. `src/native/optimiser.rs`
-    already covers the hill-climb side; extend it (or add
-    `src/native/pareto.rs`) for the front-tracking side.
-
-    Acceptance criteria:
-      - All 9 tests compile and pass.
-      - The `::test_populates_the_pareto_front` through
-        `::test_does_not_run_optimisation_when_max_examples_is_small`
-        bullet in `SKIPPED.md` is removed.
-
 - title: Add NativeTestCase DataObserver hook
   details: |
     Port `test_can_observe_draws` and `test_calls_concluded_implicitly`

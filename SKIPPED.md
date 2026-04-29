@@ -2391,17 +2391,6 @@ is acceptance for the corresponding follow-up.
   (`fixate_shrink_passes([pass_name])`). `TargetedRunner` exposes
   `cached_test_function` but not `new_shrinker`, and the native
   `Shrinker` has no fixate-on-one-pass entry point.
-- `conjecture/test_engine.py::test_populates_the_pareto_front`,
-  `::test_pareto_front_contains_smallest_valid`,
-  `::test_replaces_all_dominated`, `::test_does_not_duplicate_elements`,
-  `::test_includes_right_hand_side_targets_in_dominance`,
-  `::test_smaller_interesting_dominates_larger_valid`,
-  `::test_runs_optimisation_even_if_not_generating`,
-  `::test_runs_optimisation_once_when_generating`,
-  `::test_does_not_run_optimisation_when_max_examples_is_small` —
-  each asserts on `runner.pareto_front` / `dominance` /
-  `runner.optimise_calls_count`. Pareto-front bookkeeping is not in
-  `src/native/optimiser.rs`; only the hill-climb side is ported.
 The `conjecture/test_test_data.py::*` entries below are parked
 awaiting follow-up additions to `NativeTestCase` /
 `NativeConjectureData` in `src/native/`. The three tests that map to
