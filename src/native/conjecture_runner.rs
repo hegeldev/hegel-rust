@@ -269,16 +269,14 @@ impl ParetoFront {
         let n = self.front.len();
 
         // Randomised cleanup to the right (larger sort_key entries).
+        // Mirror Python's LazySequenceCopy.pop: sample without replacement from
+        // the pool of right-side indices.
+        let mut available: Vec<usize> = (insert_pos + 1..n).collect();
         let mut failures = 0;
-        let mut i = insert_pos + 1;
-        while i < n && failures < 10 {
-            let j = if i + 1 < n {
-                i + self.rng.random_range(0..(n - i))
-            } else {
-                i
-            };
-            let candidate = &self.front[j];
-            let dom = dominance(&data, candidate);
+        while !available.is_empty() && failures < 10 {
+            let pick = self.rng.random_range(0..available.len());
+            let j = available.swap_remove(pick);
+            let dom = dominance(&data, &self.front[j]);
             debug_assert_ne!(dom, DominanceRelation::RightDominates);
             if dom == DominanceRelation::LeftDominates {
                 to_remove.push(j);
@@ -286,7 +284,6 @@ impl ParetoFront {
             } else {
                 failures += 1;
             }
-            i += 1;
         }
 
         // Check elements to the left (smaller sort_key) for dominance
