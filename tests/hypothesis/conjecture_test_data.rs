@@ -40,8 +40,8 @@
 #![cfg(feature = "native")]
 
 use hegel::__native_test_internals::{
-    ChoiceValue, NativeConjectureData, NativeResult, NativeTestCase, Status, interesting_origin,
-    structural_coverage,
+    ChoiceValue, MAX_DEPTH, NativeConjectureData, NativeResult, NativeTestCase, Span, Status,
+    interesting_origin, structural_coverage,
 };
 
 #[test]
@@ -277,4 +277,247 @@ fn test_can_mark_invalid_with_why() {
     }));
     assert!(result.is_err());
     assert_eq!(d.events()["invalid because"], "some reason");
+}
+
+#[test]
+fn test_examples_show_up_as_discarded() {
+    // Upstream uses d.draw(strategy) which auto-wraps in a span; here we
+    // drive spans explicitly with start_span / weighted / stop_span.
+    let mut d = NativeTestCase::for_choices(
+        &[
+            ChoiceValue::Boolean(true),
+            ChoiceValue::Boolean(false),
+            ChoiceValue::Boolean(true),
+        ],
+        None,
+    );
+    d.start_span(1);
+    d.weighted(0.5, None).ok().unwrap();
+    d.stop_span(true); // discard=true
+    d.start_span(1);
+    d.weighted(0.5, None).ok().unwrap();
+    d.stop_span(false);
+    d.freeze();
+    assert_eq!(d.spans.iter().filter(|ex| ex.discarded).count(), 1);
+}
+
+#[test]
+fn test_examples_support_negative_indexing() {
+    let mut d = NativeTestCase::for_choices(
+        &[ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)],
+        None,
+    );
+    d.start_span(1);
+    d.weighted(0.5, None).ok().unwrap();
+    d.stop_span(false);
+    d.start_span(1);
+    d.weighted(0.5, None).ok().unwrap();
+    d.stop_span(false);
+    d.freeze();
+    assert_eq!(d.spans[-1_i64].choice_count(), 1);
+}
+
+#[test]
+fn test_examples_out_of_bounds_index() {
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(false)], None);
+    d.start_span(1);
+    d.weighted(0.5, None).ok().unwrap();
+    d.stop_span(false);
+    d.freeze();
+    let spans = d.spans.clone();
+    let result = std::panic::catch_unwind(|| {
+        let _ = spans[10_usize];
+    });
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_can_override_label() {
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(false)], None);
+    d.start_span(7);
+    d.weighted(0.5, None).ok().unwrap();
+    d.stop_span(false);
+    d.freeze();
+    assert!(d.spans.iter().any(|ex| ex.label == "7"));
+}
+
+#[test]
+fn test_example_equality() {
+    let mut d = NativeTestCase::for_choices(
+        &[ChoiceValue::Boolean(false), ChoiceValue::Boolean(false)],
+        None,
+    );
+    d.start_span(0);
+    d.weighted(0.5, None).ok().unwrap();
+    d.stop_span(false);
+    d.start_span(0);
+    d.weighted(0.5, None).ok().unwrap();
+    d.stop_span(false);
+    d.freeze();
+
+    let spans: Vec<&Span> = d.spans.iter().collect();
+    for (i, ex1) in spans.iter().enumerate() {
+        for (j, ex2) in spans.iter().enumerate() {
+            if i == j {
+                assert_eq!(ex1, ex2);
+                assert!(!(ex1 != ex2));
+            } else {
+                assert_ne!(ex1, ex2);
+                assert!(!(ex1 == ex2));
+            }
+        }
+    }
+    // Note: upstream also checks `ex != "hello"` (comparing Span to a non-Span),
+    // which is not applicable in Rust due to the type system.
+}
+
+#[test]
+fn test_example_depth_marking() {
+    // Add an explicit top-level span (Hypothesis's ConjectureData.__init__
+    // opens one automatically via self.start_span(TOP_LABEL)).
+    let choices: Vec<ChoiceValue> = (0..6).map(|_| ChoiceValue::Integer(0)).collect();
+    let mut d = NativeTestCase::for_choices(&choices, None);
+    d.start_span(0); // top span, depth=0
+    // v1: draw(st.integers())
+    d.start_span(1); // depth=1
+    d.draw_integer(0, 1000).ok().unwrap();
+    d.stop_span(false);
+    // inner (start_span(0))
+    d.start_span(0); // depth=1
+    // v2: draw(st.integers())
+    d.start_span(1); // depth=2
+    d.draw_integer(0, 1000).ok().unwrap();
+    d.stop_span(false);
+    // v3: draw(st.integers())
+    d.start_span(1); // depth=2
+    d.draw_integer(0, 1000).ok().unwrap();
+    d.stop_span(false);
+    d.stop_span(false); // close inner
+    // v4: draw(st.integers())
+    d.start_span(1); // depth=1
+    d.draw_integer(0, 1000).ok().unwrap();
+    d.stop_span(false);
+    d.freeze(); // closes top span
+
+    assert_eq!(d.spans.len(), 6);
+    let depths: Vec<(usize, u32)> =
+        d.spans.iter().map(|ex| (ex.choice_count(), ex.depth)).collect();
+    assert_eq!(
+        depths,
+        vec![
+            (4, 0), // top
+            (1, 1), // v1
+            (2, 1), // inner
+            (1, 2), // v2
+            (1, 2), // v3
+            (1, 1), // v4
+        ]
+    );
+}
+
+#[test]
+fn test_has_examples_even_when_empty() {
+    // st.just(False) makes no choices; the span exists but covers 0 nodes.
+    let mut d = NativeTestCase::for_choices(&[], None);
+    d.start_span(1);
+    d.stop_span(false);
+    d.freeze();
+    assert!(!d.spans.is_empty());
+}
+
+#[test]
+fn test_has_cached_examples_even_when_overrun() {
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(false)], None);
+    d.start_span(3);
+    d.weighted(0.5, None).ok().unwrap();
+    d.stop_span(false);
+    // Draw past end → overrun.
+    let _ = d.weighted(0.5, None);
+    assert_eq!(d.status, Some(Status::EarlyStop));
+    assert!(d.spans.iter().any(|ex| ex.label == "3" && ex.choice_count() == 1));
+    // d.spans is d.spans — in Rust, spans is a plain field so the address is
+    // always the same; confirmed by pointer equality.
+    let ptr1: *const _ = &d.spans;
+    let ptr2: *const _ = &d.spans;
+    assert_eq!(ptr1, ptr2);
+}
+
+#[test]
+fn test_closes_interval_on_error_in_strategy() {
+    // Upstream: d.draw(BoomStrategy()) opens a span, draws a boolean, then
+    // raises ValueError; draw()'s `finally: stop_span()` closes the span.
+    // In native, freeze() drains span_stack and sets end on all open spans,
+    // which is the equivalent guarantee.
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None);
+    d.start_span(1);
+    d.weighted(0.5, None).ok().unwrap();
+    // Span left open (simulates strategy panicking before stop_span).
+    d.freeze();
+    assert!(d.spans.iter().all(|eg| eg.end >= eg.start));
+}
+
+#[test]
+fn test_does_not_double_freeze_in_interval_close() {
+    // Upstream: d.draw(BigStrategy()) opens a span, draw_bytes overruns
+    // (freezing via mark_overrun()), then draw()'s finally: stop_span() is a
+    // no-op (frozen guard).  In native, freeze() is idempotent on an already-
+    // frozen (EarlyStop) test case and closes any unclosed spans.
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Boolean(false)], None);
+    d.start_span(1);
+    d.weighted(0.5, None).ok().unwrap();
+    // Overrun: draw past end of prefix (only 1 choice supplied).
+    let result = d.weighted(0.5, None);
+    assert!(result.is_err());
+    // Span still open; freeze() closes it without changing EarlyStop status.
+    d.freeze();
+    assert!(d.frozen());
+    assert!(d.spans.iter().all(|eg| eg.end >= eg.start));
+}
+
+#[test]
+fn test_will_mark_too_deep_examples_as_invalid() {
+    let mut d = NativeTestCase::for_choices(&[ChoiceValue::Integer(0)], None);
+    // Open MAX_DEPTH + 1 spans: the 101st call (stack_len == MAX_DEPTH == 100)
+    // triggers the depth limit and sets Status::Invalid.
+    for _ in 0..=MAX_DEPTH {
+        d.start_span(0);
+    }
+    let result = d.draw_integer(0, 100);
+    assert!(result.is_err());
+    assert_eq!(d.status, Some(Status::Invalid));
+}
+
+#[test]
+fn test_child_indices() {
+    let choices: Vec<ChoiceValue> = (0..4).map(|_| ChoiceValue::Boolean(true)).collect();
+    let mut d = NativeTestCase::for_choices(&choices, None);
+    // Add a top-level span so indices match Python (span 0 = top).
+    d.start_span(0); // span 0: top
+    d.start_span(0); // span 1: examples[1]
+    d.start_span(1); // span 2: examples[2]
+    d.start_span(2); // span 3: examples[3]
+    d.weighted(0.5, None).ok().unwrap();
+    d.stop_span(false);
+    d.start_span(2); // span 4: examples[4]
+    d.weighted(0.5, None).ok().unwrap();
+    d.stop_span(false);
+    d.stop_span(false); // close examples[2]
+    d.stop_span(false); // close examples[1]
+    d.start_span(2); // span 5: examples[5]
+    d.weighted(0.5, None).ok().unwrap();
+    d.stop_span(false);
+    d.start_span(2); // span 6: examples[6]
+    d.weighted(0.5, None).ok().unwrap();
+    d.stop_span(false);
+    d.freeze(); // closes top span
+
+    assert_eq!(d.spans.children(0), vec![1, 5, 6]);
+    assert_eq!(d.spans.children(1), vec![2]);
+    assert_eq!(d.spans.children(2), vec![3, 4]);
+
+    assert_eq!(d.spans[0_usize].parent, None);
+    for i in 1..d.spans.len() {
+        let parent_idx = d.spans[i].parent.unwrap();
+        assert!(d.spans.children(parent_idx).contains(&i));
+    }
 }
