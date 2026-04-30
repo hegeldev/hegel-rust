@@ -11,10 +11,9 @@ fn test_can_draw_sets_of_hard_to_find_elements() {
         .min_value(0.0)
         .max_value(1.0)
         .map(|x: f64| x <= 0.05);
-    find_any(
-        gs::hashsets(rarebool).min_size(2),
-        |s: &HashSet<bool>| s.len() >= 2,
-    );
+    find_any(gs::hashsets(rarebool).min_size(2), |s: &HashSet<bool>| {
+        s.len() >= 2
+    });
 }
 
 #[test]
