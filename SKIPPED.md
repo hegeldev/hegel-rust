@@ -1837,11 +1837,15 @@ Individually-skipped tests (rest of the file is ported):
   (no hegel-rust analog), `|` union-strategy on strategies, and nested `@given`;
   no portable Rust form.
 
-- `test_precise_shrinking.py` (in `nocover/`) — port abandoned: parallel
-  port-loop worker produced commits on `port/worker-0` that could not be
-  cherry-picked cleanly onto the supervisor branch (merge conflict in
-  `tests/hypothesis/main.rs`); left for human inspection on branch
-  `port/worker-0`.
+- `test_precise_shrinking.py::test_strategy_list_is_in_sorted_order` — asserts
+  that `[st.none(), st.booleans(), st.binary(), st.text(), st.integers()]` are
+  in ascending `sort_key(minimal_nodes)` order. Python's `st.integers()`
+  (unbounded) uses a multi-choice draw sequence, so its minimal nodes sort after
+  `st.binary()` and `st.text()`. Our `gs::integers::<i64>()` uses a single
+  bounded-integer draw, giving the same minimal `sort_key` as `gs::booleans()`,
+  which violates the Python ordering and makes the assertion fail as stated.
+  (All other tests in `test_precise_shrinking.py` are ported in
+  `tests/hypothesis/nocover_precise_shrinking.rs`.)
 
 - `conjecture/test_utils.py::test_invalid_numpy_sample`,
   `conjecture/test_utils.py::test_valid_numpy_sample` — require numpy;

@@ -58,6 +58,7 @@ mod nocover_given_reuse;
 mod nocover_imports;
 mod nocover_limits;
 mod nocover_nesting;
+mod nocover_precise_shrinking;
 mod nocover_sets;
 mod nocover_simple_numbers;
 mod nocover_unusual_settings_configs;

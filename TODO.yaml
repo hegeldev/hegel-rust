@@ -107,17 +107,6 @@
     All of these live in src/native/optimiser.rs and src/native/conjecture_runner.rs.
     Tests should be #[cfg(feature = "native")].
 
-- title: Port nocover/test_precise_shrinking.py
-  details: |
-    Upstream: resources/hypothesis/hypothesis-python/tests/nocover/test_precise_shrinking.py
-    Destination: tests/hypothesis/nocover_precise_shrinking.rs
-
-    Abandoned due to a merge conflict in tests/hypothesis/main.rs (worker raced
-    ahead of supervisor). No portability issue stated. Remove from SKIPPED.md when porting.
-
-    Tests precise shrink-to-minimum behaviour for integers, floats, alternatives,
-    and blocked shrinking. All native-engine territory; use #[cfg(feature = "native")].
-
 - title: Port quality/test_discovery_ability.py
   details: |
     Upstream: resources/hypothesis/hypothesis-python/tests/quality/test_discovery_ability.py
