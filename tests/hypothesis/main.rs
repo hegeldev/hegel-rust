@@ -69,6 +69,7 @@ mod one_of;
 mod permutations;
 mod provisional_strategies;
 mod pytest_runs;
+mod quality_discovery_ability;
 mod quality_float_shrinking;
 mod quality_integers;
 mod quality_poisoned_lists;
