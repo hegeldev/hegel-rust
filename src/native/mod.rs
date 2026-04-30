@@ -57,3 +57,10 @@ pub(crate) fn with_current_native_tc<R>(handle: NativeTestCaseHandle, f: impl Fn
 pub fn with_native_tc<R>(f: impl FnOnce(Option<&NativeTestCaseHandle>) -> R) -> R {
     CURRENT_NATIVE_TC.with(|cell| f(cell.borrow().as_ref()))
 }
+
+/// Return a clone of the native test case handle stored in `tc`, if any.
+///
+/// Preferred over `with_native_tc` for code that already holds a `TestCase`.
+pub fn native_tc_handle_of(tc: &crate::TestCase) -> Option<NativeTestCaseHandle> {
+    tc.native_tc_handle().cloned()
+}

@@ -60,6 +60,11 @@ pub(crate) struct TestCaseGlobalData {
     /// non-reentrant; no method holds it while calling back into
     /// `TestCase`.
     shared: Mutex<SharedState>,
+    /// Native-backend test case handle. Set once at construction time by
+    /// `attach_native_handle` before the TestCase is shared; read-only
+    /// thereafter.
+    #[cfg(feature = "native")]
+    pub(crate) native_handle: Option<crate::native::data_source::NativeTestCaseHandle>,
 }
 
 pub(crate) struct SharedState {
@@ -239,6 +244,8 @@ impl TestCase {
                         allocated_display_names: HashSet::new(),
                     },
                 }),
+                #[cfg(feature = "native")]
+                native_handle: None,
             }),
             local: RefCell::new(TestCaseLocalData {
                 span_depth: 0,
@@ -246,6 +253,28 @@ impl TestCase {
                 on_draw,
             }),
         }
+    }
+
+    /// Attach the native test case handle.
+    ///
+    /// Must be called at most once, before the `TestCase` is cloned or
+    /// shared with any other code (i.e. right after construction).
+    #[cfg(feature = "native")]
+    pub(crate) fn attach_native_handle(
+        &mut self,
+        handle: crate::native::data_source::NativeTestCaseHandle,
+    ) {
+        Arc::get_mut(&mut self.global)
+            .expect("attach_native_handle called after TestCase was shared")
+            .native_handle = Some(handle);
+    }
+
+    /// Return a reference to the native test case handle, if present.
+    #[cfg(feature = "native")]
+    pub(crate) fn native_tc_handle(
+        &self,
+    ) -> Option<&crate::native::data_source::NativeTestCaseHandle> {
+        self.global.native_handle.as_ref()
     }
 
     pub(crate) fn mode(&self) -> Mode {
