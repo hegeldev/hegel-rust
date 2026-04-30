@@ -32,7 +32,11 @@ fn test_max_examples_is_not_exceeded() {
             let n: u64 = tc.draw(gs::integers::<u64>().max_value(m));
             tc.target((n * (m - n)) as f64, "");
         })
-        .settings(Settings::new().test_cases(max_examples as u64).database(None))
+        .settings(
+            Settings::new()
+                .test_cases(max_examples as u64)
+                .database(None),
+        )
         .run();
         assert_eq!(calls, max_examples, "max_examples = {max_examples}");
     }
