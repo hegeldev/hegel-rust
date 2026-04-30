@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.6 - 2026-04-29
+
+Internal refactor of `one_of`.
+
 ## 0.8.5 - 2026-04-28
 
 Bump our pinned hegel-core to `0.4.14`.
