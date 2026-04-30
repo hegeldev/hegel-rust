@@ -1823,11 +1823,19 @@ Individually-skipped tests (rest of the file is ported):
   floating-point values between …" message; the exact wording the
   test matches against doesn't appear in hegel-rust's output.
 
-- `test_flakiness.py` — port abandoned: parallel port-loop worker
-  produced commits on `port/worker-0` that could not be cherry-picked
-  cleanly onto the supervisor branch (conflicting concurrent edits to
-  `tests/hypothesis/main.rs` plus an untracked `tests/hypothesis/flakiness.rs`);
-  left for human inspection on branch `port/worker-0`.
+- `test_flakiness.py::test_fails_differently_is_flaky` — relies on
+  Hypothesis `@given`/`core.py` exception-type comparison during the final-replay
+  phase (`expected_failure` matching). hegel-rust's server backend communicates
+  only INTERESTING/VALID/INVALID status (no exception type), so "same status,
+  different exception" cannot be detected as flaky through the hegel protocol.
+- `test_flakiness.py::test_exceptiongroup_wrapped_naked_exception_is_flaky` —
+  requires Python 3.11+ `ExceptionGroup`/`except*` syntax; no Rust counterpart.
+- `test_flakiness.py::test_flaky_with_context_when_fails_only_under_tracing` —
+  uses `monkeypatch` and Hypothesis-internal `Tracer`/`StateForActualGivenExecution`;
+  no Rust counterpart.
+- `test_flakiness.py::test_failure_sequence_inducing` — uses `random_module()`
+  (no hegel-rust analog), `|` union-strategy on strategies, and nested `@given`;
+  no portable Rust form.
 
 - `test_precise_shrinking.py` (in `nocover/`) — port abandoned: parallel
   port-loop worker produced commits on `port/worker-0` that could not be

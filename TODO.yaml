@@ -88,20 +88,6 @@
     Tests precise shrink-to-minimum behaviour for integers, floats, alternatives,
     and blocked shrinking. All native-engine territory; use #[cfg(feature = "native")].
 
-
-- title: Port cover/test_flakiness.py
-  details: |
-    Upstream: resources/hypothesis/hypothesis-python/tests/cover/test_flakiness.py
-    Destination: tests/hypothesis/flakiness.rs
-
-    Abandoned due to merge conflict in tests/hypothesis/main.rs and an untracked
-    flakiness.rs. No portability issue. Remove from SKIPPED.md when porting.
-
-    7 tests covering flaky-test detection: fails-only-once, fails-differently,
-    flaky-assumption. These pin down native engine behaviour (FlakyError / status
-    tracking). Tests that require Python ExceptionGroup specifics should be skipped
-    or adapted; the core flakiness-detection logic is portable.
-
 - title: Port quality/test_discovery_ability.py
   details: |
     Upstream: resources/hypothesis/hypothesis-python/tests/quality/test_discovery_ability.py
