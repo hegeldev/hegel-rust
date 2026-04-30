@@ -62,7 +62,7 @@ Generator transforms (all require `Generator` trait in scope):
 | `tc.choice(n)`             | `tc.draw(gs::integers::<i64>().min_value(0).max_value(n-1))` |
 | `tc.weighted(p)`            | **missing** from the public API. For `p ∈ {0.0, 1.0}` substitute `gs::just(false)` / `gs::just(true)`. For rare probabilities, a **native-gated** port can drive `NativeTestCase::weighted(p, None)` directly via `with_native_tc` from inside a `compose!` body — see "Calling native draws from a `compose!` body" below. |
 | `tc.mark_status(INTERESTING)` | `panic!(...)` to signal failure        |
-| `tc.target(score)`         | **missing from the public `TestCase` API.** For porting Hypothesis's `conjecture/test_optimiser.py`-shape tests (or pbtkit `test_targeting.py`) that *build their own runner* to exercise `target_observations` / `optimise_targets`, drive the native-only `TargetedRunner` / `TargetedTestCase` surface from `hegel::__native_test_internals` — `target_observations` is a `pub HashMap<String, f64>` on the test case. See `tests/hypothesis/conjecture_optimiser.rs` for the worked harness. A `tc.target(...)` call on a regular `Hegel::new(...).run()` user test still has no analog. |
+| `tc.target(score)`         | `tc.target(score, label)` — method on `TestCase` (same pattern as `tc.assume()` / `tc.note()`). **This method is not yet implemented** (see TODO.yaml "Expose target() in the public hegel API"). Until it lands: for tests that *build their own runner* to exercise `target_observations` directly (Hypothesis's `conjecture/test_optimiser.py` shape), drive the native-only `TargetedRunner` / `TargetedTestCase` surface from `hegel::__native_test_internals`. See `tests/hypothesis/conjecture_optimiser.rs` for the worked harness. Do **not** implement `target` as a free function `hegel::target(score, label)` — it belongs on `TestCase`. |
 | `ConjectureData.for_choices([v, ...])` | `NativeTestCase::for_choices(&[ChoiceValue::…, …], None)` from `hegel::__native_test_internals` (native-only) — see "Replaying fixed choices" below |
 | `tc.reject()`              | `tc.reject()` — public method, equivalent to `assume(false)` but returns `!` so following code is statically unreachable |
 
@@ -189,12 +189,13 @@ adding the feature. Don't invent a workaround in the test.
   escape hatch via `with_native_tc`; see "Calling native draws from a
   `compose!` body" below. The *public* API gap is still real.)
 - `tc.target(score)` — score-directed search on the *public* `TestCase`.
-  (A native-only test-harness surface — `TargetedRunner` /
-  `TargetedTestCase` / `BufferSizeLimit` from `__native_test_internals`
-  — exists for porting Hypothesis's `conjecture/test_optimiser.py`-shape
-  tests; see `tests/hypothesis/conjecture_optimiser.rs`. It is not
-  wired into `Hegel::new(...).run()`, so user-test `tc.target(score)`
-  calls still have no analog.)
+  The method `tc.target(score, label)` is planned as a `TestCase` method
+  (same pattern as `tc.assume()` / `tc.note()`) but is not yet implemented.
+  A native-only test-harness surface — `TargetedRunner` / `TargetedTestCase`
+  / `BufferSizeLimit` from `__native_test_internals` — exists for porting
+  Hypothesis's `conjecture/test_optimiser.py`-shape tests; see
+  `tests/hypothesis/conjecture_optimiser.rs`. Until `tc.target()` lands on
+  `TestCase`, user-test `tc.target(score)` calls have no public analog.
 - `tc.reject()` distinguished from `tc.assume(false)`.
 - `tc.forced_choice(v)` — direct replay fixture.
 - `gs::nothing()` — the empty generator.
