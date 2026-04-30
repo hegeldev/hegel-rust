@@ -86,7 +86,12 @@ fn runner_for(
     }
     for d in &ran_results {
         let (rewritten, status) = runner.tree().rewrite(&d.choices);
-        assert_eq!(status, Some(d.status), "rewrite status mismatch for choices {:?}", d.choices);
+        assert_eq!(
+            status,
+            Some(d.status),
+            "rewrite status mismatch for choices {:?}",
+            d.choices
+        );
         assert_eq!(rewritten, d.choices, "rewritten choices mismatch");
     }
     runner
@@ -242,10 +247,7 @@ fn test_overruns_if_prefix() {
         NativeRunnerSettings::new().max_examples(100),
         SmallRng::seed_from_u64(0),
     );
-    runner.cached_test_function(&[
-        ChoiceValue::Boolean(false),
-        ChoiceValue::Boolean(false),
-    ]);
+    runner.cached_test_function(&[ChoiceValue::Boolean(false), ChoiceValue::Boolean(false)]);
     let (_, status) = runner.tree().rewrite(&[ChoiceValue::Boolean(false)]);
     assert_eq!(status, Some(Status::EarlyStop)); // OVERRUN analog
 }
@@ -314,7 +316,12 @@ fn test_will_generate_novel_prefix_to_avoid_exhausted_branches() {
     runner.cached_test_function(&[ChoiceValue::Integer(0), ChoiceValue::Bytes(vec![1])]);
 
     let prefix = runner.generate_novel_prefix();
-    assert_eq!(prefix.len(), 2, "prefix should be 2 elements, got {:?}", prefix);
+    assert_eq!(
+        prefix.len(),
+        2,
+        "prefix should be 2 elements, got {:?}",
+        prefix
+    );
     assert_eq!(prefix[0], ChoiceValue::Integer(0));
 }
 
