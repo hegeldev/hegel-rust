@@ -68,7 +68,10 @@ ctor = "0.2"
 default = []
 rand = ["dep:rand"]
 antithesis = ["dep:serde_json"]
-num = ["dep:num-bigint", "dep:num-rational", "dep:num-complex", "dep:num-traits", "dep:num-integer"]
+num-bigint = ["dep:num-bigint", "dep:num-traits"]
+num-rational = ["dep:num-rational", "dep:num-integer", "dep:num-traits"]
+num-complex = ["dep:num-complex"]
+num = ["num-bigint", "num-rational", "num-complex"]
 
 [package.metadata.docs.rs]
 all-features = true

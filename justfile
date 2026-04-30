@@ -10,6 +10,14 @@ check-tests-all-features:
 check-tests-rand-feature:
     RUST_BACKTRACE=1 cargo test --features rand
 
+# `num` is a meta-feature that enables `num-bigint`, `num-rational`, and `num-complex`.
+# `check-tests-all-features` already covers the meta; this recipe makes sure each
+# sub-feature compiles in isolation (catches stale `cfg(feature = "num-X")` gates).
+check-num-subfeatures:
+    cargo check --features num-bigint --all-targets
+    cargo check --features num-rational --all-targets
+    cargo check --features num-complex --all-targets
+
 check-tests-minimal-versions:
     # This is an annoyingly specific check and feels like it overly couples CI concerns and check
     # concerns. I don't have a better proposal right now.

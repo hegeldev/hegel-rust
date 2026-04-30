@@ -224,7 +224,7 @@ where
     }
 }
 
-#[cfg(feature = "num")]
+#[cfg(feature = "num-bigint")]
 impl DefaultGenerator for num_bigint::BigInt {
     type Generator = IntegerGenerator<num_bigint::BigInt>;
     fn default_generator() -> Self::Generator {
@@ -232,7 +232,7 @@ impl DefaultGenerator for num_bigint::BigInt {
     }
 }
 
-#[cfg(feature = "num")]
+#[cfg(feature = "num-bigint")]
 impl DefaultGenerator for num_bigint::BigUint {
     type Generator = IntegerGenerator<num_bigint::BigUint>;
     fn default_generator() -> Self::Generator {

@@ -1,3 +1,3 @@
+#[cfg(feature = "num-bigint")]
+pub mod bigint;
 pub mod cbor_utils;
-#[cfg(feature = "num")]
-pub mod num;
