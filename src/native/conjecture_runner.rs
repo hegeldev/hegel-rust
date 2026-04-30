@@ -722,6 +722,43 @@ impl<'a> NativeDataTreeView<'a> {
         self.runner.tree_root.is_exhausted
     }
 
+    /// Walk the data tree along `choices` and return the rewritten choice
+    /// sequence plus the recorded status, mirroring
+    /// `DataTree.rewrite(choices)` from Hypothesis's
+    /// `internal/conjecture/datatree.py`.
+    ///
+    /// Return value semantics:
+    /// - `(choices[..i], Some(status))` — the test concluded at depth `i`
+    ///   with `status`; any trailing choices past `i` are discarded.
+    /// - `(choices.to_vec(), Some(Status::EarlyStop))` — we exhausted all
+    ///   `choices` but are still at a branch node (known children beyond
+    ///   this prefix); maps to Python's `Status.OVERRUN`.
+    /// - `(choices.to_vec(), None)` — novel: the path is unknown to the
+    ///   tree at this point.
+    pub fn rewrite(&self, choices: &[ChoiceValue]) -> (Vec<ChoiceValue>, Option<Status>) {
+        let mut current = &self.runner.tree_root;
+        for (i, choice) in choices.iter().enumerate() {
+            if let Some(status) = current.conclusion {
+                return (choices[..i].to_vec(), Some(status));
+            }
+            if current.kind.is_none() {
+                return (choices.to_vec(), None);
+            }
+            let key = ChoiceValueKey::from(choice);
+            match current.children.get(&key) {
+                None => return (choices.to_vec(), None),
+                Some(child) => current = child,
+            }
+        }
+        if let Some(status) = current.conclusion {
+            return (choices.to_vec(), Some(status));
+        }
+        if current.kind.is_some() || !current.children.is_empty() {
+            return (choices.to_vec(), Some(Status::EarlyStop));
+        }
+        (choices.to_vec(), None)
+    }
+
     /// Walk the data tree along `choices` and return `true` when the
     /// path terminates at a recorded leaf.  Mirrors
     /// `DataTree.simulate_test_function(data)`: a `true` return is the

@@ -2618,4 +2618,27 @@ follow-up.
   a cherry-pick conflict in `src/native/conjecture_runner.rs` between the
   worker branch and the supervisor branch; defer to a human to resolve.
 
-- `conjecture/test_data_tree.py` — port abandoned; cherry-picking `port/worker-2` onto the supervisor branch conflicted in `src/native/runner.rs`.
+Individually-skipped tests (rest of the file is ported in
+`tests/hypothesis/conjecture_data_tree.rs`):
+
+- `conjecture/test_data_tree.py::test_stores_the_tree_flat_until_needed` — accesses `root.constraints / root.values / root.transition.status`: Python's DataTree flat-list optimisation not in `DataTreeNode`.
+- `conjecture/test_data_tree.py::test_split_in_the_middle` — accesses `root.transition.children[i].values`: same flat-list structure.
+- `conjecture/test_data_tree.py::test_stores_forced_nodes` — accesses `root.forced`: `DataTreeNode` does not track forced indices.
+- `conjecture/test_data_tree.py::test_correctly_relocates_forced_nodes` — same as above.
+- `conjecture/test_data_tree.py::test_can_go_from_interesting_to_valid` — standalone `DataTree()` + observer API not exposed in native mode.
+- `conjecture/test_data_tree.py::test_going_from_interesting_to_invalid_is_flaky` — Flaky detection for status changes not implemented in native.
+- `conjecture/test_data_tree.py::test_concluding_at_prefix_is_flaky` — standalone DataTree + Flaky.
+- `conjecture/test_data_tree.py::test_concluding_with_overrun_at_prefix_is_not_flaky` — standalone DataTree observer API not exposed.
+- `conjecture/test_data_tree.py::test_changing_n_bits_is_flaky_in_prefix` — standalone DataTree + Flaky.
+- `conjecture/test_data_tree.py::test_changing_n_bits_is_flaky_in_branch` — standalone DataTree + Flaky.
+- `conjecture/test_data_tree.py::test_extending_past_conclusion_is_flaky` — standalone DataTree + Flaky.
+- `conjecture/test_data_tree.py::test_changing_to_forced_is_flaky` — standalone DataTree + Flaky.
+- `conjecture/test_data_tree.py::test_changing_value_of_forced_is_flaky` — standalone DataTree + Flaky.
+- `conjecture/test_data_tree.py::test_child_becomes_exhausted_after_split` — accesses `tree.root.transition.children[b"\0"].is_exhausted`: internal tree children not exposed.
+- `conjecture/test_data_tree.py::test_will_mark_changes_in_discard_as_flaky` — standalone DataTree + Flaky on `stop_span(discard=True)`.
+- `conjecture/test_data_tree.py::test_is_not_flaky_on_positive_zero_and_negative_zero` — accesses `tree.root.transition.children[float_to_int(...)]`.
+- `conjecture/test_data_tree.py::test_observed_choice_type_draw[integer/float/boolean/string/bytes]` — accesses `tree.root.choice_types / tree.root.transition`.
+- `conjecture/test_data_tree.py::test_non_observed_choice_type_draw[integer/float/boolean/string/bytes]` — same.
+- `conjecture/test_data_tree.py::test_datatree_repr` — tests `pretty.pretty(tree)`: Python repr.
+- `conjecture/test_data_tree.py::test_can_generate_hard_floats` — requires forced float draws via `draw_float(..., forced=f)`; native `NativeConjectureData.draw_float` has no `forced` parameter.
+- `conjecture/test_data_tree.py::test_simulate_forced_floats` — uses standalone DataTree + `tree.simulate_test_function(data)` where data is a `ConjectureData`; native `simulate_test_function` takes `&[ChoiceValue]`, not a data object.
