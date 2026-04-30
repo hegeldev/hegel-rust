@@ -916,6 +916,104 @@ tests") so the unported-gate sees them and a future agent can pick
 them up as each native gap closes — the gap names above are the
 acceptance criteria for un-skipping.
 
+## `DataTree` / `NativeDataTreeView` (`conjecture/test_data_tree.py`)
+
+`test_data_tree.py` tests Hypothesis's `DataTree` — the internal tree of
+explored choice sequences used for novel-prefix detection and exhaustion.
+The native counterpart is `NativeDataTreeView`, returned by `runner.tree()`.
+
+### Available API on `NativeDataTreeView`
+
+All via `hegel::__native_test_internals` (native-only):
+
+| Hypothesis `DataTree` / `ConjectureRunner`  | hegel-rust                                                        |
+|---------------------------------------------|-------------------------------------------------------------------|
+| `tree.rewrite(choices)` → `(choices, Status)` | `runner.tree().rewrite(&choices) -> (Vec<ChoiceValue>, Option<Status>)` |
+| `tree.is_exhausted`                         | `runner.tree().is_exhausted()`                                    |
+| `runner.generate_novel_prefix()`            | `runner.generate_novel_prefix() -> Vec<ChoiceValue>`              |
+| `runner.cached_test_function(choices)`      | `runner.cached_test_function(&choices) -> NativeConjectureData`   |
+| `runner.cached_test_function(choices)` returning the full drawn sequence | `runner.cached_test_function_full(&prefix) -> NativeConjectureData` — extends the prefix with freshly generated choices; use when you want the actual drawn sequence rather than the truncated one. |
+
+`rewrite` return semantics (mirrors Python):
+- `(choices[..i], Some(status))` — path concluded at depth `i`; trailing choices discarded.
+- `(choices.to_vec(), Some(Status::EarlyStop))` — all choices consumed but tree has known children beyond this point (Python's `Status.OVERRUN`).
+- `(choices.to_vec(), None)` — novel prefix; tree has no record.
+
+### The `runner_for` helper pattern
+
+Many `test_data_tree.py` tests build a runner, feed it several example choice
+sequences, then verify `rewrite` semantics. Port as a local `runner_for`:
+
+```rust
+fn runner_for(
+    examples: Vec<Vec<ChoiceValue>>,
+    test_fn: impl FnMut(&mut NativeConjectureData) + 'static,
+) -> NativeConjectureRunner {
+    let mut runner = NativeConjectureRunner::new(
+        test_fn,
+        NativeRunnerSettings::new().max_examples(100).suppress_health_check(vec![]),
+        SmallRng::seed_from_u64(0),
+    );
+    let mut ran = Vec::new();
+    for choices in &examples {
+        ran.push(runner.cached_test_function(choices));
+    }
+    for d in &ran {
+        let (rewritten, status) = runner.tree().rewrite(&d.choices);
+        assert_eq!(status, Some(d.status));
+        assert_eq!(rewritten, d.choices);
+    }
+    runner
+}
+```
+
+The key subtlety: verify using `d.choices` (what the test function *drew*),
+not the original input choices. Forced draws write the forced value to the
+tree rather than the prefix value, so the recorded path may differ from input.
+
+### Simulating `forced=N` with `cached_test_function`
+
+When the Python test uses `draw_integer(forced=N)` via the runner path (not
+`NativeTestCase::for_choices`), there is no `forced=` parameter on
+`cached_test_function`. Simulate it by constraining the draw to `[N, N]`:
+
+```python
+# Python
+data.draw_integer(0, 1000, forced=1)
+```
+```rust
+// Rust — constrain the range; input choices use ChoiceValue::Integer(1)
+data.draw_integer(1, 1);
+```
+
+This differs from the `for_choices` + `draw_integer_forced` path (see "Forced
+draws" section): that path targets single-replay tests; `cached_test_function`
+targets tree-state tests across multiple runs.
+
+### Large skip cluster in `test_data_tree.py`
+
+About half the file must be individually-skipped. The three root causes:
+
+1. **Flat-list optimization** — Python's `DataTree` stores pre-branch runs as
+   a flat list (`root.values`, `root.constraints`, `root.transition.status`).
+   `DataTreeNode` is always tree-shaped; those fields don't exist.
+   Blocks: `test_stores_the_tree_flat_until_needed`, `test_split_in_the_middle`.
+
+2. **Observer API** — Python exposes `DataTree.new_observer()` and
+   `ConjectureData.for_choices(observer=...)` as a standalone harness.
+   Native mode doesn't expose a standalone `DataTree` or observer.
+   Blocks: all tests that construct `DataTree()` directly, all `Flaky`-detection
+   tests (`test_concluding_at_prefix_is_flaky`, `test_changing_n_bits_*`, etc.).
+
+3. **Internal tree fields not on `NativeDataTreeView`** — `root.forced`,
+   `root.transition.children[key]`, `root.choice_types` are not exposed.
+   Blocks: `test_stores_forced_nodes`, `test_correctly_relocates_forced_nodes`,
+   `test_child_becomes_exhausted_after_split`, `test_observed_choice_type_draw`,
+   `test_datatree_repr`.
+
+See `tests/hypothesis/conjecture_data_tree.rs` module docstring for the
+complete individual-skip list.
+
 ## Conjecture utilities (`conjecture/utils.py`)
 
 A small native-only surface for the `nocover/test_conjecture_utils.py`
