@@ -6,9 +6,6 @@ file and treats listed files as "done".
 
 ## pbtkit (`/tmp/pbtkit/tests/`)
 
-- `test_targeting.py` — uses `tc.target(score)`, a pbtkit public-API feature
-  (targeted property-based testing) with no hegel-rust analog. Hegel-rust
-  exposes no targeting surface on its `TestCase`.
 - `test_features.py` — tests Python-specific module-system shims
   (`sys.modules`, dunder access) with no Rust counterpart.
 - `test_exercise_shrink_paths.py` — depends on `test_pbtsmith.py` (see
@@ -19,12 +16,11 @@ file and treats listed files as "done".
   `hypothesis.internal.conjecture.engine.ConjectureRunner` as the oracle
   to compare against pbtkit's findability. Hypothesis's engine is a Python
   library dependency with no Rust counterpart.
-- `test_hypothesis.py` — drives pbtkit via the public `tc.weighted(p)` and
-  `tc.target(score)` methods, which hegel-rust deliberately doesn't expose
-  on `TestCase` (no public weighted-boolean or targeting API). The
-  `tc.choice(n)` / `tc.mark_status(...)` calls do have hegel-rust
-  counterparts, but the test's method-dispatch loop can't be expressed
-  without the missing two.
+- `test_hypothesis.py` — drives pbtkit via the public `tc.weighted(p)` method,
+  which hegel-rust deliberately doesn't expose on `TestCase` (no public
+  weighted-boolean API). The `tc.choice(n)` / `tc.mark_status(...)` /
+  `tc.target(score)` calls do have hegel-rust counterparts, but the test's
+  method-dispatch loop can't be expressed without `tc.weighted(p)`.
 - `test_pbtsmith.py` — generates random Python programs via pbtkit's code
   generator and `exec()`s them; this is a Python-syntax/runtime integration
   with no hegel-rust counterpart.
@@ -72,14 +68,8 @@ Individually-skipped tests (rest of the file is ported):
 - `test_bytes.py::test_bytes_sort_key_type_mismatch` — same pattern as the
   string equivalent: Rust's `sort_key(&[u8])` signature makes the
   "non-bytes argument" case unrepresentable at compile time.
-- `test_bytes.py::test_targeting_with_bytes` — uses `tc.target(score)`;
-  no targeting API in hegel-rust (already covered by the whole-file skip
-  of `test_targeting.py`).
 - `test_generators.py::test_cannot_witness_nothing` — uses `gs.nothing()`;
   hegel-rust has no empty-generator public API.
-- `test_generators.py::test_target_and_reduce` — uses `tc.target(score)`;
-  no targeting API in hegel-rust (already covered by the whole-file skip
-  of `test_targeting.py`).
 - `test_generators.py::test_impossible_weighted`,
   `test_generators.py::test_guaranteed_weighted` — both use pbtkit's
   public `tc.weighted(p)` method; hegel-rust deliberately exposes no
@@ -157,9 +147,6 @@ Individually-skipped tests (rest of the file is ported):
   `sort_key(wrong_type)` (same pattern as the already-skipped
   `test_string_sort_key_type_mismatch` /
   `test_bytes_sort_key_type_mismatch`).
-- `test_core.py::test_targeting_skips_non_integer` — uses
-  `tc.target(score)`, no analog (whole-file skip of
-  `test_targeting.py`).
 - `test_core.py::test_note_prints_on_failing_example`,
   `test_core.py::test_draw_silent_does_not_print` — use pbtkit's
   `capsys` pytest fixture to inspect the final-replay stdout formatter
@@ -1070,14 +1057,8 @@ Individually-skipped tests (rest of the file is ported):
 
 - `test_statistical_events.py` — every test relies on `hypothesis.statistics.collector`
   / `describe_statistics` (programmatic test-run statistics collection) and/or
-  `event()` / `target()` (Hypothesis public APIs for recording custom events and
-  targeted PBT scores). hegel-rust exposes none of these: no `event()`, no `target()`,
-  no statistics collection or formatting infrastructure.
-
-- `test_targeting.py` — every test calls Hypothesis's public `target(observation, label=...)`
-  function and/or stresses its internal `TargetSelector` pool-size logic. hegel-rust
-  exposes no `target()` function and no targeted-PBT surface at all (same gap as
-  `test_statistical_events.py`), so none of the nine tests are portable.
+  `event()` (Hypothesis public API for recording custom events). hegel-rust exposes
+  none of these: no `event()`, no statistics collection or formatting infrastructure.
 
 - `test_observability.py` — every test sits on Hypothesis's observability public
   API surface, none of which hegel-rust exposes:
