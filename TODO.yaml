@@ -34,23 +34,6 @@
     - All previously thread-local accesses are replaced by explicit parameters.
     - All tests continue to pass.
 
-- title: Port conjecture/test_pareto.py
-  blocked_by:
-    - Expose target() in the public hegel API
-  details: |
-    Upstream: resources/hypothesis/hypothesis-python/tests/conjecture/test_pareto.py
-    Destination: tests/hypothesis/conjecture_pareto.rs
-
-    Was abandoned due to a cherry-pick conflict (worker branched before native backend
-    feature landed — that conflict is now resolved). Remove test_pareto.py from
-    SKIPPED.md when porting.
-
-    The file exercises:
-    - ParetoFront mechanics (add/contains/dominates)
-    - ConjectureRunner with target_observations + multiple interesting origins
-    - Pareto-front preservation across shrinking
-    All of these live in src/native/optimiser.rs and src/native/conjecture_runner.rs.
-    Tests should be #[cfg(feature = "native")].
 
 - title: Port quality/test_discovery_ability.py
   details: |
