@@ -15,8 +15,8 @@ use super::process::{
 };
 use super::runner::{cbor_decode, cbor_encode};
 
-pub(super) const SUPPORTED_PROTOCOL_VERSIONS: (&str, &str) = ("0.11", "0.11");
-pub(super) const HEGEL_SERVER_VERSION: &str = "0.5.0";
+pub(super) const SUPPORTED_PROTOCOL_VERSIONS: (&str, &str) = ("0.11", "0.12");
+pub(super) const HEGEL_SERVER_VERSION: &str = "0.6.0";
 
 pub(super) static SESSION: Mutex<Option<Arc<HegelSession>>> = Mutex::new(None);
 
