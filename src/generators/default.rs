@@ -224,6 +224,22 @@ where
     }
 }
 
+#[cfg(feature = "num-bigint")]
+impl DefaultGenerator for num_bigint::BigInt {
+    type Generator = IntegerGenerator<num_bigint::BigInt>;
+    fn default_generator() -> Self::Generator {
+        integers()
+    }
+}
+
+#[cfg(feature = "num-bigint")]
+impl DefaultGenerator for num_bigint::BigUint {
+    type Generator = IntegerGenerator<num_bigint::BigUint>;
+    fn default_generator() -> Self::Generator {
+        integers()
+    }
+}
+
 /// Derive a generator for a struct type defined externally.
 ///
 /// This macro creates a hidden generator struct with builder methods for each field,

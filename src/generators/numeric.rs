@@ -1,45 +1,93 @@
 use super::{BasicGenerator, Generator, TestCase};
-use crate::cbor_utils::{cbor_map, cbor_serialize, map_insert};
+use crate::utils::cbor_utils::{cbor_map, cbor_serialize, map_insert};
 use ciborium::Value;
 use std::marker::PhantomData;
 
 /// Trait bound for integer types usable with [`integers()`].
-pub trait Integer: Copy + Ord {
-    /// The minimum value of this type.
-    const MIN: Self;
-    /// The maximum value of this type.
-    const MAX: Self;
+///
+/// Implementations supply the default range, a `one` value for builders,
+/// and the CBOR encode/decode hooks used by the schema protocol. Fixed-width
+/// primitives use serde; arbitrary-precision types use CBOR bignum tags.
+pub trait Integer: Clone + Ord + Send + Sync + 'static {
+    /// Default minimum when `min_value` is not set.
+    fn default_min() -> Self;
+    /// Default maximum when `max_value` is not set.
+    fn default_max() -> Self;
+    /// The value `1` — used by derived builders that need a positive lower bound.
+    fn one() -> Self;
+    /// Default minimum value when used as `Ratio<Self>`. For fixed-width types
+    /// this is tightened so `min × max_denominator` cannot underflow the numerator.
+    fn rational_default_min() -> Self {
+        Self::default_min()
+    }
+    /// Default maximum value when used as `Ratio<Self>`. For fixed-width types
+    /// this is tightened so `max × max_denominator` cannot overflow the numerator.
+    fn rational_default_max() -> Self {
+        Self::default_max()
+    }
+    /// Encode this value as a CBOR integer or bignum tag for the schema.
+    fn to_cbor(&self) -> Value;
+    /// Decode a CBOR value produced by the server into `Self`.
+    fn from_cbor(v: Value) -> Self;
 }
 
-macro_rules! impl_integer_type {
+macro_rules! impl_signed_integer {
     ($($t:ty),*) => { $(
         impl Integer for $t {
-            const MIN: Self = <$t>::MIN;
-            const MAX: Self = <$t>::MAX;
+            fn default_min() -> Self { <$t>::MIN }
+            fn default_max() -> Self { <$t>::MAX }
+            fn one() -> Self { 1 }
+            fn rational_default_min() -> Self { -<$t>::MAX.isqrt() }
+            fn rational_default_max() -> Self { <$t>::MAX.isqrt() }
+            fn to_cbor(&self) -> Value { cbor_serialize(self) }
+            fn from_cbor(v: Value) -> Self { super::deserialize_value(v) }
         }
     )* };
 }
 
-impl_integer_type!(
-    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
-);
+macro_rules! impl_unsigned_integer {
+    ($($t:ty),*) => { $(
+        impl Integer for $t {
+            fn default_min() -> Self { <$t>::MIN }
+            fn default_max() -> Self { <$t>::MAX }
+            fn one() -> Self { 1 }
+            fn rational_default_min() -> Self { 0 }
+            fn rational_default_max() -> Self { <$t>::MAX.isqrt() }
+            fn to_cbor(&self) -> Value { cbor_serialize(self) }
+            fn from_cbor(v: Value) -> Self { super::deserialize_value(v) }
+        }
+    )* };
+}
+
+impl_signed_integer!(i8, i16, i32, i64, i128, isize);
+impl_unsigned_integer!(u8, u16, u32, u64, u128, usize);
 
 /// Trait bound for float types usable with [`floats()`].
 pub trait Float: Copy + PartialOrd {
+    const ZERO: Self;
     /// The minimum value of this type.
     const MIN: Self;
     /// The maximum value of this type.
     const MAX: Self;
+    const INFINITY: Self;
+    /// The width of this type in bits.
+    const WIDTH: u32;
 }
 
 impl Float for f32 {
+    const ZERO: Self = 0.0;
     const MIN: Self = f32::MIN;
     const MAX: Self = f32::MAX;
+    const INFINITY: Self = f32::INFINITY;
+    const WIDTH: u32 = 32;
 }
 
 impl Float for f64 {
+    const ZERO: Self = 0.0;
     const MIN: Self = f64::MIN;
     const MAX: Self = f64::MAX;
+    const INFINITY: Self = f64::INFINITY;
+    const WIDTH: u32 = 64;
 }
 
 /// Generator for integer values. Created by [`integers()`].
@@ -65,42 +113,36 @@ impl<T> IntegerGenerator<T> {
     }
 }
 
-impl<T: Integer + serde::Serialize> IntegerGenerator<T> {
+impl<T: Integer> IntegerGenerator<T> {
     fn build_schema(&self) -> Value {
-        let min = self.min.unwrap_or(T::MIN);
-        let max = self.max.unwrap_or(T::MAX);
+        let min = self.min.clone().unwrap_or_else(T::default_min);
+        let max = self.max.clone().unwrap_or_else(T::default_max);
         assert!(min <= max, "Cannot have max_value < min_value");
 
         cbor_map! {
             "type" => "integer",
-            "min_value" => cbor_serialize(&min),
-            "max_value" => cbor_serialize(&max)
+            "min_value" => min.to_cbor(),
+            "max_value" => max.to_cbor()
         }
     }
 }
 
-impl<T: Integer + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static>
-    Generator<T> for IntegerGenerator<T>
-{
+impl<T: Integer> Generator<T> for IntegerGenerator<T> {
     fn do_draw(&self, tc: &TestCase) -> T {
-        super::generate_from_schema(tc, &self.build_schema())
+        T::from_cbor(super::generate_raw(tc, &self.build_schema()))
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            super::deserialize_value(raw)
-        }))
+        Some(BasicGenerator::new(self.build_schema(), T::from_cbor))
     }
 }
 
 /// Generate integers of type `T`.
 ///
-/// Bounds default to the full range of `T`. Use the builder methods `min_value`
-/// and `max_value` to constrain the range. See [`IntegerGenerator`] for more
-/// details.
-pub fn integers<
-    T: Integer + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static,
->() -> IntegerGenerator<T> {
+/// Bounds default to the full range of `T` (or `±2^128` for arbitrary-precision
+/// types). Use the builder methods `min_value` and `max_value` to constrain the
+/// range. See [`IntegerGenerator`] for more details.
+pub fn integers<T: Integer>() -> IntegerGenerator<T> {
     IntegerGenerator {
         min: None,
         max: None,
@@ -161,7 +203,7 @@ impl<T> FloatGenerator<T> {
 
 impl<T: Float + serde::Serialize> FloatGenerator<T> {
     fn build_schema(&self) -> Value {
-        let width = (std::mem::size_of::<T>() * 8) as u64;
+        let width = u64::from(T::WIDTH);
         let has_min = self.min.is_some();
         let has_max = self.max.is_some();
 

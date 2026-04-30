@@ -216,7 +216,6 @@
 
 pub(crate) mod antithesis;
 pub mod backend;
-pub(crate) mod cbor_utils;
 pub(crate) mod cli;
 pub(crate) mod control;
 pub mod explicit_test_case;
@@ -225,6 +224,7 @@ pub(crate) mod runner;
 pub(crate) mod server;
 pub mod stateful;
 mod test_case;
+pub(crate) mod utils;
 
 #[doc(hidden)]
 pub use control::currently_in_test_context;

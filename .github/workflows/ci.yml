@@ -93,6 +93,9 @@ jobs:
           - os: ubuntu-latest
             rust: stable
             recipe: check-tests-all-features
+          - os: ubuntu-latest
+            rust: stable
+            recipe: check-num-subfeatures
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -135,11 +138,12 @@ jobs:
 
           PROTOCOL_MIN_CORE=$(echo "$VERSIONS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['$MIN_PROTOCOL'])")
 
-          # CLI-compatibility floor: hegel-core 0.4.8 removed the Unix socket
-          # transport and dropped the --stdio flag. Older versions reject the
-          # client's invocation, so we can't run them as the minimum even when
-          # the wire protocol matches.
-          CLI_COMPAT_FLOOR="0.4.8"
+          # CLI-compatibility floor: hegel-core 0.4.14 pins dependencies below their
+          # next major version. This was introduced because cbor2 6.0.0 
+          # is a major version that returns frozendict containers for some decoded maps.
+          # hegel-core raises TypeError: Object of type frozendict is not JSON serializable
+          # when dumping the schema to json.
+          CLI_COMPAT_FLOOR="0.4.14"
 
           MIN_CORE=$(printf '%s\n%s\n' "$PROTOCOL_MIN_CORE" "$CLI_COMPAT_FLOOR" | sort -V | tail -1)
           echo "Minimum supported protocol version: $MIN_PROTOCOL"

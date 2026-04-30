@@ -1,5 +1,5 @@
 use super::{BasicGenerator, Generator, TestCase};
-use crate::cbor_utils::{cbor_array, cbor_map, map_extend, map_insert};
+use crate::utils::cbor_utils::{cbor_array, cbor_map, map_extend, map_insert};
 use ciborium::Value;
 
 /// Categories that include surrogate codepoints. Rust strings cannot contain

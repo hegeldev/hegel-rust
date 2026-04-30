@@ -19,8 +19,14 @@ mod strings;
 mod time;
 mod tuples;
 
+#[cfg(feature = "num-bigint")]
+mod bigint;
+#[cfg(feature = "num-complex")]
+mod complex;
 #[cfg(feature = "rand")]
 mod random;
+#[cfg(feature = "num-rational")]
+mod rational;
 
 pub(crate) mod value;
 
@@ -63,5 +69,9 @@ pub use tuples::{
     tuples10, tuples11, tuples12,
 };
 
+#[cfg(feature = "num-complex")]
+pub use complex::{ComplexGenerator, complex};
 #[cfg(feature = "rand")]
 pub use random::{HegelRandom, RandomsGenerator, randoms};
+#[cfg(feature = "num-rational")]
+pub use rational::{RationalGenerator, rationals};
