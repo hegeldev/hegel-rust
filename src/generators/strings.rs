@@ -597,14 +597,21 @@ impl IpAddressGenerator {
 impl Generator<String> for IpAddressGenerator {
     // nocov start
     fn do_draw(&self, tc: &TestCase) -> String {
-        super::generate_from_schema(tc, &self.build_schema())
+        self.as_basic().unwrap().do_draw(tc)
         // nocov end
     }
 
     // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            super::deserialize_value(raw)
+        let version = self.version;
+        Some(BasicGenerator::new(self.build_schema(), move |raw| {
+            // one_of returns [index, value]; extract the value for the mixed case.
+            let inner = if version.is_none() {
+                raw.into_array().unwrap().into_iter().nth(1).unwrap()
+            } else {
+                raw
+            };
+            super::deserialize_value(inner)
             // nocov end
         }))
     }
