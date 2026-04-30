@@ -55,11 +55,21 @@ fn interpret_one_of_selects_a_branch() {
         ],
     };
     let result = interpret_one_of(&mut ntc, &schema).ok().unwrap();
-    let Value::Integer(i) = result else {
-        panic!("expected integer")
+    let Value::Array(items) = result else {
+        panic!("expected [index, value] array")
     };
-    let n: i128 = i.into();
-    assert!(n == 10 || n == 20);
+    assert_eq!(items.len(), 2);
+    let Value::Integer(ref idx) = items[0] else {
+        panic!("expected integer index")
+    };
+    let idx: i128 = (*idx).into();
+    assert!(idx == 0 || idx == 1);
+    let Value::Integer(ref val) = items[1] else {
+        panic!("expected integer value")
+    };
+    let val: i128 = (*val).into();
+    assert_eq!(idx == 0, val == 10);
+    assert_eq!(idx == 1, val == 20);
 }
 
 #[test]
