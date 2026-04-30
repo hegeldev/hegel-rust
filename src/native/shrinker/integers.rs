@@ -122,7 +122,7 @@ impl<'a> Shrinker<'a> {
                             unreachable!()
                         };
                         if cur_v > 0 {
-                            let upper = (cur_v - 1).min(-ic.min_value);
+                            let upper = (cur_v - 1).min(ic.min_value.saturating_neg());
                             if upper >= 1 {
                                 self.replace(&HashMap::from([(i, ChoiceValue::Integer(-upper))]));
                                 bin_search_down(1, upper, &mut |a| {
