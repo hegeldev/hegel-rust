@@ -344,7 +344,7 @@ pub fn native_run<F>(
 
     // --- Shrinking phase ---
     if let Some(ref mut best_nodes) = result {
-        if replay_aligned {
+        if replay_aligned || settings.no_shrink {
             if verbosity == Verbosity::Debug {
                 eprintln!(
                     "Skipping shrink: reused aligned database replay of length {}",

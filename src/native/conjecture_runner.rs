@@ -2414,10 +2414,88 @@ impl NativeConjectureRunner {
     /// Requires `allow_transition` support in `src/native/shrinker/` —
     /// not yet implemented.
     pub fn pareto_optimise(&mut self) {
-        todo!(
-            "pareto_optimise: needs allow_transition callback in the Shrinker \
-             (see ParetoOptimiser in hypothesis/internal/conjecture/pareto.py)"
-        )
+        let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+        let mut i = self.pareto_front.len() as isize - 1;
+        while i >= 0 && self.interesting_examples.is_empty() {
+            let pareto_len = self.pareto_front.len();
+            if pareto_len == 0 {
+                break;
+            }
+            let i_usize = (i as usize).min(pareto_len - 1);
+            let target = self.pareto_front[i_usize].clone();
+            let key = choices_to_bytes(&target.choices);
+            if seen.contains(&key) {
+                i -= 1;
+                continue;
+            }
+            seen.insert(key.clone());
+            self.pareto_shrink_one(&target);
+            // After shrinking, find where target would sit in the (possibly
+            // shorter) front and continue from one position to its left.
+            let target_key = crate::native::core::sort_key(&target.nodes);
+            let pos = self
+                .pareto_front
+                .front
+                .partition_point(|e| crate::native::core::sort_key(&e.nodes) < target_key);
+            i = pos as isize - 1;
+        }
+    }
+
+    /// Shrink one pareto front entry toward a dominating result.
+    ///
+    /// Tries block deletion and integer zero/one substitution. Any candidate
+    /// that dominates `current` becomes the new `current`. The pareto front is
+    /// updated as a side-effect of each `cached_test_function` call.
+    fn pareto_shrink_one(&mut self, initial: &ConjectureRunResult) {
+        let mut current = initial.clone();
+        let mut made_progress = true;
+        while made_progress && self.interesting_examples.is_empty() {
+            made_progress = false;
+
+            // Block deletion
+            let choices = current.choices.clone();
+            let n = choices.len();
+            let mut k = n.div_ceil(2);
+            while k >= 1 && self.interesting_examples.is_empty() {
+                let mut start = 0usize;
+                while start + k <= n && self.interesting_examples.is_empty() {
+                    let attempt: Vec<ChoiceValue> = choices[..start]
+                        .iter()
+                        .chain(choices[start + k..].iter())
+                        .cloned()
+                        .collect();
+                    let result = self.cached_test_function(&attempt);
+                    if dominance(&result, &current) == DominanceRelation::LeftDominates {
+                        current = result;
+                        made_progress = true;
+                    }
+                    start += 1;
+                }
+                k /= 2;
+            }
+
+            // Integer simplification: try replacing each integer with 0 then 1
+            let mut j = 0;
+            while j < current.choices.len() && self.interesting_examples.is_empty() {
+                if let ChoiceValue::Integer(v) = current.choices[j] {
+                    for replacement in [0i128, 1i128] {
+                        if v <= replacement || j >= current.choices.len() {
+                            break;
+                        }
+                        let mut attempt = current.choices.clone();
+                        attempt[j] = ChoiceValue::Integer(replacement);
+                        let result = self.cached_test_function(&attempt);
+                        if self.interesting_examples.is_empty()
+                            && dominance(&result, &current) == DominanceRelation::LeftDominates
+                        {
+                            current = result;
+                            made_progress = true;
+                        }
+                    }
+                }
+                j += 1;
+            }
+        }
     }
 
     /// Generate new test examples (generation phase).  Mirrors the

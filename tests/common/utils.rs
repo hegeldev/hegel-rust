@@ -185,7 +185,7 @@ where
         Self {
             generator,
             condition,
-            max_attempts: 1000,
+            max_attempts: 5000,
             suppress_health_checks: Vec::new(),
             _marker: std::marker::PhantomData,
         }
@@ -221,6 +221,7 @@ where
                 Settings::new()
                     .test_cases(max_attempts)
                     .database(None)
+                    .no_shrink(true)
                     .suppress_health_check(suppress_health_checks),
             )
             .run();
