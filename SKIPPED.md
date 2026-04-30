@@ -1844,12 +1844,6 @@ Individually-skipped tests (rest of the file is ported):
   `__hash__` raising `TypeError`; no Rust analog. Rest of the file ported
   in `tests/hypothesis/conjecture_utils.rs`.
 
-- `test_pareto.py` (in `conjecture/`) — port abandoned: parallel port-loop
-  worker produced commits on `port/worker-0` that could not be cherry-picked
-  cleanly onto the supervisor branch (merge conflicts in `Cargo.toml`,
-  `src/lib.rs`, `src/native/mod.rs`, `src/native/runner.rs`, `src/runner.rs`,
-  and `tests/test_native.rs` — worker depended on an unmerged native-backend
-  feature); left for human inspection on branch `port/worker-0`.
 
 - `test_validation.py::test_errors_when_given_varargs`,
   `test_validation.py::test_varargs_without_positional_arguments_allowed`,
