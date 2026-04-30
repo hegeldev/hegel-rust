@@ -160,6 +160,14 @@ impl DataSource for NativeDataSource {
         Ok(i.into())
     }
 
+    fn target_observation(&self, score: f64, label: &str) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .target_observations
+            .insert(label.to_string(), score);
+    }
+
     fn mark_complete(&self, _status: &str, _origin: Option<&str>) {
         // No-op for native backend: there is no server to notify.
     }

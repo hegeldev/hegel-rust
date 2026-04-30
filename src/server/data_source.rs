@@ -212,6 +212,19 @@ impl DataSource for ServerDataSource {
         }
     }
 
+    fn target_observation(&self, score: f64, label: &str) {
+        if self.aborted.load(Ordering::SeqCst) {
+            return;
+        }
+        let _ = self.send_request(
+            "target",
+            &cbor_map! {
+                "value" => score,
+                "label" => label.to_string()
+            },
+        );
+    }
+
     fn mark_complete(&self, status: &str, origin: Option<&str>) {
         let origin_value = match origin {
             Some(s) => Value::Text(s.to_string()),
