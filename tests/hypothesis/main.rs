@@ -18,6 +18,7 @@ mod conjecture_minimizer;
 mod conjecture_mutations;
 mod conjecture_optimiser;
 mod conjecture_order_shrinking;
+mod conjecture_pareto;
 mod conjecture_provider_contract;
 mod conjecture_shrinker;
 mod conjecture_test_data;
