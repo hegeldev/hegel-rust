@@ -77,8 +77,8 @@
 //!   `sort_key(wrong_type)` (same pattern as the already-skipped
 //!   `test_string_sort_key_type_mismatch`, `test_bytes_sort_key_type_mismatch`);
 //!   Rust's typed `sort_key` signatures make it unrepresentable.
-//! - `test_targeting_skips_non_integer` — uses `tc.target(score)`, no
-//!   analog (whole-file skip of `test_targeting.py`).
+//! - `test_targeting_skips_non_integer` — uses `tc.weighted(0.5)`, no
+//!   hegel-rust public API analog (same reason as the other `weighted` skips).
 //! - `test_note_prints_on_failing_example`,
 //!   `test_draw_silent_does_not_print` — use pbtkit's `capsys` pytest
 //!   fixture to inspect the final-replay stdout formatter byte-for-byte.
