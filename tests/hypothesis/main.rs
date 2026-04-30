@@ -87,6 +87,7 @@ mod snapshots_combinators;
 mod snapshots_shrinking;
 mod stateful;
 mod subnormal_floats;
+mod targeting;
 mod testdecorators;
 mod threading;
 mod uuids;
