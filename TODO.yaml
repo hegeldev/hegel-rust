@@ -11,17 +11,28 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Port quality/test_discovery_ability.py
+- title: Add GLOBAL_CONSTANTS integer/string seeding to native engine
   details: |
-    Upstream: resources/hypothesis/hypothesis-python/tests/quality/test_discovery_ability.py
-    Destination: tests/hypothesis/quality_discovery_ability.rs
+    Hypothesis's ConjectureRunner seeds "interesting" values from GLOBAL_CONSTANTS
+    (src/hypothesis/internal/conjecture/providers.py) including:
+    - Integers: factorials 9!..20!, primorial numbers, powers of 10 (5..20),
+      powers of 2 (16..66), plus their ±1 neighbours and negations.
+    - Strings: "NaN", "Inf", "undefined", "null", "true", "false", and other
+      commonly-interesting string values.
 
-    Abandoned due to a cherry-pick conflict (TODO.yaml merge conflict during parallel
-    run). No portability issue. Remove from SKIPPED.md when porting.
+    Without these, the following individually-skipped tests in
+    tests/hypothesis/quality_discovery_ability.rs cannot pass:
+    - test_can_produce_large_factorial
+    - test_can_produce_above_large_factorial
+    - test_can_produce_below_large_factorial
+    - test_can_produce_large_factorial_negative
+    - test_can_produce_above_large_factorial_negative
+    - test_can_produce_below_large_factorial_negative
+    - test_can_produce_nasty_strings
+    - test_long_duplicates_strings
 
-    ~60 statistical tests that assert generator distributions produce specific values
-    with a minimum probability (e.g. "integers() produces values > 1000 at least 50%
-    of the time"). The test harness uses ConjectureRunner directly, which maps to
-    src/native/conjecture_runner.rs. All tests should be #[cfg(feature = "native")].
-    These are important distribution-quality regression tests.
+    Acceptance criteria: implement GLOBAL_CONSTANTS seeding in
+    src/native/core/state.rs (draw_integer and draw_string interesting-value
+    injection), remove the #[ignore] attributes from the above 8 tests, and
+    remove the corresponding entries from SKIPPED.md.
 
