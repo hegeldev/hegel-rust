@@ -1843,10 +1843,21 @@ Individually-skipped tests (rest of the file is ported):
   `tests/hypothesis/main.rs`); left for human inspection on branch
   `port/worker-0`.
 
-- `test_utils.py` (in `conjecture/`) — port abandoned: parallel port-loop
-  worker produced commits on `port/worker-0` that could not be cherry-picked
-  cleanly onto the supervisor branch (merge conflicts in `src/lib.rs` and
-  `src/native/mod.rs`); left for human inspection on branch `port/worker-0`.
+- `conjecture/test_utils.py::test_invalid_numpy_sample`,
+  `conjecture/test_utils.py::test_valid_numpy_sample` — require numpy;
+  no Rust counterpart.
+- `conjecture/test_utils.py::test_invalid_set_sample`,
+  `conjecture/test_utils.py::test_valid_list_sample` — test Python
+  `cu.check_sample()` which validates Python container types; no Rust
+  counterpart.
+- `conjecture/test_utils.py::test_samples_from_a_range_directly` — tests
+  Python `range` type with no Rust analog.
+- `conjecture/test_utils.py::test_choice` — `ConjectureData.choice(seq)` is
+  a distinct Python API (sample from a sequence by index); not the same as
+  `draw_integer`.
+- `conjecture/test_utils.py::test_unhashable_calc_label` — tests Python
+  `__hash__` raising `TypeError`; no Rust analog. Rest of the file ported
+  in `tests/hypothesis/conjecture_utils.rs`.
 
 - `test_pareto.py` (in `conjecture/`) — port abandoned: parallel port-loop
   worker produced commits on `port/worker-0` that could not be cherry-picked

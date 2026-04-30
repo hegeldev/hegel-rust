@@ -134,7 +134,7 @@ fn test_sampler_matches_distribution() {
         for _ in 0..10_000 {
             let inner_seed: u64 = seed_rng.random::<u64>();
             let mut data = NativeTestCase::new_random(SmallRng::seed_from_u64(inner_seed));
-            let n = sampler.sample(&mut data).ok().unwrap();
+            let n = sampler.sample(&mut data, None).ok().unwrap();
             *counter.entry(n).or_insert(0) += 1;
         }
 

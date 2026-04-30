@@ -1,13 +1,14 @@
 //! Port of `hypothesis.internal.conjecture.utils`: small helpers shared
 //! across the engine, exposed for tests via `__native_test_internals`.
 //!
-//! Currently covers `_calc_p_continue`, `_p_continue_to_avg`,
-//! `SMALLEST_POSITIVE_FLOAT`, and `Sampler` (Vose's alias method).
+//! Covers `_calc_p_continue`, `_p_continue_to_avg`, `SMALLEST_POSITIVE_FLOAT`,
+//! `Sampler` (Vose's alias method), `Many` (variable-length collection helper),
+//! and `combine_labels`.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-use crate::native::core::{NativeTestCase, StopTest};
+use crate::native::core::{NativeTestCase, Status, StopTest};
 
 /// Smallest positive `f64`. Mirrors Hypothesis's `cu.SMALLEST_POSITIVE_FLOAT`,
 /// which is `next_up(0.0)` (the smallest positive subnormal).
@@ -156,13 +157,125 @@ impl Sampler {
     ///
     /// Mirrors `Sampler.sample` in Hypothesis: uniformly pick a table entry,
     /// then with probability `alternate_chance` return `alternate`, else
-    /// return `base`. Hypothesis additionally supports `forced` and
-    /// `observe`; neither is needed by current callers, so they're omitted.
-    pub fn sample(&self, data: &mut NativeTestCase) -> Result<usize, StopTest> {
-        let idx = data.draw_integer(0, (self.table.len() - 1) as i128)? as usize;
+    /// return `base`. Pass `forced=Some(v)` to force a specific result value.
+    pub fn sample(
+        &self,
+        data: &mut NativeTestCase,
+        forced: Option<usize>,
+    ) -> Result<usize, StopTest> {
+        let n = self.table.len();
+        let (forced_idx, forced_use_alternate) = if let Some(fv) = forced {
+            let (entry_idx, entry) = self
+                .table
+                .iter()
+                .enumerate()
+                .find(|&(_, &(b, a, p))| fv == b || (fv == a && p > 0.0))
+                .expect("forced value not in sampler table");
+            let (_base, alternate, alt_chance) = *entry;
+            let use_alt = fv == alternate && alt_chance > 0.0;
+            (Some(entry_idx as i128), Some(use_alt))
+        } else {
+            (None, None)
+        };
+
+        let idx = if let Some(fi) = forced_idx {
+            data.draw_integer_forced(0, (n - 1) as i128, fi)? as usize
+        } else {
+            data.draw_integer(0, (n - 1) as i128)? as usize
+        };
         let (base, alternate, alternate_chance) = self.table[idx];
-        let use_alternate = data.weighted(alternate_chance, None)?;
+        let use_alternate = data.weighted(alternate_chance, forced_use_alternate)?;
         Ok(if use_alternate { alternate } else { base })
+    }
+}
+
+/// Combine multiple span labels into one. Port of `hypothesis.internal.conjecture.utils.combine_labels`.
+///
+/// Applies `label = (label << 1) & u64::MAX ^ l` for each input label, starting from 0.
+/// A single-argument call is an identity: `combine_labels(&[n]) == n`.
+pub fn combine_labels(labels: &[u64]) -> u64 {
+    let mut label: u64 = 0;
+    for &l in labels {
+        label = label.wrapping_shl(1);
+        label ^= l;
+    }
+    label
+}
+
+/// Variable-length collection helper. Port of `hypothesis.internal.conjecture.utils.Many`.
+///
+/// Tracks how many elements should be drawn for a collection, stopping based on
+/// a geometric distribution with probability `p_continue` derived from `average_size`.
+pub struct Many {
+    pub min_size: usize,
+    pub max_size: f64,
+    pub p_continue: f64,
+    pub count: usize,
+    pub rejections: usize,
+    pub force_stop: bool,
+}
+
+impl Many {
+    /// Build a `Many` from explicit `min_size`, `max_size`, and `average_size`.
+    ///
+    /// Mirrors `cu.many(data, min_size, max_size, average_size)` in Hypothesis.
+    pub fn new(min_size: usize, max_size: f64, average_size: f64) -> Self {
+        let min_f = min_size as f64;
+        let desired_extra = average_size - min_f;
+        let max_extra = max_size - min_f;
+        let p_continue = if desired_extra == max_extra {
+            1.0
+        } else if max_extra == 0.0 || desired_extra <= 0.0 {
+            calc_p_continue(desired_extra.max(0.0), max_extra.max(0.0))
+        } else {
+            calc_p_continue(desired_extra, max_extra)
+        };
+        Many {
+            min_size,
+            max_size,
+            p_continue,
+            count: 0,
+            rejections: 0,
+            force_stop: false,
+        }
+    }
+
+    /// Should another element be drawn? Mirrors `Many.more()` in Hypothesis.
+    pub fn more(&mut self, data: &mut NativeTestCase) -> Result<bool, StopTest> {
+        let should_continue = if self.min_size as f64 == self.max_size {
+            self.count < self.min_size
+        } else {
+            let forced = if self.force_stop {
+                Some(false)
+            } else if self.count < self.min_size {
+                Some(true)
+            } else if self.count as f64 >= self.max_size {
+                Some(false)
+            } else {
+                None
+            };
+            data.weighted(self.p_continue, forced)?
+        };
+        if should_continue {
+            self.count += 1;
+        }
+        Ok(should_continue)
+    }
+
+    /// Reject the last drawn element. Mirrors `Many.reject()` in Hypothesis.
+    pub fn reject(&mut self, data: &mut NativeTestCase) -> Result<(), StopTest> {
+        assert!(self.count > 0);
+        self.count -= 1;
+        self.rejections += 1;
+        if self.rejections > std::cmp::max(3, 2 * self.count) {
+            if self.count < self.min_size {
+                data.status = Some(Status::Invalid);
+                return Err(StopTest);
+            } else {
+                self.force_stop = true;
+            }
+        }
+        Ok(())
     }
 }
 

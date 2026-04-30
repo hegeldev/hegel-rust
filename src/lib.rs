@@ -271,13 +271,13 @@ pub mod __native_test_internals {
         interesting_origin, run_to_nodes,
     };
     pub use crate::native::conjecture_utils::{
-        SMALLEST_POSITIVE_FLOAT, Sampler, calc_p_continue, p_continue_to_avg,
+        Many, SMALLEST_POSITIVE_FLOAT, Sampler, calc_p_continue, combine_labels, p_continue_to_avg,
     };
     pub use crate::native::core::{
         BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, CoverageTag, DataObserver,
         FloatChoice, IntegerChoice, MAX_DEPTH, NativeConjectureResult, NativeResult,
-        NativeTestCase, Span, Spans, Status, StringChoice, decode_exponent, encode_exponent,
-        float_to_index, index_to_float, reverse_bits_n, structural_coverage,
+        NativeTestCase, Span, Spans, Status, StopTest, StringChoice, decode_exponent,
+        encode_exponent, float_to_index, index_to_float, reverse_bits_n, structural_coverage,
     };
     pub use crate::native::database::{
         BackgroundWriteNativeDatabase, ExampleDatabase, InMemoryNativeDatabase, Listener,

@@ -102,15 +102,3 @@
     src/native/conjecture_runner.rs. All tests should be #[cfg(feature = "native")].
     These are important distribution-quality regression tests.
 
-- title: Port conjecture/test_utils.py
-  details: |
-    Upstream: resources/hypothesis/hypothesis-python/tests/conjecture/test_utils.py
-    Destination: tests/hypothesis/conjecture_utils.rs
-
-    Abandoned due to merge conflicts in src/lib.rs and src/native/mod.rs (native
-    backend landed after the worker branched). No portability issue. Remove from
-    SKIPPED.md when porting.
-
-    Tests hypothesis.internal.conjecture.utils (integer encoding, weighted coin,
-    biased bits, etc.) — these map directly to src/native/ draw helpers.
-    Use #[cfg(feature = "native")] throughout. Skip any tests that require numpy.
