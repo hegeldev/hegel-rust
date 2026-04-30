@@ -291,6 +291,15 @@ Record these in **both** places:
    unported-gate and port audits scan this file; a skip that lives
    only in a module docstring is invisible to them.
 
+**"Absent test" vs. "ported test with a dropped assertion"**: if the
+test IS present in the Rust file but one of its assertions is dropped
+(e.g. a `capsys` stdout check on counterexample output with no Rust
+equivalent), do NOT list it under `//! Individually-skipped tests:`.
+That heading means the test doesn't exist in the file; using it for a
+present-but-reduced test misleads skip audits. Use a separate docstring
+section like `//! Upstream assertions not ported:` instead, naming the
+specific assertion dropped. The test itself does NOT go in SKIPPED.md.
+
 Do **not** add the whole file to SKIPPED.md's whole-file section —
 that tells the unported-gate the file is done and stops it dispatching
 further work on it.
