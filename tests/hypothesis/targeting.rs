@@ -26,11 +26,7 @@ use hegel::{Hegel, Settings};
 #[test]
 fn test_allowed_inputs_to_target() {
     Hegel::new(|tc| {
-        let observation: f64 = tc.draw(
-            gs::floats::<f64>()
-                .allow_nan(false)
-                .allow_infinity(false),
-        );
+        let observation: f64 = tc.draw(gs::floats::<f64>().allow_nan(false).allow_infinity(false));
         let label: String = tc.draw(gs::text());
         tc.target(observation, label);
     })
@@ -42,11 +38,7 @@ fn test_allowed_inputs_to_target() {
 #[test]
 fn test_allowed_inputs_to_target_fewer_labels() {
     Hegel::new(|tc| {
-        let observation: f64 = tc.draw(
-            gs::floats::<f64>()
-                .min_value(1.0)
-                .allow_infinity(false),
-        );
+        let observation: f64 = tc.draw(gs::floats::<f64>().min_value(1.0).allow_infinity(false));
         let label: &str = tc.draw(gs::sampled_from(vec!["a", "few", "labels"]));
         tc.target(observation, label);
     })
@@ -58,11 +50,7 @@ fn test_allowed_inputs_to_target_fewer_labels() {
 #[test]
 fn test_target_without_label() {
     Hegel::new(|tc| {
-        let observation: f64 = tc.draw(
-            gs::floats::<f64>()
-                .min_value(1.0)
-                .max_value(10.0),
-        );
+        let observation: f64 = tc.draw(gs::floats::<f64>().min_value(1.0).max_value(10.0));
         tc.target(observation, "");
     })
     .settings(Settings::new().test_cases(100).database(None))
@@ -75,11 +63,8 @@ fn test_multiple_target_calls() {
     Hegel::new(|tc| {
         let n: usize = tc.draw(gs::integers::<usize>().min_value(1).max_value(20));
         for i in 0..n {
-            let observation: f64 = tc.draw(
-                gs::floats::<f64>()
-                    .allow_nan(false)
-                    .allow_infinity(false),
-            );
+            let observation: f64 =
+                tc.draw(gs::floats::<f64>().allow_nan(false).allow_infinity(false));
             tc.target(observation, i.to_string());
         }
     })

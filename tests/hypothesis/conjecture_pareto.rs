@@ -13,10 +13,9 @@
 #![cfg(feature = "native")]
 
 use hegel::__native_test_internals::{
-    ChoiceValue, ConjectureRunResult, ExampleDatabase, HealthCheckLabel,
-    InMemoryNativeDatabase, NativeConjectureData, NativeConjectureRunner,
-    NativeRunnerSettings, ParetoFront, RunnerPhase, Status, choices_from_bytes, choices_to_bytes,
-    interesting_origin,
+    ChoiceValue, ConjectureRunResult, ExampleDatabase, HealthCheckLabel, InMemoryNativeDatabase,
+    NativeConjectureData, NativeConjectureRunner, NativeRunnerSettings, ParetoFront, RunnerPhase,
+    Status, choices_from_bytes, choices_to_bytes, interesting_origin,
 };
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -287,15 +286,15 @@ fn test_optimises_the_pareto_front() {
             while data.draw_integer(0, (1i128 << 8) - 1) != 0 {
                 count += 1;
             }
-            data.target_observations.insert("".to_string(), count.min(5) as f64);
+            data.target_observations
+                .insert("".to_string(), count.min(5) as f64);
         },
         settings,
         rng(),
     )
     .with_database_key(b"stuff".to_vec());
 
-    let seed: Vec<ChoiceValue> = std::iter::repeat(ChoiceValue::Integer(255))
-        .take(20)
+    let seed: Vec<ChoiceValue> = std::iter::repeat_n(ChoiceValue::Integer(255), 20)
         .chain(std::iter::once(ChoiceValue::Integer(0)))
         .collect();
     runner.cached_test_function(&seed);
@@ -304,8 +303,7 @@ fn test_optimises_the_pareto_front() {
     assert_eq!(runner.pareto_front().len(), 6);
     for i in 0..6 {
         let data = &runner.pareto_front()[i];
-        let expected: Vec<ChoiceValue> = std::iter::repeat(ChoiceValue::Integer(1))
-            .take(i)
+        let expected: Vec<ChoiceValue> = std::iter::repeat_n(ChoiceValue::Integer(1), i)
             .chain(std::iter::once(ChoiceValue::Integer(0)))
             .collect();
         assert_eq!(data.choices, expected);

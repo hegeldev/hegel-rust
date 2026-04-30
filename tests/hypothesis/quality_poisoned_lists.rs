@@ -17,9 +17,9 @@
 #![cfg(feature = "native")]
 
 use hegel::__native_test_internals::native_tc_handle_of;
+use hegel::TestCase;
 use hegel::compose;
 use hegel::generators::{self as gs, Generator};
-use hegel::TestCase;
 
 use crate::common::utils::Minimal;
 
@@ -35,8 +35,8 @@ enum Poisoned {
 const STOP_TEST_STRING: &str = "__HEGEL_STOP_TEST";
 
 fn weighted_boolean(tc: &TestCase, p: f64) -> bool {
-    let handle = native_tc_handle_of(tc)
-        .expect("weighted_boolean called outside native test context");
+    let handle =
+        native_tc_handle_of(tc).expect("weighted_boolean called outside native test context");
     match handle.lock().unwrap().weighted(p, None) {
         Ok(v) => v,
         Err(_) => panic!("{STOP_TEST_STRING}"),

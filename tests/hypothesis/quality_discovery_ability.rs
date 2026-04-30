@@ -47,7 +47,10 @@ fn three_way_gen() -> impl Generator<ThreeWay> {
 // Mirrors Python's distorted_value(map(type, x)) for BoolOrUnit lists.
 // Checks whether one variant appears 3x or more as often as the other.
 fn distorted_by_type_bool_unit(items: &[BoolOrUnit]) -> bool {
-    let bools = items.iter().filter(|x| matches!(x, BoolOrUnit::Bool(_))).count();
+    let bools = items
+        .iter()
+        .filter(|x| matches!(x, BoolOrUnit::Bool(_)))
+        .count();
     let units = items.iter().filter(|x| **x == BoolOrUnit::Unit).count();
     let counts: Vec<usize> = [bools, units].into_iter().filter(|&c| c > 0).collect();
     if counts.len() < 2 {
@@ -103,37 +106,49 @@ fn test_can_produce_large_negative_integers() {
 #[test]
 fn test_can_produce_large_factorial() {
     let factorials: HashSet<i128> = (9..=20u32).map(factorial).collect();
-    find_any(gs::integers::<i128>(), move |&x| x >= 50_000 && factorials.contains(&x));
+    find_any(gs::integers::<i128>(), move |&x| {
+        x >= 50_000 && factorials.contains(&x)
+    });
 }
 
 #[test]
 fn test_can_produce_above_large_factorial() {
     let factorials: HashSet<i128> = (9..=20u32).map(factorial).collect();
-    find_any(gs::integers::<i128>(), move |&x| x >= 50_000 && factorials.contains(&(x - 1)));
+    find_any(gs::integers::<i128>(), move |&x| {
+        x >= 50_000 && factorials.contains(&(x - 1))
+    });
 }
 
 #[test]
 fn test_can_produce_below_large_factorial() {
     let factorials: HashSet<i128> = (9..=20u32).map(factorial).collect();
-    find_any(gs::integers::<i128>(), move |&x| x >= 50_000 && factorials.contains(&(x + 1)));
+    find_any(gs::integers::<i128>(), move |&x| {
+        x >= 50_000 && factorials.contains(&(x + 1))
+    });
 }
 
 #[test]
 fn test_can_produce_large_factorial_negative() {
     let factorials: HashSet<i128> = (9..=20u32).map(factorial).collect();
-    find_any(gs::integers::<i128>(), move |&x| x <= -50_000 && factorials.contains(&x.abs()));
+    find_any(gs::integers::<i128>(), move |&x| {
+        x <= -50_000 && factorials.contains(&x.abs())
+    });
 }
 
 #[test]
 fn test_can_produce_above_large_factorial_negative() {
     let factorials: HashSet<i128> = (9..=20u32).map(factorial).collect();
-    find_any(gs::integers::<i128>(), move |&x| x <= -50_000 && factorials.contains(&(x - 1).abs()));
+    find_any(gs::integers::<i128>(), move |&x| {
+        x <= -50_000 && factorials.contains(&(x - 1).abs())
+    });
 }
 
 #[test]
 fn test_can_produce_below_large_factorial_negative() {
     let factorials: HashSet<i128> = (9..=20u32).map(factorial).collect();
-    find_any(gs::integers::<i128>(), move |&x| x <= -50_000 && factorials.contains(&(x + 1).abs()));
+    find_any(gs::integers::<i128>(), move |&x| {
+        x <= -50_000 && factorials.contains(&(x + 1).abs())
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -204,26 +219,23 @@ fn test_can_produce_nan() {
 
 #[test]
 fn test_can_produce_floats_near_left() {
-    find_any(
-        gs::floats::<f64>().min_value(0.0).max_value(1.0),
-        |&t| t < 0.2,
-    );
+    find_any(gs::floats::<f64>().min_value(0.0).max_value(1.0), |&t| {
+        t < 0.2
+    });
 }
 
 #[test]
 fn test_can_produce_floats_near_right() {
-    find_any(
-        gs::floats::<f64>().min_value(0.0).max_value(1.0),
-        |&t| t > 0.8,
-    );
+    find_any(gs::floats::<f64>().min_value(0.0).max_value(1.0), |&t| {
+        t > 0.8
+    });
 }
 
 #[test]
 fn test_can_produce_floats_in_middle() {
-    find_any(
-        gs::floats::<f64>().min_value(0.0).max_value(1.0),
-        |&t| (0.2..=0.8).contains(&t),
-    );
+    find_any(gs::floats::<f64>().min_value(0.0).max_value(1.0), |&t| {
+        (0.2..=0.8).contains(&t)
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -232,12 +244,16 @@ fn test_can_produce_floats_in_middle() {
 
 #[test]
 fn test_can_produce_long_lists() {
-    find_any(gs::vecs(gs::integers::<i64>()), |x: &Vec<i64>| x.len() >= 10);
+    find_any(gs::vecs(gs::integers::<i64>()), |x: &Vec<i64>| {
+        x.len() >= 10
+    });
 }
 
 #[test]
 fn test_can_produce_short_lists() {
-    find_any(gs::vecs(gs::integers::<i64>()), |x: &Vec<i64>| x.len() <= 10);
+    find_any(gs::vecs(gs::integers::<i64>()), |x: &Vec<i64>| {
+        x.len() <= 10
+    });
 }
 
 #[test]
@@ -309,7 +325,10 @@ fn test_ints_can_occasionally_be_really_large() {
 #[test]
 fn test_mixing_is_sometimes_distorted() {
     find_any(gs::vecs(bool_or_unit_gen()), |x: &Vec<BoolOrUnit>| {
-        let bools = x.iter().filter(|v| matches!(v, BoolOrUnit::Bool(_))).count();
+        let bools = x
+            .iter()
+            .filter(|v| matches!(v, BoolOrUnit::Bool(_)))
+            .count();
         let units = x.iter().filter(|v| **v == BoolOrUnit::Unit).count();
         bools > 0 && units > 0 && distorted_by_type_bool_unit(x)
     });
@@ -320,7 +339,7 @@ fn test_mixes_2_reasonably_often() {
     find_any(gs::vecs(bool_or_unit_gen()), |x: &Vec<BoolOrUnit>| {
         !x.is_empty()
             && x.iter().any(|v| matches!(v, BoolOrUnit::Bool(_)))
-            && x.iter().any(|v| *v == BoolOrUnit::Unit)
+            && x.contains(&BoolOrUnit::Unit)
     });
 }
 
@@ -328,9 +347,12 @@ fn test_mixes_2_reasonably_often() {
 fn test_partial_mixes_3_reasonably_often() {
     find_any(gs::vecs(three_way_gen()), |x: &Vec<ThreeWay>| {
         let has_bool = x.iter().any(|v| matches!(v, ThreeWay::Bool(_)));
-        let has_unit = x.iter().any(|v| *v == ThreeWay::Unit);
-        let has_str = x.iter().any(|v| *v == ThreeWay::Str);
-        let distinct = [has_bool, has_unit, has_str].into_iter().filter(|&b| b).count();
+        let has_unit = x.contains(&ThreeWay::Unit);
+        let has_str = x.contains(&ThreeWay::Str);
+        let distinct = [has_bool, has_unit, has_str]
+            .into_iter()
+            .filter(|&b| b)
+            .count();
         !x.is_empty() && distinct > 1 && distinct < 3
     });
 }
@@ -340,7 +362,7 @@ fn test_mixes_not_too_often() {
     find_any(gs::vecs(bool_or_unit_gen()), |x: &Vec<BoolOrUnit>| {
         !x.is_empty() && {
             let has_bool = x.iter().any(|v| matches!(v, BoolOrUnit::Bool(_)));
-            let has_unit = x.iter().any(|v| *v == BoolOrUnit::Unit);
+            let has_unit = x.contains(&BoolOrUnit::Unit);
             !(has_bool && has_unit)
         }
     });
@@ -513,13 +535,15 @@ fn one_of_nested_strategy_with_map() -> impl Generator<i64> {
                     .map(|x| x * 2)
                     .boxed(),
                 // one_of((just(6)|just(7)|just(8)).map(double)) → 12, 14, or 16
-                gs::one_of(vec![gs::one_of(vec![
-                    gs::just(6i64).boxed(),
-                    gs::just(7i64).boxed(),
-                    gs::just(8i64).boxed(),
+                gs::one_of(vec![
+                    gs::one_of(vec![
+                        gs::just(6i64).boxed(),
+                        gs::just(7i64).boxed(),
+                        gs::just(8i64).boxed(),
+                    ])
+                    .map(|x| x * 2)
+                    .boxed(),
                 ])
-                .map(|x| x * 2)
-                .boxed()])
                 .boxed(),
             ])
             .map(|x| x * 2)
@@ -582,8 +606,11 @@ fn one_of_nested_strategy_with_flatmap() -> impl Generator<Vec<()>> {
                 gs::one_of(vec![
                     gs::just(vec![(); 4]).boxed(),
                     gs::just(vec![(); 5]).boxed(),
-                    gs::one_of(vec![gs::just(vec![(); 6]).boxed(), gs::just(vec![(); 7]).boxed()])
-                        .boxed(),
+                    gs::one_of(vec![
+                        gs::just(vec![(); 6]).boxed(),
+                        gs::just(vec![(); 7]).boxed(),
+                    ])
+                    .boxed(),
                 ])
                 .boxed(),
             ])

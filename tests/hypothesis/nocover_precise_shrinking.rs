@@ -66,7 +66,6 @@ fn combined_gen(combo: &[usize]) -> gs::OneOfGenerator<'static, PreciseValue> {
     gs::one_of(combo.iter().map(|&t| make_gen(t)))
 }
 
-
 /// Return all k-element subsets of {0, 1, 2, 3, 4} in lexicographic order.
 fn combos_from_5(k: usize) -> Vec<Vec<usize>> {
     fn rec(start: usize, k: usize, cur: &mut Vec<usize>, out: &mut Vec<Vec<usize>>) {
@@ -156,8 +155,7 @@ fn test_can_precisely_shrink_alternatives() {
                 for idx_j in (idx_i + 1)..n {
                     let threshold = combo[idx_i];
                     let g = combined_gen(&combo);
-                    let result =
-                        minimal(g, move |x: &PreciseValue| x.type_index() >= threshold);
+                    let result = minimal(g, move |x: &PreciseValue| x.type_index() >= threshold);
                     assert_eq!(
                         result.type_index(),
                         threshold,
