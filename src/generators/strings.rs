@@ -564,19 +564,15 @@ pub struct IpAddressGenerator {
 
 impl IpAddressGenerator {
     /// Only generate IPv4 addresses.
-    // nocov start
     pub fn v4(mut self) -> Self {
         self.version = Some(IpVersion::V4);
         self
-        // nocov end
     }
 
     /// Only generate IPv6 addresses.
-    // nocov start
     pub fn v6(mut self) -> Self {
         self.version = Some(IpVersion::V6);
         self
-        // nocov end
     }
 
     fn build_schema(&self) -> Value {
@@ -586,8 +582,8 @@ impl IpAddressGenerator {
             None => cbor_map! {
                 "type" => "one_of",
                 "generators" => cbor_array![
-                    cbor_map!{"type" => "ipv4"},
-                    cbor_map!{"type" => "ipv6"}
+                    cbor_map!{"type" => "ip_address", "version" => 4u64},
+                    cbor_map!{"type" => "ip_address", "version" => 6u64}
                 ]
             },
         }
@@ -595,13 +591,10 @@ impl IpAddressGenerator {
 }
 
 impl Generator<String> for IpAddressGenerator {
-    // nocov start
     fn do_draw(&self, tc: &TestCase) -> String {
         self.as_basic().unwrap().do_draw(tc)
-        // nocov end
     }
 
-    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         let version = self.version;
         Some(BasicGenerator::new(self.build_schema(), move |raw| {
@@ -612,7 +605,6 @@ impl Generator<String> for IpAddressGenerator {
                 raw
             };
             super::deserialize_value(inner)
-            // nocov end
         }))
     }
 }
@@ -620,10 +612,8 @@ impl Generator<String> for IpAddressGenerator {
 /// Generate IP address strings (IPv4 or IPv6).
 ///
 /// See [`IpAddressGenerator`] for builder methods.
-// nocov start
 pub fn ip_addresses() -> IpAddressGenerator {
     IpAddressGenerator { version: None }
-    // nocov end
 }
 
 /// Generator for date strings in YYYY-MM-DD format. Created by [`dates()`].
