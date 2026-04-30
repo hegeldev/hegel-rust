@@ -44,6 +44,7 @@ mod nocover_baseexception;
 mod nocover_boundary_exploration;
 mod nocover_characters;
 mod nocover_collective_minimization;
+mod nocover_completion;
 mod nocover_conjecture_engine;
 mod nocover_conjecture_utils;
 mod nocover_database_agreement;

@@ -1568,11 +1568,6 @@ Individually-skipped tests (rest of the file is ported):
   limited to `ascii` / `latin-1` / `utf-8`. Rest of the file ported in
   `tests/hypothesis/nocover_characters.rs`.
 
-- `nocover/test_completion.py` — entire file skipped; the cherry-pick of
-  the worker port conflicted in `src/native/runner.rs` against concurrent
-  changes on the supervisor branch and was abandoned to avoid blocking the
-  port loop.
-
 - `nocover/test_conjecture_engine.py::test_saves_data_while_shrinking`,
   `nocover/test_conjecture_engine.py::test_can_discard` — both
   `monkeypatch.setattr(ConjectureRunner, "generate_new_examples",
