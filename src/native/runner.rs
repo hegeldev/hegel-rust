@@ -265,7 +265,7 @@ pub fn native_run<F>(
             }
             let tc_start = std::time::Instant::now();
             let (status, nodes, spans) = ctf.run(ntc);
-            total_test_time += tc_start.elapsed();
+            let elapsed = tc_start.elapsed();
             calls += 1;
             if verbosity == Verbosity::Debug {
                 eprintln!(
@@ -274,25 +274,14 @@ pub fn native_run<F>(
                 );
             }
 
-            // TooSlow health check: if cumulative test execution time exceeds
-            // the threshold, report it. Mirrors Hypothesis's `total_draw_time`
-            // check in `conjecture/engine.py`. The check is only active while
-            // we are still in the first `HEALTH_CHECK_MAX_VALID` valid examples;
-            // once that window closes, later slow examples are tolerated.
-            if valid_test_cases < HEALTH_CHECK_MAX_VALID
-                && total_test_time > TOO_SLOW_THRESHOLD
-                && !settings
-                    .suppress_health_check
-                    .contains(&HealthCheck::TooSlow)
-            {
-                panic!(
-                    "FailedHealthCheck: TooSlow — input generation is slow: \
-                     only {valid_test_cases} valid inputs after {:?} (threshold \
-                     {:?}). Slow generation makes property testing much less \
-                     effective. If this is expected, suppress the check with \
-                     suppress_health_check = [HealthCheck::TooSlow].",
-                    total_test_time, TOO_SLOW_THRESHOLD
-                );
+            // Only accumulate time for non-filtered cases. Invalid (filtered)
+            // draws have near-zero generation cost; including their wall-clock
+            // overhead would cause TooSlow to fire before FilterTooMuch on
+            // tests that filter everything. Mirrors Hypothesis's
+            // total_draw_time, which tracks time inside do_draw only, not
+            // infrastructure overhead or test-body time.
+            if status != Status::Invalid {
+                total_test_time += elapsed;
             }
 
             if nodes.is_empty() && status >= Status::Invalid {
@@ -301,11 +290,11 @@ pub fn native_run<F>(
             if status >= Status::Valid {
                 valid_test_cases += 1;
             }
+
+            // FilterTooMuch: checked before TooSlow to match Hypothesis's
+            // ordering (engine.py checks filter_too_much then too_slow).
             if status == Status::Invalid {
                 invalid_calls += 1;
-                // FilterTooMuch health check: if a large number of consecutive test
-                // cases are all filtered out (via assume()) before any valid example
-                // is found, report a health check failure.
                 if invalid_calls >= FILTER_TOO_MUCH_THRESHOLD
                     && valid_test_cases == 0
                     && !settings
@@ -323,6 +312,25 @@ pub fn native_run<F>(
                 }
             } else {
                 invalid_calls = 0;
+            }
+
+            // TooSlow health check: if cumulative draw time exceeds the
+            // threshold, report it. Only active while fewer than
+            // HEALTH_CHECK_MAX_VALID valid examples have been seen.
+            if valid_test_cases < HEALTH_CHECK_MAX_VALID
+                && total_test_time > TOO_SLOW_THRESHOLD
+                && !settings
+                    .suppress_health_check
+                    .contains(&HealthCheck::TooSlow)
+            {
+                panic!(
+                    "FailedHealthCheck: TooSlow — input generation is slow: \
+                     only {valid_test_cases} valid inputs after {:?} (threshold \
+                     {:?}). Slow generation makes property testing much less \
+                     effective. If this is expected, suppress the check with \
+                     suppress_health_check = [HealthCheck::TooSlow].",
+                    total_test_time, TOO_SLOW_THRESHOLD
+                );
             }
             if status == Status::Interesting {
                 if result.is_none() || sort_key(&nodes) < sort_key(result.as_ref().unwrap()) {
