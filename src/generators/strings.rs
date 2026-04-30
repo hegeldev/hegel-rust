@@ -585,8 +585,7 @@ impl IpAddressGenerator {
             Some(IpVersion::V4) => cbor_map! {"type" => "ip_addresses", "version" => 4u64},
             Some(IpVersion::V6) => cbor_map! {"type" => "ip_addresses", "version" => 6u64},
             None => cbor_map! {
-                "type" => "one_of",
-                "generators" => cbor_array![
+                "type" => "one_of", "generators" => cbor_array![
                     cbor_map!{"type" => "ip_addresses", "version" => 4u64},
                     cbor_map!{"type" => "ip_addresses", "version" => 6u64}
             // nocov end
