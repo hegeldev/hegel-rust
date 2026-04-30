@@ -163,10 +163,7 @@ fn test_multiple_invariants() {
     expect_panic(
         || {
             Hegel::new(|tc: TestCase| {
-                hegel::stateful::run(
-                    MultipleInvariantMachine { first_ran: false },
-                    tc,
-                );
+                hegel::stateful::run(MultipleInvariantMachine { first_ran: false }, tc);
             })
             .settings(Settings::new().database(None))
             .run();
@@ -218,9 +215,12 @@ struct CountStepsMachine {
 
 impl StateMachine for CountStepsMachine {
     fn rules(&self) -> Vec<Rule<Self>> {
-        vec![Rule::new("do_something", |m: &mut CountStepsMachine, _tc: TestCase| {
-            *m.count.lock().unwrap() += 1;
-        })]
+        vec![Rule::new(
+            "do_something",
+            |m: &mut CountStepsMachine, _tc: TestCase| {
+                *m.count.lock().unwrap() += 1;
+            },
+        )]
     }
     fn invariants(&self) -> Vec<Rule<Self>> {
         vec![]
