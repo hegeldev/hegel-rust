@@ -1731,18 +1731,27 @@ def dispatch_claude(
         cmd += ["--resume", resume_session]
     else:
         cmd += ["--append-system-prompt", COMMON_SYSTEM_PROMPT]
-    cmd.append(full_prompt)
+    # Pass the prompt via stdin rather than as a CLI argument so that large
+    # prompts (rescue logs with hundreds of JSONL lines, long gate output)
+    # don't exceed the kernel's ARG_MAX limit (E2BIG / "Argument list too long").
+    cmd.append("-")
 
     proc_cwd = cwd_override if cwd_override is not None else REPO_ROOT
     proc = subprocess.Popen(
         cmd,
         cwd=str(proc_cwd),
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
         preexec_fn=_set_resource_limits,
     )
+    # Write the prompt and close stdin immediately so claude sees EOF and
+    # starts processing; stdout is still open for streaming.
+    assert proc.stdin is not None
+    proc.stdin.write(full_prompt)
+    proc.stdin.close()
 
     timed_out = False
 
