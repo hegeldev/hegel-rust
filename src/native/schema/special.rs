@@ -97,6 +97,18 @@ pub(super) fn interpret_ipv6(ntc: &mut NativeTestCase) -> Result<Value, StopTest
     Ok(encode_string(s))
 }
 
+/// `ip_address` schema with `version` field → delegates to `interpret_ipv4` or `interpret_ipv6`.
+pub(super) fn interpret_ip_address(
+    ntc: &mut NativeTestCase,
+    schema: &Value,
+) -> Result<Value, StopTest> {
+    use crate::cbor_utils::as_u64;
+    match map_get(schema, "version").and_then(as_u64) {
+        Some(4) => interpret_ipv4(ntc),
+        _ => interpret_ipv6(ntc),
+    }
+}
+
 /// `domain` schema → a hostname like `sub.example.com`, respecting `max_length`.
 ///
 /// Structure: up to 2 subdomain labels + a second-level label + TLD, joined by dots.

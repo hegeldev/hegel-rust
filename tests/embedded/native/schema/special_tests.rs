@@ -109,6 +109,35 @@ fn interpret_ipv6_produces_eight_hex_groups() {
     }
 }
 
+// ── interpret_ip_address ───────────────────────────────────────────────────
+
+#[test]
+fn interpret_ip_address_v4_produces_dotted_octets() {
+    let mut ntc = fresh_ntc();
+    let schema = cbor_map! { "type" => "ip_address", "version" => 4u64 };
+    let s = decode_tagged(&interpret_ip_address(&mut ntc, &schema).ok().unwrap());
+    let parts: Vec<&str> = s.split('.').collect();
+    assert_eq!(parts.len(), 4);
+    for p in parts {
+        let n: u32 = p.parse().unwrap();
+        assert!(n <= 255);
+    }
+}
+
+#[test]
+fn interpret_ip_address_v6_produces_eight_hex_groups() {
+    let mut ntc = fresh_ntc();
+    let schema = cbor_map! { "type" => "ip_address", "version" => 6u64 };
+    let s = decode_tagged(&interpret_ip_address(&mut ntc, &schema).ok().unwrap());
+    let parts: Vec<&str> = s.split(':').collect();
+    assert_eq!(parts.len(), 8);
+    for p in parts {
+        assert_eq!(p.len(), 4);
+        let n = u32::from_str_radix(p, 16).unwrap();
+        assert!(n <= 0xFFFF);
+    }
+}
+
 // ── interpret_domain ───────────────────────────────────────────────────────
 
 #[test]
