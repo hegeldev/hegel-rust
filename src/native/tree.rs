@@ -19,7 +19,6 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use crate::control::with_test_context;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Span, Status};
 use crate::native::data_source::NativeDataSource;
-use crate::native::with_current_native_tc;
 use crate::test_case::{ASSUME_FAIL_STRING, LOOP_DONE_STRING, STOP_TEST_STRING, TestCase};
 
 use super::runner::{panic_message, store_final_panic_info};
@@ -185,11 +184,10 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
         is_final: bool,
     ) -> (Status, Vec<ChoiceNode>, Vec<Span>, Option<String>) {
         let (data_source, ntc_handle) = NativeDataSource::new(ntc);
-        let tc = TestCase::new(Box::new(data_source), is_final, self.mode);
+        let mut tc = TestCase::new(Box::new(data_source), is_final, self.mode);
+        tc.attach_native_handle(ntc_handle.clone());
         let result = with_test_context(|| {
-            with_current_native_tc(ntc_handle.clone(), || {
-                catch_unwind(AssertUnwindSafe(|| (self.test_fn)(tc.clone())))
-            })
+            catch_unwind(AssertUnwindSafe(|| (self.test_fn)(tc.clone())))
         });
 
         let (status, panic_msg) = match result {
