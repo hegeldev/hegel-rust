@@ -385,6 +385,30 @@ impl TestCase {
         (local.on_draw)(&format!("{:indent$}{}", "", message, indent = indent));
     }
 
+    /// Record a targeting observation to help the engine find extreme inputs.
+    ///
+    /// Call this inside a test body to guide generation toward inputs that
+    /// maximise `score`. The label distinguishes multiple simultaneous
+    /// targeting goals; pass `""` for a single unlabeled score.
+    ///
+    /// Has no effect during replays or if the test case has been aborted.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators as gs;
+    ///
+    /// #[hegel::test]
+    /// fn my_test(tc: hegel::TestCase) {
+    ///     let n: u32 = tc.draw(gs::integers::<u32>());
+    ///     tc.target(n as f64, "");
+    /// }
+    /// ```
+    pub fn target(&self, score: f64, label: impl Into<String>) {
+        let shared = self.global.shared.lock();
+        shared.data_source.target_observation(score, &label.into());
+    }
+
     /// Run `body` in a loop that should runs "logically infinitely" or until
     /// error. Roughly equivalent to a `loop` but with better interaction with
     /// the test runner: This loop will never exit until the test case completes.

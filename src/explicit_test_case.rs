@@ -129,6 +129,11 @@ impl ExplicitTestCase {
         panic!("{}", ASSUME_FAIL_STRING);
     }
 
+    pub fn target(&self, _score: f64, _label: impl Into<String>) {
+        // No-op for explicit test cases: targeting is only meaningful
+        // when the engine can act on the score during generation.
+    }
+
     #[doc(hidden)]
     pub fn start_span(&self, _label: u64) {
         panic!("start_span is not supported in explicit test cases");

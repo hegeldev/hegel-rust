@@ -68,6 +68,12 @@ pub trait DataSource: Send + Sync {
     /// If `consume` is true, the variable is removed from the pool.
     fn pool_generate(&self, pool_id: i128, consume: bool) -> Result<i128, DataSourceError>;
 
+    /// Record a targeting observation for the current test case.
+    ///
+    /// The score is used by the backend to guide generation toward
+    /// higher-scoring inputs. No-op if the test has been aborted.
+    fn target_observation(&self, score: f64, label: &str);
+
     /// Signal that the test case is complete.
     fn mark_complete(&self, status: &str, origin: Option<&str>);
 
