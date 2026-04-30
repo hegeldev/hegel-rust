@@ -29,38 +29,9 @@ pub mod shrinker;
 pub mod tree;
 pub mod unicodedata;
 
-use std::cell::RefCell;
-
 use data_source::NativeTestCaseHandle;
 
-thread_local! {
-    /// Handle to the `NativeTestCase` for the currently-running test function.
-    ///
-    /// Set by `tree.rs::execute` for the duration of each test function call so
-    /// that native-only primitives (e.g. `FeatureFlags`) can make direct draws
-    /// on the underlying test case without going through the `DataSource`
-    /// protocol.
-    static CURRENT_NATIVE_TC: RefCell<Option<NativeTestCaseHandle>> = const { RefCell::new(None) };
-}
-
-/// Install `handle` as the current test-case handle for the duration of `f`.
-///
-/// Previous value is restored on exit, supporting nested contexts.
-pub(crate) fn with_current_native_tc<R>(handle: NativeTestCaseHandle, f: impl FnOnce() -> R) -> R {
-    let prev = CURRENT_NATIVE_TC.with(|cell| cell.replace(Some(handle)));
-    let result = f();
-    CURRENT_NATIVE_TC.with(|cell| cell.replace(prev));
-    result
-}
-
-/// Run `f` with the current test-case handle, if any.
-pub fn with_native_tc<R>(f: impl FnOnce(Option<&NativeTestCaseHandle>) -> R) -> R {
-    CURRENT_NATIVE_TC.with(|cell| f(cell.borrow().as_ref()))
-}
-
 /// Return a clone of the native test case handle stored in `tc`, if any.
-///
-/// Preferred over `with_native_tc` for code that already holds a `TestCase`.
 pub fn native_tc_handle_of(tc: &crate::TestCase) -> Option<NativeTestCaseHandle> {
     tc.native_tc_handle().cloned()
 }
