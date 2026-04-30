@@ -139,7 +139,7 @@ fn test_can_produce_large_factorial_negative() {
 fn test_can_produce_above_large_factorial_negative() {
     let factorials: HashSet<i128> = (9..=20u32).map(factorial).collect();
     find_any(gs::integers::<i128>(), move |&x| {
-        x <= -50_000 && factorials.contains(&(x - 1).abs())
+        x <= -50_000 && x.checked_sub(1).and_then(|v| v.checked_abs()).map_or(false, |a| factorials.contains(&a))
     });
 }
 
