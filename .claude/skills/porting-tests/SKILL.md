@@ -355,7 +355,7 @@ Specific shapes that *look* skip-worthy but aren't:
   `Settings::new().database(Database::Path(...))`. The round-trip is only
   exercised natively, so native-gate it. See `tests/test_database_key.rs`.
 - **`tc.choice(n)` in Python** → in hegel-rust,
-  `tc.draw(gs::integers::<i64>().min_value(0).max_value(n-1))`.
+  `tc.draw(gs::integers::<i64>().min_value(0).max_value(n))` — range is `[0, n]` inclusive.
 - **Full 64-bit integer range** → `gs::integers::<u64>()` etc.
 - **`@gs.composite`** → `#[hegel::composite]` or `hegel::compose!`.
 - **`tc.weighted(0.0)` / `tc.weighted(1.0)`** — the public API is
