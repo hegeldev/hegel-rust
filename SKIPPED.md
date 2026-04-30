@@ -2617,3 +2617,5 @@ follow-up.
 - `test_from_type_recipe.py` (in `nocover/`) — port was abandoned due to
   a cherry-pick conflict in `src/native/conjecture_runner.rs` between the
   worker branch and the supervisor branch; defer to a human to resolve.
+
+- `conjecture/test_data_tree.py` — port abandoned; cherry-picking `port/worker-2` onto the supervisor branch conflicted in `src/native/runner.rs`.
