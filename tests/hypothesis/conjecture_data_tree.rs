@@ -36,22 +36,21 @@
 //!   children not exposed on `NativeDataTreeView`.
 //! - `test_will_mark_changes_in_discard_as_flaky` — standalone DataTree +
 //!   Flaky on `stop_span(discard=True)`.
-//! - `test_is_not_flaky_on_positive_zero_and_negative_zero` — accesses
-//!   `tree.root.transition.children[float_to_int(...)]`.
+//! - `test_is_not_flaky_on_positive_zero_and_negative_zero` —
+//!   `NativeConjectureData::draw_float` is `todo!()`; float paths cannot
+//!   be recorded in the native tree at all.
 //! - `test_observed_choice_type_draw` (×5) — accesses
 //!   `tree.root.choice_types / tree.root.transition`: not on
 //!   `DataTreeNode`.
 //! - `test_non_observed_choice_type_draw` (×5) — same.
 //! - `test_datatree_repr` — tests `pretty.pretty(tree)`: Python repr.
-//! - `test_can_generate_hard_floats` — requires forced float draws via
-//!   `run_to_nodes` + `draw_float(..., forced=f)` with bit-precise float
-//!   constraints; the native draw_float path for the runner's
-//!   `NativeConjectureData` does not expose a `forced` parameter.
+//! - `test_can_generate_hard_floats` — `NativeConjectureData::draw_float`
+//!   is `todo!()`; float paths cannot be recorded in the native tree.
 //! - `test_simulate_forced_floats` — uses standalone DataTree +
 //!   `tree.simulate_test_function(data)` where `data` is a
-//!   `ConjectureData` object; the native `simulate_test_function` takes
-//!   `&[ChoiceValue]`, not a data object, and the `nodes()` strategy
-//!   from `tests/conjecture/common.py` has no native equivalent.
+//!   `ConjectureData` object; additionally, `NativeConjectureData::draw_float`
+//!   is `todo!()` and `nodes()` from `tests/conjecture/common.py` has no
+//!   native equivalent.
 
 #![cfg(feature = "native")]
 
@@ -217,6 +216,14 @@ fn test_novel_prefixes_are_novel() {
     );
     for _ in 0..100 {
         let prefix = runner.generate_novel_prefix();
+        // The prefix must be novel (None) or a partial prefix that causes an
+        // overrun (EarlyStop) — never a previously-recorded terminal status.
+        let (_, pre_status) = runner.tree().rewrite(&prefix);
+        assert!(
+            pre_status.is_none() || pre_status == Some(Status::EarlyStop),
+            "novel prefix should be unknown or overrun before running, got {:?}",
+            pre_status
+        );
         let result = runner.cached_test_function_full(&prefix);
         // After running, the actual choice sequence is recorded in the tree.
         let (rewritten, status) = runner.tree().rewrite(&result.choices);
