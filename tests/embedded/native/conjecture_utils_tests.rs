@@ -124,7 +124,7 @@ fn sample_distribution_matches_weights() {
     for _ in 0..n_iters {
         let inner_seed: u64 = rand::RngExt::random(&mut seed_rng);
         let mut data = NativeTestCase::new_random(SmallRng::seed_from_u64(inner_seed));
-        let n = sampler.sample(&mut data).ok().unwrap();
+        let n = sampler.sample(&mut data, None).ok().unwrap();
         counts[n] += 1;
     }
     for (i, &c) in counts.iter().enumerate() {
