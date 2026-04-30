@@ -283,8 +283,9 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         // Schema is `{"type": "one_of", "generators": [s_0, s_1, ...]}` with one
         // child per variant in declaration order. The server's response is
         // `[index, value]` where `index` selects the variant; for unit variants
-        // the corresponding child schema is `{"type": "null"}` and the value is
-        // discarded, for data variants it's the variant generator's schema.
+        // the corresponding child schema is `{"type": "constant", "value": null}`
+        // and the value is discarded, for data variants it's the variant
+        // generator's schema.
 
         // Bind data variant basic generators (must succeed for all data variants).
         let data_variant_basic_bindings: Vec<proc_macro2::TokenStream> = data_variants
@@ -300,7 +301,10 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
 
         // Build schema entries and parse arms in declaration order so the wire
         // index matches the variant order.
-        let null_schema = cbor_map(vec![(cbor_text("type"), cbor_text("null"))]);
+        let null_schema = cbor_map(vec![
+            (cbor_text("type"), cbor_text("constant")),
+            (cbor_text("value"), quote! { hegel::ciborium::Value::Null }),
+        ]);
         let one_of_schema_entries: Vec<proc_macro2::TokenStream> = variants
             .iter()
             .map(|variant| match classify_variant(variant) {

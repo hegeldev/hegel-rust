@@ -582,12 +582,13 @@ impl IpAddressGenerator {
     // nocov start
     fn build_schema(&self) -> Value {
         match self.version {
-            Some(IpVersion::V4) => cbor_map! {"type" => "ipv4"},
-            Some(IpVersion::V6) => cbor_map! {"type" => "ipv6"},
+            Some(IpVersion::V4) => cbor_map! {"type" => "ip_addresses", "version" => 4u64},
+            Some(IpVersion::V6) => cbor_map! {"type" => "ip_addresses", "version" => 6u64},
             None => cbor_map! {
-                "one_of" => cbor_array![
-                    cbor_map!{"type" => "ipv4"},
-                    cbor_map!{"type" => "ipv6"}
+                "type" => "one_of",
+                "generators" => cbor_array![
+                    cbor_map!{"type" => "ip_addresses", "version" => 4u64},
+                    cbor_map!{"type" => "ip_addresses", "version" => 6u64}
             // nocov end
                 ]
             },
