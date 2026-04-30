@@ -16,9 +16,10 @@
 
 #![cfg(feature = "native")]
 
-use hegel::__native_test_internals::with_native_tc;
+use hegel::__native_test_internals::native_tc_handle_of;
 use hegel::compose;
 use hegel::generators::{self as gs, Generator};
+use hegel::TestCase;
 
 use crate::common::utils::Minimal;
 
@@ -33,23 +34,18 @@ enum Poisoned {
 // buffer" — matches how `tc.draw` propagates `DataSourceError::StopTest`.
 const STOP_TEST_STRING: &str = "__HEGEL_STOP_TEST";
 
-fn weighted_boolean(p: f64) -> bool {
-    with_native_tc(|handle| {
-        match handle
-            .expect("weighted_boolean called outside native test context")
-            .lock()
-            .unwrap()
-            .weighted(p, None)
-        {
-            Ok(v) => v,
-            Err(_) => panic!("{STOP_TEST_STRING}"),
-        }
-    })
+fn weighted_boolean(tc: &TestCase, p: f64) -> bool {
+    let handle = native_tc_handle_of(tc)
+        .expect("weighted_boolean called outside native test context");
+    match handle.lock().unwrap().weighted(p, None) {
+        Ok(v) => v,
+        Err(_) => panic!("{STOP_TEST_STRING}"),
+    }
 }
 
 fn poisoned(p: f64) -> impl Generator<Poisoned> {
     compose!(|tc| {
-        if weighted_boolean(p) {
+        if weighted_boolean(&tc, p) {
             Poisoned::Poison
         } else {
             Poisoned::Value(tc.draw(gs::integers::<i64>().min_value(0).max_value(10)))

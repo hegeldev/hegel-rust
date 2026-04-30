@@ -16,7 +16,7 @@
 #[test]
 fn test_filter_iterations_are_marked_as_discarded() {
     use hegel::__native_test_internals::{
-        CachedTestFunction, ChoiceValue, NativeTestCase, with_native_tc,
+        CachedTestFunction, ChoiceValue, NativeTestCase, native_tc_handle_of,
     };
     use hegel::TestCase;
     use hegel::generators::{self as gs, Generator};
@@ -30,7 +30,7 @@ fn test_filter_iterations_are_marked_as_discarded() {
     let mut ctf = CachedTestFunction::new(move |tc: TestCase| {
         let v: i64 = tc.draw(gs::integers::<i64>().filter(|x: &i64| *x == 0));
         *drawn_clone.lock().unwrap() = Some(v);
-        let hd = with_native_tc(|handle| handle.unwrap().lock().unwrap().has_discards);
+        let hd = native_tc_handle_of(&tc).unwrap().lock().unwrap().has_discards;
         *hd_clone.lock().unwrap() = hd;
     });
 
