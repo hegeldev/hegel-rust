@@ -2636,9 +2636,9 @@ Individually-skipped tests (rest of the file is ported in
 - `conjecture/test_data_tree.py::test_changing_value_of_forced_is_flaky` — standalone DataTree + Flaky.
 - `conjecture/test_data_tree.py::test_child_becomes_exhausted_after_split` — accesses `tree.root.transition.children[b"\0"].is_exhausted`: internal tree children not exposed.
 - `conjecture/test_data_tree.py::test_will_mark_changes_in_discard_as_flaky` — standalone DataTree + Flaky on `stop_span(discard=True)`.
-- `conjecture/test_data_tree.py::test_is_not_flaky_on_positive_zero_and_negative_zero` — accesses `tree.root.transition.children[float_to_int(...)]`.
+- `conjecture/test_data_tree.py::test_is_not_flaky_on_positive_zero_and_negative_zero` — `NativeConjectureData::draw_float` is `todo!()`; float paths cannot be recorded in the native tree.
 - `conjecture/test_data_tree.py::test_observed_choice_type_draw[integer/float/boolean/string/bytes]` — accesses `tree.root.choice_types / tree.root.transition`.
 - `conjecture/test_data_tree.py::test_non_observed_choice_type_draw[integer/float/boolean/string/bytes]` — same.
 - `conjecture/test_data_tree.py::test_datatree_repr` — tests `pretty.pretty(tree)`: Python repr.
-- `conjecture/test_data_tree.py::test_can_generate_hard_floats` — requires forced float draws via `draw_float(..., forced=f)`; native `NativeConjectureData.draw_float` has no `forced` parameter.
-- `conjecture/test_data_tree.py::test_simulate_forced_floats` — uses standalone DataTree + `tree.simulate_test_function(data)` where data is a `ConjectureData`; native `simulate_test_function` takes `&[ChoiceValue]`, not a data object.
+- `conjecture/test_data_tree.py::test_can_generate_hard_floats` — `NativeConjectureData::draw_float` is `todo!()`; float paths cannot be recorded in the native tree.
+- `conjecture/test_data_tree.py::test_simulate_forced_floats` — `NativeConjectureData::draw_float` is `todo!()`; also uses standalone DataTree + `tree.simulate_test_function(data)` where data is a `ConjectureData`, with no native equivalent.

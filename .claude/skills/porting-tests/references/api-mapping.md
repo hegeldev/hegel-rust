@@ -992,7 +992,7 @@ targets tree-state tests across multiple runs.
 
 ### Large skip cluster in `test_data_tree.py`
 
-About half the file must be individually-skipped. The three root causes:
+About half the file must be individually-skipped. The four root causes:
 
 1. **Flat-list optimization** — Python's `DataTree` stores pre-branch runs as
    a flat list (`root.values`, `root.constraints`, `root.transition.status`).
@@ -1010,6 +1010,11 @@ About half the file must be individually-skipped. The three root causes:
    Blocks: `test_stores_forced_nodes`, `test_correctly_relocates_forced_nodes`,
    `test_child_becomes_exhausted_after_split`, `test_observed_choice_type_draw`,
    `test_datatree_repr`.
+
+4. **`NativeConjectureData::draw_float` is `todo!()`** — float paths cannot
+   be recorded in the native tree at all.
+   Blocks: `test_is_not_flaky_on_positive_zero_and_negative_zero`,
+   `test_can_generate_hard_floats`, `test_simulate_forced_floats`.
 
 See `tests/hypothesis/conjecture_data_tree.rs` module docstring for the
 complete individual-skip list.
