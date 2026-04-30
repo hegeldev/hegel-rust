@@ -11,30 +11,6 @@
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
 
-- title: Remove CURRENT_NATIVE_TC thread-local; pass TestCase explicitly
-  details: |
-    src/native/mod.rs has a thread-local `CURRENT_NATIVE_TC` that holds a raw
-    pointer to the current `NativeTestCase`. This is a design smell: test-case
-    state should be passed through the call stack explicitly, not smuggled via a
-    global. The thread-local was introduced as a shortcut so that inner draw
-    operations could find the test case without changing every function signature,
-    but the right fix is to refactor those signatures.
-
-    Concretely:
-    - Remove `CURRENT_NATIVE_TC` from src/native/mod.rs.
-    - Wherever `with_native_tc(|tc| ...)` is called to access the test case,
-      thread the `NativeTestCase` (or a `&mut TestCase`) down through the call
-      chain instead.
-    - The `target()` method being added to `TestCase` (see "Expose target() in
-      the public hegel API") should pass the score through explicitly too — no
-      new thread-locals.
-
-    Acceptance criteria:
-    - `CURRENT_NATIVE_TC` and `with_native_tc` are removed from the codebase.
-    - All previously thread-local accesses are replaced by explicit parameters.
-    - All tests continue to pass.
-
-
 - title: Port quality/test_discovery_ability.py
   details: |
     Upstream: resources/hypothesis/hypothesis-python/tests/quality/test_discovery_ability.py
