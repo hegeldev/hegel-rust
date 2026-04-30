@@ -32,7 +32,10 @@ pub(super) fn interpret_one_of(
     );
     let idx = ntc.draw_integer(0, generators.len() as i128 - 1)?;
     let value = interpret_schema(ntc, &generators[idx as usize])?;
-    Ok(Value::Array(vec![Value::Integer((idx as i64).into()), value]))
+    Ok(Value::Array(vec![
+        Value::Integer((idx as i64).into()),
+        value,
+    ]))
 }
 
 pub(super) fn interpret_sampled_from(
