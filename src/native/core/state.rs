@@ -72,6 +72,141 @@ fn many_draw_length(rng: &mut SmallRng, min_size: usize, max_size: usize) -> usi
     len
 }
 
+/// Interesting integer constants seeded from Hypothesis's GLOBAL_CONSTANTS
+/// (providers.py): powers of 2 (2^16..2^65), powers of 10 (10^5..10^19),
+/// factorials (9!..20!), primorials — plus their ±1 neighbours and negations.
+static GLOBAL_CONSTANTS_INTEGERS: LazyLock<Vec<i128>> = LazyLock::new(|| {
+    let mut base: Vec<i128> = Vec::new();
+    // Powers of 2 (2^16 to 2^65)
+    for n in 16u32..66 {
+        base.push(1i128 << n);
+    }
+    // Powers of 10 (10^5 to 10^19)
+    let mut p10 = 100_000i128;
+    for _ in 5..20u32 {
+        base.push(p10);
+        p10 *= 10;
+    }
+    // Factorials (9! to 20!)
+    let mut f = 362_880i128; // 9!
+    base.push(f);
+    for i in 10u32..=20 {
+        f *= i as i128;
+        base.push(f);
+    }
+    // Primorial numbers
+    base.extend_from_slice(&[
+        510_510i128,
+        6_469_693_230,
+        304_250_263_527_210,
+        32_589_158_477_190_044_730,
+    ]);
+    // Extend with n-1 and n+1
+    let n_base = base.len();
+    for i in 0..n_base {
+        base.push(base[i] - 1);
+        base.push(base[i] + 1);
+    }
+    // Extend with negations of all values so far
+    let n_half = base.len();
+    for i in 0..n_half {
+        base.push(-base[i]);
+    }
+    base.sort_unstable();
+    base.dedup();
+    base
+});
+
+/// Interesting string constants seeded from Hypothesis's GLOBAL_CONSTANTS
+/// (providers.py `_constant_strings`): logic keywords, numeric edge cases,
+/// common Unicode stress strings.  Stored as codepoint vectors so they can
+/// be validated against and inserted into the draw_string nasty pool.
+static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
+    let strings: &[&str] = &[
+        // strings interpretable as code / logic
+        "undefined",
+        "null",
+        "NULL",
+        "nil",
+        "NIL",
+        "true",
+        "false",
+        "True",
+        "False",
+        "TRUE",
+        "FALSE",
+        "None",
+        "none",
+        "if",
+        "then",
+        "else",
+        "__dict__",
+        "__proto__",
+        // strings interpretable as numbers
+        "0",
+        "1e100",
+        "0..0",
+        "0/0",
+        "1/0",
+        "+0.0",
+        "Infinity",
+        "-Infinity",
+        "Inf",
+        "INF",
+        "NaN",
+        "999999999999999999999999999999",
+        // common ASCII punctuation / special chars
+        ",./;'[]\\-=<>?:\"{}|_+!@#$%^&*()`~",
+        // common Unicode characters
+        "Ω≈ç√∫˜µ≤≥÷åß∂ƒ©˙∆˚¬…æœ∑´®†¥¨ˆøπ\u{201C}\u{2018}¡™£¢∞§¶•ªº–≠¸˛Ç◊ı˜Â¯˘¿ÅÍÎÏ˝ÓÔÒÚÆ☃Œ„´‰ˇÁ¨ˆØ∏\u{201D}\u{2019}`⁄€‹›ﬁﬂ‡°·‚—±",
+        // characters that increase in length when lowercased
+        "Ⱥ",
+        "Ⱦ",
+        // ligatures
+        "æœÆŒﬀʤʨß",
+        // emoticons
+        "(╯°□°）╯︵ ┻━┻)",
+        // emojis
+        "😍",
+        "🇺🇸",
+        "🏻",
+        "👍🏻",
+        // RTL text
+        "الكل في المجمو عة",
+        // Ogham text
+        "᚛ᚄᚓᚐᚋᚒᚄ ᚑᚄᚂᚑᚏᚅ᚜",
+        // Thai consonant + spacing vowel
+        "กา",
+        "ก ำกำ",
+        // mathematical bold/fraktur/script text
+        "𝐓𝐡𝐞 𝐪𝐮𝐢𝐜𝐤 𝐛𝐫𝐨𝐰𝐧 𝐟𝐨𝐱 𝐣𝐮𝐦𝐩𝐬 𝐨𝐯𝐞𝐫 𝐭𝐡𝐞 𝐥𝐚𝐳𝐲 𝐝𝐨𝐠",
+        "𝕿𝖍𝖊 𝖖𝖚𝖎𝖈𝖐 𝖇𝖗𝖔𝖜𝖓 𝖋𝖔𝖝 𝖏𝖚𝖒𝖕𝖘 𝖔𝖛𝖊𝖗 𝖙𝖍𝖊 𝖑𝖆𝖟𝖞 𝖉𝖔𝖌",
+        "𝑻𝒉𝒆 𝒒𝒖𝒊𝒄𝒌 𝒃𝒓𝒐𝒘𝒏 𝒇𝒐𝒙 𝒋𝒖𝒎𝒑𝒔 𝒐𝒗𝒆𝒓 𝒕𝒉𝒆 𝒍𝒂𝒛𝒚 𝒅𝒐𝒈",
+        "𝓣𝓱𝓮 𝓺𝓾𝓲𝓬𝓴 𝓫𝓻𝓸𝔀𝓷 𝓯𝓸𝔁 𝓳𝓾𝓶𝓹𝓼 𝓸𝓿𝓮𝓻 𝓽𝓱𝓮 𝓵𝓪𝔃𝔂 𝓭𝓸𝓰",
+        "𝕋𝕙𝕖 𝕢𝕦𝕚𝕔𝕜 𝕓𝕣𝕠𝕨𝕟 𝕗𝕠𝕩 𝕛𝕦𝕞𝕡𝕤 𝕠𝕧𝕖𝕣 𝕥𝕙𝕖 𝕝𝕒𝕫𝕪 𝕕𝕠𝕘",
+        // upside-down text
+        "ʇǝɯɐ ʇᴉs ɹolop ɯnsdᴉ ɯǝɹo˥",
+        // Windows reserved names
+        "NUL",
+        "COM1",
+        "LPT1",
+        // Scunthorpe problem
+        "Scunthorpe",
+        // zalgo text
+        "Ṱ̺̺̕o͞ ̷i̲̬͇̪͙n̝̗͕v̟̜̘̦͟o̶̙̰̠kè͚̮̺̪̹̱̤ ̖t̝͕̳̣̻̪͞h̼͓̲̦̳̘̲e͇̣̰̦̬͎ ̢̼̻̱̘h͚͎͙̜̣̲ͅi̦̲̣̰̤v̻͍e̺̭̳̪̰-m̢iͅn̖̺̞̲̯̰d̵̼̟͙̩̼̘̳ ̞̥̱̳̭r̛̗̘e͙p͠r̼̞̻̭̗e̺̠̣͟s̘͇̳͍̝͉e͉̥̯̞̲͚̬͜ǹ̬͎͎̟̖͇̤t͍̬̤͓̼̭͘ͅi̪̱n͠g̴͉ ͏͉ͅc̬̟h͡a̫̻̯͘o̫̟̖͍̙̝͉s̗̦̲.̨̹͈̣",
+        // examples from https://faultlore.com/blah/text-hates-you/
+        "मनीष منش",
+        "पन्ह पन्ह त्र र्च कृकृ ड्ड न्हृे إلا بسم الله",
+        "lorem لا بسم الله ipsum 你好1234你好",
+        // unconditional Unicode line-break characters (UAX #14)
+        "a\u{000A}b\u{000D}c\u{0085}d\u{000B}e\u{000C}f\u{2028}g\u{2029}h\u{000D}\u{000A}i",
+    ];
+    strings
+        .iter()
+        .map(|s| s.chars().map(|c| c as u32).collect::<Vec<u32>>())
+        .collect()
+});
+
 /// A pool of variable IDs for stateful testing.
 ///
 /// Port of hegel-core's `Variables` class from server.py.
@@ -894,6 +1029,11 @@ impl NativeTestCase {
                         nasty.push(v);
                     }
                 }
+                for &v in GLOBAL_CONSTANTS_INTEGERS.iter() {
+                    if kind.validate(v) && !nasty.contains(&v) {
+                        nasty.push(v);
+                    }
+                }
                 let threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
                 if rng.random::<f64>() < threshold {
                     let idx = rng.random_range(0..nasty.len());
@@ -1169,7 +1309,8 @@ impl NativeTestCase {
 
         // Edge-case-boosting: simplest, empty (if allowed), single simplest
         // codepoint (if allowed), two simplest codepoints (for duplicate-char
-        // counterexamples).
+        // counterexamples), plus GLOBAL_CONSTANTS strings that satisfy the
+        // current constraint.
         let nasty: Vec<Vec<u32>> = {
             let simplest = kind.simplest();
             let simplest_cp = kind.simplest_codepoint();
@@ -1182,6 +1323,11 @@ impl NativeTestCase {
             }
             if min_size <= 2 && max_size >= 2 {
                 v.push(vec![simplest_cp, simplest_cp]);
+            }
+            for cps in GLOBAL_CONSTANTS_STRINGS.iter() {
+                if kind.validate(cps) && !v.contains(cps) {
+                    v.push(cps.clone());
+                }
             }
             v
         };
