@@ -1946,7 +1946,7 @@ fn test_does_not_duplicate_elements() {
 
     let d1 = runner.cached_test_function(&[ChoiceValue::Integer(1)]);
     assert_eq!(runner.pareto_front().len(), 1);
-    assert!(runner.pareto_front_mut().add(d1));
+    assert!(runner.pareto_front_mut().add(d1).0);
     assert_eq!(runner.pareto_front().len(), 1);
 }
 
