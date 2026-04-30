@@ -52,11 +52,7 @@ fn test_gives_flaky_error_if_assumption_is_flaky() {
                 seen.lock().unwrap().insert(s);
                 panic!("AssertionError");
             })
-            .settings(
-                Settings::new()
-                    .verbosity(Verbosity::Quiet)
-                    .database(None),
-            )
+            .settings(Settings::new().verbosity(Verbosity::Quiet).database(None))
             .run();
         },
         "Flaky test detected",

@@ -186,9 +186,8 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
         let (data_source, ntc_handle) = NativeDataSource::new(ntc);
         let mut tc = TestCase::new(Box::new(data_source), is_final, self.mode);
         tc.attach_native_handle(ntc_handle.clone());
-        let result = with_test_context(|| {
-            catch_unwind(AssertUnwindSafe(|| (self.test_fn)(tc.clone())))
-        });
+        let result =
+            with_test_context(|| catch_unwind(AssertUnwindSafe(|| (self.test_fn)(tc.clone()))));
 
         let (status, panic_msg) = match result {
             Ok(()) => (Status::Valid, None),

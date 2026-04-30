@@ -1350,7 +1350,14 @@ fn run_test_fn(
         .filter_map(|s| if s.discarded { Some(s.end) } else { None })
         .collect();
     let nodes = std::mem::take(&mut data.ntc.nodes);
-    (status, nodes, origin, target_observations, tags, kill_depths)
+    (
+        status,
+        nodes,
+        origin,
+        target_observations,
+        tags,
+        kill_depths,
+    )
 }
 
 /// Return `true` if `choices` is a strict prefix of some path already

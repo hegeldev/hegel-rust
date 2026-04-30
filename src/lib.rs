@@ -292,6 +292,7 @@ pub mod __native_test_internals {
         make_float_clamper, next_down, next_down_normal, next_up, next_up_normal, sign_aware_lte,
     };
     pub use crate::native::intervalsets::IntervalSet;
+    pub use crate::native::native_tc_handle_of;
     pub use crate::native::optimiser::{
         BufferSizeLimit, CachedTestResult, RunIsComplete, TargetedRunner, TargetedRunnerSettings,
         TargetedTestCase,
@@ -302,7 +303,6 @@ pub mod __native_test_internals {
     pub use crate::native::shrinker::{ShrinkRun, Shrinker};
     pub use crate::native::tree::CachedTestFunction;
     pub use crate::native::unicodedata;
-    pub use crate::native::native_tc_handle_of;
 }
 
 /// Derive a generator for a struct or enum.
