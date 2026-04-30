@@ -7,7 +7,7 @@
 //! uses `data.draw_boolean(p)` for rare poisoning, which has no public
 //! generator equivalent (`gs::booleans()` takes no probability), so this
 //! port goes through `NativeTestCase::weighted(p, None)` via
-//! `with_native_tc` and is native-only.
+//! `native_tc_handle_of` and is native-only.
 //!
 //! The Python file parametrizes over `seed` (4 values); hegel-rust's
 //! `Minimal` runs derandomised, so the seed axis collapses. The remaining
