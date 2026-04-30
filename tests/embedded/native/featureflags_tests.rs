@@ -4,6 +4,7 @@
 // and the StopTest panic branches in is_enabled / do_draw.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -11,7 +12,6 @@ use rand::rngs::SmallRng;
 use super::*;
 use crate::native::core::NativeTestCase;
 use crate::native::data_source::NativeDataSource;
-use crate::native::with_current_native_tc;
 use crate::runner::Mode;
 use crate::test_case::TestCase;
 
@@ -47,10 +47,10 @@ fn debug_formats_sorted_enabled_and_disabled() {
 
 #[test]
 fn live_flags_fall_back_to_enabled_when_handle_missing() {
-    // A live FeatureFlags with no thread-local test-case handle (either the
-    // test completed or the user constructed one manually) should default to
+    // A live FeatureFlags with no test-case handle (either the test
+    // completed or the user constructed one manually) should default to
     // every feature enabled — matching Hypothesis's "data frozen" fallback.
-    let flags = FeatureFlags::live(0.5, HashSet::new());
+    let flags = FeatureFlags::live(0.5, HashSet::new(), None);
     assert!(flags.is_enabled("unknown"));
 }
 
@@ -62,13 +62,15 @@ fn live_flags_remember_prior_decisions_when_handle_missing() {
         let ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(1));
         let (data_source, handle) = NativeDataSource::new(ntc);
         let strategy = FeatureStrategy::new();
-        let tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);
-        let flags = with_current_native_tc(handle, || strategy.do_draw(&tc));
+        let mut tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);
+        tc.attach_native_handle(handle);
+        let flags = strategy.do_draw(&tc);
         // Force a decision while the handle is still live.
         let _ = flags.is_enabled("recorded");
         flags
+        // tc is dropped here: all strong Arc refs go away → Weak fails to upgrade
     };
-    // Thread-local is now cleared (the closure returned).
+    // Weak upgrade now fails, so is_enabled falls back to frozen-mode default.
     assert!(flags.is_enabled("brand_new"));
 }
 
@@ -80,11 +82,10 @@ fn at_least_one_of_single_name_forces_enabled() {
     let ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(42));
     let (data_source, handle) = NativeDataSource::new(ntc);
     let strategy = FeatureStrategy::new().at_least_one_of(["only"]);
-    let tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);
-    with_current_native_tc(handle, || {
-        let flags = strategy.do_draw(&tc);
-        assert!(flags.is_enabled("only"));
-    });
+    let mut tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);
+    tc.attach_native_handle(handle);
+    let flags = strategy.do_draw(&tc);
+    assert!(flags.is_enabled("only"));
 }
 
 #[test]
@@ -94,11 +95,12 @@ fn is_enabled_panics_stop_test_when_test_case_exhausted() {
     // draw returns StopTest, which is_enabled converts to a STOP_TEST_STRING
     // panic (caught by the runner to mark the test invalid).
     let ntc = NativeTestCase::for_choices(&[], None, None);
-    let (_data_source, handle) = NativeDataSource::new(ntc);
-    let flags = FeatureFlags::live(0.5, HashSet::new());
-    with_current_native_tc(handle, || {
-        flags.is_enabled("x");
-    });
+    let (data_source, handle) = NativeDataSource::new(ntc);
+    let weak = Arc::downgrade(&handle);
+    // Keep both strong refs alive so the Weak upgrade succeeds.
+    let flags = FeatureFlags::live(0.5, HashSet::new(), Some(weak));
+    let _keeper = (data_source, handle);
+    flags.is_enabled("x");
 }
 
 #[test]
@@ -107,17 +109,16 @@ fn do_draw_panics_stop_test_when_test_case_exhausted() {
     let ntc = NativeTestCase::for_choices(&[], None, None);
     let (data_source, handle) = NativeDataSource::new(ntc);
     let strategy = FeatureStrategy::new();
-    let tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);
-    with_current_native_tc(handle, || {
-        strategy.do_draw(&tc);
-    });
+    let mut tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);
+    tc.attach_native_handle(handle);
+    strategy.do_draw(&tc);
 }
 
 #[test]
 #[should_panic(expected = "FeatureStrategy::do_draw called outside the native test context")]
 fn do_draw_outside_native_context_panics() {
-    // FeatureStrategy only works when the thread-local native TC handle is
-    // set. Outside a native run the expect-message fires.
+    // FeatureStrategy only works when tc.native_tc_handle() is Some.
+    // Without attach_native_handle the handle is None and the expect fires.
     let ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(0));
     let (data_source, _handle) = NativeDataSource::new(ntc);
     let strategy = FeatureStrategy::new();
