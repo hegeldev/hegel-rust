@@ -3,20 +3,6 @@
 //! Statistical tests asserting that generators produce specific values with a
 //! minimum probability.  All tests are native-gated; the Python originals use
 //! ConjectureRunner directly (no server needed).
-//!
-//! Individually-skipped tests (rest of the file is ported):
-//! - test_can_produce_large_factorial — native engine lacks GLOBAL_CONSTANTS
-//!   factorial seeding; probability effectively zero without it.
-//! - test_can_produce_above_large_factorial — same reason.
-//! - test_can_produce_below_large_factorial — same reason.
-//! - test_can_produce_large_factorial_negative — same reason.
-//! - test_can_produce_above_large_factorial_negative — same reason.
-//! - test_can_produce_below_large_factorial_negative — same reason.
-//! - test_can_produce_nasty_strings — needs GLOBAL_CONSTANTS string injection
-//!   ("NaN", "Inf", "undefined"); native engine does not seed these.
-//! - test_long_duplicates_strings — relies on GLOBAL_CONSTANTS to make both
-//!   text() draws in a tuple produce the same constant string; two equal
-//!   random strings of length >= 5 are otherwise unreachable.
 
 #![cfg(feature = "native")]
 
@@ -115,42 +101,36 @@ fn test_can_produce_large_negative_integers() {
 }
 
 #[test]
-#[ignore = "native engine lacks GLOBAL_CONSTANTS factorial seeding — tracked in TODO.yaml"]
 fn test_can_produce_large_factorial() {
     let factorials: HashSet<i128> = (9..=20u32).map(factorial).collect();
     find_any(gs::integers::<i128>(), move |&x| x >= 50_000 && factorials.contains(&x));
 }
 
 #[test]
-#[ignore = "native engine lacks GLOBAL_CONSTANTS factorial seeding — tracked in TODO.yaml"]
 fn test_can_produce_above_large_factorial() {
     let factorials: HashSet<i128> = (9..=20u32).map(factorial).collect();
     find_any(gs::integers::<i128>(), move |&x| x >= 50_000 && factorials.contains(&(x - 1)));
 }
 
 #[test]
-#[ignore = "native engine lacks GLOBAL_CONSTANTS factorial seeding — tracked in TODO.yaml"]
 fn test_can_produce_below_large_factorial() {
     let factorials: HashSet<i128> = (9..=20u32).map(factorial).collect();
     find_any(gs::integers::<i128>(), move |&x| x >= 50_000 && factorials.contains(&(x + 1)));
 }
 
 #[test]
-#[ignore = "native engine lacks GLOBAL_CONSTANTS factorial seeding — tracked in TODO.yaml"]
 fn test_can_produce_large_factorial_negative() {
     let factorials: HashSet<i128> = (9..=20u32).map(factorial).collect();
     find_any(gs::integers::<i128>(), move |&x| x <= -50_000 && factorials.contains(&x.abs()));
 }
 
 #[test]
-#[ignore = "native engine lacks GLOBAL_CONSTANTS factorial seeding — tracked in TODO.yaml"]
 fn test_can_produce_above_large_factorial_negative() {
     let factorials: HashSet<i128> = (9..=20u32).map(factorial).collect();
     find_any(gs::integers::<i128>(), move |&x| x <= -50_000 && factorials.contains(&(x - 1).abs()));
 }
 
 #[test]
-#[ignore = "native engine lacks GLOBAL_CONSTANTS factorial seeding — tracked in TODO.yaml"]
 fn test_can_produce_below_large_factorial_negative() {
     let factorials: HashSet<i128> = (9..=20u32).map(factorial).collect();
     find_any(gs::integers::<i128>(), move |&x| x <= -50_000 && factorials.contains(&(x + 1).abs()));
@@ -798,13 +778,7 @@ fn test_one_of_flattens_filter_branches_3() {
     find_any(one_of_nested_strategy_with_filter(), |&x| x == 6);
 }
 
-// ---------------------------------------------------------------------------
-// Individually-skipped: test_long_duplicates_strings and
-// test_can_produce_nasty_strings (GLOBAL_CONSTANTS dependency).
-// ---------------------------------------------------------------------------
-
 #[test]
-#[ignore = "native engine lacks GLOBAL_CONSTANTS string injection — tracked in TODO.yaml"]
 fn test_long_duplicates_strings() {
     find_any(
         gs::tuples!(gs::text(), gs::text()),
@@ -813,7 +787,6 @@ fn test_long_duplicates_strings() {
 }
 
 #[test]
-#[ignore = "native engine lacks GLOBAL_CONSTANTS string injection — tracked in TODO.yaml"]
 fn test_can_produce_nasty_strings() {
     let nasty: HashSet<&str> = ["NaN", "Inf", "undefined"].into_iter().collect();
     find_any(gs::text(), move |s: &String| nasty.contains(s.as_str()));

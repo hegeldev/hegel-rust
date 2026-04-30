@@ -10,29 +10,3 @@
 #                           #   listed blocker is removed from TODO.yaml.
 #     details: |
 #       Multi-line body with context, pointers, acceptance criteria.
-
-- title: Add GLOBAL_CONSTANTS integer/string seeding to native engine
-  details: |
-    Hypothesis's ConjectureRunner seeds "interesting" values from GLOBAL_CONSTANTS
-    (src/hypothesis/internal/conjecture/providers.py) including:
-    - Integers: factorials 9!..20!, primorial numbers, powers of 10 (5..20),
-      powers of 2 (16..66), plus their ±1 neighbours and negations.
-    - Strings: "NaN", "Inf", "undefined", "null", "true", "false", and other
-      commonly-interesting string values.
-
-    Without these, the following individually-skipped tests in
-    tests/hypothesis/quality_discovery_ability.rs cannot pass:
-    - test_can_produce_large_factorial
-    - test_can_produce_above_large_factorial
-    - test_can_produce_below_large_factorial
-    - test_can_produce_large_factorial_negative
-    - test_can_produce_above_large_factorial_negative
-    - test_can_produce_below_large_factorial_negative
-    - test_can_produce_nasty_strings
-    - test_long_duplicates_strings
-
-    Acceptance criteria: implement GLOBAL_CONSTANTS seeding in
-    src/native/core/state.rs (draw_integer and draw_string interesting-value
-    injection), remove the #[ignore] attributes from the above 8 tests, and
-    remove the corresponding entries from SKIPPED.md.
-

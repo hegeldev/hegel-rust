@@ -57,19 +57,6 @@ file and treats listed files as "done".
 
 Individually-skipped tests (rest of the file is ported):
 
-- `quality/test_discovery_ability.py::test_can_produce_large_factorial` — native
-  engine lacks GLOBAL_CONSTANTS factorial seeding; probability of generating a
-  specific factorial value is effectively zero.
-- `quality/test_discovery_ability.py::test_can_produce_above_large_factorial` — same reason.
-- `quality/test_discovery_ability.py::test_can_produce_below_large_factorial` — same reason.
-- `quality/test_discovery_ability.py::test_can_produce_large_factorial_negative` — same reason.
-- `quality/test_discovery_ability.py::test_can_produce_above_large_factorial_negative` — same reason.
-- `quality/test_discovery_ability.py::test_can_produce_below_large_factorial_negative` — same reason.
-- `quality/test_discovery_ability.py::test_can_produce_nasty_strings` — native engine
-  lacks GLOBAL_CONSTANTS string injection; "NaN", "Inf", "undefined" are not seeded.
-- `quality/test_discovery_ability.py::test_long_duplicates_strings` — relies on
-  GLOBAL_CONSTANTS to make two independent text() draws produce the same constant
-  string of length >= 5; unreachable without it.
 - `shrink_quality/test_composite.py::test_lower_and_bump_j_past_end_after_shortening`
   — invokes pbtkit's `lower_and_bump(shrinker)` shrink pass directly with
   a pre-seeded `TC.for_choices(...)` and `Shrinker(...)`; hegel-rust's
