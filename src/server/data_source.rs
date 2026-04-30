@@ -213,9 +213,6 @@ impl DataSource for ServerDataSource {
     }
 
     fn target_observation(&self, score: f64, label: &str) {
-        if self.aborted.load(Ordering::SeqCst) {
-            return;
-        }
         let _ = self.send_request(
             "target",
             &cbor_map! {
