@@ -173,6 +173,15 @@ impl Settings {
         self
     }
 
+    /// When true, skip the shrinking phase even if a failing example is found.
+    ///
+    /// Useful for `find_any`-style helpers where shrinking is not desired
+    /// and can be extremely expensive.
+    pub fn no_shrink(mut self, no_shrink: bool) -> Self {
+        self.no_shrink = no_shrink;
+        self
+    }
+
     /// Suppress one or more health checks so they do not cause test failure.
     ///
     /// Health checks detect common issues like excessive filtering or slow
