@@ -5,12 +5,11 @@
 //! to guide the search, so tests that depend on targeting driving generation
 //! toward a goal are gated with `#[cfg(not(feature = "native"))]`.
 //!
-//! Individually-skipped tests:
-//! - `test_can_target_a_score_upwards_to_interesting` (stdout check) — the
-//!   upstream asserts specific `capsys` stdout lines; ported without the
-//!   stdout check (only the panic is asserted).
-//! - `test_targeting_when_most_do_not_benefit` (stdout check) — same reason.
-//! - `test_can_target_a_score_downwards` (stdout check) — same reason.
+//! Upstream stdout assertions not ported (no capsys equivalent):
+//! - `test_can_target_a_score_upwards_to_interesting` — upstream checks specific
+//!   counterexample lines via `capsys`; ported without that check (panic asserted).
+//! - `test_targeting_when_most_do_not_benefit` — same reason.
+//! - `test_can_target_a_score_downwards` — same reason.
 
 #[cfg(not(feature = "native"))]
 use crate::common::utils::expect_panic;
