@@ -69,8 +69,9 @@ pub trait Float: Copy + PartialOrd {
     const MIN: Self;
     /// The maximum value of this type.
     const MAX: Self;
-
     const INFINITY: Self;
+    /// The width of this type in bits.
+    const WIDTH: u32;
 }
 
 impl Float for f32 {
@@ -78,6 +79,7 @@ impl Float for f32 {
     const MIN: Self = f32::MIN;
     const MAX: Self = f32::MAX;
     const INFINITY: Self = f32::INFINITY;
+    const WIDTH: u32 = 32;
 }
 
 impl Float for f64 {
@@ -85,6 +87,7 @@ impl Float for f64 {
     const MIN: Self = f64::MIN;
     const MAX: Self = f64::MAX;
     const INFINITY: Self = f64::INFINITY;
+    const WIDTH: u32 = 64;
 }
 
 /// Generator for integer values. Created by [`integers()`].
@@ -200,7 +203,7 @@ impl<T> FloatGenerator<T> {
 
 impl<T: Float + serde::Serialize> FloatGenerator<T> {
     fn build_schema(&self) -> Value {
-        let width = (std::mem::size_of::<T>() * 8) as u64;
+        let width = u64::from(T::WIDTH);
         let has_min = self.min.is_some();
         let has_max = self.max.is_some();
 

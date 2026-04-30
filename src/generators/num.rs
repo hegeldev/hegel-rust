@@ -247,7 +247,7 @@ impl<T: super::Float + serde::Serialize> ComplexGenerator<T> {
             "allow_nan" => self.allow_nan,
             "allow_infinity" => self.allow_infinity,
             "allow_subnormal" => self.allow_subnormal,
-            "width" => (2 * std::mem::size_of::<T>() * 8) as u64,
+            "width" => u64::from(2 * T::WIDTH),
         }
     }
 }
