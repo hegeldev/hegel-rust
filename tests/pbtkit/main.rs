@@ -21,6 +21,7 @@ mod shrink_quality_composite;
 mod shrink_quality_flatmap;
 mod shrink_quality_integers;
 mod shrink_quality_mixed_types;
+mod shrink_quality_floats;
 mod shrink_quality_strings;
 mod spans;
 mod targeting;

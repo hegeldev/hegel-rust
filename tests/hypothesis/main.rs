@@ -59,6 +59,7 @@ mod nocover_flatmap;
 mod nocover_floating;
 mod nocover_given_reuse;
 mod nocover_imports;
+mod nocover_large_examples;
 mod nocover_limits;
 mod nocover_nesting;
 mod nocover_precise_shrinking;
