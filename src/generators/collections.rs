@@ -74,11 +74,14 @@ where
         if let Some(max) = self.max_size {
             assert!(self.min_size <= max, "Cannot have max_size < min_size");
         }
+        if self.unique_by.is_some() {
+            return None;
+        }
         let basic = self.elements.as_basic()?;
 
         let mut schema = cbor_map! {
             "type" => "list",
-            "unique" => self.unique_by.is_some(),
+            "unique" => false,
             "elements" => basic.schema().clone(),
             "min_size" => self.min_size as u64
         };

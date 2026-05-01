@@ -284,6 +284,19 @@ fn test_vec_non_basic_generator_with_max_size(tc: TestCase) {
     assert!(vec.len() <= 5);
 }
 
+// Regression test: vecs(sampled_from).unique(true) must check value-level uniqueness.
+// Before the fix, as_basic() sent "unique":true to the server, which enforced index-level
+// uniqueness (distinct sampled_from indices), not value-level uniqueness. For a pool of
+// 100 copies of the same value, distinct indices still map to the same value, producing
+// duplicates. The fix makes as_basic() return None when unique_by is set, routing through
+// the non-basic Collection path that checks actual T values.
+#[hegel::test]
+fn test_vec_unique_sampled_from_no_duplicates(tc: TestCase) {
+    let vec: Vec<i64> = tc.draw(gs::vecs(gs::sampled_from(vec![0_i64; 100])).unique(true));
+    // All elements are 0, so a unique vec can have at most 1 element.
+    assert!(vec.len() <= 1);
+}
+
 #[test]
 fn test_vec_unique_requires_partial_eq() {
     TempRustProject::new()
