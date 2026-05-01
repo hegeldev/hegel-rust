@@ -2,7 +2,7 @@ use crate::antithesis::TestLocation;
 use crate::antithesis::is_running_in_antithesis;
 use crate::backend::{DataSource, TestCaseResult, TestRunner};
 use crate::control::{currently_in_test_context, with_test_context};
-use crate::runner::{Mode, Settings};
+use crate::runner::{Mode, Phase, Settings};
 use crate::test_case::TestCase;
 use crate::test_case::{ASSUME_FAIL_STRING, LOOP_DONE_STRING, STOP_TEST_STRING};
 
@@ -268,6 +268,10 @@ pub fn server_run<F>(
     F: FnMut(TestCase),
 {
     init_panic_hook();
+
+    if !settings.phases.contains(&Phase::Generate) {
+        return;
+    }
 
     let runner = super::session::ServerTestRunner;
     let mut test_fn = test_fn;
