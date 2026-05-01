@@ -30,7 +30,6 @@ mod database_backend;
 mod datetimes;
 mod debug_information;
 mod direct_strategies;
-mod draw_example;
 mod feature_flags;
 mod filtered_strategy;
 mod find;
