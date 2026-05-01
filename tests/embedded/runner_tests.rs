@@ -1,8 +1,15 @@
 use super::*;
+use crate::runner::Phase;
 
 #[test]
 fn test_settings_verbosity() {
     let _ = Settings::new().verbosity(Verbosity::Debug);
+}
+
+#[test]
+fn test_settings_phases() {
+    let s = Settings::new().phases([Phase::Explicit, Phase::Explain]);
+    assert_eq!(s.phases, vec![Phase::Explicit, Phase::Explain]);
 }
 
 #[test]
