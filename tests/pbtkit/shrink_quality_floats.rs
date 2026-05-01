@@ -13,7 +13,10 @@ use hegel::generators as gs;
 
 #[test]
 fn test_shrinks_to_simple_float_above_0() {
-    assert_eq!(minimal(gs::floats::<f64>().allow_nan(false), |x: &f64| *x > 0.0), 1.0);
+    assert_eq!(
+        minimal(gs::floats::<f64>().allow_nan(false), |x: &f64| *x > 0.0),
+        1.0
+    );
 }
 
 #[test]
