@@ -3,8 +3,6 @@
 //! Tests asserting server-side phase enforcement (Reuse, Shrink, Generate
 //! skipping) are gated on `#[cfg(feature = "native")]` because hegel-core
 //! 0.6.1 does not yet forward the phases parameter to the engine.
-// The `native` feature is defined in the DRMacIver/native branch, not here;
-// suppress the unknown-feature warning so the tests compile cleanly.
 #![allow(unexpected_cfgs)]
 
 mod common;
