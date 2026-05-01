@@ -133,19 +133,10 @@ jobs:
 
           VERSIONS_JSON=$(curl -sf https://hegel.dev/api/versions.json)
 
-          PROTOCOL_MIN_CORE=$(echo "$VERSIONS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['$MIN_PROTOCOL'])")
+          MIN_CORE=$(echo "$VERSIONS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['$MIN_PROTOCOL'])")
 
-          # CLI-compatibility floor: hegel-core 0.4.8 removed the Unix socket
-          # transport and dropped the --stdio flag. Older versions reject the
-          # client's invocation, so we can't run them as the minimum even when
-          # the wire protocol matches.
-          CLI_COMPAT_FLOOR="0.4.8"
-
-          MIN_CORE=$(printf '%s\n%s\n' "$PROTOCOL_MIN_CORE" "$CLI_COMPAT_FLOOR" | sort -V | tail -1)
           echo "Minimum supported protocol version: $MIN_PROTOCOL"
-          echo "Protocol-derived minimum hegel-core: $PROTOCOL_MIN_CORE"
-          echo "CLI-compatibility floor: $CLI_COMPAT_FLOOR"
-          echo "Minimum hegel-core version (max of the two): $MIN_CORE"
+          echo "Minimum hegel-core version: $MIN_CORE"
           echo "min_core=$MIN_CORE" >> "$GITHUB_OUTPUT"
 
       - name: Run tests with minimum protocol version
