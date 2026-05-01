@@ -5,7 +5,7 @@ use std::panic::{UnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
 use hegel::generators::Generator;
-use hegel::{Hegel, Settings};
+use hegel::{HealthCheck, Hegel, Settings};
 use regex::Regex;
 use std::fmt::Debug;
 
@@ -86,6 +86,14 @@ where
     }
 
     pub fn run(self) {
+        self.run_with_health_checks_suppressed(&[]);
+    }
+
+    pub fn run_with_health_checks_suppressed(self, checks: &[HealthCheck]) {
+        let settings = Settings::new()
+            .test_cases(self.test_cases)
+            .database(None)
+            .suppress_health_check(checks.iter().cloned());
         Hegel::new(move |tc| {
             let value = tc.draw(&self.generator);
             assert!(
@@ -93,7 +101,7 @@ where
                 "Found value that does not match predicate"
             );
         })
-        .settings(Settings::new().test_cases(self.test_cases))
+        .settings(settings)
         .run();
     }
 }
@@ -137,7 +145,10 @@ where
     }
 
     pub fn run(self) {
-        self.inner.run();
+        // These checks are about "can we generate at all", not speed, and
+        // instrumented coverage binaries routinely trip the TooSlow check.
+        self.inner
+            .run_with_health_checks_suppressed(&[HealthCheck::TooSlow]);
     }
 }
 
@@ -160,6 +171,7 @@ where
     generator: G,
     condition: P,
     max_attempts: u64,
+    suppress_health_checks: Vec<HealthCheck>,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -173,7 +185,8 @@ where
         Self {
             generator,
             condition,
-            max_attempts: 1000,
+            max_attempts: 5000,
+            suppress_health_checks: Vec::new(),
             _marker: std::marker::PhantomData,
         }
     }
@@ -184,10 +197,17 @@ where
         self
     }
 
+    #[allow(dead_code)]
+    pub fn suppress_health_check(mut self, hc: HealthCheck) -> Self {
+        self.suppress_health_checks.push(hc);
+        self
+    }
+
     pub fn run(self) -> T {
         let found: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
         let found_clone = Arc::clone(&found);
         let max_attempts = self.max_attempts;
+        let suppress_health_checks = self.suppress_health_checks;
 
         let hegel_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Hegel::new(move |tc| {
@@ -197,7 +217,13 @@ where
                     panic!("HEGEL_FOUND"); // Early exit marker
                 }
             })
-            .settings(Settings::new().test_cases(max_attempts))
+            .settings(
+                Settings::new()
+                    .test_cases(max_attempts)
+                    .database(None)
+                    .no_shrink(true)
+                    .suppress_health_check(suppress_health_checks),
+            )
             .run();
         }));
 
@@ -356,8 +382,24 @@ where
     }
 
     pub fn run(self) {
-        AssertAllExamples::new(self.generator, move |v| !(self.condition)(v))
-            .test_cases(self.test_cases)
-            .run();
+        // Matches Python's `assert_no_examples`, which catches Unsatisfiable:
+        // if the strategy only produces invalid inputs, the assertion holds
+        // vacuously. Suppress FilterTooMuch so the run completes instead of
+        // panicking on excess rejections.
+        let condition = self.condition;
+        Hegel::new(move |tc| {
+            let value = tc.draw(&self.generator);
+            assert!(
+                !condition(&value),
+                "Found value that does not match predicate"
+            );
+        })
+        .settings(
+            Settings::new()
+                .test_cases(self.test_cases)
+                .database(None)
+                .suppress_health_check([HealthCheck::FilterTooMuch]),
+        )
+        .run();
     }
 }

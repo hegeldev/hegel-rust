@@ -1,0 +1,825 @@
+---
+name: porting-tests
+description: "Port Python property-based tests from pbtkit or hypothesis to Rust in this repo. Use when scripts/port-loop.py dispatches you on a specific upstream file, or when you manually decide to port one."
+---
+
+# Porting Python tests to hegel-rust
+
+You are porting ONE Python test file from pbtkit
+(`resources/pbtkit/tests/`) or Hypothesis
+(`resources/hypothesis/hypothesis-python/tests/cover/`) to a Rust test file
+in this repo. `scripts/port-loop.py` gives you the exact upstream path and
+destination. Port only that file in this commit — do not batch.
+
+## Structure
+
+All ported tests live inside one of two integration-test binaries,
+already wired up in `Cargo.toml`:
+
+- `tests/pbtkit/main.rs` — `cargo test --test pbtkit`
+- `tests/hypothesis/main.rs` — `cargo test --test hypothesis`
+
+Each `main.rs` exists as an empty harness and declares submodules:
+
+```rust
+//! Tests ported from pbtkit/tests/
+
+#[path = "../common/mod.rs"]
+mod common;
+
+mod bytes;
+mod collections;
+// ... one `mod foo;` per ported file, alphabetical
+```
+
+Your file goes in `tests/pbtkit/<name>.rs` (or `tests/hypothesis/<name>.rs`)
+as a submodule. Use the original Python filename minus the `test_` prefix
+and `.py` extension.
+
+Examples:
+- `resources/pbtkit/tests/test_text.py` → `tests/pbtkit/text.rs` (module `text`)
+- `resources/pbtkit/tests/test_core.py` → `tests/pbtkit/core.rs`
+- `resources/hypothesis/hypothesis-python/tests/cover/test_floats.py` → `tests/hypothesis/floats.rs`
+
+For subdirectories in the source (e.g.
+`resources/pbtkit/tests/findability/test_types.py`), flatten to a prefix:
+`tests/pbtkit/findability_types.rs`.
+
+### Wiring in
+
+After writing `tests/pbtkit/<name>.rs`, add `mod <name>;` to
+`tests/pbtkit/main.rs` (alphabetically). Do NOT touch the `[[test]]`
+declarations in `Cargo.toml` — they're already set up.
+
+**Do NOT declare `mod common;` inside your submodule file** — it's
+declared by `main.rs`. Your file accesses helpers via
+`use crate::common::utils::...`.
+
+## File template
+
+```rust
+//! Ported from <original_path>
+
+use crate::common::utils::{assert_all_examples, find_any, minimal};
+use hegel::generators::{self as gs, Generator};
+
+#[test]
+fn test_foo() {
+    // ...
+}
+```
+
+**Critical import**: `use hegel::generators::{self as gs, Generator};`. The
+`Generator` trait is required for `.map()`, `.filter()`, `.flat_map()`,
+`.boxed()` on any generator. Without it you get `"X is not an iterator"` errors.
+
+## Available test helpers (from `crate::common::utils`)
+
+- `assert_all_examples(generator, predicate)` — assert all 100 generated values satisfy the predicate.
+- `find_any(generator, condition) -> T` — return the first generated value matching the condition (panics after 1000 attempts).
+- `minimal(generator, condition) -> T` — return the minimal (most-shrunk) value matching the condition.
+- `assert_no_examples(generator, condition)` — assert no generated value matches.
+- `check_can_generate_examples(generator)` — smoke test that the generator runs.
+- `expect_panic(|| { ... }, "regex")` — assert the closure panics with a message matching the regex.
+
+For lower-level control:
+
+```rust
+use hegel::{Hegel, Settings, Verbosity};
+
+Hegel::new(|tc| {
+    let x: i64 = tc.draw(&gs::integers());
+}).settings(Settings::new().test_cases(100).database(None)).run();
+```
+
+## Generator API quick-reference
+
+See `references/api-mapping.md` for the full pbtkit/Hypothesis → hegel-rust
+cheat sheet. In brief:
+
+- `gs::integers::<T>()`, `gs::floats::<T>()`, `gs::booleans()`, `gs::text()`, `gs::binary()`.
+- `gs::vecs(inner)`, `gs::hashsets(inner)`, `gs::hashmaps(k, v)`, `gs::arrays::<G, T, N>(inner)`.
+- `gs::just(x)`, `gs::unit()`, `gs::optional(inner)`, `gs::sampled_from(vec)`, `gs::one_of(vec![g.boxed()])`.
+- `gs::from_regex(pat)`, `gs::characters()`, `gs::dates()`, `gs::times()`, `gs::datetimes()`, `gs::durations()`.
+- Transforms on generators (require `Generator` trait in scope): `.map`, `.filter`, `.flat_map`, `.boxed`.
+
+## Common type-inference pitfalls
+
+Closure parameters sometimes need explicit types. When the Python tests use
+`@given(st.lists(st.integers()))` and take `xs`, the Rust port often needs
+`&Vec<i64>`:
+
+```rust
+// wrong:  |xs| xs.iter().sum::<i64>() > 10,
+// right:
+assert_all_examples(gs::vecs(gs::integers::<i64>()), |xs: &Vec<i64>| {
+    xs.iter().sum::<i64>() > 10
+});
+```
+
+For tuples: `|(x, y): &(i64, i64)| ...`. For floats: `|f: &f64| ...` (note
+it's passed by `&T`). If unsure about element types, make them explicit with
+`gs::integers::<i64>()` rather than `gs::integers()` bare.
+
+**Sum-based predicates on full-range integers overflow during
+shrinking.** `assert sum(xs) <= 1000` on `gs::vecs(gs::integers::<i64>())`
+literally translates to `xs.iter().sum::<i64>() > 1000`, but the
+shrinker probes at the bounds (including `i64::MIN`/`i64::MAX`) and
+`sum::<i64>()` panics on overflow — masking the real witness. Fold
+into a wider type: `xs.iter().map(|&x| i128::from(x)).sum::<i128>() > 1000`.
+Same pattern for `product`, `max`/`min` deltas, etc.
+
+## Skip vs. port decision
+
+Default: **port**. The skip-list is narrow and strict; redundancy is fine,
+mis-skips are not.
+
+### Add to SKIPPED.md — public-API incompatibility only
+
+An upstream file goes in `SKIPPED.md` ONLY when its tests rely on *public
+API* that has no hegel-rust counterpart:
+
+1. Python-specific facilities: `pickle`, `__repr__`, `__iter__`,
+   `sys.modules`, dunder access patterns, Python syntax checks.
+2. Integrations with other Python libraries: numpy, pandas, django,
+   attrs, redis, etc.
+3. Hypothesis/pbtkit public-API features with genuinely no analog (rare
+   — most of the public API *does* have a counterpart).
+
+Add the filename to the appropriate section of `SKIPPED.md` with a
+one-line rationale naming the specific public API or integration that
+blocks the port, then commit. "Too complex", "engine internal", and
+"no Rust counterpart" (by itself) are NOT valid reasons — those are
+covered below.
+
+### NOT reasons to skip
+
+Agents have a strong bias to rationalise ports away. These are not valid
+reasons to skip a file, drop a test from the port, or list a case as
+"omitted" in the module docstring:
+
+- **"Has no Rust counterpart"** (for an internal API). That's the reason
+  to port — see the next section.
+- **"This is covered by tests/foo.rs already"** / **"redundant with an
+  existing test"**. Redundancy is fine. A later rationalisation pass will
+  deduplicate; don't pre-empt it. Porting the test a second time costs
+  very little; incorrectly skipping one costs real coverage.
+- **"The test targets pbtkit's serialization tag / database format /
+  internal harness"** when hegel-rust has the equivalent internal
+  facility under `src/native/`. Native-gate it and port.
+- **"The test requires a shrinking pass marked `@pytest.mark.requires(...)`
+  that hegel-rust may or may not have"**. If hegel-rust has it, port
+  normally. If it doesn't yet, native-gate the test and stub/implement
+  the pass per the next section.
+
+### Port — native-gated plus source-level stub
+
+Tests that exercise pbtkit / Hypothesis *engine internals* —
+`ChoiceNode`, `PbtkitState`, `ConjectureRunner`, `SHRINK_PASSES`,
+`CachedTestFunction`, `IntegerChoice`, `FloatChoice`, `StringChoice`,
+`TC.for_choices`, `to_index`/`from_index`, database serialization tags,
+span introspection, `ConjectureData.target_observations`,
+`ConjectureRunner.best_observed_targets` / `optimise_targets`,
+`Optimiser.hill_climb`, etc. — have counterparts under `src/native/` and
+are reachable only in native mode. Port these; do NOT skip them. An
+engine internal visibly absent from `src/native/` is the cue to *add*
+the stub and port, not to skip with "no counterpart"; the targeting /
+optimiser surface in `src/native/optimiser.rs` was added exactly this
+way while porting `conjecture/test_optimiser.py`.
+
+1. Write the test in its usual destination (`tests/<kind>/<module>.rs`),
+   or as an embedded test in `tests/embedded/native/...` if it needs
+   private access — the embedded pattern wires the test into the source
+   via
+   `#[cfg(test)] #[path = "../../../tests/embedded/native/foo_tests.rs"] mod tests;`.
+   Look at `tests/embedded/native/choices_tests.rs` and
+   `tree_tests.rs` for the pattern.
+2. Native-gate it. Put `#![cfg(feature = "native")]` at the top of the
+   file if every test in it is native-only; otherwise mark individual
+   tests with `#[cfg(feature = "native")]`.
+3. If the test depends on a native-mode feature that isn't implemented
+   yet:
+   - If the feature is easy to add, implement it properly in
+     `src/native/...`.
+   - If it's hard, stub the missing function body in `src/native/...`
+     with `todo!("specific thing missing")` — a runtime panic, not a
+     compile error. A subsequent fixer-task invocation will pick it
+     up once the test fails at runtime.
+   - The test MUST compile cleanly in both server and native modes.
+     `todo!()` lives in the source code, never in the test body.
+
+### Port — normal (the common case)
+
+For tests that only use the public generator API (`gs::integers`,
+`gs::vecs`, `Hegel::new(...).run()`, etc.) — just port them. No
+native-gating, no stubs.
+
+### Port — server-only (`#[cfg(not(feature = "native"))]`)
+
+The mirror image of native-gating: a test uses only the public API
+but passes only against the Python server, because the native backend
+is less sophisticated on a specific point. Don't skip these — gate them
+with `#[cfg(not(feature = "native"))]` and name the native-backend gap
+concretely in the module docstring. Known gap categories:
+
+| Gap | Symptom | Example |
+|-----|---------|---------|
+| Different shrink target | `minimal()` converges on a different value than Hypothesis does | `test_simplifies_towards_millenium` in `tests/hypothesis/datetimes.rs` (Python → 2000-01-01, native → 1970-01-01) |
+| Missing input validation | Invalid constraint combos that Hypothesis rejects with `InvalidArgument` run silently in native | the `InvalidArgument` cluster in `tests/hypothesis/float_nastiness.rs` |
+| Missing engine-internal pruning / bias | `Hegel::new(...).run()` can't navigate a dense `assume`-reject tree that Hypothesis's `DataTree` novel-prefix walk finds | `test_lot_of_dead_nodes` in `tests/hypothesis/nocover_conjecture_engine.rs` (one-in-128⁴ witness unreachable from `NativeTestCase::new_random`) |
+| Missing nasty-value injection | A "do we reliably hit these special values?" test expects the provider to seed near-boundary constants (powers of 10 and their ±1 neighbours from Hypothesis's `GLOBAL_CONSTANTS` in `hypothesis/internal/conjecture/providers.py`); native's bounded-integer provider only seeds the exact `min_value` / `max_value` | `test_biases_towards_boundary_values` in `tests/hypothesis/quality_integers.rs` (Python hits all four of `{-T, -T+1, T-1, T}` in 1000 draws; native hits only two) |
+| Targeting optimizer inactive | Native records `tc.target()` observations but does not use them to guide generation, so tests that assert the search reaches a quality target (e.g. `max_score == 2000`, find `(500, 500)`) fail in native even though the call compiles and runs | `tests/pbtkit/targeting.rs` — 5 of 7 tests gated; `test_targeting_adjust_avoids_negative_values` (forced-zero smoke test) runs in both modes |
+
+Only use this gate when the test body itself is public-API-only. If
+the test reaches into `src/native/`-level engine internals
+(`CachedTestFunction`, `Shrinker`, `NativeTestCase`, etc.), follow the
+native-gated-plus-source-stub route above instead — that's not a
+server-only situation.
+
+### Skipping individual tests within an otherwise-ported file
+
+Occasionally one test (or one parametrize row) in an otherwise
+fully-ported file is unrepresentable — usually because its input
+exercises a Python type / shape that Rust's type system forbids, or
+because it tests a failure mode unreachable through the Rust public
+API (e.g. a client-side invariant the runner adds silently, such as
+`gs::characters()`'s implicit `exclude_categories=["Cs"]`), or
+because the test asserts on Hypothesis's *strategy-composition class
+structure* — attribute access on a strategy instance like
+`FilteredStrategy(...).branches` / `.flat_conditions` /
+`.filtered_strategy`, or `.is_empty` on any strategy (a
+`SearchStrategy` property; shows up in `test_nothing.py`'s
+`.map` / `.filter` / `.flatmap` composition checks and in any
+`st.tuples(st.nothing()).is_empty` shape). hegel-rust composes
+strategies as Rust generic wrappers (`Filtered<T, F, G>`,
+`Mapped<...>`, etc.) that have no introspectable attributes; these are distinct from engine internals
+(`ChoiceNode`, `ConjectureData.*`) which *do* have `src/native/`
+counterparts and should be native-gated rather than skipped.
+
+A separate reason for individual skipping is that the test's *subject* is
+a native feature hegel-rust hasn't implemented yet — not a Python-type
+issue, not a missing harness, but a concrete pass / branch / fallback
+that pbtkit (or Hypothesis) has and `src/native/` doesn't. Example:
+pbtkit's `sort_values` insertion-sort fallback (triggered when the full
+sort fails the `replace` predicate) has no counterpart in hegel-rust's
+`sort_values_integers`, so the test exercising that branch can't be
+ported until the fallback lands. For this case:
+
+1. Name the specific missing feature in both the module docstring and
+   the `SKIPPED.md` entry — not "no entry point" or "no counterpart",
+   but the concrete pass/branch/fallback that's absent.
+2. File a `TODO.yaml` entry for implementing the feature with
+   un-skipping the test(s) listed as acceptance criteria, and reference
+   it from the SKIPPED.md entry so the chain is traceable.
+
+This is a frequent mis-diagnosis: a first-pass skip blames "no public
+entry point" when the real barrier is a missing native feature (or, in
+the other direction, the skip rationale is genuine but the test IS
+portable as an embedded `Shrinker::new(...).shrink()` harness call —
+see pbtkit-overview's engine-harness section). Before committing an
+individual skip, re-check which of the three you're actually hitting.
+
+Record these in **both** places:
+
+1. At the top of the Rust module, under an `//! Individually-skipped
+   tests:` docstring listing each skipped test with a one-line
+   reason. Future readers comparing the port against the Python
+   original see what's missing and why.
+2. In `SKIPPED.md` under the `Individually-skipped tests (rest of
+   the file is ported):` section for that upstream (pbtkit or
+   hypothesis), as `test_file.py::test_name — reason.`. The
+   unported-gate and port audits scan this file; a skip that lives
+   only in a module docstring is invisible to them.
+
+**"Absent test" vs. "ported test with a dropped assertion"**: if the
+test IS present in the Rust file but one of its assertions is dropped
+(e.g. a `capsys` stdout check on counterexample output with no Rust
+equivalent), do NOT list it under `//! Individually-skipped tests:`.
+That heading means the test doesn't exist in the file; using it for a
+present-but-reduced test misleads skip audits. Use a separate docstring
+section like `//! Upstream assertions not ported:` instead, naming the
+specific assertion dropped. The test itself does NOT go in SKIPPED.md.
+
+Do **not** add the whole file to SKIPPED.md's whole-file section —
+that tells the unported-gate the file is done and stops it dispatching
+further work on it.
+
+### Partial ports: when an upstream test bundles two invariants
+
+Occasionally a single upstream test function asserts two independent
+invariants and native models only one. Example:
+`test_trivial_nodes` asserts both `node.trivial == True` *and*
+`minimal(values()) == node.value` in the same body; native
+`ChoiceNode::trivial` is a faithful port, but the
+`minimal(values())` half needs a shrinking/generator harness that
+doesn't exist yet. Don't skip the whole test — port the invariant
+that's expressible, drop the other, and record it explicitly:
+
+- Module docstring: "`test_trivial_nodes`: the `.trivial` half ports;
+  the `minimal(values()) == value` shrinking-invariant half needs a
+  shrinking harness." Name the skipped invariant, not the test.
+- SKIPPED.md entry keeps the test name and spells out which half was
+  ported and which wasn't ("Tests ported in full: X. Tests partially
+  ported: Y's `.trivial` half — Z's shrinking-invariant half not
+  ported.").
+
+A reviewer should be able to see at a glance that the test is *not*
+fully ported without opening the Rust file, and future agents should
+see what work un-blocks the rest.
+
+### When un-skipping, clean up stale references
+
+When you re-port a test that was previously in `SKIPPED.md` (or listed
+as "no counterpart" in `references/api-mapping.md`), grep both files
+for references to that test's name and the cluster it was bundled
+with, and delete the stale entries. A dangling SKIPPED.md entry after
+a successful port silently misleads the next agent into thinking the
+feature's still blocked. Precedent: commit `37582546` removed
+`test_nodes` entries from `SKIPPED.md` and `api-mapping.md` after the
+test was re-ported in `f22b7df2`; the module docstring had been
+updated at port time but the skip records had not. Fold the cleanup
+into the re-porting commit, or push a separate focused follow-up with
+a message like "Remove stale X skip entries".
+
+### Think harder before skipping
+
+Agents have a strong bias to mark anything unfamiliar as unportable.
+Specific shapes that *look* skip-worthy but aren't:
+
+- **stdout/stderr capture** (`capsys` in Python) — hegel-rust has a
+  `TempRustProject` helper used in `tests/test_output.rs` and
+  `tests/test_draw_named.rs` that runs test code as a subprocess and
+  captures stderr.
+- **Database replay** (writing a failing case, replaying it) — hegel-rust
+  has `Database::Path(...)` via
+  `Settings::new().database(Database::Path(...))`. The round-trip is only
+  exercised natively, so native-gate it. See `tests/test_database_key.rs`.
+- **`tc.choice(n)` in Python** → in hegel-rust,
+  `tc.draw(gs::integers::<i64>().min_value(0).max_value(n))` — range is `[0, n]` inclusive.
+- **Full 64-bit integer range** → `gs::integers::<u64>()` etc.
+- **`@gs.composite`** → `#[hegel::composite]` or `hegel::compose!`.
+- **`tc.weighted(0.0)` / `tc.weighted(1.0)`** — the public API is
+  missing, but the *forced* cases substitute cleanly: `tc.draw(gs::just(false))`
+  / `tc.draw(gs::just(true))`. Don't skip tests just because they mention
+  `tc.weighted`; check the probability first. (pbtkit uses this forcing
+  idiom in `test_core.py`, `test_draw_names.py`, `test_generators.py`,
+  and `test_hypothesis.py`.) Real probabilistic `tc.weighted(0.9)` etc.
+  stay skipped.
+- **Mixed-type `one_of` / `sampled_from`** — e.g.
+  `st.one_of(st.integers(), st.tuples(st.booleans()))` or
+  `st.sampled_from([1, "two", 3.0])`. Python's dynamic typing lets
+  branches produce different types; Rust's `gs::one_of` requires a
+  single element type. Don't skip — define a small local `enum` with
+  one variant per branch, `.map(Variant::…)` each inner generator,
+  and `gs::one_of(vec![…])` the lot. Example:
+
+  ```rust
+  #[derive(Debug, Clone)]
+  enum Value { Int(i64), BoolTuple((bool,)) }
+
+  let gen = gs::one_of(vec![
+      gs::integers::<i64>().map(Value::Int).boxed(),
+      gs::tuples!(gs::booleans()).map(Value::BoolTuple).boxed(),
+  ]);
+  ```
+
+  The test body then matches on `Value` to exercise each branch. The
+  enum is scaffolding for the port, not a new public API.
+- **Upstream PBT with a leading `assume(...)` filter** — the filter
+  restricts the test body's assertions to a subset of the input space,
+  so the test may still port even if the *un-filtered* behaviour
+  doesn't. Concrete case: `test_copy_choice_node` has
+  `assume(not node.was_forced)` at the top, making it a test of the
+  non-forced branch only; the raise-on-forced behaviour lives in a
+  separately-named test (`test_cannot_modify_forced_nodes`). Before
+  skipping a test on the grounds that "native X doesn't raise on Y",
+  read the upstream body for `assume`/`event`/filter predicates that
+  carve the scope down to something native *does* model. The two
+  Python tests often look like one blurry "X behaviour" to a first
+  pass, but port as one skip plus one successful port.
+- **Bundle-skipping by name similarity** — when a first-pass port
+  groups several tests under one skip rationale ("these five
+  `*_injective` tests all need `all_children`", "these four `*_trivial`
+  tests all need `ChoiceNode.trivial`"), open each test body before
+  the bundle sticks. Naming similarity is a fast clustering heuristic,
+  not a dependency proof — individual members often have different
+  (smaller) dependencies than the cluster's worst case. Concrete case:
+  `test_choice_from_value_injective` was bundled with
+  `test_choice_to_index_injective` on the `_injective` suffix, but
+  the former iterates `range(cap)` via `from_index` only — no
+  `all_children` dependency — and ported in a follow-up commit
+  (`9dc893f5`). When you catch one of these, un-cluster the skip
+  entry by name so the next reader sees which individual tests are
+  blocked on what.
+
+## Don't add `suppress_health_check` that wasn't in the original
+
+If a ported test starts tripping a health check (`TooSlow`,
+`FilterTooMuch`, `LargeBaseExample`, etc.) only after the port, do
+NOT reach for `.suppress_health_check([...])`. A tripped health
+check is usually signalling a real performance or
+generation-rejection problem in the engine or generator — silence
+it and the next test that walks the same path will silently pay
+the same cost.
+
+Before adding any suppression:
+
+1. Check the upstream source. If the original did not call
+   `suppress_health_check` (or the pbtkit equivalent), your port
+   must not either. If the original DID, mirror it exactly — same
+   checks, no extras.
+2. If there's no upstream (native-only coverage tests), the same
+   rule holds: a health check trip on a native-only test means the
+   underlying path is genuinely slow / genuinely rejects too much,
+   and that's the bug to fix.
+3. File a TODO.yaml entry describing the slow or rejection-heavy
+   path and what needs investigating. Leave the test failing, or
+   native-gate it, rather than suppressing the check.
+
+The exception is when the *purpose* of the test is to exercise the
+health-check mechanism itself (e.g.
+`native_too_slow_suppressed`) — those are obvious on inspection.
+
+## When a test fails because Rust ≠ Python semantics, STOP
+
+If a test port keeps tripping over disagreements between a Rust crate
+`src/native/` is using and the Python module Hypothesis is using —
+e.g. a regex crate that disagrees with Python's `re` on `\Z` vs `\z`,
+a unicode crate that disagrees with CPython's `unicodedata` on some
+edge codepoint, a bignum crate that disagrees with Python `int` on
+shift semantics — **do not paper over it with per-test translation
+shims**. That's how we end up with `translate_python_escapes`,
+`normalise_category`, and other sticks of gum holding the boundary
+together until it collapses.
+
+The fix is to stop, file a TODO (or pick up the relevant existing
+one), and port the Python module directly into `src/native/` as a
+standalone Rust module. `src/native/unicodedata.rs` and
+`src/native/bignum.rs` are worked precedents. The full rationale is
+in `.claude/skills/implementing-native/SKILL.md` under "Port, don't
+adapt" — read it before reaching for another third-party crate at
+the semantics boundary.
+
+In the meantime, add the failing tests to SKIPPED.md with a rationale
+that names the underlying Python module needing to be ported (so the
+skip is visibly blocked on a known follow-up, not "no Rust
+counterpart"). **Whenever you add skips for this reason, update the
+corresponding TODO.yaml entry for the port so that removing those exact
+SKIPPED.md entries is part of its acceptance criteria.** If no TODO
+exists yet, file one and include the skip list in the acceptance
+criteria from the start. Without that link the skips become invisible
+debt — the port "completes" while the tests it was meant to unblock
+quietly stay skipped.
+
+## Stateful (rule-based) tests
+
+If the upstream file uses `hypothesis.stateful` —
+`RuleBasedStateMachine`, `@rule`, `@invariant`, `Bundle`, `@initialize`,
+`@precondition`, `consumes`, `multiple`, or `run_state_machine_as_test` —
+follow `.claude/skills/porting-stateful/SKILL.md` for the stateful-specific
+API mapping. The layout, naming, verification and skip policy rules in this
+file still apply.
+
+## Conjecture tests (Hypothesis internal engine)
+
+Tests under `resources/hypothesis/hypothesis-python/tests/conjecture/`
+test Hypothesis's engine internals. Place these at
+`tests/hypothesis/conjecture_*.rs` with `#![cfg(feature = "native")]`
+at the top, following the native-gated-plus-source-stub rules above.
+
+Four distinct *shapes* appear in this directory, each with a different
+native entry point:
+
+- **`test_shrinker.py`-shape** — body decorated with `@shrinking_from(initial)`
+  or `@run_to_nodes`, asserts on the shrunk choice sequence. Port via
+  hand-seeded `Shrinker::new(test_fn, nodes).shrink()` plus
+  `current_nodes` assertions (see `api-mapping.md`'s `@shrinking_from`
+  and `@run_to_nodes` sections).
+- **`test_optimiser.py`-shape** — body builds a `ConjectureRunner` and
+  calls `optimise_targets()`, asserts on `target_observations` /
+  `best_observed_targets`. Port via the native
+  `TargetedRunner` / `TargetedTestCase` / `BufferSizeLimit` surface in
+  `__native_test_internals` (see `tests/hypothesis/conjecture_optimiser.rs`).
+- **`test_engine.py`-shape** — body builds
+  `ConjectureRunner(f, settings=, random=, database_key=)`, calls
+  `runner.run()`, and asserts on runner-level bookkeeping:
+  `runner.interesting_examples`, `runner.exit_reason`, `runner.shrinks`,
+  `runner.call_count`, `runner.pareto_front`, `runner.secondary_key`,
+  `runner.save_choices(...)`, plus fixtures like `run_to_nodes(f)` from
+  `tests/conjecture/common.py` (the `conftest.py` fixture that returns
+  the shrunk `data.nodes` of the sole interesting example — distinct
+  from the `@run_to_nodes` decorator in `test_shrinker.py`). Port these
+  through the `NativeConjectureRunner` wrapper in
+  `__native_test_internals`: `NativeConjectureRunner::new(test_fn,
+  settings, rng).with_database_key(key).run()`, then read back
+  `runner.interesting_examples` / `runner.exit_reason` /
+  `runner.shrinks` / `runner.call_count` / `runner.valid_examples` /
+  `runner.pareto_front()` / `runner.secondary_key()` /
+  `runner.pareto_key()` / `runner.generate_novel_prefix()` /
+  `runner.tree().is_exhausted()`. The `run_to_nodes(f)` fixture has a
+  free-function port of the same name. The `fails_health_check(label,
+  build)` decorator has a free-function port that asserts the runner's
+  panic message carries the `HealthCheckLabel`. `TargetedRunner` is
+  *not* this surface — it exposes only `cached_test_function` /
+  `optimise_targets` / `best_observed_targets`, not interesting-example
+  tracking, exit reasons, shrink counters, or pareto bookkeeping.
+  Individual `NativeConjectureRunner` attributes may still be `todo!()`
+  stubs in `src/native/conjecture_runner.rs` when you start porting;
+  the runtime `todo!()` panic on first use tells the port-loop which
+  attribute the next test exercises, and subsequent cycles fill them
+  in one test at a time. Don't bundle several attribute fills into one
+  port — keep each commit focused on the test that landed.
+- **`test_test_data.py`-shape** — body builds
+  `ConjectureData.for_choices(...)` directly (no runner, no shrinker)
+  and asserts on per-choice / per-span bookkeeping (`data.nodes[i].trivial`,
+  `data.examples`, `data.frozen`, `data.status`, `data.events`). Port
+  via `NativeTestCase::for_choices(&[ChoiceValue::…], None)` plus direct
+  `weighted` / `draw_bytes_forced` / `record_span` calls and
+  `nodes[i].trivial()` reads. The portable subset is small (3 of 33
+  upstream tests in `test_test_data.py`); most of the file relies on
+  `freeze()`, `mark_*`, `note`/`output`/`events`, draw-by-strategy with
+  auto-recorded spans, `Span.parent`/`.children`/`.depth`, `DataObserver`,
+  `MAX_DEPTH`, `as_result()`, `structural_coverage()`, or the
+  prefix-plus-`max_choices` constructor — none of which `NativeTestCase`
+  exposes. See `api-mapping.md`'s `test_test_data.py` section for the
+  per-API gap table and the auto-span-mirroring caveat (Hypothesis wraps
+  every `data.draw(strategy)` call in a span; native primitives don't,
+  so port-time `record_span(start, end, label)` calls are needed for
+  `(start, end)`-keyed lookups to find a match).
+
+**Don't skip `test_engine.py`-shape files wholesale.** Inside such
+files there's usually a subset of shrink-quality tests — the
+`test_can_shrink_variable_draws` / `test_can_shrink_variable_string_draws` /
+`test_variable_size_string_increasing` / `test_mildly_complicated_strategies`
+cluster in `test_engine.py` is the worked example — that assert on a
+shrunk *generated value* rather than runner bookkeeping, and port
+unchanged through the public `minimal(generator, predicate)` API (no
+`#![cfg(feature = "native")]` needed for these specific tests, though
+the file as a whole is native-gated because the rest of the module
+references `__native_test_internals`). Port those; skip the
+runner-attribute subset individually.
+
+### Outer `@given` driving an inner `NativeConjectureRunner`
+
+A small but distinct shape (canonical example:
+`nocover/test_explore_arbitrary_languages.py`): the upstream test is
+decorated `@given(st.data())` with a body that draws an arbitrary
+"language" (recursive enum tree), constructs a `ConjectureRunner` with
+`max_examples=1` plus a test function that walks the tree, and runs
+it. The outer `@given` is *fuzzing the engine itself* across diverse
+choice-graph shapes; the inner runner's bookkeeping isn't asserted on,
+only `assume(runner.interesting_examples)`.
+
+Port shape:
+
+- Outer is `Hegel::new(|tc| { ... }).run()`. Generators are public.
+- Inner is `NativeConjectureRunner::new(test_fn, NativeRunnerSettings::new()
+  .max_examples(1).suppress_health_check(...), SmallRng::seed_from_u64(seed)).run()`.
+- The inner test fn needs `'static`, so capture cloned generator
+  handles and `let outer_tc = tc.clone();` (`TestCase: Clone`) up
+  front. From inside the inner closure, `outer_tc.draw(handle.clone())`
+  extends the language tree on demand, mirroring the Python
+  `data.draw(nodes)` inside the inner runner's body. The outer `tc` is
+  alive for the whole outer test function and the inner runner runs
+  synchronously, so the clone's references stay valid. (Distinct from
+  `tests/hypothesis/conjecture_engine.rs::test_interleaving_engines`,
+  whose *outer* is itself a `NativeConjectureRunner` and which captures
+  by raw pointer.)
+- After `runner.run()`, gate with
+  `tc.assume(!runner.interesting_examples.is_empty())` so cases that
+  didn't reach an interesting outcome don't count.
+- `phases=set(default) - {Phase.shrink}` on the outer test has no
+  analog (no `Phase` knob); drop it. The tested behaviour — the inner
+  runner not crashing on arbitrary languages — is independent of
+  outer-shrink.
+- The outer 100-case default may dominate per-test budget when each
+  case shrinks deeply-recursive trees. `Settings::new().test_cases(20)`
+  is fine — note in the docstring that the upstream is `nocover/` for
+  the same slow-by-nature reason.
+
+Tests of this shape are also a useful surfacer of latent native-engine
+panics: they reach choice-graph shapes hand-coded test fns don't. When
+a shrinker pass in `src/native/shrinker/` panics under such a port, the
+fix is usually one of two:
+
+- **Arithmetic overflow on a saturating-cast value the new test
+  reaches** (`bin_search_down`'s `lo + 1` at `i128::MAX` from a
+  `f64::MAX as i128` cast). Switch to `checked_add` / `saturating_*`.
+- **A precondition assert that's no longer true mid-pass** (e.g.
+  `Shrinker::replace`'s `assert!(i < attempt.len())` after an earlier
+  pass shortened `current_nodes`, or a kind-mismatch when the index now
+  points at a different `ChoiceKind`). Treat the impossible
+  replacement as a failed attempt and `return false` rather than
+  panicking — the surrounding `bin_search_down` / `consider` callers
+  are written to retry on `false`.
+
+Commit the engine fix separately from the test port, with a regression
+rationale naming the test that surfaced it.
+
+## Style
+
+- Keep each `#[test]` close in spirit to the Python original, with a similar
+  name (prefix `test_`).
+- Use `.unwrap()` over `.expect("static message")`.
+- Don't bind unused return values to `_`.
+- Minimal comments — only when a translation choice is non-obvious.
+- Don't add new helpers to `tests/common/utils.rs`.
+- **Closures consumed synchronously don't need `move` or cloned
+  captures.** When the function being called takes `F: FnOnce(...)` or
+  `F: FnMut(...)` and runs the closure inside the same call (e.g.
+  `tree.step(order, |chooser| ...)`, `assert_all_examples(gen, |v| ...)`),
+  the closure can borrow its captures directly — no `move`, no
+  `.clone()` on the captured `Vec`, no `Rc<RefCell<...>>` wrapper for
+  a mutable result. The Python closure-with-captured-list shape
+  (`lambda chooser: results.append(f(chooser))`) looks like it needs
+  these wrappers, but doesn't: ports Rust-side to a plain
+  `|chooser| results.push(f(chooser))`. Reach for `move` + owned
+  captures only when the closure outlives the call that receives it —
+  e.g. a builder returning `Box<dyn FnMut>` (see
+  `random_selection_order` in `src/native/choicetree.rs`) or a
+  `tokio::spawn`-style hand-off. If you find yourself writing `let x =
+  x.clone(); tree.step(order, move |...| { ... x ... })`, try dropping
+  both the `clone` and `move` first — the compiler will usually accept
+  it.
+- **Python `@helper` decorators applied to a `def foo(args): ...`
+  often port as an inline closure call, not a named function.** In
+  Python, `@exhaust` on `def nested(chooser): ...` rebinds `nested`
+  to `exhaust(nested_fn)` — the decorator is just sugar for an
+  immediate call with the body as its argument. The Rust port is
+  `let nested = exhaust(|chooser| { ... });`, not a free `fn nested`
+  plus an `exhaust(nested)` call. Same idiom shows up as
+  `@shrinking_from(initial)` in `test_shrinker.py` (see api-mapping);
+  the fix is the same. If the decorator takes arguments, those become
+  positional arguments to the helper: `@helper(x) def foo(...)` → `let
+  foo = helper(x, |...| { ... });`.
+
+## Verification step (REQUIRED before commit)
+
+Before you finish:
+
+1. Write the file.
+2. Update `tests/pbtkit/main.rs` (or `tests/hypothesis/main.rs`) to
+   include your new module via `mod <name>;`. Both `main.rs` files and
+   the matching `[[test]]` declarations in `Cargo.toml` already exist —
+   do not add or modify them.
+3. Run `cargo test --test pbtkit --no-run` (or `--test hypothesis`). The
+   suite MUST compile.
+4. Run `cargo test --test pbtkit <your_module>` (server mode). Every test
+   you wrote must either pass or fail with a runtime `todo!()` raised
+   from `src/native/` (see the skip-vs-port section). Tests themselves
+   must not contain `todo!()`.
+5. Run `cargo test --features native --test pbtkit --no-run` — the suite
+   must still compile under native mode.
+
+**Interpreting failures:**
+
+- **Compilation errors** are *always* a problem in your test code, not in
+  hegel-rust. Common fixes:
+  - `X is not an iterator` / `method 'boxed' not found` → you forgot
+    `use hegel::generators::{self as gs, Generator};`
+  - `type annotations needed` → add closure parameter type (`|xs: &Vec<i64>|`).
+  - `file not found for module 'common'` → you left a spurious
+    `mod common;` in the submodule file; remove it.
+- **Runtime test failures** are *usually* a problem in your test translation
+  (wrong expected value, wrong bounds, misread the Python intent). Look at
+  your test first.
+- But runtime failures can occasionally be genuine hegel-rust bugs,
+  especially under `#[cfg(feature = "native")]` where the engine is less
+  mature. If after re-reading the Python original and your translation you
+  believe the test is correct, leave the test asserting the correct
+  behavior — don't fudge the assertion to make it pass. The fixer loop
+  will pick up the failure and fix the engine.
+
+### Handling tests that can't pass yet
+
+If a test calls a native-mode feature that isn't implemented yet, do NOT
+`todo!()` the test body. Instead, per the skip-vs-port section above:
+
+1. Write the full test body (native-gated if it exercises engine internals).
+2. Implement the missing feature in `src/native/...`, or stub the missing
+   function body with `todo!("specific thing missing")` if it's too large
+   for this commit.
+3. Commit. The test will compile and (if the source was stubbed) fail at
+   runtime — that's expected; a fixer-task invocation will pick it up.
+
+### `#[ignore = "..."]` vs. skipping: which to use
+
+`#[ignore = "reason"]` is for tests that *compile and run but don't pass*
+against the current engine — typically because a semantic gap between
+hegel-rust's `src/native/` and Hypothesis hides behind an otherwise
+working feature. Three shapes seen so far:
+
+- The feature is implemented and the rest of the test-file's tests
+  pass, but one case's assertion depends on a sub-behaviour the native
+  port simplifies away — e.g. `test_targeting_can_drive_length_very_high`
+  needs Hypothesis's 3-retry loop inside `attempt_replace`, which the
+  initial optimiser port collapses to single-attempt + span fixup.
+- The test is known-flaky upstream (`@pytest.mark.xfail(..., strict=False)`
+  or a comment saying "depends on random seed"); Rust's deterministic
+  seeding pattern doesn't reliably hit the same witness. Mirror the
+  upstream xfail with `#[ignore]` — see
+  `tests/pbtkit/findability_pbtsmith_regressions.rs` for precedent.
+- The file is a shrink-quality test whose `@example` rows exercise
+  the same assertion under different inputs, and the native shrinker
+  converges on some rows but gaps on others. Split each row into its
+  own `#[test]` and `#[ignore]` only the gapping ones under a single
+  shared TODO entry — see the "Shrink-quality stacks where rows gap
+  individually" subsection of `references/api-mapping.md` for the
+  shape, and `tests/hypothesis/quality_zig_zagging.rs` for a
+  precedent.
+
+For any of these: `#[ignore = "short reason — tracked in TODO.yaml"]`,
+file a corresponding TODO.yaml entry with un-ignoring as acceptance
+criteria, and leave the test body asserting the correct (future)
+behaviour. Do NOT degrade the assertion to match the current engine.
+Do NOT move the test to SKIPPED.md — SKIPPED.md is for whole files and
+individually-skipped (commented-out / absent) tests; `#[ignore]` tests
+live in the source tree and re-light automatically when the gap is
+closed.
+
+## Coverage witnesses the Python original doesn't have
+
+If your port adds or pulls in `src/native/` code with a defensive
+branch (a `clamp`-to-bound fallthrough, an `unreachable`-adjacent
+fall-through that returns a sentinel, a `.max(0)` guard on an
+arithmetic result), Python's `@example` cases often don't exercise it
+— Python coverage tools don't flag it and the upstream author never
+needed to. Rust's 100% line-coverage ratchet does flag it.
+
+Don't delete the defensive branch; it's there for a reason. Don't add
+`// nocov`; that needs human permission. Instead add a single small
+test with a pathological input that actually hits the branch. Mark it
+clearly as non-upstream so a later reviewer diffing the port against
+the Python doesn't think it's missing from their audit:
+
+```rust
+// Exercise the defensive `return lower` branch of make_float_clamper:
+// when the constraint is pathological (no value can satisfy both sm > max
+// and -sm >= min) the clamper falls back to min_value rather than a
+// value below it. Python coverage doesn't test this; Rust's ratchet does.
+#[test]
+fn test_float_clamper_defensive_lower() { ... }
+```
+
+One focused `#[test]` per defensive branch, same file as the port,
+commit message notes the extra.
+
+The same witness pattern applies when the upstream's *predicate shape*
+is what starves coverage, not a defensive branch in the code. Budget /
+call-count tests (e.g. `test_shrink_budgeting.py`, which asserts
+`shrinker.calls <= 10` with a `lambda x: x == value` predicate that
+accepts only the initial value) deliberately reject every
+improvement, so the *mainline* improvement paths of the code under
+test go unhit. Add one witness per path the budget predicate skips —
+a permissive predicate to hit the short-circuit improvement arm, a
+threshold predicate to walk the binary-search / mask arms, inputs
+that trigger the skip-branch of a "continue if already in order"
+loop, etc. Same file, same "non-upstream" comment style, commit
+message notes the extras.
+
+## Keep this skill current
+
+As you port, you'll figure things out that aren't documented yet. When
+you do, update the relevant file as part of the same commit (or a
+separate follow-up commit during the same sub-loop). Additions should
+be terse — tables over prose, real code over hand-waving — and only
+for things not already covered somewhere else in the skill.
+
+Where new content belongs:
+
+- `references/api-mapping.md` — a Python→Rust translation missing from
+  the cheat sheet, or a transform whose shape in Rust isn't obvious.
+- `references/pbtkit-overview.md` /
+  `references/hypothesis-overview.md` — structural or organizational
+  facts about the upstream that would help a future porter orient.
+- This file (`SKILL.md`) — a new porting-workflow rule, a recurring
+  gotcha, or a clarification to the skip-vs-port policy.
+
+Do NOT record per-file notes (one-off quirks of a single upstream file
+don't belong in the skill; they belong in the port's commit message).
+Do NOT rewrite existing content to match your preferences; add to it
+only when there's something genuinely new.
+
+## Commit
+
+After verification passes, commit with a focused message like:
+
+```
+Port pbtkit/test_text.py to tests/pbtkit/text.rs
+
+7 tests ported via the public generator API. 12 native-gated tests
+exercise src/native/choices, which currently stubs `choice_with_weight`
+as `todo!()`; fixer-task invocations will fill the stub in.
+```
+
+One port per commit. Update `tests/pbtkit/main.rs` in the same commit.
+
+## Don't modify
+
+- `tests/common/utils.rs`.
+- Any existing ported file.
+- `src/` code beyond the scope of this port. You MAY:
+  - Add a `#[cfg(test)] #[path = "..."] mod tests;` wiring at the bottom
+    of a source file to hook up a new embedded test module.
+  - Add or stub a missing native-mode function under `src/native/...`
+    as required by the port (see the skip-vs-port section).

@@ -1,0 +1,30 @@
+error[E0277]: The first parameter in a #[composite] generator must have type TestCase.
+ --> tests/compile/fail/composite_missing_test_case_parameter.rs:2:35
+  |
+2 | fn composite_integer_generator(n: i32) -> i32 {
+  |                                   ^^^ This type does not match `TestCase`.
+  |
+  = help: the trait `__IsTestCase` is not implemented for `i32`
+help: the trait `__IsTestCase` is implemented for `TestCase`
+ --> src/test_case.rs
+  |
+  | impl __IsTestCase for TestCase {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `__assert_is_test_case`
+ --> src/test_case.rs
+  |
+  | pub fn __assert_is_test_case<T: __IsTestCase>() {}
+  |                                 ^^^^^^^^^^^^ required by this bound in `__assert_is_test_case`
+
+error[E0308]: mismatched types
+ --> tests/compile/fail/composite_missing_test_case_parameter.rs:1:1
+  |
+1 | #[hegel::composite]
+  | ^^^^^^^^^^^^^^^^^^^
+  | |
+  | expected `ComposedGenerator<i32, _>`, found `ComposedGenerator<TestCase, ...>`
+  | expected `hegel::generators::ComposedGenerator<i32, _>` because of return type
+  |
+  = note: expected struct `hegel::generators::ComposedGenerator<i32, _>`
+             found struct `hegel::generators::ComposedGenerator<TestCase, {closure@$DIR/src/generators/compose.rs:76:52: 76:80}>`
+  = note: this error originates in the macro `::hegel::compose` which comes from the expansion of the attribute macro `hegel::composite` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,0 +1,259 @@
+// Data tree and test function cache for the native backend.
+//
+// The data tree records the ChoiceKind (schema parameters) at each position in
+// the choice sequence, keyed by the prefix of choice values. When a test is
+// replayed with the same choice values, the tree verifies that the schema
+// parameters haven't changed — a change indicates non-deterministic data
+// generation (e.g. a generator that depends on global mutable state).
+//
+// The cache maps complete choice sequences to their test results, avoiding
+// redundant test function calls during shrinking.
+//
+// CachedTestFunction owns the test function and is the sole way to execute
+// test cases. This ensures every run is automatically recorded in the data
+// tree and (during shrinking) checked against the cache.
+
+use std::collections::HashMap;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
+use crate::control::with_test_context;
+use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Span, Status};
+use crate::native::data_source::NativeDataSource;
+use crate::test_case::{ASSUME_FAIL_STRING, LOOP_DONE_STRING, STOP_TEST_STRING, TestCase};
+
+use super::runner::{panic_message, store_final_panic_info};
+
+/// Hashable version of `ChoiceValue`, for use as tree/cache keys.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum ChoiceValueKey {
+    Integer(i128),
+    Boolean(bool),
+    Float(u64), // f64::to_bits()
+    Bytes(Vec<u8>),
+    String(Vec<u32>),
+}
+
+impl From<&ChoiceValue> for ChoiceValueKey {
+    fn from(v: &ChoiceValue) -> Self {
+        match v {
+            ChoiceValue::Integer(n) => ChoiceValueKey::Integer(*n),
+            ChoiceValue::Boolean(b) => ChoiceValueKey::Boolean(*b),
+            ChoiceValue::Float(f) => ChoiceValueKey::Float(f.to_bits()),
+            ChoiceValue::Bytes(b) => ChoiceValueKey::Bytes(b.clone()),
+            ChoiceValue::String(s) => ChoiceValueKey::String(s.clone()),
+        }
+    }
+}
+
+/// A node in the data tree trie.
+///
+/// Each node represents a choice position: `kind` is the expected schema at
+/// this position (set on first visit and shared by every draw made here),
+/// and `children` branches to the position following this draw, keyed by
+/// the choice value.
+struct TreeNode {
+    /// The expected ChoiceKind at this position (set on first visit).
+    kind: Option<ChoiceKind>,
+    /// Children keyed by the choice value drawn at this position.
+    children: HashMap<ChoiceValueKey, TreeNode>,
+}
+
+impl TreeNode {
+    fn new() -> Self {
+        TreeNode {
+            kind: None,
+            children: HashMap::new(),
+        }
+    }
+}
+
+impl Drop for TreeNode {
+    fn drop(&mut self) {
+        // Drop the trie iteratively. Naive recursive Drop overflows the stack
+        // when a generator (e.g. vecs(vecs(vecs(booleans())))) produces long
+        // choice sequences, making the trie's longest branch thousands deep.
+        let mut stack: Vec<TreeNode> = self.children.drain().map(|(_, v)| v).collect();
+        while let Some(mut node) = stack.pop() {
+            stack.extend(node.children.drain().map(|(_, v)| v));
+        }
+    }
+}
+
+/// Wraps the user's test function with a data tree (non-determinism detection)
+/// and a result cache (avoiding redundant calls during shrinking).
+///
+/// All test case execution flows through this struct, so recording and
+/// caching happen automatically.
+pub struct CachedTestFunction<F: FnMut(TestCase)> {
+    test_fn: F,
+    /// Root of the data tree trie.
+    tree_root: TreeNode,
+    /// Cache of test results keyed on complete choice sequences.
+    cache: HashMap<Vec<ChoiceValueKey>, (bool, Vec<ChoiceNode>)>,
+    /// Execution mode forwarded to each TestCase. Defaults to `Mode::TestRun`;
+    /// `native_run` overrides via `set_mode` to propagate `Settings::mode`.
+    mode: crate::runner::Mode,
+}
+
+impl<F: FnMut(TestCase)> CachedTestFunction<F> {
+    pub fn new(test_fn: F) -> Self {
+        CachedTestFunction {
+            test_fn,
+            tree_root: TreeNode::new(),
+            cache: HashMap::new(),
+            mode: crate::runner::Mode::TestRun,
+        }
+    }
+
+    /// Override the mode forwarded to each executed [`TestCase`].
+    pub fn set_mode(&mut self, mode: crate::runner::Mode) {
+        self.mode = mode;
+    }
+
+    /// Run a test case during the generation or database-replay phase.
+    ///
+    /// Records the resulting nodes in the data tree (checking for
+    /// non-determinism) but does not use the cache (random generation
+    /// produces unique sequences, so caching would just waste memory).
+    pub fn run(&mut self, ntc: NativeTestCase) -> (Status, Vec<ChoiceNode>, Vec<Span>) {
+        let (status, nodes, spans, _) = self.execute(ntc, false);
+        self.record(&nodes);
+        (status, nodes, spans)
+    }
+
+    /// Run a test case during shrinking.
+    ///
+    /// Checks the cache first; on a miss, runs the test, records in the
+    /// data tree, and stores the result in the cache.
+    /// Returns `(is_interesting, actual_nodes)` where `actual_nodes` is
+    /// the sequence of nodes the test actually produced (which may differ
+    /// from `candidate_nodes` if the test exited early or if values were
+    /// punned for a changed kind).
+    pub fn run_shrink(&mut self, candidate_nodes: &[ChoiceNode]) -> (bool, Vec<ChoiceNode>) {
+        if let Some(cached) = self.cache_lookup(candidate_nodes) {
+            return cached;
+        }
+
+        let choices: Vec<ChoiceValue> = candidate_nodes.iter().map(|n| n.value.clone()).collect();
+        let ntc = NativeTestCase::for_choices(&choices, Some(candidate_nodes), None);
+        let (status, new_nodes, _, _) = self.execute(ntc, false);
+        self.record(&new_nodes);
+
+        let result = (status == Status::Interesting, new_nodes);
+        self.cache_store(candidate_nodes, result.clone());
+        result
+    }
+
+    /// Run a probe test case: replay `prefix` then draw randomly beyond it,
+    /// up to `max_size` total choices.
+    ///
+    /// Used by `mutate_and_shrink`. Results are cached on the actual
+    /// produced node sequence (not the prefix), so a probe that happens to
+    /// reproduce a previously-seen trace hits the cache. Records in the
+    /// data tree like any other run.
+    pub fn run_probe(
+        &mut self,
+        prefix: &[ChoiceValue],
+        seed: u64,
+        max_size: usize,
+    ) -> (bool, Vec<ChoiceNode>) {
+        use rand::SeedableRng;
+        use rand::rngs::SmallRng;
+        let rng = SmallRng::seed_from_u64(seed);
+        let ntc = NativeTestCase::for_probe(prefix, rng, max_size);
+        let (status, new_nodes, _, _) = self.execute(ntc, false);
+        self.record(&new_nodes);
+        let result = (status == Status::Interesting, new_nodes);
+        self.cache_store(&result.1, result.clone());
+        result
+    }
+
+    /// Run the final replay of a failing test case (with output enabled).
+    ///
+    /// Does not use the cache or record in the tree — the test is about
+    /// to fail and we need the actual panic payload for re-raising.
+    pub fn run_final(&mut self, ntc: NativeTestCase) -> (Status, Vec<ChoiceNode>, Vec<Span>) {
+        let (status, nodes, spans, _) = self.execute(ntc, true);
+        (status, nodes, spans)
+    }
+
+    /// Core test execution: run one test case and return results.
+    fn execute(
+        &mut self,
+        ntc: NativeTestCase,
+        is_final: bool,
+    ) -> (Status, Vec<ChoiceNode>, Vec<Span>, Option<String>) {
+        let (data_source, ntc_handle) = NativeDataSource::new(ntc);
+        let mut tc = TestCase::new(Box::new(data_source), is_final, self.mode);
+        tc.attach_native_handle(ntc_handle.clone());
+        let result =
+            with_test_context(|| catch_unwind(AssertUnwindSafe(|| (self.test_fn)(tc.clone()))));
+
+        let (status, panic_msg) = match result {
+            Ok(()) => (Status::Valid, None),
+            Err(e) => {
+                let msg = panic_message(&e);
+                if msg == ASSUME_FAIL_STRING || msg == STOP_TEST_STRING {
+                    (Status::Invalid, None)
+                } else if msg == LOOP_DONE_STRING {
+                    (Status::Valid, None)
+                } else {
+                    if is_final {
+                        store_final_panic_info(&msg);
+                    }
+                    (Status::Interesting, Some(msg))
+                }
+            }
+        };
+
+        let nodes = NativeDataSource::take_nodes(&ntc_handle);
+        let spans = NativeDataSource::take_spans(&ntc_handle);
+        (status, nodes, spans, panic_msg)
+    }
+
+    /// Record nodes in the data tree, checking for non-determinism.
+    ///
+    /// The kind at each position is a property of that position, not of the
+    /// value drawn: every draw made at the same prefix must use the same
+    /// schema regardless of which value it produced. A mismatch means the
+    /// generator's constraints depend on external state.
+    fn record(&mut self, nodes: &[ChoiceNode]) {
+        let mut current = &mut self.tree_root;
+        for node in nodes {
+            if let Some(ref expected_kind) = current.kind {
+                if *expected_kind != node.kind {
+                    panic!(
+                        "Your data generation is non-deterministic: at the same choice \
+                         position with the same prefix, the schema changed from {:?} to {:?}. \
+                         This usually means a generator depends on global mutable state.",
+                        expected_kind, node.kind
+                    );
+                }
+            } else {
+                current.kind = Some(node.kind.clone());
+            }
+            let key = ChoiceValueKey::from(&node.value);
+            current = current.children.entry(key).or_insert_with(TreeNode::new);
+        }
+    }
+
+    fn cache_lookup(&self, nodes: &[ChoiceNode]) -> Option<(bool, Vec<ChoiceNode>)> {
+        let key: Vec<ChoiceValueKey> = nodes
+            .iter()
+            .map(|n| ChoiceValueKey::from(&n.value))
+            .collect();
+        self.cache.get(&key).cloned()
+    }
+
+    fn cache_store(&mut self, nodes: &[ChoiceNode], result: (bool, Vec<ChoiceNode>)) {
+        let key: Vec<ChoiceValueKey> = nodes
+            .iter()
+            .map(|n| ChoiceValueKey::from(&n.value))
+            .collect();
+        self.cache.insert(key, result);
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/embedded/native/tree_tests.rs"]
+mod tests;

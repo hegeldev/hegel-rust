@@ -13,8 +13,10 @@ target/
 result
 .claude-reliability/
 CLAUDE.local.md
+.remember/
 
 lcov.info
+*.profraw
 
 # whitelist .claude files, rather than blacklist. Some local claude files
 # (skills, agents) have to live in .claude - as opposed to eg CLAUDE.local.md,
@@ -28,3 +30,13 @@ lcov.info
 !.claude/skills/self-review/
 
 docs/superpowers
+resources
+
+.port-loop-cache.json
+.port-loop-todo-attempts.json
+.port-loop-last-push
+.porting/
+.port-worktrees/
+target-worker-*/
+
+lcov-*.info

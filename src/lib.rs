@@ -221,7 +221,10 @@ pub(crate) mod cli;
 pub(crate) mod control;
 pub mod explicit_test_case;
 pub mod generators;
+#[cfg(feature = "native")]
+pub(crate) mod native;
 pub(crate) mod runner;
+#[cfg(not(feature = "native"))]
 pub(crate) mod server;
 pub mod stateful;
 mod test_case;
@@ -245,6 +248,62 @@ pub use test_case::{
 // re-export public api
 #[doc(hidden)]
 pub use antithesis::TestLocation;
+
+// Re-exports of native-engine internals for integration-test access.
+// `#[doc(hidden)]` — not part of the stable public API.
+#[cfg(feature = "native")]
+#[doc(hidden)]
+pub mod __native_test_internals {
+    pub use crate::native::bignum::BigUint;
+    pub use crate::native::cache::{
+        CacheEntry, CacheInvalidArgument, CachePinError, CacheScoring, GenericCache, LRUCache,
+        LRUReusedCache, LRUReusedScoring,
+    };
+    pub use crate::native::cathetus::cathetus;
+    pub use crate::native::choicetree::{
+        ChoiceTree, Chooser, DeadBranch, prefix_selection_order, random_selection_order,
+    };
+    pub use crate::native::conjecture_runner::{
+        ConjectureRunResult, DominanceRelation, ExitReason, HealthCheckLabel, InterestingExample,
+        InterestingOrigin, NativeConjectureData, NativeConjectureRunner, NativeDataTreeView,
+        NativeRunnerSettings, NativeShrinkSpan, NativeShrinkTarget, NativeShrinker, ParetoFront,
+        Phase as RunnerPhase, choices_from_bytes, choices_to_bytes, dominance, fails_health_check,
+        interesting_origin, run_to_nodes,
+    };
+    pub use crate::native::conjecture_utils::{
+        Many, SMALLEST_POSITIVE_FLOAT, Sampler, calc_p_continue, combine_labels, p_continue_to_avg,
+    };
+    pub use crate::native::core::{
+        BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, CoverageTag, DataObserver,
+        FloatChoice, IntegerChoice, MAX_DEPTH, NativeConjectureResult, NativeResult,
+        NativeTestCase, Span, Spans, Status, StopTest, StringChoice, decode_exponent,
+        encode_exponent, float_to_index, index_to_float, reverse_bits_n, structural_coverage,
+    };
+    pub use crate::native::database::{
+        BackgroundWriteNativeDatabase, ExampleDatabase, InMemoryNativeDatabase, Listener,
+        ListenerEvent, Listeners, METAKEYS_NAME, MultiplexedNativeDatabase, NativeDatabase,
+        ReadOnlyNativeDatabase,
+    };
+    pub use crate::native::datatree::{MAX_CHILDREN_EFFECTIVELY_INFINITE, compute_max_children};
+    pub use crate::native::dynamic_variable::DynamicVariable;
+    pub use crate::native::featureflags::{FeatureFlags, FeatureStrategy};
+    pub use crate::native::floats::{
+        FloatConstraints, choice_equal_float, choice_permitted_float, count_between_floats,
+        make_float_clamper, next_down, next_down_normal, next_up, next_up_normal, sign_aware_lte,
+    };
+    pub use crate::native::intervalsets::IntervalSet;
+    pub use crate::native::native_tc_handle_of;
+    pub use crate::native::optimiser::{
+        BufferSizeLimit, CachedTestResult, RunIsComplete, TargetedRunner, TargetedRunnerSettings,
+        TargetedTestCase,
+    };
+    pub use crate::native::shrinker::value_shrinkers::{
+        BytesShrinker, CollectionShrinker, IntegerShrinker, OrderingShrinker, StringShrinker,
+    };
+    pub use crate::native::shrinker::{ShrinkRun, Shrinker};
+    pub use crate::native::tree::CachedTestFunction;
+    pub use crate::native::unicodedata;
+}
 
 /// Derive a generator for a struct or enum.
 ///
@@ -421,7 +480,9 @@ pub use cli::apply_cli_args as __apply_cli_args;
 #[doc(hidden)]
 pub use runner::hegel;
 pub use runner::{HealthCheck, Hegel, Mode, Settings, Verbosity};
+#[cfg(not(feature = "native"))]
 #[doc(hidden)]
 pub use server::process::__test_kill_server;
+#[cfg(not(feature = "native"))]
 #[doc(hidden)]
 pub use server::process::format_log_excerpt;

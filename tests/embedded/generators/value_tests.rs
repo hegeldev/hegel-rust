@@ -29,6 +29,30 @@ fn test_deserialize_neg_infinity() {
 }
 
 #[test]
+fn test_deserialize_negative_zero_f64() {
+    let v = HegelValue::Number(-0.0_f64);
+    let result: f64 = from_hegel_value(v).unwrap();
+    assert_eq!(result, 0.0);
+    assert!(result.is_sign_negative());
+}
+
+#[test]
+fn test_deserialize_negative_zero_f32() {
+    let v = HegelValue::Number(-0.0_f64);
+    let result: f32 = from_hegel_value(v).unwrap();
+    assert_eq!(result, 0.0_f32);
+    assert!(result.is_sign_negative());
+}
+
+#[test]
+fn test_deserialize_positive_zero_f64() {
+    let v = HegelValue::Number(0.0_f64);
+    let result: f64 = from_hegel_value(v).unwrap();
+    assert_eq!(result, 0.0);
+    assert!(result.is_sign_positive());
+}
+
+#[test]
 fn test_deserialize_vec_f64() {
     let v = HegelValue::Array(vec![
         HegelValue::Number(1.0),

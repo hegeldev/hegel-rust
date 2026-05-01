@@ -38,7 +38,8 @@ pub use collections::{
     VecGenerator, arrays, fixed_dicts, hashmaps, hashsets, vecs,
 };
 pub use combinators::{
-    OneOfGenerator, OptionalGenerator, SampledFromGenerator, one_of, optional, sampled_from,
+    OneOfGenerator, OptionalGenerator, PermutationsGenerator, SampledFromGenerator, one_of,
+    optional, permutations, sampled_from,
 };
 pub use compose::ComposedGenerator;
 #[doc(hidden)]
@@ -48,8 +49,11 @@ pub use deferred::{DeferredGeneratorDefinition, deferred};
 #[doc(hidden)]
 pub use generators::BasicGenerator;
 pub use generators::{BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};
-pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit};
-pub use numeric::{Float, FloatGenerator, Integer, IntegerGenerator, floats, integers};
+pub use misc::{BoolGenerator, JustGenerator, UuidsGenerator, booleans, just, unit, uuids};
+pub use numeric::{
+    Float, FloatGenerator, Integer, IntegerGenerator, NanFloatGenerator, floats, integers,
+    nan_floats,
+};
 pub use strings::{
     BinaryGenerator, CharactersGenerator, DateGenerator, DateTimeGenerator, DomainGenerator,
     EmailGenerator, IpAddressGenerator, RegexGenerator, TextGenerator, TimeGenerator, UrlGenerator,

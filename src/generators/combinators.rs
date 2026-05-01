@@ -40,6 +40,10 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<T> for SampledFromGenerator<'a, 
             elements[index].clone()
         }))
     }
+
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        Some(self.elements.to_vec())
+    }
 }
 
 /// Pick from a fixed list of values.
@@ -203,3 +207,46 @@ pub fn optional<T, G: Generator<T>>(inner: G) -> OptionalGenerator<G, T> {
         _phantom: PhantomData,
     }
 }
+
+/// Generator that produces permutations of a fixed list of values. Created by [`permutations()`].
+pub struct PermutationsGenerator<'a, T: Clone> {
+    elements: Cow<'a, [T]>,
+}
+
+impl<T: Clone + Send + Sync> Generator<Vec<T>> for PermutationsGenerator<'_, T> {
+    // nocov start
+    fn do_draw(&self, tc: &TestCase) -> Vec<T> {
+        let mut result: Vec<T> = self.elements.iter().cloned().collect();
+        let n = result.len();
+        if n <= 1 {
+            return result;
+        }
+        // Reversed Fisher-Yates: for each i, swap with self or a later element.
+        // Shrinking towards i==j collapses to the identity permutation.
+        for i in 0..(n - 1) {
+            let j = integers::<usize>()
+                .min_value(i)
+                .max_value(n - 1)
+                .do_draw(tc);
+            result.swap(i, j);
+        }
+        result
+    }
+    // nocov end
+}
+
+/// Generate permutations of an ordered collection.
+///
+/// Accepts anything convertible into `Cow<[T]>` (e.g. `Vec<T>` or `&[T]`).
+/// Examples shrink towards the original order.
+// nocov start
+pub fn permutations<'a, T, S>(elements: S) -> PermutationsGenerator<'a, T>
+where
+    T: Clone + Send + Sync,
+    S: Into<Cow<'a, [T]>>,
+{
+    PermutationsGenerator {
+        elements: elements.into(),
+    }
+}
+// nocov end

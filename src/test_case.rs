@@ -60,6 +60,11 @@ pub(crate) struct TestCaseGlobalData {
     /// non-reentrant; no method holds it while calling back into
     /// `TestCase`.
     shared: Mutex<SharedState>,
+    /// Native-backend test case handle. Set once at construction time by
+    /// `attach_native_handle` before the TestCase is shared; read-only
+    /// thereafter.
+    #[cfg(feature = "native")]
+    pub(crate) native_handle: Option<crate::native::data_source::NativeTestCaseHandle>,
 }
 
 pub(crate) struct SharedState {
@@ -239,6 +244,8 @@ impl TestCase {
                         allocated_display_names: HashSet::new(),
                     },
                 }),
+                #[cfg(feature = "native")]
+                native_handle: None,
             }),
             local: RefCell::new(TestCaseLocalData {
                 span_depth: 0,
@@ -246,6 +253,28 @@ impl TestCase {
                 on_draw,
             }),
         }
+    }
+
+    /// Attach the native test case handle.
+    ///
+    /// Must be called at most once, before the `TestCase` is cloned or
+    /// shared with any other code (i.e. right after construction).
+    #[cfg(feature = "native")]
+    pub(crate) fn attach_native_handle(
+        &mut self,
+        handle: crate::native::data_source::NativeTestCaseHandle,
+    ) {
+        Arc::get_mut(&mut self.global)
+            .expect("attach_native_handle called after TestCase was shared")
+            .native_handle = Some(handle);
+    }
+
+    /// Return a reference to the native test case handle, if present.
+    #[cfg(feature = "native")]
+    pub(crate) fn native_tc_handle(
+        &self,
+    ) -> Option<&crate::native::data_source::NativeTestCaseHandle> {
+        self.global.native_handle.as_ref()
     }
 
     pub(crate) fn mode(&self) -> Mode {
@@ -383,6 +412,30 @@ impl TestCase {
         let local = self.local.borrow();
         let indent = local.indent;
         (local.on_draw)(&format!("{:indent$}{}", "", message, indent = indent));
+    }
+
+    /// Record a targeting observation to help the engine find extreme inputs.
+    ///
+    /// Call this inside a test body to guide generation toward inputs that
+    /// maximise `score`. The label distinguishes multiple simultaneous
+    /// targeting goals; pass `""` for a single unlabeled score.
+    ///
+    /// Has no effect during replays or if the test case has been aborted.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators as gs;
+    ///
+    /// #[hegel::test]
+    /// fn my_test(tc: hegel::TestCase) {
+    ///     let n: u32 = tc.draw(gs::integers::<u32>());
+    ///     tc.target(n as f64, "");
+    /// }
+    /// ```
+    pub fn target(&self, score: f64, label: impl Into<String>) {
+        let shared = self.global.shared.lock();
+        shared.data_source.target_observation(score, &label.into());
     }
 
     /// Run `body` in a loop that should runs "logically infinitely" or until
@@ -551,11 +604,13 @@ impl TestCase {
     /// Report whether the test case has been aborted (StopTest/overflow).
     ///
     /// Used by the runner to decide whether to send `mark_complete`.
+    #[cfg(not(feature = "native"))]
     pub(crate) fn test_aborted(&self) -> bool {
         self.with_data_source(|ds| ds.test_aborted())
     }
 
     /// Send `mark_complete` on this test case's data source.
+    #[cfg(not(feature = "native"))]
     pub(crate) fn mark_complete(&self, status: &str, origin: Option<&str>) {
         self.with_data_source(|ds| ds.mark_complete(status, origin));
     }

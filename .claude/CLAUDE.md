@@ -29,7 +29,6 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 - `src/runner.rs` — Spawns hegel CLI, manages socket server
 - `src/generators/` — All generator implementations (`mod.rs` has the `Generate` trait + `TestCaseData`)
 - `hegel-macros/` — Proc macro crate for `#[derive(Generate)]` (sub-crate with its own `Cargo.toml`)
-- `build.rs` — Locates `hegel` binary on PATH, exports `HEGEL_BINARY_PATH` env var (falls back to `"hegel"`)
 
 ### Feature Flags
 
@@ -62,7 +61,7 @@ Key insight: `map()` on a `BasicGenerator` preserves the schema by composing the
 
 ### Thread-Local State
 
-`TestCaseData` is stored in thread-local `TEST_CASE_DATA` and holds the socket connection, stream, and span depth. `IS_LAST_RUN` tracks whether this is the final replay for counterexample output.
+`TestCase` (in `src/test_case.rs`) is the public test-case handle passed to test closures. It holds a `Mutex<SharedState>` for the socket connection, stream, span depth, and other mutable state. `IS_LAST_RUN` (a thread-local bool) tracks whether this is the final replay for counterexample output.
 
 ### Span System
 

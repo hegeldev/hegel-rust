@@ -1,0 +1,12 @@
+# Pending tasks for the port loop. `scripts/port-loop.py` pops one entry at a
+# time and dispatches an agent to handle it before moving on to porting new
+# upstream tests. Add entries at any position; remove an entry when it's done.
+#
+# Schema per entry:
+#   - title: one-line summary
+#     blocked_by:           # optional; list of titles that must be cleared
+#       - Other entry title #   first. Blocked entries are kept in the queue
+#                           #   but skipped by the dispatcher until every
+#                           #   listed blocker is removed from TODO.yaml.
+#     details: |
+#       Multi-line body with context, pointers, acceptance criteria.

@@ -30,16 +30,24 @@ pub trait Float: Copy + PartialOrd {
     const MIN: Self;
     /// The maximum value of this type.
     const MAX: Self;
+    /// Widen to f64 for cross-width comparisons (bound validation).
+    fn to_f64(self) -> f64;
 }
 
 impl Float for f32 {
     const MIN: Self = f32::MIN;
     const MAX: Self = f32::MAX;
+    fn to_f64(self) -> f64 {
+        self as f64
+    }
 }
 
 impl Float for f64 {
     const MIN: Self = f64::MIN;
     const MAX: Self = f64::MAX;
+    fn to_f64(self) -> f64 {
+        self
+    }
 }
 
 /// Generator for integer values. Created by [`integers()`].
@@ -167,6 +175,20 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
 
         if let (Some(min), Some(max)) = (self.min, self.max) {
             assert!(min <= max, "Cannot have max_value < min_value");
+            // Reject the sign-aware-empty range min=+0.0, max=-0.0. Plain `<=`
+            // considers these equal but Hypothesis (and the native backend)
+            // treat -0.0 as strictly less than 0.0 — so this range contains
+            // no valid floats. See hypothesis's strategies/_internal/numbers.py
+            // (`bad_zero_bounds`) and native/core/choices.rs::sign_aware_lte.
+            let min_f = min.to_f64();
+            let max_f = max.to_f64();
+            if min_f == 0.0 && max_f == 0.0 && min_f.is_sign_positive() && max_f.is_sign_negative()
+            {
+                panic!(
+                    "InvalidArgument: There are no {width}-bit floating-point \
+                     values between min_value=0.0 and max_value=-0.0"
+                );
+            }
         }
 
         let allow_nan = self.allow_nan.unwrap_or(!has_min && !has_max);
@@ -253,4 +275,38 @@ pub fn floats<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send +
         allow_nan: None,
         allow_infinity: None,
     }
+}
+
+/// Generator for NaN `f64` values. Created by [`nan_floats()`].
+///
+/// Port of Hypothesis's `NanStrategy`, the strategy that `filter_rewriting`
+/// substitutes for `floats().filter(math.isnan)`. Emits a mix of sign bits
+/// and mantissa bit-patterns so all four (positive/negative × math.nan /
+/// other-bit-pattern) variants are routinely reachable.
+pub struct NanFloatGenerator;
+
+impl Generator<f64> for NanFloatGenerator {
+    fn do_draw(&self, tc: &TestCase) -> f64 {
+        // Match hypothesis/strategies/_internal/numbers.py::NanStrategy:
+        // sign bit, then 52-bit mantissa. The base `nan_bits` already has
+        // the quiet bit set, so the ORed result is always a valid NaN.
+        let sign: bool = tc.draw_silent(super::booleans());
+        let mantissa: i64 = tc.draw_silent(
+            super::integers::<i64>()
+                .min_value(0)
+                .max_value((1i64 << 52) - 1),
+        );
+        let sign_bit = u64::from(sign) << 63;
+        let nan_bits = f64::NAN.to_bits();
+        f64::from_bits(sign_bit | nan_bits | (mantissa as u64))
+    }
+}
+
+/// Generate NaN `f64` values with a mix of sign and mantissa bit-patterns.
+///
+/// Intended for tests that need to distinguish NaN variants (e.g. finding
+/// a negative NaN or a NaN whose bit-pattern differs from `f64::NAN`).
+/// For generic floats use [`floats()`].
+pub fn nan_floats() -> NanFloatGenerator {
+    NanFloatGenerator
 }

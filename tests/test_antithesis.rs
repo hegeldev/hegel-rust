@@ -1,6 +1,5 @@
 // Antithesis only supports Linux.
 #![cfg(not(windows))]
-
 mod common;
 
 use common::project::TempRustProject;
@@ -76,6 +75,57 @@ fn my_test(tc: hegel::TestCase) {
             }
         })
     );
+}
+
+#[test]
+fn test_antithesis_native_jsonl_written_when_env_set() {
+    let output_dir = TempDir::new().unwrap();
+    let output_path = output_dir.path().to_str().unwrap().to_string();
+
+    let code = r#"
+use hegel::generators as gs;
+
+#[hegel::test]
+fn my_test(tc: hegel::TestCase) {
+    let _ = tc.draw(gs::booleans());
+}
+"#;
+
+    TempRustProject::new()
+        .test_file("test.rs", code)
+        .feature("native")
+        .feature("antithesis")
+        .env("ANTITHESIS_OUTPUT_DIR", &output_path)
+        .cargo_test(&[]);
+
+    let jsonl_path = output_dir.path().join("sdk.jsonl");
+    assert!(jsonl_path.exists());
+
+    let contents = std::fs::read_to_string(&jsonl_path).unwrap();
+    let lines: Vec<&str> = contents.lines().collect();
+    assert_eq!(lines.len(), 2, "Got {} lines", lines.len());
+}
+
+#[test]
+fn test_antithesis_native_panics_without_feature() {
+    let output_dir = TempDir::new().unwrap();
+    let output_path = output_dir.path().to_str().unwrap().to_string();
+
+    let code = r#"
+use hegel::generators as gs;
+
+#[hegel::test]
+fn my_test(tc: hegel::TestCase) {
+    let _ = tc.draw(gs::booleans());
+}
+"#;
+
+    TempRustProject::new()
+        .test_file("test.rs", code)
+        .feature("native")
+        .env("ANTITHESIS_OUTPUT_DIR", &output_path)
+        .expect_failure("antithesis")
+        .cargo_test(&[]);
 }
 
 #[test]

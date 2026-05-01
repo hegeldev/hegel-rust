@@ -12,10 +12,11 @@ mod common;
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use hegel::generators as gs;
-use hegel::{Hegel, Settings};
+use hegel::{HealthCheck, Hegel, Settings};
 
 /// Run `body` as a Hegel property test and return the lines captured during
 /// the final replay of the shrunk failing case. `body` is expected to trigger
@@ -147,23 +148,36 @@ fn loop_terminates_when_body_never_panics() {
     // With a body that always succeeds, the loop should still terminate (via
     // the backend exhausting its budget and raising StopTest). If repeat did
     // not catch StopTest, this test would fail with an Overrun.
-    let iterations = Rc::new(Cell::new(0u64));
-    let iterations_inside = iterations.clone();
-    Hegel::new(move |tc| {
-        let iterations = iterations_inside.clone();
-        tc.repeat(|| {
-            iterations.set(iterations.get() + 1);
-        });
-    })
-    .settings(
-        Settings::new()
-            .test_cases(3)
-            .database(None)
-            .derandomize(true),
-    )
-    .run();
+    //
+    // The native backend's repeat loop can run thousands of iterations
+    // (up to BUFFER_SIZE), which in unoptimized debug builds overflows
+    // the default 8 MB test-thread stack. Run in a thread with more room.
+    let iterations = Arc::new(AtomicU64::new(0));
+    let iterations_thread = iterations.clone();
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            let iterations_inside = iterations_thread.clone();
+            Hegel::new(move |tc| {
+                let iterations = iterations_inside.clone();
+                tc.repeat(|| {
+                    iterations.fetch_add(1, Ordering::Relaxed);
+                });
+            })
+            .settings(
+                Settings::new()
+                    .test_cases(3)
+                    .database(None)
+                    .derandomize(true)
+                    .suppress_health_check([HealthCheck::TooSlow]),
+            )
+            .run();
+        })
+        .unwrap()
+        .join()
+        .unwrap();
     assert!(
-        iterations.get() > 0,
+        iterations.load(Ordering::Relaxed) > 0,
         "expected the loop body to execute at least once",
     );
 }
