@@ -648,12 +648,15 @@ impl NativeConjectureData {
 
     pub fn draw_float(
         &mut self,
-        _min_value: f64,
-        _max_value: f64,
-        _allow_nan: bool,
-        _allow_infinity: bool,
+        min_value: f64,
+        max_value: f64,
+        allow_nan: bool,
+        allow_infinity: bool,
     ) -> f64 {
-        todo!("NativeConjectureData::draw_float")
+        match self.ntc.draw_float(min_value, max_value, allow_nan, allow_infinity) {
+            Ok(v) => v,
+            Err(_) => std::panic::panic_any(STOP_TEST_PANIC),
+        }
     }
 
     pub fn mark_interesting(&mut self, origin: InterestingOrigin) -> ! {
