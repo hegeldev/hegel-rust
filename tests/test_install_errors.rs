@@ -1,5 +1,6 @@
 mod common;
 
+#[cfg(unix)]
 use common::project::TempRustProject;
 
 // Unix-only: exercises the sh-based uv auto-install path and uses Unix PATH

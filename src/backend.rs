@@ -1,4 +1,5 @@
 use crate::Settings;
+use crate::server::runner::PanicInfo;
 use ciborium::Value;
 
 /// Error returned by [`DataSource`] methods when an operation cannot complete.
@@ -88,6 +89,14 @@ pub enum TestCaseResult {
     Interesting {
         /// The panic message from the failing test.
         panic_message: String,
+    },
+    /// A hegel-internal panic occurred during the test case. This should be
+    /// propagated immediately without any shrinking.
+    InternalError {
+        /// The panic message.
+        panic_message: String,
+        /// Information about the panic, including source location and backtrace.
+        panic_info: PanicInfo,
     },
 }
 

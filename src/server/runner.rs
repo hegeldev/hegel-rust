@@ -2,7 +2,7 @@ use crate::antithesis::TestLocation;
 use crate::antithesis::is_running_in_antithesis;
 use crate::backend::{DataSource, TestCaseResult, TestRunner};
 use crate::control::{currently_in_test_context, with_test_context};
-use crate::runner::{Mode, Settings};
+use crate::settings::{Mode, Settings};
 use crate::test_case::TestCase;
 use crate::test_case::{ASSUME_FAIL_STRING, LOOP_DONE_STRING, STOP_TEST_STRING};
 
@@ -14,13 +14,29 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static PANIC_HOOK_INIT: Once = Once::new();
 
-thread_local! {
-    /// (thread_name, thread_id, location, backtrace)
-    static LAST_PANIC_INFO: RefCell<Option<(String, String, String, Backtrace)>> = const { RefCell::new(None) };
+/// Information about a panic captured during test execution.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct PanicInfo {
+    pub thread_name: String,
+    pub thread_id: String,
+    pub file: String,
+    pub line: u32,
+    pub column: u32,
+    pub backtrace: Backtrace,
 }
 
-/// (thread_name, thread_id, location, backtrace).
-fn take_panic_info() -> Option<(String, String, String, Backtrace)> {
+impl PanicInfo {
+    pub(crate) fn location(&self) -> String {
+        format!("{}:{}:{}", self.file, self.line, self.column)
+    }
+}
+
+thread_local! {
+    static LAST_PANIC_INFO: RefCell<Option<PanicInfo>> = const { RefCell::new(None) };
+}
+
+fn take_panic_info() -> Option<PanicInfo> {
     LAST_PANIC_INFO.with(|info| info.borrow_mut().take())
 }
 
@@ -140,15 +156,24 @@ pub(super) fn init_panic_hook() {
                 .trim_start_matches("ThreadId(")
                 .trim_end_matches(')')
                 .to_string();
-            let location = info
-                .location()
-                .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
-                .unwrap_or_else(|| "<unknown>".to_string());
-
+            let loc = info.location().expect(
+                "PanicHookInfo.location() returned None. This should never happen - please open an issue!"
+            );
+            let file = loc.file().to_string();
+            let line = loc.line();
+            let column = loc.column();
             let backtrace = Backtrace::capture();
 
-            LAST_PANIC_INFO
-                .with(|l| *l.borrow_mut() = Some((thread_name, thread_id, location, backtrace)));
+            LAST_PANIC_INFO.with(|l| {
+                *l.borrow_mut() = Some(PanicInfo {
+                    thread_name,
+                    thread_id,
+                    file,
+                    line,
+                    column,
+                    backtrace,
+                })
+            });
         }));
     });
 }
@@ -177,32 +202,36 @@ fn run_test_case(
                 // the same as a no-panic return.
                 (TestCaseResult::Valid, None)
             } else {
-                // Take panic info - we need location for origin, and print details on final
-                let (thread_name, thread_id, location, backtrace) = take_panic_info()
-                    .unwrap_or_else(|| {
-                        // nocov start
-                        (
-                            "<unknown>".to_string(),
-                            "?".to_string(),
-                            "<unknown>".to_string(),
-                            Backtrace::disabled(),
-                        )
-                        // nocov end
-                    });
+                let panic_info = take_panic_info()
+                    // nocov start
+                    .expect(
+                        "Expected panic info, but got None. This should never happen - please open an issue!"
+                    );
+                // nocov end
+
+                // immediately propagate internal errors
+                if super::utils::is_hegel_file(&panic_info.file) {
+                    return TestCaseResult::InternalError {
+                        panic_message: msg,
+                        panic_info,
+                    };
+                }
 
                 if is_final {
                     eprintln!(
                         "thread '{}' ({}) panicked at {}:",
-                        thread_name, thread_id, location
+                        panic_info.thread_name,
+                        panic_info.thread_id,
+                        panic_info.location()
                     );
                     eprintln!("{}", msg);
 
                     // nocov start
-                    if backtrace.status() == BacktraceStatus::Captured {
+                    if panic_info.backtrace.status() == BacktraceStatus::Captured {
                         let is_full = std::env::var("RUST_BACKTRACE")
                             .map(|v| v == "full")
                             .unwrap_or(false);
-                        let formatted = format_backtrace(&backtrace, is_full);
+                        let formatted = format_backtrace(&panic_info.backtrace, is_full);
                         eprintln!("stack backtrace:\n{}", formatted);
                         if !is_full {
                             eprintln!(
@@ -213,7 +242,7 @@ fn run_test_case(
                     // nocov end
                 }
 
-                let origin = format!("Panic at {}", location);
+                let origin = format!("Panic at {}", panic_info.location());
                 (
                     TestCaseResult::Interesting { panic_message: msg },
                     Some(origin),
@@ -229,6 +258,9 @@ fn run_test_case(
             TestCaseResult::Valid => "VALID",
             TestCaseResult::Invalid | TestCaseResult::Overrun => "INVALID",
             TestCaseResult::Interesting { .. } => "INTERESTING",
+            // InternalError is propagated immediately above; this arm is
+            // unreachable in practice but exhaustive matching requires it.
+            TestCaseResult::InternalError { .. } => "INTERESTING", // nocov
         };
         tc.mark_complete(status, origin.as_deref());
     }
@@ -276,6 +308,27 @@ pub fn server_run<F>(
     let mode = settings.mode;
     let result = runner.run(settings, database_key, &mut |backend, is_final| {
         let tc_result = run_test_case(backend, &mut test_fn, is_final, mode);
+        if let TestCaseResult::InternalError {
+            panic_message,
+            panic_info,
+        } = &tc_result
+        {
+            let mut msg = format!(
+                "hegel internal error at {}:\n{}\n",
+                panic_info.location(),
+                panic_message,
+            );
+            if panic_info.backtrace.status() == BacktraceStatus::Captured {
+                let is_full = std::env::var("RUST_BACKTRACE")
+                    .map(|v| v == "full")
+                    .unwrap_or(false);
+                msg.push_str(&format!(
+                    "\noriginal backtrace:\n{}\n",
+                    format_backtrace(&panic_info.backtrace, is_full),
+                ));
+            }
+            panic!("{}", msg);
+        }
         if matches!(&tc_result, TestCaseResult::Interesting { .. }) {
             got_interesting.store(true, Ordering::SeqCst);
         }

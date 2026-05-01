@@ -1,7 +1,7 @@
 use crate::backend::{DataSource, TestCaseResult, TestRunResult, TestRunner};
 use crate::cbor_utils::{as_bool, as_text, as_u64, cbor_map, map_get, map_insert};
-use crate::runner::{Database, HealthCheck, Mode, Settings, Verbosity};
 use crate::server::protocol::{Connection, HANDSHAKE_STRING, Stream};
+use crate::settings::{Database, HealthCheck, Mode, Settings, Verbosity};
 use ciborium::Value;
 
 use std::process::Stdio;

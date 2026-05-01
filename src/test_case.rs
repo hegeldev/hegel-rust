@@ -1,6 +1,6 @@
 pub use crate::backend::{DataSource, DataSourceError};
 use crate::generators::Generator;
-use crate::runner::Mode;
+use crate::settings::Mode;
 use ciborium::Value;
 use parking_lot::Mutex;
 use std::any::Any;

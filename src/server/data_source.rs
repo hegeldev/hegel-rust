@@ -1,7 +1,7 @@
 use crate::backend::{DataSource, DataSourceError};
 use crate::cbor_utils::{cbor_map, map_insert};
-use crate::runner::Verbosity;
 use crate::server::protocol::{Connection, Stream};
+use crate::settings::Verbosity;
 use ciborium::Value;
 
 use std::sync::atomic::{AtomicBool, Ordering};

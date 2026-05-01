@@ -62,7 +62,7 @@
 
 use crate::TestCase;
 use crate::generators::integers;
-use crate::runner::Mode;
+use crate::settings::Mode;
 use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING};
 use std::cmp::min;
 use std::collections::HashMap;

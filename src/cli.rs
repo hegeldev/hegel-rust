@@ -5,7 +5,7 @@
 //! `#[hegel::main(test_cases = 500)]` produces a binary whose `--test-cases`
 //! flag defaults to 500) and applies CLI overrides on top of it.
 
-use crate::runner::{HealthCheck, Mode, Settings, Verbosity};
+use crate::settings::{HealthCheck, Mode, Settings, Verbosity};
 
 /// Result of applying CLI overrides. The macro wrapper in `#[hegel::main]`
 /// dispatches on this to print messages and exit the process; keeping the
