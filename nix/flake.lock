@@ -38,17 +38,17 @@
       },
       "locked": {
         "dir": "nix",
-        "lastModified": 1777568232,
-        "narHash": "sha256-VInDnyh7uxm6d9IyfV3ShxHZD4BvsTF7wIB+kv9apbk=",
-        "ref": "refs/tags/v0.6.0",
-        "rev": "4630a7845bff88908be4505675a945711f43b5bd",
-        "revCount": 658,
+        "lastModified": 1777637816,
+        "narHash": "sha256-b29o4ARBUQeFqLvSMOepL7oZr9jSeFvW0BFWBHSOhzs=",
+        "ref": "refs/tags/v0.6.1",
+        "rev": "db86ea0f17ef357afee351b08ae7d5f7cb0977ba",
+        "revCount": 662,
         "type": "git",
         "url": "https://github.com/hegeldev/hegel-core"
       },
       "original": {
         "dir": "nix",
-        "ref": "refs/tags/v0.6.0",
+        "ref": "refs/tags/v0.6.1",
         "type": "git",
         "url": "https://github.com/hegeldev/hegel-core"
       }
