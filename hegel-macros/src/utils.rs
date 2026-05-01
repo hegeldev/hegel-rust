@@ -54,3 +54,25 @@ pub(crate) fn default_gen_bounds(
         })
         .collect()
 }
+
+/// Generator DefaultGenerator + Send + Sync bounds for a set of types.
+pub(crate) fn default_or_custom_gen_bounds(
+    types: &[&syn::Type],
+    path_opt: &[Option<syn::Path>],
+    lifetime: proc_macro2::TokenStream,
+) -> Vec<proc_macro2::TokenStream> {
+    types
+        .iter()
+        .zip(path_opt.iter())
+        .map(|(ty, opt)| {
+            if opt.is_some() {
+                quote! {}
+            } else {
+                quote! {
+                    #ty: hegel::generators::DefaultGenerator,
+                    <#ty as hegel::generators::DefaultGenerator>::Generator: Send + Sync + #lifetime
+                }
+            }
+        })
+        .collect()
+}
