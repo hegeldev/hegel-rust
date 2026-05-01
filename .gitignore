@@ -16,6 +16,7 @@ CLAUDE.local.md
 .remember/
 
 lcov.info
+lcov-*.info
 *.profraw
 
 # whitelist .claude files, rather than blacklist. Some local claude files
@@ -30,13 +31,13 @@ lcov.info
 !.claude/skills/self-review/
 
 docs/superpowers
-resources
 
+# Port-loop working files
 .port-loop-cache.json
 .port-loop-todo-attempts.json
 .port-loop-last-push
-.porting/
 .port-worktrees/
+.porting/
+resources/
 target-worker-*/
-
-lcov-*.info
+tests/.test_loop.rs.pending-snap
