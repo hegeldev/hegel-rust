@@ -29,13 +29,13 @@ fn health_check_as_str(check: &HealthCheck) -> &'static str {
     }
 }
 
-fn phase_as_str(phase: &Phase) -> Option<&'static str> {
+fn phase_as_str(phase: &Phase) -> &'static str {
     match phase {
-        Phase::Explicit => None, // handled locally; not forwarded to the server
-        Phase::Reuse => Some("reuse"),
-        Phase::Generate => Some("generate"),
-        Phase::Target => Some("target"),
-        Phase::Shrink => Some("shrink"),
+        Phase::Explicit => "explicit",
+        Phase::Reuse => "reuse",
+        Phase::Generate => "generate",
+        Phase::Target => "target",
+        Phase::Shrink => "shrink",
     }
 }
 
@@ -322,7 +322,7 @@ impl TestRunner for ServerTestRunner {
         let phase_names: Vec<Value> = settings
             .phases
             .iter()
-            .filter_map(|p| phase_as_str(p).map(|s| Value::Text(s.to_string())))
+            .map(|p| Value::Text(phase_as_str(p).to_string()))
             .collect();
         if let Value::Map(ref mut map) = run_test_msg {
             map.push((Value::Text("phases".to_string()), Value::Array(phase_names)));
@@ -344,6 +344,9 @@ impl TestRunner for ServerTestRunner {
         if verbosity == Verbosity::Debug {
             eprintln!("run_test response received");
         }
+
+        let shrink_enabled = settings.phases.contains(&Phase::Shrink);
+        let mut found_interesting = false;
 
         let result_data: Value;
         let ack_null = cbor_map! {"result" => Value::Null};
@@ -379,7 +382,14 @@ impl TestRunner for ServerTestRunner {
                         test_case_stream,
                         verbosity,
                     ));
-                    run_case(backend, false);
+                    if !shrink_enabled && found_interesting {
+                        backend.mark_complete("VALID", None);
+                    } else {
+                        let result = run_case(backend, false);
+                        if matches!(result, TestCaseResult::Interesting { .. }) {
+                            found_interesting = true;
+                        }
+                    }
                 }
                 "test_done" => {
                     let ack_true = cbor_map! {"result" => true};
