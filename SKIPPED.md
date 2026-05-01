@@ -29,11 +29,6 @@ file and treats listed files as "done".
   `IntervalSet`) to run Hypothesis as an oracle against pbtkit's shrinker.
   Hypothesis's engine is a Python library dependency with no Rust
   counterpart.
-- `test_floats.py` (in `shrink_quality/`) — port-loop worker produced
-  commits that conflicted irreconcilably on integration (merge conflict in
-  `.claude/skills/porting-tests/references/pbtkit-overview.md` against the
-  pbtkit-only shrink-pass gating update on the supervisor branch).
-  Abandoned pending human review of the worker's `port/worker-0` branch.
 
 Individually-skipped tests (rest of the file is ported):
 
@@ -42,6 +37,13 @@ Individually-skipped tests (rest of the file is ported):
   a pre-seeded `TC.for_choices(...)` and `Shrinker(...)`; hegel-rust's
   shrinker exposes no public or `__native_test_internals` entry-point
   for a single shrink pass on a seeded test case.
+- `shrink_quality/test_floats.py::test_shrinks_to_simple_float_above_1`
+  — requires the pbtkit `shrinking.mutation` pass; the hegel-rust server
+  backend (Hypothesis) shrinks to `2.0` rather than the nearest
+  representable float above `1.0`, and the native backend hasn't implemented
+  `draw_float` yet.
+- `shrink_quality/test_floats.py::test_negative_zero_shrinks_to_positive_zero`
+  — uses `gs.nothing()`; hegel-rust has no empty-generator public API.
 - `test_text.py::test_string_sort_key_type_mismatch` — exercises Python's
   dynamically-typed `sort_key(non-string)`; Rust's `sort_key(&str)` signature
   makes the "non-string argument" case unrepresentable at compile time.
@@ -430,8 +432,6 @@ Individually-skipped tests (rest of the file is ported):
   surface to derive a Hypothesis-style per-strategy label from (same
   strategy-class-structure family as `.is_cacheable` / `.branches` /
   `.is_empty` skips).
-- `test_large_examples.py` (in `nocover/`) — port abandoned due to
-  integration conflict when cherry-picking onto the supervisor branch.
 - `test_pretty_repr.py` (in `nocover/`) — both tests exercise Python's
   `repr()` / `eval()` round-trip on strategy objects.
   `test_repr_evals_to_thing_with_same_repr` asserts `repr(eval(repr(s)))
