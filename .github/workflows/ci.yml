@@ -144,7 +144,7 @@ jobs:
           MIN_CORE: ${{ steps.min-version.outputs.min_core }}
         run: |
           uv tool install "hegel-core==$MIN_CORE"
-          HEGEL_SERVER_COMMAND=$(which hegel) RUST_BACKTRACE=1 cargo test -- --skip single_test_case
+          HEGEL_SERVER_COMMAND=$(which hegel) RUST_BACKTRACE=1 cargo test -- --skip single_test_case --skip test_ip_addresses
 
   docs:
     name: docs
