@@ -90,7 +90,7 @@ pub fn expand_standalone_function(attr: TokenStream, item: TokenStream) -> Token
     let new_body: TokenStream = quote! {
         {
             let __hegel_settings = #settings_expr;
-            if __hegel_settings.phases.contains(&hegel::Phase::Explicit) {
+            if __hegel_settings.has_phase(hegel::Phase::Explicit) {
                 #(#explicit_blocks)*
             }
 

@@ -203,6 +203,11 @@ impl Settings {
         self.phases = phases.into_iter().collect();
         self
     }
+
+    /// Returns `true` if the given phase is enabled in these settings.
+    pub fn has_phase(&self, phase: Phase) -> bool {
+        self.phases.contains(&phase)
+    }
 }
 
 impl Default for Settings {
