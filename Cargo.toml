@@ -3,7 +3,7 @@ members = [".", "hegel-macros"]
 
 [package]
 name = "hegeltest"
-version = "0.8.10"
+version = "0.8.11"
 edition = "2024"
 # if you bump this, also bump ci.yml and hegel-macros/Cargo.toml
 rust-version = "1.86"
@@ -41,7 +41,7 @@ tempfile = "3.0"
 ciborium = "0.2.2"
 crc32fast = "1.4"
 parking_lot = "0.12"
-hegeltest-macros = { version = "=0.8.10", path = "hegel-macros" }
+hegeltest-macros = { version = "=0.8.11", path = "hegel-macros" }
 # optional feature dependencies
 rand = { version = "0.10", optional = true }
 serde_json = { version = "1.0.61", optional = true }

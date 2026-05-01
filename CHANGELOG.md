@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.11 - 2026-05-01
+
+`sampled_from([...]).filter(pred)` now works correctly regardless of how selective the predicate is. Previously, very selective filters (e.g. only one value in 100 satisfies the predicate) would trigger a `FilterTooMuch` health check. Now the filter enumerates the valid subset of elements and picks directly from it. If no element satisfies the predicate, the test panics immediately with a clear "Unsatisfiable filter" message instead of failing via a health check.
+
 ## 0.8.10 - 2026-05-01
 
 This patch bumps the minimum supported protocol version to take into account recent changes to `one_of`.
