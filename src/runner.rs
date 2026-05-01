@@ -125,12 +125,7 @@ impl Settings {
                 Database::Unset // nocov
             },
             suppress_health_check: Vec::new(),
-            phases: vec![
-                Phase::Reuse,
-                Phase::Generate,
-                Phase::Target,
-                Phase::Shrink,
-            ],
+            phases: vec![Phase::Reuse, Phase::Generate, Phase::Target, Phase::Shrink],
         }
     }
 
