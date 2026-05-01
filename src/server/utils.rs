@@ -45,3 +45,7 @@ pub fn validate_executable(path: &str) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/embedded/server/utils_tests.rs"]
+mod tests;

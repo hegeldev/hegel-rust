@@ -129,11 +129,12 @@ jobs:
 
       - id: min-version
         run: |
-          MIN_PROTOCOL=$(grep -oE 'SUPPORTED_PROTOCOL_VERSIONS.*"[0-9.]+"' src/runner.rs | grep -oE '"[0-9.]+"' | head -1 | tr -d '"')
+          MIN_PROTOCOL=$(grep -rE 'SUPPORTED_PROTOCOL_VERSIONS.*"[0-9.]+"' src/ | grep -oE '"[0-9.]+"' | head -1 | tr -d '"')
 
           VERSIONS_JSON=$(curl -sf https://hegel.dev/api/versions.json)
 
           MIN_CORE=$(echo "$VERSIONS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['$MIN_PROTOCOL'])")
+
           echo "Minimum supported protocol version: $MIN_PROTOCOL"
           echo "Minimum hegel-core version: $MIN_CORE"
           echo "min_core=$MIN_CORE" >> "$GITHUB_OUTPUT"
@@ -305,6 +306,23 @@ jobs:
       - name: Run conformance tests
         run: just check-conformance
 
+  whole-repo:
+    name: whole-repo
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just uv
+
+      - name: Run whole-repo tests
+        run: just check-tests-whole-repo
+
   nix:
     name: nix
     runs-on: ubuntu-latest
@@ -325,7 +343,7 @@ jobs:
   release:
     name: release
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust'
-    needs: [lint, test, test-all-features, test-minimal-versions, docs, coverage, conformance, nix]
+    needs: [lint, test, test-all-features, test-minimal-versions, docs, coverage, conformance, nix, whole-repo]
     runs-on: ubuntu-latest
     permissions:
       contents: write

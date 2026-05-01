@@ -7,16 +7,85 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 CORE_REPO = "hegeldev/hegel-core"
 
+# Optional Rust visibility modifier: `pub`, `pub(crate)`, `pub(super)`, `pub(in path)`.
+_VISIBILITY = r"(?:pub(?:\([^)]+\))?\s+)?"
+
+_VERSION_VALUE_RE = re.compile(
+    rf'^{_VISIBILITY}const HEGEL_SERVER_VERSION: &str = "([^"]+)";',
+    re.MULTILINE,
+)
+_VERSION_SUB_RE = re.compile(
+    rf'^({_VISIBILITY}const HEGEL_SERVER_VERSION: &str = ")[^"]+(";)',
+    re.MULTILINE,
+)
+_PROTOCOL_SUB_RE = re.compile(
+    rf'^({_VISIBILITY}const SUPPORTED_PROTOCOL_VERSIONS: \(&str, &str\) = \("[^"]+", ")[^"]+("\);)',
+    re.MULTILINE,
+)
+_FLAKE_TAG_SUB_RE = re.compile(r"refs/tags/v[0-9.]+")
+
 
 def git(*args: str) -> None:
     subprocess.run(["git", *args], check=True, cwd=ROOT)
 
 
-def get_current_version() -> str:
-    text = (ROOT / "src" / "runner.rs").read_text()
-    m = re.search(r'^const HEGEL_SERVER_VERSION: &str = "([^"]+)";', text, re.MULTILINE)
-    assert m is not None
+def parse_current_version(session_rs_text: str) -> str:
+    m = _VERSION_VALUE_RE.search(session_rs_text)
+    if m is None:
+        raise ValueError(
+            "Could not find `const HEGEL_SERVER_VERSION: &str = \"...\";` in session.rs. "
+            "The constant may have been renamed or moved — update the regex accordingly."
+        )
     return m.group(1)
+
+
+def update_session(session_rs_text: str, version: str, protocol_version: str) -> str:
+    new_text, n = _VERSION_SUB_RE.subn(
+        rf"\g<1>{version}\g<2>", session_rs_text, count=1
+    )
+    if n != 1:
+        raise ValueError("Could not find `const HEGEL_SERVER_VERSION` to update.")
+    new_text, n = _PROTOCOL_SUB_RE.subn(
+        rf"\g<1>{protocol_version}\g<2>", new_text, count=1
+    )
+    if n != 1:
+        raise ValueError(
+            "Could not find `const SUPPORTED_PROTOCOL_VERSIONS` to update."
+        )
+    return new_text
+
+
+def update_flake(flake_nix_text: str, version: str) -> str:
+    new_text, n = _FLAKE_TAG_SUB_RE.subn(
+        f"refs/tags/v{version}", flake_nix_text, count=1
+    )
+    if n != 1:
+        raise ValueError("Could not find `refs/tags/v...` in flake.nix.")
+    return new_text
+
+
+def format_release_md(version: str, releases: list[dict[str, str]]) -> str:
+    release_url = f"https://github.com/{CORE_REPO}/releases/tag/v{version}"
+
+    changelog_sections = []
+    for r in releases:
+        url = f"https://github.com/{CORE_REPO}/releases/tag/v{r['version']}"
+        quoted = "\n".join(f"> {line}" if line else ">" for line in r["body"].splitlines())
+        changelog_sections.append(f"{quoted}\n>\n> — [v{r['version']}]({url})")
+
+    changes_text = "\n\n".join(changelog_sections)
+    noun = "change" if len(releases) == 1 else "changes"
+
+    return (
+        f"RELEASE_TYPE: patch\n\n"
+        f"Bump our pinned hegel-core to [{version}]({release_url}), "
+        f"incorporating the following {noun}:\n\n"
+        f"{changes_text}\n"
+    )
+
+
+def get_current_version() -> str:
+    return parse_current_version((ROOT / "src" / "server" / "session.rs").read_text())
 
 
 def get_releases_in_range(from_version: str, to_version: str) -> list[dict[str, str]]:
@@ -49,33 +118,11 @@ def get_releases_in_range(from_version: str, to_version: str) -> list[dict[str, 
 def bump(version: str, protocol_version: str) -> None:
     current_version = get_current_version()
 
-    runner = ROOT / "src" / "runner.rs"
-    text = runner.read_text()
-    text = re.sub(
-        r'^const HEGEL_SERVER_VERSION: &str = "[^"]+";',
-        f'const HEGEL_SERVER_VERSION: &str = "{version}";',
-        text,
-        count=1,
-        flags=re.MULTILINE,
-    )
-    text = re.sub(
-        r'^(const SUPPORTED_PROTOCOL_VERSIONS: \(&str, &str\) = \("[^"]+"), "[^"]+"\);',
-        rf'\1, "{protocol_version}");',
-        text,
-        count=1,
-        flags=re.MULTILINE,
-    )
-    runner.write_text(text)
+    session = ROOT / "src" / "server" / "session.rs"
+    session.write_text(update_session(session.read_text(), version, protocol_version))
 
     flake = ROOT / "nix" / "flake.nix"
-    text = flake.read_text()
-    text = re.sub(
-        r"refs/tags/[^\"]+",
-        f"refs/tags/v{version}",
-        text,
-        count=1,
-    )
-    flake.write_text(text)
+    flake.write_text(update_flake(flake.read_text(), version))
 
     subprocess.run(
         ["nix", "--extra-experimental-features", "nix-command flakes", "flake", "lock", "./nix"],
@@ -84,31 +131,15 @@ def bump(version: str, protocol_version: str) -> None:
     )
 
     releases = get_releases_in_range(current_version, version)
-    release_url = f"https://github.com/{CORE_REPO}/releases/tag/v{version}"
-
-    changelog_sections = []
-    for r in releases:
-        url = f"https://github.com/{CORE_REPO}/releases/tag/v{r['version']}"
-        quoted = "\n".join(f"> {line}" if line else ">" for line in r["body"].splitlines())
-        changelog_sections.append(f"{quoted}\n>\n> — [v{r['version']}]({url})")
-
-    changes_text = "\n\n".join(changelog_sections)
-    noun = "change" if len(releases) == 1 else "changes"
-
     release_md = ROOT / "RELEASE.md"
-    release_md.write_text(
-        f"RELEASE_TYPE: patch\n\n"
-        f"Bump our pinned hegel-core to [{version}]({release_url}), "
-        f"incorporating the following {noun}:\n\n"
-        f"{changes_text}\n"
-    )
+    release_md.write_text(format_release_md(version, releases))
 
     app_id = os.environ["HEGEL_RELEASE_APP_ID"]
     git("config", "user.name", "hegel-release[bot]")
     git("config", "user.email", f"{app_id}+hegel-release[bot]@users.noreply.github.com")
 
     git("checkout", "-b", "ci/bump-hegel-core")
-    git("add", "src/runner.rs", "nix/flake.nix", "nix/flake.lock", "RELEASE.md")
+    git("add", "src/server/session.rs", "nix/flake.nix", "nix/flake.lock", "RELEASE.md")
     git("commit", "-m", f"Bump hegel-core to {version}")
     git("push", "--force", "origin", "ci/bump-hegel-core")
 

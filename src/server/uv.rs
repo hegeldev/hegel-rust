@@ -101,7 +101,7 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
             return Some(candidate);
         }
         #[cfg(windows)]
-        for ext in crate::utils::executable_extensions() {
+        for ext in super::utils::executable_extensions() {
             let with_ext = dir.join(format!("{name}{ext}"));
             if with_ext.is_file() {
                 return Some(with_ext);
@@ -120,5 +120,5 @@ fn cache_dir_from(xdg_cache_home: Option<String>, home_dir: Option<PathBuf>) -> 
 }
 
 #[cfg(test)]
-#[path = "../tests/embedded/uv_tests.rs"]
+#[path = "../../tests/embedded/server/uv_tests.rs"]
 mod tests;

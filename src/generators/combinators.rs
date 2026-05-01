@@ -40,9 +40,13 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<T> for SampledFromGenerator<'a, 
             elements[index].clone()
         }))
     }
+
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        Some(self.elements.to_vec())
+    }
 }
 
-/// Pick uniformly from a fixed list of values.
+/// Pick from a fixed list of values.
 ///
 /// Accepts anything convertible into `Cow<[T]>`, including:
 /// - `Vec<T>` (consumed without re-allocation)
@@ -91,36 +95,14 @@ impl<T> Generator<T> for OneOfGenerator<'_, T> {
             .map(|g| g.as_basic())
             .collect::<Option<Vec<_>>>()?;
 
-        let tagged_schemas: Vec<Value> = basics
-            .iter()
-            .enumerate()
-            .map(|(i, b)| {
-                cbor_map! {
-                    "type" => "tuple",
-                    "elements" => cbor_array![
-                        cbor_map!{"type" => "constant", "value" => Value::Integer(ciborium::value::Integer::from(i as i64))},
-                        b.schema().clone()
-                    ]
-                }
-            })
-            .collect();
-
-        let schema = cbor_map! {"type" => "one_of", "generators" => Value::Array(tagged_schemas)};
+        let schemas: Vec<Value> = basics.iter().map(|b| b.schema().clone()).collect();
+        let schema = cbor_map! {"type" => "one_of", "generators" => Value::Array(schemas)};
 
         Some(BasicGenerator::new(schema, move |raw| {
-            let arr = match raw {
-                Value::Array(arr) => arr,
-                _ => panic!("Expected array from tagged tuple, got {:?}", raw), // nocov
-            };
-            let tag = match &arr[0] {
-                Value::Integer(i) => {
-                    let val: i128 = (*i).into();
-                    val as usize
-                }
-                _ => panic!("Expected integer tag, got {:?}", arr[0]), // nocov
-            };
-            let value = arr.into_iter().nth(1).unwrap();
-            basics[tag].parse_raw(value)
+            // The server returns `[index, value]` for one_of schemas.
+            let [idx, value]: [Value; 2] = raw.into_array().unwrap().try_into().unwrap();
+            let index = i128::from(idx.into_integer().unwrap()) as usize;
+            basics[index].parse_raw(value)
         }))
     }
 }
@@ -201,41 +183,17 @@ where
         let inner_basic = self.inner.as_basic()?;
         let inner_schema = inner_basic.schema().clone();
 
-        let null_schema = cbor_map! {
-            "type" => "tuple",
-            "elements" => cbor_array![
-                cbor_map!{"type" => "constant", "value" => Value::Integer(0.into())},
-                cbor_map!{"type" => "null"}
-            ]
-        };
-        let value_schema = cbor_map! {
-            "type" => "tuple",
-            "elements" => cbor_array![
-                cbor_map!{"type" => "constant", "value" => Value::Integer(1.into())},
-                inner_schema
-            ]
-        };
-
+        let null_schema = cbor_map! {"type" => "constant", "value" => Value::Null};
         let schema =
-            cbor_map! {"type" => "one_of", "generators" => cbor_array![null_schema, value_schema]};
+            cbor_map! {"type" => "one_of", "generators" => cbor_array![null_schema, inner_schema]};
 
         Some(BasicGenerator::new(schema, move |raw| {
-            let arr = match raw {
-                Value::Array(arr) => arr,
-                _ => panic!("Expected array from tagged tuple, got {:?}", raw), // nocov
-            };
-            let tag = match &arr[0] {
-                Value::Integer(i) => {
-                    let val: i128 = (*i).into();
-                    val as usize
-                }
-                _ => panic!("Expected integer tag, got {:?}", arr[0]), // nocov
-            };
-
-            if tag == 0 {
+            // The server returns `[index, value]` for one_of schemas; index 0
+            // selects the null branch (None), 1 selects the inner generator (Some).
+            let [idx, value]: [Value; 2] = raw.into_array().unwrap().try_into().unwrap();
+            if i128::from(idx.into_integer().unwrap()) == 0 {
                 None
             } else {
-                let value = arr.into_iter().nth(1).unwrap();
                 Some(inner_basic.parse_raw(value))
             }
         }))

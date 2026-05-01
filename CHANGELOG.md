@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.8.11 - 2026-05-01
+
+`sampled_from([...]).filter(pred)` now works correctly regardless of how selective the predicate is. Previously, very selective filters (e.g. only one value in 100 satisfies the predicate) would trigger a `FilterTooMuch` health check. Now the filter enumerates the valid subset of elements and picks directly from it. If no element satisfies the predicate, the test panics immediately with a clear "Unsatisfiable filter" message instead of failing via a health check.
+
+## 0.8.10 - 2026-05-01
+
+This patch bumps the minimum supported protocol version to take into account recent changes to `one_of`.
+
+## 0.8.9 - 2026-05-01
+
+Bump our pinned hegel-core to [0.6.1](https://github.com/hegeldev/hegel-core/releases/tag/v0.6.1), incorporating the following change:
+
+> This patch changes the default Hegel server settings when running inside Antithesis (i.e. when `ANTITHESIS_OUTPUT_DIR` is set in the environment) to disable health checks and database. Health checks are designed for the sort of small fast test you would run in your unit tests and are not sensible defaults for Antithesis, and the database is essentially useless inside Antithesis as replay is done via the fuzzer.
+>
+> — [v0.6.1](https://github.com/hegeldev/hegel-core/releases/tag/v0.6.1)
+
+## 0.8.8 - 2026-05-01
+
+This patch fixes `ip_addresses()` returning malformed strings when generating mixed IPv4/IPv6 addresses (the default, with no version specified). The server returns a `[index, value]` pair for `one_of` schemas, but the generator was attempting to deserialize the entire pair as a string rather than extracting the value.
+
+## 0.8.7 - 2026-04-30
+
+Internal refactor.
+
+## 0.8.6 - 2026-04-29
+
+Internal refactor of `one_of`.
+
+## 0.8.5 - 2026-04-28
+
+Bump our pinned hegel-core to `0.4.14`.
+
+## 0.8.4 - 2026-04-27
+
+This patch fixes a flaky test. There are no user visible changes.
+
+## 0.8.3 - 2026-04-27
+
+This release just contains internal refactoring and should have no user visible changes.
+
+## 0.8.2 - 2026-04-27
+
+Small internal refactors.
+
 ## 0.8.1 - 2026-04-25
 
 This release implements `DefaultGenerator` for `PathBuf`.
