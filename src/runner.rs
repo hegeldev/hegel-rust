@@ -42,6 +42,30 @@ impl HealthCheck {
     }
 }
 
+/// Controls which phases of the test lifecycle are executed.
+///
+/// By default, all phases run. Use [`Settings::phases`] to restrict which
+/// phases execute — for example, passing only `[Phase::Generate]` disables
+/// shrinking, which is useful when you only need to find a counterexample
+/// quickly and don't need the minimal one.
+///
+/// Corresponds directly to `hypothesis.Phase`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Phase {
+    /// Replay explicit examples (e.g. from `@example` in Python).
+    Explicit,
+    /// Replay examples from the failure database.
+    Reuse,
+    /// Generate new random examples.
+    Generate,
+    /// Use targeting to guide generation toward interesting areas.
+    Target,
+    /// Shrink failing examples to a minimal counterexample.
+    Shrink,
+    /// Attempt to explain the failure after shrinking.
+    Explain,
+}
+
 /// Controls the test execution mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -82,6 +106,7 @@ pub struct Settings {
     pub(crate) derandomize: bool,
     pub(crate) database: Database,
     pub(crate) suppress_health_check: Vec<HealthCheck>,
+    pub(crate) phases: Vec<Phase>,
 }
 
 impl Settings {
@@ -100,6 +125,12 @@ impl Settings {
                 Database::Unset // nocov
             },
             suppress_health_check: Vec::new(),
+            phases: vec![
+                Phase::Reuse,
+                Phase::Generate,
+                Phase::Target,
+                Phase::Shrink,
+            ],
         }
     }
 
@@ -161,6 +192,21 @@ impl Settings {
     /// ```
     pub fn suppress_health_check(mut self, checks: impl IntoIterator<Item = HealthCheck>) -> Self {
         self.suppress_health_check.extend(checks);
+        self
+    }
+
+    /// Set which phases of the test lifecycle to run.
+    ///
+    /// By default all phases are enabled. Pass a subset to disable specific
+    /// phases — for example, omitting [`Phase::Shrink`] skips shrinking:
+    ///
+    /// ```no_run
+    /// use hegel::{Phase, Settings};
+    ///
+    /// let settings = Settings::new().phases([Phase::Reuse, Phase::Generate]);
+    /// ```
+    pub fn phases(mut self, phases: impl IntoIterator<Item = Phase>) -> Self {
+        self.phases = phases.into_iter().collect();
         self
     }
 }
