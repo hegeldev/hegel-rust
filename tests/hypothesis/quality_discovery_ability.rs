@@ -131,7 +131,7 @@ fn test_can_produce_below_large_factorial() {
 fn test_can_produce_large_factorial_negative() {
     let factorials: HashSet<i128> = (9..=20u32).map(factorial).collect();
     find_any(gs::integers::<i128>(), move |&x| {
-        x <= -50_000 && factorials.contains(&x.abs())
+        x <= -50_000 && x.checked_abs().is_some_and(|a| factorials.contains(&a))
     });
 }
 
