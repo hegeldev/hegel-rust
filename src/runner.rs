@@ -49,7 +49,8 @@ impl HealthCheck {
 /// shrinking, which is useful when you only need to find a counterexample
 /// quickly and don't need the minimal one.
 ///
-/// Corresponds directly to `hypothesis.Phase`.
+/// Corresponds to a subset of `hypothesis.Phase` (the `explain` phase is not
+/// yet supported in hegel-rust).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Phase {
     /// Replay explicit examples (e.g. from `@example` in Python).
@@ -62,8 +63,6 @@ pub enum Phase {
     Target,
     /// Shrink failing examples to a minimal counterexample.
     Shrink,
-    /// Attempt to explain the failure after shrinking.
-    Explain,
 }
 
 /// Controls the test execution mode.

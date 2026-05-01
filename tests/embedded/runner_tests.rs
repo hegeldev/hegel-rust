@@ -8,8 +8,8 @@ fn test_settings_verbosity() {
 
 #[test]
 fn test_settings_phases() {
-    let s = Settings::new().phases([Phase::Explicit, Phase::Explain]);
-    assert_eq!(s.phases, vec![Phase::Explicit, Phase::Explain]);
+    let s = Settings::new().phases([Phase::Explicit, Phase::Generate]);
+    assert_eq!(s.phases, vec![Phase::Explicit, Phase::Generate]);
 }
 
 #[test]

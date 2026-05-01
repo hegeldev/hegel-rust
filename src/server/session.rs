@@ -36,7 +36,6 @@ fn phase_as_str(phase: &Phase) -> &'static str {
         Phase::Generate => "generate",
         Phase::Target => "target",
         Phase::Shrink => "shrink",
-        Phase::Explain => "explain",
     }
 }
 

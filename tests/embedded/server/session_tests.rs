@@ -47,5 +47,4 @@ fn test_phase_as_str_all_variants() {
     assert_eq!(phase_as_str(&Phase::Generate), "generate");
     assert_eq!(phase_as_str(&Phase::Target), "target");
     assert_eq!(phase_as_str(&Phase::Shrink), "shrink");
-    assert_eq!(phase_as_str(&Phase::Explain), "explain");
 }
