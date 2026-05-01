@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.10 - 2026-05-01
+
+This patch bumps the minimum supported protocol version to take into account recent changes to `one_of`.
+
 ## 0.8.9 - 2026-05-01
 
 Bump our pinned hegel-core to [0.6.1](https://github.com/hegeldev/hegel-core/releases/tag/v0.6.1), incorporating the following change:
