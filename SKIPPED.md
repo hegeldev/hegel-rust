@@ -29,26 +29,6 @@ file and treats listed files as "done".
   `IntervalSet`) to run Hypothesis as an oracle against pbtkit's shrinker.
   Hypothesis's engine is a Python library dependency with no Rust
   counterpart.
-- `findability/test_types.py` — port-loop workers produced commits that
-  conflicted irreconcilably with the `src/native/` backend on integration
-  (Cargo.toml, src/lib.rs, src/native/mod.rs, src/native/runner.rs,
-  src/runner.rs, tests/test_native.rs). Abandoned pending human review of
-  the workers' `port/worker-0` and `port/worker-1` branches.
-- `test_flatmap.py` (in `shrink_quality/`) — port-loop worker produced
-  commits that conflicted irreconcilably with the `src/native/` backend on
-  integration (Cargo.toml, src/lib.rs, src/native/mod.rs, src/native/runner.rs,
-  src/runner.rs, tests/test_native.rs). Abandoned pending human review of
-  the worker's `port/worker-1` branch.
-- `test_composite.py` — port-loop worker produced commits that conflicted
-  irreconcilably with the `src/native/` backend on integration (Cargo.toml,
-  src/lib.rs, src/native/mod.rs, src/native/runner.rs, src/runner.rs,
-  tests/test_native.rs). Abandoned pending human review of the worker's
-  `port/worker-0` branch.
-- `test_mixed_types.py` (in `shrink_quality/`) — port-loop worker produced
-  commits that conflicted irreconcilably with the `src/native/` backend on
-  integration (Cargo.toml, src/lib.rs, src/native/mod.rs, src/native/runner.rs,
-  src/runner.rs, tests/test_native.rs). Abandoned pending human review of
-  the worker's `port/worker-0` branch.
 - `test_floats.py` (in `shrink_quality/`) — port-loop worker produced
   commits that conflicted irreconcilably on integration (merge conflict in
   `.claude/skills/porting-tests/references/pbtkit-overview.md` against the
