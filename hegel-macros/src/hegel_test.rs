@@ -77,10 +77,13 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let new_body: TokenStream = quote! {
         {
-            #(#explicit_blocks)*
+            let __hegel_settings = #settings_expr;
+            if __hegel_settings.phases.contains(&hegel::Phase::Explicit) {
+                #(#explicit_blocks)*
+            }
 
             hegel::Hegel::new(|#param_pat: #param_ty| #body)
-            .settings(#settings_expr)
+            .settings(__hegel_settings)
             .__database_key(format!("{}::{}", module_path!(), #test_name))
             .test_location(hegel::TestLocation {
                 function: #test_name.to_string(),

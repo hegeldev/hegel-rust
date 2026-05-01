@@ -53,7 +53,7 @@ impl HealthCheck {
 /// yet supported in hegel-rust).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Phase {
-    /// Replay explicit examples (e.g. from `@example` in Python).
+    /// Run explicit test cases added via `#[hegel::explicit_test_case]`.
     Explicit,
     /// Replay examples from the failure database.
     Reuse,

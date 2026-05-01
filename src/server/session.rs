@@ -29,13 +29,13 @@ fn health_check_as_str(check: &HealthCheck) -> &'static str {
     }
 }
 
-fn phase_as_str(phase: &Phase) -> &'static str {
+fn phase_as_str(phase: &Phase) -> Option<&'static str> {
     match phase {
-        Phase::Explicit => "explicit",
-        Phase::Reuse => "reuse",
-        Phase::Generate => "generate",
-        Phase::Target => "target",
-        Phase::Shrink => "shrink",
+        Phase::Explicit => None, // handled locally; not forwarded to the server
+        Phase::Reuse => Some("reuse"),
+        Phase::Generate => Some("generate"),
+        Phase::Target => Some("target"),
+        Phase::Shrink => Some("shrink"),
     }
 }
 
@@ -322,7 +322,7 @@ impl TestRunner for ServerTestRunner {
         let phase_names: Vec<Value> = settings
             .phases
             .iter()
-            .map(|p| Value::Text(phase_as_str(p).to_string()))
+            .filter_map(|p| phase_as_str(p).map(|s| Value::Text(s.to_string())))
             .collect();
         if let Value::Map(ref mut map) = run_test_msg {
             map.push((Value::Text("phases".to_string()), Value::Array(phase_names)));
