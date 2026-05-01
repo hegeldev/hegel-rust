@@ -6,6 +6,14 @@ fn test_settings_verbosity() {
 }
 
 #[test]
+fn test_settings_no_shrink() {
+    let settings = Settings::new().no_shrink(true);
+    assert!(settings.no_shrink);
+    let settings = Settings::new().no_shrink(false);
+    assert!(!settings.no_shrink);
+}
+
+#[test]
 fn test_is_in_ci_some_expected_variant() {
     // Removing "CI" (a None-type entry) forces the iterator to continue and
     // evaluate the Some("true") entries such as TF_BUILD and GITHUB_ACTIONS,

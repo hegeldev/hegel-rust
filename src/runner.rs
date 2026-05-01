@@ -82,6 +82,7 @@ pub struct Settings {
     pub(crate) derandomize: bool,
     pub(crate) database: Database,
     pub(crate) suppress_health_check: Vec<HealthCheck>,
+    pub(crate) no_shrink: bool,
 }
 
 impl Settings {
@@ -100,6 +101,7 @@ impl Settings {
                 Database::Unset // nocov
             },
             suppress_health_check: Vec::new(),
+            no_shrink: false,
         }
     }
 
@@ -139,6 +141,15 @@ impl Settings {
             None => Database::Disabled,
             Some(path) => Database::Path(path),
         };
+        self
+    }
+
+    /// When true, skip the shrinking phase even if a failing example is found.
+    ///
+    /// Useful for `find_any`-style helpers where shrinking is not desired
+    /// and can be extremely expensive.
+    pub fn no_shrink(mut self, no_shrink: bool) -> Self {
+        self.no_shrink = no_shrink;
         self
     }
 

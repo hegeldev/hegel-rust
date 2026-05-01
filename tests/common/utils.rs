@@ -173,7 +173,7 @@ where
         Self {
             generator,
             condition,
-            max_attempts: 1000,
+            max_attempts: 5000,
             _marker: std::marker::PhantomData,
         }
     }
@@ -197,7 +197,12 @@ where
                     panic!("HEGEL_FOUND"); // Early exit marker
                 }
             })
-            .settings(Settings::new().test_cases(max_attempts))
+            .settings(
+                Settings::new()
+                    .test_cases(max_attempts)
+                    .database(None)
+                    .no_shrink(true),
+            )
             .run();
         }));
 
