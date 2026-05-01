@@ -267,9 +267,10 @@ pub mod __native_test_internals {
         ConjectureRunResult, DominanceRelation, ExitReason, HealthCheckLabel, InterestingExample,
         InterestingOrigin, NativeConjectureData, NativeConjectureRunner, NativeDataTreeView,
         NativeRunnerSettings, NativeShrinkSpan, NativeShrinkTarget, NativeShrinker, ParetoFront,
-        Phase as RunnerPhase, choices_from_bytes, choices_to_bytes, dominance, fails_health_check,
+        choices_from_bytes, choices_to_bytes, dominance, fails_health_check,
         interesting_origin, run_to_nodes,
     };
+    pub use crate::runner::Phase as RunnerPhase;
     pub use crate::native::conjecture_utils::{
         Many, SMALLEST_POSITIVE_FLOAT, Sampler, calc_p_continue, combine_labels, p_continue_to_avg,
     };

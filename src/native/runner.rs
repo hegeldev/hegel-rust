@@ -16,7 +16,7 @@ use crate::native::database::{
 };
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 use crate::native::tree::CachedTestFunction;
-use crate::runner::{Database, HealthCheck, Mode, Settings, Verbosity};
+use crate::runner::{Database, HealthCheck, Mode, Phase, Settings, Verbosity};
 use crate::test_case::TestCase;
 
 static NATIVE_PANIC_HOOK_INIT: Once = Once::new();
@@ -352,7 +352,7 @@ pub fn native_run<F>(
 
     // --- Shrinking phase ---
     if let Some(ref mut best_nodes) = result {
-        if replay_aligned || settings.no_shrink {
+        if replay_aligned || !settings.phases.contains(&Phase::Shrink) {
             if verbosity == Verbosity::Debug {
                 eprintln!(
                     "Skipping shrink: reused aligned database replay of length {}",

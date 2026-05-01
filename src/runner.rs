@@ -173,12 +173,20 @@ impl Settings {
         self
     }
 
-    /// When true, skip the shrinking phase even if a failing example is found.
+    /// Set which test lifecycle phases to run.
     ///
-    /// Useful for `find_any`-style helpers where shrinking is not desired
-    /// and can be extremely expensive.
-    pub fn no_shrink(mut self, no_shrink: bool) -> Self {
-        self.no_shrink = no_shrink;
+    /// Defaults to `[Phase::Reuse, Phase::Generate, Phase::Target, Phase::Shrink]`.
+    ///
+    /// Example — skip shrinking (useful when you only need a witness, not a
+    /// minimal counterexample):
+    ///
+    /// ```no_run
+    /// use hegel::{Phase, Settings};
+    ///
+    /// let s = Settings::new().phases([Phase::Reuse, Phase::Generate]);
+    /// ```
+    pub fn phases(mut self, phases: impl IntoIterator<Item = Phase>) -> Self {
+        self.phases = phases.into_iter().collect();
         self
     }
 
@@ -201,21 +209,6 @@ impl Settings {
     /// ```
     pub fn suppress_health_check(mut self, checks: impl IntoIterator<Item = HealthCheck>) -> Self {
         self.suppress_health_check.extend(checks);
-        self
-    }
-
-    /// Set which phases of the test lifecycle to run.
-    ///
-    /// By default all phases are enabled. Pass a subset to disable specific
-    /// phases — for example, omitting [`Phase::Shrink`] skips shrinking:
-    ///
-    /// ```no_run
-    /// use hegel::{Phase, Settings};
-    ///
-    /// let settings = Settings::new().phases([Phase::Reuse, Phase::Generate]);
-    /// ```
-    pub fn phases(mut self, phases: impl IntoIterator<Item = Phase>) -> Self {
-        self.phases = phases.into_iter().collect();
         self
     }
 
