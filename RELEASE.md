@@ -1,3 +1,3 @@
-RELEASE_TYPE: patch
+RELEASE_TYPE: minor
 
-This patch bumps the minimum supported protocol version to take into account recent changes to `one_of`.
+Rename `Variables::empty()` to `Variables::is_empty()` to follow Rust naming conventions, and add `Variables::len() -> usize`. The old `empty()` method is removed; callers should use `is_empty()` instead.
