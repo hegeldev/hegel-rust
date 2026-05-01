@@ -156,3 +156,40 @@ mod f64_tests {
     use super::*;
     float_tests!(f64);
 }
+
+mod nan_float_tests {
+    use super::*;
+
+    #[test]
+    fn always_nan() {
+        assert_all_examples(gs::nan_floats(), |n: &f64| n.is_nan());
+    }
+
+    #[test]
+    fn can_find_positive_quiet_nan() {
+        find_any(gs::nan_floats(), |n: &f64| {
+            n.is_sign_positive() && n.abs().to_bits() == f64::NAN.to_bits()
+        });
+    }
+
+    #[test]
+    fn can_find_negative_quiet_nan() {
+        find_any(gs::nan_floats(), |n: &f64| {
+            n.is_sign_negative() && n.abs().to_bits() == f64::NAN.to_bits()
+        });
+    }
+
+    #[test]
+    fn can_find_positive_signaling_nan() {
+        find_any(gs::nan_floats(), |n: &f64| {
+            n.is_sign_positive() && n.abs().to_bits() != f64::NAN.to_bits()
+        });
+    }
+
+    #[test]
+    fn can_find_negative_signaling_nan() {
+        find_any(gs::nan_floats(), |n: &f64| {
+            n.is_sign_negative() && n.abs().to_bits() != f64::NAN.to_bits()
+        });
+    }
+}
