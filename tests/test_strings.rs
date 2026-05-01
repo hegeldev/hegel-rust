@@ -1,6 +1,6 @@
 mod common;
 
-use common::utils::{assert_all_examples, find_any};
+use common::utils::{assert_all_examples, find_any, hegel_supports_ip_addresses};
 use hegel::generators as gs;
 
 #[test]
@@ -140,6 +140,9 @@ fn test_regex_with_alphabet() {
 
 #[test]
 fn test_ip_addresses_format() {
+    if !hegel_supports_ip_addresses() {
+        return;
+    }
     assert_all_examples(gs::ip_addresses(), |s: &String| {
         // Accept any valid IPv4 or IPv6 address string (including compressed IPv6).
         s.parse::<std::net::IpAddr>().is_ok()
@@ -148,6 +151,9 @@ fn test_ip_addresses_format() {
 
 #[test]
 fn test_ip_addresses_v4_only() {
+    if !hegel_supports_ip_addresses() {
+        return;
+    }
     assert_all_examples(gs::ip_addresses().v4(), |s: &String| {
         let parts: Vec<&str> = s.split('.').collect();
         parts.len() == 4
@@ -159,6 +165,9 @@ fn test_ip_addresses_v4_only() {
 
 #[test]
 fn test_ip_addresses_v6_only() {
+    if !hegel_supports_ip_addresses() {
+        return;
+    }
     assert_all_examples(gs::ip_addresses().v6(), |s: &String| {
         // Accept any valid IPv6 address string (including compressed form like "::").
         s.parse::<std::net::Ipv6Addr>().is_ok()

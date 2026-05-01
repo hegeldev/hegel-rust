@@ -9,6 +9,37 @@ use hegel::{Hegel, Settings};
 use regex::Regex;
 use std::fmt::Debug;
 
+/// Returns the hegel-core version tuple `(major, minor, patch)` when running
+/// under a custom `HEGEL_SERVER_COMMAND` (i.e. the min-protocol CI job).
+/// Returns `None` when no override is set (normal CI uses the latest).
+fn hegel_server_version() -> Option<(u32, u32, u32)> {
+    let cmd = std::env::var("HEGEL_SERVER_COMMAND").ok()?;
+    let out = std::process::Command::new(&cmd)
+        .arg("--version")
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let start = text.find("version ")?;
+    let rest = text[start + 8..].trim_start();
+    let ver = rest.split(')').next().unwrap_or("").trim();
+    let parts: Vec<u32> = ver.split('.').filter_map(|p| p.parse().ok()).collect();
+    if parts.len() == 3 {
+        Some((parts[0], parts[1], parts[2]))
+    } else {
+        None
+    }
+}
+
+/// Returns `true` when the hegel server supports the `ip_address` schema type
+/// (added in hegel-core 0.6.0 / protocol 0.12). In the min-protocol CI job
+/// (which installs an older release), we query the binary's version to decide.
+pub fn hegel_supports_ip_addresses() -> bool {
+    match hegel_server_version() {
+        Some(v) => v >= (0, 6, 0),
+        None => true,
+    }
+}
+
 // some of our tests differ in behavior in our nightly rust job.
 pub fn is_nightly() -> bool {
     std::env::var("HEGEL_RUNNING_TESTS_WITH_RUST_NIGHTLY").is_ok_and(|v| v == "1")
