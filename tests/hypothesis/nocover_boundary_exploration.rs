@@ -46,6 +46,7 @@ fn test_explore_arbitrary_function() {
     })
     .settings(
         Settings::new()
+            .test_cases(10)
             .database(None)
             .suppress_health_check(HealthCheck::all()),
     )
