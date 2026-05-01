@@ -14,8 +14,10 @@
 //! - `test_target_returns_value` — `tc.target()` returns `()`, not the score.
 //! - `test_reports_target_results` — requires capture of pytest's stdout output
 //!   format; no portable Rust counterpart via the public API.
-//! - `test_targeting_can_be_disabled` — requires `Phase`-based settings
-//!   (`Phase::Target`); hegel-rust has no public `Phase`/`phases` API.
+//! - `test_targeting_can_be_disabled` — exercises `settings(phases=[Phase.generate,
+//!   Phase.target])` vs `phases=[Phase.generate]` and asserts targeting achieves
+//!   higher scores; flaky in both modes and depends on targeting being effective,
+//!   so left for a dedicated targeting-quality test pass.
 
 #[cfg(not(feature = "native"))]
 use crate::common::utils::expect_panic;

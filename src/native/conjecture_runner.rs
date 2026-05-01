@@ -39,6 +39,7 @@ use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, S
 use crate::native::database::ExampleDatabase;
 use crate::native::datatree::compute_max_children;
 use crate::native::shrinker::Shrinker;
+use crate::runner::Phase;
 
 /// Re-export of [`crate::native::database::serialize_choices`] under
 /// Hypothesis's public name.  Mirrors
@@ -461,18 +462,6 @@ impl Default for NativeRunnerSettings {
     }
 }
 
-/// Port of Hypothesis's `Phase` enum.  Subset listed covers what the
-/// ported tests toggle.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Phase {
-    Generate,
-    Shrink,
-    Reuse,
-    Explain,
-    /// Targeting / hill-climbing phase.  Mirrors `Phase.target` in
-    /// Hypothesis's `phases.py`.
-    Target,
-}
 
 /// Unique-per-`NativeConjectureData` id used as the panic payload for
 /// `mark_interesting` / `mark_invalid`.  When runners are nested (the

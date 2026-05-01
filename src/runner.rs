@@ -42,6 +42,30 @@ impl HealthCheck {
     }
 }
 
+/// Controls which phases of the test lifecycle Hegel runs.
+///
+/// Pass a list of phases to [`Settings::phases`] to customize. The default
+/// runs all meaningful phases: reuse, generate, target, and shrink.
+///
+/// Mirrors Hypothesis's `Phase` enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Phase {
+    /// Re-run examples stored in the database from previous failing runs.
+    Reuse,
+    /// Generate new random examples.
+    Generate,
+    /// Use targeting to guide generation toward higher-scoring inputs.
+    /// Only effective when the test calls [`TestCase::target`].
+    Target,
+    /// Shrink a failing example to a minimal form.
+    Shrink,
+    /// Run `#[hegel::example]` explicit examples.
+    Explicit,
+    /// Attempt to explain why a failure occurred (not yet implemented;
+    /// included for API compatibility with Hypothesis).
+    Explain,
+}
+
 /// Controls the test execution mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -82,7 +106,7 @@ pub struct Settings {
     pub(crate) derandomize: bool,
     pub(crate) database: Database,
     pub(crate) suppress_health_check: Vec<HealthCheck>,
-    pub(crate) no_shrink: bool,
+    pub(crate) phases: Vec<Phase>,
 }
 
 impl Settings {
@@ -101,7 +125,7 @@ impl Settings {
                 Database::Unset // nocov
             },
             suppress_health_check: Vec::new(),
-            no_shrink: false,
+            phases: vec![Phase::Reuse, Phase::Generate, Phase::Target, Phase::Shrink],
         }
     }
 
@@ -144,12 +168,20 @@ impl Settings {
         self
     }
 
-    /// When true, skip the shrinking phase even if a failing example is found.
+    /// Set which test lifecycle phases to run.
     ///
-    /// Useful for `find_any`-style helpers where shrinking is not desired
-    /// and can be extremely expensive.
-    pub fn no_shrink(mut self, no_shrink: bool) -> Self {
-        self.no_shrink = no_shrink;
+    /// Defaults to `[Phase::Reuse, Phase::Generate, Phase::Target, Phase::Shrink]`.
+    ///
+    /// Example — skip shrinking (useful when you only need a witness, not a
+    /// minimal counterexample):
+    ///
+    /// ```no_run
+    /// use hegel::{Phase, Settings};
+    ///
+    /// let s = Settings::new().phases([Phase::Reuse, Phase::Generate]);
+    /// ```
+    pub fn phases(mut self, phases: impl IntoIterator<Item = Phase>) -> Self {
+        self.phases = phases.into_iter().collect();
         self
     }
 

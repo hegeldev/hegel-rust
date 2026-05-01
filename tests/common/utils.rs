@@ -5,7 +5,7 @@ use std::panic::{UnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
 use hegel::generators::Generator;
-use hegel::{HealthCheck, Hegel, Settings};
+use hegel::{HealthCheck, Hegel, Phase, Settings};
 use regex::Regex;
 use std::fmt::Debug;
 
@@ -221,7 +221,7 @@ where
                 Settings::new()
                     .test_cases(max_attempts)
                     .database(None)
-                    .no_shrink(true)
+                    .phases([Phase::Reuse, Phase::Generate])
                     .suppress_health_check(suppress_health_checks),
             )
             .run();
