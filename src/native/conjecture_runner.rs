@@ -653,7 +653,10 @@ impl NativeConjectureData {
         allow_nan: bool,
         allow_infinity: bool,
     ) -> f64 {
-        match self.ntc.draw_float(min_value, max_value, allow_nan, allow_infinity) {
+        match self
+            .ntc
+            .draw_float(min_value, max_value, allow_nan, allow_infinity)
+        {
             Ok(v) => v,
             Err(_) => std::panic::panic_any(STOP_TEST_PANIC),
         }
