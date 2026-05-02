@@ -54,7 +54,7 @@ fn test_disabling_shrink_limits_interesting_calls() {
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         Hegel::new(move |tc: TestCase| {
-            let _: bool = tc.draw(gs::booleans());
+            let _: i64 = tc.draw(gs::integers::<i64>());
             count.fetch_add(1, Ordering::SeqCst);
             panic!("always fails");
         })
