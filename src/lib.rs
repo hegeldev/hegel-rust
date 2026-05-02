@@ -420,7 +420,7 @@ pub use cli::CliOutcome;
 pub use cli::apply_cli_args as __apply_cli_args;
 #[doc(hidden)]
 pub use runner::hegel;
-pub use runner::{HealthCheck, Hegel, Mode, Settings, Verbosity};
+pub use runner::{HealthCheck, Hegel, Mode, Phase, Settings, Verbosity};
 #[doc(hidden)]
 pub use server::process::__test_kill_server;
 #[doc(hidden)]

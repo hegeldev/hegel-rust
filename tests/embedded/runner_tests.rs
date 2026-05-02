@@ -1,8 +1,24 @@
 use super::*;
+use crate::runner::Phase;
 
 #[test]
 fn test_settings_verbosity() {
     let _ = Settings::new().verbosity(Verbosity::Debug);
+}
+
+#[test]
+fn test_settings_phases() {
+    let s = Settings::new().phases([Phase::Explicit, Phase::Generate]);
+    assert_eq!(s.phases, vec![Phase::Explicit, Phase::Generate]);
+}
+
+#[test]
+fn test_settings_has_phase() {
+    let s = Settings::new().phases([Phase::Generate, Phase::Shrink]);
+    assert!(s.has_phase(Phase::Generate));
+    assert!(s.has_phase(Phase::Shrink));
+    assert!(!s.has_phase(Phase::Reuse));
+    assert!(!s.has_phase(Phase::Explicit));
 }
 
 #[test]
