@@ -138,6 +138,16 @@ pub trait Generator<T>: Send + Sync {
         }
     }
 
+    /// Return all possible values if this generator has a known finite value set.
+    ///
+    /// Used by [`Filtered`] as a fallback when random sampling fails: instead of
+    /// calling `assume(false)`, enumerate valid elements and pick one.
+    /// Mirrors Hypothesis's `SampledFromStrategy.do_filtered_draw` optimization.
+    #[doc(hidden)]
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        None
+    }
+
     /// Convert this generator into a type-erased boxed generator.
     ///
     /// This is needed when you have generators of different concrete types
@@ -207,6 +217,12 @@ where
         let f = Arc::clone(&self.f);
         Some(source_basic.map(move |t| f(t)))
     }
+
+    fn enumerate_values(&self) -> Option<Vec<U>> {
+        self.source
+            .enumerate_values()
+            .map(|vals| vals.into_iter().map(|v| (self.f)(v)).collect())
+    }
 }
 
 /// Result of [`Generator::flat_map`].
@@ -241,10 +257,14 @@ pub struct Filtered<T, F, G> {
 
 impl<T, F, G> Generator<T> for Filtered<T, F, G>
 where
+    T: Clone + Send + Sync,
     G: Generator<T>,
     F: Fn(&T) -> bool + Send + Sync,
 {
     fn do_draw(&self, tc: &TestCase) -> T {
+        if let Some(basic) = self.as_basic() {
+            return basic.do_draw(tc);
+        }
         for _ in 0..3 {
             tc.start_span(labels::FILTER);
             let value = self.source.do_draw(tc);
@@ -254,8 +274,40 @@ where
             }
             tc.stop_span(true);
         }
+        if self
+            .enumerate_values()
+            .is_some_and(|valid| valid.is_empty())
+        {
+            panic!(
+                "Unsatisfiable filter: all values from the source generator \
+                 are rejected by the filter predicate"
+            );
+        }
         tc.assume(false);
         unreachable!()
+    }
+
+    fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
+        let valid = self.enumerate_values()?;
+        if valid.is_empty() {
+            return None;
+        }
+        use crate::cbor_utils::cbor_map;
+        let schema = cbor_map! {
+            "type" => "integer",
+            "min_value" => 0u64,
+            "max_value" => (valid.len() - 1) as u64
+        };
+        Some(BasicGenerator::new(schema, move |raw| {
+            let index: usize = super::deserialize_value(raw);
+            valid[index].clone()
+        }))
+    }
+
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        self.source
+            .enumerate_values()
+            .map(|vals| vals.into_iter().filter(|v| (self.predicate)(v)).collect())
     }
 }
 
@@ -279,6 +331,10 @@ impl<T> Generator<T> for BoxedGenerator<'_, T> {
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
         self.inner.as_basic()
+    }
+
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        self.inner.enumerate_values()
     }
 
     fn boxed<'b>(self) -> BoxedGenerator<'b, T>

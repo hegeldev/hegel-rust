@@ -136,8 +136,9 @@ jobs:
 
           VERSIONS_JSON=$(curl -sf https://hegel.dev/api/versions.json)
 
-          PROTOCOL_MIN_CORE=$(echo "$VERSIONS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['$MIN_PROTOCOL'])")
+          MIN_CORE=$(echo "$VERSIONS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['$MIN_PROTOCOL'])")
 
+<<<<<<< echoumcp1/impl-num
           # CLI-compatibility floor: hegel-core 0.4.14 pins dependencies below their
           # next major version. This was introduced because cbor2 6.0.0 
           # is a major version that returns frozendict containers for some decoded maps.
@@ -146,10 +147,10 @@ jobs:
           CLI_COMPAT_FLOOR="0.4.14"
 
           MIN_CORE=$(printf '%s\n%s\n' "$PROTOCOL_MIN_CORE" "$CLI_COMPAT_FLOOR" | sort -V | tail -1)
+=======
+>>>>>>> main
           echo "Minimum supported protocol version: $MIN_PROTOCOL"
-          echo "Protocol-derived minimum hegel-core: $PROTOCOL_MIN_CORE"
-          echo "CLI-compatibility floor: $CLI_COMPAT_FLOOR"
-          echo "Minimum hegel-core version (max of the two): $MIN_CORE"
+          echo "Minimum hegel-core version: $MIN_CORE"
           echo "min_core=$MIN_CORE" >> "$GITHUB_OUTPUT"
 
       - name: Run tests with minimum protocol version
