@@ -1,4 +1,4 @@
-use super::{BasicGenerator, Generator, TestCase};
+use super::{BasicGenerator, Generator};
 use crate::cbor_utils::{cbor_array, cbor_map, map_extend, map_insert};
 use ciborium::Value;
 
@@ -191,10 +191,6 @@ impl TextGenerator {
 }
 
 impl Generator<String> for TextGenerator {
-    fn do_draw(&self, tc: &TestCase) -> String {
-        super::generate_from_schema(tc, &self.build_schema())
-    }
-
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(
             self.build_schema(),
@@ -299,10 +295,6 @@ fn parse_char(raw: Value) -> char {
 }
 
 impl Generator<char> for CharactersGenerator {
-    fn do_draw(&self, tc: &TestCase) -> char {
-        parse_char(super::generate_raw(tc, &self.build_schema()))
-    }
-
     fn as_basic(&self) -> Option<BasicGenerator<'_, char>> {
         Some(BasicGenerator::new(self.build_schema(), parse_char))
     }
@@ -358,12 +350,6 @@ impl RegexGenerator {
 }
 
 impl Generator<String> for RegexGenerator {
-    // nocov start
-    fn do_draw(&self, tc: &TestCase) -> String {
-        super::generate_from_schema(tc, &self.build_schema())
-        // nocov end
-    }
-
     // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(
@@ -432,10 +418,6 @@ fn parse_binary(raw: Value) -> Vec<u8> {
 }
 
 impl Generator<Vec<u8>> for BinaryGenerator {
-    fn do_draw(&self, tc: &TestCase) -> Vec<u8> {
-        parse_binary(super::generate_raw(tc, &self.build_schema()))
-    }
-
     fn as_basic(&self) -> Option<BasicGenerator<'_, Vec<u8>>> {
         Some(BasicGenerator::new(self.build_schema(), parse_binary))
     }
@@ -456,12 +438,6 @@ pub struct EmailGenerator;
 
 impl Generator<String> for EmailGenerator {
     // nocov start
-    fn do_draw(&self, tc: &TestCase) -> String {
-        super::generate_from_schema(tc, &cbor_map! {"type" => "email"})
-        // nocov end
-    }
-
-    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(cbor_map! {"type" => "email"}, |raw| {
             super::deserialize_value(raw)
@@ -481,12 +457,6 @@ pub fn emails() -> EmailGenerator {
 pub struct UrlGenerator;
 
 impl Generator<String> for UrlGenerator {
-    // nocov start
-    fn do_draw(&self, tc: &TestCase) -> String {
-        super::generate_from_schema(tc, &cbor_map! {"type" => "url"})
-        // nocov end
-    }
-
     // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(cbor_map! {"type" => "url"}, |raw| {
@@ -529,12 +499,6 @@ impl DomainGenerator {
 }
 
 impl Generator<String> for DomainGenerator {
-    // nocov start
-    fn do_draw(&self, tc: &TestCase) -> String {
-        super::generate_from_schema(tc, &self.build_schema())
-        // nocov end
-    }
-
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(self.build_schema(), |raw| {
             super::deserialize_value(raw) // nocov
@@ -591,10 +555,6 @@ impl IpAddressGenerator {
 }
 
 impl Generator<String> for IpAddressGenerator {
-    fn do_draw(&self, tc: &TestCase) -> String {
-        self.as_basic().unwrap().do_draw(tc)
-    }
-
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         let version = self.version;
         Some(BasicGenerator::new(self.build_schema(), move |raw| {
@@ -621,12 +581,6 @@ pub struct DateGenerator;
 
 impl Generator<String> for DateGenerator {
     // nocov start
-    fn do_draw(&self, tc: &TestCase) -> String {
-        super::generate_from_schema(tc, &cbor_map! {"type" => "date"})
-        // nocov end
-    }
-
-    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(cbor_map! {"type" => "date"}, |raw| {
             super::deserialize_value(raw)
@@ -647,12 +601,6 @@ pub struct TimeGenerator;
 
 impl Generator<String> for TimeGenerator {
     // nocov start
-    fn do_draw(&self, tc: &TestCase) -> String {
-        super::generate_from_schema(tc, &cbor_map! {"type" => "time"})
-        // nocov end
-    }
-
-    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(cbor_map! {"type" => "time"}, |raw| {
             super::deserialize_value(raw)
@@ -672,12 +620,6 @@ pub fn times() -> TimeGenerator {
 pub struct DateTimeGenerator;
 
 impl Generator<String> for DateTimeGenerator {
-    // nocov start
-    fn do_draw(&self, tc: &TestCase) -> String {
-        super::generate_from_schema(tc, &cbor_map! {"type" => "datetime"})
-        // nocov end
-    }
-
     // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(

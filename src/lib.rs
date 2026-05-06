@@ -220,6 +220,7 @@ pub(crate) mod cbor_utils;
 pub(crate) mod cli;
 pub(crate) mod control;
 pub mod explicit_test_case;
+pub mod extras;
 pub mod generators;
 pub(crate) mod runner;
 pub(crate) mod server;
