@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.1 - 2026-05-06
+
+This patch fixes `gs::vecs(gs::sampled_from(...)).unique(true)` sometimes producing duplicate elements.
+
 ## 0.9.0 - 2026-05-06
 
 This release adds the `Phase` enum and `Settings::phases()` API, allowing
