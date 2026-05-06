@@ -103,7 +103,7 @@ fn test_internal_error_output() {
     assert_matches_regex(
         &output.stderr,
         concat!(
-            r"thread '.*'(?: \(\d+\))? panicked at .*src[/\\]runner\.rs:\d+:\d+:\n",
+            r"thread '.*'(?: \(\d+\))? panicked at .*src[/\\](?:[A-Za-z_]+[/\\])*runner\.rs:\d+:\d+:\n",
             r"hegel internal error at .*src[/\\]generators[/\\]numeric\.rs:\d+:\d+:\n",
             r"Cannot have max_value < min_value\n\n",
             r"note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
@@ -152,7 +152,7 @@ fn test_internal_error_output_with_backtrace() {
             concat!(
                 r"(?s)",
                 // re-panic location from default handler
-                r"thread '.*'(?: \(\d+\))? panicked at .*src[/\\]runner\.rs:\d+:\d+:\n",
+                r"thread '.*'(?: \(\d+\))? panicked at .*src[/\\](?:[A-Za-z_]+[/\\])*runner\.rs:\d+:\d+:\n",
                 // our formatted message: original location + error
                 r"hegel internal error at .*src[/\\]generators[/\\]numeric\.rs:\d+:\d+:\n",
                 r"Cannot have max_value < min_value\n",
@@ -171,7 +171,7 @@ fn test_internal_error_output_with_backtrace() {
                 r".*",
                 r"temp_hegel_test_\d+_\d+::main::{closure_name}\n", // user's closure
                 r".*",
-                r"hegel::runner::run_test_case", // hegel runner internals
+                r"hegel::(?:[a-z_]+::)*run_test_case", // hegel runner internals
                 r".*",
                 r"temp_hegel_test_\d+_\d+::main\n", // user's main
                 r".*",
