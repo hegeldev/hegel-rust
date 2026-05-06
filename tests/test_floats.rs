@@ -111,6 +111,13 @@ macro_rules! float_tests {
                 let effective_lo = if exmin { lo.next_up() } else { lo };
                 let effective_hi = if exmax { hi.next_down() } else { hi };
                 tc.assume(effective_lo <= effective_hi);
+                // Sign-aware reject of the min=+0.0, max=-0.0 range, which the
+                // generator treats as empty (matches hypothesis's bad_zero_bounds).
+                if effective_lo == 0 as $t && effective_hi == 0 as $t {
+                    tc.assume(
+                        !(effective_lo.is_sign_positive() && effective_hi.is_sign_negative()),
+                    );
+                }
             }
 
             let mut g = gs::floats::<$t>();

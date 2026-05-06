@@ -47,6 +47,9 @@ docs:
 check-nocov-style:
     scripts/check-nocov-style.py
 
+check-tests-whole-repo:
+    uv run --with pytest pytest tests/whole_repo/
+
 check-lint: check-format check-clippy check-nocov-style
 
 check-coverage:

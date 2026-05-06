@@ -30,16 +30,40 @@ pub trait Float: Copy + PartialOrd {
     const MIN: Self;
     /// The maximum value of this type.
     const MAX: Self;
+    /// Widen to f64 for cross-width comparisons (bound validation).
+    fn to_f64(self) -> f64;
 }
 
 impl Float for f32 {
     const MIN: Self = f32::MIN;
     const MAX: Self = f32::MAX;
+    fn to_f64(self) -> f64 {
+        self as f64
+    }
 }
 
 impl Float for f64 {
     const MIN: Self = f64::MIN;
     const MAX: Self = f64::MAX;
+    fn to_f64(self) -> f64 {
+        self
+    }
+}
+
+/// Less-than-or-equal under sign-aware ordering, where `-0.0 < +0.0`.
+///
+/// IEEE 754 considers `+0.0` and `-0.0` equal under `<=`, but Hypothesis and
+/// the native backend treat `-0.0` as strictly less than `+0.0`. Mirrors
+/// `sign_aware_lte` in hypothesis (`strategies/_internal/numbers.py`) and
+/// `native/core/choices.rs`.
+pub(crate) fn sign_aware_lte<T: Float>(a: T, b: T) -> bool {
+    let a = a.to_f64();
+    let b = b.to_f64();
+    if a == 0.0 && b == 0.0 {
+        a.is_sign_negative() || b.is_sign_positive()
+    } else {
+        a <= b
+    }
 }
 
 /// Generator for integer values. Created by [`integers()`].
@@ -167,6 +191,14 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
 
         if let (Some(min), Some(max)) = (self.min, self.max) {
             assert!(min <= max, "Cannot have max_value < min_value");
+            // Reject the sign-aware-empty range min=+0.0, max=-0.0: the
+            // backends treat -0.0 < +0.0, so this range contains no floats.
+            if !sign_aware_lte(min, max) {
+                panic!(
+                    "InvalidArgument: There are no {width}-bit floating-point \
+                     values between min_value=0.0 and max_value=-0.0"
+                );
+            }
         }
 
         let allow_nan = self.allow_nan.unwrap_or(!has_min && !has_max);
@@ -254,3 +286,7 @@ pub fn floats<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send +
         allow_infinity: None,
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/embedded/generators/numeric_tests.rs"]
+mod tests;

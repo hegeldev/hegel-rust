@@ -1,8 +1,8 @@
 mod common;
 
-use common::utils::find_any;
-use hegel::TestCase;
+use common::utils::{assert_all_examples, expect_panic, find_any};
 use hegel::generators::{self as gs, Generator};
+use hegel::{Hegel, Settings, TestCase};
 
 #[hegel::test]
 fn test_sampled_from_returns_element_from_list(tc: TestCase) {
@@ -177,5 +177,65 @@ fn test_optional_mapped_find_any() {
     find_any(
         gs::optional(gs::integers::<i32>().map(|n| n.wrapping_mul(2))),
         |v| v.is_none(),
+    );
+}
+
+// Tests for enumerate_values / filtered sampled_from optimization.
+
+/// A rare value (x == 0) should always be found via the enumerate_values fallback.
+#[test]
+fn test_sampled_from_filter_rare_value() {
+    assert_all_examples(
+        gs::sampled_from((0..100_i64).collect::<Vec<i64>>()).filter(|x: &i64| *x == 0),
+        |x: &i64| *x == 0,
+    );
+}
+
+/// A selective filter on sampled_from should only produce values satisfying
+/// the predicate, not trigger a FilterTooMuch health check.
+#[test]
+fn test_sampled_from_filter_produces_only_valid_values() {
+    assert_all_examples(
+        gs::sampled_from(vec![1_i64, 2, 3, 4, 5]).filter(|x: &i64| *x > 2),
+        |x: &i64| *x > 2,
+    );
+}
+
+/// When all elements are rejected, panic immediately with a clear message
+/// rather than triggering FilterTooMuch or silently passing vacuously.
+#[test]
+fn test_sampled_from_unsatisfiable_filter_panics() {
+    expect_panic(
+        || {
+            Hegel::new(|tc| {
+                let _: i64 =
+                    tc.draw(gs::sampled_from((0..10_i64).collect::<Vec<i64>>()).filter(|x| *x < 0));
+            })
+            .settings(Settings::new().database(None))
+            .run();
+        },
+        "(?i)(unsatisfiable|filter)",
+    );
+}
+
+/// Chained .map().filter() on sampled_from should also use enumerate_values.
+#[test]
+fn test_sampled_from_mapped_then_filtered() {
+    assert_all_examples(
+        gs::sampled_from(vec![1_i64, 2, 3, 4, 5])
+            .map(|x: i64| x * 2)
+            .filter(|x: &i64| *x > 4),
+        |x: &i64| *x > 4,
+    );
+}
+
+/// Boxed filtered sampled_from forwards enumerate_values through the box.
+#[test]
+fn test_sampled_from_filtered_boxed() {
+    assert_all_examples(
+        gs::sampled_from(vec![1_i64, 2, 3, 4, 5])
+            .filter(|x: &i64| *x % 2 == 0)
+            .boxed(),
+        |x: &i64| *x % 2 == 0,
     );
 }

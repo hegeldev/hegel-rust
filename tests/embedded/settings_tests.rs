@@ -6,6 +6,21 @@ fn test_settings_verbosity() {
 }
 
 #[test]
+fn test_settings_phases() {
+    let s = Settings::new().phases([Phase::Explicit, Phase::Generate]);
+    assert_eq!(s.phases, vec![Phase::Explicit, Phase::Generate]);
+}
+
+#[test]
+fn test_settings_has_phase() {
+    let s = Settings::new().phases([Phase::Generate, Phase::Shrink]);
+    assert!(s.has_phase(Phase::Generate));
+    assert!(s.has_phase(Phase::Shrink));
+    assert!(!s.has_phase(Phase::Reuse));
+    assert!(!s.has_phase(Phase::Explicit));
+}
+
+#[test]
 fn test_is_in_ci_some_expected_variant() {
     // Removing "CI" (a None-type entry) forces the iterator to continue and
     // evaluate the Some("true") entries such as TF_BUILD and GITHUB_ACTIONS,

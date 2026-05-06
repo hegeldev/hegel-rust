@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.9.0 - 2026-05-06
+
+This release adds the `Phase` enum and `Settings::phases()` API, allowing
+callers to control which test lifecycle phases run. The default phase set
+is `Explicit`, `Reuse`, `Generate`, `Target`, and `Shrink`.
+
+## 0.8.13 - 2026-05-05
+
+This patch fixes two related issues with negative zero in the float generator:
+
+- `gs::floats()` previously accepted `min_value=0.0` and `max_value=-0.0` without error. Although `+0.0 == -0.0` under IEEE 754, Hypothesis and the native backend use sign-aware ordering where `-0.0 < +0.0`, so this range contains no valid floats. The generator now panics with a clear `InvalidArgument` message in this case, matching the behaviour of the native backend.
+- `HegelValue` was deserializing `-0.0` as `0.0` for float targets. The integer-optimisation branch was triggering for negative zero (because `-0.0.fract() == 0.0`), so the visitor received `visit_i64(0)` and the sign bit was silently lost. This caused `floats(max_value=-0.0)` to generate `0.0` instead of `-0.0`, and made `minimal(floats(), |x| x.is_sign_negative())` shrink to `-1.0` rather than `-0.0`.
+
+## 0.8.12 - 2026-05-05
+
+Bump our pinned hegel-core to [0.7.0](https://github.com/hegeldev/hegel-core/releases/tag/v0.7.0), incorporating the following change:
+
+> This release adds support for the `phases` parameter in the `run_test` protocol message,
+> allowing clients to control which Hypothesis phases run (e.g. `generate`, `shrink`,
+> `reuse`, `target`, `explicit`, `explain`).
+>
+> — [v0.7.0](https://github.com/hegeldev/hegel-core/releases/tag/v0.7.0)
+
+## 0.8.11 - 2026-05-01
+
+`sampled_from([...]).filter(pred)` now works correctly regardless of how selective the predicate is. Previously, very selective filters (e.g. only one value in 100 satisfies the predicate) would trigger a `FilterTooMuch` health check. Now the filter enumerates the valid subset of elements and picks directly from it. If no element satisfies the predicate, the test panics immediately with a clear "Unsatisfiable filter" message instead of failing via a health check.
+
+## 0.8.10 - 2026-05-01
+
+This patch bumps the minimum supported protocol version to take into account recent changes to `one_of`.
+
+## 0.8.9 - 2026-05-01
+
+Bump our pinned hegel-core to [0.6.1](https://github.com/hegeldev/hegel-core/releases/tag/v0.6.1), incorporating the following change:
+
+> This patch changes the default Hegel server settings when running inside Antithesis (i.e. when `ANTITHESIS_OUTPUT_DIR` is set in the environment) to disable health checks and database. Health checks are designed for the sort of small fast test you would run in your unit tests and are not sensible defaults for Antithesis, and the database is essentially useless inside Antithesis as replay is done via the fuzzer.
+>
+> — [v0.6.1](https://github.com/hegeldev/hegel-core/releases/tag/v0.6.1)
+
+## 0.8.8 - 2026-05-01
+
+This patch fixes `ip_addresses()` returning malformed strings when generating mixed IPv4/IPv6 addresses (the default, with no version specified). The server returns a `[index, value]` pair for `one_of` schemas, but the generator was attempting to deserialize the entire pair as a string rather than extracting the value.
+
+## 0.8.7 - 2026-04-30
+
+Internal refactor.
+
+## 0.8.6 - 2026-04-29
+
+Internal refactor of `one_of`.
+
+## 0.8.5 - 2026-04-28
+
+Bump our pinned hegel-core to `0.4.14`.
+
 ## 0.8.4 - 2026-04-27
 
 This patch fixes a flaky test. There are no user visible changes.

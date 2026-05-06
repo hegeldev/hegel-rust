@@ -426,4 +426,4 @@ pub use runner::hegel;
 pub use server::process::__test_kill_server;
 #[doc(hidden)]
 pub use server::process::format_log_excerpt;
-pub use settings::{HealthCheck, Mode, Settings, Verbosity};
+pub use settings::{HealthCheck, Mode, Phase, Settings, Verbosity};

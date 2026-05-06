@@ -5,7 +5,7 @@ use std::panic::{UnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
 use hegel::generators::Generator;
-use hegel::{Hegel, Settings};
+use hegel::{Hegel, Phase, Settings};
 use regex::Regex;
 use std::fmt::Debug;
 
@@ -197,7 +197,12 @@ where
                     panic!("HEGEL_FOUND"); // Early exit marker
                 }
             })
-            .settings(Settings::new().test_cases(max_attempts))
+            .settings(
+                Settings::new()
+                    .test_cases(max_attempts)
+                    .database(None)
+                    .phases([Phase::Reuse, Phase::Generate]),
+            )
             .run();
         }));
 

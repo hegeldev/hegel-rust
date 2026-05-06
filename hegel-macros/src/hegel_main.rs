@@ -93,7 +93,9 @@ pub fn expand_main(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             };
 
-            #(#explicit_blocks)*
+            if __hegel_settings.has_phase(hegel::Phase::Explicit) {
+                #(#explicit_blocks)*
+            }
 
             hegel::Hegel::new(|#param_pat: #param_ty| #body)
             .settings(__hegel_settings)
