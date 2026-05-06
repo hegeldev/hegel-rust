@@ -8,6 +8,7 @@ mod common;
 use common::utils::{assert_all_examples, check_can_generate_examples, find_any};
 use hegel::DefaultGenerator as DeriveGenerator;
 use hegel::generators::{self as gs, DefaultGenerator, Generator};
+use chrono::{DateTime, Utc};
 
 // ============================================================================
 // Struct definitions
@@ -24,6 +25,19 @@ struct Person {
     name: String,
     age: u32,
     active: bool,
+}
+
+#[derive(DeriveGenerator, Debug, Clone)]
+struct WithTime {
+    index: u32,
+    #[hegel(generate_with = "generate_chrono_datetime")]
+    time: DateTime<Utc>,
+}
+
+fn generate_chrono_datetime() -> hegel::generators::BoxedGenerator<'static, DateTime<Utc>> {
+    hegel::generators::datetimes()
+        .map(|time| DateTime::parse_from_rfc3339(&format!("{time}Z")).unwrap().into())
+        .boxed()
 }
 
 #[derive(DeriveGenerator, Debug, Clone)]
@@ -157,6 +171,15 @@ fn test_derive_many_fields_struct() {
 #[test]
 fn test_derive_nested_struct() {
     check_can_generate_examples(gs::default::<WithNested>());
+}
+
+// ============================================================================
+// generate_with field generation
+// ============================================================================
+
+#[test]
+fn test_derive_struct_with_generate_with() {
+    check_can_generate_examples(gs::default::<WithTime>());
 }
 
 // ============================================================================

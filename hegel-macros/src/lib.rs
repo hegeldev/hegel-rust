@@ -15,7 +15,7 @@ use syn::{Data, DeriveInput, ItemFn, ItemImpl, parse_macro_input};
 
 // documentation for hegel-macros lives in hegel's lib.rs so that we get proper intra-doc links.
 
-#[proc_macro_derive(DefaultGenerator)]
+#[proc_macro_derive(DefaultGenerator, attributes(hegel))]
 pub fn derive_generator(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 

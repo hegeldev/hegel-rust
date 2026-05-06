@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{DeriveInput, Fields};
 
-use crate::utils::{cbor_to_iter, default_gen_bounds, tuple_schema};
+use crate::utils::{cbor_to_iter, default_or_custom_gen_bounds, tuple_schema};
 
 /// Derive Generator for a struct.
 pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruct) -> TokenStream {
@@ -30,6 +30,22 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
 
     let field_types: Vec<_> = fields.iter().map(|f| &f.ty).collect();
 
+    let field_custom_gens:Vec<_> = fields.iter().map(|f| {
+        let mut generate_with_path = None;
+        for attr in &f.attrs {
+            if attr.path().is_ident("hegel") {
+                let _ = attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("generate_with") {
+                        let value: syn::LitStr = meta.value()?.parse()?;
+                        generate_with_path = Some(value.parse()?);
+                    }
+                    Ok(())
+                });
+            }
+        }
+        generate_with_path
+    }).collect();
+
     // Generate the builder method names (same as field names, no prefix)
     let builder_methods: Vec<_> = field_names.to_vec();
 
@@ -44,9 +60,17 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
         });
 
     // Generate the new() constructor
-    let new_field_inits = field_types.iter().map(|ty| {
-        quote! {
-            <#ty as hegel::generators::DefaultGenerator>::default_generator().boxed()
+    let new_field_inits = field_types.iter()
+    .zip(field_custom_gens.iter())
+    .map(|(ty, path_opt)| {
+        if let Some(path) = path_opt {
+            quote! {
+                #path().boxed()
+            }
+        } else {
+            quote! {
+                <#ty as hegel::generators::DefaultGenerator>::default_generator().boxed()
+            }
         }
     });
 
@@ -55,7 +79,7 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
     });
 
     // Generator Default trait bounds for new()
-    let default_bounds = default_gen_bounds(&field_types, quote! { 'a });
+    let default_bounds = default_or_custom_gen_bounds(&field_types, &field_custom_gens, quote! { 'a });
 
     // Generate builder methods
     let with_method_impls = field_names
@@ -116,7 +140,7 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
     let construct_fields: Vec<&syn::Ident> = field_names.clone();
 
     // Generator DefaultGenerate bounds (same as new() but with 'static lifetime)
-    let default_generator_bounds = default_gen_bounds(&field_types, quote! { 'static });
+    let default_generator_bounds = default_or_custom_gen_bounds(&field_types, &field_custom_gens, quote! { 'static });
 
     let schema_ts = tuple_schema(schema_elements);
     let parse_iter_ts = cbor_to_iter("iter", quote! { raw }, "Expected tuple from struct schema");
@@ -132,7 +156,7 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
             impl<'a> #generator_name<'a> {
                 pub fn new() -> Self
                 where
-                    #(#default_bounds,)*
+                    #(#default_bounds),*
                 {
                     Self {
                         #(#new_fields,)*
@@ -144,8 +168,7 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
 
             impl<'a> Default for #generator_name<'a>
             where
-                #(#field_types: hegel::generators::DefaultGenerator,)*
-                #(<#field_types as hegel::generators::DefaultGenerator>::Generator: Send + Sync + 'a,)*
+                #(#default_bounds),*
             {
                 fn default() -> Self {
                     Self::new()
@@ -185,7 +208,7 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
 
             impl hegel::generators::DefaultGenerator for #name
             where
-                #(#default_generator_bounds,)*
+                #(#default_generator_bounds),*
             {
                 type Generator = #generator_name<'static>;
                 fn default_generator() -> Self::Generator {
