@@ -221,6 +221,17 @@ fn test_can_find_negative_and_signaling_nans_signaling_negative() {
 }
 
 #[test]
+fn test_can_find_nan_f32() {
+    FindAny::new(
+        gs::floats::<f32>().filter(|x: &f32| x.is_nan()),
+        |_: &f32| true,
+    )
+    .max_attempts(1000)
+    .suppress_health_check(HealthCheck::FilterTooMuch)
+    .run();
+}
+
+#[test]
 fn test_floats_are_in_range() {
     Hegel::new(|tc| {
         let x: f64 = tc.draw(gs::floats::<f64>().allow_nan(false).allow_infinity(false));
