@@ -222,6 +222,7 @@ pub fn native_run<F>(
     // shrinking; values that are corrupt or no longer interesting are
     // evicted from the database. Mirrors Hypothesis's
     // `reuse_existing_examples`.
+    if settings.phases.contains(&Phase::Reuse) {
     if let (Some(db_ref), Some(key)) = (&db, database_key) {
         let key_bytes = key.as_bytes();
         let mut values = db_ref.fetch(key_bytes);
@@ -241,9 +242,11 @@ pub fn native_run<F>(
             db_ref.delete(key_bytes, &raw);
         }
     }
+    } // end Phase::Reuse gate
 
     // --- Generation phase ---
-    while !test_is_trivial
+    while settings.phases.contains(&Phase::Generate)
+        && !test_is_trivial
         && result.is_none()
         && valid_test_cases < max_examples
         && calls < max_examples * 10

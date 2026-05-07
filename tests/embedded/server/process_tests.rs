@@ -92,12 +92,11 @@ fn test_startup_error_message_version_mismatch() {
 
 #[test]
 fn test_startup_error_message_version_matches() {
-    let dir = std::env::temp_dir().join("hegel_test_unit_version_ok");
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tempfile::TempDir::new().unwrap();
     let expected_output = format!("hegel (version {})", HEGEL_SERVER_VERSION);
     #[cfg(unix)]
     let script = {
-        let s = dir.join("fake_version_ok");
+        let s = dir.path().join("fake_version_ok");
         std::fs::write(&s, format!("#!/bin/sh\necho '{}'\n", expected_output)).unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&s, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -105,7 +104,7 @@ fn test_startup_error_message_version_matches() {
     };
     #[cfg(windows)]
     let script = {
-        let s = dir.join("fake_version_ok.bat");
+        let s = dir.path().join("fake_version_ok.bat");
         std::fs::write(&s, format!("@echo off\r\necho {}\r\n", expected_output)).unwrap();
         s
     };
@@ -117,11 +116,10 @@ fn test_startup_error_message_version_matches() {
 
 #[test]
 fn test_startup_error_message_unexpected_version_output() {
-    let dir = std::env::temp_dir().join("hegel_test_unit_version_unexpected");
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tempfile::TempDir::new().unwrap();
     #[cfg(unix)]
     let script = {
-        let s = dir.join("fake_version_unexpected");
+        let s = dir.path().join("fake_version_unexpected");
         std::fs::write(&s, "#!/bin/sh\necho 'totally not hegel'\n").unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&s, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -129,7 +127,7 @@ fn test_startup_error_message_unexpected_version_output() {
     };
     #[cfg(windows)]
     let script = {
-        let s = dir.join("fake_version_unexpected.bat");
+        let s = dir.path().join("fake_version_unexpected.bat");
         std::fs::write(&s, "@echo off\r\necho totally not hegel\r\n").unwrap();
         s
     };
