@@ -987,3 +987,7 @@ impl Drop for BufferSizeLimit {
         BUFFER_SIZE_OVERRIDE.with(|c| *c.borrow_mut() = prev);
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/embedded/native/optimiser_tests.rs"]
+mod tests;

@@ -136,3 +136,23 @@ fn sample_distribution_matches_weights() {
         );
     }
 }
+
+// ── Many::new — max_extra == 0.0 or desired_extra <= 0.0 branch ───────────
+
+#[test]
+fn many_new_when_max_extra_is_zero() {
+    // min_size == max_size means max_extra = 0.0, hitting the
+    // `max_extra == 0.0 || desired_extra <= 0.0` branch.
+    let m = Many::new(3, 3.0, 3.0);
+    assert_eq!(m.min_size, 3);
+    // p_continue should come from calc_p_continue(0.0, 0.0).
+    assert!(m.p_continue >= 0.0 && m.p_continue <= 1.0);
+}
+
+#[test]
+fn many_new_when_desired_extra_is_negative() {
+    // average_size < min_size → desired_extra < 0 → hits the same branch.
+    let m = Many::new(5, 10.0, 3.0);
+    assert_eq!(m.min_size, 5);
+    assert!(m.p_continue >= 0.0 && m.p_continue <= 1.0);
+}

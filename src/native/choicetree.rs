@@ -221,3 +221,7 @@ impl ChoiceTree {
         chooser.finish()
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/embedded/native/choicetree_tests.rs"]
+mod tests;

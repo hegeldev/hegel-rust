@@ -545,3 +545,7 @@ fn build_gap_sort<T: Ord + Clone>(current: &[T], a: usize, b: usize, i: usize) -
     attempt.extend_from_slice(&current[b..]);
     attempt
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/value_shrinkers_tests.rs"]
+mod tests;

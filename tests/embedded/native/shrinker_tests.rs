@@ -2335,3 +2335,129 @@ fn try_bump_ij_returns_false_when_bump_val_does_not_validate() {
     );
     assert!(!result);
 }
+
+// ── Shrinker::mark_changed and clear_change_tracking ──────────────────────
+
+#[test]
+fn mark_changed_inserts_into_changed_nodes() {
+    let nodes = vec![int_node(0, 10, 5), int_node(0, 10, 3)];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
+    shrinker.mark_changed(0);
+    shrinker.mark_changed(1);
+    // lower_common_node_offset only runs if len > 1; calling it without error
+    // proves both indices were inserted.
+    shrinker.lower_common_node_offset();
+    // Both values should now be 0 (lowered by their common offset = 3).
+    let v0 = match shrinker.current_nodes[0].value {
+        ChoiceValue::Integer(v) => v,
+        _ => panic!("expected Integer"),
+    };
+    let v1 = match shrinker.current_nodes[1].value {
+        ChoiceValue::Integer(v) => v,
+        _ => panic!("expected Integer"),
+    };
+    assert_eq!(v0, 2); // 5 - 3
+    assert_eq!(v1, 0); // 3 - 3
+}
+
+#[test]
+fn clear_change_tracking_empties_set() {
+    let nodes = vec![int_node(0, 10, 5), int_node(0, 10, 3)];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
+    shrinker.mark_changed(0);
+    shrinker.mark_changed(1);
+    shrinker.clear_change_tracking();
+    // After clearing, lower_common_node_offset should be a no-op (len <= 1).
+    let before = shrinker.current_nodes.clone();
+    shrinker.lower_common_node_offset();
+    assert_eq!(shrinker.current_nodes[0].value, before[0].value);
+    assert_eq!(shrinker.current_nodes[1].value, before[1].value);
+}
+
+// ── Shrinker::run_named_pass ──────────────────────────────────────────────
+
+#[test]
+fn run_named_pass_minimize_individual_choices() {
+    // "minimize_individual_choices" calls zero_choices + binary_search.
+    // Starting with a non-zero integer that is always interesting → shrinks to 0.
+    let nodes = vec![int_node(0, 100, 50)];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
+    shrinker.run_named_pass("minimize_individual_choices");
+    let v = match shrinker.current_nodes[0].value {
+        ChoiceValue::Integer(v) => v,
+        _ => panic!("expected Integer"),
+    };
+    assert_eq!(v, 0);
+}
+
+#[test]
+fn run_named_pass_remove_discarded_is_noop() {
+    // "remove_discarded" at the Shrinker level is a documented no-op.
+    let nodes = vec![int_node(0, 10, 5)];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
+    let before = shrinker.current_nodes.clone();
+    shrinker.run_named_pass("remove_discarded");
+    assert_eq!(shrinker.current_nodes[0].value, before[0].value);
+}
+
+#[test]
+#[should_panic(expected = "unknown shrink pass")]
+fn run_named_pass_unknown_panics() {
+    let nodes = vec![int_node(0, 10, 5)];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
+    shrinker.run_named_pass("not_a_real_pass");
+}
+
+// ── Shrinker::lower_common_node_offset edge cases ─────────────────────────
+
+#[test]
+fn lower_common_node_offset_noop_when_one_or_fewer_changed() {
+    // With only one changed node, lower_common_node_offset must return early.
+    let nodes = vec![int_node(0, 100, 10)];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
+    shrinker.mark_changed(0);
+    let before_val = match shrinker.current_nodes[0].value {
+        ChoiceValue::Integer(v) => v,
+        _ => panic!(),
+    };
+    shrinker.lower_common_node_offset();
+    let after_val = match shrinker.current_nodes[0].value {
+        ChoiceValue::Integer(v) => v,
+        _ => panic!(),
+    };
+    assert_eq!(before_val, after_val);
+}
+
+#[test]
+fn lower_common_node_offset_skips_out_of_range_index() {
+    // Mark index 99 which doesn't exist in a 2-element list.
+    // Only index 0 is a valid integer; the out-of-range one is skipped.
+    let nodes = vec![int_node(0, 100, 5), int_node(0, 100, 3)];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
+    shrinker.mark_changed(0);
+    shrinker.mark_changed(99); // out of range
+    // Should not panic and should treat as only 1 valid changed node (index 0).
+    // With one valid node, lower_common_node_offset returns early (changed.len() <= 1).
+    shrinker.lower_common_node_offset();
+}
+
+#[test]
+fn lower_common_node_offset_lowers_values() {
+    // Two integer nodes with values 5 and 8. Common offset = min(5,8) = 5.
+    // lower_common_node_offset should reduce both by 5, yielding 0 and 3.
+    let nodes = vec![int_node(0, 100, 5), int_node(0, 100, 8)];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
+    shrinker.mark_changed(0);
+    shrinker.mark_changed(1);
+    shrinker.lower_common_node_offset();
+    let v0 = match shrinker.current_nodes[0].value {
+        ChoiceValue::Integer(v) => v,
+        _ => panic!(),
+    };
+    let v1 = match shrinker.current_nodes[1].value {
+        ChoiceValue::Integer(v) => v,
+        _ => panic!(),
+    };
+    assert_eq!(v0, 0);
+    assert_eq!(v1, 3);
+}

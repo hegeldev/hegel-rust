@@ -2927,3 +2927,7 @@ where
         "expected no interesting examples after FailedHealthCheck"
     );
 }
+
+#[cfg(test)]
+#[path = "../../tests/embedded/native/conjecture_runner_tests.rs"]
+mod tests;
