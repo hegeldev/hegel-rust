@@ -223,25 +223,25 @@ pub fn native_run<F>(
     // evicted from the database. Mirrors Hypothesis's
     // `reuse_existing_examples`.
     if settings.phases.contains(&Phase::Reuse) {
-    if let (Some(db_ref), Some(key)) = (&db, database_key) {
-        let key_bytes = key.as_bytes();
-        let mut values = db_ref.fetch(key_bytes);
-        values.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
-        for raw in values {
-            let Some(stored_choices) = deserialize_choices(&raw) else {
+        if let (Some(db_ref), Some(key)) = (&db, database_key) {
+            let key_bytes = key.as_bytes();
+            let mut values = db_ref.fetch(key_bytes);
+            values.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+            for raw in values {
+                let Some(stored_choices) = deserialize_choices(&raw) else {
+                    db_ref.delete(key_bytes, &raw);
+                    continue;
+                };
+                let ntc = NativeTestCase::for_choices(&stored_choices, None, None);
+                let (status, nodes, _) = ctf.run(ntc);
+                if status == Status::Interesting {
+                    replay_aligned = nodes.len() == stored_choices.len();
+                    result = Some(nodes);
+                    break;
+                }
                 db_ref.delete(key_bytes, &raw);
-                continue;
-            };
-            let ntc = NativeTestCase::for_choices(&stored_choices, None, None);
-            let (status, nodes, _) = ctf.run(ntc);
-            if status == Status::Interesting {
-                replay_aligned = nodes.len() == stored_choices.len();
-                result = Some(nodes);
-                break;
             }
-            db_ref.delete(key_bytes, &raw);
         }
-    }
     } // end Phase::Reuse gate
 
     // --- Generation phase ---

@@ -53,4 +53,3 @@ impl Generator<bool> for BoolGenerator {
 pub fn booleans() -> BoolGenerator {
     BoolGenerator
 }
-

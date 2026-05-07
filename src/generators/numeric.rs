@@ -46,7 +46,9 @@ impl Float for f32 {
     fn random_nan(tc: &TestCase) -> Self {
         let sign: bool = tc.draw_silent(super::booleans());
         let mantissa: i32 = tc.draw_silent(
-            super::integers::<i32>().min_value(0).max_value((1i32 << 23) - 1),
+            super::integers::<i32>()
+                .min_value(0)
+                .max_value((1i32 << 23) - 1),
         );
         f32::from_bits(u32::from(sign) << 31 | f32::NAN.to_bits() | mantissa as u32)
     }
@@ -61,7 +63,9 @@ impl Float for f64 {
     fn random_nan(tc: &TestCase) -> Self {
         let sign: bool = tc.draw_silent(super::booleans());
         let mantissa: i64 = tc.draw_silent(
-            super::integers::<i64>().min_value(0).max_value((1i64 << 52) - 1),
+            super::integers::<i64>()
+                .min_value(0)
+                .max_value((1i64 << 52) - 1),
         );
         f64::from_bits(u64::from(sign) << 63 | f64::NAN.to_bits() | mantissa as u64)
     }

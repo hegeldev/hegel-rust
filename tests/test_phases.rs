@@ -6,10 +6,10 @@
 
 mod common;
 
-use hegel::generators as gs;
-use hegel::{Phase, Settings, TestCase};
 #[cfg(feature = "native")]
 use hegel::Hegel;
+use hegel::generators as gs;
+use hegel::{Phase, Settings, TestCase};
 
 // With phases not including Explicit, explicit cases are skipped.
 // The explicit case would fail at runtime (name mismatch: "hello_world" vs "b"),

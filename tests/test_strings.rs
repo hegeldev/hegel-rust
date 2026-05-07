@@ -156,7 +156,6 @@ fn test_regex_with_alphabet() {
     );
 }
 
-
 // --- Special schema generators ---
 
 #[test]
@@ -231,7 +230,6 @@ fn test_datetimes_format() {
         hour <= 23 && min <= 59 && sec <= 59
     });
 }
-
 
 #[test]
 fn test_ip_addresses_format() {

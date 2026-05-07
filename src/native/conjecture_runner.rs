@@ -462,7 +462,6 @@ impl Default for NativeRunnerSettings {
     }
 }
 
-
 /// Unique-per-`NativeConjectureData` id used as the panic payload for
 /// `mark_interesting` / `mark_invalid`.  When runners are nested (the
 /// `test_interleaving_engines` shape), the inner runner's `catch_unwind`
