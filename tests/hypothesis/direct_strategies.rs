@@ -156,14 +156,6 @@ fn test_text_alphabet_empty_with_min_size_panics() {
     );
 }
 
-#[test]
-fn test_uuids_version_and_allow_nil_panics() {
-    expect_generator_panic(
-        gs::uuids().version(4).allow_nil(true),
-        "nil UUID is not of any version",
-    );
-}
-
 // --- test_produces_valid_examples_from_keyword: valid kwargs generate fine ---
 
 #[test]

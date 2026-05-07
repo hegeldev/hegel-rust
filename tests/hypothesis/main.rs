@@ -94,7 +94,6 @@ mod subnormal_floats;
 mod targeting;
 mod testdecorators;
 mod threading;
-mod uuids;
 mod validation;
 mod verbosity;
 mod watchdog_database_cover;

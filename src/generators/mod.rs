@@ -49,7 +49,7 @@ pub use deferred::{DeferredGeneratorDefinition, deferred};
 #[doc(hidden)]
 pub use generators::BasicGenerator;
 pub use generators::{BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};
-pub use misc::{BoolGenerator, JustGenerator, UuidsGenerator, booleans, just, unit, uuids};
+pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit};
 pub use numeric::{FilteredFloat, Float, FloatGenerator, Integer, IntegerGenerator, floats, integers};
 pub use strings::{
     BinaryGenerator, CharactersGenerator, DateGenerator, DateTimeGenerator, DomainGenerator,
