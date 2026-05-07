@@ -179,6 +179,7 @@ fn interpret_schema(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, S
         "url" => special::interpret_url(ntc),
         "domain" => special::interpret_domain(ntc, schema),
         "ip_address" => special::interpret_ip_address(ntc, schema),
+        "uuid" => special::interpret_uuid(ntc, schema),
         "ipv4" => special::interpret_ipv4(ntc),
         "ipv6" => special::interpret_ipv6(ntc),
         "date" => special::interpret_date(ntc),

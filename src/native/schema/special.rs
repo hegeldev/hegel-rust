@@ -174,6 +174,31 @@ pub(super) fn interpret_url(ntc: &mut NativeTestCase) -> Result<Value, StopTest>
     Ok(encode_string(format!("{scheme}://{host}{path}")))
 }
 
+/// `uuid` schema → canonical hyphenated UUID string `xxxxxxxx-xxxx-Mxxx-Nxxx-xxxxxxxxxxxx`.
+///
+/// When `version` is specified, the version nibble (M) is set accordingly and the
+/// RFC 4122 variant bits (N ∈ {8,9,a,b}) are always applied.  When unspecified,
+/// defaults to version 4.  The nil UUID is never produced.
+pub(super) fn interpret_uuid(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
+    let version = map_get(schema, "version")
+        .and_then(crate::cbor_utils::as_u64)
+        .unwrap_or(4) as i128;
+
+    let g1 = ntc.draw_integer(0, 0xFFFF_FFFF)?; // 32 bits: time_low
+    let g2 = ntc.draw_integer(0, 0xFFFF)?; // 16 bits: time_mid
+    let g3_low = ntc.draw_integer(0, 0x0FFF)?; // 12 bits: time_high
+    let g4_low = ntc.draw_integer(0, 0x3FFF)?; // 14 bits: clock_seq
+    let g5_hi = ntc.draw_integer(0, 0xFFFF)?; // 16 bits: node high
+    let g5_lo = ntc.draw_integer(0, 0xFFFF_FFFF)?; // 32 bits: node low
+
+    let g3 = g3_low | (version << 12); // version in top nibble of third group
+    let g4 = g4_low | 0x8000; // RFC 4122 variant: top 2 bits = 10
+
+    Ok(encode_string(format!(
+        "{g1:08x}-{g2:04x}-{g3:04x}-{g4:04x}-{g5_hi:04x}{g5_lo:08x}"
+    )))
+}
+
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/schema/special_tests.rs"]
 mod tests;
