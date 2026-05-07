@@ -1,0 +1,17 @@
+# Disallow signed-integer `abs()` on its own. The plain `abs()` panics on
+# T::MIN (its absolute value is not representable in the same signed type),
+# and we keep getting bitten by it — most recently when bumping hegel-core
+# happened to surface `i64::MIN` from `find_any` and turned a flaky-looking
+# test into a panic.
+#
+# To opt out at a specific call site, add an `#[expect(clippy::disallowed_methods, reason = "...")]`
+# attribute on the enclosing item or expression. Don't disable this list
+# wholesale — every callsite should articulate why the input cannot be MIN.
+disallowed-methods = [
+    { path = "i8::abs", reason = "i8::abs panics on i8::MIN; use unsigned_abs / wrapping_abs / saturating_abs / checked_abs (or #[expect(clippy::disallowed_methods, reason = \"...\")] if you have proven the input is never MIN)" },
+    { path = "i16::abs", reason = "i16::abs panics on i16::MIN; use unsigned_abs / wrapping_abs / saturating_abs / checked_abs (or #[expect(clippy::disallowed_methods, reason = \"...\")] if you have proven the input is never MIN)" },
+    { path = "i32::abs", reason = "i32::abs panics on i32::MIN; use unsigned_abs / wrapping_abs / saturating_abs / checked_abs (or #[expect(clippy::disallowed_methods, reason = \"...\")] if you have proven the input is never MIN)" },
+    { path = "i64::abs", reason = "i64::abs panics on i64::MIN; use unsigned_abs / wrapping_abs / saturating_abs / checked_abs (or #[expect(clippy::disallowed_methods, reason = \"...\")] if you have proven the input is never MIN)" },
+    { path = "i128::abs", reason = "i128::abs panics on i128::MIN; use unsigned_abs / wrapping_abs / saturating_abs / checked_abs (or #[expect(clippy::disallowed_methods, reason = \"...\")] if you have proven the input is never MIN)" },
+    { path = "isize::abs", reason = "isize::abs panics on isize::MIN; use unsigned_abs / wrapping_abs / saturating_abs / checked_abs (or #[expect(clippy::disallowed_methods, reason = \"...\")] if you have proven the input is never MIN)" },
+]

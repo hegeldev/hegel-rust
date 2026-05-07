@@ -174,15 +174,8 @@ fn test_hashset_with_min_and_max_size(tc: TestCase) {
 
 #[hegel::test]
 fn test_hashset_with_mapped_elements(tc: TestCase) {
-    // Exclude i32::MIN to avoid overflow when taking abs
-    let set: HashSet<i32> = tc.draw(
-        gs::hashsets(
-            gs::integers::<i32>()
-                .min_value(i32::MIN + 1)
-                .map(|x| x.abs()),
-        )
-        .max_size(10),
-    );
+    let set: HashSet<i32> =
+        tc.draw(gs::hashsets(gs::integers::<i32>().map(|x| x.saturating_abs())).max_size(10));
     assert!(set.iter().all(|&x| x >= 0));
 }
 
