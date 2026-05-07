@@ -32,6 +32,9 @@ pub trait Float: Copy + PartialOrd {
     const MAX: Self;
     /// Widen to f64 for cross-width comparisons (bound validation).
     fn to_f64(self) -> f64;
+    /// Generate a random NaN with varying sign and mantissa bits.
+    #[doc(hidden)]
+    fn random_nan(tc: &TestCase) -> Self;
 }
 
 impl Float for f32 {
@@ -40,6 +43,13 @@ impl Float for f32 {
     fn to_f64(self) -> f64 {
         self as f64
     }
+    fn random_nan(tc: &TestCase) -> Self {
+        let sign: bool = tc.draw_silent(super::booleans());
+        let mantissa: i32 = tc.draw_silent(
+            super::integers::<i32>().min_value(0).max_value((1i32 << 23) - 1),
+        );
+        f32::from_bits(u32::from(sign) << 31 | f32::NAN.to_bits() | mantissa as u32)
+    }
 }
 
 impl Float for f64 {
@@ -47,6 +57,13 @@ impl Float for f64 {
     const MAX: Self = f64::MAX;
     fn to_f64(self) -> f64 {
         self
+    }
+    fn random_nan(tc: &TestCase) -> Self {
+        let sign: bool = tc.draw_silent(super::booleans());
+        let mantissa: i64 = tc.draw_silent(
+            super::integers::<i64>().min_value(0).max_value((1i64 << 52) - 1),
+        );
+        f64::from_bits(u64::from(sign) << 63 | f64::NAN.to_bits() | mantissa as u64)
     }
 }
 
@@ -257,6 +274,58 @@ impl<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + '
     }
 }
 
+impl<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static>
+    FloatGenerator<T>
+{
+    /// Filter values from this generator, with a NaN fallback.
+    ///
+    /// Behaves like [`Generator::filter`] but after the normal retry attempts,
+    /// also checks whether a randomly-generated NaN satisfies the predicate.
+    /// This recovers the common `floats().filter(|x| x.is_nan())` pattern without
+    /// requiring a separate NaN-only generator.
+    pub fn filter<F>(self, predicate: F) -> FilteredFloat<T, F>
+    where
+        F: Fn(&T) -> bool + Send + Sync,
+    {
+        FilteredFloat {
+            source: self,
+            predicate,
+        }
+    }
+}
+
+/// Result of [`FloatGenerator::filter`]. Behaves like [`Filtered`](super::Filtered) but
+/// falls back to checking a random NaN if the standard attempts all fail.
+pub struct FilteredFloat<T, F> {
+    source: FloatGenerator<T>,
+    predicate: F,
+}
+
+impl<T, F> Generator<T> for FilteredFloat<T, F>
+where
+    T: Float + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static,
+    F: Fn(&T) -> bool + Send + Sync,
+{
+    fn do_draw(&self, tc: &TestCase) -> T {
+        use super::labels;
+        for _ in 0..3 {
+            tc.start_span(labels::FILTER);
+            let value = self.source.do_draw(tc);
+            if (self.predicate)(&value) {
+                tc.stop_span(false);
+                return value;
+            }
+            tc.stop_span(true);
+        }
+        let nan = T::random_nan(tc);
+        if (self.predicate)(&nan) {
+            return nan;
+        }
+        tc.assume(false);
+        unreachable!()
+    }
+}
+
 /// Generate floating-point values of type `T`.
 /// Use the builder methods `min_value`, `max_value`, `allow_nan`, and
 /// `allow_infinity` to constrain the output. By default, may produce NaN and
@@ -285,40 +354,6 @@ pub fn floats<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send +
         allow_nan: None,
         allow_infinity: None,
     }
-}
-
-/// Generator for NaN `f64` values. Created by [`nan_floats()`].
-///
-/// Port of Hypothesis's `NanStrategy`, the strategy that `filter_rewriting`
-/// substitutes for `floats().filter(math.isnan)`. Emits a mix of sign bits
-/// and mantissa bit-patterns so all four (positive/negative × math.nan /
-/// other-bit-pattern) variants are routinely reachable.
-pub struct NanFloatGenerator;
-
-impl Generator<f64> for NanFloatGenerator {
-    fn do_draw(&self, tc: &TestCase) -> f64 {
-        // Match hypothesis/strategies/_internal/numbers.py::NanStrategy:
-        // sign bit, then 52-bit mantissa. The base `nan_bits` already has
-        // the quiet bit set, so the ORed result is always a valid NaN.
-        let sign: bool = tc.draw_silent(super::booleans());
-        let mantissa: i64 = tc.draw_silent(
-            super::integers::<i64>()
-                .min_value(0)
-                .max_value((1i64 << 52) - 1),
-        );
-        let sign_bit = u64::from(sign) << 63;
-        let nan_bits = f64::NAN.to_bits();
-        f64::from_bits(sign_bit | nan_bits | (mantissa as u64))
-    }
-}
-
-/// Generate NaN `f64` values with a mix of sign and mantissa bit-patterns.
-///
-/// Intended for tests that need to distinguish NaN variants (e.g. finding
-/// a negative NaN or a NaN whose bit-pattern differs from `f64::NAN`).
-/// For generic floats use [`floats()`].
-pub fn nan_floats() -> NanFloatGenerator {
-    NanFloatGenerator
 }
 
 #[cfg(test)]

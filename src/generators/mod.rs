@@ -50,10 +50,7 @@ pub use deferred::{DeferredGeneratorDefinition, deferred};
 pub use generators::BasicGenerator;
 pub use generators::{BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};
 pub use misc::{BoolGenerator, JustGenerator, UuidsGenerator, booleans, just, unit, uuids};
-pub use numeric::{
-    Float, FloatGenerator, Integer, IntegerGenerator, NanFloatGenerator, floats, integers,
-    nan_floats,
-};
+pub use numeric::{FilteredFloat, Float, FloatGenerator, Integer, IntegerGenerator, floats, integers};
 pub use strings::{
     BinaryGenerator, CharactersGenerator, DateGenerator, DateTimeGenerator, DomainGenerator,
     EmailGenerator, IpAddressGenerator, RegexGenerator, TextGenerator, TimeGenerator, UrlGenerator,

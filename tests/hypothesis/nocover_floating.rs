@@ -9,12 +9,11 @@
 //! to rare values (NaN, infinity).
 //!
 //! `test_can_find_negative_and_signaling_nans` is driven through
-//! `gs::nan_floats()` (hegel-rust's port of Hypothesis's `NanStrategy`)
-//! rather than the `floats().filter(math.isnan)` + filter-rewriting path
-//! that Python uses. hegel-rust's `.filter()` is a generic 3-try rejection
-//! sampler with no `is_nan` special case, so the direct NaN generator is
-//! needed to hit all four (sign × mantissa-pattern) variants inside the
-//! 1000-attempt budget.
+//! `gs::floats::<f64>().filter(variant_matches)`. `FloatGenerator::filter`
+//! returns a `FilteredFloat` that, after the standard 3 rejection attempts,
+//! falls back to drawing a random NaN and checking the predicate. This
+//! recovers all four (sign × mantissa-pattern) NaN variants without a
+//! dedicated public API.
 
 use crate::common::utils::{FindAny, assert_all_examples};
 use hegel::generators as gs;
@@ -166,24 +165,23 @@ fn variant_matches(x: f64, snan: bool, neg: bool) -> bool {
     snan == is_snan && neg == is_neg
 }
 
-// The two `quiet` variants require mantissa_bits == 0 exactly, which
-// `gs::nan_floats()` produces with only ~0.5% combined probability per
-// draw (≈1% for mantissa=0 via the nasty-boundary path × 50% for the
-// sign bit). At the upstream's TRY_HARDER budget of 1000 the residual
-// failure rate is empirically ~7% — high enough to break CI. The
-// signaling variants need mantissa != 0 (essentially always true), so
-// they're fine at 1000. Bumping the two quiet tests to 10_000 drops the
-// failure odds to well below 1e-6 while still completing in <1s. The
-// upstream passes at 1000 because Hypothesis's example database caches
-// the counterexample across runs; our FindAny disables the database to
-// keep tests hermetic.
+// The two `quiet` variants require mantissa_bits == 0 exactly. The
+// `FilteredFloat` NaN fallback draws a random mantissa from [0, 2^52-1];
+// mantissa=0 occurs with only ~0.5% combined probability per NaN draw
+// (≈1% for mantissa=0 via the nasty-boundary path × 50% for the sign bit).
+// At the upstream's TRY_HARDER budget of 1000 the residual failure rate is
+// empirically ~7% — high enough to break CI. The signaling variants need
+// mantissa != 0 (essentially always true), so they're fine at 1000.
+// Bumping the two quiet tests to 10_000 drops the failure odds to well
+// below 1e-6 while still completing in <1s.
 const QUIET_NAN_ATTEMPTS: u64 = 10_000;
 
 #[test]
 fn test_can_find_negative_and_signaling_nans_quiet_positive() {
-    FindAny::new(gs::nan_floats(), |x: &f64| {
-        variant_matches(*x, false, false)
-    })
+    FindAny::new(
+        gs::floats::<f64>().filter(|x| variant_matches(*x, false, false)),
+        |_: &f64| true,
+    )
     .max_attempts(QUIET_NAN_ATTEMPTS)
     .suppress_health_check(HealthCheck::FilterTooMuch)
     .run();
@@ -191,26 +189,35 @@ fn test_can_find_negative_and_signaling_nans_quiet_positive() {
 
 #[test]
 fn test_can_find_negative_and_signaling_nans_quiet_negative() {
-    FindAny::new(gs::nan_floats(), |x: &f64| variant_matches(*x, false, true))
-        .max_attempts(QUIET_NAN_ATTEMPTS)
-        .suppress_health_check(HealthCheck::FilterTooMuch)
-        .run();
+    FindAny::new(
+        gs::floats::<f64>().filter(|x| variant_matches(*x, false, true)),
+        |_: &f64| true,
+    )
+    .max_attempts(QUIET_NAN_ATTEMPTS)
+    .suppress_health_check(HealthCheck::FilterTooMuch)
+    .run();
 }
 
 #[test]
 fn test_can_find_negative_and_signaling_nans_signaling_positive() {
-    FindAny::new(gs::nan_floats(), |x: &f64| variant_matches(*x, true, false))
-        .max_attempts(1000)
-        .suppress_health_check(HealthCheck::FilterTooMuch)
-        .run();
+    FindAny::new(
+        gs::floats::<f64>().filter(|x| variant_matches(*x, true, false)),
+        |_: &f64| true,
+    )
+    .max_attempts(1000)
+    .suppress_health_check(HealthCheck::FilterTooMuch)
+    .run();
 }
 
 #[test]
 fn test_can_find_negative_and_signaling_nans_signaling_negative() {
-    FindAny::new(gs::nan_floats(), |x: &f64| variant_matches(*x, true, true))
-        .max_attempts(1000)
-        .suppress_health_check(HealthCheck::FilterTooMuch)
-        .run();
+    FindAny::new(
+        gs::floats::<f64>().filter(|x| variant_matches(*x, true, true)),
+        |_: &f64| true,
+    )
+    .max_attempts(1000)
+    .suppress_health_check(HealthCheck::FilterTooMuch)
+    .run();
 }
 
 #[test]

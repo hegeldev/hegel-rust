@@ -11,7 +11,7 @@
 //! can't happen), so the suppression itself is also dropped.
 
 use crate::common::utils::minimal;
-use hegel::generators::{self as gs, Generator};
+use hegel::generators as gs;
 
 #[test]
 fn test_shrinks_to_simple_floats() {
