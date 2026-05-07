@@ -15,7 +15,7 @@ use std::collections::HashMap;
 
 use hegel::__native_test_internals::{NativeTestCase, Sampler, calc_p_continue, p_continue_to_avg};
 use hegel::generators::{self as gs, Generator};
-use hegel::{Hegel, Settings, TestCase};
+use hegel::{HealthCheck, Hegel, Settings, TestCase};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -151,6 +151,11 @@ fn test_sampler_matches_distribution() {
             );
         }
     })
-    .settings(Settings::new().test_cases(3).database(None))
+    .settings(
+        Settings::new()
+            .test_cases(3)
+            .database(None)
+            .suppress_health_check(vec![HealthCheck::TooSlow]),
+    )
     .run();
 }

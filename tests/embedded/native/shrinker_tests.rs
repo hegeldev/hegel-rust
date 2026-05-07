@@ -2461,3 +2461,170 @@ fn lower_common_node_offset_lowers_values() {
     assert_eq!(v0, 0);
     assert_eq!(v1, 3);
 }
+
+// ── replace: out-of-bounds index returns false (line 182) ──────────────────
+//
+// Calling replace() with an index beyond the current node list returns false
+// immediately without running the test function.
+
+#[test]
+fn replace_returns_false_for_out_of_bounds_index() {
+    // Create a shrinker with 2 nodes. Try to replace index 99 (out of bounds).
+    let nodes = vec![int_node(0, 100, 5), int_node(0, 100, 3)];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
+    let result = shrinker.replace(&std::collections::HashMap::from([
+        (99usize, ChoiceValue::Integer(42)),
+    ]));
+    assert!(!result);
+    // Nodes unchanged.
+    assert_eq!(shrinker.current_nodes.len(), 2);
+}
+
+// ── lower_integers_together: index out-of-range after shrink (line 332) ────
+//
+// Line 332 fires when current_nodes shrinks mid-loop and a gap=2 check
+// finds j = int_indices[pair_idx + 2] >= current_nodes.len().
+//
+// Setup: 3 integer nodes [5, 3, 7]. int_indices=[0,1,2].
+// pair_idx=0, gap=1 (pair i=0, j=1): find_integer with v_i=5, v_j=3.
+//   k=3: replace({0:Integer(2), 1:Integer(0)}) → test returns [Integer(2)] (1 node)
+//   when v1=2 AND v2=0 → sort_key(1 node) < sort_key(3 nodes) → improvement.
+//   current_nodes = [Integer(2)], len=1.
+// pair_idx=0, gap=2 (pair i=0, j=2): j=2 >= len=1 → line 332 fires → break.
+
+#[test]
+fn lower_integers_together_breaks_when_index_out_of_range() {
+    let initial_nodes = vec![
+        int_node(0, 100, 5),
+        int_node(0, 100, 3),
+        int_node(0, 100, 7),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|nodes: &[ChoiceNode]| {
+            // When v1=2 AND v2=0, return only the first node (shorter sequence).
+            if nodes.len() >= 2 {
+                if let (ChoiceValue::Integer(v1), ChoiceValue::Integer(v2)) =
+                    (&nodes[0].value, &nodes[1].value)
+                {
+                    if *v1 == 2 && *v2 == 0 {
+                        return (true, nodes[..1].to_vec());
+                    }
+                }
+            }
+            (true, nodes.to_vec())
+        }),
+        initial_nodes,
+    );
+    // pair_idx=0, gap=1: v_i=5, v_j=3. k=3: new_i=2, new_j=0.
+    // replace({0:Integer(2), 1:Integer(0)}) → test returns [Integer(2)].
+    // sort_key(1 node) < sort_key(3 nodes) → improvement! len=1.
+    // gap=2: i=0, j=2. j=2 >= len=1 → line 332 fires.
+    shrinker.lower_integers_together();
+    assert_eq!(shrinker.current_nodes.len(), 1);
+}
+
+// ── lower_integers_together: non-integer kind fires continue (line 338) ──────
+//
+// Line 338 fires when current_nodes[i].kind is no longer Integer after a
+// previous replace updated current_nodes. This requires 3+ integer nodes so
+// that pair_idx=1 processes (i=1, j=2) AFTER pair_idx=0 changed node 1 to
+// a non-Integer type.
+//
+// Setup: 3 integer nodes [5, 3, 7]. Test function: when called with
+// Integer(2) at index 0 and Integer(0) at index 1, returns Boolean at index 1.
+// lower_integers_together, pair_idx=0, gap=1 (pair (0,1)):
+//   find_integer tries k=3: replace({0:Integer(2), 1:Integer(0)})
+//     → test returns [Integer(2), Boolean(false), Integer(7)]
+//     → sort_key: Scalar(2) < Scalar(5) → improvement!
+//     → current_nodes = [Integer(2), Boolean(false), Integer(7)]
+// pair_idx=1, gap=1 (pair (1,2)): i=1, j=2.
+//   Check: current_nodes[1].kind = Boolean → let-else fails at line 338 → continue.
+
+#[test]
+fn lower_integers_together_continues_when_kind_is_not_integer() {
+    let initial_nodes = vec![
+        int_node(0, 100, 5),
+        int_node(0, 100, 3),
+        int_node(0, 100, 7),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|nodes: &[ChoiceNode]| {
+            // When called with Integer(2) at [0] and Integer(0) at [1]:
+            // return Boolean(false) at index 1 to make kind non-Integer.
+            if nodes.len() >= 3 {
+                if let (ChoiceValue::Integer(v1), ChoiceValue::Integer(v2)) =
+                    (&nodes[0].value, &nodes[1].value)
+                {
+                    if *v1 == 2 && *v2 == 0 {
+                        let bool_node = ChoiceNode {
+                            kind: ChoiceKind::Boolean(BooleanChoice),
+                            value: ChoiceValue::Boolean(false),
+                            was_forced: false,
+                        };
+                        return (true, vec![nodes[0].clone(), bool_node, nodes[2].clone()]);
+                    }
+                }
+            }
+            (true, nodes.to_vec())
+        }),
+        initial_nodes,
+    );
+    // pair_idx=0, gap=1: find_integer with v_i=5, v_j=3.
+    //   k=3: new_i=2, new_j=0. replace({0:Integer(2), 1:Integer(0)}).
+    //   Test returns [Integer(2), Boolean(false), Integer(7)].
+    //   sort_key smaller → improvement → current_nodes updated.
+    // pair_idx=1, gap=1: i=int_indices[1]=1, j=int_indices[2]=2.
+    //   current_nodes[1].kind = Boolean → line 338 fires → continue.
+    shrinker.lower_integers_together();
+    // After shrinking, current_nodes[1] should be Boolean.
+    assert!(matches!(shrinker.current_nodes[1].kind, ChoiceKind::Boolean(_)));
+}
+
+// ── lower_integers_together: node j has non-Integer kind (line 341) ──────────
+//
+// Setup: 3 int nodes [5, 3, 7]. During gap=1 for pair (0,1), the test
+// function returns nodes where node 2 is changed to Boolean(false). After
+// that update, the gap=2 pass finds i=0 (Integer) and j=2 (Boolean) →
+// `current_nodes[j].kind` fails the Integer pattern → line 341 fires.
+
+#[test]
+fn lower_integers_together_continues_when_node_j_kind_not_integer() {
+    let initial_nodes = vec![
+        int_node(0, 100, 5),
+        int_node(0, 100, 3),
+        int_node(0, 100, 7),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|nodes: &[ChoiceNode]| {
+            // When nodes[0]=Int(2) and nodes[1]=Int(0), accept and return a
+            // version where node 2 becomes Boolean(false). This triggers gap=2
+            // to see non-Integer kind at j=2 → line 341.
+            if nodes.len() >= 3 {
+                if let (ChoiceValue::Integer(v1), ChoiceValue::Integer(v2)) =
+                    (&nodes[0].value, &nodes[1].value)
+                {
+                    if *v1 == 2 && *v2 == 0 {
+                        let bool_node = ChoiceNode {
+                            kind: ChoiceKind::Boolean(BooleanChoice),
+                            value: ChoiceValue::Boolean(false),
+                            was_forced: false,
+                        };
+                        // Return [Int(2), Int(0), Boolean(false)].
+                        // sort_key < [5,3,7] so consider() accepts.
+                        return (true, vec![nodes[0].clone(), nodes[1].clone(), bool_node]);
+                    }
+                }
+            }
+            (true, nodes.to_vec())
+        }),
+        initial_nodes,
+    );
+    // pair_idx=0, gap=1: pair (i=0, j=1). find_integer with k=3 yields
+    // new_i=2, new_j=0. Test returns [Int(2), Int(0), Boolean(false)].
+    // current_nodes updated to [Int(2), Int(0), Boolean(false)].
+    // pair_idx=0, gap=2: i=0 (Integer), j=2 (Boolean kind) → line 341 fires.
+    shrinker.lower_integers_together();
+    // Node 2 should be Boolean after shrinking.
+    assert!(matches!(shrinker.current_nodes[2].kind, ChoiceKind::Boolean(_)));
+}
+
