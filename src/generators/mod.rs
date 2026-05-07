@@ -48,13 +48,13 @@ pub use deferred::{DeferredGeneratorDefinition, deferred};
 #[doc(hidden)]
 pub use generators::BasicGenerator;
 pub use generators::{BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};
-pub use misc::{BoolGenerator, JustGenerator, UuidsGenerator, booleans, just, unit, uuids};
+pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit};
 pub use numeric::{Float, FloatGenerator, Integer, IntegerGenerator, floats, integers};
 pub use strings::{
     BinaryGenerator, CharactersGenerator, DateGenerator, DateTimeGenerator, DomainGenerator,
     EmailGenerator, IpAddressGenerator, RegexGenerator, TextGenerator, TimeGenerator, UrlGenerator,
-    binary, characters, dates, datetimes, domains, emails, from_regex, ip_addresses, text, times,
-    urls,
+    UuidsGenerator, binary, characters, dates, datetimes, domains, emails, from_regex,
+    ip_addresses, text, times, urls, uuids,
 };
 pub use time::{DurationGenerator, durations};
 #[doc(hidden)]
