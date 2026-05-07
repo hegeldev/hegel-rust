@@ -175,7 +175,7 @@ impl Settings {
 
     /// Set which test lifecycle phases to run.
     ///
-    /// Defaults to `[Phase::Reuse, Phase::Generate, Phase::Target, Phase::Shrink]`.
+    /// Defaults to all phases: `[Phase::Explicit, Phase::Reuse, Phase::Generate, Phase::Target, Phase::Shrink]`.
     ///
     /// Example — skip shrinking (useful when you only need a witness, not a
     /// minimal counterexample):

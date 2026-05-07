@@ -21,7 +21,7 @@ use hegel::__native_test_internals::{
     ChoiceNode, ChoiceValue, NativeTestCase, Shrinker, decode_exponent, encode_exponent,
     float_to_index, index_to_float, reverse_bits_n,
 };
-use hegel::generators::{self as gs, Generator};
+use hegel::generators as gs;
 use hegel::{Hegel, Settings};
 
 const MAX_EXPONENT: u64 = 0x7FF;
