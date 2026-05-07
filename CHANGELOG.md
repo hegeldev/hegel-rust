@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.0 - 2026-05-07
+
+This release adds `gs::uuids()`, a generator for UUID strings in the canonical hyphenated form (e.g. `"f47ac10b-58cc-4372-a567-0e02b2c3d479"`).
+
 ## 0.10.0 - 2026-05-06
 
 This patch fixes `gs::vecs(gs::sampled_from(...)).unique(true)` sometimes producing duplicate elements.
