@@ -53,8 +53,8 @@ pub use numeric::{Float, FloatGenerator, Integer, IntegerGenerator, floats, inte
 pub use strings::{
     BinaryGenerator, CharactersGenerator, DateGenerator, DateTimeGenerator, DomainGenerator,
     EmailGenerator, IpAddressGenerator, RegexGenerator, TextGenerator, TimeGenerator, UrlGenerator,
-    binary, characters, dates, datetimes, domains, emails, from_regex, ip_addresses, text, times,
-    urls,
+    UuidsGenerator, binary, characters, dates, datetimes, domains, emails, from_regex,
+    ip_addresses, text, times, urls, uuids,
 };
 pub use time::{DurationGenerator, durations};
 #[doc(hidden)]

@@ -694,3 +694,46 @@ pub fn datetimes() -> DateTimeGenerator {
     DateTimeGenerator
     // nocov end
 }
+
+/// Generator for UUID strings in canonical hyphenated form. Created by [`uuids()`].
+///
+/// By default generates UUIDs of any version. Use [`UuidsGenerator::version`]
+/// to restrict to a specific RFC 4122 version (1–5).
+pub struct UuidsGenerator {
+    version: Option<u8>,
+}
+
+impl UuidsGenerator {
+    /// Restrict to UUIDs of a specific version (1–5).
+    pub fn version(mut self, version: u8) -> Self {
+        self.version = Some(version);
+        self
+    }
+
+    fn build_schema(&self) -> Value {
+        match self.version {
+            Some(v) => cbor_map! {"type" => "uuid", "version" => v as u64},
+            None => cbor_map! {"type" => "uuid"},
+        }
+    }
+}
+
+impl Generator<String> for UuidsGenerator {
+    fn do_draw(&self, tc: &TestCase) -> String {
+        self.as_basic().unwrap().do_draw(tc)
+    }
+
+    fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
+        Some(BasicGenerator::new(
+            self.build_schema(),
+            super::deserialize_value,
+        ))
+    }
+}
+
+/// Generate UUID strings in canonical hyphenated form.
+///
+/// See [`UuidsGenerator`] for builder methods.
+pub fn uuids() -> UuidsGenerator {
+    UuidsGenerator { version: None }
+}
