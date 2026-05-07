@@ -758,7 +758,7 @@ impl TargetedRunner {
         idx: usize,
         k: i64,
     ) -> bool {
-        if k.abs() > (1 << 20) {
+        if k.saturating_abs() > (1 << 20) {
             return false;
         }
         if idx >= current_nodes.len() {
@@ -778,7 +778,7 @@ impl TargetedRunner {
                 ChoiceValue::Integer(new)
             }
             (ChoiceValue::Boolean(b), ChoiceKind::Boolean(_)) => {
-                if k.abs() > 1 {
+                if k.saturating_abs() > 1 {
                     return false;
                 }
                 if k == -1 {

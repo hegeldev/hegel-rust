@@ -132,7 +132,7 @@ impl<'a> Shrinker<'a> {
                         }
                     }
                 } else if v < 0 {
-                    let lo = ic.simplest().min(0).abs();
+                    let lo = ic.simplest().min(0).saturating_abs();
                     bin_search_down(lo, -v, &mut |candidate| {
                         self.replace(&HashMap::from([(i, ChoiceValue::Integer(-candidate))]))
                     });
@@ -465,7 +465,7 @@ impl<'a> Shrinker<'a> {
                     self.replace(&replacements)
                 });
             } else if cur_value < 0 {
-                let lo = ic.simplest().min(0).abs();
+                let lo = ic.simplest().min(0).saturating_abs();
                 let v_abs = -cur_value;
                 bin_search_down(lo, v_abs, &mut |candidate| {
                     let current_valid: Vec<usize> = valid

@@ -52,7 +52,7 @@ fn run_once(tc: &mut NativeTestCase, max_draw: i128, lower_bound: i128, marker: 
     if bytes != marker {
         return false;
     }
-    (m - n).abs() == 1
+    (m - n).saturating_abs() == 1
 }
 
 fn check(m: u128, marker: &[u8], lower_bound: u128) {

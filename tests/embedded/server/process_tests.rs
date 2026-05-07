@@ -92,47 +92,21 @@ fn test_startup_error_message_version_mismatch() {
 
 #[test]
 fn test_startup_error_message_version_matches() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let expected_output = format!("hegel (version {})", HEGEL_SERVER_VERSION);
-    #[cfg(unix)]
-    let script = {
-        let s = dir.path().join("fake_version_ok");
-        std::fs::write(&s, format!("#!/bin/sh\necho '{}'\n", expected_output)).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&s, std::fs::Permissions::from_mode(0o755)).unwrap();
-        s
-    };
-    #[cfg(windows)]
-    let script = {
-        let s = dir.path().join("fake_version_ok.bat");
-        std::fs::write(&s, format!("@echo off\r\necho {}\r\n", expected_output)).unwrap();
-        s
-    };
     let exit_status = exit_failure_status();
-    let msg = startup_error_message(Some(script.to_str().unwrap()), exit_status);
+    let expected = format!("hegel (version {})\n", HEGEL_SERVER_VERSION);
+    let version_output = fake_output(exit_success_status(), &expected);
+    let msg =
+        startup_error_message_from_version(Some(("/fake/path", Ok(version_output))), exit_status);
     assert!(!msg.contains("Version mismatch"), "Message: {msg}");
     assert!(!msg.contains("Is this a hegel binary"), "Message: {msg}");
 }
 
 #[test]
 fn test_startup_error_message_unexpected_version_output() {
-    let dir = tempfile::TempDir::new().unwrap();
-    #[cfg(unix)]
-    let script = {
-        let s = dir.path().join("fake_version_unexpected");
-        std::fs::write(&s, "#!/bin/sh\necho 'totally not hegel'\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&s, std::fs::Permissions::from_mode(0o755)).unwrap();
-        s
-    };
-    #[cfg(windows)]
-    let script = {
-        let s = dir.path().join("fake_version_unexpected.bat");
-        std::fs::write(&s, "@echo off\r\necho totally not hegel\r\n").unwrap();
-        s
-    };
     let exit_status = exit_failure_status();
-    let msg = startup_error_message(Some(script.to_str().unwrap()), exit_status);
+    let version_output = fake_output(exit_success_status(), "totally not hegel\n");
+    let msg =
+        startup_error_message_from_version(Some(("/fake/path", Ok(version_output))), exit_status);
     assert!(
         msg.contains("--version returned unexpected output"),
         "Message: {msg}"

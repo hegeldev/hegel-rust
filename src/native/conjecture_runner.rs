@@ -391,7 +391,7 @@ pub struct NativeRunnerSettings {
     /// Override for `engine_module.CACHE_SIZE` — the maximum number of
     /// entries kept in the runner's `cached_test_function` LRU before
     /// the oldest is evicted.  `None` falls back to the default
-    /// [`CACHE_SIZE`].
+    /// `CACHE_SIZE`.
     pub cache_size: Option<usize>,
 }
 

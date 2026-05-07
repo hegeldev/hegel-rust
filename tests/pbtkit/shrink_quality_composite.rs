@@ -343,13 +343,13 @@ fn test_lower_and_bump_explores_new_range() {
         let v1: i64 = tc.draw(gs::sampled_from(vec![32i64, 46]));
         let v2: i64 = tc.draw(
             gs::integers::<i64>()
-                .min_value(-(v0.abs() + 1))
-                .max_value(v0.abs() + 1),
+                .min_value(-(v0.saturating_abs() + 1))
+                .max_value(v0.saturating_abs() + 1),
         );
         let v3: i64 = tc.draw(
             gs::integers::<i64>()
-                .min_value(-(v2.abs() + 1))
-                .max_value(v2.abs() + 1),
+                .min_value(-(v2.saturating_abs() + 1))
+                .max_value(v2.saturating_abs() + 1),
         );
         (v0, v1, v2, v3)
     });

@@ -431,7 +431,7 @@ fn test_zig_zags_quickly() {
         if m == 0 || n == 0 {
             return false;
         }
-        (m - n).abs() <= 1 || (m - n).abs() <= 10
+        (m - n).saturating_abs() <= 1 || (m - n).saturating_abs() <= 10
     });
     shrinker.shrink();
     assert_eq!(extract_integers(&shrinker.current_nodes), vec![1, 1]);
@@ -476,7 +476,7 @@ fn test_shrinking_blocks_from_common_offset() {
             Ok(v) => v,
             Err(_) => return false,
         };
-        (m - n).abs() <= 1 && m.max(n) > 0
+        (m - n).saturating_abs() <= 1 && m.max(n) > 0
     });
     shrinker.shrink();
     let result = extract_integers(&shrinker.current_nodes);

@@ -30,8 +30,8 @@ use crate::native::core::{
 
 /// Request passed to the shrinker's test function.
 ///
-/// [`Full`] replays a full node sequence with punning (the shape used by
-/// most shrink passes). [`Probe`] replays a prefix of choice values and
+/// [`ShrinkRun::Full`] replays a full node sequence with punning (the shape used by
+/// most shrink passes). [`ShrinkRun::Probe`] replays a prefix of choice values and
 /// then draws randomly beyond it — needed by `mutate_and_shrink` (port of
 /// pbtkit's `shrinking/mutation.py`).
 pub enum ShrinkRun<'a> {
