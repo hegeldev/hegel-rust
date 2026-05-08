@@ -214,6 +214,7 @@ impl<'a> Shrinker<'a> {
             self.sort_values();
             self.swap_adjacent_blocks();
             self.shrink_floats();
+            self.redistribute_numeric_pairs();
             self.shrink_bytes();
             self.redistribute_bytes_pairs();
             self.shrink_strings();

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::cbor_utils::{as_text, as_u64, map_get};
-use crate::native::core::{ManyState, NativeTestCase, StopTest};
+use crate::native::core::{ManyState, NativeTestCase, StopTest, codepoint_key, key_to_codepoint};
 use crate::native::unicodedata;
 use ciborium::Value;
 
@@ -127,7 +127,7 @@ impl StringAlphabet {
     ///
     /// These correspond to indices [0, ascii_count) in `char_at` order,
     /// since both `keyed_codepoint_at_index` and the explicit alphabet's
-    /// `codepoint_sort_key` ordering put ASCII characters first.
+    /// `codepoint_key` ordering put ASCII characters first.
     pub(super) fn ascii_count(&self) -> usize {
         match self {
             StringAlphabet::Range { min, max } => {
@@ -142,7 +142,7 @@ impl StringAlphabet {
         }
     }
 
-    /// Return the character at position `idx` in `codepoint_sort_key` order.
+    /// Return the character at position `idx` in `codepoint_key` order.
     ///
     /// Index 0 returns '0' (codepoint 48) for alphabets that contain it,
     /// matching pbtkit's shrinking behavior where '0' is the simplest char.
@@ -237,7 +237,7 @@ fn build_intervals_alphabet(cp_min: u32, cp_max: u32, exclude_chars: &[char]) ->
             ascii_sorted.push(char::from_u32(cp).unwrap());
         }
     }
-    ascii_sorted.sort_by_key(|c| codepoint_sort_key(*c as u32));
+    ascii_sorted.sort_by_key(|c| codepoint_key(*c as u32));
 
     let total: usize = ranges.iter().map(|(s, e)| (e - s + 1) as usize).sum();
 
@@ -344,7 +344,7 @@ fn build_string_alphabet_uncached(schema: &Value) -> StringAlphabet {
                             .unwrap_or(false)
                 })
                 .collect();
-            filtered.sort_by_key(|c| codepoint_sort_key(*c as u32));
+            filtered.sort_by_key(|c| codepoint_key(*c as u32));
             return StringAlphabet::Explicit(filtered);
         }
     }
@@ -432,30 +432,18 @@ fn build_string_alphabet_uncached(schema: &Value) -> StringAlphabet {
         }
     }
 
-    // Sort by codepoint_sort_key so index 0 → '0' (simplest under shrinking).
-    alphabet.sort_by_key(|c| codepoint_sort_key(*c as u32));
+    // Sort by codepoint_key so index 0 → '0' (simplest under shrinking).
+    alphabet.sort_by_key(|c| codepoint_key(*c as u32));
 
     StringAlphabet::Explicit(alphabet)
 }
 // nocov end
 
-/// Sort key for codepoints: maps '0' (48) to 0, '1' to 1, ..., and
-/// reorders low 128 codepoints so '0' is simplest.
-/// Non-ASCII codepoints keep their natural order (key = codepoint).
+/// Return the character at `idx` in [`crate::native::core::codepoint_key`]
+/// order within `[min, max]`.
 ///
-/// Port of pbtkit's `_codepoint_key`.
-fn codepoint_sort_key(c: u32) -> u32 {
-    if c < 128 {
-        (c + 80) % 128 // = (c - 48 + 128) % 128
-    } else {
-        c
-    }
-}
-
-/// Return the character at `idx` in codepoint_sort_key order within [min, max].
-///
-/// ASCII chars (0-127) come first, sorted by codepoint_sort_key.
-/// Non-ASCII chars (128+) come after, in natural codepoint order.
+/// ASCII chars (0-127) come first, sorted by `codepoint_key`. Non-ASCII chars
+/// (128+) come after, in natural codepoint order.
 fn keyed_codepoint_at_index(min: u32, max: u32, idx: usize) -> char {
     // Count ASCII chars in the range.
     let ascii_end = max.min(127);
@@ -467,11 +455,12 @@ fn keyed_codepoint_at_index(min: u32, max: u32, idx: usize) -> char {
     };
 
     if idx < ascii_count {
-        // Find the idx-th ASCII char in codepoint_sort_key order.
-        // Iterate all 128 key values; key ki corresponds to codepoint (ki+48)%128.
+        // Find the idx-th ASCII char in codepoint_key order.
+        // Iterate all 128 key values; key ki corresponds to
+        // codepoint key_to_codepoint(ki).
         let mut found = 0usize;
         for ki in 0u32..128 {
-            let c = (ki + 48) % 128; // key_to_codepoint
+            let c = key_to_codepoint(ki);
             if c >= ascii_start && c <= ascii_end {
                 if found == idx {
                     return char::from_u32(c).unwrap();

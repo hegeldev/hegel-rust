@@ -63,6 +63,46 @@ def parse_unicode_data(path: Path) -> dict[int, str]:
     return entries
 
 
+def parse_canonical_decompositions(path: Path) -> dict[int, int]:
+    """Parse the recursive NFD base codepoint for each canonically-decomposable codepoint.
+
+    Field 5 of UnicodeData.txt holds the decomposition mapping. Entries
+    starting with `<...>` are *compatibility* decompositions (used by NFKD,
+    not NFD); we ignore those. Canonical decompositions are space-separated
+    hex codepoints; the first is the "base" and the rest are combining marks.
+
+    The base may itself decompose (e.g. Ǻ → Å + combining-acute, and Å
+    decomposes further to A + combining-ring). We follow the chain to
+    its fixed point so the final mapping always points at a non-decomposable
+    starting codepoint.
+    """
+    immediate: dict[int, int] = {}
+    for line in path.read_text().splitlines():
+        if not line:
+            continue
+        fields = line.split(";")
+        cp = int(fields[0], 16)
+        decomp = fields[5]
+        if not decomp or decomp.startswith("<"):
+            continue
+        first = int(decomp.split()[0], 16)
+        if first != cp:
+            immediate[cp] = first
+
+    # Resolve recursively. Cycle detection is defensive — Unicode canonical
+    # decompositions are guaranteed acyclic, but we don't rely on that.
+    recursive: dict[int, int] = {}
+    for cp in immediate:
+        seen: set[int] = set()
+        current = cp
+        while current in immediate and current not in seen:
+            seen.add(current)
+            current = immediate[current]
+        if current != cp:
+            recursive[cp] = current
+    return recursive
+
+
 def build_ranges(entries: dict[int, str]) -> list[tuple[int, int, str]]:
     """Collapse per-codepoint categories into contiguous runs.
 
@@ -83,7 +123,11 @@ def build_ranges(entries: dict[int, str]) -> list[tuple[int, int, str]]:
     return ranges
 
 
-def emit(ranges: list[tuple[int, int, str]], out_path: Path) -> None:
+def emit(
+    ranges: list[tuple[int, int, str]],
+    nfd_bases: dict[int, int],
+    out_path: Path,
+) -> None:
     seen_cats = sorted({r[2] for r in ranges})
     unknown = [c for c in seen_cats if c not in CATEGORIES]
     if unknown:
@@ -105,6 +149,15 @@ def emit(ranges: list[tuple[int, int, str]], out_path: Path) -> None:
         lines.append(f"    ({end:#07x}, Category::{cat}),")
     lines.append("];")
     lines.append("")
+    lines.append("/// Recursive NFD base for codepoints that have a canonical")
+    lines.append("/// decomposition. Sorted by codepoint; binary-searchable.")
+    lines.append("/// Codepoints not in this table either have no canonical")
+    lines.append("/// decomposition or are already their own base.")
+    lines.append("pub(super) const NFD_BASES: &[(u32, u32)] = &[")
+    for cp in sorted(nfd_bases):
+        lines.append(f"    ({cp:#07x}, {nfd_bases[cp]:#07x}),")
+    lines.append("];")
+    lines.append("")
 
     out_path.write_text("\n".join(lines))
 
@@ -112,8 +165,12 @@ def emit(ranges: list[tuple[int, int, str]], out_path: Path) -> None:
 def main() -> None:
     entries = parse_unicode_data(UCD_PATH)
     ranges = build_ranges(entries)
-    emit(ranges, OUT_PATH)
-    print(f"Wrote {OUT_PATH} with {len(ranges)} ranges.")
+    nfd_bases = parse_canonical_decompositions(UCD_PATH)
+    emit(ranges, nfd_bases, OUT_PATH)
+    print(
+        f"Wrote {OUT_PATH} with {len(ranges)} ranges "
+        f"and {len(nfd_bases)} NFD base entries."
+    )
 
 
 if __name__ == "__main__":

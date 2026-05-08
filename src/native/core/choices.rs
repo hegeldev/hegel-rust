@@ -463,23 +463,51 @@ fn max_finite_global_rank() -> crate::native::bignum::BigUint {
     BigUint::from(max_finite_lex) * BigUint::from(2u32) + BigUint::from(1u32)
 }
 
-/// Map a codepoint to its sort-key position.
+/// Map a codepoint to its shrink-key position.
 ///
-/// Port of pbtkit's `_codepoint_key`. Reorders the low 128 codepoints so
-/// that '0' (48) maps to key 0 (simplest), '1' to 1, ..., '/' to 47, and
-/// anything above 127 keeps its natural position. This makes digits
-/// sort-simpler than letters, which in turn are simpler than punctuation.
+/// Mirrors Hypothesis's [`IntervalSet.char_in_shrink_order`] inverse for the
+/// default-text alphabet (all non-surrogates). The low 128 codepoints are
+/// reordered so that:
+///
+/// - `'0'..='Z'` (48..=90) map to keys 0..=42 (digits and uppercase letters
+///   are the simplest characters, in natural order)
+/// - codepoints below `'0'` (47..=0) map to keys 43..=90 in reverse (so `/`,
+///   the codepoint just below `'0'`, is the next-simplest after `Z`, and
+///   NUL is the least-simple low-ASCII character)
+/// - codepoints above `'Z'` and below 128 (`[`..127) map to themselves
+/// - codepoints `>=128` map to themselves
+///
+/// This places digits before letters before punctuation before control
+/// characters in shrink order, which is intuitively "simplest" and matches
+/// what Hypothesis produces for the default `st.text()` strategy. The earlier
+/// pbtkit-derived `(c - 48) mod 128` formula put NUL ahead of `/`; that
+/// disagreed with Hypothesis on which codepoint below `'0'` is "simplest".
 pub fn codepoint_key(c: u32) -> u32 {
-    if c < 128 {
-        ((c as i32 - b'0' as i32).rem_euclid(128)) as u32
+    if c <= 47 {
+        // below '0' — reverse-mapped to 43..=90, so '/' (just below '0')
+        // comes immediately after 'Z' and NUL falls at the bottom.
+        90 - c
+    } else if c <= 90 {
+        // '0'..='Z' — natural order with '0' at key 0.
+        c - 48
     } else {
+        // '['..= 127 and 128.. — natural codepoint position.
         c
     }
 }
 
 /// Inverse of [`codepoint_key`].
 pub fn key_to_codepoint(k: u32) -> u32 {
-    if k < 128 { (k + b'0' as u32) % 128 } else { k }
+    if k <= 42 {
+        // 0..=42 → '0'..='Z'
+        k + 48
+    } else if k <= 90 {
+        // 43..=90 → '/'..=NUL (reverse).
+        90 - k
+    } else {
+        // 91.. → natural codepoint position.
+        k
+    }
 }
 
 /// A bytes choice with bounded length.

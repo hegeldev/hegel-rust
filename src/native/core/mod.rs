@@ -7,12 +7,12 @@
 
 mod choices;
 pub mod float_index;
-mod state;
+pub(crate) mod state;
 
 pub use choices::{
     BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice,
     InterestingOrigin, NodeSortKey, Status, StopTest, StringChoice, codepoint_key,
-    interesting_origin, sort_key,
+    interesting_origin, key_to_codepoint, sort_key,
 };
 pub use float_index::{
     decode_exponent, encode_exponent, float_to_index, index_to_float, reverse_bits_n,

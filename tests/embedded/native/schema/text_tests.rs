@@ -309,15 +309,25 @@ fn extract_string_array_not_array() {
     assert_eq!(extract_string_array(&schema, "cats"), None);
 }
 
-// ── codepoint_sort_key ────────────────────────────────────────────────
+// ── codepoint_key (re-exported via super) ─────────────────────────────
 
 #[test]
-fn codepoint_sort_key_zero_maps_to_48() {
-    assert_eq!(codepoint_sort_key(48), 0);
+fn codepoint_key_zero_maps_to_48() {
+    assert_eq!(codepoint_key(48), 0);
 }
 
 #[test]
-fn codepoint_sort_key_non_ascii_identity() {
-    assert_eq!(codepoint_sort_key(200), 200);
-    assert_eq!(codepoint_sort_key(1000), 1000);
+fn codepoint_key_non_ascii_identity() {
+    assert_eq!(codepoint_key(200), 200);
+    assert_eq!(codepoint_key(1000), 1000);
+}
+
+#[test]
+fn codepoint_key_orders_slash_simpler_than_nul() {
+    // The Hypothesis-aligned ordering puts codepoints below '0' immediately
+    // after 'Z' in shrink order, with NUL at the bottom — '/' (the codepoint
+    // just below '0') is therefore "simpler" than NUL.
+    assert!(codepoint_key('/' as u32) < codepoint_key(0));
+    assert_eq!(codepoint_key('/' as u32), 43);
+    assert_eq!(codepoint_key(0), 90);
 }

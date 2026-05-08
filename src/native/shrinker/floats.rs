@@ -3,10 +3,11 @@
 use std::collections::HashMap;
 
 use crate::native::core::{
-    ChoiceKind, ChoiceNode, ChoiceValue, float_to_index, index_to_float, sort_key,
+    ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice, float_to_index, index_to_float,
+    sort_key,
 };
 
-use super::{ShrinkRun, Shrinker, bin_search_down};
+use super::{ShrinkRun, Shrinker, bin_search_down, find_integer};
 
 /// Decompose a positive finite float into `(m, n)` with `value == m / n`.
 ///
@@ -266,6 +267,205 @@ impl<'a> Shrinker<'a> {
         match self.current_nodes[i].value {
             ChoiceValue::Float(f) => f,
             _ => unreachable!(),
+        }
+    }
+
+    /// Redistribute magnitude across nearby numeric pairs.
+    ///
+    /// Port of Hypothesis's `redistribute_numeric_pairs`. For sum-style
+    /// constraints (`a + b > 1000`), shrinking `a` toward 0 alone breaks
+    /// the predicate; the pair only collapses to its minimum when `a` is
+    /// reduced and `b` is raised by the same amount in lockstep. Walks pairs
+    /// `(i, j)` where `j - i` is small (cap 4 to avoid quadratic scans), at
+    /// least one side is a non-trivial Float, and probes
+    /// `(v_i - k, v_j + k)` (or `(v_i + k, v_j - k)` if `v_i` is below its
+    /// shrink target). Maximises `k` via `find_integer`.
+    ///
+    /// Pure Integer-Integer pairs are already handled by
+    /// [`Shrinker::redistribute_integers`] — this pass complements it by
+    /// covering Float-Float, Float-Integer, and Integer-Float pairs that
+    /// the integer-only pass skips.
+    pub(super) fn redistribute_numeric_pairs(&mut self) {
+        let len = self.current_nodes.len();
+        for i in 0..len {
+            for gap in 1..=4 {
+                if i + gap >= self.current_nodes.len() {
+                    break;
+                }
+                let j = i + gap;
+                if !is_float_or_integer(&self.current_nodes[i].kind)
+                    || !is_float_or_integer(&self.current_nodes[j].kind)
+                {
+                    continue;
+                }
+                // Skip pure Int-Int — covered by redistribute_integers.
+                if matches!(
+                    (&self.current_nodes[i].kind, &self.current_nodes[j].kind),
+                    (ChoiceKind::Integer(_), ChoiceKind::Integer(_))
+                ) {
+                    continue;
+                }
+                if is_trivial(&self.current_nodes[i]) {
+                    continue;
+                }
+                redistribute_pair(self, i, j);
+            }
+        }
+    }
+}
+
+fn is_float_or_integer(k: &ChoiceKind) -> bool {
+    matches!(k, ChoiceKind::Float(_) | ChoiceKind::Integer(_))
+}
+
+fn is_trivial(node: &ChoiceNode) -> bool {
+    match (&node.kind, &node.value) {
+        (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => *v == ic.simplest(),
+        (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => {
+            !v.is_finite() || *v == fc.simplest()
+        }
+        _ => true,
+    }
+}
+
+/// Direction the integer-pair search moves `node[i]` in.
+///
+/// `v_i` is reduced toward its shrink target (0 for floats, simplest() for
+/// integers); the matching adjustment to `v_j` raises it. If `v_i` is
+/// already below its shrink target, both deltas flip sign.
+fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) {
+    // Snapshot the original values; find_integer will probe larger and
+    // larger `k` and the kept candidate updates current_nodes in place.
+    let (v_i, kind_i) = match (&shrinker.current_nodes[i].kind, &shrinker.current_nodes[i].value) {
+        (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => {
+            (NumericValue::Integer(*n), NumericKind::Integer(ic.clone()))
+        }
+        (ChoiceKind::Float(fc), ChoiceValue::Float(f)) => {
+            if !f.is_finite() {
+                return;
+            }
+            (NumericValue::Float(*f), NumericKind::Float(fc.clone()))
+        }
+        _ => return,
+    };
+    let (v_j, kind_j) = match (&shrinker.current_nodes[j].kind, &shrinker.current_nodes[j].value) {
+        (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => {
+            (NumericValue::Integer(*n), NumericKind::Integer(ic.clone()))
+        }
+        (ChoiceKind::Float(fc), ChoiceValue::Float(f)) => {
+            if !f.is_finite() {
+                return;
+            }
+            (NumericValue::Float(*f), NumericKind::Float(fc.clone()))
+        }
+        _ => return,
+    };
+
+    let target_i = shrink_target(&kind_i);
+    let dir = if v_i.as_f64() >= target_i {
+        Direction::LowerLeftRaiseRight
+    } else {
+        Direction::RaiseLeftLowerRight
+    };
+
+    find_integer(|k| {
+        if k == 0 {
+            return true; // find_integer assumes f(0) is true.
+        }
+        let (cand_i, cand_j) = apply_delta(&v_i, &v_j, k as i128, dir);
+        let Some(val_i) = build_value(&kind_i, cand_i) else {
+            return false;
+        };
+        let Some(val_j) = build_value(&kind_j, cand_j) else {
+            return false;
+        };
+        shrinker.replace(&HashMap::from([(i, val_i), (j, val_j)]))
+    });
+}
+
+#[derive(Clone, Copy)]
+enum Direction {
+    /// v_i above shrink target: subtract k from v_i, add k to v_j.
+    LowerLeftRaiseRight,
+    /// v_i below shrink target: add k to v_i, subtract k from v_j.
+    RaiseLeftLowerRight,
+}
+
+#[derive(Clone, Copy)]
+enum NumericValue {
+    Integer(i128),
+    Float(f64),
+}
+
+impl NumericValue {
+    fn as_f64(self) -> f64 {
+        match self {
+            NumericValue::Integer(n) => n as f64,
+            NumericValue::Float(f) => f,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum NumericKind {
+    Integer(IntegerChoice),
+    Float(FloatChoice),
+}
+
+fn shrink_target(kind: &NumericKind) -> f64 {
+    match kind {
+        NumericKind::Integer(ic) => ic.simplest() as f64,
+        NumericKind::Float(_) => 0.0,
+    }
+}
+
+fn apply_delta(
+    v_i: &NumericValue,
+    v_j: &NumericValue,
+    k: i128,
+    dir: Direction,
+) -> (NumericValue, NumericValue) {
+    let signed_k_i = match dir {
+        Direction::LowerLeftRaiseRight => -k,
+        Direction::RaiseLeftLowerRight => k,
+    };
+    let signed_k_j = -signed_k_i;
+    (add_int(v_i, signed_k_i), add_int(v_j, signed_k_j))
+}
+
+fn add_int(v: &NumericValue, k: i128) -> NumericValue {
+    match v {
+        NumericValue::Integer(n) => NumericValue::Integer(n.saturating_add(k)),
+        NumericValue::Float(f) => NumericValue::Float(*f + k as f64),
+    }
+}
+
+fn build_value(kind: &NumericKind, candidate: NumericValue) -> Option<ChoiceValue> {
+    match (kind, candidate) {
+        (NumericKind::Integer(ic), NumericValue::Integer(n)) => {
+            if ic.validate(n) {
+                Some(ChoiceValue::Integer(n))
+            } else {
+                None
+            }
+        }
+        (NumericKind::Integer(ic), NumericValue::Float(f)) => {
+            // Cross-type: float candidate for integer node — rounds.
+            if !f.is_finite() {
+                return None;
+            }
+            let n = f.round() as i128;
+            if (n as f64 - f).abs() > 0.5 {
+                return None;
+            }
+            ic.validate(n).then_some(ChoiceValue::Integer(n))
+        }
+        (NumericKind::Float(fc), NumericValue::Float(f)) => {
+            fc.validate(f).then_some(ChoiceValue::Float(f))
+        }
+        (NumericKind::Float(fc), NumericValue::Integer(n)) => {
+            let f = n as f64;
+            fc.validate(f).then_some(ChoiceValue::Float(f))
         }
     }
 }

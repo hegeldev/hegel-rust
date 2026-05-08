@@ -40,8 +40,14 @@ fn encode_string(s: String) -> Value {
 /// `date` schema → YYYY-MM-DD.
 ///
 /// Year in [1970, 2100], month in [1, 12], day in [1, 28] (28 is valid for all months).
+///
+/// The year is drawn as `2000 + offset` so that shrinking pulls offset toward
+/// zero — yielding 2000-01-01 as the minimal date. This matches Hypothesis's
+/// `dates()` strategy, which also anchors on the millennium rather than the
+/// generator's lower bound.
 pub(super) fn interpret_date(ntc: &mut NativeTestCase) -> Result<Value, StopTest> {
-    let year = ntc.draw_integer(1970, 2100)?;
+    let year_offset = ntc.draw_integer(1970 - 2000, 2100 - 2000)?;
+    let year = 2000 + year_offset;
     let month = ntc.draw_integer(1, 12)?;
     let day = ntc.draw_integer(1, 28)?;
     Ok(encode_string(format!("{year:04}-{month:02}-{day:02}")))
@@ -62,8 +68,11 @@ pub(super) fn interpret_time(ntc: &mut NativeTestCase) -> Result<Value, StopTest
 }
 
 /// `datetime` schema → YYYY-MM-DDTHH:MM:SS.
+///
+/// Year is anchored at 2000 (see `interpret_date` for rationale).
 pub(super) fn interpret_datetime(ntc: &mut NativeTestCase) -> Result<Value, StopTest> {
-    let year = ntc.draw_integer(1970, 2100)?;
+    let year_offset = ntc.draw_integer(1970 - 2000, 2100 - 2000)?;
+    let year = 2000 + year_offset;
     let month = ntc.draw_integer(1, 12)?;
     let day = ntc.draw_integer(1, 28)?;
     let hour = ntc.draw_integer(0, 23)?;

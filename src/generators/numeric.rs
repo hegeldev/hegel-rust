@@ -216,6 +216,34 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
                      values between min_value=0.0 and max_value=-0.0"
                 );
             }
+            // Reject zero-interval ranges with either endpoint excluded:
+            // min == max means the range contains exactly one value, which
+            // exclude_min/exclude_max would discard, leaving the range empty.
+            if min == max && (self.exclude_min || self.exclude_max) {
+                panic!(
+                    "InvalidArgument: Cannot exclude an endpoint when \
+                     min_value == max_value (empty range)"
+                );
+            }
+        }
+        // Reject infinite endpoint with the matching exclude flag: the
+        // exclusion would leave no representable {width}-bit float on the
+        // open side. Server-side Hypothesis raises InvalidArgument.
+        if let Some(min) = self.min {
+            if min.to_f64().is_infinite() && min.to_f64() > 0.0 && self.exclude_min {
+                panic!(
+                    "InvalidArgument: Cannot exclude min_value=inf — there \
+                     are no {width}-bit floats above +inf"
+                );
+            }
+        }
+        if let Some(max) = self.max {
+            if max.to_f64().is_infinite() && max.to_f64() < 0.0 && self.exclude_max {
+                panic!(
+                    "InvalidArgument: Cannot exclude max_value=-inf — there \
+                     are no {width}-bit floats below -inf"
+                );
+            }
         }
 
         let allow_nan = self.allow_nan.unwrap_or(!has_min && !has_max);

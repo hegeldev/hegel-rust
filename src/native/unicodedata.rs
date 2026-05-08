@@ -131,6 +131,23 @@ pub fn is_in_group(cp: u32, group: &str) -> bool {
 
 const MAJOR_CLASSES: &[&str] = &["L", "M", "N", "P", "S", "Z", "C"];
 
+/// Return the recursive NFD base codepoint for `cp`, if it has a canonical
+/// decomposition that resolves to a different starting codepoint.
+///
+/// For example, `À` (U+00C0) → `A` (U+0041), `Ǻ` (U+01FA) → `A`, but `A`
+/// itself returns `None`. The returned codepoint is itself non-decomposable
+/// (i.e. applying `nfd_base` to the result yields `None`).
+///
+/// Codepoints with no canonical decomposition (including emoji, CJK
+/// ideographs, and ASCII) return `None`. Compatibility decompositions
+/// (NFKD, e.g. `Ⅰ` → `I`) are *not* applied — they're not part of NFD.
+pub fn nfd_base(cp: u32) -> Option<u32> {
+    tables::NFD_BASES
+        .binary_search_by_key(&cp, |&(c, _)| c)
+        .ok()
+        .map(|idx| tables::NFD_BASES[idx].1)
+}
+
 #[cfg(test)]
 #[path = "../../tests/embedded/native/unicodedata_tests.rs"]
 mod tests;

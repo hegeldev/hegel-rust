@@ -1003,11 +1003,13 @@ fn sc(min_cp: u32, max_cp: u32) -> StringChoice {
 
 #[test]
 fn key_to_codepoint_in_range_ascii_maps_through_key_to_codepoint() {
-    // k < 128 → cp = (k + '0') % 128. For k=0 → '0' (48); for k=80 the
-    // sum wraps back to 0.
+    // Hypothesis-aligned ordering: '0'..='Z' map to keys 0..=42; codepoints
+    // below '0' rotate to 43..=90 in reverse (so '/' is the next-simplest
+    // after 'Z' and NUL is at the bottom).
     let kind = sc(0, 127);
     assert_eq!(key_to_codepoint_in_range(0, &kind), Some(b'0' as u32));
-    assert_eq!(key_to_codepoint_in_range(80, &kind), Some(0));
+    assert_eq!(key_to_codepoint_in_range(43, &kind), Some(b'/' as u32));
+    assert_eq!(key_to_codepoint_in_range(90, &kind), Some(0));
 }
 
 #[test]

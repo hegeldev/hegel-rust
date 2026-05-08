@@ -113,3 +113,42 @@ fn is_in_group_unknown_or_invalid_matches_nothing() {
     assert!(!is_in_group('A' as u32, ""));
     assert!(!is_in_group('A' as u32, "Lux"));
 }
+
+#[test]
+fn nfd_base_decomposes_diacritic_letters_to_ascii() {
+    // À, Á, Â, Ã, Ä, Å all decompose to A.
+    for cp in [0x00C0, 0x00C1, 0x00C2, 0x00C3, 0x00C4, 0x00C5] {
+        assert_eq!(nfd_base(cp), Some('A' as u32), "U+{cp:04X} → A");
+    }
+    // à and friends decompose to a.
+    for cp in [0x00E0, 0x00E1, 0x00E2, 0x00E3, 0x00E4, 0x00E5] {
+        assert_eq!(nfd_base(cp), Some('a' as u32), "U+{cp:04X} → a");
+    }
+    // Ñ → N, ñ → n.
+    assert_eq!(nfd_base(0x00D1), Some('N' as u32));
+    assert_eq!(nfd_base(0x00F1), Some('n' as u32));
+}
+
+#[test]
+fn nfd_base_resolves_recursively() {
+    // Ǻ (U+01FA) decomposes to Å + acute, and Å decomposes to A + ring.
+    // The recursive base is A.
+    assert_eq!(nfd_base(0x01FA), Some('A' as u32));
+    // Å (U+00C5) directly decomposes to A.
+    assert_eq!(nfd_base(0x00C5), Some('A' as u32));
+}
+
+#[test]
+fn nfd_base_returns_none_for_non_decomposable() {
+    // ASCII letters and digits don't decompose.
+    assert_eq!(nfd_base('A' as u32), None);
+    assert_eq!(nfd_base('0' as u32), None);
+    // ß (German sharp s) has no canonical decomposition.
+    assert_eq!(nfd_base(0x00DF), None);
+    // Roman numeral I uses *compatibility* decomposition (NFKD only),
+    // not canonical, so NFD leaves it alone.
+    assert_eq!(nfd_base(0x2160), None);
+    // High-codepoint characters with no decomposition.
+    assert_eq!(nfd_base(0x1F600), None); // 😀
+    assert_eq!(nfd_base(0x82535), None);
+}

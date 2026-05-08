@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 
 use crate::native::core::{ChoiceKind, ChoiceValue, StringChoice, codepoint_key};
+use crate::native::unicodedata;
 
 use super::{Shrinker, bin_search_down};
 
@@ -70,25 +71,123 @@ impl<'a> Shrinker<'a> {
                 self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]));
             }
 
-            // Step 4: reduce each codepoint toward the simplest codepoint.
+            // Step 3.5: shrink duplicated codepoints simultaneously.
+            //
+            // When two or more positions hold the same codepoint and the
+            // predicate links them (e.g. `decode(rle_encode(s)) != s`
+            // requires at least two positions to share a value to trigger
+            // the bug), reducing one position alone breaks the link. This
+            // pass tries replacing *every* instance of a duplicated
+            // codepoint at once, mirroring the per-value pass in
+            // Hypothesis's `Collection.run_step`.
+            let dup_codepoints: Vec<u32> = {
+                let cur = self.current_string(i);
+                let mut counts: HashMap<u32, usize> = HashMap::new();
+                for &cp in &cur {
+                    *counts.entry(cp).or_default() += 1;
+                }
+                counts
+                    .into_iter()
+                    .filter(|(_, n)| *n > 1)
+                    .map(|(cp, _)| cp)
+                    .collect()
+            };
+            for val in dup_codepoints {
+                if codepoint_key(val) == 0 {
+                    continue;
+                }
+                // Skip if the previous step replaced every instance of `val`
+                // already.
+                if !self.current_string(i).contains(&val) {
+                    continue;
+                }
+
+                let try_replace_all = |sh: &mut Shrinker<'_>, cand_cp: u32| -> bool {
+                    let mut new_str = sh.current_string(i);
+                    let mut changed = false;
+                    for c in new_str.iter_mut() {
+                        if *c == val {
+                            *c = cand_cp;
+                            changed = true;
+                        }
+                    }
+                    if !changed {
+                        return false;
+                    }
+                    sh.replace(&HashMap::from([(i, ChoiceValue::String(new_str))]))
+                };
+
+                for cand_cp in semantic_candidates(val, &kind) {
+                    if codepoint_key(cand_cp) >= codepoint_key(val) {
+                        continue;
+                    }
+                    try_replace_all(self, cand_cp);
+                    if !self.current_string(i).contains(&val) {
+                        break;
+                    }
+                }
+
+                if self.current_string(i).contains(&val) {
+                    let cur_key = codepoint_key(val);
+                    if cur_key > 0 {
+                        bin_search_down(0, cur_key as i128, &mut |k| {
+                            let Some(cp) = key_to_codepoint_in_range(k as u32, &kind) else {
+                                return false;
+                            };
+                            try_replace_all(self, cp)
+                        });
+                    }
+                }
+            }
+
+            // Step 4: reduce each codepoint via a small set of semantic
+            // candidates (digits, ASCII letters, NFD base) followed by
+            // `bin_search_down` over the remaining key range.
+            //
+            // Why not a linear scan over all keys < current_key? The default
+            // `gs::text()` alphabet has ~1.1M valid codepoints, so a worst-
+            // case scan from a high-codepoint character is prohibitive.
+            //
+            // Why not just `bin_search_down`? It's not robust to non-monotone
+            // predicates: midpoint probes can miss valid simpler characters
+            // sitting between failing midpoints (e.g. 'A' at key 17 when
+            // shrinking from 'À' at key 192 — bin_search probes 96, 144, 168,
+            // ..., never trying 17). This is the same basin trap that
+            // afflicts upstream Hypothesis's per-element Integer shrinker
+            // (HypothesisWorks/hypothesis#4725).
+            //
+            // The hybrid: try a fixed list of "obvious smaller candidates"
+            // first to cover the common ASCII / Latin-with-diacritic basins,
+            // then `bin_search_down` for the long tail. Bounded at roughly
+            // 62 + log2(0x10FFFF) ≈ 84 probes per character per pass.
             let mut j = self.current_string(i).len();
             while j > 0 {
                 j -= 1;
-                let current_key = codepoint_key(self.current_string(i)[j]);
-                if current_key == 0 {
+                if codepoint_key(self.current_string(i)[j]) == 0 {
                     continue;
                 }
-                // Scan candidate keys from 0 up to current_key-1, accepting
-                // the first that produces an interesting reduction.
-                for k in 0..current_key {
-                    let Some(cp) = key_to_codepoint_in_range(k, &kind) else {
+                let original_cp = self.current_string(i)[j];
+
+                for cand_cp in semantic_candidates(original_cp, &kind) {
+                    let cur_key = codepoint_key(self.current_string(i)[j]);
+                    if codepoint_key(cand_cp) >= cur_key {
                         continue;
-                    };
-                    let mut cand = self.current_string(i);
-                    cand[j] = cp;
-                    if self.replace(&HashMap::from([(i, ChoiceValue::String(cand))])) {
-                        break;
                     }
+                    let mut cand = self.current_string(i);
+                    cand[j] = cand_cp;
+                    self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]));
+                }
+
+                let cur_key = codepoint_key(self.current_string(i)[j]);
+                if cur_key > 0 {
+                    bin_search_down(0, cur_key as i128, &mut |k| {
+                        let Some(cp) = key_to_codepoint_in_range(k as u32, &kind) else {
+                            return false;
+                        };
+                        let mut cand = self.current_string(i);
+                        cand[j] = cp;
+                        self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))
+                    });
                 }
             }
 
@@ -227,7 +326,7 @@ impl<'a> Shrinker<'a> {
 /// Return the codepoint corresponding to sort-key `k`, if it lies within the
 /// valid range (excluding surrogates).
 pub(super) fn key_to_codepoint_in_range(k: u32, kind: &StringChoice) -> Option<u32> {
-    let cp = if k < 128 { (k + b'0' as u32) % 128 } else { k };
+    let cp = crate::native::core::key_to_codepoint(k);
     if cp < kind.min_codepoint || cp > kind.max_codepoint {
         return None;
     }
@@ -235,4 +334,61 @@ pub(super) fn key_to_codepoint_in_range(k: u32, kind: &StringChoice) -> Option<u
         return None;
     }
     Some(cp)
+}
+
+/// "Obvious smaller" replacement codepoints to try for a character with
+/// codepoint `cp` in a [`StringChoice`] with the given alphabet, in
+/// shrink-key order. Filtered to in-range, non-surrogate values only.
+///
+/// Roughly: ASCII digits, then ASCII uppercase letters, then ASCII lowercase
+/// letters, then the recursive NFD base of `cp` if it's a non-ASCII
+/// codepoint with a canonical decomposition (e.g. `À` → `A`, `ñ` → `n`).
+/// Pure ASCII inputs already fall inside the digit/letter ranges so NFD
+/// adds nothing for them and is skipped.
+///
+/// Used by `shrink_strings` to escape predicate basins where neither a
+/// pure binary search nor a Hypothesis-style `find_integer` descent would
+/// reach the smaller-key target.
+fn semantic_candidates(cp: u32, kind: &StringChoice) -> Vec<u32> {
+    let mut out = Vec::with_capacity(64);
+
+    let push_key = |out: &mut Vec<u32>, k: u32| {
+        if let Some(cp) = key_to_codepoint_in_range(k, kind) {
+            out.push(cp);
+        }
+    };
+
+    // '0' (key 0) is also covered by Step 1's `kind.simplest()`, but
+    // re-trying it per-position handles strings whose simplest_codepoint
+    // pass lost the lock when an earlier position couldn't shrink.
+    push_key(&mut out, 0);
+
+    // Digits '1'..'9'.
+    for k in 1..=9 {
+        push_key(&mut out, k);
+    }
+
+    // ASCII uppercase 'A'..'Z' (keys 17..=42).
+    for k in 17..=42 {
+        push_key(&mut out, k);
+    }
+
+    // ASCII lowercase 'a'..'z' (keys 49..=74).
+    for k in 49..=74 {
+        push_key(&mut out, k);
+    }
+
+    if cp >= 0x80 {
+        if let Some(base) = unicodedata::nfd_base(cp) {
+            if base >= kind.min_codepoint
+                && base <= kind.max_codepoint
+                && !(0xD800..=0xDFFF).contains(&base)
+                && codepoint_key(base) < codepoint_key(cp)
+            {
+                out.push(base);
+            }
+        }
+    }
+
+    out
 }
