@@ -377,7 +377,7 @@ impl<F: FnMut(&[usize]) -> bool> CollectionShrinker<usize, F> {
             return false;
         }
         if !self.left_is_better(&value, &self.current) {
-            return false;
+            unreachable!("consider is only called with candidates that are lexicographically better");
         }
         if (self.predicate)(&value) {
             self.current = value;
@@ -424,7 +424,7 @@ impl<F: FnMut(&[usize]) -> bool> CollectionShrinker<usize, F> {
             let initial_val = BigUint::from(dup as u64);
             let mut shrinker = IntegerShrinker::new(initial_val, |bu: &BigUint| {
                 let Some(new_val) = bu.to_usize() else {
-                    return false;
+                    unreachable!("IntegerShrinker only shrinks, so value never exceeds initial usize");
                 };
                 let candidate: Vec<usize> = self
                     .current
@@ -443,7 +443,7 @@ impl<F: FnMut(&[usize]) -> bool> CollectionShrinker<usize, F> {
             let initial_val = BigUint::from(val as u64);
             let mut shrinker = IntegerShrinker::new(initial_val, |bu: &BigUint| {
                 let Some(new_val) = bu.to_usize() else {
-                    return false;
+                    unreachable!("IntegerShrinker only shrinks, so value never exceeds initial usize");
                 };
                 let mut candidate = self.current.clone();
                 candidate[i] = new_val;

@@ -1260,3 +1260,181 @@ fn try_replace_span_fixup_max_examples_fires_line_892() {
     let result = runner.optimise_targets();
     let _ = result;
 }
+
+// ── try_replace: k too large (line 762) ───────────────────────────────────────
+//
+// Line 762 fires when k.saturating_abs() > (1 << 20). This is a defensive guard
+// that is unreachable through optimise_targets (find_integer caps hi at 1<<20
+// and returns before passing such a k), so we call try_replace directly.
+
+#[test]
+fn try_replace_k_too_large_returns_false() {
+    let settings = TargetedRunnerSettings::new().max_examples(10);
+    let mut runner = TargetedRunner::new(
+        |tc: &mut TargetedTestCase| {
+            let v = tc.draw_integer(0, 100);
+            tc.target_observations.insert("score".to_string(), v as f64);
+        },
+        settings,
+        make_rng(),
+    );
+    let choices = vec![ChoiceValue::Integer(50)];
+    let (_, mut nodes, mut spans, mut obs) = runner.run_extend_full(&choices);
+    let mut score = 50.0_f64;
+    let mut improvements = 0usize;
+    let result = runner.try_replace(
+        "score",
+        &mut nodes,
+        &mut spans,
+        &mut obs,
+        &mut score,
+        &mut improvements,
+        0,
+        (1i64 << 20) + 1,
+    );
+    assert!(!result);
+}
+
+// ── try_replace: idx out of bounds (line 765) ────────────────────────────────
+//
+// Line 765 fires when idx >= current_nodes.len(). Unreachable through
+// optimise_targets (hill_climb validates idx before calling find_integer),
+// so we call try_replace directly with idx = nodes.len().
+
+#[test]
+fn try_replace_idx_out_of_bounds_returns_false() {
+    let settings = TargetedRunnerSettings::new().max_examples(10);
+    let mut runner = TargetedRunner::new(
+        |tc: &mut TargetedTestCase| {
+            let v = tc.draw_integer(0, 100);
+            tc.target_observations.insert("score".to_string(), v as f64);
+        },
+        settings,
+        make_rng(),
+    );
+    let choices = vec![ChoiceValue::Integer(50)];
+    let (_, mut nodes, mut spans, mut obs) = runner.run_extend_full(&choices);
+    let mut score = 50.0_f64;
+    let mut improvements = 0usize;
+    let idx = nodes.len();
+    let result = runner.try_replace(
+        "score",
+        &mut nodes,
+        &mut spans,
+        &mut obs,
+        &mut score,
+        &mut improvements,
+        idx,
+        1,
+    );
+    assert!(!result);
+}
+
+// ── try_replace: was_forced node (line 769) ───────────────────────────────────
+//
+// Line 769 fires when node.was_forced is true. Unreachable through
+// optimise_targets (hill_climb checks !was_forced before calling find_integer),
+// so we set was_forced manually and call try_replace directly.
+
+#[test]
+fn try_replace_was_forced_returns_false() {
+    let settings = TargetedRunnerSettings::new().max_examples(10);
+    let mut runner = TargetedRunner::new(
+        |tc: &mut TargetedTestCase| {
+            let v = tc.draw_integer(0, 100);
+            tc.target_observations.insert("score".to_string(), v as f64);
+        },
+        settings,
+        make_rng(),
+    );
+    let choices = vec![ChoiceValue::Integer(50)];
+    let (_, mut nodes, mut spans, mut obs) = runner.run_extend_full(&choices);
+    let mut score = 50.0_f64;
+    let mut improvements = 0usize;
+    nodes[0].was_forced = true;
+    let result = runner.try_replace(
+        "score",
+        &mut nodes,
+        &mut spans,
+        &mut obs,
+        &mut score,
+        &mut improvements,
+        0,
+        1,
+    );
+    assert!(!result);
+}
+
+// ── try_replace: Boolean with k=0 (line 789) ─────────────────────────────────
+//
+// Line 789 fires for a Boolean node when k == 0 (neither -1 nor 1).
+// find_integer never produces k=0, so we call try_replace directly.
+// k=0 → new_val = Boolean(*b) (unchanged). Same score → consider_new_data
+// accepts it as a lateral move → try_replace returns true.
+
+#[test]
+fn try_replace_boolean_k_zero() {
+    let settings = TargetedRunnerSettings::new().max_examples(10);
+    let mut runner = TargetedRunner::new(
+        |tc: &mut TargetedTestCase| {
+            let b = tc.draw_boolean(0.5);
+            tc.target_observations
+                .insert("score".to_string(), if b { 1.0 } else { 0.0 });
+        },
+        settings,
+        make_rng(),
+    );
+    let choices = vec![ChoiceValue::Boolean(true)];
+    let (_, mut nodes, mut spans, mut obs) = runner.run_extend_full(&choices);
+    let mut score = 1.0_f64;
+    let mut improvements = 0usize;
+    // k=0: neither branch for -1 or 1, so line 789 fires: ChoiceValue::Boolean(*b).
+    // Same value replayed → same score=1.0 → lateral move → consider_new_data returns true.
+    let result = runner.try_replace(
+        "score",
+        &mut nodes,
+        &mut spans,
+        &mut obs,
+        &mut score,
+        &mut improvements,
+        0,
+        0,
+    );
+    assert!(result);
+}
+
+// ── try_replace: Bytes decrement to zero (line 804) ──────────────────────────
+//
+// Line 804 fires when the computed new_v == 0 for a Bytes node: the while loop
+// would produce an empty vec, so we push a single 0u8 byte to preserve the
+// byte-width. Triggered by k=-1 on a one-byte value of 1: new_v = 0.
+
+#[test]
+fn try_replace_bytes_decrement_to_zero() {
+    let settings = TargetedRunnerSettings::new().max_examples(10);
+    let mut runner = TargetedRunner::new(
+        |tc: &mut TargetedTestCase| {
+            let b = tc.draw_bytes(1, 1);
+            tc.target_observations.insert("score".to_string(), b[0] as f64);
+        },
+        settings,
+        make_rng(),
+    );
+    let choices = vec![ChoiceValue::Bytes(vec![1])];
+    let (_, mut nodes, mut spans, mut obs) = runner.run_extend_full(&choices);
+    let mut score = 1.0_f64;
+    let mut improvements = 0usize;
+    // k=-1: v=1, new_v=0 → x==0 → new_bytes.push(0u8) (line 804).
+    // validate([0], min=1, max=1) → true. score=0.0 < 1.0 → consider fails.
+    let result = runner.try_replace(
+        "score",
+        &mut nodes,
+        &mut spans,
+        &mut obs,
+        &mut score,
+        &mut improvements,
+        0,
+        -1,
+    );
+    assert!(!result);
+}

@@ -590,8 +590,7 @@ impl TargetedRunner {
             }
             let idx = i as usize;
             if idx >= current_nodes.len() || nodes_examined.contains(&idx) {
-                i -= 1;
-                continue;
+                unreachable!("idx out of bounds or already examined: i strictly decreases and nodes_examined is cleared on length change");
             }
             nodes_examined.insert(idx);
 
@@ -873,7 +872,7 @@ impl TargetedRunner {
                 }
                 let ex_attempt = match new_spans.get(j) {
                     Some(s) => s.clone(),
-                    None => continue,
+                    None => unreachable!("new_spans and current_spans always have the same length"),
                 };
                 if ex.end - ex.start == ex_attempt.end - ex_attempt.start {
                     continue;

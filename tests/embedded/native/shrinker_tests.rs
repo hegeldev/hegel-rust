@@ -2634,3 +2634,4 @@ fn lower_integers_together_continues_when_node_j_kind_not_integer() {
         ChoiceKind::Boolean(_)
     ));
 }
+

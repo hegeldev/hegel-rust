@@ -2456,8 +2456,7 @@ impl NativeConjectureRunner {
             let target = self.pareto_front[i_usize].clone();
             let key = choices_to_bytes(&target.choices);
             if seen.contains(&key) {
-                i -= 1;
-                continue;
+                unreachable!("pareto front entries are unique by construction");
             }
             seen.insert(key.clone());
             self.pareto_shrink_one(&target);
@@ -2610,7 +2609,7 @@ impl NativeConjectureRunner {
                         hc_overrun += 1;
                         hc_draw_time += probe_elapsed;
                     }
-                    Status::Interesting => {}
+                    Status::Interesting => unreachable!("health-check probes run before any interesting example is found"),
                 }
             }
         }
@@ -2686,7 +2685,7 @@ impl NativeConjectureRunner {
                             );
                         }
                     }
-                    Status::Interesting => {}
+                    Status::Interesting => unreachable!("health-check probes run before any interesting example is found"),
                 }
 
                 // TooSlow: cumulative draw time in the health-check window
@@ -2816,12 +2815,12 @@ impl NativeConjectureRunner {
             }
             let current_val = match &current_choices[idx] {
                 ChoiceValue::Integer(n) => *n,
-                _ => break,
+                _ => unreachable!("find_integer_for_target called on non-integer node"),
             };
             // Check integer constraint
             let max_val = match &current_nodes[idx].kind {
                 ChoiceKind::Integer(ic) => ic.max_value,
-                _ => break,
+                _ => unreachable!("find_integer_for_target called on non-integer node"),
             };
             let new_val = current_val.saturating_add(step);
             if new_val > max_val {

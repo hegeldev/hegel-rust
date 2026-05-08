@@ -341,7 +341,7 @@ impl<'a> Shrinker<'a> {
                     continue;
                 };
                 let ChoiceValue::Integer(v_j) = self.current_nodes[j].value else {
-                    continue;
+                    unreachable!("kind/value mismatch: Integer kind with non-Integer value");
                 };
                 let v_i = *v_i;
                 let ic_i = ic_i.clone();
