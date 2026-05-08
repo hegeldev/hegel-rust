@@ -67,10 +67,15 @@ impl TestRunner for NativeTestRunner {
 
 /// Run a single test case (used by `Mode::SingleTestCase`).
 fn run_single(
-    _settings: &Settings,
+    settings: &Settings,
     run_case: &mut dyn FnMut(Box<dyn DataSource>, bool) -> TestCaseResult,
 ) -> TestRunResult {
-    let mut rng = rand::rngs::SmallRng::from_rng(&mut rand::rng());
+    // Honour `settings.seed` / `settings.derandomize` here for the same
+    // reason `run_main` does: callers (Antithesis runs especially) pass
+    // a deterministic seed expecting `Mode::SingleTestCase` to replay
+    // the same draws on every invocation. Without this, a `seed(Some(42))`
+    // is silently ignored and each call produces fresh OS-random draws.
+    let mut rng = create_rng(settings, None);
     let ntc = NativeTestCase::new_random(SmallRng::from_rng(&mut rng));
     let (data_source, _handle) = NativeDataSource::new(ntc);
     let result = run_case(Box::new(data_source), true);
