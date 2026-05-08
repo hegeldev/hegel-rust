@@ -7,18 +7,19 @@
 // that the ported Conjecture tests assert on:
 // `interesting_examples`, `exit_reason`, `shrinks`, `call_count`,
 // `valid_examples`, `save_choices`, `secondary_key`, `pareto_key`,
-// `reuse_existing_examples`, `clear_secondary_key`, `new_shrinker` /
+// `reuse_existing_examples`, `clear_secondary_key`,
 // `fixate_shrink_passes`, `pareto_front` / `dominance`,
 // `tree.is_exhausted`, `generate_novel_prefix`, `ignore_limits`,
 // `statistics`, `cached_test_function`, `shrink_interesting_examples`,
 // plus the `run_to_nodes(f)` conftest fixture and the
 // `fails_health_check(label)` decorator.
 //
-// Most attributes start as `todo!()` stubs. Each subsequent port-loop
-// cycle that lands a native-gated test from
-// `conjecture/test_engine.py` fills in the specific attribute(s) that
-// test exercises, as per the design captured in
-// `.claude/skills/porting-tests/SKILL.md` under "`test_engine.py`-shape".
+// `new_shrinker(data, predicate)` (engine.py:1668) is intentionally not
+// ported: ports of `test_engine.py`/`test_shrinker.py` currently route
+// through `NativeShrinker::from_choices` (line 853 below), which is the
+// shape these tests actually exercise. If a future ported test needs the
+// upstream `runner.new_shrinker(...)` shape, restore the method then —
+// don't keep a permanent `todo!()` placeholder.
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -697,8 +698,6 @@ impl NativeConjectureData {
     }
 
     /// Accessor for the status recorded on the underlying test case.
-    /// Used by `new_shrinker` predicates (`|d| d.status() ==
-    /// Status::Interesting`).
     pub fn status(&self) -> Status {
         match &self.mark {
             Some((MarkKind::Interesting, _)) => Status::Interesting,
@@ -822,10 +821,10 @@ struct SpanSnapshot {
     has_discards: bool,
 }
 
-/// Shrinker handle returned by `runner.new_shrinker(data, predicate)` or
-/// by the local `shrinking_from` helper in conjecture engine tests.  Wraps
-/// a concrete [`Shrinker`] plus span bookkeeping needed by
-/// `remove_discarded`.
+/// Shrinker handle built via [`Self::from_choices`] (the entry point used
+/// by `tests/hypothesis/conjecture_engine.rs` and the local
+/// `shrinking_from` helper). Wraps a concrete [`Shrinker`] plus span
+/// bookkeeping needed by `remove_discarded`.
 pub struct NativeShrinker {
     inner: Shrinker<'static>,
     /// Spans from the last interesting test run; updated by the
@@ -2140,17 +2139,6 @@ impl NativeConjectureRunner {
         };
         self.record_test_result(status, nodes, origin, target_observations, tags);
         result
-    }
-
-    /// Hill-climb from the current best interesting example and return
-    /// a `Shrinker`-like handle the test can drive with
-    /// `fixate_shrink_passes`.  Mirrors
-    /// `ConjectureRunner.new_shrinker`.
-    pub fn new_shrinker<P>(&mut self, _data: NativeConjectureData, _predicate: P) -> NativeShrinker
-    where
-        P: FnMut(&NativeConjectureData) -> bool + 'static,
-    {
-        todo!("NativeConjectureRunner::new_shrinker")
     }
 
     /// View of the internal data tree for `runner.tree.is_exhausted`

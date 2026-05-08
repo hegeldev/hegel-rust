@@ -323,18 +323,6 @@ fn run_shrinker_user_fn_arbitrary_panic_returns_interesting() {
     assert!(interesting);
 }
 
-// ── NativeConjectureRunner::new_shrinker todo ─────────────────────────────
-
-#[test]
-#[should_panic(expected = "NativeConjectureRunner::new_shrinker")]
-fn new_shrinker_panics_with_todo() {
-    let settings = default_settings();
-    let mut runner =
-        NativeConjectureRunner::new(|_data: &mut NativeConjectureData| {}, settings, make_rng());
-    let data = NativeConjectureData::for_choices(&[]);
-    runner.new_shrinker(data, |_d: &NativeConjectureData| true);
-}
-
 // ── ChoiceValueKey::String ────────────────────────────────────────────────
 
 #[test]

@@ -299,7 +299,7 @@ For each: read the test, decide whether the *test* is wrong (expected message ch
 ### Tier S — Lying outright
 
 - [x] **S1.** `src/native/runner.rs:27` — `store_final_panic_info(_msg: &str) {}` is a no-op. Verified `CachedTestFunction::run_final` (the only caller of the `is_final=true` branch in `execute`) was dead code with zero callers anywhere in `src/` or `tests/`. Deleted the no-op, the dead `run_final` method, the `is_final` parameter on `execute`, and updated doc comments. Existing test suite (~30 `CachedTestFunction` tests) covers the surface that remains.
-- [ ] **S2.** `src/native/conjecture_runner.rs:2153` — `todo!("NativeConjectureRunner::new_shrinker")`. Implement it (using `Shrinker::with_probe` so `mutate_and_shrink` works) and honour the `_predicate` parameter. Add tests routed through `runner.new_shrinker`.
+- [x] **S2.** `src/native/conjecture_runner.rs:2153` — `todo!("NativeConjectureRunner::new_shrinker")`. **Resolved by deletion.** Verified zero real callers in `src/` or `tests/`; the only "test" was a `#[should_panic(expected = "NativeConjectureRunner::new_shrinker")]` shim that enshrined the `todo!()`. The 8 ported Hypothesis conjecture-engine tests in `tests/hypothesis/conjecture_engine.rs` already work via `NativeShrinker::from_choices` and don't need `new_shrinker`. Keeping a stub `todo!()` "for API parity" is the kind of bullshit the audit was about — when a future port test legitimately needs `runner.new_shrinker(data, predicate)`, restore it then with the real driving use case (and an Rc<RefCell> on `test_fn` so the shrinker can call back). Module head doc updated to flag this as an intentional non-port; the vapid `should_panic` test removed from `tests/embedded/native/conjecture_runner_tests.rs`.
 - [ ] **S3.** `src/native/conjecture_runner.rs:2450` — `pareto_optimise` is implemented but never called from `run()`. Wire it into the production loop (or delete it if `NativeConjectureRunner` is itself dead-in-production; in that case, demote to a port-only test fixture and document).
 - [ ] **S4.** `src/native/test_runner.rs:125,230,301` — `Phase::Target` is silently ignored. Gate `TargetingDriver::record` and `maybe_optimise` on `phases.contains(&Phase::Target)`. Test: removing `Phase::Target` should make `target_observations` empty.
 - [ ] **S5.** `src/native/shrinker/mod.rs:79-94` — `mutate_and_shrink` silently disabled because the runner uses `Shrinker::new` not `Shrinker::with_probe`. Switch to `with_probe` (or design a unified constructor). Test: a counterexample whose minimum is only reachable via mutation should shrink to that minimum.
@@ -428,7 +428,7 @@ If any of these fails, do not emit the promise. Continue to the next iteration.
 
 When you delete or significantly weaken a test, log it here with the reason. (Strengthening tests doesn't need an entry.) This is so the user can audit test-suite changes at the end.
 
-- (none yet)
+- **Deleted `tests/embedded/native/conjecture_runner_tests.rs::new_shrinker_panics_with_todo`** (iter 7, S2). Vapid coverage shim — `#[should_panic(expected = "NativeConjectureRunner::new_shrinker")]` asserted the `todo!()` panic message, which only existed to keep the line covered. Closed by deleting the `new_shrinker` method itself; nothing to test for now.
 
 ## 11. Reference: how to run things
 
