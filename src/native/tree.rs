@@ -21,7 +21,7 @@ use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, S
 use crate::native::data_source::NativeDataSource;
 use crate::test_case::{ASSUME_FAIL_STRING, LOOP_DONE_STRING, STOP_TEST_STRING, TestCase};
 
-use super::runner::{panic_message, store_final_panic_info};
+use super::runner::panic_message;
 
 /// Hashable version of `ChoiceValue`, for use as tree/cache keys.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -144,7 +144,7 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
     /// non-determinism) but does not use the cache (random generation
     /// produces unique sequences, so caching would just waste memory).
     pub fn run(&mut self, ntc: NativeTestCase) -> RunResult {
-        let result = self.execute(ntc, false);
+        let result = self.execute(ntc);
         self.record(&result.nodes);
         result
     }
@@ -164,7 +164,7 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
 
         let choices: Vec<ChoiceValue> = candidate_nodes.iter().map(|n| n.value.clone()).collect();
         let ntc = NativeTestCase::for_choices(&choices, Some(candidate_nodes), None);
-        let RunResult { status, nodes, .. } = self.execute(ntc, false);
+        let RunResult { status, nodes, .. } = self.execute(ntc);
         self.record(&nodes);
 
         let result = (status == Status::Interesting, nodes);
@@ -189,31 +189,23 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
         use rand::rngs::SmallRng;
         let rng = SmallRng::seed_from_u64(seed);
         let ntc = NativeTestCase::for_probe(prefix, rng, max_size);
-        let RunResult { status, nodes, .. } = self.execute(ntc, false);
+        let RunResult { status, nodes, .. } = self.execute(ntc);
         self.record(&nodes);
         let result = (status == Status::Interesting, nodes);
         self.cache_store(&result.1, result.clone());
         result
     }
 
-    /// Run the final replay of a failing test case (with output enabled).
-    ///
-    /// Does not use the cache or record in the tree — the test is about
-    /// to fail and we need the actual panic payload for re-raising.
-    pub fn run_final(&mut self, ntc: NativeTestCase) -> (Status, Vec<ChoiceNode>, Vec<Span>) {
-        let RunResult {
-            status,
-            nodes,
-            spans,
-            ..
-        } = self.execute(ntc, true);
-        (status, nodes, spans)
-    }
-
     /// Core test execution: run one test case and return results.
-    fn execute(&mut self, ntc: NativeTestCase, is_final: bool) -> RunResult {
+    ///
+    /// Final-replay output (the `is_last_run = true` path on `TestCase::new`)
+    /// is owned by [`crate::run_lifecycle::drive`], which is what every
+    /// `Hegel::run` invocation goes through. `CachedTestFunction` is only
+    /// used by embedded tests that drive the engine directly without that
+    /// lifecycle, so it never needs to mark a run as final.
+    fn execute(&mut self, ntc: NativeTestCase) -> RunResult {
         let (data_source, ntc_handle) = NativeDataSource::new(ntc);
-        let tc = TestCase::new(Box::new(data_source), is_final, self.mode);
+        let tc = TestCase::new(Box::new(data_source), false, self.mode);
         let result =
             with_test_context(|| catch_unwind(AssertUnwindSafe(|| (self.test_fn)(tc.clone()))));
 
@@ -226,9 +218,6 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
                 } else if msg == LOOP_DONE_STRING {
                     (Status::Valid, None)
                 } else {
-                    if is_final {
-                        store_final_panic_info(&msg);
-                    }
                     (Status::Interesting, Some(msg))
                 }
             }
@@ -240,12 +229,10 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
             spans: NativeDataSource::take_spans(&ntc_handle),
             target_observations: NativeDataSource::take_target_observations(&ntc_handle),
             panic_message,
-            // CachedTestFunction's standalone path (used by embedded
-            // tests) doesn't drive through the cross-backend panic
-            // hook, so it can't synthesize a `file:line:col` origin.
-            // Callers that need multi-origin tracking go through
-            // `EngineCtx` instead, which receives the origin from
-            // `crate::run_lifecycle::run_test_case`.
+            // `EngineCtx` (the live `Hegel::run` path) receives an origin
+            // from `crate::run_lifecycle::run_test_case`. The embedded-test
+            // path through `CachedTestFunction` doesn't drive through the
+            // cross-backend panic hook, so it has no origin to attach.
             origin: None,
         }
     }

@@ -25,7 +25,7 @@
 //!   `CachedTestFunction([values])` / `.lookup([values])` interface,
 //!   which takes a raw choice-value list. hegel-rust's
 //!   `CachedTestFunction` takes a `NativeTestCase` instead and exposes
-//!   only `run` / `run_shrink` / `run_final`; the pbtkit-shape API
+//!   only `run` / `run_shrink` / `run_probe`; the pbtkit-shape API
 //!   doesn't exist.
 //! - `test_prints_a_top_level_weighted` — uses `tc.weighted(p)`, which
 //!   hegel-rust deliberately doesn't expose on `TestCase` (same
