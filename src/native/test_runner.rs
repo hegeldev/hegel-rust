@@ -159,6 +159,7 @@ fn run_main(
     // just the first one to fire.
     let mut first_bug_at: Option<u64> = None;
     let mut last_bug_at: Option<u64> = None;
+    let shrink_enabled = settings.phases.contains(&Phase::Shrink);
     while settings.phases.contains(&Phase::Generate)
         && !test_is_trivial
         && valid_test_cases < max_examples
@@ -169,6 +170,7 @@ fn run_main(
             calls,
             first_bug_at,
             last_bug_at,
+            shrink_enabled,
         )
     {
         for _ in 0..RANDOM_GENERATION_BATCH {
@@ -181,6 +183,7 @@ fn run_main(
                     calls,
                     first_bug_at,
                     last_bug_at,
+                    shrink_enabled,
                 )
             {
                 break;
@@ -495,9 +498,19 @@ fn should_generate_more(
     calls: u64,
     first_bug_at: Option<u64>,
     last_bug_at: Option<u64>,
+    shrink_enabled: bool,
 ) -> bool {
     if no_bug_yet {
         return true;
+    }
+    // Once a bug is found, the post-bug probing window exists to surface
+    // *other* origins so each can be shrunk independently. If `Phase::Shrink`
+    // isn't in the active phases there will be no shrinking, so additional
+    // origins add nothing — stop generation immediately. This is what
+    // `tests/test_phases.rs::test_disabling_shrink_limits_interesting_calls`
+    // asserts (body called at most twice: initial discovery + final replay).
+    if !shrink_enabled {
+        return false;
     }
     let Some(first) = first_bug_at else {
         return false;
