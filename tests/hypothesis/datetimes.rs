@@ -31,7 +31,6 @@ fn parse_time_parts(s: &str) -> (u32, u32, u32, u32) {
     (hour, minute, second, microsecond)
 }
 
-#[cfg(not(feature = "native"))]
 fn datetime_parts(s: &str) -> (i32, u32, u32, u32, u32, u32, u32) {
     let mut dt = s.splitn(2, 'T');
     let date_str = dt.next().unwrap();
@@ -46,7 +45,6 @@ fn datetime_parts(s: &str) -> (i32, u32, u32, u32, u32, u32, u32) {
 
 // --- datetime tests ---
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_simplifies_towards_millenium() {
     // Hypothesis shrinks datetimes toward 2000-01-01T00:00:00; the native
@@ -83,7 +81,6 @@ fn test_can_find_after_the_year_2000() {
     assert_eq!(date_year(&d), 2001);
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_can_find_before_the_year_2000() {
     // Hypothesis shrinks toward 2000, so the minimal year < 2000 is 1999.

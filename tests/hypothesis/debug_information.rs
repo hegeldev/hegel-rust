@@ -34,25 +34,9 @@ fn test_reports_passes() {
     let output = debug_failing_project().cargo_run(&[]);
     let stderr = &output.stderr;
 
-    #[cfg(feature = "native")]
-    {
-        assert!(
-            stderr.contains("Shrinking:"),
-            "Expected shrinking debug output in stderr:\n{}",
-            stderr
-        );
-        assert!(
-            stderr.contains("Shrinking complete:"),
-            "Expected shrinking-complete debug output in stderr:\n{}",
-            stderr
-        );
-    }
-    #[cfg(not(feature = "native"))]
-    {
-        assert!(
-            stderr.contains("Test done."),
-            "Expected 'Test done.' in debug output:\n{}",
-            stderr
-        );
-    }
+    assert!(
+        stderr.contains("Test done."),
+        "Expected 'Test done.' in debug output:\n{}",
+        stderr
+    );
 }

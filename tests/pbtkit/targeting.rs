@@ -11,7 +11,6 @@
 //! - `test_targeting_when_most_do_not_benefit` — same reason.
 //! - `test_can_target_a_score_downwards` — same reason.
 
-#[cfg(not(feature = "native"))]
 use crate::common::utils::expect_panic;
 use hegel::generators::{self as gs};
 use hegel::{Hegel, Settings};
@@ -21,7 +20,6 @@ use hegel::{Hegel, Settings};
 /// a representative subset [1, 5, 25, 99] is checked here.
 /// Server mode only: the native runner makes extra calls per valid test case
 /// for span mutations, so the call count exceeds max_examples in native mode.
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_max_examples_is_not_exceeded() {
     let m: u64 = 10000;
@@ -45,7 +43,6 @@ fn test_max_examples_is_not_exceeded() {
 /// Targeting with a 2D quadratic score drives the optimizer to (500, 500).
 /// Ported from test_finds_a_local_maximum (parametrized over 100 seeds).
 /// Server mode only: native does not use target observations to guide generation.
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_finds_a_local_maximum() {
     expect_panic(
@@ -67,7 +64,6 @@ fn test_finds_a_local_maximum() {
 /// Targeting can drive a sum score to its maximum and trigger an assertion failure.
 /// Ported from test_can_target_a_score_upwards_to_interesting (stdout check omitted).
 /// Server mode only: native does not use target observations to guide generation.
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_can_target_a_score_upwards_to_interesting() {
     expect_panic(
@@ -89,7 +85,6 @@ fn test_can_target_a_score_upwards_to_interesting() {
 /// Targeting drives the maximum observed sum to 2000 without any assertion failure.
 /// Ported from test_can_target_a_score_upwards_without_failing.
 /// Server mode only: native does not use target observations to guide generation.
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_can_target_a_score_upwards_without_failing() {
     let mut max_score: u64 = 0;
@@ -111,7 +106,6 @@ fn test_can_target_a_score_upwards_without_failing() {
 /// still drives the third draw to its maximum.
 /// Ported from test_targeting_when_most_do_not_benefit (stdout check omitted).
 /// Server mode only: native does not use target observations to guide generation.
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_targeting_when_most_do_not_benefit() {
     let big: u64 = 10000;
@@ -147,7 +141,6 @@ fn test_targeting_adjust_avoids_negative_values() {
 /// Targeting can drive a score downwards and find a case where the sum is 0.
 /// Ported from test_can_target_a_score_downwards (stdout check omitted).
 /// Server mode only: native does not use target observations to guide generation.
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_can_target_a_score_downwards() {
     expect_panic(

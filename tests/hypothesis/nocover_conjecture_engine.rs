@@ -55,17 +55,12 @@
 //!   docstring), and there is no `max_stall` / `fixate_shrink_passes`
 //!   / call-counter surface on `Shrinker`.
 
-#[cfg(not(feature = "native"))]
 use std::panic;
-#[cfg(not(feature = "native"))]
 use std::sync::{Arc, Mutex};
 
-#[cfg(not(feature = "native"))]
 use hegel::generators::{self as gs};
-#[cfg(not(feature = "native"))]
 use hegel::{HealthCheck, Hegel, Settings};
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_lot_of_dead_nodes() {
     // Draw four integers in [0, 127]; the test is only "interesting"

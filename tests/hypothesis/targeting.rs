@@ -19,7 +19,6 @@
 //!   higher scores; flaky in both modes and depends on targeting being effective,
 //!   so left for a dedicated targeting-quality test pass.
 
-#[cfg(not(feature = "native"))]
 use crate::common::utils::expect_panic;
 use hegel::generators as gs;
 use hegel::{Hegel, Settings};
@@ -94,7 +93,6 @@ fn test_respects_max_pool_size() {
 /// Targeting can drive a sum score toward its maximum and find a counterexample.
 /// Ported from pbtkit/tests/test_targeting.py::test_can_target_a_score_upwards_to_interesting.
 /// Only meaningful in server mode where target observations actively guide generation.
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_can_target_a_score_upwards_to_interesting() {
     expect_panic(

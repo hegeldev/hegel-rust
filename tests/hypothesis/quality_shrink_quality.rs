@@ -566,7 +566,6 @@ fn test_sum_of_pair_int() {
 // down to the integer 1.0 through paired-sum constraints; it gets
 // stuck at intermediate values (e.g. 203.0). Same gap blocks the two
 // `_mixed_float_int` and `_separated_float` variants.
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_sum_of_pair_float() {
     let (a, b) = minimal(
@@ -580,7 +579,6 @@ fn test_sum_of_pair_float() {
     assert_eq!(b, 1000.0);
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_sum_of_pair_mixed_float_int() {
     let (a, b) = minimal(
@@ -621,7 +619,6 @@ fn test_sum_of_pair_separated_int() {
     assert_eq!((a, b), (1, 1000));
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_sum_of_pair_separated_float() {
     let separated_sum = hegel::compose!(|tc| {
@@ -859,7 +856,6 @@ fn test_lowering_together_with_gap() {
 // values toward the simplification target ('0'); native's text-shrink
 // stops on lex-smaller codepoints from elsewhere in the
 // `IntervalSet`.
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_run_length_encoding() {
     fn decode(table: &[(u32, char)]) -> String {
@@ -900,7 +896,6 @@ fn test_run_length_encoding() {
     assert_eq!(s, "001");
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_minimize_duplicated_characters_within_a_choice() {
     let s = minimal(gs::text().min_size(1), |v: &String| {
@@ -917,7 +912,6 @@ fn test_minimize_duplicated_characters_within_a_choice() {
 // Server-only: native's text provider doesn't seed Hypothesis's
 // `NASTY_STRINGS` constant pool (mathematical-fraktur etc.), so
 // 10 000 attempts can't reliably surface the witness.
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_nasty_string_shrinks() {
     let s = Minimal::new(gs::text(), |s: &String| {

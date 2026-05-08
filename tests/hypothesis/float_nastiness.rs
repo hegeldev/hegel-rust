@@ -17,11 +17,9 @@
 //! are native-gated off: validation currently happens server-side, and the
 //! native backend does not yet reject these combinations.
 
-#[cfg(not(feature = "native"))]
 use crate::common::utils::expect_panic;
 use crate::common::utils::{assert_all_examples, check_can_generate_examples, find_any, minimal};
 use hegel::generators::{self as gs, Generator};
-#[cfg(not(feature = "native"))]
 use hegel::{Hegel, Settings};
 
 #[test]
@@ -265,7 +263,6 @@ fn test_zero_intervals_are_ok() {
 // combinations with an InvalidArgument error. The native backend does not yet
 // enforce these checks, so we gate the tests to server mode.
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_exclude_infinite_endpoint_is_invalid_min() {
     expect_panic(
@@ -284,7 +281,6 @@ fn test_exclude_infinite_endpoint_is_invalid_min() {
     );
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_exclude_infinite_endpoint_is_invalid_max() {
     expect_panic(
@@ -303,7 +299,6 @@ fn test_exclude_infinite_endpoint_is_invalid_max() {
     );
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_exclude_entire_interval() {
     for bound in [1.0_f64, -1.0_f64, 1e10_f64, -1e-10_f64] {
@@ -328,7 +323,6 @@ fn test_exclude_entire_interval() {
     }
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_cannot_exclude_endpoint_with_zero_interval() {
     for lo in [0.0_f64, -0.0_f64] {

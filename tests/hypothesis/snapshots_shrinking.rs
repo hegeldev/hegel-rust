@@ -21,18 +21,19 @@ fn test_shrunk_list() {
     assert_eq!(xs, vec![1001]);
 }
 
+// Upstream snapshot pins `s='A'`. Native reaches it. The server backend
+// (Hypothesis) gets stuck at 'À' (U+00C0) on most seeds because
+// Hypothesis's per-element Integer shrinker can't escape the Latin-1
+// uppercase basin: from index 192, `find_integer`-based shift_right and
+// shrink_by_multiples(1|2) all fail their first probe and give up. See
+// HypothesisWorks/hypothesis#4725. Marked `should_panic` on server until
+// that's fixed; once it is, the test will start passing on server and
+// the should_panic gate will start failing, prompting cleanup.
 #[test]
+#[cfg_attr(not(feature = "native"), should_panic)]
 fn test_shrunk_string() {
-    // Upstream snapshot: `s='A'` (Hypothesis shrinks to the ASCII
-    // uppercase letter). The native port agrees; the server backend's
-    // choice-protocol string shrinker gets stuck at `'À'` (U+00C0)
-    // without reaching ASCII, even though upstream Hypothesis itself
-    // shrinks to `'A'`.
     let s = minimal(gs::text().min_size(1), |s: &String| s != &s.to_lowercase());
-    #[cfg(feature = "native")]
     assert_eq!(s, "A");
-    #[cfg(not(feature = "native"))]
-    assert_eq!(s, "À");
 }
 
 #[test]
