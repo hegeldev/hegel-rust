@@ -2784,6 +2784,7 @@ impl NativeConjectureRunner {
             if !node.was_forced {
                 if let (ChoiceValue::Integer(_), ChoiceKind::Integer(_)) = (&node.value, &node.kind)
                 {
+                    let len_before = current_nodes.len();
                     improvements += self.find_integer_for_target(
                         target,
                         &mut current_choices,
@@ -2793,6 +2794,22 @@ impl NativeConjectureRunner {
                         idx,
                         1,
                     );
+                    // If the +1 direction grew current_nodes, the idx we were
+                    // examining is no longer at a "frontier" position — trying
+                    // -1 there almost always shrinks the sequence back to a
+                    // lower score, so skip. Mirrors the same guard in the
+                    // standalone TargetedRunner in src/native/optimiser.rs.
+                    if idx < current_nodes.len() && current_nodes.len() == len_before {
+                        improvements += self.find_integer_for_target(
+                            target,
+                            &mut current_choices,
+                            &mut current_nodes,
+                            &mut current_score,
+                            max_improvements.saturating_sub(improvements),
+                            idx,
+                            -1,
+                        );
+                    }
                 }
             }
             i -= 1;
@@ -2800,9 +2817,11 @@ impl NativeConjectureRunner {
         improvements
     }
 
-    /// Try incrementing the integer at position `idx` in `current_choices`
-    /// to increase the target score, using linear + exponential probing.
-    /// Returns the number of improvements made.
+    /// Hill-climb the integer at position `idx` of `current_choices` in the
+    /// direction given by `sign` (+1 or -1). Mirrors `junkdrawer.find_integer`:
+    /// a linear scan over deltas 1..5, then exponential probing 5, 10, 20, ...,
+    /// then a binary search between the last accepted delta and the first
+    /// rejected one. Returns the number of improvements committed.
     #[allow(clippy::too_many_arguments)]
     fn find_integer_for_target(
         &mut self,
@@ -2812,53 +2831,122 @@ impl NativeConjectureRunner {
         current_score: &mut f64,
         max_improvements: usize,
         idx: usize,
-        step: i128,
+        sign: i128,
     ) -> usize {
-        let mut improvements = 0;
-        let mut step = step;
+        let mut improvements: usize = 0;
+
+        for k in 1..5i128 {
+            if improvements >= max_improvements {
+                return improvements;
+            }
+            if !self.try_replace_for_target(
+                target,
+                current_choices,
+                current_nodes,
+                current_score,
+                &mut improvements,
+                idx,
+                sign * k,
+            ) {
+                return improvements;
+            }
+        }
+
+        let mut lo: i128 = 4;
+        let mut hi: i128 = 5;
         loop {
             if improvements >= max_improvements {
+                return improvements;
+            }
+            if !self.try_replace_for_target(
+                target,
+                current_choices,
+                current_nodes,
+                current_score,
+                &mut improvements,
+                idx,
+                sign * hi,
+            ) {
                 break;
             }
-            let current_val = match &current_choices[idx] {
-                ChoiceValue::Integer(n) => *n,
-                _ => unreachable!("find_integer_for_target called on non-integer node"),
-            };
-            // Check integer constraint
-            let max_val = match &current_nodes[idx].kind {
-                ChoiceKind::Integer(ic) => ic.max_value,
-                _ => unreachable!("find_integer_for_target called on non-integer node"),
-            };
-            let new_val = current_val.saturating_add(step);
-            if new_val > max_val {
-                break;
+            lo = hi;
+            hi = hi.saturating_mul(2);
+            if hi > (1 << 20) {
+                return improvements;
             }
-            let mut trial_choices = current_choices.clone();
-            trial_choices[idx] = ChoiceValue::Integer(new_val);
-            let result = self.cached_test_function(&trial_choices);
-            if result.status < Status::Valid {
-                break;
+        }
+
+        while lo + 1 < hi {
+            if improvements >= max_improvements {
+                return improvements;
             }
-            let new_score = *result
-                .target_observations
-                .get(target)
-                .unwrap_or(&f64::NEG_INFINITY);
-            if new_score > *current_score {
-                *current_score = new_score;
-                *current_choices = trial_choices;
-                *current_nodes = result.nodes;
-                // Update best for target
-                self.best_observed_targets
-                    .insert(target.to_string(), new_score);
-                self.best_choices_for_target
-                    .insert(target.to_string(), current_choices.clone());
-                improvements += 1;
-                step = step.saturating_mul(2);
+            let mid = lo + (hi - lo) / 2;
+            if self.try_replace_for_target(
+                target,
+                current_choices,
+                current_nodes,
+                current_score,
+                &mut improvements,
+                idx,
+                sign * mid,
+            ) {
+                lo = mid;
             } else {
-                break;
+                hi = mid;
             }
         }
         improvements
+    }
+
+    /// Replace the integer at `current_choices[idx]` with `current + delta`,
+    /// bounds-checking and running the trial. Commits to the current state and
+    /// bumps `improvements` iff the trial yields a strictly higher target
+    /// score. Returns true iff the trial was a strict improvement.
+    #[allow(clippy::too_many_arguments)]
+    fn try_replace_for_target(
+        &mut self,
+        target: &str,
+        current_choices: &mut Vec<ChoiceValue>,
+        current_nodes: &mut Vec<ChoiceNode>,
+        current_score: &mut f64,
+        improvements: &mut usize,
+        idx: usize,
+        delta: i128,
+    ) -> bool {
+        let current_val = match &current_choices[idx] {
+            ChoiceValue::Integer(n) => *n,
+            _ => unreachable!("try_replace_for_target called on non-integer node"),
+        };
+        let kind = match &current_nodes[idx].kind {
+            ChoiceKind::Integer(ic) => ic,
+            _ => unreachable!("try_replace_for_target called on non-integer node"),
+        };
+        let new_val = current_val.saturating_add(delta);
+        if !kind.validate(new_val) {
+            return false;
+        }
+        let mut trial_choices = current_choices.clone();
+        trial_choices[idx] = ChoiceValue::Integer(new_val);
+        let result = self.cached_test_function(&trial_choices);
+        if result.status < Status::Valid {
+            return false;
+        }
+        let new_score = *result
+            .target_observations
+            .get(target)
+            .unwrap_or(&f64::NEG_INFINITY);
+        if new_score <= *current_score {
+            return false;
+        }
+        *current_score = new_score;
+        *current_choices = trial_choices;
+        *current_nodes = result.nodes;
+        self.best_observed_targets
+            .insert(target.to_string(), new_score);
+        self.best_choices_for_target
+            .insert(target.to_string(), current_choices.clone());
+        *improvements += 1;
+        true
     }
 }
 

@@ -93,6 +93,10 @@ pub struct CachedTestFunction<F: FnMut(TestCase)> {
     /// Execution mode forwarded to each TestCase. Defaults to `Mode::TestRun`;
     /// `native_run` overrides via `set_mode` to propagate `Settings::mode`.
     mode: crate::runner::Mode,
+    /// `tc.target()` / `tc.target_labelled()` observations recorded by the
+    /// most recent `execute` call. The runner reads this after each run to
+    /// drive targeted property-based search; reset on every run.
+    last_target_observations: HashMap<String, f64>,
 }
 
 impl<F: FnMut(TestCase)> CachedTestFunction<F> {
@@ -102,12 +106,19 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
             tree_root: TreeNode::new(),
             cache: HashMap::new(),
             mode: crate::runner::Mode::TestRun,
+            last_target_observations: HashMap::new(),
         }
     }
 
     /// Override the mode forwarded to each executed [`TestCase`].
     pub fn set_mode(&mut self, mode: crate::runner::Mode) {
         self.mode = mode;
+    }
+
+    /// `tc.target()` / `tc.target_labelled()` observations from the most
+    /// recent execution. Empty if the test made no targeting calls.
+    pub fn last_target_observations(&self) -> &HashMap<String, f64> {
+        &self.last_target_observations
     }
 
     /// Run a test case during the generation or database-replay phase.
@@ -208,6 +219,7 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
 
         let nodes = NativeDataSource::take_nodes(&ntc_handle);
         let spans = NativeDataSource::take_spans(&ntc_handle);
+        self.last_target_observations = NativeDataSource::take_target_observations(&ntc_handle);
         (status, nodes, spans, panic_msg)
     }
 

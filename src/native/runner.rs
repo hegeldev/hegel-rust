@@ -15,6 +15,7 @@ use crate::native::database::{
     ExampleDatabase, NativeDatabase, deserialize_choices, serialize_choices,
 };
 use crate::native::shrinker::{ShrinkRun, Shrinker};
+use crate::native::targeting::{OptimiseCtx, TargetingState, optimise_targets};
 use crate::native::tree::CachedTestFunction;
 use crate::runner::{Database, HealthCheck, Mode, Phase, Settings, Verbosity};
 use crate::test_case::TestCase;
@@ -207,6 +208,14 @@ pub fn native_run<F>(
     let mut test_is_trivial = false;
     let mut invalid_calls: u64 = 0;
     let mut total_test_time = std::time::Duration::ZERO;
+    // Targeted property-based search state. Populated from
+    // `tc.target()` / `tc.target_labelled()` observations during the
+    // generation phase, then driven by hill-climbing once enough valid
+    // examples have been seen. Mirrors Hypothesis's `optimise_at` gate.
+    let mut targeting = TargetingState::new();
+    let small_example_cap = (max_examples / 10).min(50);
+    let optimise_at = (max_examples / 2).max(small_example_cap + 1).max(10);
+    let mut ran_optimisations = false;
     // True when `result` came from a database replay that matched the
     // stored choice sequence exactly (same length = same test shape). In
     // that case we trust the stored value is already shrunk and skip the
@@ -292,6 +301,11 @@ pub fn native_run<F>(
             }
             if status >= Status::Valid {
                 valid_test_cases += 1;
+                let observations = ctf.last_target_observations().clone();
+                if !observations.is_empty() {
+                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                    targeting.record(&choices, &observations);
+                }
             }
 
             // FilterTooMuch: checked before TooSlow to match Hypothesis's
@@ -349,6 +363,26 @@ pub fn native_run<F>(
                         result = Some(mut_nodes);
                     }
                 }
+            }
+
+            // Targeted PBT: once enough valid examples have accumulated,
+            // hill-climb each target's best-scoring choice sequence.
+            // Mirrors Hypothesis's one-shot `optimise_at` gate inside
+            // `engine.py::generate_new_examples`.
+            if !ran_optimisations
+                && valid_test_cases >= optimise_at
+                && !targeting.is_empty()
+                && result.is_none()
+            {
+                ran_optimisations = true;
+                let mut ctx = OptimiseCtx {
+                    result: &mut result,
+                    calls: &mut calls,
+                    valid_test_cases: &mut valid_test_cases,
+                    max_valid: max_examples,
+                    max_calls: max_examples * 10,
+                };
+                optimise_targets(&mut ctf, &mut targeting, &mut ctx);
             }
         }
     }

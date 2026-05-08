@@ -60,6 +60,19 @@ impl NativeDataSource {
             .into_vec()
     }
 
+    /// Convenience: extract target observations from a handle after a test
+    /// case. Returns the `tc.target()` / `tc.target_labelled()` calls made
+    /// by the test body, keyed by label.
+    pub fn take_target_observations(
+        handle: &NativeTestCaseHandle,
+    ) -> std::collections::HashMap<String, f64> {
+        handle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .target_observations
+            .clone()
+    }
+
     fn dispatch(&self, command: &str, payload: &Value) -> Result<Value, DataSourceError> {
         if self.aborted.load(Ordering::Relaxed) {
             return Err(DataSourceError::StopTest);

@@ -26,6 +26,7 @@ pub mod re;
 pub mod runner;
 pub mod schema;
 pub mod shrinker;
+pub mod targeting;
 pub mod tree;
 pub mod unicodedata;
 
