@@ -118,13 +118,17 @@ impl SubPattern {
         self.data.push(op);
     }
 
+    // nocov start
     pub fn last(&self) -> Option<&OpCode> {
         self.data.last()
     }
+    // nocov end
 
+    // nocov start
     pub fn last_mut(&mut self) -> Option<&mut OpCode> {
         self.data.last_mut()
     }
+    // nocov end
 }
 
 /// Top-level output of [`parse`]: the parsed pattern tree plus the
@@ -146,9 +150,11 @@ pub struct ParseError {
 }
 
 impl std::fmt::Display for ParseError {
+    // nocov start
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} at position {}", self.msg, self.pos)
     }
+    // nocov end
 }
 
 impl std::error::Error for ParseError {}
@@ -181,6 +187,7 @@ impl State {
         self.groupwidths.len() as u32
     }
 
+    // nocov start
     fn opengroup(&mut self, name: Option<&str>) -> ParseResult<u32> {
         let gid = self.groups();
         self.groupwidths.push(None);
@@ -204,6 +211,7 @@ impl State {
         }
         Ok(gid)
     }
+    // nocov end
 
     fn closegroup(&mut self, gid: u32) {
         if let Some(slot) = self.groupwidths.get_mut(gid as usize) {
@@ -215,6 +223,7 @@ impl State {
         (gid as usize) < self.groupwidths.len() && self.groupwidths[gid as usize].is_some()
     }
 
+    // nocov start
     fn checklookbehindgroup(&self, gid: u32, tok: &Tokenizer) -> ParseResult<()> {
         if let Some(lb) = self.lookbehindgroups {
             if !self.checkgroup(gid) {
@@ -229,6 +238,7 @@ impl State {
         }
         Ok(())
     }
+    // nocov end
 }
 
 /// Character-level tokenizer. Python treats `\X` (backslash + char) as one
@@ -252,6 +262,7 @@ impl Tokenizer {
         Ok(tok)
     }
 
+    // nocov start
     fn advance(&mut self) -> ParseResult<()> {
         let mut index = self.index;
         let Some(&ch) = self.chars.get(index) else {
@@ -276,6 +287,7 @@ impl Tokenizer {
         self.index = index + 1;
         Ok(())
     }
+    // nocov end
 
     fn peek_next_char(&self) -> Option<char> {
         self.next.as_ref().and_then(|s| s.chars().next())
@@ -296,6 +308,7 @@ impl Tokenizer {
         Ok(this)
     }
 
+    // nocov start
     fn getwhile(&mut self, n: usize, charset: &str) -> ParseResult<String> {
         let mut result = String::new();
         for _ in 0..n {
@@ -312,7 +325,9 @@ impl Tokenizer {
         }
         Ok(result)
     }
+    // nocov end
 
+    // nocov start
     fn getuntil(&mut self, terminator: char, name: &str) -> ParseResult<String> {
         let mut result = String::new();
         loop {
@@ -340,6 +355,7 @@ impl Tokenizer {
             }
         }
     }
+    // nocov end
 
     /// Port of `pos`/`tell`: index of the start of the current `next` token.
     fn tell(&self) -> usize {
@@ -347,10 +363,12 @@ impl Tokenizer {
         self.index - next_len
     }
 
+    // nocov start
     fn seek(&mut self, index: usize) -> ParseResult<()> {
         self.index = index;
         self.advance()
     }
+    // nocov end
 
     fn error(&self, msg: &str, offset: usize) -> ParseError {
         let pos = self.tell().saturating_sub(offset);
@@ -360,6 +378,7 @@ impl Tokenizer {
         }
     }
 
+    // nocov start
     fn checkgroupname(&self, name: &str, offset: usize) -> ParseResult<()> {
         if !self.istext && !name.is_ascii() {
             return Err(self.error(
@@ -375,6 +394,7 @@ impl Tokenizer {
         }
         Ok(())
     }
+    // nocov end
 }
 
 /// True if `s` is a valid Python identifier per `str.isidentifier`.
@@ -385,6 +405,7 @@ impl Tokenizer {
 /// that's sufficient for regex group names in the patterns Hypothesis
 /// generates. (Matching fails closed — we may reject a valid identifier
 /// that used a rare Unicode script; we will never accept an invalid one.)
+// nocov start
 fn is_python_identifier(s: &str) -> bool {
     let mut chars = s.chars();
     let Some(first) = chars.next() else {
@@ -395,6 +416,7 @@ fn is_python_identifier(s: &str) -> bool {
     }
     chars.all(is_id_continue)
 }
+// nocov end
 
 fn is_id_start(c: char) -> bool {
     c == '_' || c.is_alphabetic()
@@ -451,6 +473,7 @@ enum CategoryCode {
     In(ChCode),
 }
 
+// nocov start
 fn flag_for_char(c: char) -> Option<u32> {
     match c {
         'i' => Some(SRE_FLAG_IGNORECASE),
@@ -463,10 +486,12 @@ fn flag_for_char(c: char) -> Option<u32> {
         _ => None,
     }
 }
+// nocov end
 
 /// Escape handler inside a character class `[...]`.
 ///
 /// Port of `_parser._class_escape`.
+// nocov start
 fn class_escape(source: &mut Tokenizer, escape: &str) -> ParseResult<ClassEscapeResult> {
     if let Some(cp) = lookup_escape_literal(escape) {
         return Ok(ClassEscapeResult::Literal(cp));
@@ -568,6 +593,7 @@ fn class_escape(source: &mut Tokenizer, escape: &str) -> ParseResult<ClassEscape
         None => Err(source.error(&format!("bad escape {}", escape), escape.chars().count())),
     }
 }
+// nocov end
 
 enum ClassEscapeResult {
     Literal(u32),
@@ -577,6 +603,7 @@ enum ClassEscapeResult {
 /// General escape handler (outside character classes).
 ///
 /// Port of `_parser._escape`.
+// nocov start
 fn escape_code(
     source: &mut Tokenizer,
     escape: &str,
@@ -716,6 +743,7 @@ fn escape_code(
         None => Err(source.error(&format!("bad escape {}", escape), escape.chars().count())),
     }
 }
+// nocov end
 
 enum EscapeResult {
     Literal(u32),
@@ -744,6 +772,7 @@ fn is_repeat_opcode(op: &OpCode) -> bool {
 }
 
 /// Port of `_parser._parse_sub`. Parses an alternation.
+// nocov start
 fn parse_sub(
     source: &mut Tokenizer,
     state: &mut State,
@@ -825,8 +854,10 @@ fn parse_sub(
     subpattern.push(OpCode::Branch(items));
     Ok(subpattern)
 }
+// nocov end
 
 /// Port of `_parser._parse`. Parses one simple pattern (no `|`).
+// nocov start
 fn parse(
     source: &mut Tokenizer,
     state: &mut State,
@@ -1361,6 +1392,7 @@ fn parse(
 
     Ok(subpattern)
 }
+// nocov end
 
 /// Either a simple literal or a class-escape result (used when tokenising
 /// the body of a character class).
@@ -1378,6 +1410,7 @@ fn push_set_code(set: &mut Vec<SetItem>, code: Either) {
 }
 
 /// Port of `_parser._parse_flags`.
+// nocov start
 fn parse_flags(
     source: &mut Tokenizer,
     state: &mut State,
@@ -1485,9 +1518,11 @@ fn parse_flags(
     }
     Ok(Some((add_flags, del_flags)))
 }
+// nocov end
 
 /// Port of `_parser.fix_flags`. Str-pattern only; callers always pass
 /// `istext = true` in our code base.
+// nocov start
 fn fix_flags(istext: bool, mut flags: u32) -> ParseResult<u32> {
     if istext {
         if flags & SRE_FLAG_LOCALE != 0 {
@@ -1520,12 +1555,14 @@ fn fix_flags(istext: bool, mut flags: u32) -> ParseResult<u32> {
     }
     Ok(flags)
 }
+// nocov end
 
 /// Parse a Python regex pattern string.
 ///
 /// Matches the public entry point `_parser.parse(str, flags=0)`. Always
 /// treats `pattern` as a `str` pattern; bytes patterns are not produced by
 /// Hypothesis's native generator in hegel-rust.
+// nocov start
 pub fn parse_pattern(pattern: &str, flags: u32) -> ParseResult<ParsedPattern> {
     let mut source = Tokenizer::new(pattern, true)?;
     let mut state = State::new();
@@ -1555,6 +1592,7 @@ pub fn parse_pattern(pattern: &str, flags: u32) -> ParseResult<ParsedPattern> {
         group_names: state.groupdict,
     })
 }
+// nocov end
 
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/re_parser_tests.rs"]

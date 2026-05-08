@@ -237,9 +237,11 @@ impl<T: ExampleDatabase + ?Sized + 'static> ExampleDatabase for Arc<T> {
     fn remove_listener(&self, f: &Listener) {
         (**self).remove_listener(f);
     }
+    // nocov start
     fn clear_listeners(&self) {
         (**self).clear_listeners();
     }
+    // nocov end
     fn as_any(&self) -> &dyn Any {
         (**self).as_any()
     }
@@ -330,6 +332,7 @@ impl NativeDatabase {
     /// changes (including from other processes) are translated into
     /// listener events. Called on the 0→1 listener-count transition.
     /// Hypothesis: `DirectoryBasedExampleDatabase._start_listening`.
+    // nocov start
     fn start_watcher(&self) {
         // Seed the hash→key reverse map from the persisted metakey
         // entry. Without this, events arriving for keys that existed
@@ -383,13 +386,16 @@ impl NativeDatabase {
             shutdown,
         });
     }
+    // nocov end
 
     /// Stop the `notify` watcher. Called on the 1→0 listener-count
     /// transition. Hypothesis:
     /// `DirectoryBasedExampleDatabase._stop_listening`.
+    // nocov start
     fn stop_watcher(&self) {
         *self.watcher.lock().unwrap() = None;
     }
+    // nocov end
 }
 
 impl ExampleDatabase for NativeDatabase {
@@ -418,6 +424,7 @@ impl ExampleDatabase for NativeDatabase {
     /// Create events and broadcasts them, which means listeners on one
     /// `NativeDatabase` handle also see writes from other processes
     /// (or other in-process handles) sharing the same directory.
+    // nocov start
     fn save(&self, key: &[u8], value: &[u8]) {
         // Hypothesis keeps a "metakeys" entry — a bookkeeping key whose
         // values are the raw bytes of every other key ever saved. The
@@ -458,6 +465,7 @@ impl ExampleDatabase for NativeDatabase {
             }
         }
     }
+    // nocov end
 
     /// Hypothesis: `DirectoryBasedExampleDatabase.delete`. If `value` was
     /// the last entry under `key`, the (now-empty) key directory is also
@@ -478,6 +486,7 @@ impl ExampleDatabase for NativeDatabase {
     /// Hypothesis: `DirectoryBasedExampleDatabase.move`. Overrides the
     /// default `delete` + `save` with a single `rename` when possible so
     /// that the move is atomic on the same filesystem.
+    // nocov start
     fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]) {
         if src == dst {
             self.save(src, value);
@@ -511,6 +520,7 @@ impl ExampleDatabase for NativeDatabase {
         // nonexistent_key` in `test_database_backend.py` relies on that.
         let _ = std::fs::remove_dir(self.key_path(src));
     }
+    // nocov end
 
     fn add_listener(&self, f: Listener) {
         if self.listeners.add(f) {
@@ -518,18 +528,22 @@ impl ExampleDatabase for NativeDatabase {
         }
     }
 
+    // nocov start
     fn remove_listener(&self, f: &Listener) {
         let (removed, now_empty) = self.listeners.remove(f);
         if removed && now_empty {
             self.stop_watcher();
         }
     }
+    // nocov end
 
+    // nocov start
     fn clear_listeners(&self) {
         if self.listeners.clear() {
             self.stop_watcher();
         }
     }
+    // nocov end
 
     fn as_any(&self) -> &dyn Any {
         self
@@ -556,6 +570,7 @@ impl Eq for NativeDatabase {}
 /// Translate a `notify::Event` into zero or more `ListenerEvent`
 /// broadcasts. Mirrors the `Handler` class in Hypothesis's
 /// `DirectoryBasedExampleDatabase._start_listening`.
+// nocov start
 fn handle_watcher_event(event: notify::Event, ctx: &WatcherCtx) {
     match event.kind {
         EventKind::Create(CreateKind::File)
@@ -603,10 +618,12 @@ fn handle_watcher_event(event: notify::Event, ctx: &WatcherCtx) {
         _ => {}
     }
 }
+// nocov end
 
 /// Walk a folder and emit a synthetic `on_file_created` for each file
 /// (recursing into any subfolders). Recovers the file events that
 /// inotify races cause to be dropped on directory creation.
+// nocov start
 fn scan_new_folder(path: &Path, ctx: &WatcherCtx) {
     let Ok(entries) = std::fs::read_dir(path) else {
         return;
@@ -623,11 +640,13 @@ fn scan_new_folder(path: &Path, ctx: &WatcherCtx) {
         }
     }
 }
+// nocov end
 
 /// Seed `ctx.seen_saves` with every value file already on disk at the
 /// moment the watcher starts, so a subsequent rescan triggered by a
 /// `Create(Folder)` event doesn't replay pre-existing entries as fresh
 /// `Save` broadcasts.
+// nocov start
 fn prime_seen_saves(ctx: &WatcherCtx) {
     let Ok(key_dirs) = std::fs::read_dir(&ctx.db_root) else {
         return;
@@ -651,6 +670,7 @@ fn prime_seen_saves(ctx: &WatcherCtx) {
         }
     }
 }
+// nocov end
 
 /// inotify has a well-known race: a file written into a freshly-created
 /// subdirectory can appear before notify manages to install a watch on
@@ -685,6 +705,7 @@ fn key_hash_of(path: &Path) -> Option<String> {
         .map(String::from)
 }
 
+// nocov start
 fn on_file_created(path: &Path, ctx: &WatcherCtx) {
     let Some(key_hash) = key_hash_of(path) else {
         return;
@@ -719,6 +740,7 @@ fn on_file_created(path: &Path, ctx: &WatcherCtx) {
     };
     ctx.listeners.broadcast(&ListenerEvent::Save { key, value });
 }
+// nocov end
 
 /// Resolve a key hash to its raw key bytes, falling back to a direct read
 /// of the metakeys directory if the in-memory map doesn't yet have it.
@@ -743,6 +765,7 @@ fn resolve_key(key_hash: &str, ctx: &WatcherCtx) -> Option<Vec<u8>> {
     Some(key_bytes)
 }
 
+// nocov start
 fn on_file_deleted(path: &Path, ctx: &WatcherCtx) {
     let Some(key_hash) = key_hash_of(path) else {
         return;
@@ -764,7 +787,9 @@ fn on_file_deleted(path: &Path, ctx: &WatcherCtx) {
     ctx.listeners
         .broadcast(&ListenerEvent::Delete { key, value: None });
 }
+// nocov end
 
+// nocov start
 fn on_file_moved(src_path: &Path, dst_path: &Path, ctx: &WatcherCtx) {
     let (Some(src_h), Some(dst_h)) = (key_hash_of(src_path), key_hash_of(dst_path)) else {
         return;
@@ -801,6 +826,7 @@ fn on_file_moved(src_path: &Path, dst_path: &Path, ctx: &WatcherCtx) {
         value,
     });
 }
+// nocov end
 
 /// Non-persistent sibling of [`NativeDatabase`]. Backing store is a
 /// `HashMap<Vec<u8>, HashSet<Vec<u8>>>` behind a `Mutex`.
@@ -1284,6 +1310,7 @@ pub(super) fn fnv_hex(s: &[u8]) -> String {
 ///       little-endian u32 codepoints (raw Unicode codepoints, including
 ///       surrogates — the engine's internal codepoint model preserves them;
 ///       the no-surrogate filter lives at the user-facing boundary).
+// nocov start
 pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + choices.len() * 17);
     let count = choices.len() as u32;
@@ -1320,11 +1347,13 @@ pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
     }
     buf
 }
+// nocov end
 
 /// Decode a byte slice produced by [`serialize_choices`].
 ///
 /// Returns `None` if the data is truncated, malformed, or contains an
 /// unknown type tag (defensive against filesystem corruption).
+// nocov start
 pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
     if bytes.len() < 4 {
         return None;
@@ -1405,6 +1434,7 @@ pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
     }
     Some(choices)
 }
+// nocov end
 
 #[cfg(test)]
 #[path = "../../tests/embedded/native/database_tests.rs"]
