@@ -77,7 +77,11 @@ impl Statement {
                 )
             }
             Statement::Target { score_expr, label } => {
-                format!("tc.target({score_expr}, \"{label}\");")
+                if label.is_empty() {
+                    format!("tc.target({score_expr});")
+                } else {
+                    format!("tc.target_labelled({score_expr}, \"{label}\");")
+                }
             }
             Statement::IfBlock {
                 condition,
@@ -985,7 +989,8 @@ fn gen_note_statement(tc: &TestCase, env: &Env) -> Statement {
     }
 }
 
-/// Generate a `tc.target(score, label)` call. Picks a numeric variable in
+/// Generate a `tc.target(score)` / `tc.target_labelled(score, label)` call.
+/// Picks a numeric variable in
 /// scope and projects it to f64 with one of a few simple expressions.
 /// Drives the pareto-front / targeted-optimiser code paths in the native
 /// backend.

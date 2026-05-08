@@ -417,8 +417,12 @@ impl TestCase {
     /// Record a targeting observation to help the engine find extreme inputs.
     ///
     /// Call this inside a test body to guide generation toward inputs that
-    /// maximise `score`. The label distinguishes multiple simultaneous
-    /// targeting goals; pass `""` for a single unlabeled score.
+    /// maximise `score`. Inside a `#[hegel::test]`, `#[hegel::main]`, or
+    /// `#[hegel::standalone_function]` body, `tc.target(expr)` is rewritten
+    /// to call [`target_labelled`](Self::target_labelled) with the source
+    /// text of `expr` as the label, so different targeting expressions are
+    /// tracked separately by default. Outside that rewrite, `tc.target(score)`
+    /// uses the empty label.
     ///
     /// Has no effect during replays or if the test case has been aborted.
     ///
@@ -430,12 +434,25 @@ impl TestCase {
     /// #[hegel::test]
     /// fn my_test(tc: hegel::TestCase) {
     ///     let n: u32 = tc.draw(gs::integers::<u32>());
-    ///     tc.target(n as f64, "");
+    ///     tc.target(n as f64);
     /// }
     /// ```
-    pub fn target(&self, score: f64, label: impl Into<String>) {
-        let shared = self.global.shared.lock();
-        shared.data_source.target_observation(score, &label.into());
+    pub fn target(&self, score: f64) {
+        self.target_labelled(score, "");
+    }
+
+    /// Record a targeting observation under an explicit label.
+    ///
+    /// The label distinguishes multiple simultaneous targeting goals.
+    /// Use this directly when you want a specific label string;
+    /// [`target`](Self::target) is the usual entry point and will be
+    /// rewritten to call this with the source expression as the label
+    /// inside a `#[hegel::test]` body.
+    ///
+    /// Has no effect during replays or if the test case has been aborted.
+    pub fn target_labelled(&self, score: f64, label: impl Into<String>) {
+        let label = label.into();
+        self.with_data_source(|ds| ds.target_observation(score, &label));
     }
 
     /// Run `body` in a loop that should runs "logically infinitely" or until
