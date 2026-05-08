@@ -302,7 +302,7 @@ pub mod __native_test_internals {
         BytesShrinker, CollectionShrinker, IntegerShrinker, OrderingShrinker, StringShrinker,
     };
     pub use crate::native::shrinker::{ShrinkRun, Shrinker};
-    pub use crate::native::tree::CachedTestFunction;
+    pub use crate::native::tree::{CachedTestFunction, RunResult};
     pub use crate::native::unicodedata;
     pub use crate::runner::Phase as RunnerPhase;
 }

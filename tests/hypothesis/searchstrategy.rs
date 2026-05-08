@@ -54,7 +54,7 @@ fn test_just_strategy_does_not_draw() {
         *seen_clone.lock().unwrap() = Some(v);
     });
     let ntc = NativeTestCase::for_choices(&[], None, None);
-    let (_, nodes, _) = ctf.run(ntc);
+    let nodes = ctf.run(ntc).nodes;
 
     assert_eq!(seen.lock().unwrap().as_deref(), Some("hello"));
     assert!(nodes.is_empty());
@@ -74,7 +74,7 @@ fn test_none_strategy_does_not_draw() {
         *seen_clone.lock().unwrap() = true;
     });
     let ntc = NativeTestCase::for_choices(&[], None, None);
-    let (_, nodes, _) = ctf.run(ntc);
+    let nodes = ctf.run(ntc).nodes;
 
     assert!(*seen.lock().unwrap());
     assert!(nodes.is_empty());

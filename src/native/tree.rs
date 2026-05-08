@@ -93,10 +93,17 @@ pub struct CachedTestFunction<F: FnMut(TestCase)> {
     /// Execution mode forwarded to each TestCase. Defaults to `Mode::TestRun`;
     /// `native_run` overrides via `set_mode` to propagate `Settings::mode`.
     mode: crate::runner::Mode,
-    /// `tc.target()` / `tc.target_labelled()` observations recorded by the
-    /// most recent `execute` call. The runner reads this after each run to
-    /// drive targeted property-based search; reset on every run.
-    last_target_observations: HashMap<String, f64>,
+}
+
+/// One run's worth of results from [`CachedTestFunction::run`]. Mirrors what
+/// Hypothesis exposes via the per-run `ConjectureData` after the test body
+/// returns: status, the realised choice nodes/spans, and any
+/// `tc.target()` / `tc.target_labelled()` observations the body recorded.
+pub struct RunResult {
+    pub status: Status,
+    pub nodes: Vec<ChoiceNode>,
+    pub spans: Vec<Span>,
+    pub target_observations: HashMap<String, f64>,
 }
 
 impl<F: FnMut(TestCase)> CachedTestFunction<F> {
@@ -106,7 +113,6 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
             tree_root: TreeNode::new(),
             cache: HashMap::new(),
             mode: crate::runner::Mode::TestRun,
-            last_target_observations: HashMap::new(),
         }
     }
 
@@ -115,21 +121,15 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
         self.mode = mode;
     }
 
-    /// `tc.target()` / `tc.target_labelled()` observations from the most
-    /// recent execution. Empty if the test made no targeting calls.
-    pub fn last_target_observations(&self) -> &HashMap<String, f64> {
-        &self.last_target_observations
-    }
-
     /// Run a test case during the generation or database-replay phase.
     ///
     /// Records the resulting nodes in the data tree (checking for
     /// non-determinism) but does not use the cache (random generation
     /// produces unique sequences, so caching would just waste memory).
-    pub fn run(&mut self, ntc: NativeTestCase) -> (Status, Vec<ChoiceNode>, Vec<Span>) {
-        let (status, nodes, spans, _) = self.execute(ntc, false);
-        self.record(&nodes);
-        (status, nodes, spans)
+    pub fn run(&mut self, ntc: NativeTestCase) -> RunResult {
+        let result = self.execute(ntc, false);
+        self.record(&result.nodes);
+        result
     }
 
     /// Run a test case during shrinking.
@@ -147,10 +147,10 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
 
         let choices: Vec<ChoiceValue> = candidate_nodes.iter().map(|n| n.value.clone()).collect();
         let ntc = NativeTestCase::for_choices(&choices, Some(candidate_nodes), None);
-        let (status, new_nodes, _, _) = self.execute(ntc, false);
-        self.record(&new_nodes);
+        let RunResult { status, nodes, .. } = self.execute(ntc, false);
+        self.record(&nodes);
 
-        let result = (status == Status::Interesting, new_nodes);
+        let result = (status == Status::Interesting, nodes);
         self.cache_store(candidate_nodes, result.clone());
         result
     }
@@ -172,9 +172,9 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
         use rand::rngs::SmallRng;
         let rng = SmallRng::seed_from_u64(seed);
         let ntc = NativeTestCase::for_probe(prefix, rng, max_size);
-        let (status, new_nodes, _, _) = self.execute(ntc, false);
-        self.record(&new_nodes);
-        let result = (status == Status::Interesting, new_nodes);
+        let RunResult { status, nodes, .. } = self.execute(ntc, false);
+        self.record(&nodes);
+        let result = (status == Status::Interesting, nodes);
         self.cache_store(&result.1, result.clone());
         result
     }
@@ -184,43 +184,46 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
     /// Does not use the cache or record in the tree — the test is about
     /// to fail and we need the actual panic payload for re-raising.
     pub fn run_final(&mut self, ntc: NativeTestCase) -> (Status, Vec<ChoiceNode>, Vec<Span>) {
-        let (status, nodes, spans, _) = self.execute(ntc, true);
+        let RunResult {
+            status,
+            nodes,
+            spans,
+            ..
+        } = self.execute(ntc, true);
         (status, nodes, spans)
     }
 
     /// Core test execution: run one test case and return results.
-    fn execute(
-        &mut self,
-        ntc: NativeTestCase,
-        is_final: bool,
-    ) -> (Status, Vec<ChoiceNode>, Vec<Span>, Option<String>) {
+    fn execute(&mut self, ntc: NativeTestCase, is_final: bool) -> RunResult {
         let (data_source, ntc_handle) = NativeDataSource::new(ntc);
         let mut tc = TestCase::new(Box::new(data_source), is_final, self.mode);
         tc.attach_native_handle(ntc_handle.clone());
         let result =
             with_test_context(|| catch_unwind(AssertUnwindSafe(|| (self.test_fn)(tc.clone()))));
 
-        let (status, panic_msg) = match result {
-            Ok(()) => (Status::Valid, None),
+        let status = match result {
+            Ok(()) => Status::Valid,
             Err(e) => {
                 let msg = panic_message(&e);
                 if msg == ASSUME_FAIL_STRING || msg == STOP_TEST_STRING {
-                    (Status::Invalid, None)
+                    Status::Invalid
                 } else if msg == LOOP_DONE_STRING {
-                    (Status::Valid, None)
+                    Status::Valid
                 } else {
                     if is_final {
                         store_final_panic_info(&msg);
                     }
-                    (Status::Interesting, Some(msg))
+                    Status::Interesting
                 }
             }
         };
 
-        let nodes = NativeDataSource::take_nodes(&ntc_handle);
-        let spans = NativeDataSource::take_spans(&ntc_handle);
-        self.last_target_observations = NativeDataSource::take_target_observations(&ntc_handle);
-        (status, nodes, spans, panic_msg)
+        RunResult {
+            status,
+            nodes: NativeDataSource::take_nodes(&ntc_handle),
+            spans: NativeDataSource::take_spans(&ntc_handle),
+            target_observations: NativeDataSource::take_target_observations(&ntc_handle),
+        }
     }
 
     /// Record nodes in the data tree, checking for non-determinism.

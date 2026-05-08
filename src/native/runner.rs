@@ -16,7 +16,7 @@ use crate::native::database::{
 };
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 use crate::native::targeting::{OptimiseCtx, TargetingState, optimise_targets};
-use crate::native::tree::CachedTestFunction;
+use crate::native::tree::{CachedTestFunction, RunResult};
 use crate::runner::{Database, HealthCheck, Mode, Phase, Settings, Verbosity};
 use crate::test_case::TestCase;
 
@@ -242,10 +242,10 @@ pub fn native_run<F>(
                     continue;
                 };
                 let ntc = NativeTestCase::for_choices(&stored_choices, None, None);
-                let (status, nodes, _) = ctf.run(ntc);
-                if status == Status::Interesting {
-                    replay_aligned = nodes.len() == stored_choices.len();
-                    result = Some(nodes);
+                let run = ctf.run(ntc);
+                if run.status == Status::Interesting {
+                    replay_aligned = run.nodes.len() == stored_choices.len();
+                    result = Some(run.nodes);
                     break;
                 }
                 db_ref.delete(key_bytes, &raw);
@@ -276,7 +276,12 @@ pub fn native_run<F>(
                 eprintln!("Trying example: ");
             }
             let tc_start = std::time::Instant::now();
-            let (status, nodes, spans) = ctf.run(ntc);
+            let RunResult {
+                status,
+                nodes,
+                spans,
+                target_observations: observations,
+            } = ctf.run(ntc);
             let elapsed = tc_start.elapsed();
             calls += 1;
             if verbosity == Verbosity::Debug {
@@ -301,7 +306,6 @@ pub fn native_run<F>(
             }
             if status >= Status::Valid {
                 valid_test_cases += 1;
-                let observations = ctf.last_target_observations().clone();
                 if !observations.is_empty() {
                     let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
                     targeting.record(&choices, &observations);
@@ -410,8 +414,8 @@ pub fn native_run<F>(
             // below (and as the server backend's flaky detector).
             let choices: Vec<ChoiceValue> = best_nodes.iter().map(|n| n.value.clone()).collect();
             let verify_ntc = NativeTestCase::for_choices(&choices, Some(best_nodes), None);
-            let (verify_status, verify_nodes, _) = ctf.run(verify_ntc);
-            if verify_status != Status::Interesting {
+            let verify = ctf.run(verify_ntc);
+            if verify.status != Status::Interesting {
                 panic!(
                     "Flaky test detected: Your test produced different outcomes \
                      when run with the same generated data — it failed when it \
@@ -420,7 +424,7 @@ pub fn native_run<F>(
                      global variables, system time, or external random number generators."
                 );
             }
-            *best_nodes = verify_nodes;
+            *best_nodes = verify.nodes;
 
             {
                 let mut shrinker = Shrinker::with_probe(
@@ -745,10 +749,10 @@ fn try_span_mutation<F: FnMut(TestCase)>(
         };
 
         let ntc = NativeTestCase::for_choices(&attempt, None, None);
-        let (status, new_nodes, _) = ctf.run(ntc);
+        let run = ctf.run(ntc);
 
-        if status == Status::Interesting {
-            return Some(new_nodes);
+        if run.status == Status::Interesting {
+            return Some(run.nodes);
         }
     }
 

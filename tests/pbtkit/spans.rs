@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 
 use crate::common::utils::find_any;
-use hegel::__native_test_internals::{CachedTestFunction, ChoiceValue, NativeTestCase};
+use hegel::__native_test_internals::{CachedTestFunction, ChoiceValue, NativeTestCase, RunResult};
 use hegel::TestCase;
 use hegel::generators::{self as gs};
 
@@ -18,7 +18,7 @@ fn test_draw_records_spans() {
     });
     let choices = vec![ChoiceValue::Integer(3), ChoiceValue::Integer(5)];
     let ntc = NativeTestCase::for_choices(&choices, None, None);
-    let (_, nodes, spans) = ctf.run(ntc);
+    let RunResult { nodes, spans, .. } = ctf.run(ntc);
 
     assert_eq!(nodes.len(), 2);
     assert_eq!(spans.len(), 2);
@@ -51,7 +51,7 @@ fn test_nested_spans() {
     });
     let choices = vec![ChoiceValue::Integer(1), ChoiceValue::Integer(2)];
     let ntc = NativeTestCase::for_choices(&choices, None, None);
-    let (_, nodes, spans) = ctf.run(ntc);
+    let RunResult { nodes, spans, .. } = ctf.run(ntc);
 
     assert_eq!(nodes.len(), 2);
     // Rust records only leaf (integer) spans; no outer tuple span.
@@ -79,7 +79,7 @@ fn test_list_draw_has_spans() {
         ChoiceValue::Boolean(false),
     ];
     let ntc = NativeTestCase::for_choices(&choices, None, None);
-    let (_, nodes, spans) = ctf.run(ntc);
+    let RunResult { nodes, spans, .. } = ctf.run(ntc);
 
     assert_eq!(nodes.len(), 3);
     assert_eq!(spans.len(), 1);

@@ -17,7 +17,7 @@ fn test_span_mutation_noop_without_spans() {
     let mut ctf = CachedTestFunction::new(|_: TestCase| {});
     let choices = vec![ChoiceValue::Integer(0)];
     let ntc = NativeTestCase::for_choices(&choices, None, None);
-    let (_, nodes, spans) = ctf.run(ntc);
+    let crate::native::tree::RunResult { nodes, spans, .. } = ctf.run(ntc);
 
     assert!(spans.is_empty());
 
@@ -54,7 +54,9 @@ fn test_span_mutation_exercises_swaps() {
         let mut rng = SmallRng::seed_from_u64(seed);
         let batch_rng = SmallRng::from_rng(&mut rng);
         let ntc = NativeTestCase::new_random(batch_rng);
-        let (_, nodes, spans) = ctf.run(ntc);
+        let run = ctf.run(ntc);
+        let nodes = run.nodes;
+        let spans = run.spans;
         let base_calls = calls.load(Ordering::SeqCst);
 
         let mut swap_rng = SmallRng::seed_from_u64(seed);

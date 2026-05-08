@@ -78,20 +78,19 @@ fn run_trial<F: FnMut(TestCase)>(
         return None;
     }
     let ntc = NativeTestCase::for_choices(choices, None, None);
-    let (status, nodes, _spans) = ctf.run(ntc);
+    let run = ctf.run(ntc);
     *ctx.calls += 1;
-    let observations = ctf.last_target_observations().clone();
-    if status >= Status::Valid {
+    if run.status >= Status::Valid {
         *ctx.valid_test_cases += 1;
-        let actual_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
-        targeting.record(&actual_choices, &observations);
+        let actual_choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
+        targeting.record(&actual_choices, &run.target_observations);
     }
-    if status == Status::Interesting
-        && (ctx.result.is_none() || sort_key(&nodes) < sort_key(ctx.result.as_ref().unwrap()))
+    if run.status == Status::Interesting
+        && (ctx.result.is_none() || sort_key(&run.nodes) < sort_key(ctx.result.as_ref().unwrap()))
     {
-        *ctx.result = Some(nodes.clone());
+        *ctx.result = Some(run.nodes.clone());
     }
-    Some((status, nodes, observations))
+    Some((run.status, run.nodes, run.target_observations))
 }
 
 /// Hill-climb every target until no further improvements are found or the
