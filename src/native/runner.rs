@@ -15,8 +15,8 @@ use crate::native::database::{
     ExampleDatabase, NativeDatabase, deserialize_choices, serialize_choices,
 };
 use crate::native::shrinker::{ShrinkRun, Shrinker};
-use crate::native::targeting::{OptimiseCtx, TargetingState, optimise_targets};
-use crate::native::tree::{CachedTestFunction, RunResult};
+use crate::native::targeting::TargetingDriver;
+use crate::native::tree::CachedTestFunction;
 use crate::runner::{Database, HealthCheck, Mode, Phase, Settings, Verbosity};
 use crate::test_case::TestCase;
 
@@ -208,14 +208,7 @@ pub fn native_run<F>(
     let mut test_is_trivial = false;
     let mut invalid_calls: u64 = 0;
     let mut total_test_time = std::time::Duration::ZERO;
-    // Targeted property-based search state. Populated from
-    // `tc.target()` / `tc.target_labelled()` observations during the
-    // generation phase, then driven by hill-climbing once enough valid
-    // examples have been seen. Mirrors Hypothesis's `optimise_at` gate.
-    let mut targeting = TargetingState::new();
-    let small_example_cap = (max_examples / 10).min(50);
-    let optimise_at = (max_examples / 2).max(small_example_cap + 1).max(10);
-    let mut ran_optimisations = false;
+    let mut targeting = TargetingDriver::new(max_examples);
     // True when `result` came from a database replay that matched the
     // stored choice sequence exactly (same length = same test shape). In
     // that case we trust the stored value is already shrunk and skip the
@@ -276,18 +269,14 @@ pub fn native_run<F>(
                 eprintln!("Trying example: ");
             }
             let tc_start = std::time::Instant::now();
-            let RunResult {
-                status,
-                nodes,
-                spans,
-                target_observations: observations,
-            } = ctf.run(ntc);
+            let run = ctf.run(ntc);
             let elapsed = tc_start.elapsed();
             calls += 1;
             if verbosity == Verbosity::Debug {
                 eprintln!(
-                    "test case #{calls}: status = {status:?}, choices = {}",
-                    nodes.len()
+                    "test case #{calls}: status = {:?}, choices = {}",
+                    run.status,
+                    run.nodes.len()
                 );
             }
 
@@ -297,24 +286,21 @@ pub fn native_run<F>(
             // tests that filter everything. Mirrors Hypothesis's
             // total_draw_time, which tracks time inside do_draw only, not
             // infrastructure overhead or test-body time.
-            if status != Status::Invalid {
+            if run.status != Status::Invalid {
                 total_test_time += elapsed;
             }
 
-            if nodes.is_empty() && status >= Status::Invalid {
+            if run.nodes.is_empty() && run.status >= Status::Invalid {
                 test_is_trivial = true;
             }
-            if status >= Status::Valid {
+            if run.status >= Status::Valid {
                 valid_test_cases += 1;
-                if !observations.is_empty() {
-                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
-                    targeting.record(&choices, &observations);
-                }
+                targeting.record(&run.nodes, &run.target_observations);
             }
 
             // FilterTooMuch: checked before TooSlow to match Hypothesis's
             // ordering (engine.py checks filter_too_much then too_slow).
-            if status == Status::Invalid {
+            if run.status == Status::Invalid {
                 invalid_calls += 1;
                 if invalid_calls >= FILTER_TOO_MUCH_THRESHOLD
                     && valid_test_cases == 0
@@ -353,13 +339,13 @@ pub fn native_run<F>(
                     total_test_time, TOO_SLOW_THRESHOLD
                 );
             }
-            if status == Status::Interesting {
-                if result.is_none() || sort_key(&nodes) < sort_key(result.as_ref().unwrap()) {
-                    result = Some(nodes);
+            if run.status == Status::Interesting {
+                if result.is_none() || sort_key(&run.nodes) < sort_key(result.as_ref().unwrap()) {
+                    result = Some(run.nodes);
                 }
-            } else if status == Status::Valid {
+            } else if run.status == Status::Valid {
                 // Try span mutations on this valid test case to find interesting ones.
-                let mutation_result = try_span_mutation(&nodes, &spans, &mut rng, &mut ctf);
+                let mutation_result = try_span_mutation(&run.nodes, &run.spans, &mut rng, &mut ctf);
                 calls += SPAN_MUTATION_ATTEMPTS as u64;
                 if let Some(mut_nodes) = mutation_result {
                     if result.is_none() || sort_key(&mut_nodes) < sort_key(result.as_ref().unwrap())
@@ -369,25 +355,13 @@ pub fn native_run<F>(
                 }
             }
 
-            // Targeted PBT: once enough valid examples have accumulated,
-            // hill-climb each target's best-scoring choice sequence.
-            // Mirrors Hypothesis's one-shot `optimise_at` gate inside
-            // `engine.py::generate_new_examples`.
-            if !ran_optimisations
-                && valid_test_cases >= optimise_at
-                && !targeting.is_empty()
-                && result.is_none()
-            {
-                ran_optimisations = true;
-                let mut ctx = OptimiseCtx {
-                    result: &mut result,
-                    calls: &mut calls,
-                    valid_test_cases: &mut valid_test_cases,
-                    max_valid: max_examples,
-                    max_calls: max_examples * 10,
-                };
-                optimise_targets(&mut ctf, &mut targeting, &mut ctx);
-            }
+            targeting.maybe_optimise(
+                &mut ctf,
+                &mut result,
+                &mut calls,
+                &mut valid_test_cases,
+                max_examples,
+            );
         }
     }
 

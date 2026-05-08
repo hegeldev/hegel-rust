@@ -49,6 +49,71 @@ impl TargetingState {
     }
 }
 
+/// All the targeted-PBT state and triggers needed by `native_run`. Holds
+/// the per-run [`TargetingState`] plus the one-shot `optimise_at` gate
+/// (mirroring Hypothesis's `engine.py::generate_new_examples` line 1317
+/// behaviour: fire `optimise_targets` exactly once after enough valid
+/// examples have been observed). Wrapping all of this in a single struct
+/// lets the runner's hot loop call into the targeting module via two
+/// short method calls instead of inlining the whole protocol.
+pub(crate) struct TargetingDriver {
+    targeting: TargetingState,
+    optimise_at: u64,
+    ran_optimisations: bool,
+}
+
+impl TargetingDriver {
+    pub fn new(max_examples: u64) -> Self {
+        let small_example_cap = (max_examples / 10).min(50);
+        let optimise_at = (max_examples / 2).max(small_example_cap + 1).max(10);
+        Self {
+            targeting: TargetingState::new(),
+            optimise_at,
+            ran_optimisations: false,
+        }
+    }
+
+    /// Record `observations` against the choice sequence in `nodes`. No-op
+    /// when the test made no `tc.target()` calls.
+    pub fn record(&mut self, nodes: &[ChoiceNode], observations: &HashMap<String, f64>) {
+        if observations.is_empty() {
+            return;
+        }
+        let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+        self.targeting.record(&choices, observations);
+    }
+
+    /// Fire `optimise_targets` if we've crossed the `optimise_at` threshold,
+    /// haven't already run this pass, and have at least one observed target
+    /// to climb. No-op once an interesting example has been recorded — at
+    /// that point the runner will move on to shrinking.
+    pub fn maybe_optimise<F: FnMut(TestCase)>(
+        &mut self,
+        ctf: &mut CachedTestFunction<F>,
+        result: &mut Option<Vec<ChoiceNode>>,
+        calls: &mut u64,
+        valid_test_cases: &mut u64,
+        max_examples: u64,
+    ) {
+        if self.ran_optimisations
+            || *valid_test_cases < self.optimise_at
+            || self.targeting.is_empty()
+            || result.is_some()
+        {
+            return;
+        }
+        self.ran_optimisations = true;
+        let mut ctx = OptimiseCtx {
+            result,
+            calls,
+            valid_test_cases,
+            max_valid: max_examples,
+            max_calls: max_examples * 10,
+        };
+        optimise_targets(ctf, &mut self.targeting, &mut ctx);
+    }
+}
+
 /// Mutable state threaded through the hill-climber.
 pub(crate) struct OptimiseCtx<'a> {
     pub result: &'a mut Option<Vec<ChoiceNode>>,
