@@ -41,6 +41,10 @@ pub enum Statement {
         then_body: Vec<Statement>,
         else_body: Option<Vec<Statement>>,
     },
+    Target {
+        score_expr: String,
+        label: String,
+    },
 }
 
 impl Statement {
@@ -71,6 +75,9 @@ impl Statement {
                     "let {var_name}: {} = tc.draw({gen_source});",
                     type_annotation.render()
                 )
+            }
+            Statement::Target { score_expr, label } => {
+                format!("tc.target({score_expr}, \"{label}\");")
             }
             Statement::IfBlock {
                 condition,
@@ -231,7 +238,24 @@ pub fn generate_statements(tc: &TestCase) -> Vec<Statement> {
         stmts.push(gen_if_block(tc, &mut env, 0));
     }
 
-    // Phase 4: Optionally add trailing draws/notes/assumes
+    // Phase 4: Optionally add 0-3 tc.target() calls. These populate the
+    // native backend's pareto front / targeted-optimiser state, which
+    // would otherwise never be exercised.
+    let has_numeric = env
+        .vars
+        .iter()
+        .any(|v| v.rust_type.is_integer() || v.rust_type.is_float());
+    if has_numeric {
+        // Bias toward at least one target call so the pareto / targeted
+        // optimiser paths actually run; hegel's exploration heavily
+        // oversamples the lower bound, so min=0 leaves them unexercised.
+        let num_targets: usize = tc.draw(generators::integers::<usize>().min_value(1).max_value(3));
+        for _ in 0..num_targets {
+            stmts.push(gen_target_statement(tc, &env));
+        }
+    }
+
+    // Phase 5: Optionally add trailing draws/notes/assumes
     let num_trailing: usize = tc.draw(generators::integers::<usize>().min_value(0).max_value(2));
     for _ in 0..num_trailing {
         stmts.push(gen_misc_statement(tc, &mut env));
@@ -256,11 +280,15 @@ fn gen_draw_or_dependent(tc: &TestCase, env: &mut Env) -> Statement {
     }
 }
 
-/// Generate a misc statement (draw, note, assume).
+/// Generate a misc statement (draw, note, assume, target).
 fn gen_misc_statement(tc: &TestCase, env: &mut Env) -> Statement {
     let has_vars = !env.vars.is_empty();
+    let has_numeric = env
+        .vars
+        .iter()
+        .any(|v| v.rust_type.is_integer() || v.rust_type.is_float());
     let choice: u8 = if has_vars {
-        tc.draw(generators::integers::<u8>().min_value(0).max_value(5))
+        tc.draw(generators::integers::<u8>().min_value(0).max_value(6))
     } else {
         0
     };
@@ -269,6 +297,13 @@ fn gen_misc_statement(tc: &TestCase, env: &mut Env) -> Statement {
         3 => gen_note_statement(tc, env),
         4 => gen_assume_statement(tc, env),
         5 => gen_draw_or_dependent(tc, env),
+        6 => {
+            if has_numeric {
+                gen_target_statement(tc, env)
+            } else {
+                gen_draw_or_dependent(tc, env)
+            }
+        }
         _ => unreachable!(),
     }
 }
@@ -948,6 +983,41 @@ fn gen_note_statement(tc: &TestCase, env: &Env) -> Statement {
     Statement::Note {
         message: format!("\"{} = {{:?}}\", {}", var.name, var.name),
     }
+}
+
+/// Generate a `tc.target(score, label)` call. Picks a numeric variable in
+/// scope and projects it to f64 with one of a few simple expressions.
+/// Drives the pareto-front / targeted-optimiser code paths in the native
+/// backend.
+fn gen_target_statement(tc: &TestCase, env: &Env) -> Statement {
+    let numeric_vars: Vec<&VarInfo> = env
+        .vars
+        .iter()
+        .filter(|v| v.rust_type.is_integer() || v.rust_type.is_float())
+        .collect();
+    let var = Env::pick_from(tc, &numeric_vars);
+    let name = &var.name;
+    let score_expr = if var.rust_type.is_float() {
+        match tc.draw(generators::integers::<u8>().min_value(0).max_value(2)) {
+            0 => format!("({name} as f64)"),
+            1 => format!("({name} as f64).abs()"),
+            _ => format!("if ({name} as f64).is_finite() {{ {name} as f64 }} else {{ 0.0 }}"),
+        }
+    } else {
+        // Integer: cast through i128 so we don't overflow on extreme widths,
+        // then to f64 for the API.
+        match tc.draw(generators::integers::<u8>().min_value(0).max_value(2)) {
+            0 => format!("({name} as i128) as f64"),
+            1 => format!("(({name} as i128).wrapping_neg()) as f64"),
+            _ => format!("(({name} as i128).abs()) as f64"),
+        }
+    };
+    let label = match tc.draw(generators::integers::<u8>().min_value(0).max_value(2)) {
+        0 => "".to_string(),
+        1 => "score".to_string(),
+        _ => format!("score_{name}"),
+    };
+    Statement::Target { score_expr, label }
 }
 
 fn gen_assume_statement(tc: &TestCase, env: &Env) -> Statement {
