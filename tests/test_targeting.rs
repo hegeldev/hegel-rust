@@ -95,8 +95,12 @@ fn test_max_examples_is_not_exceeded() {
 }
 
 /// Targeting with a 2D quadratic score drives the optimizer to (500, 500).
-/// Server mode only: the native backend records target observations but does
-/// not feed them back to actively guide search toward an interior maximum.
+/// Server mode only: the native runner's production hill-climber currently
+/// only probes the `+1` direction (see `find_integer_for_target` in
+/// `conjecture_runner.rs`), so it cannot walk *down* toward an interior
+/// maximum from random initial draws above 500. The other tests in this
+/// file all happen to optimise toward a boundary, which a one-directional
+/// hill-climb does reach.
 #[cfg(not(feature = "native"))]
 #[test]
 fn test_finds_a_local_maximum() {
