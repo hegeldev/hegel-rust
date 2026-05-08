@@ -138,7 +138,6 @@ impl ExplicitTestCase {
         // No-op for explicit test cases: see `target`.
     }
 
-
     #[doc(hidden)]
     pub fn start_span(&self, _label: u64) {
         panic!("start_span is not supported in explicit test cases");
