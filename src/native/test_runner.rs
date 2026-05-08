@@ -703,14 +703,18 @@ fn record_into(node: &mut DetTreeNode, nodes: &[ChoiceNode]) {
     let mut current = node;
     for choice in nodes {
         if let Some(ref expected_kind) = current.kind {
-            assert_eq!(
-                expected_kind, &choice.kind,
-                "Non-deterministic test: ChoiceKind at this position differs from a prior run.\n\
-                 expected = {expected_kind:?}\n\
-                 got      = {:?}\n\
-                 This usually means a generator depends on global mutable state.",
-                choice.kind
-            );
+            if *expected_kind != choice.kind {
+                // Wording mirrors `tree.rs::CachedTestFunction::record` so the
+                // user-facing diagnostic is identical regardless of which
+                // engine path detected the divergence. If you change one,
+                // change both.
+                panic!(
+                    "Your data generation is non-deterministic: at the same choice \
+                     position with the same prefix, the schema changed from {:?} to {:?}. \
+                     This usually means a generator depends on global mutable state.",
+                    expected_kind, choice.kind
+                );
+            }
         } else {
             current.kind = Some(choice.kind.clone());
         }

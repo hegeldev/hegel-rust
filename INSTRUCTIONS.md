@@ -289,7 +289,7 @@ When you fix an item, append the commit hash(es) at the end of the line, like ` 
 
 For each: read the test, decide whether the *test* is wrong (expected message changed because the live runner moved) or the *implementation* is wrong (a real regression). Fix the actual cause; never paper over by relaxing the assertion. If the assertion was correctly capturing a behaviour we still want, the implementation is what should change.
 
-- [ ] **T0.1** `tests/test_flaky_global_state.rs::flaky_tests::test_flaky_global_state` — expected substring `"Your data generation is non-deterministic"` no longer matches; live runner panics with `"Non-deterministic test: ChoiceKind at this position differs from a prior run."` (`src/native/test_runner.rs:706`). Two non-determinism panic sites have diverged. Unify the message between `tree.rs` and `test_runner.rs`, or update the test to match — the *behaviour* is correct, only the wording differs. Pick one canonical message, ideally one that mentions "non-deterministic data generation" so the user-facing diagnostic is informative.
+- [x] **T0.1** `tests/test_flaky_global_state.rs::flaky_tests::test_flaky_global_state` — expected substring `"Your data generation is non-deterministic"` no longer matches; live runner panics with `"Non-deterministic test: ChoiceKind at this position differs from a prior run."` (`src/native/test_runner.rs:706`). Two non-determinism panic sites have diverged. Unify the message between `tree.rs` and `test_runner.rs`, or update the test to match — the *behaviour* is correct, only the wording differs. Pick one canonical message, ideally one that mentions "non-deterministic data generation" so the user-facing diagnostic is informative.
 - [ ] **T0.2** `tests/test_health_check.rs::native_too_slow_detected` — fails. Read the test, identify the expected vs actual behaviour, and fix.
 - [ ] **T0.3** `native_single_panic_on_failure` (in whichever test binary — find it with `git grep -n 'fn native_single_panic_on_failure'`). Fix.
 - [ ] **T0.4** `test_disabling_shrink_limits_interesting_calls` — fails. Investigate; fix.
@@ -381,7 +381,8 @@ For each: read the test, decide whether the *test* is wrong (expected message ch
 
 Add new findings here, in the appropriate tier. Each must include a file:line and a one-sentence "why this is wrong".
 
-- (none yet)
+- [ ] **N1 (Tier A).** `src/native/test_runner.rs:540-720` and `src/native/tree.rs:27-264` — duplicated non-determinism detection: each runner has its own `ChoiceValueKey` enum AND its own trie (`DetTreeNode` vs `TreeNode`) AND its own panic-message wording. The wording duplication caused T0.1; the structural duplication will cause more drift. Factor the trie + key + diagnostic into a single shared module under `src/native/` (or `core/`) and use it from both runners. While there, also de-duplicate `panic_message` (it's defined in `src/native/runner.rs:11` and again in `src/run_lifecycle.rs:153`).
+- [ ] **N2 (meta).** INSTRUCTIONS.md §0 cites `external/hypothesis/...` and `external/pbtkit/...`; the actual paths are `resources/hypothesis/hypothesis-python/src/hypothesis/internal/conjecture/` and `resources/pbtkit/`. Update §0 so future iterations don't waste time looking under `external/`.
 
 ### Resolved as not-a-bug (do not re-add)
 
