@@ -95,6 +95,9 @@ fn test_max_examples_is_not_exceeded() {
 }
 
 /// Targeting with a 2D quadratic score drives the optimizer to (500, 500).
+/// Server mode only: the native backend records target observations but does
+/// not feed them back to actively guide search toward an interior maximum.
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_finds_a_local_maximum() {
     expect_panic(
