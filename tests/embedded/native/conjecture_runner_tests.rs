@@ -1066,6 +1066,39 @@ fn native_runner_find_integer_invalid_probe_breaks() {
     runner.optimise_targets();
 }
 
+// ── NativeConjectureRunner::find_integer_for_target — hi > (1 << 20) cap ──
+//
+// The exponential-doubling phase in `find_integer_for_target` returns
+// when `hi` exceeds 2^20.  Starting at hi=5 and doubling on each
+// successful try_replace, ~18 doublings push hi past the cap.  Give the
+// climber a monotone score over a large integer range so each probe is
+// accepted and the cap actually fires.
+
+#[test]
+fn native_runner_find_integer_hi_cap_fires() {
+    let settings = NativeRunnerSettings::new()
+        .max_examples(500)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let v = data.draw_integer(0, 10_000_000);
+            data.target_observations
+                .insert("score".to_string(), v as f64);
+        },
+        settings,
+        make_rng(),
+    );
+    // Seed at 0 so the climber has maximum headroom to double upward.
+    let choices = vec![ChoiceValue::Integer(0)];
+    runner.cached_test_function(&choices);
+    runner.optimise_targets();
+}
+
 // ── InterestingOrigin::from_panic_payload — &str and String arms ─────────
 //
 // Lines 82, 84: the first two branches of `from_panic_payload` fire for

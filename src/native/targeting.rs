@@ -26,17 +26,18 @@ impl TargetingState {
         }
     }
 
-    /// Record the observations from a Valid run. For each label, if the
-    /// score beats the current best, remember the new score and the choice
-    /// sequence that produced it.
+    /// Record the observations from a Valid run. The first observation for
+    /// each label always populates both maps; subsequent observations only
+    /// overwrite when the score strictly improves. The two maps therefore
+    /// share the same key set (relied on by [`hill_climb`]).
     pub fn record(&mut self, choices: &[ChoiceValue], observations: &HashMap<String, f64>) {
         for (label, &score) in observations {
-            let entry = self
-                .best_observed_targets
-                .entry(label.clone())
-                .or_insert(f64::NEG_INFINITY);
-            if score > *entry {
-                *entry = score;
+            let should_record = match self.best_observed_targets.get(label) {
+                None => true,
+                Some(&best) => score > best,
+            };
+            if should_record {
+                self.best_observed_targets.insert(label.clone(), score);
                 self.best_choices_for_target
                     .insert(label.clone(), choices.to_vec());
             }
@@ -95,26 +96,22 @@ fn run_trial<F: FnMut(TestCase)>(
 
 /// Hill-climb every target until no further improvements are found or the
 /// budget is exhausted. Mirrors `engine.py::optimise_targets`.
+///
+/// Budget is enforced by [`run_trial`], which is the only place a test is
+/// actually invoked; once it short-circuits, every downstream `try_replace`
+/// returns false and the surrounding loops fall out via their natural
+/// no-improvement exits.
 pub(crate) fn optimise_targets<F: FnMut(TestCase)>(
     ctf: &mut CachedTestFunction<F>,
     targeting: &mut TargetingState,
     ctx: &mut OptimiseCtx<'_>,
 ) {
     let targets: Vec<String> = targeting.best_observed_targets.keys().cloned().collect();
-    if targets.is_empty() {
-        return;
-    }
     let mut max_improvements: usize = 10;
     loop {
-        if ctx.budget_exhausted() {
-            return;
-        }
         let prev_calls = *ctx.calls;
         let mut any_improvements = false;
         for target in &targets {
-            if ctx.budget_exhausted() {
-                return;
-            }
             let imps = hill_climb(ctf, targeting, ctx, target, max_improvements);
             if imps > 0 {
                 any_improvements = true;
@@ -137,10 +134,16 @@ fn hill_climb<F: FnMut(TestCase)>(
     target: &str,
     max_improvements: usize,
 ) -> usize {
-    let start_choices = match targeting.best_choices_for_target.get(target).cloned() {
-        Some(c) => c,
-        None => return 0,
-    };
+    // `record` keeps `best_choices_for_target` in sync with `best_observed_targets`,
+    // so any label our caller iterates from `best_observed_targets` must have a
+    // matching choice sequence here.
+    let start_choices = targeting
+        .best_choices_for_target
+        .get(target)
+        .cloned()
+        .unwrap_or_else(|| {
+            unreachable!("best_choices_for_target out of sync with best_observed_targets")
+        });
     let trial = match run_trial(ctf, targeting, ctx, &start_choices) {
         Some(t) => t,
         None => return 0,
@@ -156,9 +159,6 @@ fn hill_climb<F: FnMut(TestCase)>(
 
     let mut i: isize = current_nodes.len() as isize - 1;
     while i >= 0 && improvements <= max_improvements {
-        if ctx.budget_exhausted() {
-            return improvements;
-        }
         let idx = i as usize;
         let node = &current_nodes[idx];
         if !node.was_forced {
@@ -220,7 +220,7 @@ fn find_integer<F: FnMut(TestCase)>(
     let mut improvements: usize = 0;
 
     for k in 1..5i128 {
-        if improvements >= max_improvements || ctx.budget_exhausted() {
+        if improvements >= max_improvements {
             return improvements;
         }
         if !try_replace(
@@ -242,7 +242,7 @@ fn find_integer<F: FnMut(TestCase)>(
     let mut lo: i128 = 4;
     let mut hi: i128 = 5;
     loop {
-        if improvements >= max_improvements || ctx.budget_exhausted() {
+        if improvements >= max_improvements {
             return improvements;
         }
         if !try_replace(
@@ -267,7 +267,7 @@ fn find_integer<F: FnMut(TestCase)>(
     }
 
     while lo + 1 < hi {
-        if improvements >= max_improvements || ctx.budget_exhausted() {
+        if improvements >= max_improvements {
             return improvements;
         }
         let mid = lo + (hi - lo) / 2;
@@ -339,3 +339,7 @@ fn try_replace<F: FnMut(TestCase)>(
     *improvements += 1;
     true
 }
+
+#[cfg(test)]
+#[path = "../../tests/embedded/native/targeting_tests.rs"]
+mod tests;
