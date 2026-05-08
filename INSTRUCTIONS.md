@@ -1,0 +1,467 @@
+# INSTRUCTIONS.md — Native backend audit remediation
+
+You are working on the `DRMacIver/native` branch of `hegel-rust`. The repository is at `/home/ubuntu/hegel-rust`. You are being run inside a Ralph loop — you will be re-spawned in a fresh context after each iteration. **This file is your durable memory.** Read it from the top each iteration.
+
+## 0. The situation
+
+The branch implements a native pure-Rust backend for Hegel (the `native` cargo feature) that runs the Hypothesis-style PBT engine in-process instead of going through the Python server. An audit found that **a large fraction of the implementation is sloppy, silently degraded, or claims behaviour it does not deliver**. Your job is to fix it — properly — until the native backend is genuinely good.
+
+The reader is **David MacIver, original author of Hypothesis.** He will read this code. Anything fake, half-finished, or "it kind of works on the happy path" will infuriate him. **Your aim is code he reads and approves of**, not code that satisfies a CI check.
+
+The Python references live in:
+- `/home/ubuntu/hegel-rust/external/hypothesis/hypothesis-python/src/hypothesis/internal/conjecture/` (the engine, shrinker, optimiser, pareto)
+- `/home/ubuntu/hegel-rust/external/pbtkit/` (DRMacIver's leaner reimplementation; closer in spirit to ours)
+
+When you port a behaviour, **cite the upstream file:line in a comment** so the next reader can verify the port.
+
+## 1. Iteration protocol
+
+### 1.0 GREEN BASELINE FIRST — non-negotiable
+
+**Before doing anything else, run the test suite.**
+
+```bash
+cargo test --features native --tests --no-fail-fast 2>&1 | grep -E 'FAILED|test result'
+cargo test --tests --no-fail-fast 2>&1 | grep -E 'FAILED|test result'
+```
+
+If any test fails — including pre-existing failures, including failures unrelated to the punch-list, including flakes — **the only valid iteration option is to fix one of those failures.** Tier-0 in §7 lists known-failing tests; if a failing test isn't already there, add it.
+
+You cannot meaningfully audit, fix, or verify anything against a red baseline. "It wasn't caused by my change" is not an excuse. A red suite means *nothing* about correctness can be concluded — when a fix lands and the suite stays red, you can't tell if it broke something or not.
+
+Do not pick from Tier S, A, B, C, D, or E until **every** test in both feature configurations passes. Do not write new tests until then either — they would be running against the same broken baseline.
+
+If a test is *legitimately* impossible to fix (genuine platform issue, etc.), document it under §8 with `[ ]` so a human can decide whether to delete it; do not `#[ignore]` it as a workaround.
+
+### 1.1 What an iteration does
+
+Once the baseline is green (all tests pass under both feature configurations), each Ralph iteration does **one** of the following, then exits:
+
+1. **Fix one punch-list item.** Pick the highest-priority unchecked item from §7 (Tier 0 first if non-empty, then S, A, B, C, D, E). Apply the test-first discipline in §3. Commit. Tick the box in this file (edit it). Done.
+2. **Investigate further.** If §7 looks complete but you're not confident the audit was thorough, run one of the heuristics in §6 to look for new findings. Add anything you find as a new punch-list item with an unchecked box, in the appropriate tier. Commit the additions to INSTRUCTIONS.md. Done.
+3. **Run the exit checks (§9).** If every box in §7 is ticked and you ran exit checks last iteration without finding anything new, run them again and emit the completion promise.
+
+**Do not** try to do multiple items per iteration. One thing, well, per iteration. The loop will keep running.
+
+**Always commit your work at the end of an iteration**, even if it's partial — but mark the punch-list item complete only when it is *actually* complete by the standards of §3 and §4. Use commit messages that reference the punch-list item number.
+
+If you start an item and decide mid-way it's bigger than expected, split it: add new sub-items to the punch list, finish what you can, commit, and the next iteration will continue.
+
+**Never edit this file to lower the quality bar to escape the loop.** If something is genuinely impossible, add an `## 8. Open questions` entry describing what's blocking and *what you tried*, then continue with the next item. Do not falsely claim completion.
+
+## 2. The prime directive: TESTS FIRST
+
+For every single bug on the punch list, **the first thing you do is make sure the test suite catches it.** Then, and only then, do you fix the bug.
+
+The protocol for each item:
+
+1. **Read the bug carefully.** Understand what the implementation does and what it should do. Read the relevant Python reference if applicable.
+2. **Write a test that fails on the current code.** The test must:
+   - Assert the *correct* behaviour, not the current (buggy) behaviour.
+   - Run under `cargo test --features native` (and if relevant, also under default features).
+   - Be a real behavioural test, not a "no panic" test (see §4).
+3. **Run the test. Confirm it fails.** If it passes on the current buggy code, the test is wrong — it isn't catching the bug. Strengthen it until it fails.
+4. **Commit the failing test.** Commit message: `tests: add failing test for <punch-list item N> — <one-line summary>`. (Yes, commit a failing test. The next iteration's CI will be red until the fix lands. That's intentional and OK on a feature branch — this is the discipline.)
+   - **Exception:** if committing a failing test would block other work (e.g. the failing test panics in a way that takes down the whole test binary), gate it behind `#[ignore]` with a comment naming the punch-list item and remove the ignore in the same commit as the fix.
+5. **Implement the fix.** Match the upstream reference where there is one. Remove the corresponding `// nocov` block if there is one — never re-add it.
+6. **Run the test again. Confirm it now passes.** Run the *full* test suite (`just test` and `cargo test --features native`) — your fix must not break anything else.
+7. **Commit the fix.** Commit message: `fix: <punch-list item N> — <one-line>`. Include `Refs: INSTRUCTIONS.md item N` in the body.
+8. **Tick the box in §7.** Update INSTRUCTIONS.md (this file) so the next iteration knows the item is done.
+
+Why tests first, always:
+- It proves the bug is real and observable from the test surface.
+- It prevents regressions when the next refactor lands.
+- It forces you to articulate the correct behaviour before writing the fix, which catches a category of "I fixed something but not what I should have" mistakes.
+- The audit found dozens of cases where existing tests asserted weak claims that wouldn't catch the bug. We are not adding to that pile.
+
+## 3. The quality bar — what "good" means
+
+A fix is not done until it meets every applicable point below. If you can't honestly tick all of them, the fix isn't ready.
+
+### 3.1 Code
+
+- **No fake stubs.** A function that exists must do what its name and doc claim. No `fn foo(_msg: &str) {}` "legacy stubs" left in the code unless they are genuinely needed; if they are needed, the no-op must be obvious from the name (e.g. `fn ignore_msg`) or wrapped in a clear "intentionally a no-op because X" comment.
+- **No silent option-ignoring.** Every public Settings option, Phase, Verbosity level, etc. is either honoured by both backends or rejected at the boundary with a clear error. "Compiles and accepts but does nothing" is forbidden.
+- **No `_ => panic!(...)` on external input.** Schema parsing, command dispatch, and anything that consumes data crossing a backend boundary must return `Status::Invalid` or a typed error for unrecognised input — not crash the test runner.
+- **No bare `unreachable!()`.** Every `unreachable!()` includes a message naming the invariant that makes it unreachable. If you can't articulate the invariant, it isn't unreachable; replace it with proper error handling.
+- **No dead code.** No public fields that are never read. No enum arms that are never matched. No re-exports of types that aren't used. `cargo +nightly udeps` and `cargo machete` (if available) help; manual grep also works (`git grep -n field_name`).
+- **Match Python upstream** unless you have a documented reason to diverge. Cite `engine.py:1234` etc. in a comment when the choice is non-obvious. Divergences must be explicit and justified.
+- **No `// nocov`** without explicit human approval. The user has stated this is a hard rule. If a line is genuinely unreachable, restructure the code so the unreachability is type-level. If you cannot, add an `## 8. Open questions` entry asking for permission and skip the item until granted.
+- **No coverage-ratchet bumps** without explicit human approval. Same rule.
+- **Comments explain WHY, not WHAT.** Don't restate code. Do explain non-obvious invariants, references to upstream, and things that surprised you.
+- **No commented-out code.** Delete it. Git remembers.
+
+### 3.2 Tests
+
+- **Every test asserts a *behavioural* claim.** "Doesn't panic" is not a behavioural claim. `let _ = result;` at the end of a test is a smell — it usually means the test author didn't decide what should be true.
+- **Every test would fail if the implementation broke.** Before committing a test, mentally (or actually) revert the fix and check that the test fails. If a wholly broken implementation passes the test, the test is not pulling its weight.
+- **Tests assert against the *spec*, not the *implementation*.** Don't read the implementation, run it, observe the output, and then assert that exact output. Decide what the function *should* do and assert that. If the spec is "outputs an integer ≥ 0", assert that — don't assert `== 47` because that's what the current code happens to return.
+- **Tests run under both backends** when the behaviour is supposed to be backend-agnostic. If a test is `cfg(not(feature = "native"))`-gated, there must be a *good reason* in a comment naming the divergence.
+- **Tests for randomised behaviour need either**: a deterministic seed that's been verified to exercise the case, OR a probabilistic assertion (e.g. "in 1000 runs, we hit X at least once") strong enough that random luck doesn't cover a genuine bug.
+- **Helper assertions like `check_can_generate_examples` are smoke tests, not behavioural tests.** They have a place but don't count as coverage of correctness.
+
+### 3.3 Coverage
+
+- **100% line coverage on new code** (project rule).
+- **Coverage shouldn't be gamed.** If you write a test purely to bump a counter, that's a Tier-D test from the audit. Either the line is genuinely worth a behavioural test, or it should be deleted.
+- **If a line is hard to cover, restructure so it's easy.** Lift error paths into the type system, narrow function inputs, etc. The coverage skill at `.claude/skills/coverage/SKILL.md` is your reference.
+
+### 3.4 Documentation
+
+- **Public docs match behaviour.** Settings docs that say "the X option does Y" must be true on every backend.
+- **RELEASE.md is honest.** No marketing. If a feature has caveats, they're stated.
+- **Doc-examples in rustdoc compile and run** (`just docs` does this).
+
+## 4. Rules of engagement
+
+These are absolute. Do not break them, even to "make progress".
+
+- **Never** add `// nocov` without an `## 8. Open questions` entry asking for explicit permission.
+- **Never** raise the coverage ratchet (`.github/coverage-ratchet.json`) without permission.
+- **Never** mark a punch-list item complete unless §3 is fully met.
+- **Never** delete a test without justifying the deletion in the commit message AND in `## 10. Test changelog` below.
+- **Never** add `#[ignore]` to a test without a comment naming the reason and a punch-list item to un-ignore it.
+- **Never** weaken an existing assertion. If a test seems too strict, the burden is on you to explain why the strictness was wrong.
+- **Never** delete code marked `// nocov` without first writing a test that covers it. (The audit suggests many of these are reachable; deleting them silently would be a regression in the wrong direction.)
+- **Always** run `just check` (which includes `cargo test`, `cargo clippy`, `cargo fmt --check`) before committing a fix. If `just check` fails, the fix isn't done.
+- **Always** check both feature configurations: `cargo test` (default) and `cargo test --features native`.
+- **Prefer one-PR-per-item commits over big bundled commits.** Each item is a separable concern.
+
+If you are tempted to break a rule "just this once", that is the moment to add an entry under §8 and let a human decide.
+
+## 5. How fixes generally look (recipes)
+
+These are templates. Apply with judgement.
+
+### 5.1 Recipe: "option X is silently ignored under native"
+
+1. Write a test asserting that option X has its declared effect under native. Make it observable — e.g., `Phase::Target` removed → no `target_observations` recorded → some metric is zero.
+2. Confirm the test fails on current code.
+3. Find the live runner path (`src/native/test_runner.rs` for production; `src/native/conjecture_runner.rs` for the engine port).
+4. Check whether the option is read at all. If not, plumb it. If read but ignored, branch on it.
+5. Mirror Python's gate (cite `engine.py:line`).
+6. Run the test. Run the suite.
+
+### 5.2 Recipe: "function returns hard-coded / empty data"
+
+Examples: `cached_test_function` returning `nodes: vec![]` and `tags: HashSet::new()`.
+1. Write a test that compares `result.nodes` (or `tags`) against the expected sequence after a known input. Make sure the test fails currently.
+2. Trace the data flow upstream to find where the real value is computed but discarded.
+3. Plumb it through. Watch for ownership — `tags: HashSet<Tag>` may need a clone.
+4. Verify dominance / Pareto comparisons that consume the field now behave correctly. Add a separate test for *that* if it isn't covered.
+
+### 5.3 Recipe: "schema kind / panic on unknown input"
+
+Examples: `_ => panic!("Unknown schema type")` in `schema/mod.rs:189`.
+1. Write a test that constructs a malformed-or-future schema and asserts the runner returns `Status::Invalid` (or a clean error) instead of panicking.
+2. Replace the `_ => panic!(...)` with a proper Result-returning path. Bubble the error up to `mark_invalid` or equivalent.
+3. Make sure callers handle the new variant. Don't `.unwrap()` it back into a panic.
+
+### 5.4 Recipe: "shrinker pass missing"
+
+Examples: `pass_to_descendant`, `try_trivial_spans`, `reorder_spans`, `node_program`, `mutate_and_shrink`.
+1. Write a shrink-quality test asserting that a counterexample shrinks to a specific minimal form. It should fail currently because the missing pass means the shrink stops early.
+2. Read the upstream pass in `hypothesis-python/.../shrinker/passes.py` (and `shrinker.py`).
+3. Port it. Match the iteration order, fixpoint semantics, and `consider`/`incorporate` discipline of Python.
+4. Add it to the live shrink loop (`Shrinker::new` vs `Shrinker::with_probe` matters — see audit item #5).
+5. Verify the shrink test now hits the minimum.
+
+### 5.5 Recipe: "// nocov hides covered code"
+
+1. Write a test that exercises the supposedly-uncovered branch.
+2. Run coverage to confirm the line is now hit (`just check-coverage`).
+3. Remove the `// nocov` markers.
+4. Lower the coverage ratchet to match (this is OK because coverage is improving, not getting worse — but still ask for permission since the rule is hard).
+
+### 5.6 Recipe: "vapid test (Potemkin)"
+
+1. Identify what behaviour the test claims to verify (from name + comments).
+2. Write a real assertion against that behaviour.
+3. Verify the new test fails if the underlying code is broken (mentally revert the relevant code).
+4. Replace the vapid test with the real one. Or add the real one alongside if there's an argument for keeping the smoke check.
+5. Note the change under `## 10. Test changelog`.
+
+## 6. How to find more (investigative heuristics)
+
+Use these any iteration that doesn't have an obvious next item, OR if you finish the punch list and want to verify completeness.
+
+### 6.1 Stub / fake-implementation hunt
+
+```bash
+# Definite stubs
+git grep -n -E 'todo!\(\)|unimplemented!\(\)' src/native/ src/
+
+# No-op functions ("legacy stub", "for now", "stub", "skip")
+git grep -ni -E 'legacy stub|for now|simplification|stub|skip|fixme|todo|hack|xxx' src/native/ src/
+
+# Functions whose body is only `()` or `Ok(())` or `_ = arg;`
+# (manually scan results from this; many false positives)
+grep -rn -E 'fn [a-z_]+\([^)]*\)[^{]*\{\s*\}|fn [a-z_]+\([^)]*\)[^{]*\{\s*Ok\(\(\)\)\s*\}' src/native/
+
+# Public fields that are never read
+# (audit each for read sites; if zero, suspicious)
+git grep -n 'pub [a-z_]\+:' src/native/
+```
+
+### 6.2 Silent-option-ignoring hunt
+
+For every public option on the `Hegel` builder (`src/runner.rs` / `src/lib.rs`):
+
+1. Find where it's stored on `Settings`.
+2. `git grep -n` the field name across `src/native/` and `src/server/`.
+3. If only one backend reads it, that's the bug. Confirm with a test.
+
+### 6.3 Forward-compat panic hunt
+
+```bash
+git grep -n -E '_ *=> *panic!|_ *=> *unreachable!' src/native/
+```
+
+For each: is the input source external (CBOR from server, regex pattern from user, schema field)? If yes, normally that should be `Status::Invalid` or a typed error.
+
+**Exception (per §7 "Resolved as not-a-bug"):** schema-side panics (`src/native/schema/*`) are intentional. Rust generators construct schemas; if the Rust API can't construct the offending shape, the panic is unreachable, and if it can, a Rust-side generator test catches it. Skip these.
+
+### 6.4 Bare `unreachable!()` hunt
+
+```bash
+git grep -n 'unreachable!()' src/native/
+```
+
+Each must have a message. Bare `unreachable!()` is a debuggability bug — fix on sight.
+
+### 6.5 `// nocov` audit
+
+```bash
+grep -rn -E '// nocov( start| end)?' src/native/
+```
+
+For each block:
+1. Read the wrapped code.
+2. Search for tests that *call* this code (`git grep -n "fn_name" tests/`).
+3. If tests call it: the nocov is masking real coverage — write a behavioural test, remove the nocov.
+4. If no tests call it but the code is reachable from real input: write a test, remove the nocov.
+5. If genuinely unreachable: restructure to make the unreachability type-level (e.g. exhaustive match on a smaller enum), then remove the nocov.
+
+### 6.6 Shrink-quality test audit
+
+Every test under `tests/test_find_quality/`, `tests/test_shrink_quality/`, `tests/pbtkit/shrink_quality_*` should assert *the minimum value*, not "shrinks to something". Look for:
+
+```bash
+git grep -n 'let _ = .*Minimal::\|let _ = .*\.run()\b' tests/
+git grep -n 'is_empty\|!\.is_empty' tests/test_*quality*
+```
+
+Replace with `assert_eq!(result, expected_minimum)`.
+
+### 6.7 Cross-backend parity sweep
+
+Run the test suite under both backends and diff failures:
+
+```bash
+cargo test 2>&1 | tee /tmp/server.out
+cargo test --features native 2>&1 | tee /tmp/native.out
+diff <(grep -E '^test ' /tmp/server.out | sort) <(grep -E '^test ' /tmp/native.out | sort)
+```
+
+Any test that exists under one but not the other (cfg-gated) needs justification. Any test passing on one but failing on the other points to a parity bug.
+
+### 6.8 Conformance audit
+
+`tests/conformance/test_conformance.py` runs Rust binaries from `tests/conformance/rust/src/bin/`. Confirm the conformance Cargo.toml enables `native`. If not, conformance is only validating server-side generators.
+
+### 6.9 RELEASE.md / docs honesty pass
+
+Read `RELEASE.md`, `README.md`, top-level rustdoc on `Hegel`, `Settings`, every Phase / Verbosity / HealthCheck variant. For each claim, verify it's actually true on both backends. Add findings to the punch list.
+
+### 6.10 "Two runners" hunt
+
+The audit found that production (`NativeTestRunner`) and engine ports (`NativeConjectureRunner`) are different code paths with different bugs. When fixing anything in either, ask: is the same bug in the other? Search both files.
+
+## 7. The punch list
+
+Format: `[ ]` is open, `[x]` is done. Edit this file to tick boxes when items are complete (per §1, after the fix is committed and tests pass). Items are sorted by severity within each tier.
+
+When you fix an item, append the commit hash(es) at the end of the line, like ` — fixed in abc1234`.
+
+### Tier 0 — Failing tests (green baseline)
+
+**These must all be ticked before any other tier is touched** (see §1.0). Each is a test that fails on the current commit under `--features native`. Investigate root cause; do not weaken assertions to make them pass.
+
+For each: read the test, decide whether the *test* is wrong (expected message changed because the live runner moved) or the *implementation* is wrong (a real regression). Fix the actual cause; never paper over by relaxing the assertion. If the assertion was correctly capturing a behaviour we still want, the implementation is what should change.
+
+- [ ] **T0.1** `tests/test_flaky_global_state.rs::flaky_tests::test_flaky_global_state` — expected substring `"Your data generation is non-deterministic"` no longer matches; live runner panics with `"Non-deterministic test: ChoiceKind at this position differs from a prior run."` (`src/native/test_runner.rs:706`). Two non-determinism panic sites have diverged. Unify the message between `tree.rs` and `test_runner.rs`, or update the test to match — the *behaviour* is correct, only the wording differs. Pick one canonical message, ideally one that mentions "non-deterministic data generation" so the user-facing diagnostic is informative.
+- [ ] **T0.2** `tests/test_health_check.rs::native_too_slow_detected` — fails. Read the test, identify the expected vs actual behaviour, and fix.
+- [ ] **T0.3** `native_single_panic_on_failure` (in whichever test binary — find it with `git grep -n 'fn native_single_panic_on_failure'`). Fix.
+- [ ] **T0.4** `test_disabling_shrink_limits_interesting_calls` — fails. Investigate; fix.
+- [ ] **T0.5** `test_single_test_case_with_seed_is_deterministic` — fails. This may be related to A12 (single-test-case mode ignores `seed`/`derandomize`) — likely the test asserts the correct behaviour and the implementation is wrong; fixing this fix may overlap with A12. If so, link the items.
+- [ ] **T0.6** Re-run the suite after each fix above. If new failures appear, add them here. The Tier-0 list is *complete* when **`cargo test`** and **`cargo test --features native`** both produce zero failures and zero ignores (other than ignores that have a documented punch-list item attached).
+
+### Tier S — Lying outright
+
+- [x] **S1.** `src/native/runner.rs:27` — `store_final_panic_info(_msg: &str) {}` is a no-op. Verified `CachedTestFunction::run_final` (the only caller of the `is_final=true` branch in `execute`) was dead code with zero callers anywhere in `src/` or `tests/`. Deleted the no-op, the dead `run_final` method, the `is_final` parameter on `execute`, and updated doc comments. Existing test suite (~30 `CachedTestFunction` tests) covers the surface that remains.
+- [ ] **S2.** `src/native/conjecture_runner.rs:2153` — `todo!("NativeConjectureRunner::new_shrinker")`. Implement it (using `Shrinker::with_probe` so `mutate_and_shrink` works) and honour the `_predicate` parameter. Add tests routed through `runner.new_shrinker`.
+- [ ] **S3.** `src/native/conjecture_runner.rs:2450` — `pareto_optimise` is implemented but never called from `run()`. Wire it into the production loop (or delete it if `NativeConjectureRunner` is itself dead-in-production; in that case, demote to a port-only test fixture and document).
+- [ ] **S4.** `src/native/test_runner.rs:125,230,301` — `Phase::Target` is silently ignored. Gate `TargetingDriver::record` and `maybe_optimise` on `phases.contains(&Phase::Target)`. Test: removing `Phase::Target` should make `target_observations` empty.
+- [ ] **S5.** `src/native/shrinker/mod.rs:79-94` — `mutate_and_shrink` silently disabled because the runner uses `Shrinker::new` not `Shrinker::with_probe`. Switch to `with_probe` (or design a unified constructor). Test: a counterexample whose minimum is only reachable via mutation should shrink to that minimum.
+- [ ] **S6.** `src/native/database.rs` — most of the module (~14 nocov blocks) is dead code in production. Decide: keep and wire in (then write tests + remove nocov), or delete. The on-disk format also needs to either match Hypothesis's or document the incompatibility.
+- [ ] **S7.** `src/native/test_runner.rs:101-104` — `Database::Unset` silently maps to `None` on native, but to a default path on server. Pick parity behaviour (probably default-to-path) or document and reject `Unset` explicitly. Don't silently differ.
+
+### Tier A — Real correctness bugs
+
+- [ ] **A1.** `src/native/schema/special.rs:191-209` — UUID variant nibble: `g4 = g4_low | 0x8000` only forces the top bit. RFC 4122 needs `(g4_low & 0x3FFF) | 0x8000` AND mask to ensure top two bits are `10`. Test: 1000 UUIDs, all match `[8-b][0-9a-f]{3}` at the variant nibble.
+- [ ] **A2.** `src/native/schema/special.rs:191-209` — `uuids(version=None)` always emits v4. Fix to vary across `{1..5}` per Hypothesis. Test: variant distribution.
+- [ ] **A3.** `src/native/schema/special.rs:125-147` — `interpret_domain` can exceed `max_length`. Constrain. Domain charset is letters-only; add digits and hyphens per RFC. Tests: respect `max_length(10)`; produce IDN forms.
+- [ ] **A4.** `src/native/schema/special.rs:48-83` — `interpret_date` always uses `day ∈ [1,28]`. Generate the full calendar properly (handle Feb leap years, 30/31-day months). Same for `datetimes`. Test: all 12 months represented; Feb 29 reachable in leap years.
+- [ ] **A5.** `src/native/conjecture_runner.rs:80-92` — `InterestingOrigin::from_panic_payload` collapses non-string panics by Rust type. Key on `(type, file, line)` (capture the location from the panic hook) like Python. Test: two `assert!`s at different sites produce distinct origins.
+- [ ] **A6.** `src/native/conjecture_runner.rs:1864-1944` — shrink-time and re-validation runs bypass `cached_test_function`. Route them through it so `valid_examples`, `tree_root`, `target_observations`, `tags`, LRU cache all stay coherent. Match `engine.py`.
+- [ ] **A7.** `src/native/conjecture_runner.rs:2013-2022` — `cached_test_function` returns `nodes: vec![]` and `tags: HashSet::new()`. Plumb the real values through. Verify `dominance()` and Pareto comparisons now behave correctly (separate test).
+- [ ] **A8.** `src/native/conjecture_runner.rs:2539-2733` — `generate_new_examples` only runs novel-prefix; no mutation step. Port `generate_mutations_from` from `engine.py`.
+- [ ] **A9.** `src/native/conjecture_runner.rs:1599-1600,1845-1846,2234-2235,2543-2544` — default phases are `[Reuse, Generate, Shrink]`, missing `Target` and `Explicit`. Match the codebase-wide default.
+- [ ] **A10.** `src/native/conjecture_runner.rs:2266-2331` — `reuse_existing_examples` deletes from both primary AND secondary regardless of source corpus. Delete only from the corpus the entry came from.
+- [ ] **A11.** `src/native/conjecture_runner.rs:2287-2301` — reuse never replaces an existing interesting entry with a smaller one. Add `sort_key` compare and replace.
+- [ ] **A12.** `src/native/test_runner.rs:69-87` — `Mode::SingleTestCase` ignores `seed` and `derandomize`. Pass them to the RNG.
+- [ ] **A13.** `src/runner.rs:81-90` — `Verbosity::Quiet` is unimplemented. Implement (suppress `Normal`-level output) or delete the variant.
+- [ ] **A14.** `src/native/test_runner.rs:235-268,322-332` — `HealthCheck::TestCasesTooLarge` and `LargeInitialTestCase` are never raised. Implement them, or remove the variants from the public API. (Suppression of an unimplementable check is a lie.)
+- [ ] **A15.** `src/native/conjecture_runner.rs:2572,2636` — `with_buffer_size_limit` only caps bytes, not choice count. Plumb to `NativeTestCase::for_simplest`/`for_probe`.
+- [ ] **A16.** `src/native/data_source.rs:181` — `target_observations.insert(label, score)` silently overwrites duplicate labels. Match Python: raise/return `Status::Invalid`. Same file: reject NaN/inf.
+- [ ] **A17.** `src/native/targeting.rs:397` and `src/native/conjecture_runner.rs:2938` — `try_replace` rejects ties. Accept ties when length doesn't grow (mirror `optimiser.py:75-81`).
+- [ ] **A18.** `src/native/targeting.rs:229` and `src/native/conjecture_runner.rs:2785` — hill-climbing is integer-only in production. Extend to `integer | float | bytes | boolean` per `optimiser.py:109`. Remove `try_replace_for_target called on non-integer node` unreachable!s.
+- [ ] **A19.** `src/native/conjecture_runner.rs:899-921` and `src/native/shrinker/mod.rs:242-254` — `fixate_shrink_passes` accepts only three pass names. Wire in the full Hypothesis pass list.
+- [ ] **A20.** Span-aware shrinker passes are entirely missing: `pass_to_descendant`, `try_trivial_spans`, `reorder_spans`, `reduce_each_alternative`, `node_program`. Port each. (Probably split into multiple sub-items as you go.)
+- [ ] **A21.** `src/native/shrinker/mod.rs:263-308` and `src/native/shrinker/integers.rs:308-387` — joint integer passes drop `shrink_towards`. Add a `shrink_towards` field to `IntegerChoice` and use it. Mirror `shrinker.py:1014-1027` and `1437-1447`.
+- [ ] **A22.** `src/native/shrinker/floats.rs:288-314` — `redistribute_numeric_pairs` drops the `MAX_PRECISE_INTEGER` guard. Restore it.
+- [ ] **A23.** `src/native/test_runner.rs:128-151` — DB replay only loads first interesting example. Loop through all stored values; call `record_test_result` for each.
+- [ ] **A24.** `src/native/test_runner.rs:407-413` — DB save has no secondary-key downgrade. Implement the downgrade per Hypothesis's stale-key flow.
+- [ ] **A25.** `src/native/conjecture_runner.rs:311,2456,2462` — Pareto front uniqueness is fragile. Either dedupe by `sort_key` (so `Equal` is genuinely unreachable) or add a `Pareto::Equal` arm with a sensible policy. Stop relying on "Equal has not been observed".
+
+### Tier B — Forward-compat hazards
+
+- [ ] **B1.** `src/native/featureflags.rs:131,218` — `panic!("{}", STOP_TEST_STRING)` as control flow. If this is the established escape hatch, fine — but document it loudly at the call site so a reader knows it's not a bug.
+- [ ] **B2.** ~20+ bare `unreachable!()` sites across `shrinker/integers.rs`, `shrinker/strings.rs`, `shrinker/floats.rs`, `shrinker/bytes.rs`, `core/state.rs`, `core/choices.rs`. Add diagnostic messages to each. Use `unreachable!("kind/value mismatch: {kind:?} vs {value:?}")` style.
+- [ ] **B3.** `src/native/schema/float.rs:8,32,41,57,70` — only `width == 32` is special-cased; other widths silently treated as f64. Either reject other widths explicitly, or implement them. Add a fail-loud test for an out-of-range `width`.
+
+### Tier C — `// nocov` masking covered code
+
+- [ ] **C1.** `src/native/database.rs:1313-1437` — `serialize_choices`/`deserialize_choices` are `// nocov` but tested. Remove nocov, lower ratchet (with permission).
+- [ ] **C2.** `src/native/re/parser.rs:1565-1595` — `parse_pattern` is the public entry point; nocov is wrong. Remove.
+- [ ] **C3.** `src/native/re/parser.rs:860-1395, 775-857, 606-746, 494-596, 266-289, 190-214, 408-419, 153-157, 476-489, 311-358, 366-371, 381-397, 121-131, 226-241` — entire parser pipeline. Remove nocov for any range that has direct test coverage; add tests where coverage is genuinely missing.
+- [ ] **C4.** `src/native/database.rs` — `save`/`move_value`/watcher methods are nocov but tested by `test_database_*`. Remove (subject to S6 — if database is being deleted entirely, this collapses into that).
+- [ ] **C5.** `src/native/core/state.rs:1083-1124,1245-1299` — `weighted` and `draw_bytes` nocov but called everywhere. Remove.
+- [ ] **C6.** `src/native/core/choices.rs:48-58,152-157,345-352,385-450,203-302,872-884` — `*_index`, `simplest`, `unit`, `PartialEq` for FloatChoice. Remove.
+- [ ] **C7.** `src/native/shrinker/integers.rs:211-295,395-491` — `redistribute_integers`, `shrink_duplicates` (both directly tested). Remove.
+- [ ] **C8.** `src/native/schema/text.rs:258-440` — `build_string_alphabet`/`_uncached`. Remove.
+- [ ] **C9.** Audit every remaining `// nocov` block in `src/native/` after C1-C8 are done. Each must be a genuinely-unreachable type-level invariant or be deleted.
+
+### Tier D — Vapid tests
+
+- [ ] **D1.** `tests/test_targeting.rs:11-74,206-215` — six tests with no assertions. Replace each with a real behavioural test (e.g. observe that `target_observations` actually steers the search; assert a specific recorded label/score; assert max examples constraints). Delete the originals.
+- [ ] **D2.** `tests/embedded/native/optimiser_tests.rs` lines 70, 350, 386, 1039, 1084, 1126, 1176, 1218, 1261 — line-coverage stubs. For each: figure out the actual behavioural claim of the named line and write a real test. If the line doesn't carry behavioural meaning, the line itself is a candidate for deletion.
+- [ ] **D3.** `tests/embedded/native/conjecture_runner_tests.rs` — `record_test_result_early_stop_increments_overrun` (1755), `data_tree_view_rewrite_missing_key_returns_novel` (2069), `record_tree_kill_depth_applied` (2241), `enumerate_choice_values_bytes_small_range` (2275), `generate_novel_prefix_traverses_children` (2332), `should_generate_more_*` (2576), `runner_optimise_targets_with_target_phase_only` (2596). Same — replace with real assertions.
+- [ ] **D4.** `tests/embedded/native/state_tests.rs:498-571,596-611,708-724` — observer tests that can't fail. Either expose enough state on `DataObserver` to assert on (preferred), or delete and replace with a public-API-level test.
+- [ ] **D5.** `tests/test_native.rs:14-20,23-26,29-32,42-52,98-104,181-216` — tautologies and "this closure never executes". Replace with real tests or delete.
+- [ ] **D6.** `tests/test_health_check.rs:53-94` — suppression tests with no assertions. Once A14 lands, write tests that (a) confirm the check fires under triggering conditions and (b) confirm suppression suppresses it. Delete the assertion-free originals.
+- [ ] **D7.** `tests/embedded/native/shrinker_tests.rs:2049` — `assert!(shrinker.current_nodes.len() < 21)` is too weak. Replace with `assert_eq!(.., expected_minimum_len)`.
+- [ ] **D8.** `tests/test_targeting.rs::test_finds_a_local_maximum` — relies on random-seed luck. Either use a fixed seed verified to work AND a probabilistic re-run check, or assert against a deterministic optimiser-only run. The previous cfg-gating was conservative-correct; ungating without strengthening was a regression.
+- [ ] **D9.** `tests/common/utils.rs:37-43` — `check_can_generate_examples` is a smoke test by design but is being used as if it were a behavioural test in `tests/test_standard_generators.rs`. Add real behavioural assertions for each generator (range, distribution, shrink target).
+
+### Tier E — Smells / dead code
+
+- [ ] **E1.** `src/native/conjecture_runner.rs:1488` — `pub ignore_limits: bool` is dead. Either implement it (gate the limit checks on the flag) or delete it.
+- [ ] **E2.** `src/native/conjecture_runner.rs:1372-1375` — `Status::Invalid` reason discarded. Plumb `events`/`why` onto `ConjectureRunResult` so tests can assert on it.
+- [ ] **E3.** `src/native/targeting.rs:224-264` — `hill_climb` doesn't reset `i` after node-count-changing improvements. Mirror `optimiser.py:95-97`.
+- [ ] **E4.** `src/native/targeting.rs:97` — `maybe_optimise` is one-shot per run. Allow re-entry as more valid examples arrive (or document why one-shot is correct).
+- [ ] **E5.** `src/native/conjecture_runner.rs:1701-1721` — Pareto-add gate doesn't check `data.has_discards`. Add the check.
+- [ ] **E6.** `src/native/test_runner.rs:586-610` — `EngineCtx::mode` field is dead. Remove.
+- [ ] **E7.** `RELEASE.md` — overstates parity. Update once items above land.
+- [ ] **E8.** No `print_blob` / `reproduce_failure` on either backend. If this is on the roadmap, add to Open Questions; otherwise leave it.
+- [ ] **E9.** `src/native/shrinker/strings.rs:120-141` — non-deterministic iteration order over a `HashMap`. Sort first.
+- [ ] **E10.** `src/native/shrinker/index_passes.rs:58` — `checked_add(0)` is a no-op; the overflow guard is missing. Either add the guard properly or simplify to a non-checked form.
+
+### Newly discovered items
+
+Add new findings here, in the appropriate tier. Each must include a file:line and a one-sentence "why this is wrong".
+
+- (none yet)
+
+### Resolved as not-a-bug (do not re-add)
+
+These were on the original audit list but the user (DRMacIver) has decided they are intentional / acceptable. Do not add them back. Cite this section if you find them again during a §6 sweep.
+
+- **Hard-coded constants matching Python.** `src/native/conjecture_runner.rs:497-505` (`INVALID_THRESHOLD_BASE = 458`, `INVALID_PER_VALID = 100`) and any similar "match Python exactly at port time" constants. **Policy:** these stay hard-coded; we sync with upstream manually. If you find a new one, leave it alone — but add a brief `// Match Python <file:func>` comment if there isn't one already.
+- **`_ => panic!` on schema fields and dispatch keys.** All of:
+  - `src/native/schema/mod.rs:139` (`Unknown native command`)
+  - `src/native/schema/mod.rs:189` (`Unknown schema type`)
+  - `src/native/schema/mod.rs:249,261,270` (bignum / CBOR shape panics)
+  - `src/native/schema/text.rs:284` (`Invalid codec`)
+  - `src/native/schema/collections.rs:12,27,47` (tuple/one_of/sampled_from shape panics)
+  - `src/native/schema/regex.rs:36` (invalid regex pattern)
+  
+  **Policy:** schemas are constructed by Rust generators; if the Rust API can't produce the shape, the panic is unreachable. If it can, a Rust-side generator test will exercise it and we'll see the panic and fix it. Do **not** convert these to `Status::Invalid`.
+- **Conformance does not run native.** `tests/conformance/rust/Cargo.toml` not enabling `native` is intentional — the conformance suite targets the server protocol, not the native backend.
+
+## 8. Open questions
+
+Use this section when you genuinely need a human decision and cannot proceed. Each entry: question, what you tried, what you'd do if forced to pick. Do not block the loop on a question — work on a different item until the question is answered.
+
+- (none yet)
+
+## 9. Acceptance criteria — when to emit COMPLETE
+
+Emit `<promise>COMPLETE</promise>` at the end of an iteration if and only if **every** point below is true:
+
+1. **Every box in §7 is ticked.** No open items in any tier including Tier 0 and "Newly discovered items".
+2. **Two consecutive investigative iterations** (using §6 heuristics) have found no new items. This guards against the audit being shallow.
+3. **`just check` passes** on the current commit.
+4. **`just check-coverage` passes** without any new ratchet bumps unauthorised by §8 entries that received human approval.
+5. **`cargo test`** (default features) and **`cargo test --features native`** both pass.
+6. **`git grep -n -E 'todo!\(\)|unimplemented!\(\)' src/native/`** returns nothing (UnicodeData.txt false positives are fine; only `.rs` matches count).
+7. **`git grep -n 'unreachable!()' src/native/`** returns nothing — every site has a diagnostic message.
+8. **`grep -rn -E '// nocov' src/native/`** is either empty, or every remaining block has an entry under §8 with documented human approval.
+9. **RELEASE.md** is honest about native-vs-server parity.
+10. **The audit can be re-run from scratch** (re-run §6 heuristics) without finding anything new of Tier-S, Tier-A, or Tier-B severity. Items in "Resolved as not-a-bug" do not count as new findings.
+
+If any of these fails, do not emit the promise. Continue to the next iteration.
+
+## 10. Test changelog
+
+When you delete or significantly weaken a test, log it here with the reason. (Strengthening tests doesn't need an entry.) This is so the user can audit test-suite changes at the end.
+
+- (none yet)
+
+## 11. Reference: how to run things
+
+```bash
+# Full local check (clippy + fmt + test)
+just check
+
+# Tests only, both backends
+cargo test                 # default features (server backend)
+cargo test --features native
+
+# Single test
+cargo test test_name
+cargo test --features native test_name
+
+# Coverage
+just check-coverage
+
+# Conformance (Python harness)
+just check-conformance
+
+# Format
+just format
+```
+
+## 12. Reference: where the audit findings came from
+
+The Tier S/A/B/C/D/E items above came from a multi-agent audit run on commit `fa2c5d03` of branch `DRMacIver/native`. The audit covered:
+- conjecture_runner.rs vs `engine.py`
+- shrinker/* vs `hypothesis-python/.../shrinker/`
+- every `// nocov` block in src/native/
+- every `panic!`/`unreachable!` site in src/native/
+- schema/* vs the generators that emit schemas
+- targeting/optimiser vs `pareto.py`/`optimiser.py`
+- test quality across `tests/`
+- public API parity native vs server
+
+If you want to reproduce or extend the audit, the heuristics in §6 are the same ones used. The audit is not exhaustive — finding Tier-A bugs that the original audit missed is expected and welcome. Add them under "Newly discovered items" in §7.
