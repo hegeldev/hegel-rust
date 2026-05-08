@@ -300,12 +300,12 @@ impl ParetoFront {
                         dominated_by_some = false;
                         j += 1;
                     }
-                    DominanceRelation::RightDominates => {
-                        to_remove.push(candidate_idx);
-                        dominated_by_some = true;
-                        break;
-                    }
-                    DominanceRelation::Equal => {
+                    // RightDominates is unreachable here: the front is sorted
+                    // ascending, so all entries in `dominators` have index
+                    // >= candidate_idx, meaning key(v) >= key(candidate).
+                    // dominance(candidate_small_key, v_large_key) can only
+                    // return LeftDominates, NoDominance, or Equal.
+                    DominanceRelation::RightDominates | DominanceRelation::Equal => {
                         dominated_by_some = true;
                         break;
                     }

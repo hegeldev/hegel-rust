@@ -395,9 +395,6 @@ impl<F: FnMut(&[usize]) -> bool> CollectionShrinker<usize, F> {
         // 2. Try deleting each element from the back.
         let n = self.current.len();
         for i in (0..n).rev() {
-            if i >= self.current.len() {
-                continue;
-            }
             let mut candidate = self.current.clone();
             candidate.remove(i);
             self.consider(candidate);
@@ -426,10 +423,7 @@ impl<F: FnMut(&[usize]) -> bool> CollectionShrinker<usize, F> {
         for dup in duplicates {
             let initial_val = BigUint::from(dup as u64);
             let mut shrinker = IntegerShrinker::new(initial_val, |bu: &BigUint| {
-                let new_val = match bu.to_u64() {
-                    Some(v) if v <= usize::MAX as u64 => v as usize,
-                    _ => return false,
-                };
+                let Some(new_val) = bu.to_usize() else { return false; };
                 let candidate: Vec<usize> = self
                     .current
                     .iter()
@@ -446,13 +440,7 @@ impl<F: FnMut(&[usize]) -> bool> CollectionShrinker<usize, F> {
         for (i, &val) in initial_vals.iter().enumerate() {
             let initial_val = BigUint::from(val as u64);
             let mut shrinker = IntegerShrinker::new(initial_val, |bu: &BigUint| {
-                let new_val = match bu.to_u64() {
-                    Some(v) if v <= usize::MAX as u64 => v as usize,
-                    _ => return false,
-                };
-                if i >= self.current.len() {
-                    return false;
-                }
+                let Some(new_val) = bu.to_usize() else { return false; };
                 let mut candidate = self.current.clone();
                 candidate[i] = new_val;
                 self.consider(candidate)

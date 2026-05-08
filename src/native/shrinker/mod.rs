@@ -284,16 +284,13 @@ impl<'a> Shrinker<'a> {
         }
 
         let offset = changed.iter().map(|(_, v)| v.unsigned_abs()).min().unwrap();
-        if offset == 0 {
-            return;
-        }
 
         // Find the maximum k in [0, offset] such that lowering each value by k
         // is still interesting. `find_integer` returns the largest k where f(k)=true.
         let changed_clone = changed.clone();
         find_integer(|k| {
-            if k == 0 {
-                return true;
+            if (k as u128) > offset {
+                return false;
             }
             let k = k as i128;
             let replacements: HashMap<usize, ChoiceValue> = changed_clone

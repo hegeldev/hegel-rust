@@ -498,6 +498,55 @@ fn pareto_front_left_entry_dominates_new_entry() {
     assert!(!in_front);
 }
 
+// ── ParetoFront — Equal arm in the left-check loop (lines 308-310) ──────────
+//
+// To trigger the Equal arm, we need two entries with the same sort_key to the
+// left of the insertion position of a new entry with a larger sort_key.
+// When C (larger key) is added after A and B (same key K1):
+//   insert_pos=2; left-check sees i=1 (A dominates C → LeftDominates → A put in
+//   dominators); then i=0 (B vs A → same sort_key → Equal fires).
+
+#[test]
+fn pareto_front_equal_in_left_check_loop() {
+    let mut front = ParetoFront::new(make_rng());
+    // A and B have the same sort_key (nodes=[]) but different choices content.
+    let a = ConjectureRunResult {
+        status: Status::Valid,
+        nodes: vec![],
+        choices: vec![ChoiceValue::Integer(1)],
+        target_observations: Default::default(),
+        origin: None,
+        tags: Default::default(),
+    };
+    let b = ConjectureRunResult {
+        status: Status::Valid,
+        nodes: vec![],
+        choices: vec![ChoiceValue::Integer(2)],
+        target_observations: Default::default(),
+        origin: None,
+        tags: Default::default(),
+    };
+    front.add(a);
+    front.add(b);
+    // C has a larger sort_key (1 boolean node). Adding C triggers the left-check
+    // loop: A dominates C (LeftDominates), then B vs A hits Equal.
+    let c = ConjectureRunResult {
+        status: Status::Valid,
+        nodes: vec![ChoiceNode {
+            kind: ChoiceKind::Boolean(crate::native::core::BooleanChoice),
+            value: ChoiceValue::Boolean(false),
+            was_forced: false,
+        }],
+        choices: vec![ChoiceValue::Boolean(false)],
+        target_observations: Default::default(),
+        origin: None,
+        tags: Default::default(),
+    };
+    let (in_front, evicted) = front.add(c);
+    assert!(!in_front);
+    assert!(!evicted.is_empty());
+}
+
 // ── run_shrinker_user_fn: MarkPanic with mismatched data_id ──────────────
 //
 // Line 797: `std::panic::resume_unwind(p)` fires when a MarkPanic arrives

@@ -6,7 +6,6 @@
 
 mod common;
 
-#[cfg(feature = "native")]
 use hegel::Hegel;
 use hegel::generators as gs;
 use hegel::{Phase, Settings, TestCase};
@@ -61,7 +60,8 @@ fn test_only_runs_explicit_examples(tc: TestCase) {
 // Without Phase::Generate, no test cases are generated.  A body that always
 // panics never runs, so even a test that would always fail passes.
 // Port of test_this_would_fail_if_you_ran_it.
-#[cfg(feature = "native")]
+// Runs in both native and server mode: the server backend returns early at
+// runner.rs:273 when Generate is not in phases; native enforces it natively.
 #[test]
 fn test_no_generate_means_body_never_runs() {
     Hegel::new(|tc: TestCase| {
