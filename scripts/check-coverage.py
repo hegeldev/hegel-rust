@@ -179,15 +179,21 @@ class UncoveredLine:
         Check if this line contains only structural syntax (closing braces, etc.).
 
         Returns True for lines like: }  })  },  });  }};  etc.
+        Returns True for blank lines: LLVM region-based coverage sometimes
+        attributes blank lines between function definitions to a region with
+        0 executions. Blank lines have no executable code, so this is a
+        coverage artifact, not a real gap.
         Returns False for: }else  } // comment  }foo  or any actual code
         """
         stripped = self.content.strip()
+        # Blank lines are not executable — LLVM coverage artifact at fn boundaries
+        if len(stripped) == 0:
+            return True
         # Remove all structural characters and whitespace
         cleaned = re.sub(r"[})\];,\s]", "", stripped)
 
         # If nothing remains after removing structural chars, it is just syntax
-        # But the original must have had something (not be empty)
-        return len(cleaned) == 0 and len(stripped) > 0
+        return len(cleaned) == 0
 
     def is_todo_placeholder(self) -> bool:
         """
