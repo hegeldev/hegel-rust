@@ -36,6 +36,21 @@ fn test_optional_respects_inner_generator_bounds(tc: TestCase) {
     }
 }
 
+// Exercises the non-basic OptionalGenerator::do_draw path (flat_map produces a
+// non-basic generator, so optional falls back to compositional generation
+// rather than schema-based generation).
+#[hegel::test]
+fn test_optional_with_non_basic_inner(tc: TestCase) {
+    let inner = gs::integers::<i32>()
+        .min_value(1)
+        .max_value(5)
+        .flat_map(|n| gs::just(n * 10));
+    let value = tc.draw(gs::optional(inner));
+    if let Some(n) = value {
+        assert!([10, 20, 30, 40, 50].contains(&n));
+    }
+}
+
 #[hegel::test]
 fn test_one_of_returns_value_from_one_generator(tc: TestCase) {
     let value = tc.draw(hegel::one_of!(

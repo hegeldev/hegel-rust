@@ -1,4 +1,4 @@
-use super::{BasicGenerator, Generator, TestCase};
+use super::{BasicGenerator, Generator};
 use crate::cbor_utils::cbor_map;
 use std::time::Duration;
 
@@ -38,11 +38,6 @@ impl DurationGenerator {
 }
 
 impl Generator<Duration> for DurationGenerator {
-    fn do_draw(&self, tc: &TestCase) -> Duration {
-        let nanos: u64 = super::generate_from_schema(tc, &self.build_schema());
-        Duration::from_nanos(nanos)
-    }
-
     fn as_basic(&self) -> Option<BasicGenerator<'_, Duration>> {
         Some(BasicGenerator::new(self.build_schema(), |raw| {
             let nanos: u64 = super::deserialize_value(raw);

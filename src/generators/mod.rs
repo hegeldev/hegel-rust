@@ -19,9 +19,6 @@ mod strings;
 mod time;
 mod tuples;
 
-#[cfg(feature = "rand")]
-mod random;
-
 pub(crate) mod value;
 
 #[doc(hidden)]
@@ -65,6 +62,3 @@ pub use tuples::{
     tuples0, tuples1, tuples2, tuples3, tuples4, tuples5, tuples6, tuples7, tuples8, tuples9,
     tuples10, tuples11, tuples12,
 };
-
-#[cfg(feature = "rand")]
-pub use random::{HegelRandom, RandomsGenerator, randoms};

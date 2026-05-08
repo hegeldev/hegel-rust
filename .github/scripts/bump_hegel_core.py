@@ -1,4 +1,3 @@
-import json
 import os
 import re
 import subprocess
@@ -64,55 +63,18 @@ def update_flake(flake_nix_text: str, version: str) -> str:
     return new_text
 
 
-def format_release_md(version: str, releases: list[dict[str, str]]) -> str:
+def format_release_md(current_version: str, version: str) -> str:
+    current_url = f"https://github.com/{CORE_REPO}/releases/tag/v{current_version}"
     release_url = f"https://github.com/{CORE_REPO}/releases/tag/v{version}"
-
-    changelog_sections = []
-    for r in releases:
-        url = f"https://github.com/{CORE_REPO}/releases/tag/v{r['version']}"
-        quoted = "\n".join(f"> {line}" if line else ">" for line in r["body"].splitlines())
-        changelog_sections.append(f"{quoted}\n>\n> — [v{r['version']}]({url})")
-
-    changes_text = "\n\n".join(changelog_sections)
-    noun = "change" if len(releases) == 1 else "changes"
-
     return (
         f"RELEASE_TYPE: patch\n\n"
-        f"Bump our pinned hegel-core to [{version}]({release_url}), "
-        f"incorporating the following {noun}:\n\n"
-        f"{changes_text}\n"
+        f"This patch bumps our pinned hegel-core from "
+        f"[{current_version}]({current_url}) to [{version}]({release_url}).\n"
     )
 
 
 def get_current_version() -> str:
     return parse_current_version((ROOT / "src" / "server" / "session.rs").read_text())
-
-
-def get_releases_in_range(from_version: str, to_version: str) -> list[dict[str, str]]:
-    """Fetch hegel-core releases between from_version (exclusive) and to_version (inclusive)."""
-    result = subprocess.run(
-        ["gh", "api", f"repos/{CORE_REPO}/releases", "--paginate", "--jq", ".[]"],
-        capture_output=True,
-        text=True,
-        check=True,
-        cwd=ROOT,
-    )
-    # --jq ".[]" with --paginate outputs one JSON object per line
-    releases = [json.loads(line) for line in result.stdout.strip().splitlines() if line.strip()]
-
-    from_parts = [int(x) for x in from_version.split(".")]
-    to_parts = [int(x) for x in to_version.split(".")]
-
-    in_range = []
-    for release in releases:
-        tag = release["tag_name"].lstrip("v")
-        parts = [int(x) for x in tag.split(".")]
-        if parts > from_parts and parts <= to_parts:
-            in_range.append({"version": tag, "body": release["body"].strip()})
-
-    # Sort oldest first
-    in_range.sort(key=lambda r: [int(x) for x in r["version"].split(".")])
-    return in_range
 
 
 def bump(version: str, protocol_version: str) -> None:
@@ -130,9 +92,8 @@ def bump(version: str, protocol_version: str) -> None:
         cwd=ROOT,
     )
 
-    releases = get_releases_in_range(current_version, version)
     release_md = ROOT / "RELEASE.md"
-    release_md.write_text(format_release_md(version, releases))
+    release_md.write_text(format_release_md(current_version, version))
 
     app_id = os.environ["HEGEL_RELEASE_APP_ID"]
     git("config", "user.name", "hegel-release[bot]")

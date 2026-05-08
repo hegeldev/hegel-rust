@@ -127,10 +127,6 @@ impl<T: Integer + serde::Serialize> IntegerGenerator<T> {
 impl<T: Integer + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static>
     Generator<T> for IntegerGenerator<T>
 {
-    fn do_draw(&self, tc: &TestCase) -> T {
-        super::generate_from_schema(tc, &self.build_schema())
-    }
-
     fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
         Some(BasicGenerator::new(self.build_schema(), |raw| {
             super::deserialize_value(raw)
@@ -267,10 +263,6 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
 impl<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static> Generator<T>
     for FloatGenerator<T>
 {
-    fn do_draw(&self, tc: &TestCase) -> T {
-        super::generate_from_schema(tc, &self.build_schema())
-    }
-
     fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
         Some(BasicGenerator::new(self.build_schema(), |raw| {
             super::deserialize_value(raw)
