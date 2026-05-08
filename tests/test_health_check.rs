@@ -94,14 +94,18 @@ fn test_large_base_example_suppressed(tc: TestCase) {
 }
 
 /// When cumulative test-case time exceeds the TooSlow threshold, the health
-/// check fires. The test draws a value so the runner doesn't bail out on the
-/// trivial-case path after the first iteration.
+/// check fires.
+///
+/// We draw an `i32` (rather than a `bool`) so the choice tree doesn't
+/// exhaust after a couple of values; with a 2-element value space the run
+/// would terminate by exhaustion in ~600ms — under the 1s threshold —
+/// before TooSlow ever gets a chance to fire.
 #[cfg(feature = "native")]
 #[test]
 fn native_too_slow_detected() {
     let result = std::panic::catch_unwind(|| {
         hegel::Hegel::new(|tc: hegel::TestCase| {
-            let _: bool = tc.draw(gs::booleans());
+            let _: i32 = tc.draw(gs::integers::<i32>());
             std::thread::sleep(std::time::Duration::from_millis(300));
         })
         .run();
