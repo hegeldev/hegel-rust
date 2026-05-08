@@ -28,6 +28,8 @@ pub use crate::test_case::{
 };
 
 // public api
+#[cfg(feature = "rand")]
+pub use crate::extras::rand::{HegelRandom, RandomsGenerator, randoms};
 #[doc(inline)]
 pub use crate::tuples;
 pub use collections::{
