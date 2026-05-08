@@ -1415,7 +1415,8 @@ fn try_replace_bytes_decrement_to_zero() {
     let mut runner = TargetedRunner::new(
         |tc: &mut TargetedTestCase| {
             let b = tc.draw_bytes(1, 1);
-            tc.target_observations.insert("score".to_string(), b[0] as f64);
+            tc.target_observations
+                .insert("score".to_string(), b[0] as f64);
         },
         settings,
         make_rng(),

@@ -2609,7 +2609,9 @@ impl NativeConjectureRunner {
                         hc_overrun += 1;
                         hc_draw_time += probe_elapsed;
                     }
-                    Status::Interesting => unreachable!("health-check probes run before any interesting example is found"),
+                    Status::Interesting => unreachable!(
+                        "health-check probes run before any interesting example is found"
+                    ),
                 }
             }
         }
@@ -2685,7 +2687,9 @@ impl NativeConjectureRunner {
                             );
                         }
                     }
-                    Status::Interesting => unreachable!("health-check probes run before any interesting example is found"),
+                    Status::Interesting => unreachable!(
+                        "health-check probes run before any interesting example is found"
+                    ),
                 }
 
                 // TooSlow: cumulative draw time in the health-check window

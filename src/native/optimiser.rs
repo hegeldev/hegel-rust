@@ -590,7 +590,9 @@ impl TargetedRunner {
             }
             let idx = i as usize;
             if idx >= current_nodes.len() || nodes_examined.contains(&idx) {
-                unreachable!("idx out of bounds or already examined: i strictly decreases and nodes_examined is cleared on length change");
+                unreachable!(
+                    "idx out of bounds or already examined: i strictly decreases and nodes_examined is cleared on length change"
+                );
             }
             nodes_examined.insert(idx);
 
