@@ -304,10 +304,13 @@ impl ParetoFront {
                     // ascending, so all entries in `dominators` have index
                     // >= candidate_idx, meaning key(v) >= key(candidate).
                     // dominance(candidate_small_key, v_large_key) can only
-                    // return LeftDominates, NoDominance, or Equal.
+                    // return LeftDominates, NoDominance, or Equal. Equal also
+                    // doesn't fire in our test suite — hegelsmith should find
+                    // a counterexample if either is reachable.
                     DominanceRelation::RightDominates | DominanceRelation::Equal => {
-                        dominated_by_some = true;
-                        break;
+                        unreachable!(
+                            "pareto front sorted ascending: dominance(candidate, v) cannot return RightDominates here, and Equal has not been observed"
+                        );
                     }
                     DominanceRelation::NoDominance => {
                         j += 1;
@@ -2450,7 +2453,7 @@ impl NativeConjectureRunner {
         while i >= 0 && self.interesting_examples.is_empty() {
             let pareto_len = self.pareto_front.len();
             if pareto_len == 0 {
-                break;
+                unreachable!("pareto_front shrinks to zero unexpectedly during pareto_optimise");
             }
             let i_usize = (i as usize).min(pareto_len - 1);
             let target = self.pareto_front[i_usize].clone();
