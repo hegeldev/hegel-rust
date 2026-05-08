@@ -35,6 +35,13 @@ thread_local! {
     /// [`take_panic_info`] right after `catch_unwind` returns.
     static LAST_PANIC_INFO: RefCell<Option<(String, String, String, Backtrace)>> =
         const { RefCell::new(None) };
+
+    /// One-shot flag: when set, the panic hook silently swallows the next
+    /// panic's stderr output. Used by [`drive`] to re-raise a `"Property
+    /// test failed: <msg>"` panic for `catch_unwind` callers and `cargo
+    /// test`'s benefit, without duplicating the user-facing diagnostic
+    /// that the final replay already printed. Cleared by the hook on read.
+    static SUPPRESS_NEXT_PANIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn take_panic_info() -> Option<(String, String, String, Backtrace)> {
@@ -53,6 +60,13 @@ pub(crate) fn init_panic_hook() {
     PANIC_HOOK_INIT.call_once(|| {
         let prev_hook = panic::take_hook();
         panic::set_hook(Box::new(move |info| {
+            // `drive` sets this when re-raising the bookkeeping
+            // `"Property test failed: ..."` panic. Swallow stderr for
+            // exactly that one panic; the diagnostic was already printed.
+            if SUPPRESS_NEXT_PANIC.with(|c| c.replace(false)) {
+                return;
+            }
+
             if !currently_in_test_context() {
                 prev_hook(info);
                 return;
@@ -295,6 +309,21 @@ pub(crate) fn drive<R, F>(
 
     if test_failed {
         let msg = result.failure_message.as_deref().unwrap_or("unknown");
+        // The user-facing diagnostic (location, falsifying example, original
+        // panic message, backtrace) was already printed by `run_test_case`
+        // during the final replay above. We need three things from this
+        // re-raise:
+        //   - stderr to say something so a human sees the run failed —
+        //     printed manually as a one-line footer below;
+        //   - the panic payload to be exactly `"Property test failed: <msg>"`
+        //     so `catch_unwind` callers like `Minimal::run` in
+        //     `tests/common/utils.rs` can pattern-match expected failures;
+        //   - `cargo test` to see the test panic so it marks it failed.
+        // Suppressing the next panic's stderr print keeps the original
+        // message from being duplicated (Rust's default hook would otherwise
+        // print `"Property test failed: <msg>"` to stderr verbatim).
+        eprintln!("Property test failed.");
+        SUPPRESS_NEXT_PANIC.with(|c| c.set(true));
         panic!("Property test failed: {}", msg);
     }
 }
