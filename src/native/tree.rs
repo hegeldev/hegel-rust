@@ -95,15 +95,32 @@ pub struct CachedTestFunction<F: FnMut(TestCase)> {
     mode: crate::runner::Mode,
 }
 
-/// One run's worth of results from [`CachedTestFunction::run`]. Mirrors what
-/// Hypothesis exposes via the per-run `ConjectureData` after the test body
-/// returns: status, the realised choice nodes/spans, and any
-/// `tc.target()` / `tc.target_labelled()` observations the body recorded.
+/// One run's worth of results. Mirrors what Hypothesis exposes via the
+/// per-run `ConjectureData` after the test body returns: status, the
+/// realised choice nodes/spans, any `tc.target()` observations the body
+/// recorded, and (for `Status::Interesting`) the panic message that
+/// triggered the failure plus an opaque origin string identifying *where*
+/// the panic happened. The origin is supplied by
+/// [`crate::run_lifecycle::run_test_case`] from the captured panic
+/// `file:line:col`; per-origin shrinking and database storage key on it.
+#[derive(Clone)]
 pub struct RunResult {
     pub status: Status,
     pub nodes: Vec<ChoiceNode>,
     pub spans: Vec<Span>,
     pub target_observations: HashMap<String, f64>,
+    pub panic_message: Option<String>,
+    pub origin: Option<String>,
+}
+
+/// Object-safe surface used by the native targeting / hill-climber code:
+/// "run a [`NativeTestCase`] and tell me what happened." Both the legacy
+/// [`CachedTestFunction`] (which owns the user's test_fn directly) and the
+/// production [`EngineCtx`](super::test_runner::EngineCtx) (which wraps the
+/// cross-backend `run_case` callback) implement it, so targeting doesn't
+/// need to care which lifecycle drove the test.
+pub trait NativeRunner {
+    fn run(&mut self, ntc: NativeTestCase) -> RunResult;
 }
 
 impl<F: FnMut(TestCase)> CachedTestFunction<F> {
@@ -196,24 +213,23 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
     /// Core test execution: run one test case and return results.
     fn execute(&mut self, ntc: NativeTestCase, is_final: bool) -> RunResult {
         let (data_source, ntc_handle) = NativeDataSource::new(ntc);
-        let mut tc = TestCase::new(Box::new(data_source), is_final, self.mode);
-        tc.attach_native_handle(ntc_handle.clone());
+        let tc = TestCase::new(Box::new(data_source), is_final, self.mode);
         let result =
             with_test_context(|| catch_unwind(AssertUnwindSafe(|| (self.test_fn)(tc.clone()))));
 
-        let status = match result {
-            Ok(()) => Status::Valid,
+        let (status, panic_message) = match result {
+            Ok(()) => (Status::Valid, None),
             Err(e) => {
                 let msg = panic_message(&e);
                 if msg == ASSUME_FAIL_STRING || msg == STOP_TEST_STRING {
-                    Status::Invalid
+                    (Status::Invalid, None)
                 } else if msg == LOOP_DONE_STRING {
-                    Status::Valid
+                    (Status::Valid, None)
                 } else {
                     if is_final {
                         store_final_panic_info(&msg);
                     }
-                    Status::Interesting
+                    (Status::Interesting, Some(msg))
                 }
             }
         };
@@ -223,6 +239,14 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
             nodes: NativeDataSource::take_nodes(&ntc_handle),
             spans: NativeDataSource::take_spans(&ntc_handle),
             target_observations: NativeDataSource::take_target_observations(&ntc_handle),
+            panic_message,
+            // CachedTestFunction's standalone path (used by embedded
+            // tests) doesn't drive through the cross-backend panic
+            // hook, so it can't synthesize a `file:line:col` origin.
+            // Callers that need multi-origin tracking go through
+            // `EngineCtx` instead, which receives the origin from
+            // `crate::run_lifecycle::run_test_case`.
+            origin: None,
         }
     }
 
@@ -266,6 +290,12 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
             .map(|n| ChoiceValueKey::from(&n.value))
             .collect();
         self.cache.insert(key, result);
+    }
+}
+
+impl<F: FnMut(TestCase)> NativeRunner for CachedTestFunction<F> {
+    fn run(&mut self, ntc: NativeTestCase) -> RunResult {
+        CachedTestFunction::run(self, ntc)
     }
 }
 

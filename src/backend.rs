@@ -79,6 +79,21 @@ pub trait DataSource: Send + Sync {
 
     /// Returns true if a previous request triggered an abort (overflow/StopTest).
     fn test_aborted(&self) -> bool;
+
+    /// Native-backend escape hatch: return the underlying
+    /// `NativeTestCaseHandle` so [`crate::TestCase::native_tc_handle`]
+    /// (consumed by `FeatureStrategy::do_draw` and a handful of other
+    /// native-internal helpers) can look up engine state without
+    /// type-erasing through the [`DataSource`] interface.
+    ///
+    /// Defaults to `None`; the server-protocol [`DataSource`] never
+    /// produces a handle, while `NativeDataSource` overrides this to
+    /// return its inner `NativeTestCase`.
+    #[cfg(feature = "native")]
+    #[doc(hidden)]
+    fn native_handle(&self) -> Option<crate::native::data_source::NativeTestCaseHandle> {
+        None
+    }
 }
 
 /// Result of running a single test case.
@@ -94,6 +109,14 @@ pub enum TestCaseResult {
     Interesting {
         /// The panic message from the failing test.
         panic_message: String,
+        /// Opaque origin tag identifying *where* the panic happened —
+        /// derived from the captured `file:line:col` of the panic site
+        /// by [`crate::run_lifecycle::run_test_case`]. Two test cases
+        /// that fail on the same source line share an origin and are
+        /// treated as the same bug for shrinking and database storage;
+        /// distinct origins surface as distinct counterexamples (the
+        /// native equivalent of Hypothesis's `BaseExceptionGroup`).
+        origin: Option<String>,
     },
 }
 

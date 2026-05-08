@@ -9,8 +9,7 @@
 use std::collections::HashMap;
 
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Status, sort_key};
-use crate::native::tree::CachedTestFunction;
-use crate::test_case::TestCase;
+use crate::native::tree::NativeRunner;
 
 /// Per-label best score and the choice sequence that produced it.
 pub(crate) struct TargetingState {
@@ -87,9 +86,9 @@ impl TargetingDriver {
     /// haven't already run this pass, and have at least one observed target
     /// to climb. No-op once an interesting example has been recorded — at
     /// that point the runner will move on to shrinking.
-    pub fn maybe_optimise<F: FnMut(TestCase)>(
+    pub fn maybe_optimise(
         &mut self,
-        ctf: &mut CachedTestFunction<F>,
+        runner: &mut dyn NativeRunner,
         result: &mut Option<Vec<ChoiceNode>>,
         calls: &mut u64,
         valid_test_cases: &mut u64,
@@ -110,7 +109,7 @@ impl TargetingDriver {
             max_valid: max_examples,
             max_calls: max_examples * 10,
         };
-        optimise_targets(ctf, &mut self.targeting, &mut ctx);
+        optimise_targets(runner, &mut self.targeting, &mut ctx);
     }
 }
 
@@ -134,8 +133,8 @@ impl OptimiseCtx<'_> {
 /// Run a single trial and update bookkeeping. Returns `Some((status, nodes,
 /// observations))` if the trial completed (regardless of status); returns
 /// `None` if the budget was exhausted before this call.
-fn run_trial<F: FnMut(TestCase)>(
-    ctf: &mut CachedTestFunction<F>,
+fn run_trial(
+    runner: &mut dyn NativeRunner,
     targeting: &mut TargetingState,
     ctx: &mut OptimiseCtx<'_>,
     choices: &[ChoiceValue],
@@ -144,7 +143,7 @@ fn run_trial<F: FnMut(TestCase)>(
         return None;
     }
     let ntc = NativeTestCase::for_choices(choices, None, None);
-    let run = ctf.run(ntc);
+    let run = runner.run(ntc);
     *ctx.calls += 1;
     if run.status >= Status::Valid {
         *ctx.valid_test_cases += 1;
@@ -166,8 +165,8 @@ fn run_trial<F: FnMut(TestCase)>(
 /// actually invoked; once it short-circuits, every downstream `try_replace`
 /// returns false and the surrounding loops fall out via their natural
 /// no-improvement exits.
-pub(crate) fn optimise_targets<F: FnMut(TestCase)>(
-    ctf: &mut CachedTestFunction<F>,
+pub(crate) fn optimise_targets(
+    runner: &mut dyn NativeRunner,
     targeting: &mut TargetingState,
     ctx: &mut OptimiseCtx<'_>,
 ) {
@@ -177,7 +176,7 @@ pub(crate) fn optimise_targets<F: FnMut(TestCase)>(
         let prev_calls = *ctx.calls;
         let mut any_improvements = false;
         for target in &targets {
-            let imps = hill_climb(ctf, targeting, ctx, target, max_improvements);
+            let imps = hill_climb(runner, targeting, ctx, target, max_improvements);
             if imps > 0 {
                 any_improvements = true;
             }
@@ -192,8 +191,8 @@ pub(crate) fn optimise_targets<F: FnMut(TestCase)>(
 /// Walk the integer choices in `best_choices_for_target[target]` from the
 /// end backwards, hill-climbing each one in both directions. Mirrors
 /// `Optimiser._optimise_target`.
-fn hill_climb<F: FnMut(TestCase)>(
-    ctf: &mut CachedTestFunction<F>,
+fn hill_climb(
+    runner: &mut dyn NativeRunner,
     targeting: &mut TargetingState,
     ctx: &mut OptimiseCtx<'_>,
     target: &str,
@@ -209,7 +208,7 @@ fn hill_climb<F: FnMut(TestCase)>(
         .unwrap_or_else(|| {
             unreachable!("best_choices_for_target out of sync with best_observed_targets")
         });
-    let trial = match run_trial(ctf, targeting, ctx, &start_choices) {
+    let trial = match run_trial(runner, targeting, ctx, &start_choices) {
         Some(t) => t,
         None => return 0,
     };
@@ -230,7 +229,7 @@ fn hill_climb<F: FnMut(TestCase)>(
             if let (ChoiceValue::Integer(_), ChoiceKind::Integer(_)) = (&node.value, &node.kind) {
                 let len_before = current_nodes.len();
                 improvements += find_integer(
-                    ctf,
+                    runner,
                     targeting,
                     ctx,
                     target,
@@ -247,7 +246,7 @@ fn hill_climb<F: FnMut(TestCase)>(
                 // Mirrors the same guard in Hypothesis's `Optimiser.hill_climb`.
                 if idx < current_nodes.len() && current_nodes.len() == len_before {
                     improvements += find_integer(
-                        ctf,
+                        runner,
                         targeting,
                         ctx,
                         target,
@@ -270,8 +269,8 @@ fn hill_climb<F: FnMut(TestCase)>(
 /// exponential probing 5, 10, 20, ..., then a binary search between the
 /// last accepted delta and the first rejected one.
 #[allow(clippy::too_many_arguments)]
-fn find_integer<F: FnMut(TestCase)>(
-    ctf: &mut CachedTestFunction<F>,
+fn find_integer(
+    runner: &mut dyn NativeRunner,
     targeting: &mut TargetingState,
     ctx: &mut OptimiseCtx<'_>,
     target: &str,
@@ -289,7 +288,7 @@ fn find_integer<F: FnMut(TestCase)>(
             return improvements;
         }
         if !try_replace(
-            ctf,
+            runner,
             targeting,
             ctx,
             target,
@@ -311,7 +310,7 @@ fn find_integer<F: FnMut(TestCase)>(
             return improvements;
         }
         if !try_replace(
-            ctf,
+            runner,
             targeting,
             ctx,
             target,
@@ -337,7 +336,7 @@ fn find_integer<F: FnMut(TestCase)>(
         }
         let mid = lo + (hi - lo) / 2;
         if try_replace(
-            ctf,
+            runner,
             targeting,
             ctx,
             target,
@@ -360,8 +359,8 @@ fn find_integer<F: FnMut(TestCase)>(
 /// run the trial. On a strict score improvement, commit the new state and
 /// bump `improvements`. Returns `true` iff the trial improved the score.
 #[allow(clippy::too_many_arguments)]
-fn try_replace<F: FnMut(TestCase)>(
-    ctf: &mut CachedTestFunction<F>,
+fn try_replace(
+    runner: &mut dyn NativeRunner,
     targeting: &mut TargetingState,
     ctx: &mut OptimiseCtx<'_>,
     target: &str,
@@ -386,7 +385,7 @@ fn try_replace<F: FnMut(TestCase)>(
     }
     let mut trial_choices = current_choices.clone();
     trial_choices[idx] = ChoiceValue::Integer(new_val);
-    let trial = match run_trial(ctf, targeting, ctx, &trial_choices) {
+    let trial = match run_trial(runner, targeting, ctx, &trial_choices) {
         Some(t) => t,
         None => return false,
     };

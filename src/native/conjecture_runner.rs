@@ -1055,7 +1055,7 @@ impl From<&ChoiceValue> for ChoiceValueKey {
 /// `Status` if the test concluded at this position, and a cached
 /// `is_exhausted` flag.
 #[derive(Default)]
-struct DataTreeNode {
+pub(crate) struct DataTreeNode {
     kind: Option<ChoiceKind>,
     children: HashMap<ChoiceValueKey, Box<DataTreeNode>>,
     /// Terminal status if the test case ended at this node.  Only set
@@ -1066,7 +1066,7 @@ struct DataTreeNode {
     /// explored — either because this is a terminal (conclusion is
     /// set) or because every possible child has been observed and is
     /// itself exhausted.
-    is_exhausted: bool,
+    pub(crate) is_exhausted: bool,
 }
 
 /// Iterative drop so a thousands-deep single-path tree (built when the
@@ -1115,7 +1115,7 @@ impl DataTreeNode {
 /// concluded cleanly) and propagates exhaustion up the path so the
 /// runner's `generate_novel_prefix` walk can avoid dead branches.
 /// Walk `nodes` through `tree_root` ... (see full doc below)
-fn record_tree(
+pub(crate) fn record_tree(
     tree_root: &mut DataTreeNode,
     nodes: &[ChoiceNode],
     status: Status,
@@ -1205,7 +1205,7 @@ const ENUMERATION_CAP: u64 = 1024;
 fn random_choice_value(kind: &ChoiceKind, rng: &mut SmallRng) -> Option<ChoiceValue> {
     match kind {
         ChoiceKind::Integer(ic) => Some(ChoiceValue::Integer(
-            rng.random_range(ic.min_value..=ic.max_value),
+            crate::native::core::state::biased_integer_sample(ic, rng),
         )),
         ChoiceKind::Boolean(_) => Some(ChoiceValue::Boolean(rng.random::<bool>())),
         ChoiceKind::Bytes(bc) => {
@@ -1303,7 +1303,7 @@ fn pick_non_exhausted_value(
 /// fresh RNG sampling.  Returning an empty prefix means "just draw
 /// everything at random" — correct for the first call in a run, when
 /// the tree is still empty.
-fn generate_novel_prefix(tree_root: &DataTreeNode, rng: &mut SmallRng) -> Vec<ChoiceValue> {
+pub(crate) fn generate_novel_prefix(tree_root: &DataTreeNode, rng: &mut SmallRng) -> Vec<ChoiceValue> {
     if tree_root.is_exhausted {
         return Vec::new();
     }

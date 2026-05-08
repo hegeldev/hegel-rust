@@ -182,7 +182,13 @@ impl DataSource for NativeDataSource {
     }
 
     fn mark_complete(&self, _status: &str, _origin: Option<&str>) {
-        // No-op for native backend: there is no server to notify.
+        // No-op for native: the per-test-case status/origin flow back
+        // to `NativeTestRunner` via the `TestCaseResult` returned from
+        // the shared `run_case` callback, not via the data source.
+    }
+
+    fn native_handle(&self) -> Option<NativeTestCaseHandle> {
+        Some(Arc::clone(&self.inner))
     }
 
     fn test_aborted(&self) -> bool {

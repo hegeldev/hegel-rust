@@ -117,6 +117,102 @@ static GLOBAL_CONSTANTS_INTEGERS: LazyLock<Vec<i128>> = LazyLock::new(|| {
     base
 });
 
+/// Boundary-biased uniform sample for integers.
+///
+/// Implements the "nasty value" boost used by both the
+/// [`NativeTestCase::draw_integer`] code path and the data-tree
+/// [`pick_non_exhausted_value`](crate::native::conjecture_runner) path
+/// during novel-prefix walks. Sharing the implementation keeps the two
+/// random-generation routes consistent: when `generate_novel_prefix`
+/// chooses a child to recurse into, it now picks special values
+/// (0, 1, ±powers-of-two, factorials, …) with the same frequency as
+/// `draw_integer` does for fresh draws.
+///
+/// Returns a value in `[ic.min_value, ic.max_value]` (inclusive). With
+/// probability proportional to `nasty.len() * BOUNDARY_PROBABILITY` (≈ 0.5
+/// for unbounded ranges) the result is one of those nasty/interesting
+/// values; otherwise it's uniform across the range.
+pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut SmallRng) -> i128 {
+    if ic.min_value == ic.max_value {
+        return ic.min_value;
+    }
+    let mut nasty: Vec<i128> = vec![ic.min_value, ic.max_value];
+    let interesting: &[i128] = &[
+        0,
+        1,
+        -1,
+        2,
+        -2,
+        7,
+        -7,
+        8,
+        -8,
+        15,
+        -15,
+        16,
+        -16,
+        31,
+        -31,
+        32,
+        -32,
+        63,
+        -63,
+        64,
+        -64,
+        127,
+        -127,
+        128,
+        -128,
+        255,
+        -255,
+        256,
+        -256,
+        511,
+        -511,
+        512,
+        -512,
+        1023,
+        -1023,
+        1024,
+        -1024,
+        2047,
+        -2047,
+        2048,
+        -2048,
+        4095,
+        -4095,
+        4096,
+        -4096,
+        8191,
+        -8191,
+        8192,
+        -8192,
+        i16::MAX as i128,
+        i16::MIN as i128,
+        i32::MAX as i128,
+        i32::MIN as i128,
+        i64::MAX as i128,
+        i64::MIN as i128,
+    ];
+    for &v in interesting {
+        if ic.validate(v) && !nasty.contains(&v) {
+            nasty.push(v);
+        }
+    }
+    for &v in GLOBAL_CONSTANTS_INTEGERS.iter() {
+        if ic.validate(v) && !nasty.contains(&v) {
+            nasty.push(v);
+        }
+    }
+    let threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
+    if rng.random::<f64>() < threshold {
+        let idx = rng.random_range(0..nasty.len());
+        nasty[idx]
+    } else {
+        rng.random_range(ic.min_value..=ic.max_value)
+    }
+}
+
 /// Interesting string constants seeded from Hypothesis's GLOBAL_CONSTANTS
 /// (providers.py `_constant_strings`): logic keywords, numeric edge cases,
 /// common Unicode stress strings.  Stored as codepoint vectors so they can
@@ -962,85 +1058,7 @@ impl NativeTestCase {
             || ChoiceValue::Integer(kind.simplest()),
             || ChoiceValue::Integer(kind.unit()),
             |v| matches!(v, ChoiceValue::Integer(n) if kind.validate(*n)),
-            |rng| {
-                if min_value == max_value {
-                    return ChoiceValue::Integer(min_value);
-                }
-                let mut nasty: Vec<i128> = vec![min_value, max_value];
-                let interesting: &[i128] = &[
-                    0,
-                    1,
-                    -1,
-                    2,
-                    -2,
-                    7,
-                    -7,
-                    8,
-                    -8,
-                    15,
-                    -15,
-                    16,
-                    -16,
-                    31,
-                    -31,
-                    32,
-                    -32,
-                    63,
-                    -63,
-                    64,
-                    -64,
-                    127,
-                    -127,
-                    128,
-                    -128,
-                    255,
-                    -255,
-                    256,
-                    -256,
-                    511,
-                    -511,
-                    512,
-                    -512,
-                    1023,
-                    -1023,
-                    1024,
-                    -1024,
-                    2047,
-                    -2047,
-                    2048,
-                    -2048,
-                    4095,
-                    -4095,
-                    4096,
-                    -4096,
-                    8191,
-                    -8191,
-                    8192,
-                    -8192,
-                    i16::MAX as i128,
-                    i16::MIN as i128,
-                    i32::MAX as i128,
-                    i32::MIN as i128,
-                    i64::MAX as i128,
-                    i64::MIN as i128,
-                ];
-                for &v in interesting {
-                    if kind.validate(v) && !nasty.contains(&v) {
-                        nasty.push(v);
-                    }
-                }
-                for &v in GLOBAL_CONSTANTS_INTEGERS.iter() {
-                    if kind.validate(v) && !nasty.contains(&v) {
-                        nasty.push(v);
-                    }
-                }
-                let threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
-                if rng.random::<f64>() < threshold {
-                    let idx = rng.random_range(0..nasty.len());
-                    return ChoiceValue::Integer(nasty[idx]);
-                }
-                ChoiceValue::Integer(rng.random_range(min_value..=max_value))
-            },
+            |rng| ChoiceValue::Integer(biased_integer_sample(&kind, rng)),
         )?;
 
         let ChoiceValue::Integer(v) = value else {

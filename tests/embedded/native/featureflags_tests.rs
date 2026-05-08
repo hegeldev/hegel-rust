@@ -60,10 +60,9 @@ fn live_flags_remember_prior_decisions_when_handle_missing() {
     // new defaults to enabled.
     let flags = {
         let ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(1));
-        let (data_source, handle) = NativeDataSource::new(ntc);
+        let (data_source, _handle) = NativeDataSource::new(ntc);
         let strategy = FeatureStrategy::new();
-        let mut tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);
-        tc.attach_native_handle(handle);
+        let tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);
         let flags = strategy.do_draw(&tc);
         // Force a decision while the handle is still live.
         let _ = flags.is_enabled("recorded");
@@ -80,10 +79,9 @@ fn at_least_one_of_single_name_forces_enabled() {
     // is_enabled that forces `false` (i.e. "not disabled") for the sole
     // required feature, regardless of p_disabled.
     let ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(42));
-    let (data_source, handle) = NativeDataSource::new(ntc);
+    let (data_source, _handle) = NativeDataSource::new(ntc);
     let strategy = FeatureStrategy::new().at_least_one_of(["only"]);
-    let mut tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);
-    tc.attach_native_handle(handle);
+    let tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);
     let flags = strategy.do_draw(&tc);
     assert!(flags.is_enabled("only"));
 }
@@ -107,21 +105,15 @@ fn is_enabled_panics_stop_test_when_test_case_exhausted() {
 #[should_panic(expected = "__HEGEL_STOP_TEST")]
 fn do_draw_panics_stop_test_when_test_case_exhausted() {
     let ntc = NativeTestCase::for_choices(&[], None, None);
-    let (data_source, handle) = NativeDataSource::new(ntc);
-    let strategy = FeatureStrategy::new();
-    let mut tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);
-    tc.attach_native_handle(handle);
-    strategy.do_draw(&tc);
-}
-
-#[test]
-#[should_panic(expected = "FeatureStrategy::do_draw called outside the native test context")]
-fn do_draw_outside_native_context_panics() {
-    // FeatureStrategy only works when tc.native_tc_handle() is Some.
-    // Without attach_native_handle the handle is None and the expect fires.
-    let ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(0));
     let (data_source, _handle) = NativeDataSource::new(ntc);
     let strategy = FeatureStrategy::new();
     let tc = TestCase::new(Box::new(data_source), false, Mode::TestRun);
     strategy.do_draw(&tc);
 }
+
+// `do_draw_outside_native_context_panics` previously lived here, asserting
+// that a `TestCase` built from a `NativeDataSource` without an explicit
+// `attach_native_handle` call made `FeatureStrategy::do_draw` panic. With
+// the [`DataSource::native_handle`] hook in place, `TestCase::new` picks
+// up the handle directly from the data source, so the failing branch is
+// no longer reachable from any production code path.

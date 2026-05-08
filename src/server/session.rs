@@ -82,7 +82,7 @@ impl HegelSession {
                 return Arc::clone(s);
             }
         }
-        super::runner::init_panic_hook();
+        crate::run_lifecycle::init_panic_hook();
         let session = Arc::new(HegelSession::init());
         *guard = Some(Arc::clone(&session));
         session
@@ -242,7 +242,7 @@ impl ServerTestRunner {
                     ));
                     let tc_result = run_case(backend, true);
 
-                    if let TestCaseResult::Interesting { panic_message } = tc_result {
+                    if let TestCaseResult::Interesting { panic_message, .. } = tc_result {
                         passed = false;
                         failure_message = Some(panic_message);
                     }
@@ -449,7 +449,7 @@ impl TestRunner for ServerTestRunner {
             ));
             let tc_result = run_case(backend, true);
 
-            if let TestCaseResult::Interesting { panic_message } = tc_result {
+            if let TestCaseResult::Interesting { panic_message, .. } = tc_result {
                 failure_message = Some(panic_message);
             }
 

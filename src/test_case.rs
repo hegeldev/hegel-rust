@@ -232,6 +232,12 @@ impl TestCase {
             _ if is_last_run => Arc::new(|msg| eprintln!("{}", msg)),
             _ => Arc::new(|_| {}),
         };
+        // Snapshot the native engine handle (if any) before we type-erase
+        // the data source: native-only generators like `FeatureStrategy`
+        // need direct access to the underlying `NativeTestCase`, but
+        // `Box<dyn DataSource>` hides the concrete type.
+        #[cfg(feature = "native")]
+        let native_handle = data_source.native_handle();
         TestCase {
             global: Arc::new(TestCaseGlobalData {
                 is_last_run,
@@ -245,7 +251,7 @@ impl TestCase {
                     },
                 }),
                 #[cfg(feature = "native")]
-                native_handle: None,
+                native_handle,
             }),
             local: RefCell::new(TestCaseLocalData {
                 span_depth: 0,
@@ -255,19 +261,9 @@ impl TestCase {
         }
     }
 
-    /// Attach the native test case handle.
-    ///
-    /// Must be called at most once, before the `TestCase` is cloned or
-    /// shared with any other code (i.e. right after construction).
-    #[cfg(feature = "native")]
-    pub(crate) fn attach_native_handle(
-        &mut self,
-        handle: crate::native::data_source::NativeTestCaseHandle,
-    ) {
-        Arc::get_mut(&mut self.global)
-            .expect("attach_native_handle called after TestCase was shared")
-            .native_handle = Some(handle);
-    }
+    // `attach_native_handle` was removed: `TestCase::new` now picks up
+    // the handle from `data_source.native_handle()` at construction
+    // time, so there's no separate post-construction attach step.
 
     /// Return a reference to the native test case handle, if present.
     #[cfg(feature = "native")]
@@ -621,13 +617,17 @@ impl TestCase {
     /// Report whether the test case has been aborted (StopTest/overflow).
     ///
     /// Used by the runner to decide whether to send `mark_complete`.
-    #[cfg(not(feature = "native"))]
     pub(crate) fn test_aborted(&self) -> bool {
         self.with_data_source(|ds| ds.test_aborted())
     }
 
     /// Send `mark_complete` on this test case's data source.
-    #[cfg(not(feature = "native"))]
+    ///
+    /// Both backends use this to communicate the outcome — and, for
+    /// `Status::Interesting`, an `origin` string identifying the panic
+    /// site — to whatever owns the per-test-case bookkeeping
+    /// (Hypothesis on the server backend; the native engine's
+    /// `NativeTestCase` on the native backend).
     pub(crate) fn mark_complete(&self, status: &str, origin: Option<&str>) {
         self.with_data_source(|ds| ds.mark_complete(status, origin));
     }
