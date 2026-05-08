@@ -34,6 +34,14 @@ name = "hegel"
 name = "stack"
 doc-scrape-examples = true
 
+# Random program generator that exercises hegel-rust by emitting and running
+# hegel-rust source. Gated behind the hegelsmith feature so it doesn't pull
+# its module tree into normal builds.
+[[bin]]
+name = "hegelsmith"
+path = "src/bin/hegelsmith/main.rs"
+required-features = ["hegelsmith"]
+
 # Integration-test binaries that collect ported tests from Python upstreams.
 # Each subdirectory groups one upstream source (resources/pbtkit/tests/,
 # resources/hypothesis/hypothesis-python/tests/cover/). Cargo does not
@@ -84,6 +92,9 @@ jiff = ["dep:jiff"]
 serde_json = ["dep:serde_json"]
 # Enables the serde_json/raw_value feature. Enables generators for serde_json::value::RawValue.
 serde_json_raw_value = ["serde_json", "serde_json/raw_value"]
+# Enables the hegelsmith binary, which generates random hegel-rust programs to
+# fuzz the engine itself. See src/bin/hegelsmith/.
+hegelsmith = []
 
 [package.metadata.docs.rs]
 all-features = true
