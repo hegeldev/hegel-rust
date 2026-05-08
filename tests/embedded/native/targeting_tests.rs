@@ -183,6 +183,39 @@ fn find_integer_hi_cap_fires() {
     );
 }
 
+// ── try_replace: returns false when the probed run mark_invalid's.
+//
+// The first linear-scan probe (delta = +1) lands on `cur + 1 = 1`, which
+// the test rejects via `assume(false)` → Status::Invalid. `try_replace`
+// hits the `status < Status::Valid` branch and returns false; the linear
+// scan therefore returns immediately.
+
+#[test]
+fn try_replace_returns_false_when_probe_is_invalid() {
+    use crate::generators as gs;
+    let mut ctf = CachedTestFunction::new(|tc: crate::TestCase| {
+        let v: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(100));
+        // First probe in the climb is cur+1=1 → reject. The seed replay at
+        // cur=0 succeeds.
+        tc.assume(v == 0);
+        tc.target_labelled(v as f64, "score");
+    });
+    let mut targeting = TargetingState::new();
+    targeting.best_observed_targets.insert("score".into(), 0.0);
+    targeting
+        .best_choices_for_target
+        .insert("score".into(), vec![ChoiceValue::Integer(0)]);
+    let mut result = None;
+    let mut calls: u64 = 0;
+    let mut valid: u64 = 0;
+    let mut ctx = ctx_with_budget(&mut result, &mut calls, &mut valid, 1000, 1000);
+
+    let imps = hill_climb(&mut ctf, &mut targeting, &mut ctx, "score", 10);
+    // Seed replay at v=0 succeeded, then the very first probe was Invalid →
+    // try_replace returned false → linear scan exited with no improvements.
+    assert_eq!(imps, 0);
+}
+
 // ── find_integer: improvements >= max_improvements check inside binary search.
 //
 // To enter the binary-search phase we need the exponential loop to `break`
