@@ -131,11 +131,7 @@ fn collection_shrinker_consider_returns_false_for_duplicate_seen() {
     // ordering shrinker proposes [1,3] which is left_is_better than [3,1] but
     // the predicate rejects it. Step 5 per-element: tries candidate with changed
     // element which is in seen → line 377.
-    let mut shrinker = CollectionShrinker::new(
-        vec![3usize, 1],
-        |v: &[usize]| v == [3, 1],
-        2,
-    );
+    let mut shrinker = CollectionShrinker::new(vec![3usize, 1], |v: &[usize]| v == [3, 1], 2);
     shrinker.run();
     assert_eq!(shrinker.current(), &[3, 1]);
 }
@@ -242,8 +238,7 @@ fn ordering_shrinker_does_not_change_already_sorted() {
 fn ordering_shrinker_left_is_better_sorts_within_predicate() {
     // Predicate: only accept sequences where first element <= second.
     // Start with [4, 2]: sorted [2,4] passes. run() short-circuits.
-    let mut shrinker =
-        OrderingShrinker::new(vec![4usize, 2], |v: &[usize]| v[0] <= v[1]);
+    let mut shrinker = OrderingShrinker::new(vec![4usize, 2], |v: &[usize]| v[0] <= v[1]);
     shrinker.run();
     assert_eq!(shrinker.current(), &[2, 4]);
 }
@@ -252,8 +247,7 @@ fn ordering_shrinker_left_is_better_sorts_within_predicate() {
 fn ordering_shrinker_sort_regions_with_gaps() {
     // A sequence with a local disorder that sort_regions_with_gaps should fix.
     // [1, 5, 2, 3, 4]: position 1 (5) is out of order with position 2 (2).
-    let mut shrinker =
-        OrderingShrinker::new(vec![1usize, 5, 2, 3, 4], |_: &[usize]| true);
+    let mut shrinker = OrderingShrinker::new(vec![1usize, 5, 2, 3, 4], |_: &[usize]| true);
     shrinker.run();
     assert_eq!(shrinker.current(), &[1, 2, 3, 4, 5]);
 }

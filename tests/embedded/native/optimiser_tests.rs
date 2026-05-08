@@ -339,13 +339,11 @@ fn run_extend_full_hits_prefix_cache() {
 #[test]
 fn hill_climb_returns_zero_when_best_choices_missing() {
     let settings = TargetedRunnerSettings::new().max_examples(100);
-    let mut runner = TargetedRunner::new(
-        |_tc: &mut TargetedTestCase| {},
-        settings,
-        make_rng(),
-    );
+    let mut runner = TargetedRunner::new(|_tc: &mut TargetedTestCase| {}, settings, make_rng());
     // Manually populate best_observed_targets without touching best_choices_for_target.
-    runner.best_observed_targets.insert("score".to_string(), 5.0);
+    runner
+        .best_observed_targets
+        .insert("score".to_string(), 5.0);
     // optimise_targets → hill_climb("score") → best_choices_for_target.get("score") == None
     // → return Ok(0) (line 568).
     let result = runner.optimise_targets();
@@ -483,7 +481,8 @@ fn hill_climb_re_examines_nodes_after_length_change() {
         |tc: &mut TargetedTestCase| {
             let a = tc.draw_integer(0, 100);
             let b = tc.draw_integer(0, 100);
-            tc.target_observations.insert("score".to_string(), (a + b) as f64);
+            tc.target_observations
+                .insert("score".to_string(), (a + b) as f64);
         },
         settings,
         make_rng(),
@@ -604,7 +603,8 @@ fn encode_choice_key_boolean_variant() {
     let mut runner = TargetedRunner::new(
         |tc: &mut TargetedTestCase| {
             let v = tc.draw_boolean(0.5);
-            tc.target_observations.insert("x".to_string(), if v { 1.0 } else { 0.0 });
+            tc.target_observations
+                .insert("x".to_string(), if v { 1.0 } else { 0.0 });
         },
         settings,
         make_rng(),
@@ -658,7 +658,8 @@ fn encode_choice_key_string_variant() {
         |tc: &mut TargetedTestCase| {
             let intervals = IntervalSet::new(vec![(65, 90)]);
             let s = tc.draw_string(&intervals, 1, 3);
-            tc.target_observations.insert("x".to_string(), s.chars().count() as f64);
+            tc.target_observations
+                .insert("x".to_string(), s.chars().count() as f64);
         },
         settings,
         make_rng(),
@@ -766,7 +767,8 @@ fn run_extend_full_prefix_cache_hit_via_hill_climb() {
             if v > 0 {
                 // Draw a second integer only when v > 0.
                 let w = tc.draw_integer(0, 10);
-                tc.target_observations.insert("score".to_string(), (v + w) as f64);
+                tc.target_observations
+                    .insert("score".to_string(), (v + w) as f64);
                 phc.store(true, Ordering::SeqCst);
             } else {
                 // v == 0: only 1 node drawn.
@@ -796,7 +798,8 @@ fn try_replace_with_boolean_node() {
     let mut runner = TargetedRunner::new(
         |tc: &mut TargetedTestCase| {
             let b = tc.draw_boolean(0.5);
-            tc.target_observations.insert("score".to_string(), if b { 1.0 } else { 0.0 });
+            tc.target_observations
+                .insert("score".to_string(), if b { 1.0 } else { 0.0 });
         },
         settings,
         make_rng(),
@@ -816,7 +819,8 @@ fn try_replace_with_bytes_node() {
     let mut runner = TargetedRunner::new(
         |tc: &mut TargetedTestCase| {
             let b = tc.draw_bytes(1, 1);
-            tc.target_observations.insert("score".to_string(), b[0] as f64);
+            tc.target_observations
+                .insert("score".to_string(), b[0] as f64);
         },
         settings,
         make_rng(),
@@ -844,7 +848,8 @@ fn try_cache_skips_when_nodes_exceed_prefix() {
         |tc: &mut TargetedTestCase| {
             let a = tc.draw_integer(0, 10);
             let b = tc.draw_integer(0, 10);
-            tc.target_observations.insert("sum".to_string(), (a + b) as f64);
+            tc.target_observations
+                .insert("sum".to_string(), (a + b) as f64);
         },
         settings,
         make_rng(),
@@ -900,7 +905,11 @@ fn consider_new_data_strict_improvement() {
     runner.cached_test_function(&[ChoiceValue::Integer(0)]);
     let _ = runner.optimise_targets();
     // After climbing, best score should be > 0.
-    let best = runner.best_observed_targets().get("score").copied().unwrap_or(0.0);
+    let best = runner
+        .best_observed_targets()
+        .get("score")
+        .copied()
+        .unwrap_or(0.0);
     assert!(best > 0.0);
 }
 
@@ -973,7 +982,8 @@ fn find_integer_negative_direction_propagates_run_is_complete() {
             let v = tc.draw_integer(0, 50);
             // Score DECREASES with v: +1 direction gives lower score (bad),
             // -1 direction gives higher score (good, for hill_climb).
-            tc.target_observations.insert("score".to_string(), (50 - v) as f64);
+            tc.target_observations
+                .insert("score".to_string(), (50 - v) as f64);
         },
         settings,
         make_rng(),
@@ -1059,7 +1069,8 @@ fn try_replace_max_examples_hit_in_retry_loop() {
                 let _w = tc.draw_integer(0, 50);
             }
             // Score DECREASES with v: +1 direction worsens score.
-            tc.target_observations.insert("score".to_string(), (50 - v) as f64);
+            tc.target_observations
+                .insert("score".to_string(), (50 - v) as f64);
         },
         settings,
         make_rng(),
@@ -1148,7 +1159,8 @@ fn try_replace_span_fixup_breaks_when_span_after_idx() {
                 let _x = tc.draw_integer(0, 10);
             }
             // Score DECREASES with v → +1 direction is WORSE → consider fails.
-            tc.target_observations.insert("score".to_string(), (10 - v) as f64);
+            tc.target_observations
+                .insert("score".to_string(), (10 - v) as f64);
         },
         settings,
         make_rng(),
@@ -1192,7 +1204,8 @@ fn try_replace_span_fixup_size_match_and_after_idx() {
             if v >= 4 {
                 let _x = tc.draw_integer(0, 10);
             }
-            tc.target_observations.insert("score".to_string(), (10 - v) as f64);
+            tc.target_observations
+                .insert("score".to_string(), (10 - v) as f64);
         },
         settings,
         make_rng(),
@@ -1233,7 +1246,8 @@ fn try_replace_span_fixup_max_examples_fires_line_892() {
             }
             tc.stop_span();
             // Score DECREASES with v → +1 direction is worse → consider fails.
-            tc.target_observations.insert("score".to_string(), (10 - v) as f64);
+            tc.target_observations
+                .insert("score".to_string(), (10 - v) as f64);
         },
         settings,
         make_rng(),

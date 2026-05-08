@@ -2472,9 +2472,10 @@ fn replace_returns_false_for_out_of_bounds_index() {
     // Create a shrinker with 2 nodes. Try to replace index 99 (out of bounds).
     let nodes = vec![int_node(0, 100, 5), int_node(0, 100, 3)];
     let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
-    let result = shrinker.replace(&std::collections::HashMap::from([
-        (99usize, ChoiceValue::Integer(42)),
-    ]));
+    let result = shrinker.replace(&std::collections::HashMap::from([(
+        99usize,
+        ChoiceValue::Integer(42),
+    )]));
     assert!(!result);
     // Nodes unchanged.
     assert_eq!(shrinker.current_nodes.len(), 2);
@@ -2577,7 +2578,10 @@ fn lower_integers_together_continues_when_kind_is_not_integer() {
     //   current_nodes[1].kind = Boolean → line 338 fires → continue.
     shrinker.lower_integers_together();
     // After shrinking, current_nodes[1] should be Boolean.
-    assert!(matches!(shrinker.current_nodes[1].kind, ChoiceKind::Boolean(_)));
+    assert!(matches!(
+        shrinker.current_nodes[1].kind,
+        ChoiceKind::Boolean(_)
+    ));
 }
 
 // ── lower_integers_together: node j has non-Integer kind (line 341) ──────────
@@ -2625,6 +2629,8 @@ fn lower_integers_together_continues_when_node_j_kind_not_integer() {
     // pair_idx=0, gap=2: i=0 (Integer), j=2 (Boolean kind) → line 341 fires.
     shrinker.lower_integers_together();
     // Node 2 should be Boolean after shrinking.
-    assert!(matches!(shrinker.current_nodes[2].kind, ChoiceKind::Boolean(_)));
+    assert!(matches!(
+        shrinker.current_nodes[2].kind,
+        ChoiceKind::Boolean(_)
+    ));
 }
-

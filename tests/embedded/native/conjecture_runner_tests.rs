@@ -619,11 +619,8 @@ fn shrink_interesting_examples_direct_call_empty_interesting_returns_early() {
             HealthCheckLabel::LargeBaseExample,
             HealthCheckLabel::DataTooLarge,
         ]);
-    let mut runner = NativeConjectureRunner::new(
-        |_data: &mut NativeConjectureData| {},
-        settings,
-        make_rng(),
-    );
+    let mut runner =
+        NativeConjectureRunner::new(|_data: &mut NativeConjectureData| {}, settings, make_rng());
     // interesting_examples is empty → line 1844 early return.
     runner.shrink_interesting_examples();
     assert_eq!(runner.shrink_interesting_examples_call_count, 1);
@@ -796,7 +793,10 @@ fn pick_non_exhausted_value_returns_none_for_float_kind() {
 #[test]
 fn enumerate_choice_values_returns_none_for_large_range() {
     use crate::native::core::IntegerChoice;
-    let kind = ChoiceKind::Integer(IntegerChoice { min_value: 0, max_value: 2000 });
+    let kind = ChoiceKind::Integer(IntegerChoice {
+        min_value: 0,
+        max_value: 2000,
+    });
     // max_c = 2001 > ENUMERATION_CAP (1024) → returns None (line 1228).
     let result = enumerate_choice_values(&kind);
     assert!(result.is_none());
@@ -833,7 +833,10 @@ fn enumerate_choice_values_returns_none_for_float_kind() {
 fn pick_non_exhausted_value_returns_none_when_all_exhausted() {
     use crate::native::core::IntegerChoice;
     use rand::SeedableRng;
-    let kind = ChoiceKind::Integer(IntegerChoice { min_value: 0, max_value: 1 });
+    let kind = ChoiceKind::Integer(IntegerChoice {
+        min_value: 0,
+        max_value: 1,
+    });
     // Build children where both values (0 and 1) are exhausted.
     let mut children: std::collections::HashMap<ChoiceValueKey, Box<DataTreeNode>> =
         std::collections::HashMap::new();
@@ -929,13 +932,12 @@ fn fails_health_check_with_non_string_panic_triggers_line_2916() {
 #[test]
 fn native_runner_hill_climb_no_best_choices_returns_zero() {
     let settings = default_settings();
-    let mut runner = NativeConjectureRunner::new(
-        |_: &mut NativeConjectureData| {},
-        settings,
-        make_rng(),
-    );
+    let mut runner =
+        NativeConjectureRunner::new(|_: &mut NativeConjectureData| {}, settings, make_rng());
     // Inject an observation without the matching choice sequence.
-    runner.best_observed_targets.insert("score".to_string(), 5.0);
+    runner
+        .best_observed_targets
+        .insert("score".to_string(), 5.0);
     // optimise_targets iterates best_observed_targets → calls hill_climb("score")
     // → best_choices_for_target.get("score") == None → return 0 (line 2760).
     runner.optimise_targets();
@@ -970,7 +972,8 @@ fn native_runner_hill_climb_invalid_status_returns_zero() {
                 // Second invocation: mark invalid so status < Valid.
                 data.mark_invalid(None);
             } else {
-                data.target_observations.insert("score".to_string(), v as f64);
+                data.target_observations
+                    .insert("score".to_string(), v as f64);
             }
         },
         settings,
@@ -1006,7 +1009,8 @@ fn native_runner_hill_climb_loop_body_executed() {
     let mut runner = NativeConjectureRunner::new(
         |data: &mut NativeConjectureData| {
             let v = data.draw_integer(0, 100);
-            data.target_observations.insert("score".to_string(), v as f64);
+            data.target_observations
+                .insert("score".to_string(), v as f64);
         },
         settings,
         make_rng(),
@@ -1047,7 +1051,8 @@ fn native_runner_find_integer_invalid_probe_breaks() {
                 // Any probe above the seed: mark invalid → Status::Invalid.
                 data.mark_invalid(None);
             } else {
-                data.target_observations.insert("score".to_string(), v as f64);
+                data.target_observations
+                    .insert("score".to_string(), v as f64);
             }
         },
         settings,
@@ -1125,13 +1130,11 @@ fn dominance_right_dominates_via_swap() {
     };
     let big = ConjectureRunResult {
         status: Status::Valid,
-        nodes: vec![
-            ChoiceNode {
-                kind: ChoiceKind::Boolean(BooleanChoice),
-                value: ChoiceValue::Boolean(true),
-                was_forced: false,
-            },
-        ],
+        nodes: vec![ChoiceNode {
+            kind: ChoiceKind::Boolean(BooleanChoice),
+            value: ChoiceValue::Boolean(true),
+            was_forced: false,
+        }],
         choices: vec![ChoiceValue::Boolean(true)],
         target_observations: Default::default(),
         origin: None,
@@ -1158,13 +1161,11 @@ fn dominance_no_dominance_when_left_status_lower() {
     };
     let big_interesting = ConjectureRunResult {
         status: Status::Interesting,
-        nodes: vec![
-            ChoiceNode {
-                kind: ChoiceKind::Boolean(BooleanChoice),
-                value: ChoiceValue::Boolean(true),
-                was_forced: false,
-            },
-        ],
+        nodes: vec![ChoiceNode {
+            kind: ChoiceKind::Boolean(BooleanChoice),
+            value: ChoiceValue::Boolean(true),
+            was_forced: false,
+        }],
         choices: vec![ChoiceValue::Boolean(true)],
         target_observations: Default::default(),
         origin: Some(interesting_origin(None)),
@@ -1204,8 +1205,8 @@ fn pareto_front_contains_and_index() {
 
 #[test]
 fn settings_database_builder() {
-    use std::sync::Arc;
     use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
     let db = Arc::new(InMemoryNativeDatabase::new());
     let s = NativeRunnerSettings::new().database(Some(db));
     assert!(s.database.is_some());
@@ -1250,11 +1251,8 @@ fn data_stop_span_delegates_to_stop_span_with_discard() {
 #[test]
 fn data_tree_view_is_exhausted_returns_false_for_fresh_runner() {
     let settings = default_settings();
-    let runner = NativeConjectureRunner::new(
-        |_: &mut NativeConjectureData| {},
-        settings,
-        make_rng(),
-    );
+    let runner =
+        NativeConjectureRunner::new(|_: &mut NativeConjectureData| {}, settings, make_rng());
     assert!(!runner.tree().is_exhausted());
 }
 
@@ -1271,11 +1269,8 @@ fn data_tree_view_is_exhausted_returns_false_for_fresh_runner() {
 #[test]
 fn data_tree_view_rewrite_empty_tree_returns_novel() {
     let settings = default_settings();
-    let runner = NativeConjectureRunner::new(
-        |_: &mut NativeConjectureData| {},
-        settings,
-        make_rng(),
-    );
+    let runner =
+        NativeConjectureRunner::new(|_: &mut NativeConjectureData| {}, settings, make_rng());
     // Tree is empty (no known paths); rewrite returns (choices, None).
     let choices = vec![ChoiceValue::Boolean(true)];
     let (out, status) = runner.tree().rewrite(&choices);
@@ -1291,11 +1286,8 @@ fn data_tree_view_rewrite_empty_tree_returns_novel() {
 #[test]
 fn data_tree_view_rewrite_empty_choices_on_empty_tree() {
     let settings = default_settings();
-    let runner = NativeConjectureRunner::new(
-        |_: &mut NativeConjectureData| {},
-        settings,
-        make_rng(),
-    );
+    let runner =
+        NativeConjectureRunner::new(|_: &mut NativeConjectureData| {}, settings, make_rng());
     // Empty choices on an empty tree: loop doesn't run, root has no conclusion,
     // no kind, no children → line 753 fires returning ([], None).
     let (out, status) = runner.tree().rewrite(&[]);
@@ -1377,12 +1369,9 @@ fn native_shrinker_shrink_target_returns_metadata() {
 #[test]
 fn runner_with_database_key_accessors() {
     let settings = default_settings();
-    let runner = NativeConjectureRunner::new(
-        |_: &mut NativeConjectureData| {},
-        settings,
-        make_rng(),
-    )
-    .with_database_key(b"my_test".to_vec());
+    let runner =
+        NativeConjectureRunner::new(|_: &mut NativeConjectureData| {}, settings, make_rng())
+            .with_database_key(b"my_test".to_vec());
     // database_key() (lines 2188-2190)
     assert_eq!(runner.database_key(), Some(b"my_test".as_slice()));
     // secondary_key() (lines 2167-2173)
@@ -1474,8 +1463,8 @@ fn runner_generate_novel_prefix_returns_prefix() {
 
 #[test]
 fn runner_save_choices_with_in_memory_database() {
-    use std::sync::Arc;
     use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
     let db = Arc::new(InMemoryNativeDatabase::new());
     let settings = NativeRunnerSettings::new()
         .max_examples(5)
@@ -1540,11 +1529,8 @@ fn runner_exits_with_max_iterations() {
 #[test]
 fn runner_pareto_front_accessors() {
     let settings = default_settings();
-    let mut runner = NativeConjectureRunner::new(
-        |_: &mut NativeConjectureData| {},
-        settings,
-        make_rng(),
-    );
+    let mut runner =
+        NativeConjectureRunner::new(|_: &mut NativeConjectureData| {}, settings, make_rng());
     // pareto_front() (lines 2432-2434)
     let pf = runner.pareto_front();
     assert!(pf.is_empty());
@@ -1735,11 +1721,8 @@ fn cached_test_function_returns_early_stop_for_known_prefix() {
 #[test]
 fn record_test_result_early_stop_increments_overrun() {
     let settings = default_settings();
-    let mut runner = NativeConjectureRunner::new(
-        |_: &mut NativeConjectureData| {},
-        settings,
-        make_rng(),
-    );
+    let mut runner =
+        NativeConjectureRunner::new(|_: &mut NativeConjectureData| {}, settings, make_rng());
     let initial_overrun = runner.overrun_examples;
     // cached_test_function_extend with extend=0 on empty choices → EarlyStop
     // (or no-op if tree is exhausted). Use a choices vec that leads to overrun.
@@ -1808,11 +1791,8 @@ fn runner_exits_finished_when_tree_exhausted() {
             HealthCheckLabel::LargeBaseExample,
             HealthCheckLabel::DataTooLarge,
         ]);
-    let mut runner = NativeConjectureRunner::new(
-        |_: &mut NativeConjectureData| {},
-        settings,
-        make_rng(),
-    );
+    let mut runner =
+        NativeConjectureRunner::new(|_: &mut NativeConjectureData| {}, settings, make_rng());
     runner.run();
     // Tree exhausts immediately (no draws → root is concluded Valid → exhausted).
     // After the one-shot probe, tree_root.is_exhausted = true → Finished (line 1611).
@@ -1838,7 +1818,8 @@ fn record_test_result_pareto_eviction_path() {
     let mut runner = NativeConjectureRunner::new(
         |data: &mut NativeConjectureData| {
             let v = data.draw_integer(0, 100);
-            data.target_observations.insert("score".to_string(), v as f64);
+            data.target_observations
+                .insert("score".to_string(), v as f64);
         },
         settings,
         make_rng(),
@@ -1856,8 +1837,8 @@ fn record_test_result_pareto_eviction_path() {
 
 #[test]
 fn reuse_existing_examples_with_database() {
-    use std::sync::Arc;
     use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
     let db = Arc::new(InMemoryNativeDatabase::new());
     let key = b"reuse_test".to_vec();
 
@@ -2127,24 +2108,21 @@ fn native_shrinker_remove_discarded_with_discard_span() {
     // (accepted and interesting). This gives `has_discards = true` with a
     // non-empty discard span so lines 975-993 are exercised.
     let choices = vec![ChoiceValue::Integer(0), ChoiceValue::Integer(5)];
-    let mut shrinker = NativeShrinker::from_choices(
-        choices,
-        |data: &mut NativeConjectureData| {
-            let v = loop {
-                data.start_span(1);
-                let v = data.draw_integer(0, 10);
-                if v >= 1 {
-                    data.stop_span();
-                    break v;
-                } else {
-                    data.stop_span_with_discard(true);
-                }
-            };
-            if v >= 3 {
-                data.mark_interesting(interesting_origin(None));
+    let mut shrinker = NativeShrinker::from_choices(choices, |data: &mut NativeConjectureData| {
+        let v = loop {
+            data.start_span(1);
+            let v = data.draw_integer(0, 10);
+            if v >= 1 {
+                data.stop_span();
+                break v;
+            } else {
+                data.stop_span_with_discard(true);
             }
-        },
-    );
+        };
+        if v >= 3 {
+            data.mark_interesting(interesting_origin(None));
+        }
+    });
     // remove_discarded should process the discards and cover lines 975-993.
     let result = shrinker.remove_discarded();
     // After removing the discarded span [0] and keeping [5], consider() will
@@ -2163,19 +2141,16 @@ fn native_shrinker_remove_discarded_with_zero_length_discard() {
     // start_span, immediately stop_span_with_discard(true) — no draws inside.
     // The span has start==end, choice_count()==0.
     let choices = vec![ChoiceValue::Integer(5)];
-    let mut shrinker = NativeShrinker::from_choices(
-        choices,
-        |data: &mut NativeConjectureData| {
-            // Zero-length discard span: no draws inside.
-            data.start_span(1);
-            data.stop_span_with_discard(true);
-            // Draw the value that determines interesting.
-            let v = data.draw_integer(0, 10);
-            if v >= 3 {
-                data.mark_interesting(interesting_origin(None));
-            }
-        },
-    );
+    let mut shrinker = NativeShrinker::from_choices(choices, |data: &mut NativeConjectureData| {
+        // Zero-length discard span: no draws inside.
+        data.start_span(1);
+        data.stop_span_with_discard(true);
+        // Draw the value that determines interesting.
+        let v = data.draw_integer(0, 10);
+        if v >= 3 {
+            data.mark_interesting(interesting_origin(None));
+        }
+    });
     // has_discards=true, but discarded list is empty (choice_count==0).
     // remove_discarded returns true at line 986.
     let result = shrinker.remove_discarded();
@@ -2202,24 +2177,21 @@ fn native_shrinker_remove_discarded_with_zero_length_discard() {
 #[test]
 fn native_shrinker_remove_discarded_returns_false() {
     let choices = vec![ChoiceValue::Integer(0), ChoiceValue::Integer(7)];
-    let mut shrinker = NativeShrinker::from_choices(
-        choices,
-        |data: &mut NativeConjectureData| {
-            // Draw a flag in [0,1]; discard the span if a==0.
-            data.start_span(1);
-            let a = data.draw_integer(0, 1);
-            if a == 0 {
-                data.stop_span_with_discard(true);
-            } else {
-                data.stop_span();
-            }
-            // Draw a secondary value; only interesting when a==0 AND b>=5.
-            let b = data.draw_integer(0, 10);
-            if a == 0 && b >= 5 {
-                data.mark_interesting(interesting_origin(None));
-            }
-        },
-    );
+    let mut shrinker = NativeShrinker::from_choices(choices, |data: &mut NativeConjectureData| {
+        // Draw a flag in [0,1]; discard the span if a==0.
+        data.start_span(1);
+        let a = data.draw_integer(0, 1);
+        if a == 0 {
+            data.stop_span_with_discard(true);
+        } else {
+            data.stop_span();
+        }
+        // Draw a secondary value; only interesting when a==0 AND b>=5.
+        let b = data.draw_integer(0, 10);
+        if a == 0 && b >= 5 {
+            data.mark_interesting(interesting_origin(None));
+        }
+    });
     // After removing discard [0..1], attempt=[{Integer(7), kind=Integer(0..=10)}].
     // Test fn draws a (0..=1): sees Integer(7) which is out-of-range → a=unit()=1.
     // a==0 is false → NOT interesting → consider() returns false → line 993.
@@ -2282,7 +2254,10 @@ fn enumerate_choice_values_boolean_arm() {
 fn enumerate_choice_values_bytes_small_range() {
     use crate::native::core::BytesChoice;
     // Bytes with size 0..=1 gives max_c = 256^1 = 256 <= 1024 → enumerate.
-    let kind = ChoiceKind::Bytes(BytesChoice { min_size: 1, max_size: 1 });
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 1,
+        max_size: 1,
+    });
     let result = enumerate_choice_values(&kind);
     // Should enumerate all 256 single-byte sequences (or None if max_c > 1024).
     // BytesChoice::max_children for max_size=1 is 256^1 = 256 <= 1024.
@@ -2467,7 +2442,8 @@ fn runner_pareto_optimise_with_populated_front() {
     let mut runner = NativeConjectureRunner::new(
         |data: &mut NativeConjectureData| {
             let v = data.draw_integer(0, 100);
-            data.target_observations.insert("score".to_string(), v as f64);
+            data.target_observations
+                .insert("score".to_string(), v as f64);
         },
         settings,
         make_rng(),
@@ -2489,7 +2465,7 @@ fn runner_pareto_optimise_with_populated_front() {
 #[test]
 #[should_panic(expected = "non-deterministic")]
 fn record_tree_non_determinism_panics() {
-    use crate::native::core::{IntegerChoice, ChoiceKind};
+    use crate::native::core::{ChoiceKind, IntegerChoice};
     let mut root = DataTreeNode {
         kind: None,
         children: std::collections::HashMap::new(),
@@ -2498,7 +2474,10 @@ fn record_tree_non_determinism_panics() {
     };
     // First recording: Integer kind at position 0.
     let integer_node = ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice { min_value: 0, max_value: 10 }),
+        kind: ChoiceKind::Integer(IntegerChoice {
+            min_value: 0,
+            max_value: 10,
+        }),
         value: ChoiceValue::Integer(5),
         was_forced: false,
     };
@@ -2601,7 +2580,8 @@ fn runner_optimise_targets_with_target_phase_only() {
     let mut runner = NativeConjectureRunner::new(
         |data: &mut NativeConjectureData| {
             let v = data.draw_integer(0, 100);
-            data.target_observations.insert("score".to_string(), v as f64);
+            data.target_observations
+                .insert("score".to_string(), v as f64);
         },
         settings,
         make_rng(),
@@ -2669,12 +2649,13 @@ fn runner_exits_with_very_slow_shrinking() {
         },
         settings,
         make_rng(),
-    ).with_time_source(move || {
+    )
+    .with_time_source(move || {
         let n = call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if n == 0 {
-            0.0  // first call: sets deadline = 0 + MAX_SHRINKING_SECONDS
+            0.0 // first call: sets deadline = 0 + MAX_SHRINKING_SECONDS
         } else {
-            f64::MAX  // second+ calls: always past deadline
+            f64::MAX // second+ calls: always past deadline
         }
     });
     runner.run();
@@ -2759,11 +2740,8 @@ fn runner_default_buffer_size_limit_uses_conjecture_buffer_size() {
         ]);
     // buffer_size_limit is None → line 2108 fires in run().
     assert!(settings.buffer_size_limit.is_none());
-    let mut runner = NativeConjectureRunner::new(
-        |_: &mut NativeConjectureData| {},
-        settings,
-        make_rng(),
-    );
+    let mut runner =
+        NativeConjectureRunner::new(|_: &mut NativeConjectureData| {}, settings, make_rng());
     runner.run();
     // No panic = success; line 2108 was hit.
 }
@@ -2782,12 +2760,18 @@ fn dominance_no_dominance_different_interesting_origins() {
     // This ensures left_key < right_key so the dominance check proceeds past
     // the early-return-Equal guard, then hits line 181.
     let node_left = ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice { min_value: 0, max_value: 10 }),
+        kind: ChoiceKind::Integer(IntegerChoice {
+            min_value: 0,
+            max_value: 10,
+        }),
         value: ChoiceValue::Integer(1),
         was_forced: false,
     };
     let node_right = ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice { min_value: 0, max_value: 10 }),
+        kind: ChoiceKind::Integer(IntegerChoice {
+            min_value: 0,
+            max_value: 10,
+        }),
         value: ChoiceValue::Integer(5),
         was_forced: false,
     };
@@ -2892,7 +2876,8 @@ fn runner_hill_climb_finds_improvement() {
     let mut runner = NativeConjectureRunner::new(
         |data: &mut NativeConjectureData| {
             let v = data.draw_integer(0, 100);
-            data.target_observations.insert("score".to_string(), v as f64);
+            data.target_observations
+                .insert("score".to_string(), v as f64);
         },
         settings,
         make_rng(),
@@ -2901,11 +2886,12 @@ fn runner_hill_climb_finds_improvement() {
     let start_choices = vec![ChoiceValue::Integer(0)];
     runner.cached_test_function(&start_choices);
     // Manually populate best_choices_for_target at a non-maximum value.
-    runner.best_choices_for_target.insert(
-        "score".to_string(),
-        vec![ChoiceValue::Integer(1)],
-    );
-    runner.best_observed_targets.insert("score".to_string(), 1.0);
+    runner
+        .best_choices_for_target
+        .insert("score".to_string(), vec![ChoiceValue::Integer(1)]);
+    runner
+        .best_observed_targets
+        .insert("score".to_string(), 1.0);
     // hill_climb should try Integer(2) which has score 2.0 > 1.0 → improvement.
     runner.optimise_targets();
     // After optimisation, best should have improved.
@@ -2919,8 +2905,8 @@ fn runner_hill_climb_finds_improvement() {
 
 #[test]
 fn runner_reuse_existing_examples_with_database() {
-    use std::sync::Arc;
     use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
 
     let db = Arc::new(InMemoryNativeDatabase::new());
     let db_key = b"test_key".to_vec();
@@ -2933,7 +2919,9 @@ fn runner_reuse_existing_examples_with_database() {
     let settings = NativeRunnerSettings::new()
         .max_examples(10)
         .phases(vec![crate::Phase::Reuse])
-        .database(Some(db.clone() as Arc<dyn crate::native::database::ExampleDatabase>))
+        .database(Some(
+            db.clone() as Arc<dyn crate::native::database::ExampleDatabase>
+        ))
         .suppress_health_check(vec![
             HealthCheckLabel::FilterTooMuch,
             HealthCheckLabel::TooSlow,
@@ -2960,8 +2948,8 @@ fn runner_reuse_existing_examples_with_database() {
 
 #[test]
 fn runner_reuse_existing_examples_interesting() {
-    use std::sync::Arc;
     use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
 
     let db = Arc::new(InMemoryNativeDatabase::new());
     let db_key = b"interesting_key".to_vec();
@@ -2974,7 +2962,9 @@ fn runner_reuse_existing_examples_interesting() {
     let settings = NativeRunnerSettings::new()
         .max_examples(10)
         .phases(vec![crate::Phase::Reuse, crate::Phase::Shrink])
-        .database(Some(db.clone() as Arc<dyn crate::native::database::ExampleDatabase>))
+        .database(Some(
+            db.clone() as Arc<dyn crate::native::database::ExampleDatabase>
+        ))
         .suppress_health_check(vec![
             HealthCheckLabel::FilterTooMuch,
             HealthCheckLabel::TooSlow,
@@ -3005,15 +2995,17 @@ fn runner_reuse_existing_examples_interesting() {
 
 #[test]
 fn runner_pareto_with_database_saves_to_pareto_key() {
-    use std::sync::Arc;
     use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
 
     let db = Arc::new(InMemoryNativeDatabase::new());
     let db_key = b"pareto_key_test".to_vec();
 
     let settings = NativeRunnerSettings::new()
         .max_examples(30)
-        .database(Some(db.clone() as Arc<dyn crate::native::database::ExampleDatabase>))
+        .database(Some(
+            db.clone() as Arc<dyn crate::native::database::ExampleDatabase>
+        ))
         .suppress_health_check(vec![
             HealthCheckLabel::FilterTooMuch,
             HealthCheckLabel::TooSlow,
@@ -3023,7 +3015,8 @@ fn runner_pareto_with_database_saves_to_pareto_key() {
     let mut runner = NativeConjectureRunner::new(
         |data: &mut NativeConjectureData| {
             let v = data.draw_integer(0, 100);
-            data.target_observations.insert("score".to_string(), v as f64);
+            data.target_observations
+                .insert("score".to_string(), v as f64);
         },
         settings,
         make_rng(),
@@ -3046,15 +3039,17 @@ fn runner_pareto_with_database_saves_to_pareto_key() {
 
 #[test]
 fn runner_interesting_with_targets_saved_to_pareto_key() {
-    use std::sync::Arc;
     use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
 
     let db = Arc::new(InMemoryNativeDatabase::new());
     let db_key = b"interesting_pareto".to_vec();
 
     let settings = NativeRunnerSettings::new()
         .max_examples(20)
-        .database(Some(db.clone() as Arc<dyn crate::native::database::ExampleDatabase>))
+        .database(Some(
+            db.clone() as Arc<dyn crate::native::database::ExampleDatabase>
+        ))
         .suppress_health_check(vec![
             HealthCheckLabel::FilterTooMuch,
             HealthCheckLabel::TooSlow,
@@ -3064,7 +3059,8 @@ fn runner_interesting_with_targets_saved_to_pareto_key() {
     let mut runner = NativeConjectureRunner::new(
         |data: &mut NativeConjectureData| {
             let v = data.draw_integer(0, 100);
-            data.target_observations.insert("score".to_string(), v as f64);
+            data.target_observations
+                .insert("score".to_string(), v as f64);
             if v == 0 {
                 data.mark_interesting(interesting_origin(None));
             }
@@ -3098,7 +3094,8 @@ fn runner_pareto_optimise_seen_duplicate() {
     let mut runner = NativeConjectureRunner::new(
         |data: &mut NativeConjectureData| {
             let v = data.draw_integer(0, 10);
-            data.target_observations.insert("score".to_string(), v as f64);
+            data.target_observations
+                .insert("score".to_string(), v as f64);
         },
         settings,
         make_rng(),
@@ -3129,7 +3126,8 @@ fn runner_pareto_shrink_one_finds_dominating_result() {
             let v = data.draw_integer(0, 100);
             // Use a multi-choice test: draw two integers.
             let _w = data.draw_integer(0, 100);
-            data.target_observations.insert("score".to_string(), v as f64);
+            data.target_observations
+                .insert("score".to_string(), v as f64);
         },
         settings,
         make_rng(),
@@ -3147,8 +3145,8 @@ fn runner_pareto_shrink_one_finds_dominating_result() {
 
 #[test]
 fn runner_clear_secondary_key_with_entries() {
-    use std::sync::Arc;
     use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
 
     let db = Arc::new(InMemoryNativeDatabase::new());
     let db_key = b"secondary_test".to_vec();
@@ -3170,7 +3168,9 @@ fn runner_clear_secondary_key_with_entries() {
     let settings = NativeRunnerSettings::new()
         .max_examples(10)
         .phases(vec![crate::Phase::Reuse, crate::Phase::Shrink])
-        .database(Some(db.clone() as Arc<dyn crate::native::database::ExampleDatabase>))
+        .database(Some(
+            db.clone() as Arc<dyn crate::native::database::ExampleDatabase>
+        ))
         .suppress_health_check(vec![
             HealthCheckLabel::FilterTooMuch,
             HealthCheckLabel::TooSlow,
@@ -3201,8 +3201,8 @@ fn runner_clear_secondary_key_with_entries() {
 
 #[test]
 fn runner_reuse_secondary_corpus_shuffles_when_too_large() {
-    use std::sync::Arc;
     use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
 
     let db = Arc::new(InMemoryNativeDatabase::new());
     let db_key = b"secondary_shuffle_test".to_vec();
@@ -3225,7 +3225,9 @@ fn runner_reuse_secondary_corpus_shuffles_when_too_large() {
     let settings = NativeRunnerSettings::new()
         .max_examples(10)
         .phases(vec![crate::Phase::Reuse, crate::Phase::Generate])
-        .database(Some(db.clone() as Arc<dyn crate::native::database::ExampleDatabase>))
+        .database(Some(
+            db.clone() as Arc<dyn crate::native::database::ExampleDatabase>
+        ))
         .suppress_health_check(vec![
             HealthCheckLabel::FilterTooMuch,
             HealthCheckLabel::TooSlow,
@@ -3252,8 +3254,8 @@ fn runner_reuse_secondary_corpus_shuffles_when_too_large() {
 
 #[test]
 fn runner_reuse_max_examples_early_exit() {
-    use std::sync::Arc;
     use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
 
     let db = Arc::new(InMemoryNativeDatabase::new());
     let db_key = b"max_examples_early".to_vec();
@@ -3268,7 +3270,9 @@ fn runner_reuse_max_examples_early_exit() {
     let settings = NativeRunnerSettings::new()
         .max_examples(1)
         .phases(vec![crate::Phase::Reuse])
-        .database(Some(db.clone() as Arc<dyn crate::native::database::ExampleDatabase>))
+        .database(Some(
+            db.clone() as Arc<dyn crate::native::database::ExampleDatabase>
+        ))
         .suppress_health_check(vec![
             HealthCheckLabel::FilterTooMuch,
             HealthCheckLabel::TooSlow,
@@ -3295,8 +3299,8 @@ fn runner_reuse_max_examples_early_exit() {
 
 #[test]
 fn runner_reuse_skips_invalid_db_bytes() {
-    use std::sync::Arc;
     use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
 
     let db = Arc::new(InMemoryNativeDatabase::new());
     let db_key = b"invalid_bytes_key".to_vec();
@@ -3312,7 +3316,9 @@ fn runner_reuse_skips_invalid_db_bytes() {
     let settings = NativeRunnerSettings::new()
         .max_examples(10)
         .phases(vec![crate::Phase::Reuse])
-        .database(Some(db.clone() as Arc<dyn crate::native::database::ExampleDatabase>))
+        .database(Some(
+            db.clone() as Arc<dyn crate::native::database::ExampleDatabase>
+        ))
         .suppress_health_check(vec![
             HealthCheckLabel::FilterTooMuch,
             HealthCheckLabel::TooSlow,
@@ -3339,8 +3345,8 @@ fn runner_reuse_skips_invalid_db_bytes() {
 
 #[test]
 fn runner_reuse_replay_choices_differ_from_stored() {
-    use std::sync::Arc;
     use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
 
     let db = Arc::new(InMemoryNativeDatabase::new());
     let db_key = b"replay_differs_key".to_vec();
@@ -3355,7 +3361,9 @@ fn runner_reuse_replay_choices_differ_from_stored() {
     let settings = NativeRunnerSettings::new()
         .max_examples(5)
         .phases(vec![crate::Phase::Reuse])
-        .database(Some(db.clone() as Arc<dyn crate::native::database::ExampleDatabase>))
+        .database(Some(
+            db.clone() as Arc<dyn crate::native::database::ExampleDatabase>
+        ))
         .suppress_health_check(vec![
             HealthCheckLabel::FilterTooMuch,
             HealthCheckLabel::TooSlow,
@@ -3392,8 +3400,8 @@ fn runner_reuse_replay_choices_differ_from_stored() {
 
 #[test]
 fn runner_reuse_pareto_corpus_replayed() {
-    use std::sync::Arc;
     use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
 
     let db = Arc::new(InMemoryNativeDatabase::new());
     let db_key = b"pareto_corpus_reuse".to_vec();
@@ -3412,7 +3420,9 @@ fn runner_reuse_pareto_corpus_replayed() {
     let settings = NativeRunnerSettings::new()
         .max_examples(10)
         .phases(vec![crate::Phase::Reuse])
-        .database(Some(db.clone() as Arc<dyn crate::native::database::ExampleDatabase>))
+        .database(Some(
+            db.clone() as Arc<dyn crate::native::database::ExampleDatabase>
+        ))
         .suppress_health_check(vec![
             HealthCheckLabel::FilterTooMuch,
             HealthCheckLabel::TooSlow,
@@ -3422,7 +3432,8 @@ fn runner_reuse_pareto_corpus_replayed() {
     let mut runner = NativeConjectureRunner::new(
         |data: &mut NativeConjectureData| {
             let v = data.draw_integer(0, 10);
-            data.target_observations.insert("score".to_string(), v as f64);
+            data.target_observations
+                .insert("score".to_string(), v as f64);
         },
         settings,
         make_rng(),
@@ -3439,8 +3450,8 @@ fn runner_reuse_pareto_corpus_replayed() {
 
 #[test]
 fn runner_reuse_pareto_corpus_skips_invalid_bytes() {
-    use std::sync::Arc;
     use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
 
     let db = Arc::new(InMemoryNativeDatabase::new());
     let db_key = b"pareto_invalid_bytes".to_vec();
@@ -3458,7 +3469,9 @@ fn runner_reuse_pareto_corpus_skips_invalid_bytes() {
     let settings = NativeRunnerSettings::new()
         .max_examples(10)
         .phases(vec![crate::Phase::Reuse])
-        .database(Some(db.clone() as Arc<dyn crate::native::database::ExampleDatabase>))
+        .database(Some(
+            db.clone() as Arc<dyn crate::native::database::ExampleDatabase>
+        ))
         .suppress_health_check(vec![
             HealthCheckLabel::FilterTooMuch,
             HealthCheckLabel::TooSlow,
@@ -3468,7 +3481,8 @@ fn runner_reuse_pareto_corpus_skips_invalid_bytes() {
     let mut runner = NativeConjectureRunner::new(
         |data: &mut NativeConjectureData| {
             let v = data.draw_integer(0, 10);
-            data.target_observations.insert("score".to_string(), v as f64);
+            data.target_observations
+                .insert("score".to_string(), v as f64);
         },
         settings,
         make_rng(),
@@ -3485,8 +3499,8 @@ fn runner_reuse_pareto_corpus_skips_invalid_bytes() {
 
 #[test]
 fn runner_reuse_pareto_corpus_shuffles_when_too_large() {
-    use std::sync::Arc;
     use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
 
     let db = Arc::new(InMemoryNativeDatabase::new());
     let db_key = b"pareto_shuffle_test".to_vec();
@@ -3508,7 +3522,9 @@ fn runner_reuse_pareto_corpus_shuffles_when_too_large() {
     let settings = NativeRunnerSettings::new()
         .max_examples(2)
         .phases(vec![crate::Phase::Reuse])
-        .database(Some(db.clone() as Arc<dyn crate::native::database::ExampleDatabase>))
+        .database(Some(
+            db.clone() as Arc<dyn crate::native::database::ExampleDatabase>
+        ))
         .suppress_health_check(vec![
             HealthCheckLabel::FilterTooMuch,
             HealthCheckLabel::TooSlow,
@@ -3518,7 +3534,8 @@ fn runner_reuse_pareto_corpus_shuffles_when_too_large() {
     let mut runner = NativeConjectureRunner::new(
         |data: &mut NativeConjectureData| {
             let v = data.draw_integer(0, 10);
-            data.target_observations.insert("score".to_string(), v as f64);
+            data.target_observations
+                .insert("score".to_string(), v as f64);
         },
         settings,
         make_rng(),

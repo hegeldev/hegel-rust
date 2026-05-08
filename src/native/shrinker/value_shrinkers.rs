@@ -423,7 +423,9 @@ impl<F: FnMut(&[usize]) -> bool> CollectionShrinker<usize, F> {
         for dup in duplicates {
             let initial_val = BigUint::from(dup as u64);
             let mut shrinker = IntegerShrinker::new(initial_val, |bu: &BigUint| {
-                let Some(new_val) = bu.to_usize() else { return false; };
+                let Some(new_val) = bu.to_usize() else {
+                    return false;
+                };
                 let candidate: Vec<usize> = self
                     .current
                     .iter()
@@ -440,7 +442,9 @@ impl<F: FnMut(&[usize]) -> bool> CollectionShrinker<usize, F> {
         for (i, &val) in initial_vals.iter().enumerate() {
             let initial_val = BigUint::from(val as u64);
             let mut shrinker = IntegerShrinker::new(initial_val, |bu: &BigUint| {
-                let Some(new_val) = bu.to_usize() else { return false; };
+                let Some(new_val) = bu.to_usize() else {
+                    return false;
+                };
                 let mut candidate = self.current.clone();
                 candidate[i] = new_val;
                 self.consider(candidate)

@@ -562,7 +562,10 @@ fn draw_float_forced_notifies_observer() {
     let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
     // draw_float_forced uses pre_choice() which checks nodes.len() < max_size.
     // max_size = 1 here, nodes.len() = 0 initially.
-    let v = tc.draw_float_forced(0.0, 1.0, false, false, 0.5).ok().unwrap();
+    let v = tc
+        .draw_float_forced(0.0, 1.0, false, false, 0.5)
+        .ok()
+        .unwrap();
     assert!((v - 0.5).abs() < f64::EPSILON);
     // If the observer was called, no panic occurred.
 }
@@ -666,7 +669,10 @@ fn freeze_notifies_observer_on_conclude_test() {
         }
     }
 
-    let obs = Box::new(FreezeObserver { concluded: false, concluded_status: None });
+    let obs = Box::new(FreezeObserver {
+        concluded: false,
+        concluded_status: None,
+    });
     let mut tc = NativeTestCase::for_choices(&[], None, Some(obs));
     tc.freeze();
     assert!(tc.frozen());
@@ -778,7 +784,10 @@ fn draw_float_unbounded_range() {
     let mut tc = NativeTestCase::new_random(rng);
     // Fully unbounded (min=-INF, max=INF) + allow_nan=true triggers the
     // else/allow_nan branches.
-    let _v = tc.draw_float(f64::NEG_INFINITY, f64::INFINITY, true, true).ok().unwrap();
+    let _v = tc
+        .draw_float(f64::NEG_INFINITY, f64::INFINITY, true, true)
+        .ok()
+        .unwrap();
     // Any value is acceptable (including NaN, infinity, or a normal number).
 }
 
