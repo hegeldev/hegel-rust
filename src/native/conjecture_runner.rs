@@ -949,6 +949,13 @@ impl NativeShrinker {
                     "remove_discarded" => {
                         self.remove_discarded();
                     }
+                    "try_trivial_spans" => {
+                        // Span-aware pass: needs `span_snapshot` access,
+                        // which only the NativeShrinker wrapper has — the
+                        // basic Shrinker dispatches the same name as a
+                        // no-op stub.
+                        self.try_trivial_spans();
+                    }
                     "lower_common_node_offset" => {
                         self.inner.lower_common_node_offset();
                     }
@@ -1002,6 +1009,52 @@ impl NativeShrinker {
                     choice_count: sp.choice_count(),
                 })
                 .collect(),
+        }
+    }
+
+    /// Attempt to set each span's choices to their simplest values.
+    /// Mirrors `Shrinker.try_trivial_spans` (`shrinker.py:1571`): for
+    /// each span, replace every non-forced node in `[span.start, span.end)`
+    /// with `kind.simplest()` and accept if the test still triggers.
+    ///
+    /// Upstream picks one span per call (chooser-driven) and relies on
+    /// `fixate_shrink_passes` to loop the call.  We iterate spans
+    /// in-order; on accept the snapshot updates and remaining span
+    /// indices may have shifted, so we restart the inner loop until a
+    /// pass over all spans finds no further progress.
+    pub fn try_trivial_spans(&mut self) {
+        loop {
+            let mut made_progress = false;
+            let snapshot_spans = {
+                let s = self.span_snapshot.borrow();
+                s.spans.clone()
+            };
+            for span in snapshot_spans {
+                let current_len = self.inner.current_nodes.len();
+                if span.end > current_len || span.start >= span.end {
+                    continue;
+                }
+                let mut attempt = self.inner.current_nodes.clone();
+                let mut changed = false;
+                for j in span.start..span.end {
+                    if !attempt[j].was_forced {
+                        let simplest = attempt[j].kind.simplest();
+                        if attempt[j].value != simplest {
+                            attempt[j] = attempt[j].with_value(simplest);
+                            changed = true;
+                        }
+                    }
+                }
+                if changed && self.inner.consider(&attempt) {
+                    made_progress = true;
+                    // The snapshot was refreshed inside `consider`; restart
+                    // with the new spans because indices may have shifted.
+                    break;
+                }
+            }
+            if !made_progress {
+                break;
+            }
         }
     }
 

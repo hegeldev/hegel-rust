@@ -864,6 +864,39 @@ fn native_shrinker_shrink_and_current_nodes() {
     }
 }
 
+// ── A20a: try_trivial_spans replaces each span's nodes with simplest ──────
+//
+// Mirrors `shrinker.py:1571 try_trivial_spans`: pick a span, replace each
+// non-forced node in `[span.start, span.end)` with the simplest value of
+// its kind, and accept if the test still triggers.  Pre-A20a the pass
+// was an A20-deferred no-op stub that left the choices untouched.
+#[test]
+fn fixate_shrink_passes_try_trivial_spans_trivializes_span() {
+    let choices = vec![
+        ChoiceValue::Integer(5),
+        ChoiceValue::Integer(5),
+        ChoiceValue::Integer(5),
+    ];
+    let mut shrinker = NativeShrinker::from_choices(choices, |data: &mut NativeConjectureData| {
+        data.start_span(42);
+        let _ = data.draw_integer(0, 100);
+        let _ = data.draw_integer(0, 100);
+        let _ = data.draw_integer(0, 100);
+        data.stop_span();
+        data.mark_interesting(interesting_origin(None));
+    });
+    shrinker.fixate_shrink_passes(&["try_trivial_spans"]);
+    let nodes = shrinker.current_nodes();
+    // Every node in the span should now be at the simplest integer (0).
+    for (i, node) in nodes.iter().enumerate() {
+        if let ChoiceValue::Integer(v) = node.value {
+            assert_eq!(v, 0, "node {i} should be 0, got {v}");
+        } else {
+            panic!("expected integer at node {i}");
+        }
+    }
+}
+
 // ── NativeShrinker::fixate_shrink_passes — remove_discarded path ──────────
 
 #[test]
