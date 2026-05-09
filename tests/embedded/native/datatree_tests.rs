@@ -17,6 +17,7 @@ fn integer_bounded_range_gives_exact_count() {
     let kind = ChoiceKind::Integer(IntegerChoice {
         min_value: 0,
         max_value: 200,
+        shrink_towards: 0,
     });
     assert_eq!(compute_max_children(&kind), bu(201));
 }
@@ -26,6 +27,7 @@ fn integer_negative_range_gives_exact_count() {
     let kind = ChoiceKind::Integer(IntegerChoice {
         min_value: -10,
         max_value: 10,
+        shrink_towards: 0,
     });
     assert_eq!(compute_max_children(&kind), bu(21));
 }
@@ -35,6 +37,7 @@ fn integer_full_i128_range_is_two_pow_128() {
     let kind = ChoiceKind::Integer(IntegerChoice {
         min_value: i128::MIN,
         max_value: i128::MAX,
+        shrink_towards: 0,
     });
     // 2^128 = u128::MAX + 1.
     let expected = BigUint::from(u128::MAX) + bu(1);
@@ -164,6 +167,7 @@ fn test_optimising_all_nodes_example_constraints_all_exceed_50() {
     let integer = ChoiceKind::Integer(IntegerChoice {
         min_value: 0,
         max_value: 200,
+        shrink_towards: 0,
     });
     assert!(compute_max_children(&integer) > bu(50));
 }

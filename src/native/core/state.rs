@@ -1051,6 +1051,7 @@ impl NativeTestCase {
         let kind = IntegerChoice {
             min_value,
             max_value,
+            shrink_towards: 0,
         };
 
         let (value, was_forced) = self.resolve_choice(
@@ -1433,6 +1434,7 @@ impl NativeTestCase {
         let kind = IntegerChoice {
             min_value,
             max_value,
+            shrink_towards: 0,
         };
         assert!(kind.validate(forced), "forced value outside range");
         self.pre_choice()?;

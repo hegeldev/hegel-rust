@@ -11,6 +11,7 @@ fn integer_choice_simplest_spans_zero() {
         IntegerChoice {
             min_value: -10,
             max_value: 10,
+            shrink_towards: 0,
         }
         .simplest(),
         0
@@ -23,6 +24,7 @@ fn integer_choice_simplest_all_positive() {
         IntegerChoice {
             min_value: 5,
             max_value: 100,
+            shrink_towards: 0,
         }
         .simplest(),
         5
@@ -35,6 +37,7 @@ fn integer_choice_simplest_all_negative() {
         IntegerChoice {
             min_value: -100,
             max_value: -5,
+            shrink_towards: 0,
         }
         .simplest(),
         -5
@@ -51,6 +54,7 @@ fn integer_choice_unit_spans_zero() {
         IntegerChoice {
             min_value: -10,
             max_value: 10,
+            shrink_towards: 0,
         }
         .unit(),
         1
@@ -63,6 +67,7 @@ fn integer_choice_unit_all_positive() {
         IntegerChoice {
             min_value: 5,
             max_value: 100,
+            shrink_towards: 0,
         }
         .unit(),
         6
@@ -77,6 +82,7 @@ fn integer_choice_unit_all_negative() {
         IntegerChoice {
             min_value: -100,
             max_value: -5,
+            shrink_towards: 0,
         }
         .unit(),
         -6
@@ -90,6 +96,7 @@ fn integer_choice_unit_single_value_range() {
         IntegerChoice {
             min_value: 5,
             max_value: 5,
+            shrink_towards: 0,
         }
         .unit(),
         5
@@ -800,6 +807,7 @@ fn choice_kind_to_index_panics_on_kind_value_mismatch() {
     let kind = ChoiceKind::Integer(IntegerChoice {
         min_value: 0,
         max_value: 100,
+        shrink_towards: 0,
     });
     let _ = kind.to_index(&ChoiceValue::Boolean(true));
 }

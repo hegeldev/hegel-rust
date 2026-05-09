@@ -84,6 +84,7 @@ fn dispatch_shrink_run_full_routes_to_run_shrink() {
     let kind = ChoiceKind::Integer(IntegerChoice {
         min_value: 0,
         max_value: 100,
+        shrink_towards: 0,
     });
     let nodes = vec![ChoiceNode {
         kind,

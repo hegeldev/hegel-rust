@@ -275,7 +275,8 @@ mod integer_choice_internals {
         assert_eq!(
             IntegerChoice {
                 min_value: -10,
-                max_value: 10
+                max_value: 10,
+                shrink_towards: 0,
             }
             .simplest(),
             0
@@ -283,7 +284,8 @@ mod integer_choice_internals {
         assert_eq!(
             IntegerChoice {
                 min_value: 5,
-                max_value: 100
+                max_value: 100,
+                shrink_towards: 0,
             }
             .simplest(),
             5
@@ -291,7 +293,8 @@ mod integer_choice_internals {
         assert_eq!(
             IntegerChoice {
                 min_value: -100,
-                max_value: -5
+                max_value: -5,
+                shrink_towards: 0,
             }
             .simplest(),
             -5
@@ -303,7 +306,8 @@ mod integer_choice_internals {
         assert_eq!(
             IntegerChoice {
                 min_value: -10,
-                max_value: 10
+                max_value: 10,
+                shrink_towards: 0,
             }
             .unit(),
             1
@@ -311,7 +315,8 @@ mod integer_choice_internals {
         assert_eq!(
             IntegerChoice {
                 min_value: 5,
-                max_value: 100
+                max_value: 100,
+                shrink_towards: 0,
             }
             .unit(),
             6
@@ -320,7 +325,8 @@ mod integer_choice_internals {
         assert_eq!(
             IntegerChoice {
                 min_value: -100,
-                max_value: -5
+                max_value: -5,
+                shrink_towards: 0,
             }
             .unit(),
             -6
@@ -329,7 +335,8 @@ mod integer_choice_internals {
         assert_eq!(
             IntegerChoice {
                 min_value: 5,
-                max_value: 5
+                max_value: 5,
+                shrink_towards: 0,
             }
             .unit(),
             5

@@ -7,19 +7,29 @@ use crate::native::floats::sign_aware_lte;
 pub struct IntegerChoice {
     pub min_value: i128,
     pub max_value: i128,
+    /// The "preferred" value the shrinker aims at — analogous to
+    /// upstream's `node.constraints["shrink_towards"]` (default 0).  All
+    /// of [`Self::simplest`], [`Self::unit`], and [`Self::sort_key`]
+    /// are anchored at `shrink_towards.clamp(min_value, max_value)`, so
+    /// integer-shrinking passes converge on this value rather than on 0.
+    pub shrink_towards: i128,
 }
 
 impl IntegerChoice {
-    /// The simplest (most "shrunk") value: 0 if in range,
-    /// otherwise the endpoint closest to 0.
+    /// The shrink-target value clamped into the kind's range.  All shrink
+    /// helpers compare against this rather than the raw `shrink_towards`
+    /// to keep behaviour well-defined when callers pass an out-of-range
+    /// hint.
+    pub(crate) fn clamped_shrink_towards(&self) -> i128 {
+        self.shrink_towards.clamp(self.min_value, self.max_value)
+    }
+
+    /// The simplest (most "shrunk") value: `shrink_towards` clamped to
+    /// the kind's range.  With the default `shrink_towards = 0` this is
+    /// `0` when in range and the closest endpoint otherwise — matching
+    /// pre-A21 behaviour.
     pub fn simplest(&self) -> i128 {
-        if self.min_value <= 0 && 0 <= self.max_value {
-            0
-        } else if self.min_value.unsigned_abs() <= self.max_value.unsigned_abs() {
-            self.min_value
-        } else {
-            self.max_value
-        }
+        self.clamped_shrink_towards()
     }
 
     /// The second simplest value, used for punning when types change.
@@ -38,10 +48,17 @@ impl IntegerChoice {
         self.min_value <= value && value <= self.max_value
     }
 
-    /// Sort key for shrinking: smaller absolute values are simpler,
-    /// positive values are simpler than negative at the same magnitude.
+    /// Sort key for shrinking: smaller distance from `shrink_towards`
+    /// is simpler, with values below `shrink_towards` ordered after
+    /// values above at the same distance (mirrors upstream's
+    /// `choice_to_index` semantics for integer kinds with non-zero
+    /// `shrink_towards`).  With the default `shrink_towards = 0` this
+    /// is `(value.unsigned_abs(), value < 0)` — matching pre-A21
+    /// behaviour.
     pub fn sort_key(&self, value: i128) -> (u128, bool) {
-        (value.unsigned_abs(), value < 0)
+        let target = self.clamped_shrink_towards();
+        let distance = value.wrapping_sub(target).unsigned_abs();
+        (distance, value < target)
     }
 
     /// pbtkit: `core.py::IntegerChoice.max_index`.

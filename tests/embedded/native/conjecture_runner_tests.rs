@@ -1407,6 +1407,7 @@ fn enumerate_choice_values_returns_none_for_large_range() {
     let kind = ChoiceKind::Integer(IntegerChoice {
         min_value: 0,
         max_value: 2000,
+        shrink_towards: 0,
     });
     // max_c = 2001 > ENUMERATION_CAP (1024) → returns None (line 1228).
     let result = enumerate_choice_values(&kind);
@@ -1447,6 +1448,7 @@ fn pick_non_exhausted_value_returns_none_when_all_exhausted() {
     let kind = ChoiceKind::Integer(IntegerChoice {
         min_value: 0,
         max_value: 1,
+        shrink_towards: 0,
     });
     // Build children where both values (0 and 1) are exhausted.
     let mut children: std::collections::HashMap<ChoiceValueKey, Box<DataTreeNode>> =
@@ -3162,6 +3164,7 @@ fn record_tree_non_determinism_panics() {
         kind: ChoiceKind::Integer(IntegerChoice {
             min_value: 0,
             max_value: 10,
+            shrink_towards: 0,
         }),
         value: ChoiceValue::Integer(5),
         was_forced: false,
@@ -3448,6 +3451,7 @@ fn dominance_no_dominance_different_interesting_origins() {
         kind: ChoiceKind::Integer(IntegerChoice {
             min_value: 0,
             max_value: 10,
+            shrink_towards: 0,
         }),
         value: ChoiceValue::Integer(1),
         was_forced: false,
@@ -3456,6 +3460,7 @@ fn dominance_no_dominance_different_interesting_origins() {
         kind: ChoiceKind::Integer(IntegerChoice {
             min_value: 0,
             max_value: 10,
+            shrink_towards: 0,
         }),
         value: ChoiceValue::Integer(5),
         was_forced: false,

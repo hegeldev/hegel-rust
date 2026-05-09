@@ -36,6 +36,7 @@ fn integer_kind_and_value(tc: TestCase) -> (IntegerChoice, i128) {
     let kind = IntegerChoice {
         min_value: i128::from(lo),
         max_value: i128::from(hi),
+        shrink_towards: 0,
     };
     let value: i64 = tc.draw(gs::integers::<i64>().min_value(lo).max_value(hi));
     (kind, i128::from(value))

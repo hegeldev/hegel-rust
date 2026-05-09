@@ -586,6 +586,7 @@ fn int_node(min: i128, max: i128, value: i128) -> ChoiceNode {
         kind: ChoiceKind::Integer(IntegerChoice {
             min_value: min,
             max_value: max,
+            shrink_towards: 0,
         }),
         value: ChoiceValue::Integer(value),
         was_forced: false,
@@ -2460,6 +2461,67 @@ fn run_named_pass_dispatches_lower_integers_together() {
     shrinker.mark_changed(0);
     shrinker.mark_changed(1);
     shrinker.run_named_pass("lower_integers_together");
+}
+
+// ── A21: lower_integers_together aims at shrink_towards ─────────────────
+//
+// Mirrors `shrinker.py:1437-1447`: the joint integer pass should converge
+// on `shrink_towards` rather than always on 0. With the default
+// `shrink_towards = 0` the existing behaviour is preserved (pre-A21's
+// "shrink toward 0" was the special case `st = 0`).
+#[test]
+fn lower_integers_together_aims_at_shrink_towards() {
+    let kind = ChoiceKind::Integer(IntegerChoice {
+        min_value: -10,
+        max_value: 10,
+        shrink_towards: 5,
+    });
+    let nodes = vec![
+        ChoiceNode {
+            kind: kind.clone(),
+            value: ChoiceValue::Integer(-3),
+            was_forced: false,
+        },
+        ChoiceNode {
+            kind,
+            value: ChoiceValue::Integer(-2),
+            was_forced: false,
+        },
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let sum: i128 = n
+                .iter()
+                .map(|node| match node.value {
+                    ChoiceValue::Integer(v) => v,
+                    _ => 0,
+                })
+                .sum();
+            (sum >= -5, n.to_vec())
+        }),
+        nodes,
+    );
+    shrinker.run_named_pass("lower_integers_together");
+    let v0 = match shrinker.current_nodes[0].value {
+        ChoiceValue::Integer(v) => v,
+        _ => unreachable!(),
+    };
+    let v1 = match shrinker.current_nodes[1].value {
+        ChoiceValue::Integer(v) => v,
+        _ => unreachable!(),
+    };
+    // Post-A21: sort_key uses distance from shrink_towards = 5, so the
+    // raising scan continues past 0 and ends up with both values at or
+    // above 5 (the pass uses `find_integer` which assumes a monotone
+    // predicate — with a U-shaped score it overshoots somewhat, ending
+    // around `[7, 8]`).  Pre-A21 (sort_key uses abs(v)) the same scan
+    // stopped at `[0, 1]` (sort_key minimum at 0).
+    assert!(
+        v0 >= 5 && v1 >= 5,
+        "expected both values to cross shrink_towards = 5 post-A21, \
+         got ({v0}, {v1}) — joint pass should aim at shrink_towards \
+         (pre-A21 it stopped at [0, 1])",
+    );
 }
 
 #[test]

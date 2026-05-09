@@ -232,6 +232,7 @@ fn test_compute_max_children_is_positive_integer() {
     let kind = ChoiceKind::Integer(IntegerChoice {
         min_value: i128::MIN,
         max_value: i128::MAX,
+        shrink_towards: 0,
     });
     assert!(compute_max_children(&kind) >= bu(0));
 }
@@ -355,6 +356,7 @@ fn test_nodes() {
             kind: ChoiceKind::Integer(IntegerChoice {
                 min_value: 0,
                 max_value: 100,
+                shrink_towards: 0,
             }),
             value: ChoiceValue::Integer(50),
             was_forced: true,
@@ -466,6 +468,7 @@ fn test_choice_permitted_integer_below_range() {
     let k = ChoiceKind::Integer(IntegerChoice {
         min_value: 1,
         max_value: 2,
+        shrink_towards: 0,
     });
     assert!(!permitted(k, ChoiceValue::Integer(0)));
 }
@@ -475,6 +478,7 @@ fn test_choice_permitted_integer_above_range() {
     let k = ChoiceKind::Integer(IntegerChoice {
         min_value: 0,
         max_value: 1,
+        shrink_towards: 0,
     });
     assert!(!permitted(k, ChoiceValue::Integer(2)));
 }
@@ -484,6 +488,7 @@ fn test_choice_permitted_integer_in_range() {
     let k = ChoiceKind::Integer(IntegerChoice {
         min_value: 0,
         max_value: 20,
+        shrink_towards: 0,
     });
     assert!(permitted(k, ChoiceValue::Integer(10)));
 }
@@ -495,6 +500,7 @@ fn test_choice_permitted_integer_full_i128_range() {
     let k = ChoiceKind::Integer(IntegerChoice {
         min_value: i128::MIN,
         max_value: i128::MAX,
+        shrink_towards: 0,
     });
     assert!(permitted(k, ChoiceValue::Integer(i128::MAX)));
 }
@@ -627,6 +633,7 @@ fn test_simplest_has_index_0_integer() {
     let ic = IntegerChoice {
         min_value: -10,
         max_value: 10,
+        shrink_towards: 0,
     };
     assert_eq!(ic.to_index(ic.simplest()), bu(0));
     assert_eq!(ic.from_index(bu(0)), Some(ic.simplest()));
@@ -637,6 +644,7 @@ fn test_simplest_has_index_0_integer_positive_range() {
     let ic = IntegerChoice {
         min_value: 5,
         max_value: 100,
+        shrink_towards: 0,
     };
     assert_eq!(ic.to_index(ic.simplest()), bu(0));
     assert_eq!(ic.from_index(bu(0)), Some(ic.simplest()));
@@ -647,6 +655,7 @@ fn test_simplest_has_index_0_integer_negative_range() {
     let ic = IntegerChoice {
         min_value: -100,
         max_value: -5,
+        shrink_towards: 0,
     };
     assert_eq!(ic.to_index(ic.simplest()), bu(0));
     assert_eq!(ic.from_index(bu(0)), Some(ic.simplest()));
@@ -679,6 +688,7 @@ fn test_choice_index_inverses_integer_min_only() {
     let ic = IntegerChoice {
         min_value: 1,
         max_value: 9,
+        shrink_towards: 0,
     };
     for v in 1..=9i128 {
         let idx = ic.to_index(v);
@@ -691,6 +701,7 @@ fn test_choice_index_inverses_integer_negative_to_positive() {
     let ic = IntegerChoice {
         min_value: -10,
         max_value: 5,
+        shrink_towards: 0,
     };
     for v in -10..=5i128 {
         let idx = ic.to_index(v);
@@ -737,6 +748,7 @@ fn assert_integer_choice_index(min_value: i128, max_value: i128, choices: &[i128
     let ic = IntegerChoice {
         min_value,
         max_value,
+        shrink_towards: 0,
     };
     for (i, &c) in choices.iter().enumerate() {
         assert_eq!(
@@ -799,6 +811,7 @@ fn test_choice_from_value_injective_integer() {
     let ic = IntegerChoice {
         min_value: -10,
         max_value: 10,
+        shrink_towards: 0,
     };
     let cap = 21_u64;
     let mut seen = std::collections::HashSet::new();
@@ -1028,6 +1041,7 @@ fn test_copy_choice_node_integer() {
         ChoiceKind::Integer(IntegerChoice {
             min_value: -10,
             max_value: 10,
+            shrink_towards: 0,
         }),
         ChoiceValue::Integer(5),
         ChoiceValue::Integer(-3),
@@ -1108,6 +1122,7 @@ fn test_forced_nodes_are_trivial_integer() {
             ChoiceKind::Integer(IntegerChoice {
                 min_value: -10,
                 max_value: 10,
+                shrink_towards: 0,
             }),
             ChoiceValue::Integer(7),
             true,
@@ -1273,6 +1288,7 @@ fn test_trivial_nodes_integer_simplest_is_lower_bound() {
             ChoiceKind::Integer(IntegerChoice {
                 min_value: 50,
                 max_value: 100,
+                shrink_towards: 0,
             }),
             ChoiceValue::Integer(50),
             false,
@@ -1288,6 +1304,7 @@ fn test_trivial_nodes_integer_zero_in_range() {
             ChoiceKind::Integer(IntegerChoice {
                 min_value: -10,
                 max_value: 10,
+                shrink_towards: 0,
             }),
             ChoiceValue::Integer(0),
             false,
@@ -1304,6 +1321,7 @@ fn test_trivial_nodes_integer_full_i128_range() {
             ChoiceKind::Integer(IntegerChoice {
                 min_value: i128::MIN,
                 max_value: i128::MAX,
+                shrink_towards: 0,
             }),
             ChoiceValue::Integer(0),
             false,
@@ -1450,6 +1468,7 @@ fn test_nontrivial_nodes_integer_at_bound() {
             ChoiceKind::Integer(IntegerChoice {
                 min_value: -10,
                 max_value: 10,
+                shrink_towards: 0,
             }),
             ChoiceValue::Integer(-10),
             false,
@@ -1465,6 +1484,7 @@ fn test_nontrivial_nodes_integer_unbounded_nonzero() {
             ChoiceKind::Integer(IntegerChoice {
                 min_value: i128::MIN,
                 max_value: i128::MAX,
+                shrink_towards: 0,
             }),
             ChoiceValue::Integer(42),
             false,

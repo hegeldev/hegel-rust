@@ -49,6 +49,7 @@ fn assert_integer_permitted(min_value: i128, max_value: i128) {
     let kind = IntegerChoice {
         min_value,
         max_value,
+        shrink_towards: 0,
     };
     for &seed in SEEDS {
         let mut data = seeded(seed);

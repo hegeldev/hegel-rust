@@ -11,6 +11,7 @@ fn tree_records_and_accepts_consistent_kinds() {
         kind: ChoiceKind::Integer(IntegerChoice {
             min_value: 0,
             max_value: 100,
+            shrink_towards: 0,
         }),
         value: ChoiceValue::Integer(42),
         was_forced: false,
@@ -28,6 +29,7 @@ fn tree_detects_kind_mismatch() {
         kind: ChoiceKind::Integer(IntegerChoice {
             min_value: 0,
             max_value: 100,
+            shrink_towards: 0,
         }),
         value: ChoiceValue::Integer(42),
         was_forced: false,
@@ -39,6 +41,7 @@ fn tree_detects_kind_mismatch() {
         kind: ChoiceKind::Integer(IntegerChoice {
             min_value: 5,
             max_value: 100,
+            shrink_towards: 0,
         }),
         value: ChoiceValue::Integer(42),
         was_forced: false,
@@ -59,6 +62,7 @@ fn tree_detects_kind_mismatch_at_different_values() {
         kind: ChoiceKind::Integer(IntegerChoice {
             min_value: 0,
             max_value: 100,
+            shrink_towards: 0,
         }),
         value: ChoiceValue::Integer(42),
         was_forced: false,
@@ -67,6 +71,7 @@ fn tree_detects_kind_mismatch_at_different_values() {
         kind: ChoiceKind::Integer(IntegerChoice {
             min_value: 5,
             max_value: 100,
+            shrink_towards: 0,
         }),
         value: ChoiceValue::Integer(77),
         was_forced: false,
@@ -92,6 +97,7 @@ fn tree_allows_different_kinds_at_different_prefixes() {
             kind: ChoiceKind::Integer(IntegerChoice {
                 min_value: 0,
                 max_value: 100,
+                shrink_towards: 0,
             }),
             value: ChoiceValue::Integer(42),
             was_forced: false,
@@ -249,6 +255,7 @@ fn tree_drop_does_not_overflow_stack_for_deep_sequences() {
                     kind: ChoiceKind::Integer(IntegerChoice {
                         min_value: 0,
                         max_value: 1 << 20,
+                        shrink_towards: 0,
                     }),
                     value: ChoiceValue::Integer(i as i128),
                     was_forced: false,
