@@ -16,13 +16,60 @@
 // `reuse_existing_examples` in `conjecture/engine.py`), so the native
 // engine follows Hypothesis here.
 //
+// # Public-API building blocks
+//
+// The module exposes several database implementations the user can
+// compose; the live `NativeTestRunner` (`test_runner.rs`) itself only
+// ever instantiates `NativeDatabase::new(path)` from a
+// `Database::Path(...)` setting. The other types are intentional
+// public-API building blocks (see lib.rs re-exports), each mirroring
+// an upstream Hypothesis sibling:
+//
+//   - `InMemoryNativeDatabase` — non-persistent; useful in tests and
+//     short-lived runs.
+//   - `ReadOnlyNativeDatabase` — wraps another DB; rejects writes.
+//     Mirrors Hypothesis's `ReadOnlyDatabase`.
+//   - `MultiplexedNativeDatabase` — fans out reads across many DBs and
+//     writes only to the first. Mirrors `MultiplexedDatabase`. Useful
+//     for "local writes + readonly shared CI corpus" setups.
+//   - `BackgroundWriteNativeDatabase` — wraps another DB and pushes
+//     writes through a worker thread. Mirrors
+//     `BackgroundWriteDatabase`. Hides write latency from the main
+//     test loop.
+//
+// The change-listener / watcher infrastructure (`Listeners`,
+// `ListenerEvent`, `add_listener` / `remove_listener` /
+// `clear_listeners` on the trait, plus the `notify`-driven directory
+// watcher inside `NativeDatabase`) is also public API. It exists so
+// users who compose `MultiplexedNativeDatabase` across processes can
+// receive cross-process change events the same way Hypothesis users
+// can. The default `Hegel::run` path neither installs nor reads
+// listeners — they're for advanced users.
+//
+// # On-disk format (and Hypothesis incompatibility)
+//
 // Storage layout (directory backend):
+//
 //   db_root/<fnv_hex(key)>/<fnv_hex(value)>
 //
 // where the file contents are the raw value bytes. `serialize_choices`
 // and `deserialize_choices` are the canonical binary encoding used for
 // ChoiceValue sequences (the value bytes); they are kept here so that
-// the replay path in `runner.rs` can round-trip them.
+// the replay path in `test_runner.rs` can round-trip them.
+//
+// **The on-disk format is deliberately not cross-compatible with
+// Hypothesis's `DirectoryBasedExampleDatabase`.** The path shape
+// matches (a hash-of-key directory containing hash-of-value files),
+// but the hash function differs (FNV-1a 64-bit hex here vs
+// `sha384(key).hexdigest()[:16]` in Hypothesis), and the bookkeeping
+// metakey filename differs (`.hegel-keys` here vs `.hypothesis-keys`
+// upstream). A directory written by one toolchain cannot be read by
+// the other. This is a conscious choice: the value-byte encoding
+// (`serialize_choices`) is also Hegel-specific, so even matching the
+// hash function wouldn't make corpora portable. Users who want a
+// shared corpus across both toolchains should use a separate
+// `ExampleDatabase` implementation that handles the format
+// translation, layered via `MultiplexedNativeDatabase`.
 
 use std::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
