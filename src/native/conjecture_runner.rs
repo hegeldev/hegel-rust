@@ -1501,6 +1501,12 @@ pub struct NativeConjectureRunner {
     /// How many times `optimise_targets()` has been called during
     /// `generate_new_examples()`.
     pub optimise_targets_call_count: usize,
+    /// How many times `pareto_optimise()` has been called. Mirrors
+    /// upstream's instrumentation pattern (test_engine.py inspects
+    /// engine state after `_run`); used by tests to assert the wiring
+    /// in `optimise_targets` actually fires `pareto_optimise` when
+    /// per-target hill-climbing exhausts.
+    pub pareto_optimise_call_count: usize,
 }
 
 impl NativeConjectureRunner {
@@ -1536,6 +1542,7 @@ impl NativeConjectureRunner {
             best_observed_targets: HashMap::new(),
             best_choices_for_target: HashMap::new(),
             optimise_targets_call_count: 0,
+            pareto_optimise_call_count: 0,
         }
     }
 
@@ -2433,9 +2440,13 @@ impl NativeConjectureRunner {
     /// smaller result that still dominates the original).  Mirrors
     /// `engine.py::pareto_optimise` / `pareto.ParetoOptimiser.run`.
     ///
-    /// Requires `allow_transition` support in `src/native/shrinker/` —
-    /// not yet implemented.
+    /// The Rust port shrinks via block-deletion + integer zero/one
+    /// substitution rather than the full Hypothesis shrink-pass pipeline
+    /// (`allow_transition`-aware passes are not yet ported); the wiring
+    /// from `optimise_targets` is upstream-faithful even though the
+    /// shrink probes are weaker.
     pub fn pareto_optimise(&mut self) {
+        self.pareto_optimise_call_count += 1;
         let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
         let mut i = self.pareto_front.len() as isize - 1;
         while i >= 0 && self.interesting_examples.is_empty() {
@@ -2722,7 +2733,7 @@ impl NativeConjectureRunner {
 
     /// Optimise all observed targets by hill-climbing from the best
     /// known choice sequence for each target.  Mirrors
-    /// `engine.py::optimise_targets`.
+    /// `engine.py::optimise_targets` (lines 1483-1521).
     pub fn optimise_targets(&mut self) {
         let targets: Vec<String> = self.best_observed_targets.keys().cloned().collect();
         if targets.is_empty() {
@@ -2730,7 +2741,7 @@ impl NativeConjectureRunner {
         }
         let mut max_improvements: usize = 10;
         loop {
-            let prev_valid = self.valid_examples;
+            let prev_calls = self.call_count;
             let mut any_improvements = false;
             for target in targets.clone() {
                 let improvements = self.hill_climb(&target, max_improvements);
@@ -2738,8 +2749,24 @@ impl NativeConjectureRunner {
                     any_improvements = true;
                 }
             }
+            // Mirrors engine.py:1509-1510: stop ramping if a bug has been
+            // found mid-optimisation.
+            if !self.interesting_examples.is_empty() {
+                break;
+            }
             max_improvements = max_improvements.saturating_mul(2);
-            if !any_improvements || prev_valid == self.valid_examples {
+            if any_improvements {
+                continue;
+            }
+            // Mirrors engine.py:1517-1518: when per-target hill-climbing
+            // can't find anything more, run the pareto-front optimiser to
+            // try to widen coverage along structural axes.
+            if !self.best_observed_targets.is_empty() {
+                self.pareto_optimise();
+            }
+            // Mirrors engine.py:1520-1521: terminate the loop if neither
+            // hill-climbing nor pareto_optimise made any test calls.
+            if prev_calls == self.call_count {
                 break;
             }
         }

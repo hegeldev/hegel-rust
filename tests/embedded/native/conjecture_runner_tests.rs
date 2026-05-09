@@ -2477,6 +2477,47 @@ fn runner_pareto_optimise_with_populated_front() {
     // No panic = success.
 }
 
+// `optimise_targets` should fire `pareto_optimise` once per-target
+// hill-climbing exhausts (mirrors engine.py:1517-1518). We drive a
+// runner that records target observations whose values are bounded
+// (so hill-climbing eventually plateaus) and assert that
+// `pareto_optimise_call_count` becomes non-zero by the end of
+// `optimise_targets()`.
+#[test]
+fn optimise_targets_invokes_pareto_optimise_when_hill_climbing_exhausts() {
+    let settings = NativeRunnerSettings::new()
+        .max_examples(20)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            // Bounded target: scores cap at 5, so the hill-climber finds
+            // the plateau in finite probes and `optimise_targets` falls
+            // through to `pareto_optimise`.
+            let v = data.draw_integer(0, 100);
+            let score = (v as f64).min(5.0);
+            data.target_observations
+                .insert("bounded".to_string(), score);
+        },
+        settings,
+        make_rng(),
+    );
+    runner.run();
+    let before = runner.pareto_optimise_call_count;
+    runner.optimise_targets();
+    assert!(
+        runner.pareto_optimise_call_count > before,
+        "expected optimise_targets() to fire pareto_optimise at least once after \
+         per-target hill-climbing exhausted, got pareto_optimise_call_count = {} (was {})",
+        runner.pareto_optimise_call_count,
+        before
+    );
+}
+
 // ── record_tree non-determinism panic (line 1140) ─────────────────────────
 //
 // Line 1140: fires when record_tree sees a conflicting kind at the same tree
