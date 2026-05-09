@@ -208,7 +208,6 @@ impl<'a> Shrinker<'a> {
     /// versa) while keeping the total sum constant. Useful for sum-type
     /// constraints where the minimal counterexample has one small and one
     /// large value.
-    // nocov start
     pub(super) fn redistribute_integers(&mut self) {
         let int_indices: Vec<usize> = self
             .current_nodes
@@ -292,8 +291,6 @@ impl<'a> Shrinker<'a> {
             }
         }
     }
-    // nocov end
-
     /// Lower pairs of nearby integer choices by the same amount
     /// simultaneously.
     ///
@@ -392,7 +389,6 @@ impl<'a> Shrinker<'a> {
     /// with the same value, applies binary search to all simultaneously. This
     /// handles cases where two integers must remain equal (e.g. a vec element
     /// and a separate integer that must be in the vec).
-    // nocov start
     pub(super) fn shrink_duplicates(&mut self) {
         // Find groups of integer node indices that share the same value.
         let mut groups: HashMap<i128, Vec<usize>> = HashMap::new();
@@ -488,5 +484,4 @@ impl<'a> Shrinker<'a> {
             }
         }
     }
-    // nocov end
 }
