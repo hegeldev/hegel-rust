@@ -1847,7 +1847,7 @@ pub(crate) fn step_choice(node: &ChoiceNode, delta: i128) -> Option<ChoiceValue>
 
 /// Concatenate `database_key + b"." + sub` to derive a sub-corpus key.
 /// Mirrors `ConjectureRunner.sub_key` (`b".".join((database_key, sub))`).
-fn sub_key(database_key: &[u8], sub: &[u8]) -> Vec<u8> {
+pub(crate) fn sub_key(database_key: &[u8], sub: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(database_key.len() + 1 + sub.len());
     out.extend_from_slice(database_key);
     out.push(b'.');

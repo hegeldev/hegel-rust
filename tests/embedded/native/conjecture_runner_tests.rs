@@ -1002,6 +1002,82 @@ fn fixate_shrink_passes_pass_to_descendant_replaces_with_subtree() {
     }
 }
 
+// ── A24: live test_runner downgrades displaced entries to secondary key ──
+//
+// Mirrors `engine.py::downgrade_choices` (lines 899-902): when a new
+// shrunk counterexample replaces an existing primary-key entry for the
+// same origin, the displaced entry moves to the `<key>.secondary`
+// sub-corpus rather than being deleted.  Pre-A24 the live runner's
+// save phase only wrote the new entries to primary, leaving the old
+// ones stranded in primary alongside (and never moved to secondary at
+// all).  This test asserts that after a run that finds a new shrunk
+// example, the stale primary entry is on the secondary key.
+#[test]
+fn live_runner_db_save_downgrades_stale_primary_entries() {
+    use crate::native::database::{ExampleDatabase, NativeDatabase, serialize_choices};
+    let temp = tempfile::TempDir::new().unwrap();
+    let db_path = temp.path().join("db");
+    std::fs::create_dir_all(&db_path).unwrap();
+    let db_str = db_path.to_str().unwrap().to_string();
+
+    // Pre-populate primary with a stale unshrunk-shape value
+    // `[Integer(99), Integer(0)]` (an extra trailing choice that the
+    // body never reads — so on replay the realised choice sequence is
+    // shorter and `replay_aligned` flips to false, forcing the shrink
+    // phase to run.  The shrinker reduces `[99]` to `[50]` (the
+    // predicate boundary), saves `[50]` to primary, and pre-A24 leaves
+    // the original `[99, 0]` orphaned in primary.  Post-A24 the
+    // displaced entry moves to secondary.
+    let key = "a24_db_save_downgrade";
+    let stale_serialized = serialize_choices(&[ChoiceValue::Integer(99), ChoiceValue::Integer(0)]);
+    {
+        let db = NativeDatabase::new(&db_str);
+        db.save(key.as_bytes(), &stale_serialized);
+    }
+
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            let n: i64 = tc.draw(crate::generators::integers::<i64>().min_value(0).max_value(100));
+            assert!(n < 50, "predicate violated");
+        })
+        .settings(
+            crate::runner::Settings::new()
+                .phases([
+                    crate::runner::Phase::Reuse,
+                    crate::runner::Phase::Generate,
+                    crate::runner::Phase::Shrink,
+                ])
+                .database(Some(db_str.clone()))
+                .derandomize(true),
+        )
+        .__database_key(key.to_string())
+        .run();
+    }));
+
+    let db = NativeDatabase::new(&db_str);
+    let primary = db.fetch(key.as_bytes());
+    let secondary_key = crate::native::conjecture_runner::sub_key(key.as_bytes(), b"secondary");
+    let secondary = db.fetch(&secondary_key);
+
+    // Primary now contains the new shrunk value (`[Integer(50)]`),
+    // not the original 99 value.
+    let new_shrunk = serialize_choices(&[ChoiceValue::Integer(50)]);
+    assert!(
+        primary.contains(&new_shrunk),
+        "primary missing the new shrunk value (50); got {primary:?}",
+    );
+    assert!(
+        !primary.contains(&stale_serialized),
+        "primary still contains the stale 99 entry; got {primary:?}",
+    );
+    // Post-A24: the stale 99 entry must have been moved to the
+    // secondary sub-corpus rather than just deleted.
+    assert!(
+        secondary.contains(&stale_serialized),
+        "secondary missing the downgraded 99 entry; got {secondary:?}",
+    );
+}
+
 // ── A23: live test_runner DB replay loops through all stored values ──────
 //
 // Mirrors `test_runner.rs:128-151`: pre-A23 the live runner's DB-replay

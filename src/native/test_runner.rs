@@ -465,10 +465,32 @@ fn run_main(
     }
 
     // --- Save to database ---
+    //
+    // For each interesting origin, save the shrunk counterexample to
+    // primary.  Any *displaced* primary entry — present at start of
+    // run but no longer in `interesting` — moves to the
+    // `<key>.secondary` sub-corpus rather than disappearing, mirroring
+    // upstream's `engine.py::downgrade_choices` (lines 899-902).  The
+    // secondary key is the historical fallback corpus the next reuse
+    // pass consults if primary doesn't have enough entries.
     if let (Some(db_ref), Some(key)) = (&db, database_key) {
-        for nodes in interesting.values() {
-            let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
-            db_ref.save(key.as_bytes(), &serialize_choices(&choices));
+        let key_bytes = key.as_bytes();
+        let secondary_key = crate::native::conjecture_runner::sub_key(key_bytes, b"secondary");
+        let new_entries: std::collections::HashSet<Vec<u8>> = interesting
+            .values()
+            .map(|nodes| {
+                let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                serialize_choices(&choices)
+            })
+            .collect();
+        let primary_now = db_ref.fetch(key_bytes);
+        for old in primary_now {
+            if !new_entries.contains(&old) {
+                db_ref.move_value(key_bytes, &secondary_key, &old);
+            }
+        }
+        for new_bytes in &new_entries {
+            db_ref.save(key_bytes, new_bytes);
         }
     }
 
