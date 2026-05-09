@@ -1496,6 +1496,96 @@ fn is_prefix_of_known_path(tree_root: &DataTreeNode, choices: &[ChoiceValue]) ->
     !current.children.is_empty()
 }
 
+/// Returns `true` iff `(value, kind)` is a node kind the hill-climber can
+/// step. Mirrors `optimiser.py:109` which admits `{integer, float, bytes,
+/// boolean}` and skips strings (no sensible "larger" step).
+pub(crate) fn is_climbable(value: &ChoiceValue, kind: &ChoiceKind) -> bool {
+    matches!(
+        (value, kind),
+        (ChoiceValue::Integer(_), ChoiceKind::Integer(_))
+            | (ChoiceValue::Float(_), ChoiceKind::Float(_))
+            | (ChoiceValue::Boolean(_), ChoiceKind::Boolean(_))
+            | (ChoiceValue::Bytes(_), ChoiceKind::Bytes(_))
+    )
+}
+
+/// Step a choice node by `delta` and return the resulting value if it's
+/// representable and validates against the node's kind constraints, or
+/// `None` to signal "this trial isn't worth running."  Mirrors
+/// `optimiser.py::Optimiser.attempt_replace` lines 130-156 plus the
+/// `choice_permitted(new_choice, node.constraints)` post-check.
+///
+/// Stepping rules per kind (matching upstream):
+/// - **Integer / Float**: `value + delta` (saturating for integers).
+/// - **Boolean**: `delta = ±1` toggles; `|delta| > 1` is rejected.
+/// - **Bytes**: big-endian-integer add; clamps to non-negative; padding
+///   to the original length keeps shorter encodings stable so e.g.
+///   `b"\x01"` doesn't collapse to `b"\x00"` then back into a shorter
+///   encoding (this mirrors upstream's `max(len(node.value),
+///   bits_to_bytes(v.bit_length()))` rule).
+pub(crate) fn step_choice(node: &ChoiceNode, delta: i128) -> Option<ChoiceValue> {
+    match (&node.value, &node.kind) {
+        (ChoiceValue::Integer(v), ChoiceKind::Integer(kind)) => {
+            let new = v.saturating_add(delta);
+            if !kind.validate(new) {
+                return None;
+            }
+            Some(ChoiceValue::Integer(new))
+        }
+        (ChoiceValue::Float(v), ChoiceKind::Float(kind)) => {
+            let new = v + delta as f64;
+            if !kind.validate(new) {
+                return None;
+            }
+            Some(ChoiceValue::Float(new))
+        }
+        (ChoiceValue::Boolean(b), ChoiceKind::Boolean(_)) => {
+            if delta.saturating_abs() > 1 {
+                return None;
+            }
+            let new = if delta == -1 {
+                false
+            } else if delta == 1 {
+                true
+            } else {
+                *b
+            };
+            Some(ChoiceValue::Boolean(new))
+        }
+        (ChoiceValue::Bytes(b), ChoiceKind::Bytes(kind)) => {
+            let mut v: i128 = 0;
+            for &byte in b {
+                v = (v << 8) | byte as i128;
+            }
+            let new_v = v.saturating_add(delta);
+            if new_v < 0 {
+                return None;
+            }
+            let mut new_bytes = Vec::new();
+            let mut x = new_v;
+            if x == 0 {
+                new_bytes.push(0u8);
+            }
+            while x > 0 {
+                new_bytes.push((x & 0xff) as u8);
+                x >>= 8;
+            }
+            new_bytes.reverse();
+            // Pad up to the original length so a shorter encoding doesn't
+            // collapse the byte string. Mirrors upstream's
+            // `max(len(node.value), bits_to_bytes(v.bit_length()))`.
+            while new_bytes.len() < b.len() {
+                new_bytes.insert(0, 0);
+            }
+            if !kind.validate(&new_bytes) {
+                return None;
+            }
+            Some(ChoiceValue::Bytes(new_bytes))
+        }
+        _ => None,
+    }
+}
+
 /// Concatenate `database_key + b"." + sub` to derive a sub-corpus key.
 /// Mirrors `ConjectureRunner.sub_key` (`b".".join((database_key, sub))`).
 fn sub_key(database_key: &[u8], sub: &[u8]) -> Vec<u8> {
@@ -3132,10 +3222,23 @@ impl NativeConjectureRunner {
         while i >= 0 && improvements <= max_improvements {
             let idx = i as usize;
             let node = &current_nodes[idx];
-            if !node.was_forced {
-                if let (ChoiceValue::Integer(_), ChoiceKind::Integer(_)) = (&node.value, &node.kind)
-                {
-                    let len_before = current_nodes.len();
+            if !node.was_forced && is_climbable(&node.value, &node.kind) {
+                let len_before = current_nodes.len();
+                improvements += self.find_integer_for_target(
+                    target,
+                    &mut current_choices,
+                    &mut current_nodes,
+                    &mut current_score,
+                    max_improvements.saturating_sub(improvements),
+                    idx,
+                    1,
+                );
+                // If the +1 direction grew current_nodes, the idx we were
+                // examining is no longer at a "frontier" position — trying
+                // -1 there almost always shrinks the sequence back to a
+                // lower score, so skip. Mirrors the same guard in the
+                // standalone TargetedRunner in src/native/optimiser.rs.
+                if idx < current_nodes.len() && current_nodes.len() == len_before {
                     improvements += self.find_integer_for_target(
                         target,
                         &mut current_choices,
@@ -3143,24 +3246,8 @@ impl NativeConjectureRunner {
                         &mut current_score,
                         max_improvements.saturating_sub(improvements),
                         idx,
-                        1,
+                        -1,
                     );
-                    // If the +1 direction grew current_nodes, the idx we were
-                    // examining is no longer at a "frontier" position — trying
-                    // -1 there almost always shrinks the sequence back to a
-                    // lower score, so skip. Mirrors the same guard in the
-                    // standalone TargetedRunner in src/native/optimiser.rs.
-                    if idx < current_nodes.len() && current_nodes.len() == len_before {
-                        improvements += self.find_integer_for_target(
-                            target,
-                            &mut current_choices,
-                            &mut current_nodes,
-                            &mut current_score,
-                            max_improvements.saturating_sub(improvements),
-                            idx,
-                            -1,
-                        );
-                    }
                 }
             }
             i -= 1;
@@ -3249,14 +3336,16 @@ impl NativeConjectureRunner {
         improvements
     }
 
-    /// Replace the integer at `current_choices[idx]` with `current + delta`,
-    /// bounds-checking and running the trial. Mirrors
-    /// `optimiser.py::Optimiser.consider_new_data` (lines 65-82): a strict
-    /// score improvement commits the new state and bumps `improvements`; a
-    /// tie commits iff the new node count doesn't grow but does *not* count
-    /// as an improvement (so lateral moves can let the climber escape a
-    /// plateau without keeping it spinning forever). Returns `true` iff the
-    /// trial was committed.
+    /// Replace the choice at `current_choices[idx]` by stepping it `delta`
+    /// units in the direction of the climb. Mirrors
+    /// `optimiser.py::Optimiser.attempt_replace` (lines 112-156): handles
+    /// integer / float / bytes / boolean nodes with type-appropriate
+    /// stepping (integer & float: addition; boolean: ±1 toggles; bytes:
+    /// big-endian addition with non-negative clamp). Mirrors
+    /// `consider_new_data` (lines 65-82) for the score acceptance: strict
+    /// improvement bumps `improvements`; a tie commits iff the new node
+    /// count doesn't grow but does *not* count as an improvement.
+    /// Returns `true` iff the trial was committed.
     #[allow(clippy::too_many_arguments)]
     fn try_replace_for_target(
         &mut self,
@@ -3268,20 +3357,12 @@ impl NativeConjectureRunner {
         idx: usize,
         delta: i128,
     ) -> bool {
-        let current_val = match &current_choices[idx] {
-            ChoiceValue::Integer(n) => *n,
-            _ => unreachable!("try_replace_for_target called on non-integer node"),
+        let new_val = match step_choice(&current_nodes[idx], delta) {
+            Some(v) => v,
+            None => return false,
         };
-        let kind = match &current_nodes[idx].kind {
-            ChoiceKind::Integer(ic) => ic,
-            _ => unreachable!("try_replace_for_target called on non-integer node"),
-        };
-        let new_val = current_val.saturating_add(delta);
-        if !kind.validate(new_val) {
-            return false;
-        }
         let mut trial_choices = current_choices.clone();
-        trial_choices[idx] = ChoiceValue::Integer(new_val);
+        trial_choices[idx] = new_val;
         let result = self.cached_test_function(&trial_choices);
         if result.status < Status::Valid {
             return false;

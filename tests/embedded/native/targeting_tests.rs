@@ -336,11 +336,8 @@ fn try_replace_accepts_lateral_move_when_length_does_not_grow() {
 #[test]
 fn try_replace_rejects_strict_score_decrease() {
     use crate::generators as gs;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicI64, Ordering};
     // A body whose score equals v exactly. The seed at v=50 gives score 50;
     // a probe at v=49 (delta=-1) gives score 49, which must be rejected.
-    let _hint = Arc::new(AtomicI64::new(0));
     let mut ctf = CachedTestFunction::new(|tc: crate::TestCase| {
         let v: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(100));
         tc.target_labelled(v as f64, "score");

@@ -4059,6 +4059,128 @@ fn runner_reuse_pareto_corpus_shuffles_when_too_large() {
     assert!(runner.call_count >= 1);
 }
 
+#[test]
+fn optimise_targets_hill_climbs_bytes_node() {
+    let settings = NativeRunnerSettings::new()
+        .max_examples(200)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            // Body draws 1 byte; score is the byte value.  Pre-A18 the
+            // climber skipped the bytes node and never raised the score
+            // above the seed; post-A18 it walks the byte upward.
+            let v = data.draw_bytes(1, 1);
+            data.target_observations
+                .insert("score".to_string(), v[0] as f64);
+        },
+        settings,
+        make_rng(),
+    );
+    let seed_choices = vec![ChoiceValue::Bytes(vec![0u8])];
+    runner.cached_test_function(&seed_choices);
+    assert_eq!(
+        runner.best_observed_targets.get("score").copied(),
+        Some(0.0)
+    );
+    runner.optimise_targets();
+    let best = runner.best_observed_targets.get("score").copied().unwrap();
+    assert!(
+        best > 0.0,
+        "bytes hill-climbing should raise the score above the 0x00 seed; got {best}"
+    );
+}
+
+#[test]
+fn optimise_targets_hill_climbs_float_node() {
+    let settings = NativeRunnerSettings::new()
+        .max_examples(200)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            // Score is the drawn float in [0.0, 100.0].  Pre-A18 the
+            // climber skipped the float node and never improved past the
+            // seed; post-A18 it walks the value upward.
+            let v = data.draw_float(0.0, 100.0, false, false);
+            data.target_observations.insert("score".to_string(), v);
+        },
+        settings,
+        make_rng(),
+    );
+    let seed_choices = vec![ChoiceValue::Float(0.0)];
+    runner.cached_test_function(&seed_choices);
+    assert_eq!(
+        runner.best_observed_targets.get("score").copied(),
+        Some(0.0)
+    );
+    runner.optimise_targets();
+    let best = runner.best_observed_targets.get("score").copied().unwrap();
+    assert!(
+        best > 0.0,
+        "float hill-climbing should raise the score above the 0.0 seed; got {best}"
+    );
+}
+
+// ── A18: hill-climbing extends past integer to bool/bytes/float ──────────
+//
+// Mirrors `optimiser.py:109` which admits any node of kind in
+// `{integer, float, bytes, boolean}` for hill-climbing. Pre-A18, the
+// conjecture-runner port's hill_climb filtered to integer-only and the
+// `try_replace_for_target` helper had `unreachable!("called on
+// non-integer node")` arms — so a body with no integer draws but a
+// boolean/bytes/float draw was completely uncliimable.
+//
+// The Boolean test here uses a body that draws a boolean and scores it
+// 1 if true, 0 if false; pre-A18 the climber cannot move past the
+// seed `Boolean(false)` (no integer node to step on); post-A18, it
+// flips to `Boolean(true)` via the `delta=+1` linear-scan probe.
+#[test]
+fn optimise_targets_hill_climbs_boolean_node() {
+    let settings = NativeRunnerSettings::new()
+        .max_examples(200)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let v = data.draw_boolean(0.5);
+            data.target_observations
+                .insert("score".to_string(), if v { 1.0 } else { 0.0 });
+        },
+        settings,
+        make_rng(),
+    );
+    let seed_choices = vec![ChoiceValue::Boolean(false)];
+    runner.cached_test_function(&seed_choices);
+    assert_eq!(
+        runner.best_observed_targets.get("score").copied(),
+        Some(0.0)
+    );
+    runner.optimise_targets();
+    // Post-A18: the climber flips the boolean to true, score becomes 1.
+    assert_eq!(
+        runner.best_observed_targets.get("score").copied(),
+        Some(1.0),
+        "boolean hill-climbing should flip false→true to maximise the score"
+    );
+    assert_eq!(
+        runner.best_choices_for_target.get("score").cloned(),
+        Some(vec![ChoiceValue::Boolean(true)]),
+    );
+}
+
 // ── A17: try_replace_for_target accepts lateral moves on a plateau ───────
 //
 // Mirrors `optimiser.py::Optimiser.consider_new_data` (lines 65-82): a

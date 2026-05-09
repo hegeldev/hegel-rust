@@ -8,7 +8,8 @@
 
 use std::collections::HashMap;
 
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Status, sort_key};
+use crate::native::conjecture_runner::{is_climbable, step_choice};
+use crate::native::core::{ChoiceNode, ChoiceValue, NativeTestCase, Status, sort_key};
 use crate::native::tree::NativeRunner;
 
 /// Per-label best score and the choice sequence that produced it.
@@ -225,9 +226,25 @@ fn hill_climb(
     while i >= 0 && improvements <= max_improvements {
         let idx = i as usize;
         let node = &current_nodes[idx];
-        if !node.was_forced {
-            if let (ChoiceValue::Integer(_), ChoiceKind::Integer(_)) = (&node.value, &node.kind) {
-                let len_before = current_nodes.len();
+        if !node.was_forced && is_climbable(&node.value, &node.kind) {
+            let len_before = current_nodes.len();
+            improvements += find_integer(
+                runner,
+                targeting,
+                ctx,
+                target,
+                &mut current_choices,
+                &mut current_nodes,
+                &mut current_score,
+                max_improvements.saturating_sub(improvements),
+                idx,
+                1,
+            );
+            // If the +1 direction grew current_nodes, idx no longer points
+            // at the same logical position; trying -1 there almost always
+            // shrinks the sequence back below the new score, so skip.
+            // Mirrors the same guard in Hypothesis's `Optimiser.hill_climb`.
+            if idx < current_nodes.len() && current_nodes.len() == len_before {
                 improvements += find_integer(
                     runner,
                     targeting,
@@ -238,26 +255,8 @@ fn hill_climb(
                     &mut current_score,
                     max_improvements.saturating_sub(improvements),
                     idx,
-                    1,
+                    -1,
                 );
-                // If the +1 direction grew current_nodes, idx no longer points
-                // at the same logical position; trying -1 there almost always
-                // shrinks the sequence back below the new score, so skip.
-                // Mirrors the same guard in Hypothesis's `Optimiser.hill_climb`.
-                if idx < current_nodes.len() && current_nodes.len() == len_before {
-                    improvements += find_integer(
-                        runner,
-                        targeting,
-                        ctx,
-                        target,
-                        &mut current_choices,
-                        &mut current_nodes,
-                        &mut current_score,
-                        max_improvements.saturating_sub(improvements),
-                        idx,
-                        -1,
-                    );
-                }
             }
         }
         i -= 1;
@@ -355,14 +354,16 @@ fn find_integer(
     improvements
 }
 
-/// Replace `current_choices[idx]` with `current + delta`, bounds-check, and
-/// run the trial. Mirrors `optimiser.py::Optimiser.consider_new_data`
-/// (lines 65-82): a strict score improvement commits the new state and
-/// bumps `improvements`; a tie commits iff the new node count doesn't
-/// grow but does *not* count as an improvement (lateral moves are the
-/// principal mechanism for escaping local maxima, but they shouldn't
-/// keep the climber spinning forever). Returns `true` iff the trial was
-/// committed.
+/// Replace `current_choices[idx]` by stepping it `delta` units in the
+/// direction of the climb. Mirrors `optimiser.py::Optimiser.attempt_replace`
+/// (lines 112-156) for the per-kind stepping (integer/float: addition;
+/// boolean: ±1 toggles; bytes: big-endian addition with non-negative clamp)
+/// and `consider_new_data` (lines 65-82) for score acceptance: a strict
+/// score improvement commits the new state and bumps `improvements`; a tie
+/// commits iff the new node count doesn't grow but does *not* count as an
+/// improvement (lateral moves are the principal mechanism for escaping
+/// local maxima, but they shouldn't keep the climber spinning forever).
+/// Returns `true` iff the trial was committed.
 #[allow(clippy::too_many_arguments)]
 fn try_replace(
     runner: &mut dyn NativeRunner,
@@ -376,20 +377,12 @@ fn try_replace(
     idx: usize,
     delta: i128,
 ) -> bool {
-    let current_val = match &current_choices[idx] {
-        ChoiceValue::Integer(n) => *n,
-        _ => unreachable!("try_replace called on non-integer node"),
+    let new_val = match step_choice(&current_nodes[idx], delta) {
+        Some(v) => v,
+        None => return false,
     };
-    let kind = match &current_nodes[idx].kind {
-        ChoiceKind::Integer(ic) => ic,
-        _ => unreachable!("try_replace called on non-integer node"),
-    };
-    let new_val = current_val.saturating_add(delta);
-    if !kind.validate(new_val) {
-        return false;
-    }
     let mut trial_choices = current_choices.clone();
-    trial_choices[idx] = ChoiceValue::Integer(new_val);
+    trial_choices[idx] = new_val;
     let trial = match run_trial(runner, targeting, ctx, &trial_choices) {
         Some(t) => t,
         None => return false,
