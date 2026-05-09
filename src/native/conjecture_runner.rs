@@ -1052,6 +1052,14 @@ struct CachedRun {
     nodes: Vec<ChoiceNode>,
     origin: Option<InterestingOrigin>,
     target_observations: HashMap<String, f64>,
+    /// Structural-coverage tags from non-discarded spans. Mirrors
+    /// `ConjectureResult.tags` in `internal/conjecture/data.py`. Used by
+    /// `dominance` to determine whether one cached result covers the
+    /// structural paths of another. Pre-A7, `cached_test_function`
+    /// returned `tags: HashSet::new()` from every code path, so all
+    /// cached comparisons read as "equal empty" and Pareto's
+    /// structural-coverage rule was inert.
+    tags: HashSet<u64>,
 }
 
 /// Hashable choice-value key, mirroring [`crate::native::tree`]'s
@@ -2089,13 +2097,19 @@ impl NativeConjectureRunner {
                 choices: result_choices,
                 target_observations: cached.target_observations,
                 origin: cached.origin,
-                tags: HashSet::new(),
+                tags: cached.tags,
             };
         }
         // If `choices` is a strict prefix of a known path in the tree,
         // return EarlyStop without re-running the test.  Mirrors Python's
         // `simulate_best_attempt` which returns `Overrun` for incomplete
         // prefixes without invoking the test function.
+        //
+        // The tree records `kind` per position but not tags (those come
+        // from spans, which the tree doesn't reconstruct), so the
+        // returned `tags` is empty for this path. A future fix can walk
+        // back to the full cached result if any caller needs the
+        // structural-coverage tags from a prefix-walk; tracked as N5.
         if is_prefix_of_known_path(&self.tree_root, choices) {
             return ConjectureRunResult {
                 status: Status::EarlyStop,
@@ -2122,6 +2136,7 @@ impl NativeConjectureRunner {
                 nodes: nodes.clone(),
                 origin: origin.clone(),
                 target_observations: target_observations.clone(),
+                tags: tags.clone(),
             },
         );
         let result_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
@@ -2131,7 +2146,7 @@ impl NativeConjectureRunner {
             choices: result_choices,
             target_observations: target_observations.clone(),
             origin: origin.clone(),
-            tags: HashSet::new(),
+            tags: tags.clone(),
         };
         self.record_test_result(status, nodes, origin, target_observations, tags);
         result
@@ -2183,7 +2198,7 @@ impl NativeConjectureRunner {
                     choices: result_choices,
                     target_observations: cached.target_observations,
                     origin: cached.origin,
-                    tags: HashSet::new(),
+                    tags: cached.tags,
                 };
             }
         }
@@ -2213,6 +2228,7 @@ impl NativeConjectureRunner {
                     nodes: nodes.clone(),
                     origin: origin.clone(),
                     target_observations: target_observations.clone(),
+                    tags: tags.clone(),
                 },
             );
         }
@@ -2222,7 +2238,7 @@ impl NativeConjectureRunner {
             choices: result_choices,
             target_observations: target_observations.clone(),
             origin: origin.clone(),
-            tags: HashSet::new(),
+            tags: tags.clone(),
         };
         self.record_test_result(status, nodes, origin, target_observations, tags);
         result

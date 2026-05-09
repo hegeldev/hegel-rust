@@ -482,6 +482,58 @@ fn re_validation_populates_cache_for_interesting_choices() {
     );
 }
 
+// ── A7: cached_test_function returns real tags ─────────────────────────────
+//
+// `cached_test_function`'s ConjectureRunResult was returning
+// `tags: HashSet::new()` from all three return paths (cache hit, prefix
+// path, and fresh run), so any caller doing structural-coverage checks
+// (`dominance`, Pareto front membership) saw all results as
+// equal-empty-tags. Real tags come from `run_test_fn` in the form of
+// span-derived structural-coverage labels; they need to be plumbed into
+// `CachedRun` and back out of all three return paths.
+#[test]
+fn cached_test_function_returns_real_tags_from_fresh_run() {
+    let settings = default_settings();
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            // A non-discarded span propagates its label into
+            // `data.ntc.tags` as a structural-coverage tag.
+            data.start_span(0xC0FFEE);
+            data.stop_span();
+        },
+        settings,
+        make_rng(),
+    );
+    let result = runner.cached_test_function(&[]);
+    assert!(
+        result.tags.contains(&0xC0FFEE),
+        "cached_test_function should propagate run-time tags; got {:?}",
+        result.tags
+    );
+}
+
+#[test]
+fn cached_test_function_returns_real_tags_on_cache_hit() {
+    let settings = default_settings();
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            data.start_span(0xBEEF);
+            data.stop_span();
+        },
+        settings,
+        make_rng(),
+    );
+    // First call populates the cache.
+    let _ = runner.cached_test_function(&[]);
+    // Second call must return real tags from the cache, not an empty set.
+    let result = runner.cached_test_function(&[]);
+    assert!(
+        result.tags.contains(&0xBEEF),
+        "cached_test_function cache-hit should return the cached tags; got {:?}",
+        result.tags
+    );
+}
+
 // ── ChoiceValueKey::String ────────────────────────────────────────────────
 
 #[test]
