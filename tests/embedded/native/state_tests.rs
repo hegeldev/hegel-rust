@@ -493,121 +493,143 @@ fn as_result_returns_conjecture_for_interesting_status() {
 }
 
 // ── Observer called in draw_float ─────────────────────────────────────────
+//
+// The `observer` field on `NativeTestCase` is private, so post-draw the
+// test can't reach back into the boxed observer.  Instead the observer
+// holds an `Arc<Mutex<...>>` that the test side keeps a clone of —
+// after the draw, the lock contains exactly what the observer captured.
 
 #[test]
 fn draw_float_notifies_observer() {
+    use std::sync::{Arc, Mutex};
     struct FloatObserver {
-        last_value: Option<f64>,
-        last_forced: Option<bool>,
+        captured: Arc<Mutex<Option<(f64, bool)>>>,
     }
     impl DataObserver for FloatObserver {
         fn draw_float(&mut self, value: f64, was_forced: bool) {
-            self.last_value = Some(value);
-            self.last_forced = Some(was_forced);
+            *self.captured.lock().unwrap() = Some((value, was_forced));
         }
     }
-
+    let captured = Arc::new(Mutex::new(None));
     let choices = vec![ChoiceValue::Float(1.5)];
     let obs = Box::new(FloatObserver {
-        last_value: None,
-        last_forced: None,
+        captured: captured.clone(),
     });
     let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
     let v = tc.draw_float(0.0, 10.0, false, false).ok().unwrap();
     assert_eq!(v, 1.5);
-    // The observer field is private; we can't directly inspect it, but if
-    // the code path was hit the test will complete without error.  The
-    // absence of a panic means the observer was called successfully.
+    // The observer must have captured the drawn value with
+    // `was_forced=false` (the value came from the prefix, not a forced
+    // override).
+    let recorded = captured.lock().unwrap().take();
+    assert_eq!(recorded, Some((1.5, false)));
 }
 
 // ── Observer called in draw_string ────────────────────────────────────────
 
 #[test]
 fn draw_string_notifies_observer() {
+    use std::sync::{Arc, Mutex};
     struct StringObserver {
-        received: Vec<String>,
+        received: Arc<Mutex<Vec<String>>>,
     }
     impl DataObserver for StringObserver {
         fn draw_string(&mut self, value: &str, _was_forced: bool) {
-            self.received.push(value.to_string());
+            self.received.lock().unwrap().push(value.to_string());
         }
     }
-
+    let received = Arc::new(Mutex::new(Vec::new()));
     let choices = vec![ChoiceValue::String(vec![65, 66])]; // "AB"
-    let obs = Box::new(StringObserver { received: vec![] });
+    let obs = Box::new(StringObserver {
+        received: received.clone(),
+    });
     let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
     let v = tc.draw_string(65, 90, 1, 5).ok().unwrap();
     assert_eq!(v, "AB");
+    // Exactly one observer call, with the realised string.
+    let r = received.lock().unwrap();
+    assert_eq!(*r, vec!["AB".to_string()]);
 }
 
 // ── Observer called in draw_float_forced ─────────────────────────────────
 
 #[test]
 fn draw_float_forced_notifies_observer() {
+    use std::sync::{Arc, Mutex};
     struct ForcedFloatObserver {
-        was_forced: Option<bool>,
+        captured: Arc<Mutex<Option<(f64, bool)>>>,
     }
     impl DataObserver for ForcedFloatObserver {
-        fn draw_float(&mut self, _value: f64, was_forced: bool) {
-            self.was_forced = Some(was_forced);
+        fn draw_float(&mut self, value: f64, was_forced: bool) {
+            *self.captured.lock().unwrap() = Some((value, was_forced));
         }
     }
-
-    // Workaround: supply a dummy choices slice of length 1 using a dummy
-    // float choice, but draw_float_forced ignores the prefix and records
-    // a forced node, so we just need max_size >= 1.  Supply a valid
-    // float prefix choice to satisfy the max_size check.
-    let choices = vec![ChoiceValue::Float(0.0)]; // any float
-    let obs = Box::new(ForcedFloatObserver { was_forced: None });
+    let captured = Arc::new(Mutex::new(None));
+    let choices = vec![ChoiceValue::Float(0.0)]; // any float, just for max_size
+    let obs = Box::new(ForcedFloatObserver {
+        captured: captured.clone(),
+    });
     let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
-    // draw_float_forced uses pre_choice() which checks nodes.len() < max_size.
-    // max_size = 1 here, nodes.len() = 0 initially.
     let v = tc
         .draw_float_forced(0.0, 1.0, false, false, 0.5)
         .ok()
         .unwrap();
     assert!((v - 0.5).abs() < f64::EPSILON);
-    // If the observer was called, no panic occurred.
+    // The forced draw must record the forced value AND set was_forced=true.
+    let recorded = captured.lock().unwrap().take();
+    assert!(matches!(recorded, Some((v, true)) if (v - 0.5).abs() < f64::EPSILON));
 }
 
 // ── Observer called in draw_bytes_forced ─────────────────────────────────
 
 #[test]
 fn draw_bytes_forced_notifies_observer() {
+    use std::sync::{Arc, Mutex};
     struct BytesObserver {
-        called: bool,
+        captured: Arc<Mutex<Option<(Vec<u8>, bool)>>>,
     }
     impl DataObserver for BytesObserver {
-        fn draw_bytes(&mut self, _value: &[u8], _was_forced: bool) {
-            self.called = true;
+        fn draw_bytes(&mut self, value: &[u8], was_forced: bool) {
+            *self.captured.lock().unwrap() = Some((value.to_vec(), was_forced));
         }
     }
-
-    let choices = vec![ChoiceValue::Bytes(vec![])]; // placeholder, max_size=1
-    let obs = Box::new(BytesObserver { called: false });
+    let captured = Arc::new(Mutex::new(None));
+    let choices = vec![ChoiceValue::Bytes(vec![])]; // placeholder
+    let obs = Box::new(BytesObserver {
+        captured: captured.clone(),
+    });
     let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
     let v = tc.draw_bytes_forced(0, 3, vec![1, 2]).ok().unwrap();
     assert_eq!(v, vec![1, 2]);
+    // The forced draw must record the forced bytes AND was_forced=true.
+    let recorded = captured.lock().unwrap().take();
+    assert_eq!(recorded, Some((vec![1, 2], true)));
 }
 
 // ── Observer called in draw_string_forced ────────────────────────────────
 
 #[test]
 fn draw_string_forced_notifies_observer() {
+    use std::sync::{Arc, Mutex};
     struct StrObserver {
-        called: bool,
+        captured: Arc<Mutex<Option<(String, bool)>>>,
     }
     impl DataObserver for StrObserver {
-        fn draw_string(&mut self, _value: &str, _was_forced: bool) {
-            self.called = true;
+        fn draw_string(&mut self, value: &str, was_forced: bool) {
+            *self.captured.lock().unwrap() = Some((value.to_string(), was_forced));
         }
     }
-
-    let choices = vec![ChoiceValue::String(vec![])]; // placeholder, max_size=1
-    let obs = Box::new(StrObserver { called: false });
+    let captured = Arc::new(Mutex::new(None));
+    let choices = vec![ChoiceValue::String(vec![])]; // placeholder
+    let obs = Box::new(StrObserver {
+        captured: captured.clone(),
+    });
     let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
     let v = tc.draw_string_forced(65, 90, 1, 5, "A").ok().unwrap();
     assert_eq!(v, "A");
+    // The forced draw must record the forced string AND was_forced=true.
+    let recorded = captured.lock().unwrap().take();
+    assert_eq!(recorded, Some(("A".to_string(), true)));
 }
 
 // ── DataObserver::draw_boolean default (line 453) ─────────────────────────
@@ -658,26 +680,26 @@ fn freeze_when_already_frozen_is_noop() {
 
 #[test]
 fn freeze_notifies_observer_on_conclude_test() {
+    use std::sync::{Arc, Mutex};
     struct FreezeObserver {
-        concluded: bool,
-        concluded_status: Option<Status>,
+        captured: Arc<Mutex<Option<Status>>>,
     }
     impl DataObserver for FreezeObserver {
         fn conclude_test(&mut self, status: Status, _origin: Option<InterestingOrigin>) {
-            self.concluded = true;
-            self.concluded_status = Some(status);
+            *self.captured.lock().unwrap() = Some(status);
         }
     }
-
+    let captured = Arc::new(Mutex::new(None));
     let obs = Box::new(FreezeObserver {
-        concluded: false,
-        concluded_status: None,
+        captured: captured.clone(),
     });
     let mut tc = NativeTestCase::for_choices(&[], None, Some(obs));
     tc.freeze();
     assert!(tc.frozen());
-    // Can't inspect the observer directly (it's moved into the tc), but no
-    // panic means conclude_test was called successfully.
+    // `conclude_test` was called exactly once with the current status —
+    // for a never-marked test case that's `Status::Valid` (the default).
+    let recorded = captured.lock().unwrap().take();
+    assert_eq!(recorded, Some(Status::Valid));
 }
 
 // ── NativeTestCase::note, note_str, output (lines 911-925) ─────────────────
@@ -706,21 +728,27 @@ fn output_is_empty_initially() {
 
 #[test]
 fn draw_integer_notifies_observer() {
+    use std::sync::{Arc, Mutex};
     struct IntObserver {
-        last: Option<i128>,
+        captured: Arc<Mutex<Option<(i128, bool)>>>,
     }
     impl DataObserver for IntObserver {
-        fn draw_integer(&mut self, value: i128, _was_forced: bool) {
-            self.last = Some(value);
+        fn draw_integer(&mut self, value: i128, was_forced: bool) {
+            *self.captured.lock().unwrap() = Some((value, was_forced));
         }
     }
-
+    let captured = Arc::new(Mutex::new(None));
     let choices = vec![ChoiceValue::Integer(99)];
-    let obs = Box::new(IntObserver { last: None });
+    let obs = Box::new(IntObserver {
+        captured: captured.clone(),
+    });
     let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
     let v = tc.draw_integer(0, 100).ok().unwrap();
     assert_eq!(v, 99);
-    // Observer was called successfully (no panic).
+    // The observer must have captured the prefix-replayed value with
+    // was_forced=false.
+    let recorded = captured.lock().unwrap().take();
+    assert_eq!(recorded, Some((99, false)));
 }
 
 // ── NativeTestCase::stop_span extends parent labels (line 798) ────────────
