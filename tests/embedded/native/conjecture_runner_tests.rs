@@ -573,6 +573,78 @@ fn default_phases_contains_target_and_explicit() {
     );
 }
 
+// ── A10: reuse_existing_examples deletes only from the source corpus ──────
+//
+// Pre-A10, when a primary-corpus entry returned non-Interesting,
+// `reuse_existing_examples` deleted it from BOTH the primary AND
+// secondary corpora. So if the secondary corpus happened to contain a
+// byte-identical entry (very plausible across runs of the same test),
+// the secondary copy was wiped as a side effect of processing the
+// primary one.
+//
+// The fix is to delete only from the corpus the entry actually came
+// from. We observe this by pre-populating both corpora with a shared
+// entry (`[Integer(0)]`) plus an extra primary-only entry, running the
+// reuse pass, and checking the secondary copy is still there.
+#[test]
+fn reuse_existing_examples_does_not_wipe_secondary_on_primary_match() {
+    use crate::native::conjecture_runner::choices_to_bytes;
+    use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
+
+    let db = Arc::new(InMemoryNativeDatabase::new());
+    let key = b"a10_reuse".to_vec();
+    let secondary = {
+        let mut s = key.clone();
+        s.push(b'.');
+        s.extend_from_slice(b"secondary");
+        s
+    };
+
+    // Primary corpus: two entries — `[Integer(0)]` and `[Integer(1)]`.
+    let entry_a = choices_to_bytes(&[ChoiceValue::Integer(0)]);
+    let entry_b = choices_to_bytes(&[ChoiceValue::Integer(1)]);
+    db.save(&key, &entry_a);
+    db.save(&key, &entry_b);
+
+    // Secondary corpus: a byte-identical copy of `entry_a`. This is the
+    // entry the bug used to wipe.
+    db.save(&secondary, &entry_a);
+
+    let settings = NativeRunnerSettings::new()
+        .max_examples(10)
+        .database(Some(db.clone()))
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            // Body returns Valid for every replayed entry — this is what
+            // triggers the non-Interesting deletion branch in
+            // `reuse_existing_examples`.
+            let _ = data.draw_integer(0, 10);
+        },
+        settings,
+        make_rng(),
+    )
+    .with_database_key(key.clone());
+    runner.reuse_existing_examples();
+
+    // After the reuse pass:
+    //   - primary should be empty (both entries replayed Valid → deleted).
+    //   - secondary should still have `entry_a` (it was never visited).
+    let remaining_secondary = db.fetch(&secondary);
+    assert!(
+        remaining_secondary.iter().any(|v| v == &entry_a),
+        "secondary corpus should still contain the byte-identical entry \
+         `{entry_a:?}` — pre-A10, processing the matching primary entry \
+         wiped it as a side effect; got secondary = {remaining_secondary:?}"
+    );
+}
+
 // ── A8: generate_mutations_from runs after each generate-phase test ───────
 //
 // `engine.py:1309` calls `generate_mutations_from(data)` after every

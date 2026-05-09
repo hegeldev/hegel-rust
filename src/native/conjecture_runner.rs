@@ -2393,11 +2393,22 @@ impl NativeConjectureRunner {
             if i >= primary_corpus_size && found_interesting_in_primary {
                 break;
             }
+            // Each entry only exists in *one* corpus (primary if
+            // `i < primary_corpus_size`, otherwise secondary). Pre-A10
+            // we deleted from both regardless, which wiped any
+            // byte-identical entry in the *other* corpus as a side
+            // effect (very plausible across runs of the same test, as
+            // shrunk counterexamples often appear in both stores).
+            let source_key: &[u8] = if i < primary_corpus_size {
+                &db_key
+            } else {
+                &secondary_key
+            };
             let Some(choices) = choices_from_bytes(existing) else {
                 // `choices_from_bytes`-failures are only purged from the
                 // corpus the entry came from — secondary deletes happen in
                 // `clear_secondary_key`, not here.
-                db.delete(&db_key, existing);
+                db.delete(source_key, existing);
                 continue;
             };
             let ntc = NativeTestCase::for_choices(&choices, None, None);
@@ -2433,8 +2444,7 @@ impl NativeConjectureRunner {
                     break;
                 }
             } else {
-                db.delete(&db_key, existing);
-                db.delete(&secondary_key, existing);
+                db.delete(source_key, existing);
             }
 
             if self.interesting_examples.is_empty()
