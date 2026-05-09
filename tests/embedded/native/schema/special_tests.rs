@@ -272,3 +272,47 @@ fn interpret_url_http_with_path_components() {
     let s = decode_tagged(&interpret_url(&mut ntc).ok().unwrap());
     assert_eq!(s, "http://aaa.aa/aa/aa");
 }
+
+// ── interpret_uuid: RFC 4122 variant nibble ────────────────────────────────
+
+/// Every UUID produced by `interpret_uuid` must have RFC 4122-compliant
+/// variant bits: the first nibble of the fourth hyphen-separated group
+/// (`Nxxx`) must be one of `8`, `9`, `a`, or `b` (i.e. top two bits of
+/// that 16-bit group are `10`).
+///
+/// Audit item A1 claimed that `g4 = g4_low | 0x8000` only forces the top
+/// bit, leaving `N ∈ {8..f}`. That would be true if `g4_low` were a 16-bit
+/// draw, but `interpret_uuid` constrains it to 14 bits via
+/// `draw_integer(0, 0x3FFF)`, so bit 14 is always 0 and the OR with
+/// `0x8000` produces a 16-bit value with top two bits `10`. This test
+/// pins that invariant: 1000 random UUIDs all match `[8-b][0-9a-f]{3}`
+/// at the variant nibble.
+#[test]
+fn interpret_uuid_variant_nibble_is_rfc4122() {
+    let schema = cbor_map! {};
+    let mut all_seen: std::collections::HashSet<char> = std::collections::HashSet::new();
+    for seed in 0u64..1000 {
+        let mut ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
+        let s = decode_tagged(&interpret_uuid(&mut ntc, &schema).ok().unwrap());
+        // Format: xxxxxxxx-xxxx-Mxxx-Nxxx-xxxxxxxxxxxx
+        let groups: Vec<&str> = s.split('-').collect();
+        assert_eq!(groups.len(), 5, "uuid {s:?} has the wrong shape");
+        let g4 = groups[3];
+        assert_eq!(g4.len(), 4, "g4 group {g4:?} has the wrong length");
+        let variant_nibble = g4.chars().next().unwrap();
+        assert!(
+            matches!(variant_nibble, '8' | '9' | 'a' | 'b'),
+            "uuid {s:?} has a non-RFC-4122 variant nibble {variant_nibble:?} \
+             (top two bits of g4 should be 10)"
+        );
+        all_seen.insert(variant_nibble);
+    }
+    // Sanity check: across 1000 UUIDs we expect to see at least two of the
+    // four allowed variant nibbles (the draw is uniform over 14 bits, so
+    // each nibble appears with ~25% probability).
+    assert!(
+        all_seen.len() >= 2,
+        "expected variant nibble distribution to span >=2 of {{8,9,a,b}}, \
+         got {all_seen:?}"
+    );
+}
