@@ -66,8 +66,14 @@ fn optimise_targets_returns_run_is_complete_when_budget_exhausted() {
     // should return RunIsComplete.
     let result = runner.optimise_targets();
     // Either Ok or Err(RunIsComplete) depending on budget; either is valid.
-    // The point is it must not panic.
+    // What matters behaviourally: with `max_examples=2` and the seed
+    // already consuming one, the optimiser must not exceed the budget.
     let _ = result;
+    assert!(
+        runner.valid_examples <= 2,
+        "valid_examples ({}) must respect max_examples=2",
+        runner.valid_examples,
+    );
 }
 
 // ── sort_key_less for various ChoiceValue types ────────────────────────────
@@ -347,7 +353,11 @@ fn hill_climb_returns_zero_when_best_choices_missing() {
     // optimise_targets → hill_climb("score") → best_choices_for_target.get("score") == None
     // → return Ok(0) (line 568).
     let result = runner.optimise_targets();
-    let _ = result;
+    // Without best_choices the climber has no seed and returns
+    // immediately — Ok with no work done.  No body run means
+    // `valid_examples` stays at zero.
+    assert!(result.is_ok());
+    assert_eq!(runner.valid_examples, 0);
 }
 
 // ── hill_climb: return Ok(0) when run_extend_full gives status < Valid ─────
@@ -383,7 +393,15 @@ fn hill_climb_returns_zero_when_extend_full_returns_invalid() {
     runner.cache.clear();
     // optimise_targets → hill_climb("score") → run_extend_full → Invalid
     // → status < Valid → return Ok(0) (line 573).
-    let _ = runner.optimise_targets();
+    let result = runner.optimise_targets();
+    // The Invalid replay aborts the climb; result must be Ok and the
+    // budget must not have been exceeded.
+    assert!(result.is_ok());
+    assert!(
+        runner.valid_examples <= runner.max_examples,
+        "valid_examples ({}) must respect max_examples ({})",
+        runner.valid_examples, runner.max_examples,
+    );
 }
 
 // ── TargetedTestCase::draw_boolean STOP_TEST_PANIC when overrun ───────────
@@ -1034,9 +1052,17 @@ fn find_integer_binary_search_returns_run_is_complete() {
     runner.cached_test_function(&[ChoiceValue::Integer(0)]);
     // Exponential probe reaches k=40 (current=45+40=85>80→fail). Binary search
     // starts; first mid=30 passes (45+30=75≤80) and uses the last budget slot.
-    // Next binary iteration fires line 712.
+    // Next binary iteration fires line 712, propagating `Err(RunIsComplete)`.
     let result = runner.optimise_targets();
-    let _ = result;
+    assert!(
+        result.is_err(),
+        "binary-search budget exhaustion should propagate as Err",
+    );
+    assert!(
+        runner.valid_examples <= runner.max_examples,
+        "valid_examples ({}) must respect max_examples ({})",
+        runner.valid_examples, runner.max_examples,
+    );
 }
 
 // ── try_replace: max_examples hit during retry loop (line 836) ──────────────
@@ -1081,7 +1107,13 @@ fn try_replace_max_examples_hit_in_retry_loop() {
     //   probe [Integer(6)] → 2 nodes, score=44 < 45 → no improvement.
     //   retry 2: valid_examples=2=max → return false (line 836).
     let result = runner.optimise_targets();
-    let _ = result;
+    let _ = result; // line 836 returns false from try_replace, not an Err
+    // The budget must be exactly at the cap — line 836's job is to stop
+    // the retry loop *before* exceeding `max_examples`.
+    assert_eq!(
+        runner.valid_examples, 2,
+        "line 836 should fire exactly when valid_examples reaches max_examples=2",
+    );
 }
 
 // ── try_replace: EarlyStop from run_extend_full (line 854) ──────────────────
@@ -1123,7 +1155,12 @@ fn try_replace_early_stop_fires_line_854() {
     let _limit = BufferSizeLimit::new(1);
     // hill_climb tries +1 direction → Integer(2) → EarlyStop (line 854).
     let result = runner.optimise_targets();
-    let _ = result;
+    // EarlyStop short-circuits the retry without an Err.  Behaviourally
+    // the climber must not have exceeded its budget, and the original
+    // seed value must remain the best (the +1 candidate aborts via
+    // EarlyStop, so the climb produces no improvement).
+    assert!(result.is_ok());
+    assert!(runner.valid_examples <= runner.max_examples);
 }
 
 // ── span-fixup: break when span starts after idx (line 869) ──────────────────
@@ -1173,7 +1210,12 @@ fn try_replace_span_fixup_breaks_when_span_after_idx() {
     //   consider false. Status=Valid. Lengths differ (3!=2) → span-fixup.
     //   current_spans=[{1,2}]. ex.start=1 > idx=0 → LINE 869 breaks.
     let result = runner.optimise_targets();
+    // The span-fixup loop breaks without finding a fixup; the climb may
+    // continue exploring (and possibly exhaust its budget mid-search,
+    // returning Err).  Either way the budget must hold and the line is
+    // exercised — this test's role is to drive line 869 specifically.
     let _ = result;
+    assert!(runner.valid_examples <= runner.max_examples);
 }
 
 // ── span-fixup: span size matches (line 879) and break (line 869) ────────────
@@ -1215,7 +1257,12 @@ fn try_replace_span_fixup_size_match_and_after_idx() {
     // try +1 at idx=0 → choices=[Int(4),Int(0)]: 3 nodes, score=6<7.
     // span-fixup: j=0 → same size → LINE 879. j=1 → start=1>idx=0 → LINE 869.
     let result = runner.optimise_targets();
+    // Same-size span-fixup yields no improvement; the second span's
+    // post-idx start breaks the loop.  As with the prior test, the
+    // climb may exhaust its budget during downstream exploration; the
+    // observable invariant is still that the budget holds.
     let _ = result;
+    assert!(runner.valid_examples <= runner.max_examples);
 }
 
 // ── span-fixup: max_examples exceeded (line 892) ─────────────────────────────
@@ -1258,7 +1305,16 @@ fn try_replace_span_fixup_max_examples_fires_line_892() {
     //   new_spans=[{0,2}]. sizes differ. span-fixup j=0: line 891: 2>=2 → LINE 892!
     runner.cached_test_function(&[ChoiceValue::Integer(3)]);
     let result = runner.optimise_targets();
+    // Line 892 (`valid_examples >= max_examples` inside span-fixup
+    // splice) is the budget guard for the splice path. With
+    // `max_examples=2` and the seed run plus the first failed +1 probe
+    // already consuming both, the optimiser must stop without exceeding
+    // it.  The exact cap is 2.
     let _ = result;
+    assert_eq!(
+        runner.valid_examples, 2,
+        "line 892 should fire when valid_examples reaches max_examples=2",
+    );
 }
 
 // ── try_replace: k too large (line 762) ───────────────────────────────────────
