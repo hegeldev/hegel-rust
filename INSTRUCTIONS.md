@@ -345,7 +345,7 @@ For each: read the test, decide whether the *test* is wrong (expected message ch
 
 ### Tier B — Forward-compat hazards
 
-- [ ] **B1.** `src/native/featureflags.rs:131,218` — `panic!("{}", STOP_TEST_STRING)` as control flow. If this is the established escape hatch, fine — but document it loudly at the call site so a reader knows it's not a bug.
+- [x] **B1.** `src/native/featureflags.rs:131,218` — `panic!("{}", STOP_TEST_STRING)` as control flow. If this is the established escape hatch, fine — but document it loudly at the call site so a reader knows it's not a bug. Done by adding multi-line comments at both sites that name the sentinel, point at `run_lifecycle.rs:218` (where `run_test_case` recognises it and converts to `TestCaseResult::Overrun`), and cite the symmetric `panic_on_data_source_error` in `test_case.rs:47` so a reader can see this is the project-wide convention for "abort a draw from generator code that doesn't return `Result`". Pure documentation change, no behavioural test required (and §3.1's "no bare unreachable!()" rule is satisfied because these aren't `unreachable!`s — they're explicit sentinel-panics that the runner catches).
 - [ ] **B2.** ~20+ bare `unreachable!()` sites across `shrinker/integers.rs`, `shrinker/strings.rs`, `shrinker/floats.rs`, `shrinker/bytes.rs`, `core/state.rs`, `core/choices.rs`. Add diagnostic messages to each. Use `unreachable!("kind/value mismatch: {kind:?} vs {value:?}")` style.
 - [ ] **B3.** `src/native/schema/float.rs:8,32,41,57,70` — only `width == 32` is special-cased; other widths silently treated as f64. Either reject other widths explicitly, or implement them. Add a fail-loud test for an out-of-range `width`.
 

@@ -128,6 +128,15 @@ impl FeatureFlags {
         let start = handle.lock().unwrap().nodes.len();
         let is_disabled = match handle.lock().unwrap().weighted(p_disabled, forced) {
             Ok(v) => v,
+            // `panic!(STOP_TEST_STRING)` is the established escape hatch
+            // for "the backend ran out of data mid-draw" — `run_test_case`
+            // (`run_lifecycle.rs:218`) recognises this sentinel string and
+            // converts the panic into `TestCaseResult::Overrun` instead of
+            // surfacing it as a property failure. This mirrors how
+            // `panic_on_data_source_error` in `test_case.rs:47` handles
+            // the same `StopTest` from the boxed `DataSource` path: a
+            // panic is the only way to abort a draw from inside generator
+            // code that doesn't return `Result`.
             Err(StopTest) => panic!("{}", STOP_TEST_STRING),
         };
         let end = handle.lock().unwrap().nodes.len();
@@ -215,6 +224,11 @@ impl Generator<FeatureFlags> for FeatureStrategy {
             .expect("FeatureStrategy::do_draw called outside the native test context");
         let p_disabled = match handle.lock().unwrap().draw_integer(0, 254) {
             Ok(n) => n as f64 / 255.0,
+            // See the symmetric site in `is_enabled` (~line 131) for why
+            // `panic!(STOP_TEST_STRING)` is the right control-flow here:
+            // it's the established sentinel that `run_test_case`
+            // (`run_lifecycle.rs:218`) translates back into
+            // `TestCaseResult::Overrun`.
             Err(StopTest) => panic!("{}", STOP_TEST_STRING),
         };
         let weak = Arc::downgrade(handle);
