@@ -573,6 +573,90 @@ fn default_phases_contains_target_and_explicit() {
     );
 }
 
+// ── A11: reuse replaces existing interesting with smaller ─────────────────
+//
+// Pre-A11, when `reuse_existing_examples` saw a Status::Interesting
+// replay for an origin already in `interesting_examples`, it silently
+// dropped the new example — no sort_key compare, no replacement. So a
+// later run that found a smaller failing input for the same origin
+// would keep the older, larger one in the in-memory map.
+//
+// Two-runs setup forces the order: run 1 populates interesting_examples
+// with a LONG entry; run 2 sees a SHORTER entry but the origin already
+// matches → bug discards the shorter one.
+#[test]
+fn reuse_replaces_existing_interesting_with_smaller() {
+    use crate::native::conjecture_runner::choices_to_bytes;
+    use crate::native::database::InMemoryNativeDatabase;
+    use std::sync::Arc;
+
+    let db = Arc::new(InMemoryNativeDatabase::new());
+    let key = b"a11_test".to_vec();
+
+    // Both entries panic at the same source line (same origin), but
+    // produce different choice sequences in `interesting_examples`.
+    let big = choices_to_bytes(&[ChoiceValue::Integer(100), ChoiceValue::Integer(100)]);
+    let small = choices_to_bytes(&[ChoiceValue::Integer(0), ChoiceValue::Integer(0)]);
+
+    // Run 1: only `big` in primary. After reuse, `interesting_examples`
+    // holds the big entry.
+    db.save(&key, &big);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let _ = data.draw_integer(0, 100);
+            let _ = data.draw_integer(0, 100);
+            panic!("oops");
+        },
+        NativeRunnerSettings::new()
+            .max_examples(10)
+            .database(Some(db.clone()))
+            .suppress_health_check(vec![
+                HealthCheckLabel::FilterTooMuch,
+                HealthCheckLabel::TooSlow,
+                HealthCheckLabel::LargeBaseExample,
+                HealthCheckLabel::DataTooLarge,
+            ]),
+        make_rng(),
+    )
+    .with_database_key(key.clone());
+    runner.reuse_existing_examples();
+
+    // Sanity: run 1 populated `interesting_examples` with the big entry.
+    let initial_origin = runner
+        .interesting_examples
+        .keys()
+        .next()
+        .expect("run 1 should have populated interesting_examples")
+        .clone();
+    assert_eq!(
+        runner.interesting_examples[&initial_origin].nodes.len(),
+        2,
+        "run 1 should have a 2-node interesting example"
+    );
+    let initial_choices = runner.interesting_examples[&initial_origin].choices.clone();
+    assert_eq!(
+        initial_choices,
+        vec![ChoiceValue::Integer(100), ChoiceValue::Integer(100)],
+        "run 1 should have stored the big choices"
+    );
+
+    // Run 2: add `small` to primary so the corpus is `[small, big]`
+    // (shortlex sort puts smaller-bytes first). Re-run reuse.
+    db.save(&key, &small);
+    runner.reuse_existing_examples();
+
+    // Post-A11: `small`'s sort_key < big's sort_key → replace.
+    // Pre-A11: contains_key was true → skip → big remains.
+    let final_choices = runner.interesting_examples[&initial_origin].choices.clone();
+    assert_eq!(
+        final_choices,
+        vec![ChoiceValue::Integer(0), ChoiceValue::Integer(0)],
+        "expected reuse_existing_examples to replace the existing \
+         interesting entry with the strictly-smaller replay; got \
+         {final_choices:?} (the larger one stuck — pre-A11 bug)"
+    );
+}
+
 // ── A10: reuse_existing_examples deletes only from the source corpus ──────
 //
 // Pre-A10, when a primary-corpus entry returned non-Interesting,

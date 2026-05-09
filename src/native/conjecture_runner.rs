@@ -2423,7 +2423,30 @@ impl NativeConjectureRunner {
                 let origin = origin.expect("Interesting status carries an origin");
                 let replay_choices: Vec<ChoiceValue> =
                     nodes.iter().map(|n| n.value.clone()).collect();
-                if !self.interesting_examples.contains_key(&origin) {
+                // Mirrors `engine.py::test_function`: when the replay's
+                // origin matches an existing interesting example,
+                // compare `sort_key`s and replace if the new replay is
+                // strictly smaller (downgrading the displaced entry to
+                // the secondary corpus). Pre-A11, the new example was
+                // silently discarded — so a later run that found a
+                // smaller failing input for the same origin would keep
+                // the older, larger one in the runner's
+                // `interesting_examples` map.
+                let should_insert = match self.interesting_examples.get(&origin) {
+                    None => true,
+                    Some(existing) => {
+                        if crate::native::core::sort_key(&nodes)
+                            < crate::native::core::sort_key(&existing.nodes)
+                        {
+                            self.shrinks += 1;
+                            self.downgrade_choices(&existing.choices);
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                };
+                if should_insert {
                     self.save_choices(&replay_choices);
                     self.interesting_examples.insert(
                         origin.clone(),
