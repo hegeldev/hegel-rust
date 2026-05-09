@@ -103,9 +103,18 @@ fn run_main(
     let verbosity = settings.verbosity;
     let mode = settings.mode;
 
+    // `Database::Unset` is the non-CI default (set by `Settings::new` in
+    // `src/runner.rs`); it means "the user didn't pick, so use the
+    // sensible default." For parity with the server backend (which
+    // forwards `Unset` and lets the server pick its own default) and
+    // with upstream Hypothesis (whose `DirectoryBasedExampleDatabase`
+    // defaults to `.hypothesis/examples` relative to cwd), the native
+    // default is `.hegel/examples` relative to cwd. `Disabled` is the
+    // explicit opt-out; `Path(p)` is the explicit choice.
     let db: Option<Box<dyn ExampleDatabase>> = match &settings.database {
         Database::Path(p) => Some(Box::new(NativeDatabase::new(p))),
-        _ => None,
+        Database::Unset => Some(Box::new(NativeDatabase::new(".hegel/examples"))),
+        Database::Disabled => None,
     };
 
     let mut ctx = EngineCtx::new(run_case, mode);

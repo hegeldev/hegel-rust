@@ -34,10 +34,7 @@ fn cwd_is_a_hegel_rust_test_tempdir() {
 }
 
 // The server backend always writes `.hegel/server.*.log` in cwd, so running a
-// Hegel test is a load-bearing assertion that the isolation chdir worked. The
-// native backend doesn't touch `.hegel/` at all (no Python server, no log
-// directory, and the default database is unset), so this assertion doesn't
-// apply there.
+// Hegel test is a load-bearing assertion that the isolation chdir worked.
 #[cfg(not(feature = "native"))]
 #[test]
 fn running_hegel_creates_dot_hegel_in_tempdir_not_crate_root() {
@@ -50,6 +47,43 @@ fn running_hegel_creates_dot_hegel_in_tempdir_not_crate_root() {
     assert!(
         cwd.join(".hegel").exists(),
         ".hegel should exist in the test-binary tempdir cwd {cwd:?}",
+    );
+    let crate_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    assert_ne!(
+        cwd, crate_root,
+        ".hegel landed in the crate root, which means isolation isn't working",
+    );
+}
+
+// Native parity: with `Database::Unset` (the non-CI default), a failing
+// run must persist its counterexample under `.hegel/examples/` in cwd —
+// matching upstream Hypothesis's `.hypothesis/examples/` default. Before
+// S7 the default was silently `None` on native, so dev runs lost their
+// failing examples between iterations and `.hegel/` never appeared.
+#[cfg(feature = "native")]
+#[test]
+fn running_failing_native_test_creates_dot_hegel_examples() {
+    use hegel::Hegel;
+    use hegel::generators as gs;
+
+    // Use the failing-property/`Minimal::run`-style catch_unwind dance:
+    // the `Hegel::run` call panics with `"Property test failed: ..."`
+    // when the body fails, which we expect.
+    let _ = std::panic::catch_unwind(|| {
+        Hegel::new(|tc: hegel::TestCase| {
+            let _: bool = tc.draw(gs::booleans());
+            panic!("forced failure to populate the default database");
+        })
+        .__database_key("dot_hegel_examples_test".to_string())
+        .run();
+    });
+
+    let cwd = std::env::current_dir().unwrap();
+    let db_root = cwd.join(".hegel").join("examples");
+    assert!(
+        db_root.exists(),
+        ".hegel/examples should exist after a failing native run with \
+         default settings; cwd = {cwd:?}",
     );
     let crate_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     assert_ne!(
