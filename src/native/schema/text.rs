@@ -255,7 +255,6 @@ fn build_intervals_alphabet(cp_min: u32, cp_max: u32, exclude_chars: &[char]) ->
 /// once per draw, so we memoise the result globally keyed by the schema's
 /// canonical CBOR encoding. Mirrors Hypothesis's `limited_category_index_cache`
 /// in `internal/charmap.py`.
-// nocov start
 pub(super) fn build_string_alphabet(schema: &Value) -> StringAlphabet {
     type Cache = Mutex<HashMap<Vec<u8>, Arc<StringAlphabet>>>;
     static CACHE: OnceLock<Cache> = OnceLock::new();
@@ -271,9 +270,6 @@ pub(super) fn build_string_alphabet(schema: &Value) -> StringAlphabet {
     }
     build_string_alphabet_uncached(schema)
 }
-// nocov end
-
-// nocov start
 fn build_string_alphabet_uncached(schema: &Value) -> StringAlphabet {
     // Determine codepoint range from codec + min/max codepoint.
     let codec = map_get(schema, "codec").and_then(as_text);
@@ -437,8 +433,6 @@ fn build_string_alphabet_uncached(schema: &Value) -> StringAlphabet {
 
     StringAlphabet::Explicit(alphabet)
 }
-// nocov end
-
 /// Return the character at `idx` in [`crate::native::core::codepoint_key`]
 /// order within `[min, max]`.
 ///
