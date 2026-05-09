@@ -426,6 +426,62 @@ fn distinct_assert_sites_produce_distinct_origins() {
     );
 }
 
+// ── A6: re-validation populates LRU cache for the interesting choices ─────
+//
+// Pre-A6, `shrink_interesting_examples`'s re-validation pass called
+// `run_test_fn` directly, only bumped `call_count`, and skipped
+// `record_tree` / `record_test_result` / `test_cache` insertion. So the
+// very choices the runner just confirmed are interesting weren't in the
+// LRU cache — a subsequent `cached_test_function(...)` on those choices
+// would re-execute the user's body. Routing through
+// `cached_test_function` fixes this.
+#[test]
+fn re_validation_populates_cache_for_interesting_choices() {
+    // `max_shrinks(0)` keeps the shrinker from probing — that way the
+    // post-run `interesting_examples` choices are identical to what
+    // re-validation called `cached_test_function` on, so the test's
+    // follow-up `cached_test_function` call uses the same key.
+    // (If shrinker probes ran, they'd use `run_test_fn` directly, not
+    // `cached_test_function`, and would change the post-shrink choices
+    // out from under the cache key produced by re-validation.)
+    //
+    // The integer range is wider than 0..=0 so the choice tree doesn't
+    // exhaust the moment the for-simplest probe panics. Tree exhaustion
+    // would set `exit_reason = Finished` and skip the shrink phase,
+    // meaning re-validation never runs.
+    let settings = default_settings().max_shrinks(0);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let _ = data.draw_integer(0, 100);
+            assert!(false, "boom");
+        },
+        settings,
+        make_rng(),
+    );
+    runner.run();
+
+    let interesting_choices: Vec<ChoiceValue> = runner
+        .interesting_examples
+        .values()
+        .next()
+        .expect("test always panics, so an interesting example must exist")
+        .nodes
+        .iter()
+        .map(|n| n.value.clone())
+        .collect();
+
+    let calls_before = runner.call_count;
+    let _ = runner.cached_test_function(&interesting_choices);
+    let calls_after = runner.call_count;
+    assert_eq!(
+        calls_before, calls_after,
+        "re-validation should populate the test_cache so calling \
+         cached_test_function on the interesting choices hits the cache; \
+         got call_count {calls_before} → {calls_after} (a miss means the \
+         re-validation pass bypassed cached_test_function)"
+    );
+}
+
 // ── ChoiceValueKey::String ────────────────────────────────────────────────
 
 #[test]

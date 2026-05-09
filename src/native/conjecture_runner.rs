@@ -1921,12 +1921,22 @@ impl NativeConjectureRunner {
         // and then the Flaky-when-not-interesting check
         // (line 1594-1595).  Deadline takes priority over flakiness,
         // matching Python's call order.
+        //
+        // Routes through `cached_test_function` so the LRU cache,
+        // `tree_root`, and `record_test_result` bookkeeping
+        // (`valid_examples` etc., target observations, pareto front)
+        // all see the re-validation runs — matching upstream's
+        // "every shrink-time call goes through cached_test_function"
+        // discipline. Pre-A6, re-validation called `run_test_fn`
+        // directly and only bumped `call_count`, leaving the rest of
+        // the runner's bookkeeping stale and the LRU cache empty for
+        // the very choices the runner just confirmed are interesting.
+        let _ = buffer_size_limit; // cached_test_function reads the same setting
         for origin in &origins {
             let initial = self.interesting_examples[origin].nodes.clone();
             let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value.clone()).collect();
-            let ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
-            let (status, _, _, _, _, _) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
-            self.call_count += 1;
+            let result = self.cached_test_function(&choices);
+            let status = result.status;
 
             if (self.time_source)() > deadline {
                 self.exit_reason = Some(ExitReason::VerySlowShrinking);
