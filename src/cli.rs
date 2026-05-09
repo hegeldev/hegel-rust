@@ -158,12 +158,10 @@ fn parse_health_check(s: &str) -> Result<Vec<HealthCheck>, CliError> {
         let hc = match part {
             "filter_too_much" => HealthCheck::FilterTooMuch,
             "too_slow" => HealthCheck::TooSlow,
-            "test_cases_too_large" => HealthCheck::TestCasesTooLarge,
-            "large_initial_test_case" => HealthCheck::LargeInitialTestCase,
             other => {
                 return Err(CliError::Parse(format!(
                     "--suppress-health-check does not recognise {other:?}. \
-                     Known names: all, filter_too_much, too_slow, test_cases_too_large, large_initial_test_case"
+                     Known names: all, filter_too_much, too_slow"
                 )));
             }
         };

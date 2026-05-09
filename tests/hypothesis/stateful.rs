@@ -326,10 +326,14 @@ fn test_invariants_are_checked_after_init_steps() {
 
 // ── test_lots_of_entropy ──────────────────────────────────────────────────────
 //
-// Skipped: hegel-rust raises TestCasesTooLarge when a stateful rule draws
-// 512 bytes per step; Python Hypothesis silently handles this for stateful
-// tests as part of the fix for GH-3618, but hegel-rust has not implemented
-// the equivalent data-budget exemption for stateful rule draws.
+// Skipped: hegel-rust's native conjecture-runner internal-label
+// `DataTooLarge` fires when a stateful rule draws 512 bytes per step.
+// Python Hypothesis silently handles this for stateful tests as part
+// of the fix for GH-3618, but hegel-rust has not implemented the
+// equivalent data-budget exemption for stateful rule draws. The public
+// `HealthCheck` enum no longer exposes `data_too_large` at all (per
+// audit item A14); the internal label still exists in the
+// conjecture-runner port-test fixture.
 // TODO: implement GH-3618-equivalent fix and re-enable this test.
 
 // ── test_flaky_raises_flaky ───────────────────────────────────────────────────

@@ -101,7 +101,11 @@ fn test_suppress_health_check_multiple() {
 #[test]
 fn test_suppress_health_check_all() {
     let parsed = apply(&["--suppress-health-check", "all"]);
-    assert_eq!(parsed.suppress_health_check.len(), 4);
+    // Post-A14, `HealthCheck` exposes only `FilterTooMuch` and
+    // `TooSlow` — the unimplemented `TestCasesTooLarge` and
+    // `LargeInitialTestCase` variants were removed. `all` expands to
+    // a 2-element list now.
+    assert_eq!(parsed.suppress_health_check.len(), 2);
 }
 
 #[test]

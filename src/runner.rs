@@ -7,16 +7,20 @@ use crate::test_case::TestCase;
 ///
 /// Health checks detect common issues with test configuration that would
 /// otherwise cause tests to run inefficiently or not at all.
+///
+/// Two upstream Hypothesis variants — `data_too_large` /
+/// `large_base_example` — were previously exposed here as
+/// `TestCasesTooLarge` / `LargeInitialTestCase`, but the live native
+/// runner never actually fires them. Suppressing a check that's never
+/// raised is a lie, so those variants are gone (per audit item A14).
+/// If the live runner gains the firing logic later, restore them with
+/// the upstream-matching names `DataTooLarge` and `LargeBaseExample`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HealthCheck {
     /// Too many test cases are being filtered out via `assume()`.
     FilterTooMuch,
     /// Test execution is too slow.
     TooSlow,
-    /// Generated test cases are too large.
-    TestCasesTooLarge,
-    /// The smallest natural input is very large.
-    LargeInitialTestCase,
 }
 
 impl HealthCheck {
@@ -32,13 +36,8 @@ impl HealthCheck {
     ///     // ...
     /// }
     /// ```
-    pub const fn all() -> [HealthCheck; 4] {
-        [
-            HealthCheck::FilterTooMuch,
-            HealthCheck::TooSlow,
-            HealthCheck::TestCasesTooLarge,
-            HealthCheck::LargeInitialTestCase,
-        ]
+    pub const fn all() -> [HealthCheck; 2] {
+        [HealthCheck::FilterTooMuch, HealthCheck::TooSlow]
     }
 }
 

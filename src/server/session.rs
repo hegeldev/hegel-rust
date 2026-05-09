@@ -24,8 +24,6 @@ fn health_check_as_str(check: &HealthCheck) -> &'static str {
     match check {
         HealthCheck::FilterTooMuch => "filter_too_much",
         HealthCheck::TooSlow => "too_slow",
-        HealthCheck::TestCasesTooLarge => "test_cases_too_large",
-        HealthCheck::LargeInitialTestCase => "large_initial_test_case",
     }
 }
 

@@ -1064,11 +1064,11 @@ normalise rather than chaining `gs::floats()`.
 
 ## Health checks
 
-hegel-rust's `HealthCheck` enum has four variants — `FilterTooMuch`,
-`TooSlow`, `TestCasesTooLarge`, `LargeInitialTestCase` — a subset of
-Hypothesis's. When a check fires, the native runner **panics** with a
-message of the form `FailedHealthCheck: …<VariantName>…`. There is no
-dedicated error type to catch.
+hegel-rust's `HealthCheck` enum has two variants — `FilterTooMuch` and
+`TooSlow` — a strict subset of Hypothesis's. When a check fires, the
+native runner **panics** with a message of the form
+`FailedHealthCheck: …<VariantName>…`. There is no dedicated error type
+to catch.
 
 | Python                                             | Rust                                                                |
 |----------------------------------------------------|---------------------------------------------------------------------|
@@ -1076,10 +1076,10 @@ dedicated error type to catch.
 | `pytest.raises(Unsatisfiable)` / `@fails_with(Unsatisfiable)` over an always-rejecting test | `expect_panic(\|\| { ... }, "FilterTooMuch")` — Hypothesis's `Unsatisfiable` for "every draw rejected" maps to hegel-rust's `FilterTooMuch` health check. **Native-only** (server mode silently passes on all-rejected runs). Other `Unsatisfiable` causes — explicit `nothing()`, deadline exhaustion — have no Rust analog and skip per the api-mapping rows for those features. |
 | `suppress_health_check=list(HealthCheck)`          | `.suppress_health_check(HealthCheck::all())`                        |
 | `suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow]` | `.suppress_health_check([HealthCheck::FilterTooMuch, HealthCheck::TooSlow])` |
-| `HealthCheck.data_too_large`                       | `HealthCheck::TestCasesTooLarge`                                    |
-| `HealthCheck.large_base_example`                   | `HealthCheck::LargeInitialTestCase`                                 |
+| `HealthCheck.data_too_large`                       | *No public mapping.* The native runner doesn't fire this check; the conjecture-runner port-test fixture has an internal-only `HealthCheckLabel::DataTooLarge`. Skip the upstream test or rewrite to assert via the internal label. |
+| `HealthCheck.large_base_example`                   | *No public mapping.* Same situation as `data_too_large`: internal-only `HealthCheckLabel::LargeBaseExample` exists in the port-test fixture but is not exposed as a public `HealthCheck` variant. |
 
-`HealthCheck::all()` returns `[HealthCheck; 4]`, which satisfies
+`HealthCheck::all()` returns `[HealthCheck; 2]`, which satisfies
 `IntoIterator<Item = HealthCheck>` — it plugs straight into
 `.suppress_health_check(...)` without a `.to_vec()`.
 
