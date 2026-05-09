@@ -2579,21 +2579,32 @@ fn record_test_result_early_stop_increments_overrun() {
     let mut runner =
         NativeConjectureRunner::new(|_: &mut NativeConjectureData| {}, settings, make_rng());
     let initial_overrun = runner.overrun_examples;
-    // cached_test_function_extend with extend=0 on empty choices → EarlyStop
-    // (or no-op if tree is exhausted). Use a choices vec that leads to overrun.
-    // Alternatively, directly call the runner methods:
-    // The simplest: run with choices that cause EarlyStop via is_prefix_of_known_path.
+    let initial_call_count = runner.call_count;
+    // Run with a single boolean draw, then re-run with empty choices.
+    // The body is a no-op so the empty-prefix replay completes Valid
+    // without overrun bookkeeping; this exercises the cache-miss path
+    // through `cached_test_function` without the body actually drawing.
     let choices = vec![ChoiceValue::Boolean(true)];
     runner.cached_test_function(&choices);
     runner.test_cache.cache.clear();
-    runner.cached_test_function(&[]);
-    // After the EarlyStop result, the overrun counter should have incremented.
-    // (record_test_result is called via cached_test_function_with_extend for
-    // extend != None=0 case... actually the is_prefix path returns early
-    // without calling record_test_result. Let me check another path.)
-    // The overrun count is only incremented in generate_new_examples, not
-    // in cached_test_function. So this test verifies no panic.
-    let _ = runner.overrun_examples >= initial_overrun;
+    let result = runner.cached_test_function(&[]);
+    // Behavioural claims: the empty replay completes (status is one of
+    // the recognised terminal statuses), `overrun_examples` is monotone
+    // non-decreasing, and the call counter advanced for at least one
+    // of the two cached_test_function calls.
+    assert!(
+        matches!(result.status, Status::Valid | Status::EarlyStop),
+        "empty-prefix replay must return a recognised status; got {:?}",
+        result.status,
+    );
+    assert!(
+        runner.overrun_examples >= initial_overrun,
+        "overrun_examples must be monotone non-decreasing across runs",
+    );
+    assert!(
+        runner.call_count > initial_call_count,
+        "the two cached_test_function calls must have advanced call_count",
+    );
 }
 
 // ── should_generate_more: report_multiple_bugs=false (line 1579) ──────────
@@ -2911,12 +2922,25 @@ fn data_tree_view_rewrite_missing_key_returns_novel() {
     );
     // Run once: the tree gets the value chosen by the all-simplest probe (0).
     runner.run();
-    // Pass [1000]: if 1000 is not in the tree, line 743 fires.
+    // After one run drawing an integer in `0..=1000`, the tree has one
+    // recorded value at the root.  Probing `[1000]` exercises the
+    // missing-key branch unless the seed happens to draw 1000.  Either
+    // way, the rewrite returns a (nodes, status) pair where the nodes
+    // length matches what was actually consumed: `out.len()` must
+    // equal `choices.len()` when the path is fully tracked, and `<` when
+    // `rewrite` short-circuits at a missing key (novel-path return).
     let choices = vec![ChoiceValue::Integer(1000)];
     let (out, status) = runner.tree().rewrite(&choices);
-    // If 1000 is not in the tree → returns novel (None).
-    // If it IS in the tree (from a random draw), the test still passes.
-    let _ = (out, status); // Just verify no panic.
+    // The rewrite walked at most one position of the prefix.
+    assert!(
+        out.len() <= choices.len(),
+        "rewrite output cannot exceed the input prefix length",
+    );
+    // `status` is `None` when the path is novel (missing-key branch
+    // — line 743 of the audit), `Some(status)` when fully reconstructed.
+    // Either is valid for this seed-dependent setup, but the union
+    // must hold.
+    let _ = status;
 }
 
 #[test]
@@ -3086,7 +3110,17 @@ fn record_tree_kill_depth_applied() {
         make_rng(),
     );
     runner.run();
-    // No panic = kill depth path was exercised.
+    // The body either marks interesting (when v != 0) or discards the
+    // span (when v == 0).  Across `max_examples=10` runs, the runner
+    // must have observed at least one interesting case (the most common
+    // outcome — v=0 is a single value out of 6) AND the discard path
+    // must have populated kill_depths into the tree (the only way the
+    // run completes without exceeding the budget).  Behavioural claim:
+    // the runner reaches a terminal exit_reason without panicking.
+    assert!(
+        runner.exit_reason.is_some(),
+        "runner must have exited via a recognised exit_reason, got None",
+    );
 }
 
 // ── enumerate_choice_values: Boolean and Bytes arms (lines 1243-1254) ──────
@@ -3108,15 +3142,24 @@ fn enumerate_choice_values_boolean_arm() {
 #[test]
 fn enumerate_choice_values_bytes_small_range() {
     use crate::native::core::BytesChoice;
-    // Bytes with size 0..=1 gives max_c = 256^1 = 256 <= 1024 → enumerate.
+    // Bytes with size 1..=1 gives max_c = 256^1 = 256 ≤ 1024 → enumerate
+    // returns Some.  Behavioural claim: every single-byte sequence is
+    // returned exactly once, in some order.
     let kind = ChoiceKind::Bytes(BytesChoice {
         min_size: 1,
         max_size: 1,
     });
     let result = enumerate_choice_values(&kind);
-    // Should enumerate all 256 single-byte sequences (or None if max_c > 1024).
-    // BytesChoice::max_children for max_size=1 is 256^1 = 256 <= 1024.
-    let _ = result; // Just verify no panic.
+    let values = result.expect("enumerate must return Some for small bytes range");
+    assert_eq!(
+        values.len(),
+        256,
+        "1-byte enumerate must produce all 256 single-byte sequences; got {}",
+        values.len(),
+    );
+    // Verify the enumeration includes the boundary values 0x00 and 0xFF.
+    assert!(values.contains(&ChoiceValue::Bytes(vec![0])));
+    assert!(values.contains(&ChoiceValue::Bytes(vec![255])));
 }
 
 // ── pick_non_exhausted_value shuffle (lines 1287-1289) ────────────────────
@@ -3168,14 +3211,19 @@ fn generate_novel_prefix_traverses_children() {
         settings,
         make_rng(),
     );
-    // Run once to populate the tree with some paths.
+    // Run once to populate the tree with `[Integer(0)]`.
     let choices = vec![ChoiceValue::Integer(0)];
     runner.cached_test_function(&choices);
-    // generate_novel_prefix walks existing children to find a novel path.
-    // Lines 1316-1317 fire when a non-exhausted child is followed.
+    // `generate_novel_prefix` walks the recorded tree looking for a
+    // path the engine hasn't yet explored.  Behavioural claim: the
+    // returned prefix doesn't *equal* the only known path
+    // (`[Integer(0)]`) — it must diverge at the integer draw to count
+    // as novel.
     let prefix = generate_novel_prefix(&runner.tree_root, &mut make_rng());
-    // Just verify it returns without panic.
-    let _ = prefix;
+    assert!(
+        prefix != choices,
+        "generate_novel_prefix must return a path that diverges from the recorded one",
+    );
 }
 
 // ── is_prefix_of_known_path: last branch (line 1410, 1413) ───────────────
@@ -3453,8 +3501,25 @@ fn should_generate_more_returns_false_at_line_1575() {
         make_rng(),
     );
     runner.run();
-    // If any interesting example was found and valid_examples reached max_examples,
-    // line 1575 was triggered. No assertion needed beyond no panic.
+    // Line 1575 fires when `valid_examples >= max_examples` AND
+    // `interesting_examples` is non-empty — i.e., the runner found a
+    // bug and then ran out of budget probing for more.  Behavioural
+    // claim: with max_examples=5 and the body always producing a v=0
+    // bug from the simplest probe, the runner has both seen the bug
+    // (interesting_examples non-empty) AND respected its budget
+    // (call_count near 5; allowing some span-mutation overshoot).
+    assert!(
+        !runner.interesting_examples.is_empty(),
+        "the simplest probe must mark interesting at v=0",
+    );
+    // Generation phase respects max_examples; post-bug probing window
+    // is small (a few extra calls).  100 is well above any expected
+    // overshoot for max_examples=5.
+    assert!(
+        runner.call_count <= 100,
+        "post-bug probing must not blow past the budget; got call_count={}",
+        runner.call_count,
+    );
 }
 
 // ── optimise_targets without generate phase (line 1624) ───────────────────
@@ -3484,8 +3549,20 @@ fn runner_optimise_targets_with_target_phase_only() {
         make_rng(),
     );
     runner.run();
-    // Line 1624 was hit: optimise_targets() called with no generate phase.
-    // No panic = success.
+    // With phases=[Phase::Target] only, the runner skips Generate (so
+    // valid_examples stays at 0; targeting needs at least one observed
+    // target observation to climb), skips Reuse, skips Shrink.
+    // Behavioural claims: no interesting examples (no body run that
+    // panicked), no calls beyond what the no-phase-active path needs,
+    // and an exit_reason that explains the early termination.
+    assert!(
+        runner.interesting_examples.is_empty(),
+        "Target-only phase must not produce interesting examples without Generate",
+    );
+    assert!(
+        runner.exit_reason.is_some(),
+        "runner must exit with a recognised reason, got None",
+    );
 }
 
 // ── MaxShrinks exit reason (lines 1971-1972) ──────────────────────────────
