@@ -4086,3 +4086,58 @@ fn cached_test_function_with_extend_bypasses_cached_early_stop() {
     // The re-run with a real RNG should draw successfully → Valid.
     assert_eq!(r2.status, Status::Valid);
 }
+
+// ── A15: buffer_size_limit caps choice count, not just bytes ─────────────
+//
+// Hypothesis's `engine.BUFFER_SIZE` (which `buffer_size_limit(n)` overrides)
+// caps the *number of choices* a single test case may make — see
+// `engine.py::test_function`'s `max_choices=BUFFER_SIZE` plumbing through
+// `new_conjecture_data`.  Pre-A15, our runner only consulted the limit
+// inside `NativeConjectureData::draw_bytes` / `draw_boolean` for byte
+// accounting; the `for_simplest`/`for_probe` calls in
+// `generate_new_examples` always passed `CONJECTURE_BUFFER_SIZE` (8192) for
+// `max_size`, so a draw that doesn't go through `draw_bytes` (e.g.
+// `draw_integer`) was uncapped in choice count.
+//
+// This test sets `buffer_size_limit(2)`, runs a body that tries 5
+// `draw_integer` calls, and asserts that no test case observed more than 2
+// successful draws — the 3rd integer raises `StopTest` and panics out of
+// the closure before the per-case counter can increment further.
+#[test]
+fn buffer_size_limit_caps_choice_count() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let max_observed = Arc::new(AtomicUsize::new(0));
+    let case_count = Arc::new(AtomicUsize::new(0));
+    let mco = max_observed.clone();
+    let cc = case_count.clone();
+    let settings = NativeRunnerSettings::new()
+        .max_examples(5)
+        .buffer_size_limit(2)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        move |data: &mut NativeConjectureData| {
+            cc.fetch_add(1, Ordering::SeqCst);
+            let mut local: usize = 0;
+            for _ in 0..5 {
+                let _ = data.draw_integer(0, 100);
+                local += 1;
+            }
+            mco.fetch_max(local, Ordering::SeqCst);
+        },
+        settings,
+        make_rng(),
+    );
+    runner.run();
+    assert!(case_count.load(Ordering::SeqCst) > 0);
+    let observed = max_observed.load(Ordering::SeqCst);
+    assert!(
+        observed <= 2,
+        "expected ≤2 draws per case under buffer_size_limit(2), got {observed}",
+    );
+}

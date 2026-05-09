@@ -2240,9 +2240,13 @@ impl NativeConjectureRunner {
             .buffer_size_limit
             .unwrap_or(CONJECTURE_BUFFER_SIZE);
         // Use a probe NTC so draws beyond the prefix use the runner's RNG.
+        // `max_extend = None` (extend="full") still respects
+        // `buffer_size_limit` as the choice-count cap — mirrors
+        // upstream's `max_choices=BUFFER_SIZE` plumbing in
+        // `engine.py::test_function`.
         let max_size = match max_extend {
             Some(ext) => choices.len() + ext,
-            None => CONJECTURE_BUFFER_SIZE,
+            None => buffer_size_limit,
         };
         let probe_rng = SmallRng::seed_from_u64(self.rng.random::<u64>());
         let ntc = NativeTestCase::for_probe(choices, probe_rng, max_size);
@@ -2878,7 +2882,7 @@ impl NativeConjectureRunner {
 
         // One-shot "all simplest" probe.
         if self.should_generate_more(do_shrink) && !self.tree_root.is_exhausted {
-            let ntc = NativeTestCase::for_simplest(CONJECTURE_BUFFER_SIZE);
+            let ntc = NativeTestCase::for_simplest(buffer_size_limit);
             let probe_start = std::time::Instant::now();
             let (status, nodes, origin, target_obs, tags, kill_depths, spans) =
                 run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
@@ -2954,7 +2958,7 @@ impl NativeConjectureRunner {
 
             let mut batch_rng = SmallRng::from_rng(&mut self.rng);
             let prefix = generate_novel_prefix(&self.tree_root, &mut batch_rng);
-            let ntc = NativeTestCase::for_probe(&prefix, batch_rng, CONJECTURE_BUFFER_SIZE);
+            let ntc = NativeTestCase::for_probe(&prefix, batch_rng, buffer_size_limit);
             let tc_start = std::time::Instant::now();
             let (status, nodes, origin, target_obs, tags, kill_depths, spans) =
                 run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
