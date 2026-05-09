@@ -39,7 +39,7 @@ use crate::native::cache::LRUCache;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Span, Status};
 use crate::native::database::ExampleDatabase;
 use crate::native::datatree::compute_max_children;
-use crate::native::shrinker::Shrinker;
+use crate::native::shrinker::{ShrinkRun, Shrinker};
 use crate::runner::Phase;
 
 /// Re-export of [`crate::native::database::serialize_choices`] under
@@ -866,21 +866,42 @@ impl NativeShrinker {
             s.has_discards = has_discards;
         }
 
-        let test_fn = Box::new(move |candidate: &[ChoiceNode]| {
-            let values: Vec<ChoiceValue> = candidate.iter().map(|n| n.value.clone()).collect();
-            let ntc = NativeTestCase::for_choices(&values, Some(candidate), None);
-            let (is_interesting, nodes, spans, has_discards) =
-                run_shrinker_user_fn(&mut user_fn, ntc);
-            if is_interesting {
-                let mut s = snapshot_clone.borrow_mut();
-                s.spans = spans;
-                s.has_discards = has_discards;
-            }
-            (is_interesting, nodes)
-        });
+        // Use `with_probe` so `mutate_and_shrink` can issue
+        // `ShrinkRun::Probe` requests. Without it the probe variant gets
+        // swallowed and mutation-based shrinking is silently disabled —
+        // matching the live `NativeTestRunner` (test_runner.rs:391) which
+        // already does this. The two ShrinkRun variants need different
+        // `NativeTestCase` constructions: full sequences via
+        // `for_choices`, partial prefixes via `for_probe`.
+        let test_fn: Box<crate::native::shrinker::TestFn<'static>> =
+            Box::new(move |req: ShrinkRun| {
+                let ntc = match req {
+                    ShrinkRun::Full(candidate) => {
+                        let values: Vec<ChoiceValue> =
+                            candidate.iter().map(|n| n.value.clone()).collect();
+                        NativeTestCase::for_choices(&values, Some(candidate), None)
+                    }
+                    ShrinkRun::Probe {
+                        prefix,
+                        seed,
+                        max_size,
+                    } => {
+                        let rng = SmallRng::seed_from_u64(seed);
+                        NativeTestCase::for_probe(prefix, rng, max_size)
+                    }
+                };
+                let (is_interesting, nodes, spans, has_discards) =
+                    run_shrinker_user_fn(&mut user_fn, ntc);
+                if is_interesting {
+                    let mut s = snapshot_clone.borrow_mut();
+                    s.spans = spans;
+                    s.has_discards = has_discards;
+                }
+                (is_interesting, nodes)
+            });
 
         NativeShrinker {
-            inner: Shrinker::new(test_fn, initial_nodes),
+            inner: Shrinker::with_probe(test_fn, initial_nodes),
             span_snapshot: snapshot,
         }
     }
@@ -1913,13 +1934,29 @@ impl NativeConjectureRunner {
             let call_count = &mut self.call_count;
             let report_multiple_bugs = self.settings.report_multiple_bugs;
             let target = origin.clone();
+            // Use `with_probe` so `mutate_and_shrink` actually runs
+            // (mirrors test_runner.rs:391). With `Shrinker::new` the
+            // probe variant is silently dropped and mutation-based
+            // shrinking is disabled.
             let (shrunk, improvements, downgraded) = {
-                let mut shrinker = Shrinker::new(
-                    Box::new(|candidate: &[ChoiceNode]| {
+                let mut shrinker = Shrinker::with_probe(
+                    Box::new(|req: ShrinkRun| {
                         *call_count += 1;
-                        let choices: Vec<ChoiceValue> =
-                            candidate.iter().map(|n| n.value.clone()).collect();
-                        let ntc = NativeTestCase::for_choices(&choices, Some(candidate), None);
+                        let ntc = match req {
+                            ShrinkRun::Full(candidate) => {
+                                let choices: Vec<ChoiceValue> =
+                                    candidate.iter().map(|n| n.value.clone()).collect();
+                                NativeTestCase::for_choices(&choices, Some(candidate), None)
+                            }
+                            ShrinkRun::Probe {
+                                prefix,
+                                seed,
+                                max_size,
+                            } => {
+                                let rng = SmallRng::seed_from_u64(seed);
+                                NativeTestCase::for_probe(prefix, rng, max_size)
+                            }
+                        };
                         let (status, actual_nodes, found_origin, _target_obs, _tags, _kill_depths) =
                             run_test_fn(test_fn, ntc, buffer_size_limit);
                         // Mirrors `engine.py`'s per-target predicate

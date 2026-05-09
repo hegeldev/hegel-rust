@@ -323,6 +323,66 @@ fn run_shrinker_user_fn_arbitrary_panic_returns_interesting() {
     assert!(interesting);
 }
 
+// ── NativeShrinker::from_choices forwards Probe to user_fn ─────────────────
+//
+// `mutate_and_shrink` (the last shrink pass) issues `ShrinkRun::Probe`
+// requests. With `Shrinker::new`, those are silently dropped — the
+// closure converts Probe → `(false, vec![])`. With `Shrinker::with_probe`
+// (the post-S5 wiring), Probe is forwarded to `user_fn` via a
+// `for_probe`-built `NativeTestCase`. This test pins the wiring by
+// counting user_fn invocations during shrinking and asserting the
+// shrinker invokes `user_fn` more times than the bare deterministic
+// passes alone would, which only happens if probes are being forwarded.
+#[test]
+fn native_shrinker_from_choices_forwards_probe() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // A test that's only "interesting" when *any* boolean is true. The
+    // initial choice sequence sets several booleans to true so every
+    // probe (with random extension of the prefix) has a high chance of
+    // staying interesting — `mutate_and_shrink` will repeatedly invoke
+    // `user_fn` via Probe to explore continuations.
+    let initial: Vec<ChoiceValue> = vec![
+        ChoiceValue::Boolean(true),
+        ChoiceValue::Boolean(true),
+        ChoiceValue::Boolean(true),
+    ];
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_clone = Arc::clone(&calls);
+    let mut shrinker = NativeShrinker::from_choices(initial, move |data| {
+        calls_clone.fetch_add(1, Ordering::SeqCst);
+        let mut any_true = false;
+        for _ in 0..3 {
+            if data.draw_boolean(0.5) {
+                any_true = true;
+            }
+        }
+        if any_true {
+            data.mark_interesting(interesting_origin(None));
+        }
+    });
+    let calls_before_shrink = calls.load(Ordering::SeqCst);
+    shrinker.shrink();
+    let calls_after_shrink = calls.load(Ordering::SeqCst);
+    let shrink_calls = calls_after_shrink - calls_before_shrink;
+
+    // Empirical thresholds: with `Shrinker::new` (probe-as-no-op), the
+    // deterministic passes alone invoke `user_fn` about 28 times for
+    // this 3-node sequence. With `Shrinker::with_probe` (post-S5),
+    // `mutate_and_shrink` adds 40+ probe-driven invocations, lifting the
+    // count to ~70. Threshold 40 cleanly separates the two states; if
+    // shrinker internals change in a way that drops this below 40,
+    // either the threshold needs revisiting *or* mutation is silently
+    // disabled again — both worth a look.
+    assert!(
+        shrink_calls > 40,
+        "expected `shrink` to forward probe requests to user_fn, but got \
+         only {shrink_calls} calls — `mutate_and_shrink` likely silently \
+         disabled (Shrinker::new vs Shrinker::with_probe)"
+    );
+}
+
 // ── ChoiceValueKey::String ────────────────────────────────────────────────
 
 #[test]
