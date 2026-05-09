@@ -16,6 +16,10 @@ When you port a behaviour, **cite the upstream file:line in a comment** so the n
 
 ## 1. Iteration protocol
 
+### General Principles
+
+**All necessary work must be tracked in this document**. If you spot something that needs to be done, you should probably just do it, but even if you think it is out of scope for your current task, it is **mandatory** to make sure that it is tracked in this document as work that needs to be done. Update this document before continuing to do anything else.
+
 ### 1.0 GREEN BASELINE FIRST — non-negotiable
 
 **Before doing anything else, run the test suite.**
