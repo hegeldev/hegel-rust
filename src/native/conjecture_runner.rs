@@ -72,19 +72,31 @@ pub use crate::native::core::{InterestingOrigin, interesting_origin};
 
 impl InterestingOrigin {
     /// Synthesise an origin from a panic payload that escaped the test
-    /// function.  Used by [`run_test_fn`] to map non-mark / non-stop
+    /// function. Used by [`run_test_fn`] to map non-mark / non-stop
     /// panics to a [`Status::Interesting`] result, mirroring the way
     /// Hypothesis records each distinct user-thrown traceback as its
-    /// own interesting example.  Two payloads with the same downcast
-    /// string (or, failing that, the same concrete type) hash to the
-    /// same origin.
-    fn from_panic_payload(payload: &(dyn Any + Send)) -> Self {
-        let label = if let Some(s) = payload.downcast_ref::<&'static str>() {
+    /// own interesting example.
+    ///
+    /// Hypothesis keys interesting origins on `(type, file, line)`, so
+    /// two `assert!` failures at different source locations produce
+    /// distinct origins even when their payloads happen to be byte-
+    /// identical (very common with `assert!(false)`, where Rust's
+    /// default panic message is the same string `"assertion failed:
+    /// false"`). We approximate that by appending the captured
+    /// `file:line:col` location — when one is available — to the panic
+    /// label. The location is captured by the cross-backend panic hook
+    /// installed via `crate::run_lifecycle::init_panic_hook`.
+    fn from_panic_payload(payload: &(dyn Any + Send), location: Option<String>) -> Self {
+        let payload_label = if let Some(s) = payload.downcast_ref::<&'static str>() {
             format!("&str:{s}")
         } else if let Some(s) = payload.downcast_ref::<String>() {
             format!("String:{s}")
         } else {
             format!("type-id:{:?}", payload.type_id())
+        };
+        let label = match location {
+            Some(loc) if !loc.is_empty() => format!("{payload_label}@{loc}"),
+            _ => payload_label,
         };
         InterestingOrigin {
             id: None,
@@ -1355,18 +1367,37 @@ fn run_test_fn(
     ntc: NativeTestCase,
     buffer_size_limit: usize,
 ) -> TestFnResult {
+    // Install the cross-backend panic hook so `LAST_PANIC_INFO` captures
+    // file:line:col for any panic raised inside `with_test_context`.
+    // Idempotent: `init_panic_hook` is gated on a `Once`. Required so
+    // `from_panic_payload` can key origins on the panic site, mirroring
+    // Hypothesis's `(type, file, line)` keying — without it, two
+    // `assert!` failures at different sites with identical payloads
+    // (very common with `assert!(false)`, default message
+    // `"assertion failed: false"`) collapse into one origin.
+    crate::run_lifecycle::init_panic_hook();
+
     let mut data = NativeConjectureData::new(ntc, buffer_size_limit);
     let my_id = data.data_id;
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        test_fn(&mut data);
-    }));
+    let result = crate::control::with_test_context(|| {
+        catch_unwind(AssertUnwindSafe(|| {
+            test_fn(&mut data);
+        }))
+    });
 
     let status = match result {
-        Ok(()) => Status::Valid,
+        Ok(()) => {
+            // Drain any leftover panic info from a prior test case so it
+            // doesn't bleed into the next one. (Inside-test panics that
+            // hit MarkPanic / StopTest also write LAST_PANIC_INFO.)
+            let _ = crate::run_lifecycle::take_panic_location();
+            Status::Valid
+        }
         Err(payload) => {
             if let Some(mp) = payload.downcast_ref::<MarkPanic>() {
                 if mp.data_id == my_id {
+                    let _ = crate::run_lifecycle::take_panic_location();
                     match &data.mark {
                         Some((MarkKind::Interesting, _)) => Status::Interesting,
                         Some((MarkKind::Invalid, _)) => Status::Invalid,
@@ -1376,13 +1407,15 @@ fn run_test_fn(
                     std::panic::resume_unwind(payload)
                 }
             } else if payload.downcast_ref::<&'static str>().copied() == Some(STOP_TEST_PANIC) {
+                let _ = crate::run_lifecycle::take_panic_location();
                 Status::EarlyStop
             } else {
                 // Arbitrary panic from user test code.  Mirror Hypothesis's
                 // behaviour of treating each distinct user exception as an
                 // interesting example with a per-traceback origin so the
                 // runner records the bug rather than aborting the whole run.
-                let origin = InterestingOrigin::from_panic_payload(payload.as_ref());
+                let location = crate::run_lifecycle::take_panic_location();
+                let origin = InterestingOrigin::from_panic_payload(payload.as_ref(), location);
                 data.mark = Some((MarkKind::Interesting, Some(origin)));
                 Status::Interesting
             }

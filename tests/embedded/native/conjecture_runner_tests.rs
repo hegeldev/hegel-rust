@@ -383,6 +383,49 @@ fn native_shrinker_from_choices_forwards_probe() {
     );
 }
 
+// ── InterestingOrigin keys on panic location, not just type ───────────────
+//
+// Pre-A5, `from_panic_payload` keyed origins on the downcast string ("&str:..."
+// or "String:...") — so two `assert!` failures at different source locations
+// with the same message would collapse into one origin in
+// `interesting_examples`. That hides distinct bugs.
+//
+// Hypothesis upstream keys interesting origins on `(type, file, line)`. We
+// approximate by appending the captured `file:line:col` location to the
+// panic label so two assertion sites with identical messages produce
+// distinct origins.
+#[test]
+fn distinct_assert_sites_produce_distinct_origins() {
+    let settings = default_settings()
+        .max_examples(50)
+        .report_multiple_bugs(true);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let v = data.draw_integer(0, 1);
+            if v == 0 {
+                assert!(false, "boom");
+            } else {
+                assert!(false, "boom");
+            }
+        },
+        settings,
+        make_rng(),
+    );
+    runner.run();
+    assert_eq!(
+        runner.interesting_examples.len(),
+        2,
+        "two distinct assert sites with the same message should produce \
+         two origins in `interesting_examples`, but got \
+         {:?}",
+        runner
+            .interesting_examples
+            .keys()
+            .map(|o| o.panic_label.as_deref().unwrap_or("<none>").to_string())
+            .collect::<Vec<_>>()
+    );
+}
+
 // ── ChoiceValueKey::String ────────────────────────────────────────────────
 
 #[test]

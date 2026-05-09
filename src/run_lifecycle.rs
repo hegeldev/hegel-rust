@@ -48,6 +48,19 @@ fn take_panic_info() -> Option<(String, String, String, Backtrace)> {
     LAST_PANIC_INFO.with(|info| info.borrow_mut().take())
 }
 
+/// Take just the captured `file:line:col` location for the most recent
+/// panic raised inside a test context, leaving the rest of
+/// `LAST_PANIC_INFO` (thread name, id, backtrace) intact for downstream
+/// consumers. Used by `NativeConjectureRunner::run_test_fn` to key
+/// `InterestingOrigin` on the panic site so two distinct `assert!` sites
+/// with the same payload string don't collapse into a single origin.
+pub(crate) fn take_panic_location() -> Option<String> {
+    LAST_PANIC_INFO.with(|info| {
+        let mut slot = info.borrow_mut();
+        slot.as_mut().map(|(_, _, location, _)| std::mem::take(location))
+    })
+}
+
 /// Install the cross-backend panic hook on first call.
 ///
 /// Idempotent across all backends: the hook captures location + backtrace
