@@ -1357,7 +1357,6 @@ pub(super) fn fnv_hex(s: &[u8]) -> String {
 ///       little-endian u32 codepoints (raw Unicode codepoints, including
 ///       surrogates — the engine's internal codepoint model preserves them;
 ///       the no-surrogate filter lives at the user-facing boundary).
-// nocov start
 pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + choices.len() * 17);
     let count = choices.len() as u32;
@@ -1394,13 +1393,11 @@ pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
     }
     buf
 }
-// nocov end
 
 /// Decode a byte slice produced by [`serialize_choices`].
 ///
 /// Returns `None` if the data is truncated, malformed, or contains an
 /// unknown type tag (defensive against filesystem corruption).
-// nocov start
 pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
     if bytes.len() < 4 {
         return None;
@@ -1481,7 +1478,6 @@ pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
     }
     Some(choices)
 }
-// nocov end
 
 #[cfg(test)]
 #[path = "../../tests/embedded/native/database_tests.rs"]

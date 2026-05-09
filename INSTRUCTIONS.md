@@ -351,7 +351,7 @@ For each: read the test, decide whether the *test* is wrong (expected message ch
 
 ### Tier C — `// nocov` masking covered code
 
-- [ ] **C1.** `src/native/database.rs:1313-1437` — `serialize_choices`/`deserialize_choices` are `// nocov` but tested. Remove nocov, lower ratchet (with permission).
+- [x] **C1.** `src/native/database.rs:1313-1437` — `serialize_choices`/`deserialize_choices` are `// nocov` but tested. Remove nocov, lower ratchet (with permission). **Nocov removed** (deleted 4 marker lines: 2 start/2 end around the two functions). The audit was correct that both functions are well-tested — `tests/embedded/native/database_tests.rs` has ≥10 tests calling each. Naive nocov-line count in `src/` dropped from 3306 to 3190 (a 116-line reduction matching the two blocks' interior). **Ratchet not lowered** — the audit's "(with permission)" qualifier suggests the human owner needs to sign off on tightening the budget; captured as Q1 in §8 Open Questions. Native suite remains green (335 integration + 880 lib tests).
 - [ ] **C2.** `src/native/re/parser.rs:1565-1595` — `parse_pattern` is the public entry point; nocov is wrong. Remove.
 - [ ] **C3.** `src/native/re/parser.rs:860-1395, 775-857, 606-746, 494-596, 266-289, 190-214, 408-419, 153-157, 476-489, 311-358, 366-371, 381-397, 121-131, 226-241` — entire parser pipeline. Remove nocov for any range that has direct test coverage; add tests where coverage is genuinely missing.
 - [ ] **C4.** `src/native/database.rs` — `save`/`move_value`/watcher methods are nocov but tested by `test_database_*`. Remove (subject to S6 — if database is being deleted entirely, this collapses into that).
@@ -421,7 +421,7 @@ These were on the original audit list but the user (DRMacIver) has decided they 
 
 Use this section when you genuinely need a human decision and cannot proceed. Each entry: question, what you tried, what you'd do if forced to pick. Do not block the loop on a question — work on a different item until the question is answered.
 
-- (none yet)
+- **Q1 (C1).** Permission to lower `.github/coverage-ratchet.json`'s `nocov` value? After C1 removed two `// nocov start/end` blocks around `serialize_choices` / `deserialize_choices` (~116 lines of formerly-excluded coverage), the actual nocov line count in `src/` dropped from 3306 to 3190. The ratchet is at 3962 (~772-line buffer). The audit recommends "lower ratchet (with permission)"; INSTRUCTIONS §3.1 forbids raising without permission but doesn't explicitly cover lowering. Lowering would tighten the budget so future commits can't add ~772 extra nocov lines silently. Recommended: lower to ~3200 (small headroom for the script's `cfg(windows)` exclusions). Awaiting explicit permission per the audit's wording.
 
 ## 9. Acceptance criteria — when to emit COMPLETE
 
