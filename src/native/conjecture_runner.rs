@@ -1032,6 +1032,22 @@ impl NativeShrinker {
     }
 }
 
+/// The default `phases` set for `NativeConjectureRunner` when the user
+/// hasn't explicitly chosen one — kept in sync with the codebase-wide
+/// default in `Settings::new` (`src/runner.rs:127-133`). Pre-A9 the
+/// runner fell back to the 3-phase `[Reuse, Generate, Shrink]`,
+/// silently dropping `Phase::Explicit` and `Phase::Target` from the
+/// port-test fixture's behaviour.
+pub fn default_phases() -> Vec<Phase> {
+    vec![
+        Phase::Explicit,
+        Phase::Reuse,
+        Phase::Generate,
+        Phase::Target,
+        Phase::Shrink,
+    ]
+}
+
 type RunnerTestFn = Box<dyn FnMut(&mut NativeConjectureData)>;
 type TestFnResult = (
     Status,
@@ -1675,7 +1691,7 @@ impl NativeConjectureRunner {
             .settings
             .phases
             .clone()
-            .unwrap_or_else(|| vec![Phase::Reuse, Phase::Generate, Phase::Shrink]);
+            .unwrap_or_else(default_phases);
         let do_reuse = phases.contains(&Phase::Reuse);
         let do_generate = phases.contains(&Phase::Generate);
         let do_shrink = phases.contains(&Phase::Shrink);
@@ -1921,7 +1937,7 @@ impl NativeConjectureRunner {
             .settings
             .phases
             .clone()
-            .unwrap_or_else(|| vec![Phase::Reuse, Phase::Generate, Phase::Shrink]);
+            .unwrap_or_else(default_phases);
         if !phases.contains(&Phase::Shrink) || self.interesting_examples.is_empty() {
             return;
         }
@@ -2340,7 +2356,7 @@ impl NativeConjectureRunner {
             .settings
             .phases
             .clone()
-            .unwrap_or_else(|| vec![Phase::Reuse, Phase::Generate, Phase::Shrink]);
+            .unwrap_or_else(default_phases);
         let factor: f64 = if phases.contains(&Phase::Generate) {
             0.1
         } else {
@@ -2801,7 +2817,7 @@ impl NativeConjectureRunner {
             .settings
             .phases
             .clone()
-            .unwrap_or_else(|| vec![Phase::Reuse, Phase::Generate, Phase::Shrink]);
+            .unwrap_or_else(default_phases);
         let do_shrink = phases.contains(&Phase::Shrink);
         let buffer_size_limit = self
             .settings

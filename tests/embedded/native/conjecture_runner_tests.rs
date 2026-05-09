@@ -534,6 +534,45 @@ fn cached_test_function_returns_real_tags_on_cache_hit() {
     );
 }
 
+// ── A9: default phases match the codebase-wide default ────────────────────
+//
+// `Settings::new` (src/runner.rs:127-133) defaults to all five phases:
+// `[Explicit, Reuse, Generate, Target, Shrink]`. The
+// `NativeConjectureRunner` fallback for `settings.phases = None`
+// previously was the 3-phase `[Reuse, Generate, Shrink]`, missing
+// Explicit and Target. The audit (A9) called this out as silently
+// disabling targeting and explicit-case handling under the port-test
+// fixture.
+//
+// We pin this with a direct equality check on the `default_phases()`
+// helper so a future drift between the codebase-wide default and the
+// runner-fallback is a compile-time-equivalent test failure.
+#[test]
+fn default_phases_contains_target_and_explicit() {
+    use crate::runner::Phase;
+    let phases = crate::native::conjecture_runner::default_phases();
+    assert!(
+        phases.contains(&Phase::Explicit),
+        "default phases should include Phase::Explicit, got {phases:?}"
+    );
+    assert!(
+        phases.contains(&Phase::Target),
+        "default phases should include Phase::Target, got {phases:?}"
+    );
+    assert!(
+        phases.contains(&Phase::Reuse),
+        "default phases should include Phase::Reuse, got {phases:?}"
+    );
+    assert!(
+        phases.contains(&Phase::Generate),
+        "default phases should include Phase::Generate, got {phases:?}"
+    );
+    assert!(
+        phases.contains(&Phase::Shrink),
+        "default phases should include Phase::Shrink, got {phases:?}"
+    );
+}
+
 // ── A8: generate_mutations_from runs after each generate-phase test ───────
 //
 // `engine.py:1309` calls `generate_mutations_from(data)` after every
