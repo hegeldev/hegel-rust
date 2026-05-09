@@ -147,3 +147,65 @@ fn generate_integer_round_trips() {
         .unwrap();
     assert_eq!(n, ciborium::Value::Integer(5.into()));
 }
+
+// ── A16: target_observation rejects non-finite scores and duplicate labels ──
+//
+// Mirror upstream `hypothesis.control.target` (`control.py:354,356,372`):
+// an `int|float` observation is checked for finiteness (`InvalidArgument`
+// on NaN/inf), and a label that already has a recorded observation
+// raises `InvalidArgument` rather than silently overwriting.  Pre-A16,
+// `NativeDataSource::target_observation` did `target_observations.insert`
+// without either guard.
+
+#[test]
+#[should_panic(expected = "finite")]
+fn target_observation_rejects_nan() {
+    let (ds, _handle) = random_source();
+    ds.target_observation(f64::NAN, "x");
+}
+
+#[test]
+#[should_panic(expected = "finite")]
+fn target_observation_rejects_positive_infinity() {
+    let (ds, _handle) = random_source();
+    ds.target_observation(f64::INFINITY, "x");
+}
+
+#[test]
+#[should_panic(expected = "finite")]
+fn target_observation_rejects_negative_infinity() {
+    let (ds, _handle) = random_source();
+    ds.target_observation(f64::NEG_INFINITY, "x");
+}
+
+#[test]
+#[should_panic(expected = "overwrite")]
+fn target_observation_rejects_duplicate_label() {
+    let (ds, _handle) = random_source();
+    ds.target_observation(1.0, "x");
+    ds.target_observation(2.0, "x");
+}
+
+#[test]
+fn target_observation_accepts_distinct_labels() {
+    let (ds, handle) = random_source();
+    ds.target_observation(1.0, "a");
+    ds.target_observation(2.0, "b");
+    let observed = NativeDataSource::take_target_observations(&handle);
+    assert_eq!(observed.get("a"), Some(&1.0));
+    assert_eq!(observed.get("b"), Some(&2.0));
+}
+
+#[test]
+fn target_observation_does_not_record_rejected_value() {
+    // After a duplicate-label rejection, the prior value must remain
+    // unchanged — the new (rejected) value must not overwrite it.
+    let (ds, handle) = random_source();
+    ds.target_observation(1.0, "x");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ds.target_observation(2.0, "x");
+    }));
+    assert!(result.is_err());
+    let observed = NativeDataSource::take_target_observations(&handle);
+    assert_eq!(observed.get("x"), Some(&1.0));
+}

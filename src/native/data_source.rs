@@ -174,11 +174,28 @@ impl DataSource for NativeDataSource {
     }
 
     fn target_observation(&self, score: f64, label: &str) {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .target_observations
-            .insert(label.to_string(), score);
+        // Mirror `hypothesis.control.target` (`control.py:354-356,372-376`):
+        // observations must be finite and each label may be observed at
+        // most once per test case.  Pre-A16 we silently accepted both —
+        // a NaN observation poisoned the targeting search, and a duplicate
+        // label silently overwrote the earlier value (so a single test
+        // case could lose information about which `target()` call ran
+        // first).  Both are now hard errors so the user notices the bug.
+        if !score.is_finite() {
+            panic!(
+                "tc.target({score}, label={label:?}) requires a finite score; \
+                 got non-finite value"
+            );
+        }
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(prev) = inner.target_observations.get(label) {
+            panic!(
+                "tc.target({score}, label={label:?}) would overwrite \
+                 previous tc.target({prev}, label={label:?}); \
+                 each label can be observed at most once per test case"
+            );
+        }
+        inner.target_observations.insert(label.to_string(), score);
     }
 
     fn mark_complete(&self, _status: &str, _origin: Option<&str>) {
