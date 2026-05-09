@@ -79,7 +79,9 @@ fn encode_string(s: String) -> Value {
 
 /// `date` schema → YYYY-MM-DD.
 ///
-/// Year in [1970, 2100], month in [1, 12], day in [1, 28] (28 is valid for all months).
+/// Year in [1970, 2100], month in [1, 12], day in [1, days_in_month(year, month)].
+/// Every valid Gregorian date in that range is reachable, including Feb 29
+/// in leap years and the 31st of months with 31 days.
 ///
 /// The year is drawn as `2000 + offset` so that shrinking pulls offset toward
 /// zero — yielding 2000-01-01 as the minimal date. This matches Hypothesis's
@@ -89,8 +91,25 @@ pub(super) fn interpret_date(ntc: &mut NativeTestCase) -> Result<Value, StopTest
     let year_offset = ntc.draw_integer(1970 - 2000, 2100 - 2000)?;
     let year = 2000 + year_offset;
     let month = ntc.draw_integer(1, 12)?;
-    let day = ntc.draw_integer(1, 28)?;
+    let day = ntc.draw_integer(1, days_in_month(year, month) as i128)?;
     Ok(encode_string(format!("{year:04}-{month:02}-{day:02}")))
+}
+
+/// Days in the given month of the Gregorian `year`. Months 4/6/9/11 have
+/// 30; February has 28 (29 if leap); the rest have 31. Leap years are
+/// `year % 4 == 0` except `year % 100 == 0 && year % 400 != 0`.
+fn days_in_month(year: i128, month: i128) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            let is_leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+            if is_leap { 29 } else { 28 }
+        }
+        // `month` is drawn from [1, 12] in the only callers, so other
+        // values cannot occur.
+        _ => unreachable!("days_in_month: month {} out of range 1..=12", month),
+    }
 }
 
 /// `time` schema → HH:MM:SS.
@@ -109,12 +128,14 @@ pub(super) fn interpret_time(ntc: &mut NativeTestCase) -> Result<Value, StopTest
 
 /// `datetime` schema → YYYY-MM-DDTHH:MM:SS.
 ///
-/// Year is anchored at 2000 (see `interpret_date` for rationale).
+/// Year is anchored at 2000 (see `interpret_date` for rationale). Day is
+/// constrained to a valid Gregorian day for the drawn (year, month) so
+/// every date in the range is reachable, including Feb 29 in leap years.
 pub(super) fn interpret_datetime(ntc: &mut NativeTestCase) -> Result<Value, StopTest> {
     let year_offset = ntc.draw_integer(1970 - 2000, 2100 - 2000)?;
     let year = 2000 + year_offset;
     let month = ntc.draw_integer(1, 12)?;
-    let day = ntc.draw_integer(1, 28)?;
+    let day = ntc.draw_integer(1, days_in_month(year, month) as i128)?;
     let hour = ntc.draw_integer(0, 23)?;
     let minute = ntc.draw_integer(0, 59)?;
     let second = ntc.draw_integer(0, 59)?;

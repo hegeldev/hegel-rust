@@ -26,19 +26,154 @@ fn decode_tagged(value: &Value) -> String {
 
 // ── interpret_date ─────────────────────────────────────────────────────────
 
+/// Days in `month` of the Gregorian `year`, accounting for leap years.
+/// Used by the date-coverage tests below to verify generated dates are
+/// always valid (no Feb 30, no Apr 31, etc.).
+fn days_in_month(year: i64, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            let is_leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+            if is_leap { 29 } else { 28 }
+        }
+        _ => unreachable!("month {} out of range 1..=12", month),
+    }
+}
+
+fn parse_date(s: &str) -> (i64, u32, u32) {
+    let parts: Vec<&str> = s.split('-').collect();
+    assert_eq!(parts.len(), 3, "bad date format: {s:?}");
+    (
+        parts[0].parse().unwrap(),
+        parts[1].parse().unwrap(),
+        parts[2].parse().unwrap(),
+    )
+}
+
 #[test]
 fn interpret_date_produces_yyyy_mm_dd() {
     let mut ntc = fresh_ntc();
     let s = decode_tagged(&interpret_date(&mut ntc).ok().unwrap());
     assert_eq!(s.len(), 10);
-    let parts: Vec<&str> = s.split('-').collect();
-    assert_eq!(parts.len(), 3);
-    let year: u32 = parts[0].parse().unwrap();
-    let month: u32 = parts[1].parse().unwrap();
-    let day: u32 = parts[2].parse().unwrap();
+    let (year, month, day) = parse_date(&s);
     assert!((1970..=2100).contains(&year));
     assert!((1..=12).contains(&month));
-    assert!((1..=28).contains(&day));
+    assert!((1..=31).contains(&day));
+    assert!(
+        day <= days_in_month(year, month),
+        "invalid Gregorian date: {s:?} (month has {} days)",
+        days_in_month(year, month)
+    );
+}
+
+/// `interpret_date` must produce every valid Gregorian date. Pre-A4 it
+/// hard-coded `day ∈ [1, 28]` so Feb 29, day 30, and day 31 were all
+/// unreachable. Run 2000 seeded draws and assert:
+///   - all 12 months appear
+///   - day 31 appears (only valid for Jan/Mar/May/Jul/Aug/Oct/Dec)
+///   - day 30 appears (valid for everything except Feb)
+///   - every drawn date is a valid Gregorian date.
+///
+/// (Feb 29 reachability is tested separately and deterministically —
+/// the joint probability of `month=2 ∧ year is leap ∧ day=29` is too
+/// low to land reliably in random seeds.)
+#[test]
+fn interpret_date_full_calendar_coverage() {
+    let mut months_seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut saw_day_30 = false;
+    let mut saw_day_31 = false;
+    for seed in 0u64..2000 {
+        let mut ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
+        let s = decode_tagged(&interpret_date(&mut ntc).ok().unwrap());
+        let (year, month, day) = parse_date(&s);
+        assert!(
+            day <= days_in_month(year, month),
+            "{s:?} is not a valid Gregorian date"
+        );
+        months_seen.insert(month);
+        if day == 30 {
+            saw_day_30 = true;
+        }
+        if day == 31 {
+            saw_day_31 = true;
+        }
+    }
+    assert_eq!(
+        months_seen.len(),
+        12,
+        "expected all 12 months in 2000 draws, got {months_seen:?}"
+    );
+    assert!(saw_day_30, "expected day 30 to appear in 2000 draws");
+    assert!(saw_day_31, "expected day 31 to appear in 2000 draws");
+}
+
+/// Feb 29 must be reachable in leap years. Force the choice sequence:
+/// year offset 0 → year=2000 (a leap year), month=2, day=29.
+#[test]
+fn interpret_date_can_produce_feb_29_in_leap_year() {
+    let mut ntc = NativeTestCase::for_choices(
+        &[
+            ChoiceValue::Integer(0),  // year offset = 0 → year = 2000 (leap)
+            ChoiceValue::Integer(2),  // month = 2
+            ChoiceValue::Integer(29), // day = 29 — only valid because feb-leap
+        ],
+        None,
+        None,
+    );
+    let s = decode_tagged(&interpret_date(&mut ntc).ok().unwrap());
+    assert_eq!(s, "2000-02-29");
+}
+
+/// Feb 29 must NOT be drawable in non-leap years. Force year=2001 (not
+/// leap), month=2; the day-draw bound should be 28, so any choice value
+/// of 29 is rejected by the integer bounds. We replay with `day=29`
+/// (intentionally out of range) and check the result respects the
+/// 28-day cap.
+#[test]
+fn interpret_date_rejects_feb_29_in_non_leap_year() {
+    let mut ntc = NativeTestCase::for_choices(
+        &[
+            ChoiceValue::Integer(1),  // year offset = 1 → year = 2001 (not leap)
+            ChoiceValue::Integer(2),  // month = 2
+            ChoiceValue::Integer(29), // day = 29 — out of bounds for non-leap Feb
+        ],
+        None,
+        None,
+    );
+    let s = decode_tagged(&interpret_date(&mut ntc).ok().unwrap());
+    let (_, month, day) = parse_date(&s);
+    assert_eq!(month, 2);
+    assert!(
+        day <= 28,
+        "non-leap Feb should cap day at 28, got {day} in {s:?}"
+    );
+}
+
+#[test]
+fn interpret_datetime_full_calendar_coverage() {
+    let mut months_seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut saw_day_31 = false;
+    for seed in 0u64..1000 {
+        let mut ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
+        let s = decode_tagged(&interpret_datetime(&mut ntc).ok().unwrap());
+        let (date, _time) = s.split_once('T').unwrap();
+        let (year, month, day) = parse_date(date);
+        assert!(
+            day <= days_in_month(year, month),
+            "{s:?} contains invalid date {date}"
+        );
+        months_seen.insert(month);
+        if day == 31 {
+            saw_day_31 = true;
+        }
+    }
+    assert_eq!(
+        months_seen.len(),
+        12,
+        "expected all 12 months in 1000 draws, got {months_seen:?}"
+    );
+    assert!(saw_day_31, "expected day 31 to appear in 1000 datetime draws");
 }
 
 // ── interpret_time ─────────────────────────────────────────────────────────
