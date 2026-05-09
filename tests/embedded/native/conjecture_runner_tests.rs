@@ -864,6 +864,60 @@ fn native_shrinker_shrink_and_current_nodes() {
     }
 }
 
+// ── A20b: pass_to_descendant replaces a span with a same-label descendant ──
+//
+// Mirrors `shrinker.py:892 pass_to_descendant`.  The body recurses through
+// `start_span(7)` calls and a "keep recursing?" integer at each level; the
+// span tree therefore contains a chain of nested same-label spans (the
+// outer span is an ancestor of the inner ones).  Pre-A20b the pass was an
+// A20-deferred no-op, so the outer span couldn't be replaced with one of
+// its inner descendants and the choice sequence stayed full-length.
+fn body_recursive_same_label(data: &mut NativeConjectureData, depth: u32) {
+    data.start_span(7);
+    if depth > 0 {
+        let r = data.draw_integer(0, 1);
+        if r > 0 {
+            body_recursive_same_label(data, depth - 1);
+        }
+    }
+    data.stop_span();
+}
+
+#[test]
+fn fixate_shrink_passes_pass_to_descendant_replaces_with_subtree() {
+    // Initial choices: recurse three times, then stop (4 draws total, 4
+    // nested same-label spans).  After pass_to_descendant the entire span
+    // chain collapses to the innermost subtree (1 draw, the "stop" 0).
+    let choices = vec![
+        ChoiceValue::Integer(1),
+        ChoiceValue::Integer(1),
+        ChoiceValue::Integer(1),
+        ChoiceValue::Integer(0),
+    ];
+    let mut shrinker = NativeShrinker::from_choices(choices, |data: &mut NativeConjectureData| {
+        body_recursive_same_label(data, 5);
+        data.mark_interesting(interesting_origin(None));
+    });
+    shrinker.fixate_shrink_passes(&["pass_to_descendant"]);
+    let nodes = shrinker.current_nodes();
+    assert!(
+        nodes.len() < 4,
+        "pass_to_descendant should collapse the span chain; got {} nodes",
+        nodes.len(),
+    );
+    // The descendant chain has only "stop" choices for any non-leaf level
+    // and a final "stop" 0 at the deepest node — replacing the outer span
+    // with the deepest descendant must leave only 0-valued integers.
+    for (i, node) in nodes.iter().enumerate() {
+        if let ChoiceValue::Integer(v) = node.value {
+            assert_eq!(
+                v, 0,
+                "node {i} after descendant collapse should be 0, got {v}",
+            );
+        }
+    }
+}
+
 // ── A20a: try_trivial_spans replaces each span's nodes with simplest ──────
 //
 // Mirrors `shrinker.py:1571 try_trivial_spans`: pick a span, replace each

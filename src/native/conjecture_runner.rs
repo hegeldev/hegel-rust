@@ -956,6 +956,13 @@ impl NativeShrinker {
                         // no-op stub.
                         self.try_trivial_spans();
                     }
+                    "pass_to_descendant" => {
+                        // Span-aware pass: needs `span_snapshot` to find
+                        // same-label ancestor/descendant pairs.  Same
+                        // wrapper-level dispatch reasoning as
+                        // `try_trivial_spans`.
+                        self.pass_to_descendant();
+                    }
                     "lower_common_node_offset" => {
                         self.inner.lower_common_node_offset();
                     }
@@ -1009,6 +1016,83 @@ impl NativeShrinker {
                     choice_count: sp.choice_count(),
                 })
                 .collect(),
+        }
+    }
+
+    /// For each span, attempt to replace its content with the content of
+    /// one of its same-label "descendants" (a span whose range is
+    /// contained inside it). Mirrors `Shrinker.pass_to_descendant`
+    /// (`shrinker.py:892`): targets recursive strategies (e.g. tree
+    /// generators) where any subtree is a valid replacement for the
+    /// containing tree. The descendant must have strictly fewer choices
+    /// than the ancestor and must share the ancestor's label.
+    pub fn pass_to_descendant(&mut self) {
+        loop {
+            let mut made_progress = false;
+            let snapshot_spans = {
+                let s = self.span_snapshot.borrow();
+                s.spans.clone()
+            };
+            // Group spans by label, preserving the snapshot's natural
+            // sort order (spans are recorded in span-creation order,
+            // i.e., sorted by `start` ascending).
+            let mut by_label: std::collections::HashMap<String, Vec<usize>> =
+                std::collections::HashMap::new();
+            for (idx, sp) in snapshot_spans.iter().enumerate() {
+                by_label.entry(sp.label.clone()).or_default().push(idx);
+            }
+
+            'outer: for indices in by_label.values() {
+                if indices.len() < 2 {
+                    continue;
+                }
+                for ai in 0..indices.len() - 1 {
+                    let ancestor = &snapshot_spans[indices[ai]];
+                    let ac = ancestor.choice_count();
+                    if ac == 0 {
+                        continue;
+                    }
+                    // Descendants are spans whose range is strictly
+                    // inside the ancestor's range with strictly fewer
+                    // choices.  Mirrors the binary-search `hi` cutoff
+                    // upstream uses (lines 924-936).
+                    for di in (ai + 1)..indices.len() {
+                        let descendant = &snapshot_spans[indices[di]];
+                        if descendant.start >= ancestor.end {
+                            // Past the ancestor's range; further spans
+                            // can't be descendants.
+                            break;
+                        }
+                        if descendant.start < ancestor.start
+                            || descendant.end > ancestor.end
+                            || descendant.choice_count() == 0
+                            || descendant.choice_count() >= ac
+                        {
+                            continue;
+                        }
+                        let current = self.inner.current_nodes.clone();
+                        if ancestor.end > current.len() || descendant.end > current.len() {
+                            continue;
+                        }
+                        let mut attempt: Vec<ChoiceNode> = Vec::with_capacity(
+                            current.len() - ac + descendant.choice_count(),
+                        );
+                        attempt.extend_from_slice(&current[..ancestor.start]);
+                        attempt
+                            .extend_from_slice(&current[descendant.start..descendant.end]);
+                        attempt.extend_from_slice(&current[ancestor.end..]);
+                        if self.inner.consider(&attempt) {
+                            made_progress = true;
+                            // The snapshot was refreshed inside `consider`,
+                            // so restart the outer scan with the new spans.
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if !made_progress {
+                break;
+            }
         }
     }
 
