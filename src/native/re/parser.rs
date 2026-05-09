@@ -1562,7 +1562,6 @@ fn fix_flags(istext: bool, mut flags: u32) -> ParseResult<u32> {
 /// Matches the public entry point `_parser.parse(str, flags=0)`. Always
 /// treats `pattern` as a `str` pattern; bytes patterns are not produced by
 /// Hypothesis's native generator in hegel-rust.
-// nocov start
 pub fn parse_pattern(pattern: &str, flags: u32) -> ParseResult<ParsedPattern> {
     let mut source = Tokenizer::new(pattern, true)?;
     let mut state = State::new();
@@ -1592,7 +1591,6 @@ pub fn parse_pattern(pattern: &str, flags: u32) -> ParseResult<ParsedPattern> {
         group_names: state.groupdict,
     })
 }
-// nocov end
 
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/re_parser_tests.rs"]
