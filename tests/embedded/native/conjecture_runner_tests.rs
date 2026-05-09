@@ -1002,6 +1002,75 @@ fn fixate_shrink_passes_pass_to_descendant_replaces_with_subtree() {
     }
 }
 
+// ── A23: live test_runner DB replay loops through all stored values ──────
+//
+// Mirrors `test_runner.rs:128-151`: pre-A23 the live runner's DB-replay
+// phase broke on the first interesting result, leaving any subsequent
+// stored interesting examples un-replayed.  A multi-bug test that
+// previously discovered both bugs would silently lose one on the next
+// run.  Post-A23 the loop continues, accumulating each interesting
+// result via `update_interesting`.
+#[test]
+fn live_runner_db_replay_loops_through_all_stored_values() {
+    use crate::native::database::{ExampleDatabase, NativeDatabase, serialize_choices};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let temp = tempfile::TempDir::new().unwrap();
+    let db_path = temp.path().join("db");
+    std::fs::create_dir_all(&db_path).unwrap();
+    let db_str = db_path.to_str().unwrap().to_string();
+
+    // Pre-populate with two stored choice sequences: [Integer(0)] and
+    // [Integer(1)].  The body panics at distinct sites for each, so each
+    // produces a distinct `InterestingOrigin`.
+    let key = "a23_db_replay_full_loop";
+    {
+        let db = NativeDatabase::new(&db_str);
+        db.save(
+            key.as_bytes(),
+            &serialize_choices(&[ChoiceValue::Integer(0)]),
+        );
+        db.save(
+            key.as_bytes(),
+            &serialize_choices(&[ChoiceValue::Integer(1)]),
+        );
+    }
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        crate::Hegel::new(move |tc: crate::TestCase| {
+            counter_clone.fetch_add(1, Ordering::SeqCst);
+            let n: i64 = tc.draw(crate::generators::integers::<i64>().min_value(0).max_value(1));
+            if n == 0 {
+                panic!("at_A");
+            } else {
+                panic!("at_B");
+            }
+        })
+        .settings(
+            // Generate is required for `drive` to enter the runner at
+            // all (`run_lifecycle.rs:300`); excluding Shrink keeps
+            // generation from continuing past the first bug — see
+            // `should_generate_more` — so the body call count is exactly
+            // (replays + final-replays) and nothing else.
+            crate::runner::Settings::new()
+                .phases([crate::runner::Phase::Reuse, crate::runner::Phase::Generate])
+                .database(Some(db_str.clone()))
+                .derandomize(true),
+        )
+        .__database_key(key.to_string())
+        .run();
+    }));
+    // Pre-A23: 1 replay (breaks on first Interesting) + 1 final = 2 calls.
+    // Post-A23: 2 replays + 2 final-replays (one per origin) = 4 calls.
+    let n = counter.load(Ordering::SeqCst);
+    assert!(
+        n >= 4,
+        "expected ≥4 body calls (2 replays + 2 final-replays); got {n}",
+    );
+}
+
 // ── A20a: try_trivial_spans replaces each span's nodes with simplest ──────
 //
 // Mirrors `shrinker.py:1571 try_trivial_spans`: pick a span, replace each

@@ -147,11 +147,25 @@ fn run_main(
     let mut replay_aligned = false;
 
     // --- Database replay phase ---
+    //
+    // Mirrors `engine.py`'s reuse step: every stored value is replayed,
+    // not just the first interesting one.  A test that previously
+    // discovered N distinct bugs has N stored choice sequences in the
+    // DB; each must be replayed so each bug's shrunk counterexample
+    // re-surfaces in `interesting`.  Pre-A23 the loop broke on the
+    // first interesting result, silently losing the rest.
+    //
+    // `replay_aligned` tracks whether *every* interesting replay's
+    // realised choice sequence matches the stored prefix length —
+    // when true the runner can skip the shrink phase because each
+    // stored value is already minimal.  Any single divergence flips
+    // it to false so the shrinker re-runs over the full set.
     if settings.phases.contains(&Phase::Reuse) {
         if let (Some(db_ref), Some(key)) = (&db, database_key) {
             let key_bytes = key.as_bytes();
             let mut values = db_ref.fetch(key_bytes);
             values.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+            replay_aligned = !values.is_empty();
             for raw in values {
                 let Some(stored_choices) = deserialize_choices(&raw) else {
                     db_ref.delete(key_bytes, &raw);
@@ -161,12 +175,24 @@ fn run_main(
                 let run = ctx.run(ntc);
                 if run.status == Status::Interesting {
                     let origin = run.origin.unwrap_or_default();
-                    replay_aligned = run.nodes.len() == stored_choices.len();
-                    interesting.insert(origin.clone(), run.nodes);
-                    representative_origin = Some(origin);
-                    break;
+                    if run.nodes.len() != stored_choices.len() {
+                        replay_aligned = false;
+                    }
+                    if representative_origin.is_none() {
+                        representative_origin = Some(origin.clone());
+                    }
+                    update_interesting(&mut interesting, origin, run.nodes);
+                } else {
+                    // Non-interesting (or invalid) replay: the stored
+                    // value no longer reproduces the bug, drop it.
+                    db_ref.delete(key_bytes, &raw);
                 }
-                db_ref.delete(key_bytes, &raw);
+            }
+            if interesting.is_empty() {
+                // No replay survived — fall back to the pre-replay
+                // alignment state so the shrink phase decides based on
+                // generation results instead.
+                replay_aligned = false;
             }
         }
     }
