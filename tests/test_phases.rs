@@ -177,3 +177,73 @@ fn test_disabling_reuse_skips_saved_example() {
          still replayed as the first drawn value"
     );
 }
+
+// With Phase::Target excluded, the targeting hill-climber must not run.
+// `tc.target_labelled` calls still populate the per-test-case target
+// observations (the user's body decides whether to call it), but the
+// runner-side `TargetingDriver::record` should be skipped — which keeps
+// `targeting.is_empty()` true, so `maybe_optimise` short-circuits and no
+// hill-climbing happens. Without this gate, the runner would silently
+// optimise even when the user explicitly disabled the phase.
+//
+// We observe the gate via a behavioural signature: hill-climbing a
+// sum-of-bounded-integers target deterministically drives the maximum
+// observed score to its cap (n × max_value). With targeting suppressed
+// and three independent boundary-biased draws (each with ~1% chance of
+// landing on `max_value`), the joint event of all three hitting the cap
+// in the same trial has probability ≈ 1e-6 per trial — so 1000 trials
+// should not reach `3 × max_value` without hill-climb steering. Three
+// draws (rather than two) is the threshold that makes random luck
+// negligible against the boundary bias of `biased_integer_sample`.
+#[cfg(feature = "native")]
+#[test]
+fn test_disabling_target_skips_hill_climb() {
+    use std::sync::{Arc, Mutex};
+
+    fn run_collecting_max(phases: Vec<Phase>) -> u64 {
+        let max_score = Arc::new(Mutex::new(0u64));
+        let m = max_score.clone();
+        Hegel::new(move |tc: TestCase| {
+            let a: u64 = tc.draw(gs::integers::<u64>().max_value(1000));
+            let b: u64 = tc.draw(gs::integers::<u64>().max_value(1000));
+            let c: u64 = tc.draw(gs::integers::<u64>().max_value(1000));
+            let score = a + b + c;
+            tc.target(score as f64);
+            let mut g = m.lock().unwrap();
+            if score > *g {
+                *g = score;
+            }
+        })
+        .settings(
+            Settings::new()
+                .test_cases(1000)
+                .phases(phases)
+                .database(None),
+        )
+        .run();
+        let g = max_score.lock().unwrap();
+        *g
+    }
+
+    let with_target = run_collecting_max(vec![Phase::Generate, Phase::Target]);
+    let without_target = run_collecting_max(vec![Phase::Generate]);
+
+    // With targeting active, hill-climb deterministically drives the
+    // sum of bounded integers to its cap (3 × 1000 = 3000).
+    assert_eq!(
+        with_target, 3000,
+        "with Phase::Target enabled, hill-climb should drive the score \
+         to its upper bound; got max = {with_target}"
+    );
+    // Without targeting, the cap (all three draws == 1000) is reachable
+    // only by joint random luck (~1e-6 per trial); 1000 trials should
+    // not hit it. If `without_target` reaches 3000, the runner is
+    // silently steering the search even though the user disabled
+    // Phase::Target.
+    assert!(
+        without_target < 3000,
+        "with Phase::Target excluded, hill-climb should not steer the \
+         search; got max = {without_target} (extras are evidence of an \
+         ungated hill-climb)"
+    );
+}

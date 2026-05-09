@@ -127,6 +127,13 @@ fn run_main(
     let mut test_is_trivial = false;
     let mut invalid_calls: u64 = 0;
     let mut total_test_time = std::time::Duration::ZERO;
+    // `tc.target()` / `tc.target_labelled()` only steer the search when
+    // `Phase::Target` is in the active phase set, mirroring upstream
+    // (`engine.py:_run` lines 1543-1546 only invokes the targeting path
+    // when the phase is enabled). The user's test body can still call
+    // these methods unconditionally — they just become a no-op for
+    // search-steering purposes when the phase is disabled.
+    let target_phase_enabled = settings.phases.contains(&Phase::Target);
     let mut targeting = TargetingDriver::new(max_examples);
     let mut replay_aligned = false;
 
@@ -235,7 +242,9 @@ fn run_main(
             }
             if run.status >= Status::Valid {
                 valid_test_cases += 1;
-                targeting.record(&run.nodes, &run.target_observations);
+                if target_phase_enabled {
+                    targeting.record(&run.nodes, &run.target_observations);
+                }
             }
 
             if run.status == Status::Invalid {
@@ -302,19 +311,27 @@ fn run_main(
 
             // Targeting still uses the legacy single-result entry point;
             // share the representative origin's nodes so its hill-climb
-            // can find slips against that bug.
-            let mut single_result: Option<Vec<ChoiceNode>> = representative_origin
-                .as_ref()
-                .and_then(|o| interesting.get(o).cloned());
-            targeting.maybe_optimise(
-                &mut ctx,
-                &mut single_result,
-                &mut calls,
-                &mut valid_test_cases,
-                max_examples,
-            );
-            if let (Some(origin), Some(nodes)) = (representative_origin.clone(), single_result) {
-                update_interesting(&mut interesting, origin, nodes);
+            // can find slips against that bug. Skip entirely when the
+            // user disabled `Phase::Target` — record() above is already
+            // gated, so `targeting.is_empty()` would short-circuit
+            // maybe_optimise here too, but checking the phase up front
+            // makes the intent explicit and avoids paying the function-
+            // call cost.
+            if target_phase_enabled {
+                let mut single_result: Option<Vec<ChoiceNode>> = representative_origin
+                    .as_ref()
+                    .and_then(|o| interesting.get(o).cloned());
+                targeting.maybe_optimise(
+                    &mut ctx,
+                    &mut single_result,
+                    &mut calls,
+                    &mut valid_test_cases,
+                    max_examples,
+                );
+                if let (Some(origin), Some(nodes)) = (representative_origin.clone(), single_result)
+                {
+                    update_interesting(&mut interesting, origin, nodes);
+                }
             }
         }
     }
