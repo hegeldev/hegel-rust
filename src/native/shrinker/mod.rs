@@ -238,17 +238,64 @@ impl<'a> Shrinker<'a> {
     }
 
     /// Run one named shrink pass.  Used by `NativeShrinker::fixate_shrink_passes`.
-    /// Panics on unrecognised pass names.
+    ///
+    /// Accepts every pass name from upstream's `Shrinker.shrink_passes`
+    /// list (`shrinker.py:310-324`).  Implemented passes dispatch to
+    /// their concrete bodies; passes that haven't been ported yet (the
+    /// span-aware ones plus `node_program_*` and
+    /// `lower_duplicated_characters`, all tracked under A20) accept the
+    /// name silently as a no-op so a caller passing the upstream list
+    /// doesn't crash.  Unrecognised names still panic, so a typo
+    /// surfaces immediately.
     pub fn run_named_pass(&mut self, name: &str) {
+        // node_program is a parameterised pass: upstream registers
+        // `node_program_X`, `node_program_XX`, ..., `node_program_XXXXX`.
+        // Treat any "node_program_*" as an A20-deferred no-op stub.
+        if name.starts_with("node_program_") {
+            return;
+        }
         match name {
+            // ── Implemented passes ──
             "minimize_individual_choices" => {
+                // Mirrors upstream `minimize_nodes` (shrinker.py:1510),
+                // which dispatches by choice_type.  Our `zero_choices`
+                // covers the `simplest()` collapse for every kind
+                // (integer/float/boolean/bytes/string), and the
+                // type-specific shrinkers refine each kind further.
                 self.zero_choices();
                 self.binary_search_integer_towards_zero();
+                self.shrink_floats();
+                self.shrink_bytes();
+                self.shrink_strings();
             }
+            "minimize_duplicated_choices" => {
+                self.shrink_duplicates();
+            }
+            "redistribute_numeric_pairs" => {
+                self.redistribute_numeric_pairs();
+            }
+            "lower_integers_together" => {
+                self.lower_integers_together();
+            }
+
+            // ── Documented no-ops ──
             "remove_discarded" => {
-                // no-op at Shrinker level (span data needed);
+                // No-op at Shrinker level (span data needed);
                 // NativeShrinker.remove_discarded handles the actual logic.
             }
+
+            // ── A20-deferred span passes (no-op stubs) ──
+            // Each of these is a TODO under A20 in INSTRUCTIONS.md; the
+            // stubs let `fixate_shrink_passes(...)` accept the upstream
+            // pass list without crashing.  When A20 ports them, replace
+            // the no-op with the implementation.
+            "try_trivial_spans"
+            | "pass_to_descendant"
+            | "reorder_spans"
+            | "lower_duplicated_characters" => {
+                // A20: not yet ported.
+            }
+
             _ => panic!("unknown shrink pass: {name:?}"),
         }
     }

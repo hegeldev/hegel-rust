@@ -926,8 +926,20 @@ impl NativeShrinker {
     /// Run named shrink passes to fixation (loop until stable).
     /// Mirrors `Shrinker.fixate_shrink_passes(passes)`.
     ///
-    /// Pass names: `"minimize_individual_choices"`, `"lower_common_node_offset"`,
-    /// `"remove_discarded"`.
+    /// Accepts every name from upstream's `Shrinker.shrink_passes` list
+    /// (`shrinker.py:310-324`):
+    /// - **Implemented**: `minimize_individual_choices`,
+    ///   `minimize_duplicated_choices`, `redistribute_numeric_pairs`,
+    ///   `lower_integers_together`, `lower_common_node_offset`,
+    ///   `remove_discarded`.
+    /// - **A20-deferred no-op stubs**: `try_trivial_spans`,
+    ///   `pass_to_descendant`, `reorder_spans`,
+    ///   `lower_duplicated_characters`, and `node_program_<size>` for
+    ///   any `<size>`. These accept the name silently so a caller using
+    ///   the full upstream list doesn't crash; the actual shrinking
+    ///   waits on A20.
+    ///
+    /// Unrecognised names still panic.
     pub fn fixate_shrink_passes(&mut self, passes: &[&str]) {
         use crate::native::core::sort_key;
         loop {

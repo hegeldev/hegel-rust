@@ -2407,7 +2407,91 @@ fn run_named_pass_remove_discarded_is_noop() {
 fn run_named_pass_unknown_panics() {
     let nodes = vec![int_node(0, 10, 5)];
     let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
-    shrinker.run_named_pass("not_a_real_pass");
+    shrinker.run_named_pass("definitely_not_a_real_pass");
+}
+
+// ── A19: full Hypothesis pass list dispatches without panicking ──────────
+//
+// Pre-A19, `Shrinker::run_named_pass` accepted only `minimize_individual_choices`
+// and `remove_discarded`; every other upstream pass name (the full list at
+// `shrinker.py:310-324`) panicked with "unknown shrink pass". A19 wires the
+// dispatch to:
+//   - the *implemented* passes: minimize_duplicated_choices →
+//     shrink_duplicates; redistribute_numeric_pairs →
+//     redistribute_numeric_pairs; lower_integers_together →
+//     lower_integers_together. Plus the existing
+//     `minimize_individual_choices`, now also dispatching to shrink_floats /
+//     shrink_bytes / shrink_strings to match upstream's `minimize_nodes`.
+//   - the *not-yet-ported* passes (A20): try_trivial_spans,
+//     pass_to_descendant, reorder_spans, lower_duplicated_characters, and
+//     `node_program_<program>` for any size — no-op stubs for now so a
+//     caller passing the full upstream pass list doesn't crash.
+//
+// Each test below would panic on pre-A19 with "unknown shrink pass: <name>".
+
+#[test]
+fn run_named_pass_dispatches_redistribute_numeric_pairs() {
+    let nodes = vec![int_node(0, 100, 5), int_node(0, 100, 3)];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
+    shrinker.run_named_pass("redistribute_numeric_pairs");
+}
+
+#[test]
+fn run_named_pass_dispatches_minimize_duplicated_choices() {
+    let nodes = vec![int_node(0, 100, 5), int_node(0, 100, 5)];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
+    shrinker.run_named_pass("minimize_duplicated_choices");
+    // Both duplicates jointly shrunk to 0 (the simplest integer in [0, 100]).
+    let v0 = match shrinker.current_nodes[0].value {
+        ChoiceValue::Integer(v) => v,
+        _ => panic!("expected Integer"),
+    };
+    let v1 = match shrinker.current_nodes[1].value {
+        ChoiceValue::Integer(v) => v,
+        _ => panic!("expected Integer"),
+    };
+    assert_eq!((v0, v1), (0, 0));
+}
+
+#[test]
+fn run_named_pass_dispatches_lower_integers_together() {
+    let nodes = vec![int_node(0, 100, 5), int_node(0, 100, 7)];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
+    shrinker.mark_changed(0);
+    shrinker.mark_changed(1);
+    shrinker.run_named_pass("lower_integers_together");
+}
+
+#[test]
+fn run_named_pass_node_program_is_noop_a20_stub() {
+    // Upstream registers `node_program_X`, `node_program_XX`, ...,
+    // `node_program_XXXXX`. Until A20 ports the implementation, treat
+    // these as no-ops so a caller passing the upstream list doesn't crash.
+    let nodes = vec![int_node(0, 10, 5)];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
+    let before = shrinker.current_nodes.clone();
+    shrinker.run_named_pass("node_program_XXXXX");
+    shrinker.run_named_pass("node_program_X");
+    assert_eq!(shrinker.current_nodes[0].value, before[0].value);
+}
+
+#[test]
+fn run_named_pass_a20_span_passes_are_noop_stubs() {
+    // try_trivial_spans / pass_to_descendant / reorder_spans /
+    // lower_duplicated_characters: not yet ported (A20). Until then the
+    // dispatch must accept them silently rather than panic.
+    let nodes = vec![int_node(0, 10, 5)];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
+    let before = shrinker.current_nodes.clone();
+    for name in [
+        "try_trivial_spans",
+        "pass_to_descendant",
+        "reorder_spans",
+        "lower_duplicated_characters",
+    ] {
+        shrinker.run_named_pass(name);
+    }
+    assert_eq!(shrinker.current_nodes[0].value, before[0].value);
 }
 
 // ── Shrinker::lower_common_node_offset edge cases ─────────────────────────
