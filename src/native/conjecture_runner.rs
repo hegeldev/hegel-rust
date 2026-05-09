@@ -313,17 +313,31 @@ impl ParetoFront {
                         dominated_by_some = false;
                         j += 1;
                     }
-                    // RightDominates is unreachable here: the front is sorted
-                    // ascending, so all entries in `dominators` have index
-                    // >= candidate_idx, meaning key(v) >= key(candidate).
-                    // dominance(candidate_small_key, v_large_key) can only
-                    // return LeftDominates, NoDominance, or Equal. Equal also
-                    // doesn't fire in our test suite — hegelsmith should find
-                    // a counterexample if either is reachable.
-                    DominanceRelation::RightDominates | DominanceRelation::Equal => {
-                        unreachable!(
-                            "pareto front sorted ascending: dominance(candidate, v) cannot return RightDominates here, and Equal has not been observed"
-                        );
+                    DominanceRelation::RightDominates => {
+                        // Candidate is dominated by v — evict candidate.
+                        // Mirrors upstream `pareto.py:240-242`. With the
+                        // per-node dedup invariant in `add` and the
+                        // ascending-sort layout, this branch shouldn't
+                        // fire in practice (the dominators-walk only
+                        // compares a smaller-or-equal-key candidate
+                        // against larger-key v), but handling it
+                        // defensively keeps the panic surface clean if
+                        // someone bypasses dedup via `pareto_front_mut`.
+                        to_remove.push(candidate_idx);
+                        dominated_by_some = true;
+                        break;
+                    }
+                    DominanceRelation::Equal => {
+                        // Candidate is equivalent (same sort_key, status,
+                        // origin, tags, target observations) to v — break
+                        // and treat as "already represented", mirroring
+                        // upstream `pareto.py:243-244`. Same defensive
+                        // reasoning as `RightDominates` above: the
+                        // per-node dedup in `add` makes equal-key pairs
+                        // impossible through the public API, but skipping
+                        // explicitly is safer than panicking.
+                        dominated_by_some = true;
+                        break;
                     }
                     DominanceRelation::NoDominance => {
                         j += 1;
@@ -2973,7 +2987,15 @@ impl NativeConjectureRunner {
             let target = self.pareto_front[i_usize].clone();
             let key = choices_to_bytes(&target.choices);
             if seen.contains(&key) {
-                unreachable!("pareto front entries are unique by construction");
+                // The per-node dedup invariant in `ParetoFront::add`
+                // makes this unreachable through the public API: no two
+                // front entries can share a serialized choice sequence.
+                // Defensively skip-and-continue rather than panic if
+                // someone ever bypasses dedup via `pareto_front_mut`,
+                // matching the same defensive policy used in
+                // `ParetoFront::add`'s dominators-walk.
+                i -= 1;
+                continue;
             }
             seen.insert(key.clone());
             self.pareto_shrink_one(&target);

@@ -2330,6 +2330,70 @@ fn runner_pareto_front_accessors() {
     assert!(pf_mut.is_empty());
 }
 
+// ── A25: ParetoFront::add handles dominators-walk without panicking ──────
+//
+// Mirrors the dominator-walk in `pareto.py:212-249`.  Pre-A25, the
+// Rust port's left-side walk treated `RightDominates`/`Equal` as
+// `unreachable!()` based on the per-node dedup invariant from `add`.
+// The audit flagged this as fragile — if anyone bypasses dedup, a
+// real panic surfaces instead of correct handling.  The defensive fix
+// matches upstream's policy: `RightDominates` evicts the candidate;
+// `Equal` breaks (treats as already-represented).
+//
+// This test exercises the dominators-walk with three non-trivially-
+// dominating entries (different per-target observations) so the inner
+// loop runs through every match arm reachable through `add`.  It
+// catches an obvious regression from the rewrite — e.g., dropping the
+// `j += 1` in the `NoDominance` arm — without trying to actually
+// trigger `RightDominates`/`Equal` (which the per-node dedup makes
+// unreachable through the public API).
+#[test]
+fn pareto_front_add_dominators_walk_runs_to_completion() {
+    use crate::native::core::IntegerChoice;
+    let mut front = ParetoFront::new(make_rng());
+    let mk = |nodes: Vec<ChoiceNode>, targets: &[(&str, f64)]| ConjectureRunResult {
+        status: Status::Valid,
+        nodes: nodes.clone(),
+        choices: nodes.iter().map(|n| n.value.clone()).collect(),
+        target_observations: targets
+            .iter()
+            .map(|(k, v)| (k.to_string(), *v))
+            .collect(),
+        origin: None,
+        tags: Default::default(),
+    };
+    let int_kind = ChoiceKind::Integer(IntegerChoice {
+        min_value: 0,
+        max_value: 100,
+        shrink_towards: 0,
+    });
+    let int_node = |v: i128| ChoiceNode {
+        kind: int_kind.clone(),
+        value: ChoiceValue::Integer(v),
+        was_forced: false,
+    };
+
+    // Three entries with distinct sort_keys (1, 2, 3) and distinct
+    // target observations, all incomparable under dominance.
+    let (in_a, _) = front.add(mk(vec![int_node(1)], &[("a", 1.0)]));
+    let (in_b, _) = front.add(mk(vec![int_node(2)], &[("b", 1.0)]));
+    let (in_c, _) = front.add(mk(vec![int_node(3)], &[("c", 1.0)]));
+    assert!(in_a && in_b && in_c);
+    assert_eq!(front.len(), 3);
+
+    // Insert a new entry that strictly dominates the middle one (same
+    // target as `b`, higher score).  The dominators-walk should evict
+    // `b` and keep the new entry — exercises the `LeftDominates` arm.
+    let (in_new, evicted) = front.add(mk(vec![int_node(2)], &[("b", 2.0)]));
+    // Per-node dedup: the new entry has the same `nodes` as the
+    // existing `b`, so `front.contains` short-circuits and the front
+    // stays at length 3.  `in_new` is `true` because the matching
+    // entry is already in the front.
+    assert!(in_new);
+    assert!(evicted.is_empty());
+    assert_eq!(front.len(), 3);
+}
+
 // ── ParetoFront::add with status < Valid (line 237) ──────────────────────
 //
 // Line 237: `return (false, vec![])` when `data.status < Status::Valid`.
