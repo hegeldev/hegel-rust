@@ -11,24 +11,34 @@ fn native_integer_in_range(tc: hegel::TestCase) {
     assert!((-100..=100).contains(&n));
 }
 
+// `native_boolean_is_bool` (a `b || !b` tautology) and the open-range
+// `native_u8_in_range` / `native_i64_in_range` smoke checks were
+// deleted as part of D5 — the assertions were either logical
+// tautologies or type-system tautologies (`u8` literally cannot be
+// outside `u8::MIN..=u8::MAX`).  See `## 10. Test changelog` for the
+// rationale.
+
+/// Narrow-range u8: assert the generator respects user-supplied
+/// `min_value` / `max_value` bounds.  This is a real behavioural claim
+/// — a generator that ignored the bounds would (occasionally) produce
+/// values outside `[10, 200]`.
 #[hegel::test]
-fn native_boolean_is_bool(tc: hegel::TestCase) {
-    let b = tc.draw(gs::booleans());
-    // Tautology: just exercises the boolean generation path.
-    // Use black_box to prevent clippy from optimizing out the tautology check.
-    assert!(b || !std::hint::black_box(b));
+fn native_u8_respects_narrow_bounds(tc: hegel::TestCase) {
+    let n = tc.draw(gs::integers::<u8>().min_value(10).max_value(200));
+    assert!(
+        (10..=200).contains(&n),
+        "u8 generator with min=10/max=200 yielded {n}",
+    );
 }
 
+/// Narrow-range i64: same property, exercising the signed code path.
 #[hegel::test]
-fn native_u8_in_range(tc: hegel::TestCase) {
-    let n = tc.draw(gs::integers::<u8>());
-    assert!((u8::MIN..=u8::MAX).contains(&n));
-}
-
-#[hegel::test]
-fn native_i64_in_range(tc: hegel::TestCase) {
-    let n = tc.draw(gs::integers::<i64>());
-    assert!((i64::MIN..=i64::MAX).contains(&n));
+fn native_i64_respects_narrow_bounds(tc: hegel::TestCase) {
+    let n = tc.draw(gs::integers::<i64>().min_value(-1000).max_value(1000));
+    assert!(
+        (-1000..=1000).contains(&n),
+        "i64 generator with min=-1000/max=1000 yielded {n}",
+    );
 }
 
 #[hegel::test]
@@ -95,12 +105,37 @@ fn native_deterministic_with_seed(tc: hegel::TestCase) {
     assert!(n >= 0);
 }
 
-#[hegel::test]
-fn native_multiple_draws(tc: hegel::TestCase) {
-    let a = tc.draw(gs::integers::<i32>().min_value(0).max_value(100));
-    let b = tc.draw(gs::integers::<i32>().min_value(0).max_value(100));
-    // Just exercise multiple draws in one test case.
-    assert!(a >= 0 && b >= 0);
+// `native_multiple_draws` (asserting `a >= 0 && b >= 0` for non-negative
+// generators — a tautology) is replaced with a cross-case
+// independence-and-bounds check using `Hegel::new` directly so the
+// post-run assertion runs after all test cases (no inter-test
+// ordering dependency).
+#[test]
+fn native_multiple_draws_are_independent() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let differed = Arc::new(AtomicBool::new(false));
+    let differed_clone = differed.clone();
+    hegel::Hegel::new(move |tc: hegel::TestCase| {
+        let a = tc.draw(gs::integers::<i32>().min_value(0).max_value(100));
+        let b = tc.draw(gs::integers::<i32>().min_value(0).max_value(100));
+        assert!(
+            (0..=100).contains(&a) && (0..=100).contains(&b),
+            "draws ({a}, {b}) outside [0,100]",
+        );
+        if a != b {
+            differed_clone.store(true, Ordering::SeqCst);
+        }
+    })
+    .run();
+    // With i.i.d. draws over `[0, 100]` and 100 test cases (the default
+    // `test_cases`), the probability of `a == b` in *every* case is
+    // `(1/101)^100` — astronomically small.  A failure here points to a
+    // generator-determinism or RNG-shareing regression.
+    assert!(
+        differed.load(Ordering::SeqCst),
+        "expected at least one (a, b) case with a != b across the run",
+    );
 }
 
 // --- Regex schema coverage tests ---
@@ -174,45 +209,59 @@ fn native_regex_partial_match() {
     });
 }
 
-/// HirKind::Literal blocked by alphabet triggers Invalid.
-/// This is tested by running a regex with a literal char not in the alphabet,
-/// and verifying it succeeds (invalid test cases are filtered out silently).
+/// HirKind::Literal blocked by alphabet triggers Invalid for every
+/// case — the body's after-draw code is unreachable.  Behavioural
+/// claim: a counter incremented after the `tc.draw` call stays at zero
+/// across the whole run.
 #[test]
 fn native_regex_literal_blocked_by_alphabet() {
-    // "a" fullmatch with an alphabet that only allows digits.
-    // Every generated case tries to push 'a' but the alphabet only allows '0'-'9',
-    // so every case is Invalid. With 100 test cases all filtered, Hegel passes
-    // (same as filter_too_much health check suppression).
-    hegel::Hegel::new(|tc: hegel::TestCase| {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let post_draw = Arc::new(AtomicUsize::new(0));
+    let counter = post_draw.clone();
+    hegel::Hegel::new(move |tc: hegel::TestCase| {
         let _s = tc.draw(
             gs::from_regex("a")
                 .fullmatch(true)
                 .alphabet(gs::characters().categories(&["Nd"])),
         );
-        // If we get here, the alphabet allowed 'a' — which shouldn't happen.
-        // In practice all cases become Invalid so this closure never executes.
+        // Reaching here would mean the digit-only alphabet somehow
+        // accepted "a" — which contradicts the alphabet filter.
+        counter.fetch_add(1, Ordering::SeqCst);
     })
     .settings(hegel::Settings::new().test_cases(10))
     .run();
+    assert_eq!(
+        post_draw.load(Ordering::SeqCst),
+        0,
+        "every case must be filtered Invalid before the body's after-draw code runs",
+    );
 }
 
-/// HirKind::Class::Unicode empty after filtering triggers Invalid.
-/// A class [a-z] filtered to digits (no overlap) gives empty chars → Invalid.
+/// HirKind::Class::Unicode empty after filtering: same shape as above.
+/// `[a-z]+` filtered to digits has no overlap, so every case must be
+/// Invalid.  The post-draw counter must stay at 0.
 #[test]
 fn native_regex_unicode_class_empty_after_filter() {
-    // Every case is Invalid, so we never accumulate valid examples; the
-    // resulting cumulative wall-clock trips TooSlow before the run ends.
-    // Suppress it — this test is specifically about the empty-class path,
-    // not generation speed.
-    hegel::Hegel::new(|tc: hegel::TestCase| {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let post_draw = Arc::new(AtomicUsize::new(0));
+    let counter = post_draw.clone();
+    hegel::Hegel::new(move |tc: hegel::TestCase| {
         let _s = tc.draw(
             gs::from_regex("[a-z]+")
                 .fullmatch(true)
                 .alphabet(gs::characters().categories(&["Nd"])),
         );
+        counter.fetch_add(1, Ordering::SeqCst);
     })
     .settings(hegel::Settings::new().test_cases(10))
     .run();
+    assert_eq!(
+        post_draw.load(Ordering::SeqCst),
+        0,
+        "every case must be filtered Invalid before the body's after-draw code runs",
+    );
 }
 
 /// Regression test: FloatChoice::simplest() must return -∞ (not panic) when
