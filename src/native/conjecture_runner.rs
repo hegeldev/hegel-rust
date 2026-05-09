@@ -1040,6 +1040,7 @@ type TestFnResult = (
     HashMap<String, f64>,
     HashSet<u64>,
     Vec<usize>,
+    Vec<Span>,
 );
 
 /// Cached outcome of a [`NativeConjectureRunner::cached_test_function`]
@@ -1444,6 +1445,7 @@ fn run_test_fn(
         .iter()
         .filter_map(|s| if s.discarded { Some(s.end) } else { None })
         .collect();
+    let spans: Vec<Span> = data.ntc.spans.iter().cloned().collect();
     let nodes = std::mem::take(&mut data.ntc.nodes);
     (
         status,
@@ -1452,6 +1454,7 @@ fn run_test_fn(
         target_observations,
         tags,
         kill_depths,
+        spans,
     )
 }
 
@@ -1569,6 +1572,12 @@ pub struct NativeConjectureRunner {
     /// in `optimise_targets` actually fires `pareto_optimise` when
     /// per-target hill-climbing exhausts.
     pub pareto_optimise_call_count: usize,
+    /// How many `cached_test_function` probes the
+    /// `generate_mutations_from` driver has issued across the run.
+    /// Lets tests verify mutation actually fired (the audit's A8
+    /// concern: novel-prefix-only generation skips structural
+    /// exploration that mutation provides).
+    pub mutations_attempted: usize,
 }
 
 impl NativeConjectureRunner {
@@ -1605,6 +1614,7 @@ impl NativeConjectureRunner {
             best_choices_for_target: HashMap::new(),
             optimise_targets_call_count: 0,
             pareto_optimise_call_count: 0,
+            mutations_attempted: 0,
         }
     }
 
@@ -2008,8 +2018,15 @@ impl NativeConjectureRunner {
                                 NativeTestCase::for_probe(prefix, rng, max_size)
                             }
                         };
-                        let (status, actual_nodes, found_origin, _target_obs, _tags, _kill_depths) =
-                            run_test_fn(test_fn, ntc, buffer_size_limit);
+                        let (
+                            status,
+                            actual_nodes,
+                            found_origin,
+                            _target_obs,
+                            _tags,
+                            _kill_depths,
+                            _spans,
+                        ) = run_test_fn(test_fn, ntc, buffer_size_limit);
                         // Mirrors `engine.py`'s per-target predicate
                         // (`d.interesting_origin == target`): when
                         // `report_multiple_bugs` is on, slipping to a
@@ -2125,7 +2142,7 @@ impl NativeConjectureRunner {
             .buffer_size_limit
             .unwrap_or(CONJECTURE_BUFFER_SIZE);
         let ntc = NativeTestCase::for_choices(choices, None, None);
-        let (status, nodes, origin, target_observations, tags, kill_depths) =
+        let (status, nodes, origin, target_observations, tags, kill_depths, _spans) =
             run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
         self.call_count += 1;
         record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
@@ -2213,7 +2230,7 @@ impl NativeConjectureRunner {
         };
         let probe_rng = SmallRng::seed_from_u64(self.rng.random::<u64>());
         let ntc = NativeTestCase::for_probe(choices, probe_rng, max_size);
-        let (status, nodes, origin, target_observations, tags, kill_depths) =
+        let (status, nodes, origin, target_observations, tags, kill_depths, _spans) =
             run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
         self.call_count += 1;
         record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
@@ -2368,7 +2385,7 @@ impl NativeConjectureRunner {
                 continue;
             };
             let ntc = NativeTestCase::for_choices(&choices, None, None);
-            let (status, nodes, origin, _target_obs, _tags, _kill_depths) =
+            let (status, nodes, origin, _target_obs, _tags, _kill_depths, _spans) =
                 run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             self.call_count += 1;
 
@@ -2440,7 +2457,7 @@ impl NativeConjectureRunner {
                     continue;
                 };
                 let ntc = NativeTestCase::for_choices(&choices, None, None);
-                let (status, nodes, origin, target_obs, tags, _kill_depths) =
+                let (status, nodes, origin, target_obs, tags, _kill_depths, _spans) =
                     run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
                 self.call_count += 1;
                 // Check if this replayed entry is still in the pareto front.
@@ -2626,6 +2643,154 @@ impl NativeConjectureRunner {
         }
     }
 
+    /// Mutate the most recent generate-phase result by replacing one of
+    /// its same-label spans with a copy of another, then evaluating the
+    /// result through `cached_test_function`. Mirrors
+    /// `engine.py::generate_mutations_from` (engine.py:1325-1485).
+    ///
+    /// The motivation is to surface bugs that need the *same* drawn value
+    /// at multiple positions — `assert n != m` over two same-label
+    /// integer draws, recursive trees with shared structure, etc. Random
+    /// generation rarely produces those collisions; mutation does it
+    /// deliberately by copying a span's choices over another span with
+    /// the same label.
+    ///
+    /// Bounded by `call_count <= initial_calls + 5` and
+    /// `failed_mutations <= 5` per call site, matching upstream's
+    /// "fairly conservative" probe budget. Runs only when
+    /// `data_status >= Status::Invalid` (skip Overrun, since OVERRUN
+    /// doesn't carry enough span information to mutate).
+    fn generate_mutations_from(
+        &mut self,
+        initial_choices: &[ChoiceValue],
+        initial_spans: &[Span],
+        initial_target_obs: &HashMap<String, f64>,
+        initial_status: Status,
+        do_shrink: bool,
+    ) {
+        // OVERRUN/EarlyStop doesn't have usable span structure.
+        if initial_status < Status::Invalid {
+            return;
+        }
+        let initial_calls = self.call_count;
+        let mut failed_mutations: usize = 0;
+        let mut data_choices: Vec<ChoiceValue> = initial_choices.to_vec();
+        let mut data_spans: Vec<Span> = initial_spans.to_vec();
+        let mut data_target_obs: HashMap<String, f64> = initial_target_obs.clone();
+        let mut data_status: Status = initial_status;
+
+        while self.should_generate_more(do_shrink)
+            && self.call_count <= initial_calls + 5
+            && failed_mutations <= 5
+        {
+            // Mutator groups: spans grouped by label, only labels with
+            // >= 2 occurrences. Mirrors `data.spans.mutator_groups`.
+            //
+            // Spans are taken from the *initial* test result and may
+            // reference positions past the current `data_choices`
+            // length if a prior mutation accepted a shorter sequence
+            // (`ConjectureRunResult` doesn't carry spans yet — see
+            // N6). Filter to spans whose `end` fits in the current
+            // length so the slice indexing below stays in bounds.
+            let n = data_choices.len();
+            let mut by_label: HashMap<&str, Vec<(usize, usize)>> = HashMap::new();
+            for span in &data_spans {
+                if span.end > n {
+                    continue;
+                }
+                by_label
+                    .entry(span.label.as_str())
+                    .or_default()
+                    .push((span.start, span.end));
+            }
+            let groups: Vec<Vec<(usize, usize)>> = by_label
+                .into_values()
+                .filter(|v| v.len() >= 2)
+                .map(|mut v| {
+                    v.sort();
+                    v
+                })
+                .collect();
+            if groups.is_empty() {
+                break;
+            }
+
+            let group = &groups[self.rng.random_range(0..groups.len())];
+            let i_a = self.rng.random_range(0..group.len());
+            let mut i_b = self.rng.random_range(0..group.len() - 1);
+            if i_b >= i_a {
+                i_b += 1;
+            }
+            let (mut start1, mut end1) = group[i_a];
+            let (mut start2, mut end2) = group[i_b];
+            if start1 > start2 {
+                std::mem::swap(&mut start1, &mut start2);
+                std::mem::swap(&mut end1, &mut end2);
+            }
+
+            // engine.py:1366-1432: when one span entirely contains the
+            // other, duplicate the parent's choices in [start1, start2].
+            // Otherwise, replace both with one's content.
+            let attempt: Vec<ChoiceValue> = if start1 <= start2 && end2 <= end1 {
+                let mut out = Vec::with_capacity(data_choices.len() + (start2 - start1));
+                out.extend_from_slice(&data_choices[..start2]);
+                out.extend_from_slice(&data_choices[start1..]);
+                out
+            } else {
+                // Random choice between the two donor spans.
+                let (donor_start, donor_end) = if self.rng.random::<bool>() {
+                    (start1, end1)
+                } else {
+                    (start2, end2)
+                };
+                let replacement: &[ChoiceValue] = &data_choices[donor_start..donor_end];
+                let mut out = Vec::new();
+                out.extend_from_slice(&data_choices[..start1]);
+                out.extend_from_slice(replacement);
+                out.extend_from_slice(&data_choices[end1..start2]);
+                out.extend_from_slice(replacement);
+                out.extend_from_slice(&data_choices[end2..]);
+                out
+            };
+
+            self.mutations_attempted += 1;
+            let new_data = self.cached_test_function(&attempt);
+
+            // engine.py:1465-1479: accept the mutated result as the new
+            // base if it's at least as good (status >=) AND a different
+            // choice sequence AND each prior target observation didn't
+            // regress. The status-improvement check is the gating
+            // signal that mutation is exploring useful territory.
+            let status_at_least = new_data.status >= data_status;
+            let different = new_data.choices != data_choices;
+            let targets_didnt_regress = data_target_obs.iter().all(|(k, &v)| {
+                new_data
+                    .target_observations
+                    .get(k)
+                    .copied()
+                    .is_some_and(|nv| nv >= v)
+            });
+            if status_at_least && different && targets_didnt_regress {
+                data_choices = new_data.choices;
+                data_target_obs = new_data.target_observations;
+                data_status = new_data.status;
+                // Keep `data_spans` pointing at the *original* test's
+                // spans rather than the new data's: `ConjectureRunResult`
+                // doesn't carry spans (the data tree doesn't reconstruct
+                // them and `cached_test_function` doesn't preserve
+                // them). Mutating against stale spans is slightly
+                // inaccurate — span boundaries on the new sequence may
+                // not exactly line up with the old — but it keeps the
+                // probe budget exercised; tracked under N6 for a
+                // proper fix that plumbs spans through
+                // `ConjectureRunResult`.
+                failed_mutations = 0;
+            } else {
+                failed_mutations += 1;
+            }
+        }
+    }
+
     /// Generate new test examples (generation phase).  Mirrors the
     /// generation loop from `engine.py::generate_new_examples`.
     /// Extracted so it can be called independently (e.g. by tests that
@@ -2666,12 +2831,24 @@ impl NativeConjectureRunner {
         if self.should_generate_more(do_shrink) && !self.tree_root.is_exhausted {
             let ntc = NativeTestCase::for_simplest(CONJECTURE_BUFFER_SIZE);
             let probe_start = std::time::Instant::now();
-            let (status, nodes, origin, target_obs, tags, kill_depths) =
+            let (status, nodes, origin, target_obs, tags, kill_depths, spans) =
                 run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             let probe_elapsed = probe_start.elapsed();
             self.call_count += 1;
             record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
+            // Snapshot what `generate_mutations_from` needs *before* moving
+            // `nodes` / `target_obs` / `tags` into `record_test_result`.
+            let mutation_choices: Vec<ChoiceValue> =
+                nodes.iter().map(|n| n.value.clone()).collect();
+            let mutation_target_obs = target_obs.clone();
             self.record_test_result(status, nodes, origin, target_obs, tags);
+            self.generate_mutations_from(
+                &mutation_choices,
+                &spans,
+                &mutation_target_obs,
+                status,
+                do_shrink,
+            );
 
             // LargeBaseExample: the simplest possible input already overruns
             // the byte budget.  Mirrors `engine.py` lines 1163-1187.
@@ -2730,12 +2907,22 @@ impl NativeConjectureRunner {
             let prefix = generate_novel_prefix(&self.tree_root, &mut batch_rng);
             let ntc = NativeTestCase::for_probe(&prefix, batch_rng, CONJECTURE_BUFFER_SIZE);
             let tc_start = std::time::Instant::now();
-            let (status, nodes, origin, target_obs, tags, kill_depths) =
+            let (status, nodes, origin, target_obs, tags, kill_depths, spans) =
                 run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             let tc_elapsed = tc_start.elapsed();
             self.call_count += 1;
             record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
+            let mutation_choices: Vec<ChoiceValue> =
+                nodes.iter().map(|n| n.value.clone()).collect();
+            let mutation_target_obs = target_obs.clone();
             self.record_test_result(status, nodes, origin, target_obs, tags);
+            self.generate_mutations_from(
+                &mutation_choices,
+                &spans,
+                &mutation_target_obs,
+                status,
+                do_shrink,
+            );
 
             // Update health-check window and fire any triggered checks.
             // Once an interesting example is found (bug detected), the window

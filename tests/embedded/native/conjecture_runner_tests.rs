@@ -534,6 +534,52 @@ fn cached_test_function_returns_real_tags_on_cache_hit() {
     );
 }
 
+// ── A8: generate_mutations_from runs after each generate-phase test ───────
+//
+// `engine.py:1309` calls `generate_mutations_from(data)` after every
+// `test_function(data)` call in the generate loop. The native port was
+// missing this step entirely — generation was novel-prefix only, with
+// no mutation. Adding it gives the runner the same "duplicate matching
+// spans" exploration upstream uses to find structural-coverage bugs
+// like `assert n != m` in two same-label draws.
+//
+// `mutations_attempted` is the direct instrumentation: it bumps once
+// per `cached_test_function` probe inside `generate_mutations_from`.
+// Without the wiring, it stays at 0 across a whole run.
+#[test]
+fn generate_new_examples_runs_mutation_after_each_test() {
+    let settings = NativeRunnerSettings::new()
+        .max_examples(10)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            // Two same-label spans → `mutator_groups` finds a group of
+            // size ≥ 2, so mutation has something to do.
+            data.start_span(0xABC);
+            let _ = data.draw_integer(0, 100);
+            data.stop_span();
+            data.start_span(0xABC);
+            let _ = data.draw_integer(0, 100);
+            data.stop_span();
+        },
+        settings,
+        make_rng(),
+    );
+    runner.run();
+    assert!(
+        runner.mutations_attempted > 0,
+        "expected `generate_mutations_from` to fire at least one \
+         `cached_test_function` probe across the generate phase; \
+         got mutations_attempted = 0 (the audit's A8 concern: \
+         generate-phase mutation wasn't wired in)"
+    );
+}
+
 // ── ChoiceValueKey::String ────────────────────────────────────────────────
 
 #[test]
