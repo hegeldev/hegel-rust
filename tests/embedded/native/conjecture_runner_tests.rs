@@ -4059,6 +4059,72 @@ fn runner_reuse_pareto_corpus_shuffles_when_too_large() {
     assert!(runner.call_count >= 1);
 }
 
+// ── A17: try_replace_for_target accepts lateral moves on a plateau ───────
+//
+// Mirrors `optimiser.py::Optimiser.consider_new_data` (lines 65-82): a
+// score tie commits the new state iff the node count doesn't grow.
+// Without this guard, the conjecture-runner optimiser gets stuck on any
+// plateau (every probe is a tie and gets rejected), so
+// `best_choices_for_target` never advances past the seed.
+//
+// The setup here uses a 0..=10 integer range with the seed at the *upper*
+// bound (10) so that the +1 direction immediately fails `kind.validate`
+// and the -1 direction's linear scan walks the climber past the seed
+// without the binary-search phase being able to return to it (the binary
+// only narrows between the last-accepted delta and the first-rejected
+// one, so a one-shot small-range descent terminates at the lower bound).
+// Pre-A17 every -1 probe was a tie and got rejected; the climber never
+// moved.
+#[test]
+fn optimise_targets_accepts_lateral_moves_on_plateau() {
+    let settings = NativeRunnerSettings::new()
+        .max_examples(500)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            // Body draws an integer but always reports the same score —
+            // every probe is a tie at 50.0.  Pre-A17 the climber sees no
+            // strict improvement and stays at the seed; post-A17 the
+            // lateral-move acceptance lets it walk the plateau.
+            let _v = data.draw_integer(0, 10);
+            data.target_observations
+                .insert("score".to_string(), 50.0);
+        },
+        settings,
+        make_rng(),
+    );
+    let seed_choices = vec![ChoiceValue::Integer(10)];
+    runner.cached_test_function(&seed_choices);
+    assert_eq!(
+        runner
+            .best_choices_for_target
+            .get("score")
+            .map(|v| v.as_slice()),
+        Some(seed_choices.as_slice()),
+        "seed run should populate best_choices_for_target with the seed"
+    );
+    runner.optimise_targets();
+    let after = runner
+        .best_choices_for_target
+        .get("score")
+        .cloned()
+        .unwrap();
+    assert_ne!(
+        after, seed_choices,
+        "lateral moves must let the climber leave the seed on a constant-score plateau"
+    );
+    // Score never rose above the seed's 50.0 (every probe ties).
+    assert_eq!(
+        runner.best_observed_targets.get("score").copied(),
+        Some(50.0)
+    );
+}
+
 // ── cached_test_function_with_extend: cached EarlyStop bypass (line 2099) ──
 //
 // Line 2099 fires when: cache has an EarlyStop result for these choices AND

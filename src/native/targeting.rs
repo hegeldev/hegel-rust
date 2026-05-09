@@ -356,8 +356,13 @@ fn find_integer(
 }
 
 /// Replace `current_choices[idx]` with `current + delta`, bounds-check, and
-/// run the trial. On a strict score improvement, commit the new state and
-/// bump `improvements`. Returns `true` iff the trial improved the score.
+/// run the trial. Mirrors `optimiser.py::Optimiser.consider_new_data`
+/// (lines 65-82): a strict score improvement commits the new state and
+/// bumps `improvements`; a tie commits iff the new node count doesn't
+/// grow but does *not* count as an improvement (lateral moves are the
+/// principal mechanism for escaping local maxima, but they shouldn't
+/// keep the climber spinning forever). Returns `true` iff the trial was
+/// committed.
 #[allow(clippy::too_many_arguments)]
 fn try_replace(
     runner: &mut dyn NativeRunner,
@@ -394,13 +399,19 @@ fn try_replace(
         return false;
     }
     let new_score = *observations.get(target).unwrap_or(&f64::NEG_INFINITY);
-    if new_score <= *current_score {
+    if new_score < *current_score {
+        return false;
+    }
+    let strict = new_score > *current_score;
+    if !strict && nodes.len() > current_nodes.len() {
         return false;
     }
     *current_score = new_score;
     *current_choices = nodes.iter().map(|n| n.value.clone()).collect();
     *current_nodes = nodes;
-    *improvements += 1;
+    if strict {
+        *improvements += 1;
+    }
     true
 }
 

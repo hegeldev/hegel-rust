@@ -3250,9 +3250,13 @@ impl NativeConjectureRunner {
     }
 
     /// Replace the integer at `current_choices[idx]` with `current + delta`,
-    /// bounds-checking and running the trial. Commits to the current state and
-    /// bumps `improvements` iff the trial yields a strictly higher target
-    /// score. Returns true iff the trial was a strict improvement.
+    /// bounds-checking and running the trial. Mirrors
+    /// `optimiser.py::Optimiser.consider_new_data` (lines 65-82): a strict
+    /// score improvement commits the new state and bumps `improvements`; a
+    /// tie commits iff the new node count doesn't grow but does *not* count
+    /// as an improvement (so lateral moves can let the climber escape a
+    /// plateau without keeping it spinning forever). Returns `true` iff the
+    /// trial was committed.
     #[allow(clippy::too_many_arguments)]
     fn try_replace_for_target(
         &mut self,
@@ -3286,17 +3290,30 @@ impl NativeConjectureRunner {
             .target_observations
             .get(target)
             .unwrap_or(&f64::NEG_INFINITY);
-        if new_score <= *current_score {
+        if new_score < *current_score {
+            return false;
+        }
+        let strict = new_score > *current_score;
+        if !strict && result.nodes.len() > current_nodes.len() {
             return false;
         }
         *current_score = new_score;
         *current_choices = trial_choices;
         *current_nodes = result.nodes;
-        self.best_observed_targets
-            .insert(target.to_string(), new_score);
+        // best_observed_targets is the maximum score we've ever seen for
+        // this label, so update it only on strict improvements; the
+        // best_choices snapshot tracks current_choices regardless so the
+        // optimiser can keep climbing from wherever the lateral moves
+        // landed (matching upstream's `current_data` semantics).
+        if strict {
+            self.best_observed_targets
+                .insert(target.to_string(), new_score);
+        }
         self.best_choices_for_target
             .insert(target.to_string(), current_choices.clone());
-        *improvements += 1;
+        if strict {
+            *improvements += 1;
+        }
         true
     }
 }

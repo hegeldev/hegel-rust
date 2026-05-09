@@ -260,3 +260,128 @@ fn find_integer_max_improvements_check_in_binary_search() {
         .unwrap();
     assert!(best >= 75.0, "expected best >= 75, got {}", best);
 }
+
+// ── A17: try_replace accepts lateral moves when length does not grow ──────
+//
+// Mirrors upstream `optimiser.py::Optimiser.consider_new_data` (lines
+// 75-81): on a score tie, the new candidate is accepted iff
+// `len(data.nodes) <= len(self.current_data.nodes)`. Without this, the
+// hill-climber gets stuck on any plateau — a serious regression because
+// lateral moves are the principal mechanism for escaping local maxima.
+//
+// Pre-A17, `try_replace` rejected ties via `if new_score <= *current_score
+// { return false; }`. The fix loosens the inequality to `<` and adds a
+// length-monotone guard for the tie case, with `improvements` only
+// bumping on strict improvement (matching the upstream comment that
+// lateral moves don't count).
+#[test]
+fn try_replace_accepts_lateral_move_when_length_does_not_grow() {
+    use crate::generators as gs;
+    let mut ctf = CachedTestFunction::new(|tc: crate::TestCase| {
+        let _v: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(100));
+        // Constant score: every input ties at 50.
+        tc.target_labelled(50.0, "score");
+    });
+    let mut targeting = TargetingState::new();
+    let mut result = None;
+    let mut calls: u64 = 0;
+    let mut valid: u64 = 0;
+    let mut ctx = ctx_with_budget(&mut result, &mut calls, &mut valid, 1000, 1000);
+
+    // Bootstrap: run the seed trial so we have current_choices/nodes/score
+    // populated, mirroring the prelude inside `hill_climb`.
+    let trial = run_trial(
+        &mut ctf,
+        &mut targeting,
+        &mut ctx,
+        &[ChoiceValue::Integer(10)],
+    )
+    .unwrap();
+    let (status, nodes, observations) = trial;
+    assert_eq!(status, Status::Valid);
+    let mut current_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+    let mut current_nodes = nodes;
+    let mut current_score = *observations.get("score").unwrap();
+    let mut improvements: usize = 0;
+
+    let accepted = try_replace(
+        &mut ctf,
+        &mut targeting,
+        &mut ctx,
+        "score",
+        &mut current_choices,
+        &mut current_nodes,
+        &mut current_score,
+        &mut improvements,
+        0,
+        -1,
+    );
+    assert!(
+        accepted,
+        "lateral move with same score and same length must be accepted"
+    );
+    // current_choices reflects the trial value, current_score unchanged.
+    match current_choices[0] {
+        ChoiceValue::Integer(9) => {}
+        ref other => panic!("expected Integer(9), got {other:?}"),
+    }
+    assert_eq!(current_score, 50.0);
+    // Lateral moves don't count toward the strict-improvement budget.
+    assert_eq!(
+        improvements, 0,
+        "lateral moves must not bump the strict-improvement counter"
+    );
+}
+
+#[test]
+fn try_replace_rejects_strict_score_decrease() {
+    use crate::generators as gs;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicI64, Ordering};
+    // A body whose score equals v exactly. The seed at v=50 gives score 50;
+    // a probe at v=49 (delta=-1) gives score 49, which must be rejected.
+    let _hint = Arc::new(AtomicI64::new(0));
+    let mut ctf = CachedTestFunction::new(|tc: crate::TestCase| {
+        let v: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(100));
+        tc.target_labelled(v as f64, "score");
+    });
+    let mut targeting = TargetingState::new();
+    let mut result = None;
+    let mut calls: u64 = 0;
+    let mut valid: u64 = 0;
+    let mut ctx = ctx_with_budget(&mut result, &mut calls, &mut valid, 1000, 1000);
+
+    let trial = run_trial(
+        &mut ctf,
+        &mut targeting,
+        &mut ctx,
+        &[ChoiceValue::Integer(50)],
+    )
+    .unwrap();
+    let (_, nodes, observations) = trial;
+    let mut current_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+    let mut current_nodes = nodes;
+    let mut current_score = *observations.get("score").unwrap();
+    let mut improvements: usize = 0;
+    assert_eq!(current_score, 50.0);
+
+    let accepted = try_replace(
+        &mut ctf,
+        &mut targeting,
+        &mut ctx,
+        "score",
+        &mut current_choices,
+        &mut current_nodes,
+        &mut current_score,
+        &mut improvements,
+        0,
+        -1,
+    );
+    assert!(!accepted, "strict score decrease must be rejected");
+    match current_choices[0] {
+        ChoiceValue::Integer(50) => {}
+        ref other => panic!("expected current to remain at Integer(50), got {other:?}"),
+    }
+    assert_eq!(current_score, 50.0);
+    assert_eq!(improvements, 0);
+}
