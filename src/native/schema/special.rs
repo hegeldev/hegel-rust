@@ -18,16 +18,56 @@ fn draw_letters(ntc: &mut NativeTestCase, len: usize) -> Result<String, StopTest
     Ok(s)
 }
 
-/// Draw a short hostname label: 3–8 lowercase letters.
+/// Draw a short hostname-style letter-only label: 3–8 lowercase letters.
+/// Used by `interpret_email` / `interpret_url` whose hostnames don't go
+/// through `interpret_domain`. Switching these to the RFC-compliant
+/// `draw_dns_label` is a separate item — see A3 follow-ups.
 fn draw_label(ntc: &mut NativeTestCase) -> Result<String, StopTest> {
     let len = ntc.draw_integer(3, 8)? as usize;
     draw_letters(ntc, len)
 }
 
-/// Draw a top-level domain: 2–4 lowercase letters.
+/// Draw a top-level domain: 2–4 lowercase letters. Same caveat as
+/// [`draw_label`].
 fn draw_tld(ntc: &mut NativeTestCase) -> Result<String, StopTest> {
     let len = ntc.draw_integer(2, 4)? as usize;
     draw_letters(ntc, len)
+}
+
+/// Draw an RFC 1035-compliant domain label of the given length.
+///
+/// Per RFC 1035 §2.3.1 (relaxed by RFC 1123 §2.1):
+///   - First character: ASCII letter.
+///   - Last character (if `len > 1`): ASCII letter or digit.
+///   - Middle characters: ASCII letters, digits, or hyphens.
+///
+/// Letters dominate the boundary positions to keep generated names
+/// predominantly readable; the middle positions span the full
+/// letter/digit/hyphen alphabet so generators surface bugs in code
+/// paths that handle alphanumeric and hyphenated labels — very common
+/// in real DNS.
+fn draw_dns_label(ntc: &mut NativeTestCase, len: usize) -> Result<String, StopTest> {
+    let mut s = String::with_capacity(len);
+    // First char: letter.
+    s.push((ntc.draw_integer(0, 25)? as u8 + b'a') as char);
+    if len == 1 {
+        return Ok(s);
+    }
+    // Middle chars: letter / digit / hyphen.
+    for _ in 1..(len - 1) {
+        let idx = ntc.draw_integer(0, 36)? as u8;
+        let c = match idx {
+            0..=25 => idx + b'a',
+            26..=35 => idx - 26 + b'0',
+            _ => b'-',
+        };
+        s.push(c as char);
+    }
+    // Last char: letter or digit (no trailing hyphen).
+    let idx = ntc.draw_integer(0, 35)? as u8;
+    let c = if idx < 26 { idx + b'a' } else { idx - 26 + b'0' };
+    s.push(c as char);
+    Ok(s)
 }
 
 /// Encode a `String` as a CBOR tag-91 value (the wire format used by the hegel
@@ -120,8 +160,13 @@ pub(super) fn interpret_ip_address(
 
 /// `domain` schema → a hostname like `sub.example.com`, respecting `max_length`.
 ///
-/// Structure: up to 2 subdomain labels + a second-level label + TLD, joined by dots.
-/// Total length always ≤ max_length (capped conservatively).
+/// Structure: a TLD + an SLD, optionally preceded by up to two subdomain
+/// labels, all joined by dots. Each label is RFC 1035 / RFC 1123 compliant
+/// (letters, digits, hyphens; letter-start; letter-or-digit-end).
+///
+/// Lengths are budgeted from right to left (TLD, SLD, then subs) so the
+/// total length is *guaranteed* never to exceed `max_length`. The minimum
+/// is `"a.aa"` (4 chars), which is the smallest valid generator setting.
 pub(super) fn interpret_domain(
     ntc: &mut NativeTestCase,
     schema: &Value,
@@ -129,20 +174,46 @@ pub(super) fn interpret_domain(
     use crate::cbor_utils::as_u64;
     let max_length = map_get(schema, "max_length")
         .and_then(as_u64)
-        .unwrap_or(255) as usize;
+        .unwrap_or(255) as i128;
 
-    // Draw the number of subdomain labels (0, 1, or 2) plus the SLD + TLD.
-    // Minimum domain is "aaa.aa" = 6 chars; with 1 sub it's "aaa.aaa.aa" = 10; etc.
-    let max_subs = if max_length >= 10 { 2 } else { 0 };
-    let n_subs = ntc.draw_integer(0, max_subs)?;
+    // TLD: 2..=4 letters, capped by remaining budget. Minimum domain is
+    // "a.aa" (4 chars) so max_length ≥ 4 is enforced upstream by
+    // `DomainGenerator::build_schema`. Reserving 2 chars (1 SLD + 1 dot)
+    // leaves at most `max_length - 2` for the TLD.
+    let tld_len_max = i128::min(4, max_length - 2);
+    let tld_len = ntc.draw_integer(2, tld_len_max)? as usize;
+    let tld = draw_letters(ntc, tld_len)?;
+    let mut remaining = max_length - tld_len as i128 - 1; // 1 for the dot before TLD
 
-    let mut parts: Vec<String> = Vec::new();
+    // SLD: 1..=8 chars, capped by remaining budget (must leave ≥0 for subs).
+    let sld_len_max = i128::min(8, remaining);
+    let sld_len = ntc.draw_integer(1, sld_len_max)? as usize;
+    let sld = draw_dns_label(ntc, sld_len)?;
+    remaining -= sld_len as i128;
+
+    // Subdomains: 0..=2 of them. Each adds at least 2 chars ("a." prefix),
+    // so n_subs is bounded by floor(remaining / 2). We also cap at 2 to
+    // match the pre-A3 structural shape (most realistic domains have 0–2
+    // subdomain levels).
+    let max_subs_by_budget = if remaining >= 2 { remaining / 2 } else { 0 };
+    let n_subs = ntc.draw_integer(0, i128::min(2, max_subs_by_budget))?;
+    let mut subs: Vec<String> = Vec::with_capacity(n_subs as usize);
     for _ in 0..n_subs {
-        parts.push(draw_label(ntc)?);
+        // Each sub costs label_len + 1 (dot). Need ≥ 2 chars remaining
+        // (1-char label + dot) to fit at all.
+        if remaining < 2 {
+            break;
+        }
+        let label_len_max = i128::min(8, remaining - 1); // -1 for the dot
+        let label_len = ntc.draw_integer(1, label_len_max)? as usize;
+        subs.push(draw_dns_label(ntc, label_len)?);
+        remaining -= label_len as i128 + 1;
     }
-    parts.push(draw_label(ntc)?); // SLD
-    parts.push(draw_tld(ntc)?); // TLD
 
+    // Assemble: subs (in draw order) ++ [SLD, TLD], joined by '.'.
+    let mut parts: Vec<String> = subs;
+    parts.push(sld);
+    parts.push(tld);
     Ok(encode_string(parts.join(".")))
 }
 

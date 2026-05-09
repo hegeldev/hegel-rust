@@ -153,47 +153,53 @@ fn interpret_domain_default_max_length_has_at_least_two_labels() {
 }
 
 #[test]
-fn interpret_domain_short_max_length_disables_subdomains() {
-    // max_length < 10 forces max_subs = 0 → exactly SLD.TLD.
-    let mut ntc = fresh_ntc();
+fn interpret_domain_minimum_max_length_yields_two_labels() {
+    // The smallest legal `max_length` is 4 (`DomainGenerator::build_schema`
+    // asserts this). At 4 chars there's exactly enough room for a 1-letter
+    // SLD + dot + 2-letter TLD ("a.aa"), which leaves no budget for any
+    // subdomains: `interpret_domain` must produce exactly 2 labels.
     let schema = cbor_map! {
         "type" => "domain",
-        "max_length" => 9u64,
+        "max_length" => 4u64,
     };
-    let s = decode_tagged(&interpret_domain(&mut ntc, &schema).ok().unwrap());
-    let labels: Vec<&str> = s.split('.').collect();
-    assert_eq!(labels.len(), 2);
+    for seed in 0u64..50 {
+        let mut ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
+        let s = decode_tagged(&interpret_domain(&mut ntc, &schema).ok().unwrap());
+        let labels: Vec<&str> = s.split('.').collect();
+        assert_eq!(
+            labels.len(),
+            2,
+            "max_length=4 should produce exactly SLD.TLD; got {s:?}"
+        );
+        assert!(s.len() <= 4, "max_length=4 violated by {s:?}");
+    }
 }
 
 #[test]
 fn interpret_domain_with_two_subdomains() {
-    // Force n_subs = 2 by replaying choices: first integer drawn from
-    // [0, max_subs] is the subdomain count.
+    // Force n_subs = 2 by replaying the choice sequence emitted by the
+    // new (post-A3) budget-driven layout: TLD len → TLD chars → SLD len
+    // → SLD chars → n_subs → (sub_len, sub chars)*. Min-sized labels
+    // throughout produce "a.a.a.aa".
     let mut ntc = NativeTestCase::for_choices(
         &[
-            ChoiceValue::Integer(2), // n_subs = 2
-            ChoiceValue::Integer(3), // sub1 length
-            ChoiceValue::Integer(0), // sub1 letter
-            ChoiceValue::Integer(0),
-            ChoiceValue::Integer(0),
-            ChoiceValue::Integer(3), // sub2 length
-            ChoiceValue::Integer(0),
-            ChoiceValue::Integer(0),
-            ChoiceValue::Integer(0),
-            ChoiceValue::Integer(3), // SLD length
-            ChoiceValue::Integer(0),
-            ChoiceValue::Integer(0),
-            ChoiceValue::Integer(0),
             ChoiceValue::Integer(2), // TLD length
-            ChoiceValue::Integer(0),
-            ChoiceValue::Integer(0),
+            ChoiceValue::Integer(0), // TLD char 0 ('a')
+            ChoiceValue::Integer(0), // TLD char 1 ('a')
+            ChoiceValue::Integer(1), // SLD length
+            ChoiceValue::Integer(0), // SLD char ('a' — letter-only since len=1)
+            ChoiceValue::Integer(2), // n_subs = 2
+            ChoiceValue::Integer(1), // sub1 length
+            ChoiceValue::Integer(0), // sub1 char
+            ChoiceValue::Integer(1), // sub2 length
+            ChoiceValue::Integer(0), // sub2 char
         ],
         None,
         None,
     );
     let schema = cbor_map! { "type" => "domain" };
     let s = decode_tagged(&interpret_domain(&mut ntc, &schema).ok().unwrap());
-    assert_eq!(s, "aaa.aaa.aaa.aa");
+    assert_eq!(s, "a.a.a.aa");
 }
 
 // ── interpret_email ────────────────────────────────────────────────────────
@@ -271,6 +277,89 @@ fn interpret_url_http_with_path_components() {
     );
     let s = decode_tagged(&interpret_url(&mut ntc).ok().unwrap());
     assert_eq!(s, "http://aaa.aa/aa/aa");
+}
+
+// ── interpret_domain: max_length enforcement + RFC 1035 charset ────────────
+
+/// `interpret_domain` must respect the schema's `max_length` for *every*
+/// drawn output. The pre-A3 code chose `n_subs ∈ {0, 1, 2}` whenever
+/// `max_length >= 10`, but each sub adds up to 9 chars plus a dot, so
+/// `gs::domains().max_length(10)` could produce strings up to ~31 chars.
+#[test]
+fn interpret_domain_respects_max_length_across_seeds() {
+    for max_length in [4u64, 6, 9, 10, 15, 20, 25, 50, 100, 255] {
+        let schema = cbor_map! {
+            "type" => "domain",
+            "max_length" => max_length,
+        };
+        for seed in 0u64..200 {
+            let mut ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
+            let s = decode_tagged(&interpret_domain(&mut ntc, &schema).ok().unwrap());
+            assert!(
+                s.len() as u64 <= max_length,
+                "max_length={max_length} but got {s:?} of length {}",
+                s.len()
+            );
+            assert!(
+                !s.is_empty() && s.contains('.'),
+                "domain {s:?} should be non-empty and contain a dot"
+            );
+        }
+    }
+}
+
+/// Domain labels should follow RFC 1035: start with a letter, end with
+/// a letter or digit, internal characters can be letters / digits /
+/// hyphens. The pre-A3 implementation drew labels from the lowercase
+/// letters only — no digits, no hyphens — which made
+/// `gs::domains()` unable to surface bugs in code that handles
+/// alphanumeric or hyphenated labels (very common in real DNS).
+#[test]
+fn interpret_domain_charset_includes_digits_and_hyphens() {
+    let schema = cbor_map! { "type" => "domain", "max_length" => 60u64 };
+    let mut saw_digit = false;
+    let mut saw_hyphen = false;
+    for seed in 0u64..1000 {
+        let mut ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
+        let s = decode_tagged(&interpret_domain(&mut ntc, &schema).ok().unwrap());
+        for label in s.split('.') {
+            assert!(!label.is_empty(), "label in {s:?} is empty");
+            for (i, c) in label.chars().enumerate() {
+                let is_first = i == 0;
+                let is_last = i == label.len() - 1;
+                if is_first {
+                    assert!(
+                        c.is_ascii_alphabetic(),
+                        "label {label:?} (in {s:?}) starts with non-letter {c:?}"
+                    );
+                } else if is_last {
+                    assert!(
+                        c.is_ascii_alphanumeric(),
+                        "label {label:?} ends with {c:?} (must be letter or digit)"
+                    );
+                } else {
+                    assert!(
+                        c.is_ascii_alphanumeric() || c == '-',
+                        "label {label:?} has invalid character {c:?}"
+                    );
+                }
+                if c.is_ascii_digit() {
+                    saw_digit = true;
+                }
+                if c == '-' {
+                    saw_hyphen = true;
+                }
+            }
+        }
+    }
+    assert!(
+        saw_digit,
+        "expected at least one drawn domain to contain a digit across 1000 seeds"
+    );
+    assert!(
+        saw_hyphen,
+        "expected at least one drawn domain to contain a hyphen across 1000 seeds"
+    );
 }
 
 // ── interpret_uuid: version distribution when unspecified ──────────────────
