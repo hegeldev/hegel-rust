@@ -864,6 +864,49 @@ fn native_shrinker_shrink_and_current_nodes() {
     }
 }
 
+// ── A20c: reorder_spans sorts same-label sibling spans by sort_key ───────
+//
+// Mirrors `shrinker.py:1701 reorder_spans`. Two same-label sibling spans
+// can be swapped (their content blocks reordered) so the lexicographically
+// smaller content appears first. Pre-A20c the pass was an A20-deferred
+// no-op stub.
+#[test]
+fn fixate_shrink_passes_reorder_spans_sorts_siblings() {
+    // Wrap two same-label child spans in an outer parent so they share a
+    // common parent and qualify as reorderable siblings. Predicate fires
+    // when either drawn integer is non-zero, so swapping a=3 ↔ b=1 keeps
+    // the test interesting while shrinking the sort_key from [3, 1] to
+    // [1, 3].
+    let choices = vec![ChoiceValue::Integer(3), ChoiceValue::Integer(1)];
+    let mut shrinker = NativeShrinker::from_choices(choices, |data: &mut NativeConjectureData| {
+        data.start_span(99); // outer parent
+        data.start_span(7); // sibling A
+        let a = data.draw_integer(0, 100);
+        data.stop_span();
+        data.start_span(7); // sibling B
+        let b = data.draw_integer(0, 100);
+        data.stop_span();
+        data.stop_span();
+        if a > 0 || b > 0 {
+            data.mark_interesting(interesting_origin(None));
+        }
+    });
+    shrinker.fixate_shrink_passes(&["reorder_spans"]);
+    let nodes = shrinker.current_nodes();
+    let values: Vec<i128> = nodes
+        .iter()
+        .map(|n| match n.value {
+            ChoiceValue::Integer(v) => v,
+            _ => panic!("expected integer"),
+        })
+        .collect();
+    assert_eq!(
+        values,
+        vec![1, 3],
+        "reorder_spans should sort same-label siblings ascending; got {values:?}",
+    );
+}
+
 // ── A20b: pass_to_descendant replaces a span with a same-label descendant ──
 //
 // Mirrors `shrinker.py:892 pass_to_descendant`.  The body recurses through

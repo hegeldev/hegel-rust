@@ -963,6 +963,12 @@ impl NativeShrinker {
                         // `try_trivial_spans`.
                         self.pass_to_descendant();
                     }
+                    "reorder_spans" => {
+                        // Span-aware pass: needs `span_snapshot` to walk
+                        // the parent/children tree.  Same wrapper-level
+                        // dispatch reasoning as the others.
+                        self.reorder_spans();
+                    }
                     "lower_common_node_offset" => {
                         self.inner.lower_common_node_offset();
                     }
@@ -1016,6 +1022,110 @@ impl NativeShrinker {
                     choice_count: sp.choice_count(),
                 })
                 .collect(),
+        }
+    }
+
+    /// Reorder same-label sibling spans so their content appears in
+    /// shortlex-ascending order. Mirrors `Shrinker.reorder_spans`
+    /// (`shrinker.py:1701`): for each parent span, group its direct
+    /// children by label and, for each group with ≥2 siblings, sort
+    /// them by the `sort_key` of their content and try the reordered
+    /// candidate.  Targets the canonical
+    /// `@given(text(), text()) test_not_equal(x, y): assert x != y`
+    /// scenario, where reordering the two `text()` draws makes the
+    /// counterexample reliably reproduce as `x="", y="0"` rather than
+    /// either order.
+    pub fn reorder_spans(&mut self) {
+        use crate::native::core::sort_key;
+        loop {
+            let mut made_progress = false;
+            let snapshot_spans = {
+                let s = self.span_snapshot.borrow();
+                s.spans.clone()
+            };
+            let current = self.inner.current_nodes.clone();
+
+            // Walk every span as a potential parent. The synthetic
+            // "top-level" parent (None) collects spans without an
+            // explicit parent; we model it as a virtual extra index.
+            let n_parents = snapshot_spans.len();
+            'outer: for parent_idx in 0..n_parents {
+                // Direct children of `parent_idx`.
+                let children: Vec<usize> = (0..snapshot_spans.len())
+                    .filter(|&i| snapshot_spans[i].parent == Some(parent_idx))
+                    .collect();
+                if children.len() < 2 {
+                    continue;
+                }
+                // Group children by label.
+                let mut by_label: std::collections::HashMap<String, Vec<usize>> =
+                    std::collections::HashMap::new();
+                for &c in &children {
+                    by_label
+                        .entry(snapshot_spans[c].label.clone())
+                        .or_default()
+                        .push(c);
+                }
+                for sibling_indices in by_label.values() {
+                    if sibling_indices.len() < 2 {
+                        continue;
+                    }
+                    // Sort siblings by sort_key of their content range.
+                    let mut sorted = sibling_indices.clone();
+                    sorted.sort_by(|&a, &b| {
+                        let sa = &snapshot_spans[a];
+                        let sb = &snapshot_spans[b];
+                        if sa.end > current.len() || sb.end > current.len() {
+                            return std::cmp::Ordering::Equal;
+                        }
+                        sort_key(&current[sa.start..sa.end])
+                            .cmp(&sort_key(&current[sb.start..sb.end]))
+                    });
+                    if sorted == *sibling_indices {
+                        continue; // already in shortlex order
+                    }
+                    // Build a list of (orig_start, orig_end, replacement) per
+                    // sibling and apply right-to-left so earlier ranges
+                    // aren't shifted when later ones change length.
+                    let mut replacements: Vec<(usize, usize, Vec<ChoiceNode>)> =
+                        sibling_indices
+                            .iter()
+                            .zip(sorted.iter())
+                            .filter_map(|(&orig_idx, &target_idx)| {
+                                if orig_idx == target_idx {
+                                    return None;
+                                }
+                                let orig = &snapshot_spans[orig_idx];
+                                let target = &snapshot_spans[target_idx];
+                                if orig.end > current.len()
+                                    || target.end > current.len()
+                                {
+                                    return None;
+                                }
+                                Some((
+                                    orig.start,
+                                    orig.end,
+                                    current[target.start..target.end].to_vec(),
+                                ))
+                            })
+                            .collect();
+                    if replacements.is_empty() {
+                        continue;
+                    }
+                    replacements.sort_by(|a, b| b.0.cmp(&a.0));
+                    let mut attempt = current.clone();
+                    for (start, end, replacement) in &replacements {
+                        attempt.splice(*start..*end, replacement.iter().cloned());
+                    }
+                    if self.inner.consider(&attempt) {
+                        made_progress = true;
+                        break 'outer;
+                    }
+                }
+            }
+            if !made_progress {
+                break;
+            }
         }
     }
 
