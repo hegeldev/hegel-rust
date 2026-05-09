@@ -864,6 +864,47 @@ fn native_shrinker_shrink_and_current_nodes() {
     }
 }
 
+// ── A20e: node_program deletes N consecutive nodes ───────────────────────
+//
+// Mirrors `shrinker.py:1273 node_program`: each `node_program_<size>`
+// pass picks a starting index and deletes `size` consecutive nodes,
+// accepting if the test still triggers.  Pre-A20e the pass was an
+// A20-deferred no-op stub (registered for any `node_program_*` name in
+// `Shrinker::run_named_pass`).
+//
+// The body recurses through `data.draw_integer(0, 1)` calls without any
+// span structure, so neither `pass_to_descendant` nor `try_trivial_spans`
+// helps — only deletion does.
+fn body_recursive_no_span(data: &mut NativeConjectureData, depth: u32) {
+    if depth > 0 {
+        let r = data.draw_integer(0, 1);
+        if r > 0 {
+            body_recursive_no_span(data, depth - 1);
+        }
+    }
+}
+
+#[test]
+fn fixate_shrink_passes_node_program_x_deletes_one_node_at_a_time() {
+    let choices = vec![
+        ChoiceValue::Integer(1),
+        ChoiceValue::Integer(1),
+        ChoiceValue::Integer(1),
+        ChoiceValue::Integer(0),
+    ];
+    let mut shrinker = NativeShrinker::from_choices(choices, |data: &mut NativeConjectureData| {
+        body_recursive_no_span(data, 5);
+        data.mark_interesting(interesting_origin(None));
+    });
+    shrinker.fixate_shrink_passes(&["node_program_X"]);
+    let nodes = shrinker.current_nodes();
+    assert!(
+        nodes.len() < 4,
+        "node_program_X should delete redundant choices; got {} nodes",
+        nodes.len(),
+    );
+}
+
 // ── A20c: reorder_spans sorts same-label sibling spans by sort_key ───────
 //
 // Mirrors `shrinker.py:1701 reorder_spans`. Two same-label sibling spans

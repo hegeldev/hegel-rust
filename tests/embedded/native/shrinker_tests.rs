@@ -2463,16 +2463,51 @@ fn run_named_pass_dispatches_lower_integers_together() {
 }
 
 #[test]
-fn run_named_pass_node_program_is_noop_a20_stub() {
+fn run_named_pass_node_program_x_deletes_one_node() {
     // Upstream registers `node_program_X`, `node_program_XX`, ...,
-    // `node_program_XXXXX`. Until A20 ports the implementation, treat
-    // these as no-ops so a caller passing the upstream list doesn't crash.
+    // `node_program_XXXXX` (A20e). Each `node_program_<X*N>` deletes
+    // N consecutive nodes at each candidate start position.
+    let nodes = vec![
+        int_node(0, 10, 5),
+        int_node(0, 10, 5),
+        int_node(0, 10, 5),
+    ];
+    // Predicate accepts when at least one node remains — so the pass
+    // can shrink the sequence down but won't reduce to the empty
+    // sequence.
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| (!n.is_empty(), n.to_vec())),
+        nodes,
+    );
+    shrinker.run_named_pass("node_program_X");
+    assert_eq!(
+        shrinker.current_nodes.len(),
+        1,
+        "node_program_X should reduce to the smallest accepting sequence",
+    );
+}
+
+#[test]
+fn run_named_pass_node_program_xxxxx_skips_short_sequences() {
+    // node_program_XXXXX deletes 5 nodes at a time; on a 1-node seed
+    // there's no candidate start position, so the pass is a no-op.
     let nodes = vec![int_node(0, 10, 5)];
     let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
     let before = shrinker.current_nodes.clone();
     shrinker.run_named_pass("node_program_XXXXX");
-    shrinker.run_named_pass("node_program_X");
     assert_eq!(shrinker.current_nodes[0].value, before[0].value);
+}
+
+#[test]
+fn run_named_pass_node_program_unknown_suffix_is_silent_noop() {
+    // A `node_program_<suffix>` name with a non-X suffix isn't currently
+    // used by upstream but is still accepted as a no-op (forward-compat
+    // — typo names that don't match anything else still panic via the
+    // outer `_ => panic!`).
+    let nodes = vec![int_node(0, 10, 5)];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
+    shrinker.run_named_pass("node_program_FUTURE");
+    assert_eq!(shrinker.current_nodes.len(), 1);
 }
 
 #[test]

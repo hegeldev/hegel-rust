@@ -242,16 +242,22 @@ impl<'a> Shrinker<'a> {
     /// Accepts every pass name from upstream's `Shrinker.shrink_passes`
     /// list (`shrinker.py:310-324`).  Implemented passes dispatch to
     /// their concrete bodies; passes that haven't been ported yet (the
-    /// span-aware ones plus `node_program_*` and
-    /// `lower_duplicated_characters`, all tracked under A20) accept the
-    /// name silently as a no-op so a caller passing the upstream list
-    /// doesn't crash.  Unrecognised names still panic, so a typo
-    /// surfaces immediately.
+    /// span-aware ones plus `lower_duplicated_characters`, tracked under
+    /// A20) accept the name silently as a no-op so a caller passing the
+    /// upstream list doesn't crash.  Unrecognised names still panic, so
+    /// a typo surfaces immediately.
     pub fn run_named_pass(&mut self, name: &str) {
-        // node_program is a parameterised pass: upstream registers
-        // `node_program_X`, `node_program_XX`, ..., `node_program_XXXXX`.
-        // Treat any "node_program_*" as an A20-deferred no-op stub.
-        if name.starts_with("node_program_") {
+        // `node_program_<X*N>` (A20e): delete N consecutive nodes at
+        // each candidate start position.  The size N is the count of
+        // 'X' characters in the suffix.
+        if let Some(suffix) = name.strip_prefix("node_program_") {
+            let n = suffix.len();
+            if n > 0 && suffix.chars().all(|c| c == 'X') {
+                self.run_node_program(n);
+                return;
+            }
+            // Other suffixes (none currently used by upstream) are
+            // accepted silently as a no-op for forward-compat.
             return;
         }
         match name {

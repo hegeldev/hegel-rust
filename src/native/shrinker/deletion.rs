@@ -7,6 +7,42 @@ use crate::native::core::{ChoiceKind, ChoiceValue};
 use super::{Shrinker, bin_search_down};
 
 impl<'a> Shrinker<'a> {
+    /// Delete `n` consecutive nodes at each candidate start position.
+    /// Mirrors upstream's `node_program("X" * n)` (`shrinker.py:1273`):
+    /// each `node_program_<X*N>` shrink pass picks a starting index and
+    /// drops `N` adjacent nodes, accepting if the test still triggers.
+    /// Iterates backwards since later choices tend to depend on earlier
+    /// ones (same convention as `delete_chunks`).
+    pub(crate) fn run_node_program(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
+        loop {
+            let mut made_progress = false;
+            let len = self.current_nodes.len();
+            if len < n {
+                break;
+            }
+            // Walk i from `len - n` down to 0 inclusive.
+            let mut i = len - n;
+            loop {
+                let mut attempt: Vec<_> = self.current_nodes[..i].to_vec();
+                attempt.extend_from_slice(&self.current_nodes[i + n..]);
+                if self.consider(&attempt) {
+                    made_progress = true;
+                    break;
+                }
+                if i == 0 {
+                    break;
+                }
+                i -= 1;
+            }
+            if !made_progress {
+                break;
+            }
+        }
+    }
+
     /// Try deleting chunks of choices from the sequence.
     ///
     /// Longer chunks allow deleting composite elements (e.g. a list element
