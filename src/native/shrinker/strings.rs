@@ -225,7 +225,7 @@ impl<'a> Shrinker<'a> {
     fn current_string(&self, i: usize) -> Vec<u32> {
         match &self.current_nodes[i].value {
             ChoiceValue::String(s) => s.clone(),
-            _ => unreachable!(),
+            _ => unreachable!("kind/value invariant violated: outer match guaranteed this variant"),
         }
     }
 
@@ -270,7 +270,7 @@ impl<'a> Shrinker<'a> {
         let t = self.current_string(j);
         let kind_j = match &self.current_nodes[j].kind {
             ChoiceKind::String(kj) => kj.clone(),
-            _ => unreachable!(),
+            _ => unreachable!("kind/value invariant violated: outer match guaranteed this variant"),
         };
 
         if s.is_empty() {

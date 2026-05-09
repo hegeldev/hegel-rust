@@ -1063,7 +1063,7 @@ impl NativeTestCase {
         )?;
 
         let ChoiceValue::Integer(v) = value else {
-            unreachable!()
+            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
         };
 
         self.nodes.push(ChoiceNode {
@@ -1107,7 +1107,7 @@ impl NativeTestCase {
         };
 
         let ChoiceValue::Boolean(v) = value else {
-            unreachable!()
+            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
         };
 
         self.nodes.push(ChoiceNode {
@@ -1224,7 +1224,7 @@ impl NativeTestCase {
         )?;
 
         let ChoiceValue::Float(v) = value else {
-            unreachable!()
+            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
         };
 
         self.nodes.push(ChoiceNode {
@@ -1282,7 +1282,7 @@ impl NativeTestCase {
         )?;
 
         let ChoiceValue::Bytes(v) = value else {
-            unreachable!()
+            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
         };
 
         self.nodes.push(ChoiceNode {
@@ -1393,7 +1393,7 @@ impl NativeTestCase {
         )?;
 
         let ChoiceValue::String(v) = value else {
-            unreachable!()
+            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
         };
 
         self.nodes.push(ChoiceNode {

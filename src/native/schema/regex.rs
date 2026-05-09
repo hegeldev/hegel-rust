@@ -698,7 +698,7 @@ fn draw_any_char(
             let n = alpha.len();
             if n == 0 {
                 mark_invalid(ntc)?;
-                unreachable!()
+                unreachable!("mark_invalid returns Err — control flow does not reach here")
             }
             let idx = ntc.draw_integer(0, n as i128 - 1)?;
             Ok(alpha.char_at(idx as usize))

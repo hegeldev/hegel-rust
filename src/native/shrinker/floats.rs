@@ -273,7 +273,7 @@ impl<'a> Shrinker<'a> {
     fn float_at(&self, i: usize) -> f64 {
         match self.current_nodes[i].value {
             ChoiceValue::Float(f) => f,
-            _ => unreachable!(),
+            _ => unreachable!("kind/value invariant violated: outer match guaranteed this variant"),
         }
     }
 

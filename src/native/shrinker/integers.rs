@@ -79,7 +79,7 @@ impl<'a> Shrinker<'a> {
                         8
                     };
                     let ChoiceValue::Integer(cur_v) = self.current_nodes[i].value else {
-                        unreachable!()
+                        unreachable!("kind/value invariant violated: outer match guaranteed this variant")
                     };
                     for c in lo..lo.saturating_add(scan_count).min(cur_v) {
                         if !self.replace(&HashMap::from([(i, ChoiceValue::Integer(c))])) {
@@ -93,7 +93,7 @@ impl<'a> Shrinker<'a> {
                     // shrinker flip a linked pair from `(m, m+1)` down to
                     // `(m, m-1)` at the cost of one extra probe.
                     let ChoiceValue::Integer(base) = self.current_nodes[i].value else {
-                        unreachable!()
+                        unreachable!("kind/value invariant violated: outer match guaranteed this variant")
                     };
                     if base > lo {
                         find_integer(|n| {
@@ -105,7 +105,7 @@ impl<'a> Shrinker<'a> {
                         });
                     }
                     let ChoiceValue::Integer(base) = self.current_nodes[i].value else {
-                        unreachable!()
+                        unreachable!("kind/value invariant violated: outer match guaranteed this variant")
                     };
                     if base > lo {
                         find_integer(|n| {
@@ -119,7 +119,7 @@ impl<'a> Shrinker<'a> {
                     // Also try negative values with smaller absolute value (simpler).
                     if ic.min_value < 0 {
                         let ChoiceValue::Integer(cur_v) = self.current_nodes[i].value else {
-                            unreachable!()
+                            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
                         };
                         if cur_v > 0 {
                             let upper = (cur_v - 1).min(ic.min_value.saturating_neg());
@@ -146,7 +146,7 @@ impl<'a> Shrinker<'a> {
                     // `cur + 2*n` / `cur + n` (moving toward zero). Mirrors
                     // the positive-side block above.
                     let ChoiceValue::Integer(base) = self.current_nodes[i].value else {
-                        unreachable!()
+                        unreachable!("kind/value invariant violated: outer match guaranteed this variant")
                     };
                     let neg_hi = -lo;
                     if base < neg_hi {
@@ -159,7 +159,7 @@ impl<'a> Shrinker<'a> {
                         });
                     }
                     let ChoiceValue::Integer(base) = self.current_nodes[i].value else {
-                        unreachable!()
+                        unreachable!("kind/value invariant violated: outer match guaranteed this variant")
                     };
                     if base < neg_hi {
                         find_integer(|n| {
@@ -173,7 +173,7 @@ impl<'a> Shrinker<'a> {
                     // Also try positive values with smaller absolute value (simpler).
                     if ic.max_value > 0 {
                         let ChoiceValue::Integer(cur_v) = self.current_nodes[i].value else {
-                            unreachable!()
+                            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
                         };
                         if cur_v < 0 {
                             let upper = (-cur_v - 1).min(ic.max_value);
@@ -254,14 +254,14 @@ impl<'a> Shrinker<'a> {
                 let j = current_ints[pair_idx + gap];
 
                 let ChoiceValue::Integer(prev_i) = self.current_nodes[i].value else {
-                    unreachable!()
+                    unreachable!("kind/value invariant violated: outer match guaranteed this variant")
                 };
                 let ChoiceValue::Integer(prev_j) = self.current_nodes[j].value else {
-                    unreachable!()
+                    unreachable!("kind/value invariant violated: outer match guaranteed this variant")
                 };
 
                 let ChoiceKind::Integer(ic_i) = &self.current_nodes[i].kind else {
-                    unreachable!()
+                    unreachable!("kind/value invariant violated: outer match guaranteed this variant")
                 };
                 let simplest_i = ic_i.simplest();
 
@@ -422,7 +422,7 @@ impl<'a> Shrinker<'a> {
             }
 
             let ChoiceKind::Integer(ic) = &self.current_nodes[valid[0]].kind else {
-                unreachable!()
+                unreachable!("kind/value invariant violated: outer match guaranteed this variant")
             };
             let ic = ic.clone();
 
@@ -438,7 +438,7 @@ impl<'a> Shrinker<'a> {
 
             // Re-read current value after possible replacement.
             let ChoiceValue::Integer(cur_value) = self.current_nodes[valid[0]].value else {
-                unreachable!()
+                unreachable!("kind/value invariant violated: outer match guaranteed this variant")
             };
 
             // Binary search all simultaneously toward zero.

@@ -1379,7 +1379,7 @@ fn parse(
         );
         if take_inner {
             let OpCode::Subpattern { p, .. } = subpattern.data.remove(i) else {
-                unreachable!()
+                unreachable!("opcode at index i was matched as Subpattern by the surrounding take_inner check")
             };
             let expanded = p.data;
             let expanded_len = expanded.len();

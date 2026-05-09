@@ -115,7 +115,7 @@ impl<'a> Shrinker<'a> {
     fn current_byte_value(&self, i: usize) -> Vec<u8> {
         match &self.current_nodes[i].value {
             ChoiceValue::Bytes(v) => v.clone(),
-            _ => unreachable!(),
+            _ => unreachable!("kind/value invariant violated: outer match guaranteed this variant"),
         }
     }
 
@@ -160,7 +160,7 @@ impl<'a> Shrinker<'a> {
         let t = self.current_byte_value(j);
         let kind_j = match &self.current_nodes[j].kind {
             ChoiceKind::Bytes(kj) => kj.clone(),
-            _ => unreachable!(),
+            _ => unreachable!("kind/value invariant violated: outer match guaranteed this variant"),
         };
 
         if s.is_empty() {
