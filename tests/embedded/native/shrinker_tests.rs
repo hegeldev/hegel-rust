@@ -2046,8 +2046,20 @@ fn delete_chunks_guard_fires_after_shortening() {
     );
 
     shrinker.delete_chunks();
-    // Must terminate without panicking and make some progress below 21 nodes.
-    assert!(shrinker.current_nodes.len() < 21);
+    // The trailing `False` isn't required: when the predicate's loop
+    // exhausts the input with `count >= 5` it returns
+    // `(true, n[..i].to_vec())` regardless of whether a `False` ever
+    // appeared.  So the minimum-interesting sequence is exactly 5
+    // `(True, integer)` pairs — 10 nodes — and `delete_chunks`
+    // reaches that minimum by deleting the 5 surplus pairs plus the
+    // trailing `False`.  The audit's original `< 21` assertion was
+    // too weak (any single deletion satisfied it without proving the
+    // pass actually converges).
+    assert_eq!(
+        shrinker.current_nodes.len(),
+        10,
+        "delete_chunks should converge on 5 (True, int) pairs = 10 nodes",
+    );
 }
 
 #[test]
