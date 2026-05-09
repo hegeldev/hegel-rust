@@ -2724,7 +2724,7 @@ impl NativeConjectureRunner {
         let initial_calls = self.call_count;
         let mut failed_mutations: usize = 0;
         let mut data_choices: Vec<ChoiceValue> = initial_choices.to_vec();
-        let mut data_spans: Vec<Span> = initial_spans.to_vec();
+        let data_spans: Vec<Span> = initial_spans.to_vec();
         let mut data_target_obs: HashMap<String, f64> = initial_target_obs.clone();
         let mut data_status: Status = initial_status;
 

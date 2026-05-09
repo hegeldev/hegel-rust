@@ -161,3 +161,51 @@ fn main() {
         output.stderr
     );
 }
+
+/// `Verbosity::Quiet` suppresses both the Hypothesis-style final-replay
+/// diagnostic ("thread 'X' panicked at …") and the "Property test
+/// failed." footer. The test process still exits non-zero (cargo test
+/// still sees the failure) and the panic payload still says
+/// `"Property test failed: <msg>"` for `catch_unwind` callers — only
+/// the human-readable stderr noise is suppressed. Pre-A13 the variant
+/// was unimplemented and `Quiet` produced the same output as `Normal`.
+#[cfg(feature = "native")]
+#[test]
+fn native_quiet_verbosity_suppresses_failure_diagnostic() {
+    const CODE: &str = r#"
+use hegel::generators as gs;
+
+fn main() {
+    hegel::Hegel::new(|tc| {
+        let _x: bool = tc.draw(gs::booleans());
+        panic!("hush hush");
+    })
+    .settings(hegel::Settings::new().verbosity(hegel::Verbosity::Quiet))
+    .run();
+}
+"#;
+    let output = TempRustProject::new()
+        .main_file(CODE)
+        .expect_failure(".") // any non-empty stdout/stderr satisfies; we
+        // only require the process to exit non-zero.
+        .cargo_run(&[]);
+
+    assert!(
+        !output.stderr.contains("hush hush"),
+        "Quiet verbosity should suppress the original panic message in \
+         stderr; got:\n{}",
+        output.stderr
+    );
+    assert!(
+        !output.stderr.contains("Property test failed"),
+        "Quiet verbosity should suppress the 'Property test failed' \
+         footer in stderr; got:\n{}",
+        output.stderr
+    );
+    assert!(
+        !output.stderr.contains("panicked at"),
+        "Quiet verbosity should suppress the 'panicked at <location>' \
+         line in stderr; got:\n{}",
+        output.stderr
+    );
+}

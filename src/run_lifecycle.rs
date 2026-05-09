@@ -204,6 +204,7 @@ pub(crate) fn run_test_case(
     test_fn: &mut dyn FnMut(TestCase),
     is_final: bool,
     mode: Mode,
+    verbosity: crate::runner::Verbosity,
 ) -> TestCaseResult {
     let tc = TestCase::new(data_source, is_final, mode);
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
@@ -229,7 +230,13 @@ pub(crate) fn run_test_case(
                         )
                     });
 
-                if is_final {
+                // The Hypothesis-style final-replay diagnostic
+                // (thread / location / message / backtrace) is the
+                // user-facing failure output. `Verbosity::Quiet`
+                // suppresses it entirely so callers running in CI logs
+                // can opt out of stderr noise. Other backends still see
+                // the failure via the returned `TestCaseResult`.
+                if is_final && verbosity != crate::runner::Verbosity::Quiet {
                     eprintln!(
                         "thread '{}' ({}) panicked at {}:",
                         thread_name, thread_id, location
@@ -297,8 +304,9 @@ pub(crate) fn drive<R, F>(
     let mut test_fn = test_fn;
     let got_interesting = AtomicBool::new(false);
     let mode = settings.mode;
+    let verbosity = settings.verbosity;
     let result = runner.run(settings, database_key, &mut |backend, is_final| {
-        let tc_result = run_test_case(backend, &mut test_fn, is_final, mode);
+        let tc_result = run_test_case(backend, &mut test_fn, is_final, mode, verbosity);
         if matches!(&tc_result, TestCaseResult::Interesting { .. }) {
             got_interesting.store(true, Ordering::SeqCst);
         }
@@ -335,7 +343,12 @@ pub(crate) fn drive<R, F>(
         // Suppressing the next panic's stderr print keeps the original
         // message from being duplicated (Rust's default hook would otherwise
         // print `"Property test failed: <msg>"` to stderr verbatim).
-        eprintln!("Property test failed.");
+        // `Verbosity::Quiet` suppresses the human-readable footer too;
+        // `cargo test` still sees the test panic, but stderr stays
+        // empty (the final-replay diagnostic above is also gated).
+        if verbosity != crate::runner::Verbosity::Quiet {
+            eprintln!("Property test failed.");
+        }
         SUPPRESS_NEXT_PANIC.with(|c| c.set(true));
         panic!("Property test failed: {}", msg);
     }

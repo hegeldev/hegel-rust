@@ -73,7 +73,14 @@ fn quiet_failing_project() -> &'static TempRustProject {
     PROJECT.get_or_init(|| {
         TempRustProject::new()
             .main_file(QUIET_FAILING_CODE)
-            .expect_failure("x should be true")
+            // Post-A13, `Verbosity::Quiet` suppresses both the
+            // final-replay diagnostic ("x should be true") and the
+            // "Property test failed" footer. The process still exits
+            // non-zero (cargo sees the test panic), so we keep
+            // `expect_failure` for the exit-code assertion but use an
+            // empty regex pattern that matches any output (including
+            // empty output).
+            .expect_failure("")
     })
 }
 
