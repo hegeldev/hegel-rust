@@ -2463,6 +2463,57 @@ fn run_named_pass_dispatches_lower_integers_together() {
     shrinker.run_named_pass("lower_integers_together");
 }
 
+// ── A22: redistribute_numeric_pairs honours the MAX_PRECISE_INTEGER guard ─
+//
+// Mirrors `shrinker.py:1356-1358` and `shrinker.py:1404-1405`: pairs
+// where either side is a Float with `|v| >= 2^53` are skipped because
+// `f + 1 == f` at that scale, so the redistribute math stops being a
+// reliable shrink.  Pre-A22 the Rust port skipped non-finite floats but
+// not high-magnitude finite ones; the pass would produce candidates
+// where lossy float arithmetic reads as a "shrink" without actually
+// reducing the value.
+#[test]
+fn redistribute_numeric_pairs_skips_floats_above_max_precise_integer() {
+    // MAX_PRECISE_INTEGER == 2^53 == 9_007_199_254_740_992.
+    let max_precise = (1u64 << 53) as f64;
+    let nodes = vec![
+        ChoiceNode {
+            kind: ChoiceKind::Float(crate::native::core::FloatChoice {
+                min_value: 0.0,
+                max_value: f64::INFINITY,
+                allow_nan: false,
+                allow_infinity: false,
+            }),
+            value: ChoiceValue::Float(max_precise),
+            was_forced: false,
+        },
+        ChoiceNode {
+            kind: ChoiceKind::Integer(IntegerChoice {
+                min_value: 0,
+                max_value: 1_000_000,
+                shrink_towards: 0,
+            }),
+            value: ChoiceValue::Integer(0),
+            was_forced: false,
+        },
+    ];
+    let mut shrinker = Shrinker::new(Box::new(|n: &[ChoiceNode]| (true, n.to_vec())), nodes);
+    shrinker.run_named_pass("redistribute_numeric_pairs");
+    // Post-A22: the float side is at MAX_PRECISE_INTEGER, so the pair is
+    // skipped and the float stays put.  Pre-A22 the pass attempted a
+    // redistribute that lowered the float (since 2^53 − 1 is exactly
+    // representable, the candidate succeeded as "smaller").
+    let v0 = match shrinker.current_nodes[0].value {
+        ChoiceValue::Float(f) => f,
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        v0.to_bits(),
+        max_precise.to_bits(),
+        "expected float to remain at MAX_PRECISE_INTEGER post-A22, got {v0}",
+    );
+}
+
 // ── A21: lower_integers_together aims at shrink_towards ─────────────────
 //
 // Mirrors `shrinker.py:1437-1447`: the joint integer pass should converge

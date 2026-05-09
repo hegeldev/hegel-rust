@@ -9,6 +9,13 @@ use crate::native::core::{
 
 use super::{ShrinkRun, Shrinker, bin_search_down, find_integer};
 
+/// Largest `f64` for which `n + 1.0 != n` holds — i.e., `2^53`.  Above
+/// this magnitude consecutive integers stop being individually
+/// representable as `f64`, so any "redistribute" that bumps a float by
+/// 1 silently reads as a shrink without actually changing the value.
+/// Mirrors `hypothesis.internal.floats.MAX_PRECISE_INTEGER`.
+const MAX_PRECISE_INTEGER: f64 = (1u64 << 53) as f64;
+
 /// Decompose a positive finite float into `(m, n)` with `value == m / n`.
 ///
 /// Mirrors Python's `float.as_integer_ratio`. Returns `None` for values whose
@@ -305,12 +312,37 @@ impl<'a> Shrinker<'a> {
                 ) {
                     continue;
                 }
+                // MAX_PRECISE_INTEGER guard (shrinker.py:1356-1358): for
+                // a Float node, skip if the value is non-finite or has
+                // `|v| >= 2^53`.  Above that magnitude `f + 1 == f` so
+                // the redistribute math reads as a shrink without
+                // actually reducing the value — we'd waste calls and
+                // possibly accept lossy "no-op" candidates.
+                if !can_choose_for_redistribute(&self.current_nodes[i])
+                    || !can_choose_for_redistribute(&self.current_nodes[j])
+                {
+                    continue;
+                }
                 if is_trivial(&self.current_nodes[i]) {
                     continue;
                 }
                 redistribute_pair(self, i, j);
             }
         }
+    }
+}
+
+/// `node.constraints["shrink_towards"]` for floats is fixed at 0 in
+/// upstream and we don't carry it in [`FloatChoice`]; the only
+/// node-level filter `redistribute_numeric_pairs` needs is the
+/// MAX_PRECISE_INTEGER / NaN / inf check from `shrinker.py:1356-1358`.
+fn can_choose_for_redistribute(node: &ChoiceNode) -> bool {
+    match (&node.kind, &node.value) {
+        (ChoiceKind::Float(_), ChoiceValue::Float(f)) => {
+            f.is_finite() && f.abs() < MAX_PRECISE_INTEGER
+        }
+        (ChoiceKind::Integer(_), ChoiceValue::Integer(_)) => true,
+        _ => false,
     }
 }
 
@@ -368,11 +400,23 @@ fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) {
         Direction::RaiseLeftLowerRight
     };
 
+    let i_is_float = matches!(kind_i, NumericKind::Float(_));
     find_integer(|k| {
         if k == 0 {
             return true; // find_integer assumes f(0) is true.
         }
         let (cand_i, cand_j) = apply_delta(&v_i, &v_j, k as i128, dir);
+        // MAX_PRECISE_INTEGER guard (shrinker.py:1404-1405): if node1 is
+        // a float, give up if raising node2 has crossed the precision
+        // threshold.  Above 2^53 consecutive integers are no longer
+        // individually representable as f64, so the candidate's
+        // arithmetic stops being a reliable shrink.
+        if i_is_float
+            && let NumericValue::Float(f) = cand_j
+            && f.abs() >= MAX_PRECISE_INTEGER
+        {
+            return false;
+        }
         let Some(val_i) = build_value(&kind_i, cand_i) else {
             return false;
         };
