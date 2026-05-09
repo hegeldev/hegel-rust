@@ -273,6 +273,38 @@ fn interpret_url_http_with_path_components() {
     assert_eq!(s, "http://aaa.aa/aa/aa");
 }
 
+// ── interpret_uuid: version distribution when unspecified ──────────────────
+
+/// `gs::uuids()` (no `.version(...)`) emits a schema without a `version`
+/// field; the doc on `UuidsGenerator` advertises this as "UUIDs of any
+/// version." `interpret_uuid` must therefore pick a version randomly,
+/// not silently default to v4. We draw 1000 UUIDs across distinct seeds
+/// and assert the version nibble (15th character of the canonical form,
+/// i.e. the first nibble of the third hyphen-separated group) covers
+/// at least three of the RFC 4122 versions {1, 2, 3, 4, 5}.
+#[test]
+fn interpret_uuid_no_version_varies_across_rfc_versions() {
+    let schema = cbor_map! {};
+    let mut versions: std::collections::HashSet<char> = std::collections::HashSet::new();
+    for seed in 0u64..1000 {
+        let mut ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
+        let s = decode_tagged(&interpret_uuid(&mut ntc, &schema).ok().unwrap());
+        let groups: Vec<&str> = s.split('-').collect();
+        let g3 = groups[2];
+        let version_nibble = g3.chars().next().unwrap();
+        assert!(
+            matches!(version_nibble, '1' | '2' | '3' | '4' | '5'),
+            "uuid {s:?} has a non-RFC-4122 version nibble {version_nibble:?}"
+        );
+        versions.insert(version_nibble);
+    }
+    assert!(
+        versions.len() >= 3,
+        "expected `gs::uuids()` (no version) to produce >=3 distinct RFC \
+         versions across 1000 draws, got {versions:?}"
+    );
+}
+
 // ── interpret_uuid: RFC 4122 variant nibble ────────────────────────────────
 
 /// Every UUID produced by `interpret_uuid` must have RFC 4122-compliant

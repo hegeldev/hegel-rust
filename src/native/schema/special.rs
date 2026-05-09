@@ -185,13 +185,18 @@ pub(super) fn interpret_url(ntc: &mut NativeTestCase) -> Result<Value, StopTest>
 
 /// `uuid` schema → canonical hyphenated UUID string `xxxxxxxx-xxxx-Mxxx-Nxxx-xxxxxxxxxxxx`.
 ///
-/// When `version` is specified, the version nibble (M) is set accordingly and the
-/// RFC 4122 variant bits (N ∈ {8,9,a,b}) are always applied.  When unspecified,
-/// defaults to version 4.  The nil UUID is never produced.
+/// When `version` is specified, the version nibble (M) is set accordingly. When
+/// unspecified, a version is drawn uniformly from `{1..=5}` so the generator
+/// matches its documented "any version" default (`UuidsGenerator` doc in
+/// `src/generators/strings.rs`). RFC 4122 variant bits (N ∈ {8,9,a,b}) are
+/// always applied. The nil UUID is never produced.
 pub(super) fn interpret_uuid(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
-    let version = map_get(schema, "version")
-        .and_then(crate::cbor_utils::as_u64)
-        .unwrap_or(4) as i128;
+    let version: i128 = match map_get(schema, "version").and_then(crate::cbor_utils::as_u64) {
+        Some(v) => v as i128,
+        // Schema-side `gs::uuids()` (no `.version(...)`) emits no
+        // `version` field. Pick uniformly across the RFC 4122 versions.
+        None => ntc.draw_integer(1, 5)?,
+    };
 
     let g1 = ntc.draw_integer(0, 0xFFFF_FFFF)?; // 32 bits: time_low
     let g2 = ntc.draw_integer(0, 0xFFFF)?; // 16 bits: time_mid
