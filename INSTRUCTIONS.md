@@ -429,6 +429,7 @@ If any of these fails, do not emit the promise. Continue to the next iteration.
 When you delete or significantly weaken a test, log it here with the reason. (Strengthening tests doesn't need an entry.) This is so the user can audit test-suite changes at the end.
 
 - **Deleted `tests/embedded/native/conjecture_runner_tests.rs::new_shrinker_panics_with_todo`** (iter 7, S2). Vapid coverage shim — `#[should_panic(expected = "NativeConjectureRunner::new_shrinker")]` asserted the `todo!()` panic message, which only existed to keep the line covered. Closed by deleting the `new_shrinker` method itself; nothing to test for now.
+- **Strengthened `tests/test_phases.rs::test_disabling_target_skips_hill_climb`** (iter 13). Added `seed(Some(0xdeadbeef))` to make it deterministic. Previously failed ~40% of runs because `try_span_mutation` could swap a max-value draw between span positions, propagating it to all three positions and hitting the cap independently of hill-climbing. Re-verified test still catches the original S4 bug: with both `targeting.record` and `maybe_optimise` un-gated, the test fails with `max = 3000`. So the seed change preserves the regression-detection power while removing the flake.
 
 ## 11. Reference: how to run things
 

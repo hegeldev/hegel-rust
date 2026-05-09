@@ -200,6 +200,13 @@ fn test_disabling_reuse_skips_saved_example() {
 fn test_disabling_target_skips_hill_climb() {
     use std::sync::{Arc, Mutex};
 
+    // Seed both runs deterministically. Without a fixed seed the test
+    // is flaky: `try_span_mutation` can swap a max-value draw between
+    // span positions, so a single boundary-biased `1000` draw can
+    // propagate to all three positions and hit the cap even with
+    // hill-climbing disabled. Picking a seed verified not to do that
+    // in the without-target run keeps the test honest about what the
+    // gate is responsible for.
     fn run_collecting_max(phases: Vec<Phase>) -> u64 {
         let max_score = Arc::new(Mutex::new(0u64));
         let m = max_score.clone();
@@ -218,6 +225,7 @@ fn test_disabling_target_skips_hill_climb() {
             Settings::new()
                 .test_cases(1000)
                 .phases(phases)
+                .seed(Some(0xdeadbeef))
                 .database(None),
         )
         .run();
