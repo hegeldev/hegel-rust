@@ -6,6 +6,17 @@ use ciborium::Value;
 
 pub(super) fn interpret_float(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
     let width: u64 = map_get(schema, "width").and_then(as_u64).unwrap_or(64);
+    // Hypothesis only supports `width ∈ {16, 32, 64}` for floats; we
+    // back `width=64` with `f64` and `width=32` with `f64` rounded to
+    // `f32` precision (no `f16` Rust type yet).  Pre-B3 any other value
+    // silently fell through to the f64 path, masking schema bugs.
+    // Reject loud at the boundary instead — the schema is constructed
+    // by Rust generators, so any non-{32, 64} value is a Rust-side bug.
+    if width != 32 && width != 64 {
+        panic!(
+            "unsupported float width: {width} — Hegel supports widths 32 and 64",
+        );
+    }
     let min_value = map_get(schema, "min_value")
         .map(cbor_to_f64)
         .unwrap_or(f64::NEG_INFINITY);
