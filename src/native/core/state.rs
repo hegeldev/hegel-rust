@@ -1081,7 +1081,6 @@ impl NativeTestCase {
 
     /// Draw a boolean with probability `p` of being true.
     /// If `forced` is Some, the result is forced to that value.
-    // nocov start
     pub fn weighted(&mut self, p: f64, forced: Option<bool>) -> Result<bool, StopTest> {
         let kind = BooleanChoice;
 
@@ -1122,8 +1121,6 @@ impl NativeTestCase {
 
         Ok(v)
     }
-    // nocov end
-
     /// Draw a floating-point value.
     ///
     /// Port of pbtkit's `_draw_float` / `draw_float` method.
@@ -1243,7 +1240,6 @@ impl NativeTestCase {
     /// Draw a bytes value with length in `[min_size, max_size]`.
     ///
     /// Port of pbtkit's `_draw_bytes` / `draw_bytes` method.
-    // nocov start
     pub fn draw_bytes(&mut self, min_size: usize, max_size: usize) -> Result<Vec<u8>, StopTest> {
         assert!(
             min_size <= max_size,
@@ -1297,8 +1293,6 @@ impl NativeTestCase {
 
         Ok(v)
     }
-    // nocov end
-
     /// Draw a string value with codepoint range `[min_codepoint, max_codepoint]`
     /// (surrogates automatically excluded) and length in `[min_size, max_size]`.
     ///
