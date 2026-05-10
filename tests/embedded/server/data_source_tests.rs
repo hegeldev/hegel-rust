@@ -1,5 +1,5 @@
 use super::*;
-use crate::server::protocol::packet::{read_packet, write_packet, Packet};
+use crate::server::protocol::packet::{Packet, read_packet, write_packet};
 use std::os::unix::net::UnixStream;
 
 // Mutex so the env-var-mutating tests below serialise with each other —
@@ -11,7 +11,9 @@ static PROTOCOL_DEBUG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(()
 /// regardless of subsequent env var changes).
 #[test]
 fn protocol_debug_from_env_true_for_true_lowercase() {
-    let _guard = PROTOCOL_DEBUG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = PROTOCOL_DEBUG_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     unsafe {
         std::env::set_var("HEGEL_PROTOCOL_DEBUG", "true");
     }
@@ -23,7 +25,9 @@ fn protocol_debug_from_env_true_for_true_lowercase() {
 
 #[test]
 fn protocol_debug_from_env_true_for_one() {
-    let _guard = PROTOCOL_DEBUG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = PROTOCOL_DEBUG_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     unsafe {
         std::env::set_var("HEGEL_PROTOCOL_DEBUG", "1");
     }
@@ -35,7 +39,9 @@ fn protocol_debug_from_env_true_for_one() {
 
 #[test]
 fn protocol_debug_from_env_false_when_unset() {
-    let _guard = PROTOCOL_DEBUG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = PROTOCOL_DEBUG_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     unsafe {
         std::env::remove_var("HEGEL_PROTOCOL_DEBUG");
     }
@@ -44,7 +50,9 @@ fn protocol_debug_from_env_false_when_unset() {
 
 #[test]
 fn protocol_debug_from_env_false_for_garbage() {
-    let _guard = PROTOCOL_DEBUG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = PROTOCOL_DEBUG_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     unsafe {
         std::env::set_var("HEGEL_PROTOCOL_DEBUG", "yes");
     }

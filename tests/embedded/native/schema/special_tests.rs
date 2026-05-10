@@ -173,7 +173,10 @@ fn interpret_datetime_full_calendar_coverage() {
         12,
         "expected all 12 months in 1000 draws, got {months_seen:?}"
     );
-    assert!(saw_day_31, "expected day 31 to appear in 1000 datetime draws");
+    assert!(
+        saw_day_31,
+        "expected day 31 to appear in 1000 datetime draws"
+    );
 }
 
 // ── interpret_time ─────────────────────────────────────────────────────────

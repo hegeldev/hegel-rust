@@ -1044,7 +1044,11 @@ fn live_runner_db_save_downgrades_stale_primary_entries() {
 
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         crate::Hegel::new(|tc: crate::TestCase| {
-            let n: i64 = tc.draw(crate::generators::integers::<i64>().min_value(0).max_value(100));
+            let n: i64 = tc.draw(
+                crate::generators::integers::<i64>()
+                    .min_value(0)
+                    .max_value(100),
+            );
             assert!(n < 50, "predicate violated");
         })
         .settings(
@@ -1124,7 +1128,11 @@ fn live_runner_db_replay_loops_through_all_stored_values() {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         crate::Hegel::new(move |tc: crate::TestCase| {
             counter_clone.fetch_add(1, Ordering::SeqCst);
-            let n: i64 = tc.draw(crate::generators::integers::<i64>().min_value(0).max_value(1));
+            let n: i64 = tc.draw(
+                crate::generators::integers::<i64>()
+                    .min_value(0)
+                    .max_value(1),
+            );
             if n == 0 {
                 panic!("at_A");
             } else {
@@ -2372,10 +2380,7 @@ fn pareto_front_add_dominators_walk_runs_to_completion() {
         status: Status::Valid,
         nodes: nodes.clone(),
         choices: nodes.iter().map(|n| n.value.clone()).collect(),
-        target_observations: targets
-            .iter()
-            .map(|(k, v)| (k.to_string(), *v))
-            .collect(),
+        target_observations: targets.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
         origin: None,
         tags: Default::default(),
         spans: vec![],
@@ -4697,8 +4702,7 @@ fn optimise_targets_accepts_lateral_moves_on_plateau() {
             // strict improvement and stays at the seed; post-A17 the
             // lateral-move acceptance lets it walk the plateau.
             let _v = data.draw_integer(0, 10);
-            data.target_observations
-                .insert("score".to_string(), 50.0);
+            data.target_observations.insert("score".to_string(), 50.0);
         },
         settings,
         make_rng(),
@@ -4805,10 +4809,7 @@ fn cached_test_function_carries_spans() {
         settings,
         make_rng(),
     );
-    let result = runner.cached_test_function(&[
-        ChoiceValue::Integer(5),
-        ChoiceValue::Integer(7),
-    ]);
+    let result = runner.cached_test_function(&[ChoiceValue::Integer(5), ChoiceValue::Integer(7)]);
     assert_eq!(result.status, Status::Valid);
     assert!(
         result.spans.len() >= 2,
@@ -4847,8 +4848,7 @@ fn pareto_front_excludes_results_with_discards() {
             let _ = data.draw_integer(0, 10);
             // discard=true sets has_discards on the test case.
             data.stop_span_with_discard(true);
-            data.target_observations
-                .insert("score".to_string(), 1.0);
+            data.target_observations.insert("score".to_string(), 1.0);
         },
         settings,
         make_rng(),
@@ -4993,10 +4993,7 @@ fn cached_test_function_prefix_reconstructs_partial_nodes() {
     );
     // First call: full path of length 2. Populates the tree with kinds at
     // both positions and a Valid conclusion at depth 2.
-    let full = runner.cached_test_function(&[
-        ChoiceValue::Integer(5),
-        ChoiceValue::Integer(7),
-    ]);
+    let full = runner.cached_test_function(&[ChoiceValue::Integer(5), ChoiceValue::Integer(7)]);
     assert_eq!(full.status, Status::Valid);
     assert_eq!(full.nodes.len(), 2);
 

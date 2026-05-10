@@ -9,7 +9,7 @@
 
 use crate::common::utils::expect_panic;
 use hegel::generators as gs;
-use hegel::{Hegel, HealthCheck, Settings};
+use hegel::{HealthCheck, Hegel, Settings};
 
 #[test]
 fn test_nesting_1() {
@@ -40,10 +40,7 @@ fn test_nesting_1() {
                     Settings::new()
                         .test_cases(100)
                         .database(None)
-                        .suppress_health_check([
-                            HealthCheck::TooSlow,
-                            HealthCheck::FilterTooMuch,
-                        ]),
+                        .suppress_health_check([HealthCheck::TooSlow, HealthCheck::FilterTooMuch]),
                 )
                 .run();
             },

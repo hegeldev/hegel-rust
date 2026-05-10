@@ -13,9 +13,7 @@ pub(super) fn interpret_float(ntc: &mut NativeTestCase, schema: &Value) -> Resul
     // Reject loud at the boundary instead — the schema is constructed
     // by Rust generators, so any non-{32, 64} value is a Rust-side bug.
     if width != 32 && width != 64 {
-        panic!(
-            "unsupported float width: {width} — Hegel supports widths 32 and 64",
-        );
+        panic!("unsupported float width: {width} — Hegel supports widths 32 and 64",);
     }
     let min_value = map_get(schema, "min_value")
         .map(cbor_to_f64)

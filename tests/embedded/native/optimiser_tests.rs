@@ -400,7 +400,8 @@ fn hill_climb_returns_zero_when_extend_full_returns_invalid() {
     assert!(
         runner.valid_examples <= runner.max_examples,
         "valid_examples ({}) must respect max_examples ({})",
-        runner.valid_examples, runner.max_examples,
+        runner.valid_examples,
+        runner.max_examples,
     );
 }
 
@@ -1104,7 +1105,8 @@ fn find_integer_binary_search_returns_run_is_complete() {
     assert!(
         runner.valid_examples <= runner.max_examples,
         "valid_examples ({}) must respect max_examples ({})",
-        runner.valid_examples, runner.max_examples,
+        runner.valid_examples,
+        runner.max_examples,
     );
 }
 

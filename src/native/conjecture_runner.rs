@@ -1111,28 +1111,25 @@ impl NativeShrinker {
                     // Build a list of (orig_start, orig_end, replacement) per
                     // sibling and apply right-to-left so earlier ranges
                     // aren't shifted when later ones change length.
-                    let mut replacements: Vec<(usize, usize, Vec<ChoiceNode>)> =
-                        sibling_indices
-                            .iter()
-                            .zip(sorted.iter())
-                            .filter_map(|(&orig_idx, &target_idx)| {
-                                if orig_idx == target_idx {
-                                    return None;
-                                }
-                                let orig = &snapshot_spans[orig_idx];
-                                let target = &snapshot_spans[target_idx];
-                                if orig.end > current.len()
-                                    || target.end > current.len()
-                                {
-                                    return None;
-                                }
-                                Some((
-                                    orig.start,
-                                    orig.end,
-                                    current[target.start..target.end].to_vec(),
-                                ))
-                            })
-                            .collect();
+                    let mut replacements: Vec<(usize, usize, Vec<ChoiceNode>)> = sibling_indices
+                        .iter()
+                        .zip(sorted.iter())
+                        .filter_map(|(&orig_idx, &target_idx)| {
+                            if orig_idx == target_idx {
+                                return None;
+                            }
+                            let orig = &snapshot_spans[orig_idx];
+                            let target = &snapshot_spans[target_idx];
+                            if orig.end > current.len() || target.end > current.len() {
+                                return None;
+                            }
+                            Some((
+                                orig.start,
+                                orig.end,
+                                current[target.start..target.end].to_vec(),
+                            ))
+                        })
+                        .collect();
                     if replacements.is_empty() {
                         continue;
                     }
@@ -1208,12 +1205,10 @@ impl NativeShrinker {
                         if ancestor.end > current.len() || descendant.end > current.len() {
                             continue;
                         }
-                        let mut attempt: Vec<ChoiceNode> = Vec::with_capacity(
-                            current.len() - ac + descendant.choice_count(),
-                        );
+                        let mut attempt: Vec<ChoiceNode> =
+                            Vec::with_capacity(current.len() - ac + descendant.choice_count());
                         attempt.extend_from_slice(&current[..ancestor.start]);
-                        attempt
-                            .extend_from_slice(&current[descendant.start..descendant.end]);
+                        attempt.extend_from_slice(&current[descendant.start..descendant.end]);
                         attempt.extend_from_slice(&current[ancestor.end..]);
                         if self.inner.consider(&attempt) {
                             made_progress = true;
@@ -1650,7 +1645,10 @@ fn pick_non_exhausted_value(
 /// fresh RNG sampling.  Returning an empty prefix means "just draw
 /// everything at random" — correct for the first call in a run, when
 /// the tree is still empty.
-pub(crate) fn generate_novel_prefix(tree_root: &DataTreeNode, rng: &mut SmallRng) -> Vec<ChoiceValue> {
+pub(crate) fn generate_novel_prefix(
+    tree_root: &DataTreeNode,
+    rng: &mut SmallRng,
+) -> Vec<ChoiceValue> {
     if tree_root.is_exhausted {
         return Vec::new();
     }
@@ -1787,10 +1785,7 @@ fn run_test_fn(
 /// Per the N5 audit, tags can't be reconstructed from the data tree (those
 /// come from spans, which the tree doesn't record); we return only the
 /// nodes here.
-fn prefix_walk_nodes(
-    tree_root: &DataTreeNode,
-    choices: &[ChoiceValue],
-) -> Option<Vec<ChoiceNode>> {
+fn prefix_walk_nodes(tree_root: &DataTreeNode, choices: &[ChoiceValue]) -> Option<Vec<ChoiceNode>> {
     let mut current = tree_root;
     let mut nodes = Vec::with_capacity(choices.len());
     for choice in choices {
@@ -2113,11 +2108,7 @@ impl NativeConjectureRunner {
     /// / `shrinks` / `call_count` / `valid_examples` / `invalid_examples`
     /// / `overrun_examples` / `statistics`.
     pub fn run(&mut self) {
-        let phases = self
-            .settings
-            .phases
-            .clone()
-            .unwrap_or_else(default_phases);
+        let phases = self.settings.phases.clone().unwrap_or_else(default_phases);
         let do_reuse = phases.contains(&Phase::Reuse);
         let do_generate = phases.contains(&Phase::Generate);
         let do_shrink = phases.contains(&Phase::Shrink);
@@ -2427,11 +2418,7 @@ impl NativeConjectureRunner {
     /// the generation phase finishes.
     pub fn shrink_interesting_examples(&mut self) {
         self.shrink_interesting_examples_call_count += 1;
-        let phases = self
-            .settings
-            .phases
-            .clone()
-            .unwrap_or_else(default_phases);
+        let phases = self.settings.phases.clone().unwrap_or_else(default_phases);
         if !phases.contains(&Phase::Shrink) || self.interesting_examples.is_empty() {
             return;
         }
@@ -2906,11 +2893,7 @@ impl NativeConjectureRunner {
             .buffer_size_limit
             .unwrap_or(CONJECTURE_BUFFER_SIZE);
 
-        let phases = self
-            .settings
-            .phases
-            .clone()
-            .unwrap_or_else(default_phases);
+        let phases = self.settings.phases.clone().unwrap_or_else(default_phases);
         let factor: f64 = if phases.contains(&Phase::Generate) {
             0.1
         } else {
@@ -3418,11 +3401,7 @@ impl NativeConjectureRunner {
     /// need to run targeting without the full `run()` lifecycle) and so
     /// `optimise_targets` can be triggered mid-generation.
     pub fn generate_new_examples(&mut self) {
-        let phases = self
-            .settings
-            .phases
-            .clone()
-            .unwrap_or_else(default_phases);
+        let phases = self.settings.phases.clone().unwrap_or_else(default_phases);
         let do_shrink = phases.contains(&Phase::Shrink);
         let buffer_size_limit = self
             .settings
@@ -3463,15 +3442,7 @@ impl NativeConjectureRunner {
                 nodes.iter().map(|n| n.value.clone()).collect();
             let mutation_target_obs = target_obs.clone();
             let mutation_spans = spans.clone();
-            self.record_test_result(
-                status,
-                nodes,
-                origin,
-                target_obs,
-                tags,
-                spans,
-                has_discards,
-            );
+            self.record_test_result(status, nodes, origin, target_obs, tags, spans, has_discards);
             self.generate_mutations_from(
                 &mutation_choices,
                 &mutation_spans,
@@ -3546,15 +3517,7 @@ impl NativeConjectureRunner {
                 nodes.iter().map(|n| n.value.clone()).collect();
             let mutation_target_obs = target_obs.clone();
             let mutation_spans = spans.clone();
-            self.record_test_result(
-                status,
-                nodes,
-                origin,
-                target_obs,
-                tags,
-                spans,
-                has_discards,
-            );
+            self.record_test_result(status, nodes, origin, target_obs, tags, spans, has_discards);
             self.generate_mutations_from(
                 &mutation_choices,
                 &mutation_spans,

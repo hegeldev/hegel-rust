@@ -56,9 +56,7 @@ impl<'a> Shrinker<'a> {
                 // `checked_add` proper so that an index near `usize::MAX`
                 // doesn't silently wrap in release builds; the trailing
                 // `filter` then bounds-checks against the node-list length.
-                let j_opt = i
-                    .checked_add(gap)
-                    .filter(|&j| j < self.current_nodes.len());
+                let j_opt = i.checked_add(gap).filter(|&j| j < self.current_nodes.len());
                 let Some(j) = j_opt else {
                     idx += 1;
                     continue;

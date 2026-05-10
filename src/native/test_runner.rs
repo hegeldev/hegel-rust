@@ -238,10 +238,8 @@ fn run_main(
             }
 
             let batch_rng = SmallRng::from_rng(&mut rng);
-            let prefix = crate::native::conjecture_runner::generate_novel_prefix(
-                &tree_root,
-                &mut rng,
-            );
+            let prefix =
+                crate::native::conjecture_runner::generate_novel_prefix(&tree_root, &mut rng);
             let ntc = if prefix.is_empty() {
                 NativeTestCase::new_random(batch_rng)
             } else {
@@ -643,9 +641,7 @@ pub(crate) struct EngineCtx<'a> {
 }
 
 impl<'a> EngineCtx<'a> {
-    fn new(
-        run_case: &'a mut dyn FnMut(Box<dyn DataSource>, bool) -> TestCaseResult,
-    ) -> Self {
+    fn new(run_case: &'a mut dyn FnMut(Box<dyn DataSource>, bool) -> TestCaseResult) -> Self {
         EngineCtx {
             run_case,
             tree_root: DetTreeNode::new(),
@@ -707,8 +703,8 @@ impl<'a> EngineCtx<'a> {
         let choices: Vec<ChoiceValue> = candidate_nodes.iter().map(|n| n.value.clone()).collect();
         let ntc = NativeTestCase::for_choices(&choices, Some(candidate_nodes), None);
         let run = self.execute(ntc, false);
-        let matches = run.status == Status::Interesting
-            && run.origin.as_deref() == Some(target_origin);
+        let matches =
+            run.status == Status::Interesting && run.origin.as_deref() == Some(target_origin);
         self.cache.insert(key, run.clone());
         (matches, run.nodes)
     }
@@ -723,8 +719,8 @@ impl<'a> EngineCtx<'a> {
         let rng = SmallRng::seed_from_u64(seed);
         let ntc = NativeTestCase::for_probe(prefix, rng, max_size);
         let run = self.execute(ntc, false);
-        let matches = run.status == Status::Interesting
-            && run.origin.as_deref() == Some(target_origin);
+        let matches =
+            run.status == Status::Interesting && run.origin.as_deref() == Some(target_origin);
         let key: Vec<ChoiceValueKey> = run
             .nodes
             .iter()

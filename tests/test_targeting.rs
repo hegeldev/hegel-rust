@@ -217,7 +217,13 @@ fn test_finds_a_local_maximum() {
 #[test]
 fn test_finds_a_local_maximum_across_seeds() {
     let seeds: [u64; 8] = [
-        0xdeadbeef, 0xc0ffee, 0xfeedface, 0xbadc0de, 0x12345678, 0xabcdef01, 0xcafe_d00d,
+        0xdeadbeef,
+        0xc0ffee,
+        0xfeedface,
+        0xbadc0de,
+        0x12345678,
+        0xabcdef01,
+        0xcafe_d00d,
         0x42424242,
     ];
     let successes = seeds

@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use crate::native::core::{
-    ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice, float_to_index, index_to_float,
-    sort_key,
+    ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice, float_to_index,
+    index_to_float, sort_key,
 };
 
 use super::{ShrinkRun, Shrinker, bin_search_down, find_integer};
@@ -353,9 +353,7 @@ fn is_float_or_integer(k: &ChoiceKind) -> bool {
 fn is_trivial(node: &ChoiceNode) -> bool {
     match (&node.kind, &node.value) {
         (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => *v == ic.simplest(),
-        (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => {
-            !v.is_finite() || *v == fc.simplest()
-        }
+        (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => !v.is_finite() || *v == fc.simplest(),
         _ => true,
     }
 }
@@ -368,7 +366,10 @@ fn is_trivial(node: &ChoiceNode) -> bool {
 fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) {
     // Snapshot the original values; find_integer will probe larger and
     // larger `k` and the kept candidate updates current_nodes in place.
-    let (v_i, kind_i) = match (&shrinker.current_nodes[i].kind, &shrinker.current_nodes[i].value) {
+    let (v_i, kind_i) = match (
+        &shrinker.current_nodes[i].kind,
+        &shrinker.current_nodes[i].value,
+    ) {
         (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => {
             (NumericValue::Integer(*n), NumericKind::Integer(ic.clone()))
         }
@@ -380,7 +381,10 @@ fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) {
         }
         _ => return,
     };
-    let (v_j, kind_j) = match (&shrinker.current_nodes[j].kind, &shrinker.current_nodes[j].value) {
+    let (v_j, kind_j) = match (
+        &shrinker.current_nodes[j].kind,
+        &shrinker.current_nodes[j].value,
+    ) {
         (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => {
             (NumericValue::Integer(*n), NumericKind::Integer(ic.clone()))
         }

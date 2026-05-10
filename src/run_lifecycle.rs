@@ -57,7 +57,8 @@ fn take_panic_info() -> Option<(String, String, String, Backtrace)> {
 pub(crate) fn take_panic_location() -> Option<String> {
     LAST_PANIC_INFO.with(|info| {
         let mut slot = info.borrow_mut();
-        slot.as_mut().map(|(_, _, location, _)| std::mem::take(location))
+        slot.as_mut()
+            .map(|(_, _, location, _)| std::mem::take(location))
     })
 }
 
@@ -157,11 +158,7 @@ fn format_backtrace(bt: &Backtrace, full: bool) -> String {
     let mut result = Vec::new();
     for line in filtered {
         let trimmed = line.trim_start();
-        if trimmed
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_digit())
-        {
+        if trimmed.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             if let Some(colon_pos) = trimmed.find(':') {
                 let rest = &trimmed[colon_pos..];
                 result.push(format!("{:>4}{}", new_frame_num, rest));
@@ -221,8 +218,8 @@ pub(crate) fn run_test_case(
             } else if msg == LOOP_DONE_STRING {
                 (TestCaseResult::Valid, None)
             } else {
-                let (thread_name, thread_id, location, backtrace) =
-                    take_panic_info().unwrap_or_else(|| {
+                let (thread_name, thread_id, location, backtrace) = take_panic_info()
+                    .unwrap_or_else(|| {
                         (
                             "<unknown>".to_string(),
                             "?".to_string(),

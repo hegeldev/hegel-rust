@@ -65,7 +65,11 @@ fn draw_dns_label(ntc: &mut NativeTestCase, len: usize) -> Result<String, StopTe
     }
     // Last char: letter or digit (no trailing hyphen).
     let idx = ntc.draw_integer(0, 35)? as u8;
-    let c = if idx < 26 { idx + b'a' } else { idx - 26 + b'0' };
+    let c = if idx < 26 {
+        idx + b'a'
+    } else {
+        idx - 26 + b'0'
+    };
     s.push(c as char);
     Ok(s)
 }

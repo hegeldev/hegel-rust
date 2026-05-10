@@ -2592,11 +2592,7 @@ fn run_named_pass_node_program_x_deletes_one_node() {
     // Upstream registers `node_program_X`, `node_program_XX`, ...,
     // `node_program_XXXXX` (A20e). Each `node_program_<X*N>` deletes
     // N consecutive nodes at each candidate start position.
-    let nodes = vec![
-        int_node(0, 10, 5),
-        int_node(0, 10, 5),
-        int_node(0, 10, 5),
-    ];
+    let nodes = vec![int_node(0, 10, 5), int_node(0, 10, 5), int_node(0, 10, 5)];
     // Predicate accepts when at least one node remains — so the pass
     // can shrink the sequence down but won't reduce to the empty
     // sequence.
