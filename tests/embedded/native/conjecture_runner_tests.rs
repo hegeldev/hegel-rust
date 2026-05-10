@@ -4819,25 +4819,29 @@ fn cached_test_function_carries_spans() {
     );
 }
 
-// ── N4: shrink-time probes record stats / target observations ────────────
+// ── N4: shrink-time probes record target observations / pareto ───────────
 //
 // Pre-N4, `shrink_interesting_examples` invoked the shrinker via a closure
-// that called `run_test_fn` directly (bypassing `cached_test_function` /
-// `record_test_result`). As a result, every Valid run that the shrinker
-// explored during shrinking went unrecorded: `valid_examples` didn't tick,
-// target observations weren't merged into `best_observed_targets`, and
-// the pareto front never saw the result.
+// that called `run_test_fn` directly. Valid runs explored during shrinking
+// went unrecorded: target observations didn't merge into
+// `best_observed_targets`, and the pareto front never saw the result.
 //
-// Behavioural claim: with `max_examples=5` capping the generation phase to
-// at most 5 valid examples, and a body whose simplest probe (v=0) marks
-// interesting, the shrinker phase explores many alternatives. Each
-// alternative with v>=1 is Valid. Post-N4 those Valid runs flow through
-// `record_test_result`, so `runner.valid_examples` after `run()` exceeds
-// the generation-phase budget. Pre-N4 it's capped at the budget.
+// Behavioural claim: with `max_examples=1`, generation runs only the
+// simplest probe (v=0 → interesting); generation never reaches a Valid
+// status, so any entry in `best_observed_targets` *must* come from
+// shrink-time Valid probes. Pre-N4 the dict is empty after `run()`;
+// post-N4 it has the highest score the shrinker observed (which is
+// strictly > 0 since shrinker explores v>=1 candidates).
+//
+// We deliberately do *not* assert `valid_examples > max_examples`:
+// upstream (`engine.py::test_function`) treats `valid_examples` as the
+// generation-phase budget, and tests like `test_shrink_after_max_examples`
+// assert `valid_examples == max_examples` after the run. Shrink-time
+// observations bypass the counters but do flow into pareto / targets.
 #[test]
-fn shrink_probes_count_toward_valid_examples() {
+fn shrink_probes_record_target_observations() {
     let settings = NativeRunnerSettings::new()
-        .max_examples(5)
+        .max_examples(1)
         .suppress_health_check(vec![
             HealthCheckLabel::FilterTooMuch,
             HealthCheckLabel::TooSlow,
@@ -4849,6 +4853,13 @@ fn shrink_probes_count_toward_valid_examples() {
             let v = data.draw_integer(0, 100);
             if v == 0 {
                 data.mark_interesting(interesting_origin(None));
+            } else {
+                // Recorded only on Valid runs; with max_examples=1 the
+                // generation phase produces zero Valid runs (the simplest
+                // probe at v=0 is Interesting), so any non-empty target
+                // dict afterwards comes purely from shrink probes.
+                data.target_observations
+                    .insert("score".to_string(), v as f64);
             }
         },
         settings,
@@ -4859,15 +4870,13 @@ fn shrink_probes_count_toward_valid_examples() {
         !runner.interesting_examples.is_empty(),
         "v=0 must be marked interesting (hit by the simplest probe)",
     );
-    // Pre-N4: shrink-time Valid probes don't bump valid_examples, so the
-    // counter is capped at max_examples=5. Post-N4: shrink probes flow
-    // through record_test_result and the counter exceeds 5.
+    let best = runner.best_observed_targets.get("score").copied();
     assert!(
-        runner.valid_examples > 5,
-        "valid_examples must include shrink-time Valid probes (got {}; \
-         pre-N4 the shrinker bypassed record_test_result so the counter \
-         was capped at the generation-phase budget of 5)",
-        runner.valid_examples,
+        best.is_some_and(|b| b > 0.0),
+        "shrink-time Valid probes (v>=1) must update \
+         best_observed_targets via record_observations_only; got {best:?} \
+         (pre-N4 the shrinker bypassed record_observations_only so target \
+         observations from shrink probes were dropped on the floor)",
     );
 }
 

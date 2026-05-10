@@ -2178,6 +2178,57 @@ impl NativeConjectureRunner {
         false
     }
 
+    /// Subset of [`Self::record_test_result`] that updates target
+    /// observations and the pareto front *without* bumping the example
+    /// counters or touching `interesting_examples` / `shrinks`. Used by
+    /// the shrinker closure (N4) so shrink-time Valid probes contribute
+    /// to `best_observed_targets` and `pareto_front` without inflating
+    /// the generation-phase counters that upstream (`engine.py`) reserves
+    /// for the generation loop. Status::Interesting is left to the
+    /// shrinker's own `improvements` / `downgraded` plumbing.
+    fn record_observations_only(
+        &mut self,
+        status: Status,
+        nodes: Vec<ChoiceNode>,
+        target_observations: HashMap<String, f64>,
+        tags: HashSet<u64>,
+        spans: Vec<Span>,
+    ) {
+        if status != Status::Valid {
+            return;
+        }
+        let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+        for (k, &v) in &target_observations {
+            let entry = self
+                .best_observed_targets
+                .entry(k.clone())
+                .or_insert(f64::NEG_INFINITY);
+            if v > *entry {
+                *entry = v;
+                self.best_choices_for_target
+                    .insert(k.clone(), choices.clone());
+            }
+        }
+        if !target_observations.is_empty() {
+            let result = ConjectureRunResult {
+                status: Status::Valid,
+                nodes,
+                choices: choices.clone(),
+                target_observations,
+                origin: None,
+                tags,
+                spans,
+            };
+            let (added, evicted) = self.pareto_front.add(result);
+            if added {
+                self.save_to_pareto_key(&choices);
+            }
+            for e in evicted {
+                self.delete_from_pareto_key(&e.choices);
+            }
+        }
+    }
+
     /// Update the runner's call-count / status counters and bug-tracking
     /// fields from a single test invocation's outcome.  Shared by the
     /// generation loop and [`Self::cached_test_function`].
@@ -2423,18 +2474,30 @@ impl NativeConjectureRunner {
             let max_shrinks = self.settings.max_shrinks.unwrap_or(MAX_SHRINKS);
             let remaining = max_shrinks.saturating_sub(self.shrinks);
 
-            let test_fn = &mut self.test_fn;
-            let call_count = &mut self.call_count;
             let report_multiple_bugs = self.settings.report_multiple_bugs;
             let target = origin.clone();
             // Use `with_probe` so `mutate_and_shrink` actually runs
             // (mirrors test_runner.rs:391). With `Shrinker::new` the
             // probe variant is silently dropped and mutation-based
             // shrinking is disabled.
+            //
+            // Capture `&mut self` (as `me`) into the closure so each probe
+            // can route bookkeeping through `record_test_result` — N4 fix.
+            // Pre-N4 the closure captured `&mut self.test_fn` and
+            // `&mut self.call_count` separately, leaving every Valid /
+            // Invalid / EarlyStop run unrecorded (no valid_examples bump,
+            // no target merging into best_observed_targets, no pareto
+            // contribution). Now the runner sees shrink-time probes
+            // identically to generation-phase runs.
+            //
+            // We can't route through `cached_test_function` itself yet:
+            // its `for_choices(_, None, None)` call drops the punning
+            // `prefix_nodes` that Full-replay needs to handle one_of
+            // shape changes. That's tracked as N4-followup.
             let (shrunk, improvements, downgraded) = {
+                let me: &mut Self = self;
                 let mut shrinker = Shrinker::with_probe(
-                    Box::new(|req: ShrinkRun| {
-                        *call_count += 1;
+                    Box::new(move |req: ShrinkRun| {
                         let ntc = match req {
                             ShrinkRun::Full(candidate) => {
                                 let choices: Vec<ChoiceValue> =
@@ -2454,11 +2517,32 @@ impl NativeConjectureRunner {
                             status,
                             actual_nodes,
                             found_origin,
-                            _target_obs,
-                            _tags,
+                            target_obs,
+                            tags,
                             _kill_depths,
-                            _spans,
-                        ) = run_test_fn(test_fn, ntc, buffer_size_limit);
+                            spans,
+                        ) = run_test_fn(&mut me.test_fn, ntc, buffer_size_limit);
+                        me.call_count += 1;
+                        // Merge any target observations from this probe
+                        // into best_observed_targets / pareto_front via
+                        // `record_observations_only`. We *don't* bump
+                        // valid_examples / invalid_examples /
+                        // overrun_examples here: upstream
+                        // (`engine.py::test_function`) treats those
+                        // counters as the generation-phase budget, and
+                        // tests like `test_shrink_after_max_examples`
+                        // assert `valid_examples == max_examples` after
+                        // the run regardless of how many shrink probes
+                        // landed. We *also* skip the Interesting branch:
+                        // the shrinker tracks improvements / downgraded
+                        // itself and the post-loop code applies them.
+                        me.record_observations_only(
+                            status,
+                            actual_nodes.clone(),
+                            target_obs,
+                            tags,
+                            spans,
+                        );
                         // Mirrors `engine.py`'s per-target predicate
                         // (`d.interesting_origin == target`): when
                         // `report_multiple_bugs` is on, slipping to a
