@@ -384,7 +384,7 @@ For each: read the test, decide whether the *test* is wrong (expected message ch
 - [ ] **E7.** `RELEASE.md` — overstates parity. Update once items above land.
 - [ ] **E8.** No `print_blob` / `reproduce_failure` on either backend. If this is on the roadmap, add to Open Questions; otherwise leave it.
 - [ ] **E9.** `src/native/shrinker/strings.rs:120-141` — non-deterministic iteration order over a `HashMap`. Sort first.
-- [ ] **E10.** `src/native/shrinker/index_passes.rs:58` — `checked_add(0)` is a no-op; the overflow guard is missing. Either add the guard properly or simplify to a non-checked form.
+- [x] **E10.** `src/native/shrinker/index_passes.rs:58` — `checked_add(0)` is a no-op; the overflow guard is missing. Either add the guard properly or simplify to a non-checked form. Done — replaced `(i + gap).checked_add(0).filter(...)` with `i.checked_add(gap).filter(...)`. Pre-fix the inner `i + gap` could silently wrap in release builds (panic in debug); the `.checked_add(0)` always returned `Some(self)` and never caught the wrap. Post-fix the addition itself is checked; `None` short-circuits the surrounding loop iteration. In practice the indices are bounded by realistic node-list lengths so wrap was vanishingly unlikely, but the guard is now correct rather than ornamental. Native + default suites green.
 
 ### Newly discovered items
 

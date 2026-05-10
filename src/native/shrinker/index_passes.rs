@@ -52,9 +52,12 @@ impl<'a> Shrinker<'a> {
                     }
                 }
 
-                // Find bump target `j`: the gap'th node after i.
-                let j_opt = (i + gap)
-                    .checked_add(0)
+                // Find bump target `j`: the gap'th node after i. Use
+                // `checked_add` proper so that an index near `usize::MAX`
+                // doesn't silently wrap in release builds; the trailing
+                // `filter` then bounds-checks against the node-list length.
+                let j_opt = i
+                    .checked_add(gap)
                     .filter(|&j| j < self.current_nodes.len());
                 let Some(j) = j_opt else {
                     idx += 1;
