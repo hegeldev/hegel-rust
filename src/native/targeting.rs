@@ -58,18 +58,26 @@ impl TargetingState {
 /// short method calls instead of inlining the whole protocol.
 pub(crate) struct TargetingDriver {
     targeting: TargetingState,
-    optimise_at: u64,
-    ran_optimisations: bool,
+    /// Step size between optimise-targets passes. The first pass fires when
+    /// `valid_test_cases` first reaches `next_optimise_at` (initialised to
+    /// the same step), and each pass thereafter advances `next_optimise_at`
+    /// by another `optimise_step`. Pre-E4 this was a single-shot bool, but
+    /// `targeting.record` keeps accumulating observations as more valid
+    /// examples arrive — those later observations can introduce better
+    /// starting points that the first pass's local-maximum walk missed.
+    /// Re-entry lets the climber explore from those fresh starting points.
+    optimise_step: u64,
+    next_optimise_at: u64,
 }
 
 impl TargetingDriver {
     pub fn new(max_examples: u64) -> Self {
         let small_example_cap = (max_examples / 10).min(50);
-        let optimise_at = (max_examples / 2).max(small_example_cap + 1).max(10);
+        let optimise_step = (max_examples / 2).max(small_example_cap + 1).max(10);
         Self {
             targeting: TargetingState::new(),
-            optimise_at,
-            ran_optimisations: false,
+            optimise_step,
+            next_optimise_at: optimise_step,
         }
     }
 
@@ -95,14 +103,15 @@ impl TargetingDriver {
         valid_test_cases: &mut u64,
         max_examples: u64,
     ) {
-        if self.ran_optimisations
-            || *valid_test_cases < self.optimise_at
+        if *valid_test_cases < self.next_optimise_at
             || self.targeting.is_empty()
             || result.is_some()
         {
             return;
         }
-        self.ran_optimisations = true;
+        // Schedule the next pass after another `optimise_step` valid examples.
+        // saturating_add guards against overflow on max_examples = u64::MAX.
+        self.next_optimise_at = valid_test_cases.saturating_add(self.optimise_step);
         let mut ctx = OptimiseCtx {
             result,
             calls,
