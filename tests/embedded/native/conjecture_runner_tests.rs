@@ -4819,6 +4819,58 @@ fn cached_test_function_carries_spans() {
     );
 }
 
+// ── N4: shrink-time probes record stats / target observations ────────────
+//
+// Pre-N4, `shrink_interesting_examples` invoked the shrinker via a closure
+// that called `run_test_fn` directly (bypassing `cached_test_function` /
+// `record_test_result`). As a result, every Valid run that the shrinker
+// explored during shrinking went unrecorded: `valid_examples` didn't tick,
+// target observations weren't merged into `best_observed_targets`, and
+// the pareto front never saw the result.
+//
+// Behavioural claim: with `max_examples=5` capping the generation phase to
+// at most 5 valid examples, and a body whose simplest probe (v=0) marks
+// interesting, the shrinker phase explores many alternatives. Each
+// alternative with v>=1 is Valid. Post-N4 those Valid runs flow through
+// `record_test_result`, so `runner.valid_examples` after `run()` exceeds
+// the generation-phase budget. Pre-N4 it's capped at the budget.
+#[test]
+fn shrink_probes_count_toward_valid_examples() {
+    let settings = NativeRunnerSettings::new()
+        .max_examples(5)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let v = data.draw_integer(0, 100);
+            if v == 0 {
+                data.mark_interesting(interesting_origin(None));
+            }
+        },
+        settings,
+        make_rng(),
+    );
+    runner.run();
+    assert!(
+        !runner.interesting_examples.is_empty(),
+        "v=0 must be marked interesting (hit by the simplest probe)",
+    );
+    // Pre-N4: shrink-time Valid probes don't bump valid_examples, so the
+    // counter is capped at max_examples=5. Post-N4: shrink probes flow
+    // through record_test_result and the counter exceeds 5.
+    assert!(
+        runner.valid_examples > 5,
+        "valid_examples must include shrink-time Valid probes (got {}; \
+         pre-N4 the shrinker bypassed record_test_result so the counter \
+         was capped at the generation-phase budget of 5)",
+        runner.valid_examples,
+    );
+}
+
 // ── N5: cached_test_function prefix-walk reconstructs partial nodes ───────
 //
 // `cached_test_function` short-circuits when `choices` is a strict prefix
