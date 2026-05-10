@@ -33,6 +33,34 @@ impl CharacterFields {
 
     /// Build a schema map containing the character filtering fields.
     fn to_schema(&self) -> Value {
+        // N13(a): Eagerly validate `min_codepoint <= max_codepoint`.
+        // Pre-N13 a builder with `min_codepoint(42).max_codepoint(24)`
+        // would silently produce a schema whose alphabet was empty,
+        // panicking at draw time inside `build_string_alphabet_uncached`
+        // with a generic "no valid characters" message. Mirrors upstream
+        // Hypothesis's strategy-construction-time `InvalidArgument` raise.
+        if let (Some(min_cp), Some(max_cp)) = (self.min_codepoint, self.max_codepoint) {
+            assert!(
+                min_cp <= max_cp,
+                "InvalidArgument: min_codepoint={min_cp} > max_codepoint={max_cp} \
+                 — the codepoint range is empty.",
+            );
+        }
+        // N13(c): Eagerly validate codec values against the set the
+        // native schema interpreter accepts. Pre-N13 an unknown codec
+        // would panic at draw time inside `build_string_alphabet_uncached`
+        // with `Invalid codec: <codec>`. The same panic at builder time
+        // means upstream-compatible "InvalidArgument-at-strategy-
+        // construction" semantics, which is what conformance and the
+        // simple_characters tests both want.
+        if let Some(ref codec) = self.codec {
+            const SUPPORTED_CODECS: &[&str] = &["ascii", "latin-1", "iso-8859-1", "utf-8"];
+            assert!(
+                SUPPORTED_CODECS.contains(&codec.as_str()),
+                "InvalidArgument: codec={codec:?} is not supported. \
+                 Supported codecs: {SUPPORTED_CODECS:?}",
+            );
+        }
         let mut schema = cbor_map! {};
         if let Some(ref codec) = self.codec {
             map_insert(&mut schema, "codec", codec.as_str());
