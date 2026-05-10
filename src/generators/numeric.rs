@@ -346,7 +346,7 @@ where
             return nan;
         }
         tc.assume(false);
-        unreachable!()
+        unreachable!("tc.assume(false) on the line above panics out of the test case")
     }
 }
 

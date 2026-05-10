@@ -300,7 +300,7 @@ where
             );
         }
         tc.assume(false);
-        unreachable!()
+        unreachable!("tc.assume(false) on the line above panics out of the test case")
     }
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
