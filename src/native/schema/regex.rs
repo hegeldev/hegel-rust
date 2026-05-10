@@ -16,7 +16,7 @@ use crate::native::re::constants::{
     AtCode, ChCode, SRE_FLAG_ASCII, SRE_FLAG_DOTALL, SRE_FLAG_IGNORECASE, SRE_FLAG_MULTILINE,
 };
 use crate::native::re::parser::{OpCode, ParsedPattern, SetItem, SubPattern, parse_pattern};
-use crate::native::unicodedata;
+use crate::unicodedata;
 use ciborium::Value;
 
 use super::many_more;

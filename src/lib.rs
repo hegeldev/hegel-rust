@@ -230,6 +230,19 @@ pub(crate) mod runner;
 pub(crate) mod server;
 pub mod stateful;
 mod test_case;
+// N14: unicodedata was previously in `src/native/unicodedata`, gated
+// behind the `native` feature. The non-feature-gated generator-builder
+// layer (`src/generators/strings.rs::CharacterFields`) now needs the
+// category data to eagerly validate exclude_categories / categories
+// constraints at strategy-construction time, so the module is top-level.
+// Server-side builds pay the `tables.rs` compile cost once but otherwise
+// don't use the module.
+//
+// `#[doc(hidden)]`-marked because this module isn't part of the stable
+// public API; it's still publicly visible so `__native_test_internals`
+// can re-export it.
+#[doc(hidden)]
+pub mod unicodedata;
 
 #[doc(hidden)]
 pub use control::currently_in_test_context;
@@ -304,7 +317,7 @@ pub mod __native_test_internals {
     };
     pub use crate::native::shrinker::{ShrinkRun, Shrinker};
     pub use crate::native::tree::{CachedTestFunction, RunResult};
-    pub use crate::native::unicodedata;
+    pub use crate::unicodedata;
     pub use crate::runner::Phase as RunnerPhase;
 }
 

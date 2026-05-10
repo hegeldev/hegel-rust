@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::cbor_utils::{as_text, as_u64, map_get};
 use crate::native::core::{ManyState, NativeTestCase, StopTest, codepoint_key, key_to_codepoint};
-use crate::native::unicodedata;
+use crate::unicodedata;
 use ciborium::Value;
 
 use super::many_more;

@@ -30,7 +30,6 @@ pub mod shrinker;
 pub mod targeting;
 pub mod test_runner;
 pub mod tree;
-pub mod unicodedata;
 
 use data_source::NativeTestCaseHandle;
 

@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 
 use crate::native::core::{ChoiceKind, ChoiceValue, StringChoice, codepoint_key};
-use crate::native::unicodedata;
+use crate::unicodedata;
 
 use super::{Shrinker, bin_search_down};
 

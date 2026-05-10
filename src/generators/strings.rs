@@ -96,6 +96,67 @@ impl CharacterFields {
         if let Some(ref excl) = self.exclude_characters {
             map_insert(&mut schema, "exclude_characters", excl.as_str());
         }
+
+        // N14: empty-alphabet validation when the codepoint range is
+        // bounded and small enough to scan cheaply. For each cp in the
+        // range, check that it's not excluded by categories, surrogates,
+        // or exclude_characters. If no cp survives, the alphabet is
+        // empty — panic at builder time rather than at draw time.
+        //
+        // Bounded at 0x1000 codepoints to keep `gs::characters()`-call
+        // overhead low. Larger ranges (default `[0, 0x10FFFF]` etc.)
+        // defer to schema-time validation; they're almost always
+        // non-empty in practice because the Unicode category set is rich
+        // across the full plane.
+        if let (Some(min_cp), Some(max_cp)) = (self.min_codepoint, self.max_codepoint) {
+            const SCAN_LIMIT: u32 = 0x1000;
+            if max_cp.saturating_sub(min_cp) < SCAN_LIMIT {
+                let exclude_chars: Vec<char> = self
+                    .exclude_characters
+                    .as_deref()
+                    .map(|s| s.chars().collect())
+                    .unwrap_or_default();
+                let include_chars: Vec<char> = self
+                    .include_characters
+                    .as_deref()
+                    .map(|s| s.chars().collect())
+                    .unwrap_or_default();
+                let categories = self.categories.as_ref();
+                let exclude_categories = self.exclude_categories.as_ref();
+                let any_valid = (min_cp..=max_cp).any(|cp| {
+                    let Some(c) = char::from_u32(cp) else {
+                        return false; // surrogate
+                    };
+                    if exclude_chars.contains(&c) {
+                        return false;
+                    }
+                    if include_chars.contains(&c) {
+                        return true;
+                    }
+                    if let Some(cats) = categories {
+                        cats.iter()
+                            .any(|cat| crate::unicodedata::is_in_group(cp, cat))
+                    } else if let Some(excats) = exclude_categories {
+                        !excats
+                            .iter()
+                            .any(|cat| crate::unicodedata::is_in_group(cp, cat))
+                    } else {
+                        true
+                    }
+                });
+                assert!(
+                    any_valid,
+                    "InvalidArgument: no valid characters in the specified range. \
+                     min_codepoint={min_cp:#x}, max_codepoint={max_cp:#x}, \
+                     categories={:?}, exclude_categories={:?}, \
+                     include_characters={:?}, exclude_characters={:?}",
+                    self.categories,
+                    self.exclude_categories,
+                    self.include_characters,
+                    self.exclude_characters,
+                );
+            }
+        }
         schema
     }
 }
