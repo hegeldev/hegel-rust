@@ -295,6 +295,15 @@ fn test_shrinking_mixed_choice_types_no_sort_crash() {
 fn test_shrinking_stale_indices_no_redistribute_crash() {
     // Variable-length sequence so shrinking a prior choice changes the
     // result length mid-pass.
+    //
+    // Predicate: `sum > 150 && len >= 3`. Each value is in [0, 100], `n`
+    // is in [2, 8]. The shortest length satisfying `len >= 3` is 3, so
+    // the shrinker pins n=3 and lex-minimises the values. The lex-min
+    // way to make three values in [0, 100] sum to > 150 is
+    // `[0, 51, 100]`: 0 then the smallest second element such that
+    // `0 + b + 100 > 150` (i.e., b=51) then the largest available value
+    // (100). Pre-N11 this was a `let _ = ...` smoke test asserting only
+    // "doesn't crash".
     let g = hegel::compose!(|tc| {
         let n: i64 = tc.draw(gs::integers::<i64>().min_value(2).max_value(8));
         let vals: Vec<i64> = (0..n)
@@ -303,11 +312,12 @@ fn test_shrinking_stale_indices_no_redistribute_crash() {
         let _: bool = tc.draw(gs::booleans()); // non-integer choice
         vals
     });
-    let _ = Minimal::new(g, |vals: &Vec<i64>| {
+    let vals = Minimal::new(g, |vals: &Vec<i64>| {
         vals.iter().sum::<i64>() > 150 && vals.len() >= 3
     })
     .test_cases(2000)
     .run();
+    assert_eq!(vals, vec![0, 51, 100]);
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -499,7 +509,10 @@ enum BoolIntOrInt {
 
 #[test]
 fn test_redistribute_stale_indices_with_one_of() {
-    // Should not crash — the test runs `state.run()` with no assertion.
+    // Predicate: `Bool(true) | Two`. The first one_of branch (Bool)
+    // matches via `Bool(true)`, which is the simplest matching variant
+    // (the one_of branch index drops to 0). Pre-N11 this was a
+    // `let _ = ...` smoke test asserting only "doesn't crash".
     let g = hegel::compose!(|tc| {
         let v0 = tc.draw(gs::one_of(vec![
             gs::booleans().map(BoolIntOrInt::Bool).boxed(),
@@ -518,17 +531,23 @@ fn test_redistribute_stale_indices_with_one_of() {
         let _: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(0));
         v0
     });
-    let _ = Minimal::new(g, |v: &BoolIntOrInt| {
+    let v = Minimal::new(g, |v: &BoolIntOrInt| {
         matches!(v, BoolIntOrInt::Bool(true) | BoolIntOrInt::Two)
     })
     .test_cases(2000)
     .run();
+    assert_eq!(v, BoolIntOrInt::Bool(true));
 }
 
 #[test]
 fn test_lower_and_bump_stale_j_after_replace() {
-    // Regression for AssertionError in lower_and_bump — we just run and
-    // observe that shrinking completes without panicking.
+    // Regression for AssertionError in lower_and_bump under a complex
+    // generator structure (filter + flat_map + nested vecs). The test
+    // body returns just `v0: bool`; predicate is `*v == true`, so the
+    // shrunk minimum is `true` (any other draw shrinks to its simplest
+    // value, but they're discarded). Pre-N11 this was a `let _ = ...`
+    // smoke test — the assertion now both confirms "doesn't crash"
+    // *and* "actually finds the minimum" in one shot.
     let g = hegel::compose!(|tc| {
         let v0: bool = tc.draw(gs::booleans());
         let _: bool = tc.draw(gs::booleans());
@@ -551,7 +570,8 @@ fn test_lower_and_bump_stale_j_after_replace() {
         );
         v0
     });
-    let _ = Minimal::new(g, |v: &bool| *v).test_cases(2000).run();
+    let v = Minimal::new(g, |v: &bool| *v).test_cases(2000).run();
+    assert!(v);
 }
 
 #[test]
@@ -657,10 +677,16 @@ fn test_mutate_exercises_index_probes() {
 fn test_mutate_skips_large_result() {
     // 35 integer draws — upstream asserts shrinking doesn't choke on the
     // large-result early-return in `mutate_and_shrink`.
+    //
+    // Predicate accepts every Vec<i64>, so the shrinker minimises every
+    // value to its simplest. Each integer is in [0, 10] with the default
+    // shrink_towards = 0, so the shrunk minimum is exactly 35 zeros.
+    // Pre-N11 this was a `let _ = ...` smoke test.
     let g = hegel::compose!(|tc| {
         (0..35)
             .map(|_| tc.draw(gs::integers::<i64>().min_value(0).max_value(10)))
             .collect::<Vec<i64>>()
     });
-    let _ = Minimal::new(g, |_: &Vec<i64>| true).test_cases(200).run();
+    let v = Minimal::new(g, |_: &Vec<i64>| true).test_cases(200).run();
+    assert_eq!(v, vec![0i64; 35]);
 }

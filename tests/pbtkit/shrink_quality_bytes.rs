@@ -26,9 +26,16 @@ fn test_redistribute_bytes_between_pairs() {
 
 #[test]
 fn test_redistribute_bytes_respects_max_size() {
-    // redistribute_bytes must skip transfers that exceed max_size.
-    // Smoke test: shrinker completes and yields some counterexample.
-    let _ = Minimal::new(
+    // redistribute_bytes must skip transfers that exceed max_size, and
+    // the shrinker must still find the lex-minimum that satisfies the
+    // sum constraint (a + b >= 15) under the asymmetric size caps:
+    // `a in [5, 10]`, `b in [0, 8]`.
+    //
+    // The minimum-length, lex-smallest solution is `(a=7, b=8)`: any
+    // shorter `a` would force `b > 8`, and any larger `a` is lex-bigger
+    // (tuple shortlex prefers smaller `a` first). All bytes shrink to
+    // zero. Pre-N11 this was a `let _ = ...` smoke test.
+    let (a, b) = Minimal::new(
         gs::tuples!(
             gs::binary().min_size(5).max_size(10),
             gs::binary().max_size(8),
@@ -37,13 +44,21 @@ fn test_redistribute_bytes_respects_max_size() {
     )
     .test_cases(1000)
     .run();
+    assert_eq!(a, vec![0u8; 7]);
+    assert_eq!(b, vec![0u8; 8]);
 }
 
 #[test]
 fn test_bytes_sorts_when_order_matters() {
     // Bytes shrinking attempts to sort bytes; when sorting would violate
     // the condition, it backs off. This covers the failure branch.
-    let _ = Minimal::new(gs::binary().min_size(3).max_size(3), |v0: &Vec<u8>| {
+    //
+    // Predicate: 3-byte vec, contains 0x01, NOT equal to its sorted form.
+    // The lex-minimum 3-byte sequence satisfying both is `[0, 1, 0]`:
+    // sorted is `[0, 0, 1]`, so `v0 != sorted` ✓; contains 0x01 ✓; and
+    // any lex-smaller candidate (`[0, 0, ?]`) is either sorted-equal or
+    // lacks 0x01. Pre-N11 this was a `let _ = ...` smoke test.
+    let v0 = Minimal::new(gs::binary().min_size(3).max_size(3), |v0: &Vec<u8>| {
         if !v0.contains(&0x01u8) {
             return false;
         }
@@ -53,6 +68,7 @@ fn test_bytes_sorts_when_order_matters() {
     })
     .test_cases(1000)
     .run();
+    assert_eq!(v0, vec![0u8, 1, 0]);
 }
 
 #[cfg(feature = "native")]
