@@ -1752,21 +1752,58 @@ fn run_test_fn(
 /// logic: if the choices walk into the tree but end at a non-terminal
 /// node (one with known continuations), the call would result in an
 /// EarlyStop without re-running the test function.
-fn is_prefix_of_known_path(tree_root: &DataTreeNode, choices: &[ChoiceValue]) -> bool {
+/// If `choices` is a strict prefix of a known tree path, walk the tree and
+/// reconstruct the partial walk's `ChoiceNode`s — one per consumed choice,
+/// with `kind` taken from the tree's recorded kind at that depth and `value`
+/// from the input. Returns `None` if `choices` is not a strict prefix
+/// (novel value, terminal hit, or fully exhausted match).
+///
+/// Mirrors Python's `simulate_test_function` (`engine.py`): when the
+/// simulator hits an internal node whose subtree it can't extend, it raises
+/// `PreviouslyUnseenBehaviour` and surfaces the partial walk's nodes —
+/// importantly *not* an empty list. A downstream `sort_key` comparison would
+/// otherwise treat an empty result as smaller than any non-empty one,
+/// poisoning Pareto / dominance ordering.
+///
+/// Per the N5 audit, tags can't be reconstructed from the data tree (those
+/// come from spans, which the tree doesn't record); we return only the
+/// nodes here.
+fn prefix_walk_nodes(
+    tree_root: &DataTreeNode,
+    choices: &[ChoiceValue],
+) -> Option<Vec<ChoiceNode>> {
     let mut current = tree_root;
+    let mut nodes = Vec::with_capacity(choices.len());
     for choice in choices {
+        let kind = match &current.kind {
+            Some(k) => k.clone(),
+            // The tree position we're about to consume has no recorded
+            // kind — happens when `choices` overshoots a partially-built
+            // tree. Treat as "not a known prefix".
+            None => return None,
+        };
         let key = ChoiceValueKey::from(choice);
         match current.children.get(&key) {
             Some(child) => current = child.as_ref(),
-            None => return false, // novel choice value, not in tree
+            None => return None, // novel choice value, not in tree
         }
+        nodes.push(ChoiceNode {
+            kind,
+            value: choice.clone(),
+            was_forced: false,
+        });
         if current.conclusion.is_some() {
-            // The path terminates here; `choices` extends beyond a known path.
-            return false;
+            // `choices` extends beyond a known path (the path terminates here).
+            return None;
         }
     }
-    // All choices consumed at a non-terminal node with known children.
-    !current.children.is_empty()
+    // All choices consumed at a non-terminal node with known children:
+    // it's a *strict* prefix.
+    if current.children.is_empty() {
+        None
+    } else {
+        Some(nodes)
+    }
 }
 
 /// Returns `true` iff `(value, kind)` is a node kind the hill-climber can
@@ -2498,18 +2535,15 @@ impl NativeConjectureRunner {
         }
         // If `choices` is a strict prefix of a known path in the tree,
         // return EarlyStop without re-running the test.  Mirrors Python's
-        // `simulate_best_attempt` which returns `Overrun` for incomplete
-        // prefixes without invoking the test function.
-        //
-        // The tree records `kind` per position but not tags (those come
-        // from spans, which the tree doesn't reconstruct), so the
-        // returned `tags` is empty for this path. A future fix can walk
-        // back to the full cached result if any caller needs the
-        // structural-coverage tags from a prefix-walk; tracked as N5.
-        if is_prefix_of_known_path(&self.tree_root, choices) {
+        // `simulate_test_function` which carries the partial walk's nodes.
+        // Tags can't be reconstructed (spans aren't in the tree), so they
+        // remain empty — but `nodes` is reconstructed from each step's
+        // tree-recorded `kind` paired with the input value, so downstream
+        // sort_key / Pareto comparisons see a non-empty result.
+        if let Some(partial_nodes) = prefix_walk_nodes(&self.tree_root, choices) {
             return ConjectureRunResult {
                 status: Status::EarlyStop,
-                nodes: vec![],
+                nodes: partial_nodes,
                 choices: choices.to_vec(),
                 target_observations: HashMap::new(),
                 origin: None,
