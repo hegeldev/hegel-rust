@@ -318,16 +318,24 @@ impl<'a> Shrinker<'a> {
             return;
         }
 
-        // Collect non-trivial integer nodes from changed indices.
-        let mut changed: Vec<(usize, i128)> = Vec::new();
+        // Collect non-trivial integer nodes from changed indices, paired
+        // with each node's signed offset from its own `shrink_towards`.
+        // N10: pre-fix this used `v.unsigned_abs()` and `if *v > 0`,
+        // baking in the assumption that shrink_towards = 0. With
+        // non-zero st, "lower" / "raise" must be relative to each
+        // node's own st.
+        let mut changed: Vec<(usize, i128, i128)> = Vec::new();
         for &i in &self.changed_nodes.clone() {
             if i >= self.current_nodes.len() {
                 continue;
             }
             let node = &self.current_nodes[i];
             match (&node.kind, &node.value) {
-                (ChoiceKind::Integer(_), ChoiceValue::Integer(v)) if *v != 0 => {
-                    changed.push((i, *v));
+                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
+                    let st = ic.clamped_shrink_towards();
+                    if *v != st {
+                        changed.push((i, *v, st));
+                    }
                 }
                 _ => {}
             }
@@ -337,10 +345,17 @@ impl<'a> Shrinker<'a> {
             return;
         }
 
-        let offset = changed.iter().map(|(_, v)| v.unsigned_abs()).min().unwrap();
+        // Distance from each node to its own st. The cap is the minimum
+        // distance — beyond that, the node nearest to its st crosses
+        // it and the U-shape's elbow turns sort_key upward again.
+        let offset = changed
+            .iter()
+            .map(|(_, v, st)| v.wrapping_sub(*st).unsigned_abs())
+            .min()
+            .unwrap();
 
-        // Find the maximum k in [0, offset] such that lowering each value by k
-        // is still interesting. `find_integer` returns the largest k where f(k)=true.
+        // Find the maximum k in [0, offset] such that moving each value
+        // toward its own st by k is still interesting.
         let changed_clone = changed.clone();
         find_integer(|k| {
             if (k as u128) > offset {
@@ -349,8 +364,8 @@ impl<'a> Shrinker<'a> {
             let k = k as i128;
             let replacements: HashMap<usize, ChoiceValue> = changed_clone
                 .iter()
-                .map(|(i, v)| {
-                    let new_val = if *v > 0 { v - k } else { v + k };
+                .map(|(i, v, st)| {
+                    let new_val = if *v > *st { v - k } else { v + k };
                     (*i, ChoiceValue::Integer(new_val))
                 })
                 .collect();

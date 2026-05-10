@@ -364,41 +364,78 @@ impl<'a> Shrinker<'a> {
                 let ic_i = ic_i.clone();
                 let ic_j = ic_j.clone();
 
-                // Lower both by `k`: the primary direction when both values
-                // are above `shrink_towards` (= simplest). For linked
-                // positive pairs this is what drives `(m, m+1)` down to
-                // `(lb, lb+1)`. Bounds-check first — if we overflow the
-                // kind's validation range, prefix-replay substitutes
-                // in-range values and every probe "succeeds", which walks
-                // `find_integer`'s `hi *= 2` right off the end of `usize`.
-                find_integer(|n| {
-                    let k = n as i128;
-                    let new_i = v_i - k;
-                    let new_j = v_j - k;
-                    if !ic_i.validate(new_i) || !ic_j.validate(new_j) {
-                        return false;
-                    }
-                    self.replace(&HashMap::from([
-                        (i, ChoiceValue::Integer(new_i)),
-                        (j, ChoiceValue::Integer(new_j)),
-                    ]))
-                });
+                // N10: cap k at the i-th element's distance from
+                // `shrink_towards`. Pre-N10 each direction's `find_integer`
+                // probe assumed a monotone predicate in k, but A21's
+                // `shrink_towards`-aware sort_key turned the score
+                // U-shaped: moving past `shrink_towards` makes sort_key
+                // grow again. The exponential probe (5, 10, 20, …) then
+                // jumped past the elbow and committed a worse-than-optimal
+                // pair (e.g. `[-3, -2]` with `st=5` ended at `[7, 8]`
+                // instead of `[5, 6]`).
+                //
+                // Why d_i (the i-th element's distance), not min/max of
+                // both? Sort_key compares element-wise via shortlex; the
+                // 0-th element (= sort_key of i-th node) dominates the
+                // tuple comparison. Sort_key(v_i + k) is uniquely
+                // minimised at k = st_i - v_i (raise) or k = v_i - st_i
+                // (lower), where v_i lands exactly at st_i. Beyond that,
+                // it grows. So the optimal k for the pair is d_i; capping
+                // there keeps find_integer's predicate monotone, and
+                // validate() trims further if v_j's constraints kick in
+                // first.
+                let st_i = ic_i.clamped_shrink_towards();
+                let st_j = ic_j.clamped_shrink_towards();
 
-                // Raise both by `k`: symmetric case when both values are
-                // below `shrink_towards` and moving up makes the pair
-                // simpler. No-op for positive pairs since sort_key grows.
-                find_integer(|n| {
-                    let k = n as i128;
-                    let new_i = v_i + k;
-                    let new_j = v_j + k;
-                    if !ic_i.validate(new_i) || !ic_j.validate(new_j) {
-                        return false;
-                    }
-                    self.replace(&HashMap::from([
-                        (i, ChoiceValue::Integer(new_i)),
-                        (j, ChoiceValue::Integer(new_j)),
-                    ]))
-                });
+                // Direction is determined by the i-th element (shortlex
+                // dominates on element 0): move it toward its own st.
+                // The j-th element follows. If j is on the same side of
+                // its st, joint motion is unambiguously better; if j is
+                // on the opposite side, j's sort_key grows but i's gain
+                // wins the shortlex comparison.
+                let _ = st_j;
+
+                // Lower direction: run when v_i > st_i. The largest
+                // useful k is `v_i - st_i` (the i-th's distance to st).
+                if v_i > st_i {
+                    let max_k = v_i - st_i;
+                    find_integer(|n| {
+                        let k = n as i128;
+                        if k > max_k {
+                            return false;
+                        }
+                        let new_i = v_i - k;
+                        let new_j = v_j - k;
+                        if !ic_i.validate(new_i) || !ic_j.validate(new_j) {
+                            return false;
+                        }
+                        self.replace(&HashMap::from([
+                            (i, ChoiceValue::Integer(new_i)),
+                            (j, ChoiceValue::Integer(new_j)),
+                        ]))
+                    });
+                }
+
+                // Raise direction: run when v_i < st_i. Largest useful
+                // k: `st_i - v_i`.
+                if v_i < st_i {
+                    let max_k = st_i - v_i;
+                    find_integer(|n| {
+                        let k = n as i128;
+                        if k > max_k {
+                            return false;
+                        }
+                        let new_i = v_i + k;
+                        let new_j = v_j + k;
+                        if !ic_i.validate(new_i) || !ic_j.validate(new_j) {
+                            return false;
+                        }
+                        self.replace(&HashMap::from([
+                            (i, ChoiceValue::Integer(new_i)),
+                            (j, ChoiceValue::Integer(new_j)),
+                        ]))
+                    });
+                }
             }
         }
     }
