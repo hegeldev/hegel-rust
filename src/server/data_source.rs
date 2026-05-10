@@ -4,12 +4,17 @@ use crate::runner::Verbosity;
 use crate::server::protocol::{Connection, Stream};
 use ciborium::Value;
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use super::process::server_crash_message;
 
-static PROTOCOL_DEBUG: LazyLock<bool> = LazyLock::new(|| {
+/// Read `HEGEL_PROTOCOL_DEBUG` and decide whether protocol debug logging is on.
+/// Extracted so tests can exercise the env-var → bool mapping without going
+/// through `PROTOCOL_DEBUG`'s LazyLock cache (which is sensitive to whichever
+/// test happens to access it first in a binary).
+fn protocol_debug_from_env() -> bool {
     matches!(
         std::env::var("HEGEL_PROTOCOL_DEBUG")
             .unwrap_or_default()
@@ -17,7 +22,9 @@ static PROTOCOL_DEBUG: LazyLock<bool> = LazyLock::new(|| {
             .as_str(),
         "1" | "true"
     )
-});
+}
+
+static PROTOCOL_DEBUG: LazyLock<bool> = LazyLock::new(protocol_debug_from_env);
 
 /// Backend implementation that communicates with the hegel-core server
 /// over a multiplexed stream.
@@ -26,6 +33,13 @@ pub(crate) struct ServerDataSource {
     stream: Mutex<Stream>,
     aborted: AtomicBool,
     verbosity: Verbosity,
+    /// Labels seen by `target_observation` this test case. Used to reject
+    /// duplicate observations of the same label, mirroring
+    /// `NativeDataSource::target_observation` (post-A16) and upstream
+    /// `hypothesis.control.target` (`control.py:354-356,372-376`). One
+    /// `ServerDataSource` is constructed per test case (see
+    /// `session.rs:236,378,443`), so this is per-test-case state.
+    target_labels: Mutex<HashSet<String>>,
 }
 
 impl ServerDataSource {
@@ -35,6 +49,7 @@ impl ServerDataSource {
             stream: Mutex::new(stream),
             aborted: AtomicBool::new(false),
             verbosity,
+            target_labels: Mutex::new(HashSet::new()),
         }
     }
 
@@ -213,6 +228,27 @@ impl DataSource for ServerDataSource {
     }
 
     fn target_observation(&self, score: f64, label: &str) {
+        // Mirror `NativeDataSource::target_observation` (post-A16) and
+        // upstream `hypothesis.control.target` (`control.py:354-356,372-376`):
+        // observations must be finite and each label may be observed at
+        // most once per test case. Pre-N8 these were silently forwarded to
+        // the Python server, surfacing as a CBOR round-trip error rather
+        // than a clean client-side panic.
+        if !score.is_finite() {
+            panic!(
+                "tc.target({score}, label={label:?}) requires a finite score; \
+                 got non-finite value"
+            );
+        }
+        let mut seen = self.target_labels.lock().unwrap_or_else(|e| e.into_inner());
+        if !seen.insert(label.to_string()) {
+            panic!(
+                "tc.target({score}, label={label:?}) would overwrite previous \
+                 tc.target(_, label={label:?}); each label can be observed at \
+                 most once per test case"
+            );
+        }
+        drop(seen);
         let _ = self.send_request(
             "target",
             &cbor_map! {

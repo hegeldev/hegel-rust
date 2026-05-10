@@ -1,16 +1,54 @@
 use super::*;
+use crate::server::protocol::packet::{read_packet, write_packet, Packet};
 use std::os::unix::net::UnixStream;
 
+// Mutex so the env-var-mutating tests below serialise with each other —
+// modifying process-global env vars from concurrent tests is racy.
+static PROTOCOL_DEBUG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Read PROTOCOL_DEBUG from the env via the extracted helper, isolating us
+/// from the LazyLock cache (which would only initialise once per binary
+/// regardless of subsequent env var changes).
 #[test]
-fn test_protocol_debug_true_when_env_set() {
-    // Set the env var BEFORE the LazyLock is first accessed in this binary.
-    // No other test in the lib binary touches PROTOCOL_DEBUG, so this is the
-    // first access and the closure evaluates with the env var present.
-    // This exercises the "1" | "true" arm of the matches! macro.
+fn protocol_debug_from_env_true_for_true_lowercase() {
+    let _guard = PROTOCOL_DEBUG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
         std::env::set_var("HEGEL_PROTOCOL_DEBUG", "true");
     }
-    assert!(*PROTOCOL_DEBUG);
+    assert!(protocol_debug_from_env());
+    unsafe {
+        std::env::remove_var("HEGEL_PROTOCOL_DEBUG");
+    }
+}
+
+#[test]
+fn protocol_debug_from_env_true_for_one() {
+    let _guard = PROTOCOL_DEBUG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        std::env::set_var("HEGEL_PROTOCOL_DEBUG", "1");
+    }
+    assert!(protocol_debug_from_env());
+    unsafe {
+        std::env::remove_var("HEGEL_PROTOCOL_DEBUG");
+    }
+}
+
+#[test]
+fn protocol_debug_from_env_false_when_unset() {
+    let _guard = PROTOCOL_DEBUG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        std::env::remove_var("HEGEL_PROTOCOL_DEBUG");
+    }
+    assert!(!protocol_debug_from_env());
+}
+
+#[test]
+fn protocol_debug_from_env_false_for_garbage() {
+    let _guard = PROTOCOL_DEBUG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        std::env::set_var("HEGEL_PROTOCOL_DEBUG", "yes");
+    }
+    assert!(!protocol_debug_from_env());
     unsafe {
         std::env::remove_var("HEGEL_PROTOCOL_DEBUG");
     }
@@ -69,7 +107,38 @@ fn target_observation_panics_on_neg_infinity() {
 #[test]
 #[should_panic(expected = "would overwrite previous tc.target")]
 fn target_observation_panics_on_duplicate_label() {
-    let ds = make_dead_data_source();
+    // Unlike the finite-score tests above, we need the *first* call's
+    // send_request to succeed so the second call can reach the duplicate
+    // check — a dead stream would panic in send_request before we get
+    // there. Spawn a one-shot mock server that ack's the first request
+    // with a CBOR null reply.
+    let (client, mut server) = UnixStream::pair().unwrap();
+    let client_writer = client.try_clone().unwrap();
+    let conn = Connection::new(Box::new(client), Box::new(client_writer));
+    let stream = conn.new_stream();
+
+    std::thread::spawn(move || {
+        let request = read_packet(&mut server).unwrap();
+        // request_cbor expects a Map response (it calls map_get on it).
+        let response = Value::Map(vec![(
+            Value::Text("status".into()),
+            Value::Text("ok".into()),
+        )]);
+        let mut payload = Vec::new();
+        ciborium::into_writer(&response, &mut payload).unwrap();
+        write_packet(
+            &mut server,
+            &Packet {
+                stream: request.stream,
+                message_id: request.message_id,
+                is_reply: true,
+                payload,
+            },
+        )
+        .unwrap();
+    });
+
+    let ds = ServerDataSource::new(conn, stream, Verbosity::Quiet);
     ds.target_observation(1.0, "x");
     ds.target_observation(2.0, "x");
 }
