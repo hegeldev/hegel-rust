@@ -6,7 +6,7 @@
 // `internal/conjecture/optimiser.py` and the `optimise_targets` driver in
 // `engine.py`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::native::conjecture_runner::{is_climbable, step_choice};
 use crate::native::core::{ChoiceNode, ChoiceValue, NativeTestCase, Status, sort_key};
@@ -222,9 +222,30 @@ fn hill_climb(
     let mut current_score = *observations.get(target).unwrap_or(&f64::NEG_INFINITY);
     let mut improvements: usize = 0;
 
+    let mut nodes_examined: HashSet<usize> = HashSet::new();
     let mut i: isize = current_nodes.len() as isize - 1;
+    let mut prev_len = current_nodes.len();
     while i >= 0 && improvements <= max_improvements {
+        // E3 (mirrors `optimiser.py:95-97` and the parallel
+        // `optimiser.rs::hill_climb`): when `find_integer` lengthens or
+        // shortens `current_nodes`, the existing `i` no longer indexes
+        // the same logical position. Reset to the new tail and start
+        // afresh; clear `nodes_examined` so positions that were valid
+        // before but now correspond to different node identities can
+        // be retried.
+        if current_nodes.len() != prev_len {
+            i = current_nodes.len() as isize - 1;
+            prev_len = current_nodes.len();
+            nodes_examined.clear();
+            continue;
+        }
         let idx = i as usize;
+        if idx >= current_nodes.len() || !nodes_examined.insert(idx) {
+            // `idx` was either resized out of range during a re-entry
+            // or already visited; either way, advance.
+            i -= 1;
+            continue;
+        }
         let node = &current_nodes[idx];
         if !node.was_forced && is_climbable(&node.value, &node.kind) {
             let len_before = current_nodes.len();
