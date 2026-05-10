@@ -17,67 +17,12 @@ use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::control::with_test_context;
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Span, Status};
+use crate::native::core::{ChoiceNode, ChoiceValue, NativeTestCase, Span, Status};
 use crate::native::data_source::NativeDataSource;
+use crate::native::det_tree::{ChoiceValueKey, DetTreeNode, record_into};
 use crate::test_case::{ASSUME_FAIL_STRING, LOOP_DONE_STRING, STOP_TEST_STRING, TestCase};
 
 use super::runner::panic_message;
-
-/// Hashable version of `ChoiceValue`, for use as tree/cache keys.
-#[derive(Clone, PartialEq, Eq, Hash)]
-enum ChoiceValueKey {
-    Integer(i128),
-    Boolean(bool),
-    Float(u64), // f64::to_bits()
-    Bytes(Vec<u8>),
-    String(Vec<u32>),
-}
-
-impl From<&ChoiceValue> for ChoiceValueKey {
-    fn from(v: &ChoiceValue) -> Self {
-        match v {
-            ChoiceValue::Integer(n) => ChoiceValueKey::Integer(*n),
-            ChoiceValue::Boolean(b) => ChoiceValueKey::Boolean(*b),
-            ChoiceValue::Float(f) => ChoiceValueKey::Float(f.to_bits()),
-            ChoiceValue::Bytes(b) => ChoiceValueKey::Bytes(b.clone()),
-            ChoiceValue::String(s) => ChoiceValueKey::String(s.clone()),
-        }
-    }
-}
-
-/// A node in the data tree trie.
-///
-/// Each node represents a choice position: `kind` is the expected schema at
-/// this position (set on first visit and shared by every draw made here),
-/// and `children` branches to the position following this draw, keyed by
-/// the choice value.
-struct TreeNode {
-    /// The expected ChoiceKind at this position (set on first visit).
-    kind: Option<ChoiceKind>,
-    /// Children keyed by the choice value drawn at this position.
-    children: HashMap<ChoiceValueKey, TreeNode>,
-}
-
-impl TreeNode {
-    fn new() -> Self {
-        TreeNode {
-            kind: None,
-            children: HashMap::new(),
-        }
-    }
-}
-
-impl Drop for TreeNode {
-    fn drop(&mut self) {
-        // Drop the trie iteratively. Naive recursive Drop overflows the stack
-        // when a generator (e.g. vecs(vecs(vecs(booleans())))) produces long
-        // choice sequences, making the trie's longest branch thousands deep.
-        let mut stack: Vec<TreeNode> = self.children.drain().map(|(_, v)| v).collect();
-        while let Some(mut node) = stack.pop() {
-            stack.extend(node.children.drain().map(|(_, v)| v));
-        }
-    }
-}
 
 /// Wraps the user's test function with a data tree (non-determinism detection)
 /// and a result cache (avoiding redundant calls during shrinking).
@@ -87,7 +32,7 @@ impl Drop for TreeNode {
 pub struct CachedTestFunction<F: FnMut(TestCase)> {
     test_fn: F,
     /// Root of the data tree trie.
-    tree_root: TreeNode,
+    tree_root: DetTreeNode,
     /// Cache of test results keyed on complete choice sequences.
     cache: HashMap<Vec<ChoiceValueKey>, (bool, Vec<ChoiceNode>)>,
     /// Execution mode forwarded to each TestCase. Defaults to `Mode::TestRun`;
@@ -127,7 +72,7 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
     pub fn new(test_fn: F) -> Self {
         CachedTestFunction {
             test_fn,
-            tree_root: TreeNode::new(),
+            tree_root: DetTreeNode::new(),
             cache: HashMap::new(),
             mode: crate::runner::Mode::TestRun,
         }
@@ -239,28 +184,11 @@ impl<F: FnMut(TestCase)> CachedTestFunction<F> {
 
     /// Record nodes in the data tree, checking for non-determinism.
     ///
-    /// The kind at each position is a property of that position, not of the
-    /// value drawn: every draw made at the same prefix must use the same
-    /// schema regardless of which value it produced. A mismatch means the
-    /// generator's constraints depend on external state.
+    /// Delegates to [`crate::native::det_tree::record_into`] so the trie
+    /// structure and divergent-kind diagnostic are shared with
+    /// [`crate::native::test_runner::EngineCtx`].
     fn record(&mut self, nodes: &[ChoiceNode]) {
-        let mut current = &mut self.tree_root;
-        for node in nodes {
-            if let Some(ref expected_kind) = current.kind {
-                if *expected_kind != node.kind {
-                    panic!(
-                        "Your data generation is non-deterministic: at the same choice \
-                         position with the same prefix, the schema changed from {:?} to {:?}. \
-                         This usually means a generator depends on global mutable state.",
-                        expected_kind, node.kind
-                    );
-                }
-            } else {
-                current.kind = Some(node.kind.clone());
-            }
-            let key = ChoiceValueKey::from(&node.value);
-            current = current.children.entry(key).or_insert_with(TreeNode::new);
-        }
+        record_into(&mut self.tree_root, nodes);
     }
 
     fn cache_lookup(&self, nodes: &[ChoiceNode]) -> Option<(bool, Vec<ChoiceNode>)> {

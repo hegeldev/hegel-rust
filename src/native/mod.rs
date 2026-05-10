@@ -17,6 +17,7 @@ pub mod core;
 pub mod data_source;
 pub mod database;
 pub mod datatree;
+pub mod det_tree;
 pub mod dynamic_variable;
 pub mod featureflags;
 pub mod floats;

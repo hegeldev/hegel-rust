@@ -176,8 +176,9 @@ fn format_backtrace(bt: &Backtrace, full: bool) -> String {
     result.join("\n")
 }
 
-/// Extract a string message from a panic payload.
-fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+/// Extract a string message from a panic payload. Pre-N1 this was duplicated
+/// in `src/native/runner.rs:11`; that copy now re-exports this one.
+pub(crate) fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         s.to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {

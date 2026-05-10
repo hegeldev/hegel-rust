@@ -7,13 +7,7 @@
 //! embedded tests that drive the engine directly, and it needs the helper
 //! below to extract panic payloads.
 
-/// Extract a string message from a panic payload.
-pub(crate) fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(s) = payload.downcast_ref::<&str>() {
-        s.to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "Unknown panic".to_string()
-    }
-}
+/// Re-export of [`crate::run_lifecycle::panic_message`] so existing
+/// `super::runner::panic_message` imports inside `native/` continue working.
+/// The canonical implementation lives in `run_lifecycle.rs` (N1 dedup).
+pub(crate) use crate::run_lifecycle::panic_message;

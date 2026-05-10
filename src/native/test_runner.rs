@@ -13,6 +13,8 @@
 //! machinery (which expect a [`NativeRunner`]) can be reused unchanged.
 
 use std::collections::{HashMap, hash_map::Entry};
+
+use crate::native::det_tree::{ChoiceValueKey, DetTreeNode, record_into};
 use std::sync::Once;
 
 use rand::RngExt;
@@ -21,7 +23,7 @@ use rand::rngs::SmallRng;
 
 use crate::backend::{DataSource, TestCaseResult, TestRunResult, TestRunner};
 use crate::native::core::{
-    BUFFER_SIZE, ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Span, Status, sort_key,
+    BUFFER_SIZE, ChoiceNode, ChoiceValue, NativeTestCase, Span, Status, sort_key,
 };
 use crate::native::data_source::NativeDataSource;
 use crate::native::database::{
@@ -620,57 +622,6 @@ fn update_interesting(
     }
 }
 
-/// Hashable version of [`ChoiceValue`] for use as cache keys.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum ChoiceValueKey {
-    Integer(i128),
-    Boolean(bool),
-    Float(u64),
-    Bytes(Vec<u8>),
-    String(Vec<u32>),
-}
-
-impl From<&ChoiceValue> for ChoiceValueKey {
-    fn from(v: &ChoiceValue) -> Self {
-        match v {
-            ChoiceValue::Integer(n) => ChoiceValueKey::Integer(*n),
-            ChoiceValue::Boolean(b) => ChoiceValueKey::Boolean(*b),
-            ChoiceValue::Float(f) => ChoiceValueKey::Float(f.to_bits()),
-            ChoiceValue::Bytes(b) => ChoiceValueKey::Bytes(b.clone()),
-            ChoiceValue::String(s) => ChoiceValueKey::String(s.clone()),
-        }
-    }
-}
-
-/// Trie node used to detect non-deterministic generators by recording the
-/// `ChoiceKind` observed at each prefix position. Mirrors `tree.rs`'s own
-/// non-determinism tree but lives here so it's easy to find from
-/// `NativeTestRunner.run`.
-struct DetTreeNode {
-    kind: Option<ChoiceKind>,
-    children: HashMap<ChoiceValueKey, DetTreeNode>,
-}
-
-impl DetTreeNode {
-    fn new() -> Self {
-        DetTreeNode {
-            kind: None,
-            children: HashMap::new(),
-        }
-    }
-}
-
-impl Drop for DetTreeNode {
-    fn drop(&mut self) {
-        // Iterative drop so a thousands-deep single-path trie doesn't
-        // overflow the thread's stack.
-        let mut stack: Vec<DetTreeNode> = self.children.drain().map(|(_, v)| v).collect();
-        while let Some(mut node) = stack.pop() {
-            stack.extend(node.children.drain().map(|(_, v)| v));
-        }
-    }
-}
-
 /// Wraps the cross-backend `run_case` callback together with the
 /// non-determinism trie and the shrink-result cache, exposing the
 /// `NativeRunner` surface the surrounding shrinker, span-mutation, and
@@ -788,30 +739,6 @@ impl<'a> EngineCtx<'a> {
 impl NativeRunner for EngineCtx<'_> {
     fn run(&mut self, ntc: NativeTestCase) -> RunResult {
         self.execute(ntc, false)
-    }
-}
-
-fn record_into(node: &mut DetTreeNode, nodes: &[ChoiceNode]) {
-    let mut current = node;
-    for choice in nodes {
-        if let Some(ref expected_kind) = current.kind {
-            if *expected_kind != choice.kind {
-                // Wording mirrors `tree.rs::CachedTestFunction::record` so the
-                // user-facing diagnostic is identical regardless of which
-                // engine path detected the divergence. If you change one,
-                // change both.
-                panic!(
-                    "Your data generation is non-deterministic: at the same choice \
-                     position with the same prefix, the schema changed from {:?} to {:?}. \
-                     This usually means a generator depends on global mutable state.",
-                    expected_kind, choice.kind
-                );
-            }
-        } else {
-            current.kind = Some(choice.kind.clone());
-        }
-        let key = ChoiceValueKey::from(&choice.value);
-        current = current.children.entry(key).or_insert_with(DetTreeNode::new);
     }
 }
 
