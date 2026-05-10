@@ -82,6 +82,7 @@ fn dominance_equal_keys_returns_equal() {
         target_observations: Default::default(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     let d = dominance(&result, &result.clone());
     assert_eq!(d, DominanceRelation::Equal);
@@ -110,6 +111,7 @@ fn dominance_right_simpler_no_dominance() {
         target_observations: Default::default(),
         origin: None,
         tags: longer_tags,
+        spans: vec![],
     };
     let shorter = ConjectureRunResult {
         status: Status::Valid,
@@ -118,6 +120,7 @@ fn dominance_right_simpler_no_dominance() {
         target_observations: Default::default(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     // Pass longer as left, shorter as right. The right_key < left_key branch fires.
     // The recursive call returns NoDominance. After the swap: NoDominance.
@@ -149,6 +152,7 @@ fn pareto_front_right_dominates_evicts_worse_entry() {
         target_observations: Default::default(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     front.add(worse.clone());
     assert_eq!(front.len(), 1);
@@ -161,6 +165,7 @@ fn pareto_front_right_dominates_evicts_worse_entry() {
         target_observations: Default::default(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     let (in_front, evicted) = front.add(better);
     assert!(in_front);
@@ -179,6 +184,7 @@ fn pareto_front_adding_equal_entry_is_idempotent() {
         target_observations: Default::default(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     front.add(entry.clone());
     let (in_front, evicted) = front.add(entry);
@@ -199,6 +205,7 @@ fn pareto_front_iter_nonempty() {
         target_observations: Default::default(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     front.add(entry);
     let v: Vec<_> = front.iter().collect();
@@ -1214,6 +1221,7 @@ fn pareto_front_left_entry_dominates_new_entry() {
         target_observations: Default::default(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     front.add(simple.clone());
     assert_eq!(front.len(), 1);
@@ -1247,6 +1255,7 @@ fn pareto_front_left_entry_dominates_new_entry() {
         target_observations: Default::default(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     // The complex entry has the same tags ({}) but is larger — simple dominates.
     let (in_front, _evicted) = front.add(complex);
@@ -1273,6 +1282,7 @@ fn pareto_front_equal_in_left_check_loop() {
         target_observations: Default::default(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     let b = ConjectureRunResult {
         status: Status::Valid,
@@ -1281,6 +1291,7 @@ fn pareto_front_equal_in_left_check_loop() {
         target_observations: Default::default(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     front.add(a);
     front.add(b);
@@ -1297,6 +1308,7 @@ fn pareto_front_equal_in_left_check_loop() {
         target_observations: Default::default(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     let (in_front, evicted) = front.add(c);
     assert!(!in_front);
@@ -1918,6 +1930,7 @@ fn dominance_right_dominates_via_swap() {
         target_observations: Default::default(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     let big = ConjectureRunResult {
         status: Status::Valid,
@@ -1930,6 +1943,7 @@ fn dominance_right_dominates_via_swap() {
         target_observations: Default::default(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     // Pass (big, small): big has larger sort_key, so the swap branch fires.
     // The recursive dominance(small, big) returns LeftDominates → flipped to RightDominates.
@@ -1949,6 +1963,7 @@ fn dominance_no_dominance_when_left_status_lower() {
         target_observations: Default::default(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     let big_interesting = ConjectureRunResult {
         status: Status::Interesting,
@@ -1961,6 +1976,7 @@ fn dominance_no_dominance_when_left_status_lower() {
         target_observations: Default::default(),
         origin: Some(interesting_origin(None)),
         tags: Default::default(),
+        spans: vec![],
     };
     // small_valid is simpler (left) but has lower status → NoDominance (line 176).
     let d = dominance(&small_valid, &big_interesting);
@@ -1982,6 +1998,7 @@ fn pareto_front_contains_and_index() {
         target_observations: Default::default(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     front.add(entry.clone());
     assert!(front.contains(&entry));
@@ -2361,6 +2378,7 @@ fn pareto_front_add_dominators_walk_runs_to_completion() {
             .collect(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     let int_kind = ChoiceKind::Integer(IntegerChoice {
         min_value: 0,
@@ -2408,6 +2426,7 @@ fn pareto_front_add_invalid_status_returns_false() {
         target_observations: Default::default(),
         origin: None,
         tags: Default::default(),
+        spans: vec![],
     };
     let (in_front, evicted) = front.add(entry);
     assert!(!in_front);
@@ -3758,6 +3777,7 @@ fn dominance_no_dominance_different_interesting_origins() {
         target_observations: std::collections::HashMap::new(),
         origin: Some(origin_a),
         tags: std::collections::HashSet::new(),
+        spans: vec![],
     };
     let right = ConjectureRunResult {
         status: Status::Interesting,
@@ -3766,6 +3786,7 @@ fn dominance_no_dominance_different_interesting_origins() {
         target_observations: std::collections::HashMap::new(),
         origin: Some(origin_b),
         tags: std::collections::HashSet::new(),
+        spans: vec![],
     };
     // Two interesting results with different origins → NoDominance (line 181).
     assert_eq!(dominance(&left, &right), DominanceRelation::NoDominance);
@@ -4753,6 +4774,51 @@ fn cached_test_function_with_extend_bypasses_cached_early_stop() {
 // `draw_integer` calls, and asserts that no test case observed more than 2
 // successful draws — the 3rd integer raises `StopTest` and panics out of
 // the closure before the per-case counter can increment further.
+// ── N6: cached_test_function carries per-test spans on ConjectureRunResult
+//
+// Pre-N6, ConjectureRunResult had no `spans` field. `generate_mutations_from`
+// would re-derive `mutator_groups` from the *initial* test's spans for every
+// accepted mutation (with a length-filter to avoid out-of-range slicing).
+// The fix plumbs spans through `ConjectureRunResult` / `CachedRun` /
+// `cached_test_function` / `record_test_result` so the mutator picks up the
+// current test's structure each time.
+//
+// Behavioural claim: after `cached_test_function` runs a body that opens two
+// labelled spans (each containing one draw), the returned `result.spans` has
+// at least two entries. A regression dropping spans on the floor (e.g.
+// reverting `cached_test_function` to `spans: Vec::new()`) would set this
+// to 0 and break `generate_mutations_from`'s mutator_groups derivation.
+#[test]
+fn cached_test_function_carries_spans() {
+    let settings = default_settings();
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            // Two same-label spans so the structure is exactly what
+            // generate_mutations_from looks for in mutator_groups.
+            data.start_span(7);
+            let _ = data.draw_integer(0, 100);
+            data.stop_span();
+            data.start_span(7);
+            let _ = data.draw_integer(0, 100);
+            data.stop_span();
+        },
+        settings,
+        make_rng(),
+    );
+    let result = runner.cached_test_function(&[
+        ChoiceValue::Integer(5),
+        ChoiceValue::Integer(7),
+    ]);
+    assert_eq!(result.status, Status::Valid);
+    assert!(
+        result.spans.len() >= 2,
+        "cached_test_function must populate ConjectureRunResult.spans \
+         from run_test_fn's span structure (got {} spans; expected ≥2 \
+         from the two start_span/stop_span pairs)",
+        result.spans.len(),
+    );
+}
+
 // ── N5: cached_test_function prefix-walk reconstructs partial nodes ───────
 //
 // `cached_test_function` short-circuits when `choices` is a strict prefix

@@ -384,6 +384,7 @@ fn test_pareto_contains() {
         target_observations: HashMap::new(),
         origin: None,
         tags: std::collections::HashSet::new(),
+        spans: vec![],
     };
     let (added, _) = front.add(overrun.clone());
     assert!(!added);

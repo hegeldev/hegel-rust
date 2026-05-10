@@ -152,6 +152,16 @@ pub struct ConjectureRunResult {
     /// Used by `dominance` to determine whether one result covers
     /// at least the structural paths of another.
     pub tags: HashSet<u64>,
+    /// Per-test span structure recorded by `data.ntc.spans`. Pre-N6
+    /// this was empty on every code path, which forced
+    /// `generate_mutations_from` to keep reusing the *initial* test's
+    /// spans for every accepted mutation (with a length filter to
+    /// avoid out-of-range slicing). With spans plumbed through, the
+    /// mutator can re-derive `mutator_groups` from each accepted
+    /// mutation's spans, exploring the structural space of mutated
+    /// test cases properly. Mirrors `ConjectureResult.spans` from
+    /// `internal/conjecture/data.py`.
+    pub spans: Vec<Span>,
 }
 
 impl PartialEq for ConjectureRunResult {
@@ -1350,6 +1360,9 @@ struct CachedRun {
     /// cached comparisons read as "equal empty" and Pareto's
     /// structural-coverage rule was inert.
     tags: HashSet<u64>,
+    /// Per-test span structure. Pre-N6 not cached; mutation flows had to
+    /// reuse the initial test's spans across every accepted mutation.
+    spans: Vec<Span>,
 }
 
 /// Hashable choice-value key, mirroring [`crate::native::tree`]'s
@@ -2175,6 +2188,7 @@ impl NativeConjectureRunner {
         origin: Option<InterestingOrigin>,
         target_observations: HashMap<String, f64>,
         tags: HashSet<u64>,
+        spans: Vec<Span>,
     ) {
         match status {
             Status::Valid => {
@@ -2204,6 +2218,7 @@ impl NativeConjectureRunner {
                         target_observations,
                         origin: None,
                         tags,
+                        spans,
                     };
                     let (added, evicted) = self.pareto_front.add(result);
                     if added {
@@ -2253,6 +2268,7 @@ impl NativeConjectureRunner {
                         target_observations,
                         origin: Some(origin.clone()),
                         tags,
+                        spans,
                     };
                     let (added, evicted) = self.pareto_front.add(pareto_result);
                     if added && has_targets {
@@ -2531,13 +2547,15 @@ impl NativeConjectureRunner {
                 target_observations: cached.target_observations,
                 origin: cached.origin,
                 tags: cached.tags,
+                spans: cached.spans,
             };
         }
         // If `choices` is a strict prefix of a known path in the tree,
         // return EarlyStop without re-running the test.  Mirrors Python's
         // `simulate_test_function` which carries the partial walk's nodes.
-        // Tags can't be reconstructed (spans aren't in the tree), so they
-        // remain empty — but `nodes` is reconstructed from each step's
+        // Tags / spans can't be reconstructed (the data tree doesn't record
+        // either; they come from the test body's span emissions). They
+        // remain empty here — but `nodes` is reconstructed from each step's
         // tree-recorded `kind` paired with the input value, so downstream
         // sort_key / Pareto comparisons see a non-empty result.
         if let Some(partial_nodes) = prefix_walk_nodes(&self.tree_root, choices) {
@@ -2548,6 +2566,7 @@ impl NativeConjectureRunner {
                 target_observations: HashMap::new(),
                 origin: None,
                 tags: HashSet::new(),
+                spans: Vec::new(),
             };
         }
         let buffer_size_limit = self
@@ -2555,7 +2574,7 @@ impl NativeConjectureRunner {
             .buffer_size_limit
             .unwrap_or(CONJECTURE_BUFFER_SIZE);
         let ntc = NativeTestCase::for_choices(choices, None, None);
-        let (status, nodes, origin, target_observations, tags, kill_depths, _spans) =
+        let (status, nodes, origin, target_observations, tags, kill_depths, spans) =
             run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
         self.call_count += 1;
         record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
@@ -2567,6 +2586,7 @@ impl NativeConjectureRunner {
                 origin: origin.clone(),
                 target_observations: target_observations.clone(),
                 tags: tags.clone(),
+                spans: spans.clone(),
             },
         );
         let result_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
@@ -2577,8 +2597,9 @@ impl NativeConjectureRunner {
             target_observations: target_observations.clone(),
             origin: origin.clone(),
             tags: tags.clone(),
+            spans: spans.clone(),
         };
-        self.record_test_result(status, nodes, origin, target_observations, tags);
+        self.record_test_result(status, nodes, origin, target_observations, tags, spans);
         result
     }
 
@@ -2629,6 +2650,7 @@ impl NativeConjectureRunner {
                     target_observations: cached.target_observations,
                     origin: cached.origin,
                     tags: cached.tags,
+                    spans: cached.spans,
                 };
             }
         }
@@ -2647,7 +2669,7 @@ impl NativeConjectureRunner {
         };
         let probe_rng = SmallRng::seed_from_u64(self.rng.random::<u64>());
         let ntc = NativeTestCase::for_probe(choices, probe_rng, max_size);
-        let (status, nodes, origin, target_observations, tags, kill_depths, _spans) =
+        let (status, nodes, origin, target_observations, tags, kill_depths, spans) =
             run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
         self.call_count += 1;
         record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
@@ -2663,6 +2685,7 @@ impl NativeConjectureRunner {
                     origin: origin.clone(),
                     target_observations: target_observations.clone(),
                     tags: tags.clone(),
+                    spans: spans.clone(),
                 },
             );
         }
@@ -2673,8 +2696,9 @@ impl NativeConjectureRunner {
             target_observations: target_observations.clone(),
             origin: origin.clone(),
             tags: tags.clone(),
+            spans: spans.clone(),
         };
-        self.record_test_result(status, nodes, origin, target_observations, tags);
+        self.record_test_result(status, nodes, origin, target_observations, tags, spans);
         result
     }
 
@@ -2907,7 +2931,7 @@ impl NativeConjectureRunner {
                     continue;
                 };
                 let ntc = NativeTestCase::for_choices(&choices, None, None);
-                let (status, nodes, origin, target_obs, tags, _kill_depths, _spans) =
+                let (status, nodes, origin, target_obs, tags, _kill_depths, spans) =
                     run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
                 self.call_count += 1;
                 // Check if this replayed entry is still in the pareto front.
@@ -2919,6 +2943,7 @@ impl NativeConjectureRunner {
                     target_observations: target_obs.clone(),
                     origin: origin.clone(),
                     tags: tags.clone(),
+                    spans: spans.clone(),
                 };
                 let (still_in_front, evicted) = self.pareto_front.add(pareto_result);
                 if !still_in_front {
@@ -2927,7 +2952,7 @@ impl NativeConjectureRunner {
                 for e in evicted {
                     db.delete(&pareto_key, &choices_to_bytes(&e.choices));
                 }
-                self.record_test_result(status, nodes, origin, target_obs, tags);
+                self.record_test_result(status, nodes, origin, target_obs, tags, spans);
                 if matches!(status, Status::Interesting) {
                     break;
                 }
@@ -3133,7 +3158,7 @@ impl NativeConjectureRunner {
         let initial_calls = self.call_count;
         let mut failed_mutations: usize = 0;
         let mut data_choices: Vec<ChoiceValue> = initial_choices.to_vec();
-        let data_spans: Vec<Span> = initial_spans.to_vec();
+        let mut data_spans: Vec<Span> = initial_spans.to_vec();
         let mut data_target_obs: HashMap<String, f64> = initial_target_obs.clone();
         let mut data_status: Status = initial_status;
 
@@ -3144,12 +3169,13 @@ impl NativeConjectureRunner {
             // Mutator groups: spans grouped by label, only labels with
             // >= 2 occurrences. Mirrors `data.spans.mutator_groups`.
             //
-            // Spans are taken from the *initial* test result and may
-            // reference positions past the current `data_choices`
-            // length if a prior mutation accepted a shorter sequence
-            // (`ConjectureRunResult` doesn't carry spans yet — see
-            // N6). Filter to spans whose `end` fits in the current
-            // length so the slice indexing below stays in bounds.
+            // Post-N6: spans are refreshed from each accepted mutation's
+            // `ConjectureRunResult.spans`, so they always describe the
+            // *current* `data_choices`. The length-filter below is now
+            // a defensive no-op for canonical paths, but kept because
+            // EarlyStop / prefix-walk results carry empty spans, and a
+            // mutation accepting one of those would otherwise need a
+            // separate code path.
             let n = data_choices.len();
             let mut by_label: HashMap<&str, Vec<(usize, usize)>> = HashMap::new();
             for span in &data_spans {
@@ -3232,16 +3258,16 @@ impl NativeConjectureRunner {
                 data_choices = new_data.choices;
                 data_target_obs = new_data.target_observations;
                 data_status = new_data.status;
-                // Keep `data_spans` pointing at the *original* test's
-                // spans rather than the new data's: `ConjectureRunResult`
-                // doesn't carry spans (the data tree doesn't reconstruct
-                // them and `cached_test_function` doesn't preserve
-                // them). Mutating against stale spans is slightly
-                // inaccurate — span boundaries on the new sequence may
-                // not exactly line up with the old — but it keeps the
-                // probe budget exercised; tracked under N6 for a
-                // proper fix that plumbs spans through
-                // `ConjectureRunResult`.
+                // Refresh `data_spans` from the mutated result's spans
+                // (post-N6): `ConjectureRunResult` now carries spans through
+                // `cached_test_function`, so subsequent mutator-group
+                // derivation operates on the *current* test's structure
+                // rather than reusing the initial test's stale spans.
+                // EarlyStop / prefix-walk hits return empty spans (the data
+                // tree doesn't reconstruct span structure); in that case the
+                // next iteration's `groups.is_empty()` check will break the
+                // mutation loop, which is the correct behaviour.
+                data_spans = new_data.spans;
                 failed_mutations = 0;
             } else {
                 failed_mutations += 1;
@@ -3299,10 +3325,11 @@ impl NativeConjectureRunner {
             let mutation_choices: Vec<ChoiceValue> =
                 nodes.iter().map(|n| n.value.clone()).collect();
             let mutation_target_obs = target_obs.clone();
-            self.record_test_result(status, nodes, origin, target_obs, tags);
+            let mutation_spans = spans.clone();
+            self.record_test_result(status, nodes, origin, target_obs, tags, spans);
             self.generate_mutations_from(
                 &mutation_choices,
-                &spans,
+                &mutation_spans,
                 &mutation_target_obs,
                 status,
                 do_shrink,
@@ -3373,10 +3400,11 @@ impl NativeConjectureRunner {
             let mutation_choices: Vec<ChoiceValue> =
                 nodes.iter().map(|n| n.value.clone()).collect();
             let mutation_target_obs = target_obs.clone();
-            self.record_test_result(status, nodes, origin, target_obs, tags);
+            let mutation_spans = spans.clone();
+            self.record_test_result(status, nodes, origin, target_obs, tags, spans);
             self.generate_mutations_from(
                 &mutation_choices,
-                &spans,
+                &mutation_spans,
                 &mutation_target_obs,
                 status,
                 do_shrink,
