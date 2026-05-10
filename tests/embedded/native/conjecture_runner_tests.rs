@@ -4819,6 +4819,51 @@ fn cached_test_function_carries_spans() {
     );
 }
 
+// ── E1: ignore_limits actually bypasses budget enforcement ───────────────
+//
+// Pre-E1, `pub ignore_limits: bool` was wired up but never read. Setting
+// `runner.ignore_limits = true` had no observable effect on `run()` —
+// `should_generate_more` and `set_exit_reason_if_done` enforced the
+// max_examples / invalid-iteration budgets unconditionally.
+//
+// Behavioural claim: with `max_examples=1` and `ignore_limits=true`, the
+// runner's generation loop must keep running past max_examples until it
+// either exhausts the choice tree or hits a different terminating
+// condition. Pre-E1 the loop terminated at `valid_examples >= 1`, so
+// `call_count` capped near 1 (allowing for a couple of probes / span
+// mutations). Post-E1 the loop saturates the small choice space and
+// `call_count` exceeds 5.
+#[test]
+fn ignore_limits_bypasses_max_examples() {
+    let settings = NativeRunnerSettings::new()
+        .max_examples(1)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        // Body draws a 3-bit integer (8 values), so the data tree is
+        // small enough that the runner exhausts it quickly once the
+        // limit gate is open.
+        |data: &mut NativeConjectureData| {
+            let _ = data.draw_integer(0, 7);
+        },
+        settings,
+        make_rng(),
+    );
+    runner.ignore_limits = true;
+    runner.run();
+    assert!(
+        runner.call_count > 5,
+        "ignore_limits=true must bypass max_examples=1 (got call_count={}; \
+         pre-E1 the flag was dead and the loop terminated at \
+         valid_examples >= 1)",
+        runner.call_count,
+    );
+}
+
 // ── N4: shrink-time probes record target observations / pareto ───────────
 //
 // Pre-N4, `shrink_interesting_examples` invoked the shrinker via a closure
