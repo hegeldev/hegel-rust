@@ -778,6 +778,16 @@ impl TargetedRunner {
                 }
                 ChoiceValue::Integer(new)
             }
+            // Mirrors `targeting.rs::step_choice`'s Float arm and upstream
+            // `optimiser.py:130-156`: step by `k` cast to f64 and reject if
+            // the constraints (min/max/allow_nan/allow_infinity) reject it.
+            (ChoiceValue::Float(v), ChoiceKind::Float(kind)) => {
+                let new = v + k as f64;
+                if !kind.validate(new) {
+                    return false;
+                }
+                ChoiceValue::Float(new)
+            }
             (ChoiceValue::Boolean(b), ChoiceKind::Boolean(_)) => {
                 if k.saturating_abs() > 1 {
                     return false;
