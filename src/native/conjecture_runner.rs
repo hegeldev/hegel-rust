@@ -162,6 +162,15 @@ pub struct ConjectureRunResult {
     /// test cases properly. Mirrors `ConjectureResult.spans` from
     /// `internal/conjecture/data.py`.
     pub spans: Vec<Span>,
+    /// Diagnostic key/value pairs recorded by the test body via
+    /// `data.mark_invalid(Some("why".into()))` (key = `"invalid
+    /// because"`) or future `data.event("k", "v")` hooks. Mirrors
+    /// `ConjectureResult.events` from `internal/conjecture/data.py`.
+    /// Pre-E2 the events HashMap was populated by `mark_invalid` but
+    /// never plumbed through `TestFnResult` / `ConjectureRunResult`,
+    /// so a test reasoning about the *reason* a draw was filtered
+    /// couldn't observe it.
+    pub events: HashMap<String, String>,
 }
 
 impl PartialEq for ConjectureRunResult {
@@ -1330,6 +1339,10 @@ type RunnerTestFn = Box<dyn FnMut(&mut NativeConjectureData)>;
 // Trailing `bool` (E5) is `data.ntc.has_discards`: any span closed with
 // `discard=true` sets it. Plumbed through so `record_test_result` can gate
 // `pareto_front.add` on non-discard runs, mirroring `engine.py::test_function`.
+//
+// Final `HashMap<String, String>` (E2) is `data.events`: diagnostic
+// key/value pairs recorded via `mark_invalid(why)` or future `data.event`
+// hooks. Surfaces on `ConjectureRunResult.events` for caller inspection.
 type TestFnResult = (
     Status,
     Vec<ChoiceNode>,
@@ -1339,6 +1352,7 @@ type TestFnResult = (
     Vec<usize>,
     Vec<Span>,
     bool,
+    HashMap<String, String>,
 );
 
 /// Cached outcome of a [`NativeConjectureRunner::cached_test_function`]
@@ -1362,6 +1376,8 @@ struct CachedRun {
     /// Per-test span structure. Pre-N6 not cached; mutation flows had to
     /// reuse the initial test's spans across every accepted mutation.
     spans: Vec<Span>,
+    /// Diagnostic events. See `ConjectureRunResult.events` (E2).
+    events: HashMap<String, String>,
 }
 
 /// Hashable choice-value key, mirroring [`crate::native::tree`]'s
@@ -1751,6 +1767,7 @@ fn run_test_fn(
         .collect();
     let spans: Vec<Span> = data.ntc.spans.iter().cloned().collect();
     let has_discards = data.ntc.has_discards;
+    let events = std::mem::take(&mut data.events);
     let nodes = std::mem::take(&mut data.ntc.nodes);
     (
         status,
@@ -1761,6 +1778,7 @@ fn run_test_fn(
         kill_depths,
         spans,
         has_discards,
+        events,
     )
 }
 
@@ -2203,6 +2221,7 @@ impl NativeConjectureRunner {
         tags: HashSet<u64>,
         spans: Vec<Span>,
         has_discards: bool,
+        events: HashMap<String, String>,
     ) {
         if status != Status::Valid {
             return;
@@ -2231,6 +2250,7 @@ impl NativeConjectureRunner {
                 origin: None,
                 tags,
                 spans,
+                events,
             };
             let (added, evicted) = self.pareto_front.add(result);
             if added {
@@ -2254,6 +2274,7 @@ impl NativeConjectureRunner {
         tags: HashSet<u64>,
         spans: Vec<Span>,
         has_discards: bool,
+        events: HashMap<String, String>,
     ) {
         match status {
             Status::Valid => {
@@ -2285,6 +2306,7 @@ impl NativeConjectureRunner {
                         origin: None,
                         tags,
                         spans,
+                        events,
                     };
                     let (added, evicted) = self.pareto_front.add(result);
                     if added {
@@ -2337,6 +2359,7 @@ impl NativeConjectureRunner {
                             origin: Some(origin.clone()),
                             tags,
                             spans,
+                            events,
                         };
                         let (added, evicted) = self.pareto_front.add(pareto_result);
                         if added && has_targets {
@@ -2536,6 +2559,7 @@ impl NativeConjectureRunner {
                             _kill_depths,
                             spans,
                             has_discards,
+                            events,
                         ) = run_test_fn(&mut me.test_fn, ntc, buffer_size_limit);
                         me.call_count += 1;
                         // Merge any target observations from this probe
@@ -2558,6 +2582,7 @@ impl NativeConjectureRunner {
                             tags,
                             spans,
                             has_discards,
+                            events,
                         );
                         // Mirrors `engine.py`'s per-target predicate
                         // (`d.interesting_origin == target`): when
@@ -2648,16 +2673,18 @@ impl NativeConjectureRunner {
                 origin: cached.origin,
                 tags: cached.tags,
                 spans: cached.spans,
+                events: cached.events,
             };
         }
         // If `choices` is a strict prefix of a known path in the tree,
         // return EarlyStop without re-running the test.  Mirrors Python's
         // `simulate_test_function` which carries the partial walk's nodes.
-        // Tags / spans can't be reconstructed (the data tree doesn't record
-        // either; they come from the test body's span emissions). They
-        // remain empty here — but `nodes` is reconstructed from each step's
-        // tree-recorded `kind` paired with the input value, so downstream
-        // sort_key / Pareto comparisons see a non-empty result.
+        // Tags / spans / events can't be reconstructed (the data tree
+        // doesn't record any of them; they come from the test body's
+        // calls). They remain empty here — but `nodes` is reconstructed
+        // from each step's tree-recorded `kind` paired with the input
+        // value, so downstream sort_key / Pareto comparisons see a
+        // non-empty result.
         if let Some(partial_nodes) = prefix_walk_nodes(&self.tree_root, choices) {
             return ConjectureRunResult {
                 status: Status::EarlyStop,
@@ -2667,6 +2694,7 @@ impl NativeConjectureRunner {
                 origin: None,
                 tags: HashSet::new(),
                 spans: Vec::new(),
+                events: HashMap::new(),
             };
         }
         let buffer_size_limit = self
@@ -2674,8 +2702,17 @@ impl NativeConjectureRunner {
             .buffer_size_limit
             .unwrap_or(CONJECTURE_BUFFER_SIZE);
         let ntc = NativeTestCase::for_choices(choices, None, None);
-        let (status, nodes, origin, target_observations, tags, kill_depths, spans, has_discards) =
-            run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+        let (
+            status,
+            nodes,
+            origin,
+            target_observations,
+            tags,
+            kill_depths,
+            spans,
+            has_discards,
+            events,
+        ) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
         self.call_count += 1;
         record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
         self.test_cache.insert(
@@ -2687,6 +2724,7 @@ impl NativeConjectureRunner {
                 target_observations: target_observations.clone(),
                 tags: tags.clone(),
                 spans: spans.clone(),
+                events: events.clone(),
             },
         );
         let result_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
@@ -2698,6 +2736,7 @@ impl NativeConjectureRunner {
             origin: origin.clone(),
             tags: tags.clone(),
             spans: spans.clone(),
+            events: events.clone(),
         };
         self.record_test_result(
             status,
@@ -2707,6 +2746,7 @@ impl NativeConjectureRunner {
             tags,
             spans,
             has_discards,
+            events,
         );
         result
     }
@@ -2759,6 +2799,7 @@ impl NativeConjectureRunner {
                     origin: cached.origin,
                     tags: cached.tags,
                     spans: cached.spans,
+                    events: cached.events,
                 };
             }
         }
@@ -2777,8 +2818,17 @@ impl NativeConjectureRunner {
         };
         let probe_rng = SmallRng::seed_from_u64(self.rng.random::<u64>());
         let ntc = NativeTestCase::for_probe(choices, probe_rng, max_size);
-        let (status, nodes, origin, target_observations, tags, kill_depths, spans, has_discards) =
-            run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+        let (
+            status,
+            nodes,
+            origin,
+            target_observations,
+            tags,
+            kill_depths,
+            spans,
+            has_discards,
+            events,
+        ) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
         self.call_count += 1;
         record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
         let result_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
@@ -2794,6 +2844,7 @@ impl NativeConjectureRunner {
                     target_observations: target_observations.clone(),
                     tags: tags.clone(),
                     spans: spans.clone(),
+                    events: events.clone(),
                 },
             );
         }
@@ -2805,6 +2856,7 @@ impl NativeConjectureRunner {
             origin: origin.clone(),
             tags: tags.clone(),
             spans: spans.clone(),
+            events: events.clone(),
         };
         self.record_test_result(
             status,
@@ -2814,6 +2866,7 @@ impl NativeConjectureRunner {
             tags,
             spans,
             has_discards,
+            events,
         );
         result
     }
@@ -2949,8 +3002,17 @@ impl NativeConjectureRunner {
                 continue;
             };
             let ntc = NativeTestCase::for_choices(&choices, None, None);
-            let (status, nodes, origin, _target_obs, _tags, _kill_depths, _spans, _has_discards) =
-                run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+            let (
+                status,
+                nodes,
+                origin,
+                _target_obs,
+                _tags,
+                _kill_depths,
+                _spans,
+                _has_discards,
+                _events,
+            ) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             self.call_count += 1;
 
             if matches!(status, Status::Valid) {
@@ -3043,8 +3105,17 @@ impl NativeConjectureRunner {
                     continue;
                 };
                 let ntc = NativeTestCase::for_choices(&choices, None, None);
-                let (status, nodes, origin, target_obs, tags, _kill_depths, spans, has_discards) =
-                    run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+                let (
+                    status,
+                    nodes,
+                    origin,
+                    target_obs,
+                    tags,
+                    _kill_depths,
+                    spans,
+                    has_discards,
+                    events,
+                ) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
                 self.call_count += 1;
                 // Check if this replayed entry is still in the pareto front.
                 // If not, delete it from the database.
@@ -3056,6 +3127,7 @@ impl NativeConjectureRunner {
                     origin: origin.clone(),
                     tags: tags.clone(),
                     spans: spans.clone(),
+                    events: events.clone(),
                 };
                 let (still_in_front, evicted) = self.pareto_front.add(pareto_result);
                 if !still_in_front {
@@ -3072,6 +3144,7 @@ impl NativeConjectureRunner {
                     tags,
                     spans,
                     has_discards,
+                    events,
                 );
                 if matches!(status, Status::Interesting) {
                     break;
@@ -3431,8 +3504,17 @@ impl NativeConjectureRunner {
         if self.should_generate_more(do_shrink) && !self.tree_root.is_exhausted {
             let ntc = NativeTestCase::for_simplest(buffer_size_limit);
             let probe_start = std::time::Instant::now();
-            let (status, nodes, origin, target_obs, tags, kill_depths, spans, has_discards) =
-                run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+            let (
+                status,
+                nodes,
+                origin,
+                target_obs,
+                tags,
+                kill_depths,
+                spans,
+                has_discards,
+                events,
+            ) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             let probe_elapsed = probe_start.elapsed();
             self.call_count += 1;
             record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
@@ -3442,7 +3524,16 @@ impl NativeConjectureRunner {
                 nodes.iter().map(|n| n.value.clone()).collect();
             let mutation_target_obs = target_obs.clone();
             let mutation_spans = spans.clone();
-            self.record_test_result(status, nodes, origin, target_obs, tags, spans, has_discards);
+            self.record_test_result(
+                status,
+                nodes,
+                origin,
+                target_obs,
+                tags,
+                spans,
+                has_discards,
+                events,
+            );
             self.generate_mutations_from(
                 &mutation_choices,
                 &mutation_spans,
@@ -3508,8 +3599,17 @@ impl NativeConjectureRunner {
             let prefix = generate_novel_prefix(&self.tree_root, &mut batch_rng);
             let ntc = NativeTestCase::for_probe(&prefix, batch_rng, buffer_size_limit);
             let tc_start = std::time::Instant::now();
-            let (status, nodes, origin, target_obs, tags, kill_depths, spans, has_discards) =
-                run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+            let (
+                status,
+                nodes,
+                origin,
+                target_obs,
+                tags,
+                kill_depths,
+                spans,
+                has_discards,
+                events,
+            ) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             let tc_elapsed = tc_start.elapsed();
             self.call_count += 1;
             record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
@@ -3517,7 +3617,16 @@ impl NativeConjectureRunner {
                 nodes.iter().map(|n| n.value.clone()).collect();
             let mutation_target_obs = target_obs.clone();
             let mutation_spans = spans.clone();
-            self.record_test_result(status, nodes, origin, target_obs, tags, spans, has_discards);
+            self.record_test_result(
+                status,
+                nodes,
+                origin,
+                target_obs,
+                tags,
+                spans,
+                has_discards,
+                events,
+            );
             self.generate_mutations_from(
                 &mutation_choices,
                 &mutation_spans,

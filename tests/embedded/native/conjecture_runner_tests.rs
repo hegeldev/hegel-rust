@@ -83,6 +83,7 @@ fn dominance_equal_keys_returns_equal() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     let d = dominance(&result, &result.clone());
     assert_eq!(d, DominanceRelation::Equal);
@@ -112,6 +113,7 @@ fn dominance_right_simpler_no_dominance() {
         origin: None,
         tags: longer_tags,
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     let shorter = ConjectureRunResult {
         status: Status::Valid,
@@ -121,6 +123,7 @@ fn dominance_right_simpler_no_dominance() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     // Pass longer as left, shorter as right. The right_key < left_key branch fires.
     // The recursive call returns NoDominance. After the swap: NoDominance.
@@ -153,6 +156,7 @@ fn pareto_front_right_dominates_evicts_worse_entry() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     front.add(worse.clone());
     assert_eq!(front.len(), 1);
@@ -166,6 +170,7 @@ fn pareto_front_right_dominates_evicts_worse_entry() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     let (in_front, evicted) = front.add(better);
     assert!(in_front);
@@ -185,6 +190,7 @@ fn pareto_front_adding_equal_entry_is_idempotent() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     front.add(entry.clone());
     let (in_front, evicted) = front.add(entry);
@@ -206,6 +212,7 @@ fn pareto_front_iter_nonempty() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     front.add(entry);
     let v: Vec<_> = front.iter().collect();
@@ -1230,6 +1237,7 @@ fn pareto_front_left_entry_dominates_new_entry() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     front.add(simple.clone());
     assert_eq!(front.len(), 1);
@@ -1264,6 +1272,7 @@ fn pareto_front_left_entry_dominates_new_entry() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     // The complex entry has the same tags ({}) but is larger — simple dominates.
     let (in_front, _evicted) = front.add(complex);
@@ -1291,6 +1300,7 @@ fn pareto_front_equal_in_left_check_loop() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     let b = ConjectureRunResult {
         status: Status::Valid,
@@ -1300,6 +1310,7 @@ fn pareto_front_equal_in_left_check_loop() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     front.add(a);
     front.add(b);
@@ -1317,6 +1328,7 @@ fn pareto_front_equal_in_left_check_loop() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     let (in_front, evicted) = front.add(c);
     assert!(!in_front);
@@ -1939,6 +1951,7 @@ fn dominance_right_dominates_via_swap() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     let big = ConjectureRunResult {
         status: Status::Valid,
@@ -1952,6 +1965,7 @@ fn dominance_right_dominates_via_swap() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     // Pass (big, small): big has larger sort_key, so the swap branch fires.
     // The recursive dominance(small, big) returns LeftDominates → flipped to RightDominates.
@@ -1972,6 +1986,7 @@ fn dominance_no_dominance_when_left_status_lower() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     let big_interesting = ConjectureRunResult {
         status: Status::Interesting,
@@ -1985,6 +2000,7 @@ fn dominance_no_dominance_when_left_status_lower() {
         origin: Some(interesting_origin(None)),
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     // small_valid is simpler (left) but has lower status → NoDominance (line 176).
     let d = dominance(&small_valid, &big_interesting);
@@ -2007,6 +2023,7 @@ fn pareto_front_contains_and_index() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     front.add(entry.clone());
     assert!(front.contains(&entry));
@@ -2384,6 +2401,7 @@ fn pareto_front_add_dominators_walk_runs_to_completion() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     let int_kind = ChoiceKind::Integer(IntegerChoice {
         min_value: 0,
@@ -2432,6 +2450,7 @@ fn pareto_front_add_invalid_status_returns_false() {
         origin: None,
         tags: Default::default(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     let (in_front, evicted) = front.add(entry);
     assert!(!in_front);
@@ -3783,6 +3802,7 @@ fn dominance_no_dominance_different_interesting_origins() {
         origin: Some(origin_a),
         tags: std::collections::HashSet::new(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     let right = ConjectureRunResult {
         status: Status::Interesting,
@@ -3792,6 +3812,7 @@ fn dominance_no_dominance_different_interesting_origins() {
         origin: Some(origin_b),
         tags: std::collections::HashSet::new(),
         spans: vec![],
+        events: std::collections::HashMap::new(),
     };
     // Two interesting results with different origins → NoDominance (line 181).
     assert_eq!(dominance(&left, &right), DominanceRelation::NoDominance);
@@ -4859,6 +4880,41 @@ fn pareto_front_excludes_results_with_discards() {
         "Pareto front must reject results with has_discards (got {} entries; \
          pre-E5 the gate only checked target_observations non-empty)",
         runner.pareto_front().len(),
+    );
+}
+
+// ── E2: Status::Invalid reason flows onto ConjectureRunResult.events ────
+//
+// `data.mark_invalid(Some(reason))` records the reason under
+// `events["invalid because"]`. Pre-E2 that HashMap was populated by
+// the test body but never plumbed onto `ConjectureRunResult`, so a
+// caller couldn't observe the reason.
+//
+// Behavioural claim: after `cached_test_function` runs a body that calls
+// `data.mark_invalid(Some("the_reason".to_string()))`, the returned
+// `result.events` must contain the `"invalid because" -> "the_reason"`
+// pair.
+#[test]
+fn cached_test_function_carries_mark_invalid_reason() {
+    let settings = default_settings();
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let _ = data.draw_integer(0, 10);
+            data.mark_invalid(Some("filtered_for_test".to_string()));
+        },
+        settings,
+        make_rng(),
+    );
+    let result = runner.cached_test_function(&[ChoiceValue::Integer(5)]);
+    assert_eq!(result.status, Status::Invalid);
+    assert_eq!(
+        result.events.get("invalid because").map(String::as_str),
+        Some("filtered_for_test"),
+        "ConjectureRunResult.events must surface the reason passed to \
+         data.mark_invalid; got {:?} (pre-E2 the field didn't exist; \
+         events were populated on the inner data but discarded by \
+         run_test_fn / cached_test_function)",
+        result.events,
     );
 }
 
