@@ -4753,6 +4753,60 @@ fn cached_test_function_with_extend_bypasses_cached_early_stop() {
 // `draw_integer` calls, and asserts that no test case observed more than 2
 // successful draws — the 3rd integer raises `StopTest` and panics out of
 // the closure before the per-case counter can increment further.
+// ── N5: cached_test_function prefix-walk reconstructs partial nodes ───────
+//
+// `cached_test_function` short-circuits when `choices` is a strict prefix
+// of a known tree path: it returns `Status::EarlyStop` without re-running
+// the test function. Pre-N5 it returned `nodes: vec![]` — a downstream
+// `sort_key` comparison would treat the empty result as "smaller than any
+// non-empty result," poisoning Pareto / dominance comparisons.
+//
+// Per the audit, Python's `simulate_test_function` carries the partial
+// walk's nodes (kind from the tree, value from the input choices). The
+// fix is to walk `tree_root` along `choices` and reconstruct ChoiceNodes
+// from each step's recorded `kind` plus the input's value.
+#[test]
+fn cached_test_function_prefix_reconstructs_partial_nodes() {
+    let settings = default_settings();
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            let _ = data.draw_integer(0, 100);
+            let _ = data.draw_integer(0, 100);
+        },
+        settings,
+        make_rng(),
+    );
+    // First call: full path of length 2. Populates the tree with kinds at
+    // both positions and a Valid conclusion at depth 2.
+    let full = runner.cached_test_function(&[
+        ChoiceValue::Integer(5),
+        ChoiceValue::Integer(7),
+    ]);
+    assert_eq!(full.status, Status::Valid);
+    assert_eq!(full.nodes.len(), 2);
+
+    // Second call: strict prefix of the path above. cached_test_function
+    // returns EarlyStop without re-running. Pre-N5 the returned nodes are
+    // empty; post-N5 they reconstruct the partial walk: one node, Integer
+    // kind, value = 5, was_forced = false.
+    let prefix = runner.cached_test_function(&[ChoiceValue::Integer(5)]);
+    assert_eq!(prefix.status, Status::EarlyStop);
+    assert_eq!(
+        prefix.nodes.len(),
+        1,
+        "EarlyStop on a strict prefix must carry the partial walk's nodes \
+         (got {} nodes; expected 1 reconstructed from the tree)",
+        prefix.nodes.len(),
+    );
+    assert!(
+        matches!(prefix.nodes[0].kind, ChoiceKind::Integer(_)),
+        "reconstructed node kind must come from the tree (got {:?})",
+        prefix.nodes[0].kind,
+    );
+    assert_eq!(prefix.nodes[0].value, ChoiceValue::Integer(5));
+    assert!(!prefix.nodes[0].was_forced);
+}
+
 #[test]
 fn buffer_size_limit_caps_choice_count() {
     use std::sync::Arc;
