@@ -2527,10 +2527,24 @@ impl NativeConjectureRunner {
             // contribution). Now the runner sees shrink-time probes
             // identically to generation-phase runs.
             //
-            // We can't route through `cached_test_function` itself yet:
-            // its `for_choices(_, None, None)` call drops the punning
-            // `prefix_nodes` that Full-replay needs to handle one_of
-            // shape changes. That's tracked as N4-followup.
+            // We deliberately don't route through `cached_test_function`
+            // here, even though that would deduplicate repeat probes.
+            // `cached_test_function` constructs its NTC via
+            // `for_choices(_, None, None)` — the third argument is the
+            // punning `prefix_nodes` we *need* to set to `Some(candidate)`
+            // so `resolve_choice` can fall back to a kind's simplest /
+            // unit value when a stored choice doesn't validate against a
+            // post-shrink (e.g. one_of branch-switched) kind. Without
+            // punning, Full-replay diverges from the candidate it's
+            // supposed to test.
+            //
+            // The cache benefit here is small: `Shrinker::consider` already
+            // dedups by `sort_key`, so identical candidates rarely reach
+            // the test_fn closure twice. Adding a second
+            // `cached_test_function_punned` variant or a `(choices,
+            // kinds_hash)` cache key would add complexity for marginal
+            // gain. Closes N4-followup with the "document and accept"
+            // resolution from the audit's two options.
             let (shrunk, improvements, downgraded) = {
                 let me: &mut Self = self;
                 let mut shrinker = Shrinker::with_probe(
