@@ -10,7 +10,17 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-hegeltest = { path = "../../.." }
+# N12/N15: enable the native feature so conformance binaries exercise
+# the native backend's generators rather than the default server
+# backend. The server-side generators are already covered extensively
+# by the main `cargo test` suite (`tests/test_*.rs` under default
+# features); the native backend is the one whose conformance with the
+# protocol-defined schemas was previously uncovered. N13/N14 added
+# eager validation for unsupported codec / empty alphabet / out-of-
+# order codepoint range; the conformance binaries that exercise those
+# inputs (test_text) now catch the resulting `InvalidArgument:` panics
+# and treat them as skipped cases.
+hegeltest = { path = "../../..", features = ["native"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 
