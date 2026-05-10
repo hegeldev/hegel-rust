@@ -380,7 +380,7 @@ For each: read the test, decide whether the *test* is wrong (expected message ch
 - [ ] **E3.** `src/native/targeting.rs:224-264` — `hill_climb` doesn't reset `i` after node-count-changing improvements. Mirror `optimiser.py:95-97`.
 - [ ] **E4.** `src/native/targeting.rs:97` — `maybe_optimise` is one-shot per run. Allow re-entry as more valid examples arrive (or document why one-shot is correct).
 - [ ] **E5.** `src/native/conjecture_runner.rs:1701-1721` — Pareto-add gate doesn't check `data.has_discards`. Add the check.
-- [ ] **E6.** `src/native/test_runner.rs:586-610` — `EngineCtx::mode` field is dead. Remove.
+- [x] **E6.** `src/native/test_runner.rs:586-610` — `EngineCtx::mode` field is dead. Remove. Done — removed `mode: Mode` field from `EngineCtx`, dropped the `mode` parameter from `EngineCtx::new`, and removed the `let mode = settings.mode;` line in `native_run` whose only use was passing it to that constructor. The corresponding `let _ = self.mode;` placeholder in `EngineCtx::execute` is gone. Mode is *already* plumbed through `run_lifecycle::drive`, which calls `run_test_case(_, _, _, mode, _)` per invocation; by the time `run_case` reaches `EngineCtx`, mode is captured in the closure. Native + default suites green.
 - [ ] **E7.** `RELEASE.md` — overstates parity. Update once items above land.
 - [ ] **E8.** No `print_blob` / `reproduce_failure` on either backend. If this is on the roadmap, add to Open Questions; otherwise leave it.
 - [ ] **E9.** `src/native/shrinker/strings.rs:120-141` — non-deterministic iteration order over a `HashMap`. Sort first.

@@ -103,7 +103,6 @@ fn run_main(
     let mut rng = create_rng(settings, database_key);
     let max_examples = settings.test_cases;
     let verbosity = settings.verbosity;
-    let mode = settings.mode;
 
     // `Database::Unset` is the non-CI default (set by `Settings::new` in
     // `src/runner.rs`); it means "the user didn't pick, so use the
@@ -119,7 +118,7 @@ fn run_main(
         Database::Disabled => None,
     };
 
-    let mut ctx = EngineCtx::new(run_case, mode);
+    let mut ctx = EngineCtx::new(run_case);
 
     // Local data tree used by the generation phase to drive `for_probe`
     // toward unexplored prefixes (mirrors `NativeConjectureRunner`'s
@@ -626,23 +625,25 @@ fn update_interesting(
 /// non-determinism trie and the shrink-result cache, exposing the
 /// `NativeRunner` surface the surrounding shrinker, span-mutation, and
 /// targeting code expect.
+///
+/// `Settings::mode` does not need to be stored here: it is captured in
+/// the `run_case` closure built by `run_lifecycle::drive` (which calls
+/// `run_test_case(_, _, _, mode, _)` per invocation), so by the time
+/// `run_case` reaches us the mode is already plumbed.
 pub(crate) struct EngineCtx<'a> {
     run_case: &'a mut dyn FnMut(Box<dyn DataSource>, bool) -> TestCaseResult,
     tree_root: DetTreeNode,
     cache: HashMap<Vec<ChoiceValueKey>, RunResult>,
-    mode: Mode,
 }
 
 impl<'a> EngineCtx<'a> {
     fn new(
         run_case: &'a mut dyn FnMut(Box<dyn DataSource>, bool) -> TestCaseResult,
-        mode: Mode,
     ) -> Self {
         EngineCtx {
             run_case,
             tree_root: DetTreeNode::new(),
             cache: HashMap::new(),
-            mode,
         }
     }
 
@@ -650,7 +651,6 @@ impl<'a> EngineCtx<'a> {
     /// returning a [`RunResult`] populated from the [`TestCaseResult`]
     /// plus the [`NativeTestCase`]'s realized choice nodes.
     fn execute(&mut self, ntc: NativeTestCase, is_final: bool) -> RunResult {
-        let _ = self.mode;
         let (data_source, handle) = NativeDataSource::new(ntc);
         let tc_result = (self.run_case)(Box::new(data_source), is_final);
         let nodes = NativeDataSource::take_nodes(&handle);
