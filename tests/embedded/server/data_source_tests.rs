@@ -56,14 +56,56 @@ fn protocol_debug_from_env_false_for_garbage() {
 
 /// Build a `ServerDataSource` whose underlying connection has no live peer.
 /// The reader thread exits immediately (empty()), and the write peer is
-/// dropped, so any actual `send_request` will fail with `BrokenPipe` —
-/// exactly the situation we want when asserting that *client-side*
-/// validation panics *before* attempting any IO.
+/// dropped — `send_request` will detect server-exited and panic. Use this
+/// only for tests where validation is expected to fire *before* any IO
+/// happens (the finite-score tests below).
 fn make_dead_data_source() -> ServerDataSource {
     let (_dropped_peer, write_end) = UnixStream::pair().unwrap();
     // Connection::new already returns an Arc<Connection>.
     let conn = Connection::new(Box::new(std::io::empty()), Box::new(write_end));
     let stream = conn.new_stream();
+    ServerDataSource::new(conn, stream, Verbosity::Quiet)
+}
+
+/// Build a `ServerDataSource` paired with a mock server thread that ack's
+/// `n` incoming requests with a `{status: "ok"}` Map. Use this for tests
+/// where validation is expected to fire *after* one or more successful
+/// IO round-trips (e.g. the duplicate-label test, where the *second* call
+/// must reach the duplicate check).
+fn make_mocked_data_source(n: usize) -> ServerDataSource {
+    let (client, mut server) = UnixStream::pair().unwrap();
+    let client_writer = client.try_clone().unwrap();
+    let conn = Connection::new(Box::new(client), Box::new(client_writer));
+    let stream = conn.new_stream();
+
+    std::thread::spawn(move || {
+        for _ in 0..n {
+            let Ok(request) = read_packet(&mut server) else {
+                return;
+            };
+            // request_cbor expects a Map response (it calls map_get on it).
+            let response = Value::Map(vec![(
+                Value::Text("status".into()),
+                Value::Text("ok".into()),
+            )]);
+            let mut payload = Vec::new();
+            ciborium::into_writer(&response, &mut payload).unwrap();
+            if write_packet(
+                &mut server,
+                &Packet {
+                    stream: request.stream,
+                    message_id: request.message_id,
+                    is_reply: true,
+                    payload,
+                },
+            )
+            .is_err()
+            {
+                return;
+            }
+        }
+    });
+
     ServerDataSource::new(conn, stream, Verbosity::Quiet)
 }
 
@@ -109,36 +151,8 @@ fn target_observation_panics_on_neg_infinity() {
 fn target_observation_panics_on_duplicate_label() {
     // Unlike the finite-score tests above, we need the *first* call's
     // send_request to succeed so the second call can reach the duplicate
-    // check — a dead stream would panic in send_request before we get
-    // there. Spawn a one-shot mock server that ack's the first request
-    // with a CBOR null reply.
-    let (client, mut server) = UnixStream::pair().unwrap();
-    let client_writer = client.try_clone().unwrap();
-    let conn = Connection::new(Box::new(client), Box::new(client_writer));
-    let stream = conn.new_stream();
-
-    std::thread::spawn(move || {
-        let request = read_packet(&mut server).unwrap();
-        // request_cbor expects a Map response (it calls map_get on it).
-        let response = Value::Map(vec![(
-            Value::Text("status".into()),
-            Value::Text("ok".into()),
-        )]);
-        let mut payload = Vec::new();
-        ciborium::into_writer(&response, &mut payload).unwrap();
-        write_packet(
-            &mut server,
-            &Packet {
-                stream: request.stream,
-                message_id: request.message_id,
-                is_reply: true,
-                payload,
-            },
-        )
-        .unwrap();
-    });
-
-    let ds = ServerDataSource::new(conn, stream, Verbosity::Quiet);
+    // check — a dead stream would panic in send_request before we get there.
+    let ds = make_mocked_data_source(1);
     ds.target_observation(1.0, "x");
     ds.target_observation(2.0, "x");
 }
@@ -146,10 +160,10 @@ fn target_observation_panics_on_duplicate_label() {
 #[test]
 fn target_observation_allows_distinct_labels() {
     // Distinct labels in the same test case should be accepted (not panic).
-    // Note: `send_request` will internally fail with BrokenPipe on this dead
-    // stream and is swallowed by `let _ = ...`, but the validation must not
-    // *itself* reject distinct labels.
-    let ds = make_dead_data_source();
+    // Both calls go through send_request → mock-server (must not flake on a
+    // dead stream's server-exited panic, as this test originally did when
+    // run in isolation).
+    let ds = make_mocked_data_source(2);
     ds.target_observation(1.0, "a");
     ds.target_observation(2.0, "b");
 }
