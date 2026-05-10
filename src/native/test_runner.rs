@@ -331,8 +331,14 @@ fn run_main(
                 last_bug_at = Some(calls);
                 update_interesting(&mut interesting, origin, run.nodes.clone());
             } else if run.status == Status::Valid {
-                let mutation_result = try_span_mutation(&run.nodes, &run.spans, &mut rng, &mut ctx);
-                calls += SPAN_MUTATION_ATTEMPTS as u64;
+                // N3: bump `calls` by the *actual* number of probes
+                // try_span_mutation ran, not the maximum. Pre-N3 the
+                // accounting overcharged by 5 per Valid case in tests
+                // with no repeated span labels (try_span_mutation
+                // short-circuits with multi.is_empty() and runs 0 probes).
+                let (mutation_result, mutation_attempts) =
+                    try_span_mutation(&run.nodes, &run.spans, &mut rng, &mut ctx);
+                calls += mutation_attempts as u64;
                 if let Some((mut_nodes, origin)) = mutation_result {
                     if representative_origin.is_none() {
                         representative_origin = Some(origin.clone());
@@ -749,12 +755,19 @@ impl NativeRunner for EngineCtx<'_> {
 /// Port of Hypothesis's `generate_mutations_from`. Returns the mutated
 /// shrunk nodes plus the panic origin if the attempt produced an
 /// interesting result.
+/// Runs up to [`SPAN_MUTATION_ATTEMPTS`] span-mutation probes via `ctx`.
+/// Returns the mutated counterexample (if one was found) plus the number of
+/// `ctx.execute` calls that actually ran — N3 fix: pre-N3 the caller
+/// unconditionally added `SPAN_MUTATION_ATTEMPTS` to its `calls` counter,
+/// even when no labels with ≥2 occurrences exist (multi is empty → 0 probes
+/// run) or when a probe fired Interesting on attempt 1 (only 1 probe ran).
+/// The accounting now reflects what actually happened.
 fn try_span_mutation(
     nodes: &[ChoiceNode],
     spans: &[Span],
     rng: &mut SmallRng,
     ctx: &mut EngineCtx<'_>,
-) -> Option<(Vec<ChoiceNode>, String)> {
+) -> (Option<(Vec<ChoiceNode>, String)>, usize) {
     use std::collections::HashSet;
 
     let mut by_label: HashMap<&str, HashSet<(usize, usize)>> = HashMap::new();
@@ -774,11 +787,12 @@ fn try_span_mutation(
         })
         .collect();
     if multi.is_empty() {
-        return None;
+        return (None, 0);
     }
 
     let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
 
+    let mut attempts: usize = 0;
     for _ in 0..SPAN_MUTATION_ATTEMPTS {
         let group = &multi[rng.random_range(0..multi.len())];
         let i_a = rng.random_range(0..group.len());
@@ -822,12 +836,13 @@ fn try_span_mutation(
 
         let ntc = NativeTestCase::for_choices(&attempt, None, None);
         let run = ctx.execute(ntc, false);
+        attempts += 1;
         if run.status == Status::Interesting {
             let origin = run.origin.unwrap_or_default();
-            return Some((run.nodes, origin));
+            return (Some((run.nodes, origin)), attempts);
         }
     }
-    None
+    (None, attempts)
 }
 
 fn create_rng(settings: &Settings, database_key: Option<&str>) -> SmallRng {
