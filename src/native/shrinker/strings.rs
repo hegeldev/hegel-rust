@@ -86,11 +86,20 @@ impl<'a> Shrinker<'a> {
                 for &cp in &cur {
                     *counts.entry(cp).or_default() += 1;
                 }
-                counts
+                // E9: sort the duplicated-codepoint list by `codepoint_key`
+                // (the shrink-towards order this pass uses for candidate
+                // generation) so the iteration order is deterministic
+                // regardless of `HashMap`'s unspecified bucketing.
+                // Pre-fix the order varied across builds and could shadow
+                // shrink-quality regressions that show up only on a
+                // particular hash seed.
+                let mut dups: Vec<u32> = counts
                     .into_iter()
                     .filter(|(_, n)| *n > 1)
                     .map(|(cp, _)| cp)
-                    .collect()
+                    .collect();
+                dups.sort_by_key(|&cp| codepoint_key(cp));
+                dups
             };
             for val in dup_codepoints {
                 if codepoint_key(val) == 0 {
