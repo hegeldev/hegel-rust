@@ -2074,6 +2074,13 @@ impl NativeConjectureRunner {
     /// continuation heuristic that mirrors Python's
     /// `call_count < min(first_bug_found_at + 1000, last_bug_found_at * 2)`.
     fn should_generate_more(&self, do_shrink: bool) -> bool {
+        // Mirror `engine.py::should_generate_more`'s `if self.ignore_limits:
+        // return True` short-circuit (E1). Tests like
+        // `test_can_be_set_to_ignore_limits` rely on this to drive the runner
+        // past `max_examples` until the choice tree exhausts naturally.
+        if self.ignore_limits {
+            return true;
+        }
         if self.interesting_examples.is_empty() {
             return true;
         }
@@ -2151,6 +2158,11 @@ impl NativeConjectureRunner {
     /// overrun_examples` budget exits with `MaxIterations`.  Returns
     /// `true` if the loop should break.
     fn set_exit_reason_if_done(&mut self) -> bool {
+        // E1: respect `ignore_limits` — the budget exits below would
+        // otherwise terminate the loop before the choice tree exhausts.
+        if self.ignore_limits {
+            return false;
+        }
         if !self.interesting_examples.is_empty() {
             return false;
         }

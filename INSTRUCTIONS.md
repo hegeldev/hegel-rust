@@ -375,7 +375,7 @@ For each: read the test, decide whether the *test* is wrong (expected message ch
 
 ### Tier E — Smells / dead code
 
-- [ ] **E1.** `src/native/conjecture_runner.rs:1488` — `pub ignore_limits: bool` is dead. Either implement it (gate the limit checks on the flag) or delete it.
+- [x] **E1.** `src/native/conjecture_runner.rs:1488` — `pub ignore_limits: bool` is dead. Either implement it (gate the limit checks on the flag) or delete it. Done — implemented (matches upstream's `if self.ignore_limits: return True` short-circuit in `engine.py::should_generate_more`). Added the same gate to `should_generate_more` and a complementary "no exit" gate to `set_exit_reason_if_done` so neither budget check terminates the run prematurely. The pre-existing port test `test_can_be_set_to_ignore_limits` (calling `cached_test_function` directly 256 times) continues to pass; new behavioural test `ignore_limits_bypasses_max_examples` drives the difference via `runner.run()` with `max_examples=1` and asserts `call_count > 5` — pre-fix that gives 1, post-fix the runner exhausts the 8-value choice tree. Native + default suites green.
 - [ ] **E2.** `src/native/conjecture_runner.rs:1372-1375` — `Status::Invalid` reason discarded. Plumb `events`/`why` onto `ConjectureRunResult` so tests can assert on it.
 - [ ] **E3.** `src/native/targeting.rs:224-264` — `hill_climb` doesn't reset `i` after node-count-changing improvements. Mirror `optimiser.py:95-97`.
 - [ ] **E4.** `src/native/targeting.rs:97` — `maybe_optimise` is one-shot per run. Allow re-entry as more valid examples arrive (or document why one-shot is correct).
