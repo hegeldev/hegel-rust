@@ -1332,6 +1332,9 @@ pub fn default_phases() -> Vec<Phase> {
 }
 
 type RunnerTestFn = Box<dyn FnMut(&mut NativeConjectureData)>;
+// Trailing `bool` (E5) is `data.ntc.has_discards`: any span closed with
+// `discard=true` sets it. Plumbed through so `record_test_result` can gate
+// `pareto_front.add` on non-discard runs, mirroring `engine.py::test_function`.
 type TestFnResult = (
     Status,
     Vec<ChoiceNode>,
@@ -1340,6 +1343,7 @@ type TestFnResult = (
     HashSet<u64>,
     Vec<usize>,
     Vec<Span>,
+    bool,
 );
 
 /// Cached outcome of a [`NativeConjectureRunner::cached_test_function`]
@@ -1748,6 +1752,7 @@ fn run_test_fn(
         .filter_map(|s| if s.discarded { Some(s.end) } else { None })
         .collect();
     let spans: Vec<Span> = data.ntc.spans.iter().cloned().collect();
+    let has_discards = data.ntc.has_discards;
     let nodes = std::mem::take(&mut data.ntc.nodes);
     (
         status,
@@ -1757,6 +1762,7 @@ fn run_test_fn(
         tags,
         kill_depths,
         spans,
+        has_discards,
     )
 }
 
@@ -2205,6 +2211,7 @@ impl NativeConjectureRunner {
         target_observations: HashMap<String, f64>,
         tags: HashSet<u64>,
         spans: Vec<Span>,
+        has_discards: bool,
     ) {
         if status != Status::Valid {
             return;
@@ -2221,7 +2228,10 @@ impl NativeConjectureRunner {
                     .insert(k.clone(), choices.clone());
             }
         }
-        if !target_observations.is_empty() {
+        // Pareto-add gate: mirror `engine.py::test_function`'s `not
+        // data.has_discards` predicate (E5). Runs with discarded spans
+        // shouldn't contribute to the pareto front.
+        if !target_observations.is_empty() && !has_discards {
             let result = ConjectureRunResult {
                 status: Status::Valid,
                 nodes,
@@ -2252,6 +2262,7 @@ impl NativeConjectureRunner {
         target_observations: HashMap<String, f64>,
         tags: HashSet<u64>,
         spans: Vec<Span>,
+        has_discards: bool,
     ) {
         match status {
             Status::Valid => {
@@ -2270,10 +2281,11 @@ impl NativeConjectureRunner {
                     }
                 }
                 // Only add to pareto front when target_observations is
-                // non-empty.  Mirrors Python engine.py which only calls
-                // pareto_front.add(data) when data.target_observations.
+                // non-empty AND the run has no discarded spans.  Mirrors
+                // Python `engine.py::test_function`: `pareto_front.add(data)`
+                // is gated on `data.target_observations and not data.has_discards`.
                 let has_targets = !target_observations.is_empty();
-                if has_targets {
+                if has_targets && !has_discards {
                     let result = ConjectureRunResult {
                         status: Status::Valid,
                         nodes,
@@ -2322,23 +2334,26 @@ impl NativeConjectureRunner {
                     let new_origin = !self.interesting_examples.contains_key(&origin);
                     self.save_choices(&choices);
                     // Add to pareto front (interesting status >= valid);
-                    // persist to db and evict dominated entries.
+                    // persist to db and evict dominated entries.  Gated on
+                    // `!has_discards` to mirror `engine.py::test_function`.
                     let has_targets = !target_observations.is_empty();
-                    let pareto_result = ConjectureRunResult {
-                        status: Status::Interesting,
-                        nodes: nodes.clone(),
-                        choices: choices.clone(),
-                        target_observations,
-                        origin: Some(origin.clone()),
-                        tags,
-                        spans,
-                    };
-                    let (added, evicted) = self.pareto_front.add(pareto_result);
-                    if added && has_targets {
-                        self.save_to_pareto_key(&choices);
-                    }
-                    for e in evicted {
-                        self.delete_from_pareto_key(&e.choices);
+                    if !has_discards {
+                        let pareto_result = ConjectureRunResult {
+                            status: Status::Interesting,
+                            nodes: nodes.clone(),
+                            choices: choices.clone(),
+                            target_observations,
+                            origin: Some(origin.clone()),
+                            tags,
+                            spans,
+                        };
+                        let (added, evicted) = self.pareto_front.add(pareto_result);
+                        if added && has_targets {
+                            self.save_to_pareto_key(&choices);
+                        }
+                        for e in evicted {
+                            self.delete_from_pareto_key(&e.choices);
+                        }
                     }
                     self.interesting_examples.insert(
                         origin.clone(),
@@ -2533,6 +2548,7 @@ impl NativeConjectureRunner {
                             tags,
                             _kill_depths,
                             spans,
+                            has_discards,
                         ) = run_test_fn(&mut me.test_fn, ntc, buffer_size_limit);
                         me.call_count += 1;
                         // Merge any target observations from this probe
@@ -2554,6 +2570,7 @@ impl NativeConjectureRunner {
                             target_obs,
                             tags,
                             spans,
+                            has_discards,
                         );
                         // Mirrors `engine.py`'s per-target predicate
                         // (`d.interesting_origin == target`): when
@@ -2670,7 +2687,7 @@ impl NativeConjectureRunner {
             .buffer_size_limit
             .unwrap_or(CONJECTURE_BUFFER_SIZE);
         let ntc = NativeTestCase::for_choices(choices, None, None);
-        let (status, nodes, origin, target_observations, tags, kill_depths, spans) =
+        let (status, nodes, origin, target_observations, tags, kill_depths, spans, has_discards) =
             run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
         self.call_count += 1;
         record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
@@ -2695,7 +2712,15 @@ impl NativeConjectureRunner {
             tags: tags.clone(),
             spans: spans.clone(),
         };
-        self.record_test_result(status, nodes, origin, target_observations, tags, spans);
+        self.record_test_result(
+            status,
+            nodes,
+            origin,
+            target_observations,
+            tags,
+            spans,
+            has_discards,
+        );
         result
     }
 
@@ -2765,7 +2790,7 @@ impl NativeConjectureRunner {
         };
         let probe_rng = SmallRng::seed_from_u64(self.rng.random::<u64>());
         let ntc = NativeTestCase::for_probe(choices, probe_rng, max_size);
-        let (status, nodes, origin, target_observations, tags, kill_depths, spans) =
+        let (status, nodes, origin, target_observations, tags, kill_depths, spans, has_discards) =
             run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
         self.call_count += 1;
         record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
@@ -2794,7 +2819,15 @@ impl NativeConjectureRunner {
             tags: tags.clone(),
             spans: spans.clone(),
         };
-        self.record_test_result(status, nodes, origin, target_observations, tags, spans);
+        self.record_test_result(
+            status,
+            nodes,
+            origin,
+            target_observations,
+            tags,
+            spans,
+            has_discards,
+        );
         result
     }
 
@@ -2933,7 +2966,7 @@ impl NativeConjectureRunner {
                 continue;
             };
             let ntc = NativeTestCase::for_choices(&choices, None, None);
-            let (status, nodes, origin, _target_obs, _tags, _kill_depths, _spans) =
+            let (status, nodes, origin, _target_obs, _tags, _kill_depths, _spans, _has_discards) =
                 run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             self.call_count += 1;
 
@@ -3027,7 +3060,7 @@ impl NativeConjectureRunner {
                     continue;
                 };
                 let ntc = NativeTestCase::for_choices(&choices, None, None);
-                let (status, nodes, origin, target_obs, tags, _kill_depths, spans) =
+                let (status, nodes, origin, target_obs, tags, _kill_depths, spans, has_discards) =
                     run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
                 self.call_count += 1;
                 // Check if this replayed entry is still in the pareto front.
@@ -3048,7 +3081,15 @@ impl NativeConjectureRunner {
                 for e in evicted {
                     db.delete(&pareto_key, &choices_to_bytes(&e.choices));
                 }
-                self.record_test_result(status, nodes, origin, target_obs, tags, spans);
+                self.record_test_result(
+                    status,
+                    nodes,
+                    origin,
+                    target_obs,
+                    tags,
+                    spans,
+                    has_discards,
+                );
                 if matches!(status, Status::Interesting) {
                     break;
                 }
@@ -3411,7 +3452,7 @@ impl NativeConjectureRunner {
         if self.should_generate_more(do_shrink) && !self.tree_root.is_exhausted {
             let ntc = NativeTestCase::for_simplest(buffer_size_limit);
             let probe_start = std::time::Instant::now();
-            let (status, nodes, origin, target_obs, tags, kill_depths, spans) =
+            let (status, nodes, origin, target_obs, tags, kill_depths, spans, has_discards) =
                 run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             let probe_elapsed = probe_start.elapsed();
             self.call_count += 1;
@@ -3422,7 +3463,15 @@ impl NativeConjectureRunner {
                 nodes.iter().map(|n| n.value.clone()).collect();
             let mutation_target_obs = target_obs.clone();
             let mutation_spans = spans.clone();
-            self.record_test_result(status, nodes, origin, target_obs, tags, spans);
+            self.record_test_result(
+                status,
+                nodes,
+                origin,
+                target_obs,
+                tags,
+                spans,
+                has_discards,
+            );
             self.generate_mutations_from(
                 &mutation_choices,
                 &mutation_spans,
@@ -3488,7 +3537,7 @@ impl NativeConjectureRunner {
             let prefix = generate_novel_prefix(&self.tree_root, &mut batch_rng);
             let ntc = NativeTestCase::for_probe(&prefix, batch_rng, buffer_size_limit);
             let tc_start = std::time::Instant::now();
-            let (status, nodes, origin, target_obs, tags, kill_depths, spans) =
+            let (status, nodes, origin, target_obs, tags, kill_depths, spans, has_discards) =
                 run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             let tc_elapsed = tc_start.elapsed();
             self.call_count += 1;
@@ -3497,7 +3546,15 @@ impl NativeConjectureRunner {
                 nodes.iter().map(|n| n.value.clone()).collect();
             let mutation_target_obs = target_obs.clone();
             let mutation_spans = spans.clone();
-            self.record_test_result(status, nodes, origin, target_obs, tags, spans);
+            self.record_test_result(
+                status,
+                nodes,
+                origin,
+                target_obs,
+                tags,
+                spans,
+                has_discards,
+            );
             self.generate_mutations_from(
                 &mutation_choices,
                 &mutation_spans,
