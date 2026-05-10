@@ -848,6 +848,49 @@ fn try_replace_with_bytes_node() {
     let _ = runner.optimise_targets();
 }
 
+// ── try_replace with Float node (N9) ──────────────────────────────────────
+//
+// `optimiser.rs::try_replace` is the standalone `TargetedRunner`'s analogue
+// of `targeting.rs::step_choice` and the conjecture-runner's hill-climb step.
+// A18 brought `targeting.rs` and `conjecture_runner.rs` to upstream parity
+// (`integer | float | bytes | boolean`); `optimiser.rs` was the sibling
+// implementation left out — its `match (&node.value, &node.kind)` block
+// admitted Integer, Boolean, Bytes, and fell through `_ => return false`
+// for Float, even though `hill_climb`'s outer kind filter (lines 600-607)
+// admits Float. So Float climbs were attempted but immediately rejected:
+// no node ever stepped, score never improved.
+//
+// Behavioural claim: with a float-valued score and a low seed, optimise_targets
+// must drive the score *up* — exercising try_replace's Float arm. Without N9
+// the score stays pinned at the seed (1.0); with N9 it climbs to 100.0
+// (the bound). Assert score >= 50.0 to give the optimiser slack.
+#[test]
+fn try_replace_with_float_node_climbs_score() {
+    let settings = TargetedRunnerSettings::new().max_examples(500);
+    let mut runner = TargetedRunner::new(
+        |tc: &mut TargetedTestCase| {
+            let v = tc.draw_float(0.0, 100.0, false, false);
+            tc.target_observations.insert("score".to_string(), v);
+        },
+        settings,
+        make_rng(),
+    );
+    // Seed with a low score (1.0); hill_climb should drive this much higher.
+    runner.cached_test_function(&[ChoiceValue::Float(1.0)]);
+    let _ = runner.optimise_targets();
+    let best = runner
+        .best_observed_targets()
+        .get("score")
+        .copied()
+        .expect("seeded run should have recorded a score");
+    assert!(
+        best >= 50.0,
+        "Float hill-climb stalled at {best}; expected >= 50.0 \
+         (without try_replace's Float arm the optimiser cannot step Float \
+         nodes — score stays pinned at the seed value 1.0)"
+    );
+}
+
 // ── try_cache: nodes.len() > choices.len() early return (line 514) ────────
 //
 // Line 514 fires when the test function drew MORE nodes than were in the
