@@ -4819,6 +4819,49 @@ fn cached_test_function_carries_spans() {
     );
 }
 
+// ── E5: Pareto-add gate respects has_discards ────────────────────────────
+//
+// Pre-E5, `record_test_result`'s pareto_front.add was gated only on
+// `target_observations` non-empty. Upstream `engine.py::test_function` also
+// requires `not data.has_discards` — runs with discarded spans don't
+// contribute to the pareto front because a discarded span makes the
+// structure unreliable for dominance comparisons.
+//
+// Behavioural claim: a body that opens a span, draws, and closes the
+// span with `discard=true` records a target observation but the result
+// must *not* enter the pareto front. Pre-E5 `runner.pareto_front()` has
+// one entry; post-E5 it's empty.
+#[test]
+fn pareto_front_excludes_results_with_discards() {
+    let settings = NativeRunnerSettings::new()
+        .max_examples(2)
+        .suppress_health_check(vec![
+            HealthCheckLabel::FilterTooMuch,
+            HealthCheckLabel::TooSlow,
+            HealthCheckLabel::LargeBaseExample,
+            HealthCheckLabel::DataTooLarge,
+        ]);
+    let mut runner = NativeConjectureRunner::new(
+        |data: &mut NativeConjectureData| {
+            data.start_span(7);
+            let _ = data.draw_integer(0, 10);
+            // discard=true sets has_discards on the test case.
+            data.stop_span_with_discard(true);
+            data.target_observations
+                .insert("score".to_string(), 1.0);
+        },
+        settings,
+        make_rng(),
+    );
+    runner.run();
+    assert!(
+        runner.pareto_front().is_empty(),
+        "Pareto front must reject results with has_discards (got {} entries; \
+         pre-E5 the gate only checked target_observations non-empty)",
+        runner.pareto_front().len(),
+    );
+}
+
 // ── E1: ignore_limits actually bypasses budget enforcement ───────────────
 //
 // Pre-E1, `pub ignore_limits: bool` was wired up but never read. Setting
