@@ -2877,3 +2877,72 @@ fn lower_integers_together_continues_when_node_j_kind_not_integer() {
         ChoiceKind::Boolean(_)
     ));
 }
+
+// ── N18.bytes: redistribute_bytes_pair early return when move-all wins ───
+//
+// `redistribute_bytes_pair` first tries moving every byte of `s` into
+// `t`. When that succeeds the function returns early; that's the
+// uncovered line at `bytes.rs:175`.
+#[test]
+fn redistribute_bytes_pair_returns_when_move_all_succeeds() {
+    // Two bytes nodes; predicate cares only about total length (>=20).
+    // The move-all candidate `(empty, s ++ t)` is lex-smaller than the
+    // initial pair, so the early-return path fires.
+    let nodes = vec![
+        bytes_node(0, 20, vec![1, 2, 3, 4, 5]),
+        bytes_node(0, 20, vec![6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            let total: usize = n
+                .iter()
+                .map(|x| match &x.value {
+                    ChoiceValue::Bytes(b) => b.len(),
+                    _ => 0,
+                })
+                .sum();
+            (total >= 20, n.to_vec())
+        }),
+        nodes,
+    );
+    shrinker.redistribute_bytes_pairs();
+    // The first node should now be empty (all bytes moved into the second).
+    assert_eq!(bytes_at(&shrinker.current_nodes, 0), Vec::<u8>::new());
+    assert_eq!(bytes_at(&shrinker.current_nodes, 1).len(), 20);
+}
+
+// ── N18.deletion: run_node_program(0) is a no-op ─────────────────────────
+//
+// `run_node_program(n)` deletes `n` consecutive nodes at each candidate
+// start position. The `n == 0` guard at the top of the function is the
+// "delete zero nodes" trivial case — exercise it explicitly.
+#[test]
+fn run_node_program_zero_is_noop() {
+    let nodes = vec![int_node(0, 10, 5), int_node(0, 10, 5), int_node(0, 10, 5)];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| (!n.is_empty(), n.to_vec())),
+        nodes.clone(),
+    );
+    shrinker.run_node_program(0);
+    // The pass is a no-op for n=0; current_nodes are untouched.
+    assert_eq!(shrinker.current_nodes.len(), nodes.len());
+}
+
+// ── N18.shrinker_mod: find_integer overflow guard returns last accepted k ─
+//
+// `find_integer` (`src/native/shrinker/mod.rs`) doubles `hi` until `f(hi)`
+// returns false or `hi.checked_mul(2)` overflows. The overflow path
+// (mod.rs:425) returns the last accepted `lo`. Exercised by a predicate
+// that's true for every input — the exponential probe never terminates
+// via the predicate, so `checked_mul(2)` is what eventually stops it.
+#[test]
+fn find_integer_returns_lo_on_exponential_overflow() {
+    let result = super::find_integer(|_n| true);
+    // After enough `hi *= 2` doublings, `hi` reaches a value that can't
+    // be doubled again without overflowing usize. At that point `lo`
+    // equals the last successful probe and the function returns it.
+    // The exact value depends on usize width (typically `1 << 62` on
+    // 64-bit). Assert that we got back a very large number — which we
+    // could only do by walking through the exponential phase.
+    assert!(result > 1 << 30, "expected exponential walk, got {result}");
+}

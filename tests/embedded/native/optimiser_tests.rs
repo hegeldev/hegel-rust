@@ -832,6 +832,44 @@ fn try_replace_with_boolean_node() {
 //
 // Lines 792-817 fire when try_replace encounters a Bytes node.
 
+// ── N18.optimiser: try_replace falls through on String node (line 830) ───
+//
+// `try_replace`'s outer match handles Integer / Float / Boolean / Bytes
+// (post-N9). String nodes hit the `_ => return false` catch-all because
+// `hill_climb`'s outer kind filter doesn't admit Strings (no monotone
+// "step" semantics on codepoints). Exercise the fallthrough by seeding
+// the runner with a String value and confirming the score doesn't move.
+#[test]
+fn try_replace_with_string_node_falls_through() {
+    let settings = TargetedRunnerSettings::new().max_examples(200);
+    let mut runner = TargetedRunner::new(
+        |tc: &mut TargetedTestCase| {
+            let s = tc.draw_string(
+                &crate::native::intervalsets::IntervalSet::new(vec![(0x61, 0x7a)]),
+                1,
+                1,
+            );
+            tc.target_observations.insert(
+                "score".to_string(),
+                s.chars().next().map(|c| c as u32 as f64).unwrap_or(0.0),
+            );
+        },
+        settings,
+        make_rng(),
+    );
+    runner.cached_test_function(&[ChoiceValue::String(vec![b'a' as u32])]);
+    let _ = runner.optimise_targets();
+    // try_replace's Integer/Float/Boolean/Bytes arms don't match a String
+    // node — the `_ => return false` catch-all fires and the climb stalls.
+    // The score should stay at its seed value (97 = 'a').
+    let best = runner
+        .best_observed_targets()
+        .get("score")
+        .copied()
+        .expect("seeded run records a score");
+    assert_eq!(best, 97.0);
+}
+
 #[test]
 fn try_replace_with_bytes_node() {
     let settings = TargetedRunnerSettings::new().max_examples(200);
