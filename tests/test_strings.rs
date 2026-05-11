@@ -57,6 +57,40 @@ fn test_characters_exclude_categories() {
     });
 }
 
+// N18.generators_strings: exercise the eager-validation "exclude_categories"
+// branch in `CharacterFields::to_schema` (the `else if let Some(excats)`
+// path). With a bounded codepoint range and `exclude_categories` set,
+// the validation iterates [min, max] and accepts when at least one
+// codepoint is *not* in the excluded category.
+#[test]
+fn test_characters_exclude_categories_with_bounded_range_compiles() {
+    // Range 0x30..=0x39 ('0'..='9') is `Nd` category. Excluding `Lu`
+    // doesn't strip these — `any_valid` is true and `to_schema` returns
+    // normally.
+    assert_all_examples(
+        gs::characters()
+            .exclude_categories(&["Lu"])
+            .min_codepoint(0x30)
+            .max_codepoint(0x39),
+        |c: &char| ('0'..='9').contains(c),
+    );
+}
+
+#[test]
+#[should_panic(expected = "InvalidArgument: no valid characters")]
+fn test_characters_exclude_categories_strips_entire_range_panics() {
+    // Range 0x41..=0x5a is all `Lu` (ASCII uppercase). Excluding `Lu`
+    // strips every codepoint in the range — `any_valid` is false and
+    // `to_schema` panics at strategy-construction time. Exercises the
+    // empty-alphabet failure path in the exclude_categories branch.
+    use hegel::generators::Generator;
+    let _ = gs::characters()
+        .exclude_categories(&["Lu"])
+        .min_codepoint(0x41)
+        .max_codepoint(0x5a)
+        .as_basic();
+}
+
 #[test]
 fn test_characters_include_characters() {
     assert_all_examples(
