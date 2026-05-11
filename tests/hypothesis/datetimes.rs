@@ -32,9 +32,7 @@ fn parse_time_parts(s: &str) -> (u32, u32, u32, u32) {
 }
 
 fn datetime_parts(s: &str) -> (i32, u32, u32, u32, u32, u32, u32) {
-    let mut dt = s.splitn(2, 'T');
-    let date_str = dt.next().unwrap();
-    let time_str = dt.next().unwrap();
+    let (date_str, time_str) = s.split_once('T').unwrap();
     let mut d = date_str.split('-');
     let year: i32 = d.next().unwrap().parse().unwrap();
     let month: u32 = d.next().unwrap().parse().unwrap();

@@ -585,6 +585,10 @@ fn draw_float_forced_notifies_observer() {
 #[test]
 fn draw_bytes_forced_notifies_observer() {
     use std::sync::{Arc, Mutex};
+    // The type alias would obscure the shape this test is exercising
+    // (a captured `(value, was_forced)` pair behind shared/locked option
+    // storage); allow the inline form.
+    #[allow(clippy::type_complexity)]
     struct BytesObserver {
         captured: Arc<Mutex<Option<(Vec<u8>, bool)>>>,
     }

@@ -317,8 +317,8 @@ pub mod __native_test_internals {
     };
     pub use crate::native::shrinker::{ShrinkRun, Shrinker};
     pub use crate::native::tree::{CachedTestFunction, RunResult};
-    pub use crate::unicodedata;
     pub use crate::runner::Phase as RunnerPhase;
+    pub use crate::unicodedata;
 }
 
 /// Derive a generator for a struct or enum.

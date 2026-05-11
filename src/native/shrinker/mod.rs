@@ -330,14 +330,11 @@ impl<'a> Shrinker<'a> {
                 continue;
             }
             let node = &self.current_nodes[i];
-            match (&node.kind, &node.value) {
-                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
-                    let st = ic.clamped_shrink_towards();
-                    if *v != st {
-                        changed.push((i, *v, st));
-                    }
+            if let (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) = (&node.kind, &node.value) {
+                let st = ic.clamped_shrink_towards();
+                if *v != st {
+                    changed.push((i, *v, st));
                 }
-                _ => {}
             }
         }
 

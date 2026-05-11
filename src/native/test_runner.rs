@@ -515,7 +515,7 @@ fn run_main(
     // returned to `drive` lists every origin's panic so multi-origin
     // failures aren't silently collapsed to one.
     let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> = interesting.into_iter().collect();
-    origins_sorted.sort_by(|a, b| sort_key(&b.1).cmp(&sort_key(&a.1)));
+    origins_sorted.sort_by_key(|origin| std::cmp::Reverse(sort_key(&origin.1)));
 
     let mut failure_messages: Vec<(String, String)> = Vec::new();
     for (origin, nodes) in origins_sorted {

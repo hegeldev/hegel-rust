@@ -1142,7 +1142,7 @@ impl NativeShrinker {
                     if replacements.is_empty() {
                         continue;
                     }
-                    replacements.sort_by(|a, b| b.0.cmp(&a.0));
+                    replacements.sort_by_key(|r| std::cmp::Reverse(r.0));
                     let mut attempt = current.clone();
                     for (start, end, replacement) in &replacements {
                         attempt.splice(*start..*end, replacement.iter().cloned());
@@ -1258,11 +1258,11 @@ impl NativeShrinker {
                 }
                 let mut attempt = self.inner.current_nodes.clone();
                 let mut changed = false;
-                for j in span.start..span.end {
-                    if !attempt[j].was_forced {
-                        let simplest = attempt[j].kind.simplest();
-                        if attempt[j].value != simplest {
-                            attempt[j] = attempt[j].with_value(simplest);
+                for node in attempt[span.start..span.end].iter_mut() {
+                    if !node.was_forced {
+                        let simplest = node.kind.simplest();
+                        if node.value != simplest {
+                            *node = node.with_value(simplest);
                             changed = true;
                         }
                     }
@@ -2213,6 +2213,11 @@ impl NativeConjectureRunner {
     /// the generation-phase counters that upstream (`engine.py`) reserves
     /// for the generation loop. Status::Interesting is left to the
     /// shrinker's own `improvements` / `downgraded` plumbing.
+    // 8 args because the function is the single canonical site that
+    // plumbs every per-test-result piece into pareto bookkeeping (N6/E2/E5
+    // each added one); refactoring into a struct param would only push
+    // the same fields one indirection away. allow(too_many_arguments).
+    #[allow(clippy::too_many_arguments)]
     fn record_observations_only(
         &mut self,
         status: Status,
@@ -2265,6 +2270,11 @@ impl NativeConjectureRunner {
     /// Update the runner's call-count / status counters and bug-tracking
     /// fields from a single test invocation's outcome.  Shared by the
     /// generation loop and [`Self::cached_test_function`].
+    // 9 args because the function plumbs every per-test-result piece
+    // (status, nodes, origin, target_obs, tags, spans, has_discards, events)
+    // into pareto and interesting-example bookkeeping. Refactoring into a
+    // struct param would only push the same fields one indirection away.
+    #[allow(clippy::too_many_arguments)]
     fn record_test_result(
         &mut self,
         status: Status,
@@ -3518,17 +3528,8 @@ impl NativeConjectureRunner {
         if self.should_generate_more(do_shrink) && !self.tree_root.is_exhausted {
             let ntc = NativeTestCase::for_simplest(buffer_size_limit);
             let probe_start = std::time::Instant::now();
-            let (
-                status,
-                nodes,
-                origin,
-                target_obs,
-                tags,
-                kill_depths,
-                spans,
-                has_discards,
-                events,
-            ) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+            let (status, nodes, origin, target_obs, tags, kill_depths, spans, has_discards, events) =
+                run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             let probe_elapsed = probe_start.elapsed();
             self.call_count += 1;
             record_tree(&mut self.tree_root, &nodes, status, &kill_depths);
@@ -3613,17 +3614,8 @@ impl NativeConjectureRunner {
             let prefix = generate_novel_prefix(&self.tree_root, &mut batch_rng);
             let ntc = NativeTestCase::for_probe(&prefix, batch_rng, buffer_size_limit);
             let tc_start = std::time::Instant::now();
-            let (
-                status,
-                nodes,
-                origin,
-                target_obs,
-                tags,
-                kill_depths,
-                spans,
-                has_discards,
-                events,
-            ) = run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
+            let (status, nodes, origin, target_obs, tags, kill_depths, spans, has_discards, events) =
+                run_test_fn(&mut self.test_fn, ntc, buffer_size_limit);
             let tc_elapsed = tc_start.elapsed();
             self.call_count += 1;
             record_tree(&mut self.tree_root, &nodes, status, &kill_depths);

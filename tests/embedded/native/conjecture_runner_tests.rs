@@ -404,6 +404,13 @@ fn native_shrinker_from_choices_forwards_probe() {
 // with the same message would collapse into one origin in
 // `interesting_examples`. That hides distinct bugs.
 //
+// The `if/else` with the same `assert!(false, "boom")` body and the
+// `assert!(false, ...)` form are *intentional*: the test specifically
+// verifies that two distinct source locations panicking with the same
+// message produce two distinct origins. Replacing them with `panic!()`
+// would lose the assert!-specific machinery the test is exercising.
+#[allow(clippy::if_same_then_else, clippy::assertions_on_constants)]
+//
 // Hypothesis upstream keys interesting origins on `(type, file, line)`. We
 // approximate by appending the captured `file:line:col` location to the
 // panic label so two assertion sites with identical messages produce
@@ -449,6 +456,10 @@ fn distinct_assert_sites_produce_distinct_origins() {
 // LRU cache — a subsequent `cached_test_function(...)` on those choices
 // would re-execute the user's body. Routing through
 // `cached_test_function` fixes this.
+// `assert!(false, "boom")` is the canonical "trigger a panic" pattern in
+// these regression tests; replacing with `panic!()` changes the panic
+// payload type that interesting-origin keying observes.
+#[allow(clippy::assertions_on_constants)]
 #[test]
 fn re_validation_populates_cache_for_interesting_choices() {
     // `max_shrinks(0)` keeps the shrinker from probing — that way the
