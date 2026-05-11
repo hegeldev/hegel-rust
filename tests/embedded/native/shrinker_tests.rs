@@ -2878,6 +2878,88 @@ fn lower_integers_together_continues_when_node_j_kind_not_integer() {
     ));
 }
 
+// ── N18.shrink_duplicates: filter drops below 2 → continue ───────────────
+//
+// In `shrink_duplicates`, after grouping nodes by integer value, a
+// previous group's `self.replace` can shorten `current_nodes`. A later
+// group's filter (`indices.iter().filter(|i| i < len && value matches)`)
+// then may yield fewer than 2 valid indices, hitting the
+// `continue` at integers.rs:474.
+//
+// Build [5,5,5,0,0] and a test_fn that, when the three 5s are replaced
+// to 0s, shortens the returned actual_nodes to a single node — so the
+// other group's indices fall out of bounds.
+#[test]
+fn shrink_duplicates_filter_drops_below_two_continues() {
+    let nodes = vec![
+        int_node(0, 100, 5),
+        int_node(0, 100, 5),
+        int_node(0, 100, 5),
+        int_node(0, 100, 0),
+        int_node(0, 100, 0),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| {
+            // When the three leading 5s are replaced to 0s, hand back
+            // a shorter sequence so the other group's indices (3, 4)
+            // go out of bounds.
+            let values: Vec<i128> = n
+                .iter()
+                .filter_map(|x| match &x.value {
+                    ChoiceValue::Integer(v) => Some(*v),
+                    _ => None,
+                })
+                .collect();
+            if values.iter().take(3).all(|&v| v == 0) && values.len() == 5 {
+                return (true, vec![int_node(0, 100, 0)]);
+            }
+            (true, n.to_vec())
+        }),
+        nodes,
+    );
+    shrinker.shrink_duplicates();
+    // Either group processed first; the second-iteration filter saw
+    // out-of-bounds indices, line 474 fired, and the loop continued.
+    // Behavioural claim: pass didn't panic, current_nodes is well-formed.
+    assert!(!shrinker.current_nodes.is_empty());
+}
+
+// ── N18.integers: raise direction validate-fail (line 431) ────────────────
+//
+// `lower_integers_together`'s raise branch (v_i < st_i) probes k via
+// find_integer and short-circuits to `return false` when either kind's
+// validate() rejects the candidate new_i or new_j. With asymmetric ranges
+// — i has plenty of headroom but j's max is tight — k=3 yields new_j
+// outside j's [0, 2] range, so the validate check at integers.rs:431
+// fires before `self.replace` is reached.
+//
+// Setup:
+//   node 0 (i): min=-10, max=100, st=0, v=-3 → max_k = 0 - (-3) = 3.
+//   node 1 (j): min=0,   max=2,   st=0, v=0.
+// find_integer probes k=1,2,3,4: f(1) new=(-2,1) ok; f(2) new=(-1,2) ok;
+// f(3) new=(0,3) — ic_j.validate(3)=false → line 431 returns false.
+#[test]
+fn lower_integers_together_raise_validate_fail_returns_false() {
+    let nodes = vec![
+        // i: wide kind, v_i=-3, well below st=0.
+        int_node(-10, 100, -3),
+        // j: tight kind capped at max=2; raising by k=3 escapes its range.
+        int_node(0, 2, 0),
+    ];
+    let mut shrinker = Shrinker::new(
+        Box::new(|n: &[ChoiceNode]| (true, n.to_vec())),
+        nodes,
+    );
+    shrinker.lower_integers_together();
+    // After the raise probe, k=2 is the best (new_i=-1, new_j=2). At k=3
+    // line 431 fired and stopped further raising. The final node values
+    // should reflect a successful raise by 2.
+    let v_i = int_at(&shrinker.current_nodes, 0);
+    let v_j = int_at(&shrinker.current_nodes, 1);
+    assert_eq!(v_i, -1);
+    assert_eq!(v_j, 2);
+}
+
 // ── N18.bytes: redistribute_bytes_pair early return when move-all wins ───
 //
 // `redistribute_bytes_pair` first tries moving every byte of `s` into
