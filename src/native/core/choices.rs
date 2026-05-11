@@ -625,7 +625,11 @@ impl StringChoice {
                 return self.min_codepoint;
             }
             // min_codepoint falls inside the surrogate block; step past it.
-            return 0xE000u32.min(self.max_codepoint); // nocov
+            // Exercised by `string_choice_simplest_min_in_surrogate_block_*`
+            // tests — the path is reachable through direct `StringChoice`
+            // construction even though the public `gs::characters()` /
+            // `gs::text()` builders filter surrogates before reaching here.
+            return 0xE000u32.min(self.max_codepoint);
         }
         let mut best = self.min_codepoint;
         let mut best_key = codepoint_key(best);

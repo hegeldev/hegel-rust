@@ -539,6 +539,37 @@ fn string_choice_simplest_no_ascii_overlap() {
 }
 
 #[test]
+fn string_choice_simplest_min_in_surrogate_block_steps_past() {
+    // Defensive surrogate-block fallback: `min_codepoint` falls inside
+    // `[0xD800, 0xDFFF]` (which the public string-strategy API cannot
+    // construct — `CharacterFields::to_schema` filters surrogates — but
+    // the internal `StringChoice` shape allows it). `simplest_codepoint`
+    // must step past the surrogates to the smallest non-surrogate
+    // scalar value at or above 0xE000, clamped to `max_codepoint`.
+    let sc = StringChoice {
+        min_codepoint: 0xD800,
+        max_codepoint: 0xE100,
+        min_size: 1,
+        max_size: 1,
+    };
+    assert_eq!(sc.simplest(), vec![0xE000]);
+}
+
+#[test]
+fn string_choice_simplest_min_in_surrogate_block_clamped_to_max() {
+    // Same fallback, but `max_codepoint` lies inside the surrogate
+    // block too — the result clamps to `max_codepoint` (i.e. the
+    // function returns `0xE000.min(max_codepoint)`).
+    let sc = StringChoice {
+        min_codepoint: 0xD800,
+        max_codepoint: 0xDFFF,
+        min_size: 1,
+        max_size: 1,
+    };
+    assert_eq!(sc.simplest(), vec![0xDFFF]);
+}
+
+#[test]
 fn string_choice_simplest_partial_ascii_overlap() {
     // Range [50..200]: the ASCII portion is [50..127], digit '0' (48) is NOT
     // in range, so the simplest is whichever of [50..127] has the smallest

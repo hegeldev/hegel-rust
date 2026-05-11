@@ -239,7 +239,7 @@ pub trait ExampleDatabase: Send + Sync {
     /// Drop every change listener. Hypothesis:
     /// `ExampleDatabase.clear_listeners`.
     #[allow(dead_code)]
-    fn clear_listeners(&self) {} // nocov
+    fn clear_listeners(&self) {}
 
     /// Expose `self` as `&dyn Any` so equality impls can downcast through
     /// a `&dyn ExampleDatabase` to their concrete type. Each concrete

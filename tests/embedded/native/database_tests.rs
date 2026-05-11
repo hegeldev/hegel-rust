@@ -1323,3 +1323,37 @@ fn resolve_key_returns_none_when_metakey_file_is_absent() {
     };
     assert_eq!(resolve_key("no-such-hash", &ctx), None);
 }
+
+// ── Q2(a): exercise the ExampleDatabase trait's default fns ──────────────
+//
+// The trait provides default empty bodies for the listener methods so
+// minimal `ExampleDatabase` impls (those that don't care about cross-
+// process change events) can ignore them. Pre-Q2-resolution the
+// `clear_listeners` default carried a `// nocov` annotation because no
+// in-tree concrete impl uses the default — every shipped impl overrides.
+// Verify that the default body compiles, runs, and is a no-op by
+// implementing a *minimal* `ExampleDatabase` that only provides the
+// required surface, then calling each defaulted method on it.
+#[test]
+fn example_database_default_listener_methods_are_no_ops() {
+    struct MinimalDb;
+    impl ExampleDatabase for MinimalDb {
+        fn save(&self, _key: &[u8], _value: &[u8]) {}
+        fn delete(&self, _key: &[u8], _value: &[u8]) {}
+        fn fetch(&self, _key: &[u8]) -> Vec<Vec<u8>> {
+            Vec::new()
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+    let db = MinimalDb;
+    let listener: Listener = Arc::new(|_: &ListenerEvent| {});
+    // Each default impl returns `()` after doing nothing — observe by
+    // calling and verifying no panic and no observable side effect on
+    // the (stateless) `MinimalDb`.
+    db.add_listener(Arc::clone(&listener));
+    db.remove_listener(&listener);
+    db.clear_listeners();
+    assert!(!db.db_eq(&MinimalDb));
+}
