@@ -86,14 +86,19 @@ pub trait DataSource: Send + Sync {
     /// native-internal helpers) can look up engine state without
     /// type-erasing through the [`DataSource`] interface.
     ///
-    /// Defaults to `None`; the server-protocol [`DataSource`] never
-    /// produces a handle, while `NativeDataSource` overrides this to
-    /// return its inner `NativeTestCase`.
+    /// N18: previously had a `{ None }` default body, but under the
+    /// `native` feature there's only one `DataSource` impl
+    /// (`NativeDataSource`) and it overrides this method, so the default
+    /// was structural dead code that `cargo llvm-cov` flagged. Requiring
+    /// every native `DataSource` impl to provide a real handle is
+    /// uniform with the rest of the trait (no `fetch` / `weighted` /
+    /// `target_observation` defaults either) and makes the contract
+    /// clearer: a native DataSource without a handle has no way to
+    /// surface drawn nodes back to the runner, so the requirement is
+    /// load-bearing in practice.
     #[cfg(feature = "native")]
     #[doc(hidden)]
-    fn native_handle(&self) -> Option<crate::native::data_source::NativeTestCaseHandle> {
-        None
-    }
+    fn native_handle(&self) -> Option<crate::native::data_source::NativeTestCaseHandle>;
 }
 
 /// Result of running a single test case.
