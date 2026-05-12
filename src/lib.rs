@@ -199,10 +199,10 @@
 //! by a shared mutex, so code like "spawn worker, worker draws, join, main
 //! thread draws" is deterministic.
 //!
-//! **Using threads is currently extremely fragile and should only be used with
-//! extreme caution right now.** You are liable to get flaky test failures when
-//! multiple threads draw concurrently. We intend to support this use case
-//! increasingly well over time, but right now it is a significant footgun —
+//! **Using threads is extremely fragile and should only be used with
+//! caution.** You are likely to get flaky test failures when
+//! multiple threads draw concurrently. We intend to increase support for this use case
+//! over time, but at the moment it is a significant footgun —
 //! see [`TestCase`]'s documentation for the full contract and the patterns
 //! that are safe to rely on.
 //!
@@ -215,12 +215,12 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub(crate) mod antithesis;
-pub mod backend;
+pub mod backend; <!-- I recommend defining the term for in-document consistency -->
 pub(crate) mod cbor_utils;
 pub(crate) mod cli;
 pub(crate) mod control;
-pub mod explicit_test_case;
-pub mod extras;
+pub mod explicit_test_case;<!-- I recommend defining the term, for consistency -->
+pub mod extras;<!-- I recommend defining the term, for consistency -->
 pub mod generators;
 pub(crate) mod runner;
 pub(crate) mod server;
