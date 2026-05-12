@@ -127,13 +127,18 @@ fn version_check_message(
     match version_result {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if stdout != expected_version_string {
+            if stdout == expected_version_string {
+                None
+            } else if stdout.starts_with("hegel ") {
                 Some(format!(
                     "Version mismatch: expected '{}', got '{}'.",
                     expected_version_string, stdout
                 ))
             } else {
-                None
+                Some(format!(
+                    "'{}' --version returned unexpected output. Is this a hegel binary?",
+                    binary_path
+                ))
             }
         }
         Ok(_) => Some(format!(

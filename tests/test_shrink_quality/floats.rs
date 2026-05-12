@@ -1,6 +1,7 @@
 use crate::common::utils::minimal;
 use hegel::generators as gs;
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_shrinks_to_simple_float_above_0() {
     assert_eq!(
@@ -9,26 +10,31 @@ fn test_shrinks_to_simple_float_above_0() {
     );
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_can_shrink_in_variable_sized_context_1() {
     check_shrink_in_variable_sized_context(1);
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_can_shrink_in_variable_sized_context_2() {
     check_shrink_in_variable_sized_context(2);
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_can_shrink_in_variable_sized_context_3() {
     check_shrink_in_variable_sized_context(3);
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_can_shrink_in_variable_sized_context_8() {
     check_shrink_in_variable_sized_context(8);
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_can_shrink_in_variable_sized_context_10() {
     check_shrink_in_variable_sized_context(10);
@@ -44,12 +50,14 @@ fn check_shrink_in_variable_sized_context(n: usize) {
     assert!(x.contains(&1.0));
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_can_find_nan() {
     let x = minimal(gs::floats::<f64>(), |x: &f64| x.is_nan());
     assert!(x.is_nan());
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_can_find_nans() {
     let x = minimal(gs::vecs(gs::floats::<f64>()), |x: &Vec<f64>| {

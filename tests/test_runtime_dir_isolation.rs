@@ -31,6 +31,7 @@ fn cwd_is_a_hegel_rust_test_tempdir() {
     );
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn running_hegel_creates_dot_hegel_in_tempdir_not_crate_root() {
     Hegel::new(|tc| {

@@ -1,0 +1,280 @@
+// Persistence layer for the native backend.
+//
+// Mirrors Hypothesis's `ExampleDatabase` hierarchy
+// (resources/hypothesis/hypothesis-python/src/hypothesis/database.py): a
+// multi-value key/value store where each key maps to a *set* of values.
+// The `ExampleDatabase` trait captures the shared surface
+// (`save` / `fetch` / `delete` / `move_value`); `NativeDatabase` is the
+// directory-backed implementation (mirroring
+// `DirectoryBasedExampleDatabase`) and `InMemoryNativeDatabase` is a
+// non-persistent sibling (mirroring `InMemoryExampleDatabase`).
+//
+// Minimal-native: the change-listener / watcher infrastructure, the
+// `ReadOnly` / `Multiplexed` / `BackgroundWrite` wrapper databases, and
+// the cross-process tempfile-rename dance live in the full native
+// branch but are not part of this minimal version.
+//
+// # On-disk format
+//
+// Storage layout (directory backend):
+//
+//   db_root/<fnv_hex(key)>/<fnv_hex(value)>
+//
+// where the file contents are the raw value bytes. `serialize_choices`
+// and `deserialize_choices` are the canonical binary encoding used for
+// ChoiceValue sequences (the value bytes); they are kept here so that
+// the replay path in `test_runner.rs` can round-trip them.
+//
+// The on-disk format is deliberately not cross-compatible with
+// Hypothesis's `DirectoryBasedExampleDatabase`.
+
+use std::any::Any;
+use std::path::PathBuf;
+
+use crate::native::core::ChoiceValue;
+
+/// Multi-value key/value store backing the native engine's replay phase.
+///
+/// Each key maps to an unordered *set* of values. Implementations must
+/// tolerate concurrent or corrupt state and surface failures as silent
+/// no-ops rather than errors — a non-writable database must never abort
+/// an otherwise-successful test run.
+pub trait ExampleDatabase: Send + Sync {
+    /// Return every value stored under `key`, in arbitrary order. Returns
+    /// an empty `Vec` if the key is absent.
+    fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>>;
+
+    /// Add `value` to the set stored under `key`. Idempotent: saving a
+    /// value that is already present is a no-op.
+    fn save(&self, key: &[u8], value: &[u8]);
+
+    /// Remove `value` from the set stored under `key`. A no-op when
+    /// `value` is absent.
+    fn delete(&self, key: &[u8], value: &[u8]);
+
+    /// Move `value` from `src` to `dst`. `value` is inserted at `dst`
+    /// regardless of whether it was present at `src`.
+    ///
+    /// Named `move_value` rather than `move` because `move` is a Rust
+    /// keyword. The default implementation is `delete` + `save`;
+    /// backends may override for atomicity (e.g. `NativeDatabase` uses
+    /// `rename`).
+    #[allow(dead_code)]
+    fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]) {
+        if src == dst {
+            self.save(src, value);
+            return;
+        }
+        self.delete(src, value);
+        self.save(dst, value);
+    }
+
+    /// Expose `self` as `&dyn Any` so equality impls can downcast through
+    /// a `&dyn ExampleDatabase` to their concrete type.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Cross-type equality through a trait object. Default: never equal.
+    #[allow(unused_variables, dead_code)]
+    fn db_eq(&self, other: &dyn ExampleDatabase) -> bool {
+        false
+    }
+}
+
+/// Name of the bookkeeping key under which every save() records its
+/// own key bytes. Mirrors Hypothesis's
+/// `DirectoryBasedExampleDatabase._metakeys_name` (`.hypothesis-keys`).
+pub const METAKEYS_NAME: &[u8] = b".hegel-keys";
+
+pub struct NativeDatabase {
+    db_root: PathBuf,
+    metakeys_hash: String,
+}
+
+impl NativeDatabase {
+    pub fn new(db_root: &str) -> Self {
+        NativeDatabase {
+            db_root: PathBuf::from(db_root),
+            metakeys_hash: fnv_hex(METAKEYS_NAME),
+        }
+    }
+
+    pub fn key_path(&self, key: &[u8]) -> PathBuf {
+        self.db_root.join(fnv_hex(key))
+    }
+
+    fn value_path(&self, key: &[u8], value: &[u8]) -> PathBuf {
+        self.key_path(key).join(fnv_hex(value))
+    }
+}
+
+impl ExampleDatabase for NativeDatabase {
+    fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
+        let dir = self.key_path(key);
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(d) => d,
+            Err(_) => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            if let Ok(bytes) = std::fs::read(entry.path()) {
+                out.push(bytes);
+            }
+        }
+        out
+    }
+
+    fn save(&self, key: &[u8], value: &[u8]) {
+        // Hypothesis keeps a "metakeys" entry — a bookkeeping key whose
+        // values are the raw bytes of every other key ever saved. Avoid
+        // infinite recursion when we're already saving under it.
+        if fnv_hex(key) != self.metakeys_hash {
+            self.save(METAKEYS_NAME, key);
+        }
+        let dir = self.key_path(key);
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let path = self.value_path(key, value);
+        if path.exists() {
+            return;
+        }
+        let _ = std::fs::write(&path, value);
+    }
+
+    fn delete(&self, key: &[u8], value: &[u8]) {
+        if std::fs::remove_file(self.value_path(key, value)).is_err() {
+            return;
+        }
+        // `remove_dir` only succeeds if the directory is empty; that's
+        // exactly the "value was the last entry" case.
+        if std::fs::remove_dir(self.key_path(key)).is_ok() && fnv_hex(key) != self.metakeys_hash {
+            self.delete(METAKEYS_NAME, key);
+        }
+    }
+
+    fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]) {
+        if src == dst {
+            self.save(src, value);
+            return;
+        }
+        if !self.key_path(dst).exists() {
+            self.save(METAKEYS_NAME, dst);
+        }
+        let dst_dir = self.key_path(dst);
+        if std::fs::create_dir_all(&dst_dir).is_err() {
+            self.delete(src, value);
+            self.save(dst, value);
+            return;
+        }
+        let src_path = self.value_path(src, value);
+        let dst_path = self.value_path(dst, value);
+        if std::fs::rename(&src_path, &dst_path).is_err() {
+            self.delete(src, value);
+            self.save(dst, value);
+            return;
+        }
+        let _ = std::fs::remove_dir(self.key_path(src));
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn db_eq(&self, other: &dyn ExampleDatabase) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<NativeDatabase>()
+            .is_some_and(|o| self.db_root == o.db_root)
+    }
+}
+
+impl PartialEq for NativeDatabase {
+    fn eq(&self, other: &Self) -> bool {
+        self.db_eq(other)
+    }
+}
+
+impl Eq for NativeDatabase {}
+
+/// FNV-1a 64-bit hash of a byte slice, formatted as a 16-character hex string.
+pub(super) fn fnv_hex(s: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &byte in s {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Binary encoding of a `ChoiceValue` slice.
+///
+/// Format:
+/// - 4-byte little-endian u32: number of choices
+/// - For each choice:
+///   - 1-byte type tag: 0=Integer, 1=Boolean
+///   - Value bytes:
+///     - Integer: 16 bytes (i128 little-endian)
+///     - Boolean: 1 byte (0 or 1)
+///
+/// Minimal-native only supports integer and boolean choice nodes;
+/// attempting to serialize any other variant panics with `todo!()`.
+pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(4 + choices.len() * 17);
+    let count = choices.len() as u32;
+    buf.extend_from_slice(&count.to_le_bytes());
+    for choice in choices {
+        match choice {
+            ChoiceValue::Integer(v) => {
+                buf.push(0);
+                buf.extend_from_slice(&v.to_le_bytes());
+            }
+            ChoiceValue::Boolean(v) => {
+                buf.push(1);
+                buf.push(*v as u8);
+            }
+            ChoiceValue::Float(_) | ChoiceValue::Bytes(_) | ChoiceValue::String(_) => {
+                todo!("serialize_choices: non-integer/boolean variants not yet supported in native mode")
+            }
+        }
+    }
+    buf
+}
+
+/// Decode a byte slice produced by [`serialize_choices`].
+///
+/// Returns `None` if the data is truncated, malformed, or contains an
+/// unknown type tag (defensive against filesystem corruption).
+pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
+    if bytes.len() < 4 {
+        return None;
+    }
+    let count = u32::from_le_bytes(bytes[..4].try_into().ok()?) as usize;
+    let mut choices = Vec::with_capacity(count);
+    let mut pos = 4;
+    for _ in 0..count {
+        if pos >= bytes.len() {
+            return None;
+        }
+        match bytes[pos] {
+            0 => {
+                pos += 1;
+                if pos + 16 > bytes.len() {
+                    return None;
+                }
+                let v = i128::from_le_bytes(bytes[pos..pos + 16].try_into().ok()?);
+                choices.push(ChoiceValue::Integer(v));
+                pos += 16;
+            }
+            1 => {
+                pos += 1;
+                if pos >= bytes.len() {
+                    return None;
+                }
+                choices.push(ChoiceValue::Boolean(bytes[pos] != 0));
+                pos += 1;
+            }
+            _ => return None,
+        }
+    }
+    Some(choices)
+}

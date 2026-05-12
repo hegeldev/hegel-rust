@@ -78,6 +78,7 @@ fn test_spawn_thread_with_clone_does_generation(tc: TestCase) {
     let _ = (thread_value, main_value);
 }
 
+#[cfg(not(feature = "native"))]
 #[hegel::test(test_cases = 20)]
 fn test_main_then_thread_then_main(tc: TestCase) {
     let _a: u32 = tc.draw(gs::integers());

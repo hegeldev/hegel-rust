@@ -22,6 +22,7 @@ fn test_minimize_one_of_integers() {
     }
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_minimize_one_of_mixed() {
     for _ in 0..10 {
@@ -41,6 +42,7 @@ fn test_minimize_one_of_mixed() {
     }
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_minimize_mixed_list() {
     let result = minimal(
@@ -56,6 +58,7 @@ fn test_minimize_mixed_list() {
     }
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_mixed_list_flatmap() {
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]

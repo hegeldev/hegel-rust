@@ -1,3 +1,4 @@
+#![cfg(not(feature = "native"))]
 mod common;
 
 use common::utils::{assert_all_examples, find_any};

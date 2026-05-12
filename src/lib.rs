@@ -222,11 +222,14 @@ pub(crate) mod control;
 pub mod explicit_test_case;
 pub mod extras;
 pub mod generators;
+#[cfg(feature = "native")]
+pub(crate) mod native;
+pub(crate) mod run_lifecycle;
 pub(crate) mod runner;
+#[cfg(not(feature = "native"))]
 pub(crate) mod server;
 pub mod stateful;
 mod test_case;
-
 #[doc(hidden)]
 pub use control::currently_in_test_context;
 pub use explicit_test_case::ExplicitTestCase;
@@ -422,7 +425,9 @@ pub use cli::apply_cli_args as __apply_cli_args;
 #[doc(hidden)]
 pub use runner::hegel;
 pub use runner::{HealthCheck, Hegel, Mode, Phase, Settings, Verbosity};
+#[cfg(not(feature = "native"))]
 #[doc(hidden)]
 pub use server::process::__test_kill_server;
+#[cfg(not(feature = "native"))]
 #[doc(hidden)]
 pub use server::process::format_log_excerpt;

@@ -82,7 +82,7 @@ impl HegelSession {
                 return Arc::clone(s);
             }
         }
-        super::runner::init_panic_hook();
+        crate::run_lifecycle::init_panic_hook();
         let session = Arc::new(HegelSession::init());
         *guard = Some(Arc::clone(&session));
         session
@@ -372,6 +372,9 @@ impl TestRunner for ServerTestRunner {
                         .write_reply(event_id, cbor_encode(&ack_null))
                         .expect("Failed to ack test_case");
 
+                    if verbosity == Verbosity::Verbose {
+                        eprintln!("Trying example: ");
+                    }
                     let backend = Box::new(ServerDataSource::new(
                         Arc::clone(connection),
                         test_case_stream,

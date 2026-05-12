@@ -125,11 +125,13 @@ fn test_derive_simple_struct() {
     check_can_generate_examples(gs::default::<Point>());
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_struct_with_multiple_types() {
     check_can_generate_examples(gs::default::<Person>());
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_struct_with_optional_field() {
     check_can_generate_examples(gs::default::<WithOptional>());
@@ -145,6 +147,7 @@ fn test_derive_single_field_struct() {
     check_can_generate_examples(gs::default::<SingleField>());
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_many_fields_struct() {
     check_can_generate_examples(gs::default::<ManyFields>());
@@ -154,6 +157,7 @@ fn test_derive_many_fields_struct() {
 // Nested struct generation
 // ============================================================================
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_nested_struct() {
     check_can_generate_examples(gs::default::<WithNested>());
@@ -170,12 +174,14 @@ fn test_derive_struct_generates_varied_values() {
     assert_ne!(p1.x, 0);
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_struct_generates_both_bool_values() {
     find_any(gs::default::<Person>(), |p: &Person| p.active);
     find_any(gs::default::<Person>(), |p: &Person| !p.active);
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_struct_with_optional_generates_some_and_none() {
     find_any(gs::default::<WithOptional>(), |w: &WithOptional| {
@@ -202,6 +208,7 @@ fn test_derive_struct_with_multiple_custom_fields() {
     assert_all_examples(g, |p: &Point| p.x == 1 && p.y == 2);
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_struct_with_constrained_field() {
     let g = Person::default_generator().age(gs::integers().min_value(18_u32).max_value(65));
@@ -248,11 +255,13 @@ fn test_derive_unit_enum_generates_all_variants() {
     find_any(gs::default::<Color>(), |c: &Color| *c == Color::Blue);
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_enum_with_struct_variants() {
     check_can_generate_examples(gs::default::<Shape>());
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_enum_generates_each_struct_variant() {
     find_any(gs::default::<Shape>(), |s: &Shape| {
@@ -263,11 +272,13 @@ fn test_derive_enum_generates_each_struct_variant() {
     });
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_mixed_enum() {
     check_can_generate_examples(gs::default::<MixedEnum>());
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_mixed_enum_generates_all_variants() {
     find_any(gs::default::<MixedEnum>(), |m: &MixedEnum| {
@@ -281,16 +292,19 @@ fn test_derive_mixed_enum_generates_all_variants() {
     });
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_single_variant_data_enum() {
     check_can_generate_examples(gs::default::<SingleVariantData>());
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_tuple_variants_enum() {
     check_can_generate_examples(gs::default::<TupleVariants>());
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_tuple_variant_generates_both() {
     find_any(gs::default::<TupleVariants>(), |t: &TupleVariants| {
@@ -301,11 +315,13 @@ fn test_derive_tuple_variant_generates_both() {
     });
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_complex_enum() {
     check_can_generate_examples(gs::default::<ComplexEnum>());
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_complex_enum_generates_all_variants() {
     find_any(gs::default::<ComplexEnum>(), |c: &ComplexEnum| {
@@ -322,6 +338,7 @@ fn test_derive_complex_enum_generates_all_variants() {
     });
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_enum_with_nested_types() {
     check_can_generate_examples(gs::default::<WithNestedTypes>());
@@ -331,6 +348,7 @@ fn test_derive_enum_with_nested_types() {
 // Enum builder pattern - customizing variant generators
 // ============================================================================
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_enum_variant_generator_named_fields() {
     // Use per-variant generator directly to constrain fields
@@ -345,6 +363,7 @@ fn test_derive_enum_variant_generator_named_fields() {
     });
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_enum_variant_generator_single_tuple() {
     let g = MixedEnum::default_generator().WithValue(
@@ -358,6 +377,7 @@ fn test_derive_enum_variant_generator_single_tuple() {
     });
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_enum_variant_generator_with_named_fields() {
     let g = MixedEnum::default_generator().WithFields(
@@ -464,6 +484,7 @@ fn test_derive_enum_in_hegel_test(tc: hegel::TestCase) {
     assert!(matches!(c, Color::Red | Color::Green | Color::Blue));
 }
 
+#[cfg(not(feature = "native"))]
 #[hegel::test]
 fn test_derive_complex_in_hegel_test(tc: hegel::TestCase) {
     let m: MixedEnum = tc.draw(gs::default());
@@ -478,6 +499,7 @@ fn test_derive_complex_in_hegel_test(tc: hegel::TestCase) {
 // Nested derived types
 // ============================================================================
 
+#[cfg(not(feature = "native"))]
 #[hegel::test]
 fn test_derive_nested_structs(tc: hegel::TestCase) {
     let w: WithNested = tc.draw(gs::default());
@@ -486,6 +508,7 @@ fn test_derive_nested_structs(tc: hegel::TestCase) {
     let _ = w.label;
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_nested_struct_with_custom_inner() {
     let g = WithNested::default_generator()

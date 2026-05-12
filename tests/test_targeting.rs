@@ -6,6 +6,7 @@ use common::utils::expect_panic;
 use hegel::generators as gs;
 use hegel::{Hegel, Settings};
 
+#[cfg(not(feature = "native"))]
 /// `tc.target_labelled(observation, label)` compiles and runs without panicking.
 #[test]
 fn test_allowed_inputs_to_target() {
@@ -18,6 +19,7 @@ fn test_allowed_inputs_to_target() {
     .run();
 }
 
+#[cfg(not(feature = "native"))]
 /// `tc.target_labelled(observation, label)` works for a restricted set of labels.
 #[test]
 fn test_allowed_inputs_to_target_fewer_labels() {
@@ -30,6 +32,7 @@ fn test_allowed_inputs_to_target_fewer_labels() {
     .run();
 }
 
+#[cfg(not(feature = "native"))]
 /// `tc.target(observation)` works with the empty default label.
 #[test]
 fn test_target_without_label() {
@@ -41,6 +44,7 @@ fn test_target_without_label() {
     .run();
 }
 
+#[cfg(not(feature = "native"))]
 /// Multiple `tc.target_labelled()` calls with different labels all execute without error.
 #[test]
 fn test_multiple_target_calls() {
@@ -56,6 +60,7 @@ fn test_multiple_target_calls() {
     .run();
 }
 
+#[cfg(not(feature = "native"))]
 /// Stress-test with many distinct target labels.
 #[test]
 fn test_respects_max_pool_size() {
@@ -94,6 +99,7 @@ fn test_max_examples_is_not_exceeded() {
     }
 }
 
+#[cfg(not(feature = "native"))]
 /// Targeting with a 2D quadratic score drives the optimizer to (500, 500).
 #[test]
 fn test_finds_a_local_maximum() {

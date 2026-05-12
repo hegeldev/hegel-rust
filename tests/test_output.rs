@@ -331,6 +331,7 @@ mod snapshots_combinators {
     use super::common::utils::minimal;
     use hegel::generators as gs;
 
+    #[cfg(not(feature = "native"))]
     #[test]
     fn test_data_draw() {
         // Upstream snapshot pins `Draw 1: 0` and `Draw 2: ''`: when the
@@ -376,6 +377,7 @@ mod snapshots_shrinking {
     // Integer shrinker gets stuck at 'À' (U+00C0) instead of reaching 'A' (see
     // HypothesisWorks/hypothesis#4725), so this test fails as upstream describes.
 
+    #[cfg(not(feature = "native"))]
     #[test]
     fn test_shrunk_float() {
         // Upstream snapshot: `x=1.0`.

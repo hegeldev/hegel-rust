@@ -205,6 +205,7 @@ fn test_one_of_empty() {
 
 // --- server-side error handling ---
 
+#[cfg(not(feature = "native"))]
 #[hegel::test]
 #[should_panic(expected = "InvalidArgument")]
 fn test_server_invalid_argument_is_reported(tc: TestCase) {

@@ -45,6 +45,8 @@ hegeltest-macros = { version = "=0.12.5", path = "hegel-macros" }
 # optional feature dependencies
 rand = { version = "0.10", optional = true }
 serde_json = { version = "1.0.61", optional = true }
+num-bigint = { version = "0.4.6", optional = true }
+num-traits = { version = "0.2", optional = true }
 # opting out of the clock, now, and wasmbind features.
 # 0.4.41 is the minimum version that has WeekdaySet.
 chrono = { version = "0.4.41", default-features = false, features = ["std"], optional = true }
@@ -62,6 +64,7 @@ ctor = "0.2"
 default = []
 rand = ["dep:rand"]
 antithesis = ["dep:serde_json"]
+native = ["dep:rand", "dep:num-bigint", "dep:num-traits"]
 chrono = ["dep:chrono"]
 jiff = ["dep:jiff"]
 serde_json = ["dep:serde_json"]

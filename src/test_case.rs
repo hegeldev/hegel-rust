@@ -597,6 +597,12 @@ impl TestCase {
     }
 
     /// Send `mark_complete` on this test case's data source.
+    ///
+    /// Both backends use this to communicate the outcome — and, for
+    /// `Status::Interesting`, an `origin` string identifying the panic
+    /// site — to whatever owns the per-test-case bookkeeping
+    /// (Hypothesis on the server backend; the native engine's
+    /// `NativeTestCase` on the native backend).
     pub(crate) fn mark_complete(&self, status: &str, origin: Option<&str>) {
         self.with_data_source(|ds| ds.mark_complete(status, origin));
     }

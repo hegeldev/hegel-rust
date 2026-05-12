@@ -75,6 +75,7 @@ mod composite {
         );
     }
 
+    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_assume_in_draw() {
         Hegel::new(|tc| {
