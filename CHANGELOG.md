@@ -1,5 +1,106 @@
 # Changelog
 
+## 0.12.3 - 2026-05-11
+
+This patch bumps our pinned hegel-core from [0.8.0](https://github.com/hegeldev/hegel-core/releases/tag/v0.8.0) to [0.8.2](https://github.com/hegeldev/hegel-core/releases/tag/v0.8.2).
+
+## 0.12.2 - 2026-05-08
+
+This patch adds `tc.target(score)` and `tc.target_labelled(score, label)` for targeted property-based testing. Call them inside a test body to feed an observation back to the engine, which uses the score to guide generation toward higher-scoring inputs.
+
+```rust
+use hegel::generators as gs;
+
+#[hegel::test]
+fn my_test(tc: hegel::TestCase) {
+    let n: u64 = tc.draw(gs::integers::<u64>().max_value(1000));
+    let m: u64 = tc.draw(gs::integers::<u64>().max_value(1000));
+    tc.target((n + m) as f64);
+    assert!(n + m < 2000);
+}
+```
+
+Inside a `#[hegel::test]`, `#[hegel::main]`, or `#[hegel::standalone_function]` body, `tc.target(expr)` is rewritten to `tc.target_labelled(expr, "expr")`, where the label is the source text of `expr`. That way separate targeting expressions get separate labels by default, and the engine optimises each independently. Call `tc.target_labelled(score, "...")` directly when you want to choose the label yourself.
+
+## 0.12.1 - 2026-05-07
+
+This patch adds generators for the [`serde_json`](https://docs.rs/serde_json) crate behind the new `serde_json` feature flag.
+
+`hegel::extras::serde_json` provides generators for:
+
+* `numbers()` — generates `serde_json::Number`.
+* `values()` — generates `serde_json::Value`.
+* `raw_values()` - generates `Box<serde_json::value::RawValue>`. Requires the `serde_json_raw_value` feature flag.
+
+And default generators for:
+
+* `serde_json::Number`
+* `serde_json::Value`
+* `serde_json::Map<String, Value>`
+
+For example:
+
+```rust
+use hegel::extras::serde_json as json_gs;
+
+#[hegel::test]
+fn my_test(tc: hegel::TestCase) {
+    let v = tc.draw(json_gs::values());
+    let s = serde_json::to_string(&v).unwrap();
+    let _: serde_json::Value = serde_json::from_str(&s).unwrap();
+}
+```
+
+## 0.12.0 - 2026-05-07
+
+This release moves the namespace for the `rand` generators, and adds generators for the `chrono` and `jiff` libraries.
+
+`hegel::generators::randoms` has been moved to `hegel::extras::rand::randoms`:
+
+```rust
+// before
+use hegel::generators::randoms;
+
+// after
+use hegel::extras::rand as rand_gs;
+rand_gs::randoms()
+```
+
+The new `hegel::extras::chrono` provides the following generators:
+
+* `naive_dates`
+* `naive_times`
+* `naive_datetimes`
+* `naive_weeks`
+* `time_deltas`
+* `fixed_offsets`
+* `weekday_sets`
+* `datetimes`
+
+The new `hegel::extras::jiff` provides the following generators:
+
+* `dates`
+* `times`
+* `datetimes`
+* `timestamps`
+* `spans`
+* `signed_durations`
+* `offsets`
+* `zoneds`
+
+For example:
+
+```rust
+use hegel::extras::chrono as chrono_gs;
+use hegel::extras::jiff as jiff_gs;
+
+#[hegel::test]
+fn my_test(tc: hegel::TestCase) {
+    let _: chrono::NaiveDate = tc.draw(chrono_gs::naive_dates());
+    let _: jiff::Zoned = tc.draw(jiff_gs::zoneds());
+}
+```
+
 ## 0.11.0 - 2026-05-07
 
 This release adds `gs::uuids()`, a generator for UUID strings in the canonical hyphenated form (e.g. `"f47ac10b-58cc-4372-a567-0e02b2c3d479"`).

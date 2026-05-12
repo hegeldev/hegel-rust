@@ -260,6 +260,14 @@ fn test_explicit_reject_panics() {
 }
 
 #[test]
+fn test_explicit_target_is_noop() {
+    let etc = hegel::ExplicitTestCase::new();
+    etc.target(42.0);
+    etc.target_labelled(42.0, "label");
+    etc.target_labelled(0.0, "");
+}
+
+#[test]
 fn test_explicit_start_span_panics() {
     expect_panic(
         || {

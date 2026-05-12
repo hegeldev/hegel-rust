@@ -26,5 +26,8 @@ lcov.info
 !.claude/skills/changelog/
 !.claude/skills/coverage/
 !.claude/skills/self-review/
+!.claude/skills/new-generator/
+!.claude/skills/new-default-generator/
+!.claude/skills/add-library-support/
 
 docs/superpowers

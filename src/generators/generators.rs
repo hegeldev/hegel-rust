@@ -51,9 +51,25 @@ impl<'a, T: 'a> BasicGenerator<'a, T> {
 ///
 /// Generators produce values of type `T` and optionally provide a
 /// [`BasicGenerator`] for server-based generation via `as_basic()`.
+///
+/// Implementors override one or both of [`as_basic`](Self::as_basic) and
+/// [`do_draw`](Self::do_draw):
+/// - "Always basic" leaf generators override only `as_basic`. The default
+///   `do_draw` delegates to it.
+/// - Generators with a client-side fallback (filter, flat_map, lists with
+///   non-basic elements, …) override `do_draw`. They may also override
+///   `as_basic` to opt into schema generation when their inputs allow it.
 pub trait Generator<T>: Send + Sync {
+    /// Produce a value.
+    ///
+    /// The default delegates to [`as_basic`](Self::as_basic). Generators
+    /// without a basic form must override this.
     #[doc(hidden)]
-    fn do_draw(&self, tc: &TestCase) -> T;
+    fn do_draw(&self, tc: &TestCase) -> T {
+        self.as_basic()
+            .expect("non-basic generator must override do_draw")
+            .do_draw(tc)
+    }
 
     /// Return a BasicGenerator for schema-based generation, if possible.
     #[doc(hidden)]
