@@ -94,7 +94,7 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
             return syn::Error::new_spanned(
                 attr,
                 "#[hegel::test] used on a function with #[test].\
-                Remove the #[test] attribute; [hegel::test] automatically adds #[test].",
+                 Remove the #[test] attribute; [hegel::test] automatically adds #[test].",
             )
             .to_compile_error();
         }
