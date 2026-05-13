@@ -1,5 +1,7 @@
 use super::*;
+#[cfg(unix)]
 use crate::server::protocol::packet::{Packet, read_packet, write_packet};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 
 // Mutex so the env-var-mutating tests below serialise with each other —
@@ -67,6 +69,7 @@ fn protocol_debug_from_env_false_for_garbage() {
 /// dropped — `send_request` will detect server-exited and panic. Use this
 /// only for tests where validation is expected to fire *before* any IO
 /// happens (the finite-score tests below).
+#[cfg(unix)]
 fn make_dead_data_source() -> ServerDataSource {
     let (_dropped_peer, write_end) = UnixStream::pair().unwrap();
     // Connection::new already returns an Arc<Connection>.
@@ -80,6 +83,7 @@ fn make_dead_data_source() -> ServerDataSource {
 /// where validation is expected to fire *after* one or more successful
 /// IO round-trips (e.g. the duplicate-label test, where the *second* call
 /// must reach the duplicate check).
+#[cfg(unix)]
 fn make_mocked_data_source(n: usize) -> ServerDataSource {
     let (client, mut server) = UnixStream::pair().unwrap();
     let client_writer = client.try_clone().unwrap();
@@ -133,6 +137,7 @@ fn make_mocked_data_source(n: usize) -> ServerDataSource {
 // `let _ = send_request(...)` swallows the BrokenPipe and the function
 // returns normally — no panic.
 
+#[cfg(unix)]
 #[test]
 #[should_panic(expected = "requires a finite score")]
 fn target_observation_panics_on_nan() {
@@ -140,6 +145,7 @@ fn target_observation_panics_on_nan() {
     ds.target_observation(f64::NAN, "x");
 }
 
+#[cfg(unix)]
 #[test]
 #[should_panic(expected = "requires a finite score")]
 fn target_observation_panics_on_pos_infinity() {
@@ -147,6 +153,7 @@ fn target_observation_panics_on_pos_infinity() {
     ds.target_observation(f64::INFINITY, "x");
 }
 
+#[cfg(unix)]
 #[test]
 #[should_panic(expected = "requires a finite score")]
 fn target_observation_panics_on_neg_infinity() {
@@ -154,6 +161,7 @@ fn target_observation_panics_on_neg_infinity() {
     ds.target_observation(f64::NEG_INFINITY, "x");
 }
 
+#[cfg(unix)]
 #[test]
 #[should_panic(expected = "would overwrite previous tc.target")]
 fn target_observation_panics_on_duplicate_label() {
@@ -165,6 +173,7 @@ fn target_observation_panics_on_duplicate_label() {
     ds.target_observation(2.0, "x");
 }
 
+#[cfg(unix)]
 #[test]
 fn target_observation_allows_distinct_labels() {
     // Distinct labels in the same test case should be accepted (not panic).
