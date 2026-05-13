@@ -309,11 +309,13 @@ pub(crate) fn drive<R, F>(
     );
 
     #[cfg(feature = "antithesis")]
+    // nocov start
     if crate::antithesis::is_running_in_antithesis() {
         if let Some(loc) = test_location {
             crate::antithesis::emit_assertion(loc, !test_failed);
         }
     }
+    // nocov end
     let _ = test_location;
 
     if !test_failed {

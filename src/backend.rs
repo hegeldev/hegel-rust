@@ -82,9 +82,6 @@ pub trait DataSource: Send + Sync {
     /// their engine needs here — forward the outcome to a remote server,
     /// stash it on a handle for the local engine to consume, etc.
     fn mark_complete(&self, result: &TestCaseResult);
-
-    /// Returns true if a previous request triggered an abort (overflow/StopTest).
-    fn test_aborted(&self) -> bool;
 }
 
 /// A single failing test case discovered by a [`TestRunner`].

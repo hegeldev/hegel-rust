@@ -321,10 +321,6 @@ impl DataSource for ServerDataSource {
         let _ = stream.request_cbor(&mark_complete);
         let _ = stream.close();
     }
-
-    fn test_aborted(&self) -> bool {
-        self.aborted.load(Ordering::SeqCst)
-    }
 }
 
 #[cfg(test)]

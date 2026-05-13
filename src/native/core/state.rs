@@ -259,13 +259,6 @@ pub struct Span {
     pub discarded: bool,
 }
 
-impl Span {
-    /// Number of choice nodes covered by this span.
-    pub fn choice_count(&self) -> usize {
-        self.end - self.start
-    }
-}
-
 /// Maximum nested span depth before the engine marks the test case
 /// `Status::Invalid`.  Mirrors Hypothesis's
 /// `internal/conjecture/data.py::MAX_DEPTH`.
@@ -325,11 +318,6 @@ impl Spans {
     /// True if no spans have been recorded.
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
-    }
-
-    /// Iterate spans in order.
-    pub fn iter(&self) -> std::slice::Iter<'_, Span> {
-        self.inner.iter()
     }
 
     /// Append a span (interior bookkeeping; pushes after any
@@ -451,12 +439,6 @@ pub struct NativeTestCase {
     prefix_nodes: Option<Vec<ChoiceNode>>,
     rng: Option<SmallRng>,
     max_size: usize,
-    /// When true, every draw beyond `prefix` resolves to the kind's
-    /// simplest value rather than panicking on a missing RNG.  Mirrors
-    /// Hypothesis's `ChoiceTemplate("simplest", count=None)` template
-    /// used by `generate_new_examples` to probe the all-zero leaf of
-    /// the choice tree at the start of each generation phase.
-    force_simplest: bool,
     pub nodes: Vec<ChoiceNode>,
     pub status: Option<Status>,
     /// Set to `true` by [`Self::freeze`] on the first call; subsequent calls
@@ -509,7 +491,6 @@ impl NativeTestCase {
             prefix_nodes: None,
             rng: Some(rng),
             max_size: BUFFER_SIZE,
-            force_simplest: false,
             nodes: Vec::new(),
             status: None,
             frozen: false,
@@ -541,7 +522,6 @@ impl NativeTestCase {
             prefix_nodes: prefix_nodes.map(|n| n.to_vec()),
             rng: None,
             max_size: choices.len(),
-            force_simplest: false,
             nodes: Vec::new(),
             status: None,
             frozen: false,
@@ -571,7 +551,6 @@ impl NativeTestCase {
             prefix_nodes: None,
             rng: Some(rng),
             max_size,
-            force_simplest: false,
             nodes: Vec::new(),
             status: None,
             frozen: false,
@@ -838,8 +817,6 @@ impl NativeTestCase {
                     Ok((unit(), false))
                 }
             }
-        } else if self.force_simplest {
-            Ok((simplest(), false))
         } else {
             let rng = self
                 .rng

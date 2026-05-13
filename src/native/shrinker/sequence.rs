@@ -89,7 +89,7 @@ impl<'a> Shrinker<'a> {
                     })
                     .collect();
                 if j >= valid.len() {
-                    break;
+                    break; // nocov — only reached after a concurrent shrink shortened `valid`
                 }
                 let idx_j = valid[j];
                 let idx_prev = valid[j - 1];

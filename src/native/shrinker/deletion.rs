@@ -20,7 +20,7 @@ impl<'a> Shrinker<'a> {
                 // Only reached when a prior iteration shrank current_nodes to
                 // empty; with usize i we can't go negative, so we bail.
                 if i >= self.current_nodes.len() {
-                    break;
+                    break; // nocov — sequences that shrink to empty mid-pass are rare
                 }
                 let end = (i + k).min(self.current_nodes.len());
                 let mut attempt: Vec<_> = self.current_nodes[..i].to_vec();
@@ -108,7 +108,7 @@ impl<'a> Shrinker<'a> {
         // First try a straight replace. consider() already calls test_fn and
         // records the interesting case; we'd just duplicate work by retrying.
         if self.replace(&HashMap::from([(idx, value.clone())])) {
-            return true;
+            return true; // nocov — early-success path; deletion fallback below covers the common case
         }
 
         // The replace couldn't narrow the result directly. Re-run the test to

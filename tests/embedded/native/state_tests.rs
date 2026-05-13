@@ -1,4 +1,6 @@
 use super::*;
+use rand::SeedableRng;
+use rand::rngs::SmallRng;
 
 // ── Spans::get_mut ────────────────────────────────────────────────────────
 
@@ -383,6 +385,85 @@ fn stop_span_on_empty_stack_is_a_no_op() {
 fn data_observer_draw_boolean_default_is_no_op() {
     let mut obs = NoopObserver;
     obs.draw_boolean(true, false); // must not panic
+}
+
+#[test]
+fn data_observer_draw_integer_default_is_no_op() {
+    let mut obs = NoopObserver;
+    obs.draw_integer(42, false); // must not panic
+}
+
+#[test]
+fn data_observer_conclude_test_default_is_no_op() {
+    let mut obs = NoopObserver;
+    obs.conclude_test(Status::Valid, None); // must not panic
+}
+
+// ── NativeTestCase::weighted forces `false` when `p <= 0.0` ──────────────
+//
+// `weighted`'s `forced.or(...)` chain promotes `p <= 0.0` and `p >= 1.0`
+// into forced values without recording an RNG draw.  Test cases that go
+// through `many_more` with a closed boundary exercise these.
+
+#[test]
+fn weighted_with_p_zero_returns_false_without_consulting_rng() {
+    let mut tc = NativeTestCase::new_random(SmallRng::seed_from_u64(0));
+    // RNG is present but `p == 0.0` is supposed to short-circuit it.
+    let v = tc.weighted(0.0, None).ok().unwrap();
+    assert!(!v);
+    assert!(tc.nodes.last().unwrap().was_forced);
+}
+
+#[test]
+fn weighted_with_p_one_returns_true_without_consulting_rng() {
+    let mut tc = NativeTestCase::new_random(SmallRng::seed_from_u64(0));
+    let v = tc.weighted(1.0, None).ok().unwrap();
+    assert!(v);
+    assert!(tc.nodes.last().unwrap().was_forced);
+}
+
+// ── NativeTestCase::weighted notifies the observer on draw ──────────────
+//
+// The observer hook in `weighted` fires after the boolean is recorded;
+// a custom observer captures the value to verify the call site at
+// `state.rs:obs.draw_boolean(...)` runs.
+
+// ── NativeTestCase::freeze is idempotent ─────────────────────────────────
+
+#[test]
+fn freeze_is_a_no_op_on_already_frozen_test_case() {
+    // freeze sets `frozen = true`; calling it again should hit the
+    // `if self.frozen { return; }` early return rather than
+    // re-running the close-spans / observer-notify path.
+    let mut tc = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None, None);
+    tc.start_span(7);
+    tc.stop_span(false);
+    tc.freeze();
+    let spans_after_first = tc.spans.clone().into_vec();
+    tc.freeze(); // second freeze must be a no-op
+    assert_eq!(tc.spans.clone().into_vec(), spans_after_first);
+}
+
+#[test]
+fn weighted_notifies_observer_on_boolean_draw() {
+    use std::sync::{Arc, Mutex};
+    struct CaptureBoolObserver {
+        captured: Arc<Mutex<Option<(bool, bool)>>>,
+    }
+    impl DataObserver for CaptureBoolObserver {
+        fn draw_boolean(&mut self, value: bool, was_forced: bool) {
+            *self.captured.lock().unwrap() = Some((value, was_forced));
+        }
+    }
+    let captured = Arc::new(Mutex::new(None));
+    let obs = Box::new(CaptureBoolObserver {
+        captured: captured.clone(),
+    });
+    let mut tc = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None, Some(obs));
+    let v = tc.weighted(0.5, None).ok().unwrap();
+    assert!(v);
+    let recorded = captured.lock().unwrap().expect("observer wasn't called");
+    assert_eq!(recorded, (true, false));
 }
 
 // ── NativeTestCase::freeze with observer ──────────────────────────────────

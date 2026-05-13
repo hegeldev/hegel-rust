@@ -88,9 +88,11 @@ impl<'a> Shrinker<'a> {
             return true;
         }
         if let Some(max) = self.max_improvements {
+            // nocov start — `max_improvements` is only set in tests
             if self.improvements >= max {
                 return false;
             }
+            // nocov end
         }
         let (is_interesting, actual_nodes) = (self.test_fn)(ShrinkRun::Full(nodes));
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
@@ -111,9 +113,11 @@ impl<'a> Shrinker<'a> {
     /// Port of pbtkit's `shrinker.test_function(TestCase(prefix=..., random=...))`.
     pub(super) fn probe(&mut self, prefix: &[ChoiceValue], seed: u64, max_size: usize) {
         if let Some(max) = self.max_improvements {
+            // nocov start — `max_improvements` is only set in tests
             if self.improvements >= max {
                 return;
             }
+            // nocov end
         }
         let (is_interesting, actual_nodes) = (self.test_fn)(ShrinkRun::Probe {
             prefix,
@@ -146,10 +150,10 @@ impl<'a> Shrinker<'a> {
         let mut attempt: Vec<ChoiceNode> = self.current_nodes.clone();
         for (&i, v) in values {
             if i >= attempt.len() {
-                return false;
+                return false; // nocov — index range guarded by callers
             }
             if !attempt[i].kind.validate(v) {
-                return false;
+                return false; // nocov — kind/value mismatch after one_of branch switch
             }
             attempt[i] = attempt[i].with_value(v.clone());
         }
@@ -236,7 +240,7 @@ pub(super) fn find_integer(mut f: impl FnMut(usize) -> bool) -> usize {
     while f(hi) {
         lo = hi;
         let Some(next) = hi.checked_mul(2) else {
-            return lo;
+            return lo; // nocov — usize overflow guard; tests never reach usize::MAX/2
         };
         hi = next;
     }

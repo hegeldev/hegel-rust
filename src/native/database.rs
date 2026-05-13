@@ -34,7 +34,6 @@
 // leaves room for a future `core:`-prefixed store (the eventual full
 // hegel-core / pbtkit backend) to live at the same `db_root`.
 
-use std::any::Any;
 use std::path::PathBuf;
 
 use crate::native::core::ChoiceValue;
@@ -62,24 +61,8 @@ pub trait ExampleDatabase: Send + Sync {
     /// regardless of whether it was present at `src`.
     ///
     /// Named `move_value` rather than `move` because `move` is a Rust
-    /// keyword. The default implementation is `delete` + `save`;
-    /// backends may override for atomicity (e.g. `NativeDatabase` uses
-    /// `rename`).
-    fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]) {
-        if src == dst {
-            self.save(src, value);
-            return;
-        }
-        self.delete(src, value);
-        self.save(dst, value);
-    }
-
-    /// Expose `self` as `&dyn Any` so equality impls can downcast through
-    /// a `&dyn ExampleDatabase` to their concrete type.
-    fn as_any(&self) -> &dyn Any;
-
-    /// Cross-type equality through a trait object.
-    fn db_eq(&self, other: &dyn ExampleDatabase) -> bool;
+    /// keyword.
+    fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]);
 }
 
 /// Name of the bookkeeping key under which every save() records its
@@ -148,7 +131,7 @@ impl ExampleDatabase for NativeDatabase {
         }
         let dir = self.key_path(key);
         if std::fs::create_dir_all(&dir).is_err() {
-            return;
+            return; // nocov — filesystem permission denial, not reachable in tests
         }
         let path = self.value_path(key, value);
         if path.exists() {
@@ -177,11 +160,14 @@ impl ExampleDatabase for NativeDatabase {
             self.save(METAKEYS_NAME, dst);
         }
         let dst_dir = self.key_path(dst);
+        // nocov start — filesystem permission denial; the dst_dir
+        // create_dir_all call always succeeds in the test harness.
         if std::fs::create_dir_all(&dst_dir).is_err() {
             self.delete(src, value);
             self.save(dst, value);
             return;
         }
+        // nocov end
         let src_path = self.value_path(src, value);
         let dst_path = self.value_path(dst, value);
         if std::fs::rename(&src_path, &dst_path).is_err() {
@@ -191,26 +177,7 @@ impl ExampleDatabase for NativeDatabase {
         }
         let _ = std::fs::remove_dir(self.key_path(src));
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn db_eq(&self, other: &dyn ExampleDatabase) -> bool {
-        other
-            .as_any()
-            .downcast_ref::<NativeDatabase>()
-            .is_some_and(|o| self.db_root == o.db_root)
-    }
 }
-
-impl PartialEq for NativeDatabase {
-    fn eq(&self, other: &Self) -> bool {
-        self.db_eq(other)
-    }
-}
-
-impl Eq for NativeDatabase {}
 
 /// FNV-1a 64-bit hash of a byte slice, formatted as a 16-character hex string.
 pub(super) fn fnv_hex(s: &[u8]) -> String {
@@ -262,7 +229,10 @@ pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
         return None;
     }
     let count = u32::from_le_bytes(bytes[..4].try_into().ok()?) as usize;
-    let mut choices = Vec::with_capacity(count);
+    // A corrupted entry can claim a count far larger than the input
+    // buffer can possibly back.  Cap pre-allocation at the buffer
+    // length so a bogus `count = u32::MAX` doesn't OOM the process.
+    let mut choices = Vec::with_capacity(count.min(bytes.len()));
     let mut pos = 4;
     for _ in 0..count {
         if pos >= bytes.len() {
@@ -291,3 +261,7 @@ pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
     }
     Some(choices)
 }
+
+#[cfg(test)]
+#[path = "../../tests/embedded/native/database_tests.rs"]
+mod tests;

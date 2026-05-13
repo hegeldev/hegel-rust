@@ -88,6 +88,14 @@ impl NativeDataSource {
             .expect("mark_complete must be called for every test case")
     }
 
+    /// Returns true if a previous request triggered a StopTest abort.
+    /// Test-only helper — not part of the `DataSource` interface, so
+    /// callers must hold a concrete `&NativeDataSource`.
+    #[cfg(test)]
+    pub(crate) fn test_aborted(&self) -> bool {
+        self.aborted.load(Ordering::Relaxed)
+    }
+
     fn dispatch(&self, command: &str, payload: &Value) -> Result<Value, DataSourceError> {
         if self.aborted.load(Ordering::Relaxed) {
             return Err(DataSourceError::StopTest);
@@ -203,10 +211,6 @@ impl DataSource for NativeDataSource {
         // same `DataSource` interface.
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.outcome = Some(result.clone());
-    }
-
-    fn test_aborted(&self) -> bool {
-        self.aborted.load(Ordering::Relaxed)
     }
 }
 

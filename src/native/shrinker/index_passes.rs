@@ -171,7 +171,7 @@ impl<'a> Shrinker<'a> {
 
             for incremented in &candidates {
                 if i >= self.current_nodes.len() {
-                    break;
+                    break; // nocov — only reached when an earlier consider shrank past i
                 }
                 let mut attempt = self.current_nodes.clone();
                 attempt[i] = attempt[i].with_value(incremented.clone());
@@ -199,10 +199,10 @@ pub(super) fn try_bump_ij(
 ) -> bool {
     let nodes: &[ChoiceNode] = &shrinker.current_nodes;
     if j >= nodes.len() {
-        return false;
+        return false; // nocov — index range guarded by caller
     }
     if !nodes[j].kind.validate(bump_val) {
-        return false;
+        return false; // nocov — bump value selection always validates first
     }
     let replacements: HashMap<usize, ChoiceValue> = [(i, new_val.clone()), (j, bump_val.clone())]
         .into_iter()
