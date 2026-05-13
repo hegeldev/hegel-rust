@@ -5,7 +5,7 @@ use std::panic::{UnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
 use hegel::generators::Generator;
-use hegel::{Hegel, Phase, Settings};
+use hegel::{HealthCheck, Hegel, Phase, Settings};
 use regex::Regex;
 use std::fmt::Debug;
 
@@ -86,6 +86,14 @@ where
     }
 
     pub fn run(self) {
+        self.run_with_health_checks_suppressed(&[]);
+    }
+
+    pub fn run_with_health_checks_suppressed(self, checks: &[HealthCheck]) {
+        let settings = Settings::new()
+            .test_cases(self.test_cases)
+            .database(None)
+            .suppress_health_check(checks.iter().cloned());
         Hegel::new(move |tc| {
             let value = tc.draw(&self.generator);
             assert!(
@@ -93,7 +101,7 @@ where
                 "Found value that does not match predicate"
             );
         })
-        .settings(Settings::new().test_cases(self.test_cases))
+        .settings(settings)
         .run();
     }
 }
@@ -137,7 +145,10 @@ where
     }
 
     pub fn run(self) {
-        self.inner.run();
+        // These checks are about "can we generate at all", not speed, and
+        // instrumented coverage binaries routinely trip the TooSlow check.
+        self.inner
+            .run_with_health_checks_suppressed(&[HealthCheck::TooSlow]);
     }
 }
 
@@ -160,6 +171,8 @@ where
     generator: G,
     condition: P,
     max_attempts: u64,
+    suppress_health_checks: Vec<HealthCheck>,
+    seed: Option<u64>,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -173,7 +186,9 @@ where
         Self {
             generator,
             condition,
-            max_attempts: 1000,
+            max_attempts: 5000,
+            suppress_health_checks: Vec::new(),
+            seed: None,
             _marker: std::marker::PhantomData,
         }
     }
@@ -184,10 +199,28 @@ where
         self
     }
 
+    #[allow(dead_code)]
+    pub fn suppress_health_check(mut self, hc: HealthCheck) -> Self {
+        self.suppress_health_checks.push(hc);
+        self
+    }
+
+    /// Pin the RNG seed so probabilistic searches don't flake under
+    /// coverage / random scheduling. Use this when the condition is
+    /// rare enough that even ~10k attempts on a random seed has a
+    /// non-negligible miss rate (NaN sign-bit + mantissa parity, etc.).
+    #[allow(dead_code)]
+    pub fn seed(mut self, seed: u64) -> Self {
+        self.seed = Some(seed);
+        self
+    }
+
     pub fn run(self) -> T {
         let found: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
         let found_clone = Arc::clone(&found);
         let max_attempts = self.max_attempts;
+        let suppress_health_checks = self.suppress_health_checks;
+        let pinned_seed = self.seed;
 
         let hegel_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Hegel::new(move |tc| {
@@ -201,7 +234,9 @@ where
                 Settings::new()
                     .test_cases(max_attempts)
                     .database(None)
-                    .phases([Phase::Reuse, Phase::Generate]),
+                    .phases([Phase::Reuse, Phase::Generate])
+                    .seed(pinned_seed)
+                    .suppress_health_check(suppress_health_checks),
             )
             .run();
         }));
@@ -361,8 +396,24 @@ where
     }
 
     pub fn run(self) {
-        AssertAllExamples::new(self.generator, move |v| !(self.condition)(v))
-            .test_cases(self.test_cases)
-            .run();
+        // Matches Python's `assert_no_examples`, which catches Unsatisfiable:
+        // if the strategy only produces invalid inputs, the assertion holds
+        // vacuously. Suppress FilterTooMuch so the run completes instead of
+        // panicking on excess rejections.
+        let condition = self.condition;
+        Hegel::new(move |tc| {
+            let value = tc.draw(&self.generator);
+            assert!(
+                !condition(&value),
+                "Found value that does not match predicate"
+            );
+        })
+        .settings(
+            Settings::new()
+                .test_cases(self.test_cases)
+                .database(None)
+                .suppress_health_check([HealthCheck::FilterTooMuch]),
+        )
+        .run();
     }
 }

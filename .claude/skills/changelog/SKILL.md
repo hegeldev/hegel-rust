@@ -7,31 +7,41 @@ description: "Changelog style guide for writing RELEASE.md files. Use when creat
 
 This guide describes the style for writing `RELEASE.md` files for hegel-rust. The style is modeled on the [Hypothesis changelog](https://hypothesis.readthedocs.io/en/latest/changes.html).
 
+## Choosing `RELEASE_TYPE`
+
+hegel-rust is currently zerover (`0.x.y`), so the usual semver mapping does **not** apply. While we are pre-1.0:
+
+- **`patch`** — Bug fixes, internal changes, **and new features / non-breaking API additions**. The default choice.
+- **`minor`** — **Breaking changes only.** Any change that requires users to update their code (renamed/removed APIs, changed signatures, behavior changes that could break downstream tests) is a minor bump.
+- **`major`** — Not used while we are zerover. Reserve for the eventual 1.0 and beyond.
+
+If you find yourself reaching for `minor` because the change feels "big," check whether it actually breaks any caller. A large new feature that adds API surface without removing or changing existing behavior is still a `patch`.
+
 ## Opening sentence pattern
 
 Every entry should open with a sentence that signals the scope and nature of the change:
 
-- **Small fixes/improvements (patch):** Start with `"This patch ..."`
-- **Larger changes (minor):** Start with `"This release ..."`
+- **Patch (fixes, improvements, new features):** Start with `"This patch ..."`
+- **Minor (breaking changes):** Start with `"This release ..."` and explain migration
 - **Tiny internal-only changes:** A bare sentence is fine — `"Internal refactoring."` or `"Clean up some internal code."`
 
 The opening verb should tell the reader what *kind* of change this is:
 
-| Change type | Opening pattern |
-|---|---|
-| Bug fix | `"This patch fixes ..."` or `"Fix ..."` |
-| New feature | `"This release adds ..."` |
-| Improvement | `"This patch improves ..."` or `"This release makes ... more ..."` |
-| Deprecation | `"This release deprecates ..."` |
-| Breaking change | `"This release changes ..."` (then explain migration) |
-| Performance | `"This patch improves the performance of ..."` or `"Optimize ..."` |
-| Internal-only | `"Internal refactoring."` / `"Refactor some internals."` / `"Clean up some internal code."` |
+| Change type | RELEASE_TYPE | Opening pattern |
+|---|---|---|
+| Bug fix | `patch` | `"This patch fixes ..."` or `"Fix ..."` |
+| New feature | `patch` | `"This patch adds ..."` |
+| Improvement | `patch` | `"This patch improves ..."` |
+| Performance | `patch` | `"This patch improves the performance of ..."` or `"Optimize ..."` |
+| Deprecation | `minor` | `"This release deprecates ..."` |
+| Breaking change | `minor` | `"This release changes ..."` (then explain migration) |
+| Internal-only | `patch` | `"Internal refactoring."` / `"Refactor some internals."` / `"Clean up some internal code."` |
 
 ## Describe the user impact, not the implementation
 
 Bad: `"Refactored the socket handling code to use a shared connection pool."`
 
-Good: `"This release changes the way the client manages the server to run a single persistent process for the whole test run. This should improve the performance of running many hegel tests."`
+Good: `"This patch changes the way the client manages the server to run a single persistent process for the whole test run. This should improve the performance of running many hegel tests."`
 
 For **bug fixes**, describe the bug (what went wrong from the user's perspective), not just "fixed a bug":
 
@@ -95,18 +105,18 @@ RELEASE_TYPE: patch
 Internal refactoring of the protocol handling code.
 ```
 
-**Good minor (new feature):**
+**Good patch (new feature):**
 ```
-RELEASE_TYPE: minor
+RELEASE_TYPE: patch
 
-This release adds support for `HealthCheck`. A health check is a proactive error raised by Hegel when we detect your test is likely to have degraded testing power or performance. For example, `FilterTooMuch` is raised when too many test cases are filtered out by the rejection sampling of `.filter()` or `assume()`.
+This patch adds support for `HealthCheck`. A health check is a proactive error raised by Hegel when we detect your test is likely to have degraded testing power or performance. For example, `FilterTooMuch` is raised when too many test cases are filtered out by the rejection sampling of `.filter()` or `assume()`.
 
 Health checks can be suppressed with the new `suppress_health_check` setting.
 ```
 
-**Good major (breaking change):**
+**Good minor (breaking change):**
 ```
-RELEASE_TYPE: major
+RELEASE_TYPE: minor
 
 This release changes `self` in `#[invariant]` from an immutable reference to a mutable reference:
 

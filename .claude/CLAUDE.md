@@ -33,7 +33,7 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 
 ### Feature Flags
 
-- **`rand`**: Enables `generators::randoms()` for generating `rand::RngCore` implementations
+- **`rand`**: Enables `extras::rand::randoms()` for generating `rand::RngCore` implementations
 
 ## Architecture
 

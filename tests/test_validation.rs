@@ -212,3 +212,120 @@ fn test_server_invalid_argument_is_reported(tc: TestCase) {
     // The client doesn't catch this, but the server returns InvalidArgument.
     let _: char = tc.draw(gs::characters().min_codepoint(0xD800).max_codepoint(0xD800));
 }
+
+mod validation {
+    use super::common::utils::{check_can_generate_examples, expect_panic};
+    use hegel::generators::{self as gs, Generator};
+    use hegel::{Hegel, Settings};
+
+    fn expect_draw_panic<T, G>(generator: G, pattern: &str)
+    where
+        G: Generator<T> + 'static + std::panic::UnwindSafe,
+        T: std::fmt::Debug + Send + 'static,
+    {
+        expect_panic(
+            move || {
+                Hegel::new(move |tc| {
+                    tc.draw(&generator);
+                })
+                .settings(Settings::new().test_cases(1).database(None))
+                .run();
+            },
+            pattern,
+        );
+    }
+
+    #[test]
+    fn test_float_ranges() {
+        // floats(float("nan"), 0): NaN min compares as `!(min <= max)`, tripping
+        // the bound check.
+        expect_draw_panic(
+            gs::floats::<f64>().min_value(f64::NAN).max_value(0.0),
+            "max_value < min_value",
+        );
+        expect_draw_panic(
+            gs::floats::<f64>().min_value(1.0).max_value(-1.0),
+            "max_value < min_value",
+        );
+    }
+
+    #[test]
+    fn test_float_range_and_allow_nan_cannot_both_be_enabled() {
+        expect_draw_panic(
+            gs::floats::<f64>().min_value(1.0).allow_nan(true),
+            "allow_nan=true with min_value or max_value",
+        );
+        expect_draw_panic(
+            gs::floats::<f64>().max_value(1.0).allow_nan(true),
+            "allow_nan=true with min_value or max_value",
+        );
+    }
+
+    #[test]
+    fn test_float_finite_range_and_allow_infinity_cannot_both_be_enabled() {
+        expect_draw_panic(
+            gs::floats::<f64>()
+                .min_value(0.0)
+                .max_value(1.0)
+                .allow_infinity(true),
+            "allow_infinity=true with both min_value and max_value",
+        );
+    }
+
+    #[test]
+    fn test_does_not_error_if_min_size_is_bigger_than_default_size() {
+        check_can_generate_examples(gs::vecs(gs::integers::<i64>()).min_size(50));
+        check_can_generate_examples(gs::hashsets(gs::integers::<i64>()).min_size(50));
+        // Python also tests `frozensets(...)`; hegel-rust has no `gs::frozensets()`,
+        // but `hashsets` covers the same set-shaped case.
+        check_can_generate_examples(gs::vecs(gs::integers::<i64>()).min_size(50).unique(true));
+    }
+
+    #[test]
+    fn test_min_before_max() {
+        expect_draw_panic(
+            gs::integers::<i64>().min_value(1).max_value(0),
+            "max_value < min_value",
+        );
+    }
+
+    #[test]
+    fn test_filter_validates() {
+        // Python: integers(min_value=1, max_value=0).filter(bool).validate().
+        // The bad bounds inside the filter wrapper still surface when we draw.
+        expect_draw_panic(
+            gs::integers::<i64>()
+                .min_value(1)
+                .max_value(0)
+                .filter(|x: &i64| *x != 0),
+            "max_value < min_value",
+        );
+    }
+
+    #[test]
+    fn test_validation_happens_on_draw() {
+        // Python port uses `nothing()` inside flatmap; hegel-rust has no
+        // `gs::nothing()`, so we use invalid integer bounds as the always-bad
+        // inner generator. The point is the same: the inner strategy produced
+        // by the flat_map callback is only validated when it is drawn.
+        expect_draw_panic(
+            gs::integers::<i64>().flat_map(|_| gs::integers::<i64>().min_value(1).max_value(0)),
+            "max_value < min_value",
+        );
+    }
+}
+
+mod given_error_conditions {
+    use hegel::generators as gs;
+    use hegel::{Hegel, Settings, TestCase};
+
+    #[test]
+    fn test_does_not_raise_unsatisfiable_if_some_false_in_finite_set() {
+        Hegel::new(|tc: TestCase| {
+            let x: bool = tc.draw(gs::booleans());
+            tc.assume(x);
+        })
+        .settings(Settings::new().database(None))
+        .run();
+    }
+}

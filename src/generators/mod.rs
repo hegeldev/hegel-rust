@@ -19,9 +19,6 @@ mod strings;
 mod time;
 mod tuples;
 
-#[cfg(feature = "rand")]
-mod random;
-
 pub(crate) mod value;
 
 #[doc(hidden)]
@@ -53,8 +50,8 @@ pub use numeric::{Float, FloatGenerator, Integer, IntegerGenerator, floats, inte
 pub use strings::{
     BinaryGenerator, CharactersGenerator, DateGenerator, DateTimeGenerator, DomainGenerator,
     EmailGenerator, IpAddressGenerator, RegexGenerator, TextGenerator, TimeGenerator, UrlGenerator,
-    binary, characters, dates, datetimes, domains, emails, from_regex, ip_addresses, text, times,
-    urls,
+    UuidsGenerator, binary, characters, dates, datetimes, domains, emails, from_regex,
+    ip_addresses, text, times, urls, uuids,
 };
 pub use time::{DurationGenerator, durations};
 #[doc(hidden)]
@@ -62,6 +59,3 @@ pub use tuples::{
     tuples0, tuples1, tuples2, tuples3, tuples4, tuples5, tuples6, tuples7, tuples8, tuples9,
     tuples10, tuples11, tuples12,
 };
-
-#[cfg(feature = "rand")]
-pub use random::{HegelRandom, RandomsGenerator, randoms};

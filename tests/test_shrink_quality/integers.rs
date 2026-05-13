@@ -1,15 +1,21 @@
 use crate::common::utils::{Minimal, minimal};
-use hegel::generators::{self as gs, Generator};
+use hegel::generators as gs;
 
 #[test]
 fn test_integers_from_minimizes_leftwards() {
-    assert_eq!(minimal(gs::integers::<i64>().min_value(101), |_| true), 101);
+    assert_eq!(
+        minimal(gs::integers::<i64>().min_value(101), |_: &i64| true),
+        101
+    );
 }
 
 #[test]
 fn test_minimize_bounded_integers_to_zero() {
     assert_eq!(
-        minimal(gs::integers::<i64>().min_value(-10).max_value(10), |_| true),
+        minimal(
+            gs::integers::<i64>().min_value(-10).max_value(10),
+            |_: &i64| true,
+        ),
         0
     );
 }
@@ -18,11 +24,8 @@ fn test_minimize_bounded_integers_to_zero() {
 fn test_minimize_bounded_integers_to_positive() {
     assert_eq!(
         minimal(
-            gs::integers::<i64>()
-                .min_value(-10)
-                .max_value(10)
-                .filter(|&x| x != 0),
-            |_| true
+            gs::integers::<i64>().min_value(-10).max_value(10),
+            |x: &i64| *x != 0,
         ),
         1
     );
@@ -30,54 +33,111 @@ fn test_minimize_bounded_integers_to_positive() {
 
 #[test]
 fn test_minimize_single_element_in_silly_large_int_range() {
-    let result = minimal(
-        gs::integers::<i64>()
-            .min_value(i64::MIN / 2)
-            .max_value(i64::MAX / 2),
-        |&x| x >= i64::MIN / 4,
+    let hi = i64::MAX;
+    let lo = i64::MIN;
+    assert_eq!(
+        minimal(
+            gs::integers::<i64>().min_value(lo / 2).max_value(hi / 2),
+            move |x: &i64| *x >= lo / 4,
+        ),
+        0
     );
-    assert_eq!(result, 0);
 }
 
 #[test]
 fn test_minimize_multiple_elements_in_silly_large_int_range() {
+    let hi = i64::MAX;
+    let lo = i64::MIN;
     let result = Minimal::new(
-        gs::vecs(
-            gs::integers::<i64>()
-                .min_value(i64::MIN / 2)
-                .max_value(i64::MAX / 2),
-        ),
+        gs::vecs(gs::integers::<i64>().min_value(lo / 2).max_value(hi / 2)),
         |x: &Vec<i64>| x.len() >= 20,
     )
     .test_cases(10000)
     .run();
-    assert_eq!(result, vec![0; 20]);
-}
-
-#[hegel::composite]
-fn bounded_int_vec(tc: hegel::TestCase) -> Vec<i64> {
-    tc.draw(gs::vecs(
-        gs::integers::<i64>().min_value(0).max_value(i64::MAX / 2),
-    ))
+    assert_eq!(result, vec![0i64; 20]);
 }
 
 #[test]
 fn test_minimize_multiple_elements_min_is_not_dupe() {
-    let target: Vec<i64> = (0..20).collect();
-    let x = Minimal::new(bounded_int_vec(), move |x: &Vec<i64>| {
-        x.len() >= 20 && (0..20).all(|i| x[i] >= target[i])
-    })
+    let result = Minimal::new(
+        gs::vecs(gs::integers::<i64>().min_value(0).max_value(i64::MAX / 2)),
+        |x: &Vec<i64>| x.len() >= 20 && (0..20).all(|i| x[i] >= i as i64),
+    )
     .test_cases(10000)
     .run();
-    assert_eq!(x, (0..20).collect::<Vec<i64>>());
+    let expected: Vec<i64> = (0..20).collect();
+    assert_eq!(result, expected);
 }
 
 #[test]
 fn test_can_find_an_int() {
-    assert_eq!(minimal(gs::integers::<i64>(), |_| true), 0);
+    assert_eq!(minimal(gs::integers::<i64>(), |_: &i64| true), 0);
 }
 
 #[test]
 fn test_can_find_an_int_above_13() {
-    assert_eq!(minimal(gs::integers::<i64>(), |&x| x >= 13), 13);
+    assert_eq!(minimal(gs::integers::<i64>(), |x: &i64| *x >= 13), 13);
+}
+
+#[test]
+fn test_minimizes_towards_zero() {
+    assert_eq!(
+        minimal(
+            gs::integers::<i64>().min_value(-1000).max_value(50),
+            |x: &i64| *x < 0,
+        ),
+        -1
+    );
+}
+
+// Tests 10-12 mirror test_integer_shrinks_* from the upstream, which use
+// PbtkitState directly. The same shrink quality is verified via minimal().
+
+#[test]
+fn test_integer_shrinks_negative() {
+    assert_eq!(
+        minimal(
+            gs::integers::<i64>().min_value(-1000).max_value(1000),
+            |x: &i64| *x < 0,
+        ),
+        -1
+    );
+}
+
+#[test]
+fn test_integer_shrinks_via_binary_search() {
+    assert_eq!(
+        minimal(
+            gs::integers::<i64>().min_value(0).max_value(10000),
+            |x: &i64| *x > 100,
+        ),
+        101
+    );
+}
+
+#[test]
+fn test_integer_shrinks_negative_only_range() {
+    assert_eq!(
+        minimal(
+            gs::integers::<i64>().min_value(-100).max_value(-1),
+            |x: &i64| *x <= -10,
+        ),
+        -10
+    );
+}
+
+// `choice(n)` in pbtkit draws from [0, n] inclusive, so `choice(1000)` →
+// `gs::integers::<i64>().min_value(0).max_value(1000)`.
+#[test]
+fn test_reduces_additive_pairs() {
+    let (m, n) = Minimal::new(
+        gs::tuples!(
+            gs::integers::<i64>().min_value(0).max_value(1000),
+            gs::integers::<i64>().min_value(0).max_value(1000),
+        ),
+        |(m, n): &(i64, i64)| *m + *n > 1000,
+    )
+    .test_cases(10000)
+    .run();
+    assert_eq!((m, n), (1, 1000));
 }

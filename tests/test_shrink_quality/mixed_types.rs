@@ -1,131 +1,109 @@
-use std::collections::HashSet;
-
-use crate::common::utils::minimal;
+use crate::common::utils::{Minimal, minimal};
 use hegel::generators::{self as gs, Generator};
 
-// one_of with same-type generators (integers only).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Tagged {
+    Int(i64),
+    Text(String),
+    Bool(bool),
+}
+
 #[test]
 fn test_minimize_one_of_integers() {
     for _ in 0..10 {
         let result = minimal(
-            hegel::one_of!(
-                gs::integers::<i64>(),
-                gs::integers::<i64>().min_value(100).max_value(200),
-            ),
-            |_| true,
+            gs::one_of(vec![
+                gs::integers::<i64>().boxed(),
+                gs::integers::<i64>().min_value(100).max_value(200).boxed(),
+            ]),
+            |_: &i64| true,
         );
         assert_eq!(result, 0);
     }
-}
-
-// Mixed types via enum: minimal(integers() | text() | booleans()) in (0, "", False)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum IntOrTextOrBool {
-    Int(i64),
-    Text(String),
-    Bool(bool),
 }
 
 #[test]
 fn test_minimize_one_of_mixed() {
     for _ in 0..10 {
         let result = minimal(
-            hegel::one_of!(
-                gs::integers::<i64>().map(IntOrTextOrBool::Int),
-                gs::text().map(IntOrTextOrBool::Text),
-                gs::booleans().map(IntOrTextOrBool::Bool)
-            ),
-            |_| true,
+            gs::one_of(vec![
+                gs::integers::<i64>().map(Tagged::Int).boxed(),
+                gs::text().map(Tagged::Text).boxed(),
+                gs::booleans().map(Tagged::Bool).boxed(),
+            ]),
+            |_: &Tagged| true,
         );
         assert!(
-            result == IntOrTextOrBool::Int(0)
-                || result == IntOrTextOrBool::Text(String::new())
-                || result == IntOrTextOrBool::Bool(false),
-            "Expected Int(0), Text(\"\"), or Bool(false), got {:?}",
-            result
+            result == Tagged::Int(0)
+                || result == Tagged::Text(String::new())
+                || result == Tagged::Bool(false)
         );
     }
-}
-
-// Mixed list: minimal(lists(integers() | text()), len >= 10) subset of {0, ""}
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum IntOrText {
-    Int(i64),
-    Text(String),
 }
 
 #[test]
 fn test_minimize_mixed_list() {
     let result = minimal(
-        gs::vecs(hegel::one_of!(
-            gs::integers::<i64>().map(IntOrText::Int),
-            gs::text().map(IntOrText::Text)
-        )),
-        |x: &Vec<IntOrText>| x.len() >= 10,
+        gs::vecs(gs::one_of(vec![
+            gs::integers::<i64>().map(Tagged::Int).boxed(),
+            gs::text().map(Tagged::Text).boxed(),
+        ])),
+        |x: &Vec<Tagged>| x.len() >= 10,
     );
     assert_eq!(result.len(), 10);
-    let unique: HashSet<_> = result.iter().collect();
-    let allowed: HashSet<IntOrText> =
-        HashSet::from([IntOrText::Int(0), IntOrText::Text(String::new())]);
-    for item in &unique {
-        assert!(
-            allowed.contains(item),
-            "Unexpected item in minimal mixed list: {:?}",
-            item
-        );
-    }
-}
-
-// Mixed flatmap: booleans().flatmap(b => booleans() if b else text())
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum BoolOrText {
-    Bool(bool),
-    Text(String),
-}
-
-#[hegel::composite]
-fn bool_or_text_via_flatmap(tc: hegel::TestCase) -> BoolOrText {
-    let b: bool = tc.draw(gs::booleans());
-    if b {
-        BoolOrText::Bool(tc.draw(gs::booleans()))
-    } else {
-        BoolOrText::Text(tc.draw(gs::text()))
+    for item in &result {
+        assert!(*item == Tagged::Int(0) || *item == Tagged::Text(String::new()),);
     }
 }
 
 #[test]
 fn test_mixed_list_flatmap() {
-    let result = minimal(
-        gs::vecs(bool_or_text_via_flatmap()),
-        |ls: &Vec<BoolOrText>| {
-            let bools = ls
-                .iter()
-                .filter(|x| matches!(x, BoolOrText::Bool(_)))
-                .count();
-            let texts = ls
-                .iter()
-                .filter(|x| matches!(x, BoolOrText::Text(_)))
-                .count();
-            bools >= 3 && texts >= 3
-        },
-    );
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    enum BoolOrText {
+        Bool(bool),
+        Text(String),
+    }
+
+    let bool_or_text = hegel::compose!(|tc| {
+        let b: bool = tc.draw(gs::booleans());
+        if b {
+            BoolOrText::Bool(tc.draw(gs::booleans()))
+        } else {
+            BoolOrText::Text(tc.draw(gs::text()))
+        }
+    });
+
+    let result = Minimal::new(gs::vecs(bool_or_text), |ls: &Vec<BoolOrText>| {
+        let bools = ls
+            .iter()
+            .filter(|x| matches!(x, BoolOrText::Bool(_)))
+            .count();
+        let texts = ls
+            .iter()
+            .filter(|x| matches!(x, BoolOrText::Text(_)))
+            .count();
+        bools >= 3 && texts >= 3
+    })
+    .test_cases(10000)
+    .run();
     assert_eq!(result.len(), 6);
-    let unique: HashSet<_> = result.iter().collect();
+    let as_set: std::collections::HashSet<_> = result.into_iter().collect();
     assert_eq!(
-        unique,
-        HashSet::from([&BoolOrText::Bool(false), &BoolOrText::Text(String::new())])
+        as_set,
+        std::collections::HashSet::from(
+            [BoolOrText::Bool(false), BoolOrText::Text(String::new()),]
+        )
     );
 }
 
-// one_of shrinks towards earlier branches.
 #[test]
 fn test_one_of_slip() {
     let result = minimal(
-        hegel::one_of!(
-            gs::integers::<i64>().min_value(101).max_value(200),
-            gs::integers::<i64>().min_value(0).max_value(100),
-        ),
-        |_| true,
+        gs::one_of(vec![
+            gs::integers::<i64>().min_value(101).max_value(200).boxed(),
+            gs::integers::<i64>().min_value(0).max_value(100).boxed(),
+        ]),
+        |_: &i64| true,
     );
     assert_eq!(result, 101);
 }

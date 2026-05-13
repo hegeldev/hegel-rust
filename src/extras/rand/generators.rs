@@ -5,7 +5,7 @@ use rand::SeedableRng;
 use rand::rand_core::TryRng;
 use rand::rngs::StdRng;
 
-use super::{Generator, TestCase, binary, integers};
+use crate::generators::{Generator, TestCase, binary, integers};
 
 /// Generator for random number generators. Created by [`randoms()`].
 ///
@@ -85,13 +85,13 @@ impl TryRng for HegelRandom {
 /// See [`RandomsGenerator`] for builder methods.
 ///
 /// ```no_run
-/// use hegel::generators as gs;
+/// use hegel::extras::rand as rand_gs;
 /// use rand::RngExt;
 /// use rand::prelude::{IndexedRandom, SliceRandom};
 ///
 /// #[hegel::test]
 /// fn my_test(tc: hegel::TestCase) {
-///     let mut rng = tc.draw(gs::randoms());
+///     let mut rng = tc.draw(rand_gs::randoms());
 ///
 ///     let a: i32 = rng.random_range(1..=100);
 ///     let b: bool = rng.random();

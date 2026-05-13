@@ -69,11 +69,36 @@ pub trait DataSource: Send + Sync {
     /// If `consume` is true, the variable is removed from the pool.
     fn pool_generate(&self, pool_id: i128, consume: bool) -> Result<i128, DataSourceError>;
 
+    /// Record a targeting observation for the current test case.
+    ///
+    /// The score is used by the backend to guide generation toward
+    /// higher-scoring inputs. No-op if the test has been aborted.
+    fn target_observation(&self, score: f64, label: &str);
+
     /// Signal that the test case is complete.
     fn mark_complete(&self, status: &str, origin: Option<&str>);
 
     /// Returns true if a previous request triggered an abort (overflow/StopTest).
     fn test_aborted(&self) -> bool;
+}
+
+/// A single failing test case discovered by a [`TestRunner`].
+#[derive(Debug, Clone)]
+pub struct Failure {
+    /// The raw panic message from the failing test (the string passed to `panic!`).
+    /// Used as-is for the legacy single-failure outer panic message.
+    pub panic_message: String,
+    /// Pre-rendered multi-line diagnostic — `thread '...' panicked at file:line:`
+    /// followed by the panic message and (when captured) the stack backtrace.
+    /// Same format that was previously printed inline by the runner on final replay.
+    pub diagnostic: String,
+    /// Opaque per-bug origin tag — currently `"Panic at file:line:col"` from
+    /// the captured panic site (with `<unknown>` for the location when
+    /// `take_panic_info` returns nothing).  Passed through
+    /// `DataSource::mark_complete` so Hypothesis can group test cases by
+    /// which bug they trigger and shrink each origin to its own minimal
+    /// counterexample.
+    pub origin: String,
 }
 
 /// Result of running a single test case.
@@ -86,10 +111,7 @@ pub enum TestCaseResult {
     /// Test case was rejected because the backend ran out of data.
     Overrun,
     /// Test case found a bug.
-    Interesting {
-        /// The panic message from the failing test.
-        panic_message: String,
-    },
+    Interesting(Failure),
     /// A hegel-internal panic occurred during the test case. This should be
     /// propagated immediately without any shrinking.
     InternalError {
@@ -105,8 +127,11 @@ pub enum TestCaseResult {
 pub struct TestRunResult {
     /// Whether all test cases passed.
     pub passed: bool,
-    /// If a test case failed, the message from the minimal failing example.
-    pub failure_message: Option<String>,
+    /// One entry per distinct failing example surfaced by the run.  Empty when
+    /// `passed` is `true`.  For the multi-bug case (Hypothesis emits one final
+    /// replay per `BaseExceptionGroup` origin), each origin contributes one
+    /// entry, ordered as the backend replayed them.
+    pub failures: Vec<Failure>,
 }
 
 /// Drives the test execution lifecycle.

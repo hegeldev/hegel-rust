@@ -201,6 +201,10 @@ impl VisitMut for DrawRewriter {
 ///
 /// Uses a two-pass approach so that if a name is used in a repeatable context
 /// anywhere (nested block or closure), every use of that name becomes repeatable.
+///
+/// Also rewrites `<test_case_ident>.target(score)` calls into
+/// `<test_case_ident>.target_labelled(score, "score-source")`, so each
+/// targeted expression gets a distinct label by default.
 pub fn rewrite_draws_in_block(body: &mut syn::Block, test_case_ident: &str) {
     let mut collector = DrawNameCollector {
         test_case_ident: test_case_ident.to_string(),
@@ -217,6 +221,45 @@ pub fn rewrite_draws_in_block(body: &mut syn::Block, test_case_ident: &str) {
     };
     for stmt in &mut body.stmts {
         rewriter.visit_stmt_mut(stmt);
+    }
+
+    let mut target_rewriter = TargetRewriter {
+        test_case_ident: test_case_ident.to_string(),
+    };
+    for stmt in &mut body.stmts {
+        target_rewriter.visit_stmt_mut(stmt);
+    }
+}
+
+struct TargetRewriter {
+    test_case_ident: String,
+}
+
+impl VisitMut for TargetRewriter {
+    fn visit_item_fn_mut(&mut self, _node: &mut syn::ItemFn) {}
+
+    fn visit_expr_method_call_mut(&mut self, node: &mut syn::ExprMethodCall) {
+        syn::visit_mut::visit_expr_method_call_mut(self, node);
+
+        if node.method != "target" || node.args.len() != 1 {
+            return;
+        }
+        let is_tc = match &*node.receiver {
+            Expr::Path(path) => path.path.is_ident(&self.test_case_ident),
+            _ => false,
+        };
+        if !is_tc {
+            return;
+        }
+
+        let span = node.method.span();
+        let arg = &node.args[0];
+        let expr_source = quote! { #arg }.to_string();
+        node.method = Ident::new("target_labelled", span);
+        node.args.push(Expr::Lit(syn::ExprLit {
+            attrs: vec![],
+            lit: syn::Lit::Str(syn::LitStr::new(&expr_source, span)),
+        }));
     }
 }
 
@@ -353,3 +396,7 @@ pub fn build_explicit_blocks(
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "../tests/embedded/common_tests.rs"]
+mod tests;
