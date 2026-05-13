@@ -291,17 +291,6 @@ impl ChoiceKind {
     }
 }
 
-impl From<IntegerChoice> for ChoiceKind {
-    fn from(c: IntegerChoice) -> Self {
-        ChoiceKind::Integer(c)
-    }
-}
-impl From<BooleanChoice> for ChoiceKind {
-    fn from(c: BooleanChoice) -> Self {
-        ChoiceKind::Boolean(c)
-    }
-}
-
 /// A single recorded choice in a test case.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChoiceNode {

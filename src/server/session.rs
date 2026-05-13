@@ -235,11 +235,8 @@ impl ServerTestRunner {
                         .write_reply(event_id, cbor_encode(&ack_null))
                         .expect("Failed to ack test_case");
 
-                    let (data_source, outcome) = ServerDataSource::new(
-                        Arc::clone(connection),
-                        test_case_stream,
-                        verbosity,
-                    );
+                    let (data_source, outcome) =
+                        ServerDataSource::new(Arc::clone(connection), test_case_stream, verbosity);
                     run_case(Box::new(data_source), true);
 
                     if let TestCaseResult::Interesting(failure) =
@@ -377,11 +374,8 @@ impl TestRunner for ServerTestRunner {
                     if verbosity == Verbosity::Verbose {
                         eprintln!("Trying example: ");
                     }
-                    let (data_source, _outcome) = ServerDataSource::new(
-                        Arc::clone(connection),
-                        test_case_stream,
-                        verbosity,
-                    );
+                    let (data_source, _outcome) =
+                        ServerDataSource::new(Arc::clone(connection), test_case_stream, verbosity);
                     run_case(Box::new(data_source), false);
                 }
                 "test_done" => {
@@ -442,16 +436,11 @@ impl TestRunner for ServerTestRunner {
                 .write_reply(event_id, cbor_encode(&ack_null))
                 .expect("Failed to ack final test_case");
 
-            let (data_source, outcome) = ServerDataSource::new(
-                Arc::clone(connection),
-                test_case_stream,
-                verbosity,
-            );
+            let (data_source, outcome) =
+                ServerDataSource::new(Arc::clone(connection), test_case_stream, verbosity);
             run_case(Box::new(data_source), true);
 
-            if let TestCaseResult::Interesting(failure) =
-                ServerDataSource::take_outcome(&outcome)
-            {
+            if let TestCaseResult::Interesting(failure) = ServerDataSource::take_outcome(&outcome) {
                 failures.push(failure);
             }
 
