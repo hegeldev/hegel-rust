@@ -1,11 +1,42 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{FnArg, ItemFn};
+use syn::{Attribute, FnArg, ItemFn};
 
 use crate::common::{
     SettingsAttrArgs, build_explicit_blocks, extract_explicit_test_cases, extract_ident_from_pat,
     rewrite_draws_in_block,
 };
+
+// Vendored from tokio 1fc450aefba4b05cdff9b7825ca5e39cccb3780e (thanks!)
+//
+// Check whether given attribute is a test attribute of forms:
+// * `#[test]`
+// * `#[core::prelude::*::test]` or `#[::core::prelude::*::test]`
+// * `#[std::prelude::*::test]` or `#[::std::prelude::*::test]`
+fn is_test_attribute(attr: &Attribute) -> bool {
+    let path = match &attr.meta {
+        syn::Meta::Path(path) => path,
+        _ => return false,
+    };
+    let candidates = [
+        ["core", "prelude", "*", "test"],
+        ["std", "prelude", "*", "test"],
+    ];
+    if path.leading_colon.is_none()
+        && path.segments.len() == 1
+        && path.segments[0].arguments.is_none()
+        && path.segments[0].ident == "test"
+    {
+        return true;
+    } else if path.segments.len() != candidates[0].len() {
+        return false;
+    }
+    candidates.into_iter().any(|segments| {
+        path.segments.iter().zip(segments).all(|(segment, path)| {
+            segment.arguments.is_none() && (path == "*" || segment.ident == path)
+        })
+    })
+}
 
 pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let test_args: SettingsAttrArgs = if attr.is_empty() {
@@ -47,7 +78,18 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let param_pat = &*param_typed.pat;
     let param_ty = &*param_typed.ty;
 
+    // If #[tokio::test] (or similar) did its job, we sholdn't be seeing an async function.
+    if let Some(asy) = func.sig.asyncness {
+        return syn::Error::new_spanned(
+            asy,
+            "#[hegel::test] used on an async function; move #[hegel::test] below your async test macro (like #[tokio::test]).",
+        )
+        .to_compile_error();
+    }
+
     for attr in &func.attrs {
+        // We special case the common case of "is the user trying to write this?" Other macros, like `#[tokio::test]`,
+        // don't use the bare `test` identifier from prelude, instead being caught by `is_test_attribute`.
         if attr.path().is_ident("test") {
             return syn::Error::new_spanned(
                 attr,
@@ -57,6 +99,8 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
             .to_compile_error();
         }
     }
+
+    let is_existing_test = func.attrs.iter().any(is_test_attribute);
 
     let explicit_cases = match extract_explicit_test_cases(&mut func.attrs) {
         Ok(cases) => cases,
@@ -101,8 +145,14 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     func.sig.inputs.clear();
     *func.block = new_block;
 
-    quote! {
-        #[test]
-        #func
+    if is_existing_test {
+        quote! {
+            #func
+        }
+    } else {
+        quote! {
+            #[test]
+            #func
+        }
     }
 }
