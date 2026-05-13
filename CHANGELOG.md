@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.12.4 - 2026-05-13
+
+This patch makes Hegel surface every distinct failing test case from a
+run, rather than collapsing multi-bug runs down to whichever failure
+fired last.
+
+When the run produces multiple distinct failures, Hegel now prints:
+
+```
+Hegel found N failing test cases:
+<diagnostic for failure 1>
+<diagnostic for failure 2>
+...
+```
+
 ## 0.12.3 - 2026-05-11
 
 This patch bumps our pinned hegel-core from [0.8.0](https://github.com/hegeldev/hegel-core/releases/tag/v0.8.0) to [0.8.2](https://github.com/hegeldev/hegel-core/releases/tag/v0.8.2).
