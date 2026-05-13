@@ -386,7 +386,14 @@ mod shrink_quality {
             }
             let mx = *x.iter().max().unwrap();
             let mn = *x.iter().min().unwrap();
-            mx > mn + 10 && mn + 10 > 0
+            // `mn + 10` would overflow for inputs near `i64::MAX`; previously
+            // those overflows were swallowed by the runner's single-failure
+            // collapsing.  Use `checked_add` so a draw at the extreme returns
+            // a clean `false` rather than panicking.
+            let Some(threshold) = mn.checked_add(10) else {
+                return false;
+            };
+            mx > threshold && threshold > 0
         });
         assert_eq!(xs.len(), 2);
         xs.sort();

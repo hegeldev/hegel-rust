@@ -106,6 +106,7 @@ pub struct Settings {
     pub(crate) database: Database,
     pub(crate) suppress_health_check: Vec<HealthCheck>,
     pub(crate) phases: Vec<Phase>,
+    pub(crate) report_multiple_failures: bool,
 }
 
 impl Settings {
@@ -131,6 +132,7 @@ impl Settings {
                 Phase::Target,
                 Phase::Shrink,
             ],
+            report_multiple_failures: true,
         }
     }
 
@@ -213,6 +215,22 @@ impl Settings {
     /// Returns `true` if the given phase is enabled in these settings.
     pub fn has_phase(&self, phase: Phase) -> bool {
         self.phases.contains(&phase)
+    }
+
+    /// Control whether multi-bug runs report every distinct failing example
+    /// or collapse to just the first one.
+    ///
+    /// When `true` (the default), each distinct origin Hegel finds is surfaced
+    /// as its own diagnostic, and the final panic message reports the count of
+    /// distinct failures.  Setting this to `false` makes Hegel collapse a
+    /// multi-bug run to one example — useful when you have a flaky predicate
+    /// that triggers several superficially-distinct failures whose root cause
+    /// is the same, and the extra reports are just noise.
+    ///
+    /// Maps to Hypothesis's `report_multiple_bugs` setting.
+    pub fn report_multiple_failures(mut self, report_multiple_failures: bool) -> Self {
+        self.report_multiple_failures = report_multiple_failures;
+        self
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::backend::{DataSource, TestCaseResult, TestRunResult, TestRunner};
+use crate::backend::{DataSource, Failure, TestCaseResult, TestRunResult, TestRunner};
 use crate::cbor_utils::{as_bool, as_text, as_u64, cbor_map, map_get, map_insert};
 use crate::runner::{Database, HealthCheck, Mode, Phase, Settings, Verbosity};
 use crate::server::protocol::{Connection, HANDSHAKE_STRING, Stream};
@@ -15,8 +15,8 @@ use super::process::{
 };
 use super::runner::{cbor_decode, cbor_encode};
 
-pub(super) const SUPPORTED_PROTOCOL_VERSIONS: (&str, &str) = ("0.14", "0.14");
-pub(super) const HEGEL_SERVER_VERSION: &str = "0.8.2";
+pub(super) const SUPPORTED_PROTOCOL_VERSIONS: (&str, &str) = ("0.15", "0.15");
+pub(super) const HEGEL_SERVER_VERSION: &str = "0.9.0";
 
 pub(super) static SESSION: Mutex<Option<Arc<HegelSession>>> = Mutex::new(None);
 
@@ -208,7 +208,7 @@ impl ServerTestRunner {
         }
 
         let ack_null = cbor_map! {"result" => Value::Null};
-        let mut failure_message: Option<String> = None;
+        let mut failures: Vec<Failure> = Vec::new();
         let mut passed = true;
 
         loop {
@@ -242,9 +242,9 @@ impl ServerTestRunner {
                     ));
                     let tc_result = run_case(backend, true);
 
-                    if let TestCaseResult::Interesting { panic_message } = tc_result {
+                    if let TestCaseResult::Interesting(failure) = tc_result {
                         passed = false;
-                        failure_message = Some(panic_message);
+                        failures.push(failure);
                     }
                 }
                 "test_done" => {
@@ -260,10 +260,7 @@ impl ServerTestRunner {
             }
         }
 
-        TestRunResult {
-            passed,
-            failure_message,
-        }
+        TestRunResult { passed, failures }
     }
 }
 
@@ -299,7 +296,8 @@ impl TestRunner for ServerTestRunner {
             "seed" => settings.seed.map_or(Value::Null, Value::from),
             "stream_id" => test_stream.stream_id,
             "database_key" => database_key_bytes,
-            "derandomize" => settings.derandomize
+            "derandomize" => settings.derandomize,
+            "report_multiple_failures" => settings.report_multiple_failures
         };
         let db_value = match &settings.database {
             Database::Unset => Option::None, // nocov
@@ -419,7 +417,7 @@ impl TestRunner for ServerTestRunner {
         }
 
         // Process final replay test cases (one per interesting example)
-        let mut failure_message: Option<String> = None;
+        let mut failures: Vec<Failure> = Vec::new();
         for _ in 0..n_interesting {
             let (event_id, event_payload) = test_stream
                 .receive_request()
@@ -446,8 +444,8 @@ impl TestRunner for ServerTestRunner {
             ));
             let tc_result = run_case(backend, true);
 
-            if let TestCaseResult::Interesting { panic_message } = tc_result {
-                failure_message = Some(panic_message);
+            if let TestCaseResult::Interesting(failure) = tc_result {
+                failures.push(failure);
             }
 
             if connection.server_has_exited() {
@@ -459,10 +457,7 @@ impl TestRunner for ServerTestRunner {
             .and_then(as_bool)
             .unwrap_or(true);
 
-        TestRunResult {
-            passed,
-            failure_message,
-        }
+        TestRunResult { passed, failures }
     }
 }
 

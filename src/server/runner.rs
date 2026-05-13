@@ -1,6 +1,6 @@
 use crate::antithesis::TestLocation;
 use crate::antithesis::is_running_in_antithesis;
-use crate::backend::{DataSource, TestCaseResult, TestRunner};
+use crate::backend::{DataSource, Failure, TestCaseResult, TestRunner};
 use crate::control::{currently_in_test_context, with_test_context};
 use crate::runner::{Mode, Phase, Settings};
 use crate::test_case::TestCase;
@@ -153,6 +153,40 @@ pub(super) fn init_panic_hook() {
     });
 }
 
+/// Format the diagnostic block that previously printed inline on final replay.
+/// Mirrors the default Rust panic-handler output: `thread '...' panicked at file:line:`
+/// followed by the message and (when captured) the stack backtrace.
+fn render_diagnostic(
+    thread_name: &str,
+    thread_id: &str,
+    location: &str,
+    msg: &str,
+    backtrace: &Backtrace,
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "thread '{}' ({}) panicked at {}:\n",
+        thread_name, thread_id, location
+    ));
+    out.push_str(msg);
+    out.push('\n');
+    // nocov start
+    if backtrace.status() == BacktraceStatus::Captured {
+        let is_full = std::env::var("RUST_BACKTRACE")
+            .map(|v| v == "full")
+            .unwrap_or(false);
+        let formatted = format_backtrace(backtrace, is_full);
+        out.push_str(&format!("stack backtrace:\n{}\n", formatted));
+        if !is_full {
+            out.push_str(
+                "note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\n",
+            );
+        }
+    }
+    // nocov end
+    out
+}
+
 fn run_test_case(
     data_source: Box<dyn DataSource>,
     test_fn: &mut dyn FnMut(TestCase),
@@ -163,21 +197,20 @@ fn run_test_case(
 
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
 
-    let (tc_result, origin) = match &result {
-        Ok(()) => (TestCaseResult::Valid, None),
+    let tc_result = match &result {
+        Ok(()) => TestCaseResult::Valid,
         Err(e) => {
             let msg = panic_message(e);
             if msg == ASSUME_FAIL_STRING {
-                (TestCaseResult::Invalid, None)
+                TestCaseResult::Invalid
             } else if msg == STOP_TEST_STRING {
-                (TestCaseResult::Overrun, None)
+                TestCaseResult::Overrun
             } else if msg == LOOP_DONE_STRING {
                 // `TestCase::repeat` returns `!`, so it exits via this
                 // sentinel panic when its loop completes normally. Treat it
                 // the same as a no-panic return.
-                (TestCaseResult::Valid, None)
+                TestCaseResult::Valid
             } else {
-                // Take panic info - we need location for origin, and print details on final
                 let (thread_name, thread_id, location, backtrace) = take_panic_info()
                     .unwrap_or_else(|| {
                         // nocov start
@@ -190,34 +223,13 @@ fn run_test_case(
                         // nocov end
                     });
 
-                if is_final {
-                    eprintln!(
-                        "thread '{}' ({}) panicked at {}:",
-                        thread_name, thread_id, location
-                    );
-                    eprintln!("{}", msg);
-
-                    // nocov start
-                    if backtrace.status() == BacktraceStatus::Captured {
-                        let is_full = std::env::var("RUST_BACKTRACE")
-                            .map(|v| v == "full")
-                            .unwrap_or(false);
-                        let formatted = format_backtrace(&backtrace, is_full);
-                        eprintln!("stack backtrace:\n{}", formatted);
-                        if !is_full {
-                            eprintln!(
-                                "note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace."
-                            );
-                        }
-                    }
-                    // nocov end
-                }
-
-                let origin = format!("Panic at {}", location);
-                (
-                    TestCaseResult::Interesting { panic_message: msg },
-                    Some(origin),
-                )
+                let diagnostic =
+                    render_diagnostic(&thread_name, &thread_id, &location, &msg, &backtrace);
+                TestCaseResult::Interesting(Failure {
+                    panic_message: msg,
+                    diagnostic,
+                    origin: format!("Panic at {}", location),
+                })
             }
         }
     };
@@ -225,14 +237,15 @@ fn run_test_case(
     // Send mark_complete via the data source.
     // Skip if test was aborted (StopTest) - the data source already closed.
     if !tc.test_aborted() {
-        let status = match &tc_result {
-            TestCaseResult::Valid => "VALID",
-            TestCaseResult::Invalid | TestCaseResult::Overrun => "INVALID",
-            TestCaseResult::Interesting { .. } => "INTERESTING",
+        let (status, origin) = match &tc_result {
+            TestCaseResult::Valid => ("VALID", None),
+            TestCaseResult::Invalid | TestCaseResult::Overrun => ("INVALID", None),
+            TestCaseResult::Interesting(f) => ("INTERESTING", Some(f.origin.as_str())),
         };
-        tc.mark_complete(status, origin.as_deref());
+        tc.mark_complete(status, origin);
     }
 
+    let _ = is_final;
     tc_result
 }
 
@@ -280,7 +293,7 @@ pub fn server_run<F>(
     let mode = settings.mode;
     let result = runner.run(settings, database_key, &mut |backend, is_final| {
         let tc_result = run_test_case(backend, &mut test_fn, is_final, mode);
-        if matches!(&tc_result, TestCaseResult::Interesting { .. }) {
+        if matches!(&tc_result, TestCaseResult::Interesting(_)) {
             got_interesting.store(true, Ordering::SeqCst);
         }
         tc_result
@@ -306,8 +319,38 @@ pub fn server_run<F>(
     // test_location is only consumed inside the is_running_in_antithesis() block above.
     let _ = test_location;
 
-    if test_failed {
-        let msg = result.failure_message.as_deref().unwrap_or("unknown");
-        panic!("Property test failed: {}", msg);
+    if !test_failed {
+        return;
+    }
+
+    let quiet = settings.verbosity == crate::runner::Verbosity::Quiet;
+
+    match result.failures.as_slice() {
+        // `test_failed` was set but no Failure surfaced — e.g. an aborted
+        // mid-draw test case or a backend that reported failure without
+        // attaching a Failure.  Preserve the legacy generic panic.
+        [] => panic!("Property test failed: unknown"),
+        // Single-failure path: keep the original output shape so test
+        // harnesses that pattern-match on `"Property test failed: <msg>"`
+        // (e.g. `Minimal::run` in `tests/common/utils.rs`) keep working.
+        [failure] => {
+            if !quiet {
+                eprint!("{}", failure.diagnostic);
+            }
+            panic!("Property test failed: {}", failure.panic_message);
+        }
+        // Multi-failure path: emit a header, print each replay's
+        // diagnostic block in order, then panic with the count so callers
+        // see the headline figure rather than just one of the messages.
+        failures => {
+            let n = failures.len();
+            if !quiet {
+                eprintln!("Hegel found {} failing test cases:", n);
+                for failure in failures {
+                    eprint!("{}", failure.diagnostic);
+                }
+            }
+            panic!("Property-based test failed with {} distinct failures.", n);
+        }
     }
 }
