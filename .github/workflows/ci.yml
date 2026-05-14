@@ -70,6 +70,42 @@ jobs:
       - name: Run tests
         run: just check-tests
 
+  test-native:
+    # In-process Rust engine — no Python server required, so we can run
+    # it on the OSes the server backend doesn't (macOS) as well as the
+    # ones it does.
+    name: test-native (${{ matrix.rust }}, ${{ matrix.os-label }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: ["1.86", stable]
+        include:
+          - os: ubuntu-latest
+            os-label: linux
+          - os: windows-latest
+            os-label: windows
+          - os: macos-latest
+            os-label: macos
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install ${{ matrix.rust }} --profile minimal && rustup default ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just
+
+      - name: Run tests
+        run: just check-tests-native
+
   test-all-features:
     name: test-all-features (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
     runs-on: ${{ matrix.os }}
@@ -343,7 +379,7 @@ jobs:
   release:
     name: release
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust'
-    needs: [lint, test, test-all-features, test-minimal-versions, docs, coverage, conformance, nix, whole-repo]
+    needs: [lint, test, test-native, test-all-features, test-minimal-versions, docs, coverage, conformance, nix, whole-repo]
     runs-on: ubuntu-latest
     permissions:
       contents: write
