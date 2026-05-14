@@ -71,8 +71,11 @@ jobs:
         run: just check-tests
 
   test-native:
-    # In-process Rust engine variant of the above; uses `--features native`
-    # and therefore needs neither `uv` nor the hegel-core python server.
+    # In-process Rust engine variant of `test`.  The native backend
+    # itself needs neither `uv` nor the hegel-core python server, but
+    # a handful of integration tests still build a `TempRustProject`
+    # subprocess that runs with default (server) features, so `uv`
+    # has to be on PATH the same way it is for `test`.
     name: test-native (${{ matrix.rust }}, ${{ matrix.os == 'ubuntu-latest' && 'linux' || matrix.os == 'windows-latest' && 'windows' || 'macos' }})
     runs-on: ${{ matrix.os }}
     permissions:
@@ -93,7 +96,7 @@ jobs:
 
       - uses: ./.github/actions/install-tools
         with:
-          tools: just
+          tools: just uv
 
       - name: Run tests
         run: just check-tests-native
