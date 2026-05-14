@@ -1,13 +1,11 @@
-RELEASE_TYPE: minor
+RELEASE_TYPE: patch
 
 This release adds an experimental `native` feature flag that swaps the
-hegel-core Python server for an in-process Rust engine.  The minimal
-backend supports integer and boolean choice kinds (plus the compound
-schemas built on them — tuples, lists, dicts, `one_of`, `sampled_from`),
-the database replay / generate / shrink lifecycle, span-mutation, the
-non-determinism trie, multi-failure reporting, and per-origin shrinking.
+hegel-core Python server for an in-process Rust engine. When using this
+feature, hegel has no Python dependency, and is likely to be significantly
+faster.
 
-The native backend is intended as the foundation for future PRs; most
-generators (`gs::floats`, `gs::text`, `gs::dates`, regex, etc.) and
-targeting (`tc.target`) raise `todo!()` until their schema interpreters
-land.  Use the default (server) backend for those.
+This should at this point be considered more of a preview than a usable
+feature. Some things will work, many things will fail with a `todo!`.
+It is likely to contain bugs. Experience reports on things that work
+but less well than on the server are extremely welcome.
