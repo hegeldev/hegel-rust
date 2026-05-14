@@ -1,5 +1,5 @@
-// Embedded tests for src/native/schema/mod.rs — covers the dispatch_request
-// dispatcher, many_reject's invalid path, and the CBOR helper functions.
+// Embedded tests for src/native/schema/mod.rs — covers the interpret_schema
+// dispatch, many_reject's invalid path, and the CBOR helper functions.
 
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -12,61 +12,12 @@ fn fresh_ntc() -> NativeTestCase {
     NativeTestCase::new_random(SmallRng::seed_from_u64(1))
 }
 
-// ── dispatch_request: pool_consume ──────────────────────────────────────────
-
-#[test]
-fn pool_consume_removes_variable_from_pool() {
-    let mut ntc = fresh_ntc();
-    let pool_payload = cbor_map! {};
-    let pool_id = dispatch_request(&mut ntc, "new_pool", &pool_payload)
-        .ok()
-        .unwrap();
-    let Value::Integer(pool_id) = pool_id else {
-        panic!("expected integer pool id")
-    };
-    let pool_id_cbor = Value::Integer(pool_id);
-    let add_payload = cbor_map! { "pool_id" => pool_id_cbor.clone() };
-    let variable_id = dispatch_request(&mut ntc, "pool_add", &add_payload)
-        .ok()
-        .unwrap();
-    let Value::Integer(variable_id) = variable_id else {
-        panic!("expected integer variable id")
-    };
-
-    let consume_payload = cbor_map! {
-        "pool_id" => pool_id_cbor.clone(),
-        "variable_id" => Value::Integer(variable_id),
-    };
-    let result = dispatch_request(&mut ntc, "pool_consume", &consume_payload)
-        .ok()
-        .unwrap();
-    assert_eq!(result, Value::Null);
-
-    // After consumption, the pool is empty and pool_generate returns StopTest.
-    let gen_payload = cbor_map! { "pool_id" => pool_id_cbor };
-    let err = dispatch_request(&mut ntc, "pool_generate", &gen_payload);
-    assert!(
-        err.is_err(),
-        "pool_generate on empty pool must signal StopTest"
-    );
-}
-
-// ── dispatch_request: unknown commands / schemas ────────────────────────────
-
-#[test]
-#[should_panic(expected = "Unknown native command: nope")]
-fn dispatch_request_unknown_command_panics() {
-    let mut ntc = fresh_ntc();
-    let _ = dispatch_request(&mut ntc, "nope", &cbor_map! {});
-}
-
 #[test]
 #[should_panic(expected = "Unknown schema type: mystery")]
 fn interpret_schema_unknown_type_panics() {
     let mut ntc = fresh_ntc();
     let schema = cbor_map! { "type" => "mystery" };
-    let generate_payload = cbor_map! { "schema" => schema };
-    let _ = dispatch_request(&mut ntc, "generate", &generate_payload);
+    let _ = interpret_schema(&mut ntc, &schema);
 }
 
 // ── many_reject: invalid when too many rejections under min_size ────────────

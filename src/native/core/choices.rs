@@ -59,7 +59,7 @@ impl IntegerChoice {
         (distance, value < target)
     }
 
-    /// pbtkit: `core.py::IntegerChoice.max_index`.
+    /// Hypothesis: `core.py::IntegerChoice.max_index`.
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         use crate::native::bignum::BigUint;
         // max_value - min_value can exceed i128 positive range (e.g. full
@@ -68,7 +68,7 @@ impl IntegerChoice {
         let diff = (self.max_value as u128).wrapping_sub(self.min_value as u128);
         BigUint::from(diff)
     }
-    /// pbtkit: `core.py::IntegerChoice.to_index`.
+    /// Hypothesis: `core.py::IntegerChoice.to_index`.
     pub fn to_index(&self, value: i128) -> crate::native::bignum::BigUint {
         use crate::native::bignum::{BigUint, Zero};
         let s = self.simplest();
@@ -95,7 +95,7 @@ impl IntegerChoice {
         count + BigUint::from(1u32)
     }
 
-    /// pbtkit: `core.py::IntegerChoice.from_index`.
+    /// Hypothesis: `core.py::IntegerChoice.from_index`.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<i128> {
         use crate::native::bignum::{BigUint, Zero};
@@ -152,16 +152,16 @@ impl BooleanChoice {
         true
     }
 
-    /// pbtkit: `core.py::BooleanChoice.max_index`.
+    /// Hypothesis: `core.py::BooleanChoice.max_index`.
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         crate::native::bignum::BigUint::from(1u32)
     }
-    /// pbtkit: `core.py::BooleanChoice.to_index`.
+    /// Hypothesis: `core.py::BooleanChoice.to_index`.
     pub fn to_index(&self, value: bool) -> crate::native::bignum::BigUint {
         crate::native::bignum::BigUint::from(u32::from(value))
     }
 
-    /// pbtkit: `core.py::BooleanChoice.from_index`.
+    /// Hypothesis: `core.py::BooleanChoice.from_index`.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<bool> {
         use crate::native::bignum::BigUint;
@@ -183,7 +183,7 @@ pub enum ChoiceKind {
 }
 
 /// The value produced by a choice.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ChoiceValue {
     Integer(i128),
     Boolean(bool),
@@ -200,7 +200,7 @@ impl ChoiceKind {
 
     /// Largest valid index for [`from_index`].
     ///
-    /// pbtkit: `core.py::ChoiceType.max_index`.
+    /// Hypothesis: `core.py::ChoiceType.max_index`.
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         match self {
             ChoiceKind::Integer(ic) => ic.max_index(),
@@ -210,7 +210,7 @@ impl ChoiceKind {
 
     /// Convert a value to its dense index under this kind's sort order.
     ///
-    /// pbtkit: `core.py::ChoiceType.to_index`.
+    /// Hypothesis: `core.py::ChoiceType.to_index`.
     pub fn to_index(&self, value: &ChoiceValue) -> crate::native::bignum::BigUint {
         match (self, value) {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.to_index(*v),
@@ -221,7 +221,7 @@ impl ChoiceKind {
 
     /// Inverse of [`to_index`]. Returns `None` when the index is out of range.
     ///
-    /// pbtkit: `core.py::ChoiceType.from_index`.
+    /// Hypothesis: `core.py::ChoiceType.from_index`.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<ChoiceValue> {
         match self {

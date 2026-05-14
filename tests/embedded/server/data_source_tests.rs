@@ -121,21 +121,15 @@ fn make_mocked_data_source(n: usize) -> ServerDataSource {
     ServerDataSource::new(conn, stream, Verbosity::Quiet).0
 }
 
-// ── N8: ServerDataSource::target_observation client-side validation ───────
-//
-// The audit (item N8) flagged that `ServerDataSource::target_observation`
-// forwards directly to the Python server without the same client-side
-// validation that `NativeDataSource::target_observation` performs (post-A16):
+// `ServerDataSource::target_observation` validates its input client-side
+// before forwarding to the Python server:
 //   1. score must be finite (NaN / ±inf rejected).
 //   2. each label may be observed at most once per test case.
 //
-// Pre-N8 behaviour: bad input was either silently accepted or surfaced as
-// a CBOR-round-trip error ("server rejected ...") rather than a clear
-// client-side panic naming the user's call site. The tests below build a
-// dead stream (no live peer) so that the validation panic *must* fire
-// before the would-be send_request call. Without the validation, the
-// `let _ = send_request(...)` swallows the BrokenPipe and the function
-// returns normally — no panic.
+// The tests below build a dead stream (no live peer) so the validation
+// panic *must* fire before the would-be `send_request` call.  Without
+// the validation the `let _ = send_request(...)` swallows the
+// `BrokenPipe` and the function returns normally — no panic.
 
 #[cfg(unix)]
 #[test]

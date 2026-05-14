@@ -100,6 +100,18 @@ fn new_pool_pool_add_and_pool_generate_non_consuming() {
 }
 
 #[test]
+fn pool_generate_on_empty_pool_returns_stop_test() {
+    // No `pool_add` calls — the pool has no active variables, so
+    // `pool_generate` immediately reports `StopTest`.
+    let (ds, _handle) = random_source();
+    let pool = ds.new_pool().unwrap();
+    assert!(matches!(
+        ds.pool_generate(pool, false),
+        Err(DataSourceError::StopTest)
+    ));
+}
+
+#[test]
 fn generate_stoptest_sets_aborted_and_short_circuits() {
     let (ds, _handle) = exhausted_source();
     let schema = cbor_map! {

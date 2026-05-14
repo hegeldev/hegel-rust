@@ -372,7 +372,7 @@ impl TestRunner for ServerTestRunner {
                         .expect("Failed to ack test_case");
 
                     if verbosity == Verbosity::Verbose {
-                        eprintln!("Trying example: ");
+                        eprintln!("Running test case");
                     }
                     let (data_source, _outcome) =
                         ServerDataSource::new(Arc::clone(connection), test_case_stream, verbosity);

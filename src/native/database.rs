@@ -1,10 +1,10 @@
 // Persistence layer for the native backend.
 //
-// Mirrors Hypothesis's `ExampleDatabase` hierarchy
+// Mirrors Hypothesis's `TestCaseDatabase` hierarchy
 // (resources/hypothesis/hypothesis-python/src/hypothesis/database.py): a
 // multi-value key/value store where each key maps to a *set* of values.
-// The `ExampleDatabase` trait captures the shared surface
-// (`save` / `fetch` / `delete` / `move_value`); `NativeDatabase` is the
+// The `TestCaseDatabase` trait captures the shared surface
+// (`save` / `fetch` / `delete` / `move_value`); `DirectoryTestCaseDatabase` is the
 // directory-backed implementation (mirroring
 // `DirectoryBasedExampleDatabase`) and `InMemoryNativeDatabase` is a
 // non-persistent sibling (mirroring `InMemoryExampleDatabase`).
@@ -32,7 +32,7 @@
 // `.hypothesis/examples`, our hashes are disjoint from Hypothesis's
 // and the two stores can't overwrite each other's entries.  It also
 // leaves room for a future `core:`-prefixed store (the eventual full
-// hegel-core / pbtkit backend) to live at the same `db_root`.
+// hegel-core backend) to live at the same `db_root`.
 
 use std::path::PathBuf;
 
@@ -44,7 +44,7 @@ use crate::native::core::ChoiceValue;
 /// tolerate concurrent or corrupt state and surface failures as silent
 /// no-ops rather than errors — a non-writable database must never abort
 /// an otherwise-successful test run.
-pub trait ExampleDatabase: Send + Sync {
+pub trait TestCaseDatabase: Send + Sync {
     /// Return every value stored under `key`, in arbitrary order. Returns
     /// an empty `Vec` if the key is absent.
     fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>>;
@@ -71,7 +71,7 @@ pub trait ExampleDatabase: Send + Sync {
 pub const METAKEYS_NAME: &[u8] = b".hegel-keys";
 
 /// Prefix prepended to every key before it's hashed onto disk.  Keeps
-/// `NativeDatabase`'s on-disk hashes disjoint from a Hypothesis store
+/// `DirectoryTestCaseDatabase`'s on-disk hashes disjoint from a Hypothesis store
 /// (or a future hegel `core:` store) that happens to share `db_root`:
 /// the formats aren't cross-compatible, so we never want their paths
 /// to coincide.
@@ -84,14 +84,14 @@ fn key_hash(key: &[u8]) -> String {
     fnv_hex(&buf)
 }
 
-pub struct NativeDatabase {
+pub struct DirectoryTestCaseDatabase {
     db_root: PathBuf,
     metakeys_hash: String,
 }
 
-impl NativeDatabase {
+impl DirectoryTestCaseDatabase {
     pub fn new(db_root: &str) -> Self {
-        NativeDatabase {
+        DirectoryTestCaseDatabase {
             db_root: PathBuf::from(db_root),
             metakeys_hash: key_hash(METAKEYS_NAME),
         }
@@ -106,7 +106,7 @@ impl NativeDatabase {
     }
 }
 
-impl ExampleDatabase for NativeDatabase {
+impl TestCaseDatabase for DirectoryTestCaseDatabase {
     fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
         let dir = self.key_path(key);
         let entries = match std::fs::read_dir(&dir) {
@@ -180,7 +180,15 @@ impl ExampleDatabase for NativeDatabase {
     }
 }
 
-/// FNV-1a 64-bit hash of a byte slice, formatted as a 16-character hex string.
+/// FNV-1a 64-bit hash of a byte slice, formatted as a 16-character hex
+/// string.
+///
+/// We hash keys and values onto the filesystem to give every entry a
+/// fixed-width, path-safe name regardless of the raw bytes: database
+/// keys are arbitrary user-chosen strings (e.g. test names with
+/// `::` separators) and values are CBOR-encoded choice sequences full
+/// of arbitrary bytes.  FNV-1a is fine here because we only need
+/// collision-avoidance, not cryptographic security.
 pub(super) fn fnv_hex(s: &[u8]) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for &byte in s {

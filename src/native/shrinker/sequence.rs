@@ -9,7 +9,7 @@ use super::Shrinker;
 impl<'a> Shrinker<'a> {
     /// Try sorting groups of same-type choices by sort key.
     ///
-    /// Port of pbtkit's `sort_values`. Groups choices by type and tries
+    /// Port of Hypothesis's `sort_values`. Groups choices by type and tries
     /// sorting each group so simpler values come first, enabling other
     /// passes to further reduce the leading choices. First attempts a
     /// full sort; if that fails the `consider` predicate, falls back to
@@ -74,7 +74,7 @@ impl<'a> Shrinker<'a> {
             }
         }
 
-        // Insertion-sort fallback (pbtkit's `feature_enabled("collections")`
+        // Insertion-sort fallback (Hypothesis's `feature_enabled("collections")`
         // branch of `_try_sort_group`). Each iteration refreshes the valid
         // indices because a prior successful swap can shorten current_nodes
         // or change kinds at fixed positions via value punning.
@@ -110,7 +110,7 @@ impl<'a> Shrinker<'a> {
         }
     }
 
-    /// Port of pbtkit's `swap_adjacent_blocks`.
+    /// Port of Hypothesis's `swap_adjacent_blocks`.
     ///
     /// For each block size 2..=8, tries swapping adjacent blocks of the same
     /// type structure (same sequence of choice kinds). This handles cases like

@@ -6,9 +6,9 @@ use super::*;
 use crate::native::core::ChoiceValue;
 use tempfile::TempDir;
 
-fn fresh_db() -> (NativeDatabase, TempDir) {
+fn fresh_db() -> (DirectoryTestCaseDatabase, TempDir) {
     let dir = TempDir::new().unwrap();
-    let db = NativeDatabase::new(dir.path().to_str().unwrap());
+    let db = DirectoryTestCaseDatabase::new(dir.path().to_str().unwrap());
     (db, dir)
 }
 

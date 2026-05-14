@@ -13,7 +13,7 @@ use super::choices::{
 };
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
 
-/// State for a variable-length collection (port of pbtkit's `many` class).
+/// State for a variable-length collection (port of Hypothesis's `many` class).
 pub struct ManyState {
     pub min_size: usize,
     pub max_size: f64,
@@ -542,9 +542,9 @@ impl NativeTestCase {
     /// draws randomly from `rng` for subsequent positions, up to a total of
     /// `max_size` choices.
     ///
-    /// Used by `mutate_and_shrink`: port of pbtkit's
-    /// `TestCase(prefix=..., random=..., max_size=...)` construction in
-    /// `shrinking/mutation.py`.
+    /// Used by `mutate_and_shrink`; Hypothesis's equivalent
+    /// `ConjectureData(prefix=..., random=..., max_size=...)`
+    /// construction in `shrinking/mutation.py`.
     pub fn for_probe(prefix: &[ChoiceValue], rng: SmallRng, max_size: usize) -> Self {
         NativeTestCase {
             prefix: prefix.to_vec(),
@@ -787,7 +787,8 @@ impl NativeTestCase {
 
     /// Resolve a choice value from forced, prefix, or random.
     ///
-    /// Implements the pbtkit punning logic.
+    /// Implements Hypothesis's punning logic for replaying choice
+    /// sequences whose schema has shifted across runs.
     fn resolve_choice(
         &mut self,
         _kind: &ChoiceKind,

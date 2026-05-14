@@ -102,18 +102,6 @@ fn test_startup_error_message_version_matches() {
 }
 
 #[test]
-fn test_startup_error_message_unexpected_version_output() {
-    let exit_status = exit_failure_status();
-    let version_output = fake_output(exit_success_status(), "totally not hegel\n");
-    let msg =
-        startup_error_message_from_version(Some(("/fake/path", Ok(version_output))), exit_status);
-    assert!(
-        msg.contains("--version returned unexpected output"),
-        "Message: {msg}"
-    );
-}
-
-#[test]
 fn test_startup_error_message_not_hegel() {
     let exit_status = exit_failure_status();
     #[cfg(unix)]

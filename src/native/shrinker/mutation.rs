@@ -1,6 +1,6 @@
 //! Mutation-based shrink pass.
 //!
-//! Port of pbtkit's `shrinking/mutation.py`. Tries random mutations of the
+//! Port of Hypothesis's `shrinking/mutation.py`. Tries random mutations of the
 //! current best result to escape local optima that deterministic passes
 //! can't find — particularly useful when switching a branch index
 //! (e.g. `one_of`) requires multiple downstream values to change
@@ -23,7 +23,7 @@ const MAX_MUTATE_NODES: usize = 32;
 impl<'a> Shrinker<'a> {
     /// Try random mutations of a few positions to escape local optima.
     ///
-    /// Port of pbtkit's `shrinking/mutation.py::mutate_and_shrink`.
+    /// Port of Hypothesis's `shrinking/mutation.py::mutate_and_shrink`.
     pub(super) fn mutate_and_shrink(&mut self) {
         if self.current_nodes.len() > MAX_MUTATE_NODES {
             return;
@@ -59,7 +59,7 @@ impl<'a> Shrinker<'a> {
                     .collect();
                 let max_size = self.current_nodes.len();
 
-                // Probe with a fixed seed (matches pbtkit's `Random(0)`),
+                // Probe with a fixed seed (matches Hypothesis's `Random(0)`),
                 // then RANDOM_ATTEMPTS random continuations.
                 self.probe(&prefix, 0, max_size);
                 for attempt in 0..RANDOM_ATTEMPTS {
@@ -104,9 +104,10 @@ impl<'a> Shrinker<'a> {
     }
 }
 
-/// Offset `current_idx` by `delta * sign`, returning `None` if the result
-/// would be negative. pbtkit uses Python integers throughout; Rust needs
-/// to handle the signed arithmetic on a `BigUint`.
+/// Offset `current_idx` by `delta * sign`, returning `None` if the
+/// result would be negative.  Hypothesis works in Python ints, which
+/// are arbitrary-precision and signed; the Rust port runs on a
+/// `BigUint` and handles the negative-result case explicitly.
 fn index_offset(current_idx: &BigUint, delta: u32, sign: i32) -> Option<BigUint> {
     let delta_big = BigUint::from(delta);
     if sign >= 0 {

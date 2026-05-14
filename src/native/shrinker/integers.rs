@@ -56,7 +56,7 @@ impl<'a> Shrinker<'a> {
 
     /// Binary search integer values toward zero.
     ///
-    /// Port of pbtkit's `binary_search_integer_towards_zero`. Includes a linear
+    /// Port of Hypothesis's `binary_search_integer_towards_zero`. Includes a linear
     /// scan of small values after binary search to handle non-monotonic functions
     /// (e.g. sampled_from or test functions that panic on boundary values).
     pub(super) fn binary_search_integer_towards_zero(&mut self) {
@@ -217,7 +217,7 @@ impl<'a> Shrinker<'a> {
 
     /// Try redistributing value between pairs of integer choices.
     ///
-    /// Port of pbtkit's `redistribute_integers`. For each pair of integer
+    /// Port of Hypothesis's `redistribute_integers`. For each pair of integer
     /// nodes at various distances, tries moving value from i to j (or vice
     /// versa) while keeping the total sum constant. Useful for sum-type
     /// constraints where the minimal counterexample has one small and one
@@ -447,7 +447,7 @@ impl<'a> Shrinker<'a> {
 
     /// Try shrinking duplicate integer values simultaneously.
     ///
-    /// Port of pbtkit's `shrink_duplicates`. For each group of integer nodes
+    /// Port of Hypothesis's `shrink_duplicates`. For each group of integer nodes
     /// with the same value, applies binary search to all simultaneously. This
     /// handles cases where two integers must remain equal (e.g. a vec element
     /// and a separate integer that must be in the vec).

@@ -1,4 +1,4 @@
-// Core types for the native pbtkit-style test engine.
+// Core types for the native Hypothesis-style test engine.
 //
 // Split into submodules:
 //   choices    — choice types (ChoiceKind, ChoiceNode, ChoiceValue, etc.)

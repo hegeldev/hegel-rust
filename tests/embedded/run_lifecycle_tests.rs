@@ -2,10 +2,8 @@
 
 use super::*;
 
-// ── N18.run_lifecycle: panic_message fallback for non-string payloads ────
-//
 // `panic_message` downcasts the panic payload to `&str` or `String`; for
-// any other type it falls through to the `"Unknown panic"` branch. Real
+// any other type it falls through to the `"Unknown panic"` branch.  Real
 // `panic!("...")` and `assert!(false, "...")` produce string payloads, so
 // production paths rarely hit the fallback — but `std::panic::panic_any`
 // with a non-string payload does.
@@ -19,15 +17,12 @@ fn panic_message_returns_unknown_panic_for_non_string_payload() {
     assert_eq!(panic_message(&payload), "Unknown panic");
 }
 
-// ── N18.run_lifecycle: filter_short_backtrace digit-without-colon branch ──
-//
 // `filter_short_backtrace` renumbers frames whose trimmed form matches
-// `digit … : …` (the standard `Backtrace` frame line shape). Anomalous
+// `digit … : …` (the standard `Backtrace` frame line shape).  Anomalous
 // frame lines that start with a digit but contain no colon — they exist
 // in non-standard backtrace formats and as continuation lines from some
-// runtimes — fall to a "preserve as-is" branch at run_lifecycle.rs:167.
-// All other lines (non-digit-leading) go through the analogous
-// preserve-as-is branch at line 170.
+// runtimes — fall to a "preserve as-is" branch.  All other lines
+// (non-digit-leading) go through the analogous preserve-as-is branch.
 
 #[test]
 fn filter_short_backtrace_preserves_digit_lines_without_colons() {
@@ -58,14 +53,12 @@ fn filter_short_backtrace_preserves_digit_lines_without_colons() {
     );
 }
 
-// ── N18.run_lifecycle: unknown_panic_info placeholder tuple ───────────────
-//
-// `unknown_panic_info` (run_lifecycle.rs:~190-200) returns the placeholder
-// quadruple used when the cross-backend panic hook didn't capture info for
-// a panic (e.g. init_panic_hook wasn't called yet). The production path
-// always calls init_panic_hook before run_test_case, so this fallback is
-// only reached via direct test entry — testing the placeholder shape here
-// avoids needing a contrived hook-bypass setup at run_test_case.
+// `unknown_panic_info` returns the placeholder quadruple used when the
+// cross-backend panic hook didn't capture info for a panic (e.g.
+// `init_panic_hook` wasn't called yet).  The production path always
+// calls `init_panic_hook` before `run_test_case`, so this fallback is
+// only reached via direct test entry — testing the placeholder shape
+// here avoids needing a contrived hook-bypass setup at `run_test_case`.
 
 #[test]
 fn unknown_panic_info_returns_unknown_placeholders() {

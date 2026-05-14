@@ -1,19 +1,16 @@
-// Native pbtkit-style test engine for Hegel.
+// In-process Hegel test engine.
 //
 // When the `native` feature is enabled, this module provides an alternative
-// test runner that does not require a Python server. Instead, it implements
-// the core pbtkit loop (random generation + integrated shrinking) directly
-// in Rust.
-//
-// Based on https://github.com/DRMacIver/pbtkit (core.py).
+// test runner that doesn't require a Python server: a Rust port of
+// Hypothesis's conjecture engine (random generation, choice-based shrinking,
+// span-mutation, novel-prefix generation) that runs in the same process as
+// the user's test.
 
 pub mod bignum;
 pub mod core;
 pub mod data_source;
 pub mod data_tree;
 pub mod database;
-pub mod det_tree;
 pub mod schema;
 pub mod shrinker;
 pub mod test_runner;
-pub mod tree;

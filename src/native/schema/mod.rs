@@ -1,7 +1,7 @@
 // Schema interpreter for the native backend.
 //
 // Translates CBOR schemas (as sent by hegel generators) into concrete
-// values using pbtkit-style choice recording.
+// values using Hypothesis-style choice recording.
 //
 // Split into submodules:
 //   numeric     — interpret_integer, interpret_boolean, interpret_constant
@@ -14,127 +14,9 @@
 mod collections;
 mod numeric;
 
-use crate::cbor_utils::{as_bool, as_u64, map_get};
+use crate::cbor_utils::map_get;
 use crate::native::core::{ManyState, NativeTestCase, Status, StopTest};
 use ciborium::Value;
-
-/// Top-level dispatcher for native request handling.
-///
-/// Called from NativeDataSource when the native backend is active.
-pub fn dispatch_request(
-    ntc: &mut NativeTestCase,
-    command: &str,
-    payload: &Value,
-) -> Result<Value, StopTest> {
-    match command {
-        "generate" => {
-            let schema = map_get(payload, "schema").expect("generate command missing schema");
-            interpret_schema(ntc, schema)
-        }
-        "start_span" => {
-            // Record an open span at the current choice position. The matching
-            // `stop_span` pops this entry and records a completed span so that
-            // span-mutation exploration can find structurally-matching regions.
-            let label = map_get(payload, "label")
-                .and_then(as_u64)
-                .expect("start_span payload missing label");
-            ntc.start_span(label);
-            Ok(Value::Null)
-        }
-        "stop_span" => {
-            // Mirror Hypothesis's `has_discards` bookkeeping: a `stop_span`
-            // with `discard=true` means the enclosing block (e.g. a rejected
-            // filter attempt) is dropped from the choice sequence for
-            // shrinking purposes.
-            let discard = map_get(payload, "discard")
-                .and_then(as_bool)
-                .expect("stop_span payload missing discard");
-            ntc.stop_span(discard);
-            Ok(Value::Null)
-        }
-        "new_collection" => {
-            let min_size = map_get(payload, "min_size").and_then(as_u64).unwrap_or(0) as usize;
-            let max_size = map_get(payload, "max_size")
-                .and_then(as_u64)
-                .map(|n| n as usize);
-            let state = ManyState::new(min_size, max_size);
-            let id = ntc.new_collection(state);
-            Ok(Value::Integer(id.into()))
-        }
-        "collection_more" => {
-            let id = map_get(payload, "collection_id")
-                .map(cbor_to_i64)
-                .expect("collection_more missing collection_id");
-            let mut state = ntc
-                .collections
-                .remove(&id)
-                .expect("collection_more: unknown collection_id");
-            let result = many_more(ntc, &mut state).map_err(|StopTest| StopTest)?;
-            ntc.collections.insert(id, state);
-            Ok(Value::Bool(result))
-        }
-        "collection_reject" => {
-            let id = map_get(payload, "collection_id")
-                .map(cbor_to_i64)
-                .expect("collection_reject missing collection_id");
-            let mut state = ntc
-                .collections
-                .remove(&id)
-                .expect("collection_reject: unknown collection_id");
-            many_reject(ntc, &mut state).map_err(|StopTest| StopTest)?;
-            ntc.collections.insert(id, state);
-            Ok(Value::Null)
-        }
-        "new_pool" => {
-            let pool_id = ntc.variable_pools.len() as i64;
-            ntc.variable_pools
-                .push(crate::native::core::NativeVariables::new());
-            Ok(Value::Integer(pool_id.into()))
-        }
-        "pool_add" => {
-            let pool_id = map_get(payload, "pool_id")
-                .map(cbor_to_i64)
-                .expect("pool_add missing pool_id") as usize;
-            let variable_id = ntc.variable_pools[pool_id].next() as i64;
-            Ok(Value::Integer(variable_id.into()))
-        }
-        "pool_consume" => {
-            let pool_id = map_get(payload, "pool_id")
-                .map(cbor_to_i64)
-                .expect("pool_consume missing pool_id") as usize;
-            let variable_id = map_get(payload, "variable_id")
-                .map(cbor_to_i64)
-                .expect("pool_consume missing variable_id") as i128;
-            ntc.variable_pools[pool_id].consume(variable_id);
-            Ok(Value::Null)
-        }
-        "pool_generate" => {
-            let pool_id = map_get(payload, "pool_id")
-                .map(cbor_to_i64)
-                .expect("pool_generate missing pool_id") as usize;
-            let consume = map_get(payload, "consume")
-                .and_then(as_bool)
-                .unwrap_or(false);
-
-            let active = ntc.variable_pools[pool_id].active();
-            if active.is_empty() {
-                // No variables available: mark test case as invalid.
-                return Err(StopTest);
-            }
-            let n = active.len() as i128;
-            // Draw index from [0, n-1]. Shrink towards n-1 (last added = most recent)
-            // by drawing k from [0, n-1] and using index = n-1-k.
-            let k = ntc.draw_integer(0, n - 1).map_err(|StopTest| StopTest)?;
-            let idx = (n - 1 - k) as usize;
-            let variable_id = active[idx] as i64;
-            if consume {
-                ntc.variable_pools[pool_id].consume(variable_id as i128);
-            }
-            Ok(Value::Integer(variable_id.into()))
-        }
-        _ => panic!("Unknown native command: {}", command),
-    }
-}
 
 /// Interpret a CBOR schema and produce a value using the native test case.
 ///
@@ -143,7 +25,10 @@ pub fn dispatch_request(
 /// structurally-duplicate values (e.g. two equal strings in a tuple).
 /// Compound schemas get their spans from the user-level `start_span` /
 /// `stop_span` commands that higher-level generators emit.
-fn interpret_schema(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
+pub(crate) fn interpret_schema(
+    ntc: &mut NativeTestCase,
+    schema: &Value,
+) -> Result<Value, StopTest> {
     use crate::cbor_utils::as_text;
     let schema_type = map_get(schema, "type")
         .and_then(as_text)
@@ -181,10 +66,9 @@ fn interpret_schema(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, S
     result
 }
 
-/// Advance the many state by one element. Returns true if another element should be drawn.
-///
-/// Port of pbtkit's `many.more()`.
-fn many_more(ntc: &mut NativeTestCase, state: &mut ManyState) -> Result<bool, StopTest> {
+/// Advance the many state by one element.  Returns true if another
+/// element should be drawn.  Mirrors `Hypothesis`'s `many.more()`.
+pub(crate) fn many_more(ntc: &mut NativeTestCase, state: &mut ManyState) -> Result<bool, StopTest> {
     let should_continue = if state.min_size as f64 == state.max_size {
         // Fixed size: draw exactly min_size elements.
         state.count < state.min_size
@@ -207,8 +91,8 @@ fn many_more(ntc: &mut NativeTestCase, state: &mut ManyState) -> Result<bool, St
     Ok(should_continue)
 }
 
-/// Reject the last drawn element. Port of pbtkit's `many.reject()`.
-fn many_reject(ntc: &mut NativeTestCase, state: &mut ManyState) -> Result<(), StopTest> {
+/// Reject the last drawn element.  Mirrors Hypothesis's `many.reject()`.
+pub(crate) fn many_reject(ntc: &mut NativeTestCase, state: &mut ManyState) -> Result<(), StopTest> {
     assert!(state.count > 0);
     state.count -= 1;
     state.rejections += 1;
@@ -256,11 +140,6 @@ pub(super) fn cbor_to_i128(value: &Value) -> i128 {
         }
         _ => panic!("Expected CBOR integer, got {:?}", value),
     }
-}
-
-fn cbor_to_i64(value: &Value) -> i64 {
-    let n: i128 = cbor_to_i128(value);
-    n as i64
 }
 
 /// Return true if the CBOR value is a positive bignum (tag 2) whose value exceeds i128::MAX.

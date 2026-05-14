@@ -1,6 +1,6 @@
 // Shrinker for the native backend.
 //
-// Ported from pbtkit core.py. Reduces failing test cases to minimal
+// Ported from Hypothesis. Reduces failing test cases to minimal
 // counterexamples by systematically simplifying the choice sequence.
 //
 // Split into submodules:
@@ -27,7 +27,7 @@ use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINK_ITERATIONS, NodeSo
 /// [`ShrinkRun::Full`] replays a full node sequence with punning (the shape used by
 /// most shrink passes). [`ShrinkRun::Probe`] replays a prefix of choice values and
 /// then draws randomly beyond it — needed by `mutate_and_shrink` (port of
-/// pbtkit's `shrinking/mutation.py`).
+/// Hypothesis's `shrinking/mutation.py`).
 pub enum ShrinkRun<'a> {
     Full(&'a [ChoiceNode]),
     Probe {
@@ -111,7 +111,7 @@ impl<'a> Shrinker<'a> {
     /// the resulting run is interesting and shortlex-smaller than
     /// `current_nodes`, update `current_nodes`.
     ///
-    /// Port of pbtkit's `shrinker.test_function(TestCase(prefix=..., random=...))`.
+    /// Port of Hypothesis's `shrinker.test_function(TestCase(prefix=..., random=...))`.
     pub(super) fn probe(&mut self, prefix: &[ChoiceValue], seed: u64, max_size: usize) {
         if let Some(max) = self.max_improvements {
             // `max_improvements` is only set in tests.

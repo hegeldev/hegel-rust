@@ -57,7 +57,7 @@ impl<'a> Shrinker<'a> {
         }
     }
 
-    /// Port of pbtkit's `bind_deletion`.
+    /// Port of Hypothesis's `bind_deletion`.
     ///
     /// When a value controls the length of a downstream sequence (e.g.
     /// via flat_map), reducing that value may shorten the test case without

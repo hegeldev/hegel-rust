@@ -1,36 +1,48 @@
 //! Native [`TestRunner`] implementation.
 //!
 //! `NativeTestRunner` plugs into the same [`crate::run_lifecycle::drive`]
-//! pipeline as the server backend's `ServerTestRunner`. The trait method
-//! [`TestRunner::run`] is the engine driver: it owns the database replay,
-//! generation, shrinking, and final-replay phases, and uses the supplied
-//! `run_case` callback to actually execute each test body.
+//! pipeline as the server backend's `ServerTestRunner`.  The trait
+//! method [`TestRunner::run`] is the engine driver: it owns the
+//! database replay, generation, shrinking, and final-replay phases,
+//! and uses the supplied `run_case` callback to actually execute each
+//! test body.
 //!
-//! Inside, [`EngineCtx`] wraps the `run_case` callback together with a
-//! shrink-result cache and a non-determinism trie. It exposes the same
-//! `run` / `run_shrink` / `run_probe` / `run_final` surface that the older
-//! `CachedTestFunction` did, so the surrounding shrinker and targeting
-//! machinery (which expect a [`NativeRunner`]) can be reused unchanged.
+//! Inside, [`EngineCtx`] wraps the `run_case` callback together with
+//! a shrink-result cache, exposing `run` / `run_shrink_with_origin` /
+//! `run_probe_with_origin` / `run_final` so the surrounding shrinker
+//! and span-mutation passes can drive replays.
 
 use std::collections::{HashMap, hash_map::Entry};
-
-use crate::native::det_tree::{ChoiceValueKey, DetTreeNode, record_into};
 
 use rand::RngExt;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
-use crate::backend::{DataSource, TestCaseResult, TestRunResult, TestRunner};
+use crate::backend::{DataSource, Failure, TestCaseResult, TestRunResult, TestRunner};
 use crate::native::core::{
     BUFFER_SIZE, ChoiceNode, ChoiceValue, NativeTestCase, Span, Status, sort_key,
 };
 use crate::native::data_source::NativeDataSource;
 use crate::native::database::{
-    ExampleDatabase, NativeDatabase, deserialize_choices, serialize_choices,
+    DirectoryTestCaseDatabase, TestCaseDatabase, deserialize_choices, serialize_choices,
 };
 use crate::native::shrinker::{ShrinkRun, Shrinker};
-use crate::native::tree::{NativeRunner, RunResult};
 use crate::runner::{Database, HealthCheck, Mode, Phase, Settings, Verbosity};
+
+/// One run's worth of results: status, the realised choice nodes and
+/// spans, and (for `Status::Interesting`) the captured failure carrying
+/// the rendered diagnostic and the opaque origin string identifying
+/// *where* the panic happened.  The origin is supplied by
+/// [`crate::run_lifecycle::run_test_case`] from the captured panic
+/// `file:line:col`; per-origin shrinking and database storage key on it.
+#[derive(Clone)]
+pub struct RunResult {
+    pub status: Status,
+    pub nodes: Vec<ChoiceNode>,
+    pub spans: Vec<Span>,
+    pub origin: Option<String>,
+    pub failure: Option<Failure>,
+}
 
 const RANDOM_GENERATION_BATCH: u64 = 10;
 const SPAN_MUTATION_ATTEMPTS: usize = 5;
@@ -110,9 +122,9 @@ fn run_main(
     // defaults to `.hypothesis/examples` relative to cwd), the native
     // default is `.hegel/examples` relative to cwd. `Disabled` is the
     // explicit opt-out; `Path(p)` is the explicit choice.
-    let db: Option<Box<dyn ExampleDatabase>> = match &settings.database {
-        Database::Path(p) => Some(Box::new(NativeDatabase::new(p))),
-        Database::Unset => Some(Box::new(NativeDatabase::new(".hegel/examples"))),
+    let db: Option<Box<dyn TestCaseDatabase>> = match &settings.database {
+        Database::Path(p) => Some(Box::new(DirectoryTestCaseDatabase::new(p))),
+        Database::Unset => Some(Box::new(DirectoryTestCaseDatabase::new(".hegel/examples"))),
         Database::Disabled => None,
     };
 
@@ -231,7 +243,7 @@ fn run_main(
                 NativeTestCase::for_probe(&prefix, batch_rng, BUFFER_SIZE)
             };
             if verbosity == Verbosity::Verbose {
-                eprintln!("Trying example: ");
+                eprintln!("Running test case");
             }
 
             let tc_start = std::time::Instant::now();
@@ -383,7 +395,7 @@ fn run_main(
                 let mut shrinker = Shrinker::with_probe(
                     Box::new(|req: ShrinkRun| {
                         if verbosity == Verbosity::Verbose {
-                            eprintln!("Trying example: ");
+                            eprintln!("Running test case");
                         }
                         let result = match req {
                             ShrinkRun::Full(nodes) => {
@@ -587,15 +599,13 @@ fn update_interesting(
 /// `run_case` reaches us the mode is already plumbed.
 pub(crate) struct EngineCtx<'a> {
     run_case: &'a mut dyn FnMut(Box<dyn DataSource>, bool),
-    tree_root: DetTreeNode,
-    cache: HashMap<Vec<ChoiceValueKey>, RunResult>,
+    cache: HashMap<Vec<ChoiceValue>, RunResult>,
 }
 
 impl<'a> EngineCtx<'a> {
     fn new(run_case: &'a mut dyn FnMut(Box<dyn DataSource>, bool)) -> Self {
         EngineCtx {
             run_case,
-            tree_root: DetTreeNode::new(),
             cache: HashMap::new(),
         }
     }
@@ -619,8 +629,6 @@ impl<'a> EngineCtx<'a> {
         };
         let origin = failure.as_ref().map(|f| f.origin.clone());
 
-        record_into(&mut self.tree_root, &nodes);
-
         RunResult {
             status,
             nodes,
@@ -639,18 +647,14 @@ impl<'a> EngineCtx<'a> {
         candidate_nodes: &[ChoiceNode],
         target_origin: &str,
     ) -> (bool, Vec<ChoiceNode>) {
-        let key: Vec<ChoiceValueKey> = candidate_nodes
-            .iter()
-            .map(|n| ChoiceValueKey::from(&n.value))
-            .collect();
+        let key: Vec<ChoiceValue> = candidate_nodes.iter().map(|n| n.value.clone()).collect();
         if let Some(cached) = self.cache.get(&key) {
             let matches = cached.status == Status::Interesting
                 && cached.origin.as_deref() == Some(target_origin);
             return (matches, cached.nodes.clone());
         }
 
-        let choices: Vec<ChoiceValue> = candidate_nodes.iter().map(|n| n.value.clone()).collect();
-        let ntc = NativeTestCase::for_choices(&choices, Some(candidate_nodes), None);
+        let ntc = NativeTestCase::for_choices(&key, Some(candidate_nodes), None);
         let run = self.execute(ntc, false);
         let matches =
             run.status == Status::Interesting && run.origin.as_deref() == Some(target_origin);
@@ -670,11 +674,7 @@ impl<'a> EngineCtx<'a> {
         let run = self.execute(ntc, false);
         let matches =
             run.status == Status::Interesting && run.origin.as_deref() == Some(target_origin);
-        let key: Vec<ChoiceValueKey> = run
-            .nodes
-            .iter()
-            .map(|n| ChoiceValueKey::from(&n.value))
-            .collect();
+        let key: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
         self.cache.insert(key, run.clone());
         (matches, run.nodes)
     }
@@ -685,9 +685,8 @@ impl<'a> EngineCtx<'a> {
     fn run_final(&mut self, ntc: NativeTestCase) -> RunResult {
         self.execute(ntc, true)
     }
-}
 
-impl NativeRunner for EngineCtx<'_> {
+    /// Run one test case as part of the search loop (not a final replay).
     fn run(&mut self, ntc: NativeTestCase) -> RunResult {
         self.execute(ntc, false)
     }

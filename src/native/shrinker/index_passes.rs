@@ -1,6 +1,6 @@
 //! Index-based shrink passes: `lower_and_bump` and `try_shortening_via_increment`.
 //!
-//! Port of pbtkit's `shrinking/index_passes.py`. Both passes use the
+//! Port of Hypothesis's `shrinking/index_passes.py`. Both passes use the
 //! `to_index`/`from_index` API on `ChoiceKind` for type-generic shrinking.
 
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ impl<'a> Shrinker<'a> {
     /// For each indexed node not at simplest, try decrementing it (lowering
     /// the index) and bumping a later node (raising its index).
     ///
-    /// Port of pbtkit's `shrinking/index_passes.py::lower_and_bump`. Value
+    /// Port of Hypothesis's `shrinking/index_passes.py::lower_and_bump`. Value
     /// punning (via `with_value` + `for_choices` with `prefix_nodes`) handles
     /// the case where decrementing changes the kind at position `j` (e.g.
     /// a `one_of` branch switch).
@@ -63,10 +63,11 @@ impl<'a> Shrinker<'a> {
                 };
 
                 for new_val in &decrement_targets {
-                    // Build the decrement attempt and run it. Running both
-                    // `attempt` and the zero-padded variant matches pbtkit —
-                    // the run is for its side-effect on `current` (the
-                    // shrinker auto-updates to smaller interesting results).
+                    // Build the decrement attempt and run it.  Running both
+                    // `attempt` and the zero-padded variant mirrors
+                    // Hypothesis — the run is for its side-effect on
+                    // `current` (the shrinker auto-updates to smaller
+                    // interesting results).
                     let mut attempt = self.current_nodes.clone();
                     attempt[i] = attempt[i].with_value(new_val.clone());
                     self.consider(&attempt);
@@ -79,10 +80,10 @@ impl<'a> Shrinker<'a> {
                     self.consider(&zeroed);
 
                     // Try bumping node `j` at relative and absolute index
-                    // offsets. `_try_bump_j` is pbtkit-equivalent replace
-                    // with validate — skips when the bumped value doesn't
-                    // fit the *current* kind at j (which may have shifted
-                    // under punning between iterations).
+                    // offsets — Hypothesis's replace-with-validate skips
+                    // when the bumped value doesn't fit the *current* kind
+                    // at j (which may have shifted under punning between
+                    // iterations).
                     if j < self.current_nodes.len() {
                         let kind_j = self.current_nodes[j].kind.clone();
                         let target_idx = kind_j.to_index(&self.current_nodes[j].value);
@@ -123,7 +124,7 @@ impl<'a> Shrinker<'a> {
     /// For each indexed node, try *incrementing* its index to see if the test
     /// takes a shorter path (e.g. triggering an earlier exit).
     ///
-    /// Port of pbtkit's `shrinking/index_passes.py::try_shortening_via_increment`.
+    /// Port of Hypothesis's `shrinking/index_passes.py::try_shortening_via_increment`.
     /// A value shrinker can only make values simpler; sometimes making a value
     /// *less* simple (e.g. `false → true`) causes an earlier exit, producing a
     /// shorter and thus overall simpler choice sequence.

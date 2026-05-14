@@ -97,7 +97,7 @@ fn db_replay_drops_corrupted_stored_entry() {
     use tempfile::TempDir;
     let db_dir = TempDir::new().unwrap();
     let key = b"db_replay_drops_corrupted_stored_entry";
-    // Reproduce `NativeDatabase`'s on-disk layout: `db_root/key_hash/value_hash`
+    // Reproduce `DirectoryTestCaseDatabase`'s on-disk layout: `db_root/key_hash/value_hash`
     // where `key_hash = fnv_hex(b"native:" ++ key)` and the value is the raw
     // bytes themselves.
     let mut prefixed = b"native:".to_vec();
@@ -392,14 +392,14 @@ fn main() {
 
     // test_prints_intermediate_in_success dropped on test-port: client-side
     // Verbosity::Verbose doesn't reach the Hypothesis server (which is launched
-    // with `--verbosity normal` from server::session::init), so "Trying example"
-    // never appears in stderr.
+    // with `--verbosity normal` from server::session::init), so the
+    // "Running test case" progress line never appears in stderr.
 
     #[test]
     fn test_does_not_log_in_quiet_mode() {
         let output = quiet_failing_project().cargo_run(&[]);
         assert!(
-            !output.stderr.contains("Trying example"),
+            !output.stderr.contains("Running test case"),
             "Unexpected progress output in quiet mode:\n{}",
             output.stderr
         );
@@ -424,10 +424,11 @@ fn main() {
 
     #[test]
     fn test_verbose_run_succeeds_in_process() {
-        // Exercises the verbose logging path (the "Trying example" emission in
-        // the runner) from inside the test binary, so coverage instrumentation
-        // records it. The TempRustProject-based tests above rely on subprocess
-        // binaries that are not built with coverage instrumentation.
+        // Exercises the verbose logging path (the "Running test case"
+        // emission in the runner) from inside the test binary, so
+        // coverage instrumentation records it.  The TempRustProject-based
+        // tests above rely on subprocess binaries that are not built
+        // with coverage instrumentation.
         Hegel::new(|tc| {
             let _x: bool = tc.draw(gs::booleans());
         })
