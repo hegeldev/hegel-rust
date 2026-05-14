@@ -2,6 +2,12 @@
 //! various generator shapes. Top-level binary mirroring the source pbtkit
 //! organisation (one sub-module per topic).
 
+// Many tests in this binary are gated `#[cfg(not(feature = "native"))]` and
+// take helper imports with them when the native feature is on, leaving the
+// sub-module-level `use ...` lines dangling. The minimal-native port
+// deliberately accepts that until the relevant generators land natively.
+#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]
+
 #[path = "../common/mod.rs"]
 mod common;
 

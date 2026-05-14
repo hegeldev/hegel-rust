@@ -4,11 +4,21 @@ set ignore-comments := true
 check-tests:
     RUST_BACKTRACE=1 cargo test
 
+# `cargo test --all-features` would enable `native`, which swaps the
+# entire backend rather than adding capabilities to the server one.
+# The "all features" matrix only wants the additive ones — the native
+# backend gets its own coverage in `check-tests-native`.
 check-tests-all-features:
-    RUST_BACKTRACE=1 cargo test --all-features
+    RUST_BACKTRACE=1 cargo test --features rand,antithesis,chrono,jiff,serde_json,serde_json_raw_value
 
-check-tests-rand-feature:
-    RUST_BACKTRACE=1 cargo test --features rand
+# Same as `check-tests-all-features` but drops `antithesis`, which
+# emits a `compile_error!` on Windows because the upstream SDK is
+# Linux-only.
+check-tests-all-features-windows:
+    RUST_BACKTRACE=1 cargo test --features rand,chrono,jiff,serde_json,serde_json_raw_value
+
+check-tests-native:
+    RUST_BACKTRACE=1 cargo test --features native
 
 check-tests-minimal-versions:
     # This is an annoyingly specific check and feels like it overly couples CI concerns and check

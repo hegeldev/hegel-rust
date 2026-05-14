@@ -1,12 +1,14 @@
 use crate::common::utils::{Minimal, minimal};
 use hegel::generators as gs;
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_minimize_string_to_empty() {
     let s: String = minimal(gs::text(), |_: &String| true);
     assert_eq!(s, "");
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_minimize_longer_string() {
     let s = minimal(gs::text().max_size(50), |x: &String| {
@@ -15,12 +17,14 @@ fn test_minimize_longer_string() {
     assert_eq!(s, "0".repeat(10));
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_minimize_longer_list_of_strings() {
     let v = minimal(gs::vecs(gs::text()), |x: &Vec<String>| x.len() >= 10);
     assert_eq!(v, vec![String::new(); 10]);
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_string_sorts_characters_when_possible() {
     // String shrinking should sort characters by codepoint.
@@ -34,6 +38,7 @@ fn test_string_sorts_characters_when_possible() {
     assert_eq!(s, "00e");
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_string_insertion_sort_swap_succeeds() {
     // Fixed-length 2-char string over {'a','b'} where the condition requires

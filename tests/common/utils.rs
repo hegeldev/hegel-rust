@@ -14,6 +14,11 @@ pub fn is_nightly() -> bool {
     std::env::var("HEGEL_RUNNING_TESTS_WITH_RUST_NIGHTLY").is_ok_and(|v| v == "1")
 }
 
+// some of our tests don't work on NixOS
+pub fn is_nixos() -> bool {
+    std::fs::exists("/etc/NIXOS").unwrap_or_default()
+}
+
 pub fn assert_matches_regex(text: &str, pattern: &str) {
     let re = Regex::new(pattern).unwrap_or_else(|e| panic!("invalid regex {pattern:?}: {e}"));
     assert!(

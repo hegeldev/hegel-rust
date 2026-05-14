@@ -179,6 +179,7 @@ fn test_lists_forced_near_top() {
 
 // --- Dictionaries ----------------------------------------------------------
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_dictionary_minimizes_to_empty() {
     let result = minimal(
@@ -188,6 +189,7 @@ fn test_dictionary_minimizes_to_empty() {
     assert!(result.is_empty());
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_dictionary_minimizes_values() {
     let result = minimal(
@@ -270,6 +272,7 @@ fn test_can_collectively_minimize_booleans() {
     assert_eq!(xs.iter().collect::<HashSet<_>>().len(), 2);
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_can_collectively_minimize_text() {
     let n = 10usize;

@@ -25,6 +25,7 @@ fn test_negative_sum_of_pair() {
     assert_eq!((a, b), (-1, -1000));
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_sum_of_pair_separated() {
     let separated_sum = hegel::compose!(|tc| {
@@ -87,6 +88,7 @@ enum BoolOrFloat {
     Float(f64),
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_one_of_shrinks_branch_selector() {
     let result = minimal(
@@ -106,6 +108,7 @@ fn test_one_of_shrinks_branch_selector() {
     assert_eq!(result, BoolOrFloat::Bool(true));
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_early_exit_via_flag_with_preceding_draws() {
     let g = hegel::compose!(|tc| {
@@ -123,6 +126,7 @@ fn test_early_exit_via_flag_with_preceding_draws() {
     let _ = (v0, v1, v2);
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_one_of_branch_switch_with_trailing_draws() {
     let test_data = hegel::compose!(|tc| {
@@ -146,6 +150,7 @@ fn test_one_of_branch_switch_with_trailing_draws() {
     assert_eq!(result, BoolOrFloat::Bool(true));
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_shorter_path_via_later_assertion() {
     let pair = || {
@@ -171,6 +176,7 @@ fn test_shorter_path_via_later_assertion() {
     assert!(v1.is_empty());
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_one_of_branch_switch_to_float() {
     let result = minimal(
@@ -210,6 +216,7 @@ fn test_one_of_shorter_branch_needs_non_simplest_value() {
     assert_eq!(result, TupOrBool::Bool(true));
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_switch_failure_mode_for_simpler_sort_key() {
     let test_data = hegel::compose!(|tc| {
@@ -472,6 +479,7 @@ fn test_increment_with_dependent_continuation() {
     assert!(v1);
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_lower_and_bump_with_float_target() {
     let g = hegel::compose!(|tc| {

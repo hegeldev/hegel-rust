@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]
+
 //! Tests that verify the engine can find counterexamples / interesting values
 //! across various domains (arithmetic invariants, collections, floats, mixed
 //! types, and historical PBT-smith regressions).

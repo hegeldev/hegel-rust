@@ -333,26 +333,9 @@ class CoverageData:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def get_target_triple() -> str:
-    """Get the current Rust target triple."""
-    result = subprocess.run(
-        ["rustc", "-vV"],
-        capture_output=True,
-        text=True,
-    )
-    for line in result.stdout.splitlines():
-        if line.startswith("host:"):
-            return line.split(":")[1].strip()
-    return "unknown"
-
-
-def run_coverage() -> Path:
-    """Run coverage analysis and generate LCOV report."""
-    print("Running coverage analysis...")
-    lcov_path = Path("lcov.info")
-
-    # Clean previous profdata
-    print("  Cleaning previous coverage data...")
+def _run_lcov_phase(features: str, output: Path, label: str) -> None:
+    """Run cargo llvm-cov with `features`, emit LCOV to `output`."""
+    print(f"  Cleaning previous coverage data ({label})...")
     result = subprocess.run(
         ["cargo", "llvm-cov", "clean", "--workspace"],
         capture_output=True,
@@ -361,13 +344,19 @@ def run_coverage() -> Path:
     if result.returncode != 0:
         if result.stderr:
             print(result.stderr, file=sys.stderr)
-        print("ERROR: Failed to clean coverage data", file=sys.stderr)
+        print(f"ERROR: Failed to clean coverage data ({label})", file=sys.stderr)
         sys.exit(1)
 
-    # Phase 1: Run tests and collect profraw data (no report yet)
-    print("  Running tests with coverage...")
+    print(f"  Running tests with coverage ({label})...")
     result = subprocess.run(
-        ["cargo", "llvm-cov", "--no-report", "--all-features"],
+        [
+            "cargo",
+            "llvm-cov",
+            "--features",
+            features,
+            "--lcov",
+            f"--output-path={output}",
+        ],
         capture_output=True,
         text=True,
     )
@@ -376,118 +365,108 @@ def run_coverage() -> Path:
     if result.returncode != 0:
         if result.stderr:
             print(result.stderr, file=sys.stderr)
-        print("ERROR: Coverage run failed", file=sys.stderr)
-        sys.exit(1)
-    print("  Tests passed")
-
-    # Phase 2: Generate LCOV report.
-    # First try with subprocess binaries included (for TempRustProject coverage).
-    # If that fails, fall back to standard report.
-    llvm_cov_target = Path("target/llvm-cov-target")
-    subprocess_bins = sorted(
-        p
-        for p in llvm_cov_target.glob("debug/temp_hegel_test_*")
-        if p.is_file() and not p.suffix  # exclude .d, .pdb etc
-    )
-    print(f"  Generating report ({len(subprocess_bins)} subprocess binaries)...")
-
-    if subprocess_bins:
-        # Use raw llvm tools to include subprocess binaries.
-        # Find llvm tools from the Rust toolchain.
-        toolchain_result = subprocess.run(
-            ["rustc", "--print", "sysroot"],
-            capture_output=True,
-            text=True,
-        )
-        sysroot = toolchain_result.stdout.strip()
-        llvm_bin = Path(sysroot) / "lib/rustlib" / get_target_triple() / "bin"
-        llvm_profdata = llvm_bin / "llvm-profdata"
-        llvm_cov_bin = llvm_bin / "llvm-cov"
-
-        if llvm_profdata.exists() and llvm_cov_bin.exists():
-            # Merge all profraw files
-            profraw_files = list(llvm_cov_target.glob("*.profraw"))
-            merged_profdata = llvm_cov_target / "merged.profdata"
-            result = subprocess.run(
-                [str(llvm_profdata), "merge", "-sparse"]
-                + [str(f) for f in profraw_files]
-                + ["-o", str(merged_profdata)],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                print(
-                    "WARNING: profdata merge failed, using standard report",
-                    file=sys.stderr,
-                )
-            else:
-                # Find all instrumented binaries (main test binaries + subprocess binaries)
-                main_bins = sorted(
-                    p
-                    for p in llvm_cov_target.glob("debug/deps/hegel-*")
-                    if p.is_file() and not p.suffix
-                )
-                all_bins = main_bins + subprocess_bins
-                # Also include integration test binaries
-                test_bins = sorted(
-                    p
-                    for p in llvm_cov_target.glob("debug/deps/test_*")
-                    if p.is_file() and not p.suffix
-                )
-                all_bins.extend(test_bins)
-
-                if all_bins:
-                    # Generate LCOV with all objects
-                    cmd = [
-                        str(llvm_cov_bin),
-                        "export",
-                        "-format=lcov",
-                        f"-instr-profile={merged_profdata}",
-                    ]
-                    # First binary is positional, rest are --object
-                    cmd.append(str(all_bins[0]))
-                    for b in all_bins[1:]:
-                        cmd.extend(["-object", str(b)])
-                    # Only report on project source files
-                    cmd.extend(
-                        [
-                            "-ignore-filename-regex=\\.cargo/registry",
-                            "-ignore-filename-regex=/rustc/",
-                            "-ignore-filename-regex=/rustlib/",
-                            "-ignore-filename-regex=/tmp/",
-                            "-ignore-filename-regex=/var/folders/",
-                            "-ignore-filename-regex=tests/",
-                        ]
-                    )
-
-                    result = subprocess.run(cmd, capture_output=True, text=True)
-                    if result.returncode == 0 and result.stdout:
-                        lcov_path.write_text(result.stdout)
-                        return lcov_path
-                    else:
-                        print(
-                            "WARNING: llvm-cov export failed, using standard report",
-                            file=sys.stderr,
-                        )
-                        if result.stderr:
-                            print(result.stderr[:500], file=sys.stderr)
-
-    # Fallback: standard cargo llvm-cov report
-    result = subprocess.run(
-        ["cargo", "llvm-cov", "report", "--lcov", f"--output-path={lcov_path}"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        if result.stderr:
-            print(result.stderr, file=sys.stderr)
-        print("ERROR: Coverage report generation failed", file=sys.stderr)
+        print(f"ERROR: Coverage run ({label}) failed", file=sys.stderr)
         sys.exit(1)
 
+
+def _merge_lcov(inputs: list[Path], output: Path) -> None:
+    """Union-merge several LCOV files into `output`.
+
+    For each source file, line `N` is treated as covered if it's covered
+    in ANY input.  Counts are aggregated as the max over inputs (LCOV's
+    DA: lines are `DA:<line>,<count>`).  Function and branch records
+    (`FN/FNDA/BRDA`) are similarly combined.
+    """
+    from collections import defaultdict
+
+    # source file -> {line_number -> max_count}
+    per_file_lines: dict[str, dict[int, int]] = defaultdict(dict)
+    # source file -> {function_name -> max_hit_count}
+    per_file_fn: dict[str, dict[str, int]] = defaultdict(dict)
+    # source file -> {function_name -> declaration_line}
+    per_file_fn_decl: dict[str, dict[str, int]] = defaultdict(dict)
+
+    for path in inputs:
+        if not path.exists():
+            continue
+        current: str | None = None
+        with path.open() as f:
+            for raw in f:
+                line = raw.rstrip("\n")
+                if line.startswith("SF:"):
+                    current = line[3:]
+                elif line == "end_of_record":
+                    current = None
+                elif current is None:
+                    continue
+                elif line.startswith("DA:"):
+                    n, _, count = line[3:].partition(",")
+                    if n and count:
+                        ln, c = int(n), int(count)
+                        prev = per_file_lines[current].get(ln, 0)
+                        per_file_lines[current][ln] = max(prev, c)
+                elif line.startswith("FN:"):
+                    decl_line, _, name = line[3:].partition(",")
+                    if decl_line and name:
+                        per_file_fn_decl[current][name] = int(decl_line)
+                elif line.startswith("FNDA:"):
+                    count, _, name = line[5:].partition(",")
+                    if count and name:
+                        prev = per_file_fn[current].get(name, 0)
+                        per_file_fn[current][name] = max(prev, int(count))
+
+    with output.open("w") as f:
+        for source in sorted(per_file_lines):
+            f.write("TN:\n")
+            f.write(f"SF:{source}\n")
+            for name, decl in sorted(per_file_fn_decl[source].items()):
+                f.write(f"FN:{decl},{name}\n")
+            for name, count in sorted(per_file_fn[source].items()):
+                f.write(f"FNDA:{count},{name}\n")
+            for ln in sorted(per_file_lines[source]):
+                f.write(f"DA:{ln},{per_file_lines[source][ln]}\n")
+            f.write("end_of_record\n")
+
+
+def run_coverage() -> Path:
+    """Run coverage analysis and generate LCOV report.
+
+    The `native` feature swaps the python server backend for an
+    in-process Rust one, which doesn't yet implement the schemas
+    `gs::dates` / `gs::times` / `gs::text` / `gs::binary` etc. use.
+    The jiff, serde_json, rand and several top-level tests are
+    therefore gated to the server backend, so a single
+    `--all-features` coverage pass either fails (todo!()) or leaves
+    big swaths of `src/extras/*` and `src/native/*` uncovered.
+
+    Run two coverage passes with disjoint feature sets and
+    union-merge the resulting LCOV files: the first pass covers the
+    server backend, the jiff / chrono / serde_json bindings, and the
+    text / float / etc. surface area; the second covers
+    `src/native/`.  A line is treated as covered if it's covered in
+    either.
+    """
+    print("Running coverage analysis...")
+    lcov_path = Path("lcov.info")
+    server_lcov = Path("lcov-server.info")
+    native_lcov = Path("lcov-native.info")
+
+    _run_lcov_phase(
+        features="rand,antithesis,chrono,jiff,serde_json,serde_json_raw_value",
+        output=server_lcov,
+        label="server backend, no native",
+    )
+    _run_lcov_phase(
+        features="rand,native",
+        output=native_lcov,
+        label="native backend",
+    )
+
+    print("  Merging LCOV outputs...")
+    _merge_lcov([server_lcov, native_lcov], lcov_path)
     if not lcov_path.exists():
-        print("ERROR: lcov.info was not generated", file=sys.stderr)
+        print("ERROR: merged lcov.info was not generated", file=sys.stderr)
         sys.exit(1)
-
     return lcov_path
 
 

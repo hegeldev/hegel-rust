@@ -58,7 +58,13 @@ where
     ///
     /// Panics if any test case fails.
     pub fn run(self) {
-        crate::server::runner::server_run(
+        #[cfg(feature = "native")]
+        let runner = crate::native::test_runner::NativeTestRunner;
+        #[cfg(not(feature = "native"))]
+        let runner = crate::server::session::ServerTestRunner;
+
+        crate::run_lifecycle::drive(
+            runner,
             self.test_fn,
             &self.settings,
             self.database_key.as_deref(),

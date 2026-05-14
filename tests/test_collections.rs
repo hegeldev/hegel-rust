@@ -237,6 +237,7 @@ fn test_hashmap_with_mapped_keys(tc: TestCase) {
     assert!(map.keys().all(|&k| k % 2 == 0));
 }
 
+#[cfg(not(feature = "native"))]
 #[hegel::test]
 fn test_binary_with_max_size(tc: TestCase) {
     let data = tc.draw(gs::binary().max_size(50));
@@ -515,9 +516,14 @@ mod simple_collections {
 mod nocover_sets {
     use std::collections::HashSet;
 
-    use super::common::utils::{assert_all_examples, find_any};
-    use hegel::generators::{self as gs, Generator};
+    use super::common::utils::assert_all_examples;
+    #[cfg(not(feature = "native"))]
+    use super::common::utils::find_any;
+    use hegel::generators as gs;
+    #[cfg(not(feature = "native"))]
+    use hegel::generators::Generator;
 
+    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_draw_sets_of_hard_to_find_elements() {
         let rarebool = gs::floats::<f64>()

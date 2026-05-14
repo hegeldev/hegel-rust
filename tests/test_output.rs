@@ -1,9 +1,178 @@
+#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]
+
 mod common;
 
 use std::sync::OnceLock;
 
 use common::project::TempRustProject;
 use common::utils::assert_matches_regex;
+
+// In-process exercise of the Debug / Verbose verbosity eprintln paths
+// in `src/native/test_runner.rs`.  Spawning a `TempRustProject` (as
+// the other tests in this file do) lifts those branches out of the
+// coverage harness, so we run Hegel directly in-process here.  Catch
+// the property failure with `catch_unwind` so the test itself passes.
+
+#[test]
+fn debug_verbosity_failing_run_exercises_shrink_eprintlns() {
+    use hegel::generators as gs;
+    use hegel::{Hegel, Settings, Verbosity};
+    let result = std::panic::catch_unwind(|| {
+        Hegel::new(|tc| {
+            let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(20));
+            assert!(n < 5);
+        })
+        .settings(
+            Settings::new()
+                .verbosity(Verbosity::Debug)
+                .test_cases(100)
+                .database(None),
+        )
+        .run();
+    });
+    assert!(result.is_err(), "expected the property to fail");
+}
+
+#[test]
+fn verbose_verbosity_failing_run_exercises_trying_example_eprintln() {
+    use hegel::generators as gs;
+    use hegel::{Hegel, Settings, Verbosity};
+    let result = std::panic::catch_unwind(|| {
+        Hegel::new(|tc| {
+            let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(20));
+            assert!(n < 5);
+        })
+        .settings(
+            Settings::new()
+                .verbosity(Verbosity::Verbose)
+                .test_cases(100)
+                .database(None),
+        )
+        .run();
+    });
+    assert!(result.is_err(), "expected the property to fail");
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn tree_exhausted_filter_too_much_fires_on_tiny_filtered_domain() {
+    // `tc.assume(false)` over a boolean draw exhausts the choice tree
+    // (only two children) before the standard `FILTER_TOO_MUCH_THRESHOLD`
+    // kicks in, falling through to the tree-exhaustion FilterTooMuch
+    // panic in `src/native/test_runner.rs`.
+    use hegel::generators as gs;
+    use hegel::{Hegel, Settings};
+    let result = std::panic::catch_unwind(|| {
+        Hegel::new(|tc| {
+            // Filter every input: both possible boolean draws are
+            // rejected, exhausting the tiny choice tree.
+            let _ = tc.draw(gs::booleans());
+            tc.assume(false);
+        })
+        .settings(Settings::new().test_cases(50).database(None))
+        .run();
+    });
+    let msg = result
+        .expect_err("expected FailedHealthCheck panic")
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        msg.contains("FilterTooMuch") || msg.contains("filtered out"),
+        "expected FilterTooMuch panic, got {:?}",
+        msg
+    );
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn db_replay_drops_corrupted_stored_entry() {
+    // Pre-populate the database with garbage bytes at the key
+    // `db_replay_drops_corrupted_stored_entry`.  The native engine's
+    // replay path calls `deserialize_choices(&raw)`; for garbage input
+    // it returns `None`, the replay branch deletes the entry and
+    // continues without panicking.
+    use hegel::generators as gs;
+    use hegel::{Hegel, Settings};
+    use tempfile::TempDir;
+    let db_dir = TempDir::new().unwrap();
+    let key = b"db_replay_drops_corrupted_stored_entry";
+    // Reproduce `DirectoryTestCaseDatabase`'s on-disk layout: `db_root/key_hash/value_hash`
+    // where `key_hash = fnv_hex(b"native:" ++ key)` and the value is the raw
+    // bytes themselves.
+    let mut prefixed = b"native:".to_vec();
+    prefixed.extend_from_slice(key);
+    let key_dir = db_dir.path().join(fnv_hex(&prefixed));
+    std::fs::create_dir_all(&key_dir).unwrap();
+    let garbage = b"not-a-valid-choice-encoding";
+    std::fs::write(key_dir.join(fnv_hex(garbage)), garbage).unwrap();
+
+    Hegel::new(|tc| {
+        let _ = tc.draw(gs::booleans());
+    })
+    .__database_key("db_replay_drops_corrupted_stored_entry".to_string())
+    .settings(
+        Settings::new()
+            .test_cases(5)
+            .database(Some(db_dir.path().to_str().unwrap().to_string())),
+    )
+    .run();
+
+    // The garbage entry should have been deleted during replay.
+    assert!(!key_dir.join(fnv_hex(garbage)).exists());
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn debug_verbosity_replay_aligned_emits_skipping_shrink_message() {
+    // First run: save a counterexample to the database.  Second run:
+    // replay reproduces the same counterexample (same prefix length),
+    // so `replay_aligned` stays true and the shrink phase is skipped
+    // with the "Skipping shrink: reused aligned database replay" debug
+    // line.  Both runs share the same DB and database key.
+    use hegel::generators as gs;
+    use hegel::{Hegel, Settings, Verbosity};
+    use tempfile::TempDir;
+    let db_dir = TempDir::new().unwrap();
+    let db_path = db_dir.path().to_str().unwrap().to_string();
+
+    let run_once = |verbosity: Verbosity| {
+        std::panic::catch_unwind(|| {
+            Hegel::new(|tc| {
+                let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(2));
+                assert!(n < 1);
+            })
+            .__database_key("replay_aligned_skip_shrink_test".to_string())
+            .settings(
+                Settings::new()
+                    .verbosity(verbosity)
+                    .test_cases(20)
+                    .database(Some(db_path.clone())),
+            )
+            .run();
+        })
+    };
+
+    let first = run_once(Verbosity::Normal);
+    assert!(first.is_err(), "first run should fail");
+
+    // Second run with Debug verbosity — replay reproduces the saved
+    // counterexample and the shrink phase is skipped.
+    let second = run_once(Verbosity::Debug);
+    assert!(second.is_err(), "second run should also fail");
+}
+
+#[cfg(feature = "native")]
+fn fnv_hex(s: &[u8]) -> String {
+    // Inline copy of `src/native/database.rs::fnv_hex`; the symbol there
+    // isn't re-exported.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &byte in s {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
 
 const FAILING_TEST_CODE: &str = r#"
 use hegel::generators as gs;
@@ -223,14 +392,14 @@ fn main() {
 
     // test_prints_intermediate_in_success dropped on test-port: client-side
     // Verbosity::Verbose doesn't reach the Hypothesis server (which is launched
-    // with `--verbosity normal` from server::session::init), so "Trying example"
-    // never appears in stderr.
+    // with `--verbosity normal` from server::session::init), so the
+    // "Running test case" progress line never appears in stderr.
 
     #[test]
     fn test_does_not_log_in_quiet_mode() {
         let output = quiet_failing_project().cargo_run(&[]);
         assert!(
-            !output.stderr.contains("Trying example"),
+            !output.stderr.contains("Running test case"),
             "Unexpected progress output in quiet mode:\n{}",
             output.stderr
         );
@@ -255,10 +424,11 @@ fn main() {
 
     #[test]
     fn test_verbose_run_succeeds_in_process() {
-        // Exercises the verbose logging path (the "Trying example" emission in
-        // the runner) from inside the test binary, so coverage instrumentation
-        // records it. The TempRustProject-based tests above rely on subprocess
-        // binaries that are not built with coverage instrumentation.
+        // Exercises the verbose logging path (the "Running test case"
+        // emission in the runner) from inside the test binary, so
+        // coverage instrumentation records it.  The TempRustProject-based
+        // tests above rely on subprocess binaries that are not built
+        // with coverage instrumentation.
         Hegel::new(|tc| {
             let _x: bool = tc.draw(gs::booleans());
         })
@@ -331,6 +501,7 @@ mod snapshots_combinators {
     use super::common::utils::minimal;
     use hegel::generators as gs;
 
+    #[cfg(not(feature = "native"))]
     #[test]
     fn test_data_draw() {
         // Upstream snapshot pins `Draw 1: 0` and `Draw 2: ''`: when the
@@ -376,6 +547,7 @@ mod snapshots_shrinking {
     // Integer shrinker gets stuck at 'À' (U+00C0) instead of reaching 'A' (see
     // HypothesisWorks/hypothesis#4725), so this test fails as upstream describes.
 
+    #[cfg(not(feature = "native"))]
     #[test]
     fn test_shrunk_float() {
         // Upstream snapshot: `x=1.0`.
