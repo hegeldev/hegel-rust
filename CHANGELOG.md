@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.5 - 2026-05-14
+
+This patch fixes running tests on NixOS.
+
 ## 0.12.4 - 2026-05-13
 
 This patch makes Hegel surface every distinct failing test case from a
