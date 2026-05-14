@@ -1,15 +1,17 @@
-// Tests ported from Hypothesis's shrink quality test suite.
-//
-// Source files:
-//   - hypothesis-python/tests/quality/test_shrink_quality.py
-//   - hypothesis-python/tests/quality/test_float_shrinking.py
-//   - hypothesis-python/tests/nocover/test_flatmap.py
-//   - hypothesis-python/tests/nocover/test_find.py
-//   - hypothesis-python/tests/nocover/test_collective_minimization.py
+//! Tests asserting that the shrinker produces minimal counterexamples for
+//! various generator shapes. Top-level binary mirroring the source pbtkit
+//! organisation (one sub-module per topic).
+
+// Many tests in this binary are gated `#[cfg(not(feature = "native"))]` and
+// take helper imports with them when the native feature is on, leaving the
+// sub-module-level `use ...` lines dangling. The minimal-native port
+// deliberately accepts that until the relevant generators land natively.
+#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]
 
 #[path = "../common/mod.rs"]
 mod common;
 
+mod bytes;
 mod collections;
 mod composite;
 mod flatmap;

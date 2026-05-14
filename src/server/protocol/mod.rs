@@ -1,5 +1,5 @@
 mod connection;
-mod packet;
+pub(crate) mod packet;
 mod stream;
 
 pub use connection::Connection;

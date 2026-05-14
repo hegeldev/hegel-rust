@@ -91,6 +91,17 @@ fn test_startup_error_message_version_mismatch() {
 }
 
 #[test]
+fn test_startup_error_message_version_matches() {
+    let exit_status = exit_failure_status();
+    let expected = format!("hegel (version {})\n", HEGEL_SERVER_VERSION);
+    let version_output = fake_output(exit_success_status(), &expected);
+    let msg =
+        startup_error_message_from_version(Some(("/fake/path", Ok(version_output))), exit_status);
+    assert!(!msg.contains("Version mismatch"), "Message: {msg}");
+    assert!(!msg.contains("Is this a hegel binary"), "Message: {msg}");
+}
+
+#[test]
 fn test_startup_error_message_not_hegel() {
     let exit_status = exit_failure_status();
     #[cfg(unix)]

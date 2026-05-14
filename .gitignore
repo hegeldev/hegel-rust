@@ -14,7 +14,14 @@ result
 .claude-reliability/
 CLAUDE.local.md
 
-lcov.info
+*.info
+*.profraw
+
+# insta snapshot review log
+*.pending-snap
+
+# Place to put temporary reference material
+resources
 
 # whitelist .claude files, rather than blacklist. Some local claude files
 # (skills, agents) have to live in .claude - as opposed to eg CLAUDE.local.md,

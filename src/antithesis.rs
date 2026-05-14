@@ -34,6 +34,24 @@ pub(crate) fn is_running_in_antithesis() -> bool {
     false
 }
 
+/// Panic when running inside Antithesis without the `antithesis` feature.
+///
+/// Accepts the runtime flag and a compile-time flag (`cfg!(feature = "antithesis")`)
+/// as ordinary parameters so it can be covered by a unit test that passes
+/// `(true, false)` directly — no env-var mutation required.
+pub(crate) fn require_antithesis_feature(in_antithesis: bool, feature_enabled: bool) {
+    if in_antithesis && !feature_enabled {
+        panic!(
+            "When Hegel is run inside of Antithesis, it requires the `antithesis` feature. \
+            You can add it with {{ features = [\"antithesis\"] }}."
+        );
+    }
+}
+
+#[cfg(test)]
+#[path = "../tests/embedded/antithesis_tests.rs"]
+mod tests;
+
 // nocov start
 #[cfg(feature = "antithesis")]
 pub(crate) fn emit_assertion(location: &TestLocation, passed: bool) {

@@ -1,213 +1,178 @@
-use std::collections::HashSet;
-
-use crate::common::utils::{find_any, minimal};
+use crate::common::utils::{expect_panic, find_any};
 use hegel::generators as gs;
-
-// From test_discovery_ability.py
-
-#[test]
-fn test_can_produce_positive_infinity() {
-    find_any(gs::floats::<f64>(), |&x| x == f64::INFINITY);
-}
-
-#[test]
-fn test_can_produce_negative_infinity() {
-    find_any(gs::floats::<f64>(), |&x| x == f64::NEG_INFINITY);
-}
-
-#[test]
-fn test_can_produce_nan() {
-    find_any(gs::floats::<f64>(), |x| x.is_nan());
-}
-
-#[test]
-fn test_can_produce_floats_near_left() {
-    find_any(gs::floats::<f64>().min_value(0.0).max_value(1.0), |&t| {
-        t < 0.2
-    });
-}
-
-#[test]
-fn test_can_produce_floats_near_right() {
-    find_any(gs::floats::<f64>().min_value(0.0).max_value(1.0), |&t| {
-        t > 0.8
-    });
-}
-
-#[test]
-fn test_can_produce_floats_in_middle() {
-    find_any(gs::floats::<f64>().min_value(0.0).max_value(1.0), |&t| {
-        (0.2..=0.8).contains(&t)
-    });
-}
-
-#[test]
-fn test_mostly_sensible_floats() {
-    find_any(gs::floats::<f64>(), |&t| t + 1.0 > t);
-}
-
-#[test]
-fn test_mostly_largish_floats() {
-    find_any(gs::floats::<f64>(), |&x| x > 0.0 && x + 1.0 > 1.0);
-}
-
-// From test_floating.py
+use hegel::{Hegel, Settings};
 
 #[test]
 fn test_inversion_is_imperfect() {
-    find_any(gs::floats::<f64>(), |&x| {
-        x != 0.0 && !x.is_nan() && !x.is_infinite() && x * (1.0 / x) != 1.0
-    });
-}
-
-#[test]
-fn test_can_find_floats_that_do_not_round_trip_through_strings() {
-    find_any(gs::floats::<f64>(), |x| {
-        let s = format!("{}", x);
-        match s.parse::<f64>() {
-            Ok(y) => *x != y || (x.is_nan() != y.is_nan()),
-            Err(_) => true,
-        }
-    });
-}
-
-// From test_simple_numbers.py — float shrinking/findability
-
-#[test]
-fn test_minimal_float_is_zero() {
-    assert_eq!(minimal(gs::floats::<f64>(), |_| true), 0.0);
-}
-
-#[test]
-fn test_minimals_boundary_floats() {
-    assert_eq!(
-        minimal(gs::floats::<f64>().min_value(-1.0).max_value(1.0), |_| true),
-        0.0
+    expect_panic(
+        || {
+            Hegel::new(|tc| {
+                let x: f64 = tc.draw(gs::floats::<f64>());
+                if x == 0.0 {
+                    return;
+                }
+                let y = 1.0 / x;
+                assert!(x * y == 1.0);
+            })
+            .settings(Settings::new().test_cases(1000).database(None))
+            .run();
+        },
+        "Property test failed",
     );
 }
 
 #[test]
-fn test_minimal_non_boundary_float() {
-    let x = minimal(gs::floats::<f64>().min_value(1.0).max_value(9.0), |&x| {
-        x > 2.0
-    });
-    assert_eq!(x, 3.0);
-}
-
-#[test]
-fn test_minimal_asymmetric_bounded_float() {
-    assert_eq!(
-        minimal(gs::floats::<f64>().min_value(1.1).max_value(1.6), |_| true),
-        1.5
+fn test_can_find_nan_in_list() {
+    expect_panic(
+        || {
+            Hegel::new(|tc| {
+                let xs: Vec<f64> = tc.draw(gs::vecs(gs::floats::<f64>()));
+                assert!(!xs.iter().any(|x| x.is_nan()));
+            })
+            .settings(Settings::new().test_cases(1000).database(None))
+            .run();
+        },
+        "Property test failed",
     );
 }
 
 #[test]
-fn test_negative_floats_simplify_to_zero() {
-    assert_eq!(minimal(gs::floats::<f64>(), |&x| x <= -1.0), -1.0);
+fn test_can_find_positive_infinity() {
+    find_any(gs::floats::<f64>(), |x: &f64| *x > 0.0 && x.is_infinite());
 }
 
 #[test]
-fn test_minimal_infinite_float_is_positive() {
-    assert_eq!(
-        minimal(gs::floats::<f64>(), |x| x.is_infinite()),
-        f64::INFINITY
+fn test_can_find_negative_infinity() {
+    find_any(gs::floats::<f64>(), |x: &f64| *x < 0.0 && x.is_infinite());
+}
+
+#[test]
+fn test_can_find_non_integer_float() {
+    expect_panic(
+        || {
+            Hegel::new(|tc| {
+                let x: f64 = tc.draw(gs::floats::<f64>().allow_nan(false).allow_infinity(false));
+                assert!(x == x.trunc());
+            })
+            .settings(Settings::new().test_cases(1000).database(None))
+            .run();
+        },
+        "Property test failed",
     );
 }
 
 #[test]
-fn test_can_minimal_infinite_negative_float() {
-    let x = minimal(gs::floats::<f64>(), |&x| x < -f64::MAX);
-    assert!(x.is_infinite() && x < 0.0);
-}
-
-#[test]
-fn test_can_minimal_float_on_boundary_of_representable() {
-    let x = minimal(gs::floats::<f64>(), |&x| x + 1.0 == x && !x.is_infinite());
-    assert!(x.is_finite());
-    assert_eq!(x + 1.0, x);
-}
-
-#[test]
-fn test_minimize_nan() {
-    let x = minimal(gs::floats::<f64>(), |x| x.is_nan());
-    assert!(x.is_nan());
-}
-
-#[test]
-fn test_minimize_very_large_float() {
-    let t = f64::MAX / 2.0;
-    assert_eq!(minimal(gs::floats::<f64>(), move |&x| x >= t), t);
-}
-
-#[test]
-fn test_minimal_fractional_float() {
-    assert_eq!(minimal(gs::floats::<f64>(), |&x| x >= 1.5), 2.0);
-}
-
-#[test]
-fn test_minimal_small_sum_float_list() {
-    let xs = minimal(gs::vecs(gs::floats::<f64>()).min_size(5), |x: &Vec<f64>| {
-        x.iter().sum::<f64>() >= 1.0
-    });
-    assert_eq!(xs, vec![0.0, 0.0, 0.0, 0.0, 1.0]);
-}
-
-#[test]
-fn test_list_of_fractional_float() {
-    let result = minimal(gs::vecs(gs::floats::<f64>()).min_size(5), |x: &Vec<f64>| {
-        x.iter().filter(|&&t| t >= 1.5).count() >= 5
-    });
-    let unique: HashSet<u64> = result.iter().map(|&f| f.to_bits()).collect();
-    assert_eq!(unique, HashSet::from([2.0f64.to_bits()]));
-}
-
-#[test]
-fn test_bounds_are_respected() {
-    assert_eq!(minimal(gs::floats::<f64>().min_value(1.0), |_| true), 1.0);
-    assert_eq!(minimal(gs::floats::<f64>().max_value(-1.0), |_| true), -1.0);
-}
-
-#[test]
-fn test_floats_from_zero_have_reasonable_range_0() {
-    assert_eq!(
-        minimal(gs::floats::<f64>().min_value(0.0), |&x| x >= 1.0),
-        1.0
+fn test_can_find_integer_float() {
+    expect_panic(
+        || {
+            Hegel::new(|tc| {
+                let x: f64 = tc.draw(gs::floats::<f64>().allow_nan(false).allow_infinity(false));
+                assert!(x != x.trunc());
+            })
+            .settings(Settings::new().test_cases(1000).database(None))
+            .run();
+        },
+        "Property test failed",
     );
 }
 
 #[test]
-fn test_floats_from_zero_have_reasonable_range_3() {
-    assert_eq!(
-        minimal(gs::floats::<f64>().min_value(0.0), |&x| x >= 1000.0),
-        1000.0
+fn test_can_find_float_outside_exact_int_range() {
+    expect_panic(
+        || {
+            Hegel::new(|tc| {
+                let x: f64 = tc.draw(gs::floats::<f64>().allow_nan(false).allow_infinity(false));
+                assert!(x + 1.0 != x);
+            })
+            .settings(Settings::new().test_cases(1000).database(None))
+            .run();
+        },
+        "Property test failed",
     );
 }
 
 #[test]
-fn test_floats_from_zero_have_reasonable_range_6() {
-    assert_eq!(
-        minimal(gs::floats::<f64>().min_value(0.0), |&x| x >= 1_000_000.0),
-        1_000_000.0
+fn test_can_find_float_that_does_not_round_trip_through_str() {
+    // Counterexample: NaN, since NaN != NaN regardless of how it round-trips.
+    expect_panic(
+        || {
+            Hegel::new(|tc| {
+                let x: f64 = tc.draw(gs::floats::<f64>());
+                let parsed: f64 = format!("{x}").parse().unwrap();
+                assert!(parsed == x);
+            })
+            .settings(Settings::new().test_cases(1000).database(None))
+            .run();
+        },
+        "Property test failed",
     );
 }
 
 #[test]
-fn test_explicit_allow_nan() {
-    let x = minimal(gs::floats::<f64>(), |x| x.is_nan());
-    assert!(x.is_nan());
+fn test_can_find_float_that_does_not_round_trip_through_repr() {
+    // Rust has no separate `repr` formatting; `{:?}` matches `{}` for f64
+    // round-tripping. Kept distinct to mirror the upstream test surface.
+    expect_panic(
+        || {
+            Hegel::new(|tc| {
+                let x: f64 = tc.draw(gs::floats::<f64>());
+                let parsed: f64 = format!("{x:?}").parse().unwrap();
+                assert!(parsed == x);
+            })
+            .settings(Settings::new().test_cases(1000).database(None))
+            .run();
+        },
+        "Property test failed",
+    );
 }
 
 #[test]
-fn test_one_sided_contains_infinity() {
-    let x = minimal(gs::floats::<f64>().min_value(1.0), |x| x.is_infinite());
-    assert!(x.is_infinite());
+fn test_half_bounded_generates_zero() {
+    find_any(
+        gs::floats::<f64>().min_value(-1.0).allow_nan(false),
+        |x: &f64| *x == 0.0,
+    );
+    find_any(
+        gs::floats::<f64>().max_value(1.0).allow_nan(false),
+        |x: &f64| *x == 0.0,
+    );
+}
+
+// True properties that should NOT be falsified.
+
+#[test]
+fn test_is_float() {
+    // Trivially true under Rust's static typing — drawing `f64` always
+    // returns `f64`. Kept as a smoke test mirroring the upstream surface.
+    Hegel::new(|tc| {
+        tc.draw(gs::floats::<f64>());
+    })
+    .settings(Settings::new().test_cases(1000).database(None))
+    .run();
 }
 
 #[test]
-fn test_can_minimal_float_far_from_integral() {
-    let x = minimal(gs::floats::<f64>(), |&x| {
-        x.is_finite() && (x * (1u64 << 32) as f64).fract() != 0.0
-    });
-    assert!(x.is_finite());
+fn test_negation_is_self_inverse() {
+    Hegel::new(|tc| {
+        let x: f64 = tc.draw(gs::floats::<f64>().allow_nan(false));
+        let y = -x;
+        assert_eq!(-y, x);
+    })
+    .settings(Settings::new().test_cases(1000).database(None))
+    .run();
+}
+
+#[test]
+fn test_largest_range_has_no_infinities() {
+    Hegel::new(|tc| {
+        let x: f64 = tc.draw(
+            gs::floats::<f64>()
+                .min_value(-f64::MAX)
+                .max_value(f64::MAX)
+                .allow_nan(false),
+        );
+        assert!(!x.is_infinite());
+    })
+    .settings(Settings::new().test_cases(200).database(None))
+    .run();
 }

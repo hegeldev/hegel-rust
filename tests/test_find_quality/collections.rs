@@ -1,54 +1,61 @@
-use std::collections::HashSet;
-
 use crate::common::utils::find_any;
-use hegel::generators as gs;
+use hegel::generators::{self as gs, Generator};
+
+fn list_and_int() -> impl Generator<(Vec<i64>, i64)> {
+    gs::vecs(gs::integers::<i64>()).flat_map(|v| gs::integers::<i64>().map(move |i| (v.clone(), i)))
+}
 
 #[test]
-fn test_can_produce_long_lists() {
-    find_any(gs::vecs(gs::integers::<i64>()), |x: &Vec<i64>| {
-        x.len() >= 10
+fn test_containment() {
+    for n in [0i64, 1, 10, 100, 1000] {
+        let (ls, i) = find_any(list_and_int(), move |(ls, i): &(Vec<i64>, i64)| {
+            *i >= n && ls.contains(i)
+        });
+        assert!(i >= n);
+        assert!(ls.contains(&i));
+    }
+}
+
+#[test]
+fn test_duplicate_containment() {
+    let (ls, i) = find_any(list_and_int(), |(ls, i): &(Vec<i64>, i64)| {
+        ls.iter().filter(|&&x| x == *i).count() > 1
+    });
+    assert!(ls.iter().filter(|&&x| x == i).count() > 1);
+}
+
+#[test]
+fn test_can_find_list_with_sum() {
+    let result = find_any(gs::vecs(gs::integers::<i64>()), |xs: &Vec<i64>| {
+        xs.iter().copied().fold(0i64, i64::saturating_add) >= 10
+    });
+    assert!(result.iter().copied().fold(0i64, i64::saturating_add) >= 10);
+}
+
+#[test]
+fn test_can_find_dictionary_with_key_gt_value() {
+    use std::collections::HashMap;
+    let result = find_any(
+        gs::hashmaps(gs::integers::<i64>(), gs::integers::<i64>()),
+        |xs: &HashMap<i64, i64>| xs.iter().any(|(k, v)| k > v),
+    );
+    assert!(result.iter().any(|(k, v)| k > v));
+}
+
+#[test]
+fn test_can_find_sorted_list() {
+    find_any(gs::vecs(gs::integers::<i64>()), |xs: &Vec<i64>| {
+        let mut sorted = xs.clone();
+        sorted.sort();
+        sorted != *xs
     });
 }
 
 #[test]
-fn test_can_produce_short_lists() {
-    find_any(gs::vecs(gs::integers::<i64>()), |x: &Vec<i64>| {
-        x.len() <= 10
-    });
-}
-
-#[test]
-fn test_can_produce_the_same_int_twice() {
-    find_any(gs::vecs(gs::integers::<i64>()), |x: &Vec<i64>| {
-        let unique: HashSet<_> = x.iter().collect();
-        unique.len() < x.len()
-    });
-}
-
-#[test]
-fn test_sampled_from_large_number_can_mix() {
-    let items: Vec<i64> = (0..50).collect();
-    find_any(
-        gs::vecs(gs::sampled_from(items)).min_size(50),
-        |x: &Vec<i64>| {
-            let unique: HashSet<_> = x.iter().collect();
-            unique.len() >= 25
-        },
+fn test_can_find_large_sum_list() {
+    let result = find_any(
+        gs::vecs(gs::integers::<i64>().min_value(0).max_value(100)),
+        |xs: &Vec<i64>| xs.iter().sum::<i64>() >= 100,
     );
-}
-
-#[test]
-fn test_non_empty_subset_of_two_is_usually_large() {
-    find_any(
-        gs::hashsets(gs::sampled_from(vec![1i64, 2])),
-        |x: &HashSet<i64>| x.len() == 2,
-    );
-}
-
-#[test]
-fn test_subset_of_ten_is_sometimes_empty() {
-    find_any(
-        gs::hashsets(gs::integers::<i64>().min_value(1).max_value(10)),
-        |x: &HashSet<i64>| x.is_empty(),
-    );
+    assert!(result.iter().sum::<i64>() >= 100);
 }

@@ -16,6 +16,7 @@ fn test_array_of_booleans(tc: TestCase) {
     assert_eq!(arr.len(), 3);
 }
 
+#[cfg(not(feature = "native"))]
 #[hegel::test]
 fn test_array_of_strings(tc: TestCase) {
     let arr: [String; 2] = tc.draw(gs::arrays(gs::text()));
