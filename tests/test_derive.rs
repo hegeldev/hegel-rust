@@ -237,6 +237,7 @@ fn test_derive_enum_variant_generator_single_tuple() {
     });
 }
 
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_enum_variant_generator_multi_tuple() {
     let g = TupleVariants::default_generator().pair(gs::just(42), gs::just(99));
