@@ -160,31 +160,35 @@ For every block:
 
 **Example from PR #262 / native audit:** `Q2` resolved two stubborn nocov markers in `database.rs` and `choices.rs` by *deleting* them and adding real behavioural tests that exercised both paths (default trait listener methods, surrogate-block fallback in `simplest_codepoint`).
 
-## §9. `#[ignore]` as a workaround
+## §9. Native gates: prefer xfail over silent skip
 
-A failing test was hard to fix, so the agent gated it with `#[ignore]`.
+A failing test was hard to fix, so the agent gated it with `#[cfg(not(feature = "native"))]` or `#[ignore]`. The result is dormant code that no one notices when its underlying gap closes.
+
+**Two annotations, two purposes:**
+
+- **`not_supported_on_native! { #[test] fn … }`** — *temporary* xfail. The test still runs under `--features native`; under native the runner expects it to panic, so the test fails loudly the moment it starts passing. This is the right choice for any test gated on a missing engine feature.
+- **`#[cfg(not(feature = "native"))]`** — *permanent* exclusion. Only correct for tests that depend on Python-only behaviour, server-only API, or some intentional divergence that will never be on native.
 
 **Detection:**
 ```bash
-git grep -n '#\[ignore' tests/ src/
-git grep -n '#\[cfg(not(feature = "native"))\]' tests/
+git grep -n 'not_supported_on_native' tests/                       # temporary xfails
+git grep -n '#\[cfg(not(feature = "native"))\]' tests/             # permanent + legacy
+git grep -n '#!\[cfg(not(feature = "native"))\]' tests/            # file-level (almost always wrong)
+git grep -n '#\[ignore' tests/ src/                                 # bare ignores
+git grep -n 'cfg_attr.*feature = "native".*allow' tests/           # lint-noise suppressions
 ```
 
-For every `#[ignore]`: read the message. If there's no associated bug-tracker entry or skill-documented limitation, the ignore is hiding a real failure.
+For every `#[ignore]`: read the message. If there's no associated bug-tracker entry or documented limitation, the ignore is hiding a real failure.
 
-For every `cfg(not(feature = "native"))`: is the test gated because (a) it depends on an engine feature that isn't ported yet (acceptable — drop the gate when the feature lands), or (b) it depends on Python-only behaviour with no Rust counterpart (acceptable — the test belongs in server-only)?  Anything else is bullshit: a test the agent couldn't make pass on native and hid behind a gate.
+For every `#[cfg(not(feature = "native"))]`: is it (a) temporary, waiting on an engine feature — migrate to `not_supported_on_native!`; or (b) permanent — keep the `cfg` and write a one-line comment naming the *unrepresentable concept* (e.g. `// Native: tests Python repr() formatting; no Rust counterpart`). Anything in between is bullshit.
 
-When landing a new chunk, the bar is higher: **default to ungating** any `cfg(not(feature = "native"))` in the territory the chunk now covers, even speculatively. See `landing-native-chunk` step 3.5 for the inventory-and-ungate process. A chunk that adds gates without removing any is suspect. A chunk that *only* removes gates without touching engine code is also possible and welcome — sometimes the gates outlived their cause.
+For every `#![cfg(not(feature = "native"))]` (file-level): almost never the right call. Split the file: temporary tests get `not_supported_on_native!`, permanent ones get per-item `#[cfg(...)]`.
 
-**Generic-comment audit:** existing gates with no comment, or comments like `// native doesn't support this yet`, `// TODO: native`, `// not on native`, are not actionable. Each remaining gate should name the *specific* missing engine piece in a way that lets a reader predict which future chunk will lift the gate.
+**When landing a new chunk, the bar is higher: default to ungating.** See `landing-native-chunk` step 3.5 for the inventory-and-ungate process. The xfail behaviour does most of the work — every previously-temporary gate whose underlying feature now lands surfaces automatically as a "test did not panic as expected" failure under native, telling the next chunk's author which annotations to drop. A chunk that adds gates without removing any is suspect.
 
-```bash
-git grep -B1 -nE '#\[cfg\(not\(feature = "native"\)\)\]' tests/  # see the comment above each gate
-```
+**Generic-comment audit:** existing gates with no comment, or comments like `// native doesn't support this yet`, `// TODO: native`, `// not on native`, are not actionable. Each remaining gate should name the *specific* missing engine piece (for `not_supported_on_native!`) or the *unrepresentable concept* (for `#[cfg(not(feature = "native"))]`).
 
-**Remediation:** If the test asserts behaviour the native backend is supposed to honour, fix the backend. If the test asserts behaviour that's intentionally not in the native backend (e.g. an unimplemented schema), gate it on the relevant feature and *say so* in a comment naming the engine gap. If the test depends on something that will *never* be on native (Python-specific facility, deliberate API divergence), say that in the comment — a permanent gate deserves different framing from a temporary one.
-
-**Lint-suppression sweep:** the `#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]` blocks PR #262 added to a handful of test files exist only to silence clippy when gated tests leave their imports dangling. When a chunk ungates enough of a file's tests that the suppression is no longer needed, delete the suppression. Don't leave it sitting as a marker.
+**Lint-suppression sweep:** the `#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]` blocks PR #262 added to a handful of test files exist only to silence clippy when file-level cfg gates leave imports dangling. Migrating to per-test `not_supported_on_native!` makes the helpers actually live under native, so the suppression stops doing anything — delete it.
 
 ## §10. Vapid / Potemkin tests
 

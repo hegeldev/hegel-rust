@@ -97,46 +97,44 @@ Things to **not** bring over (these are agent artefacts, not project code):
 
 ### 3.5. Ungate tests that the chunk should now cover
 
-PR #262 left a substantial pile of `#[cfg(not(feature = "native"))]` gates on tests and test files — placed there because the native backend didn't yet support the relevant schemas or behaviours. Every chunk landed after #262 should pick up some of those gates. **A new chunk that doesn't ungate any tests is suspicious** — either the chunk is purely internal plumbing (rare), or there's gated work that should be running but isn't.
+PR #262 left a substantial pile of `#[cfg(not(feature = "native"))]` gates on tests and test files. Every chunk landed after #262 should pick up some of those gates. **A new chunk that doesn't ungate any tests is suspicious** — either the chunk is purely internal plumbing (rare), or there's gated work that should be running but isn't.
 
-**Default to ungating.** Bias hard toward removing the `cfg(not(feature = "native"))` / `#[ignore]` and running the test under both backends. The test was written to assert observable behaviour; if the native backend now supports that behaviour, the test should be running against it.
+**Default to ungating, aggressively.** The bias is so far toward ungating that the project ships two annotations to make "silently still gated" impossible:
+
+- **`#[cfg(not(feature = "native"))]`** — *permanent* exclusion. Use only for tests that are genuinely incompatible with the native backend (Python-only behaviour, server-only API surface, redundant tests of things tested elsewhere under native). These don't get re-evaluated when new engine features land.
+- **`#[hegel::not_supported_on_native]`** — *temporary* xfail. The test still runs under `--features native`; if it panics, it passes (the assumed-failing state). If it doesn't panic, the *test* fails loudly with a message telling you to remove the annotation. This makes "forgot to ungate after the feature landed" impossible to miss — every new chunk's CI run automatically surfaces every previously-temporary gate whose underlying gap is now closed.
+
+**Use `#[hegel::not_supported_on_native]` for anything that *will eventually* work on native.** Reserve `#[cfg(not(feature = "native"))]` for things that *never* will.
 
 Process for each chunk:
 
-1. **Inventory the gates** in the territory this chunk touches:
+1. **Inventory** the gates in the territory this chunk touches:
 
    ```bash
-   git grep -nE '#!\[cfg\(not\(feature = "native"\)\)\]' tests/   # file-level
-   git grep -nE '#\[cfg\(not\(feature = "native"\)\)\]' tests/    # item-level
-   git grep -nE '#\[ignore' tests/                                 # bare ignores
-   git grep -nE 'cfg_attr\(feature = "native"' tests/              # the lint-noise suppressions PR #262 added
+   git grep -nE 'not_supported_on_native' tests/                   # temporary xfail
+   git grep -nE '#\[cfg\(not\(feature = "native"\)\)\]' tests/     # permanent + legacy item-level
+   git grep -nE '#!\[cfg\(not\(feature = "native"\)\)\]' tests/    # file-level (almost always wrong post-#262)
+   git grep -nE '#\[ignore' tests/                                  # bare ignores
+   git grep -nE 'cfg_attr\(feature = "native"' tests/               # lint-noise suppressions
    ```
 
-2. **For each gate in scope, try to drop it.** Run `HEGEL_SERVER_COMMAND=/bin/false cargo test --features native --test <name>`. Three outcomes:
+   File-level `#![cfg(not(feature = "native"))]` blocks an entire file from compiling under native — that's almost never what you actually want. Break the file open: the temporary tests get `#[hegel::not_supported_on_native]`, the permanent ones get `#[cfg(not(feature = "native"))]` per-item.
 
-   - **Passes.** Drop the gate. Commit the ungating as a separate small commit ("Ungate `<test>` under native — now supported by …"). This is the desired outcome.
-   - **Fails for a reason the chunk can fix.** Fix it. The test passing is part of the chunk's value.
-   - **Fails because of a *different* gap the chunk doesn't cover** (e.g. you're landing floats, but this test also draws bytes). Re-gate it — but with a **specific** comment naming what's missing, not a generic placeholder.
+2. **For every `#[hegel::not_supported_on_native]` in scope, just run the test.** Under native CI, anything that now passes will fail-as-xfail (`note: test did not panic as expected`) — that's the signal to drop the annotation. You don't have to think about it in advance.
 
-3. **Comment discipline on remaining gates.** Replace generic agent-era comments (`// native doesn't support this yet`, `// TODO: ungate when native works`, lint-suppression `cfg_attr` blocks without explanation) with one line naming the *specific* missing piece:
+3. **For every `#[cfg(not(feature = "native"))]` in scope, decide:**
+   - If the gate is temporary (engine feature missing), migrate to `#[hegel::not_supported_on_native]`. Future chunks then get the auto-surfacing.
+   - If genuinely permanent, leave the `cfg` but add a one-line comment naming the *unrepresentable concept* (e.g. `// Native: relies on Python-side repr() formatting`, not `// TODO: native`).
 
-   ```rust
-   // Native: needs draw_bytes schema (tracked: open extraction PRs).
-   #[cfg(not(feature = "native"))]
+4. **For tests that need engine work this chunk can do**, fix them and let them run under both backends.
 
-   // Native: depends on the regex shrinker pass; ungate when that lands.
-   #[cfg(not(feature = "native"))]
-   ```
+5. **For tests that need engine work *this chunk* doesn't cover**, leave them as `#[hegel::not_supported_on_native]` with a one-line `// needs <specific missing piece>` comment.
 
-   A reader scanning the gates should be able to predict which future PR will remove each one. If the comment doesn't enable that prediction, it isn't specific enough.
+6. **`#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]`** at the top of integration-test files exists only because file-level `#[cfg(...)]` gates leave imports dangling. When a chunk migrates a file's gates to per-test `#[hegel::not_supported_on_native]`, the helpers actually get used under native, so the lint suppression stops doing anything — delete it.
 
-4. **Lint-suppression `cfg_attr` blocks** (`#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]` at the top of integration-test files) were added by PR #262 because gated tests left their imports and helpers dangling under `cargo clippy --all-features`. Each one is a TODO marker. When a chunk ungates enough of a file's tests that the dangling-imports problem goes away, **delete the `cfg_attr`**. Don't leave it sitting after it's stopped doing anything.
+7. **`tests/test_validation.rs`** is the home for cross-cutting "this combinator panics on bad input" tests; PR #262 gated several. If your chunk adds a new schema or panic site, check whether `test_validation.rs` has a gated entry waiting for it.
 
-5. **`tests/test_validation.rs`** is the home for cross-cutting "this combinator panics on bad input" tests, and PR #262 gated several of these on native. The native-mode versions tend to need specific kinds of error reporting; if your chunk adds a new schema or panic site, check whether `test_validation.rs` has a gated entry waiting for it.
-
-The shape of a healthy chunk: at the end of step 3.5, the diff has *more* test deletions and gate removals than gate additions. Every gate it adds back has a one-line "needs X" comment that's actionable, and the dangling-imports `cfg_attr` blocks shrink (or vanish) along with the gates they were compensating for.
-
-If a test was gated **for a different reason** than "native doesn't support this" — e.g. the test depended on a Python-specific facility that has no Rust counterpart — leave it gated and document why in a comment naming the unrepresentable concept. That's a `cfg(not(feature = "native"))` that will never go away, and it deserves a different comment from the temporary "engine doesn't support this yet" gates.
+The shape of a healthy chunk: at the end of step 3.5, the diff has *more* removals of `#[hegel::not_supported_on_native]` than additions, *more* migrations of `#[cfg(not(feature = "native"))]` to the xfail annotation than the other way around, and the dangling-imports `cfg_attr` blocks shrink (or vanish) along with the gates they were compensating for.
 
 ### 4. Heavily review for bullshit
 
