@@ -330,6 +330,31 @@ pub(crate) fn run_test_case(
     Ok(tc_result)
 }
 
+/// Append a captured backtrace (and an optional short-form note) to `out`.
+///
+/// Shared between [`render_diagnostic`] (panic diagnostics) and
+/// [`render_internal_error`] (hegel-internal panic propagation). Both
+/// callers need the same "if captured: format with current RUST_BACKTRACE
+/// setting" logic; factoring it out keeps a single nocov region rather
+/// than duplicating the env-var-conditional block at every call site.
+fn append_captured_backtrace(
+    out: &mut String,
+    backtrace: &Backtrace,
+    header: &str,
+    include_short_note: bool,
+) {
+    // nocov start
+    if backtrace.status() == BacktraceStatus::Captured {
+        let is_full = std::env::var("RUST_BACKTRACE").is_ok_and(|v| v == "full");
+        let formatted = format_backtrace(backtrace, is_full);
+        out.push_str(&format!("{header}{formatted}\n"));
+        if include_short_note && !is_full {
+            out.push_str("note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\n");
+        }
+    }
+    // nocov end
+}
+
 /// Render the per-failure diagnostic block previously emitted inline.
 /// Mirrors the default Rust panic-handler output so each row in the
 /// multi-failure report looks like a stand-alone test failure.
@@ -347,20 +372,7 @@ fn render_diagnostic(
     ));
     out.push_str(msg);
     out.push('\n');
-    // nocov start
-    if backtrace.status() == BacktraceStatus::Captured {
-        let is_full = std::env::var("RUST_BACKTRACE")
-            .map(|v| v == "full")
-            .unwrap_or(false);
-        let formatted = format_backtrace(backtrace, is_full);
-        out.push_str(&format!("stack backtrace:\n{}\n", formatted));
-        if !is_full {
-            out.push_str(
-                "note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\n",
-            );
-        }
-    }
-    // nocov end
+    append_captured_backtrace(&mut out, backtrace, "stack backtrace:\n", true);
     out
 }
 
@@ -372,17 +384,12 @@ fn render_internal_error(err: &InternalError) -> String {
         err.panic_info.location(),
         err.panic_message,
     );
-    // nocov start
-    if err.panic_info.backtrace.status() == BacktraceStatus::Captured {
-        let is_full = std::env::var("RUST_BACKTRACE")
-            .map(|v| v == "full")
-            .unwrap_or(false);
-        msg.push_str(&format!(
-            "\noriginal backtrace:\n{}\n",
-            format_backtrace(&err.panic_info.backtrace, is_full),
-        ));
-    }
-    // nocov end
+    append_captured_backtrace(
+        &mut msg,
+        &err.panic_info.backtrace,
+        "\noriginal backtrace:\n",
+        false,
+    );
     msg
 }
 
