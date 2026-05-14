@@ -351,35 +351,10 @@ fn stop_span_on_empty_stack_is_a_no_op() {
     assert!(tc.spans.is_empty());
 }
 
-// ── NativeResult::Conjecture path in as_result ────────────────────────────
-
-// ── Observer called in draw_float ─────────────────────────────────────────
+// ── DataObserver default method bodies ────────────────────────────────────
 //
-// The `observer` field on `NativeTestCase` is private, so post-draw the
-// test can't reach back into the boxed observer.  Instead the observer
-// holds an `Arc<Mutex<...>>` that the test side keeps a clone of —
-// after the draw, the lock contains exactly what the observer captured.
-
-// ── Observer called in draw_string ────────────────────────────────────────
-
-// ── Observer called in draw_float_forced ─────────────────────────────────
-
-// ── Observer called in draw_bytes_forced ─────────────────────────────────
-
-// ── N18.core_state: observer notified by draw_bytes (non-forced) ─────────
-//
-// `draw_bytes` (non-forced) ends with
-//     if let Some(ref mut obs) = self.observer { obs.draw_bytes(&v, was_forced); }
-// at state.rs:1290-1292. `draw_bytes_forced` has a separate notification
-// site; only that one was exercised. Replay via `for_choices` resolves the
-// draw with was_forced=false, so the non-forced notification fires.
-
-// ── Observer called in draw_string_forced ────────────────────────────────
-
-// ── DataObserver::draw_boolean default (line 453) ─────────────────────────
-//
-// The `data_observer_default_methods_are_no_ops` test above omitted
-// `draw_boolean`.  Call it to cover the default implementation.
+// Each default body is a no-op; calling it on a struct that doesn't override
+// the method exercises the default arm.
 
 #[test]
 fn data_observer_draw_boolean_default_is_no_op() {
@@ -391,6 +366,12 @@ fn data_observer_draw_boolean_default_is_no_op() {
 fn data_observer_draw_integer_default_is_no_op() {
     let mut obs = NoopObserver;
     obs.draw_integer(42, false); // must not panic
+}
+
+#[test]
+fn data_observer_draw_float_default_is_no_op() {
+    let mut obs = NoopObserver;
+    obs.draw_float(1.5, false); // must not panic
 }
 
 #[test]
@@ -520,6 +501,32 @@ fn draw_integer_notifies_observer() {
     assert_eq!(recorded, Some((99, false)));
 }
 
+// ── NativeTestCase::draw_float with observer ──────────────────────────────
+
+#[test]
+fn draw_float_notifies_observer() {
+    use std::sync::{Arc, Mutex};
+    struct FloatObserver {
+        captured: Arc<Mutex<Option<(u64, bool)>>>,
+    }
+    impl DataObserver for FloatObserver {
+        fn draw_float(&mut self, value: f64, was_forced: bool) {
+            // Capture the bit pattern so `-0.0` and NaN payloads compare exactly.
+            *self.captured.lock().unwrap() = Some((value.to_bits(), was_forced));
+        }
+    }
+    let captured = Arc::new(Mutex::new(None));
+    let choices = vec![ChoiceValue::Float(2.5)];
+    let obs = Box::new(FloatObserver {
+        captured: captured.clone(),
+    });
+    let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
+    let v = tc.draw_float(0.0, 10.0, false, false).ok().unwrap();
+    assert_eq!(v, 2.5);
+    let recorded = captured.lock().unwrap().take();
+    assert_eq!(recorded, Some((2.5_f64.to_bits(), false)));
+}
+
 // ── NativeTestCase::stop_span extends parent labels (line 798) ────────────
 //
 // When stop_span is called with discard=false and there is a parent span
@@ -538,27 +545,35 @@ fn stop_span_extends_parent_label_stack() {
     // No panic means the label propagation path was executed.
 }
 
-// ── many_draw_length: min_size == max_size (line 65) ─────────────────────
-//
-// draw_string with min_size == max_size calls many_draw_length which takes
-// the early return path (line 65: return min_size).
+// ── draw_float on a fresh random NTC ─────────────────────────────────────
 
-// ── draw_float: half-bounded range (lines 1167-1187) ─────────────────────
-//
-// half_bounded = !bounded && (min.is_finite() || max.is_finite()).
-// Use (1.0, f64::INFINITY) so the range is half-bounded from below.
+#[test]
+fn draw_float_unbounded_with_nan_can_produce_nan() {
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+    // Fully unbounded with allow_nan=true exercises the random-generation
+    // branch including the NaN-emission arm.
+    for seed in 0..200u64 {
+        let mut tc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
+        let v = tc
+            .draw_float(f64::NEG_INFINITY, f64::INFINITY, true, true)
+            .ok()
+            .unwrap();
+        if v.is_nan() {
+            return; // exercised
+        }
+    }
+    panic!("never produced NaN in 200 unbounded draws with allow_nan=true");
+}
 
-// ── draw_float: unbounded range with NaN (lines 1188-1199) ───────────────
-//
-// !bounded && !half_bounded = fully unbounded. allow_nan=true enables the
-// NaN generation branch.
-
-// ── draw_string: random generation body (lines 1339-1373) ─────────────────
-//
-// Calling draw_string on a fresh random NTC (no prefix) exercises the
-// random-generation closure.
-
-// ── draw_string: min_size==0 path (line 1319) ────────────────────────────
-//
-// The nasty-floats list for draw_string includes Vec::new() when min_size==0
-// and max_size > 0. Line 1319: `v.push(Vec::new())`.
+#[test]
+fn draw_float_half_bounded_below_explores_finite_range() {
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+    let mut tc = NativeTestCase::new_random(SmallRng::seed_from_u64(0));
+    let v = tc
+        .draw_float(1.0, f64::INFINITY, false, false)
+        .ok()
+        .unwrap();
+    assert!(v >= 1.0 && !v.is_nan());
+}

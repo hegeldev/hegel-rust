@@ -8,11 +8,10 @@
 //   integers   — zero_choices, swap_integer_sign, binary_search_integer_towards_zero,
 //                redistribute_integers, shrink_duplicates
 //   sequence   — sort_values, swap_adjacent_blocks
-//   floats     — shrink_floats
-//   bytes      — shrink_bytes
-//   strings    — shrink_strings
+//   floats     — shrink_floats, redistribute_numeric_pairs
 
 mod deletion;
+mod floats;
 mod index_passes;
 mod integers;
 mod mutation;
@@ -186,6 +185,8 @@ impl<'a> Shrinker<'a> {
             self.shrink_duplicates();
             self.sort_values();
             self.swap_adjacent_blocks();
+            self.shrink_floats();
+            self.redistribute_numeric_pairs();
             self.lower_and_bump();
             self.try_shortening_via_increment();
             self.mutate_and_shrink();

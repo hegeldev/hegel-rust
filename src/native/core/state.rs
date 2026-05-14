@@ -8,9 +8,10 @@ use rand::RngExt;
 use rand::rngs::SmallRng;
 
 use super::choices::{
-    BooleanChoice, ChoiceKind, ChoiceNode, ChoiceValue, IntegerChoice, InterestingOrigin, Status,
-    StopTest,
+    BooleanChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice,
+    InterestingOrigin, Status, StopTest,
 };
+use super::float_index::lex_to_float;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
 
 /// State for a variable-length collection (port of Hypothesis's `many` class).
@@ -189,6 +190,83 @@ pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut SmallRng) -> i
     } else {
         rng.random_range(ic.min_value..=ic.max_value)
     }
+}
+
+/// Float counterpart of [`biased_integer_sample`]: draws boundary / "nasty"
+/// values (`0.0`, `-0.0`, `±1.0`, `±MAX`, `±INFINITY`, `MIN_POSITIVE`, NaN,
+/// plus the user's `min_value`/`max_value`) with probability proportional to
+/// `BOUNDARY_PROBABILITY × |nasty|`, falling back to a uniform-ish lex draw
+/// otherwise. Shared with the data-tree walk so novel-prefix exploration
+/// hits the same boundary distribution as fresh draws.
+pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut SmallRng) -> f64 {
+    let bounded = fc.min_value.is_finite() && fc.max_value.is_finite();
+    let half_bounded = !bounded && (fc.min_value.is_finite() || fc.max_value.is_finite());
+
+    let candidates = [
+        fc.min_value,
+        fc.max_value,
+        0.0,
+        -0.0_f64,
+        1.0,
+        -1.0,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+        f64::MIN_POSITIVE,
+        f64::MAX,
+        -f64::MAX,
+    ];
+    let nasty: Vec<f64> = candidates
+        .iter()
+        .copied()
+        .filter(|&v| fc.validate(v))
+        .collect();
+    let nasty_threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
+
+    if rng.random::<f64>() < nasty_threshold {
+        let idx = rng.random_range(0..nasty.len());
+        return nasty[idx];
+    }
+    let f = if bounded {
+        let r: f64 = rng.random();
+        let v = fc.min_value + r * (fc.max_value - fc.min_value);
+        v.max(fc.min_value).min(fc.max_value)
+    } else if half_bounded {
+        let use_inf = fc.allow_infinity && rng.random::<f64>() < 0.05;
+        if use_inf {
+            if fc.max_value == f64::INFINITY {
+                f64::INFINITY
+            } else {
+                f64::NEG_INFINITY
+            }
+        } else {
+            loop {
+                let bits: u64 = rng.random();
+                let mag = lex_to_float(bits).abs();
+                if mag.is_finite() {
+                    break if fc.min_value.is_finite() {
+                        fc.min_value + mag
+                    } else {
+                        fc.max_value - mag
+                    };
+                }
+            }
+        }
+    } else if fc.allow_nan && rng.random::<f64>() < 0.01 {
+        let exponent: u64 = 0x7FF << 52;
+        let sign: u64 = (rng.random::<u64>() >> 63) << 63;
+        let mantissa: u64 = (rng.random::<u64>() & ((1u64 << 52) - 1)).max(1);
+        f64::from_bits(sign | exponent | mantissa)
+    } else {
+        loop {
+            let bits: u64 = rng.random();
+            let v = lex_to_float(bits);
+            if !v.is_nan() {
+                break v;
+            }
+        }
+    };
+    if fc.validate(f) { f } else { fc.simplest() }
 }
 
 /// A pool of variable IDs for stateful testing.
@@ -424,6 +502,7 @@ impl std::ops::Index<i64> for Spans {
 pub trait DataObserver: Send {
     fn draw_boolean(&mut self, _value: bool, _was_forced: bool) {}
     fn draw_integer(&mut self, _value: i128, _was_forced: bool) {}
+    fn draw_float(&mut self, _value: f64, _was_forced: bool) {}
     fn conclude_test(&mut self, _status: Status, _origin: Option<InterestingOrigin>) {}
 }
 
@@ -723,6 +802,48 @@ impl NativeTestCase {
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_integer(v, was_forced);
+        }
+
+        Ok(v)
+    }
+
+    /// Draw a floating-point value in `[min_value, max_value]`. NaN is drawn
+    /// only when `allow_nan` is set; ±∞ only when `allow_infinity` is set and
+    /// the relevant endpoint is unbounded.
+    pub fn draw_float(
+        &mut self,
+        min_value: f64,
+        max_value: f64,
+        allow_nan: bool,
+        allow_infinity: bool,
+    ) -> Result<f64, StopTest> {
+        let kind = FloatChoice {
+            min_value,
+            max_value,
+            allow_nan,
+            allow_infinity,
+        };
+
+        let (value, was_forced) = self.resolve_choice(
+            &ChoiceKind::Float(kind.clone()),
+            || ChoiceValue::Float(kind.simplest()),
+            || ChoiceValue::Float(kind.unit()),
+            |v| matches!(v, ChoiceValue::Float(f) if kind.validate(*f)),
+            |rng| ChoiceValue::Float(biased_float_sample(&kind, rng)),
+        )?;
+
+        let ChoiceValue::Float(v) = value else {
+            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
+        };
+
+        self.nodes.push(ChoiceNode {
+            kind: ChoiceKind::Float(kind),
+            value: ChoiceValue::Float(v),
+            was_forced,
+        });
+
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_float(v, was_forced);
         }
 
         Ok(v)

@@ -150,3 +150,38 @@ fn deserialize_returns_none_on_unknown_type_tag() {
     bytes.push(42); // unknown type tag
     assert!(deserialize_choices(&bytes).is_none());
 }
+
+#[test]
+fn round_trip_float_choices_preserves_bit_pattern() {
+    let choices = vec![
+        ChoiceValue::Float(0.0),
+        ChoiceValue::Float(-0.0),
+        ChoiceValue::Float(1.5),
+        ChoiceValue::Float(-1.5),
+        ChoiceValue::Float(f64::INFINITY),
+        ChoiceValue::Float(f64::NEG_INFINITY),
+        ChoiceValue::Float(f64::NAN),
+        ChoiceValue::Float(f64::MAX),
+        ChoiceValue::Float(f64::MIN_POSITIVE),
+    ];
+    let bytes = serialize_choices(&choices);
+    let round_tripped = deserialize_choices(&bytes).unwrap();
+    assert_eq!(round_tripped.len(), choices.len());
+    for (got, want) in round_tripped.iter().zip(choices.iter()) {
+        match (got, want) {
+            (ChoiceValue::Float(g), ChoiceValue::Float(w)) => {
+                assert_eq!(g.to_bits(), w.to_bits(), "bit pattern mismatch");
+            }
+            _ => panic!("non-float variant produced"),
+        }
+    }
+}
+
+#[test]
+fn deserialize_returns_none_on_truncated_float_body() {
+    // count = 1, type tag 2 (Float), but fewer than 8 bytes follow.
+    let mut bytes = 1u32.to_le_bytes().to_vec();
+    bytes.push(2); // type tag = Float
+    bytes.extend_from_slice(&[0u8; 4]); // only 4 of 8 needed bytes
+    assert!(deserialize_choices(&bytes).is_none());
+}

@@ -16,12 +16,14 @@ use rand::seq::SliceRandom;
 use crate::native::bignum::BigUint;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Status};
 
-/// Hashable choice-value key. Mirrors `super::det_tree::ChoiceValueKey`;
-/// kept private so the tree node type can stay unexported.
+/// Hashable choice-value key. `f64` is keyed by its bit pattern so `-0.0`
+/// stays distinct from `0.0` and individual NaN payloads are tracked
+/// separately — both matter for novel-prefix exhaustion accounting.
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum ChoiceValueKey {
     Integer(i128),
     Boolean(bool),
+    Float(u64),
 }
 
 impl From<&ChoiceValue> for ChoiceValueKey {
@@ -29,6 +31,7 @@ impl From<&ChoiceValue> for ChoiceValueKey {
         match v {
             ChoiceValue::Integer(n) => ChoiceValueKey::Integer(*n),
             ChoiceValue::Boolean(b) => ChoiceValueKey::Boolean(*b),
+            ChoiceValue::Float(f) => ChoiceValueKey::Float(f.to_bits()),
         }
     }
 }
