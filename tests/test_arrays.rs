@@ -1,5 +1,6 @@
 mod common;
 
+use common::not_supported_on_native;
 use common::utils::find_any;
 use hegel::TestCase;
 use hegel::generators::{self as gs, Generator};
@@ -16,7 +17,7 @@ fn test_array_of_booleans(tc: TestCase) {
     assert_eq!(arr.len(), 3);
 }
 
-#[cfg(not(feature = "native"))]
+#[not_supported_on_native]
 #[hegel::test]
 fn test_array_of_strings(tc: TestCase) {
     let arr: [String; 2] = tc.draw(gs::arrays(gs::text()));

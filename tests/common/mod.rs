@@ -1,6 +1,17 @@
 pub mod project;
 pub mod utils;
 
+/// Re-export of the dev-only `#[not_supported_on_native]` attribute proc-macro
+/// from `hegeltest-macros`. Pulls it into the test binary's `common` module
+/// so test files can `use common::not_supported_on_native;` instead of
+/// depending on `hegeltest-macros` by name.
+///
+/// `allow(unused_imports)` because every test binary includes `mod common;`
+/// but only some of them actually use the attribute — without the allow,
+/// clippy's `-D warnings` would reject the re-export in those binaries.
+#[allow(unused_imports)]
+pub use hegel_macros::not_supported_on_native;
+
 // Each cargo test run of this project spawns its own set of integration-test
 // binaries, and each one of those binaries normally inherits the crate root as
 // its cwd. The hegel library creates `.hegel/` in the process's cwd, so

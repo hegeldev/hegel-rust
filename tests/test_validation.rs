@@ -2,6 +2,7 @@
 
 mod common;
 
+use common::not_supported_on_native;
 use hegel::TestCase;
 use hegel::generators::{self as gs, Generator};
 
@@ -207,6 +208,10 @@ fn test_one_of_empty() {
 
 // --- server-side error handling ---
 
+// Server-specific: the `InvalidArgument` string in the panic message comes
+// from the Python Hypothesis server, not the cross-backend engine. The
+// native backend surfaces the surrogate-range mistake through a different
+// code path (todo!() on unsupported character draws).
 #[cfg(not(feature = "native"))]
 #[hegel::test]
 #[should_panic(expected = "InvalidArgument")]

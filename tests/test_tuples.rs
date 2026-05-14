@@ -1,5 +1,6 @@
 mod common;
 
+use common::not_supported_on_native;
 use common::utils::{assert_all_examples, find_any};
 use hegel::TestCase;
 use hegel::generators::{self as gs, Generator};
@@ -55,7 +56,7 @@ fn test_tuple2_respects_bounds(tc: TestCase) {
 
 // tuples3
 
-#[cfg(not(feature = "native"))]
+#[not_supported_on_native]
 #[hegel::test]
 fn test_tuple3_basic(tc: TestCase) {
     let (a, b, c): (i32, String, bool) =
@@ -232,7 +233,7 @@ fn test_tuple2_with_mapped_elements(tc: TestCase) {
 
 // mixed types
 
-#[cfg(not(feature = "native"))]
+#[not_supported_on_native]
 #[hegel::test]
 fn test_tuple_mixed_types(tc: TestCase) {
     let (n, s, b, f): (i32, String, bool, f64) = tc.draw(gs::tuples!(

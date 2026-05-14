@@ -11,6 +11,7 @@
 
 mod common;
 
+use common::not_supported_on_native;
 use hegel::TestCase;
 use hegel::generators as gs;
 use std::sync::{Arc, Mutex};
@@ -78,7 +79,7 @@ fn test_spawn_thread_with_clone_does_generation(tc: TestCase) {
     let _ = (thread_value, main_value);
 }
 
-#[cfg(not(feature = "native"))]
+#[not_supported_on_native]
 #[hegel::test(test_cases = 20)]
 fn test_main_then_thread_then_main(tc: TestCase) {
     let _a: u32 = tc.draw(gs::integers());

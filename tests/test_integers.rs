@@ -7,6 +7,7 @@
 
 mod common;
 
+use common::not_supported_on_native;
 use common::utils::{assert_all_examples, find_any};
 use hegel::generators as gs;
 
@@ -121,10 +122,10 @@ fn test_usize() {
 }
 
 mod numerics {
+    use super::not_supported_on_native;
     use hegel::generators as gs;
     use hegel::{HealthCheck, Hegel, Settings};
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_fuzz_floats_bounds() {
         Hegel::new(|tc| {
@@ -189,6 +190,7 @@ mod numerics {
 
 mod nocover_simple_numbers {
     use super::common::utils::{Minimal, minimal};
+    use super::not_supported_on_native;
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
 
@@ -314,7 +316,6 @@ mod nocover_simple_numbers {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_minimal_small_sum_float_list() {
         let xs = Minimal::new(gs::vecs(gs::floats::<f64>()).min_size(5), |x: &Vec<f64>| {
@@ -324,7 +325,6 @@ mod nocover_simple_numbers {
         assert_eq!(xs, vec![0.0, 0.0, 0.0, 0.0, 1.0]);
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_minimals_boundary_floats() {
         assert_eq!(
@@ -336,7 +336,6 @@ mod nocover_simple_numbers {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_minimal_non_boundary_float() {
         assert_eq!(
@@ -348,13 +347,11 @@ mod nocover_simple_numbers {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_minimal_float_is_zero() {
         assert_eq!(minimal(gs::floats::<f64>(), |_: &f64| true), 0.0);
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_minimal_asymetric_bounded_float() {
         assert_eq!(
@@ -366,13 +363,11 @@ mod nocover_simple_numbers {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_negative_floats_simplify_to_zero() {
         assert_eq!(minimal(gs::floats::<f64>(), |x: &f64| *x <= -1.0), -1.0);
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_minimal_infinite_float_is_positive() {
         assert_eq!(
@@ -381,14 +376,12 @@ mod nocover_simple_numbers {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_minimal_infinite_negative_float() {
         let x = minimal(gs::floats::<f64>(), |x: &f64| *x < -f64::MAX);
         assert!(x < -f64::MAX);
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_minimal_float_on_boundary_of_representable() {
         minimal(gs::floats::<f64>(), |x: &f64| {
@@ -396,13 +389,11 @@ mod nocover_simple_numbers {
         });
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_minimize_nan() {
         assert!(minimal(gs::floats::<f64>(), |x: &f64| x.is_nan()).is_nan());
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_minimize_very_large_float() {
         let t = f64::MAX / 2.0;
@@ -413,7 +404,6 @@ mod nocover_simple_numbers {
         value.is_finite() && value == value.trunc()
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_minimal_float_far_from_integral() {
         minimal(gs::floats::<f64>(), |x: &f64| {
@@ -421,7 +411,6 @@ mod nocover_simple_numbers {
         });
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_list_of_fractional_float() {
         let xs = Minimal::new(gs::vecs(gs::floats::<f64>()).min_size(5), |x: &Vec<f64>| {
@@ -433,7 +422,6 @@ mod nocover_simple_numbers {
         assert_eq!(xs[0], 2.0);
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_minimal_fractional_float() {
         assert_eq!(minimal(gs::floats::<f64>(), |x: &f64| *x >= 1.5), 2.0);
@@ -457,31 +445,26 @@ mod nocover_simple_numbers {
         .run();
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_floats_in_constrained_range_zero_up() {
         check_floats_in_constrained_range(0.0, f64::from_bits(1));
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_floats_in_constrained_range_zero_down() {
         check_floats_in_constrained_range(-f64::from_bits(1), 0.0);
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_floats_in_constrained_range_straddle_zero() {
         check_floats_in_constrained_range(-f64::from_bits(1), f64::from_bits(1));
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_floats_in_constrained_range_subnormal_pair() {
         check_floats_in_constrained_range(f64::from_bits(1), f64::from_bits(2));
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_bounds_are_respected() {
         assert_eq!(
@@ -494,7 +477,6 @@ mod nocover_simple_numbers {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_floats_from_zero_have_reasonable_range() {
         for k in 0..10i32 {
@@ -512,13 +494,11 @@ mod nocover_simple_numbers {
         }
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_explicit_allow_nan() {
         minimal(gs::floats::<f64>().allow_nan(true), |x: &f64| x.is_nan());
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_one_sided_contains_infinity() {
         minimal(gs::floats::<f64>().min_value(1.0), |x: &f64| {
@@ -529,7 +509,6 @@ mod nocover_simple_numbers {
         });
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_no_allow_infinity_upper() {
         Hegel::new(|tc| {
@@ -540,7 +519,6 @@ mod nocover_simple_numbers {
         .run();
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_no_allow_infinity_lower() {
         Hegel::new(|tc| {
@@ -554,7 +532,6 @@ mod nocover_simple_numbers {
     // TestFloatsAreFloats: upstream asserts isinstance(arg, float). f64 is
     // statically typed in Rust, so these reduce to smoke tests.
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_floats_are_floats_unbounded() {
         Hegel::new(|tc| {
@@ -564,7 +541,6 @@ mod nocover_simple_numbers {
         .run();
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_floats_are_floats_int_float_bounds() {
         Hegel::new(|tc| {
@@ -578,7 +554,6 @@ mod nocover_simple_numbers {
         .run();
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_floats_are_floats_float_float_bounds() {
         Hegel::new(|tc| {

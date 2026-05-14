@@ -4,6 +4,7 @@
 
 mod common;
 
+use common::not_supported_on_native;
 use hegel::TestCase;
 use hegel::generators as gs;
 
@@ -38,9 +39,10 @@ mod composite {
     //!   strategy return-type warnings, and `typing.overload` respectively.
 
     use super::common::utils::minimal;
+    #[allow(unused_imports)]
+    use super::not_supported_on_native;
     use hegel::TestCase;
     use hegel::generators as gs;
-    #[cfg(not(feature = "native"))]
     use hegel::{HealthCheck, Hegel, Settings};
 
     #[hegel::composite]
@@ -77,7 +79,6 @@ mod composite {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_assume_in_draw() {
         Hegel::new(|tc| {

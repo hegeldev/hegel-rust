@@ -23,6 +23,7 @@
 
 mod common;
 
+use common::not_supported_on_native;
 use std::collections::HashMap;
 
 #[allow(dead_code)]
@@ -241,6 +242,8 @@ mod direct_strategies {
     use super::common::utils::{
         assert_all_examples, check_can_generate_examples, expect_panic, minimal,
     };
+    #[allow(unused_imports)]
+    use super::not_supported_on_native;
     use hegel::generators::{self as gs, Generator};
     use hegel::{Hegel, Settings};
     use std::collections::HashMap;
@@ -361,7 +364,7 @@ mod direct_strategies {
         );
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_text_alphabet_empty_with_min_size_panics() {
         // text(alphabet="", min_size=1): no characters to pick from and we require
@@ -384,7 +387,6 @@ mod direct_strategies {
         check_can_generate_examples(gs::integers::<i64>().min_value(12).max_value(12));
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_floats_valid_combinations() {
         check_can_generate_examples(gs::floats::<f64>());
@@ -439,7 +441,7 @@ mod direct_strategies {
         check_can_generate_examples(gs::hashmaps(gs::booleans(), gs::integers::<i64>()));
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_text_alphabet_kwargs() {
         check_can_generate_examples(gs::text().alphabet("abc"));
@@ -449,7 +451,7 @@ mod direct_strategies {
         // exercise the non-empty-alphabet case here.
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_characters_codecs_and_categories() {
         check_can_generate_examples(gs::characters().codec("ascii"));
@@ -462,7 +464,7 @@ mod direct_strategies {
         check_can_generate_examples(gs::characters().exclude_categories(&["Nd"]));
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_from_regex_alphabet_combinations() {
         check_can_generate_examples(
@@ -470,7 +472,7 @@ mod direct_strategies {
         );
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_ip_addresses_kwargs() {
         check_can_generate_examples(gs::ip_addresses());
@@ -503,7 +505,7 @@ mod direct_strategies {
         check_can_generate_examples(gs::one_of(vec![gs::booleans().boxed()]));
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_text_and_binary_noarg_generate() {
         check_can_generate_examples(gs::text());
@@ -547,7 +549,6 @@ mod direct_strategies {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_float_can_find_max_value_inf() {
         let v = minimal(gs::floats::<f64>().max_value(f64::INFINITY), |x: &f64| {
@@ -560,7 +561,6 @@ mod direct_strategies {
         assert_eq!(v, f64::INFINITY);
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_float_can_find_min_value_inf() {
         // Unbounded: finds some negative infinity.
@@ -624,7 +624,6 @@ mod direct_strategies {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_no_infinity_for_min_value_values() {
         for value in [-1.0_f64, 0.0, 1.0] {
@@ -635,7 +634,6 @@ mod direct_strategies {
         }
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_no_infinity_for_max_value_values() {
         for value in [-1.0_f64, 0.0, 1.0] {
@@ -646,7 +644,6 @@ mod direct_strategies {
         }
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_no_nan_for_min_value_values() {
         for value in [-1.0_f64, 0.0, 1.0] {
@@ -657,7 +654,6 @@ mod direct_strategies {
         }
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_no_nan_for_max_value_values() {
         for value in [-1.0_f64, 0.0, 1.0] {
@@ -682,18 +678,16 @@ mod direct_strategies {
 }
 
 mod provisional_strategies {
-    #[cfg(not(feature = "native"))]
+    #[allow(unused_imports)]
+    use super::not_supported_on_native;
     use std::collections::HashSet;
 
-    #[cfg(not(feature = "native"))]
     use regex::Regex;
 
     use super::common::utils::expect_panic;
-    #[cfg(not(feature = "native"))]
     use super::common::utils::{assert_all_examples, check_can_generate_examples, find_any};
     use hegel::generators::{self as gs, Generator};
 
-    #[cfg(not(feature = "native"))]
     fn url_allowed_chars() -> HashSet<char> {
         ('a'..='z')
             .chain('A'..='Z')
@@ -702,7 +696,7 @@ mod provisional_strategies {
             .collect()
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_is_url() {
         let allowed = url_allowed_chars();
@@ -754,7 +748,7 @@ mod provisional_strategies {
         }
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_valid_domains_arguments() {
         check_can_generate_examples(gs::domains());
@@ -763,13 +757,13 @@ mod provisional_strategies {
         }
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_find_any_non_empty_domains() {
         find_any(gs::domains(), |s: &String| !s.is_empty());
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_find_any_non_empty_urls() {
         find_any(gs::urls(), |s: &String| !s.is_empty());

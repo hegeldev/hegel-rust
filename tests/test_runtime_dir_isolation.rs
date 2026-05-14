@@ -8,9 +8,8 @@
 
 mod common;
 
-#[cfg(not(feature = "native"))]
+use common::not_supported_on_native;
 use hegel::Hegel;
-#[cfg(not(feature = "native"))]
 use hegel::generators as gs;
 
 #[test]
@@ -33,7 +32,7 @@ fn cwd_is_a_hegel_rust_test_tempdir() {
     );
 }
 
-#[cfg(not(feature = "native"))]
+#[not_supported_on_native]
 #[test]
 fn running_hegel_creates_dot_hegel_in_tempdir_not_crate_root() {
     Hegel::new(|tc| {

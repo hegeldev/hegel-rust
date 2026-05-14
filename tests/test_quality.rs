@@ -4,8 +4,11 @@
 
 mod common;
 
+use common::not_supported_on_native;
 mod shrink_quality {
     use super::common::utils::{Minimal, minimal};
+    #[allow(unused_imports)]
+    use super::not_supported_on_native;
     use ciborium::Value;
     use hegel::generators::{self as gs, Generator};
     use std::collections::{HashMap, HashSet};
@@ -34,14 +37,13 @@ mod shrink_quality {
         assert_eq!(v, 1);
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_minimize_string_to_empty() {
         let s: String = minimal(gs::text(), |_| true);
         assert_eq!(s, "");
     }
 
-    #[cfg(not(feature = "native"))]
     #[derive(Debug, Clone, PartialEq)]
     enum Mixed {
         Int(i64),
@@ -49,7 +51,7 @@ mod shrink_quality {
         Bool(bool),
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_minimize_one_of() {
         let v = minimal(
@@ -66,7 +68,7 @@ mod shrink_quality {
         assert!(ok, "got {v:?}");
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_minimize_mixed_list() {
         let mixed = minimal(
@@ -82,14 +84,14 @@ mod shrink_quality {
         }
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_minimize_longer_string() {
         let s = minimal(gs::text(), |x: &String| x.chars().count() >= 10);
         assert_eq!(s, "0".repeat(10));
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_minimize_longer_list_of_strings() {
         let xs = minimal(gs::vecs(gs::text()), |x: &Vec<String>| x.len() >= 10);
@@ -190,7 +192,7 @@ mod shrink_quality {
         assert_eq!(xs, vec![target]);
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_dictionary_empty() {
         let t: HashMap<i64, String> =
@@ -198,7 +200,7 @@ mod shrink_quality {
         assert!(t.is_empty());
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_dictionary_size_3() {
         let t: HashMap<i64, String> = minimal(
@@ -544,11 +546,12 @@ mod shrink_quality {
         assert_eq!((a, b), (1, 1000));
     }
 
+    // Flaky on native: the bounded-float shrinker sometimes drives the
+    // joint minimum down to (1.0, 1000.0) and sometimes gets stuck at
+    // intermediate values like (203.0, 798.0). The `_mixed_float_int`,
+    // `_mixed_int_float`, and `_separated_float` variants share the same
+    // shrinker-quality issue.
     #[cfg(not(feature = "native"))]
-    // The bounded-float shrinker can get stuck at intermediate values
-    // (e.g. 203.0) instead of driving down to 1.0 through paired-sum
-    // constraints; this also blocks the `_mixed_float_int` and
-    // `_separated_float` variants.
     #[test]
     fn test_sum_of_pair_float() {
         let (a, b) = minimal(
@@ -562,6 +565,7 @@ mod shrink_quality {
         assert_eq!(b, 1000.0);
     }
 
+    // Flaky on native — same shrinker get-stuck issue as `_float`.
     #[cfg(not(feature = "native"))]
     #[test]
     fn test_sum_of_pair_mixed_float_int() {
@@ -576,6 +580,7 @@ mod shrink_quality {
         assert_eq!(b, 1000);
     }
 
+    // Flaky on native — same shrinker get-stuck issue as `_float`.
     #[cfg(not(feature = "native"))]
     #[test]
     fn test_sum_of_pair_mixed_int_float() {
@@ -590,7 +595,7 @@ mod shrink_quality {
         assert_eq!(b, 1000.0);
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_sum_of_pair_separated_int() {
         let separated_sum = hegel::compose!(|tc| {
@@ -605,7 +610,7 @@ mod shrink_quality {
         assert_eq!((a, b), (1, 1000));
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_sum_of_pair_separated_float() {
         let separated_sum = hegel::compose!(|tc| {
@@ -813,7 +818,6 @@ mod shrink_quality {
         }
     }
 
-    #[cfg(not(feature = "native"))]
     fn check_lowering_with_gap(gap: i64) {
         let s = gs::tuples!(
             gs::integers::<i64>().min_value(-10).max_value(10),
@@ -830,7 +834,7 @@ mod shrink_quality {
         assert_eq!(d, gap);
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_lowering_together_with_gap() {
         for gap in [-10_i64, -5, 0, 5, 10] {
@@ -838,7 +842,7 @@ mod shrink_quality {
         }
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     // Hypothesis's shrinker has a per-codepoint canonicalisation pass that
     // lowers values toward the simplification target ('0'); the same gap that
     // blocks `test_minimize_duplicated_characters_within_a_choice` could stop
@@ -883,7 +887,7 @@ mod shrink_quality {
         assert_eq!(s, "001");
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_minimize_duplicated_characters_within_a_choice() {
         let s = minimal(gs::text().min_size(1), |v: &String| {
@@ -897,7 +901,7 @@ mod shrink_quality {
         assert_eq!(s, "0001");
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     // Without Hypothesis's `NASTY_STRINGS` constant pool
     // (mathematical-fraktur etc.), 10 000 attempts can't reliably
     // surface the witness.
@@ -943,6 +947,8 @@ mod shrink_quality {
 }
 
 mod collective_minimization {
+    #[allow(unused_imports)]
+    use super::not_supported_on_native;
     use std::collections::HashSet;
     use std::fmt::Debug;
 
@@ -1029,49 +1035,43 @@ mod collective_minimization {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_collectively_minimize_floats() {
         check_collective_minimization(gs::floats::<f64>());
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_collectively_minimize_floats_bounded() {
         check_collective_minimization(gs::floats::<f64>().min_value(-2.0).max_value(3.0));
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_collectively_minimize_floats_min_neg_2() {
         check_collective_minimization(gs::floats::<f64>().min_value(-2.0));
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_collectively_minimize_floats_max_neg_zero() {
         check_collective_minimization(gs::floats::<f64>().max_value(-0.0));
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_collectively_minimize_floats_min_zero() {
         check_collective_minimization(gs::floats::<f64>().min_value(0.0));
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_collectively_minimize_floats_full_range() {
         check_collective_minimization(gs::floats::<f64>().min_value(-f64::MAX).max_value(f64::MAX));
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_can_collectively_minimize_text() {
         check_collective_minimization(gs::text());
     }
 
-    #[cfg(not(feature = "native"))]
+    #[not_supported_on_native]
     #[test]
     fn test_can_collectively_minimize_binary() {
         check_collective_minimization(gs::binary());

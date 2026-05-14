@@ -1,5 +1,6 @@
 mod common;
 
+use common::not_supported_on_native;
 use common::project::TempRustProject;
 use common::utils::{assert_matches_regex, expect_panic};
 use hegel::TestCase;
@@ -187,7 +188,7 @@ fn test_explicit_case_with_function_evaluation(tc: TestCase) {
     let _ = n;
 }
 
-#[cfg(not(feature = "native"))]
+#[not_supported_on_native]
 #[hegel::test(test_cases = 1)]
 #[hegel::explicit_test_case(s = ["hello", "world"].join(" "))]
 fn test_explicit_case_with_method_chain(tc: TestCase) {
