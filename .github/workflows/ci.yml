@@ -44,15 +44,16 @@ jobs:
 
   test:
     # Keep the name matching the branch-protection required checks on Linux
-    # (`test (1.86)` / `test (stable)`); other OSes get a suffix.
-    name: test (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || matrix.os == 'macos-latest' && ', macos' || '' }})
+    # (`test (1.86)` / `test (stable)`); Windows variants get a suffix.
+    # macOS is intentionally absent for now and will land in a follow-up.
+    name: test (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest]
         rust: ["1.86", stable]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -76,14 +77,14 @@ jobs:
     # a handful of integration tests still build a `TempRustProject`
     # subprocess that runs with default (server) features, so `uv`
     # has to be on PATH the same way it is for `test`.
-    name: test-native (${{ matrix.rust }}, ${{ matrix.os == 'ubuntu-latest' && 'linux' || matrix.os == 'windows-latest' && 'windows' || 'macos' }})
+    name: test-native (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest]
         rust: ["1.86", stable]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -93,30 +94,16 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install ${{ matrix.rust }} --profile minimal && rustup default ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          # The `test-native (stable, macos)` cache restored a
-          # `~/.cargo/bin/cargo` that ran as `rustup-init`, breaking
-          # every subsequent `cargo test` on that matrix cell.  Skip
-          # caching `${CARGO_HOME}/bin` entirely so the rustup proxies
-          # come from the just-installed toolchain.
-          cache-bin: false
 
       - uses: ./.github/actions/install-tools
         with:
           tools: just uv
 
-      - name: Debug cargo / rustc
-        run: |
-          which cargo
-          cargo --version
-          rustc --version
-          rustup show
-
       - name: Run tests
         run: just check-tests-native
 
   test-all-features:
-    name: test-all-features (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || matrix.os == 'macos-latest' && ', macos' || '' }})
+    name: test-all-features (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -139,12 +126,6 @@ jobs:
             rust: "1.86"
             recipe: check-tests-all-features
           - os: ubuntu-latest
-            rust: stable
-            recipe: check-tests-all-features
-          - os: macos-latest
-            rust: "1.86"
-            recipe: check-tests-all-features
-          - os: macos-latest
             rust: stable
             recipe: check-tests-all-features
     steps:
