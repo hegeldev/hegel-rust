@@ -174,7 +174,17 @@ For every `#[ignore]`: read the message. If there's no associated bug-tracker en
 
 For every `cfg(not(feature = "native"))`: is the test gated because (a) it depends on an engine feature that isn't ported yet (acceptable — drop the gate when the feature lands), or (b) it depends on Python-only behaviour with no Rust counterpart (acceptable — the test belongs in server-only)?  Anything else is bullshit: a test the agent couldn't make pass on native and hid behind a gate.
 
-**Remediation:** If the test asserts behaviour the native backend is supposed to honour, fix the backend. If the test asserts behaviour that's intentionally not in the native backend (e.g. an unimplemented schema), gate it on the relevant feature and *say so* in a comment naming the engine gap.
+When landing a new chunk, the bar is higher: **default to ungating** any `cfg(not(feature = "native"))` in the territory the chunk now covers, even speculatively. See `landing-native-chunk` step 3.5 for the inventory-and-ungate process. A chunk that adds gates without removing any is suspect. A chunk that *only* removes gates without touching engine code is also possible and welcome — sometimes the gates outlived their cause.
+
+**Generic-comment audit:** existing gates with no comment, or comments like `// native doesn't support this yet`, `// TODO: native`, `// not on native`, are not actionable. Each remaining gate should name the *specific* missing engine piece in a way that lets a reader predict which future chunk will lift the gate.
+
+```bash
+git grep -B1 -nE '#\[cfg\(not\(feature = "native"\)\)\]' tests/  # see the comment above each gate
+```
+
+**Remediation:** If the test asserts behaviour the native backend is supposed to honour, fix the backend. If the test asserts behaviour that's intentionally not in the native backend (e.g. an unimplemented schema), gate it on the relevant feature and *say so* in a comment naming the engine gap. If the test depends on something that will *never* be on native (Python-specific facility, deliberate API divergence), say that in the comment — a permanent gate deserves different framing from a temporary one.
+
+**Lint-suppression sweep:** the `#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]` blocks PR #262 added to a handful of test files exist only to silence clippy when gated tests leave their imports dangling. When a chunk ungates enough of a file's tests that the suppression is no longer needed, delete the suppression. Don't leave it sitting as a marker.
 
 ## §10. Vapid / Potemkin tests
 

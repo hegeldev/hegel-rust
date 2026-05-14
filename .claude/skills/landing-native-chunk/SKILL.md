@@ -95,6 +95,49 @@ Things to **not** bring over (these are agent artefacts, not project code):
 - `.claude/skills/implementing-native/`, `.claude/skills/porting-tests/`, `.claude/skills/porting-stateful/`, `.claude/skills/native-review/` — the agent's own skill files. Some of these are useful and may be worth a separate, small skills-only PR (read them critically first — they have their own bullshit). Do not bundle them with engine code.
 - `resources/pbtkit/`, `resources/hypothesis/` — vendored Python reference implementations. Gitignored on main; do not commit.
 
+### 3.5. Ungate tests that the chunk should now cover
+
+PR #262 left a substantial pile of `#[cfg(not(feature = "native"))]` gates on tests and test files — placed there because the native backend didn't yet support the relevant schemas or behaviours. Every chunk landed after #262 should pick up some of those gates. **A new chunk that doesn't ungate any tests is suspicious** — either the chunk is purely internal plumbing (rare), or there's gated work that should be running but isn't.
+
+**Default to ungating.** Bias hard toward removing the `cfg(not(feature = "native"))` / `#[ignore]` and running the test under both backends. The test was written to assert observable behaviour; if the native backend now supports that behaviour, the test should be running against it.
+
+Process for each chunk:
+
+1. **Inventory the gates** in the territory this chunk touches:
+
+   ```bash
+   git grep -nE '#!\[cfg\(not\(feature = "native"\)\)\]' tests/   # file-level
+   git grep -nE '#\[cfg\(not\(feature = "native"\)\)\]' tests/    # item-level
+   git grep -nE '#\[ignore' tests/                                 # bare ignores
+   git grep -nE 'cfg_attr\(feature = "native"' tests/              # the lint-noise suppressions PR #262 added
+   ```
+
+2. **For each gate in scope, try to drop it.** Run `HEGEL_SERVER_COMMAND=/bin/false cargo test --features native --test <name>`. Three outcomes:
+
+   - **Passes.** Drop the gate. Commit the ungating as a separate small commit ("Ungate `<test>` under native — now supported by …"). This is the desired outcome.
+   - **Fails for a reason the chunk can fix.** Fix it. The test passing is part of the chunk's value.
+   - **Fails because of a *different* gap the chunk doesn't cover** (e.g. you're landing floats, but this test also draws bytes). Re-gate it — but with a **specific** comment naming what's missing, not a generic placeholder.
+
+3. **Comment discipline on remaining gates.** Replace generic agent-era comments (`// native doesn't support this yet`, `// TODO: ungate when native works`, lint-suppression `cfg_attr` blocks without explanation) with one line naming the *specific* missing piece:
+
+   ```rust
+   // Native: needs draw_bytes schema (tracked: open extraction PRs).
+   #[cfg(not(feature = "native"))]
+
+   // Native: depends on the regex shrinker pass; ungate when that lands.
+   #[cfg(not(feature = "native"))]
+   ```
+
+   A reader scanning the gates should be able to predict which future PR will remove each one. If the comment doesn't enable that prediction, it isn't specific enough.
+
+4. **Lint-suppression `cfg_attr` blocks** (`#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]` at the top of integration-test files) were added by PR #262 because gated tests left their imports and helpers dangling under `cargo clippy --all-features`. Each one is a TODO marker. When a chunk ungates enough of a file's tests that the dangling-imports problem goes away, **delete the `cfg_attr`**. Don't leave it sitting after it's stopped doing anything.
+
+5. **`tests/test_validation.rs`** is the home for cross-cutting "this combinator panics on bad input" tests, and PR #262 gated several of these on native. The native-mode versions tend to need specific kinds of error reporting; if your chunk adds a new schema or panic site, check whether `test_validation.rs` has a gated entry waiting for it.
+
+The shape of a healthy chunk: at the end of step 3.5, the diff has *more* test deletions and gate removals than gate additions. Every gate it adds back has a one-line "needs X" comment that's actionable, and the dangling-imports `cfg_attr` blocks shrink (or vanish) along with the gates they were compensating for.
+
+If a test was gated **for a different reason** than "native doesn't support this" — e.g. the test depended on a Python-specific facility that has no Rust counterpart — leave it gated and document why in a comment naming the unrepresentable concept. That's a `cfg(not(feature = "native"))` that will never go away, and it deserves a different comment from the temporary "engine doesn't support this yet" gates.
+
 ### 4. Heavily review for bullshit
 
 This is the most important step. Invoke the `detecting-port-bullshit` skill on the entire diff. Do not skip patterns — the agent's failure modes are systematic, and any one of them being missed will surface in human review.
