@@ -26,7 +26,9 @@ check-tests-minimal-versions:
 
     # --locked tells cargo not to update the lockfile. this makes sure we use the lockfile we just generated
     # and don't regenerate it for non-minimal versions.
-    HEGEL_RUNNING_TESTS_WITH_RUST_NIGHTLY=1 RUST_BACKTRACE=1 cargo test --locked --all-features
+    # Feature list matches `check-tests-all-features`: --all-features would enable `native`,
+    # which swaps the backend rather than adding capabilities.
+    HEGEL_RUNNING_TESTS_WITH_RUST_NIGHTLY=1 RUST_BACKTRACE=1 cargo test --locked --features rand,antithesis,chrono,jiff,serde_json,serde_json_raw_value
 
 format:
     cargo fmt
