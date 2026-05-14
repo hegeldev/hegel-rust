@@ -166,7 +166,7 @@ A failing test was hard to fix, so the agent gated it with `#[cfg(not(feature = 
 
 **Two annotations, two purposes:**
 
-- **`not_supported_on_native! { #[test] fn … }`** — *temporary* xfail. The test still runs under `--features native`; under native the runner expects it to panic, so the test fails loudly the moment it starts passing. This is the right choice for any test gated on a missing engine feature.
+- **`#[not_supported_on_native]`** — *temporary* xfail. An attribute proc-macro from `hegeltest-macros`, re-exported through `tests/common/mod.rs`. The test still runs under `--features native`; the runner expects it to panic, so the test fails loudly the moment it starts passing. This is the right choice for any test gated on a missing engine feature.
 - **`#[cfg(not(feature = "native"))]`** — *permanent* exclusion. Only correct for tests that depend on Python-only behaviour, server-only API, or some intentional divergence that will never be on native.
 
 **Detection:**
@@ -180,15 +180,15 @@ git grep -n 'cfg_attr.*feature = "native".*allow' tests/           # lint-noise 
 
 For every `#[ignore]`: read the message. If there's no associated bug-tracker entry or documented limitation, the ignore is hiding a real failure.
 
-For every `#[cfg(not(feature = "native"))]`: is it (a) temporary, waiting on an engine feature — migrate to `not_supported_on_native!`; or (b) permanent — keep the `cfg` and write a one-line comment naming the *unrepresentable concept* (e.g. `// Native: tests Python repr() formatting; no Rust counterpart`). Anything in between is bullshit.
+For every `#[cfg(not(feature = "native"))]`: is it (a) temporary, waiting on an engine feature — migrate to `#[not_supported_on_native]`; or (b) permanent — keep the `cfg` and write a one-line comment naming the *unrepresentable concept* (e.g. `// Native: tests Python repr() formatting; no Rust counterpart`). Anything in between is bullshit.
 
-For every `#![cfg(not(feature = "native"))]` (file-level): almost never the right call. Split the file: temporary tests get `not_supported_on_native!`, permanent ones get per-item `#[cfg(...)]`.
+For every `#![cfg(not(feature = "native"))]` (file-level): almost never the right call. Split the file: temporary tests get `#[not_supported_on_native]`, permanent ones get per-item `#[cfg(...)]`.
 
 **When landing a new chunk, the bar is higher: default to ungating.** See `landing-native-chunk` step 3.5 for the inventory-and-ungate process. The xfail behaviour does most of the work — every previously-temporary gate whose underlying feature now lands surfaces automatically as a "test did not panic as expected" failure under native, telling the next chunk's author which annotations to drop. A chunk that adds gates without removing any is suspect.
 
-**Generic-comment audit:** existing gates with no comment, or comments like `// native doesn't support this yet`, `// TODO: native`, `// not on native`, are not actionable. Each remaining gate should name the *specific* missing engine piece (for `not_supported_on_native!`) or the *unrepresentable concept* (for `#[cfg(not(feature = "native"))]`).
+**Generic-comment audit:** existing gates with no comment, or comments like `// native doesn't support this yet`, `// TODO: native`, `// not on native`, are not actionable. Each remaining gate should name the *specific* missing engine piece (for `#[not_supported_on_native]`) or the *unrepresentable concept* (for `#[cfg(not(feature = "native"))]`).
 
-**Lint-suppression sweep:** the `#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]` blocks PR #262 added to a handful of test files exist only to silence clippy when file-level cfg gates leave imports dangling. Migrating to per-test `not_supported_on_native!` makes the helpers actually live under native, so the suppression stops doing anything — delete it.
+**Lint-suppression sweep:** the `#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]` blocks PR #262 added to a handful of test files exist only to silence clippy when file-level cfg gates leave imports dangling. Migrating to per-test `#[not_supported_on_native]` makes the helpers actually live under native, so the suppression stops doing anything — delete it.
 
 ## §10. Vapid / Potemkin tests
 
