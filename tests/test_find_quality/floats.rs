@@ -36,13 +36,11 @@ fn test_can_find_nan_in_list() {
     );
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_can_find_positive_infinity() {
     find_any(gs::floats::<f64>(), |x: &f64| *x > 0.0 && x.is_infinite());
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_can_find_negative_infinity() {
     find_any(gs::floats::<f64>(), |x: &f64| *x < 0.0 && x.is_infinite());
@@ -128,7 +126,6 @@ fn test_can_find_float_that_does_not_round_trip_through_repr() {
     );
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_half_bounded_generates_zero() {
     find_any(
@@ -143,7 +140,6 @@ fn test_half_bounded_generates_zero() {
 
 // True properties that should NOT be falsified.
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_is_float() {
     // Trivially true under Rust's static typing — drawing `f64` always
@@ -155,7 +151,6 @@ fn test_is_float() {
     .run();
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_negation_is_self_inverse() {
     Hegel::new(|tc| {
@@ -167,7 +162,6 @@ fn test_negation_is_self_inverse() {
     .run();
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_largest_range_has_no_infinities() {
     Hegel::new(|tc| {

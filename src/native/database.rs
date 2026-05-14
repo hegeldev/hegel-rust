@@ -203,13 +203,15 @@ pub(super) fn fnv_hex(s: &[u8]) -> String {
 /// Format:
 /// - 4-byte little-endian u32: number of choices
 /// - For each choice:
-///   - 1-byte type tag: 0=Integer, 1=Boolean
+///   - 1-byte type tag: 0=Integer, 1=Boolean, 2=Float
 ///   - Value bytes:
 ///     - Integer: 16 bytes (i128 little-endian)
 ///     - Boolean: 1 byte (0 or 1)
+///     - Float: 8 bytes (the f64 bit pattern, little-endian, so `-0.0` and
+///       NaN payloads round-trip unchanged)
 ///
-/// Minimal-native only supports integer and boolean choice nodes;
-/// attempting to serialize any other variant panics with `todo!()`.
+/// Other [`ChoiceValue`] variants are not yet supported by the native
+/// backend and serializing them panics with `todo!()`.
 pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + choices.len() * 17);
     let count = choices.len() as u32;
@@ -223,6 +225,10 @@ pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
             ChoiceValue::Boolean(v) => {
                 buf.push(1);
                 buf.push(*v as u8);
+            }
+            ChoiceValue::Float(v) => {
+                buf.push(2);
+                buf.extend_from_slice(&v.to_bits().to_le_bytes());
             }
         }
     }
@@ -264,6 +270,15 @@ pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
                 }
                 choices.push(ChoiceValue::Boolean(bytes[pos] != 0));
                 pos += 1;
+            }
+            2 => {
+                pos += 1;
+                if pos + 8 > bytes.len() {
+                    return None;
+                }
+                let bits = u64::from_le_bytes(bytes[pos..pos + 8].try_into().ok()?);
+                choices.push(ChoiceValue::Float(f64::from_bits(bits)));
+                pos += 8;
             }
             _ => return None,
         }
