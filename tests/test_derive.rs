@@ -180,7 +180,6 @@ fn test_derive_unit_enum_generates_all_variants() {
     find_any(gs::default::<Color>(), |c: &Color| *c == Color::Blue);
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_derive_enum_generates_each_struct_variant() {
     find_any(gs::default::<Shape>(), |s: &Shape| {
@@ -216,7 +215,6 @@ fn test_derive_tuple_variant_generates_both() {
     });
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_derive_enum_variant_generator_named_fields() {
     let g = Shape::default_generator()
