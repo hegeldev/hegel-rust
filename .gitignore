@@ -29,5 +29,7 @@ lcov.info
 !.claude/skills/new-generator/
 !.claude/skills/new-default-generator/
 !.claude/skills/add-library-support/
+!.claude/skills/landing-native-chunk/
+!.claude/skills/detecting-port-bullshit/
 
 docs/superpowers
