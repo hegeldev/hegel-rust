@@ -1,5 +1,3 @@
-use crate::not_supported_on_native;
-
 use hegel::TestCase;
 use hegel::extras::rand as rand_gs;
 use hegel::generators as gs;
@@ -36,10 +34,6 @@ fn test_randoms_choose(tc: TestCase) {
     assert!(items.contains(picked));
 }
 
-// `rng.fill` draws from `gs::binary` under the hood (see
-// `src/extras/rand/generators.rs::try_fill_bytes`), which the native
-// backend hasn't shipped yet.  Gate to the server backend until then.
-#[not_supported_on_native]
 #[hegel::test]
 fn test_randoms_fill(tc: TestCase) {
     let mut rng = tc.draw(rand_gs::randoms());

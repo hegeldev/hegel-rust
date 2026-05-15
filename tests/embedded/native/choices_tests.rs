@@ -280,3 +280,99 @@ fn float_choice_to_from_index_round_trip_for_infinity_and_nan() {
         }
     }
 }
+
+// ── BytesChoice ────────────────────────────────────────────────────────
+
+#[test]
+fn bytes_choice_simplest_is_min_size_zeros() {
+    let bc = BytesChoice {
+        min_size: 3,
+        max_size: 10,
+    };
+    assert_eq!(bc.simplest(), vec![0, 0, 0]);
+}
+
+#[test]
+fn bytes_choice_unit_with_zero_min_zero_max_falls_back_to_simplest() {
+    // min == 0 && max == 0: the unit() helper has no representable
+    // "second-simplest" — it returns the simplest (empty) by definition.
+    let bc = BytesChoice {
+        min_size: 0,
+        max_size: 0,
+    };
+    assert_eq!(bc.unit(), Vec::<u8>::new());
+}
+
+#[test]
+fn bytes_choice_unit_with_zero_min_nonzero_max_is_single_one() {
+    let bc = BytesChoice {
+        min_size: 0,
+        max_size: 5,
+    };
+    assert_eq!(bc.unit(), vec![1u8]);
+}
+
+#[test]
+fn bytes_choice_unit_with_nonzero_min_is_zeros_with_trailing_one() {
+    let bc = BytesChoice {
+        min_size: 3,
+        max_size: 10,
+    };
+    assert_eq!(bc.unit(), vec![0, 0, 1]);
+}
+
+#[test]
+fn bytes_choice_index_round_trip_across_lengths() {
+    let bc = BytesChoice {
+        min_size: 0,
+        max_size: 3,
+    };
+    for v in [
+        Vec::<u8>::new(),
+        vec![0u8],
+        vec![1u8],
+        vec![0xffu8],
+        vec![0u8, 0u8],
+        vec![0u8, 1u8],
+        vec![1u8, 2u8, 3u8],
+        vec![0xff, 0xff, 0xff],
+    ] {
+        let idx = bc.to_index(&v);
+        assert_eq!(bc.from_index(idx), Some(v));
+    }
+}
+
+#[test]
+fn bytes_choice_from_index_past_max_returns_none() {
+    // Sequences of length 0..=1 over 256 bytes give 1 + 256 = 257 options.
+    let bc = BytesChoice {
+        min_size: 0,
+        max_size: 1,
+    };
+    assert!(
+        bc.from_index(crate::native::bignum::BigUint::from(1000u32))
+            .is_none()
+    );
+}
+
+#[test]
+fn bytes_choice_kind_enumerate_zero_max_size_returns_single_empty() {
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 0,
+        max_size: 0,
+    });
+    assert_eq!(
+        kind.enumerate(u64::MAX),
+        Some(vec![ChoiceValue::Bytes(Vec::new())])
+    );
+}
+
+#[test]
+fn bytes_choice_kind_enumerate_positive_max_returns_none() {
+    // Once max_size > 0, the total cardinality (`Σ 256^k`) exceeds the cap.
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 0,
+        max_size: 4,
+    });
+    assert!(kind.enumerate(u64::MAX).is_none());
+}

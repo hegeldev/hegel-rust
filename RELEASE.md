@@ -41,3 +41,5 @@ Op::default_generator()
 ```
 
 Thanks to @sunshowers and @andrewgazelka for providing feedback on enum ergonomics!
+
+The native backend (`--features native`) now supports byte-string generators.

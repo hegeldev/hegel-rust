@@ -527,6 +527,36 @@ fn draw_float_notifies_observer() {
     assert_eq!(recorded, Some((2.5_f64.to_bits(), false)));
 }
 
+#[test]
+fn data_observer_draw_bytes_default_is_no_op() {
+    let mut obs = NoopObserver;
+    obs.draw_bytes(&[1, 2, 3], false); // must not panic
+}
+
+#[test]
+fn draw_bytes_notifies_observer() {
+    use std::sync::{Arc, Mutex};
+    type Captured = Arc<Mutex<Option<(Vec<u8>, bool)>>>;
+    struct BytesObserver {
+        captured: Captured,
+    }
+    impl DataObserver for BytesObserver {
+        fn draw_bytes(&mut self, value: &[u8], was_forced: bool) {
+            *self.captured.lock().unwrap() = Some((value.to_vec(), was_forced));
+        }
+    }
+    let captured: Captured = Arc::new(Mutex::new(None));
+    let choices = vec![ChoiceValue::Bytes(vec![1, 2, 3])];
+    let obs = Box::new(BytesObserver {
+        captured: captured.clone(),
+    });
+    let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
+    let v = tc.draw_bytes(0, 10).ok().unwrap();
+    assert_eq!(v, vec![1, 2, 3]);
+    let recorded = captured.lock().unwrap().take();
+    assert_eq!(recorded, Some((vec![1u8, 2, 3], false)));
+}
+
 // ── NativeTestCase::stop_span extends parent labels (line 798) ────────────
 //
 // When stop_span is called with discard=false and there is a parent span

@@ -1071,7 +1071,6 @@ mod collective_minimization {
         check_collective_minimization(gs::text());
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_can_collectively_minimize_binary() {
         check_collective_minimization(gs::binary());

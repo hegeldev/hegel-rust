@@ -356,7 +356,7 @@ fn can_choose_for_redistribute(node: &ChoiceNode) -> bool {
 fn is_float_or_integer(k: &ChoiceKind) -> bool {
     match k {
         ChoiceKind::Float(_) | ChoiceKind::Integer(_) => true,
-        ChoiceKind::Boolean(_) => false,
+        ChoiceKind::Boolean(_) | ChoiceKind::Bytes(_) => false,
     }
 }
 

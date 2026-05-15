@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use crate::common::utils::{Minimal, minimal};
 use hegel::generators as gs;
 
-#[not_supported_on_native]
 #[test]
 fn test_redistribute_bytes_respects_max_size() {
     // redistribute_bytes must skip transfers that exceed max_size, and
@@ -30,7 +29,6 @@ fn test_redistribute_bytes_respects_max_size() {
     assert_eq!(b, vec![0u8; 8]);
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_bytes_sorts_when_order_matters() {
     // Bytes shrinking attempts to sort bytes; when sorting would violate
@@ -54,7 +52,6 @@ fn test_bytes_sorts_when_order_matters() {
     assert_eq!(v0, vec![0u8, 1, 0]);
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_bytes_redistribution_moves_all() {
     // min_size=3 on v0 prevents the value shrinker from emptying it; the
@@ -96,7 +93,6 @@ fn test_bytes_increment_shortens_sequence() {
     assert!(v1.is_empty());
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_lower_and_bump_stale_kind_after_replace() {
     // Regression: `lower_and_bump` must validate values against the

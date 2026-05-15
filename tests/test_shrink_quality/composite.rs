@@ -109,7 +109,6 @@ fn test_one_of_shrinks_branch_selector() {
     assert_eq!(result, BoolOrFloat::Bool(true));
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_early_exit_via_flag_with_preceding_draws() {
     let g = hegel::compose!(|tc| {

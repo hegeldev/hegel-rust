@@ -8,7 +8,7 @@ use rand::RngExt;
 use rand::rngs::SmallRng;
 
 use super::choices::{
-    BooleanChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice,
+    BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice,
     InterestingOrigin, Status, StopTest,
 };
 use super::float_index::lex_to_float;
@@ -26,28 +26,33 @@ pub struct ManyState {
 
 impl ManyState {
     pub fn new(min_size: usize, max_size: Option<usize>) -> Self {
-        let max_f = max_size.map_or(f64::INFINITY, |n| n as f64);
-        let min_f = min_size as f64;
-        let average = f64::min(f64::max(min_f * 2.0, min_f + 5.0), 0.5 * (min_f + max_f));
-        let desired_extra = average - min_f;
-        let max_extra = max_f - min_f;
-
-        let p_continue = if desired_extra >= max_extra {
-            0.99
-        } else if max_f.is_infinite() {
-            1.0 - 1.0 / (1.0 + desired_extra)
-        } else {
-            1.0 - 1.0 / (2.0 + desired_extra)
-        };
-
         ManyState {
             min_size,
-            max_size: max_f,
-            p_continue,
+            max_size: max_size.map_or(f64::INFINITY, |n| n as f64),
+            p_continue: length_p_continue(min_size, max_size),
             count: 0,
             rejections: 0,
             force_stop: false,
         }
+    }
+}
+
+/// Probability of extending a length draw beyond its current size. Port of
+/// Hypothesis's `many()`: length clusters around an `average_size` derived
+/// from `min(max(min_size * 2, min_size + 5), 0.5 * (min_size + max_size))`.
+pub(crate) fn length_p_continue(min_size: usize, max_size: Option<usize>) -> f64 {
+    let max_f = max_size.map_or(f64::INFINITY, |n| n as f64);
+    let min_f = min_size as f64;
+    let average = f64::min(f64::max(min_f * 2.0, min_f + 5.0), 0.5 * (min_f + max_f));
+    let desired_extra = average - min_f;
+    let max_extra = max_f - min_f;
+
+    if desired_extra >= max_extra {
+        0.99
+    } else if max_f.is_infinite() {
+        1.0 - 1.0 / (1.0 + desired_extra)
+    } else {
+        1.0 - 1.0 / (2.0 + desired_extra)
     }
 }
 
@@ -95,6 +100,29 @@ static GLOBAL_CONSTANTS_INTEGERS: LazyLock<Vec<i128>> = LazyLock::new(|| {
     base.dedup();
     base
 });
+
+/// Geometric-distribution length draw for variable-length collections.
+///
+/// Drawing length uniformly from `[min_size, max_size]` produces huge
+/// values when `max_size` is large; instead, the size follows a geometric
+/// variate with stop probability derived from [`length_p_continue`].
+///
+/// Hypothesis: `conjecture/providers.py::HypothesisProvider.draw_bytes`
+/// (and `draw_string`).
+fn many_draw_length(rng: &mut SmallRng, min_size: usize, max_size: usize) -> usize {
+    if min_size == max_size {
+        return min_size;
+    }
+    let p_continue = length_p_continue(min_size, Some(max_size));
+    // Geometric variate: `extra ~ floor(log(U) / log(p_continue))` for
+    // `U ~ Uniform(0, 1)`. `rng.random::<f64>()` returns `[0, 1)`, so `U`
+    // can be exactly `0` — that yields `-inf / log(p) = +inf` which
+    // saturates to `usize::MAX` via the float cast; the final `.min` clamps.
+    let u: f64 = rng.random();
+    let extra = (u.ln() / p_continue.ln()).floor();
+    assert!(extra >= 0.0);
+    min_size.saturating_add(extra as usize).min(max_size)
+}
 
 /// Boundary-biased uniform sample for integers.
 ///
@@ -267,6 +295,28 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut SmallRng) -> f64 {
         }
     };
     if fc.validate(f) { f } else { fc.simplest() }
+}
+
+/// Boundary-biased sample for bytes. Draws the simplest (`min_size` zeros),
+/// the all-zeros minimum-plus-one length, or a single-`0xff` byte with
+/// probability proportional to `BOUNDARY_PROBABILITY × |nasty|`, falling
+/// back to a length drawn from [`many_draw_length`] with uniformly random
+/// byte values.
+pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut SmallRng) -> Vec<u8> {
+    let mut nasty: Vec<Vec<u8>> = vec![bc.simplest()];
+    if bc.min_size == 0 && bc.max_size > 0 {
+        nasty.push(vec![0u8]);
+    }
+    if bc.min_size <= 1 && bc.max_size >= 1 {
+        nasty.push(vec![0xffu8]);
+    }
+    let nasty_threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
+    if rng.random::<f64>() < nasty_threshold {
+        let idx = rng.random_range(0..nasty.len());
+        return nasty[idx].clone();
+    }
+    let len = many_draw_length(rng, bc.min_size, bc.max_size);
+    (0..len).map(|_| rng.random::<u8>()).collect()
 }
 
 /// A pool of variable IDs for stateful testing.
@@ -503,6 +553,7 @@ pub trait DataObserver: Send {
     fn draw_boolean(&mut self, _value: bool, _was_forced: bool) {}
     fn draw_integer(&mut self, _value: i128, _was_forced: bool) {}
     fn draw_float(&mut self, _value: f64, _was_forced: bool) {}
+    fn draw_bytes(&mut self, _value: &[u8], _was_forced: bool) {}
     fn conclude_test(&mut self, _status: Status, _origin: Option<InterestingOrigin>) {}
 }
 
@@ -844,6 +895,39 @@ impl NativeTestCase {
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_float(v, was_forced);
+        }
+
+        Ok(v)
+    }
+
+    /// Draw a bytes value with length in `[min_size, max_size]`.
+    pub fn draw_bytes(&mut self, min_size: usize, max_size: usize) -> Result<Vec<u8>, StopTest> {
+        assert!(
+            min_size <= max_size,
+            "min_size ({min_size}) must be <= max_size ({max_size})"
+        );
+        let kind = BytesChoice { min_size, max_size };
+
+        let (value, was_forced) = self.resolve_choice(
+            &ChoiceKind::Bytes(kind.clone()),
+            || ChoiceValue::Bytes(kind.simplest()),
+            || ChoiceValue::Bytes(kind.unit()),
+            |v| matches!(v, ChoiceValue::Bytes(b) if kind.validate(b)),
+            |rng| ChoiceValue::Bytes(biased_bytes_sample(&kind, rng)),
+        )?;
+
+        let ChoiceValue::Bytes(v) = value else {
+            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
+        };
+
+        self.nodes.push(ChoiceNode {
+            kind: ChoiceKind::Bytes(kind),
+            value: ChoiceValue::Bytes(v.clone()),
+            was_forced,
+        });
+
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_bytes(&v, was_forced);
         }
 
         Ok(v)

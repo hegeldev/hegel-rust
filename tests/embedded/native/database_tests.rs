@@ -185,3 +185,34 @@ fn deserialize_returns_none_on_truncated_float_body() {
     bytes.extend_from_slice(&[0u8; 4]); // only 4 of 8 needed bytes
     assert!(deserialize_choices(&bytes).is_none());
 }
+
+#[test]
+fn round_trip_bytes_choices() {
+    let choices = vec![
+        ChoiceValue::Bytes(Vec::new()),
+        ChoiceValue::Bytes(vec![0u8]),
+        ChoiceValue::Bytes(vec![0xff, 0x00, 0x80, 0x7f]),
+        ChoiceValue::Bytes(vec![1; 1024]),
+    ];
+    let bytes = serialize_choices(&choices);
+    assert_eq!(deserialize_choices(&bytes), Some(choices));
+}
+
+#[test]
+fn deserialize_returns_none_on_truncated_bytes_length() {
+    // count = 1, type tag 3 (Bytes), but fewer than 4 bytes for the length.
+    let mut bytes = 1u32.to_le_bytes().to_vec();
+    bytes.push(3);
+    bytes.extend_from_slice(&[0u8; 2]); // only 2 of 4 needed bytes
+    assert!(deserialize_choices(&bytes).is_none());
+}
+
+#[test]
+fn deserialize_returns_none_on_truncated_bytes_body() {
+    // count = 1, type tag 3 (Bytes), length 5, but only 2 bytes follow.
+    let mut bytes = 1u32.to_le_bytes().to_vec();
+    bytes.push(3);
+    bytes.extend_from_slice(&5u32.to_le_bytes()); // claim 5 bytes
+    bytes.extend_from_slice(&[0u8; 2]);
+    assert!(deserialize_choices(&bytes).is_none());
+}

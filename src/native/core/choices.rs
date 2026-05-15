@@ -177,6 +177,97 @@ impl BooleanChoice {
     }
 }
 
+/// A bytes choice with bounded length.
+///
+/// Ordered by shortlex: shorter sequences are simpler, then lexicographic
+/// on the bytes themselves.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BytesChoice {
+    pub min_size: usize,
+    pub max_size: usize,
+}
+
+impl BytesChoice {
+    /// The simplest (most "shrunk") value: `min_size` zero bytes.
+    pub fn simplest(&self) -> Vec<u8> {
+        vec![0u8; self.min_size]
+    }
+
+    /// The second-simplest value, used for punning when types change.
+    /// If `min_size > 0`: the simplest except the last byte is 1.
+    /// Else if `max_size > 0`: a single `0x01` byte.
+    /// Else: the simplest (empty).
+    pub fn unit(&self) -> Vec<u8> {
+        if self.min_size > 0 {
+            let mut v = vec![0u8; self.min_size];
+            *v.last_mut().unwrap() = 1;
+            v
+        } else if self.max_size > 0 {
+            vec![1u8]
+        } else {
+            self.simplest()
+        }
+    }
+
+    pub fn validate(&self, value: &[u8]) -> bool {
+        self.min_size <= value.len() && value.len() <= self.max_size
+    }
+
+    /// Shortlex sort key: `(length, bytes)`.
+    pub fn sort_key(&self, value: &[u8]) -> (usize, Vec<u8>) {
+        (value.len(), value.to_vec())
+    }
+
+    /// Hypothesis: `core.py::BytesChoice.max_index`.
+    pub fn max_index(&self) -> crate::native::bignum::BigUint {
+        self.to_index(&vec![0xffu8; self.max_size])
+    }
+
+    /// Hypothesis: `core.py::BytesChoice.to_index`. Indexes byte sequences in
+    /// shortlex order over `[min_size, max_size]`: all length-`min_size`
+    /// sequences first, then length `min_size + 1`, and so on; within each
+    /// length, lexicographic on the bytes.
+    pub fn to_index(&self, value: &[u8]) -> crate::native::bignum::BigUint {
+        use crate::native::bignum::{BigUint, Zero};
+        let base = BigUint::from(256u32);
+        let mut offset = BigUint::zero();
+        for length in self.min_size..value.len() {
+            offset += base.pow(length as u32);
+        }
+        let mut position = BigUint::zero();
+        for &b in value {
+            position = position * &base + BigUint::from(b);
+        }
+        offset + position
+    }
+
+    /// Inverse of [`to_index`]. Returns `None` if the index is past the
+    /// last representable sequence.
+    #[allow(clippy::wrong_self_convention)]
+    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<Vec<u8>> {
+        use crate::native::bignum::BigUint;
+        let base = BigUint::from(256u32);
+        let mut remaining = index;
+        for length in self.min_size..=self.max_size {
+            let bucket = base.pow(length as u32);
+            if remaining < bucket {
+                let mut result: Vec<u8> = Vec::with_capacity(length);
+                for _ in 0..length {
+                    let b: u8 = (&remaining % &base)
+                        .try_into()
+                        .expect("byte < 256 fits in u8");
+                    result.push(b);
+                    remaining /= &base;
+                }
+                result.reverse();
+                return Some(result);
+            }
+            remaining -= bucket;
+        }
+        None
+    }
+}
+
 /// A float choice with bounded range.
 #[derive(Clone, Debug)]
 pub struct FloatChoice {
@@ -451,6 +542,7 @@ pub enum ChoiceKind {
     Integer(IntegerChoice),
     Boolean(BooleanChoice),
     Float(FloatChoice),
+    Bytes(BytesChoice),
 }
 
 /// The value produced by a choice.
@@ -459,16 +551,18 @@ pub enum ChoiceValue {
     Integer(i128),
     Boolean(bool),
     Float(f64),
+    Bytes(Vec<u8>),
 }
 
 /// Bit-exact equality for floats keeps `-0.0` distinct from `0.0` and
-/// preserves NaN payloads; integers and booleans use natural equality.
+/// preserves NaN payloads; other choice types use natural equality.
 impl PartialEq for ChoiceValue {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (ChoiceValue::Integer(a), ChoiceValue::Integer(b)) => a == b,
             (ChoiceValue::Boolean(a), ChoiceValue::Boolean(b)) => a == b,
             (ChoiceValue::Float(a), ChoiceValue::Float(b)) => a.to_bits() == b.to_bits(),
+            (ChoiceValue::Bytes(a), ChoiceValue::Bytes(b)) => a == b,
             _ => false,
         }
     }
@@ -483,6 +577,7 @@ impl std::hash::Hash for ChoiceValue {
             ChoiceValue::Integer(n) => n.hash(state),
             ChoiceValue::Boolean(b) => b.hash(state),
             ChoiceValue::Float(f) => f.to_bits().hash(state),
+            ChoiceValue::Bytes(v) => v.hash(state),
         }
     }
 }
@@ -494,6 +589,7 @@ impl ChoiceKind {
             ChoiceKind::Integer(ic) => ChoiceValue::Integer(ic.simplest()),
             ChoiceKind::Boolean(bc) => ChoiceValue::Boolean(bc.simplest()),
             ChoiceKind::Float(fc) => ChoiceValue::Float(fc.simplest()),
+            ChoiceKind::Bytes(bc) => ChoiceValue::Bytes(bc.simplest()),
         }
     }
 
@@ -505,6 +601,7 @@ impl ChoiceKind {
             ChoiceKind::Integer(ic) => ic.max_index(),
             ChoiceKind::Boolean(bc) => bc.max_index(),
             ChoiceKind::Float(fc) => fc.max_index(),
+            ChoiceKind::Bytes(bc) => bc.max_index(),
         }
     }
 
@@ -516,6 +613,7 @@ impl ChoiceKind {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.to_index(*v),
             (ChoiceKind::Boolean(bc), ChoiceValue::Boolean(v)) => bc.to_index(*v),
             (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => fc.to_index(*v),
+            (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => bc.to_index(v),
             _ => panic!("ChoiceKind::to_index: kind/value mismatch"),
         }
     }
@@ -529,6 +627,7 @@ impl ChoiceKind {
             ChoiceKind::Integer(ic) => ic.from_index(index).map(ChoiceValue::Integer),
             ChoiceKind::Boolean(bc) => bc.from_index(index).map(ChoiceValue::Boolean),
             ChoiceKind::Float(fc) => fc.from_index(index).map(ChoiceValue::Float),
+            ChoiceKind::Bytes(bc) => bc.from_index(index).map(ChoiceValue::Bytes),
         }
     }
 
@@ -538,6 +637,7 @@ impl ChoiceKind {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.validate(*v),
             (ChoiceKind::Boolean(_), ChoiceValue::Boolean(_)) => true,
             (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => fc.validate(*v),
+            (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => bc.validate(v),
             _ => false,
         }
     }
@@ -553,6 +653,7 @@ impl ChoiceKind {
             }
             ChoiceKind::Boolean(_) => BigUint::from(2u32),
             ChoiceKind::Float(fc) => fc.max_index() + BigUint::from(1u32),
+            ChoiceKind::Bytes(bc) => bc.max_index() + BigUint::from(1u32),
         }
     }
 
@@ -566,6 +667,9 @@ impl ChoiceKind {
             ChoiceKind::Boolean(_) => ChoiceValue::Boolean(rng.random::<bool>()),
             ChoiceKind::Float(fc) => {
                 ChoiceValue::Float(crate::native::core::state::biased_float_sample(fc, rng))
+            }
+            ChoiceKind::Bytes(bc) => {
+                ChoiceValue::Bytes(crate::native::core::state::biased_bytes_sample(bc, rng))
             }
         }
     }
@@ -600,6 +704,19 @@ impl ChoiceKind {
             ChoiceKind::Float(_) => {
                 unreachable!("FloatChoice max_children always exceeds u64::MAX cap")
             }
+            // For `BytesChoice` only the `max_size == 0` corner has a
+            // sensible enumeration (one empty value). Any non-zero
+            // `max_size` technically fits the `u64::MAX` cap up to
+            // `max_size = 7` (`Σ 256^k` through `k = 7` stays just under
+            // `2^64`), but the 256-way fan-out makes materialising the list
+            // pointless for any caller that would actually want it.
+            ChoiceKind::Bytes(bc) => {
+                if bc.max_size == 0 {
+                    Some(vec![ChoiceValue::Bytes(Vec::new())])
+                } else {
+                    None
+                }
+            }
         }
     }
 }
@@ -625,24 +742,42 @@ impl ChoiceNode {
         match (&self.kind, &self.value) {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
                 let (abs, neg) = ic.sort_key(*v);
-                NodeSortKey(abs, neg)
+                NodeSortKey::Scalar(abs, neg)
             }
-            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => NodeSortKey(u128::from(*v), false),
+            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => {
+                NodeSortKey::Scalar(u128::from(*v), false)
+            }
             (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => {
                 let (mag, neg) = fc.sort_key(*v);
                 // `u64` widens losslessly into the `u128` magnitude slot used
                 // for integer sort keys: float and integer choices end up in a
                 // single totally-ordered space without losing precision.
-                NodeSortKey(u128::from(mag), neg)
+                NodeSortKey::Scalar(u128::from(mag), neg)
+            }
+            (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => {
+                let (len, bytes) = bc.sort_key(v);
+                NodeSortKey::Sequence(len, bytes.into_iter().map(u32::from).collect())
             }
             _ => unreachable!("mismatched choice kind and value"),
         }
     }
 }
 
-/// Comparable key for ordering choice nodes during shrinking: (magnitude, sign).
+/// Comparable key for ordering choice nodes during shrinking.
+///
+/// Scalar kinds (integer, boolean, float) compare on a fixed `(magnitude,
+/// sign)` pair; sequence kinds (bytes) compare shortlex on `(length,
+/// elements)`. Per-element keys are stored as `u32` so a future string
+/// choice kind (with codepoint-key elements up to `0x10FFFF`) can join the
+/// same shape without changing this type. Variants are never mixed at a
+/// given node position; `Scalar < Sequence` by derived enum order is a
+/// total-ordering fall-through for the sort key of an entire
+/// sequence-of-nodes that contains both shapes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct NodeSortKey(pub u128, pub bool);
+pub enum NodeSortKey {
+    Scalar(u128, bool),
+    Sequence(usize, Vec<u32>),
+}
 
 /// Shortlex sort key for a sequence of choice nodes.
 /// Shorter sequences are simpler; among equal lengths, smaller values win.

@@ -118,7 +118,6 @@ mod testdecorators {
         );
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_bytes_addition_is_commutative() {
         find_any(

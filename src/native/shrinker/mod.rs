@@ -9,7 +9,9 @@
 //                redistribute_integers, shrink_duplicates
 //   sequence   — sort_values, swap_adjacent_blocks
 //   floats     — shrink_floats, redistribute_numeric_pairs
+//   bytes      — shrink_bytes, redistribute_bytes_pairs
 
+mod bytes;
 mod deletion;
 mod floats;
 mod index_passes;
@@ -187,6 +189,8 @@ impl<'a> Shrinker<'a> {
             self.swap_adjacent_blocks();
             self.shrink_floats();
             self.redistribute_numeric_pairs();
+            self.shrink_bytes();
+            self.redistribute_bytes_pairs();
             self.lower_and_bump();
             self.try_shortening_via_increment();
             self.mutate_and_shrink();

@@ -6,11 +6,13 @@
 // Split into submodules:
 //   numeric     — interpret_integer, interpret_boolean, interpret_constant
 //   float       — interpret_float
-//   text        — interpret_string, interpret_binary, StringAlphabet helpers
+//   bytes       — interpret_binary
+//   text        — interpret_string, StringAlphabet helpers
 //   regex       — interpret_regex, generate_hir_string
 //   collections — interpret_list, interpret_dict, interpret_tuple, interpret_one_of, interpret_sampled_from
 //   special     — date, time, datetime, ipv4, ipv6, domain, email, url
 
+mod bytes;
 mod collections;
 mod float;
 mod numeric;
@@ -38,28 +40,29 @@ pub(crate) fn interpret_schema(
     // Record spans for leaf schemas (no recursive interpret_schema calls).
     let is_leaf = matches!(
         schema_type,
-        "integer" | "boolean" | "float" | "sampled_from"
+        "integer" | "boolean" | "float" | "binary" | "sampled_from"
     );
     let span_start = if is_leaf { ntc.nodes.len() } else { 0 };
 
-    // Native backs integer + boolean + float leaves, plus the compound
-    // schemas (tuple/list/dict/one_of/sampled_from) that recurse into them.
-    // Schemas backed by string/binary/regex/datetime/etc. leaves panic with
-    // todo!() until those schema interpreters land in a follow-up PR.
+    // Native backs integer + boolean + float + binary leaves, plus the
+    // compound schemas (tuple/list/dict/one_of/sampled_from) that recurse
+    // into them. Schemas backed by string/regex/datetime/etc. leaves panic
+    // with todo!() until those schema interpreters land in a follow-up PR.
     let result = match schema_type {
         "integer" => numeric::interpret_integer(ntc, schema),
         "boolean" => numeric::interpret_boolean(ntc),
         "constant" => numeric::interpret_constant(schema),
         "null" => Ok(Value::Null),
         "float" => float::interpret_float(ntc, schema),
+        "binary" => bytes::interpret_binary(ntc, schema),
         "tuple" => collections::interpret_tuple(ntc, schema),
         "one_of" => collections::interpret_one_of(ntc, schema),
         "sampled_from" => collections::interpret_sampled_from(ntc, schema),
         "list" => collections::interpret_list(ntc, schema),
         "dict" => collections::interpret_dict(ntc, schema),
 
-        "string" | "binary" | "regex" | "email" | "url" | "domain" | "ip_address" | "uuid"
-        | "ipv4" | "ipv6" | "date" | "time" | "datetime" => {
+        "string" | "regex" | "email" | "url" | "domain" | "ip_address" | "uuid" | "ipv4"
+        | "ipv6" | "date" | "time" | "datetime" => {
             todo!("schema {:?} not yet supported in native mode", schema_type)
         }
 
