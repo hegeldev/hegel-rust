@@ -337,7 +337,13 @@ fn test_derive_complex_enum_generates_all_variants() {
     });
 }
 
-#[not_supported_on_native]
+// Flaky on native: the `should_panic` expectation requires the engine
+// to draw `OptionVariant(Some(String))` at least once across the 15
+// cases that `check_can_generate_examples` runs (only then does the
+// not-yet-implemented `string` schema fire). At ~1/6 per case, the
+// failure rate is small but non-zero. Re-ungate once the string
+// schema is implemented natively.
+#[cfg(not(feature = "native"))]
 #[test]
 fn test_derive_enum_with_nested_types() {
     check_can_generate_examples(gs::default::<WithNestedTypes>());
