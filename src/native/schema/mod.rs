@@ -16,6 +16,7 @@ mod bytes;
 mod collections;
 mod float;
 mod numeric;
+mod text;
 
 use crate::cbor_utils::map_get;
 use crate::native::core::{ManyState, NativeTestCase, Status, StopTest};
@@ -40,14 +41,14 @@ pub(crate) fn interpret_schema(
     // Record spans for leaf schemas (no recursive interpret_schema calls).
     let is_leaf = matches!(
         schema_type,
-        "integer" | "boolean" | "float" | "binary" | "sampled_from"
+        "integer" | "boolean" | "float" | "binary" | "string" | "sampled_from"
     );
     let span_start = if is_leaf { ntc.nodes.len() } else { 0 };
 
-    // Native backs integer + boolean + float + binary leaves, plus the
+    // Native backs integer + boolean + float + binary + string leaves, plus the
     // compound schemas (tuple/list/dict/one_of/sampled_from) that recurse
-    // into them. Schemas backed by string/regex/datetime/etc. leaves panic
-    // with todo!() until those schema interpreters land in a follow-up PR.
+    // into them. Schemas backed by regex/datetime/etc. leaves panic with
+    // todo!() until those schema interpreters land in a follow-up PR.
     let result = match schema_type {
         "integer" => numeric::interpret_integer(ntc, schema),
         "boolean" => numeric::interpret_boolean(ntc),
@@ -55,14 +56,15 @@ pub(crate) fn interpret_schema(
         "null" => Ok(Value::Null),
         "float" => float::interpret_float(ntc, schema),
         "binary" => bytes::interpret_binary(ntc, schema),
+        "string" => text::interpret_string(ntc, schema),
         "tuple" => collections::interpret_tuple(ntc, schema),
         "one_of" => collections::interpret_one_of(ntc, schema),
         "sampled_from" => collections::interpret_sampled_from(ntc, schema),
         "list" => collections::interpret_list(ntc, schema),
         "dict" => collections::interpret_dict(ntc, schema),
 
-        "string" | "regex" | "email" | "url" | "domain" | "ip_address" | "uuid" | "ipv4"
-        | "ipv6" | "date" | "time" | "datetime" => {
+        "regex" | "email" | "url" | "domain" | "ip_address" | "uuid" | "ipv4" | "ipv6" | "date"
+        | "time" | "datetime" => {
             todo!("schema {:?} not yet supported in native mode", schema_type)
         }
 

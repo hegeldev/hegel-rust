@@ -9,7 +9,7 @@ use rand::rngs::SmallRng;
 
 use super::choices::{
     BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice,
-    InterestingOrigin, Status, StopTest,
+    InterestingOrigin, Status, StopTest, StringChoice,
 };
 use super::float_index::lex_to_float;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
@@ -319,6 +319,127 @@ pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut SmallRng) -> Vec<u
     (0..len).map(|_| rng.random::<u8>()).collect()
 }
 
+/// Interesting string constants seeded from Hypothesis's GLOBAL_CONSTANTS
+/// (providers.py `_constant_strings`): logic keywords, numeric edge cases,
+/// common Unicode stress strings.  Stored as codepoint vectors so they can
+/// be validated against and inserted into the draw_string nasty pool.
+static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
+    let strings: &[&str] = &[
+        // strings interpretable as code / logic
+        "undefined", "null", "NULL", "nil", "NIL", "true", "false", "True", "False", "TRUE",
+        "FALSE", "None", "none", "if", "then", "else", "__dict__", "__proto__",
+        // strings interpretable as numbers
+        "0", "1e100", "0..0", "0/0", "1/0", "+0.0", "Infinity", "-Infinity", "Inf", "INF", "NaN",
+        "999999999999999999999999999999",
+        // common ASCII punctuation / special chars
+        ",./;'[]\\-=<>?:\"{}|_+!@#$%^&*()`~",
+        // common Unicode characters
+        "Ω≈ç√∫˜µ≤≥÷åß∂ƒ©˙∆˚¬…æœ∑´®†¥¨ˆøπ\u{201C}\u{2018}¡™£¢∞§¶•ªº–≠¸˛Ç◊ı˜Â¯˘¿ÅÍÎÏ˝ÓÔÒÚÆ☃Œ„´‰ˇÁ¨ˆØ∏\u{201D}\u{2019}`⁄€‹›ﬁﬂ‡°·‚—±",
+        // characters that increase in length when lowercased
+        "Ⱥ", "Ⱦ",
+        // ligatures
+        "æœÆŒﬀʤʨß",
+        // emoticons
+        "(╯°□°）╯︵ ┻━┻)",
+        // emojis
+        "😍", "🇺🇸", "🏻", "👍🏻",
+        // RTL text
+        "الكل في المجمو عة",
+        // Ogham text
+        "᚛ᚄᚓᚐᚋᚒᚄ ᚑᚄᚂᚑᚏᚅ᚜",
+        // Thai consonant + spacing vowel
+        "กา", "ก ำกำ",
+        // mathematical bold/fraktur/script text
+        "𝐓𝐡𝐞 𝐪𝐮𝐢𝐜𝐤 𝐛𝐫𝐨𝐰𝐧 𝐟𝐨𝐱 𝐣𝐮𝐦𝐩𝐬 𝐨𝐯𝐞𝐫 𝐭𝐡𝐞 𝐥𝐚𝐳𝐲 𝐝𝐨𝐠",
+        "𝕿𝖍𝖊 𝖖𝖚𝖎𝖈𝖐 𝖇𝖗𝖔𝖜𝖓 𝖋𝖔𝖝 𝖏𝖚𝖒𝖕𝖘 𝖔𝖛𝖊𝖗 𝖙𝖍𝖊 𝖑𝖆𝖟𝖞 𝖉𝖔𝖌",
+        "𝑻𝒉𝒆 𝒒𝒖𝒊𝒄𝒌 𝒃𝒓𝒐𝒘𝒏 𝒇𝒐𝒙 𝒋𝒖𝒎𝒑𝒔 𝒐𝒗𝒆𝒓 𝒕𝒉𝒆 𝒍𝒂𝒛𝒚 𝒅𝒐𝒈",
+        "𝓣𝓱𝓮 𝓺𝓾𝓲𝓬𝓴 𝓫𝓻𝓸𝔀𝓷 𝓯𝓸𝔁 𝓳𝓾𝓶𝓹𝓼 𝓸𝓿𝓮𝓻 𝓽𝓱𝓮 𝓵𝓪𝔃𝔂 𝓭𝓸𝓰",
+        "𝕋𝕙𝕖 𝕢𝕦𝕚𝕔𝕜 𝕓𝕣𝕠𝕨𝕟 𝕗𝕠𝕩 𝕛𝕦𝕞𝕡𝕤 𝕠𝕧𝕖𝕣 𝕥𝕙𝕖 𝕝𝕒𝕫𝕪 𝕕𝕠𝕘",
+        // upside-down text
+        "ʇǝɯɐ ʇᴉs ɹolop ɯnsdᴉ ɯǝɹo˥",
+        // Windows reserved names
+        "NUL", "COM1", "LPT1",
+        // Scunthorpe problem
+        "Scunthorpe",
+        // zalgo text
+        "Ṱ̺̺̕o͞ ̷i̲̬͇̪͙n̝̗͕v̟̜̘̦͟o̶̙̰̠kè͚̮̺̪̹̱̤ ̖t̝͕̳̣̻̪͞h̼͓̲̦̳̘̲e͇̣̰̦̬͎ ̢̼̻̱̘h͚͎͙̜̣̲ͅi̦̲̣̰̤v̻͍e̺̭̳̪̰-m̢iͅn̖̺̞̲̯̰d̵̼̟͙̩̼̘̳ ̞̥̱̳̭r̛̗̘e͙p͠r̼̞̻̭̗e̺̠̣͟s̘͇̳͍̝͉e͉̥̯̞̲͚̬͜ǹ̬͎͎̟̖͇̤t͍̬̤͓̼̭͘ͅi̪̱n͠g̴͉ ͏͉ͅc̬̟h͡a̫̻̯͘o̫̟̖͍̙̝͉s̗̦̲.̨̹͈̣",
+        // examples from https://faultlore.com/blah/text-hates-you/
+        "मनीष منش",
+        "पन्ह पन्ह त्र र्च कृकृ ड्ड न्हृे إلا بسم الله",
+        "lorem لا بسم الله ipsum 你好1234你好",
+        // unconditional Unicode line-break characters (UAX #14)
+        "a\u{000A}b\u{000D}c\u{0085}d\u{000B}e\u{000C}f\u{2028}g\u{2029}h\u{000D}\u{000A}i",
+    ];
+    strings
+        .iter()
+        .map(|s| s.chars().map(|c| c as u32).collect::<Vec<u32>>())
+        .collect()
+});
+
+/// Boundary-biased sample for strings. Builds a "nasty" pool from the
+/// simplest values plus GLOBAL_CONSTANTS_STRINGS entries that satisfy the
+/// kind's constraint, drawing from it with probability proportional to
+/// `BOUNDARY_PROBABILITY × |nasty|`. Otherwise builds a small 1–10 codepoint
+/// sub-alphabet (with a 20% per-slot bias toward the ASCII sub-range when
+/// present) and samples a length-`many_draw_length` string from it. Mirrors
+/// pbtkit's `_draw_string`.
+pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut SmallRng) -> Vec<u32> {
+    let nasty: Vec<Vec<u32>> = {
+        let simplest = sc.simplest();
+        let simplest_cp = sc.simplest_codepoint();
+        let mut v = vec![simplest];
+        if sc.min_size == 0 && sc.max_size > 0 {
+            v.push(Vec::new());
+        }
+        if sc.min_size <= 1 && sc.max_size >= 1 {
+            v.push(vec![simplest_cp]);
+        }
+        if sc.min_size <= 2 && sc.max_size >= 2 {
+            v.push(vec![simplest_cp, simplest_cp]);
+        }
+        for cps in GLOBAL_CONSTANTS_STRINGS.iter() {
+            if sc.validate(cps) && !v.contains(cps) {
+                v.push(cps.clone());
+            }
+        }
+        v
+    };
+    let nasty_threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
+    if rng.random::<f64>() < nasty_threshold {
+        let idx = rng.random_range(0..nasty.len());
+        return nasty[idx].clone();
+    }
+    let ascii_hi = sc.max_codepoint.min(127);
+    let has_ascii = sc.min_codepoint <= ascii_hi;
+    let alpha_size = rng.random_range(1..=10);
+    let mut alphabet: Vec<u32> = Vec::with_capacity(alpha_size);
+    while alphabet.len() < alpha_size {
+        let cp = if has_ascii && rng.random::<f64>() < 0.2 {
+            rng.random_range(sc.min_codepoint..=ascii_hi)
+        } else {
+            loop {
+                let cp = rng.random_range(sc.min_codepoint..=sc.max_codepoint);
+                if !(0xD800..=0xDFFF).contains(&cp) {
+                    break cp;
+                }
+            }
+        };
+        alphabet.push(cp);
+    }
+    let len = many_draw_length(rng, sc.min_size, sc.max_size);
+    (0..len)
+        .map(|_| alphabet[rng.random_range(0..alphabet.len())])
+        .collect()
+}
+
+/// Convert a codepoint sequence to a Rust `String`, dropping any surrogate
+/// codepoints (`0xD800..=0xDFFF`). The engine never produces surrogates
+/// during generation (rejected by `validate` and by `biased_string_sample`),
+/// but a user-supplied prefix could feed one in.
+pub(crate) fn codepoints_to_string(cps: &[u32]) -> String {
+    cps.iter().filter_map(|&cp| char::from_u32(cp)).collect()
+}
+
 /// A pool of variable IDs for stateful testing.
 ///
 /// Port of hegel-core's `Variables` class from server.py.
@@ -554,6 +675,7 @@ pub trait DataObserver: Send {
     fn draw_integer(&mut self, _value: i128, _was_forced: bool) {}
     fn draw_float(&mut self, _value: f64, _was_forced: bool) {}
     fn draw_bytes(&mut self, _value: &[u8], _was_forced: bool) {}
+    fn draw_string(&mut self, _value: &str, _was_forced: bool) {}
     fn conclude_test(&mut self, _status: Status, _origin: Option<InterestingOrigin>) {}
 }
 
@@ -931,6 +1053,54 @@ impl NativeTestCase {
         }
 
         Ok(v)
+    }
+
+    /// Draw a Unicode string with length in `[min_size, max_size]` and
+    /// codepoints in `[min_codepoint, max_codepoint]` (excluding surrogates).
+    pub fn draw_string(
+        &mut self,
+        min_codepoint: u32,
+        max_codepoint: u32,
+        min_size: usize,
+        max_size: usize,
+    ) -> Result<String, StopTest> {
+        assert!(
+            min_codepoint <= max_codepoint,
+            "Invalid codepoint range [{min_codepoint}, {max_codepoint}]"
+        );
+        assert!(min_size <= max_size);
+
+        let kind = StringChoice {
+            min_codepoint,
+            max_codepoint,
+            min_size,
+            max_size,
+        };
+
+        let (value, was_forced) = self.resolve_choice(
+            &ChoiceKind::String(kind.clone()),
+            || ChoiceValue::String(kind.simplest()),
+            || ChoiceValue::String(kind.unit()),
+            |v| matches!(v, ChoiceValue::String(s) if kind.validate(s)),
+            |rng| ChoiceValue::String(biased_string_sample(&kind, rng)),
+        )?;
+
+        let ChoiceValue::String(v) = value else {
+            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
+        };
+
+        self.nodes.push(ChoiceNode {
+            kind: ChoiceKind::String(kind),
+            value: ChoiceValue::String(v.clone()),
+            was_forced,
+        });
+
+        let s = codepoints_to_string(&v);
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_string(&s, was_forced);
+        }
+
+        Ok(s)
     }
 
     /// Draw a boolean with probability `p` of being true.

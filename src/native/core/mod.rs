@@ -10,7 +10,7 @@ pub(crate) mod float_index;
 pub(crate) mod state;
 pub use choices::{
     BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, NodeSortKey, Status, StopTest,
-    sort_key,
+    StringChoice, codepoint_key, key_to_codepoint, sort_key,
 };
 pub use float_index::{float_to_index, index_to_float};
 pub use state::{ManyState, NativeTestCase, NativeVariables, Span};

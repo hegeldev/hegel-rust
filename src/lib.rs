@@ -225,6 +225,8 @@ pub mod generators;
 #[cfg(feature = "native")]
 pub(crate) mod native;
 pub(crate) mod run_lifecycle;
+#[cfg(feature = "native")]
+pub(crate) mod unicodedata;
 pub(crate) mod runner;
 #[cfg(not(feature = "native"))]
 pub(crate) mod server;
