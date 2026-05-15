@@ -2,6 +2,7 @@
 
 mod common;
 
+#[allow(unused_imports)]
 use common::not_supported_on_native;
 use common::utils::{assert_all_examples, check_can_generate_examples, find_any};
 use hegel::DefaultGenerator as DeriveGenerator;
@@ -87,7 +88,6 @@ enum Op {
     Configure { retries: u32, timeout: u64 },
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_derive_struct_with_vec_field() {
     check_can_generate_examples(gs::default::<WithVec>());
@@ -113,14 +113,12 @@ fn test_derive_struct_generates_varied_values() {
     assert_ne!(p1.x, 0);
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_derive_struct_generates_both_bool_values() {
     find_any(gs::default::<Person>(), |p: &Person| p.active);
     find_any(gs::default::<Person>(), |p: &Person| !p.active);
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_derive_struct_with_optional_generates_some_and_none() {
     find_any(gs::default::<WithOptional>(), |w: &WithOptional| {
@@ -143,7 +141,6 @@ fn test_derive_struct_with_multiple_custom_fields() {
     assert_all_examples(g, |p: &Point| p.x == 1 && p.y == 2);
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_derive_struct_with_constrained_field() {
     let g = Person::default_generator().age(gs::integers().min_value(18_u32).max_value(65));
@@ -196,7 +193,6 @@ fn test_derive_enum_generates_each_struct_variant() {
     });
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_derive_mixed_enum_generates_all_variants() {
     find_any(gs::default::<MixedEnum>(), |m: &MixedEnum| {
@@ -210,7 +206,6 @@ fn test_derive_mixed_enum_generates_all_variants() {
     });
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_derive_tuple_variant_generates_both() {
     find_any(gs::default::<TupleVariants>(), |t: &TupleVariants| {
@@ -241,7 +236,6 @@ fn test_default_supports_enum_variant_builder() {
     });
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_derive_enum_variant_generator_single_tuple() {
     let g =
@@ -252,7 +246,6 @@ fn test_derive_enum_variant_generator_single_tuple() {
     });
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_derive_enum_variant_generator_multi_tuple() {
     let g = TupleVariants::default_generator().pair(gs::just(42), gs::just(99));
@@ -262,7 +255,6 @@ fn test_derive_enum_variant_generator_multi_tuple() {
     });
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_derive_enum_variant_generator_with_named_fields() {
     let g = MixedEnum::default_generator().with_fields(|g| g.x(gs::just(99)));
@@ -387,13 +379,11 @@ fn test_derive_enum_in_hegel_test(tc: hegel::TestCase) {
     assert!(matches!(c, Color::Red | Color::Green | Color::Blue));
 }
 
-#[not_supported_on_native]
 #[hegel::test]
 fn test_derive_nested_structs(tc: hegel::TestCase) {
     let _ = tc.draw(gs::default::<WithNested>());
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_derive_nested_struct_with_custom_inner() {
     let g = WithNested::default_generator()

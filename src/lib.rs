@@ -225,13 +225,13 @@ pub mod generators;
 #[cfg(feature = "native")]
 pub(crate) mod native;
 pub(crate) mod run_lifecycle;
-#[cfg(feature = "native")]
-pub(crate) mod unicodedata;
 pub(crate) mod runner;
 #[cfg(not(feature = "native"))]
 pub(crate) mod server;
 pub mod stateful;
 mod test_case;
+#[cfg(feature = "native")]
+pub(crate) mod unicodedata;
 #[doc(hidden)]
 pub use control::currently_in_test_context;
 pub use explicit_test_case::ExplicitTestCase;

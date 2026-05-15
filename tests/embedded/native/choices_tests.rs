@@ -376,3 +376,73 @@ fn bytes_choice_kind_enumerate_positive_max_returns_none() {
     });
     assert!(kind.enumerate(u64::MAX).is_none());
 }
+
+// ── StringChoice ──────────────────────────────────────────────────────
+
+#[test]
+fn string_choice_simplest_min_in_surrogate_block_steps_past() {
+    // `min_codepoint` lands inside the surrogate block (0xD800..=0xDFFF) and
+    // `max_codepoint` < 127, so the upper-ASCII early return doesn't fire.
+    // The "step past surrogates" branch (line 331) picks 0xE000 (or the
+    // capped `max_codepoint` if smaller).
+    let sc = StringChoice {
+        min_codepoint: 0xD900,
+        max_codepoint: 0xE100,
+        min_size: 0,
+        max_size: 1,
+    };
+    assert_eq!(sc.simplest_codepoint(), 0xE000);
+}
+
+#[test]
+fn string_choice_unit_single_codepoint_alphabet_at_max_size_falls_back_to_simplest() {
+    // Alphabet of one codepoint ('A'=0x41) at fixed length: `unit()` has no
+    // "second-simplest" to swap in and no room to lengthen, so it falls back
+    // to `simplest()`.
+    let sc = StringChoice {
+        min_codepoint: 0x41,
+        max_codepoint: 0x41,
+        min_size: 2,
+        max_size: 2,
+    };
+    assert_eq!(sc.unit(), vec![0x41, 0x41]);
+}
+
+#[test]
+fn string_choice_unit_empty_fixed_length_falls_back_to_simplest() {
+    // min_size == max_size == 0: `unit()` has no slot to insert the
+    // "second-simplest" codepoint into. Exercises the final
+    // `self.simplest()` return at the end of `unit()`.
+    let sc = StringChoice {
+        min_codepoint: 0,
+        max_codepoint: 100,
+        min_size: 0,
+        max_size: 0,
+    };
+    assert_eq!(sc.unit(), Vec::<u32>::new());
+}
+
+#[test]
+fn string_choice_kind_enumerate_zero_max_size_returns_single_empty() {
+    let kind = ChoiceKind::String(StringChoice {
+        min_codepoint: b'a' as u32,
+        max_codepoint: b'z' as u32,
+        min_size: 0,
+        max_size: 0,
+    });
+    assert_eq!(
+        kind.enumerate(u64::MAX),
+        Some(vec![ChoiceValue::String(Vec::new())])
+    );
+}
+
+#[test]
+fn string_choice_kind_enumerate_positive_max_returns_none() {
+    let kind = ChoiceKind::String(StringChoice {
+        min_codepoint: b'a' as u32,
+        max_codepoint: b'z' as u32,
+        min_size: 0,
+        max_size: 4,
+    });
+    assert!(kind.enumerate(u64::MAX).is_none());
+}

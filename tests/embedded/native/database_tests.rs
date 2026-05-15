@@ -216,3 +216,36 @@ fn deserialize_returns_none_on_truncated_bytes_body() {
     bytes.extend_from_slice(&[0u8; 2]);
     assert!(deserialize_choices(&bytes).is_none());
 }
+
+#[test]
+fn round_trip_string_choices() {
+    let choices = vec![
+        ChoiceValue::String(Vec::new()),
+        ChoiceValue::String(vec![b'0' as u32]),
+        ChoiceValue::String(vec![b'a' as u32, b'b' as u32, b'c' as u32]),
+        // Codepoints from the BMP and astral plane.
+        ChoiceValue::String(vec![0x2603, 0x1F600, 0]),
+    ];
+    let bytes = serialize_choices(&choices);
+    assert_eq!(deserialize_choices(&bytes), Some(choices));
+}
+
+#[test]
+fn deserialize_returns_none_on_truncated_string_length() {
+    // count = 1, type tag 4 (String), but fewer than 4 bytes for the length.
+    let mut bytes = 1u32.to_le_bytes().to_vec();
+    bytes.push(4);
+    bytes.extend_from_slice(&[0u8; 2]); // only 2 of 4 needed bytes
+    assert!(deserialize_choices(&bytes).is_none());
+}
+
+#[test]
+fn deserialize_returns_none_on_truncated_string_body() {
+    // count = 1, type tag 4 (String), length 3 (codepoints), only one
+    // codepoint's worth of bytes follows.
+    let mut bytes = 1u32.to_le_bytes().to_vec();
+    bytes.push(4);
+    bytes.extend_from_slice(&3u32.to_le_bytes());
+    bytes.extend_from_slice(&[0u8; 4]); // only 1 cp of 3
+    assert!(deserialize_choices(&bytes).is_none());
+}

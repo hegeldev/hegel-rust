@@ -364,7 +364,6 @@ mod direct_strategies {
         );
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_text_alphabet_empty_with_min_size_panics() {
         // text(alphabet="", min_size=1): no characters to pick from and we require
@@ -441,7 +440,6 @@ mod direct_strategies {
         check_can_generate_examples(gs::hashmaps(gs::booleans(), gs::integers::<i64>()));
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_text_alphabet_kwargs() {
         check_can_generate_examples(gs::text().alphabet("abc"));
@@ -451,7 +449,6 @@ mod direct_strategies {
         // exercise the non-empty-alphabet case here.
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_characters_codecs_and_categories() {
         check_can_generate_examples(gs::characters().codec("ascii"));
@@ -505,7 +502,6 @@ mod direct_strategies {
         check_can_generate_examples(gs::one_of(vec![gs::booleans().boxed()]));
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_text_and_binary_noarg_generate() {
         check_can_generate_examples(gs::text());

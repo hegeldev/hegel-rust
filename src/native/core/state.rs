@@ -326,29 +326,60 @@ pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut SmallRng) -> Vec<u
 static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
     let strings: &[&str] = &[
         // strings interpretable as code / logic
-        "undefined", "null", "NULL", "nil", "NIL", "true", "false", "True", "False", "TRUE",
-        "FALSE", "None", "none", "if", "then", "else", "__dict__", "__proto__",
+        "undefined",
+        "null",
+        "NULL",
+        "nil",
+        "NIL",
+        "true",
+        "false",
+        "True",
+        "False",
+        "TRUE",
+        "FALSE",
+        "None",
+        "none",
+        "if",
+        "then",
+        "else",
+        "__dict__",
+        "__proto__",
         // strings interpretable as numbers
-        "0", "1e100", "0..0", "0/0", "1/0", "+0.0", "Infinity", "-Infinity", "Inf", "INF", "NaN",
+        "0",
+        "1e100",
+        "0..0",
+        "0/0",
+        "1/0",
+        "+0.0",
+        "Infinity",
+        "-Infinity",
+        "Inf",
+        "INF",
+        "NaN",
         "999999999999999999999999999999",
         // common ASCII punctuation / special chars
         ",./;'[]\\-=<>?:\"{}|_+!@#$%^&*()`~",
         // common Unicode characters
         "Ω≈ç√∫˜µ≤≥÷åß∂ƒ©˙∆˚¬…æœ∑´®†¥¨ˆøπ\u{201C}\u{2018}¡™£¢∞§¶•ªº–≠¸˛Ç◊ı˜Â¯˘¿ÅÍÎÏ˝ÓÔÒÚÆ☃Œ„´‰ˇÁ¨ˆØ∏\u{201D}\u{2019}`⁄€‹›ﬁﬂ‡°·‚—±",
         // characters that increase in length when lowercased
-        "Ⱥ", "Ⱦ",
+        "Ⱥ",
+        "Ⱦ",
         // ligatures
         "æœÆŒﬀʤʨß",
         // emoticons
         "(╯°□°）╯︵ ┻━┻)",
         // emojis
-        "😍", "🇺🇸", "🏻", "👍🏻",
+        "😍",
+        "🇺🇸",
+        "🏻",
+        "👍🏻",
         // RTL text
         "الكل في المجمو عة",
         // Ogham text
         "᚛ᚄᚓᚐᚋᚒᚄ ᚑᚄᚂᚑᚏᚅ᚜",
         // Thai consonant + spacing vowel
-        "กา", "ก ำกำ",
+        "กา",
+        "ก ำกำ",
         // mathematical bold/fraktur/script text
         "𝐓𝐡𝐞 𝐪𝐮𝐢𝐜𝐤 𝐛𝐫𝐨𝐰𝐧 𝐟𝐨𝐱 𝐣𝐮𝐦𝐩𝐬 𝐨𝐯𝐞𝐫 𝐭𝐡𝐞 𝐥𝐚𝐳𝐲 𝐝𝐨𝐠",
         "𝕿𝖍𝖊 𝖖𝖚𝖎𝖈𝖐 𝖇𝖗𝖔𝖜𝖓 𝖋𝖔𝖝 𝖏𝖚𝖒𝖕𝖘 𝖔𝖛𝖊𝖗 𝖙𝖍𝖊 𝖑𝖆𝖟𝖞 𝖉𝖔𝖌",
@@ -358,7 +389,9 @@ static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
         // upside-down text
         "ʇǝɯɐ ʇᴉs ɹolop ɯnsdᴉ ɯǝɹo˥",
         // Windows reserved names
-        "NUL", "COM1", "LPT1",
+        "NUL",
+        "COM1",
+        "LPT1",
         // Scunthorpe problem
         "Scunthorpe",
         // zalgo text

@@ -46,11 +46,11 @@ pub(super) fn interpret_string(
     let n = alphabet.len() as i128;
     let n_ascii = alphabet.ascii_count() as i128;
 
-    // Build a small sub-alphabet (1–10 characters) following pbtkit's approach.
-    // This boosts the probability of generating structurally interesting strings
-    // (e.g. containing '\n', duplicate characters) by concentrating choices.
-    // Each slot has a 20% chance of being drawn from the ASCII sub-range (if any
-    // ASCII characters exist in the alphabet), matching pbtkit's `_draw_string`.
+    // Build a small sub-alphabet (1–10 characters) to bias generation
+    // toward structurally interesting strings (repeated characters,
+    // strings containing `'\n'`, etc.). Each slot has a 20% chance of
+    // being drawn from the ASCII sub-range when the alphabet contains
+    // any ASCII characters.
     let alpha_size = ntc.draw_integer(1, 10)?;
     let mut sub_alpha: Vec<i128> = Vec::with_capacity(alpha_size as usize);
     for _ in 0..alpha_size {
@@ -126,9 +126,8 @@ impl StringAlphabet {
     }
 
     /// Return the character at position `idx` in `codepoint_key` order.
-    ///
-    /// Index 0 returns '0' (codepoint 48) for alphabets that contain it,
-    /// matching pbtkit's shrinking behavior where '0' is the simplest char.
+    /// Index 0 is `'0'` (codepoint 48) for alphabets that contain it, so
+    /// that shrinking converges on `'0'` as the simplest character.
     pub(super) fn char_at(&self, idx: usize) -> char {
         match self {
             StringAlphabet::Range { min, max } => keyed_codepoint_at_index(*min, *max, idx),
@@ -243,15 +242,16 @@ pub(super) fn build_string_alphabet(schema: &Value) -> StringAlphabet {
     static CACHE: OnceLock<Cache> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut key = Vec::new();
-    if ciborium::into_writer(schema, &mut key).is_ok() {
-        if let Some(cached) = cache.lock().unwrap().get(&key) {
-            return (**cached).clone();
-        }
-        let computed = Arc::new(build_string_alphabet_uncached(schema));
-        cache.lock().unwrap().insert(key, Arc::clone(&computed));
-        return (*computed).clone();
+    // CBOR serialization into a `Vec<u8>` is infallible: ciborium only fails
+    // on the writer (which doesn't fault for in-memory buffers) or on
+    // un-encodable values (which `Value` rules out by construction).
+    ciborium::into_writer(schema, &mut key).expect("CBOR encoding of schema cannot fail");
+    if let Some(cached) = cache.lock().unwrap().get(&key) {
+        return (**cached).clone();
     }
-    build_string_alphabet_uncached(schema)
+    let computed = Arc::new(build_string_alphabet_uncached(schema));
+    cache.lock().unwrap().insert(key, Arc::clone(&computed));
+    (*computed).clone()
 }
 fn build_string_alphabet_uncached(schema: &Value) -> StringAlphabet {
     // Determine codepoint range from codec + min/max codepoint.
@@ -368,10 +368,12 @@ fn build_string_alphabet_uncached(schema: &Value) -> StringAlphabet {
         if is_surrogate_cp(cp) {
             continue;
         }
-        let c = match char::from_u32(cp) {
-            Some(c) => c,
-            None => continue,
-        };
+        // After the surrogate filter only scalar codepoints (`0..=0xD7FF`
+        // and `0xE000..=0x10FFFF`) remain, all of which round-trip through
+        // `char::from_u32`. The loop range is `u32`-typed, so anything
+        // above the Unicode max is rejected at the schema layer before
+        // reaching here.
+        let c = char::from_u32(cp).expect("non-surrogate cp <= 0x10FFFF is a scalar value");
 
         // Apply category filters.
         if let Some(ref cats) = categories {

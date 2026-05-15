@@ -37,7 +37,6 @@ mod shrink_quality {
         assert_eq!(v, 1);
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_minimize_string_to_empty() {
         let s: String = minimal(gs::text(), |_| true);
@@ -51,7 +50,6 @@ mod shrink_quality {
         Bool(bool),
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_minimize_one_of() {
         let v = minimal(
@@ -68,7 +66,6 @@ mod shrink_quality {
         assert!(ok, "got {v:?}");
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_minimize_mixed_list() {
         let mixed = minimal(
@@ -84,14 +81,12 @@ mod shrink_quality {
         }
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_minimize_longer_string() {
         let s = minimal(gs::text(), |x: &String| x.chars().count() >= 10);
         assert_eq!(s, "0".repeat(10));
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_minimize_longer_list_of_strings() {
         let xs = minimal(gs::vecs(gs::text()), |x: &Vec<String>| x.len() >= 10);
@@ -192,7 +187,6 @@ mod shrink_quality {
         assert_eq!(xs, vec![target]);
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_dictionary_empty() {
         let t: HashMap<i64, String> =
@@ -200,7 +194,6 @@ mod shrink_quality {
         assert!(t.is_empty());
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_dictionary_size_3() {
         let t: HashMap<i64, String> = minimal(
@@ -595,7 +588,6 @@ mod shrink_quality {
         assert_eq!(b, 1000.0);
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_sum_of_pair_separated_int() {
         let separated_sum = hegel::compose!(|tc| {
@@ -610,7 +602,6 @@ mod shrink_quality {
         assert_eq!((a, b), (1, 1000));
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_sum_of_pair_separated_float() {
         let separated_sum = hegel::compose!(|tc| {
@@ -834,7 +825,6 @@ mod shrink_quality {
         assert_eq!(d, gap);
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_lowering_together_with_gap() {
         for gap in [-10_i64, -5, 0, 5, 10] {
@@ -842,7 +832,6 @@ mod shrink_quality {
         }
     }
 
-    #[not_supported_on_native]
     // Hypothesis's shrinker has a per-codepoint canonicalisation pass that
     // lowers values toward the simplification target ('0'); the same gap that
     // blocks `test_minimize_duplicated_characters_within_a_choice` could stop
@@ -887,7 +876,6 @@ mod shrink_quality {
         assert_eq!(s, "001");
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_minimize_duplicated_characters_within_a_choice() {
         let s = minimal(gs::text().min_size(1), |v: &String| {
@@ -901,7 +889,6 @@ mod shrink_quality {
         assert_eq!(s, "0001");
     }
 
-    #[not_supported_on_native]
     // Without Hypothesis's `NASTY_STRINGS` constant pool
     // (mathematical-fraktur etc.), 10 000 attempts can't reliably
     // surface the witness.
@@ -1065,7 +1052,6 @@ mod collective_minimization {
         check_collective_minimization(gs::floats::<f64>().min_value(-f64::MAX).max_value(f64::MAX));
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_can_collectively_minimize_text() {
         check_collective_minimization(gs::text());

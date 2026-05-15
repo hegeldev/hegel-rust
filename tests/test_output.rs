@@ -504,7 +504,6 @@ mod snapshots_combinators {
     use super::not_supported_on_native;
     use hegel::generators as gs;
 
-    #[not_supported_on_native]
     #[test]
     fn test_data_draw() {
         // Upstream snapshot pins `Draw 1: 0` and `Draw 2: ''`: when the

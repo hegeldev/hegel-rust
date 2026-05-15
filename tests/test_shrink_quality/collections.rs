@@ -181,7 +181,6 @@ fn test_lists_forced_near_top() {
 
 // --- Dictionaries ----------------------------------------------------------
 
-#[not_supported_on_native]
 #[test]
 fn test_dictionary_minimizes_to_empty() {
     let result = minimal(
@@ -191,7 +190,6 @@ fn test_dictionary_minimizes_to_empty() {
     assert!(result.is_empty());
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_dictionary_minimizes_values() {
     let result = minimal(
@@ -274,7 +272,6 @@ fn test_can_collectively_minimize_booleans() {
     assert_eq!(xs.iter().collect::<HashSet<_>>().len(), 2);
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_can_collectively_minimize_text() {
     let n = 10usize;

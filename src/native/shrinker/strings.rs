@@ -1,9 +1,9 @@
-// String shrink pass.
-//
-// Port of pbtkit's shrink_sequence applied to StringChoice: try simplest,
-// shorten (linear scan from min_size), delete single codepoints, reduce each
-// codepoint toward the simplest codepoint in the alphabet, and
-// insertion-sort to normalise by `codepoint_key`.
+// String shrink passes. The main `shrink_strings` pass runs, for each
+// `StringChoice` node in the choice sequence: try the simplest value;
+// shorten from `min_size` upward; delete single codepoints; reduce each
+// codepoint toward `'0'` in `codepoint_key` space; and insertion-sort the
+// resulting codepoints. `redistribute_string_pairs` moves codepoints
+// between adjacent string nodes for sum-of-length-style predicates.
 //
 // The alphabet of valid codepoints comes from the StringChoice itself
 // (min_codepoint..=max_codepoint, surrogates excluded). Reduction of a
@@ -86,13 +86,10 @@ impl<'a> Shrinker<'a> {
                 for &cp in &cur {
                     *counts.entry(cp).or_default() += 1;
                 }
-                // E9: sort the duplicated-codepoint list by `codepoint_key`
+                // Sort the duplicated-codepoint list by `codepoint_key`
                 // (the shrink-towards order this pass uses for candidate
                 // generation) so the iteration order is deterministic
                 // regardless of `HashMap`'s unspecified bucketing.
-                // Pre-fix the order varied across builds and could shadow
-                // shrink-quality regressions that show up only on a
-                // particular hash seed.
                 let mut dups: Vec<u32> = counts
                     .into_iter()
                     .filter(|(_, n)| *n > 1)
@@ -105,11 +102,11 @@ impl<'a> Shrinker<'a> {
                 if codepoint_key(val) == 0 {
                     continue;
                 }
-                // Skip if the previous step replaced every instance of `val`
-                // already.
-                if !self.current_string(i).contains(&val) {
-                    continue;
-                }
+                // `dup_codepoints` is snapshotted from `cur` immediately
+                // before this loop, and no prior iteration in this loop can
+                // remove a different `val` from `cur` (each iteration only
+                // rewrites its own value). The in-loop `break` on line 134
+                // covers eliminations *within* a single iteration.
 
                 let try_replace_all = |sh: &mut Shrinker<'_>, cand_cp: u32| -> bool {
                     let mut new_str = sh.current_string(i);
@@ -238,15 +235,12 @@ impl<'a> Shrinker<'a> {
         }
     }
 
-    /// Try redistributing length between pairs of string values.
-    ///
-    /// Port of pbtkit's `redistribute_string_pairs`
-    /// (`shrinking/advanced_string_passes.py`). For adjacent and
-    /// skip-one-adjacent pairs of `StringChoice` nodes, try moving
-    /// characters from the earlier node's value to the later one's.
-    /// Useful for tests with a total-length constraint across two
-    /// strings, where the minimal counterexample has the first string
-    /// as short as possible.
+    /// Try redistributing length between pairs of string values. For
+    /// adjacent and skip-one-adjacent pairs of `StringChoice` nodes, move
+    /// codepoints from the earlier node's value to the later one's —
+    /// useful for tests with a total-length constraint across two strings,
+    /// where the minimal counterexample has the first string as short as
+    /// possible.
     pub(super) fn redistribute_string_pairs(&mut self) {
         for gap in 1..3usize {
             let mut idx = 0;
@@ -285,8 +279,6 @@ impl<'a> Shrinker<'a> {
         if s.is_empty() {
             return;
         }
-
-        // Port of pbtkit's `redistribute_sequence_pair`.
 
         // Try moving everything from s to t.
         let combined: Vec<u32> = s.iter().copied().chain(t.iter().copied()).collect();
@@ -401,3 +393,7 @@ fn semantic_candidates(cp: u32, kind: &StringChoice) -> Vec<u32> {
 
     out
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_strings_tests.rs"]
+mod tests;
