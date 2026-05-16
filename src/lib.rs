@@ -363,6 +363,16 @@ pub use hegel_macros::state_machine;
 ///     assert!(x + 0 == x);
 /// }
 /// ```
+///
+/// You can use other test attribute macros, like `tokio::test`, by putting them *before* `hegel::test`:
+///
+/// ```ignore
+/// #[tokio::test]
+/// #[hegel::test]
+/// async fn my_async_test() {
+///     // ...
+/// }
+/// ```
 pub use hegel_macros::test;
 
 /// Turn a function into a standalone Hegel binary entry point.
