@@ -1,3 +1,3 @@
 RELEASE_TYPE: patch
 
-This patch adds support for async `#[hegel::test]`s, as well as fixing an error message.
+This patch adds support for combining `#[hegel::test]` with async test attributes like `#[tokio::test]`.
