@@ -3,8 +3,8 @@
 mod common;
 
 use common::not_supported_on_native;
-use common::utils::check_can_generate_examples;
-use hegel::TestCase;
+use common::project::TempRustProject;
+use common::utils::{assert_all_examples, check_can_generate_examples};
 use hegel::generators as gs;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -107,10 +107,28 @@ fn test_default_nested() {
     check_can_generate_examples(gs::default::<[Option<i32>; 4]>());
 }
 
-#[hegel::test]
-fn test_default_can_infer_through_draw(tc: TestCase) {
-    // This doesn't test anything much at runtime. We are checking
-    // that the type checker can infer the type parameter to default
-    // rather than forcing us to write this as gs::default::<i32>
+#[not_supported_on_native]
+#[test]
+fn test_default_supports_primitive_builder() {
+    let g = gs::default::<u32>().min_value(10).max_value(20);
+    assert_all_examples(g, |n: &u32| *n >= 10 && *n <= 20);
+}
+
+// see https://github.com/hegeldev/hegel-rust/issues/246 for context
+#[test]
+fn test_default_cant_infer_through_draw() {
+    TempRustProject::new()
+        .main_file(
+            r#"
+use hegel::generators as gs;
+
+fn _check(tc: &hegel::TestCase) {
     let _: i32 = tc.draw(gs::default());
+}
+
+fn main() {}
+"#,
+        )
+        .expect_failure("type annotations needed")
+        .cargo_run(&[]);
 }

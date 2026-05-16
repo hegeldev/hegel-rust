@@ -169,6 +169,12 @@ fn test_derive_struct_with_filtered_field() {
 }
 
 #[test]
+fn test_default_supports_struct_builder() {
+    let g = gs::default::<Point>().x(gs::just(42));
+    assert_all_examples(g, |p: &Point| p.x == 42);
+}
+
+#[test]
 fn test_derive_unit_enum() {
     check_can_generate_examples(gs::default::<Color>());
 }
@@ -219,6 +225,16 @@ fn test_derive_tuple_variant_generates_both() {
 fn test_derive_enum_variant_generator_named_fields() {
     let g = Shape::default_generator()
         .circle(|g| g.radius(gs::floats().min_value(1.0).max_value(10.0)));
+    assert_all_examples(g, |s: &Shape| match s {
+        Shape::Circle { radius } => *radius >= 1.0 && *radius <= 10.0,
+        Shape::Rectangle { .. } => true,
+    });
+}
+
+#[test]
+fn test_default_supports_enum_variant_builder() {
+    let g =
+        gs::default::<Shape>().circle(|g| g.radius(gs::floats().min_value(1.0).max_value(10.0)));
     assert_all_examples(g, |s: &Shape| match s {
         Shape::Circle { radius } => *radius >= 1.0 && *radius <= 10.0,
         Shape::Rectangle { .. } => true,
@@ -362,19 +378,19 @@ fn test_derive_enum_with_filter() {
 
 #[hegel::test]
 fn test_derive_struct_in_hegel_test(tc: hegel::TestCase) {
-    let _: Point = tc.draw(gs::default());
+    let _ = tc.draw(gs::default::<Point>());
 }
 
 #[hegel::test]
 fn test_derive_enum_in_hegel_test(tc: hegel::TestCase) {
-    let c: Color = tc.draw(gs::default());
+    let c = tc.draw(gs::default::<Color>());
     assert!(matches!(c, Color::Red | Color::Green | Color::Blue));
 }
 
 #[not_supported_on_native]
 #[hegel::test]
 fn test_derive_nested_structs(tc: hegel::TestCase) {
-    let _: WithNested = tc.draw(gs::default());
+    let _ = tc.draw(gs::default::<WithNested>());
 }
 
 #[not_supported_on_native]
@@ -387,9 +403,9 @@ fn test_derive_nested_struct_with_custom_inner() {
 
 #[test]
 fn test_derive_struct_generator_is_send_sync() {
-    fn assert_send_sync<T: Send + Sync>() {}
+    fn assert_send_sync<T: Send + Sync>(_: &T) {}
     let g = gs::default::<Point>();
-    assert_send_sync::<hegel::generators::BoxedGenerator<'static, Point>>();
+    assert_send_sync(&g);
     check_can_generate_examples(g);
 }
 
