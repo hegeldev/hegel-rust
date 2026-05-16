@@ -107,7 +107,6 @@ fn test_default_nested() {
     check_can_generate_examples(gs::default::<[Option<i32>; 4]>());
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_default_supports_primitive_builder() {
     let g = gs::default::<u32>().min_value(10).max_value(20);
