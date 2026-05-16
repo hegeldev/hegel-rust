@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.1 - 2026-05-16
+
+This patch adds support for combining `#[hegel::test]` with async test attributes like `#[tokio::test]`.
+
 ## 0.13.0 - 2026-05-16
 
 This release makes several changes to `#[derive(DefaultGenerator)]` ([#149](https://github.com/hegeldev/hegel-rust/issues/149)):
