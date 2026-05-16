@@ -1,7 +1,3 @@
-// Compile-time behaviour of #[hegel::composite] (successful expansion and
-// the various malformed-input error messages) lives in
-// tests/compile/{pass,fail}/composite_*.rs, driven by `trybuild`.
-
 mod common;
 
 use common::not_supported_on_native;
@@ -28,7 +24,7 @@ mod composite {
     //! - `test_errors_given_default_for_draw`, `test_errors_given_function_of_no_arguments`,
     //!   `test_errors_given_kwargs_only`, `test_warning_given_no_drawfn_call` —
     //!   Python-syntax validation of `@st.composite`. The Rust equivalent is
-    //!   compile-time and is covered in `tests/compile/fail/composite_*.rs`.
+    //!   enforced at compile time by the macro.
     //! - `test_can_use_pure_args` — relies on Python `*args` variadic composites.
     //! - `test_does_not_change_arguments` — relies on Python `data().draw()` and
     //!   object identity (`is`).

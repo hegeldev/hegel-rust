@@ -1,8 +1,4 @@
-// Compile-time error behaviour of #[hegel::test] (duplicate #[test], zero or
-// two parameters) lives in tests/compile/fail/hegel_test_*.rs, driven by
-// `trybuild`.
-//
-// Below: ported tests merged from hypothesis/{testdecorators, flakiness,
+// Ported tests merged from hypothesis/{testdecorators, flakiness,
 // nocover_baseexception, nocover_nesting, nocover_limits,
 // nocover_unusual_settings_configs, pytest_runs, nocover_completion,
 // core} and pbtkit/core, each wrapped in its own private module.
@@ -62,6 +58,18 @@ fn test_with_multiple_named_args(tc: TestCase) {
 
 #[hegel::test(seed = Some(42))]
 fn test_with_seed(tc: TestCase) {
+    tc.draw(gs::booleans());
+}
+
+#[hegel::test]
+#[test]
+fn test_works_with_bare_test_attribute(tc: TestCase) {
+    tc.draw(gs::booleans());
+}
+
+#[hegel::test]
+#[::core::prelude::v1::test]
+fn test_works_with_prelude_test_attribute(tc: TestCase) {
     tc.draw(gs::booleans());
 }
 

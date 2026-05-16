@@ -1,7 +1,3 @@
-// The compile-time assertion that `gs::vecs(...).unique(true)` requires
-// `PartialEq` on the element type lives in
-// tests/compile/fail/vec_unique_requires_partial_eq.rs, driven by `trybuild`.
-
 mod common;
 
 use common::not_supported_on_native;
