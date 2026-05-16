@@ -78,26 +78,14 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let param_pat = &*param_typed.pat;
     let param_ty = &*param_typed.ty;
 
-    // If #[tokio::test] (or similar) did its job, we sholdn't be seeing an async function.
+    // If #[tokio::test] (or similar) did its job, we shouldn't be seeing an async function.
     if let Some(asy) = func.sig.asyncness {
         return syn::Error::new_spanned(
             asy,
-            "#[hegel::test] used on an async function; move #[hegel::test] below your async test macro (like #[tokio::test]).",
+            "#[hegel::test] does not support bare interactions with async functions.\
+             Put #[hegel::test] below an async test macro like #[tokio::test] instead.",
         )
         .to_compile_error();
-    }
-
-    for attr in &func.attrs {
-        // We special case the common case of "is the user trying to write this?" Other macros, like `#[tokio::test]`,
-        // don't use the bare `test` identifier from prelude, instead being caught by `is_test_attribute`.
-        if attr.path().is_ident("test") {
-            return syn::Error::new_spanned(
-                attr,
-                "#[hegel::test] used on a function with #[test].\
-                 Remove the #[test] attribute; [hegel::test] automatically adds #[test].",
-            )
-            .to_compile_error();
-        }
     }
 
     let is_existing_test = func.attrs.iter().any(is_test_attribute);
