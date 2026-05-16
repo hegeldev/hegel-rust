@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.8 - 2026-05-16
+
+The native backend (`--features native`) now supports byte-string generators.
+
 ## 0.12.7 - 2026-05-14
 
 The native backend (`--features native`) now supports floating-point
