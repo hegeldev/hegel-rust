@@ -66,7 +66,7 @@ def set_macros_dep_version(cargo_toml: Path, new_version: str) -> None:
         r'hegeltest-macros = \{ version = "=[^"]+"',
         f'hegeltest-macros = {{ version = "={new_version}"',
         text,
-        count=1,
+        count=2,
     )
     cargo_toml.write_text(new_text)
 
