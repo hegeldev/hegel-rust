@@ -74,11 +74,14 @@ pub trait DataSource: Send + Sync {
     /// higher-scoring inputs. No-op if the test has been aborted.
     fn target_observation(&self, score: f64, label: &str);
 
-    /// Signal that the test case is complete.
-    fn mark_complete(&self, status: &str, origin: Option<&str>);
-
-    /// Returns true if a previous request triggered an abort (overflow/StopTest).
-    fn test_aborted(&self) -> bool;
+    /// Signal that the test case is complete and report its outcome.
+    ///
+    /// Called exactly once per test case, after the test body has finished
+    /// (or panicked) and the lifecycle has translated the panic payload into
+    /// a [`TestCaseResult`].  Backends are expected to do whatever bookkeeping
+    /// their engine needs here — forward the outcome to a remote server,
+    /// stash it on a handle for the local engine to consume, etc.
+    fn mark_complete(&self, result: &TestCaseResult);
 }
 
 /// A single failing test case discovered by a [`TestRunner`].
@@ -101,7 +104,7 @@ pub struct Failure {
 }
 
 /// Result of running a single test case.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TestCaseResult {
     /// Test case passed normally.
     Valid,
@@ -138,11 +141,16 @@ pub trait TestRunner {
     /// - A data source for generating test data
     /// - A bool indicating whether this is the final replay of a minimal failing example
     ///
-    /// The callback returns the result of running the test case.
+    /// The callback runs the test body to completion; the per-test-case
+    /// outcome is delivered to the backend through
+    /// [`DataSource::mark_complete`] rather than as a return value, so both
+    /// backends consume the result through the same interface.  Backends
+    /// arrange to read it back (e.g. via a per-test-case handle to a shared
+    /// outcome cell on the data source).
     fn run(
         &self,
         settings: &Settings,
         database_key: Option<&str>,
-        run_case: &mut dyn FnMut(Box<dyn DataSource>, bool) -> TestCaseResult,
+        run_case: &mut dyn FnMut(Box<dyn DataSource>, bool),
     ) -> TestRunResult;
 }

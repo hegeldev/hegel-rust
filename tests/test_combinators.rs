@@ -1,5 +1,8 @@
+#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]
+
 mod common;
 
+use common::not_supported_on_native;
 use common::utils::{assert_all_examples, expect_panic, find_any};
 use hegel::generators::{self as gs, Generator};
 use hegel::{Hegel, Settings, TestCase};
@@ -11,6 +14,7 @@ fn test_sampled_from_returns_element_from_list(tc: TestCase) {
     assert!(options.contains(&value));
 }
 
+#[not_supported_on_native]
 #[hegel::test]
 fn test_sampled_from_strings(tc: TestCase) {
     let options = tc.draw(gs::vecs(gs::text()).min_size(1));
@@ -60,6 +64,7 @@ fn test_one_of_returns_value_from_one_generator(tc: TestCase) {
     assert!((0..=10).contains(&value) || (100..=110).contains(&value));
 }
 
+#[not_supported_on_native]
 #[hegel::test]
 fn test_one_of_with_different_types_via_map(tc: TestCase) {
     let value = tc.draw(hegel::one_of!(
@@ -81,6 +86,7 @@ fn test_one_of_many(tc: TestCase) {
     assert!((0..10).contains(&value));
 }
 
+#[not_supported_on_native]
 #[hegel::test]
 fn test_flat_map(tc: TestCase) {
     let value = tc.draw(
@@ -303,11 +309,14 @@ mod find {
     //! `Hegel::new(...)` with `seed(Some(13))` and recording the first value
     //! that matches the predicate.
 
+    #[allow(unused_imports)]
+    use super::not_supported_on_native;
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
     use std::panic::AssertUnwindSafe;
     use std::sync::{Arc, Mutex};
 
+    #[not_supported_on_native]
     #[test]
     fn test_find_uses_provided_seed() {
         let mut prev: Option<String> = None;
@@ -694,6 +703,8 @@ mod nocover_filtering {
 }
 
 mod nocover_flatmap {
+    #[allow(unused_imports)]
+    use super::not_supported_on_native;
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
 
@@ -783,6 +794,7 @@ mod nocover_flatmap {
         assert_eq!(guard[0], example);
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_mixed_list_flatmap() {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1056,6 +1068,8 @@ mod nocover_given_reuse {
     //! another. hegel-rust has no `@given` decorator; the analog is sharing a
     //! generator value across multiple `Hegel::new(...)` invocations.
 
+    #[allow(unused_imports)]
+    use super::not_supported_on_native;
     use hegel::generators::{self as gs};
     use hegel::{Hegel, Settings};
 
@@ -1079,6 +1093,7 @@ mod nocover_given_reuse {
         .run();
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_fail_independently() {
         let g = gs::text();

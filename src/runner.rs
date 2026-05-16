@@ -175,6 +175,23 @@ impl Settings {
         self
     }
 
+    /// Set which test lifecycle phases to run.
+    ///
+    /// Defaults to all phases: `[Phase::Explicit, Phase::Reuse, Phase::Generate, Phase::Target, Phase::Shrink]`.
+    ///
+    /// Example — skip shrinking (useful when you only need a witness, not a
+    /// minimal counterexample):
+    ///
+    /// ```no_run
+    /// use hegel::{Phase, Settings};
+    ///
+    /// let s = Settings::new().phases([Phase::Reuse, Phase::Generate]);
+    /// ```
+    pub fn phases(mut self, phases: impl IntoIterator<Item = Phase>) -> Self {
+        self.phases = phases.into_iter().collect();
+        self
+    }
+
     /// Suppress one or more health checks so they do not cause test failure.
     ///
     /// Health checks detect common issues like excessive filtering or slow
@@ -194,21 +211,6 @@ impl Settings {
     /// ```
     pub fn suppress_health_check(mut self, checks: impl IntoIterator<Item = HealthCheck>) -> Self {
         self.suppress_health_check.extend(checks);
-        self
-    }
-
-    /// Set which phases of the test lifecycle to run.
-    ///
-    /// By default all phases are enabled. Pass a subset to disable specific
-    /// phases — for example, omitting [`Phase::Shrink`] skips shrinking:
-    ///
-    /// ```no_run
-    /// use hegel::{Phase, Settings};
-    ///
-    /// let settings = Settings::new().phases([Phase::Reuse, Phase::Generate]);
-    /// ```
-    pub fn phases(mut self, phases: impl IntoIterator<Item = Phase>) -> Self {
-        self.phases = phases.into_iter().collect();
         self
     }
 
@@ -324,7 +326,13 @@ where
     ///
     /// Panics if any test case fails.
     pub fn run(self) {
-        crate::server::runner::server_run(
+        #[cfg(feature = "native")]
+        let runner = crate::native::test_runner::NativeTestRunner;
+        #[cfg(not(feature = "native"))]
+        let runner = crate::server::session::ServerTestRunner;
+
+        crate::run_lifecycle::drive(
+            runner,
             self.test_fn,
             &self.settings,
             self.database_key.as_deref(),

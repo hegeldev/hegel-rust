@@ -45,6 +45,7 @@ jobs:
   test:
     # Keep the name matching the branch-protection required checks on Linux
     # (`test (1.86)` / `test (stable)`); Windows variants get a suffix.
+    # macOS is intentionally absent for now and will land in a follow-up.
     name: test (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
     runs-on: ${{ matrix.os }}
     permissions:
@@ -70,6 +71,37 @@ jobs:
       - name: Run tests
         run: just check-tests
 
+  test-native:
+    # In-process Rust engine variant of `test`.  The native backend
+    # itself needs neither `uv` nor the hegel-core python server, but
+    # a handful of integration tests still build a `TempRustProject`
+    # subprocess that runs with default (server) features, so `uv`
+    # has to be on PATH the same way it is for `test`.
+    name: test-native (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        rust: ["1.86", stable]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install ${{ matrix.rust }} --profile minimal && rustup default ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just uv
+
+      - name: Run tests
+        run: just check-tests-native
+
   test-all-features:
     name: test-all-features (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
     runs-on: ${{ matrix.os }}
@@ -79,14 +111,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # On Windows, --all-features would enable `antithesis`, which triggers
-          # a compile_error! on Windows. Drop back to just `rand`.
+          # "All features" here means everything additive — `native` is
+          # excluded because it swaps the backend rather than extends
+          # it; it has its own `test-native` matrix.  Windows drops
+          # `antithesis` on top of that because the upstream SDK is
+          # Linux-only and emits a `compile_error!` otherwise.
           - os: windows-latest
             rust: "1.86"
-            recipe: check-tests-rand-feature
+            recipe: check-tests-all-features-windows
           - os: windows-latest
             rust: stable
-            recipe: check-tests-rand-feature
+            recipe: check-tests-all-features-windows
           - os: ubuntu-latest
             rust: "1.86"
             recipe: check-tests-all-features
@@ -343,7 +378,7 @@ jobs:
   release:
     name: release
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust'
-    needs: [lint, test, test-all-features, test-minimal-versions, docs, coverage, conformance, nix, whole-repo]
+    needs: [lint, test, test-native, test-all-features, test-minimal-versions, docs, coverage, conformance, nix, whole-repo]
     runs-on: ubuntu-latest
     permissions:
       contents: write

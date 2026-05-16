@@ -1,5 +1,8 @@
+#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]
+
 mod common;
 
+use common::not_supported_on_native;
 use common::utils::check_can_generate_examples;
 use hegel::TestCase;
 use hegel::generators as gs;
@@ -11,11 +14,13 @@ fn test_default_bool() {
     check_can_generate_examples(gs::default::<bool>());
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_default_string() {
     check_can_generate_examples(gs::default::<String>());
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_default_char() {
     check_can_generate_examples(gs::default::<char>());
@@ -43,6 +48,7 @@ fn test_default_floats() {
     check_can_generate_examples(gs::default::<f64>());
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_default_option() {
     check_can_generate_examples(gs::default::<Option<i32>>());
@@ -50,6 +56,7 @@ fn test_default_option() {
     check_can_generate_examples(gs::default::<Option<String>>());
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_default_vec() {
     check_can_generate_examples(gs::default::<Vec<i32>>());
@@ -57,6 +64,7 @@ fn test_default_vec() {
     check_can_generate_examples(gs::default::<Vec<bool>>());
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_default_array() {
     check_can_generate_examples(gs::default::<[bool; 2]>());
@@ -65,17 +73,20 @@ fn test_default_array() {
     check_can_generate_examples(gs::default::<[i32; 0]>());
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_default_hashmap() {
     check_can_generate_examples(gs::default::<HashMap<String, i32>>());
     check_can_generate_examples(gs::default::<HashMap<String, bool>>());
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_default_pathbuf() {
     check_can_generate_examples(gs::default::<PathBuf>());
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_default_tuple() {
     check_can_generate_examples(gs::default::<(i32, bool)>());
@@ -83,6 +94,7 @@ fn test_default_tuple() {
     check_can_generate_examples(gs::default::<(i32, bool, String, f64)>());
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_default_nested() {
     check_can_generate_examples(gs::default::<Option<Vec<i32>>>());

@@ -1,5 +1,6 @@
 mod common;
 
+use common::not_supported_on_native;
 use hegel::TestCase;
 use hegel::generators::{self as gs, DefaultGenerator, Generator};
 use std::collections::{HashMap, HashSet};
@@ -509,10 +510,14 @@ mod simple_collections {
 }
 
 mod nocover_sets {
+    #[allow(unused_imports)]
+    use super::not_supported_on_native;
     use std::collections::HashSet;
 
-    use super::common::utils::{assert_all_examples, find_any};
-    use hegel::generators::{self as gs, Generator};
+    use super::common::utils::assert_all_examples;
+    use super::common::utils::find_any;
+    use hegel::generators as gs;
+    use hegel::generators::Generator;
 
     #[test]
     fn test_can_draw_sets_of_hard_to_find_elements() {

@@ -589,16 +589,15 @@ impl TestCase {
         self.with_shared(|shared| f(shared.data_source.as_ref()))
     }
 
-    /// Report whether the test case has been aborted (StopTest/overflow).
-    ///
-    /// Used by the runner to decide whether to send `mark_complete`.
-    pub(crate) fn test_aborted(&self) -> bool {
-        self.with_data_source(|ds| ds.test_aborted())
-    }
-
     /// Send `mark_complete` on this test case's data source.
-    pub(crate) fn mark_complete(&self, status: &str, origin: Option<&str>) {
-        self.with_data_source(|ds| ds.mark_complete(status, origin));
+    ///
+    /// Both backends use this to communicate the outcome — the full
+    /// [`TestCaseResult`], including any captured [`Failure`] — to whatever
+    /// owns the per-test-case bookkeeping (Hypothesis on the server backend;
+    /// the native engine, via a per-test-case outcome handle, on the native
+    /// backend).
+    pub(crate) fn mark_complete(&self, result: &crate::backend::TestCaseResult) {
+        self.with_data_source(|ds| ds.mark_complete(result));
     }
 
     #[doc(hidden)]

@@ -1,3 +1,4 @@
+#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]
 // clippy is rightfully complaining about a < n < b when that range is actually
 // guaranteed by the types. Nevertheless I want these tests here as a foundational
 // guardrail and for my sanity.
@@ -6,6 +7,7 @@
 
 mod common;
 
+use common::not_supported_on_native;
 use common::utils::{assert_all_examples, find_any};
 use hegel::generators as gs;
 
@@ -120,6 +122,7 @@ fn test_usize() {
 }
 
 mod numerics {
+    use super::not_supported_on_native;
     use hegel::generators as gs;
     use hegel::{HealthCheck, Hegel, Settings};
 
@@ -187,6 +190,7 @@ mod numerics {
 
 mod nocover_simple_numbers {
     use super::common::utils::{Minimal, minimal};
+    use super::not_supported_on_native;
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
 

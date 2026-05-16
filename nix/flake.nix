@@ -34,6 +34,7 @@
               pkgs.rust-analyzer
               pkgs.just
               pkgs.cargo-expand
+              pkgs.python3
             ];
             HEGEL_SERVER_COMMAND = pkgs.lib.getExe hegel.packages.${system}.default;
           };

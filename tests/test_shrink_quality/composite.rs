@@ -1,3 +1,5 @@
+use crate::not_supported_on_native;
+
 use crate::common::utils::{Minimal, minimal};
 use hegel::generators::{self as gs, Generator};
 
@@ -25,6 +27,7 @@ fn test_negative_sum_of_pair() {
     assert_eq!((a, b), (-1, -1000));
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_sum_of_pair_separated() {
     let separated_sum = hegel::compose!(|tc| {
@@ -472,6 +475,7 @@ fn test_increment_with_dependent_continuation() {
     assert!(v1);
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_lower_and_bump_with_float_target() {
     let g = hegel::compose!(|tc| {

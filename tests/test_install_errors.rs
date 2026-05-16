@@ -42,6 +42,13 @@ fn main() {
 #[test]
 #[cfg(unix)]
 fn test_downloads_uv_when_not_on_path() {
+    use crate::common::utils::is_nixos;
+
+    if is_nixos() {
+        eprintln!("on NixOS -- skipping");
+        return;
+    }
+
     // When uv is not on PATH and not cached, hegel should download uv
     // and use it to run hegel-core successfully.
     let code = r#"

@@ -5,10 +5,12 @@
 
 mod common;
 
+use common::not_supported_on_native;
 use common::utils::expect_panic;
 use hegel::TestCase;
 use hegel::generators as gs;
 
+#[not_supported_on_native]
 #[test]
 fn test_text_invalid_codec_panics() {
     expect_panic(
@@ -27,6 +29,7 @@ fn test_basic_usage(tc: TestCase) {
     tc.draw(gs::booleans());
 }
 
+#[not_supported_on_native]
 #[hegel::test]
 fn test_characters(tc: TestCase) {
     let c: char = tc.draw(gs::characters());
@@ -95,6 +98,8 @@ fn test_database_persists_failing_examples() {
 
 mod testdecorators {
     use super::common::utils::{assert_all_examples, expect_panic, find_any, minimal};
+    #[allow(unused_imports)]
+    use super::not_supported_on_native;
     use hegel::generators::{self as gs, Generator};
     use hegel::{Hegel, Settings};
 
@@ -106,6 +111,7 @@ mod testdecorators {
         );
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_str_addition_is_commutative() {
         find_any(
@@ -208,6 +214,7 @@ mod testdecorators {
         );
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_can_be_given_keyword_args() {
         // @fails: find (x, name) with x > 0 and len(name) >= x.
@@ -296,6 +303,7 @@ mod testdecorators {
         );
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_can_mix_sampling_with_generating() {
         find_any(
@@ -358,18 +366,21 @@ mod testdecorators {
         }
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_is_ascii() {
         // @fails_with(UnicodeEncodeError): text() can produce non-ASCII characters.
         find_any(gs::text(), |x: &String| !x.is_ascii());
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_is_not_ascii() {
         // @fails: the test asserts x is not ascii, failing when x IS ascii.
         find_any(gs::text(), |x: &String| x.is_ascii());
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_can_find_string_with_duplicates() {
         find_any(gs::text().min_size(2), |s: &String| {
@@ -379,6 +390,7 @@ mod testdecorators {
         });
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_has_ascii() {
         // @fails: the test asserts at least one char is ASCII; fails when none are.
@@ -508,6 +520,7 @@ mod testdecorators {
         );
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_a_text() {
         assert_all_examples(gs::text().alphabet("a"), |x: &String| {
@@ -515,6 +528,7 @@ mod testdecorators {
         });
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_empty_text() {
         // text("") in Python generates only empty strings; max_size(0) is the Rust equivalent
@@ -522,6 +536,7 @@ mod testdecorators {
         assert_all_examples(gs::text().max_size(0), |x: &String| x.is_empty());
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_mixed_text() {
         assert_all_examples(gs::text().alphabet("abcdefg"), |x: &String| {
@@ -861,6 +876,8 @@ mod nocover_completion {
 
 mod hypothesis_core {
     use super::common::utils::minimal;
+    #[allow(unused_imports)]
+    use super::not_supported_on_native;
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
 
@@ -886,6 +903,7 @@ mod hypothesis_core {
     // `char` is always a Unicode scalar, so for "ascii" the round-trip reduces to
     // `c.is_ascii()` and for "utf-8" it is trivially true.
 
+    #[not_supported_on_native]
     #[test]
     fn test_characters_codec_ascii_unbounded() {
         Hegel::new(|tc| {
@@ -896,6 +914,7 @@ mod hypothesis_core {
         .run();
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_characters_codec_ascii_max_codepoint_128() {
         Hegel::new(|tc| {
@@ -907,6 +926,7 @@ mod hypothesis_core {
         .run();
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_characters_codec_ascii_max_codepoint_100() {
         Hegel::new(|tc| {
@@ -918,6 +938,7 @@ mod hypothesis_core {
         .run();
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_characters_codec_utf8_unbounded() {
         Hegel::new(|tc| {
@@ -927,6 +948,7 @@ mod hypothesis_core {
         .run();
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_characters_codec_utf8_exclude_cs() {
         // Rust `char` already excludes the surrogate range by construction, so

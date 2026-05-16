@@ -1,5 +1,9 @@
 //! Tests for `tc.target()`, the public targeted property-based testing API.
 
+// The native backend does not yet implement targeting (`tc.target()` raises
+// `todo!()`), so every test in this file is gated on the server backend.
+#![cfg(not(feature = "native"))]
+
 mod common;
 
 use common::utils::expect_panic;
