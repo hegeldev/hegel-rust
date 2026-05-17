@@ -12,6 +12,7 @@ pub mod data_source;
 pub mod data_tree;
 pub mod database;
 pub mod floats;
+pub mod intervalsets;
 pub mod schema;
 pub mod shrinker;
 pub mod test_runner;

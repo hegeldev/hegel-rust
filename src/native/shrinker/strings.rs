@@ -1,24 +1,20 @@
 // String shrink passes. The main `shrink_strings` pass runs, for each
 // `StringChoice` node in the choice sequence: try the simplest value;
 // shorten from `min_size` upward; delete single codepoints; reduce each
-// codepoint toward `'0'` in `codepoint_key` space; and insertion-sort the
-// resulting codepoints. `redistribute_string_pairs` moves codepoints
-// between adjacent string nodes for sum-of-length-style predicates.
+// codepoint toward the alphabet's simplest in shrink-order; and
+// insertion-sort the resulting codepoints. `redistribute_string_pairs`
+// moves codepoints between adjacent string nodes for sum-of-length-style
+// predicates.
 //
-// The alphabet of valid codepoints comes from the StringChoice itself
-// (min_codepoint..=max_codepoint, surrogates excluded). Reduction of a
-// codepoint toward "simpler" is performed in `codepoint_key` space, which
-// makes '0' the simplest, then '1', then the rest of ASCII in a specific
-// order, then non-ASCII codepoints in natural order.
-//
-// Values are manipulated directly as `Vec<u32>` codepoints — no `char`
-// round-tripping, no surrogate special-casing at this layer (the engine
-// doesn't produce surrogates; `key_to_codepoint_in_range` filters them out
-// of the reduction candidate set as a defensive measure).
+// Reduction order is alphabet-relative: `StringChoice::codepoint_key`
+// returns each codepoint's position in `IntervalSet::char_in_shrink_order`,
+// so shrinking on `[a-z]` walks toward `'a'` while shrinking on
+// `[0-9A-Za-z]` walks toward `'0'`. Mirrors Hypothesis's per-element
+// shrinking in `internal/conjecture/shrinking/string.py`.
 
 use std::collections::HashMap;
 
-use crate::native::core::{ChoiceKind, ChoiceValue, StringChoice, codepoint_key};
+use crate::native::core::{ChoiceKind, ChoiceValue, StringChoice};
 use crate::unicodedata;
 
 use super::{Shrinker, bin_search_down};
@@ -86,27 +82,22 @@ impl<'a> Shrinker<'a> {
                 for &cp in &cur {
                     *counts.entry(cp).or_default() += 1;
                 }
-                // Sort the duplicated-codepoint list by `codepoint_key`
-                // (the shrink-towards order this pass uses for candidate
-                // generation) so the iteration order is deterministic
-                // regardless of `HashMap`'s unspecified bucketing.
+                // Sort the duplicated-codepoint list by alphabet-relative
+                // shrink-order position so the iteration order is
+                // deterministic regardless of `HashMap`'s unspecified
+                // bucketing.
                 let mut dups: Vec<u32> = counts
                     .into_iter()
                     .filter(|(_, n)| *n > 1)
                     .map(|(cp, _)| cp)
                     .collect();
-                dups.sort_by_key(|&cp| codepoint_key(cp));
+                dups.sort_by_key(|&cp| kind.codepoint_key(cp));
                 dups
             };
             for val in dup_codepoints {
-                if codepoint_key(val) == 0 {
+                if kind.codepoint_key(val) == 0 {
                     continue;
                 }
-                // `dup_codepoints` is snapshotted from `cur` immediately
-                // before this loop, and no prior iteration in this loop can
-                // remove a different `val` from `cur` (each iteration only
-                // rewrites its own value). The in-loop `break` on line 134
-                // covers eliminations *within* a single iteration.
 
                 let try_replace_all = |sh: &mut Shrinker<'_>, cand_cp: u32| -> bool {
                     let mut new_str = sh.current_string(i);
@@ -124,9 +115,8 @@ impl<'a> Shrinker<'a> {
                 };
 
                 for cand_cp in semantic_candidates(val, &kind) {
-                    if codepoint_key(cand_cp) >= codepoint_key(val) {
-                        continue;
-                    }
+                    // `semantic_candidates` only returns codepoints with
+                    // strictly smaller shrink-key than `val`.
                     try_replace_all(self, cand_cp);
                     if !self.current_string(i).contains(&val) {
                         break;
@@ -134,12 +124,15 @@ impl<'a> Shrinker<'a> {
                 }
 
                 if self.current_string(i).contains(&val) {
-                    let cur_key = codepoint_key(val);
+                    let cur_key = kind.codepoint_key(val);
                     if cur_key > 0 {
                         bin_search_down(0, cur_key as i128, &mut |k| {
-                            let Some(cp) = key_to_codepoint_in_range(k as u32, &kind) else {
-                                return false;
-                            };
+                            // `key_to_codepoint(k)` is `Some` for every
+                            // `k < alpha_size`, and our upper bound `cur_key`
+                            // is itself a valid position in the alphabet.
+                            let cp = kind
+                                .key_to_codepoint(k as u32)
+                                .expect("bin_search probe stays within alpha_size");
                             try_replace_all(self, cp)
                         });
                     }
@@ -157,26 +150,25 @@ impl<'a> Shrinker<'a> {
             // Why not just `bin_search_down`? It's not robust to non-monotone
             // predicates: midpoint probes can miss valid simpler characters
             // sitting between failing midpoints (e.g. 'A' at key 17 when
-            // shrinking from 'À' at key 192 — bin_search probes 96, 144, 168,
-            // ..., never trying 17). This is the same basin trap that
-            // afflicts upstream Hypothesis's per-element Integer shrinker
+            // shrinking from 'À' at a higher key — bin_search probes
+            // midpoints and might miss the basin). Same trap as upstream
+            // Hypothesis's per-element Integer shrinker
             // (HypothesisWorks/hypothesis#4725).
             //
             // The hybrid: try a fixed list of "obvious smaller candidates"
             // first to cover the common ASCII / Latin-with-diacritic basins,
-            // then `bin_search_down` for the long tail. Bounded at roughly
-            // 62 + log2(0x10FFFF) ≈ 84 probes per character per pass.
+            // then `bin_search_down` for the long tail.
             let mut j = self.current_string(i).len();
             while j > 0 {
                 j -= 1;
-                if codepoint_key(self.current_string(i)[j]) == 0 {
+                if kind.codepoint_key(self.current_string(i)[j]) == 0 {
                     continue;
                 }
                 let original_cp = self.current_string(i)[j];
 
                 for cand_cp in semantic_candidates(original_cp, &kind) {
-                    let cur_key = codepoint_key(self.current_string(i)[j]);
-                    if codepoint_key(cand_cp) >= cur_key {
+                    let cur_key = kind.codepoint_key(self.current_string(i)[j]);
+                    if kind.codepoint_key(cand_cp) >= cur_key {
                         continue;
                     }
                     let mut cand = self.current_string(i);
@@ -184,12 +176,12 @@ impl<'a> Shrinker<'a> {
                     self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]));
                 }
 
-                let cur_key = codepoint_key(self.current_string(i)[j]);
+                let cur_key = kind.codepoint_key(self.current_string(i)[j]);
                 if cur_key > 0 {
                     bin_search_down(0, cur_key as i128, &mut |k| {
-                        let Some(cp) = key_to_codepoint_in_range(k as u32, &kind) else {
-                            return false;
-                        };
+                        let cp = kind
+                            .key_to_codepoint(k as u32)
+                            .expect("bin_search probe stays within alpha_size");
                         let mut cand = self.current_string(i);
                         cand[j] = cp;
                         self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))
@@ -198,7 +190,7 @@ impl<'a> Shrinker<'a> {
             }
 
             // Step 5: insertion-sort pass — swap adjacent out-of-order
-            // codepoints (under codepoint_key ordering).
+            // codepoints (under the alphabet's shrink ordering).
             let mut pos = 1;
             loop {
                 let cur_len = self.current_string(i).len();
@@ -208,8 +200,8 @@ impl<'a> Shrinker<'a> {
                 let mut j = pos;
                 while j > 0 {
                     let cur = self.current_string(i);
-                    let prev_key = codepoint_key(cur[j - 1]);
-                    let cur_key = codepoint_key(cur[j]);
+                    let prev_key = kind.codepoint_key(cur[j - 1]);
+                    let cur_key = kind.codepoint_key(cur[j]);
                     if prev_key <= cur_key {
                         break;
                     }
@@ -324,68 +316,36 @@ impl<'a> Shrinker<'a> {
     }
 }
 
-/// Return the codepoint corresponding to sort-key `k`, if it lies within the
-/// valid range (excluding surrogates).
-pub(super) fn key_to_codepoint_in_range(k: u32, kind: &StringChoice) -> Option<u32> {
-    let cp = crate::native::core::key_to_codepoint(k);
-    if cp < kind.min_codepoint || cp > kind.max_codepoint {
-        return None;
-    }
-    if (0xD800..=0xDFFF).contains(&cp) {
-        return None;
-    }
-    Some(cp)
-}
-
 /// "Obvious smaller" replacement codepoints to try for a character with
 /// codepoint `cp` in a [`StringChoice`] with the given alphabet, in
-/// shrink-key order. Filtered to in-range, non-surrogate values only.
-///
-/// Roughly: ASCII digits, then ASCII uppercase letters, then ASCII lowercase
-/// letters, then the recursive NFD base of `cp` if it's a non-ASCII
-/// codepoint with a canonical decomposition (e.g. `À` → `A`, `ñ` → `n`).
-/// Pure ASCII inputs already fall inside the digit/letter ranges so NFD
-/// adds nothing for them and is skipped.
+/// shrink-key order. Walks the first 62 alphabet positions (digits + ASCII
+/// letters when present) and then the NFD base of `cp` (e.g. `'À' → 'A'`)
+/// if it's a non-ASCII codepoint with a canonical decomposition that lands
+/// in-alphabet.
 ///
 /// Used by `shrink_strings` to escape predicate basins where neither a
 /// pure binary search nor a Hypothesis-style `find_integer` descent would
 /// reach the smaller-key target.
 fn semantic_candidates(cp: u32, kind: &StringChoice) -> Vec<u32> {
     let mut out = Vec::with_capacity(64);
+    let cur_key = kind.codepoint_key(cp);
 
-    let push_key = |out: &mut Vec<u32>, k: u32| {
-        if let Some(cp) = key_to_codepoint_in_range(k, kind) {
-            out.push(cp);
+    // The first ~62 alphabet positions in shrink order are digits + ASCII
+    // letters when the alphabet contains them. Walking them directly gives
+    // exactly the "ASCII basin" candidates without needing fixed key indices.
+    let cap = 62u32.min(kind.alpha_size() as u32);
+    for k in 0..cap {
+        if k >= cur_key {
+            break;
         }
-    };
-
-    // '0' (key 0) is also covered by Step 1's `kind.simplest()`, but
-    // re-trying it per-position handles strings whose simplest_codepoint
-    // pass lost the lock when an earlier position couldn't shrink.
-    push_key(&mut out, 0);
-
-    // Digits '1'..'9'.
-    for k in 1..=9 {
-        push_key(&mut out, k);
-    }
-
-    // ASCII uppercase 'A'..'Z' (keys 17..=42).
-    for k in 17..=42 {
-        push_key(&mut out, k);
-    }
-
-    // ASCII lowercase 'a'..'z' (keys 49..=74).
-    for k in 49..=74 {
-        push_key(&mut out, k);
+        if let Some(c) = kind.key_to_codepoint(k) {
+            out.push(c);
+        }
     }
 
     if cp >= 0x80 {
         if let Some(base) = unicodedata::nfd_base(cp) {
-            if base >= kind.min_codepoint
-                && base <= kind.max_codepoint
-                && !(0xD800..=0xDFFF).contains(&base)
-                && codepoint_key(base) < codepoint_key(cp)
-            {
+            if kind.intervals.contains(base) && kind.codepoint_key(base) < cur_key {
                 out.push(base);
             }
         }

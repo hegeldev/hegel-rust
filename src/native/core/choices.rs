@@ -1,6 +1,7 @@
 // Choice types: the recorded decisions a test case makes.
 
 use crate::native::floats::sign_aware_lte;
+use crate::native::intervalsets::IntervalSet;
 
 /// An integer choice with bounded range.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -268,78 +269,51 @@ impl BytesChoice {
     }
 }
 
-/// Shrink-order key for a Unicode codepoint.
+/// A string choice with bounded length and a Unicode codepoint alphabet
+/// represented as an [`IntervalSet`].
 ///
-/// Maps codepoints to a shrink-priority space where '0' (codepoint 48) is at
-/// key 0, digits/letters '0'..='Z' fill `0..=42`, '/' down to NUL fill
-/// `43..=90` in reverse, and codepoints `>= 91` keep their natural value.
+/// Values are sequences of Unicode codepoints (`Vec<u32>`) drawn from the
+/// `intervals` set. Ordered by shortlex under the alphabet-relative shrink
+/// ordering exposed by [`IntervalSet::index_from_char_in_shrink_order`]:
+/// `'0'` is the simplest character whenever the alphabet contains it,
+/// followed by `'1'`..`'9'`, `'A'`..`'Z'`, then characters below `'0'` in
+/// reverse, then characters above `'Z'` in natural order.
 ///
-/// This places digits before letters before punctuation before control
-/// characters in shrink order, which matches Hypothesis's "simplest" notion
-/// for the default `st.text()` strategy.
-pub fn codepoint_key(c: u32) -> u32 {
-    if c <= 47 {
-        90 - c
-    } else if c <= 90 {
-        c - 48
-    } else {
-        c
-    }
-}
-
-/// Inverse of [`codepoint_key`].
-pub fn key_to_codepoint(k: u32) -> u32 {
-    if k <= 42 {
-        k + 48
-    } else if k <= 90 {
-        90 - k
-    } else {
-        k
-    }
-}
-
-/// A string choice with bounded length and codepoint range.
-///
-/// Values are sequences of raw Unicode codepoints (`Vec<u32>`) in
-/// `0..=0x10FFFF`. The no-surrogate filter is applied at the user-facing
-/// boundary where the engine hands a `String` back, not in the core
-/// representation. Ordered by shortlex over [`codepoint_key`]-remapped
-/// codepoints.
+/// Mirrors Hypothesis's `StringConstraints { intervals: IntervalSet, ... }`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StringChoice {
-    pub min_codepoint: u32,
-    pub max_codepoint: u32,
+    pub intervals: IntervalSet,
     pub min_size: usize,
     pub max_size: usize,
 }
 
 impl StringChoice {
-    /// The simplest codepoint in `[min_codepoint, min(max_codepoint, 127)]`
-    /// under [`codepoint_key`] ordering, or the smallest non-surrogate
-    /// codepoint at or above `min_codepoint` (clamped to `max_codepoint`) if
-    /// the range has no ASCII overlap.
+    /// Position of `codepoint` in the alphabet's shrink-preferred ordering.
+    /// Panics if `codepoint` is not in the alphabet.
+    pub fn codepoint_key(&self, codepoint: u32) -> u32 {
+        let c = char::from_u32(codepoint).expect("non-surrogate codepoint");
+        self.intervals.index_from_char_in_shrink_order(c) as u32
+    }
+
+    /// Codepoint at shrink-order position `key`, or `None` if `key` is past
+    /// the alphabet's size.
+    pub fn key_to_codepoint(&self, key: u32) -> Option<u32> {
+        let key = key as usize;
+        if key >= self.intervals.len() {
+            return None;
+        }
+        Some(self.intervals.char_in_shrink_order(key) as u32)
+    }
+
+    /// The simplest codepoint in the alphabet (shrink-order position 0).
+    /// Panics on an empty alphabet — callers must reject empty alphabets at
+    /// the schema layer before constructing the `StringChoice`.
     pub(crate) fn simplest_codepoint(&self) -> u32 {
-        let upper = self.max_codepoint.min(127);
-        if self.min_codepoint > upper {
-            if self.min_codepoint < 0xD800 || self.min_codepoint > 0xDFFF {
-                return self.min_codepoint;
-            }
-            // `min_codepoint` falls inside the surrogate block; step past
-            // it. Reachable only via direct `StringChoice` construction —
-            // the public `gs::characters()` / `gs::text()` builders filter
-            // surrogates before reaching here.
-            return 0xE000u32.min(self.max_codepoint);
-        }
-        let mut best = self.min_codepoint;
-        let mut best_key = codepoint_key(best);
-        for cp in (self.min_codepoint + 1)..=upper {
-            let k = codepoint_key(cp);
-            if k < best_key {
-                best = cp;
-                best_key = k;
-            }
-        }
-        best
+        assert!(
+            !self.intervals.is_empty(),
+            "StringChoice::simplest_codepoint: empty alphabet"
+        );
+        self.intervals.char_in_shrink_order(0) as u32
     }
 
     /// The simplest sequence of codepoints of length `min_size`, built
@@ -350,116 +324,64 @@ impl StringChoice {
 
     /// Second-simplest codepoint sequence, used for type-punning during replay.
     pub fn unit(&self) -> Vec<u32> {
-        let candidate = key_to_codepoint(1);
-        let second_cp = if self.min_codepoint <= candidate
-            && candidate <= self.max_codepoint
-            && !(0xD800..=0xDFFF).contains(&candidate)
-        {
-            candidate
-        } else {
-            self.simplest_codepoint()
-        };
-
-        if second_cp == self.simplest_codepoint() {
-            if self.min_size < self.max_size {
-                return vec![self.simplest_codepoint(); self.min_size + 1];
+        let simplest_cp = self.simplest_codepoint();
+        // Pick the second-simplest character in the alphabet's shrink order
+        // (position 1). If the alphabet has only one character, fall back to
+        // lengthening the simplest, or to `simplest()` if the length is also
+        // fixed.
+        let second_cp = self.key_to_codepoint(1);
+        match second_cp {
+            Some(cp) if cp != simplest_cp => {
+                if self.min_size > 0 {
+                    let mut v = self.simplest();
+                    *v.last_mut().unwrap() = cp;
+                    v
+                } else if self.max_size > 0 {
+                    vec![cp]
+                } else {
+                    self.simplest()
+                }
             }
-            return self.simplest();
+            _ => {
+                if self.min_size < self.max_size {
+                    vec![simplest_cp; self.min_size + 1]
+                } else {
+                    self.simplest()
+                }
+            }
         }
-
-        if self.min_size > 0 {
-            let mut v = self.simplest();
-            *v.last_mut().unwrap() = second_cp;
-            return v;
-        }
-        if self.max_size > 0 {
-            return vec![second_cp];
-        }
-        self.simplest()
     }
 
     pub fn validate(&self, value: &[u32]) -> bool {
         if !(self.min_size <= value.len() && value.len() <= self.max_size) {
             return false;
         }
-        value.iter().all(|&cp| {
-            self.min_codepoint <= cp && cp <= self.max_codepoint && !(0xD800..=0xDFFF).contains(&cp)
-        })
+        value.iter().all(|&cp| self.intervals.contains(cp))
     }
 
-    /// Shortlex sort key: `(length, Vec<codepoint_key>)`.
+    /// Shortlex sort key: `(length, Vec<shrink_order_position>)`.
     pub fn sort_key(&self, value: &[u32]) -> (usize, Vec<u32>) {
-        let keys: Vec<u32> = value.iter().map(|&cp| codepoint_key(cp)).collect();
+        let keys: Vec<u32> = value.iter().map(|&cp| self.codepoint_key(cp)).collect();
         (keys.len(), keys)
     }
 
-    /// Count of valid codepoints in `[min_codepoint, max_codepoint]`,
-    /// excluding surrogates.
+    /// Cardinality of the alphabet.
     pub fn alpha_size(&self) -> u64 {
-        let total = u64::from(self.max_codepoint - self.min_codepoint + 1);
-        let sur_lo = self.min_codepoint.max(0xD800);
-        let sur_hi = self.max_codepoint.min(0xDFFF);
-        if sur_lo <= sur_hi {
-            total - u64::from(sur_hi - sur_lo + 1)
-        } else {
-            total
-        }
+        self.intervals.len() as u64
     }
 
-    /// Rank of a codepoint within the kind's valid (non-surrogate) codepoints
-    /// in range, sorted by [`codepoint_key`].
+    /// Rank of `codepoint` in the alphabet's shrink-preferred ordering. Same
+    /// as [`codepoint_key`] but cast to the `u64` width used by the index
+    /// machinery.
     pub fn codepoint_rank(&self, codepoint: u32) -> u64 {
-        let key = codepoint_key(codepoint);
-        let mut count: u64 = 0;
-        let lo = self.min_codepoint;
-        let hi = self.max_codepoint.min(127);
-        if lo <= hi {
-            for c in lo..=hi {
-                if codepoint_key(c) < key {
-                    count += 1;
-                }
-            }
-        }
-        let hi_lo = self.min_codepoint.max(128);
-        let hi_hi = self.max_codepoint;
-        if hi_lo <= hi_hi && key > hi_lo {
-            let end = (key - 1).min(hi_hi);
-            let mut n = u64::from(end - hi_lo + 1);
-            let sur_lo = hi_lo.max(0xD800);
-            let sur_hi = end.min(0xDFFF);
-            if sur_lo <= sur_hi {
-                n -= u64::from(sur_hi - sur_lo + 1);
-            }
-            count += n;
-        }
-        count
+        u64::from(self.codepoint_key(codepoint))
     }
 
-    /// Codepoint at the given rank among the kind's valid (non-surrogate)
-    /// codepoints in range, sorted by [`codepoint_key`].
+    /// Codepoint at the given shrink-order rank. Panics if `rank` exceeds
+    /// `alpha_size`.
     pub fn codepoint_at_rank(&self, rank: u64) -> u32 {
-        let lo = self.min_codepoint;
-        let hi = self.max_codepoint.min(127);
-        let mut low_sorted: Vec<u32> = if lo <= hi {
-            (lo..=hi).collect()
-        } else {
-            Vec::new()
-        };
-        low_sorted.sort_by_key(|&c| codepoint_key(c));
-        if rank < low_sorted.len() as u64 {
-            return low_sorted[rank as usize];
-        }
-        let rank = rank - low_sorted.len() as u64;
-        let hi_lo = self.min_codepoint.max(128);
-        let mut c = hi_lo + rank as u32;
-        if c >= 0xD800 {
-            c += 0xDFFF - 0xD800 + 1;
-        }
-        assert!(
-            c <= self.max_codepoint,
-            "rank out of range for StringChoice"
-        );
-        c
+        self.key_to_codepoint(rank as u32)
+            .expect("rank within alpha_size")
     }
 
     /// Largest valid index for [`from_index`].
@@ -473,7 +395,7 @@ impl StringChoice {
         total - BigUint::from(1u32)
     }
 
-    /// Shortlex index of `value` under this choice's mapped-codepoint alphabet.
+    /// Shortlex index of `value` under this choice's shrink-ordered alphabet.
     pub fn to_index(&self, value: &[u32]) -> crate::native::bignum::BigUint {
         use crate::native::bignum::{BigUint, Zero};
         let alpha = BigUint::from(self.alpha_size());

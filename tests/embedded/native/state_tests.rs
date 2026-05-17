@@ -585,7 +585,9 @@ fn draw_string_notifies_observer() {
         captured: captured.clone(),
     });
     let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
-    let s = tc.draw_string(0, 0x10FFFF, 0, 10).ok().unwrap();
+    let intervals =
+        crate::native::intervalsets::IntervalSet::new(vec![(0, 0xD7FF), (0xE000, 0x10FFFF)]);
+    let s = tc.draw_string(intervals, 0, 10).ok().unwrap();
     assert_eq!(s, "abc");
     let recorded = captured.lock().unwrap().take();
     assert_eq!(recorded, Some(("abc".to_string(), false)));

@@ -1,11 +1,15 @@
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, StringChoice};
+use crate::native::intervalsets::IntervalSet;
 use crate::native::shrinker::Shrinker;
+
+fn intervals(min: u32, max: u32) -> IntervalSet {
+    IntervalSet::new(vec![(min, max)])
+}
 
 fn string_node(value: Vec<u32>, min_codepoint: u32, max_codepoint: u32) -> ChoiceNode {
     ChoiceNode {
         kind: ChoiceKind::String(StringChoice {
-            min_codepoint,
-            max_codepoint,
+            intervals: intervals(min_codepoint, max_codepoint),
             min_size: 0,
             max_size: 32,
         }),
@@ -87,8 +91,8 @@ fn redistribute_string_pair_partial_move_triggers_bin_search() {
 
 #[test]
 fn shrink_strings_collapses_accepting_run_toward_simplest() {
-    // Accepting test_fn drives the shrinker to settle on the simplest
-    // (length-1 '0') choice.
+    // Accepting test_fn drives the shrinker to settle on the empty value
+    // (alphabet [a-z], min_size = 0).
     let initial = vec![string_node(
         vec![b'a' as u32, b'b' as u32],
         b'a' as u32,
@@ -100,23 +104,57 @@ fn shrink_strings_collapses_accepting_run_toward_simplest() {
         ChoiceValue::String(v) => v.clone(),
         _ => unreachable!(),
     };
-    // 'a' is the simplest codepoint in the alphabet (codepoint_key('a') is
-    // the smallest in [a,z]); the shrinker reduces toward `[]` then climbs
-    // back up to length 0 because `min_size = 0`.
     assert!(v.is_empty(), "expected empty shrink, got {v:?}");
 }
 
 #[test]
+fn shrink_strings_duplicate_pass_bin_search_skips_after_val_eliminated() {
+    // Reach the `if !changed { return false }` guard inside `try_replace_all`:
+    // step-3.5's `bin_search_down` over a duplicated codepoint's shrink-key
+    // range probes multiple keys; once the first successful probe replaces
+    // every instance of `val`, subsequent probes call `try_replace_all`
+    // with `val` no longer present in `cur` — the guard short-circuits
+    // those calls.
+    //
+    // Predicate accepts only `[100, 100]` or `[200, 200]` (both codepoints
+    // sit above the 62-position semantic-candidates range, forcing the
+    // loop to fall through to `bin_search_down`). `bin_search` probes
+    // mid=100 → replace succeeds → `val=200` removed → subsequent probes
+    // hit the `!changed` early-return.
+    let initial = vec![string_node(vec![200, 200], 0, 0x10FFFF)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            crate::native::shrinker::ShrinkRun::Full(nodes) => {
+                let accept = matches!(
+                    nodes.first().map(|n| &n.value),
+                    Some(ChoiceValue::String(s))
+                        if s.len() == 2
+                            && s[0] == s[1]
+                            && (s[0] == 100 || s[0] == 200)
+                );
+                (accept, nodes.to_vec())
+            }
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new()),
+        }),
+        initial,
+    );
+    shrinker.shrink_strings();
+    match &shrinker.current_nodes[0].value {
+        ChoiceValue::String(s) => assert_eq!(s, &vec![100u32, 100u32]),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
 fn shrink_strings_semantic_candidate_falls_back_to_nfd_base_in_range() {
-    // 'À' (U+00C0) has NFD base 'A' (U+0041). With `categories=[Lu]`-style
-    // logic stubbed out and a wide range, the surrogate-skip filter in
-    // `semantic_candidates` is exercised when the engine considers `'A'` as
-    // a smaller-key replacement for the non-ASCII 'À'.
+    // 'À' (U+00C0) has NFD base 'A' (U+0041). With a wide alphabet that
+    // contains both, `semantic_candidates` walks the alphabet's first 62
+    // shrink-order positions and then falls back to the NFD base for
+    // non-ASCII input.
     let initial = vec![string_node(vec![0x00C0], b'A' as u32, 0x00FF)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             crate::native::shrinker::ShrinkRun::Full(nodes) => {
-                // Accept any single uppercase Latin letter (codepoint range A..=Z).
                 let accept = matches!(
                     nodes.first().map(|n| &n.value),
                     Some(ChoiceValue::String(s))
@@ -133,8 +171,6 @@ fn shrink_strings_semantic_candidate_falls_back_to_nfd_base_in_range() {
     match &shrinker.current_nodes[0].value {
         ChoiceValue::String(s) => {
             assert_eq!(s.len(), 1);
-            // The shrinker should have lowered the codepoint to 'A'
-            // (NFD base of 'À') or another in-range candidate.
             assert!((b'A' as u32..=b'Z' as u32).contains(&s[0]));
         }
         _ => unreachable!(),

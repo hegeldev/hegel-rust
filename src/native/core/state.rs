@@ -13,6 +13,7 @@ use super::choices::{
 };
 use super::float_index::lex_to_float;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
+use crate::native::intervalsets::IntervalSet;
 
 /// State for a variable-length collection (port of Hypothesis's `many` class).
 pub struct ManyState {
@@ -410,12 +411,20 @@ static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
 });
 
 /// Boundary-biased sample for strings. Builds a "nasty" pool from the
-/// simplest values plus GLOBAL_CONSTANTS_STRINGS entries that satisfy the
-/// kind's constraint, drawing from it with probability proportional to
-/// `BOUNDARY_PROBABILITY × |nasty|`. Otherwise builds a small 1–10 codepoint
-/// sub-alphabet (with a 20% per-slot bias toward the ASCII sub-range when
-/// present) and samples a length-`many_draw_length` string from it. Mirrors
-/// pbtkit's `_draw_string`.
+/// simplest values plus [`GLOBAL_CONSTANTS_STRINGS`] entries that satisfy
+/// the kind's constraint, drawing from it with probability proportional to
+/// `BOUNDARY_PROBABILITY × |nasty|`. Otherwise picks a small 1–10 codepoint
+/// sub-alphabet from the kind's [`IntervalSet`] (biased toward the
+/// first 256 shrink-order positions for large alphabets, matching
+/// `HypothesisProvider.draw_string`'s ASCII bias) and samples a
+/// length-`many_draw_length` string from it.
+///
+/// The sub-alphabet step concentrates draws into a small character set so
+/// that string-shape bugs (repeated characters, ordering, run-length) get
+/// exercised within a feasible test budget. A pure first-256 uniform draw
+/// from the full alphabet (~1.1M codepoints) almost never produces the
+/// `XXY`-shape strings that property tests of, for example, run-length
+/// encoding need to find.
 pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut SmallRng) -> Vec<u32> {
     let nasty: Vec<Vec<u32>> = {
         let simplest = sc.simplest();
@@ -442,26 +451,30 @@ pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut SmallRng) -> Vec
         let idx = rng.random_range(0..nasty.len());
         return nasty[idx].clone();
     }
-    let ascii_hi = sc.max_codepoint.min(127);
-    let has_ascii = sc.min_codepoint <= ascii_hi;
-    let alpha_size = rng.random_range(1..=10);
-    let mut alphabet: Vec<u32> = Vec::with_capacity(alpha_size);
-    while alphabet.len() < alpha_size {
-        let cp = if has_ascii && rng.random::<f64>() < 0.2 {
-            rng.random_range(sc.min_codepoint..=ascii_hi)
-        } else {
-            loop {
-                let cp = rng.random_range(sc.min_codepoint..=sc.max_codepoint);
-                if !(0xD800..=0xDFFF).contains(&cp) {
-                    break cp;
-                }
+
+    let alpha = sc.intervals.len();
+    let pick_position = |rng: &mut SmallRng| -> usize {
+        if alpha > 256 {
+            if rng.random::<f64>() < 0.2 {
+                rng.random_range(256..alpha)
+            } else {
+                rng.random_range(0..256)
             }
-        };
-        alphabet.push(cp);
+        } else {
+            rng.random_range(0..alpha)
+        }
+    };
+
+    let alpha_size = rng.random_range(1..=10.min(alpha));
+    let mut sub_alphabet: Vec<u32> = Vec::with_capacity(alpha_size);
+    while sub_alphabet.len() < alpha_size {
+        let cp = sc.intervals.char_in_shrink_order(pick_position(rng)) as u32;
+        sub_alphabet.push(cp);
     }
+
     let len = many_draw_length(rng, sc.min_size, sc.max_size);
     (0..len)
-        .map(|_| alphabet[rng.random_range(0..alphabet.len())])
+        .map(|_| sub_alphabet[rng.random_range(0..sub_alphabet.len())])
         .collect()
 }
 
@@ -1088,24 +1101,22 @@ impl NativeTestCase {
         Ok(v)
     }
 
-    /// Draw a Unicode string with length in `[min_size, max_size]` and
-    /// codepoints in `[min_codepoint, max_codepoint]` (excluding surrogates).
+    /// Draw a Unicode string with length in `[min_size, max_size]` whose
+    /// codepoints lie in the given [`IntervalSet`] alphabet.
     pub fn draw_string(
         &mut self,
-        min_codepoint: u32,
-        max_codepoint: u32,
+        intervals: IntervalSet,
         min_size: usize,
         max_size: usize,
     ) -> Result<String, StopTest> {
-        assert!(
-            min_codepoint <= max_codepoint,
-            "Invalid codepoint range [{min_codepoint}, {max_codepoint}]"
-        );
         assert!(min_size <= max_size);
+        assert!(
+            !intervals.is_empty() || max_size == 0,
+            "draw_string with empty alphabet must have max_size == 0"
+        );
 
         let kind = StringChoice {
-            min_codepoint,
-            max_codepoint,
+            intervals,
             min_size,
             max_size,
         };
