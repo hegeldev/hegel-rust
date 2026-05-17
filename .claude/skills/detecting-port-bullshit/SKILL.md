@@ -14,9 +14,9 @@ This skill is invoked from `landing-native-chunk` step 4, but you can also run i
 ## How to run an audit
 
 1. **Read the entire diff.** Not just changed files — every line of new code. Speed-reading is how bullshit hides. If the diff is too large to fully read, the chunk is too large; split.
-2. **Walk every pattern in §1–§16 below in order.** Each section has a detection command and a remediation. Run the commands; don't skim.
+2. **Walk every pattern in §1–§17 below in order.** Each section has a detection command and a remediation. Run the commands; don't skim.
 3. **For every finding: TDD.** Write a regression test that fails on the bullshit, then fix the bullshit, then confirm the test passes. The CLAUDE.md "Aim to work in a TDD style" rule applies hard here — most bullshit only stays fixed if a test pins the correct behaviour.
-4. **Re-run §1–§16 after fixing.** Every fix can introduce new bullshit.
+4. **Re-run §1–§17 after fixing.** Every fix can introduce new bullshit.
 5. **Run `just check` and `just check-coverage`** as the final gate. Both must pass without `// nocov` additions, ratchet bumps, or `#[ignore]` additions.
 
 When in doubt, **the burden of proof is on the code, not on you**. "This looks fine but I'm not sure" → write the test that would prove it fine. If you can't articulate the correct behaviour clearly enough to write a test, you don't understand the code well enough to ship it.
@@ -143,6 +143,8 @@ git grep -nE 'pub (fn|struct|enum|trait|const) ' src/native/
 
 **Reflexive trap:** the audit ID `S2` (`new_shrinker` `todo!()` "kept for API parity") was the canonical example of this. The fix was to delete it. When you see "kept for parity with the Python class shape", read it as "delete me".
 
+**Important counter-pattern:** see §12. "Ported Hypothesis machinery with no caller" looks like this section but isn't — it's the visible symptom of a structural gap in the port, and deleting it is exactly the wrong move.
+
 ## §8. `// nocov` annotations on reachable code
 
 `// nocov` is a sticking-plaster the agent reached for when a line was hard to cover. Most of these blocks turn out to be reachable from the public API; the agent just didn't write the test.
@@ -229,7 +231,44 @@ git grep -nE '_ *=> *panic!|_ *=> *unreachable!' src/native/
 
 **Example from PR #262 / native audit:** `N16` — three sites in shared generator code with bare `unreachable!()` after `tc.assume(false)`. Each got a message describing why the `unreachable!()` was actually unreachable (the `assume` panics first with `ASSUME_FAIL_STRING`).
 
-## §12. pbtkit-as-authoritative
+## §12. Ported Hypothesis machinery with no live caller in the port
+
+This is the more dangerous cousin of §7. If you find a Rust type, function, or module that mirrors a Hypothesis primitive but has no caller in the port's main code path, **the dead-looking code is almost certainly the clue that the port has a design hole**. Don't reflexively delete — investigate what Hypothesis uses that thing for, then check whether the port has secretly worked around it with parallel ad-hoc machinery.
+
+**Example: `IntervalSet` and `StringChoice`.** Hypothesis's `StringConstraints` (in `internal/conjecture/choice.py`) holds an `IntervalSet` and `PrimitiveProvider.draw_string(intervals, min_size, max_size)` takes the same `IntervalSet`. In `DRMacIver/native`, `src/native/intervalsets.rs` faithfully ports the `IntervalSet` type, but the port's `StringChoice` is `{ min_codepoint, max_codepoint, … }` — a contiguous range — and `draw_string` takes the two integers. The port's `IntervalSet` has no caller in the string code path; it's used only by `optimiser` and `value_shrinkers` (themselves alternative architectures not on the main native run path). Meanwhile, `src/native/schema/text.rs` contains `StringAlphabet::{Range, Intervals, Explicit}` — an ad-hoc, parallel implementation of the same idea with its own `Vec<(u32, u32)>` ranges, ASCII-sorted fallback, decomposition into per-char integer draws for filtered alphabets, etc.
+
+The "right" port aligns with Hypothesis: `StringChoice { intervals: IntervalSet, … }`, `draw_string(intervals, min, max)`, schema interpreter builds the IntervalSet and hands it over, no `StringAlphabet` enum. The presence of an unused `IntervalSet` module was the visible symptom of the underlying skipped work.
+
+**Detection:**
+
+```bash
+# Find Hypothesis-named modules in the port:
+git ls-tree -r origin/DRMacIver/native src/native/ | \
+    awk '{print $4}' | xargs -I {} grep -l "Port of.*Hypothesis\|Mirrors Hypothesis\|hypothesis::" {} 2>/dev/null
+
+# For each, check whether the type / function it exports is actually used
+# in the main run path:
+git grep -n 'IntervalSet\b' src/native/    # excluding the defining module itself
+```
+
+Anything with zero callers in the main path (engine, schema interpreters, default shrink passes) is a candidate.
+
+**Check upstream first:**
+
+1. Find the corresponding Hypothesis type / function (commit-pin the URL).
+2. Find Hypothesis's primary callers of it.
+3. Locate the *equivalent* in the port. Does the port use Hypothesis's primitive, or did it substitute something else?
+4. If something else: read both. Either (a) the substitute is genuinely equivalent and Hypothesis's primitive is redundant in the port (rare — the substitution usually loses fidelity), or (b) the port has worked around the missing primitive and there's a structural divergence to fix.
+
+**Remediation:**
+
+- If the port has a parallel implementation that *should* be the upstream primitive (the IntervalSet case): replace it. This is structural work, not stray-code cleanup.
+- If the parallel implementation is doing something genuinely different (some optimisation Hypothesis doesn't have): document the divergence, including *why* the port deliberately differs, and verify the divergence is sound rather than a workaround.
+- Only after either of those: any *remaining* unused machinery falls under §7 (delete it).
+
+**Reflexive trap:** "no live caller → delete" is right most of the time and is the temptation §7 names. This section's pattern subverts that: when the unused thing matches a Hypothesis primitive name-for-name, "delete" is the wrong move until you've checked whether the proper port would have used it.
+
+## §13. pbtkit-as-authoritative
 
 The native engine is meant to match **Hypothesis** semantics. pbtkit is a cleaner reference implementation of the same core ideas — useful for reading, but **not the behavioural source of truth**.
 
@@ -249,7 +288,7 @@ For every hit, check whether the citation is doing one of:
 
 **Remediation:** When the Rust function is doing something that exists in both Hypothesis and pbtkit, cite Hypothesis and (optionally) note "pbtkit's `X.py` is a more readable version of the same idea." When they disagree, the Rust code must match Hypothesis; say so in the comment.
 
-## §13. Database / format compatibility hazards
+## §14. Database / format compatibility hazards
 
 The native backend persists state to disk. Anything that touches that on-disk format risks colliding with Hypothesis's own format (if a user has both around) or, worse, *appearing* to interop while corrupting state.
 
@@ -260,7 +299,7 @@ The native backend persists state to disk. Anything that touches that on-disk fo
 
 **Remediation:** Prefix keys with a backend tag. Bound any `with_capacity` from external input by the input length. **Document the format incompatibility explicitly** in module docs — silent format divergence between two on-disk layouts that share a root path is a footgun.
 
-## §14. Defaults that diverge between backends
+## §15. Defaults that diverge between backends
 
 Defaults that differ between native and server (even just the `Default::default()` of a settings struct) are a parity bug.
 
@@ -275,7 +314,7 @@ git grep -nE 'phases|default_phases|verbosity|health_check|database' src/native/
 
 **Remediation:** Extract a single `pub fn default_phases() -> Vec<Phase>` (or analogous helper) and have every fallback site call it. Add a test that pins the helper's contents.
 
-## §15. Bookkeeping artefacts of the porting process
+## §16. Bookkeeping artefacts of the porting process
 
 The agent kept its own files at the repo root and elsewhere. Some of these are useful (in their place — the agent's own working branch); none of them belong in an extraction PR.
 
@@ -307,7 +346,7 @@ git grep -nE 'INSTRUCTIONS\.md|TODO\.yaml|SKIPPED\.md|item N[0-9]+|Refs: .* item
 
 Doc comments and commit messages citing audit IDs (`Refs: INSTRUCTIONS.md item N16`, `Tier-D test`, `§6.4`) make the PR read as a fragment of a long debugging exercise. Strip them — say what the code does and why, not where in the audit it was found.
 
-## §16. Coverage hidden behind feature blackouts
+## §17. Coverage hidden behind feature blackouts
 
 The agent used `cargo-llvm-cov` runs that enabled a specific feature set, and lines exercised only under *other* feature sets appeared uncovered to the harness even when they had real tests. The agent then added `// nocov` to "fix" the coverage of code that was actually tested under a different config.
 
@@ -321,7 +360,7 @@ git grep -nE 'cargo llvm-cov|llvm-cov' scripts/ .github/
 
 ---
 
-## §17. Final sanity checks
+## §18. Final sanity checks
 
 Once you've worked through §1–§16:
 
