@@ -15,4 +15,5 @@ pub mod floats;
 pub mod intervalsets;
 pub mod schema;
 pub mod shrinker;
+pub mod targeting;
 pub mod test_runner;

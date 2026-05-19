@@ -42,6 +42,9 @@ pub struct RunResult {
     pub spans: Vec<Span>,
     pub origin: Option<String>,
     pub failure: Option<Failure>,
+    /// `tc.target()` observations recorded during the test case, keyed by
+    /// label. Empty for tests that don't call `tc.target()`.
+    pub target_observations: HashMap<String, f64>,
 }
 
 const RANDOM_GENERATION_BATCH: u64 = 10;
@@ -54,7 +57,15 @@ const FILTER_TOO_MUCH_THRESHOLD: u64 = 200;
 
 /// Cumulative wall-clock threshold across the generation phase before
 /// TooSlow fires.
-const TOO_SLOW_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1);
+///
+/// Hypothesis computes its equivalent threshold as `max(1s, 5 × deadline)`,
+/// which works out to 1s when the user has the default `deadline=200ms` set
+/// but 30s when the user sets `deadline=None`. Hegel-Rust deliberately
+/// doesn't have a `deadline` setting at all (tight timing on tests tends to
+/// be more trouble than it's worth in this ecosystem), which puts every
+/// Hegel run in the "deadline=None" regime — so the matching Hypothesis
+/// behaviour is the 30s threshold, not the 1s one.
+const TOO_SLOW_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Health checks (TooSlow / FilterTooMuch) are evaluated only while the run
 /// has fewer than this many valid examples on record.
@@ -141,6 +152,9 @@ fn run_main(
     // is what makes a single test that fails with several distinct bugs
     // surface each one.
     let mut interesting: HashMap<String, Vec<ChoiceNode>> = HashMap::new();
+    let mut targeting = crate::native::targeting::TargetingState::new();
+    let mut target_schedule = crate::native::targeting::TargetingSchedule::new(max_examples);
+    let target_enabled = settings.phases.contains(&Phase::Target);
     let mut valid_test_cases: u64 = 0;
     let mut calls: u64 = 0;
     let mut test_is_trivial = false;
@@ -268,6 +282,11 @@ fn run_main(
             }
             if run.status >= Status::Valid {
                 valid_test_cases += 1;
+                if !run.target_observations.is_empty() {
+                    let choices: Vec<ChoiceValue> =
+                        run.nodes.iter().map(|n| n.value.clone()).collect();
+                    targeting.record(&choices, &run.target_observations);
+                }
             }
 
             if run.status == Status::Invalid {
@@ -312,6 +331,39 @@ fn run_main(
                 );
             }
             // nocov end
+
+            // Fire `optimise_targets` periodically once enough valid
+            // examples have accumulated; mirrors Hypothesis's interleaved
+            // call from `generate_new_examples`. Counts share the
+            // generation budget — targeting trials count toward
+            // `valid_test_cases` and `calls`, so `max_examples` remains a
+            // hard cap across both. Skipped once a bug has been found
+            // (matching `optimise_targets`'s own short-circuit).
+            if target_enabled
+                && interesting.is_empty()
+                && !targeting.is_empty()
+                && target_schedule.should_fire(valid_test_cases)
+            {
+                let mut on_run = |run: &RunResult| {
+                    crate::native::data_tree::record_tree(
+                        &mut tree_root,
+                        &run.nodes,
+                        run.status,
+                        &[],
+                    );
+                };
+                let mut opt_ctx = crate::native::targeting::OptimiseCtx {
+                    engine: &mut ctx,
+                    interesting: &mut interesting,
+                    calls: &mut calls,
+                    valid_test_cases: &mut valid_test_cases,
+                    max_valid: max_examples,
+                    max_calls: max_examples * 10,
+                    rng: &mut rng,
+                    on_run: &mut on_run,
+                };
+                crate::native::targeting::optimise_targets(&mut targeting, &mut opt_ctx);
+            }
 
             if run.status == Status::Interesting {
                 let origin = run.origin.clone().unwrap_or_default();
@@ -603,7 +655,7 @@ pub(crate) struct EngineCtx<'a> {
 }
 
 impl<'a> EngineCtx<'a> {
-    fn new(run_case: &'a mut dyn FnMut(Box<dyn DataSource>, bool)) -> Self {
+    pub(crate) fn new(run_case: &'a mut dyn FnMut(Box<dyn DataSource>, bool)) -> Self {
         EngineCtx {
             run_case,
             cache: HashMap::new(),
@@ -619,6 +671,7 @@ impl<'a> EngineCtx<'a> {
         (self.run_case)(Box::new(data_source), is_final);
         let nodes = NativeDataSource::take_nodes(&handle);
         let spans = NativeDataSource::take_spans(&handle);
+        let target_observations = NativeDataSource::take_target_observations(&handle);
         let tc_result = NativeDataSource::take_outcome(&handle);
 
         let (status, failure) = match tc_result {
@@ -635,6 +688,7 @@ impl<'a> EngineCtx<'a> {
             spans,
             origin,
             failure,
+            target_observations,
         }
     }
 
@@ -687,7 +741,7 @@ impl<'a> EngineCtx<'a> {
     }
 
     /// Run one test case as part of the search loop (not a final replay).
-    fn run(&mut self, ntc: NativeTestCase) -> RunResult {
+    pub(crate) fn run(&mut self, ntc: NativeTestCase) -> RunResult {
         self.execute(ntc, false)
     }
 }
