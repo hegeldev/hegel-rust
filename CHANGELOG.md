@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.2 - 2026-05-19
+
+This release makes some minor internal changes to the native feature. It should have no user-visible impact.
+
 ## 0.14.1 - 2026-05-19
 
 The native backend (`--features native`) now supports Unicode string generators.
