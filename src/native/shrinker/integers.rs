@@ -506,7 +506,6 @@ impl<'a> Shrinker<'a> {
                 let lo = ic.simplest().max(0);
                 let v_cur = cur_value;
                 bin_search_down(lo, v_cur, &mut |candidate| {
-                    // Re-validate indices.
                     let current_valid: Vec<usize> = valid
                         .iter()
                         .copied()
@@ -524,6 +523,39 @@ impl<'a> Shrinker<'a> {
                         .collect();
                     self.replace(&replacements)
                 });
+                // Linear scan small values for non-monotonic predicates
+                // — e.g. `v == 7 || v >= 256`, where bin_search settles
+                // on 256 without ever probing 7.  Matches the linear
+                // scan in `binary_search_integer_towards_zero`.
+                let range_size = ic.max_value.saturating_sub(ic.min_value).saturating_add(1);
+                let scan_count = if range_size <= 128 {
+                    range_size.min(32)
+                } else {
+                    8
+                };
+                let ChoiceValue::Integer(cur_v) = self.current_nodes[valid[0]].value else {
+                    unreachable!(
+                        "kind/value invariant violated: outer match guaranteed this variant"
+                    )
+                };
+                for c in lo..lo.saturating_add(scan_count).min(cur_v) {
+                    let current_valid: Vec<usize> = valid
+                        .iter()
+                        .copied()
+                        .filter(|&i| {
+                            i < self.current_nodes.len()
+                                && matches!(&self.current_nodes[i].value, ChoiceValue::Integer(v) if *v == cur_v)
+                        })
+                        .collect();
+                    if current_valid.len() < 2 {
+                        continue;
+                    }
+                    let replacements: HashMap<usize, ChoiceValue> = current_valid
+                        .iter()
+                        .map(|&i| (i, ChoiceValue::Integer(c)))
+                        .collect();
+                    self.replace(&replacements);
+                }
             } else if cur_value < 0 {
                 let lo = ic.simplest().min(0).saturating_abs();
                 let v_abs = -cur_value;
@@ -627,3 +659,4 @@ impl<'a> Shrinker<'a> {
         });
     }
 }
+

@@ -195,6 +195,83 @@ fn shrink_duplicates_three_copies_converges() {
     );
 }
 
+// ── shrink_duplicates with a non-monotone predicate ──────────────────────
+//
+// `shrink_duplicates` lowers same-valued integer groups jointly via pure
+// `bin_search_down` toward `shrink_towards`.  Binary search assumes the
+// predicate is monotone in the value, so a predicate with a "hole"
+// — accepts a specific value or a different higher range — gets stuck
+// at the higher range's floor and never visits the specific value.
+// Upstream Hypothesis's `Integer.shrink` includes shift_right and
+// mask_high_bits steps that DO probe such values.
+
+#[test]
+fn shrink_duplicates_three_copies_monotone_large_range() {
+    // Monotone predicate `v >= 100` on three duplicates seeded at one
+    // million.  Exercises the shift_right + shrink_by_multiples passes
+    // in `shrink_integer_offset`: shift_right finds candidates like
+    // 500_000, 250_000, …, 122; shrink_by_multiples(2) then closes the
+    // gap to exactly 100.
+    let max_v = 10_000_000i128;
+    let initial = vec![
+        int_node(0, max_v, 1_000_000),
+        int_node(0, max_v, 1_000_000),
+        int_node(0, max_v, 1_000_000),
+    ];
+    let shrinker = run_shrinker(initial, 200, |nodes| {
+        if nodes.len() != 3 {
+            return false;
+        }
+        let a = int_val(&nodes[0]);
+        let b = int_val(&nodes[1]);
+        let c = int_val(&nodes[2]);
+        a == b && b == c && a >= 100
+    });
+    assert_eq!(
+        (
+            int_val(&shrinker.current_nodes[0]),
+            int_val(&shrinker.current_nodes[1]),
+            int_val(&shrinker.current_nodes[2])
+        ),
+        (100, 100, 100),
+        "improvements = {}",
+        shrinker.improvements,
+    );
+}
+
+#[test]
+fn shrink_duplicates_three_copies_via_shift_right() {
+    let max_v = 1_000_000i128;
+    // Seed: three duplicates at 1_000_000.  Predicate accepts 7 (a value
+    // reachable via `1_000_000 >> 17 == 7`) or any value ≥ 256.  Pure
+    // bin_search_down narrows to 256 and stops; shift_right would
+    // discover 7.
+    let initial = vec![
+        int_node(0, max_v, 1_000_000),
+        int_node(0, max_v, 1_000_000),
+        int_node(0, max_v, 1_000_000),
+    ];
+    let shrinker = run_shrinker(initial, 200, |nodes| {
+        if nodes.len() != 3 {
+            return false;
+        }
+        let a = int_val(&nodes[0]);
+        let b = int_val(&nodes[1]);
+        let c = int_val(&nodes[2]);
+        a == b && b == c && (a == 7 || a >= 256)
+    });
+    assert_eq!(
+        (
+            int_val(&shrinker.current_nodes[0]),
+            int_val(&shrinker.current_nodes[1]),
+            int_val(&shrinker.current_nodes[2])
+        ),
+        (7, 7, 7),
+        "improvements = {}",
+        shrinker.improvements,
+    );
+}
+
 // ── try_shortening_via_increment for a float-kind node ───────────────────
 //
 // When a float-kind node's index-space exponential probes
