@@ -252,6 +252,23 @@ pub use test_case::{
 #[doc(hidden)]
 pub use antithesis::TestLocation;
 
+/// Test-only access to internal native engine types.
+///
+/// Exposes the in-process shrinker and choice-sequence machinery so
+/// integration tests can drive shrinking directly without going through
+/// the generator + engine layers.  Not part of the public API; only the
+/// `__` prefix and the `#[doc(hidden)]` attribute keep this from showing
+/// up in rustdoc output.
+#[cfg(feature = "native")]
+#[doc(hidden)]
+pub mod __test_internals {
+    pub use crate::native::core::choices::{BooleanChoice, IntegerChoice};
+    pub use crate::native::core::{
+        BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, NativeTestCase, StringChoice,
+    };
+    pub use crate::native::shrinker::{ShrinkRun, Shrinker};
+}
+
 /// Derive a generator for a struct or enum.
 ///
 /// This implements [`DefaultGenerator`](generators::DefaultGenerator) for the type,

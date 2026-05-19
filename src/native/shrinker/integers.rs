@@ -1,9 +1,11 @@
 // Integer-based shrink passes: zero_choices, swap_integer_sign,
-// binary_search_integer_towards_zero, redistribute_integers, shrink_duplicates.
+// binary_search_integer_towards_zero, redistribute_integers, shrink_duplicates,
+// lower_common_node_offset.
 
 use std::collections::HashMap;
+use std::mem::discriminant;
 
-use crate::native::core::{ChoiceKind, ChoiceValue};
+use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue};
 
 use super::{Shrinker, bin_search_down, find_integer};
 
@@ -545,5 +547,83 @@ impl<'a> Shrinker<'a> {
                 });
             }
         }
+    }
+
+    /// Jointly move every integer node that changed since `baseline` toward
+    /// its own `shrink_towards` by a single common offset.
+    ///
+    /// Port of Hypothesis's `lower_common_node_offset`.  Closes a gap that
+    /// `lower_integers_together` can't reach: when three-or-more integer
+    /// nodes are linked by a predicate that forces them to move together
+    /// (e.g. a chain `|a_{i+1} - a_i| == 1`), no pairwise joint move
+    /// preserves the predicate — only a single global step does.  This
+    /// pass takes one global step of the maximum size that still
+    /// triggers the test.
+    ///
+    /// Only integer nodes are eligible.  `baseline` must have the same
+    /// length and per-position kind as `current_nodes`; otherwise the
+    /// diff can't be computed safely and the pass is a no-op.
+    pub(super) fn lower_common_node_offset(&mut self, baseline: &[ChoiceNode]) {
+        if baseline.len() != self.current_nodes.len() {
+            return;
+        }
+        for (b, c) in baseline.iter().zip(self.current_nodes.iter()) {
+            if discriminant(&b.kind) != discriminant(&c.kind) {
+                return;
+            }
+        }
+
+        // Each entry: (index, current value, the node's own clamped
+        // shrink_towards).
+        let mut changed: Vec<(usize, i128, i128)> = Vec::new();
+        for (i, (b, c)) in baseline.iter().zip(self.current_nodes.iter()).enumerate() {
+            let (ChoiceKind::Integer(ic), ChoiceValue::Integer(v_new)) = (&c.kind, &c.value) else {
+                continue;
+            };
+            let ChoiceValue::Integer(v_old) = b.value else {
+                unreachable!(
+                    "kind matched between baseline and current but baseline value isn't Integer"
+                );
+            };
+            if *v_new == v_old {
+                continue;
+            }
+            let st = ic.clamped_shrink_towards();
+            if *v_new == st {
+                continue;
+            }
+            changed.push((i, *v_new, st));
+        }
+
+        if changed.len() < 2 {
+            return;
+        }
+
+        // The largest joint shift that keeps every node on its current
+        // side of its own shrink_towards is the smallest signed distance:
+        // any larger `k` would push the nearest-to-st node past its st,
+        // at which point its sort_key turns U-shape upward again and the
+        // predicate ceases to be monotone in `k`.
+        let offset = changed
+            .iter()
+            .map(|(_, v, st)| v.wrapping_sub(*st).unsigned_abs())
+            .min()
+            .unwrap();
+
+        let candidates = changed.clone();
+        find_integer(|k| {
+            if (k as u128) > offset {
+                return false;
+            }
+            let k = k as i128;
+            let replacements: HashMap<usize, ChoiceValue> = candidates
+                .iter()
+                .map(|(i, v, st)| {
+                    let new_val = if *v > *st { v - k } else { v + k };
+                    (*i, ChoiceValue::Integer(new_val))
+                })
+                .collect();
+            self.replace(&replacements)
+        });
     }
 }

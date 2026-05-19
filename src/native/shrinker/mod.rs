@@ -179,6 +179,12 @@ impl<'a> Shrinker<'a> {
             prev = current_key;
             iterations += 1;
 
+            // Snapshot the integer-changing baseline before running the
+            // per-integer passes; `lower_common_node_offset` consumes the
+            // diff at the end of the iteration to take a single joint
+            // step across every integer node that moved.
+            let integer_pass_baseline = self.current_nodes.clone();
+
             self.delete_chunks();
             self.zero_choices();
             self.swap_integer_sign();
@@ -187,6 +193,7 @@ impl<'a> Shrinker<'a> {
             self.redistribute_integers();
             self.lower_integers_together();
             self.shrink_duplicates();
+            self.lower_common_node_offset(&integer_pass_baseline);
             self.sort_values();
             self.swap_adjacent_blocks();
             self.shrink_floats();

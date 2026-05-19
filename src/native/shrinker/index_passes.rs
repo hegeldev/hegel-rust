@@ -150,17 +150,29 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            // Also try powers of 2 (and negatives) as raw values. This covers
-            // large index-space jumps that exponential index probing misses.
+            // Also try powers of 2 (and negatives) as raw values.  This
+            // covers large index-space jumps that exponential index
+            // probing misses (e.g. `-128.0` for a float predicate
+            // checking `v < -86`).  Push both an Integer and a Float
+            // candidate so the loop is useful for both kinds — without
+            // the Float variant, `kind.validate` rejects every Integer
+            // candidate against a Float-typed node and the fallback is
+            // dead code for floats.
             for e in 0u32..11 {
                 let magnitude: i128 = 1i128 << e;
+                let magnitude_f = magnitude as f64;
                 for &sign in &[1i128, -1] {
-                    let candidate_val = ChoiceValue::Integer(sign * magnitude);
-                    if kind.validate(&candidate_val)
-                        && candidate_val != node.value
-                        && !candidates.contains(&candidate_val)
-                    {
-                        candidates.push(candidate_val);
+                    let sign_f = sign as f64;
+                    for candidate_val in [
+                        ChoiceValue::Integer(sign * magnitude),
+                        ChoiceValue::Float(sign_f * magnitude_f),
+                    ] {
+                        if kind.validate(&candidate_val)
+                            && candidate_val != node.value
+                            && !candidates.contains(&candidate_val)
+                        {
+                            candidates.push(candidate_val);
+                        }
                     }
                 }
             }
