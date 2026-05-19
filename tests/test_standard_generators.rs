@@ -461,7 +461,6 @@ mod direct_strategies {
         check_can_generate_examples(gs::characters().exclude_categories(&["Nd"]));
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_from_regex_alphabet_combinations() {
         check_can_generate_examples(
