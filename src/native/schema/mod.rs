@@ -7,8 +7,8 @@
 //   numeric     — interpret_integer, interpret_boolean, interpret_constant
 //   float       — interpret_float
 //   bytes       — interpret_binary
-//   text        — interpret_string, StringAlphabet helpers
-//   regex       — interpret_regex, generate_hir_string
+//   text        — interpret_string, IntervalSet helpers
+//   regex       — interpret_regex (Python-compatible regex strategy)
 //   collections — interpret_list, interpret_dict, interpret_tuple, interpret_one_of, interpret_sampled_from
 //   special     — date, time, datetime, ip_address, uuid
 
@@ -16,6 +16,7 @@ mod bytes;
 mod collections;
 mod float;
 mod numeric;
+mod regex;
 mod special;
 mod text;
 
@@ -64,10 +65,9 @@ pub(crate) fn interpret_schema(
         ntc.freeze();
     }
 
-    // The remaining `todo!()` arm covers schemas still unported: regex (which
-    // needs the HIR walker) and the three internet-flavoured schemas
-    // (domain / email / url, which share the IANA TLD list and
-    // percent-encoding machinery).
+    // The remaining `todo!()` arm covers the internet-flavoured schemas
+    // still unported (domain / email / url, which share the IANA TLD
+    // list and percent-encoding machinery).
     let result = match schema_type {
         "integer" => numeric::interpret_integer(ntc, schema),
         "boolean" => numeric::interpret_boolean(ntc),
@@ -76,6 +76,7 @@ pub(crate) fn interpret_schema(
         "float" => float::interpret_float(ntc, schema),
         "binary" => bytes::interpret_binary(ntc, schema),
         "string" => text::interpret_string(ntc, schema),
+        "regex" => regex::interpret_regex(ntc, schema),
         "tuple" => collections::interpret_tuple(ntc, schema),
         "one_of" => collections::interpret_one_of(ntc, schema),
         "sampled_from" => collections::interpret_sampled_from(ntc, schema),
@@ -87,7 +88,7 @@ pub(crate) fn interpret_schema(
         "ip_address" => special::interpret_ip_address(ntc, schema),
         "uuid" => special::interpret_uuid(ntc, schema),
 
-        "regex" | "email" | "url" | "domain" => {
+        "email" | "url" | "domain" => {
             todo!("schema {:?} not yet supported in native mode", schema_type)
         }
 

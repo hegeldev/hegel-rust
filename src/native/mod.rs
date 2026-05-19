@@ -13,6 +13,7 @@ pub mod data_tree;
 pub mod database;
 pub mod floats;
 pub mod intervalsets;
+pub mod re;
 pub mod schema;
 pub mod shrinker;
 pub mod targeting;
