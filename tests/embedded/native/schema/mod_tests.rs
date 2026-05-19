@@ -20,6 +20,154 @@ fn interpret_schema_unknown_type_panics() {
     let _ = interpret_schema(&mut ntc, &schema);
 }
 
+// ── Every schema dispatch records an enclosing span ─────────────────────────
+//
+// Without an enclosing span, the basic-generator path (which goes from the
+// generator API straight through `interpret_schema` without any user-level
+// `start_span`/`stop_span` calls) leaves the shrinker with no way to recognise
+// a compound draw as a logical unit.
+
+#[test]
+fn interpret_schema_records_leaf_span_for_integer() {
+    let mut ntc = fresh_ntc();
+    let schema = cbor_map! {
+        "type" => "integer",
+        "min_value" => 0,
+        "max_value" => 0,
+    };
+    interpret_schema(&mut ntc, &schema).ok().unwrap();
+
+    assert_eq!(ntc.spans.len(), 1);
+    assert_eq!(ntc.spans[0usize].label, "integer");
+    assert_eq!(ntc.spans[0usize].start, 0);
+    assert_eq!(ntc.spans[0usize].end, 1);
+    assert_eq!(ntc.spans[0usize].parent, None);
+    assert_eq!(ntc.spans[0usize].depth, 0);
+}
+
+#[test]
+fn interpret_schema_records_enclosing_span_for_tuple() {
+    let mut ntc = fresh_ntc();
+    let schema = cbor_map! {
+        "type" => "tuple",
+        "elements" => vec![
+            cbor_map! { "type" => "integer", "min_value" => 0, "max_value" => 0 },
+            cbor_map! { "type" => "integer", "min_value" => 7, "max_value" => 7 },
+        ],
+    };
+    interpret_schema(&mut ntc, &schema).ok().unwrap();
+
+    // Three spans: the outer tuple plus the two integer children.
+    assert_eq!(ntc.spans.len(), 3);
+
+    // The outer tuple was pushed first (so it has the lowest index) and
+    // covers all the child nodes.
+    assert_eq!(ntc.spans[0usize].label, "tuple");
+    assert_eq!(ntc.spans[0usize].start, 0);
+    assert_eq!(ntc.spans[0usize].end, 2);
+    assert_eq!(ntc.spans[0usize].parent, None);
+    assert_eq!(ntc.spans[0usize].depth, 0);
+
+    // The integer children point at the tuple as their parent.
+    for child in ntc.spans.iter().skip(1) {
+        assert_eq!(child.label, "integer");
+        assert_eq!(child.parent, Some(0));
+        assert_eq!(child.depth, 1);
+    }
+}
+
+#[test]
+fn interpret_schema_records_enclosing_span_for_list() {
+    let mut ntc = fresh_ntc();
+    let schema = cbor_map! {
+        "type" => "list",
+        "elements" => cbor_map! { "type" => "boolean" },
+        "min_size" => 0,
+        "max_size" => 5,
+    };
+    interpret_schema(&mut ntc, &schema).ok().unwrap();
+
+    // The outer list span exists at index 0, regardless of how many
+    // elements were drawn.
+    assert_eq!(ntc.spans[0usize].label, "list");
+    assert_eq!(ntc.spans[0usize].parent, None);
+    assert_eq!(ntc.spans[0usize].depth, 0);
+    for child in ntc.spans.iter().skip(1) {
+        assert_eq!(child.parent, Some(0));
+        assert_eq!(child.depth, 1);
+    }
+}
+
+#[test]
+fn interpret_schema_records_enclosing_span_for_one_of() {
+    let mut ntc = fresh_ntc();
+    let schema = cbor_map! {
+        "type" => "one_of",
+        "generators" => vec![
+            cbor_map! { "type" => "integer", "min_value" => 10, "max_value" => 10 },
+            cbor_map! { "type" => "integer", "min_value" => 20, "max_value" => 20 },
+        ],
+    };
+    interpret_schema(&mut ntc, &schema).ok().unwrap();
+
+    assert_eq!(ntc.spans[0usize].label, "one_of");
+    assert_eq!(ntc.spans[0usize].parent, None);
+    assert_eq!(ntc.spans[0usize].depth, 0);
+}
+
+#[test]
+fn interpret_schema_nests_spans_for_tuple_of_tuples() {
+    let mut ntc = fresh_ntc();
+    let inner_tuple = cbor_map! {
+        "type" => "tuple",
+        "elements" => vec![
+            cbor_map! { "type" => "integer", "min_value" => 0, "max_value" => 0 },
+        ],
+    };
+    let schema = cbor_map! {
+        "type" => "tuple",
+        "elements" => vec![inner_tuple.clone(), inner_tuple],
+    };
+    interpret_schema(&mut ntc, &schema).ok().unwrap();
+
+    // Outer tuple at index 0, depth 0; the two inner tuples have
+    // parent = 0, depth = 1; the integer leaves have depth 2.
+    assert_eq!(ntc.spans[0usize].label, "tuple");
+    assert_eq!(ntc.spans[0usize].depth, 0);
+
+    let inner_tuple_indices: Vec<usize> = ntc
+        .spans
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| (s.label == "tuple" && i != 0).then_some(i))
+        .collect();
+    assert_eq!(inner_tuple_indices.len(), 2);
+    for &i in &inner_tuple_indices {
+        assert_eq!(ntc.spans[i].parent, Some(0));
+        assert_eq!(ntc.spans[i].depth, 1);
+    }
+    for span in ntc.spans.iter().filter(|s| s.label == "integer") {
+        assert_eq!(span.depth, 2);
+        // The parent must be one of the inner tuples.
+        assert!(inner_tuple_indices.contains(&span.parent.unwrap()));
+    }
+}
+
+#[test]
+fn interpret_schema_records_zero_node_span_for_null() {
+    // `null` consumes no choice nodes but still represents a logical draw.
+    // Recording an empty span keeps parity with start_span/stop_span, which
+    // also retain empty spans (see test_has_examples_even_when_empty on the
+    // Hypothesis side).
+    let mut ntc = fresh_ntc();
+    let schema = cbor_map! { "type" => "null" };
+    interpret_schema(&mut ntc, &schema).ok().unwrap();
+
+    assert_eq!(ntc.spans.len(), 1);
+    assert_eq!(ntc.spans[0usize].label, "null");
+    assert_eq!(ntc.spans[0usize].start, ntc.spans[0usize].end);
+}
+
 // ── many_reject: invalid when too many rejections under min_size ────────────
 
 #[test]

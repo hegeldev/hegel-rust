@@ -865,30 +865,6 @@ impl NativeTestCase {
         }
     }
 
-    /// Record a finished span covering choice nodes `[start, end)` with the
-    /// given label.  The span is assigned a parent (the innermost
-    /// currently-open span, if any) and a depth (one greater than that
-    /// parent's depth, or 0 if there is no enclosing span).
-    ///
-    /// Used by leaf-schema interpretation in `schema/mod.rs` and by
-    /// `feature_flag` draws.  Higher-level callers should prefer
-    /// [`Self::start_span`] / [`Self::stop_span`], which preserve span-tree
-    /// structure for nested draws.
-    pub fn record_span(&mut self, start: usize, end: usize, label: String) {
-        if end > start {
-            let parent = self.span_stack.last().copied();
-            let depth = self.span_stack.len() as u32;
-            self.spans.push(Span {
-                start,
-                end,
-                label,
-                depth,
-                parent,
-                discarded: false,
-            });
-        }
-    }
-
     /// Open a new span at the current choice position, labelled with `label`.
     ///
     /// Returns the index assigned to the span in `self.spans`.  The span's
