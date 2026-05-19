@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.1 - 2026-05-19
+
+The native backend (`--features native`) now supports Unicode string generators.
+
 ## 0.14.0 - 2026-05-16
 
 This release changes `gs::default::<T>()` to return the concrete generator for `T` instead of a weakly typed `BoxedGenerator` (https://github.com/hegeldev/hegel-rust/issues/246).
