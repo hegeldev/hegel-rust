@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.5 - 2026-05-19
+
+This release adds `gs::from_regex` support for the native backend.
+
 ## 0.14.4 - 2026-05-19
 
 The native backend (`--features native`) now supports `gs::dates()`, `gs::times()`, `gs::datetimes()`, `gs::ip_addresses()`, and `gs::uuids()`.
