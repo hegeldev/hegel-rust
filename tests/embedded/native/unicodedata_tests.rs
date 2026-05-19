@@ -152,3 +152,51 @@ fn nfd_base_returns_none_for_non_decomposable() {
     assert_eq!(nfd_base(0x1F600), None); // 😀
     assert_eq!(nfd_base(0x82535), None);
 }
+
+#[test]
+fn category_from_code_round_trips_every_variant() {
+    // Every code emitted by `as_str` parses back to the same variant.
+    let all = [
+        Category::Lu,
+        Category::Ll,
+        Category::Lt,
+        Category::Lm,
+        Category::Lo,
+        Category::Mn,
+        Category::Mc,
+        Category::Me,
+        Category::Nd,
+        Category::Nl,
+        Category::No,
+        Category::Pc,
+        Category::Pd,
+        Category::Ps,
+        Category::Pe,
+        Category::Pi,
+        Category::Pf,
+        Category::Po,
+        Category::Sm,
+        Category::Sc,
+        Category::Sk,
+        Category::So,
+        Category::Zs,
+        Category::Zl,
+        Category::Zp,
+        Category::Cc,
+        Category::Cf,
+        Category::Cs,
+        Category::Co,
+        Category::Cn,
+    ];
+    for cat in all {
+        assert_eq!(Category::from_code(cat.as_str()), Some(cat));
+    }
+}
+
+#[test]
+fn category_from_code_rejects_unknown() {
+    assert_eq!(Category::from_code(""), None);
+    assert_eq!(Category::from_code("Xx"), None);
+    assert_eq!(Category::from_code("lu"), None); // wrong case
+    assert_eq!(Category::from_code("Luu"), None);
+}
