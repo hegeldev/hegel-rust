@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::{LazyLock, Mutex};
 
-use rand::RngExt;
 use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
 
 use super::choices::{
     BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice,
@@ -780,6 +780,11 @@ pub struct NativeTestCase {
     /// `None` for test cases concluded by [`Self::freeze`] directly
     /// (`Status::Valid`).  Mirrors `ConjectureData.interesting_origin`.
     interesting_origin: Option<InterestingOrigin>,
+    /// When `true`, every draw bypasses the prefix/RNG paths and returns
+    /// `kind.simplest()`. Used by [`Self::for_simplest`] to mirror
+    /// Hypothesis's `ChoiceTemplate("simplest", count=None)` pre-Generate
+    /// test case (engine.py::generate_new_examples).
+    force_simplest: bool,
 }
 
 impl NativeTestCase {
@@ -802,7 +807,28 @@ impl NativeTestCase {
             labels_for_structure_stack: Vec::new(),
             observer: None,
             interesting_origin: None,
+            force_simplest: false,
         }
+    }
+
+    /// A test case where every draw returns `kind.simplest()`. Used by the
+    /// Generate phase to run a single deterministic "all simplest" trial
+    /// before random sampling, mirroring Hypothesis's
+    /// `cached_test_function((ChoiceTemplate("simplest", count=None),))`
+    /// call in `engine.py::generate_new_examples`. Without it, find-any
+    /// tests over multi-component generators (e.g. midnight = h=m=s=0
+    /// across four independent draws) need an RNG that happens to land on
+    /// all-zeros, which becomes vanishingly unlikely as the number of
+    /// components grows.
+    ///
+    /// The seed value is unused (every draw short-circuits to simplest
+    /// before reaching the RNG fallback in `resolve_choice`), but
+    /// `new_random` requires one, so we hand it a fixed seed for
+    /// reproducibility's sake.
+    pub fn for_simplest() -> Self {
+        let mut tc = Self::new_random(SmallRng::seed_from_u64(0));
+        tc.force_simplest = true;
+        tc
     }
 
     /// Construct a `NativeTestCase` that replays `choices` in order,
@@ -833,6 +859,7 @@ impl NativeTestCase {
             labels_for_structure_stack: Vec::new(),
             observer,
             interesting_origin: None,
+            force_simplest: false,
         }
     }
 
@@ -862,6 +889,7 @@ impl NativeTestCase {
             labels_for_structure_stack: Vec::new(),
             observer: None,
             interesting_origin: None,
+            force_simplest: false,
         }
     }
 
@@ -1193,6 +1221,10 @@ impl NativeTestCase {
         random: impl FnOnce(&mut SmallRng) -> ChoiceValue,
     ) -> Result<(ChoiceValue, bool), StopTest> {
         self.pre_choice()?;
+
+        if self.force_simplest {
+            return Ok((simplest(), false));
+        }
 
         let idx = self.nodes.len();
 

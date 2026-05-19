@@ -151,7 +151,6 @@ fn test_regex_with_alphabet() {
 
 // --- Special schema generators ---
 
-#[not_supported_on_native]
 #[test]
 fn test_dates_format() {
     assert_all_examples(gs::dates(), |s: &String| {
@@ -168,7 +167,6 @@ fn test_dates_format() {
     });
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_times_format() {
     assert_all_examples(gs::times(), |s: &String| {
@@ -190,7 +188,6 @@ fn test_times_format() {
     });
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_datetimes_format() {
     assert_all_examples(gs::datetimes(), |s: &String| {
@@ -227,7 +224,6 @@ fn test_datetimes_format() {
     });
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_ip_addresses_format() {
     assert_all_examples(gs::ip_addresses(), |s: &String| {
@@ -236,7 +232,6 @@ fn test_ip_addresses_format() {
     });
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_ip_addresses_v4_only() {
     assert_all_examples(gs::ip_addresses().v4(), |s: &String| {
@@ -248,7 +243,6 @@ fn test_ip_addresses_v4_only() {
     });
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_ip_addresses_v6_only() {
     assert_all_examples(gs::ip_addresses().v6(), |s: &String| {
@@ -259,13 +253,11 @@ fn test_ip_addresses_v6_only() {
 
 const NIL_UUID: &str = "00000000-0000-0000-0000-000000000000";
 
-#[not_supported_on_native]
 #[test]
 fn test_no_nil_uuid_by_default() {
     assert_no_examples(gs::uuids(), |s: &String| s == NIL_UUID);
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_uuids_have_canonical_form() {
     assert_all_examples(gs::uuids(), |s: &String| {
@@ -297,7 +289,6 @@ fn test_domains_format() {
     });
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_can_generate_specified_version() {
     for version in 1u8..=5 {

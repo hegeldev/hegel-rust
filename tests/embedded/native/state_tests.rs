@@ -643,3 +643,94 @@ fn draw_float_half_bounded_below_explores_finite_range() {
         .unwrap();
     assert!(v >= 1.0 && !v.is_nan());
 }
+
+// ── NativeTestCase::for_simplest ─────────────────────────────────────────────
+//
+// Mirrors the `cached_test_function((ChoiceTemplate("simplest", count=None),))`
+// pre-trial that Hypothesis's engine runs at the head of the Generate phase
+// (engine.py::generate_new_examples). Every draw must return the kind's
+// `simplest()` value — `shrink_towards` clamped to range for integers, 0.0
+// for floats, false for booleans, the empty / lower-bound size for bytes
+// and strings.
+
+#[test]
+fn for_simplest_draws_integer_at_shrink_target_when_in_range() {
+    let mut tc = NativeTestCase::for_simplest();
+    // shrink_towards=0 is hardcoded; for [0, 23] that's in range → simplest = 0.
+    let v = tc.draw_integer(0, 23).ok().unwrap();
+    assert_eq!(v, 0);
+}
+
+#[test]
+fn for_simplest_draws_integer_clamped_to_range_when_target_below() {
+    let mut tc = NativeTestCase::for_simplest();
+    // shrink_towards=0 below min=5 → simplest clamps to 5.
+    let v = tc.draw_integer(5, 100).ok().unwrap();
+    assert_eq!(v, 5);
+}
+
+#[test]
+fn for_simplest_draws_integer_clamped_to_range_when_target_above() {
+    let mut tc = NativeTestCase::for_simplest();
+    // shrink_towards=0 above max=-1 → simplest clamps to -1.
+    let v = tc.draw_integer(-100, -1).ok().unwrap();
+    assert_eq!(v, -1);
+}
+
+#[test]
+fn for_simplest_propagates_across_many_draws() {
+    // The mode applies to every draw, not just the first. This is what makes
+    // Hypothesis-style "midnight = all four time components are zero" findable
+    // on a single pre-trial.
+    let mut tc = NativeTestCase::for_simplest();
+    for _ in 0..10 {
+        assert_eq!(tc.draw_integer(0, 99).ok().unwrap(), 0);
+    }
+}
+
+#[test]
+fn for_simplest_draws_float_at_zero() {
+    let mut tc = NativeTestCase::for_simplest();
+    let v = tc.draw_float(-10.0, 10.0, false, false).ok().unwrap();
+    assert_eq!(v, 0.0);
+    assert!(v.is_sign_positive(), "expected +0.0, got -0.0");
+}
+
+#[test]
+fn for_simplest_draws_weighted_at_false() {
+    let mut tc = NativeTestCase::for_simplest();
+    let v = tc.weighted(0.5, None).ok().unwrap();
+    assert!(!v, "weighted draw in simplest mode should be false");
+}
+
+#[test]
+fn for_simplest_draws_bytes_at_min_size_all_zero() {
+    let mut tc = NativeTestCase::for_simplest();
+    let v = tc.draw_bytes(2, 5).ok().unwrap();
+    assert_eq!(v, vec![0u8; 2], "expected min-sized all-zero buffer");
+}
+
+#[test]
+fn for_simplest_is_independent_of_seed() {
+    // Two simplest test cases produce identical traces — that's the whole
+    // point: deterministic boundary trial that doesn't depend on RNG luck.
+    let mut a = NativeTestCase::for_simplest();
+    let mut b = NativeTestCase::for_simplest();
+    for _ in 0..5 {
+        let va = a.draw_integer(0, 1000).ok().unwrap();
+        let vb = b.draw_integer(0, 1000).ok().unwrap();
+        assert_eq!(va, vb);
+        assert_eq!(va, 0);
+    }
+}
+
+#[test]
+fn for_simplest_records_choice_nodes() {
+    // Forced-simplest draws still record nodes in the test case so the
+    // engine can inspect what was drawn and feed the trace into the data
+    // tree / shrinker if the test ends up Interesting.
+    let mut tc = NativeTestCase::for_simplest();
+    let _ = tc.draw_integer(0, 23).ok().unwrap();
+    let _ = tc.weighted(0.5, None).ok().unwrap();
+    assert_eq!(tc.nodes.len(), 2);
+}
