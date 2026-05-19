@@ -655,7 +655,7 @@ fn draw_float_half_bounded_below_explores_finite_range() {
 
 #[test]
 fn for_simplest_draws_integer_at_shrink_target_when_in_range() {
-    let mut tc = NativeTestCase::for_simplest();
+    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
     // shrink_towards=0 is hardcoded; for [0, 23] that's in range → simplest = 0.
     let v = tc.draw_integer(0, 23).ok().unwrap();
     assert_eq!(v, 0);
@@ -663,7 +663,7 @@ fn for_simplest_draws_integer_at_shrink_target_when_in_range() {
 
 #[test]
 fn for_simplest_draws_integer_clamped_to_range_when_target_below() {
-    let mut tc = NativeTestCase::for_simplest();
+    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
     // shrink_towards=0 below min=5 → simplest clamps to 5.
     let v = tc.draw_integer(5, 100).ok().unwrap();
     assert_eq!(v, 5);
@@ -671,7 +671,7 @@ fn for_simplest_draws_integer_clamped_to_range_when_target_below() {
 
 #[test]
 fn for_simplest_draws_integer_clamped_to_range_when_target_above() {
-    let mut tc = NativeTestCase::for_simplest();
+    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
     // shrink_towards=0 above max=-1 → simplest clamps to -1.
     let v = tc.draw_integer(-100, -1).ok().unwrap();
     assert_eq!(v, -1);
@@ -682,7 +682,7 @@ fn for_simplest_propagates_across_many_draws() {
     // The mode applies to every draw, not just the first. This is what makes
     // Hypothesis-style "midnight = all four time components are zero" findable
     // on a single pre-trial.
-    let mut tc = NativeTestCase::for_simplest();
+    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
     for _ in 0..10 {
         assert_eq!(tc.draw_integer(0, 99).ok().unwrap(), 0);
     }
@@ -690,7 +690,7 @@ fn for_simplest_propagates_across_many_draws() {
 
 #[test]
 fn for_simplest_draws_float_at_zero() {
-    let mut tc = NativeTestCase::for_simplest();
+    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
     let v = tc.draw_float(-10.0, 10.0, false, false).ok().unwrap();
     assert_eq!(v, 0.0);
     assert!(v.is_sign_positive(), "expected +0.0, got -0.0");
@@ -698,14 +698,14 @@ fn for_simplest_draws_float_at_zero() {
 
 #[test]
 fn for_simplest_draws_weighted_at_false() {
-    let mut tc = NativeTestCase::for_simplest();
+    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
     let v = tc.weighted(0.5, None).ok().unwrap();
     assert!(!v, "weighted draw in simplest mode should be false");
 }
 
 #[test]
 fn for_simplest_draws_bytes_at_min_size_all_zero() {
-    let mut tc = NativeTestCase::for_simplest();
+    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
     let v = tc.draw_bytes(2, 5).ok().unwrap();
     assert_eq!(v, vec![0u8; 2], "expected min-sized all-zero buffer");
 }
@@ -714,8 +714,8 @@ fn for_simplest_draws_bytes_at_min_size_all_zero() {
 fn for_simplest_is_independent_of_seed() {
     // Two simplest test cases produce identical traces — that's the whole
     // point: deterministic boundary trial that doesn't depend on RNG luck.
-    let mut a = NativeTestCase::for_simplest();
-    let mut b = NativeTestCase::for_simplest();
+    let mut a = NativeTestCase::for_simplest(BUFFER_SIZE);
+    let mut b = NativeTestCase::for_simplest(BUFFER_SIZE);
     for _ in 0..5 {
         let va = a.draw_integer(0, 1000).ok().unwrap();
         let vb = b.draw_integer(0, 1000).ok().unwrap();
@@ -729,8 +729,159 @@ fn for_simplest_records_choice_nodes() {
     // Forced-simplest draws still record nodes in the test case so the
     // engine can inspect what was drawn and feed the trace into the data
     // tree / shrinker if the test ends up Interesting.
-    let mut tc = NativeTestCase::for_simplest();
+    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
     let _ = tc.draw_integer(0, 23).ok().unwrap();
     let _ = tc.weighted(0.5, None).ok().unwrap();
     assert_eq!(tc.nodes.len(), 2);
+}
+
+// ── ChoiceTemplate / trailing_template ───────────────────────────────────────
+//
+// Direct tests for the new template mechanism. The for_simplest_* tests above
+// exercise the same paths through the `for_simplest` wrapper; these target
+// the underlying `for_choices_and_template` constructor and the count /
+// mixed-prefix behaviours that wrapper hides.
+
+#[test]
+fn template_simplest_infinite_resolves_every_draw_to_simplest() {
+    let mut tc = NativeTestCase::for_choices_and_template(
+        &[],
+        None,
+        Some(ChoiceTemplate::simplest(None)),
+        10,
+        None,
+    );
+    for _ in 0..5 {
+        assert_eq!(tc.draw_integer(-100, 100).ok().unwrap(), 0);
+    }
+    assert!(!tc.weighted(0.5, None).ok().unwrap());
+}
+
+#[test]
+fn template_simplest_finite_count_n_produces_exactly_n_values() {
+    let mut tc = NativeTestCase::for_choices_and_template(
+        &[],
+        None,
+        Some(ChoiceTemplate::simplest(Some(3))),
+        100,
+        None,
+    );
+    for _ in 0..3 {
+        assert_eq!(tc.draw_integer(0, 100).ok().unwrap(), 0);
+    }
+    // 4th draw is the overrun edge: returns Err and sets EarlyStop.
+    assert!(tc.draw_integer(0, 100).is_err());
+    assert_eq!(tc.status, Some(Status::EarlyStop));
+}
+
+#[test]
+fn template_concrete_prefix_then_template() {
+    let prefix = vec![ChoiceValue::Integer(42)];
+    let mut tc = NativeTestCase::for_choices_and_template(
+        &prefix,
+        None,
+        Some(ChoiceTemplate::simplest(None)),
+        10,
+        None,
+    );
+    // First draw replays the concrete prefix entry.
+    assert_eq!(tc.draw_integer(0, 100).ok().unwrap(), 42);
+    // Subsequent draws fall through to the template → simplest().
+    assert_eq!(tc.draw_integer(0, 100).ok().unwrap(), 0);
+    assert_eq!(tc.draw_integer(0, 100).ok().unwrap(), 0);
+}
+
+#[test]
+fn template_concrete_prefix_with_punning_then_template() {
+    // Prefix was originally a Boolean, but the test is drawing an Integer:
+    // punning routes the first draw to unit() (since the original wasn't
+    // "simplest"), and the template kicks in for subsequent draws.
+    let prefix = vec![ChoiceValue::Boolean(true)];
+    let prefix_nodes = vec![ChoiceNode {
+        kind: ChoiceKind::Boolean(BooleanChoice),
+        value: ChoiceValue::Boolean(true),
+        was_forced: false,
+    }];
+    let mut tc = NativeTestCase::for_choices_and_template(
+        &prefix,
+        Some(&prefix_nodes),
+        Some(ChoiceTemplate::simplest(None)),
+        10,
+        None,
+    );
+    // Draw 1: kind mismatch + non-simplest original → unit().
+    let v = tc.draw_integer(-100, 100).ok().unwrap();
+    assert_eq!(
+        v,
+        IntegerChoice {
+            min_value: -100,
+            max_value: 100,
+            shrink_towards: 0,
+        }
+        .unit()
+    );
+    // Draw 2: template branch → simplest().
+    assert_eq!(tc.draw_integer(0, 100).ok().unwrap(), 0);
+}
+
+#[test]
+#[should_panic(expected = "ChoiceTemplate count must be positive")]
+fn template_count_zero_panics_at_construction() {
+    let _ = ChoiceTemplate::simplest(Some(0));
+}
+
+#[test]
+fn for_simplest_wrapper_matches_template_with_count_none() {
+    // for_simplest is just sugar for the explicit template; identical traces.
+    let mut a = NativeTestCase::for_simplest(5);
+    let mut b = NativeTestCase::for_choices_and_template(
+        &[],
+        None,
+        Some(ChoiceTemplate::simplest(None)),
+        5,
+        None,
+    );
+    for _ in 0..5 {
+        let va = a.draw_integer(-10, 10).ok().unwrap();
+        let vb = b.draw_integer(-10, 10).ok().unwrap();
+        assert_eq!(va, vb);
+        assert_eq!(va, 0);
+    }
+}
+
+#[test]
+fn template_overrun_status_matches_max_size_overrun() {
+    // Finite-count exhaustion and max_size exhaustion both set Status::EarlyStop —
+    // overrun behaviour is uniform across both paths.
+    let mut tc_count = NativeTestCase::for_choices_and_template(
+        &[],
+        None,
+        Some(ChoiceTemplate::simplest(Some(2))),
+        100,
+        None,
+    );
+    assert_eq!(tc_count.draw_integer(0, 100).ok().unwrap(), 0);
+    assert_eq!(tc_count.draw_integer(0, 100).ok().unwrap(), 0);
+    assert!(tc_count.draw_integer(0, 100).is_err());
+    assert_eq!(tc_count.status, Some(Status::EarlyStop));
+}
+
+#[test]
+fn template_count_decrements_on_each_draw() {
+    // White-box check: count walks 3 → 2 → 1 → 0 across three draws, then
+    // the fourth draw flips to overrun without further decrement.
+    let mut tc = NativeTestCase::for_choices_and_template(
+        &[],
+        None,
+        Some(ChoiceTemplate::simplest(Some(3))),
+        100,
+        None,
+    );
+    for _ in 0..3 {
+        let _ = tc.draw_integer(0, 100).ok().unwrap();
+    }
+    assert_eq!(tc.trailing_template.as_ref().unwrap().count, Some(0));
+    assert!(tc.draw_integer(0, 100).is_err());
+    // After overrun, count stays at 0 (we don't underflow into wraparound).
+    assert_eq!(tc.trailing_template.as_ref().unwrap().count, Some(0));
 }

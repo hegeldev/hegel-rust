@@ -234,7 +234,7 @@ fn run_main(
         && calls < max_examples * 10
         && interesting.is_empty()
     {
-        let run = ctx.run(NativeTestCase::for_simplest());
+        let run = ctx.run(NativeTestCase::for_simplest(BUFFER_SIZE));
         crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[]);
         calls += 1;
         if run.nodes.is_empty() && run.status >= Status::Invalid {

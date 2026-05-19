@@ -4,12 +4,12 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::{LazyLock, Mutex};
 
+use rand::RngExt;
 use rand::rngs::SmallRng;
-use rand::{RngExt, SeedableRng};
 
 use super::choices::{
-    BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice,
-    InterestingOrigin, Status, StopTest, StringChoice,
+    BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceTemplate, ChoiceTemplateKind,
+    ChoiceValue, FloatChoice, IntegerChoice, InterestingOrigin, Status, StopTest, StringChoice,
 };
 use super::float_index::lex_to_float;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
@@ -780,72 +780,41 @@ pub struct NativeTestCase {
     /// `None` for test cases concluded by [`Self::freeze`] directly
     /// (`Status::Valid`).  Mirrors `ConjectureData.interesting_origin`.
     interesting_origin: Option<InterestingOrigin>,
-    /// When `true`, every draw bypasses the prefix/RNG paths and returns
-    /// `kind.simplest()`. Used by [`Self::for_simplest`] to mirror
-    /// Hypothesis's `ChoiceTemplate("simplest", count=None)` pre-Generate
-    /// test case (engine.py::generate_new_examples).
-    force_simplest: bool,
+    /// Optional template applied to every draw past the explicit `prefix`.
+    /// Mirrors the trailing `ChoiceTemplate` in `prefix + (template,)` from
+    /// Hypothesis's `engine.py::generate_new_examples`.  `count` is mutated
+    /// in-place as draws consume the template; when `count` reaches zero
+    /// the next draw is overrun (`Status::EarlyStop` + `StopTest`).
+    /// `None` means "no template" — draws past the prefix go to `rng` or
+    /// panic, as before.
+    trailing_template: Option<ChoiceTemplate>,
 }
 
 impl NativeTestCase {
     pub fn new_random(rng: SmallRng) -> Self {
-        NativeTestCase {
-            prefix: Vec::new(),
-            prefix_nodes: None,
-            rng: Some(rng),
-            max_size: BUFFER_SIZE,
-            nodes: Vec::new(),
-            status: None,
-            frozen: false,
-            collections: HashMap::new(),
-            next_collection_id: 0,
-            variable_pools: Vec::new(),
-            spans: Spans::new(),
-            span_stack: Vec::new(),
-            has_discards: false,
-            tags: HashSet::new(),
-            labels_for_structure_stack: Vec::new(),
-            observer: None,
-            interesting_origin: None,
-            force_simplest: false,
-        }
+        Self::for_choices_and_template(&[], None, None, BUFFER_SIZE, None).with_random(rng)
     }
 
-    /// A test case where every draw returns `kind.simplest()`. Used by the
-    /// Generate phase to run a single deterministic "all simplest" trial
-    /// before random sampling, mirroring Hypothesis's
-    /// `cached_test_function((ChoiceTemplate("simplest", count=None),))`
-    /// call in `engine.py::generate_new_examples`. Without it, find-any
-    /// tests over multi-component generators (e.g. midnight = h=m=s=0
-    /// across four independent draws) need an RNG that happens to land on
-    /// all-zeros, which becomes vanishingly unlikely as the number of
-    /// components grows.
+    /// Replay `choices` in order, then for every further draw resolve via
+    /// `trailing` if set.  Mirrors `ConjectureData.for_choices(prefix)` from
+    /// `hypothesis.internal.conjecture.data`, where `prefix` is
+    /// `choices + (trailing,)` when a trailing template is supplied.
     ///
-    /// The seed value is unused (every draw short-circuits to simplest
-    /// before reaching the RNG fallback in `resolve_choice`), but
-    /// `new_random` requires one, so we hand it a fixed seed for
-    /// reproducibility's sake.
-    pub fn for_simplest() -> Self {
-        let mut tc = Self::new_random(SmallRng::seed_from_u64(0));
-        tc.force_simplest = true;
-        tc
-    }
-
-    /// Construct a `NativeTestCase` that replays `choices` in order,
-    /// notifying `observer` after each draw and on conclusion.
-    ///
-    /// Mirrors `ConjectureData.for_choices(choices, observer=observer)`
-    /// from `hypothesis.internal.conjecture.data`.
-    pub fn for_choices(
+    /// `max_size` is the upper bound on the total number of choices the test
+    /// case will make.  It is floored to `choices.len()` so a too-tight value
+    /// can never truncate the explicit prefix.
+    pub fn for_choices_and_template(
         choices: &[ChoiceValue],
         prefix_nodes: Option<&[ChoiceNode]>,
+        trailing: Option<ChoiceTemplate>,
+        max_size: usize,
         observer: Option<Box<dyn DataObserver>>,
     ) -> Self {
         NativeTestCase {
             prefix: choices.to_vec(),
             prefix_nodes: prefix_nodes.map(|n| n.to_vec()),
             rng: None,
-            max_size: choices.len(),
+            max_size: max_size.max(choices.len()),
             nodes: Vec::new(),
             status: None,
             frozen: false,
@@ -859,8 +828,37 @@ impl NativeTestCase {
             labels_for_structure_stack: Vec::new(),
             observer,
             interesting_origin: None,
-            force_simplest: false,
+            trailing_template: trailing,
         }
+    }
+
+    /// A test case where every draw past the explicit prefix returns
+    /// `kind.simplest()` of the requested choice kind.  Mirrors Hypothesis's
+    /// `cached_test_function((ChoiceTemplate("simplest", count=None),))` at
+    /// the head of `engine.py::generate_new_examples`: a deterministic
+    /// all-simplest probe of the choice tree's "left leaf" before random
+    /// sampling begins.
+    pub fn for_simplest(max_size: usize) -> Self {
+        Self::for_choices_and_template(
+            &[],
+            None,
+            Some(ChoiceTemplate::simplest(None)),
+            max_size,
+            None,
+        )
+    }
+
+    /// Construct a `NativeTestCase` that replays `choices` in order,
+    /// notifying `observer` after each draw and on conclusion.
+    ///
+    /// Mirrors `ConjectureData.for_choices(choices, observer=observer)`
+    /// from `hypothesis.internal.conjecture.data`.
+    pub fn for_choices(
+        choices: &[ChoiceValue],
+        prefix_nodes: Option<&[ChoiceNode]>,
+        observer: Option<Box<dyn DataObserver>>,
+    ) -> Self {
+        Self::for_choices_and_template(choices, prefix_nodes, None, choices.len(), observer)
     }
 
     /// A test case that replays `prefix` for the first positions and then
@@ -871,26 +869,15 @@ impl NativeTestCase {
     /// `ConjectureData(prefix=..., random=..., max_size=...)`
     /// construction in `shrinking/mutation.py`.
     pub fn for_probe(prefix: &[ChoiceValue], rng: SmallRng, max_size: usize) -> Self {
-        NativeTestCase {
-            prefix: prefix.to_vec(),
-            prefix_nodes: None,
-            rng: Some(rng),
-            max_size,
-            nodes: Vec::new(),
-            status: None,
-            frozen: false,
-            collections: HashMap::new(),
-            next_collection_id: 0,
-            variable_pools: Vec::new(),
-            spans: Spans::new(),
-            span_stack: Vec::new(),
-            has_discards: false,
-            tags: HashSet::new(),
-            labels_for_structure_stack: Vec::new(),
-            observer: None,
-            interesting_origin: None,
-            force_simplest: false,
-        }
+        Self::for_choices_and_template(prefix, None, None, max_size, None).with_random(rng)
+    }
+
+    /// Attach an RNG for post-prefix random draws.  Internal builder used by
+    /// `new_random` and `for_probe` to share the [`Self::for_choices_and_template`]
+    /// constructor without duplicating the struct literal.
+    fn with_random(mut self, rng: SmallRng) -> Self {
+        self.rng = Some(rng);
+        self
     }
 
     /// Open a new span at the current choice position, labelled with `label`.
@@ -1222,36 +1209,52 @@ impl NativeTestCase {
     ) -> Result<(ChoiceValue, bool), StopTest> {
         self.pre_choice()?;
 
-        if self.force_simplest {
-            return Ok((simplest(), false));
-        }
-
         let idx = self.nodes.len();
 
+        // Branch 1: replay from the concrete prefix.  When the prefix value's
+        // recorded kind doesn't match the requested kind (e.g. a schema
+        // shifted between runs), `prefix_nodes` carries the original kind so
+        // we can route to `simplest()` or `unit()` of the *new* kind —
+        // Hypothesis's "punning" logic.
         if idx < self.prefix.len() {
             let prefix_value = &self.prefix[idx];
             if validate(prefix_value) {
-                Ok((prefix_value.clone(), false))
-            } else {
-                let is_simplest = self
-                    .prefix_nodes
-                    .as_ref()
-                    .and_then(|pn| pn.get(idx))
-                    .is_some_and(|pn| *prefix_value == pn.kind.simplest());
-
-                if is_simplest {
-                    Ok((simplest(), false))
-                } else {
-                    Ok((unit(), false))
-                }
+                return Ok((prefix_value.clone(), false));
             }
-        } else {
-            let rng = self
-                .rng
-                .as_mut()
-                .expect("No RNG available for random generation");
-            Ok((random(rng), false))
+            let is_simplest = self
+                .prefix_nodes
+                .as_ref()
+                .and_then(|pn| pn.get(idx))
+                .is_some_and(|pn| *prefix_value == pn.kind.simplest());
+            return Ok((if is_simplest { simplest() } else { unit() }, false));
         }
+
+        // Branch 2: trailing template (`prefix + (ChoiceTemplate, ...)` in
+        // Hypothesis).  Resolves every post-prefix draw to the template's
+        // kind, decrementing `count` if finite.  When `count` reaches zero
+        // the next draw marks overrun without producing a value — see the
+        // `ChoiceTemplate` docstring for the divergence from Hypothesis's
+        // literal off-by-one source.
+        if let Some(template) = self.trailing_template.as_mut() {
+            if matches!(template.count, Some(0)) {
+                self.status = Some(Status::EarlyStop);
+                return Err(StopTest);
+            }
+            let value = match template.kind {
+                ChoiceTemplateKind::Simplest => simplest(),
+            };
+            if let Some(c) = template.count.as_mut() {
+                *c -= 1;
+            }
+            return Ok((value, false));
+        }
+
+        // Branch 3: random fallback.
+        let rng = self
+            .rng
+            .as_mut()
+            .expect("No RNG available for random generation");
+        Ok((random(rng), false))
     }
 }
 
