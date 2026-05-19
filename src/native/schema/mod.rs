@@ -10,12 +10,13 @@
 //   text        — interpret_string, StringAlphabet helpers
 //   regex       — interpret_regex, generate_hir_string
 //   collections — interpret_list, interpret_dict, interpret_tuple, interpret_one_of, interpret_sampled_from
-//   special     — date, time, datetime, ipv4, ipv6, domain, email, url
+//   special     — date, time, datetime, ip_address, uuid
 
 mod bytes;
 mod collections;
 mod float;
 mod numeric;
+mod special;
 mod text;
 
 use crate::cbor_utils::map_get;
@@ -63,10 +64,10 @@ pub(crate) fn interpret_schema(
         ntc.freeze();
     }
 
-    // Native backs integer + boolean + float + binary + string leaves, plus the
-    // compound schemas (tuple/list/dict/one_of/sampled_from) that recurse
-    // into them. Schemas backed by regex/datetime/etc. leaves panic with
-    // todo!() until those schema interpreters land in a follow-up PR.
+    // The remaining `todo!()` arm covers schemas still unported: regex (which
+    // needs the HIR walker) and the three internet-flavoured schemas
+    // (domain / email / url, which share the IANA TLD list and
+    // percent-encoding machinery).
     let result = match schema_type {
         "integer" => numeric::interpret_integer(ntc, schema),
         "boolean" => numeric::interpret_boolean(ntc),
@@ -80,9 +81,13 @@ pub(crate) fn interpret_schema(
         "sampled_from" => collections::interpret_sampled_from(ntc, schema),
         "list" => collections::interpret_list(ntc, schema),
         "dict" => collections::interpret_dict(ntc, schema),
+        "date" => special::interpret_date(ntc),
+        "time" => special::interpret_time(ntc),
+        "datetime" => special::interpret_datetime(ntc),
+        "ip_address" => special::interpret_ip_address(ntc, schema),
+        "uuid" => special::interpret_uuid(ntc, schema),
 
-        "regex" | "email" | "url" | "domain" | "ip_address" | "uuid" | "ipv4" | "ipv6" | "date"
-        | "time" | "datetime" => {
+        "regex" | "email" | "url" | "domain" => {
             todo!("schema {:?} not yet supported in native mode", schema_type)
         }
 

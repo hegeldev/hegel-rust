@@ -780,6 +780,11 @@ pub struct NativeTestCase {
     /// `None` for test cases concluded by [`Self::freeze`] directly
     /// (`Status::Valid`).  Mirrors `ConjectureData.interesting_origin`.
     interesting_origin: Option<InterestingOrigin>,
+    /// When `true`, every draw bypasses the prefix/RNG paths and returns
+    /// `kind.simplest()`. Used by [`Self::for_simplest`] to mirror
+    /// Hypothesis's `ChoiceTemplate("simplest", count=None)` pre-Generate
+    /// test case (engine.py::generate_new_examples).
+    force_simplest: bool,
 }
 
 impl NativeTestCase {
@@ -802,6 +807,39 @@ impl NativeTestCase {
             labels_for_structure_stack: Vec::new(),
             observer: None,
             interesting_origin: None,
+            force_simplest: false,
+        }
+    }
+
+    /// A test case where every draw returns `kind.simplest()`. Used by the
+    /// Generate phase to run a single deterministic "all simplest" trial
+    /// before random sampling, mirroring Hypothesis's
+    /// `cached_test_function((ChoiceTemplate("simplest", count=None),))`
+    /// call in `engine.py::generate_new_examples`. Without it, find-any
+    /// tests over multi-component generators (e.g. midnight = h=m=s=0
+    /// across four independent draws) need an RNG that happens to land on
+    /// all-zeros, which becomes vanishingly unlikely as the number of
+    /// components grows.
+    pub fn for_simplest() -> Self {
+        NativeTestCase {
+            prefix: Vec::new(),
+            prefix_nodes: None,
+            rng: None,
+            max_size: BUFFER_SIZE,
+            nodes: Vec::new(),
+            status: None,
+            frozen: false,
+            collections: HashMap::new(),
+            next_collection_id: 0,
+            variable_pools: Vec::new(),
+            spans: Spans::new(),
+            span_stack: Vec::new(),
+            has_discards: false,
+            tags: HashSet::new(),
+            labels_for_structure_stack: Vec::new(),
+            observer: None,
+            interesting_origin: None,
+            force_simplest: true,
         }
     }
 
@@ -833,6 +871,7 @@ impl NativeTestCase {
             labels_for_structure_stack: Vec::new(),
             observer,
             interesting_origin: None,
+            force_simplest: false,
         }
     }
 
@@ -862,6 +901,7 @@ impl NativeTestCase {
             labels_for_structure_stack: Vec::new(),
             observer: None,
             interesting_origin: None,
+            force_simplest: false,
         }
     }
 
@@ -1193,6 +1233,10 @@ impl NativeTestCase {
         random: impl FnOnce(&mut SmallRng) -> ChoiceValue,
     ) -> Result<(ChoiceValue, bool), StopTest> {
         self.pre_choice()?;
+
+        if self.force_simplest {
+            return Ok((simplest(), false));
+        }
 
         let idx = self.nodes.len();
 

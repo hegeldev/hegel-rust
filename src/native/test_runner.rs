@@ -220,6 +220,37 @@ fn run_main(
     let mut first_bug_at: Option<u64> = None;
     let mut last_bug_at: Option<u64> = None;
     let shrink_enabled = settings.phases.contains(&Phase::Shrink);
+
+    // All-simplest pre-trial. Mirrors Hypothesis's `cached_test_function(
+    // (ChoiceTemplate("simplest", count=None),))` call at the head of
+    // `engine.py::generate_new_examples`. Drawing every choice at its
+    // shrink-target value gives find-any tests over multi-component
+    // generators (e.g. midnight = h=m=s=μ=0 across four draws) a
+    // deterministic chance to hit the all-zeros joint event before
+    // random sampling — the joint event grows vanishingly unlikely as
+    // the number of components increases.
+    if settings.phases.contains(&Phase::Generate)
+        && !test_is_trivial
+        && calls < max_examples * 10
+        && interesting.is_empty()
+    {
+        let run = ctx.run(NativeTestCase::for_simplest());
+        crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[]);
+        calls += 1;
+        if run.nodes.is_empty() && run.status >= Status::Invalid {
+            test_is_trivial = true;
+        }
+        if run.status >= Status::Valid {
+            valid_test_cases += 1;
+        }
+        if run.status == Status::Interesting {
+            let origin = run.origin.clone().unwrap_or_default();
+            first_bug_at = Some(calls);
+            last_bug_at = Some(calls);
+            update_interesting(&mut interesting, origin, run.nodes.clone());
+        }
+    }
+
     while settings.phases.contains(&Phase::Generate)
         && !test_is_trivial
         && valid_test_cases < max_examples

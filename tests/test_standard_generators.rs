@@ -469,7 +469,6 @@ mod direct_strategies {
         );
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_ip_addresses_kwargs() {
         check_can_generate_examples(gs::ip_addresses());
