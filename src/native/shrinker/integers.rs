@@ -659,4 +659,3 @@ impl<'a> Shrinker<'a> {
         });
     }
 }
-
