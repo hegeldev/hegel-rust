@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::{LazyLock, Mutex};
 
-use rand::RngExt;
+use rand::{RngExt, SeedableRng};
 use rand::rngs::SmallRng;
 
 use super::choices::{
@@ -820,27 +820,15 @@ impl NativeTestCase {
     /// across four independent draws) need an RNG that happens to land on
     /// all-zeros, which becomes vanishingly unlikely as the number of
     /// components grows.
+    ///
+    /// The seed value is unused (every draw short-circuits to simplest
+    /// before reaching the RNG fallback in `resolve_choice`), but
+    /// `new_random` requires one, so we hand it a fixed seed for
+    /// reproducibility's sake.
     pub fn for_simplest() -> Self {
-        NativeTestCase {
-            prefix: Vec::new(),
-            prefix_nodes: None,
-            rng: None,
-            max_size: BUFFER_SIZE,
-            nodes: Vec::new(),
-            status: None,
-            frozen: false,
-            collections: HashMap::new(),
-            next_collection_id: 0,
-            variable_pools: Vec::new(),
-            spans: Spans::new(),
-            span_stack: Vec::new(),
-            has_discards: false,
-            tags: HashSet::new(),
-            labels_for_structure_stack: Vec::new(),
-            observer: None,
-            interesting_origin: None,
-            force_simplest: true,
-        }
+        let mut tc = Self::new_random(SmallRng::seed_from_u64(0));
+        tc.force_simplest = true;
+        tc
     }
 
     /// Construct a `NativeTestCase` that replays `choices` in order,
