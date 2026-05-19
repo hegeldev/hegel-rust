@@ -270,11 +270,11 @@ impl BytesChoice {
 }
 
 /// A string choice with bounded length and a Unicode codepoint alphabet
-/// represented as an [`IntervalSet`].
+/// represented as an `IntervalSet`.
 ///
 /// Values are sequences of Unicode codepoints (`Vec<u32>`) drawn from the
 /// `intervals` set. Ordered by shortlex under the alphabet-relative shrink
-/// ordering exposed by [`IntervalSet::index_from_char_in_shrink_order`]:
+/// ordering exposed by `IntervalSet::index_from_char_in_shrink_order`:
 /// `'0'` is the simplest character whenever the alphabet contains it,
 /// followed by `'1'`..`'9'`, `'A'`..`'Z'`, then characters below `'0'` in
 /// reverse, then characters above `'Z'` in natural order.

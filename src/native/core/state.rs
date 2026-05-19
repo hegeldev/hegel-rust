@@ -761,7 +761,7 @@ pub struct NativeTestCase {
     /// spans.  Mirrors `ConjectureData.tags` in `data.py`: when a span
     /// closes without `discard`, every label collected by it (including
     /// its non-discarded descendants) is added here as a
-    /// [`structural_coverage`] tag.  Discarded spans drop their labels
+    /// `structural_coverage` tag.  Discarded spans drop their labels
     /// (and their descendants' labels) on the floor.
     pub tags: HashSet<&'static CoverageTag>,
     /// Per-open-span sets of labels awaiting promotion into [`Self::tags`].
