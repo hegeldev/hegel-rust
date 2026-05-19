@@ -20,7 +20,9 @@ Hegel will use [uv](https://docs.astral.sh/uv/) to install the required [hegel-c
 If `uv` is already on your path, it will use that, otherwise it will download a private copy of it to ~/.cache/hegel and not put it on your path.
 See https://hegel.dev/reference/installation for details.
 
-If you are windows (which is only supported on a somewhat experimental basis right now), the automatic uv installation doesn't work yet, and you will need to [install uv yourself](https://docs.astral.sh/uv/getting-started/installation/#__tabbed_1_2) and make sure it is on your path.
+If you are on windows (which is only supported on a somewhat experimental basis right now), the automatic uv installation doesn't work yet, and you will need to [install uv yourself](https://docs.astral.sh/uv/getting-started/installation/#__tabbed_1_2) and make sure it is on your path.
+
+If you *really* can't stand the idea of a Python dependency, you can install Hegel with the experimental `native` feature enabled, which uses a pure Rust implementation of the underlying Hegel engine. Please note that at the moment we expect the native feature to be strictly worse than the Python-based implementation, across every axis except performance, and many features have just straight up not been implemented yet in native mode. We intend to improve it significantly over a relatively short timeframe, but right now we very much encourage using the Python dependency over native mode, and you should only consider native mode if you don't have that option and can live with the limitations.
 
 ## Quickstart
 

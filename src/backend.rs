@@ -74,15 +74,37 @@ pub trait DataSource: Send + Sync {
     /// higher-scoring inputs. No-op if the test has been aborted.
     fn target_observation(&self, score: f64, label: &str);
 
-    /// Signal that the test case is complete.
-    fn mark_complete(&self, status: &str, origin: Option<&str>);
+    /// Signal that the test case is complete and report its outcome.
+    ///
+    /// Called exactly once per test case, after the test body has finished
+    /// (or panicked) and the lifecycle has translated the panic payload into
+    /// a [`TestCaseResult`].  Backends are expected to do whatever bookkeeping
+    /// their engine needs here — forward the outcome to a remote server,
+    /// stash it on a handle for the local engine to consume, etc.
+    fn mark_complete(&self, result: &TestCaseResult);
+}
 
-    /// Returns true if a previous request triggered an abort (overflow/StopTest).
-    fn test_aborted(&self) -> bool;
+/// A single failing test case discovered by a [`TestRunner`].
+#[derive(Debug, Clone)]
+pub struct Failure {
+    /// The raw panic message from the failing test (the string passed to `panic!`).
+    /// Used as-is for the legacy single-failure outer panic message.
+    pub panic_message: String,
+    /// Pre-rendered multi-line diagnostic — `thread '...' panicked at file:line:`
+    /// followed by the panic message and (when captured) the stack backtrace.
+    /// Same format that was previously printed inline by the runner on final replay.
+    pub diagnostic: String,
+    /// Opaque per-bug origin tag — currently `"Panic at file:line:col"` from
+    /// the captured panic site (with `<unknown>` for the location when
+    /// `take_panic_info` returns nothing).  Passed through
+    /// `DataSource::mark_complete` so Hypothesis can group test cases by
+    /// which bug they trigger and shrink each origin to its own minimal
+    /// counterexample.
+    pub origin: String,
 }
 
 /// Result of running a single test case.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TestCaseResult {
     /// Test case passed normally.
     Valid,
@@ -91,10 +113,7 @@ pub enum TestCaseResult {
     /// Test case was rejected because the backend ran out of data.
     Overrun,
     /// Test case found a bug.
-    Interesting {
-        /// The panic message from the failing test.
-        panic_message: String,
-    },
+    Interesting(Failure),
 }
 
 /// Result of a full test run.
@@ -102,8 +121,11 @@ pub enum TestCaseResult {
 pub struct TestRunResult {
     /// Whether all test cases passed.
     pub passed: bool,
-    /// If a test case failed, the message from the minimal failing example.
-    pub failure_message: Option<String>,
+    /// One entry per distinct failing example surfaced by the run.  Empty when
+    /// `passed` is `true`.  For the multi-bug case (Hypothesis emits one final
+    /// replay per `BaseExceptionGroup` origin), each origin contributes one
+    /// entry, ordered as the backend replayed them.
+    pub failures: Vec<Failure>,
 }
 
 /// Drives the test execution lifecycle.
@@ -119,11 +141,16 @@ pub trait TestRunner {
     /// - A data source for generating test data
     /// - A bool indicating whether this is the final replay of a minimal failing example
     ///
-    /// The callback returns the result of running the test case.
+    /// The callback runs the test body to completion; the per-test-case
+    /// outcome is delivered to the backend through
+    /// [`DataSource::mark_complete`] rather than as a return value, so both
+    /// backends consume the result through the same interface.  Backends
+    /// arrange to read it back (e.g. via a per-test-case handle to a shared
+    /// outcome cell on the data source).
     fn run(
         &self,
         settings: &Settings,
         database_key: Option<&str>,
-        run_case: &mut dyn FnMut(Box<dyn DataSource>, bool) -> TestCaseResult,
+        run_case: &mut dyn FnMut(Box<dyn DataSource>, bool),
     ) -> TestRunResult;
 }

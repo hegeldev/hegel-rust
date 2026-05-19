@@ -8,6 +8,7 @@
 
 mod common;
 
+use common::not_supported_on_native;
 use hegel::Hegel;
 use hegel::generators as gs;
 
@@ -31,6 +32,7 @@ fn cwd_is_a_hegel_rust_test_tempdir() {
     );
 }
 
+#[not_supported_on_native]
 #[test]
 fn running_hegel_creates_dot_hegel_in_tempdir_not_crate_root() {
     Hegel::new(|tc| {

@@ -1,4 +1,4 @@
-use crate::backend::{DataSource, TestCaseResult, TestRunResult, TestRunner};
+use crate::backend::{DataSource, Failure, TestCaseResult, TestRunResult, TestRunner};
 use crate::cbor_utils::{as_bool, as_text, as_u64, cbor_map, map_get, map_insert};
 use crate::runner::{Database, HealthCheck, Mode, Phase, Settings, Verbosity};
 use crate::server::protocol::{Connection, HANDSHAKE_STRING, Stream};
@@ -15,8 +15,8 @@ use super::process::{
 };
 use super::runner::{cbor_decode, cbor_encode};
 
-pub(super) const SUPPORTED_PROTOCOL_VERSIONS: (&str, &str) = ("0.14", "0.14");
-pub(super) const HEGEL_SERVER_VERSION: &str = "0.8.2";
+pub(super) const SUPPORTED_PROTOCOL_VERSIONS: (&str, &str) = ("0.15", "0.15");
+pub(super) const HEGEL_SERVER_VERSION: &str = "0.9.0";
 
 pub(super) static SESSION: Mutex<Option<Arc<HegelSession>>> = Mutex::new(None);
 
@@ -82,7 +82,7 @@ impl HegelSession {
                 return Arc::clone(s);
             }
         }
-        super::runner::init_panic_hook();
+        crate::run_lifecycle::init_panic_hook();
         let session = Arc::new(HegelSession::init());
         *guard = Some(Arc::clone(&session));
         session
@@ -179,7 +179,7 @@ impl ServerTestRunner {
     fn run_single_test_case(
         &self,
         settings: &Settings,
-        run_case: &mut dyn FnMut(Box<dyn DataSource>, bool) -> TestCaseResult,
+        run_case: &mut dyn FnMut(Box<dyn DataSource>, bool),
     ) -> TestRunResult {
         let session = HegelSession::get();
         let connection = &session.connection;
@@ -208,7 +208,7 @@ impl ServerTestRunner {
         }
 
         let ack_null = cbor_map! {"result" => Value::Null};
-        let mut failure_message: Option<String> = None;
+        let mut failures: Vec<Failure> = Vec::new();
         let mut passed = true;
 
         loop {
@@ -235,16 +235,15 @@ impl ServerTestRunner {
                         .write_reply(event_id, cbor_encode(&ack_null))
                         .expect("Failed to ack test_case");
 
-                    let backend = Box::new(ServerDataSource::new(
-                        Arc::clone(connection),
-                        test_case_stream,
-                        verbosity,
-                    ));
-                    let tc_result = run_case(backend, true);
+                    let (data_source, outcome) =
+                        ServerDataSource::new(Arc::clone(connection), test_case_stream, verbosity);
+                    run_case(Box::new(data_source), true);
 
-                    if let TestCaseResult::Interesting { panic_message } = tc_result {
+                    if let TestCaseResult::Interesting(failure) =
+                        ServerDataSource::take_outcome(&outcome)
+                    {
                         passed = false;
-                        failure_message = Some(panic_message);
+                        failures.push(failure);
                     }
                 }
                 "test_done" => {
@@ -260,10 +259,7 @@ impl ServerTestRunner {
             }
         }
 
-        TestRunResult {
-            passed,
-            failure_message,
-        }
+        TestRunResult { passed, failures }
     }
 }
 
@@ -272,7 +268,7 @@ impl TestRunner for ServerTestRunner {
         &self,
         settings: &Settings,
         database_key: Option<&str>,
-        run_case: &mut dyn FnMut(Box<dyn DataSource>, bool) -> TestCaseResult,
+        run_case: &mut dyn FnMut(Box<dyn DataSource>, bool),
     ) -> TestRunResult {
         if settings.mode == Mode::SingleTestCase {
             return self.run_single_test_case(settings, run_case);
@@ -299,7 +295,8 @@ impl TestRunner for ServerTestRunner {
             "seed" => settings.seed.map_or(Value::Null, Value::from),
             "stream_id" => test_stream.stream_id,
             "database_key" => database_key_bytes,
-            "derandomize" => settings.derandomize
+            "derandomize" => settings.derandomize,
+            "report_multiple_failures" => settings.report_multiple_failures
         };
         let db_value = match &settings.database {
             Database::Unset => Option::None, // nocov
@@ -374,12 +371,12 @@ impl TestRunner for ServerTestRunner {
                         .write_reply(event_id, cbor_encode(&ack_null))
                         .expect("Failed to ack test_case");
 
-                    let backend = Box::new(ServerDataSource::new(
-                        Arc::clone(connection),
-                        test_case_stream,
-                        verbosity,
-                    ));
-                    run_case(backend, false);
+                    if verbosity == Verbosity::Verbose {
+                        eprintln!("Running test case");
+                    }
+                    let (data_source, _outcome) =
+                        ServerDataSource::new(Arc::clone(connection), test_case_stream, verbosity);
+                    run_case(Box::new(data_source), false);
                 }
                 "test_done" => {
                     let ack_true = cbor_map! {"result" => true};
@@ -419,7 +416,7 @@ impl TestRunner for ServerTestRunner {
         }
 
         // Process final replay test cases (one per interesting example)
-        let mut failure_message: Option<String> = None;
+        let mut failures: Vec<Failure> = Vec::new();
         for _ in 0..n_interesting {
             let (event_id, event_payload) = test_stream
                 .receive_request()
@@ -439,15 +436,12 @@ impl TestRunner for ServerTestRunner {
                 .write_reply(event_id, cbor_encode(&ack_null))
                 .expect("Failed to ack final test_case");
 
-            let backend = Box::new(ServerDataSource::new(
-                Arc::clone(connection),
-                test_case_stream,
-                verbosity,
-            ));
-            let tc_result = run_case(backend, true);
+            let (data_source, outcome) =
+                ServerDataSource::new(Arc::clone(connection), test_case_stream, verbosity);
+            run_case(Box::new(data_source), true);
 
-            if let TestCaseResult::Interesting { panic_message } = tc_result {
-                failure_message = Some(panic_message);
+            if let TestCaseResult::Interesting(failure) = ServerDataSource::take_outcome(&outcome) {
+                failures.push(failure);
             }
 
             if connection.server_has_exited() {
@@ -459,10 +453,7 @@ impl TestRunner for ServerTestRunner {
             .and_then(as_bool)
             .unwrap_or(true);
 
-        TestRunResult {
-            passed,
-            failure_message,
-        }
+        TestRunResult { passed, failures }
     }
 }
 

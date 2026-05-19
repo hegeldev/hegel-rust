@@ -195,6 +195,34 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
                      values between min_value=0.0 and max_value=-0.0"
                 );
             }
+            // After exclude_min/exclude_max, the closed-open / open-closed /
+            // open-open ranges over [min, min] (and the `-0.0`/`0.0` pair
+            // that compares equal under sign-aware ordering) are empty.
+            let min_f = min.to_f64();
+            let max_f = max.to_f64();
+            let zero_pair = min_f == 0.0 && max_f == 0.0;
+            if (min_f == max_f || zero_pair) && (self.exclude_min || self.exclude_max) {
+                panic!(
+                    "InvalidArgument: exclude_min/exclude_max leave no \
+                     {width}-bit floating-point values in [{min_f}, {max_f}]"
+                );
+            }
+        }
+
+        // exclude_min=true with min_value=+inf (or exclude_max=true with
+        // max_value=-inf) demands the next representable value beyond an
+        // unbounded endpoint, which doesn't exist.
+        if self.exclude_min && self.min.is_some_and(|v| v.to_f64() == f64::INFINITY) {
+            panic!(
+                "InvalidArgument: exclude_min=true with min_value=+inf leaves \
+                 no {width}-bit floating-point values"
+            );
+        }
+        if self.exclude_max && self.max.is_some_and(|v| v.to_f64() == f64::NEG_INFINITY) {
+            panic!(
+                "InvalidArgument: exclude_max=true with max_value=-inf leaves \
+                 no {width}-bit floating-point values"
+            );
         }
 
         let allow_nan = self.allow_nan.unwrap_or(!has_min && !has_max);

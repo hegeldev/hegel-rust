@@ -106,6 +106,7 @@ pub struct Settings {
     pub(crate) database: Database,
     pub(crate) suppress_health_check: Vec<HealthCheck>,
     pub(crate) phases: Vec<Phase>,
+    pub(crate) report_multiple_failures: bool,
 }
 
 impl Settings {
@@ -131,6 +132,7 @@ impl Settings {
                 Phase::Target,
                 Phase::Shrink,
             ],
+            report_multiple_failures: true,
         }
     }
 
@@ -173,6 +175,23 @@ impl Settings {
         self
     }
 
+    /// Set which test lifecycle phases to run.
+    ///
+    /// Defaults to all phases: `[Phase::Explicit, Phase::Reuse, Phase::Generate, Phase::Target, Phase::Shrink]`.
+    ///
+    /// Example — skip shrinking (useful when you only need a witness, not a
+    /// minimal counterexample):
+    ///
+    /// ```no_run
+    /// use hegel::{Phase, Settings};
+    ///
+    /// let s = Settings::new().phases([Phase::Reuse, Phase::Generate]);
+    /// ```
+    pub fn phases(mut self, phases: impl IntoIterator<Item = Phase>) -> Self {
+        self.phases = phases.into_iter().collect();
+        self
+    }
+
     /// Suppress one or more health checks so they do not cause test failure.
     ///
     /// Health checks detect common issues like excessive filtering or slow
@@ -195,24 +214,25 @@ impl Settings {
         self
     }
 
-    /// Set which phases of the test lifecycle to run.
-    ///
-    /// By default all phases are enabled. Pass a subset to disable specific
-    /// phases — for example, omitting [`Phase::Shrink`] skips shrinking:
-    ///
-    /// ```no_run
-    /// use hegel::{Phase, Settings};
-    ///
-    /// let settings = Settings::new().phases([Phase::Reuse, Phase::Generate]);
-    /// ```
-    pub fn phases(mut self, phases: impl IntoIterator<Item = Phase>) -> Self {
-        self.phases = phases.into_iter().collect();
-        self
-    }
-
     /// Returns `true` if the given phase is enabled in these settings.
     pub fn has_phase(&self, phase: Phase) -> bool {
         self.phases.contains(&phase)
+    }
+
+    /// Control whether multi-bug runs report every distinct failing example
+    /// or collapse to just the first one.
+    ///
+    /// When `true` (the default), each distinct origin Hegel finds is surfaced
+    /// as its own diagnostic, and the final panic message reports the count of
+    /// distinct failures.  Setting this to `false` makes Hegel collapse a
+    /// multi-bug run to one example — useful when you have a flaky predicate
+    /// that triggers several superficially-distinct failures whose root cause
+    /// is the same, and the extra reports are just noise.
+    ///
+    /// Maps to Hypothesis's `report_multiple_bugs` setting.
+    pub fn report_multiple_failures(mut self, report_multiple_failures: bool) -> Self {
+        self.report_multiple_failures = report_multiple_failures;
+        self
     }
 }
 
@@ -306,7 +326,13 @@ where
     ///
     /// Panics if any test case fails.
     pub fn run(self) {
-        crate::server::runner::server_run(
+        #[cfg(feature = "native")]
+        let runner = crate::native::test_runner::NativeTestRunner;
+        #[cfg(not(feature = "native"))]
+        let runner = crate::server::session::ServerTestRunner;
+
+        crate::run_lifecycle::drive(
+            runner,
             self.test_fn,
             &self.settings,
             self.database_key.as_deref(),

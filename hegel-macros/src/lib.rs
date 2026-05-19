@@ -4,6 +4,8 @@ mod enum_gen;
 mod explicit_test_case;
 mod hegel_main;
 mod hegel_test;
+#[cfg(feature = "internal-test-only")]
+mod not_supported_on_native;
 mod rewrite_draws;
 mod standalone_function;
 mod stateful;
@@ -106,4 +108,17 @@ pub fn state_machine(_attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn rewrite_draws(input: TokenStream) -> TokenStream {
     rewrite_draws::expand_rewrite_draws(input.into()).into()
+}
+
+/// Mark a test as not-yet-supported under `--features native`. Internal
+/// hegel-rust test-suite tooling — only compiled when the
+/// `internal-test-only` feature is enabled, which is only set by
+/// `hegel-rust`'s own dev-dependency on `hegeltest-macros`. Hidden from
+/// rustdoc, never re-exported through `hegel`, and unreachable from
+/// downstream user code.
+#[cfg(feature = "internal-test-only")]
+#[doc(hidden)]
+#[proc_macro_attribute]
+pub fn not_supported_on_native(attr: TokenStream, item: TokenStream) -> TokenStream {
+    not_supported_on_native::expand_not_supported_on_native(attr.into(), item.into()).into()
 }
