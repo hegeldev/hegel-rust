@@ -14,6 +14,9 @@ use super::choices::{
 use super::float_index::lex_to_float;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
 use crate::native::intervalsets::IntervalSet;
+use crate::native::statistics::{
+    Distribution, LogStudentTDistribution, PiecewiseDistribution, UniformDistribution,
+};
 
 /// State for a variable-length collection (port of Hypothesis's `many` class).
 pub struct ManyState {
@@ -125,7 +128,63 @@ fn many_draw_length(rng: &mut SmallRng, min_size: usize, max_size: usize) -> usi
     min_size.saturating_add(extra as usize).min(max_size)
 }
 
-/// Boundary-biased uniform sample for integers.
+/// The shared integer distribution used by [`biased_integer_sample`] as
+/// the non-nasty fallback. Hypothesis: `INTEGERS_DISTRIBUTION` in
+/// `conjecture/providers.py` (PR HypothesisWorks/hypothesis#4728).
+/// A piecewise distribution composed of:
+///
+///   * uniform on `[-256, 256]` for the central core, and
+///   * a log-Student's-t (scale_bits = 13, df = 2) for the heavy outer
+///     tails — so magnitudes spread smoothly across many orders without
+///     the prior bucketed-bit-size cliffs.
+///
+/// Statically constructed because the constructor evaluates `Γ` and CDF
+/// integrals at the switchover; recomputing it per draw would dominate
+/// runtime.
+static INTEGERS_DISTRIBUTION: LazyLock<
+    PiecewiseDistribution<UniformDistribution, LogStudentTDistribution>,
+> = LazyLock::new(|| {
+    PiecewiseDistribution::new(
+        UniformDistribution::new(256.0),
+        LogStudentTDistribution::new(13.0, 2),
+        256.0,
+    )
+});
+
+/// Draw an integer in `[min_value, max_value]` from
+/// [`INTEGERS_DISTRIBUTION`] restricted to that range. Hypothesis:
+/// `HypothesisProvider._draw_integer_from_distribution`.
+///
+/// Falls back to a plain uniform draw when the CDF window across the
+/// requested range is too narrow for inverse-CDF sampling to be stable.
+/// Callers must ensure `min_value < max_value`; the `min == max` early
+/// return is handled at the [`biased_integer_sample`] call site.
+fn integer_sample_from_distribution(min_value: i128, max_value: i128, rng: &mut SmallRng) -> i128 {
+    let dist = &*INTEGERS_DISTRIBUTION;
+    // i128 endpoints can lose precision crossing into f64, but the final
+    // `clamp` mops up any out-of-range round-off so the contract holds.
+    let lo = dist.cdf(min_value as f64 - 0.5);
+    let hi = dist.cdf(max_value as f64 + 0.5);
+    // Bound from Hypothesis: a tighter CDF window than ~1e-13 leaves the
+    // inverse-CDF nothing to spread samples across, so collapse to uniform.
+    if hi - lo < 1e-13 {
+        return rng.random_range(min_value..=max_value);
+    }
+    // `inverse_cdf` requires strictly 0 < p < 1; resample if we drew an
+    // endpoint. `rng.random::<f64>()` returns `[0, 1)`, so `p == 0.0` is
+    // representable but `p == 1.0` is not unless `lo > 0` and rounding
+    // pushes the product up — the second check is cheap insurance against
+    // that.
+    let mut p = lo + rng.random::<f64>() * (hi - lo);
+    while p == 0.0 || p == 1.0 {
+        p = lo + rng.random::<f64>() * (hi - lo);
+    }
+    // `f64 as i128` saturates out-of-range values to ±i128::MAX, then
+    // `clamp` brings them into the requested range.
+    (dist.inverse_cdf(p).round() as i128).clamp(min_value, max_value)
+}
+
+/// Boundary-biased sample for integers.
 ///
 /// Implements the "nasty value" boost used by both the
 /// [`NativeTestCase::draw_integer`] code path and the data-tree
@@ -139,7 +198,8 @@ fn many_draw_length(rng: &mut SmallRng, min_size: usize, max_size: usize) -> usi
 /// Returns a value in `[ic.min_value, ic.max_value]` (inclusive). With
 /// probability proportional to `nasty.len() * BOUNDARY_PROBABILITY` (≈ 0.5
 /// for unbounded ranges) the result is one of those nasty/interesting
-/// values; otherwise it's uniform across the range.
+/// values; otherwise it is drawn from [`INTEGERS_DISTRIBUTION`] restricted
+/// to the requested range.
 pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut SmallRng) -> i128 {
     if ic.min_value == ic.max_value {
         return ic.min_value;
@@ -217,7 +277,7 @@ pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut SmallRng) -> i
         let idx = rng.random_range(0..nasty.len());
         nasty[idx]
     } else {
-        rng.random_range(ic.min_value..=ic.max_value)
+        integer_sample_from_distribution(ic.min_value, ic.max_value, rng)
     }
 }
 
