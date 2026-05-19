@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.3 - 2026-05-19
+
+The native backend (`--features native`) now implements `Phase::Target`, so `tc.target()` and `tc.target_labelled()` drive a hill-climbing search for better-scoring inputs instead of panicking with `todo!()`.
+
 ## 0.14.2 - 2026-05-19
 
 This release makes some minor internal changes to the native feature. It should have no user-visible impact.
