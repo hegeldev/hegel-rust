@@ -926,6 +926,55 @@ pub struct ChoiceNode {
     pub was_forced: bool,
 }
 
+/// Kind of fallback a [`ChoiceTemplate`] produces.  Mirrors Hypothesis's
+/// `Literal["simplest"]` field on `internal/conjecture/choice.ChoiceTemplate`.
+/// Carried as an enum so future kinds (`"random"`, etc., that Hypothesis has
+/// flirted with) can be added without changing the surrounding API.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ChoiceTemplateKind {
+    /// Resolve each templated draw to `kind.simplest()` of the requested
+    /// choice kind.
+    Simplest,
+}
+
+/// A deferred-resolution marker that drives every draw past the explicit
+/// `prefix` of a [`crate::native::core::NativeTestCase`].  Mirrors
+/// `ChoiceTemplate` from `hypothesis.internal.conjecture.choice`.
+///
+/// `count = None` is infinite — the template applies to every draw until
+/// the test case ends naturally (e.g. `max_size` is hit).  `count = Some(n)`
+/// produces exactly `n` resolved values, after which the next draw marks
+/// overrun (`Status::EarlyStop` + `StopTest`).
+///
+/// Hypothesis's literal source (`data.py::_pop_choice` lines 1054-1073)
+/// decrements the count *after* producing each value and then checks for
+/// `< 0`, which means a `count=N` template actually returns `N+1` values
+/// (the last one alongside the overrun status).  That looks like an
+/// unintentional off-by-one; we implement the cleaner "exactly N values,
+/// then overrun" semantics that the `count > 0` `__post_init__` assert
+/// suggests.  No current Hypothesis caller passes a finite count, so the
+/// divergence is invisible at the API boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChoiceTemplate {
+    pub kind: ChoiceTemplateKind,
+    pub count: Option<usize>,
+}
+
+impl ChoiceTemplate {
+    /// Build a [`ChoiceTemplateKind::Simplest`] template with the given
+    /// remaining-draws count.  `Some(0)` is rejected at construction time,
+    /// matching Hypothesis's `__post_init__` assertion.
+    pub fn simplest(count: Option<usize>) -> Self {
+        if let Some(n) = count {
+            assert!(n > 0, "ChoiceTemplate count must be positive (got 0)");
+        }
+        Self {
+            kind: ChoiceTemplateKind::Simplest,
+            count,
+        }
+    }
+}
+
 impl ChoiceNode {
     pub fn with_value(&self, value: ChoiceValue) -> ChoiceNode {
         ChoiceNode {
