@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::{LazyLock, Mutex};
 
-use rand::{RngExt, SeedableRng};
 use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
 
 use super::choices::{
     BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice,
