@@ -10,6 +10,7 @@
 //   sequence   — sort_values, swap_adjacent_blocks
 //   floats     — shrink_floats, redistribute_numeric_pairs
 //   bytes      — shrink_bytes, redistribute_bytes_pairs
+//   strings    — shrink_strings
 
 mod bytes;
 mod deletion;
@@ -18,6 +19,7 @@ mod index_passes;
 mod integers;
 mod mutation;
 mod sequence;
+mod strings;
 
 use std::collections::HashMap;
 
@@ -191,6 +193,8 @@ impl<'a> Shrinker<'a> {
             self.redistribute_numeric_pairs();
             self.shrink_bytes();
             self.redistribute_bytes_pairs();
+            self.shrink_strings();
+            self.redistribute_string_pairs();
             self.lower_and_bump();
             self.try_shortening_via_increment();
             self.mutate_and_shrink();

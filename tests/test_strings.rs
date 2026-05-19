@@ -1,6 +1,6 @@
-#![cfg(not(feature = "native"))]
 mod common;
 
+use common::not_supported_on_native;
 use common::utils::{assert_all_examples, assert_no_examples, find_any};
 use hegel::generators as gs;
 
@@ -138,6 +138,7 @@ fn test_text_exclude_characters(tc: hegel::TestCase) {
     assert!(!s.chars().any(|c| exclude.contains(c)));
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_regex_with_alphabet() {
     assert_all_examples(
@@ -150,6 +151,7 @@ fn test_regex_with_alphabet() {
 
 // --- Special schema generators ---
 
+#[not_supported_on_native]
 #[test]
 fn test_dates_format() {
     assert_all_examples(gs::dates(), |s: &String| {
@@ -166,6 +168,7 @@ fn test_dates_format() {
     });
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_times_format() {
     assert_all_examples(gs::times(), |s: &String| {
@@ -187,6 +190,7 @@ fn test_times_format() {
     });
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_datetimes_format() {
     assert_all_examples(gs::datetimes(), |s: &String| {
@@ -223,6 +227,7 @@ fn test_datetimes_format() {
     });
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_ip_addresses_format() {
     assert_all_examples(gs::ip_addresses(), |s: &String| {
@@ -231,6 +236,7 @@ fn test_ip_addresses_format() {
     });
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_ip_addresses_v4_only() {
     assert_all_examples(gs::ip_addresses().v4(), |s: &String| {
@@ -242,6 +248,7 @@ fn test_ip_addresses_v4_only() {
     });
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_ip_addresses_v6_only() {
     assert_all_examples(gs::ip_addresses().v6(), |s: &String| {
@@ -252,11 +259,13 @@ fn test_ip_addresses_v6_only() {
 
 const NIL_UUID: &str = "00000000-0000-0000-0000-000000000000";
 
+#[not_supported_on_native]
 #[test]
 fn test_no_nil_uuid_by_default() {
     assert_no_examples(gs::uuids(), |s: &String| s == NIL_UUID);
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_uuids_have_canonical_form() {
     assert_all_examples(gs::uuids(), |s: &String| {
@@ -273,6 +282,7 @@ fn test_uuids_have_canonical_form() {
     });
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_domains_format() {
     assert_all_examples(gs::domains(), |s: &String| {
@@ -287,6 +297,7 @@ fn test_domains_format() {
     });
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_can_generate_specified_version() {
     for version in 1u8..=5 {
@@ -302,6 +313,7 @@ fn test_can_generate_specified_version() {
     }
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_emails_format() {
     assert_all_examples(gs::emails(), |s: &String| {
@@ -317,6 +329,7 @@ fn test_emails_format() {
     });
 }
 
+#[not_supported_on_native]
 #[test]
 fn test_urls_format() {
     assert_all_examples(gs::urls(), |s: &String| {
@@ -380,6 +393,8 @@ mod pbtkit_bytes {
 
 mod pbtkit_text {
     use crate::common::utils::{assert_all_examples, expect_panic, minimal};
+    #[allow(unused_imports)]
+    use crate::not_supported_on_native;
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
 
@@ -535,6 +550,8 @@ mod pbtkit_text {
 
 mod simple_strings {
     use crate::common::utils::{assert_all_examples, minimal};
+    #[allow(unused_imports)]
+    use crate::not_supported_on_native;
     use hegel::generators::{self as gs};
 
     #[test]
@@ -648,6 +665,11 @@ mod simple_strings {
         assert_all_examples(gs::text().max_codepoint(127), |s: &String| s.is_ascii());
     }
 
+    // Under native this generates strings of up to 1M codepoints per case;
+    // server-side the schema is sent over once and Hypothesis caps the actual
+    // draw, so the test runs in seconds. Re-ungate once the engine has a
+    // budget for runaway-size generation.
+    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_set_max_size_large() {
         assert_all_examples(gs::text().max_size(1_000_000), |_: &String| true);
@@ -656,6 +678,8 @@ mod simple_strings {
 
 mod simple_characters {
     use crate::common::utils::{assert_no_examples, expect_panic, find_any, minimal};
+    #[allow(unused_imports)]
+    use crate::not_supported_on_native;
     use hegel::generators::{self as gs, Generator};
     use hegel::{Hegel, Settings};
 
@@ -802,6 +826,8 @@ mod simple_characters {
 
 mod nocover_characters {
     use crate::common::utils::assert_all_examples;
+    #[allow(unused_imports)]
+    use crate::not_supported_on_native;
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
 
@@ -838,8 +864,10 @@ mod nocover_characters {
 
 mod nocover_emails {
     use crate::common::utils::assert_all_examples;
+    use crate::not_supported_on_native;
     use hegel::generators as gs;
 
+    #[not_supported_on_native]
     #[test]
     fn test_is_valid_email() {
         assert_all_examples(gs::emails(), |address: &String| {
@@ -861,6 +889,7 @@ mod regex_tests {
     use crate::common::utils::{
         FindAny, assert_all_examples, assert_no_examples, check_can_generate_examples, find_any,
     };
+    use crate::not_supported_on_native;
     use hegel::generators::{self as gs};
     use hegel::{HealthCheck, Hegel, Settings};
     use regex::Regex;
@@ -872,6 +901,7 @@ mod regex_tests {
     // Bytes encode=True skipped (no bytes support). Both string modes are smoke-tested below;
     // Rust's regex crate has different Unicode semantics for \d/\w/\s so full verification would
     // require a Python-compatible regex engine.
+    #[not_supported_on_native]
     #[test]
     fn test_can_generate_patterns_no_alphabet() {
         for pattern in [
@@ -909,6 +939,7 @@ mod regex_tests {
         }
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_can_generate_patterns_with_alphabet() {
         for pattern in [
@@ -941,18 +972,21 @@ mod regex_tests {
 
     // test_literals_with_ignorecase: patterns with re.IGNORECASE or inline (?i).
     // re.compile("\\Aa\\Z", re.IGNORECASE) == "(?i)\\Aa\\Z"
+    #[not_supported_on_native]
     #[test]
     fn test_literals_with_ignorecase_a() {
         find_any(gs::from_regex(r"(?i)\Aa\Z"), |s: &String| s == "a");
         find_any(gs::from_regex(r"(?i)\Aa\Z"), |s: &String| s == "A");
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_literals_with_ignorecase_ab() {
         find_any(gs::from_regex(r"(?i)\A[ab]\Z"), |s: &String| s == "a");
         find_any(gs::from_regex(r"(?i)\A[ab]\Z"), |s: &String| s == "A");
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_not_literal_with_ignorecase() {
         assert_all_examples(gs::from_regex(r"(?i)\A[^a][^b]\Z"), |s: &String| {
@@ -963,12 +997,14 @@ mod regex_tests {
         });
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_any_doesnt_generate_newline() {
         assert_all_examples(gs::from_regex(r"\A.\Z"), |s: &String| s != "\n");
     }
 
     // test_any_with_dotall_generate_newline: re.compile("\\A.\\Z", re.DOTALL) == "(?s)\\A.\\Z"
+    #[not_supported_on_native]
     #[test]
     fn test_any_with_dotall_generate_newline() {
         // Under DOTALL `.` draws from the whole BMP-minus-surrogates alphabet.
@@ -986,22 +1022,26 @@ mod regex_tests {
     // test_groups: omitted — uses Python-internal category predicates (is_word, is_digit, etc.)
     // and compiled regex objects; complex parametric test with no direct Rust equivalent.
 
+    #[not_supported_on_native]
     #[test]
     fn test_caret_in_the_middle_does_not_generate_anything() {
         assert_no_examples(gs::from_regex("a^b"), |_: &String| true);
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_end_with_terminator_does_not_pad() {
         assert_all_examples(gs::from_regex(r"abc\Z"), |s: &String| s.ends_with("abc"));
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_end() {
         find_any(gs::from_regex(r"\Aabc$"), |s: &String| s == "abc");
         find_any(gs::from_regex(r"\Aabc$"), |s: &String| s == "abc\n");
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_groupref_exists() {
         assert_all_examples(gs::from_regex("^(<)?a(?(1)>)$"), |s: &String| {
@@ -1012,11 +1052,13 @@ mod regex_tests {
         });
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_impossible_negative_lookahead() {
         assert_no_examples(gs::from_regex("(?!foo)foo"), |_: &String| true);
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_can_handle_boundaries_nested() {
         Hegel::new(|tc| {
@@ -1027,6 +1069,7 @@ mod regex_tests {
         .run();
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_groupref_not_shared_between_regex() {
         Hegel::new(|tc| {
@@ -1040,6 +1083,7 @@ mod regex_tests {
     // test_group_ref_is_not_shared_between_identical_regex: uses base_regex_strategy (internal API).
     // test_does_not_leak_groups: uses base_regex_strategy (internal API).
 
+    #[not_supported_on_native]
     #[test]
     fn test_positive_lookbehind() {
         // TooSlow suppressed: .*(?<=ab)c is slow to generate under instrumented binaries.
@@ -1050,6 +1094,7 @@ mod regex_tests {
         .run();
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_positive_lookahead() {
         // TooSlow suppressed: a(?=bc).* is slow to generate under instrumented binaries.
@@ -1060,6 +1105,7 @@ mod regex_tests {
         .run();
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_negative_lookbehind() {
         assert_all_examples(gs::from_regex("[abc]*(?<!abc)d"), |s: &String| {
@@ -1070,6 +1116,7 @@ mod regex_tests {
         });
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_negative_lookahead() {
         assert_all_examples(gs::from_regex("^ab(?!cd)[abcd]*"), |s: &String| {
@@ -1080,6 +1127,7 @@ mod regex_tests {
         });
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_generates_only_the_provided_characters_given_boundaries() {
         Hegel::new(|tc| {
@@ -1090,6 +1138,7 @@ mod regex_tests {
         .run();
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_group_backref_may_not_be_present() {
         Hegel::new(|tc| {
@@ -1101,6 +1150,7 @@ mod regex_tests {
         .run();
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_subpattern_flags() {
         find_any(gs::from_regex(r"(?i)\Aa(?-i:b)\Z"), |s: &String| {
@@ -1121,17 +1171,20 @@ mod regex_tests {
     // test_regex_have_same_type_as_pattern: bytes variant not supported; string variant is
     // trivially true in Rust (from_regex always returns String).
 
+    #[not_supported_on_native]
     #[test]
     fn test_can_pad_strings_arbitrarily() {
         find_any(gs::from_regex("a"), |s: &String| !s.starts_with('a'));
         find_any(gs::from_regex("a"), |s: &String| !s.ends_with('a'));
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_can_pad_empty_strings() {
         find_any(gs::from_regex(""), |s: &String| !s.is_empty());
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_can_pad_strings_with_newlines() {
         find_any(gs::from_regex("^$"), |s: &String| !s.is_empty());
@@ -1139,6 +1192,7 @@ mod regex_tests {
 
     // test_given_multiline_regex_can_insert_after_dollar:
     // re.compile("\\Ahi$", re.MULTILINE) == "(?m)\\Ahi$"
+    #[not_supported_on_native]
     #[test]
     fn test_given_multiline_regex_can_insert_after_dollar() {
         find_any(gs::from_regex(r"(?m)\Ahi$"), |s: &String| {
@@ -1148,6 +1202,7 @@ mod regex_tests {
 
     // test_given_multiline_regex_can_insert_before_caret:
     // re.compile("^hi\\Z", re.MULTILINE) == "(?m)^hi\\Z"
+    #[not_supported_on_native]
     #[test]
     fn test_given_multiline_regex_can_insert_before_caret() {
         find_any(gs::from_regex(r"(?m)^hi\Z"), |s: &String| {
@@ -1155,26 +1210,31 @@ mod regex_tests {
         });
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_does_not_left_pad_beginning_of_string_marker() {
         assert_all_examples(gs::from_regex(r"\Afoo"), |s: &String| s.starts_with("foo"));
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_bare_caret_can_produce() {
         find_any(gs::from_regex("^"), |s: &String| !s.is_empty());
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_bare_dollar_can_produce() {
         find_any(gs::from_regex("$"), |s: &String| !s.is_empty());
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_shared_union() {
         check_can_generate_examples(gs::from_regex(".|."));
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_issue_992_regression() {
         // Verbose regex: whitespace and # comments are stripped
@@ -1186,11 +1246,13 @@ mod regex_tests {
     }
 
     // test_fullmatch_generates_example: parametrized; bytes variants omitted.
+    #[not_supported_on_native]
     #[test]
     fn test_fullmatch_generates_example_literal() {
         find_any(gs::from_regex("a").fullmatch(true), |s: &String| s == "a");
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_fullmatch_generates_example_charset() {
         find_any(gs::from_regex("[Aa]").fullmatch(true), |s: &String| {
@@ -1198,6 +1260,7 @@ mod regex_tests {
         });
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_fullmatch_generates_example_star() {
         find_any(gs::from_regex("[ab]*").fullmatch(true), |s: &String| {
@@ -1205,6 +1268,7 @@ mod regex_tests {
         });
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_fullmatch_generates_example_ignorecase_charset() {
         // Uses a larger max_attempts because the target "aBb" has roughly 0.15%
@@ -1219,6 +1283,7 @@ mod regex_tests {
         .run();
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_fullmatch_generates_example_ignorecase_single() {
         find_any(gs::from_regex(r"(?i)[ab]").fullmatch(true), |s: &String| {
@@ -1227,6 +1292,7 @@ mod regex_tests {
     }
 
     // test_fullmatch_matches: parametrized; bytes and compiled-with-flags variants adapted.
+    #[not_supported_on_native]
     #[test]
     fn test_fullmatch_matches_empty() {
         assert_all_examples(gs::from_regex("").fullmatch(true), |s: &String| {
@@ -1234,6 +1300,7 @@ mod regex_tests {
         });
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_fullmatch_matches_comment() {
         assert_all_examples(
@@ -1242,6 +1309,7 @@ mod regex_tests {
         );
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_fullmatch_matches_literal_a() {
         assert_all_examples(gs::from_regex("a").fullmatch(true), |s: &String| {
@@ -1249,6 +1317,7 @@ mod regex_tests {
         });
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_fullmatch_matches_charset_aa() {
         assert_all_examples(gs::from_regex("[Aa]").fullmatch(true), |s: &String| {
@@ -1256,6 +1325,7 @@ mod regex_tests {
         });
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_fullmatch_matches_star() {
         assert_all_examples(gs::from_regex("[ab]*").fullmatch(true), |s: &String| {
@@ -1263,6 +1333,7 @@ mod regex_tests {
         });
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_fullmatch_matches_ignorecase_star() {
         let re = Regex::new(r"(?i)\A[ab]*\z").unwrap();
@@ -1272,6 +1343,7 @@ mod regex_tests {
         );
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_fullmatch_matches_ignorecase_single() {
         let re = Regex::new(r"(?i)\A[ab]\z").unwrap();
@@ -1284,11 +1356,13 @@ mod regex_tests {
     // test_fullmatch_must_be_bool: omitted — hegel-rust fullmatch() takes bool, not Option<bool>.
 
     // test_issue_1786_regression: re.compile("\\\\", flags=re.IGNORECASE) == r"(?i)\\"
+    #[not_supported_on_native]
     #[test]
     fn test_issue_1786_regression() {
         check_can_generate_examples(gs::from_regex(r"(?i)\\"));
     }
 
+    #[not_supported_on_native]
     #[test]
     fn test_sets_allow_multichar_output_in_ignorecase_mode() {
         // \u{130} is İ (Latin Capital Letter I With Dot Above); with IGNORECASE,

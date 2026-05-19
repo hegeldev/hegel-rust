@@ -1,5 +1,6 @@
 mod common;
 
+#[allow(unused_imports)]
 use common::not_supported_on_native;
 use common::utils::find_any;
 use hegel::TestCase;
@@ -17,7 +18,6 @@ fn test_array_of_booleans(tc: TestCase) {
     assert_eq!(arr.len(), 3);
 }
 
-#[not_supported_on_native]
 #[hegel::test]
 fn test_array_of_strings(tc: TestCase) {
     let arr: [String; 2] = tc.draw(gs::arrays(gs::text()));

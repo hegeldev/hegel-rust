@@ -68,7 +68,6 @@ fn test_bytes_redistribution_moves_all() {
     assert_eq!(v0.len(), 3);
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_bytes_increment_shortens_sequence() {
     // Growing v0 by one byte lets the shrinker eliminate the dict entry,
