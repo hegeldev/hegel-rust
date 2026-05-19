@@ -152,12 +152,46 @@ fn generate_integer_round_trips() {
     assert_eq!(n, ciborium::Value::Integer(5.into()));
 }
 
-// `tc.target()` is not yet implemented in the native backend — calling it
-// raises `todo!()`. The Phase::Target work will land in a follow-up PR.
+// `tc.target()` records observations into per-test-case state on the data
+// source handle; the targeting phase reads them back via
+// `NativeDataSource::take_target_observations` after the test body returns.
 
 #[test]
-#[should_panic(expected = "not yet supported by the native backend")]
-fn target_observation_raises_todo() {
+fn target_observation_records_finite_score() {
+    let (ds, handle) = random_source();
+    ds.target_observation(1.5, "x");
+    let obs = NativeDataSource::take_target_observations(&handle);
+    assert_eq!(obs.get("x"), Some(&1.5));
+}
+
+#[test]
+fn target_observation_take_drains() {
+    let (ds, handle) = random_source();
+    ds.target_observation(1.0, "x");
+    let first = NativeDataSource::take_target_observations(&handle);
+    assert_eq!(first.len(), 1);
+    let second = NativeDataSource::take_target_observations(&handle);
+    assert!(second.is_empty());
+}
+
+#[test]
+#[should_panic(expected = "requires a finite score")]
+fn target_observation_rejects_nan() {
+    let (ds, _handle) = random_source();
+    ds.target_observation(f64::NAN, "x");
+}
+
+#[test]
+#[should_panic(expected = "requires a finite score")]
+fn target_observation_rejects_infinity() {
+    let (ds, _handle) = random_source();
+    ds.target_observation(f64::INFINITY, "x");
+}
+
+#[test]
+#[should_panic(expected = "would overwrite previous")]
+fn target_observation_rejects_duplicate_label() {
     let (ds, _handle) = random_source();
     ds.target_observation(1.0, "x");
+    ds.target_observation(2.0, "x");
 }

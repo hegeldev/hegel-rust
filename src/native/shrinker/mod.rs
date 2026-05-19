@@ -240,7 +240,7 @@ pub(super) fn bin_search_down(lo: i128, hi: i128, f: &mut impl FnMut(i128) -> bo
 /// Rust a predicate that accepts an unbounded range (e.g. a `lower_integers_together`
 /// pass over full-range `i128` nodes) would otherwise walk `hi` off the end
 /// of `usize`.
-pub(super) fn find_integer(mut f: impl FnMut(usize) -> bool) -> usize {
+pub(crate) fn find_integer(mut f: impl FnMut(usize) -> bool) -> usize {
     for i in 1..5 {
         if !f(i) {
             return i - 1;
