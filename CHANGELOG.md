@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.4 - 2026-05-19
+
+The native backend (`--features native`) now supports `gs::dates()`, `gs::times()`, `gs::datetimes()`, `gs::ip_addresses()`, and `gs::uuids()`.
+
 ## 0.14.3 - 2026-05-19
 
 The native backend (`--features native`) now implements `Phase::Target`, so `tc.target()` and `tc.target_labelled()` drive a hill-climbing search for better-scoring inputs instead of panicking with `todo!()`.
