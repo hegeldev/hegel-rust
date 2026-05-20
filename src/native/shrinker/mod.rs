@@ -146,30 +146,33 @@ impl<'a> Shrinker<'a> {
         // (identified by its sort_key vector — fine because the cache
         // key is the same shape the closure cares about), return the
         // recorded outcome without re-running.
+        //
+        // *Cache hits are only used for the negative "uninteresting"
+        // case.*  Caching a positive result would short-circuit
+        // `accept_improvement` whose `sort_key(actual) <
+        // sort_key(current)` check is relative to the *live*
+        // current_nodes — so we must re-run the closure to update.
         let cache_key: Vec<NodeSortKey> = candidate_key.1.clone();
-        if let Some((cached_interesting, cached_actual, cached_spans)) =
-            self.consider_cache.get(&cache_key).cloned()
-        {
-            if cached_interesting && sort_key(&cached_actual) < sort_key(&self.current_nodes) {
-                self.accept_improvement(cached_actual, cached_spans);
-            }
-            return cached_interesting;
+        if let Some((false, _, _)) = self.consider_cache.get(&cache_key) {
+            return false;
         }
 
         let (is_interesting, actual_nodes, actual_spans) = (self.test_fn)(ShrinkRun::Full(nodes));
         // Bounded cache: drop entries arbitrarily when we exceed 4096
-        // entries.  Hypothesis's cache is itself LRU-bounded; we use a
-        // simple insertion-order drop because we don't yet need
-        // recency information.
-        if self.consider_cache.len() >= 4096 {
-            if let Some(some_key) = self.consider_cache.keys().next().cloned() {
-                self.consider_cache.remove(&some_key);
+        // entries.  We only insert false (uninteresting) results into
+        // the cache; positive results need re-evaluation against the
+        // live shrink target on each call.
+        if !is_interesting {
+            if self.consider_cache.len() >= 4096 {
+                if let Some(some_key) = self.consider_cache.keys().next().cloned() {
+                    self.consider_cache.remove(&some_key);
+                }
             }
+            self.consider_cache.insert(
+                cache_key,
+                (is_interesting, actual_nodes.clone(), actual_spans.clone()),
+            );
         }
-        self.consider_cache.insert(
-            cache_key,
-            (is_interesting, actual_nodes.clone(), actual_spans.clone()),
-        );
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
             self.accept_improvement(actual_nodes, actual_spans);
         }
@@ -292,6 +295,11 @@ impl<'a> Shrinker<'a> {
     }
 
     /// Run all shrink passes repeatedly until no more progress or iteration cap.
+    ///
+    /// The pass order interleaves Hypothesis-ported passes with the
+    /// native-only extras kept per the user's directive ("parity =
+    /// superset, not replacement").  Steps 1-17 of the parity port
+    /// deliver each pass; this method is the wire-up.
     pub fn shrink(&mut self) {
         let mut prev: Vec<NodeSortKey> = Vec::new();
         let mut iterations = 0;
@@ -305,11 +313,26 @@ impl<'a> Shrinker<'a> {
             prev = current_key;
             iterations += 1;
 
+            // Hypothesis-ported span-aware passes (Steps 2-5) layered
+            // ahead of the existing native passes — they catch shapes
+            // the per-type passes can't see.
+            self.remove_discarded();
+            self.try_trivial_spans();
+            self.pass_to_descendant();
+            self.reorder_spans();
+
+            // Node-program adaptive deletion (Step 11) layered before
+            // the native deletion loop.
+            for n in [5usize, 4, 3, 2, 1] {
+                self.node_program(n);
+            }
             self.delete_chunks();
             self.zero_choices();
             self.swap_integer_sign();
             self.binary_search_integer_towards_zero();
             self.bind_deletion();
+            self.minimize_individual_choices();
+            self.lower_common_node_offset();
             self.redistribute_integers();
             self.lower_integers_together();
             self.shrink_duplicates();
@@ -320,6 +343,8 @@ impl<'a> Shrinker<'a> {
             self.shrink_bytes();
             self.redistribute_bytes_pairs();
             self.shrink_strings();
+            self.lower_duplicated_characters();
+            self.normalize_unicode_chars();
             self.redistribute_string_pairs();
             self.lower_and_bump();
             self.try_shortening_via_increment();
