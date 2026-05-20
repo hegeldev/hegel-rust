@@ -13,6 +13,7 @@
 //   strings    — shrink_strings
 
 mod bytes;
+mod coarse;
 mod deletion;
 mod floats;
 mod index_passes;
