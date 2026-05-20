@@ -6,6 +6,7 @@
 //!
 //! Hypothesis source: `hypothesis/internal/conjecture/shrinker.py`.
 
+use super::ordering::shrink_ordering;
 use super::{ShrinkRun, Shrinker};
 use crate::native::core::sort_key;
 
@@ -205,6 +206,120 @@ impl<'a> Shrinker<'a> {
             }
         }
     }
+
+    /// Reorder same-label sibling spans into a more-sorted permutation.
+    ///
+    /// Port of `shrinker.py:1810-1855` (`reorder_spans`).  For each parent
+    /// span, for each label that appears more than once among its direct
+    /// children, run an [`shrink_ordering`] over the children indices,
+    /// keyed by the sort key of the child's realised node slice.
+    ///
+    /// Permutation by index keeps the multiset of children intact; the
+    /// only thing that changes is *which* slice ends up at which start
+    /// position.  This is the pass that ensures `test_not_equal(x, y)`
+    /// collapses to a canonical `(x="", y="0")` rather than the symmetric
+    /// alternative.
+    // Wired into `shrink()` by Step 12 / Step 18 of the parity port.
+    #[allow(dead_code)]
+    pub(crate) fn reorder_spans(&mut self) {
+        let parents: Vec<Option<usize>> = {
+            // Build the set of parent indices that have direct children
+            // (including the implicit root, parent == None).
+            let mut seen: std::collections::BTreeSet<Option<usize>> =
+                std::collections::BTreeSet::new();
+            for span in self.current_spans.iter() {
+                seen.insert(span.parent);
+            }
+            seen.into_iter().collect()
+        };
+
+        for parent in parents {
+            // Group this parent's children by label, with owned label
+            // strings so the BTreeMap doesn't keep a borrow on
+            // `self.current_spans` while the closure later asks
+            // `self.consider` for a borrow.
+            let mut by_label: std::collections::BTreeMap<String, Vec<usize>> =
+                std::collections::BTreeMap::new();
+            for (idx, span) in self.current_spans.iter().enumerate() {
+                if span.parent == parent {
+                    by_label.entry(span.label.clone()).or_default().push(idx);
+                }
+            }
+
+            for (_label, child_indices) in by_label {
+                if child_indices.len() <= 1 {
+                    continue;
+                }
+                let endpoints: Vec<(usize, usize)> = child_indices
+                    .iter()
+                    .map(|&i| {
+                        let s = &self.current_spans[i];
+                        (s.start, s.end)
+                    })
+                    .collect();
+                // Sanity: endpoints must all fit in current_nodes.
+                let nodes_len = self.current_nodes.len();
+                if endpoints.iter().any(|&(_, e)| e > nodes_len) {
+                    continue;
+                }
+                // Endpoints must be non-overlapping and in source order;
+                // sibling spans always satisfy this, but a stale snapshot
+                // after an intervening shrink can break it.
+                let mut sorted_eps = endpoints.clone();
+                sorted_eps.sort();
+                let well_formed = sorted_eps.windows(2).all(|w| w[0].1 <= w[1].0);
+                if !well_formed {
+                    continue;
+                }
+
+                let n = child_indices.len();
+                let snapshot_nodes = self.current_nodes.clone();
+
+                // The keys for sorting are the sort_keys of each child's
+                // realised node slice.  Computed up front since the
+                // closure may be called O(n log n) times.
+                let mut cached_keys: Vec<(usize, Vec<crate::native::core::NodeSortKey>)> =
+                    Vec::with_capacity(endpoints.len());
+                for &(s, e) in endpoints.iter() {
+                    cached_keys.push(sort_key(&snapshot_nodes[s..e]));
+                }
+
+                // Snapshot is needed to translate a permutation back into a
+                // full node list: prefix + ordered slices + suffix.  We
+                // splice into the *snapshot* not the live current_nodes,
+                // because each accept call may modify current_nodes.
+                shrink_ordering::<(usize, Vec<crate::native::core::NodeSortKey>), _, _>(
+                    n,
+                    |i| cached_keys[i].clone(),
+                    |permutation| {
+                        // Build the candidate by interleaving the
+                        // permuted slices with the unchanged regions
+                        // between sibling endpoints.
+                        if permutation.len() != n {
+                            return false;
+                        }
+                        let mut attempt: Vec<_> = Vec::with_capacity(snapshot_nodes.len());
+                        attempt.extend_from_slice(&snapshot_nodes[..endpoints[0].0]);
+                        for (k, &(target_start, target_end)) in endpoints.iter().enumerate() {
+                            let src_idx = permutation[k];
+                            let (src_start, src_end) = endpoints[src_idx];
+                            attempt.extend_from_slice(&snapshot_nodes[src_start..src_end]);
+                            // Gap to next sibling (or to suffix).
+                            if k + 1 < endpoints.len() {
+                                attempt.extend_from_slice(
+                                    &snapshot_nodes[target_end..endpoints[k + 1].0],
+                                );
+                            } else {
+                                attempt.extend_from_slice(&snapshot_nodes[target_end..]);
+                            }
+                            let _ = target_start;
+                        }
+                        self.consider(&attempt)
+                    },
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -214,6 +329,10 @@ mod remove_discarded_tests;
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_pass_to_descendant_tests.rs"]
 mod pass_to_descendant_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_reorder_spans_tests.rs"]
+mod reorder_spans_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_try_trivial_spans_tests.rs"]

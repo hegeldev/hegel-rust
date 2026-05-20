@@ -18,6 +18,7 @@ mod floats;
 mod index_passes;
 mod integers;
 mod mutation;
+mod ordering;
 mod sequence;
 mod spans;
 mod strings;
