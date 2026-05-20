@@ -128,11 +128,92 @@ impl<'a> Shrinker<'a> {
             i += 1;
         }
     }
+
+    /// Replace each span with one of its same-label descendants.
+    ///
+    /// Port of `shrinker.py:959-1015` (`pass_to_descendant`).  This is the
+    /// pass that lets recursive strategies — `st.deferred(lambda: ... |
+    /// st.tuples(rec, rec))` — collapse a tree onto one of its subtrees in
+    /// a single step, instead of having to chew through each layer
+    /// individually.
+    ///
+    /// For every pair `(ancestor, descendant)` of same-label spans where
+    /// the descendant is strictly contained in the ancestor and is
+    /// strictly shorter, we splice the descendant's nodes in place of the
+    /// ancestor's and ask the predicate whether that's still interesting.
+    // Wired into `shrink()` by Step 12 / Step 18 of the parity port.
+    #[allow(dead_code)]
+    pub(crate) fn pass_to_descendant(&mut self) {
+        // Snapshot (start, end, label) tuples up front.  Each consider()
+        // may rebuild current_spans, which would invalidate live indices —
+        // re-reading from the snapshot after every consider would mean
+        // recomputing the per-label index every time.  Hypothesis runs
+        // this pass via a Chooser that tracks exhausted branches; we'll
+        // get the same incremental behaviour once Step 13 lands.  For
+        // now we iterate all candidates from the initial snapshot and let
+        // each consider() bail naturally on a stale ancestor.
+        let spans: Vec<(usize, usize, String)> = self
+            .current_spans
+            .iter()
+            .map(|s| (s.start, s.end, s.label.clone()))
+            .collect();
+
+        // Group span indices by label.
+        let mut by_label: std::collections::BTreeMap<&str, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for (idx, (_, _, label)) in spans.iter().enumerate() {
+            by_label.entry(label.as_str()).or_default().push(idx);
+        }
+
+        for (_label, indices) in by_label {
+            if indices.len() < 2 {
+                continue;
+            }
+            for ai in 0..indices.len() {
+                let ancestor_idx = indices[ai];
+                let (a_start, a_end, _) = spans[ancestor_idx].clone();
+                let ancestor_len = a_end.saturating_sub(a_start);
+                if ancestor_len == 0 {
+                    continue;
+                }
+                for &descendant_idx in &indices[ai + 1..] {
+                    let (d_start, d_end, _) = spans[descendant_idx].clone();
+                    // Properly contained, same label.
+                    if d_start < a_start || d_end > a_end {
+                        // Past the ancestor's range: no further descendants
+                        // because spans are ordered by `start`.
+                        if d_start >= a_end {
+                            break;
+                        }
+                        continue;
+                    }
+                    let descendant_len = d_end.saturating_sub(d_start);
+                    if descendant_len == 0 || descendant_len >= ancestor_len {
+                        continue;
+                    }
+                    // Sanity: indices must still be in range of the current
+                    // node list — if a prior consider() shortened it past
+                    // the ancestor's end, skip.
+                    if a_end > self.current_nodes.len() {
+                        continue;
+                    }
+                    let mut attempt = self.current_nodes[..a_start].to_vec();
+                    attempt.extend_from_slice(&self.current_nodes[d_start..d_end]);
+                    attempt.extend_from_slice(&self.current_nodes[a_end..]);
+                    self.consider(&attempt);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_remove_discarded_tests.rs"]
 mod remove_discarded_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_pass_to_descendant_tests.rs"]
+mod pass_to_descendant_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_try_trivial_spans_tests.rs"]
