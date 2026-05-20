@@ -6,7 +6,8 @@
 //!
 //! Hypothesis source: `hypothesis/internal/conjecture/shrinker.py`.
 
-use super::Shrinker;
+use super::{ShrinkRun, Shrinker};
+use crate::native::core::sort_key;
 
 impl<'a> Shrinker<'a> {
     /// Delete every contiguous non-overlapping discarded span in one pass.
@@ -56,8 +57,83 @@ impl<'a> Shrinker<'a> {
             // `discarded` and return.
         }
     }
+
+    /// For every span in `current_spans`, try replacing its choices with their
+    /// kind-simplest values.  Forced choices stay put.
+    ///
+    /// Port of `shrinker.py:1680-1708` (`try_trivial_spans`).  When the
+    /// attempted replacement isn't interesting but the test run still
+    /// produced a valid result, a second attempt is made using the
+    /// realised span content from the run — this lets recursive
+    /// structures whose simplest form is shape-dependent (e.g. an
+    /// inner span that becomes shorter under simplest values) still
+    /// converge.
+    // Wired into `shrink()` by Step 12 / Step 18 of the parity port.
+    #[allow(dead_code)]
+    pub(crate) fn try_trivial_spans(&mut self) {
+        let mut i = 0;
+        while i < self.current_spans.len() {
+            // Snapshot before any mutation so we can detect whether the
+            // first attempt improved the shrink target.
+            let prev_key = sort_key(&self.current_nodes);
+            let span = self.current_spans[i].clone();
+            if span.end > self.current_nodes.len() {
+                i += 1;
+                continue;
+            }
+
+            let already_trivial = self.current_spans.trivial(i, &self.current_nodes);
+            if already_trivial {
+                i += 1;
+                continue;
+            }
+
+            let mut attempt: Vec<_> = self.current_nodes.clone();
+            for node in attempt[span.start..span.end].iter_mut() {
+                if node.was_forced {
+                    continue;
+                }
+                let simplest = node.kind.simplest();
+                if node.value != simplest {
+                    *node = node.with_value(simplest);
+                }
+            }
+
+            // Manually invoke the closure so we keep hold of the actual
+            // realised nodes and spans even when the attempt isn't an
+            // improvement — Hypothesis uses this to retry with the
+            // realised span content (see line 1705-1708).
+            let (is_interesting, actual_nodes, actual_spans) =
+                (self.test_fn)(ShrinkRun::Full(&attempt));
+            if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
+                self.accept_improvement(actual_nodes, actual_spans);
+                i += 1;
+                continue;
+            }
+
+            // First attempt didn't improve.  If the run produced a valid
+            // (or interesting-but-not-smaller) result that still records
+            // a span at this index, splice its realised content back into
+            // the original sequence and try once more.
+            if sort_key(&self.current_nodes) == prev_key
+                && let Some(new_span) = actual_spans.get(i)
+                && new_span.start <= new_span.end
+                && new_span.end <= actual_nodes.len()
+            {
+                let mut spliced = self.current_nodes[..span.start].to_vec();
+                spliced.extend_from_slice(&actual_nodes[new_span.start..new_span.end]);
+                spliced.extend_from_slice(&self.current_nodes[span.end..]);
+                self.consider(&spliced);
+            }
+            i += 1;
+        }
+    }
 }
 
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_remove_discarded_tests.rs"]
-mod tests;
+mod remove_discarded_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_try_trivial_spans_tests.rs"]
+mod try_trivial_spans_tests;
