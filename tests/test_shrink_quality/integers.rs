@@ -141,3 +141,85 @@ fn test_reduces_additive_pairs() {
     .run();
     assert_eq!((m, n), (1, 1000));
 }
+
+// Port of `tests/quality/test_shrink_quality.py::test_perfectly_shrinks_integers`.
+//
+// For an integer constraint that's reached only when `x >= n` (or `x <= n`
+// for negative n), the shrinker should land exactly on `n` — no slack.
+#[test]
+fn test_perfectly_shrinks_integers_positive() {
+    for n in [3i64, 7, 42] {
+        let v = minimal(gs::integers::<i64>(), move |x: &i64| *x >= n);
+        assert_eq!(v, n, "expected exact landing on {n}");
+    }
+}
+
+#[test]
+fn test_perfectly_shrinks_integers_negative() {
+    for n in [-3i64, -7, -42] {
+        let v = minimal(gs::integers::<i64>(), move |x: &i64| *x <= n);
+        assert_eq!(v, n, "expected exact landing on {n}");
+    }
+}
+
+// Port of `tests/quality/test_shrink_quality.py::test_lowering_together_negative`.
+//
+// Two integers linked by `abs(m - n) <= 1` should collapse to `(0, 0)` quickly
+// when both are allowed to be negative.  Exercises `lower_integers_together`
+// and `lower_common_node_offset` driving both at once.
+#[test]
+fn test_lowering_together_negative() {
+    let (m, n) = Minimal::new(
+        gs::tuples!(
+            gs::integers::<i64>().min_value(-1000).max_value(1000),
+            gs::integers::<i64>().min_value(-1000).max_value(1000),
+        ),
+        |(m, n): &(i64, i64)| m.abs_diff(*n) <= 1 && *m <= -10 && *n <= -10,
+    )
+    .test_cases(10000)
+    .run();
+    // The minimal counterexample has both at the constraint boundary -10
+    // with diff ≤ 1.
+    assert_eq!(m, -10);
+    assert!(n.abs_diff(m) <= 1);
+}
+
+// Port of `tests/quality/test_shrink_quality.py::test_lowering_together_mixed`.
+//
+// Mixed-sign linked integer pair.
+#[test]
+fn test_lowering_together_mixed() {
+    let (m, n) = Minimal::new(
+        gs::tuples!(
+            gs::integers::<i64>().min_value(-100).max_value(100),
+            gs::integers::<i64>().min_value(-100).max_value(100),
+        ),
+        |(m, n): &(i64, i64)| *m > 0 && *n < 0 && m - n >= 20,
+    )
+    .test_cases(10000)
+    .run();
+    // Smallest pair satisfying `m > 0`, `n < 0`, `m - n >= 20`.
+    // The shrinker should collapse `(m, n)` toward (≥1, ≤-1) with a
+    // tight gap.
+    assert!(m >= 1 && n <= -1);
+    assert!(m - n >= 20);
+    // Excess shouldn't be wildly above the bound.
+    assert!(m - n <= 25);
+}
+
+// Port of `tests/conjecture/test_shrinker.py::test_can_simultaneously_lower_non_duplicated_nearby_integers`.
+//
+// Two non-duplicate integers within gap 3 that must both stay above 10.
+#[test]
+fn test_can_simultaneously_lower_non_duplicated_nearby_integers() {
+    let (m, n) = Minimal::new(
+        gs::tuples!(
+            gs::integers::<i64>().min_value(0).max_value(1000),
+            gs::integers::<i64>().min_value(0).max_value(1000),
+        ),
+        |(m, n): &(i64, i64)| *m >= 11 && *n >= 10 && m > n,
+    )
+    .test_cases(10000)
+    .run();
+    assert_eq!((m, n), (11, 10));
+}

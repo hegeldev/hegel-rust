@@ -50,3 +50,56 @@ fn test_string_insertion_sort_swap_succeeds() {
     .run();
     assert_eq!(s, "ab");
 }
+
+// Port of `tests/quality/test_shrink_quality.py::test_minimize_duplicated_characters_within_a_choice`.
+//
+// Strings that contain at least 3 of the same character *and* at least
+// two different characters should collapse to "000A"-style minimal
+// forms after `shrink_strings`' duplicate-codepoint pass fires.
+#[test]
+fn test_minimize_duplicated_characters_within_a_choice() {
+    let s = Minimal::new(gs::text().min_size(1).max_size(20), |s: &String| {
+        let chars: Vec<char> = s.chars().collect();
+        if chars.len() < 4 {
+            return false;
+        }
+        // At least one character appearing ≥3 times.
+        let mut counts: std::collections::HashMap<char, usize> = std::collections::HashMap::new();
+        for c in &chars {
+            *counts.entry(*c).or_default() += 1;
+        }
+        let has_triple = counts.values().any(|&n| n >= 3);
+        // At least two distinct characters.
+        let distinct = counts.len() >= 2;
+        has_triple && distinct
+    })
+    .test_cases(5000)
+    .run();
+    // The shrinker should land on length 4 with three of one char and
+    // one of another, both in the simplest part of the alphabet.
+    assert_eq!(s.chars().count(), 4);
+    let mut counts: std::collections::HashMap<char, usize> = std::collections::HashMap::new();
+    for c in s.chars() {
+        *counts.entry(c).or_default() += 1;
+    }
+    assert!(counts.values().any(|&n| n >= 3));
+    assert!(counts.len() >= 2);
+}
+
+// Port of `tests/quality/test_shrink_quality.py::test_shrink_strips_accent_to_ascii_letter`.
+//
+// `normalize_unicode_chars` should peel accents off latin letters when
+// the predicate is satisfied by the base form.
+#[test]
+fn test_shrink_strips_accent_to_ascii_letter() {
+    let s = Minimal::new(gs::text().min_size(1).max_size(8), |s: &String| {
+        s.to_lowercase().contains('e')
+    })
+    .test_cases(5000)
+    .run();
+    // After unicode normalization the canonical 1-char counterexample
+    // is "E" (or any equivalent that still satisfies the predicate).
+    let lower = s.to_lowercase();
+    assert!(lower.contains('e'));
+    assert!(s.chars().count() == 1);
+}

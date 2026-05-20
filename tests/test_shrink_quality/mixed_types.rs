@@ -193,3 +193,27 @@ fn test_redistribute_pair_with_boolean_in_sequence() {
     assert!(!b);
     assert_tight_joint_minimum(i, f);
 }
+
+// Port of `tests/quality/test_shrink_quality.py::test_sum_of_pair_float`.
+//
+// Two floats whose sum must exceed 1000 should land at (1.0, 1000.0)
+// after `redistribute_numeric_pairs`.
+#[test]
+fn test_sum_of_pair_float() {
+    let (a, b) = minimal(
+        hegel::tuples!(
+            gs::floats::<f64>()
+                .min_value(0.0)
+                .max_value(1000.0)
+                .allow_nan(false)
+                .allow_infinity(false),
+            gs::floats::<f64>()
+                .min_value(0.0)
+                .max_value(1000.0)
+                .allow_nan(false)
+                .allow_infinity(false),
+        ),
+        |&(a, b): &(f64, f64)| a + b > 1000.0,
+    );
+    assert_eq!((a, b), (1.0, 1000.0));
+}
