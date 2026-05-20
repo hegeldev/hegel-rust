@@ -107,4 +107,3 @@ pub fn state_machine(_attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn rewrite_draws(input: TokenStream) -> TokenStream {
     rewrite_draws::expand_rewrite_draws(input.into()).into()
 }
-
