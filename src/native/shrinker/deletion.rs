@@ -1,8 +1,9 @@
-// Deletion-based shrink passes: delete_chunks, bind_deletion, try_replace_with_deletion.
+// Deletion-based shrink passes: delete_chunks, bind_deletion, try_replace_with_deletion,
+// minimize_individual_choices.
 
 use std::collections::HashMap;
 
-use crate::native::core::{ChoiceKind, ChoiceValue};
+use crate::native::core::{ChoiceKind, ChoiceValue, sort_key};
 
 use super::{Shrinker, bin_search_down};
 
@@ -141,4 +142,112 @@ impl<'a> Shrinker<'a> {
         }
         false
     }
+
+    /// Per-node minimization with size-dependency deletion fallback.
+    ///
+    /// Port of `shrinker.py:1710-1808` (`minimize_individual_choices`).  For
+    /// each non-forced, non-simplest integer node, lowering it by one
+    /// often shortens the realised sequence because the integer
+    /// controlled a downstream collection size (the
+    /// `lists(integers(min_size=n))` flat-map pattern).  When that
+    /// happens but the lowered candidate isn't directly interesting, we
+    /// try splicing out spans / nodes after the integer to recover an
+    /// interesting (shorter) candidate.
+    ///
+    /// Non-integer nodes are deferred to the existing per-type passes
+    /// — the unified Hypothesis driver only adds value for integers,
+    /// per its own comment (`shrinker.py:1748-1756`).
+    // Wired into `shrink()` by Step 12 / Step 18.
+    #[allow(dead_code)]
+    pub(crate) fn minimize_individual_choices(&mut self) {
+        let mut i = 0;
+        while i < self.current_nodes.len() {
+            let node = self.current_nodes[i].clone();
+            if node.was_forced {
+                i += 1;
+                continue;
+            }
+            let (ic, current_val) = match (&node.kind, &node.value) {
+                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), *v),
+                _ => {
+                    i += 1;
+                    continue;
+                }
+            };
+            let simplest = ic.simplest();
+            if current_val == simplest {
+                i += 1;
+                continue;
+            }
+
+            // Phase 1: regular shrink target — bin_search the integer
+            // toward simplest, accepting any candidate that consider()
+            // approves.
+            let initial_key = sort_key(&self.current_nodes);
+            bin_search_down(simplest, current_val, &mut |v| {
+                self.replace(&HashMap::from([(i, ChoiceValue::Integer(v))]))
+            });
+            if sort_key(&self.current_nodes) < initial_key {
+                // Made progress; move on.
+                i += 1;
+                continue;
+            }
+
+            // Phase 2: size-dependency fallback.  Lower by exactly one,
+            // peek at the realised actual_nodes — if shorter than the
+            // current sequence, try deletions to recover validity.
+            //
+            // Re-read current_nodes since we may have inserted / removed
+            // entries above.
+            if i >= self.current_nodes.len() {
+                break;
+            }
+            let original_len = self.current_nodes.len();
+            // Lower-by-one in the direction of simplest.
+            let towards = if current_val > simplest {
+                current_val - 1
+            } else {
+                current_val + 1
+            };
+            let mut lowered = self.current_nodes.clone();
+            lowered[i] = lowered[i].with_value(ChoiceValue::Integer(towards));
+
+            let (_, actual_nodes, actual_spans) = (self.test_fn)(super::ShrinkRun::Full(&lowered));
+            if actual_nodes.len() >= original_len || actual_nodes.len() <= i + 1 {
+                i += 1;
+                continue;
+            }
+
+            // Try deleting each span that starts after i.
+            let mut shrank = false;
+            for span_idx in 0..actual_spans.len() {
+                let span = &actual_spans[span_idx];
+                if span.start <= i || span.end > actual_nodes.len() || span.end <= span.start {
+                    continue;
+                }
+                let mut candidate: Vec<_> = actual_nodes[..span.start].to_vec();
+                candidate.extend_from_slice(&actual_nodes[span.end..]);
+                if self.consider(&candidate) && sort_key(&self.current_nodes) < initial_key {
+                    shrank = true;
+                    break;
+                }
+            }
+
+            if !shrank {
+                // Try deleting individual nodes after i.
+                for j in i + 1..actual_nodes.len() {
+                    let mut candidate: Vec<_> = actual_nodes[..j].to_vec();
+                    candidate.extend_from_slice(&actual_nodes[j + 1..]);
+                    if self.consider(&candidate) && sort_key(&self.current_nodes) < initial_key {
+                        break;
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_minimize_individual_choices_tests.rs"]
+mod minimize_individual_choices_tests;
