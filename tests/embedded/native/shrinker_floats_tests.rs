@@ -1,4 +1,5 @@
 use super::*;
+use crate::native::core::Spans;
 use crate::native::shrinker::Shrinker;
 
 // ── redistribute_pair: cand_j out-of-range ────────────────────────────────
@@ -50,10 +51,11 @@ fn redistribute_pair_below_shrink_target_uses_raise_left_direction() {
     ];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
-            crate::native::shrinker::ShrinkRun::Full(nodes) => (true, nodes.to_vec()),
-            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new()),
+            crate::native::shrinker::ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
+        Spans::new(),
     );
     shrinker.redistribute_numeric_pairs();
     let (a, b) = match (
@@ -72,10 +74,11 @@ fn redistribute_pair_bails_when_int_candidate_leaves_validate_range() {
     let initial = vec![float_node(3.0, -100.0, 100.0), int_node(2, 1, 10)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
-            crate::native::shrinker::ShrinkRun::Full(nodes) => (true, nodes.to_vec()),
-            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new()),
+            crate::native::shrinker::ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
+        Spans::new(),
     );
     shrinker.redistribute_numeric_pairs();
     // Engine stayed within validate bounds despite the accepting test_fn.
@@ -121,11 +124,12 @@ fn shrink_floats_canonicalizes_nan_to_finite_when_predicate_admits() {
                     ChoiceValue::Float(f) => f.is_nan() || f.is_infinite() || *f == f64::MAX,
                     _ => false,
                 });
-                (interesting, nodes.to_vec())
+                (interesting, nodes.to_vec(), Spans::new())
             }
-            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new()),
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
+        Spans::new(),
     );
     shrinker.shrink_floats();
     // After canonicalization the node holds `f64::MAX` (first accepted

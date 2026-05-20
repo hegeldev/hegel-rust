@@ -21,9 +21,11 @@ mod mutation;
 mod sequence;
 mod strings;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINK_ITERATIONS, NodeSortKey, sort_key};
+use crate::native::core::{
+    ChoiceNode, ChoiceValue, MAX_SHRINK_ITERATIONS, NodeSortKey, Spans, sort_key,
+};
 
 /// Request passed to the shrinker's test function.
 ///
@@ -41,16 +43,22 @@ pub enum ShrinkRun<'a> {
 }
 
 /// A callback that runs a test case for the shrinker.
-/// Returns `(is_interesting, actual_nodes)`.
+/// Returns `(is_interesting, actual_nodes, actual_spans)`.
 /// `actual_nodes` is the sequence of ChoiceNodes produced during the run.
 /// For [`ShrinkRun::Full`], it may be shorter than the candidate length
 /// (for early exit / flatmap bindings), or have different values where the
 /// candidate was punned because the kind changed at that position.
-pub type TestFn<'a> = dyn FnMut(ShrinkRun) -> (bool, Vec<ChoiceNode>) + 'a;
+/// `actual_spans` is the span tree recorded by the same run.
+pub type TestFn<'a> = dyn FnMut(ShrinkRun) -> (bool, Vec<ChoiceNode>, Spans) + 'a;
 
 pub struct Shrinker<'a> {
     test_fn: Box<TestFn<'a>>,
     pub current_nodes: Vec<ChoiceNode>,
+    /// Spans recorded by the run that produced `current_nodes`.  Updated whenever
+    /// `consider` accepts a smaller candidate so span-aware passes (try_trivial_spans,
+    /// pass_to_descendant, reorder_spans, remove_discarded) can interrogate the
+    /// current shrink target's structure.
+    pub current_spans: Spans,
     /// Count of times `current_nodes` was replaced by a strictly smaller candidate.
     /// Mirrors `engine.py::ConjectureRunner.shrinks` increments inside `test_function`.
     pub improvements: usize,
@@ -62,19 +70,35 @@ pub struct Shrinker<'a> {
     /// `consider` and `probe` return `false` without running the test function,
     /// causing the shrinker to stall and exit naturally.
     pub max_improvements: Option<usize>,
+    /// Snapshot of `current_nodes` at the last call to
+    /// [`Shrinker::clear_change_tracking`] (or construction).  Each `consider`
+    /// improvement diffs against this baseline so [`Shrinker::changed_nodes`]
+    /// reports node indices whose `(kind, value)` differs.
+    last_checkpoint_nodes: Vec<ChoiceNode>,
+    /// Set of indices that changed (under structural identity) since the last
+    /// checkpoint.  `lower_common_node_offset` reads this to find correlated
+    /// integer nodes that keep shrinking together (`shrinker.py:1097-1131`).
+    all_changed_nodes: HashSet<usize>,
 }
 
 impl<'a> Shrinker<'a> {
     /// Construct a Shrinker from a closure that handles both [`ShrinkRun::Full`]
     /// and [`ShrinkRun::Probe`] requests. Required for `mutate_and_shrink` to
     /// actually explore random continuations.
-    pub fn with_probe(test_fn: Box<TestFn<'a>>, initial_nodes: Vec<ChoiceNode>) -> Self {
+    pub fn with_probe(
+        test_fn: Box<TestFn<'a>>,
+        initial_nodes: Vec<ChoiceNode>,
+        initial_spans: Spans,
+    ) -> Self {
         Shrinker {
             test_fn,
+            last_checkpoint_nodes: initial_nodes.clone(),
             current_nodes: initial_nodes,
+            current_spans: initial_spans,
             improvements: 0,
             downgraded: Vec::new(),
             max_improvements: None,
+            all_changed_nodes: HashSet::new(),
         }
     }
 
@@ -98,13 +122,9 @@ impl<'a> Shrinker<'a> {
             }
             // nocov end
         }
-        let (is_interesting, actual_nodes) = (self.test_fn)(ShrinkRun::Full(nodes));
+        let (is_interesting, actual_nodes, actual_spans) = (self.test_fn)(ShrinkRun::Full(nodes));
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
-            let old: Vec<ChoiceValue> =
-                self.current_nodes.iter().map(|n| n.value.clone()).collect();
-            self.downgraded.push(old);
-            self.improvements += 1;
-            self.current_nodes = actual_nodes;
+            self.accept_improvement(actual_nodes, actual_spans);
         }
         is_interesting
     }
@@ -124,18 +144,72 @@ impl<'a> Shrinker<'a> {
             }
             // nocov end
         }
-        let (is_interesting, actual_nodes) = (self.test_fn)(ShrinkRun::Probe {
+        let (is_interesting, actual_nodes, actual_spans) = (self.test_fn)(ShrinkRun::Probe {
             prefix,
             seed,
             max_size,
         });
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
-            let old: Vec<ChoiceValue> =
-                self.current_nodes.iter().map(|n| n.value.clone()).collect();
-            self.downgraded.push(old);
-            self.improvements += 1;
-            self.current_nodes = actual_nodes;
+            self.accept_improvement(actual_nodes, actual_spans);
         }
+    }
+
+    /// Common bookkeeping when a candidate becomes the new shrink target:
+    /// record the displaced sequence, bump `improvements`, fold the diff
+    /// into `all_changed_nodes`, and refresh `current_nodes` / `current_spans`.
+    fn accept_improvement(&mut self, new_nodes: Vec<ChoiceNode>, new_spans: Spans) {
+        let old: Vec<ChoiceValue> = self.current_nodes.iter().map(|n| n.value.clone()).collect();
+        self.downgraded.push(old);
+        self.improvements += 1;
+        Self::update_change_tracking(
+            &self.last_checkpoint_nodes,
+            &new_nodes,
+            &mut self.all_changed_nodes,
+        );
+        self.current_nodes = new_nodes;
+        self.current_spans = new_spans;
+    }
+
+    /// Update `changed` to reflect a diff between `prev` and `new`.
+    ///
+    /// Mirrors `shrinker.py:1097-1131`: when shape (length, kinds) is preserved
+    /// across the improvement, indices whose value changed are unioned into
+    /// `changed`.  When shape changes the set is cleared — there's no stable
+    /// identity between old and new node positions.
+    fn update_change_tracking(
+        prev: &[ChoiceNode],
+        new: &[ChoiceNode],
+        changed: &mut HashSet<usize>,
+    ) {
+        let shape_preserved = prev.len() == new.len()
+            && prev
+                .iter()
+                .zip(new.iter())
+                .all(|(a, b)| std::mem::discriminant(&a.kind) == std::mem::discriminant(&b.kind));
+        if !shape_preserved {
+            changed.clear();
+            return;
+        }
+        for (i, (a, b)) in prev.iter().zip(new.iter()).enumerate() {
+            if a.value != b.value {
+                changed.insert(i);
+            }
+        }
+    }
+
+    /// Indices that changed between `last_checkpoint_nodes` and `current_nodes`.
+    // Consumed by `lower_common_node_offset` once Step 6 of the shrinker
+    // parity port lands; tests already exercise this API.
+    #[allow(dead_code)]
+    pub fn changed_nodes(&self) -> &HashSet<usize> {
+        &self.all_changed_nodes
+    }
+
+    /// Reset the change-tracking set and rebaseline at `current_nodes`.
+    #[allow(dead_code)]
+    pub fn clear_change_tracking(&mut self) {
+        self.all_changed_nodes.clear();
+        self.last_checkpoint_nodes = self.current_nodes.clone();
     }
 
     /// Try replacing values at specific indices.
@@ -265,3 +339,7 @@ pub(crate) fn find_integer(mut f: impl FnMut(usize) -> bool) -> usize {
     }
     lo
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_spans_tests.rs"]
+mod tests;

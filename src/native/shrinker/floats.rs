@@ -125,7 +125,7 @@ impl<'a> Shrinker<'a> {
                     if !stepped && v.to_bits() != f64::NAN.to_bits() && fc.validate(f64::NAN) {
                         let mut attempt: Vec<ChoiceNode> = self.current_nodes.clone();
                         attempt[i] = attempt[i].with_value(ChoiceValue::Float(f64::NAN));
-                        let (is_interesting, actual_nodes) =
+                        let (is_interesting, actual_nodes, actual_spans) =
                             (self.test_fn)(ShrinkRun::Full(&attempt));
                         // Accept as a lateral move: all NaN bit patterns
                         // share sort_key so `<` alone would reject, but
@@ -135,6 +135,7 @@ impl<'a> Shrinker<'a> {
                             && sort_key(&actual_nodes) <= sort_key(&self.current_nodes)
                         {
                             self.current_nodes = actual_nodes;
+                            self.current_spans = actual_spans;
                         }
                     }
                 }

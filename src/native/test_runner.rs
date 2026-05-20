@@ -20,7 +20,7 @@ use rand::rngs::SmallRng;
 
 use crate::backend::{DataSource, Failure, TestCaseResult, TestRunResult, TestRunner};
 use crate::native::core::{
-    BUFFER_SIZE, ChoiceNode, ChoiceValue, NativeTestCase, Span, Status, sort_key,
+    BUFFER_SIZE, ChoiceNode, ChoiceValue, NativeTestCase, Span, Spans, Status, sort_key,
 };
 use crate::native::data_source::NativeDataSource;
 use crate::native::database::{
@@ -487,6 +487,7 @@ fn run_main(
             }
 
             let target_origin = origin.clone();
+            let initial_spans = Spans::from(verify.spans.clone());
             let shrunk = {
                 let persister_ref = &mut persister;
                 let mut shrinker = Shrinker::with_probe(
@@ -516,6 +517,7 @@ fn run_main(
                         result
                     }),
                     verify.nodes,
+                    initial_spans,
                 );
                 shrinker.shrink();
                 shrinker.current_nodes
@@ -812,20 +814,25 @@ impl<'a> EngineCtx<'a> {
         &mut self,
         candidate_nodes: &[ChoiceNode],
         target_origin: &str,
-    ) -> (bool, Vec<ChoiceNode>) {
+    ) -> (bool, Vec<ChoiceNode>, Spans) {
         let key: Vec<ChoiceValue> = candidate_nodes.iter().map(|n| n.value.clone()).collect();
         if let Some(cached) = self.cache.get(&key) {
             let matches = cached.status == Status::Interesting
                 && cached.origin.as_deref() == Some(target_origin);
-            return (matches, cached.nodes.clone());
+            return (
+                matches,
+                cached.nodes.clone(),
+                Spans::from(cached.spans.clone()),
+            );
         }
 
         let ntc = NativeTestCase::for_choices(&key, Some(candidate_nodes), None);
         let run = self.execute(ntc, false);
         let matches =
             run.status == Status::Interesting && run.origin.as_deref() == Some(target_origin);
+        let spans = Spans::from(run.spans.clone());
         self.cache.insert(key, run.clone());
-        (matches, run.nodes)
+        (matches, run.nodes, spans)
     }
 
     fn run_probe_with_origin(
@@ -834,15 +841,16 @@ impl<'a> EngineCtx<'a> {
         seed: u64,
         max_size: usize,
         target_origin: &str,
-    ) -> (bool, Vec<ChoiceNode>) {
+    ) -> (bool, Vec<ChoiceNode>, Spans) {
         let rng = SmallRng::seed_from_u64(seed);
         let ntc = NativeTestCase::for_probe(prefix, rng, max_size);
         let run = self.execute(ntc, false);
         let matches =
             run.status == Status::Interesting && run.origin.as_deref() == Some(target_origin);
         let key: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
+        let spans = Spans::from(run.spans.clone());
         self.cache.insert(key, run.clone());
-        (matches, run.nodes)
+        (matches, run.nodes, spans)
     }
 
     /// Replay the shrunk counterexample one last time with `is_final = true`,

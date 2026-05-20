@@ -137,6 +137,146 @@ fn spans_children_returns_direct_children() {
     assert_eq!(children1, vec![3]);
 }
 
+// ── Span::contains ────────────────────────────────────────────────────────
+
+#[test]
+fn span_contains_half_open_range() {
+    let span = Span {
+        start: 2,
+        end: 5,
+        label: "x".to_string(),
+        depth: 0,
+        parent: None,
+        discarded: false,
+    };
+    assert!(!span.contains(1));
+    assert!(span.contains(2));
+    assert!(span.contains(4));
+    assert!(!span.contains(5));
+    assert!(!span.contains(6));
+}
+
+// ── Spans::children_of ────────────────────────────────────────────────────
+
+#[test]
+fn spans_children_of_returns_root_and_inner() {
+    let mut spans = Spans::new();
+    spans.push(Span {
+        start: 0,
+        end: 10,
+        label: "root".to_string(),
+        depth: 0,
+        parent: None,
+        discarded: false,
+    });
+    spans.push(Span {
+        start: 0,
+        end: 5,
+        label: "inner_a".to_string(),
+        depth: 1,
+        parent: Some(0),
+        discarded: false,
+    });
+    spans.push(Span {
+        start: 5,
+        end: 10,
+        label: "inner_b".to_string(),
+        depth: 1,
+        parent: Some(0),
+        discarded: false,
+    });
+    // Root-level (parent == None).
+    assert_eq!(spans.children_of(None), vec![0]);
+    // Span 0's direct children.
+    assert_eq!(spans.children_of(Some(0)), vec![1, 2]);
+    // Leaves have no children.
+    assert!(spans.children_of(Some(1)).is_empty());
+}
+
+// ── Spans::with_label ─────────────────────────────────────────────────────
+
+#[test]
+fn spans_with_label_collects_matching_indices() {
+    let mut spans = Spans::new();
+    spans.push(Span {
+        start: 0,
+        end: 3,
+        label: "list".to_string(),
+        depth: 0,
+        parent: None,
+        discarded: false,
+    });
+    spans.push(Span {
+        start: 3,
+        end: 6,
+        label: "list".to_string(),
+        depth: 0,
+        parent: None,
+        discarded: false,
+    });
+    spans.push(Span {
+        start: 6,
+        end: 9,
+        label: "other".to_string(),
+        depth: 0,
+        parent: None,
+        discarded: false,
+    });
+    assert_eq!(spans.with_label("list"), vec![0, 1]);
+    assert_eq!(spans.with_label("other"), vec![2]);
+    assert!(spans.with_label("absent").is_empty());
+}
+
+// ── Spans::trivial ────────────────────────────────────────────────────────
+
+#[test]
+fn spans_trivial_handles_simplest_forced_and_oob() {
+    use crate::native::core::choices::{BooleanChoice, ChoiceKind, ChoiceNode, ChoiceValue};
+    let kind = ChoiceKind::Boolean(BooleanChoice);
+    let simplest = ChoiceNode {
+        kind: kind.clone(),
+        value: ChoiceValue::Boolean(false),
+        was_forced: false,
+    };
+    let interesting = ChoiceNode {
+        kind: kind.clone(),
+        value: ChoiceValue::Boolean(true),
+        was_forced: false,
+    };
+    let forced_interesting = ChoiceNode {
+        kind,
+        value: ChoiceValue::Boolean(true),
+        was_forced: true,
+    };
+
+    let mut spans = Spans::new();
+    spans.push(Span {
+        start: 0,
+        end: 2,
+        label: "outer".to_string(),
+        depth: 0,
+        parent: None,
+        discarded: false,
+    });
+
+    // Both children simplest → trivial.
+    let nodes = vec![simplest.clone(), simplest.clone()];
+    assert!(spans.trivial(0, &nodes));
+
+    // A non-forced non-simplest child → not trivial.
+    let nodes = vec![simplest.clone(), interesting.clone()];
+    assert!(!spans.trivial(0, &nodes));
+
+    // A forced child counts as trivial even if its value isn't simplest.
+    let nodes = vec![simplest, forced_interesting];
+    assert!(spans.trivial(0, &nodes));
+
+    // Out-of-range span index returns false.
+    let other = Spans::new();
+    let empty: Vec<ChoiceNode> = Vec::new();
+    assert!(!other.trivial(7, &empty));
+}
+
 // ── Spans::into_vec ───────────────────────────────────────────────────────
 
 #[test]

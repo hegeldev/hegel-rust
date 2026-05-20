@@ -13,7 +13,7 @@ pub use choices::{
     StringChoice, sort_key,
 };
 pub use float_index::{float_to_index, index_to_float};
-pub use state::{ManyState, NativeTestCase, NativeVariables, Span};
+pub use state::{ManyState, NativeTestCase, NativeVariables, Span, Spans};
 
 /// Maximum number of choices a single test case can make.
 pub const BUFFER_SIZE: usize = 8 * 1024;
