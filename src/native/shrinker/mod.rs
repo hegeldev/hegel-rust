@@ -278,6 +278,11 @@ impl<'a> Shrinker<'a> {
             if i >= attempt.len() {
                 return false; // nocov — index range guarded by callers
             }
+            if attempt[i].was_forced {
+                // Forced choices stay put — mirrors Hypothesis's
+                // `n.was_forced` check throughout the shrinker.
+                return false;
+            }
             if !attempt[i].kind.validate(v) {
                 return false; // nocov — kind/value mismatch after one_of branch switch
             }

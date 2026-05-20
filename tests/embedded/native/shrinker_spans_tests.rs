@@ -188,6 +188,61 @@ fn changed_nodes_clears_on_kind_change_in_place() {
 }
 
 #[test]
+fn is_trivial_recognises_forced_and_simplest() {
+    use crate::native::core::ChoiceNode;
+    let simplest = int_node(0);
+    let nontrivial = int_node(5);
+    let mut forced = int_node(5);
+    forced.was_forced = true;
+
+    assert!(ChoiceNode::is_trivial(&simplest));
+    assert!(!ChoiceNode::is_trivial(&nontrivial));
+    assert!(ChoiceNode::is_trivial(&forced));
+}
+
+#[test]
+fn forced_nodes_survive_every_shrinker_pass() {
+    use crate::native::shrinker::{ShrinkPass, Shrinker};
+
+    let mut forced = int_node(7);
+    forced.was_forced = true;
+    let initial = vec![int_node(9), forced, int_node(11)];
+    let snapshot_forced_idx = 1;
+    let initial_forced_value = match initial[snapshot_forced_idx].value {
+        ChoiceValue::Integer(v) => v,
+        _ => unreachable!(),
+    };
+
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    let mut passes = vec![
+        ShrinkPass::new("zero_choices", Box::new(|sh| sh.zero_choices())),
+        ShrinkPass::new(
+            "binary_search_integer_towards_zero",
+            Box::new(|sh| sh.binary_search_integer_towards_zero()),
+        ),
+        ShrinkPass::new(
+            "minimize_individual_choices",
+            Box::new(|sh| sh.minimize_individual_choices()),
+        ),
+        ShrinkPass::new("shrink_duplicates", Box::new(|sh| sh.shrink_duplicates())),
+    ];
+    shrinker.fixate_shrink_passes(&mut passes);
+    let value = match shrinker.current_nodes[snapshot_forced_idx].value {
+        ChoiceValue::Integer(v) => v,
+        _ => unreachable!(),
+    };
+    assert_eq!(value, initial_forced_value);
+    assert!(shrinker.current_nodes[snapshot_forced_idx].was_forced);
+}
+
+#[test]
 fn consider_cache_short_circuits_repeated_candidate() {
     // Closure increments a counter on each invocation.  Calling
     // `consider` twice with the same candidate should only invoke the
