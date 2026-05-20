@@ -161,9 +161,9 @@ where
 {
     // Hypothesis's `assert a <= i < b` allows the boundary case
     // `a == centre` (sort only the right side, with `split = 0`).
-    if a > centre || centre >= b || b > snapshot.len() {
-        return false;
-    }
+    // Callers guarantee these conditions; a debug_assert documents
+    // the invariant.
+    debug_assert!(a <= centre && centre < b && b <= snapshot.len());
     let split = centre - a;
     let mut sides: Vec<usize> = snapshot[a..centre].to_vec();
     sides.extend_from_slice(&snapshot[centre + 1..b]);

@@ -189,6 +189,89 @@ fn minimize_individual_choices_truncates_misaligned_string() {
 }
 
 #[test]
+fn minimize_individual_choices_size_dep_single_node_delete_succeeds() {
+    // Bin_search rejects every direct integer replacement.  Lowering
+    // the integer by one yields a shorter realised sequence — and
+    // splicing out a single trailing node turns the lowered
+    // candidate into an interesting (and shortlex-smaller) result.
+    // Exercises the size-dependency single-node delete break at
+    // deletion.rs:~280.
+    let initial = vec![int_node(2), int_node(7), int_node(7)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                let int_v = match nodes.first().map(|n| &n.value) {
+                    Some(ChoiceValue::Integer(v)) => *v,
+                    _ => return (false, nodes.to_vec(), Spans::new()),
+                };
+                // Auto-truncate: actual length = 1 + int_v.
+                let needed_len = 1usize.saturating_add(int_v as usize);
+                let actual_len = needed_len.min(nodes.len());
+                let actual: Vec<ChoiceNode> = nodes[..actual_len].to_vec();
+                // Predicate: original state (int=2, len=3) OR the
+                // post-delete shape (int=1, len=1).  Lowering the int
+                // alone to 1 yields (int=1, len=2) which does not
+                // match.
+                let ok = (int_v == 2 && actual.len() == 3) || (int_v == 1 && actual.len() == 1);
+                (ok, actual, Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.minimize_individual_choices();
+    assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
+    assert_eq!(shrinker.current_nodes.len(), 1);
+}
+
+#[test]
+fn minimize_individual_choices_size_dep_span_delete_succeeds() {
+    // As above but the closure also reports a span covering the
+    // trailing nodes; the span-delete branch (deletion.rs:~269)
+    // succeeds before the single-node fallback is tried.
+    use crate::native::core::Span;
+    let initial = vec![int_node(2), int_node(7), int_node(7), int_node(7)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                let int_v = match nodes.first().map(|n| &n.value) {
+                    Some(ChoiceValue::Integer(v)) => *v,
+                    _ => return (false, nodes.to_vec(), Spans::new()),
+                };
+                let needed_len = 1usize.saturating_add(int_v as usize);
+                let actual_len = needed_len.min(nodes.len());
+                let actual: Vec<ChoiceNode> = nodes[..actual_len].to_vec();
+                let mut spans = Spans::new();
+                if actual.len() >= 2 {
+                    // A "list contents" span covering the trailing
+                    // elements.  Splicing it out yields just the
+                    // integer node.
+                    spans.push(Span {
+                        start: 1,
+                        end: actual.len(),
+                        label: "list".to_string(),
+                        depth: 0,
+                        parent: None,
+                        discarded: false,
+                    });
+                }
+                // Predicate: original (int=2, len=3) OR the
+                // post-span-delete shape (int=1, len=1).
+                let ok = (int_v == 2 && actual.len() == 3) || (int_v == 1 && actual.len() == 1);
+                (ok, actual, spans)
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.minimize_individual_choices();
+    assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
+    assert_eq!(shrinker.current_nodes.len(), 1);
+}
+
+#[test]
 fn minimize_individual_choices_truncates_misaligned_bytes() {
     // Step 16, bytes variant.  Mirrors the string test but with a
     // `Bytes` node downstream of the integer.
