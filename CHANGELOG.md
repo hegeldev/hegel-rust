@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.7 - 2026-05-20
+
+The native backend (`--features native`) now supports `gs::domains()`, `gs::emails()`, and `gs::urls()`.
+
 ## 0.14.6 - 2026-05-19
 
 This release makes some minor internal changes to the native feature. It should have no user-visible impact.
