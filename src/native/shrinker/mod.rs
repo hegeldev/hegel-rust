@@ -20,9 +20,14 @@ mod index_passes;
 mod integers;
 mod mutation;
 mod ordering;
+mod scheduling;
 mod sequence;
 mod spans;
 mod strings;
+
+// Step 18 wires ShrinkPass into the main loop; tests already use it.
+#[allow(unused_imports)]
+pub use scheduling::ShrinkPass;
 
 use std::collections::{HashMap, HashSet};
 
