@@ -273,7 +273,6 @@ fn test_uuids_have_canonical_form() {
     });
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_domains_format() {
     assert_all_examples(gs::domains(), |s: &String| {
@@ -303,7 +302,6 @@ fn test_can_generate_specified_version() {
     }
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_emails_format() {
     assert_all_examples(gs::emails(), |s: &String| {
@@ -319,7 +317,6 @@ fn test_emails_format() {
     });
 }
 
-#[not_supported_on_native]
 #[test]
 fn test_urls_format() {
     assert_all_examples(gs::urls(), |s: &String| {
@@ -854,10 +851,8 @@ mod nocover_characters {
 
 mod nocover_emails {
     use crate::common::utils::assert_all_examples;
-    use crate::not_supported_on_native;
     use hegel::generators as gs;
 
-    #[not_supported_on_native]
     #[test]
     fn test_is_valid_email() {
         assert_all_examples(gs::emails(), |address: &String| {
@@ -1029,6 +1024,18 @@ mod regex_tests {
     #[test]
     fn test_impossible_negative_lookahead() {
         assert_no_examples(gs::from_regex("(?!foo)foo"), |_: &String| true);
+    }
+
+    #[test]
+    fn test_impossible_negative_lookbehind() {
+        // Mirror of test_impossible_negative_lookahead for the lookbehind
+        // path. The generator emits "abc" and then the lookbehind body matches
+        // those exact chars, so every draw hits the in-line invalidation
+        // branch in `interpret_regex` (the lookbehind arm of `OpCode::AssertNot`).
+        assert_no_examples(
+            gs::from_regex("abc(?<!abc)").fullmatch(true),
+            |_: &String| true,
+        );
     }
 
     #[test]
