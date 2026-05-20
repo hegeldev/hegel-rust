@@ -1038,3 +1038,30 @@ fn biased_integer_sample_narrow_range_uses_uniform_fallback() {
     }
     assert!(seen_zero && seen_one);
 }
+
+#[test]
+fn integer_sample_from_distribution_uniform_fallback_for_indistinguishable_bounds() {
+    // At the extreme tail of i128, `min as f64` and `max as f64` lose
+    // precision and round to the same value. The CDF window is then 0,
+    // which is below the 1e-13 threshold and forces the uniform fallback
+    // (the only path that produces a value in [min, max] when the
+    // distribution-based path can't distinguish the endpoints).
+    let mut rng = SmallRng::seed_from_u64(13);
+    let min = i128::MAX - 1000;
+    let max = i128::MAX;
+    let mut all_endpoints = true;
+    for _ in 0..50 {
+        let v = integer_sample_from_distribution(min, max, &mut rng);
+        assert!(v >= min && v <= max, "out of range: {v}");
+        if v != min && v != max {
+            all_endpoints = false;
+        }
+    }
+    // Uniform should produce interior values, not collapse to endpoints —
+    // distinguishes the fallback path from the inverse-CDF path (which
+    // would saturate to one endpoint when the CDF window is degenerate).
+    assert!(
+        !all_endpoints,
+        "uniform fallback should produce values across the range"
+    );
+}

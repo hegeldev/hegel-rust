@@ -110,16 +110,16 @@ pub fn stdtrit(df: i32, p: f64) -> f64 {
         }
         let log_f = log_norm - 0.5 * (df as f64 + 1.0) * (t * t / df as f64).ln_1p();
         let f = log_f.exp();
-        if f == 0.0 {
-            t = 0.5 * (lo + hi);
+        // `f == 0.0` would yield NaN/±inf for `t_newton`, but the
+        // bracket check rejects those (NaN/inf comparisons are false)
+        // and falls through to the bisection step — so an explicit
+        // underflow guard would be redundant.
+        let t_newton = t - (f_val - q) / f;
+        t = if lo <= t_newton && t_newton <= hi {
+            t_newton
         } else {
-            let t_newton = t - (f_val - q) / f;
-            t = if lo <= t_newton && t_newton <= hi {
-                t_newton
-            } else {
-                0.5 * (lo + hi)
-            };
-        }
+            0.5 * (lo + hi)
+        };
         if hi - lo < eps * (1.0 + t.abs()) {
             break;
         }

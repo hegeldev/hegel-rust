@@ -170,15 +170,13 @@ fn integer_sample_from_distribution(min_value: i128, max_value: i128, rng: &mut 
     if hi - lo < 1e-13 {
         return rng.random_range(min_value..=max_value);
     }
-    // `inverse_cdf` requires strictly 0 < p < 1; resample if we drew an
-    // endpoint. `rng.random::<f64>()` returns `[0, 1)`, so `p == 0.0` is
-    // representable but `p == 1.0` is not unless `lo > 0` and rounding
-    // pushes the product up — the second check is cheap insurance against
-    // that.
-    let mut p = lo + rng.random::<f64>() * (hi - lo);
-    while p == 0.0 || p == 1.0 {
-        p = lo + rng.random::<f64>() * (hi - lo);
-    }
+    // `inverse_cdf` requires strictly `0 < p < 1`. `rng.random::<f64>()`
+    // returns `[0, 1)`, so `p < hi ≤ 1` already; the only way to land on
+    // an endpoint is `p == 0.0`, which needs `lo == 0.0` and a zero-bit
+    // draw. `.max(f64::MIN_POSITIVE)` nudges that case to the smallest
+    // positive float — equivalent to the inverse-CDF at the very far
+    // tail, which the final `clamp` then brings back into range.
+    let p = (lo + rng.random::<f64>() * (hi - lo)).max(f64::MIN_POSITIVE);
     // `f64 as i128` saturates out-of-range values to ±i128::MAX, then
     // `clamp` brings them into the requested range.
     (dist.inverse_cdf(p).round() as i128).clamp(min_value, max_value)

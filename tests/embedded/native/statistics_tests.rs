@@ -139,6 +139,48 @@ fn uniform_pdf_is_reciprocal_of_total_width() {
 }
 
 #[test]
+fn uniform_cdf_clamps_outside_support() {
+    // Below -half_width the CDF is identically 0; above +half_width it is 1.
+    // These branches matter when the piecewise CDF queries the inner uniform
+    // far outside [-256, 256] (e.g. for `cdf(256) - cdf(0)`, the outer branch
+    // does the lookup, but the inner CDF still gets called for the splice's
+    // density-continuity calculation in `new()`).
+    let d = UniformDistribution::new(10.0);
+    assert_eq!(d.cdf(-100.0), 0.0);
+    assert_eq!(d.cdf(100.0), 1.0);
+}
+
+#[test]
+fn uniform_pdf_is_zero_outside_support() {
+    let d = UniformDistribution::new(10.0);
+    assert_eq!(d.pdf(-100.0), 0.0);
+    assert_eq!(d.pdf(100.0), 0.0);
+}
+
+#[test]
+fn piecewise_pdf_splits_at_switchover_and_matches_continuity() {
+    // The splice is built so `beta * inner.pdf(c) = alpha * outer.pdf(c)`
+    // at the switchover c. Inside the core we use the rescaled uniform
+    // density; outside we use the rescaled log-Student-t. Just inside (255)
+    // and just outside (257) the densities should be close (continuity)
+    // and at zero we hit the inner branch.
+    let inner = UniformDistribution::new(256.0);
+    let outer = LogStudentTDistribution::new(13.0, 2);
+    let d = PiecewiseDistribution::new(inner, outer, 256.0);
+    let p_zero = d.pdf(0.0);
+    let p_inside = d.pdf(255.0);
+    let p_outside = d.pdf(257.0);
+    // Inside-uniform branch — constant across the core, so equal at 0 and 255.
+    assert_eq!(p_zero, p_inside);
+    // Continuity at the switchover: inside and outside densities should be
+    // within a few percent at neighbouring points.
+    let rel = (p_inside - p_outside).abs() / p_inside;
+    assert!(rel < 0.05, "p_inside={p_inside}, p_outside={p_outside}");
+    // Symmetry across zero.
+    assert_eq!(d.pdf(-257.0), p_outside);
+}
+
+#[test]
 fn uniform_cdf_inverse_cdf_round_trip() {
     let d = UniformDistribution::new(100.0);
     for u in [0.1, 0.3, 0.5, 0.7, 0.9] {
