@@ -2,8 +2,6 @@
 
 mod common;
 
-#[allow(unused_imports)]
-use common::not_supported_on_native;
 use common::utils::{assert_all_examples, check_can_generate_examples, find_any};
 use hegel::DefaultGenerator as DeriveGenerator;
 use hegel::generators::{self as gs, DefaultGenerator, Generator};

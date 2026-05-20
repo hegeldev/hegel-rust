@@ -1,6 +1,5 @@
 mod common;
 
-use common::not_supported_on_native;
 use common::utils::{assert_all_examples, assert_no_examples, find_any};
 use hegel::generators as gs;
 
@@ -380,8 +379,6 @@ mod pbtkit_bytes {
 
 mod pbtkit_text {
     use crate::common::utils::{assert_all_examples, expect_panic, minimal};
-    #[allow(unused_imports)]
-    use crate::not_supported_on_native;
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
 
@@ -537,8 +534,6 @@ mod pbtkit_text {
 
 mod simple_strings {
     use crate::common::utils::{assert_all_examples, minimal};
-    #[allow(unused_imports)]
-    use crate::not_supported_on_native;
     use hegel::generators::{self as gs};
 
     #[test]
@@ -665,8 +660,6 @@ mod simple_strings {
 
 mod simple_characters {
     use crate::common::utils::{assert_no_examples, expect_panic, find_any, minimal};
-    #[allow(unused_imports)]
-    use crate::not_supported_on_native;
     use hegel::generators::{self as gs, Generator};
     use hegel::{Hegel, Settings};
 
@@ -813,8 +806,6 @@ mod simple_characters {
 
 mod nocover_characters {
     use crate::common::utils::assert_all_examples;
-    #[allow(unused_imports)]
-    use crate::not_supported_on_native;
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
 

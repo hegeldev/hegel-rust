@@ -2,7 +2,6 @@
 
 mod common;
 
-use common::not_supported_on_native;
 use common::project::TempRustProject;
 use common::utils::{assert_all_examples, check_can_generate_examples};
 use hegel::generators as gs;

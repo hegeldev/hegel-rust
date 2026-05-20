@@ -1,7 +1,5 @@
 mod common;
 
-#[allow(unused_imports)]
-use common::not_supported_on_native;
 use common::project::TempRustProject;
 use common::utils::{assert_matches_regex, expect_panic};
 use hegel::TestCase;

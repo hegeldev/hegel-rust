@@ -2,7 +2,6 @@
 
 mod common;
 
-use common::not_supported_on_native;
 use std::sync::OnceLock;
 
 use common::project::TempRustProject;
@@ -500,8 +499,6 @@ mod snapshots_combinators {
     //! the shrunk values via `minimal()` instead of capturing stderr.
 
     use super::common::utils::minimal;
-    #[allow(unused_imports)]
-    use super::not_supported_on_native;
     use hegel::generators as gs;
 
     #[test]
@@ -531,8 +528,6 @@ mod snapshots_shrinking {
     //! shrunk value directly via `minimal()` instead of capturing stderr.
 
     use super::common::utils::minimal;
-    #[allow(unused_imports)]
-    use super::not_supported_on_native;
     use hegel::generators as gs;
 
     #[test]

@@ -7,7 +7,6 @@
 
 mod common;
 
-use common::not_supported_on_native;
 use common::utils::{assert_all_examples, find_any};
 use hegel::generators as gs;
 
@@ -122,7 +121,6 @@ fn test_usize() {
 }
 
 mod numerics {
-    use super::not_supported_on_native;
     use hegel::generators as gs;
     use hegel::{HealthCheck, Hegel, Settings};
 
@@ -190,7 +188,6 @@ mod numerics {
 
 mod nocover_simple_numbers {
     use super::common::utils::{Minimal, minimal};
-    use super::not_supported_on_native;
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
 

@@ -8,9 +8,8 @@
 
 mod common;
 
-use common::not_supported_on_native;
-use hegel::Hegel;
 use hegel::generators as gs;
+use hegel::{Hegel, Settings};
 
 #[test]
 fn cwd_is_not_crate_root() {
@@ -32,13 +31,24 @@ fn cwd_is_a_hegel_rust_test_tempdir() {
     );
 }
 
-#[not_supported_on_native]
 #[test]
 fn running_hegel_creates_dot_hegel_in_tempdir_not_crate_root() {
-    Hegel::new(|tc| {
-        let _: bool = tc.draw(gs::booleans());
-    })
-    .run();
+    // Server backend creates `.hegel/server.log` when its subprocess spawns;
+    // native backend only writes under `.hegel/examples/...` when it has an
+    // interesting example to persist, which requires a failing body and a
+    // database key. Force a save so both backends populate `.hegel/`. Set
+    // the database path explicitly because `Settings::new()` defaults it to
+    // `Disabled` under CI, which would skip the native save block.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Hegel::new(|tc| {
+            let _: bool = tc.draw(gs::booleans());
+            panic!("intentional failure to populate the database");
+        })
+        .settings(Settings::new().database(Some(".hegel/examples".to_string())))
+        .__database_key("runtime_dir_isolation".to_string())
+        .run();
+    }));
+    assert!(result.is_err(), "expected the test body to panic");
 
     let cwd = std::env::current_dir().unwrap();
     assert!(

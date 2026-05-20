@@ -1,7 +1,5 @@
 mod common;
 
-#[allow(unused_imports)]
-use common::not_supported_on_native;
 use common::utils::{assert_all_examples, find_any};
 use hegel::TestCase;
 use hegel::generators::{self as gs, Generator};

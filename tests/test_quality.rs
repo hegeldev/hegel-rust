@@ -4,11 +4,8 @@
 
 mod common;
 
-use common::not_supported_on_native;
 mod shrink_quality {
     use super::common::utils::{Minimal, minimal};
-    #[allow(unused_imports)]
-    use super::not_supported_on_native;
     use ciborium::Value;
     use hegel::generators::{self as gs, Generator};
     use std::collections::{HashMap, HashSet};
@@ -934,8 +931,6 @@ mod shrink_quality {
 }
 
 mod collective_minimization {
-    #[allow(unused_imports)]
-    use super::not_supported_on_native;
     use std::collections::HashSet;
     use std::fmt::Debug;
 

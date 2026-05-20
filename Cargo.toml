@@ -63,14 +63,6 @@ ctor = "0.2"
 # with other macros for #[hegel::test] to work with #[tokio::test]. See
 # https://github.com/tokio-rs/tokio/pull/6497
 tokio = { version = "1.39", features = ["macros", "rt"] }
-# `hegeltest-macros` is a regular dep of hegel itself, but it's also listed
-# here with the `internal-test-only` feature so the integration-test suite
-# can pull in macros that are intentionally hidden from external users
-# (the `#[not_supported_on_native]` xfail attribute). Without the dev-dep
-# enabling the feature, the macro isn't built into `hegeltest-macros` at
-# all, so it can't leak into a downstream user's surface via the regular
-# `hegel → hegeltest-macros` dependency edge.
-hegeltest-macros = { version = "=0.14.7", path = "hegel-macros", features = ["internal-test-only"] }
 
 [features]
 default = []

@@ -11,8 +11,6 @@
 
 mod common;
 
-#[allow(unused_imports)]
-use common::not_supported_on_native;
 use hegel::TestCase;
 use hegel::generators as gs;
 use std::sync::{Arc, Mutex};
