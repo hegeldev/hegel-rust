@@ -159,7 +159,9 @@ where
     K: FnMut(usize) -> T,
     F: FnMut(&[usize]) -> bool,
 {
-    if a >= centre || centre >= b || b > snapshot.len() {
+    // Hypothesis's `assert a <= i < b` allows the boundary case
+    // `a == centre` (sort only the right side, with `split = 0`).
+    if a > centre || centre >= b || b > snapshot.len() {
         return false;
     }
     let split = centre - a;

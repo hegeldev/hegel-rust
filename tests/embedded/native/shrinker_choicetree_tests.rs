@@ -98,27 +98,30 @@ fn choicetree_rejecting_every_alternative_raises_dead_branch() {
 
 #[test]
 fn choicetree_break_when_live_count_hits_zero_mid_loop() {
-    // Set up a tree where the first step picks one alternative and
-    // marks another dead, leaving two live children.  The second step
-    // then rejects both live children — by the time the for loop hits
-    // the already-exhausted indices the live_count is already 0, so
-    // the early-break at line ~140 fires.
+    // Set up a state where the live children appear *first* in the
+    // iteration order and the exhausted children appear *after* them.
+    // After the live ones are marked dead the live_child_count is
+    // zero, and the next iteration's start-of-loop check trips the
+    // early break at line ~140.
     let mut tree = ChoiceTree::default();
     let values = vec![10, 20, 30, 40];
 
-    // Step 1: condition v != 30 → 40 marked dead (idx 3), 30 chosen (idx 2).
+    // Step 1: deterministic picks at indices 2 and 3.  After this
+    // step both indices 2 and 3 are exhausted in tree.root.
     let _ = tree.step(prefix_selection_order(vec![]), |chooser| {
-        let _ = chooser.choose(&values, |&v| v != 40 && v == 30)?;
+        // Pick idx 2 (val 30) — prefix_selection_order(vec![]) yields
+        // [3, 2, 1, 0]; condition rejects 40 (idx 3), accepts 30.
+        let _ = chooser.choose(&values, |&v| v == 30)?;
         Ok(())
     });
 
-    // Step 2: condition false for every remaining alternative.  When
-    // the for loop hits idx 3 (exhausted) and idx 2 (exhausted), it
-    // skips; idx 1 and idx 0 both get marked dead.  After the last
-    // mark, live_child_count is 0, and the iteration would continue
-    // for any further indices — but there are none, so the loop ends
-    // and falls into the post-loop Err(DeadBranch).
-    let second = tree.step(prefix_selection_order(vec![]), |chooser| {
+    // Step 2: condition rejects every alternative.  Use a custom
+    // selection order that visits the live children first (0, 1)
+    // *then* the already-exhausted (2, 3).  Once we've marked both
+    // live children dead, live_child_count is 0; iteration over
+    // i=2 then trips the start-of-loop break.
+    let custom_order: super::SelectionOrder = Box::new(|_, _| vec![0, 1, 2, 3]);
+    let second = tree.step(custom_order, |chooser| {
         let _ = chooser.choose(&values, |_| false)?;
         Ok(())
     });

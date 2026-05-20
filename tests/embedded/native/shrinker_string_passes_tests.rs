@@ -123,6 +123,42 @@ fn normalize_unicode_chars_skips_when_no_simpler_chars() {
 }
 
 #[test]
+fn normalize_unicode_chars_handles_string_truncated_by_closure() {
+    // Closure truncates the realised string to length 1 — after the
+    // first position is normalised, current[i].value becomes shorter
+    // than the originally-captured `value`.  The outer loop's
+    // `pos >= cur.len()` continue at strings.rs:~414 is exercised
+    // when the loop reaches the now-out-of-bounds position.
+    let initial = vec![string_node_with(b'A' as u32, 0x00FF, vec![0x00C0, 0x00C0])];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                // Closure: accept the candidate but return an actual
+                // sequence with the string truncated to length 1.
+                let mut actual: Vec<ChoiceNode> = nodes.to_vec();
+                if let Some(node) = actual.first_mut() {
+                    if let ChoiceValue::String(s) = &mut node.value {
+                        s.truncate(1);
+                    }
+                }
+                (true, actual, Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.normalize_unicode_chars();
+    // No panic on the second iteration; current_nodes converged on a
+    // length-1 string.
+    if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
+        assert_eq!(s.len(), 1);
+    } else {
+        unreachable!();
+    }
+}
+
+#[test]
 fn normalize_unicode_chars_does_nothing_on_non_string() {
     use crate::native::core::choices::BooleanChoice;
     let initial = vec![ChoiceNode {
