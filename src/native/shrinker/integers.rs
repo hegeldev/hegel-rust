@@ -448,12 +448,54 @@ impl<'a> Shrinker<'a> {
 
     /// Try shrinking duplicate integer values simultaneously.
     ///
-    /// Port of Hypothesis's `shrink_duplicates`. For each group of integer nodes
-    /// with the same value, applies binary search to all simultaneously. This
-    /// handles cases where two integers must remain equal (e.g. a vec element
-    /// and a separate integer that must be in the vec).
+    /// Port of Hypothesis's `minimize_duplicated_choices` (`shrinker.py:1379-1406`).
+    /// For each group of nodes sharing `(ChoiceKind discriminant,
+    /// ChoiceValue)`, tries simultaneous shrinking — handling cases
+    /// where two duplicates must remain equal (e.g. a list element and a
+    /// separate value that must appear in the list).
+    ///
+    /// All five choice kinds participate: every group tries the
+    /// kind-simplest replacement, and integer groups additionally drive
+    /// a binary search across all members at once.
     pub(super) fn shrink_duplicates(&mut self) {
-        // Find groups of integer node indices that share the same value.
+        // Group nodes by (kind discriminant, value).  The discriminant
+        // gate keeps an Integer and a Bytes that happen to coexist with
+        // the same numeric payload apart.
+        let mut groups: HashMap<(std::mem::Discriminant<ChoiceKind>, ChoiceValue), Vec<usize>> =
+            HashMap::new();
+        for (i, node) in self.current_nodes.iter().enumerate() {
+            let key = (std::mem::discriminant(&node.kind), node.value.clone());
+            groups.entry(key).or_default().push(i);
+        }
+        for (_key, indices) in groups.iter() {
+            if indices.len() < 2 {
+                continue;
+            }
+            // Try the simplest-replacement step for every group.  For
+            // boolean / float / bytes / string this is the main win; the
+            // integer branch below adds a deeper binary search.
+            let first = &self.current_nodes[indices[0]];
+            let simplest = first.kind.simplest();
+            if simplest != first.value {
+                let replacements: HashMap<usize, ChoiceValue> = indices
+                    .iter()
+                    .filter(|&&i| {
+                        i < self.current_nodes.len()
+                            && self.current_nodes[i].value == first.value
+                            && std::mem::discriminant(&self.current_nodes[i].kind)
+                                == std::mem::discriminant(&first.kind)
+                    })
+                    .map(|&i| (i, simplest.clone()))
+                    .collect();
+                if replacements.len() >= 2 {
+                    self.replace(&replacements);
+                }
+            }
+        }
+        // The remainder of this function is the legacy integer-only
+        // binary-search loop, kept verbatim so the existing tests still
+        // pass; future steps will move this work into the unified
+        // `minimize_individual_choices` driver (Step 8).
         let mut groups: HashMap<i128, Vec<usize>> = HashMap::new();
         for (i, node) in self.current_nodes.iter().enumerate() {
             if let (ChoiceKind::Integer(_), ChoiceValue::Integer(v)) = (&node.kind, &node.value) {
@@ -659,3 +701,7 @@ impl<'a> Shrinker<'a> {
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_lower_common_node_offset_tests.rs"]
 mod lower_common_node_offset_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_minimize_duplicated_choices_tests.rs"]
+mod minimize_duplicated_choices_tests;
