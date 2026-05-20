@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.8 - 2026-05-20
+
+Internal cleanup. Removes an unused test-only attribute macro and tidies a runtime-directory isolation test so it exercises both backends.
+
 ## 0.14.7 - 2026-05-20
 
 The native backend (`--features native`) now supports `gs::domains()`, `gs::emails()`, and `gs::urls()`.
