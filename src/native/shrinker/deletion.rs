@@ -1,11 +1,11 @@
 // Deletion-based shrink passes: delete_chunks, bind_deletion, try_replace_with_deletion,
-// minimize_individual_choices.
+// minimize_individual_choices, node_program.
 
 use std::collections::HashMap;
 
-use crate::native::core::{ChoiceKind, ChoiceValue, sort_key};
+use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, sort_key};
 
-use super::{Shrinker, bin_search_down};
+use super::{Shrinker, bin_search_down, find_integer};
 
 impl<'a> Shrinker<'a> {
     /// Try deleting chunks of choices from the sequence.
@@ -246,8 +246,98 @@ impl<'a> Shrinker<'a> {
             i += 1;
         }
     }
+
+    /// Adaptively delete `n` consecutive nodes at every position, with
+    /// `find_integer` powering the repeat-count probe.
+    ///
+    /// Port of `shrinker.py:1340-1376` (`node_program("X" * n)` /
+    /// `_node_program`) plus `run_node_program` (`shrinker.py:1857-1886`).
+    /// Walks each starting index `i`, tries deleting `[i, i+n)`; if that
+    /// lands, walks left to find the start of a contiguous deletable
+    /// region and then `find_integer`s the largest repeat count that
+    /// still keeps the candidate interesting.
+    ///
+    /// Each find_integer probe runs against a fixed snapshot taken when
+    /// the probe started — matching Hypothesis's `original` parameter
+    /// in `run_node_program` — so the repeat semantics line up with
+    /// upstream regardless of intervening shrink-target updates.
+    ///
+    /// This is `delete_chunks` rewritten as five named passes — one for
+    /// each `n in 1..=5` — and gives O(log k) test-function calls when
+    /// a long deletable region exists, vs. the linear O(k) of the legacy
+    /// loop.  `delete_chunks` is kept alongside as the native fallback.
+    // Wired into `shrink()` by Step 12 / Step 18.
+    #[allow(dead_code)]
+    pub(crate) fn node_program(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
+        let mut i = 0;
+        while i + n <= self.current_nodes.len() {
+            // First try a single application at i against the current
+            // snapshot.
+            let snapshot = self.current_nodes.clone();
+            if !self.run_node_program(&snapshot, i, n, 1) {
+                i += 1;
+                continue;
+            }
+            // Walk left as far as the program still applies, against a
+            // fresh snapshot (the success may have shrunk the
+            // sequence).
+            let snapshot = self.current_nodes.clone();
+            let starting = i.min(snapshot.len());
+            let left_offset = find_integer(|k| {
+                if k * n > starting {
+                    return false;
+                }
+                let pos = starting - k * n;
+                self.run_node_program(&snapshot, pos, n, 1)
+            });
+            let start = starting.saturating_sub(left_offset * n);
+
+            // Adaptively grow the repeat count from `start`, again
+            // against a fresh snapshot.
+            let snapshot = self.current_nodes.clone();
+            find_integer(|k| self.run_node_program(&snapshot, start, n, k));
+
+            // Advance past the region we just consumed.  Moving forward
+            // by `n` guarantees progress on the next outer iteration.
+            i = start.saturating_add(n);
+        }
+    }
+
+    /// Apply the "delete n consecutive nodes" program `repeats` times at
+    /// position `i` of `original`, then ask `consider` whether the
+    /// resulting candidate is still interesting *and* an improvement.
+    ///
+    /// Mirrors `shrinker.py:1857-1886`: the deletion always operates on
+    /// the supplied `original` snapshot, so repeat counts are
+    /// well-defined regardless of intermediate shrink-target updates.
+    fn run_node_program(
+        &mut self,
+        original: &[ChoiceNode],
+        i: usize,
+        program_len: usize,
+        repeats: usize,
+    ) -> bool {
+        if repeats == 0 {
+            return false;
+        }
+        let total_delete = program_len.saturating_mul(repeats);
+        if i + total_delete > original.len() {
+            return false;
+        }
+        let mut attempt = original[..i].to_vec();
+        attempt.extend_from_slice(&original[i + total_delete..]);
+        let initial_key = sort_key(&self.current_nodes);
+        self.consider(&attempt) && sort_key(&self.current_nodes) < initial_key
+    }
 }
 
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_minimize_individual_choices_tests.rs"]
 mod minimize_individual_choices_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_node_program_tests.rs"]
+mod node_program_tests;
