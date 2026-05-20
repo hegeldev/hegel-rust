@@ -88,6 +88,13 @@ pub struct Shrinker<'a> {
     /// checkpoint.  `lower_common_node_offset` reads this to find correlated
     /// integer nodes that keep shrinking together (`shrinker.py:1097-1131`).
     all_changed_nodes: HashSet<usize>,
+    /// Bounded cache of recent `consider`-driven test results, keyed by
+    /// the candidate's sort_key.  Mirrors Hypothesis's
+    /// `cached_test_function` (`shrinker.py:390-412`).  When two passes
+    /// propose the same candidate (or one with the same sort_key shape),
+    /// the cached `(is_interesting, actual_nodes, actual_spans)` is
+    /// returned without re-running the closure.
+    consider_cache: HashMap<Vec<NodeSortKey>, (bool, Vec<ChoiceNode>, Spans)>,
 }
 
 impl<'a> Shrinker<'a> {
@@ -108,6 +115,7 @@ impl<'a> Shrinker<'a> {
             downgraded: Vec::new(),
             max_improvements: None,
             all_changed_nodes: HashSet::new(),
+            consider_cache: HashMap::new(),
         }
     }
 
@@ -120,7 +128,8 @@ impl<'a> Shrinker<'a> {
     /// punning replaces values that no longer fit the kind at that
     /// position after a one_of branch switch.
     pub fn consider(&mut self, nodes: &[ChoiceNode]) -> bool {
-        if sort_key(nodes) == sort_key(&self.current_nodes) {
+        let candidate_key = sort_key(nodes);
+        if candidate_key == sort_key(&self.current_nodes) {
             return true;
         }
         if let Some(max) = self.max_improvements {
@@ -131,7 +140,36 @@ impl<'a> Shrinker<'a> {
             }
             // nocov end
         }
+        // Check the bounded consider_cache.  Mirrors
+        // `cached_test_function` (`shrinker.py:390-412`): if we've
+        // already asked the closure about this exact candidate
+        // (identified by its sort_key vector — fine because the cache
+        // key is the same shape the closure cares about), return the
+        // recorded outcome without re-running.
+        let cache_key: Vec<NodeSortKey> = candidate_key.1.clone();
+        if let Some((cached_interesting, cached_actual, cached_spans)) =
+            self.consider_cache.get(&cache_key).cloned()
+        {
+            if cached_interesting && sort_key(&cached_actual) < sort_key(&self.current_nodes) {
+                self.accept_improvement(cached_actual, cached_spans);
+            }
+            return cached_interesting;
+        }
+
         let (is_interesting, actual_nodes, actual_spans) = (self.test_fn)(ShrinkRun::Full(nodes));
+        // Bounded cache: drop entries arbitrarily when we exceed 4096
+        // entries.  Hypothesis's cache is itself LRU-bounded; we use a
+        // simple insertion-order drop because we don't yet need
+        // recency information.
+        if self.consider_cache.len() >= 4096 {
+            if let Some(some_key) = self.consider_cache.keys().next().cloned() {
+                self.consider_cache.remove(&some_key);
+            }
+        }
+        self.consider_cache.insert(
+            cache_key,
+            (is_interesting, actual_nodes.clone(), actual_spans.clone()),
+        );
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
             self.accept_improvement(actual_nodes, actual_spans);
         }

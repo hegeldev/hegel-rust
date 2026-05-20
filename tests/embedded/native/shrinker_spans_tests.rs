@@ -188,6 +188,36 @@ fn changed_nodes_clears_on_kind_change_in_place() {
 }
 
 #[test]
+fn consider_cache_short_circuits_repeated_candidate() {
+    // Closure increments a counter on each invocation.  Calling
+    // `consider` twice with the same candidate should only invoke the
+    // closure once.
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let count = Rc::new(Cell::new(0u32));
+    let inner = Rc::clone(&count);
+    let initial = vec![int_node(5)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run| match run {
+            ShrinkRun::Full(nodes) => {
+                inner.set(inner.get() + 1);
+                // Return false so the candidate stays in cache without
+                // becoming the new shrink target.
+                (false, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    let candidate = vec![int_node(7)];
+    shrinker.consider(&candidate);
+    shrinker.consider(&candidate);
+    shrinker.consider(&candidate);
+    assert_eq!(count.get(), 1);
+}
+
+#[test]
 fn clear_change_tracking_rebaselines_and_empties_set() {
     let initial = vec![int_node(10), int_node(10)];
     let mut shrinker = Shrinker::with_probe(

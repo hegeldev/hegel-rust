@@ -1023,7 +1023,7 @@ impl ChoiceNode {
 /// given node position; `Scalar < Sequence` by derived enum order is a
 /// total-ordering fall-through for the sort key of an entire
 /// sequence-of-nodes that contains both shapes.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NodeSortKey {
     Scalar(u128, bool),
     Sequence(usize, Vec<u32>),
