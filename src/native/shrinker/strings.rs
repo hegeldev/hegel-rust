@@ -314,6 +314,116 @@ impl<'a> Shrinker<'a> {
             (j, ChoiceValue::String(new_t)),
         ]))
     }
+
+    /// For each pair of string nodes within distance 4, lower every
+    /// occurrence of a shared codepoint in *both* strings simultaneously.
+    ///
+    /// Port of `shrinker.py:1519-1581` (`lower_duplicated_characters`).
+    /// Handles the case where two strings must contain the same
+    /// character but the actual character value is free — we want to
+    /// drive both occurrences toward the alphabet's smallest member at
+    /// once.
+    // Wired into `shrink()` by Step 12 / Step 18.
+    #[allow(dead_code)]
+    pub(crate) fn lower_duplicated_characters(&mut self) {
+        let len = self.current_nodes.len();
+        for i in 0..len {
+            for j in (i + 1)..(i + 1 + 4).min(len) {
+                // Both must be String kinds.
+                let (kind_i, val_i) =
+                    match (&self.current_nodes[i].kind, &self.current_nodes[i].value) {
+                        (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
+                        _ => continue,
+                    };
+                let (kind_j, val_j) =
+                    match (&self.current_nodes[j].kind, &self.current_nodes[j].value) {
+                        (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
+                        _ => continue,
+                    };
+                let set_i: std::collections::BTreeSet<u32> = val_i.iter().copied().collect();
+                let set_j: std::collections::BTreeSet<u32> = val_j.iter().copied().collect();
+                let shared: Vec<u32> = set_i.intersection(&set_j).copied().collect();
+                for ch in shared {
+                    // Binary-search the codepoint key downward.
+                    let original_key = kind_i.codepoint_key(ch);
+                    if original_key == 0 {
+                        continue;
+                    }
+                    super::bin_search_down(0, original_key as i128, &mut |new_key| {
+                        let new_cp = match kind_i.key_to_codepoint(new_key as u32) {
+                            Some(cp) => cp,
+                            None => return false,
+                        };
+                        if new_cp == ch {
+                            return false;
+                        }
+                        let new_i: Vec<u32> = val_i
+                            .iter()
+                            .map(|&c| if c == ch { new_cp } else { c })
+                            .collect();
+                        let new_j: Vec<u32> = val_j
+                            .iter()
+                            .map(|&c| if c == ch { new_cp } else { c })
+                            .collect();
+                        if !kind_i.validate(&new_i) || !kind_j.validate(&new_j) {
+                            return false;
+                        }
+                        self.replace(&HashMap::from([
+                            (i, ChoiceValue::String(new_i)),
+                            (j, ChoiceValue::String(new_j)),
+                        ]))
+                    });
+                }
+            }
+        }
+    }
+
+    /// Walk every string node and try replacing each codepoint with one
+    /// of its "natural simpler" variants — NFD base + case mappings.
+    ///
+    /// Port of `shrinker.py:1583-1617` (`normalize_unicode_chars`).
+    /// Complements `shrink_strings`' per-position search by trying the
+    /// semantically obvious replacements that lex-index bisection can
+    /// skip over.
+    // Wired into `shrink()` by Step 12 / Step 18.
+    #[allow(dead_code)]
+    pub(crate) fn normalize_unicode_chars(&mut self) {
+        let mut i = 0;
+        while i < self.current_nodes.len() {
+            let (kind, value) = match (&self.current_nodes[i].kind, &self.current_nodes[i].value) {
+                (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
+                _ => {
+                    i += 1;
+                    continue;
+                }
+            };
+            for pos in 0..value.len() {
+                if pos >= value.len() {
+                    break;
+                }
+                let cp = value[pos];
+                let candidates = natural_simpler_chars(cp, &kind);
+                let cur = match &self.current_nodes[i].value {
+                    ChoiceValue::String(v) => v.clone(),
+                    _ => break,
+                };
+                if pos >= cur.len() || cur[pos] != cp {
+                    continue;
+                }
+                for replacement in candidates {
+                    let mut new_value = cur.clone();
+                    new_value[pos] = replacement;
+                    if !kind.validate(&new_value) {
+                        continue;
+                    }
+                    if self.replace(&HashMap::from([(i, ChoiceValue::String(new_value))])) {
+                        break;
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
 }
 
 /// "Obvious smaller" replacement codepoints to try for a character with
@@ -323,6 +433,44 @@ impl<'a> Shrinker<'a> {
 /// if it's a non-ASCII codepoint with a canonical decomposition that lands
 /// in-alphabet.
 ///
+/// Cross-string codepoint candidates from natural text transformations.
+///
+/// Port of Hypothesis's `_natural_simpler_chars` (`shrinker.py:94-119`).
+/// For codepoint `cp` under alphabet `intervals`, returns the
+/// candidates produced by:
+///
+/// * NFD decomposition (collapsing accented forms onto their base).
+/// * `to_lowercase` and `to_uppercase` case mappings.
+///
+/// Candidates are filtered to those that (a) lie inside `intervals`
+/// and (b) have a strictly smaller shrink-order key than the original,
+/// then sorted by that key.  Used by `normalize_unicode_chars` to
+/// directly try the most semantically obvious replacements.
+fn natural_simpler_chars(cp: u32, kind: &StringChoice) -> Vec<u32> {
+    use std::collections::BTreeSet;
+    let cur_key = kind.codepoint_key(cp);
+    let mut candidates: BTreeSet<u32> = BTreeSet::new();
+    if let Some(c) = char::from_u32(cp) {
+        for sub in c.to_lowercase() {
+            candidates.insert(sub as u32);
+        }
+        for sub in c.to_uppercase() {
+            candidates.insert(sub as u32);
+        }
+    }
+    if let Some(base) = unicodedata::nfd_base(cp) {
+        candidates.insert(base);
+    }
+    candidates.remove(&cp);
+    let mut filtered: Vec<(u32, u32)> = candidates
+        .into_iter()
+        .filter(|c| kind.intervals.contains(*c) && kind.codepoint_key(*c) < cur_key)
+        .map(|c| (kind.codepoint_key(c), c))
+        .collect();
+    filtered.sort();
+    filtered.into_iter().map(|(_, c)| c).collect()
+}
+
 /// Used by `shrink_strings` to escape predicate basins where neither a
 /// pure binary search nor a Hypothesis-style `find_integer` descent would
 /// reach the smaller-key target.
@@ -357,3 +505,7 @@ fn semantic_candidates(cp: u32, kind: &StringChoice) -> Vec<u32> {
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_strings_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_string_passes_tests.rs"]
+mod string_passes_tests;
