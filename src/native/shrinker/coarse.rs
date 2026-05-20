@@ -15,10 +15,8 @@ use super::{ShrinkRun, Shrinker};
 
 impl<'a> Shrinker<'a> {
     /// Coarse pre-shrink reductions that need their own phase because
-    /// they can re-randomise (and thus enlarge) the test case.
-    // Wired into `test_runner.rs` before the main `shrink()` call by
-    // Step 18.
-    #[allow(dead_code)]
+    /// they can re-randomise (and thus enlarge) the test case.  Called
+    /// from `test_runner.rs` once, before the main `shrink()` loop.
     pub(crate) fn initial_coarse_reduction(&mut self) {
         self.reduce_each_alternative();
     }

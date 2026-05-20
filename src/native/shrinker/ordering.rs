@@ -108,7 +108,7 @@ where
             continue;
         }
         // Expand right.
-        let mut left = i;
+        let left = i;
         let mut right = i + 1;
         let snapshot_r = current.clone();
         let i_fixed = i;
@@ -126,9 +126,10 @@ where
             )
         });
         right += k_r;
-        // Refresh snapshot in case expand-right shifted current.
+        // Expand left.  The return value is discarded because `left`
+        // is re-initialised at the start of the next iteration.
         let snapshot_l = current.clone();
-        let k_l = find_integer(|k| {
+        find_integer(|k| {
             if k > left {
                 return false;
             }
@@ -141,8 +142,6 @@ where
                 &mut accept,
             )
         });
-        left = left.saturating_sub(k_l);
-        let _ = left;
     }
 }
 

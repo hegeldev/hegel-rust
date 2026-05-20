@@ -323,8 +323,6 @@ impl<'a> Shrinker<'a> {
     /// character but the actual character value is free — we want to
     /// drive both occurrences toward the alphabet's smallest member at
     /// once.
-    // Wired into `shrink()` by Step 12 / Step 18.
-    #[allow(dead_code)]
     pub(crate) fn lower_duplicated_characters(&mut self) {
         let len = self.current_nodes.len();
         for i in 0..len {
@@ -388,8 +386,6 @@ impl<'a> Shrinker<'a> {
     /// Complements `shrink_strings`' per-position search by trying the
     /// semantically obvious replacements that lex-index bisection can
     /// skip over.
-    // Wired into `shrink()` by Step 12 / Step 18.
-    #[allow(dead_code)]
     pub(crate) fn normalize_unicode_chars(&mut self) {
         let mut i = 0;
         while i < self.current_nodes.len() {

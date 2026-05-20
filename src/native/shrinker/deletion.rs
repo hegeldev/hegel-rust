@@ -157,8 +157,6 @@ impl<'a> Shrinker<'a> {
     /// Non-integer nodes are deferred to the existing per-type passes
     /// — the unified Hypothesis driver only adds value for integers,
     /// per its own comment (`shrinker.py:1748-1756`).
-    // Wired into `shrink()` by Step 12 / Step 18.
-    #[allow(dead_code)]
     pub(crate) fn minimize_individual_choices(&mut self) {
         let mut i = 0;
         while i < self.current_nodes.len() {
@@ -213,12 +211,12 @@ impl<'a> Shrinker<'a> {
 
             let (_, actual_nodes, actual_spans) = (self.test_fn)(super::ShrinkRun::Full(&lowered));
 
-            // Step 16 — misalignment-truncation.  Even when the
-            // sequence length didn't change, the realised draw of a
-            // string/bytes node at `k > i` may be shorter than the
-            // candidate (the test re-drew that node with a smaller
-            // min_size dictated by the lowered integer).  Retry with
-            // the candidate truncated to the realised length.
+            // Misalignment-truncation retry.  Even when the sequence
+            // length didn't change, the realised draw of a string/bytes
+            // node at `k > i` may be shorter than the candidate (the
+            // test re-drew that node with a smaller min_size dictated
+            // by the lowered integer).  Retry with the candidate
+            // truncated to the realised length.
             //
             // Mirrors `shrinker.py:1213-1242`.  Runs independent of
             // the size-dependency / deletion fallback below.
@@ -304,8 +302,6 @@ impl<'a> Shrinker<'a> {
     /// each `n in 1..=5` — and gives O(log k) test-function calls when
     /// a long deletable region exists, vs. the linear O(k) of the legacy
     /// loop.  `delete_chunks` is kept alongside as the native fallback.
-    // Wired into `shrink()` by Step 12 / Step 18.
-    #[allow(dead_code)]
     pub(crate) fn node_program(&mut self, n: usize) {
         if n == 0 {
             return;

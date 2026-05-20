@@ -26,7 +26,9 @@ mod sequence;
 mod spans;
 mod strings;
 
-// Step 18 wires ShrinkPass into the main loop; tests already use it.
+// Test-only convenience re-export.  `fixate_shrink_passes` is a
+// public API for hooking up custom pass lists; the main `shrink()`
+// loop uses the deterministic order directly.
 #[allow(unused_imports)]
 pub use scheduling::ShrinkPass;
 
@@ -88,13 +90,17 @@ pub struct Shrinker<'a> {
     /// checkpoint.  `lower_common_node_offset` reads this to find correlated
     /// integer nodes that keep shrinking together (`shrinker.py:1097-1131`).
     all_changed_nodes: HashSet<usize>,
-    /// Bounded cache of recent `consider`-driven test results, keyed by
-    /// the candidate's sort_key.  Mirrors Hypothesis's
-    /// `cached_test_function` (`shrinker.py:390-412`).  When two passes
-    /// propose the same candidate (or one with the same sort_key shape),
-    /// the cached `(is_interesting, actual_nodes, actual_spans)` is
-    /// returned without re-running the closure.
-    consider_cache: HashMap<Vec<NodeSortKey>, (bool, Vec<ChoiceNode>, Spans)>,
+    /// Bounded cache of *uninteresting* candidate sort_keys.  Mirrors
+    /// Hypothesis's `cached_test_function` (`shrinker.py:390-412`).
+    /// When two passes propose the same candidate (or one with the
+    /// same sort_key shape), the cached negative result lets
+    /// `consider` short-circuit without re-running the closure.
+    ///
+    /// Positive (interesting) results are *not* cached because
+    /// `accept_improvement`'s `sort_key(actual) < sort_key(current)`
+    /// check is relative to the live shrink target — a positive that
+    /// didn't improve last time might improve now.
+    consider_cache: HashSet<Vec<NodeSortKey>>,
 }
 
 impl<'a> Shrinker<'a> {
@@ -115,7 +121,7 @@ impl<'a> Shrinker<'a> {
             downgraded: Vec::new(),
             max_improvements: None,
             all_changed_nodes: HashSet::new(),
-            consider_cache: HashMap::new(),
+            consider_cache: HashSet::new(),
         }
     }
 
@@ -140,38 +146,28 @@ impl<'a> Shrinker<'a> {
             }
             // nocov end
         }
-        // Check the bounded consider_cache.  Mirrors
-        // `cached_test_function` (`shrinker.py:390-412`): if we've
-        // already asked the closure about this exact candidate
-        // (identified by its sort_key vector — fine because the cache
-        // key is the same shape the closure cares about), return the
-        // recorded outcome without re-running.
-        //
-        // *Cache hits are only used for the negative "uninteresting"
-        // case.*  Caching a positive result would short-circuit
-        // `accept_improvement` whose `sort_key(actual) <
-        // sort_key(current)` check is relative to the *live*
-        // current_nodes — so we must re-run the closure to update.
+        // Negative-result cache: if we already asked the closure
+        // about a candidate with this sort_key and it was
+        // uninteresting, short-circuit.  Mirrors
+        // `cached_test_function` (`shrinker.py:390-412`), restricted
+        // to the negative case — see the field docstring for why
+        // positive results aren't cached.
         let cache_key: Vec<NodeSortKey> = candidate_key.1.clone();
-        if let Some((false, _, _)) = self.consider_cache.get(&cache_key) {
+        if self.consider_cache.contains(&cache_key) {
             return false;
         }
 
         let (is_interesting, actual_nodes, actual_spans) = (self.test_fn)(ShrinkRun::Full(nodes));
         // Bounded cache: drop entries arbitrarily when we exceed 4096
-        // entries.  We only insert false (uninteresting) results into
-        // the cache; positive results need re-evaluation against the
-        // live shrink target on each call.
+        // entries.  Insertion-order eviction is enough — we don't
+        // need recency information.
         if !is_interesting {
             if self.consider_cache.len() >= 4096 {
-                if let Some(some_key) = self.consider_cache.keys().next().cloned() {
+                if let Some(some_key) = self.consider_cache.iter().next().cloned() {
                     self.consider_cache.remove(&some_key);
                 }
             }
-            self.consider_cache.insert(
-                cache_key,
-                (is_interesting, actual_nodes.clone(), actual_spans.clone()),
-            );
+            self.consider_cache.insert(cache_key);
         }
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
             self.accept_improvement(actual_nodes, actual_spans);
@@ -248,15 +244,12 @@ impl<'a> Shrinker<'a> {
     }
 
     /// Indices that changed between `last_checkpoint_nodes` and `current_nodes`.
-    // Consumed by `lower_common_node_offset` once Step 6 of the shrinker
-    // parity port lands; tests already exercise this API.
-    #[allow(dead_code)]
+    /// Consumed by `lower_common_node_offset`.
     pub fn changed_nodes(&self) -> &HashSet<usize> {
         &self.all_changed_nodes
     }
 
     /// Reset the change-tracking set and rebaseline at `current_nodes`.
-    #[allow(dead_code)]
     pub fn clear_change_tracking(&mut self) {
         self.all_changed_nodes.clear();
         self.last_checkpoint_nodes = self.current_nodes.clone();
@@ -297,9 +290,10 @@ impl<'a> Shrinker<'a> {
     /// Run all shrink passes repeatedly until no more progress or iteration cap.
     ///
     /// The pass order interleaves Hypothesis-ported passes with the
-    /// native-only extras kept per the user's directive ("parity =
-    /// superset, not replacement").  Steps 1-17 of the parity port
-    /// deliver each pass; this method is the wire-up.
+    /// native-only extras: span-aware structural passes first (cheap
+    /// when they apply), then deletion / zeroing, then the value-level
+    /// minimization passes, finishing with the index-generic and
+    /// entropy-based passes.
     pub fn shrink(&mut self) {
         let mut prev: Vec<NodeSortKey> = Vec::new();
         let mut iterations = 0;
@@ -313,16 +307,17 @@ impl<'a> Shrinker<'a> {
             prev = current_key;
             iterations += 1;
 
-            // Hypothesis-ported span-aware passes (Steps 2-5) layered
-            // ahead of the existing native passes — they catch shapes
-            // the per-type passes can't see.
+            // Hypothesis-ported span-aware passes layered ahead of
+            // the native passes — they catch shapes the per-type
+            // passes can't see.
             self.remove_discarded();
             self.try_trivial_spans();
             self.pass_to_descendant();
             self.reorder_spans();
 
-            // Node-program adaptive deletion (Step 11) layered before
-            // the native deletion loop.
+            // Node-program adaptive deletion (Hypothesis's
+            // `node_program("X" * n)` family) layered before the
+            // native chunked deletion loop.
             for n in [5usize, 4, 3, 2, 1] {
                 self.node_program(n);
             }

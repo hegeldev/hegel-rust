@@ -519,9 +519,9 @@ fn run_main(
                     verify.nodes,
                     initial_spans,
                 );
-                // Pre-shrink coarse reduction (Step 10) — runs once
-                // before the main fixate loop to rerandomise small
-                // one_of-style branch selectors.
+                // Pre-shrink coarse reduction — runs once before the
+                // main shrink loop to rerandomise small one_of-style
+                // branch selectors.
                 shrinker.initial_coarse_reduction();
                 shrinker.shrink();
                 shrinker.current_nodes

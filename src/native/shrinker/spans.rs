@@ -1,8 +1,8 @@
 //! Span-aware shrink passes.
 //!
-//! These passes consult [`Shrinker::current_spans`] (made available by
-//! Step 1 of the parity port) to operate on structured sub-sequences of
-//! the choice list rather than individual nodes.
+//! These passes consult [`Shrinker::current_spans`] to operate on
+//! structured sub-sequences of the choice list rather than individual
+//! nodes.
 //!
 //! Hypothesis source: `hypothesis/internal/conjecture/shrinker.py`.
 
@@ -22,9 +22,6 @@ impl<'a> Shrinker<'a> {
     /// (b) the deletion attempts succeeded.  Returns `false` when the
     /// shrinker has discarded data that can't be removed (a follow-up
     /// pass shouldn't try this work again on the same target).
-    // Wired into `shrink()` by Step 12 of the parity port; tests already
-    // exercise this API.
-    #[allow(dead_code)]
     pub(crate) fn remove_discarded(&mut self) -> bool {
         loop {
             // Gather the outermost discarded spans in source order.  A span
@@ -69,8 +66,6 @@ impl<'a> Shrinker<'a> {
     /// structures whose simplest form is shape-dependent (e.g. an
     /// inner span that becomes shorter under simplest values) still
     /// converge.
-    // Wired into `shrink()` by Step 12 / Step 18 of the parity port.
-    #[allow(dead_code)]
     pub(crate) fn try_trivial_spans(&mut self) {
         let mut i = 0;
         while i < self.current_spans.len() {
@@ -142,17 +137,16 @@ impl<'a> Shrinker<'a> {
     /// the descendant is strictly contained in the ancestor and is
     /// strictly shorter, we splice the descendant's nodes in place of the
     /// ancestor's and ask the predicate whether that's still interesting.
-    // Wired into `shrink()` by Step 12 / Step 18 of the parity port.
-    #[allow(dead_code)]
     pub(crate) fn pass_to_descendant(&mut self) {
         // Snapshot (start, end, label) tuples up front.  Each consider()
         // may rebuild current_spans, which would invalidate live indices —
         // re-reading from the snapshot after every consider would mean
         // recomputing the per-label index every time.  Hypothesis runs
-        // this pass via a Chooser that tracks exhausted branches; we'll
-        // get the same incremental behaviour once Step 13 lands.  For
-        // now we iterate all candidates from the initial snapshot and let
-        // each consider() bail naturally on a stale ancestor.
+        // this pass via a Chooser that tracks exhausted branches; the
+        // `ChoiceTree` infrastructure exists (`choicetree.rs`) but
+        // isn't yet integrated, so for now we iterate all candidates
+        // from the initial snapshot and let each consider() bail
+        // naturally on a stale ancestor.
         let spans: Vec<(usize, usize, String)> = self
             .current_spans
             .iter()
@@ -219,8 +213,6 @@ impl<'a> Shrinker<'a> {
     /// position.  This is the pass that ensures `test_not_equal(x, y)`
     /// collapses to a canonical `(x="", y="0")` rather than the symmetric
     /// alternative.
-    // Wired into `shrink()` by Step 12 / Step 18 of the parity port.
-    #[allow(dead_code)]
     pub(crate) fn reorder_spans(&mut self) {
         let parents: Vec<Option<usize>> = {
             // Build the set of parent indices that have direct children
@@ -300,7 +292,7 @@ impl<'a> Shrinker<'a> {
                         debug_assert_eq!(permutation.len(), n);
                         let mut attempt: Vec<_> = Vec::with_capacity(snapshot_nodes.len());
                         attempt.extend_from_slice(&snapshot_nodes[..endpoints[0].0]);
-                        for (k, &(target_start, target_end)) in endpoints.iter().enumerate() {
+                        for (k, &(_, target_end)) in endpoints.iter().enumerate() {
                             let src_idx = permutation[k];
                             let (src_start, src_end) = endpoints[src_idx];
                             attempt.extend_from_slice(&snapshot_nodes[src_start..src_end]);
@@ -312,7 +304,6 @@ impl<'a> Shrinker<'a> {
                             } else {
                                 attempt.extend_from_slice(&snapshot_nodes[target_end..]);
                             }
-                            let _ = target_start;
                         }
                         self.consider(&attempt)
                     },

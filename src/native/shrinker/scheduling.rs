@@ -5,11 +5,13 @@
 //! deletions) and the outer loop re-sorts them by recent success so
 //! useful passes float to the front of the list.
 //!
-//! Without the `ChoiceTree` framework (Step 13) the "step" granularity
+//! Without a `ChoiceTree`/`Chooser` integration the "step" granularity
 //! is one whole pass invocation: a step is considered to have made
-//! progress when the shrink target's sort_key strictly decreased.  Step
-//! 13 will swap in a finer-grained `&mut Chooser`-based step, but the
-//! scheduling skeleton built here stays the same.
+//! progress when the shrink target's sort_key strictly decreased.  A
+//! finer-grained `&mut Chooser`-based step is a future refinement; the
+//! scheduling skeleton here stays the same either way.  The main
+//! `shrink()` loop uses the deterministic pass order directly;
+//! `fixate_shrink_passes` is currently only exercised by tests.
 
 use crate::native::core::sort_key;
 
@@ -62,8 +64,8 @@ impl<'a> Shrinker<'a> {
     ///   shrink-search doesn't trigger the runner's stall guard.
     ///
     /// Returns when no pass made any progress over a full outer
-    /// iteration.
-    // Wired into `shrink()` by Step 18 of the parity port.
+    /// iteration.  Currently exercised only by tests; `shrink()` uses
+    /// the deterministic pass order directly.
     #[allow(dead_code)]
     pub fn fixate_shrink_passes(&mut self, passes: &mut [ShrinkPass<'a>]) {
         const MAX_FAILURES: usize = 20;
@@ -81,7 +83,7 @@ impl<'a> Shrinker<'a> {
                 let before_nodes_len = self.current_nodes.len();
                 let before_key = sort_key(&self.current_nodes);
 
-                // Until we have Chooser (Step 13), each pass is
+                // Without a `Chooser` integration, each pass is
                 // deterministic — running it again with the shrink target
                 // unchanged would simply repeat the same work.  We keep
                 // calling the pass while it strictly improves and stop

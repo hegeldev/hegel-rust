@@ -494,8 +494,10 @@ impl<'a> Shrinker<'a> {
         }
         // The remainder of this function is the legacy integer-only
         // binary-search loop, kept verbatim so the existing tests still
-        // pass; future steps will move this work into the unified
-        // `minimize_individual_choices` driver (Step 8).
+        // pass; conceptually this work could move into the unified
+        // `minimize_individual_choices` driver, but
+        // `shrink_duplicates`' "step duplicates together" semantics
+        // aren't covered there.
         let mut groups: HashMap<i128, Vec<usize>> = HashMap::new();
         for (i, node) in self.current_nodes.iter().enumerate() {
             if let (ChoiceKind::Integer(_), ChoiceValue::Integer(v)) = (&node.kind, &node.value) {
@@ -609,8 +611,6 @@ impl<'a> Shrinker<'a> {
     /// Always called after a successful pass that may have changed
     /// integer values; clears the change-tracking set on exit so the
     /// next round starts from the new shrink target.
-    // Wired into `shrink()` by Step 12 / Step 18.
-    #[allow(dead_code)]
     pub(crate) fn lower_common_node_offset(&mut self) {
         let changed: Vec<usize> = self.changed_nodes().iter().copied().collect();
         if changed.len() <= 1 {

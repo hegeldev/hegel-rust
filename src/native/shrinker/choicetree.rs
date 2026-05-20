@@ -5,11 +5,10 @@
 //! branch taken and prunes dead branches so subsequent invocations of
 //! the same pass can resume from where the previous one left off.
 //!
-//! The infrastructure is in place but, for now, only newly-written
-//! passes are migrated to take `&mut Chooser`.  The existing native
-//! passes continue to iterate directly — the scheduling layer (Step 12)
-//! still calls them as plain functions.  Migrating those to `Chooser`
-//! is left to a follow-up.
+//! The infrastructure is in place but the existing shrink passes
+//! iterate directly rather than taking `&mut Chooser`.  Migrating
+//! them to `Chooser` is a follow-up — until that lands the public
+//! API here is reachable from tests only.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
