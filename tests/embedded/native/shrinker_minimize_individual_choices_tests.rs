@@ -117,6 +117,67 @@ fn minimize_individual_choices_invokes_span_delete_fallback() {
 }
 
 #[test]
+fn minimize_individual_choices_truncates_misaligned_string() {
+    // Step 16: lowering the integer at index 0 forces the trailing
+    // string to use a smaller min_size; the closure returns a truncated
+    // version of the string.  The misalignment-truncation retry should
+    // splice in the truncated value and the lowered integer.
+    use crate::native::core::choices::StringChoice;
+    use crate::native::intervalsets::IntervalSet;
+
+    let initial = vec![
+        int_node(3),
+        ChoiceNode {
+            kind: ChoiceKind::String(StringChoice {
+                intervals: IntervalSet::new(vec![(b'a' as u32, b'z' as u32)]),
+                min_size: 0,
+                max_size: 16,
+            }),
+            value: ChoiceValue::String(vec![b'a' as u32, b'a' as u32, b'a' as u32]),
+            was_forced: false,
+        },
+    ];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                // Integer at index 0 dictates the min_size of the
+                // string at index 1.  When the integer is N, the
+                // closure truncates the string to N characters.
+                let n = match nodes.first().map(|n| &n.value) {
+                    Some(ChoiceValue::Integer(v)) => *v as usize,
+                    _ => return (false, nodes.to_vec(), Spans::new()),
+                };
+                let mut actual: Vec<ChoiceNode> = nodes.to_vec();
+                if let Some(node) = actual.get_mut(1) {
+                    if let ChoiceValue::String(s) = &mut node.value {
+                        s.truncate(n);
+                    }
+                }
+                // Predicate: accept when the integer ≥ 1 and the string
+                // length matches the integer.
+                let str_len = match actual.get(1).map(|n| &n.value) {
+                    Some(ChoiceValue::String(s)) => s.len(),
+                    _ => 0,
+                };
+                let ok = n >= 1 && str_len == n;
+                (ok, actual, Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.minimize_individual_choices();
+    // After convergence the integer is minimal (1) and the string was
+    // truncated by the misalignment-retry to length 1.
+    assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
+    match &shrinker.current_nodes[1].value {
+        ChoiceValue::String(s) => assert_eq!(s.len(), 1),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
 fn minimize_individual_choices_no_op_on_already_simplest_node() {
     let initial = vec![int_node(0)];
     let mut shrinker = Shrinker::with_probe(

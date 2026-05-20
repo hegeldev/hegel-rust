@@ -218,6 +218,39 @@ impl<'a> Shrinker<'a> {
                 continue;
             }
 
+            // Step 16 — try truncating a string/bytes value whose draw
+            // decided to use a smaller min_size after the integer was
+            // lowered.  Mirrors the misalignment-truncation case in
+            // `shrinker.py:1213-1242`: when `actual_nodes[k]` for a
+            // string or bytes node `k > i` is strictly shorter than
+            // `lowered[k]`, retry with that value truncated to match.
+            let mut misalignment_handled = false;
+            for k in (i + 1)..lowered.len().min(actual_nodes.len()) {
+                let cand = &lowered[k];
+                let actual_val = &actual_nodes[k].value;
+                let retry_value = match (&cand.value, actual_val) {
+                    (ChoiceValue::String(c), ChoiceValue::String(a)) if c.len() > a.len() => {
+                        Some(ChoiceValue::String(c[..a.len()].to_vec()))
+                    }
+                    (ChoiceValue::Bytes(c), ChoiceValue::Bytes(a)) if c.len() > a.len() => {
+                        Some(ChoiceValue::Bytes(c[..a.len()].to_vec()))
+                    }
+                    _ => None,
+                };
+                if let Some(rv) = retry_value {
+                    let mut candidate = lowered.clone();
+                    candidate[k] = candidate[k].with_value(rv);
+                    if self.consider(&candidate) && sort_key(&self.current_nodes) < initial_key {
+                        misalignment_handled = true;
+                        break;
+                    }
+                }
+            }
+            if misalignment_handled {
+                i += 1;
+                continue;
+            }
+
             // Try deleting each span that starts after i.
             let mut shrank = false;
             for span_idx in 0..actual_spans.len() {
