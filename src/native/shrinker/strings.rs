@@ -350,13 +350,18 @@ impl<'a> Shrinker<'a> {
                         continue;
                     }
                     super::bin_search_down(0, original_key as i128, &mut |new_key| {
-                        let new_cp = match kind_i.key_to_codepoint(new_key as u32) {
-                            Some(cp) => cp,
-                            None => return false,
-                        };
-                        if new_cp == ch {
-                            return false;
-                        }
+                        // `key_to_codepoint(new_key)` is `Some` for
+                        // every key in `0..alpha_size`, and our search
+                        // upper bound is `original_key` which is itself
+                        // a valid alphabet position.  Likewise the
+                        // resulting `new_cp` differs from `ch` (whose
+                        // key was `original_key > new_key`) and the
+                        // validate calls succeed since both strings
+                        // stay within the alphabet.
+                        let new_cp = kind_i
+                            .key_to_codepoint(new_key as u32)
+                            .expect("key < original_key < alpha_size");
+                        debug_assert_ne!(new_cp, ch);
                         let new_i: Vec<u32> = val_i
                             .iter()
                             .map(|&c| if c == ch { new_cp } else { c })
@@ -365,9 +370,7 @@ impl<'a> Shrinker<'a> {
                             .iter()
                             .map(|&c| if c == ch { new_cp } else { c })
                             .collect();
-                        if !kind_i.validate(&new_i) || !kind_j.validate(&new_j) {
-                            return false;
-                        }
+                        debug_assert!(kind_i.validate(&new_i) && kind_j.validate(&new_j));
                         self.replace(&HashMap::from([
                             (i, ChoiceValue::String(new_i)),
                             (j, ChoiceValue::String(new_j)),
@@ -398,14 +401,14 @@ impl<'a> Shrinker<'a> {
                 }
             };
             for pos in 0..value.len() {
-                if pos >= value.len() {
-                    break;
-                }
                 let cp = value[pos];
                 let candidates = natural_simpler_chars(cp, &kind);
+                // `current_nodes[i]` is the same kind we matched at the
+                // top of the loop; only its value may have changed
+                // under intervening `replace` calls.
                 let cur = match &self.current_nodes[i].value {
                     ChoiceValue::String(v) => v.clone(),
-                    _ => break,
+                    _ => unreachable!("kind invariant violated mid-pass"),
                 };
                 if pos >= cur.len() || cur[pos] != cp {
                     continue;
@@ -413,9 +416,12 @@ impl<'a> Shrinker<'a> {
                 for replacement in candidates {
                     let mut new_value = cur.clone();
                     new_value[pos] = replacement;
-                    if !kind.validate(&new_value) {
-                        continue;
-                    }
+                    // `natural_simpler_chars` already filters
+                    // candidates to those `intervals.contains(c)`, and
+                    // the alphabet check is the only validate gate for
+                    // single-char replacements at fixed-length —
+                    // therefore the candidate is always valid.
+                    debug_assert!(kind.validate(&new_value));
                     if self.replace(&HashMap::from([(i, ChoiceValue::String(new_value))])) {
                         break;
                     }

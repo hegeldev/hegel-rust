@@ -193,15 +193,14 @@ impl<'a> Shrinker<'a> {
                 continue;
             }
 
-            // Phase 2: size-dependency fallback.  Lower by exactly one,
-            // peek at the realised actual_nodes — if shorter than the
-            // current sequence, try deletions to recover validity.
+            // Phase 2: lower by exactly one, peek at the realised
+            // actual_nodes for misalignment + size-dependency.
             //
-            // Re-read current_nodes since we may have inserted / removed
-            // entries above.
-            if i >= self.current_nodes.len() {
-                break;
-            }
+            // Re-read current_nodes since `bin_search_down` may have
+            // accepted candidates that shortened the sequence.  The
+            // outer `while i < self.current_nodes.len()` guard means
+            // `i` is still in range when we reach this point.
+            debug_assert!(i < self.current_nodes.len());
             let original_len = self.current_nodes.len();
             // Lower-by-one in the direction of simplest.
             let towards = if current_val > simplest {
@@ -213,17 +212,16 @@ impl<'a> Shrinker<'a> {
             lowered[i] = lowered[i].with_value(ChoiceValue::Integer(towards));
 
             let (_, actual_nodes, actual_spans) = (self.test_fn)(super::ShrinkRun::Full(&lowered));
-            if actual_nodes.len() >= original_len || actual_nodes.len() <= i + 1 {
-                i += 1;
-                continue;
-            }
 
-            // Step 16 — try truncating a string/bytes value whose draw
-            // decided to use a smaller min_size after the integer was
-            // lowered.  Mirrors the misalignment-truncation case in
-            // `shrinker.py:1213-1242`: when `actual_nodes[k]` for a
-            // string or bytes node `k > i` is strictly shorter than
-            // `lowered[k]`, retry with that value truncated to match.
+            // Step 16 — misalignment-truncation.  Even when the
+            // sequence length didn't change, the realised draw of a
+            // string/bytes node at `k > i` may be shorter than the
+            // candidate (the test re-drew that node with a smaller
+            // min_size dictated by the lowered integer).  Retry with
+            // the candidate truncated to the realised length.
+            //
+            // Mirrors `shrinker.py:1213-1242`.  Runs independent of
+            // the size-dependency / deletion fallback below.
             let mut misalignment_handled = false;
             for k in (i + 1)..lowered.len().min(actual_nodes.len()) {
                 let cand = &lowered[k];
@@ -247,6 +245,13 @@ impl<'a> Shrinker<'a> {
                 }
             }
             if misalignment_handled {
+                i += 1;
+                continue;
+            }
+
+            // Size-dependency fallback only applies when the realised
+            // run truncated the trailing sequence.
+            if actual_nodes.len() >= original_len || actual_nodes.len() <= i + 1 {
                 i += 1;
                 continue;
             }
@@ -353,9 +358,10 @@ impl<'a> Shrinker<'a> {
         program_len: usize,
         repeats: usize,
     ) -> bool {
-        if repeats == 0 {
-            return false;
-        }
+        // `find_integer` starts probing at `n = 1`, so callers never
+        // ask for zero-repeat applications.  A debug_assert documents
+        // the precondition.
+        debug_assert!(repeats > 0);
         let total_delete = program_len.saturating_mul(repeats);
         if i + total_delete > original.len() {
             return false;

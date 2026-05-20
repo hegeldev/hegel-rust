@@ -179,14 +179,10 @@ impl<'a> Shrinker<'a> {
                 }
                 for &descendant_idx in &indices[ai + 1..] {
                     let (d_start, d_end, _) = spans[descendant_idx].clone();
-                    // Properly contained, same label.
-                    if d_start < a_start || d_end > a_end {
-                        // Past the ancestor's range: no further descendants
-                        // because spans are ordered by `start`.
-                        if d_start >= a_end {
-                            break;
-                        }
-                        continue;
+                    // Past the ancestor's range: no further descendants
+                    // because spans are ordered by `start`.
+                    if d_start >= a_end {
+                        break;
                     }
                     let descendant_len = d_end.saturating_sub(d_start);
                     if descendant_len == 0 || descendant_len >= ancestor_len {
@@ -198,6 +194,10 @@ impl<'a> Shrinker<'a> {
                     if a_end > self.current_nodes.len() {
                         continue;
                     }
+                    // Spans are tree-structured: any span starting inside
+                    // an ancestor must also end inside it.  Guard for
+                    // future deviations from that invariant.
+                    debug_assert!(d_start >= a_start && d_end <= a_end);
                     let mut attempt = self.current_nodes[..a_start].to_vec();
                     attempt.extend_from_slice(&self.current_nodes[d_start..d_end]);
                     attempt.extend_from_slice(&self.current_nodes[a_end..]);
@@ -262,15 +262,15 @@ impl<'a> Shrinker<'a> {
                 if endpoints.iter().any(|&(_, e)| e > nodes_len) {
                     continue;
                 }
-                // Endpoints must be non-overlapping and in source order;
-                // sibling spans always satisfy this, but a stale snapshot
-                // after an intervening shrink can break it.
-                let mut sorted_eps = endpoints.clone();
-                sorted_eps.sort();
-                let well_formed = sorted_eps.windows(2).all(|w| w[0].1 <= w[1].0);
-                if !well_formed {
-                    continue;
-                }
+                // Sibling spans are always non-overlapping and in source
+                // order under the span recorder's invariants.  A
+                // debug_assert documents the precondition; we don't try
+                // to recover from a violation at runtime.
+                debug_assert!({
+                    let mut sorted_eps = endpoints.clone();
+                    sorted_eps.sort();
+                    sorted_eps.windows(2).all(|w| w[0].1 <= w[1].0)
+                });
 
                 let n = child_indices.len();
                 let snapshot_nodes = self.current_nodes.clone();
@@ -294,10 +294,10 @@ impl<'a> Shrinker<'a> {
                     |permutation| {
                         // Build the candidate by interleaving the
                         // permuted slices with the unchanged regions
-                        // between sibling endpoints.
-                        if permutation.len() != n {
-                            return false;
-                        }
+                        // between sibling endpoints.  shrink_ordering
+                        // only ever calls accept with length-`n`
+                        // permutations.
+                        debug_assert_eq!(permutation.len(), n);
                         let mut attempt: Vec<_> = Vec::with_capacity(snapshot_nodes.len());
                         attempt.extend_from_slice(&snapshot_nodes[..endpoints[0].0]);
                         for (k, &(target_start, target_end)) in endpoints.iter().enumerate() {

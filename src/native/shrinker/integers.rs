@@ -620,9 +620,11 @@ impl<'a> Shrinker<'a> {
         let mut ic_targets: Vec<i128> = Vec::new();
         let mut distances: Vec<u128> = Vec::new();
         for &i in &changed {
-            if i >= self.current_nodes.len() {
-                continue;
-            }
+            // `changed` came from `update_change_tracking`, which only
+            // populates indices < current_nodes.len() (it clears the
+            // set when the sequence shape changes).  A debug_assert
+            // documents the invariant.
+            debug_assert!(i < self.current_nodes.len());
             let node = &self.current_nodes[i];
             let (ic, v) = match (&node.kind, &node.value) {
                 (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), *v),
@@ -641,9 +643,10 @@ impl<'a> Shrinker<'a> {
             return;
         }
         let offset = *distances.iter().min().expect("non-empty by check above");
-        if offset == 0 {
-            return;
-        }
+        // `offset > 0`: every entry in `distances` came from `v.abs_diff(target)`
+        // for `v != target` (the loop above skips equal entries), so all
+        // distances are strictly positive.
+        debug_assert!(offset > 0);
         // residual_v[k] = distance[k] - offset; the "common offset" portion
         // is what we'll try to drive toward zero.
         let residual: Vec<u128> = distances.iter().map(|d| d - offset).collect();
@@ -669,8 +672,6 @@ impl<'a> Shrinker<'a> {
         // the original signs.  Hypothesis uses `Integer.shrink(offset, ...)`
         // which is binary search; `find_integer` for the maximum n is the
         // equivalent in our infrastructure.
-        let original_distances = distances.clone();
-
         for sign_multiplier in [1i128, -1] {
             find_integer(|n| {
                 if (n as u128) > offset {
@@ -680,9 +681,11 @@ impl<'a> Shrinker<'a> {
                 let mut replacements: HashMap<usize, ChoiceValue> = HashMap::new();
                 for k in 0..indices.len() {
                     let new_distance = new_offset + residual[k];
-                    if new_distance > original_distances[k] {
-                        return false;
-                    }
+                    // `new_distance <= original_distances[k]` is guaranteed
+                    // by the `(n as u128) > offset` check above:
+                    // `new_distance = (offset - n) + residual[k]
+                    //                = (distance[k] - n)
+                    //                ≤ distance[k]`.
                     let effective_sign = signs[k] * sign_multiplier;
                     let new_value = if effective_sign >= 0 {
                         ic_targets[k].saturating_add_unsigned(new_distance)

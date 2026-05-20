@@ -74,9 +74,9 @@ impl<'a> Shrinker<'a> {
     ///
     /// Port of `shrinker.py:772-801`.
     fn try_lower_node_as_alternative(&mut self, i: usize, v: i128) -> bool {
-        if i >= self.current_nodes.len() {
-            return false;
-        }
+        // Callers iterate `i < self.current_nodes.len()`, so this is a
+        // documented precondition.
+        debug_assert!(i < self.current_nodes.len());
         // First try the bare lowering.
         let lowered = self.replace(&HashMap::from([(i, ChoiceValue::Integer(v))]));
         if lowered {

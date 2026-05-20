@@ -82,6 +82,83 @@ fn random_selection_order_yields_full_permutation() {
 }
 
 #[test]
+fn choicetree_rejecting_every_alternative_raises_dead_branch() {
+    // Non-empty values + condition that rejects every entry → the
+    // for loop exhausts every alternative via the "mark dead" branch
+    // and falls through to the post-loop `Err(DeadBranch)` return.
+    let mut tree = ChoiceTree::default();
+    let values = vec![1, 2, 3, 4];
+    let choices = tree.step(prefix_selection_order(vec![]), |chooser| {
+        let _ = chooser.choose(&values, |_v: &i32| false)?;
+        Ok(())
+    });
+    assert!(choices.is_empty());
+    assert!(tree.exhausted());
+}
+
+#[test]
+fn choicetree_break_when_live_count_hits_zero_mid_loop() {
+    // Set up a tree where the first step picks one alternative and
+    // marks another dead, leaving two live children.  The second step
+    // then rejects both live children — by the time the for loop hits
+    // the already-exhausted indices the live_count is already 0, so
+    // the early-break at line ~140 fires.
+    let mut tree = ChoiceTree::default();
+    let values = vec![10, 20, 30, 40];
+
+    // Step 1: condition v != 30 → 40 marked dead (idx 3), 30 chosen (idx 2).
+    let _ = tree.step(prefix_selection_order(vec![]), |chooser| {
+        let _ = chooser.choose(&values, |&v| v != 40 && v == 30)?;
+        Ok(())
+    });
+
+    // Step 2: condition false for every remaining alternative.  When
+    // the for loop hits idx 3 (exhausted) and idx 2 (exhausted), it
+    // skips; idx 1 and idx 0 both get marked dead.  After the last
+    // mark, live_child_count is 0, and the iteration would continue
+    // for any further indices — but there are none, so the loop ends
+    // and falls into the post-loop Err(DeadBranch).
+    let second = tree.step(prefix_selection_order(vec![]), |chooser| {
+        let _ = chooser.choose(&values, |_| false)?;
+        Ok(())
+    });
+    assert!(second.is_empty());
+    assert!(tree.exhausted());
+}
+
+#[test]
+fn choicetree_finish_break_when_leaf_not_exhausted() {
+    // A multi-depth choice where the leaf hasn't been fully explored
+    // yet — finish() bubbles up only to the depth where the node is
+    // exhausted, then breaks out of the bubble-up loop.
+    let mut tree = ChoiceTree::default();
+    // Two depths of choice.  Each step picks one path; after the
+    // first step, the leaf [1][0] is exhausted but its parent at
+    // depth 1 is not (still has unexplored sibling at idx 1).
+    let _ = tree.step(prefix_selection_order(vec![]), |chooser| {
+        let _outer = chooser.choose(&[10, 20], |_| true)?;
+        let _inner = chooser.choose(&[100, 200], |_| true)?;
+        Ok(())
+    });
+    // Second step starts at the same outer branch but a different
+    // inner branch — its finish() bubble-up should stop at the outer
+    // node which still has live children.
+    let _ = tree.step(prefix_selection_order(vec![]), |chooser| {
+        let _outer = chooser.choose(&[10, 20], |_| true)?;
+        let _inner = chooser.choose(&[100, 200], |_| true)?;
+        Ok(())
+    });
+    // Tree still has one live outer branch; not yet fully exhausted.
+    assert!(!tree.exhausted());
+}
+
+#[test]
+fn prefix_selection_order_empty_n_yields_empty() {
+    let mut order = prefix_selection_order(vec![1]);
+    assert!(order(0, 0).is_empty());
+}
+
+#[test]
 fn choicetree_handles_empty_values_as_dead_branch() {
     let mut tree = ChoiceTree::default();
     let values: Vec<&str> = Vec::new();
