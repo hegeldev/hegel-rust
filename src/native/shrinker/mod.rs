@@ -19,6 +19,7 @@ mod index_passes;
 mod integers;
 mod mutation;
 mod sequence;
+mod spans;
 mod strings;
 
 use std::collections::{HashMap, HashSet};
