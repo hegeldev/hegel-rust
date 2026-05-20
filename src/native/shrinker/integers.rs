@@ -1,5 +1,6 @@
 // Integer-based shrink passes: zero_choices, swap_integer_sign,
-// binary_search_integer_towards_zero, redistribute_integers, shrink_duplicates.
+// binary_search_integer_towards_zero, redistribute_integers, shrink_duplicates,
+// lower_common_node_offset.
 
 use std::collections::HashMap;
 
@@ -546,4 +547,115 @@ impl<'a> Shrinker<'a> {
             }
         }
     }
+
+    /// Break the zig-zag trap by lowering a common offset across every
+    /// integer node that's changed since the last checkpoint.
+    ///
+    /// Port of `shrinker.py:1017-1095` (`lower_common_node_offset`).  When
+    /// two integers `m, n` are linked by a predicate like `abs(m - n) > 1`,
+    /// the individual minimization passes can only step each toward
+    /// `shrink_towards` by one before the predicate flips; the next
+    /// iteration steps the other one by one; result: O(initial value)
+    /// iterations to zig-zag toward zero.
+    ///
+    /// This pass observes that *all* changed integer nodes shrank by some
+    /// non-zero common offset, and tries to lower that offset directly
+    /// using a `find_integer` exponential probe — collapsing the zig-zag
+    /// into O(log v) iterations.  It probes both signs because the
+    /// nodes may be sitting above or below their shrink targets.
+    ///
+    /// Always called after a successful pass that may have changed
+    /// integer values; clears the change-tracking set on exit so the
+    /// next round starts from the new shrink target.
+    // Wired into `shrink()` by Step 12 / Step 18.
+    #[allow(dead_code)]
+    pub(crate) fn lower_common_node_offset(&mut self) {
+        let changed: Vec<usize> = self.changed_nodes().iter().copied().collect();
+        if changed.len() <= 1 {
+            return;
+        }
+        let mut indices: Vec<usize> = Vec::new();
+        let mut ic_targets: Vec<i128> = Vec::new();
+        let mut distances: Vec<u128> = Vec::new();
+        for &i in &changed {
+            if i >= self.current_nodes.len() {
+                continue;
+            }
+            let node = &self.current_nodes[i];
+            let (ic, v) = match (&node.kind, &node.value) {
+                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), *v),
+                _ => continue,
+            };
+            let target = ic.clamped_shrink_towards();
+            if v == target {
+                // Already trivial; can't offset further.
+                continue;
+            }
+            indices.push(i);
+            ic_targets.push(target);
+            distances.push(v.abs_diff(target));
+        }
+        if indices.len() <= 1 {
+            return;
+        }
+        let offset = *distances.iter().min().expect("non-empty by check above");
+        if offset == 0 {
+            return;
+        }
+        // residual_v[k] = distance[k] - offset; the "common offset" portion
+        // is what we'll try to drive toward zero.
+        let residual: Vec<u128> = distances.iter().map(|d| d - offset).collect();
+
+        // The predicate signs are deduced from the sign of `(v - target)`
+        // for each node.  Hypothesis shrinks the offset both directions
+        // to handle the case where the absolute distances are equal but
+        // the signs differ.
+        let signs: Vec<i128> = indices
+            .iter()
+            .zip(ic_targets.iter())
+            .map(|(&i, &target)| {
+                let v = match self.current_nodes[i].value {
+                    ChoiceValue::Integer(v) => v,
+                    _ => unreachable!(),
+                };
+                if v >= target { 1 } else { -1 }
+            })
+            .collect();
+
+        // Try lowering by an additional `n` units in both directions.
+        // The candidate distance is `offset - n + residual`, applied with
+        // the original signs.  Hypothesis uses `Integer.shrink(offset, ...)`
+        // which is binary search; `find_integer` for the maximum n is the
+        // equivalent in our infrastructure.
+        let original_distances = distances.clone();
+
+        for sign_multiplier in [1i128, -1] {
+            find_integer(|n| {
+                if (n as u128) > offset {
+                    return false;
+                }
+                let new_offset = offset - n as u128;
+                let mut replacements: HashMap<usize, ChoiceValue> = HashMap::new();
+                for k in 0..indices.len() {
+                    let new_distance = new_offset + residual[k];
+                    if new_distance > original_distances[k] {
+                        return false;
+                    }
+                    let effective_sign = signs[k] * sign_multiplier;
+                    let new_value = if effective_sign >= 0 {
+                        ic_targets[k].saturating_add_unsigned(new_distance)
+                    } else {
+                        ic_targets[k].saturating_sub_unsigned(new_distance)
+                    };
+                    replacements.insert(indices[k], ChoiceValue::Integer(new_value));
+                }
+                self.replace(&replacements)
+            });
+        }
+        self.clear_change_tracking();
+    }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_lower_common_node_offset_tests.rs"]
+mod lower_common_node_offset_tests;
