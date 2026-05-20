@@ -1,6 +1,5 @@
 mod common;
 
-use common::not_supported_on_native;
 use hegel::TestCase;
 use hegel::generators as gs;
 
@@ -35,8 +34,6 @@ mod composite {
     //!   strategy return-type warnings, and `typing.overload` respectively.
 
     use super::common::utils::minimal;
-    #[allow(unused_imports)]
-    use super::not_supported_on_native;
     use hegel::TestCase;
     use hegel::generators as gs;
     use hegel::{HealthCheck, Hegel, Settings};

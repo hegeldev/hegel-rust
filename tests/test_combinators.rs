@@ -2,7 +2,6 @@
 
 mod common;
 
-use common::not_supported_on_native;
 use common::utils::{assert_all_examples, expect_panic, find_any};
 use hegel::generators::{self as gs, Generator};
 use hegel::{Hegel, Settings, TestCase};
@@ -306,8 +305,6 @@ mod find {
     //! `Hegel::new(...)` with `seed(Some(13))` and recording the first value
     //! that matches the predicate.
 
-    #[allow(unused_imports)]
-    use super::not_supported_on_native;
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
     use std::panic::AssertUnwindSafe;
@@ -699,8 +696,6 @@ mod nocover_filtering {
 }
 
 mod nocover_flatmap {
-    #[allow(unused_imports)]
-    use super::not_supported_on_native;
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
 
@@ -1063,8 +1058,6 @@ mod nocover_given_reuse {
     //! another. hegel-rust has no `@given` decorator; the analog is sharing a
     //! generator value across multiple `Hegel::new(...)` invocations.
 
-    #[allow(unused_imports)]
-    use super::not_supported_on_native;
     use hegel::generators::{self as gs};
     use hegel::{Hegel, Settings};
 

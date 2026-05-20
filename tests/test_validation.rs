@@ -2,7 +2,6 @@
 
 mod common;
 
-use common::not_supported_on_native;
 use hegel::TestCase;
 use hegel::generators::{self as gs, Generator};
 

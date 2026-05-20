@@ -5,7 +5,6 @@
 
 mod common;
 
-use common::not_supported_on_native;
 use common::utils::expect_panic;
 use hegel::TestCase;
 use hegel::generators as gs;
@@ -96,8 +95,6 @@ fn test_database_persists_failing_examples() {
 
 mod testdecorators {
     use super::common::utils::{assert_all_examples, expect_panic, find_any, minimal};
-    #[allow(unused_imports)]
-    use super::not_supported_on_native;
     use hegel::generators::{self as gs, Generator};
     use hegel::{Hegel, Settings};
 
@@ -864,8 +861,6 @@ mod nocover_completion {
 
 mod hypothesis_core {
     use super::common::utils::minimal;
-    #[allow(unused_imports)]
-    use super::not_supported_on_native;
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
 
