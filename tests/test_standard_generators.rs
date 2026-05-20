@@ -23,7 +23,6 @@
 
 mod common;
 
-use common::not_supported_on_native;
 use std::collections::HashMap;
 
 #[allow(dead_code)]
@@ -242,8 +241,6 @@ mod direct_strategies {
     use super::common::utils::{
         assert_all_examples, check_can_generate_examples, expect_panic, minimal,
     };
-    #[allow(unused_imports)]
-    use super::not_supported_on_native;
     use hegel::generators::{self as gs, Generator};
     use hegel::{Hegel, Settings};
     use std::collections::HashMap;
@@ -672,8 +669,6 @@ mod direct_strategies {
 }
 
 mod provisional_strategies {
-    #[allow(unused_imports)]
-    use super::not_supported_on_native;
     use std::collections::HashSet;
 
     use regex::Regex;
@@ -690,7 +685,6 @@ mod provisional_strategies {
             .collect()
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_is_url() {
         let allowed = url_allowed_chars();
@@ -742,7 +736,6 @@ mod provisional_strategies {
         }
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_valid_domains_arguments() {
         check_can_generate_examples(gs::domains());
@@ -751,13 +744,11 @@ mod provisional_strategies {
         }
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_find_any_non_empty_domains() {
         find_any(gs::domains(), |s: &String| !s.is_empty());
     }
 
-    #[not_supported_on_native]
     #[test]
     fn test_find_any_non_empty_urls() {
         find_any(gs::urls(), |s: &String| !s.is_empty());

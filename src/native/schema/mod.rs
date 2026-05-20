@@ -11,10 +11,12 @@
 //   regex       — interpret_regex (Python-compatible regex strategy)
 //   collections — interpret_list, interpret_dict, interpret_tuple, interpret_one_of, interpret_sampled_from
 //   special     — date, time, datetime, ip_address, uuid
+//   internet    — domain, email, url
 
 mod bytes;
 mod collections;
 mod float;
+mod internet;
 mod numeric;
 mod regex;
 mod special;
@@ -65,9 +67,6 @@ pub(crate) fn interpret_schema(
         ntc.freeze();
     }
 
-    // The remaining `todo!()` arm covers the internet-flavoured schemas
-    // still unported (domain / email / url, which share the IANA TLD
-    // list and percent-encoding machinery).
     let result = match schema_type {
         "integer" => numeric::interpret_integer(ntc, schema),
         "boolean" => numeric::interpret_boolean(ntc),
@@ -87,10 +86,9 @@ pub(crate) fn interpret_schema(
         "datetime" => special::interpret_datetime(ntc),
         "ip_address" => special::interpret_ip_address(ntc, schema),
         "uuid" => special::interpret_uuid(ntc, schema),
-
-        "email" | "url" | "domain" => {
-            todo!("schema {:?} not yet supported in native mode", schema_type)
-        }
+        "domain" => internet::interpret_domain(ntc, schema),
+        "email" => internet::interpret_email(ntc),
+        "url" => internet::interpret_url(ntc),
 
         other => panic!("Unknown schema type: {}", other),
     };

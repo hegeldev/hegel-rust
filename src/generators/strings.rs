@@ -437,40 +437,32 @@ pub fn binary() -> BinaryGenerator {
 pub struct EmailGenerator;
 
 impl Generator<String> for EmailGenerator {
-    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(cbor_map! {"type" => "email"}, |raw| {
             super::deserialize_value(raw)
-            // nocov end
         }))
     }
 }
 
 /// Generate email address strings.
-// nocov start
 pub fn emails() -> EmailGenerator {
     EmailGenerator
-    // nocov end
 }
 
 /// Generator for URL strings. Created by [`urls()`].
 pub struct UrlGenerator;
 
 impl Generator<String> for UrlGenerator {
-    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(cbor_map! {"type" => "url"}, |raw| {
             super::deserialize_value(raw)
-            // nocov end
         }))
     }
 }
 
 /// Generate URL strings.
-// nocov start
 pub fn urls() -> UrlGenerator {
     UrlGenerator
-    // nocov end
 }
 
 /// Generator for domain name strings. Created by [`domains()`].
@@ -491,9 +483,9 @@ impl DomainGenerator {
             "max_length must be between 4 and 255"
         );
 
-        cbor_map! { // nocov
+        cbor_map! {
             "type" => "domain",
-            "max_length" => self.max_length as u64 // nocov
+            "max_length" => self.max_length as u64
         }
     }
 }
@@ -501,7 +493,7 @@ impl DomainGenerator {
 impl Generator<String> for DomainGenerator {
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(self.build_schema(), |raw| {
-            super::deserialize_value(raw) // nocov
+            super::deserialize_value(raw)
         }))
     }
 }
