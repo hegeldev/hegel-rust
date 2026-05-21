@@ -20,3 +20,11 @@ pub const BUFFER_SIZE: usize = 8 * 1024;
 
 /// Probability of drawing a boundary/special value per special candidate.
 pub const BOUNDARY_PROBABILITY: f64 = 0.01;
+
+/// Hard cap on the number of successful shrink improvements per
+/// counterexample.  Mirrors Hypothesis's `MAX_SHRINKS` in
+/// `internal/conjecture/engine.py`.  Once the shrinker has accepted
+/// this many strictly-smaller candidates, further `consider` /
+/// `probe` calls short-circuit so the runner doesn't get stuck
+/// chasing diminishing returns on pathological inputs.
+pub const MAX_SHRINKS: usize = 500;

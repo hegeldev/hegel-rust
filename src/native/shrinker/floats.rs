@@ -161,47 +161,126 @@ impl<'a> Shrinker<'a> {
                 // (finite non-NaN) value in place.
                 let v = self.float_at(i);
 
-                // Step 4a: When current is a non-integer, explicitly search the
-                // integer-float range.  In our ordering, integer floats 0, 1, 2, …
-                // have indices 0, 1, 2, … (much smaller than any non-integer).
-                // The existing binary search below misses them because it jumps
-                // past small indices when hi is near 2^63.
+                // Step 4a: integer-magnitude reduction.
+                //
+                // Mirrors Hypothesis's `Float.run_step`
+                // (`shrinking/floats.py`):
+                //
+                // * For |v| >= 2^53 (the integer-only float range),
+                //   reduce the magnitude via `find_integer`-based
+                //   shift_right and shrink_by_multiples — O(log log
+                //   range) accepts vs the O(log range) of a full
+                //   `bin_search_down`.
+                // * For 0 < |v| < 2^53, try precision-dropping: round
+                //   `v * 2^p` to floor / ceil and divide back, for p
+                //   from 10 down to 0.  This is what lets values like
+                //   999.5 collapse to 1000.0 when the predicate
+                //   admits the rounded form — neither shift_right
+                //   (starts at floor(v)) nor the lex-index bisection
+                //   (midpoints land on out-of-range magnitudes when
+                //   fc has a tight max) finds it on its own.
                 let v_abs = v.abs();
-                let current_idx = float_to_index(v_abs);
                 let is_neg = v.is_sign_negative();
-                if current_idx >= (1u64 << 63) {
-                    // Compute the integer magnitude range valid for fc. The bounds
-                    // below keep candidates strictly inside [fc.min_value,
-                    // fc.max_value], so fc.validate is guaranteed to hold.
-                    let (int_lo, int_hi) = if is_neg {
-                        // Negative float: candidate = -(n as f64). v < 0 implies
-                        // fc.min_value < 0, so the `hi` expression is well-defined.
-                        let lo = if fc.max_value <= 0.0 {
-                            (-fc.max_value).ceil() as i128
-                        } else {
-                            0
-                        };
-                        let hi = (-fc.min_value).floor() as i128;
-                        (lo, hi)
+                if v_abs.is_finite() && v_abs > 0.0 && v_abs >= MAX_PRECISE_INTEGER {
+                    // base = |v| truncated into i128 (saturates for
+                    // values > i128::MAX, which is fine — the saturated
+                    // base still shifts to small magnitudes through k
+                    // big enough to overshoot).
+                    let base: i128 = if v_abs >= (i128::MAX as f64) {
+                        i128::MAX
                     } else {
-                        let lo = fc.min_value.max(0.0).ceil() as i128;
-                        let hi = fc.max_value.min(f64::MAX).floor() as i128;
-                        (lo, hi)
+                        v_abs as i128
                     };
-                    if int_lo >= 0 && int_lo <= int_hi {
-                        let i_capture = i;
-                        let is_neg_capture = is_neg;
-                        bin_search_down(int_lo, int_hi, &mut |n| {
-                            let candidate = if is_neg_capture {
-                                -(n as f64)
+                    let i_capture = i;
+                    let fc_capture = fc.clone();
+                    // shift_right: find the largest k where base >> k
+                    // still satisfies fc.validate and the predicate.
+                    find_integer(|k| {
+                        if k >= 127 {
+                            // i128 shifts >= 127 produce 0 (or are UB).
+                            return false;
+                        }
+                        let shifted = base >> k;
+                        let candidate_mag = shifted as f64;
+                        let candidate = if is_neg {
+                            -candidate_mag
+                        } else {
+                            candidate_mag
+                        };
+                        if !fc_capture.validate(candidate) {
+                            return false;
+                        }
+                        self.replace(&HashMap::from([(i_capture, ChoiceValue::Float(candidate))]))
+                    });
+                    // shrink_by_multiples(2) and (1) — peel off the
+                    // last few integer steps after the shift descent
+                    // overshot.
+                    let cur = self.float_at(i);
+                    if cur.is_finite() {
+                        let base_after = cur.abs() as i128;
+                        let lo: i128 = if is_neg {
+                            (-fc.min_value).floor().max(0.0) as i128
+                        } else {
+                            fc.min_value.max(0.0).ceil() as i128
+                        };
+                        for step in [2i128, 1] {
+                            let i_capture = i;
+                            let fc_capture = fc.clone();
+                            find_integer(|n| {
+                                let attempt = base_after - step * (n as i128);
+                                if attempt < lo {
+                                    return false;
+                                }
+                                let candidate_mag = attempt as f64;
+                                let candidate = if is_neg {
+                                    -candidate_mag
+                                } else {
+                                    candidate_mag
+                                };
+                                if !fc_capture.validate(candidate) {
+                                    return false;
+                                }
+                                self.replace(&HashMap::from([(
+                                    i_capture,
+                                    ChoiceValue::Float(candidate),
+                                )]))
+                            });
+                        }
+                    }
+                } else if v_abs.is_finite() && v_abs > 0.0 {
+                    // Precision-dropping for sub-MAX_PRECISE_INTEGER
+                    // values.  `2_f64.powi(p)` ladder mirrors
+                    // Hypothesis's `for p in range(10, 0, -1)` loop;
+                    // the explicit `int(current)` probe at the end
+                    // covers values whose integer floor / ceil
+                    // satisfy the predicate.
+                    let cur_abs = self.float_at(i).abs();
+                    for p in (0..=10).rev() {
+                        let scale = (2_f64).powi(p);
+                        let scaled = cur_abs * scale;
+                        // floor and ceil.  Either may give a valid
+                        // shrink; we try both.
+                        for rounded in [scaled.floor(), scaled.ceil()] {
+                            let candidate_mag = rounded / scale;
+                            if !candidate_mag.is_finite() {
+                                continue;
+                            }
+                            // Only consider values strictly smaller
+                            // (in lex order) than current.  A larger
+                            // rounded value would never improve the
+                            // sort_key.
+                            if float_to_index(candidate_mag) >= float_to_index(cur_abs) {
+                                continue;
+                            }
+                            let candidate = if is_neg {
+                                -candidate_mag
                             } else {
-                                n as f64
+                                candidate_mag
                             };
-                            self.replace(&HashMap::from([(
-                                i_capture,
-                                ChoiceValue::Float(candidate),
-                            )]))
-                        });
+                            if fc.validate(candidate) {
+                                self.replace(&HashMap::from([(i, ChoiceValue::Float(candidate))]));
+                            }
+                        }
                     }
                 }
 

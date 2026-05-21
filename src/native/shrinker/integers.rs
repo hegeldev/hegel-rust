@@ -69,9 +69,23 @@ impl<'a> Shrinker<'a> {
                 let ic = ic.clone();
                 if v > 0 {
                     let lo = ic.simplest().max(0);
-                    bin_search_down(lo, v, &mut |candidate| {
-                        self.replace(&HashMap::from([(i, ChoiceValue::Integer(candidate))]))
-                    });
+                    // shift_right adaptive descent (Hypothesis's
+                    // `Integer.shift_right`).  Probes `lo + (v - lo) >>
+                    // k` for k = 1, 2, 4, 8, ... via `find_integer`,
+                    // which is O(log log distance) rather than the
+                    // O(log distance) of a full `bin_search_down`.  For
+                    // distance 10^15 that's ~7 probes vs ~50.
+                    let dist = (v - lo) as u128;
+                    if dist > 0 {
+                        find_integer(|k| {
+                            let shifted = (dist >> k.min(127)) as i128;
+                            let candidate = lo + shifted;
+                            if candidate < lo {
+                                return false;
+                            }
+                            self.replace(&HashMap::from([(i, ChoiceValue::Integer(candidate))]))
+                        });
+                    }
                     // Linear scan small values for non-monotonic functions.
                     let range_size = ic.max_value.saturating_sub(ic.min_value).saturating_add(1);
                     let scan_count = if range_size <= 128 {
@@ -141,10 +155,25 @@ impl<'a> Shrinker<'a> {
                         }
                     }
                 } else if v < 0 {
+                    // Mirror of the positive branch.  `lo` is the
+                    // absolute value of the simplest (clamped to 0
+                    // below) and we shrink toward `lo` from `-v`
+                    // before flipping the sign back.
                     let lo = ic.simplest().min(0).saturating_abs();
-                    bin_search_down(lo, -v, &mut |candidate| {
-                        self.replace(&HashMap::from([(i, ChoiceValue::Integer(-candidate))]))
-                    });
+                    let dist = ((-v) as u128).saturating_sub(lo as u128);
+                    if dist > 0 {
+                        find_integer(|k| {
+                            let shifted = (dist >> k.min(127)) as i128;
+                            let candidate_abs = lo + shifted;
+                            if candidate_abs < lo {
+                                return false;
+                            }
+                            self.replace(&HashMap::from([(
+                                i,
+                                ChoiceValue::Integer(-candidate_abs),
+                            )]))
+                        });
+                    }
                     // Linear scan small negative values for non-monotonic functions.
                     let range_size = ic.max_value.saturating_sub(ic.min_value).saturating_add(1);
                     let neg_scan = if range_size <= 128 { (-v).min(32) } else { 8 };

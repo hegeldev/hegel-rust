@@ -47,7 +47,7 @@ fn fixate_shrink_passes_runs_passes_to_fixed_point() {
     // Stats: at least one shrink + one call recorded.
     let stats = shrinker.pass_stats(&passes);
     assert_eq!(stats.len(), 1);
-    let (_, calls, shrinks, _) = stats[0];
+    let (_, calls, shrinks, _, _) = stats[0];
     assert!(calls >= 1);
     assert!(shrinks >= 1);
 }
@@ -72,7 +72,7 @@ fn fixate_shrink_passes_records_deletion_stat_when_pass_shortens() {
     shrinker.fixate_shrink_passes(&mut passes);
     assert!(shrinker.current_nodes.is_empty());
     let stats = shrinker.pass_stats(&passes);
-    let (_, _, _, deletions) = stats[0];
+    let (_, _, _, deletions, _) = stats[0];
     assert!(deletions >= 1);
 }
 

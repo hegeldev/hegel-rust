@@ -33,6 +33,11 @@ pub struct ShrinkPass<'a> {
     pub shrinks: usize,
     /// Times the pass step reduced the sequence length.
     pub deletions: usize,
+    /// Total `accept_improvement` events triggered by this pass —
+    /// finer-grained than `shrinks`, which only counts the outer
+    /// step calls that produced any improvement.  Useful for
+    /// diagnosing per-pass shrink-budget consumption.
+    pub improvements: usize,
 }
 
 impl<'a> ShrinkPass<'a> {
@@ -44,6 +49,7 @@ impl<'a> ShrinkPass<'a> {
             calls: 0,
             shrinks: 0,
             deletions: 0,
+            improvements: 0,
         }
     }
 }
@@ -88,7 +94,9 @@ impl<'a> Shrinker<'a> {
                 for _ in 0..MAX_FAILURES {
                     sp.calls += 1;
                     let prev_key = sort_key(&self.current_nodes);
+                    let prev_improvements = self.improvements;
                     (sp.run)(self);
+                    sp.improvements += self.improvements - prev_improvements;
                     let now_key = sort_key(&self.current_nodes);
                     if now_key < prev_key {
                         sp.shrinks += 1;
@@ -137,14 +145,17 @@ impl<'a> Shrinker<'a> {
     }
 
     /// Read-only access to per-pass stats (mainly for tests).
+    ///
+    /// Returns `(name, calls, shrinks, deletions, improvements)`
+    /// tuples for each pass in `passes`.
     #[allow(dead_code)]
     pub fn pass_stats(
         &self,
         passes: &[ShrinkPass<'a>],
-    ) -> Vec<(&'static str, usize, usize, usize)> {
+    ) -> Vec<(&'static str, usize, usize, usize, usize)> {
         passes
             .iter()
-            .map(|sp| (sp.name, sp.calls, sp.shrinks, sp.deletions))
+            .map(|sp| (sp.name, sp.calls, sp.shrinks, sp.deletions, sp.improvements))
             .collect()
     }
 }

@@ -30,7 +30,7 @@ pub use scheduling::ShrinkPass;
 
 use std::collections::{HashMap, HashSet};
 
-use crate::native::core::{ChoiceNode, ChoiceValue, NodeSortKey, Spans, sort_key};
+use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINKS, NodeSortKey, Spans, sort_key};
 
 /// Request passed to the shrinker's test function.
 ///
@@ -71,20 +71,13 @@ pub struct Shrinker<'a> {
     /// Used by `shrink_interesting_examples` to downgrade each predecessor to the
     /// secondary key, mirroring `engine.py::downgrade_choices`.
     pub downgraded: Vec<Vec<ChoiceValue>>,
-    /// Test-only cap on `improvements`.  When set and
-    /// `improvements >= max_improvements`, `consider` and `probe`
-    /// short-circuit so unit tests can drive a controlled number of
-    /// successful shrinks before observing the result.  Production
-    /// runs leave it `None` — `fixate_shrink_passes` terminates on
-    /// its own when no pass produces a strict improvement over a full
-    /// outer iteration.  We don't currently port Hypothesis's
-    /// `MAX_SHRINKS = 500` global cap because the native shrink
-    /// passes consume more `accept_improvement`s per call than the
-    /// Hypothesis equivalents, and a 500-cap regresses
-    /// `test_list_of_fractional_float`.  A faithful `max_stall`
-    /// (`shrinker.py:333-340`) port would be a better fit but is
-    /// follow-up work.
-    pub max_improvements: Option<usize>,
+    /// Cap on `improvements`.  Once `improvements >= max_improvements`,
+    /// `consider` and `probe` short-circuit so the runner doesn't get
+    /// stuck chasing diminishing returns.  Defaults to [`MAX_SHRINKS`]
+    /// (mirrors Hypothesis's hard cap in
+    /// `internal/conjecture/engine.py`); tests can lower it for
+    /// controlled-budget assertions.
+    pub max_improvements: usize,
     /// Snapshot of `current_nodes` at the last call to
     /// [`Shrinker::clear_change_tracking`] (or construction).  Each `consider`
     /// improvement diffs against this baseline so [`Shrinker::changed_nodes`]
@@ -123,7 +116,7 @@ impl<'a> Shrinker<'a> {
             current_spans: initial_spans,
             improvements: 0,
             downgraded: Vec::new(),
-            max_improvements: None,
+            max_improvements: MAX_SHRINKS,
             all_changed_nodes: HashSet::new(),
             consider_cache: HashSet::new(),
         }
@@ -142,10 +135,8 @@ impl<'a> Shrinker<'a> {
         if candidate_key == sort_key(&self.current_nodes) {
             return true;
         }
-        if let Some(max) = self.max_improvements {
-            if self.improvements >= max {
-                return false;
-            }
+        if self.improvements >= self.max_improvements {
+            return false;
         }
         // Negative-result cache: if we already asked the closure
         // about a candidate with this sort_key and it was
@@ -183,10 +174,8 @@ impl<'a> Shrinker<'a> {
     ///
     /// Port of Hypothesis's `shrinker.test_function(TestCase(prefix=..., random=...))`.
     pub(super) fn probe(&mut self, prefix: &[ChoiceValue], seed: u64, max_size: usize) {
-        if let Some(max) = self.max_improvements {
-            if self.improvements >= max {
-                return;
-            }
+        if self.improvements >= self.max_improvements {
+            return;
         }
         let (is_interesting, actual_nodes, actual_spans) = (self.test_fn)(ShrinkRun::Probe {
             prefix,
