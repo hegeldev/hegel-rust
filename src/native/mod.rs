@@ -16,5 +16,6 @@ pub mod intervalsets;
 pub mod re;
 pub mod schema;
 pub mod shrinker;
+pub mod statistics;
 pub mod targeting;
 pub mod test_runner;

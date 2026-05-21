@@ -885,3 +885,183 @@ fn template_count_decrements_on_each_draw() {
     // After overrun, count stays at 0 (we don't underflow into wraparound).
     assert_eq!(tc.trailing_template.as_ref().unwrap().count, Some(0));
 }
+
+// ── biased_integer_sample / new piecewise distribution ────────────────────
+
+fn ic(min_value: i128, max_value: i128) -> IntegerChoice {
+    IntegerChoice {
+        min_value,
+        max_value,
+        shrink_towards: 0,
+    }
+}
+
+#[test]
+fn biased_integer_sample_stays_in_range_for_small_bounds() {
+    let kind = ic(0, 100);
+    let mut rng = SmallRng::seed_from_u64(1);
+    for _ in 0..1000 {
+        let v = biased_integer_sample(&kind, &mut rng);
+        assert!(kind.validate(v), "out of range: {v}");
+    }
+}
+
+#[test]
+fn biased_integer_sample_stays_in_range_for_wide_bounds() {
+    let kind = ic(i64::MIN as i128, i64::MAX as i128);
+    let mut rng = SmallRng::seed_from_u64(2);
+    for _ in 0..2000 {
+        let v = biased_integer_sample(&kind, &mut rng);
+        assert!(kind.validate(v), "out of range: {v}");
+    }
+}
+
+#[test]
+fn biased_integer_sample_stays_in_range_for_full_i128() {
+    let kind = ic(i128::MIN, i128::MAX);
+    let mut rng = SmallRng::seed_from_u64(3);
+    for _ in 0..1000 {
+        let v = biased_integer_sample(&kind, &mut rng);
+        assert!(kind.validate(v), "out of range: {v}");
+    }
+}
+
+#[test]
+fn biased_integer_sample_collapses_when_min_equals_max() {
+    let kind = ic(42, 42);
+    let mut rng = SmallRng::seed_from_u64(4);
+    for _ in 0..100 {
+        assert_eq!(biased_integer_sample(&kind, &mut rng), 42);
+    }
+}
+
+#[test]
+fn biased_integer_sample_produces_diverse_magnitudes_unbounded() {
+    // The new piecewise distribution should produce values across many
+    // orders of magnitude when the range is wide. Use a generous bound on
+    // how many distinct magnitudes we should see — the test is about
+    // avoiding the prior collapse-to-uniform behaviour, not about exact
+    // shape.
+    let kind = ic(i64::MIN as i128, i64::MAX as i128);
+    let mut rng = SmallRng::seed_from_u64(5);
+    let mut magnitudes: HashSet<i32> = HashSet::new();
+    for _ in 0..2000 {
+        let v = biased_integer_sample(&kind, &mut rng);
+        // bucket by bit-length of |v|
+        let mag = if v == 0 {
+            0
+        } else {
+            128 - v.unsigned_abs().leading_zeros() as i32
+        };
+        magnitudes.insert(mag);
+    }
+    // A uniform-only distribution on [i64::MIN, i64::MAX] would land almost
+    // every sample in the top few bits, hitting maybe 3-5 distinct buckets.
+    // The piecewise log-student-t should comfortably exceed that.
+    assert!(
+        magnitudes.len() >= 10,
+        "expected >= 10 magnitude buckets, got {}",
+        magnitudes.len()
+    );
+}
+
+#[test]
+fn biased_integer_sample_concentrates_around_zero_when_unbounded() {
+    // Inner uniform on [-256, 256] gets non-trivial probability mass.
+    // Across many samples we should see values land inside [-256, 256]
+    // far more often than chance for the wider range would suggest.
+    let kind = ic(i64::MIN as i128, i64::MAX as i128);
+    let mut rng = SmallRng::seed_from_u64(6);
+    let mut in_inner = 0;
+    let total = 2000;
+    for _ in 0..total {
+        let v = biased_integer_sample(&kind, &mut rng);
+        if v.unsigned_abs() <= 256 {
+            in_inner += 1;
+        }
+    }
+    // For a strictly uniform distribution on [i64::MIN, i64::MAX], the
+    // probability of |v| <= 256 is ~513/2^64 ≈ 0. We require at least
+    // 5% to confirm the piecewise distribution is doing its job.
+    let fraction = in_inner as f64 / total as f64;
+    assert!(
+        fraction > 0.05,
+        "only {fraction} fraction in [-256, 256]; piecewise distribution not active"
+    );
+}
+
+#[test]
+fn biased_integer_sample_log_skewed_bounded_range_favours_smaller_magnitudes() {
+    // For a range that doesn't include 0 (so the inner uniform branch
+    // doesn't dominate) and avoids most of the constants pool, the
+    // restricted log-student-t should favour values near the smaller
+    // end. The old uniform-fallback would produce a near-uniform
+    // distribution on the range, so its median would land near the
+    // midpoint.
+    let kind = ic(10_000, 10_000_000);
+    let mut rng = SmallRng::seed_from_u64(11);
+    let mut samples: Vec<i128> = (0..2000)
+        .map(|_| biased_integer_sample(&kind, &mut rng))
+        .collect();
+    samples.sort();
+    let median = samples[samples.len() / 2];
+    // Midpoint of the uniform fallback would be ~5_000_000. The new
+    // distribution should land well below that. We use 1_000_000 as a
+    // generous upper bound that the uniform fallback would clear with
+    // overwhelming probability.
+    assert!(
+        median < 1_000_000,
+        "median {median} is too high; expected log-skewed distribution"
+    );
+}
+
+#[test]
+fn biased_integer_sample_narrow_range_uses_uniform_fallback() {
+    // Very-narrow ranges where the CDF window is below the 1e-13 threshold
+    // should fall back to uniform sampling. min == max - 1 is the
+    // smallest non-trivial range; this test exercises the fallback.
+    let kind = ic(0, 1);
+    let mut rng = SmallRng::seed_from_u64(7);
+    let mut seen_zero = false;
+    let mut seen_one = false;
+    for _ in 0..200 {
+        let v = biased_integer_sample(&kind, &mut rng);
+        assert!(kind.validate(v), "out of range: {v}");
+        match v {
+            0 => seen_zero = true,
+            1 => seen_one = true,
+            _ => unreachable!(),
+        }
+        if seen_zero && seen_one {
+            break;
+        }
+    }
+    assert!(seen_zero && seen_one);
+}
+
+#[test]
+fn integer_sample_from_distribution_uniform_fallback_for_indistinguishable_bounds() {
+    // At the extreme tail of i128, `min as f64` and `max as f64` lose
+    // precision and round to the same value. The CDF window is then 0,
+    // which is below the 1e-13 threshold and forces the uniform fallback
+    // (the only path that produces a value in [min, max] when the
+    // distribution-based path can't distinguish the endpoints).
+    let mut rng = SmallRng::seed_from_u64(13);
+    let min = i128::MAX - 1000;
+    let max = i128::MAX;
+    let mut all_endpoints = true;
+    for _ in 0..50 {
+        let v = integer_sample_from_distribution(min, max, &mut rng);
+        assert!(v >= min && v <= max, "out of range: {v}");
+        if v != min && v != max {
+            all_endpoints = false;
+        }
+    }
+    // Uniform should produce interior values, not collapse to endpoints —
+    // distinguishes the fallback path from the inverse-CDF path (which
+    // would saturate to one endpoint when the CDF window is degenerate).
+    assert!(
+        !all_endpoints,
+        "uniform fallback should produce values across the range"
+    );
+}
