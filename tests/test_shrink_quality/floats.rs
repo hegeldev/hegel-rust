@@ -121,6 +121,25 @@ fn test_minimal_fractions_2() {
     );
 }
 
+/// Port of Hypothesis `test_shrinks_downwards_to_integers`
+/// (`tests/quality/test_float_shrinking.py`).  The minimal float
+/// satisfying `x >= min_value` for `min_value >= 0` is `min_value.ceil()`.
+/// (Hypothesis's @given gates `f >= 0`; for negative `f` the minimum is
+/// `0.0` since the shrink target sits inside the allowed range.)
+#[test]
+fn test_shrinks_downwards_to_integers() {
+    for f in [0.5_f64, 1.5, 7.25, 100.0] {
+        let result = minimal(
+            gs::floats::<f64>()
+                .allow_nan(false)
+                .allow_infinity(false)
+                .min_value(f),
+            move |x: &f64| *x >= f,
+        );
+        assert_eq!(result, f.ceil(), "min_value {}", f);
+    }
+}
+
 /// Translate of Hypothesis `test_minimal_fractions_3`.  A list of
 /// at least 5 finite floats shrinks to five zeroes.
 #[test]

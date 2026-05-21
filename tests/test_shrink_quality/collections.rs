@@ -486,3 +486,34 @@ fn test_multiple_empty_lists_are_independent() {
     assert_eq!(xs.len(), 2);
     assert!(xs[0].is_empty() && xs[1].is_empty());
 }
+
+/// Port of Hypothesis `test_dictionary` (`tests/quality/test_shrink_quality.py`).
+/// The empty hashmap is the minimal counterexample for any-predicate;
+/// a `len >= 3` predicate shrinks to a 3-entry map with simplest keys
+/// and empty string values.
+#[test]
+fn test_dictionary_empty_is_minimal() {
+    let result = minimal(
+        gs::hashmaps(gs::integers::<i64>(), gs::text()),
+        |_: &HashMap<i64, String>| true,
+    );
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_dictionary_at_least_three_entries() {
+    let x = minimal(
+        gs::hashmaps(gs::integers::<i64>(), gs::text()),
+        |t: &HashMap<i64, String>| t.len() >= 3,
+    );
+    assert!(x.len() >= 3);
+    let values: HashSet<&String> = x.values().collect();
+    // All values shrink to the empty string.
+    assert_eq!(values.len(), 1);
+    assert_eq!(*values.iter().next().unwrap(), "");
+    for k in x.keys() {
+        if *k < 0 {
+            assert!(x.contains_key(&(*k + 1)));
+        }
+    }
+}
