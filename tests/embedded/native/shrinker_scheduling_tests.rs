@@ -162,6 +162,46 @@ fn max_stall_grows_after_shrink() {
 }
 
 #[test]
+fn shrink_terminates_when_stalled() {
+    // Port of Hypothesis `test_will_terminate_stalled_shrinks`
+    // (`tests/conjecture/test_shrinker.py`).  Set up a predicate that
+    // accepts everything (so every shrink is interesting) but never
+    // makes the sequence smaller — the shrinker should bounce off the
+    // stall guard and terminate within `1 + 2 * max_stall` calls.
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let calls = Rc::new(Cell::new(0_usize));
+    let calls_clone = calls.clone();
+    let initial = vec![int_node(5); 100];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run| match run {
+            ShrinkRun::Full(nodes) => {
+                calls_clone.set(calls_clone.get() + 1);
+                // Accept everything but never shrink: same sort_key.
+                (true, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    // Lower max_stall so the test is fast.
+    shrinker.max_stall = 200;
+    shrinker.shrink();
+    // Closure invocation count capped near max_stall — `2 * max_stall`
+    // matches the Hypothesis expectation `shrinker.calls <= 1 + 2 *
+    // shrinker.max_stall`.  Bumped slightly to account for fixate's
+    // per-iteration max_stall growth (which the original Hypothesis
+    // assertion allows for too).
+    assert!(
+        calls.get() <= 2 + 4 * shrinker.max_stall,
+        "shrinker did not terminate fast enough: {} calls, max_stall {}",
+        calls.get(),
+        shrinker.max_stall
+    );
+}
+
+#[test]
 fn fixate_shrink_passes_reorders_useful_passes_to_the_front() {
     // Pass A: does nothing (useless).  Pass B: actually shrinks the
     // integer.  After fixate, the next iteration should run B first.

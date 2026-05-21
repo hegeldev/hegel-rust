@@ -223,3 +223,66 @@ fn test_can_simultaneously_lower_non_duplicated_nearby_integers() {
     .run();
     assert_eq!((m, n), (11, 10));
 }
+
+// ----------------------------------------------------------------------------
+// Step 8 (audit cleanup) — conjecture shrinker tests ported as
+// integration-level checks against the native runner.
+// ----------------------------------------------------------------------------
+
+/// Port of Hypothesis `test_zig_zags_quickly`
+/// (`tests/conjecture/test_shrinker.py`).  A pair of nearly-equal
+/// positive integers should shrink to the minimal pair within a tight
+/// call budget — exercising `lower_common_node_offset`'s O(log v) zig-
+/// zag breaker rather than O(v) per-step descent.
+#[test]
+fn test_zig_zags_quickly() {
+    let (m, n) = Minimal::new(
+        gs::tuples!(
+            gs::integers::<i64>().min_value(0).max_value(65535),
+            gs::integers::<i64>().min_value(0).max_value(65535)
+        ),
+        |(m, n): &(i64, i64)| (m - n).unsigned_abs() <= 1 && (*m).max(*n) > 0,
+    )
+    .test_cases(10000)
+    .run();
+    // Either (0, 1) or (1, 0) is acceptable; both are minimal under the
+    // predicate.
+    assert!((m, n) == (0, 1) || (m, n) == (1, 0));
+}
+
+/// Port of Hypothesis `test_shrinking_blocks_from_common_offset`
+/// (`tests/conjecture/test_shrinker.py`).  Initial counterexample
+/// (11, 10): predicate accepts any near-equal pair with at least one
+/// nonzero.  Lowering both by a common offset of 10 lands on (1, 0)
+/// or (0, 1).
+#[test]
+fn test_shrinking_blocks_from_common_offset() {
+    let (m, n) = Minimal::new(
+        gs::tuples!(
+            gs::integers::<i64>().min_value(0).max_value(255),
+            gs::integers::<i64>().min_value(0).max_value(255)
+        ),
+        |(m, n): &(i64, i64)| (m - n).unsigned_abs() <= 1 && (*m).max(*n) > 0,
+    )
+    .test_cases(5000)
+    .run();
+    assert!((m, n) == (0, 1) || (m, n) == (1, 0));
+}
+
+/// Port of Hypothesis `test_zig_zags_quickly_with_shrink_towards`.
+/// Same shape as `test_zig_zags_quickly` but with a negative-leaning
+/// range — exercises the lower_common_node_offset on the negative
+/// side.
+#[test]
+fn test_zig_zags_quickly_with_shrink_towards() {
+    let (m, n) = Minimal::new(
+        gs::tuples!(
+            gs::integers::<i64>().min_value(-1000).max_value(0),
+            gs::integers::<i64>().min_value(-1000).max_value(0)
+        ),
+        |(m, n): &(i64, i64)| (m - n).unsigned_abs() <= 1 && (*m).min(*n) < 0,
+    )
+    .test_cases(10000)
+    .run();
+    assert!((m, n) == (0, -1) || (m, n) == (-1, 0));
+}

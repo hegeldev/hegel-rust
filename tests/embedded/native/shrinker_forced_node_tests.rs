@@ -144,6 +144,47 @@ fn mutate_and_shrink_skips_forced_node() {
 }
 
 #[test]
+fn redistribute_numeric_pairs_skips_forced_integer() {
+    // Port of Hypothesis `test_redistribute_with_forced_node_integer`
+    // (`tests/conjecture/test_shrinker.py`).  Starting from (15, 10)
+    // with the second node forced and predicate `n1 + n2 > 20`, the
+    // redistribute_numeric_pairs pass should not modify the forced
+    // node — so the shrink target stays at (15, 10) and doesn't
+    // collapse to (11, 10).
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                let sum: i128 = nodes
+                    .iter()
+                    .filter_map(|n| match n.value {
+                        ChoiceValue::Integer(v) => Some(v),
+                        _ => None,
+                    })
+                    .sum();
+                (sum > 20, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![
+            int_node(15, false),
+            ChoiceNode {
+                kind: ChoiceKind::Integer(IntegerChoice {
+                    min_value: 0,
+                    max_value: 100,
+                    shrink_towards: 0,
+                }),
+                value: ChoiceValue::Integer(10),
+                was_forced: true,
+            },
+        ],
+        Spans::new(),
+    );
+    shrinker.redistribute_numeric_pairs();
+    assert_integer_at(&shrinker, 0, 15);
+    assert_integer_at(&shrinker, 1, 10);
+}
+
+#[test]
 fn normalize_unicode_chars_skips_forced_node() {
     use crate::native::core::choices::StringChoice;
     use crate::native::intervalsets::IntervalSet;

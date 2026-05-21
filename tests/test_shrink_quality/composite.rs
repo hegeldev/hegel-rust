@@ -678,3 +678,72 @@ fn test_mutate_skips_large_result() {
     let v = Minimal::new(g, |_: &Vec<i64>| true).test_cases(200).run();
     assert_eq!(v, vec![0i64; 35]);
 }
+
+// ----------------------------------------------------------------------------
+// Step 8 (audit cleanup) — composite tests ported from Hypothesis.
+// ----------------------------------------------------------------------------
+
+/// Port of Hypothesis `test_can_expand_zeroed_region`
+/// (`tests/conjecture/test_shrinker.py`).  Five integers; the
+/// predicate accepts iff all non-zero values appear before any
+/// zero.  The shrinker should compact to all zeroes (the predicate's
+/// "everything zero" branch).
+#[test]
+fn test_can_expand_zeroed_region() {
+    let g = hegel::compose!(|tc| {
+        let mut nums: Vec<i64> = Vec::new();
+        for _ in 0..5 {
+            nums.push(tc.draw(gs::integers::<i64>().min_value(0).max_value(255)));
+        }
+        nums
+    });
+    let v = Minimal::new(g, |nums: &Vec<i64>| {
+        let mut seen_zero = false;
+        for &n in nums {
+            if n == 0 {
+                seen_zero = true;
+            } else if seen_zero {
+                return false;
+            }
+        }
+        true
+    })
+    .test_cases(5000)
+    .run();
+    assert_eq!(v, vec![0, 0, 0, 0, 0]);
+}
+
+/// Port of Hypothesis `test_retain_end_of_buffer`
+/// (`tests/conjecture/test_shrinker.py`).  The shrinker should
+/// preserve the trailing 0 sentinel while reducing the
+/// middle-of-sequence to minimal contents that still trigger the
+/// 6-marker — converging on a sequence whose simplest form ends with
+/// the 6 and the terminator.
+#[test]
+fn test_retain_end_of_buffer() {
+    let g = hegel::compose!(|tc| {
+        let mut nums: Vec<i64> = Vec::new();
+        loop {
+            let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(255));
+            nums.push(n);
+            if n == 0 {
+                break;
+            }
+            if nums.len() > 50 {
+                break;
+            }
+        }
+        nums
+    });
+    let v = Minimal::new(g, |nums: &Vec<i64>| nums.contains(&6))
+        .test_cases(5000)
+        .run();
+    // Minimal counterexample: just [6, 0] — the 6-marker then the
+    // terminator.
+    assert!(v.contains(&6));
+    assert!(
+        v.len() <= 3,
+        "expected short tail-preserving result, got {:?}",
+        v
+    );
+}
