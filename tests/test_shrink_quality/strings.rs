@@ -103,3 +103,66 @@ fn test_shrink_strips_accent_to_ascii_letter() {
     assert!(lower.contains('e'));
     assert!(s.chars().count() == 1);
 }
+
+// Port of `tests/quality/test_shrink_quality.py::test_shrink_text_differs_from_lower_to_ascii`.
+// Hypothesis regression: text shrinking previously got stuck on a
+// high-codepoint accented letter rather than converging to ASCII 'A'.
+#[test]
+fn test_shrink_text_differs_from_lower_to_ascii() {
+    let s = Minimal::new(gs::text().min_size(1).max_size(8), |s: &String| {
+        *s != s.to_lowercase()
+    })
+    .test_cases(5000)
+    .run();
+    // Counterexample: a single-character string that is not equal to its
+    // lowercased form.  The shortest with the simplest codepoint is "A".
+    assert_eq!(s.chars().count(), 1);
+    assert!(s != s.to_lowercase());
+    // Strongest assertion: the canonical answer.
+    assert_eq!(s, "A");
+}
+
+// Port of `tests/quality/test_shrink_quality.py::test_shrink_text_differs_from_upper_to_ascii`.
+#[test]
+fn test_shrink_text_differs_from_upper_to_ascii() {
+    let s = Minimal::new(gs::text().min_size(1).max_size(8), |s: &String| {
+        *s != s.to_uppercase()
+    })
+    .test_cases(5000)
+    .run();
+    assert_eq!(s.chars().count(), 1);
+    assert!(s != s.to_uppercase());
+    assert_eq!(s, "a");
+}
+
+// Port of `tests/quality/test_shrink_quality.py::test_shrink_decomposes_compatibility_form_to_ascii`.
+// Codepoints that NFKD-decompose to ASCII letters (e.g. Mathematical
+// Bold Capital T) should reduce to the bare letter when the
+// predicate also matches it.
+#[test]
+fn test_shrink_decomposes_compatibility_form_to_ascii() {
+    let s = Minimal::new(gs::text().min_size(1).max_size(8), |s: &String| {
+        s.chars().any(|c| c.eq_ignore_ascii_case(&'t'))
+    })
+    .test_cases(5000)
+    .run();
+    assert_eq!(s.chars().count(), 1);
+    assert!(s.chars().any(|c| c.eq_ignore_ascii_case(&'t')));
+    assert_eq!(s, "T");
+}
+
+// Port of `tests/quality/test_shrink_quality.py::test_shrink_ligature_to_base_character`.
+// 'fi' (U+FB01) NFKD-decomposes to "fi"; the shrinker should land on
+// plain 'F' (a single ASCII letter) when the predicate accepts any
+// 'f'-like character.
+#[test]
+fn test_shrink_ligature_to_base_character() {
+    let s = Minimal::new(gs::text().min_size(1).max_size(8), |s: &String| {
+        s.chars().any(|c| c.eq_ignore_ascii_case(&'f'))
+    })
+    .test_cases(5000)
+    .run();
+    assert_eq!(s.chars().count(), 1);
+    assert!(s.chars().any(|c| c.eq_ignore_ascii_case(&'f')));
+    assert_eq!(s, "F");
+}

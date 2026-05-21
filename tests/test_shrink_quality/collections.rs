@@ -468,3 +468,21 @@ fn test_sort_stale_indices_after_punning() {
         .run();
     }));
 }
+
+// ----------------------------------------------------------------------------
+// Step 7 (audit cleanup) — quality tests ported from Hypothesis.
+// ----------------------------------------------------------------------------
+
+/// Port of Hypothesis `test_multiple_empty_lists_are_independent`
+/// (`tests/quality/test_shrink_quality.py`).  Hypothesis uses
+/// `none()` for the inner element type; Rust uses unit `()`.  The
+/// shrinker should reduce to two distinct empty inner lists.
+#[test]
+fn test_multiple_empty_lists_are_independent() {
+    let xs = minimal(
+        gs::vecs(gs::vecs(gs::booleans()).max_size(0)),
+        |t: &Vec<Vec<bool>>| t.len() >= 2,
+    );
+    assert_eq!(xs.len(), 2);
+    assert!(xs[0].is_empty() && xs[1].is_empty());
+}

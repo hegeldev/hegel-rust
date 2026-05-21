@@ -91,3 +91,43 @@ fn test_nan_canonicalization_prefers_finite_when_predicate_admits() {
         assert!(x.is_nan() || x.is_infinite());
     }
 }
+
+/// Translate of Hypothesis `test_minimal_fractions_1`
+/// (`tests/quality/test_shrink_quality.py`).  Hypothesis works with
+/// arbitrary `Fraction`s; the native runner shrinks `f64`s instead,
+/// but the intent is the same: the simplest finite value satisfying
+/// "true" should be 0.0.
+#[test]
+fn test_minimal_fractions_1() {
+    assert_eq!(
+        minimal(
+            gs::floats::<f64>().allow_nan(false).allow_infinity(false),
+            |_| true
+        ),
+        0.0
+    );
+}
+
+/// Translate of Hypothesis `test_minimal_fractions_2`.  The simplest
+/// finite value satisfying `x >= 1` is 1.0.
+#[test]
+fn test_minimal_fractions_2() {
+    assert_eq!(
+        minimal(
+            gs::floats::<f64>().allow_nan(false).allow_infinity(false),
+            |x: &f64| *x >= 1.0
+        ),
+        1.0
+    );
+}
+
+/// Translate of Hypothesis `test_minimal_fractions_3`.  A list of
+/// at least 5 finite floats shrinks to five zeroes.
+#[test]
+fn test_minimal_fractions_3() {
+    let xs = minimal(
+        gs::vecs(gs::floats::<f64>().allow_nan(false).allow_infinity(false)),
+        |s: &Vec<f64>| s.len() >= 5,
+    );
+    assert_eq!(xs, vec![0.0; 5]);
+}
