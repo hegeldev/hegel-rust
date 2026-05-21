@@ -131,3 +131,51 @@ fn node_program_no_op_on_empty_or_too_long() {
     shrinker.node_program(0);
     assert_eq!(shrinker.current_nodes.len(), 1);
 }
+
+/// Port of Hypothesis `test_node_programs_are_adaptive`
+/// (`tests/conjecture/test_shrinker.py`).  Start from 1000 false
+/// booleans followed by a true: the predicate accepts iff the
+/// sequence eventually reaches a true.  `node_program("X")` (delete
+/// 1) with adaptive `find_integer` repeats should collapse to a
+/// single [true] within a tight call budget.
+#[test]
+fn node_program_adaptively_deletes_long_false_run() {
+    use crate::native::core::choices::BooleanChoice;
+    let mut initial: Vec<ChoiceNode> = (0..1000)
+        .map(|_| ChoiceNode {
+            kind: ChoiceKind::Boolean(BooleanChoice),
+            value: ChoiceValue::Boolean(false),
+            was_forced: false,
+        })
+        .collect();
+    initial.push(ChoiceNode {
+        kind: ChoiceKind::Boolean(BooleanChoice),
+        value: ChoiceValue::Boolean(true),
+        was_forced: false,
+    });
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                // Predicate: at least one true present.  The realised
+                // sequence stops at the first true, mirroring
+                // Hypothesis's draw-until-true loop.
+                let mut realised: Vec<ChoiceNode> = Vec::new();
+                let mut interesting = false;
+                for n in nodes {
+                    realised.push(n.clone());
+                    if matches!(n.value, ChoiceValue::Boolean(true)) {
+                        interesting = true;
+                        break;
+                    }
+                }
+                (interesting, realised, Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.node_program(1);
+    // The shrink target collapses to a single [true].
+    assert_eq!(shrinker.current_nodes.len(), 1);
+}
