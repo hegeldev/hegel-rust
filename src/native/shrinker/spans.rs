@@ -111,15 +111,18 @@ impl<'a> Shrinker<'a> {
             // (or interesting-but-not-smaller) result that still records
             // a span at this index, splice its realised content back into
             // the original sequence and try once more.
-            if sort_key(&self.current_nodes) == prev_key
-                && let Some(new_span) = actual_spans.get(i)
-                && new_span.start <= new_span.end
-                && new_span.end <= actual_nodes.len()
-            {
-                let mut spliced = self.current_nodes[..span.start].to_vec();
-                spliced.extend_from_slice(&actual_nodes[new_span.start..new_span.end]);
-                spliced.extend_from_slice(&self.current_nodes[span.end..]);
-                self.consider(&spliced);
+            //
+            // `if let` chains stabilised after MSRV 1.86, so this is
+            // spelled out as nested conditions instead.
+            if sort_key(&self.current_nodes) == prev_key {
+                if let Some(new_span) = actual_spans.get(i) {
+                    if new_span.start <= new_span.end && new_span.end <= actual_nodes.len() {
+                        let mut spliced = self.current_nodes[..span.start].to_vec();
+                        spliced.extend_from_slice(&actual_nodes[new_span.start..new_span.end]);
+                        spliced.extend_from_slice(&self.current_nodes[span.end..]);
+                        self.consider(&spliced);
+                    }
+                }
             }
             i += 1;
         }
