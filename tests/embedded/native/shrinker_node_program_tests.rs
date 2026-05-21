@@ -135,9 +135,9 @@ fn node_program_no_op_on_empty_or_too_long() {
 /// Port of Hypothesis `test_node_programs_are_adaptive`
 /// (`tests/conjecture/test_shrinker.py`).  Start from 1000 false
 /// booleans followed by a true: the predicate accepts iff the
-/// sequence eventually reaches a true.  `node_program("X")` (delete
-/// 1) with adaptive `find_integer` repeats should collapse to a
-/// single [true] within a tight call budget.
+/// sequence eventually reaches a true.  `node_program("X")`
+/// (delete-one with adaptive `find_integer` repeats) should
+/// collapse to a single `true` within a tight call budget.
 #[test]
 fn node_program_adaptively_deletes_long_false_run() {
     use crate::native::core::choices::BooleanChoice;
