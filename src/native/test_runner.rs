@@ -352,27 +352,14 @@ fn run_main(
                 invalid_calls = 0;
             }
 
-            // The TooSlow guard short-circuits on the 1 s wall-clock
-            // threshold, which the in-process test harness rarely
-            // reaches; covering the `suppress_health_check` tail
-            // requires deliberately stalling the test body.
-            // nocov start
-            if valid_test_cases < HEALTH_CHECK_MAX_VALID
-                && total_test_time > TOO_SLOW_THRESHOLD
-                && !settings
+            too_slow_check(
+                valid_test_cases,
+                total_test_time,
+                TOO_SLOW_THRESHOLD,
+                settings
                     .suppress_health_check
-                    .contains(&HealthCheck::TooSlow)
-            {
-                panic!(
-                    "FailedHealthCheck: TooSlow — input generation is slow: \
-                     only {valid_test_cases} valid inputs after {:?} (threshold \
-                     {:?}). Slow generation makes property testing much less \
-                     effective. If this is expected, suppress the check with \
-                     suppress_health_check = [HealthCheck::TooSlow].",
-                    total_test_time, TOO_SLOW_THRESHOLD
-                );
-            }
-            // nocov end
+                    .contains(&HealthCheck::TooSlow),
+            );
 
             // Fire `optimise_targets` periodically once enough valid
             // examples have accumulated; mirrors Hypothesis's interleaved
@@ -613,7 +600,7 @@ fn run_main(
             (Status::Interesting, Some(failure)) => {
                 failures.push(failure);
             }
-            _ => flaky_final_replay_panic(), // nocov
+            _ => flaky_final_replay_panic(),
         }
     }
 
@@ -638,9 +625,35 @@ fn run_main(
 const MIN_TEST_CALLS: u64 = 10;
 const POST_BUG_EXTRA_CALLS: u64 = 1000;
 
-// nocov start
+/// Panics with the `FailedHealthCheck: TooSlow` message when input
+/// generation has consumed more than `threshold` of wall-clock time
+/// without producing `HEALTH_CHECK_MAX_VALID` valid examples, unless
+/// the user has explicitly suppressed the check.
+///
+/// Extracted from the runner's main loop so a unit test can exercise
+/// both the panicking and the suppressed branches without needing to
+/// stall the in-process test harness for `TOO_SLOW_THRESHOLD` of
+/// real time.
+pub(crate) fn too_slow_check(
+    valid_test_cases: u64,
+    total_test_time: std::time::Duration,
+    threshold: std::time::Duration,
+    suppressed: bool,
+) {
+    if valid_test_cases < HEALTH_CHECK_MAX_VALID && total_test_time > threshold && !suppressed {
+        panic!(
+            "FailedHealthCheck: TooSlow — input generation is slow: \
+             only {valid_test_cases} valid inputs after {:?} (threshold \
+             {:?}). Slow generation makes property testing much less \
+             effective. If this is expected, suppress the check with \
+             suppress_health_check = [HealthCheck::TooSlow].",
+            total_test_time, threshold
+        );
+    }
+}
+
 #[cold]
-fn flaky_final_replay_panic() -> ! {
+pub(crate) fn flaky_final_replay_panic() -> ! {
     panic!(
         "Flaky test detected: Your test produced different outcomes \
          when run with the same generated data — it failed when it \
@@ -649,7 +662,6 @@ fn flaky_final_replay_panic() -> ! {
          global variables, system time, or external random number generators."
     );
 }
-// nocov end
 
 fn should_generate_more(
     no_bug_yet: bool,
@@ -987,3 +999,7 @@ fn hash_string(s: &str) -> u64 {
     }
     hash
 }
+
+#[cfg(test)]
+#[path = "../../tests/embedded/native/test_runner_tests.rs"]
+mod tests;

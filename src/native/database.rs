@@ -131,7 +131,7 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
         }
         let dir = self.key_path(key);
         if std::fs::create_dir_all(&dir).is_err() {
-            return; // nocov — filesystem permission denial, not reachable in tests
+            return;
         }
         let path = self.value_path(key, value);
         if path.exists() {
@@ -160,15 +160,11 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
             self.save(METAKEYS_NAME, dst);
         }
         let dst_dir = self.key_path(dst);
-        // Filesystem permission denial; the dst_dir create_dir_all
-        // call always succeeds in the test harness.
-        // nocov start
         if std::fs::create_dir_all(&dst_dir).is_err() {
             self.delete(src, value);
             self.save(dst, value);
             return;
         }
-        // nocov end
         let src_path = self.value_path(src, value);
         let dst_path = self.value_path(dst, value);
         if std::fs::rename(&src_path, &dst_path).is_err() {
