@@ -86,6 +86,119 @@ fn sort_values_break_when_concurrent_shrink_drops_valid_indices() {
 }
 
 #[test]
+fn redistribute_integers_pair_idx_overshoots_after_concurrent_truncation() {
+    // test_fn truncates current_nodes to a single integer on every Full
+    // run, so pair_idx + gap (built from a stale int_indices snapshot)
+    // overshoots current_ints.len() — the defensive branch decrements
+    // pair_idx and continues.  Without coverage on that branch the
+    // function would silently UB on the index when concurrent shrinks
+    // run during a real shrink pass.
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                let truncated: Vec<ChoiceNode> = nodes.iter().take(1).cloned().collect();
+                (true, truncated, Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(10), int_node(20), int_node(30), int_node(40)],
+        Spans::new(),
+    );
+    shrinker.redistribute_integers();
+    assert_eq!(shrinker.current_nodes.len(), 1);
+}
+
+#[test]
+fn lower_integers_together_break_when_indices_outrun_current_nodes() {
+    // Same shape: every Full run truncates current_nodes, so the
+    // i/j indices captured in the pass's int_indices snapshot
+    // overshoot the live shrink target on the next iteration.
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                let truncated: Vec<ChoiceNode> = nodes.iter().take(1).cloned().collect();
+                (true, truncated, Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(10), int_node(20), int_node(30)],
+        Spans::new(),
+    );
+    shrinker.lower_integers_together();
+    assert!(shrinker.current_nodes.len() <= 3);
+}
+
+#[test]
+fn lower_integers_together_skips_kind_punning() {
+    // test_fn rewrites the second integer node to a Boolean kind on
+    // every replay so `lower_integers_together`'s `let
+    // ChoiceKind::Integer(ic_j) = ...` continue-arm fires.
+    use crate::native::core::choices::BooleanChoice;
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                let mut out: Vec<ChoiceNode> = nodes.to_vec();
+                if out.len() >= 2 {
+                    out[1] = ChoiceNode {
+                        kind: ChoiceKind::Boolean(BooleanChoice),
+                        value: ChoiceValue::Boolean(true),
+                        was_forced: false,
+                    };
+                }
+                (true, out, Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(5), int_node(10)],
+        Spans::new(),
+    );
+    shrinker.lower_integers_together();
+}
+
+#[test]
+fn shrink_duplicates_skips_groups_whose_members_diverged() {
+    // The group key is (kind, value).  A prior pass that changed one
+    // of the duplicates breaks the duplicate property; the
+    // re-validation filter rejects the now-divergent group and the
+    // pass continues with the next group.
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                // Always re-write the second element to a different value
+                // so the (value-keyed) group of 3 collapses to 1 valid.
+                let mut out: Vec<ChoiceNode> = nodes.to_vec();
+                if out.len() >= 2 {
+                    out[1] = int_node(999);
+                }
+                (true, out, Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(7), int_node(7), int_node(7)],
+        Spans::new(),
+    );
+    shrinker.shrink_duplicates();
+}
+
+#[test]
+fn try_shortening_via_increment_break_on_concurrent_shrink() {
+    // try_shortening_via_increment iterates candidates per node; if a
+    // prior consider in the same loop body shortens the sequence past
+    // i, the inner `if i >= len { break }` fires.
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            // Truncate to empty so the loop's `i` overshoots.
+            ShrinkRun::Full(_) => (true, Vec::new(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(5), int_node(10), int_node(15)],
+        Spans::new(),
+    );
+    shrinker.try_shortening_via_increment();
+    assert!(shrinker.current_nodes.is_empty());
+}
+
+#[test]
 fn replace_short_circuits_on_index_past_end_of_attempt() {
     // Doubly cover the replace L317 path: build a HashMap with two
     // entries, one in-range and one beyond, to ensure the early-return

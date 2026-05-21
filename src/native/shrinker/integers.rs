@@ -314,7 +314,6 @@ impl<'a> Shrinker<'a> {
                 // Defensive edge case: only reached when a prior
                 // shrink removed enough integer nodes that
                 // `pair_idx + gap` overshoots the new length.
-                // nocov start
                 if pair_idx + gap >= current_ints.len() {
                     if pair_idx == 0 {
                         break;
@@ -322,7 +321,6 @@ impl<'a> Shrinker<'a> {
                     pair_idx -= 1;
                     continue;
                 }
-                // nocov end
 
                 let i = current_ints[pair_idx];
                 let j = current_ints[pair_idx + gap];
@@ -407,16 +405,16 @@ impl<'a> Shrinker<'a> {
                 let i = int_indices[pair_idx];
                 let j = int_indices[pair_idx + gap];
                 if i >= self.current_nodes.len() || j >= self.current_nodes.len() {
-                    break; // nocov — indices guarded by int_indices construction
+                    break;
                 }
 
                 let (ChoiceKind::Integer(ic_i), ChoiceValue::Integer(v_i)) =
                     (&self.current_nodes[i].kind, &self.current_nodes[i].value)
                 else {
-                    continue; // nocov — int_indices only collects Integer-kind nodes
+                    continue;
                 };
                 let ChoiceKind::Integer(ic_j) = &self.current_nodes[j].kind else {
-                    continue; // nocov — int_indices only collects Integer-kind nodes
+                    continue;
                 };
                 let ChoiceValue::Integer(v_j) = self.current_nodes[j].value else {
                     unreachable!("kind/value mismatch: Integer kind with non-Integer value");
@@ -484,12 +482,12 @@ impl<'a> Shrinker<'a> {
                     find_integer(|n| {
                         let k = n as i128;
                         if k > max_k {
-                            return false; // nocov — k upper bound reached, find_integer terminates
+                            return false;
                         }
                         let new_i = v_i + k;
                         let new_j = v_j + k;
                         if !ic_i.validate(new_i) || !ic_j.validate(new_j) {
-                            return false; // nocov — out-of-range proposal, find_integer skips
+                            return false;
                         }
                         self.replace(&HashMap::from([
                             (i, ChoiceValue::Integer(new_i)),
@@ -576,7 +574,7 @@ impl<'a> Shrinker<'a> {
                 .collect();
 
             if valid.len() < 2 {
-                continue; // nocov — re-validation failure for groups that lost members
+                continue;
             }
 
             let ChoiceKind::Integer(ic) = &self.current_nodes[valid[0]].kind else {
