@@ -27,7 +27,7 @@ mod strings;
 
 pub use scheduling::ShrinkPass;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINKS, NodeSortKey, Spans, sort_key};
 
@@ -86,10 +86,19 @@ pub struct Shrinker<'a> {
     pub calls_at_last_shrink: usize,
     /// Once `calls - calls_at_last_shrink >= max_stall`, further
     /// `consider` / `probe` invocations short-circuit.  Mirrors
-    /// Hypothesis's `shrinker.py:333-340, 387, 1139-1141`: starts at
-    /// 200, grows on every successful shrink by `max(max_stall,
-    /// (calls - calls_at_last_shrink) * 2)` so a long shrink search
-    /// where each step is expensive doesn't get cut off prematurely.
+    /// Hypothesis's `shrinker.py:333-340, 387, 1139-1141`: grows on
+    /// every successful shrink by `max(max_stall, (calls -
+    /// calls_at_last_shrink) * 2)` so a long shrink search where
+    /// each step is expensive doesn't get cut off prematurely.
+    ///
+    /// Default is [`MAX_SHRINKS`] = 500.  Hypothesis defaults to 200
+    /// but its `Shrinker.calls` is shared with the engine's
+    /// generation-phase counter, so by the time shrinking starts
+    /// there's already significant headroom in `calls_at_last_shrink`.
+    /// Our `calls` is shrinker-local and starts at zero, so 200 is
+    /// too tight for predicates that need many cold calls between
+    /// the first few shrinks (the threshold landed mid-`test_bound5`
+    /// redistribute and flaked the result).
     pub max_stall: usize,
     /// Snapshot of `current_nodes` at the last call to
     /// [`Shrinker::clear_change_tracking`] (or construction).  Each `consider`
@@ -111,11 +120,30 @@ pub struct Shrinker<'a> {
     /// check is relative to the live shrink target — a positive that
     /// didn't improve last time might improve now.
     ///
-    /// `consider_cache_set` is the membership index; `consider_cache_order`
-    /// records insertion order so eviction is FIFO rather than the
-    /// undefined order of `HashSet::iter`.
-    consider_cache_set: HashSet<Vec<NodeSortKey>>,
-    consider_cache_order: VecDeque<Vec<NodeSortKey>>,
+    /// Unbounded — matches Hypothesis's `cached_test_function`
+    /// (a Python dict).  Test cases produce a few hundred to a
+    /// few thousand distinct candidates; an unbounded cache caps
+    /// memory at a few MB on the largest seen runs.  Bounding the
+    /// cache with FIFO / LRU eviction introduced a subtle
+    /// determinism issue in seed-dependent shrink trajectories
+    /// (some seeds for `test_bound5` reached `(-52, -99)` instead
+    /// of `(-51, -100)`), so eviction is simply dropped.
+    consider_cache: HashSet<Vec<(u8, NodeSortKey)>>,
+}
+
+/// One-byte tag identifying a `ChoiceKind` variant — used by
+/// `consider_cache` to keep entries for kind-punned candidates
+/// separate.  Must agree across `Shrinker::consider` calls; only the
+/// shrinker reads it.
+fn kind_tag(kind: &crate::native::core::ChoiceKind) -> u8 {
+    use crate::native::core::ChoiceKind::*;
+    match kind {
+        Boolean(_) => 0,
+        Integer(_) => 1,
+        Float(_) => 2,
+        Bytes(_) => 3,
+        String(_) => 4,
+    }
 }
 
 impl<'a> Shrinker<'a> {
@@ -137,10 +165,9 @@ impl<'a> Shrinker<'a> {
             max_improvements: MAX_SHRINKS,
             calls: 0,
             calls_at_last_shrink: 0,
-            max_stall: 200,
+            max_stall: MAX_SHRINKS,
             all_changed_nodes: HashSet::new(),
-            consider_cache_set: HashSet::new(),
-            consider_cache_order: VecDeque::new(),
+            consider_cache: HashSet::new(),
         }
     }
 
@@ -176,7 +203,14 @@ impl<'a> Shrinker<'a> {
         if self.improvements >= self.max_improvements {
             return false;
         }
-        if self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall {
+        // Only enforce the stall guard once we've found at least one
+        // improvement.  Without warmup, predicates that need many calls
+        // to find the first shrink (e.g. `test_bound5` exploring a
+        // large redistribute search space) trip the guard before
+        // making any progress and stall on a sub-minimal target.
+        if self.improvements > 0
+            && self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall
+        {
             return false;
         }
         // Negative-result cache: if we already asked the closure
@@ -185,8 +219,17 @@ impl<'a> Shrinker<'a> {
         // `cached_test_function` (`shrinker.py:390-412`), restricted
         // to the negative case — see the field docstring for why
         // positive results aren't cached.
-        let cache_key: Vec<NodeSortKey> = candidate_key.1.clone();
-        if self.consider_cache_set.contains(&cache_key) {
+        // Cache key bundles the kind discriminant with the per-node
+        // sort key: `NodeSortKey::Scalar(0, false)` is produced both
+        // by `Boolean(false)` and `Integer(0)`, and a cache shared on
+        // sort_key alone would falsely short-circuit kind-punned
+        // candidates that the test_fn would in fact accept.
+        let cache_key: Vec<(u8, NodeSortKey)> = nodes
+            .iter()
+            .zip(candidate_key.1.iter())
+            .map(|(node, sk)| (kind_tag(&node.kind), sk.clone()))
+            .collect();
+        if self.consider_cache.contains(&cache_key) {
             return false;
         }
 
@@ -196,13 +239,8 @@ impl<'a> Shrinker<'a> {
         // we exceed 4096.  Insertion-order is recorded explicitly in
         // `consider_cache_order` — `HashSet::iter` makes no order
         // guarantee, so the previous version was effectively random.
-        if !is_interesting && self.consider_cache_set.insert(cache_key.clone()) {
-            self.consider_cache_order.push_back(cache_key);
-            if self.consider_cache_set.len() > 4096 {
-                if let Some(oldest) = self.consider_cache_order.pop_front() {
-                    self.consider_cache_set.remove(&oldest);
-                }
-            }
+        if !is_interesting {
+            self.consider_cache.insert(cache_key);
         }
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
             self.accept_improvement(actual_nodes, actual_spans);

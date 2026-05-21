@@ -81,6 +81,10 @@ fn consider_short_circuits_when_stalled() {
     // Set max_stall low; feed an uninteresting candidate over and over.
     // After max_stall closure calls without a shrink, consider() should
     // return false immediately without invoking the closure again.
+    //
+    // The stall guard only fires after at least one improvement has
+    // been recorded (warmup: see the field doc for `max_stall`), so
+    // seed an interesting smaller candidate first.
     use std::cell::Cell;
     use std::rc::Rc;
     let counter = Rc::new(Cell::new(0_usize));
@@ -89,22 +93,29 @@ fn consider_short_circuits_when_stalled() {
         Box::new(move |run| match run {
             ShrinkRun::Full(nodes) => {
                 counter_clone.set(counter_clone.get() + 1);
-                (false, nodes.to_vec(), Spans::new())
+                // Anything < 5 is interesting and strictly smaller.
+                let interesting = matches!(nodes[0].value, ChoiceValue::Integer(v) if v < 5);
+                (interesting, nodes.to_vec(), Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         vec![int_node(5)],
         Spans::new(),
     );
+    // Seed one improvement so the stall guard's warmup is satisfied.
+    shrinker.consider(&[int_node(3)]);
+    let baseline = counter.get();
     shrinker.max_stall = 10;
-    for v in 0..50 {
-        shrinker.consider(&[int_node(v as i128 % 100)]);
+    // Reset calls_at_last_shrink so we measure the post-baseline budget.
+    shrinker.calls_at_last_shrink = shrinker.calls;
+    for v in 10..60 {
+        shrinker.consider(&[int_node(v)]);
     }
-    // The closure shouldn't have been invoked more than max_stall times.
+    // Post-baseline closure calls capped at max_stall.
     assert!(
-        counter.get() <= 10,
-        "test_fn invoked {} times, expected <= 10",
-        counter.get()
+        counter.get() - baseline <= 10,
+        "test_fn invoked {} times post-baseline, expected <= 10",
+        counter.get() - baseline
     );
 }
 
