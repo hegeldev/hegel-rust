@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.9 - 2026-05-21
+
+The native backend's integer sampler now uses a piecewise log-Student's-t distribution instead of a uniform fallback. The distribution is bell-shaped in `log_2(|x|)` so integer magnitudes spread smoothly across many decades, rather than concentrating at the high-magnitude end of the requested range. This mirrors [HypothesisWorks/hypothesis#4728](https://github.com/HypothesisWorks/hypothesis/pull/4728).
+
 ## 0.14.8 - 2026-05-20
 
 Internal cleanup. Removes an unused test-only attribute macro and tidies a runtime-directory isolation test so it exercises both backends.
