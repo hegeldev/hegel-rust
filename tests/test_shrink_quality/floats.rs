@@ -140,6 +140,24 @@ fn test_shrinks_downwards_to_integers() {
     }
 }
 
+/// Port of Hypothesis `test_shrinks_downwards_to_integers_when_fractional`
+/// (`tests/quality/test_float_shrinking.py`).  Strictly between `b`
+/// and `2^53`, the minimal fractional (non-integer) float is `b + 0.5`.
+#[test]
+fn test_shrinks_downwards_to_integers_when_fractional() {
+    for b in [1.0_f64, 5.0, 100.0, 12345.0] {
+        let result = minimal(
+            gs::floats::<f64>()
+                .allow_nan(false)
+                .allow_infinity(false)
+                .min_value(b)
+                .max_value(2.0_f64.powi(53)),
+            move |x: &f64| *x > b && x.fract() != 0.0,
+        );
+        assert_eq!(result, b + 0.5, "b {}", b);
+    }
+}
+
 /// Translate of Hypothesis `test_minimal_fractions_3`.  A list of
 /// at least 5 finite floats shrinks to five zeroes.
 #[test]
