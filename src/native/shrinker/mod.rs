@@ -314,7 +314,7 @@ impl<'a> Shrinker<'a> {
         let mut attempt: Vec<ChoiceNode> = self.current_nodes.clone();
         for (&i, v) in values {
             if i >= attempt.len() {
-                return false; // nocov — index range guarded by callers
+                return false;
             }
             if attempt[i].was_forced {
                 // Forced choices stay put — mirrors Hypothesis's
@@ -322,7 +322,7 @@ impl<'a> Shrinker<'a> {
                 return false;
             }
             if !attempt[i].kind.validate(v) {
-                return false; // nocov — kind/value mismatch after one_of branch switch
+                return false;
             }
             attempt[i] = attempt[i].with_value(v.clone());
         }
@@ -473,7 +473,7 @@ pub(crate) fn find_integer(mut f: impl FnMut(usize) -> bool) -> usize {
     while f(hi) {
         lo = hi;
         let Some(next) = hi.checked_mul(2) else {
-            return lo; // nocov — usize overflow guard; tests never reach usize::MAX/2
+            return lo;
         };
         hi = next;
     }
@@ -499,3 +499,7 @@ mod forced_node_tests;
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_cache_tests.rs"]
 mod cache_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_defensive_branch_tests.rs"]
+mod defensive_branch_tests;
