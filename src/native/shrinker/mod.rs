@@ -27,7 +27,7 @@ mod strings;
 
 pub use scheduling::ShrinkPass;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINKS, NodeSortKey, Spans, sort_key};
 
@@ -110,7 +110,12 @@ pub struct Shrinker<'a> {
     /// `accept_improvement`'s `sort_key(actual) < sort_key(current)`
     /// check is relative to the live shrink target — a positive that
     /// didn't improve last time might improve now.
-    consider_cache: HashSet<Vec<NodeSortKey>>,
+    ///
+    /// `consider_cache_set` is the membership index; `consider_cache_order`
+    /// records insertion order so eviction is FIFO rather than the
+    /// undefined order of `HashSet::iter`.
+    consider_cache_set: HashSet<Vec<NodeSortKey>>,
+    consider_cache_order: VecDeque<Vec<NodeSortKey>>,
 }
 
 impl<'a> Shrinker<'a> {
@@ -134,7 +139,8 @@ impl<'a> Shrinker<'a> {
             calls_at_last_shrink: 0,
             max_stall: 200,
             all_changed_nodes: HashSet::new(),
-            consider_cache: HashSet::new(),
+            consider_cache_set: HashSet::new(),
+            consider_cache_order: VecDeque::new(),
         }
     }
 
@@ -180,22 +186,23 @@ impl<'a> Shrinker<'a> {
         // to the negative case — see the field docstring for why
         // positive results aren't cached.
         let cache_key: Vec<NodeSortKey> = candidate_key.1.clone();
-        if self.consider_cache.contains(&cache_key) {
+        if self.consider_cache_set.contains(&cache_key) {
             return false;
         }
 
         self.calls += 1;
         let (is_interesting, actual_nodes, actual_spans) = (self.test_fn)(ShrinkRun::Full(nodes));
-        // Bounded cache: drop entries arbitrarily when we exceed 4096
-        // entries.  Insertion-order eviction is enough — we don't
-        // need recency information.
-        if !is_interesting {
-            if self.consider_cache.len() >= 4096 {
-                if let Some(some_key) = self.consider_cache.iter().next().cloned() {
-                    self.consider_cache.remove(&some_key);
+        // Bounded cache with FIFO eviction: drop the oldest entry once
+        // we exceed 4096.  Insertion-order is recorded explicitly in
+        // `consider_cache_order` — `HashSet::iter` makes no order
+        // guarantee, so the previous version was effectively random.
+        if !is_interesting && self.consider_cache_set.insert(cache_key.clone()) {
+            self.consider_cache_order.push_back(cache_key);
+            if self.consider_cache_set.len() > 4096 {
+                if let Some(oldest) = self.consider_cache_order.pop_front() {
+                    self.consider_cache_set.remove(&oldest);
                 }
             }
-            self.consider_cache.insert(cache_key);
         }
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
             self.accept_improvement(actual_nodes, actual_spans);
@@ -488,3 +495,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_forced_node_tests.rs"]
 mod forced_node_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_cache_tests.rs"]
+mod cache_tests;
