@@ -71,9 +71,19 @@ pub struct Shrinker<'a> {
     /// Used by `shrink_interesting_examples` to downgrade each predecessor to the
     /// secondary key, mirroring `engine.py::downgrade_choices`.
     pub downgraded: Vec<Vec<ChoiceValue>>,
-    /// Optional cap on `improvements`.  When `improvements >= max_improvements`,
-    /// `consider` and `probe` return `false` without running the test function,
-    /// causing the shrinker to stall and exit naturally.
+    /// Test-only cap on `improvements`.  When set and
+    /// `improvements >= max_improvements`, `consider` and `probe`
+    /// short-circuit so unit tests can drive a controlled number of
+    /// successful shrinks before observing the result.  Production
+    /// runs leave it `None` — `fixate_shrink_passes` terminates on
+    /// its own when no pass produces a strict improvement over a full
+    /// outer iteration.  We don't currently port Hypothesis's
+    /// `MAX_SHRINKS = 500` global cap because the native shrink
+    /// passes consume more `accept_improvement`s per call than the
+    /// Hypothesis equivalents, and a 500-cap regresses
+    /// `test_list_of_fractional_float`.  A faithful `max_stall`
+    /// (`shrinker.py:333-340`) port would be a better fit but is
+    /// follow-up work.
     pub max_improvements: Option<usize>,
     /// Snapshot of `current_nodes` at the last call to
     /// [`Shrinker::clear_change_tracking`] (or construction).  Each `consider`
@@ -133,12 +143,9 @@ impl<'a> Shrinker<'a> {
             return true;
         }
         if let Some(max) = self.max_improvements {
-            // `max_improvements` is only set in tests.
-            // nocov start
             if self.improvements >= max {
                 return false;
             }
-            // nocov end
         }
         // Negative-result cache: if we already asked the closure
         // about a candidate with this sort_key and it was
@@ -177,12 +184,9 @@ impl<'a> Shrinker<'a> {
     /// Port of Hypothesis's `shrinker.test_function(TestCase(prefix=..., random=...))`.
     pub(super) fn probe(&mut self, prefix: &[ChoiceValue], seed: u64, max_size: usize) {
         if let Some(max) = self.max_improvements {
-            // `max_improvements` is only set in tests.
-            // nocov start
             if self.improvements >= max {
                 return;
             }
-            // nocov end
         }
         let (is_interesting, actual_nodes, actual_spans) = (self.test_fn)(ShrinkRun::Probe {
             prefix,
