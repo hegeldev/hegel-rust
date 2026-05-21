@@ -147,10 +147,23 @@ impl<'a> Shrinker<'a> {
                         if cur_v > 0 {
                             let upper = (cur_v - 1).min(ic.min_value.saturating_neg());
                             if upper >= 1 {
+                                // Seed at -upper, then shift-right-descend the
+                                // absolute value toward 1 via find_integer.
                                 self.replace(&HashMap::from([(i, ChoiceValue::Integer(-upper))]));
-                                bin_search_down(1, upper, &mut |a| {
-                                    self.replace(&HashMap::from([(i, ChoiceValue::Integer(-a))]))
-                                });
+                                let dist = (upper - 1) as u128;
+                                if dist > 0 {
+                                    find_integer(|k| {
+                                        let shifted = (dist >> k.min(127)) as i128;
+                                        let candidate_abs = 1 + shifted;
+                                        if candidate_abs < 1 {
+                                            return false;
+                                        }
+                                        self.replace(&HashMap::from([(
+                                            i,
+                                            ChoiceValue::Integer(-candidate_abs),
+                                        )]))
+                                    });
+                                }
                             }
                         }
                     }
@@ -222,11 +235,24 @@ impl<'a> Shrinker<'a> {
                         if cur_v < 0 {
                             let upper = (-cur_v - 1).min(ic.max_value);
                             if upper >= 1 {
+                                // Seed at +upper, then shift-right-descend
+                                // toward lo_pos via find_integer.
                                 self.replace(&HashMap::from([(i, ChoiceValue::Integer(upper))]));
                                 let lo_pos = ic.simplest().max(0);
-                                bin_search_down(lo_pos, upper, &mut |c| {
-                                    self.replace(&HashMap::from([(i, ChoiceValue::Integer(c))]))
-                                });
+                                let dist = (upper - lo_pos) as u128;
+                                if dist > 0 {
+                                    find_integer(|k| {
+                                        let shifted = (dist >> k.min(127)) as i128;
+                                        let candidate = lo_pos + shifted;
+                                        if candidate < lo_pos {
+                                            return false;
+                                        }
+                                        self.replace(&HashMap::from([(
+                                            i,
+                                            ChoiceValue::Integer(candidate),
+                                        )]))
+                                    });
+                                }
                                 // Linear scan positive values.
                                 let scan_count = if range_size <= 128 {
                                     range_size.min(32)
@@ -573,50 +599,119 @@ impl<'a> Shrinker<'a> {
                 unreachable!("kind/value invariant violated: outer match guaranteed this variant")
             };
 
-            // Binary search all simultaneously toward zero.
+            // Shift-right adaptive descent of all members in lockstep,
+            // followed by shrink_by_multiples(2) and (1) to land on the
+            // boundary.  Mirrors Hypothesis's `Integer.shift_right`
+            // applied to a duplicate group, and the per-node block
+            // earlier in this file.  Each probe re-reads the current
+            // value of `valid[0]` so the descent starts from the live
+            // shrink target — the previous bin_search_down captured the
+            // entry value and stalled on the second probe because every
+            // member had moved.
+            let valid_capture = valid.clone();
+            let group_replace = |sh: &mut Shrinker<'_>, candidate: i128| -> bool {
+                let current_valid: Vec<usize> = valid_capture
+                    .iter()
+                    .copied()
+                    .filter(|&i| i < sh.current_nodes.len())
+                    .collect();
+                if current_valid.len() < 2 {
+                    return false;
+                }
+                let replacements: HashMap<usize, ChoiceValue> = current_valid
+                    .iter()
+                    .map(|&i| (i, ChoiceValue::Integer(candidate)))
+                    .collect();
+                sh.replace(&replacements)
+            };
             if cur_value > 0 {
                 let lo = ic.simplest().max(0);
-                let v_cur = cur_value;
-                bin_search_down(lo, v_cur, &mut |candidate| {
-                    // Re-validate indices.
-                    let current_valid: Vec<usize> = valid
-                        .iter()
-                        .copied()
-                        .filter(|&i| {
-                            i < self.current_nodes.len()
-                                && matches!(&self.current_nodes[i].value, ChoiceValue::Integer(v) if *v == cur_value)
-                        })
-                        .collect();
-                    if current_valid.len() < 2 {
-                        return false; // nocov — concurrent re-validation guard
+                let dist = (cur_value - lo) as u128;
+                if dist > 0 {
+                    find_integer(|k| {
+                        let shifted = (dist >> k.min(127)) as i128;
+                        let candidate = lo + shifted;
+                        if candidate < lo {
+                            return false;
+                        }
+                        group_replace(self, candidate)
+                    });
+                }
+                let live_base = |sh: &Shrinker<'_>| -> Option<i128> {
+                    match sh.current_nodes[valid_capture[0]].value {
+                        ChoiceValue::Integer(v) => Some(v),
+                        _ => None,
                     }
-                    let replacements: HashMap<usize, ChoiceValue> = current_valid
-                        .iter()
-                        .map(|&i| (i, ChoiceValue::Integer(candidate)))
-                        .collect();
-                    self.replace(&replacements)
-                });
+                };
+                if matches!(live_base(self), Some(b) if b > lo) {
+                    find_integer(|n| {
+                        let Some(base) = live_base(self) else {
+                            return false;
+                        };
+                        let attempt = base - 2 * (n as i128);
+                        if attempt < lo {
+                            return false;
+                        }
+                        group_replace(self, attempt)
+                    });
+                }
+                if matches!(live_base(self), Some(b) if b > lo) {
+                    find_integer(|n| {
+                        let Some(base) = live_base(self) else {
+                            return false;
+                        };
+                        let attempt = base - (n as i128);
+                        if attempt < lo {
+                            return false;
+                        }
+                        group_replace(self, attempt)
+                    });
+                }
             } else if cur_value < 0 {
                 let lo = ic.simplest().min(0).saturating_abs();
                 let v_abs = -cur_value;
-                bin_search_down(lo, v_abs, &mut |candidate| {
-                    let current_valid: Vec<usize> = valid
-                        .iter()
-                        .copied()
-                        .filter(|&i| {
-                            i < self.current_nodes.len()
-                                && matches!(&self.current_nodes[i].value, ChoiceValue::Integer(v) if *v == cur_value)
-                        })
-                        .collect();
-                    if current_valid.len() < 2 {
-                        return false; // nocov — concurrent re-validation guard
+                let dist = (v_abs - lo) as u128;
+                if dist > 0 {
+                    find_integer(|k| {
+                        let shifted = (dist >> k.min(127)) as i128;
+                        let candidate_abs = lo + shifted;
+                        if candidate_abs < lo {
+                            return false;
+                        }
+                        group_replace(self, -candidate_abs)
+                    });
+                }
+                let live_base = |sh: &Shrinker<'_>| -> Option<i128> {
+                    match sh.current_nodes[valid_capture[0]].value {
+                        ChoiceValue::Integer(v) => Some(v),
+                        _ => None,
                     }
-                    let replacements: HashMap<usize, ChoiceValue> = current_valid
-                        .iter()
-                        .map(|&i| (i, ChoiceValue::Integer(-candidate)))
-                        .collect();
-                    self.replace(&replacements)
-                });
+                };
+                let neg_hi = -lo;
+                if matches!(live_base(self), Some(b) if b < neg_hi) {
+                    find_integer(|n| {
+                        let Some(base) = live_base(self) else {
+                            return false;
+                        };
+                        let attempt = base + 2 * (n as i128);
+                        if attempt > neg_hi {
+                            return false;
+                        }
+                        group_replace(self, attempt)
+                    });
+                }
+                if matches!(live_base(self), Some(b) if b < neg_hi) {
+                    find_integer(|n| {
+                        let Some(base) = live_base(self) else {
+                            return false;
+                        };
+                        let attempt = base + (n as i128);
+                        if attempt > neg_hi {
+                            return false;
+                        }
+                        group_replace(self, attempt)
+                    });
+                }
             }
         }
     }

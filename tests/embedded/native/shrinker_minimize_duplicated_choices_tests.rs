@@ -3,7 +3,9 @@
 //!
 //! Hypothesis reference: `shrinker.py:1379-1406`.
 
-use crate::native::core::choices::{BooleanChoice, BytesChoice, FloatChoice, StringChoice};
+use crate::native::core::choices::{
+    BooleanChoice, BytesChoice, FloatChoice, IntegerChoice, StringChoice,
+};
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::shrinker::{ShrinkRun, Shrinker};
@@ -36,6 +38,18 @@ fn bytes_node(value: Vec<u8>) -> ChoiceNode {
             max_size: 16,
         }),
         value: ChoiceValue::Bytes(value),
+        was_forced: false,
+    }
+}
+
+fn integer_node(value: i128, min_value: i128, max_value: i128) -> ChoiceNode {
+    ChoiceNode {
+        kind: ChoiceKind::Integer(IntegerChoice {
+            min_value,
+            max_value,
+            shrink_towards: 0,
+        }),
+        value: ChoiceValue::Integer(value),
         was_forced: false,
     }
 }
@@ -151,4 +165,100 @@ fn shrink_duplicates_keeps_distinct_values_separate() {
             _ => unreachable!(),
         }
     }
+}
+
+/// Predicate "all members of the integer group are equal and >=
+/// threshold" — interesting iff they form a uniform value at or above
+/// threshold.  Drives `shrink_duplicates` into its multi-member
+/// descent path (L580 in `integers.rs`) so we can assert the
+/// shift_right descent uses ~log log instead of ~log accept_improvements.
+fn group_accepts_uniform_at_least(initial: Vec<ChoiceNode>, threshold: i128) -> Shrinker<'static> {
+    Shrinker::with_probe(
+        Box::new(move |run| match run {
+            ShrinkRun::Full(nodes) => {
+                let int_vals: Vec<i128> = nodes
+                    .iter()
+                    .filter_map(|n| match &n.value {
+                        ChoiceValue::Integer(v) => Some(*v),
+                        _ => None,
+                    })
+                    .collect();
+                let interesting = int_vals.len() >= 2
+                    && int_vals.iter().all(|v| *v == int_vals[0])
+                    && int_vals[0] >= threshold;
+                (interesting, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    )
+}
+
+#[test]
+fn shrink_duplicates_positive_descent_is_log_log() {
+    // Five copies of a very large integer (10^15) constrained to
+    // remain equal and >= 100.  With shift_right descent this should
+    // converge in ~7 accept_improvements (log log of 10^15);
+    // bin_search_down would take ~50.
+    let initial: Vec<ChoiceNode> = (0..5)
+        .map(|_| integer_node(1_000_000_000_000_000, 0, i128::MAX))
+        .collect();
+    let mut shrinker = group_accepts_uniform_at_least(initial, 100);
+    shrinker.shrink_duplicates();
+
+    for n in &shrinker.current_nodes {
+        match n.value {
+            ChoiceValue::Integer(v) => assert_eq!(v, 100),
+            _ => unreachable!(),
+        }
+    }
+    assert!(
+        shrinker.improvements < 30,
+        "shrink_duplicates positive descent should be log-log; saw {} improvements",
+        shrinker.improvements
+    );
+}
+
+#[test]
+fn shrink_duplicates_negative_descent_is_log_log() {
+    // Mirror of the positive case: predicate accepts uniform-negative
+    // groups <= -threshold.  Tests the L602 bin_search_down branch.
+    let initial: Vec<ChoiceNode> = (0..5)
+        .map(|_| integer_node(-1_000_000_000_000_000, i128::MIN + 1, 0))
+        .collect();
+    // Predicate accepts uniform integer groups <= -100.
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run| match run {
+            ShrinkRun::Full(nodes) => {
+                let int_vals: Vec<i128> = nodes
+                    .iter()
+                    .filter_map(|n| match &n.value {
+                        ChoiceValue::Integer(v) => Some(*v),
+                        _ => None,
+                    })
+                    .collect();
+                let interesting = int_vals.len() >= 2
+                    && int_vals.iter().all(|v| *v == int_vals[0])
+                    && int_vals[0] <= -100;
+                (interesting, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.shrink_duplicates();
+
+    for n in &shrinker.current_nodes {
+        match n.value {
+            ChoiceValue::Integer(v) => assert_eq!(v, -100),
+            _ => unreachable!(),
+        }
+    }
+    assert!(
+        shrinker.improvements < 30,
+        "shrink_duplicates negative descent should be log-log; saw {} improvements",
+        shrinker.improvements
+    );
 }
