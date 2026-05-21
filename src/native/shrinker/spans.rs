@@ -145,11 +145,14 @@ impl<'a> Shrinker<'a> {
         // may rebuild current_spans, which would invalidate live indices —
         // re-reading from the snapshot after every consider would mean
         // recomputing the per-label index every time.  Hypothesis runs
-        // this pass via a Chooser that tracks exhausted branches; the
-        // `ChoiceTree` infrastructure exists (`choicetree.rs`) but
-        // isn't yet integrated, so for now we iterate all candidates
-        // from the initial snapshot and let each consider() bail
-        // naturally on a stale ancestor.
+        // this pass via a Chooser that tracks exhausted branches across
+        // pass invocations; that requires per-pass persistent state
+        // hooked into `fixate_shrink_passes` which we don't currently
+        // support.  Instead we iterate all candidates from the initial
+        // snapshot and let each consider() bail naturally on a stale
+        // ancestor — the negative-result cache in `consider` covers
+        // the cross-invocation deduplication ChoiceTree would otherwise
+        // give us.
         let spans: Vec<(usize, usize, String)> = self
             .current_spans
             .iter()
