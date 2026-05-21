@@ -78,6 +78,20 @@ pub struct Shrinker<'a> {
     /// `internal/conjecture/engine.py`); tests can lower it for
     /// controlled-budget assertions.
     pub max_improvements: usize,
+    /// Total number of times the test closure has been invoked through
+    /// `consider` or `probe`.  Used together with `calls_at_last_shrink`
+    /// + `max_stall` to detect runaway shrink searches.
+    pub calls: usize,
+    /// Value of `calls` at the moment of the most recent
+    /// `accept_improvement`.  See `max_stall`.
+    pub calls_at_last_shrink: usize,
+    /// Once `calls - calls_at_last_shrink >= max_stall`, further
+    /// `consider` / `probe` invocations short-circuit.  Mirrors
+    /// Hypothesis's `shrinker.py:333-340, 387, 1139-1141`: starts at
+    /// 200, grows on every successful shrink by `max(max_stall,
+    /// (calls - calls_at_last_shrink) * 2)` so a long shrink search
+    /// where each step is expensive doesn't get cut off prematurely.
+    pub max_stall: usize,
     /// Snapshot of `current_nodes` at the last call to
     /// [`Shrinker::clear_change_tracking`] (or construction).  Each `consider`
     /// improvement diffs against this baseline so [`Shrinker::changed_nodes`]
@@ -117,6 +131,9 @@ impl<'a> Shrinker<'a> {
             improvements: 0,
             downgraded: Vec::new(),
             max_improvements: MAX_SHRINKS,
+            calls: 0,
+            calls_at_last_shrink: 0,
+            max_stall: 200,
             all_changed_nodes: HashSet::new(),
             consider_cache: HashSet::new(),
         }
@@ -138,6 +155,9 @@ impl<'a> Shrinker<'a> {
         if self.improvements >= self.max_improvements {
             return false;
         }
+        if self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall {
+            return false;
+        }
         // Negative-result cache: if we already asked the closure
         // about a candidate with this sort_key and it was
         // uninteresting, short-circuit.  Mirrors
@@ -149,6 +169,7 @@ impl<'a> Shrinker<'a> {
             return false;
         }
 
+        self.calls += 1;
         let (is_interesting, actual_nodes, actual_spans) = (self.test_fn)(ShrinkRun::Full(nodes));
         // Bounded cache: drop entries arbitrarily when we exceed 4096
         // entries.  Insertion-order eviction is enough — we don't
@@ -177,6 +198,10 @@ impl<'a> Shrinker<'a> {
         if self.improvements >= self.max_improvements {
             return;
         }
+        if self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall {
+            return;
+        }
+        self.calls += 1;
         let (is_interesting, actual_nodes, actual_spans) = (self.test_fn)(ShrinkRun::Probe {
             prefix,
             seed,
@@ -194,6 +219,14 @@ impl<'a> Shrinker<'a> {
         let old: Vec<ChoiceValue> = self.current_nodes.iter().map(|n| n.value.clone()).collect();
         self.downgraded.push(old);
         self.improvements += 1;
+        // Grow max_stall so a long shrink search doesn't get cut off
+        // prematurely.  Mirrors `shrinker.py:1139-1141`.
+        let span = self.calls.saturating_sub(self.calls_at_last_shrink);
+        let grown = span.saturating_mul(2);
+        if grown > self.max_stall {
+            self.max_stall = grown;
+        }
+        self.calls_at_last_shrink = self.calls;
         Self::update_change_tracking(
             &self.last_checkpoint_nodes,
             &new_nodes,

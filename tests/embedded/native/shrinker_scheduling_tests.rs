@@ -77,6 +77,80 @@ fn fixate_shrink_passes_records_deletion_stat_when_pass_shortens() {
 }
 
 #[test]
+fn consider_short_circuits_when_stalled() {
+    // Set max_stall low; feed an uninteresting candidate over and over.
+    // After max_stall closure calls without a shrink, consider() should
+    // return false immediately without invoking the closure again.
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let counter = Rc::new(Cell::new(0_usize));
+    let counter_clone = counter.clone();
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run| match run {
+            ShrinkRun::Full(nodes) => {
+                counter_clone.set(counter_clone.get() + 1);
+                (false, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(5)],
+        Spans::new(),
+    );
+    shrinker.max_stall = 10;
+    for v in 0..50 {
+        shrinker.consider(&[int_node(v as i128 % 100)]);
+    }
+    // The closure shouldn't have been invoked more than max_stall times.
+    assert!(
+        counter.get() <= 10,
+        "test_fn invoked {} times, expected <= 10",
+        counter.get()
+    );
+}
+
+#[test]
+fn max_stall_grows_after_shrink() {
+    // A test_fn that's interesting for v < 10 but uninteresting
+    // otherwise.  Each successful shrink should grow max_stall by
+    // 2 * (calls - calls_at_last_shrink) so the shrinker doesn't
+    // run out of budget on long descents.
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                let v = match &nodes[0].value {
+                    ChoiceValue::Integer(v) => *v,
+                    _ => unreachable!(),
+                };
+                (v < 10, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(20)],
+        Spans::new(),
+    );
+    // Lower max_stall so the grow step is observable without burning
+    // hundreds of calls.
+    shrinker.max_stall = 5;
+    // Seed an improvement first to anchor calls_at_last_shrink.
+    let accepted_first = shrinker.consider(&[int_node(9)]);
+    assert!(accepted_first);
+    let stall_after_first = shrinker.max_stall;
+    // Burn 3 uninteresting calls (still within stall budget).
+    for v in 11..14 {
+        shrinker.consider(&[int_node(v)]);
+    }
+    // Another improvement.  span = calls - calls_at_last_shrink ≈ 3;
+    // grown = 6 > 5, so max_stall should grow.
+    shrinker.consider(&[int_node(5)]);
+    assert!(
+        shrinker.max_stall > stall_after_first,
+        "max_stall failed to grow: {} -> {}",
+        stall_after_first,
+        shrinker.max_stall
+    );
+}
+
+#[test]
 fn fixate_shrink_passes_reorders_useful_passes_to_the_front() {
     // Pass A: does nothing (useless).  Pass B: actually shrinks the
     // integer.  After fixate, the next iteration should run B first.
