@@ -9,9 +9,7 @@
 //! is one whole pass invocation: a step is considered to have made
 //! progress when the shrink target's sort_key strictly decreased.  A
 //! finer-grained `&mut Chooser`-based step is a future refinement; the
-//! scheduling skeleton here stays the same either way.  The main
-//! `shrink()` loop uses the deterministic pass order directly;
-//! `fixate_shrink_passes` is currently only exercised by tests.
+//! scheduling skeleton here stays the same either way.
 
 use crate::native::core::sort_key;
 
@@ -64,9 +62,7 @@ impl<'a> Shrinker<'a> {
     ///   shrink-search doesn't trigger the runner's stall guard.
     ///
     /// Returns when no pass made any progress over a full outer
-    /// iteration.  Currently exercised only by tests; `shrink()` uses
-    /// the deterministic pass order directly.
-    #[allow(dead_code)]
+    /// iteration.  Called by [`Shrinker::shrink`].
     pub fn fixate_shrink_passes(&mut self, passes: &mut [ShrinkPass<'a>]) {
         const MAX_FAILURES: usize = 20;
         let mut any_ran = true;

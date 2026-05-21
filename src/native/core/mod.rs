@@ -18,8 +18,5 @@ pub use state::{ManyState, NativeTestCase, NativeVariables, Span, Spans};
 /// Maximum number of choices a single test case can make.
 pub const BUFFER_SIZE: usize = 8 * 1024;
 
-/// Maximum iterations of the outer shrink loop.
-pub const MAX_SHRINK_ITERATIONS: usize = 500;
-
 /// Probability of drawing a boundary/special value per special candidate.
 pub const BOUNDARY_PROBABILITY: f64 = 0.01;

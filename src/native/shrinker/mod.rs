@@ -26,17 +26,11 @@ mod sequence;
 mod spans;
 mod strings;
 
-// Test-only convenience re-export.  `fixate_shrink_passes` is a
-// public API for hooking up custom pass lists; the main `shrink()`
-// loop uses the deterministic order directly.
-#[allow(unused_imports)]
 pub use scheduling::ShrinkPass;
 
 use std::collections::{HashMap, HashSet};
 
-use crate::native::core::{
-    ChoiceNode, ChoiceValue, MAX_SHRINK_ITERATIONS, NodeSortKey, Spans, sort_key,
-};
+use crate::native::core::{ChoiceNode, ChoiceValue, NodeSortKey, Spans, sort_key};
 
 /// Request passed to the shrinker's test function.
 ///
@@ -295,56 +289,90 @@ impl<'a> Shrinker<'a> {
     /// minimization passes, finishing with the index-generic and
     /// entropy-based passes.
     pub fn shrink(&mut self) {
-        let mut prev: Vec<NodeSortKey> = Vec::new();
-        let mut iterations = 0;
-
-        loop {
-            let current_key: Vec<NodeSortKey> =
-                self.current_nodes.iter().map(|n| n.sort_key()).collect();
-            if current_key == prev || iterations >= MAX_SHRINK_ITERATIONS {
-                break;
-            }
-            prev = current_key;
-            iterations += 1;
-
-            // Hypothesis-ported span-aware passes layered ahead of
-            // the native passes — they catch shapes the per-type
-            // passes can't see.
-            self.remove_discarded();
-            self.try_trivial_spans();
-            self.pass_to_descendant();
-            self.reorder_spans();
-
+        // Build the pass list and hand it to the scheduler.  Each pass
+        // is wrapped in a `ShrinkPass` so `fixate_shrink_passes` can
+        // track per-pass stats and re-order them by recent success
+        // between outer iterations.
+        let mut passes: Vec<ShrinkPass> = vec![
+            // Span-aware passes — catch shapes the per-type passes
+            // can't see, run ahead of them.
+            ShrinkPass::new(
+                "remove_discarded",
+                Box::new(|sh| {
+                    sh.remove_discarded();
+                }),
+            ),
+            ShrinkPass::new("try_trivial_spans", Box::new(|sh| sh.try_trivial_spans())),
+            ShrinkPass::new("pass_to_descendant", Box::new(|sh| sh.pass_to_descendant())),
+            ShrinkPass::new("reorder_spans", Box::new(|sh| sh.reorder_spans())),
             // Node-program adaptive deletion (Hypothesis's
-            // `node_program("X" * n)` family) layered before the
-            // native chunked deletion loop.
-            for n in [5usize, 4, 3, 2, 1] {
-                self.node_program(n);
-            }
-            self.delete_chunks();
-            self.zero_choices();
-            self.swap_integer_sign();
-            self.binary_search_integer_towards_zero();
-            self.bind_deletion();
-            self.minimize_individual_choices();
-            self.lower_common_node_offset();
-            self.redistribute_integers();
-            self.lower_integers_together();
-            self.shrink_duplicates();
-            self.sort_values();
-            self.swap_adjacent_blocks();
-            self.shrink_floats();
-            self.redistribute_numeric_pairs();
-            self.shrink_bytes();
-            self.redistribute_bytes_pairs();
-            self.shrink_strings();
-            self.lower_duplicated_characters();
-            self.normalize_unicode_chars();
-            self.redistribute_string_pairs();
-            self.lower_and_bump();
-            self.try_shortening_via_increment();
-            self.mutate_and_shrink();
-        }
+            // `node_program("X" * n)` family).
+            ShrinkPass::new("node_program_5", Box::new(|sh| sh.node_program(5))),
+            ShrinkPass::new("node_program_4", Box::new(|sh| sh.node_program(4))),
+            ShrinkPass::new("node_program_3", Box::new(|sh| sh.node_program(3))),
+            ShrinkPass::new("node_program_2", Box::new(|sh| sh.node_program(2))),
+            ShrinkPass::new("node_program_1", Box::new(|sh| sh.node_program(1))),
+            ShrinkPass::new("delete_chunks", Box::new(|sh| sh.delete_chunks())),
+            ShrinkPass::new("zero_choices", Box::new(|sh| sh.zero_choices())),
+            ShrinkPass::new("swap_integer_sign", Box::new(|sh| sh.swap_integer_sign())),
+            ShrinkPass::new(
+                "binary_search_integer_towards_zero",
+                Box::new(|sh| sh.binary_search_integer_towards_zero()),
+            ),
+            ShrinkPass::new("bind_deletion", Box::new(|sh| sh.bind_deletion())),
+            ShrinkPass::new(
+                "minimize_individual_choices",
+                Box::new(|sh| sh.minimize_individual_choices()),
+            ),
+            ShrinkPass::new(
+                "lower_common_node_offset",
+                Box::new(|sh| sh.lower_common_node_offset()),
+            ),
+            ShrinkPass::new(
+                "redistribute_integers",
+                Box::new(|sh| sh.redistribute_integers()),
+            ),
+            ShrinkPass::new(
+                "lower_integers_together",
+                Box::new(|sh| sh.lower_integers_together()),
+            ),
+            ShrinkPass::new("shrink_duplicates", Box::new(|sh| sh.shrink_duplicates())),
+            ShrinkPass::new("sort_values", Box::new(|sh| sh.sort_values())),
+            ShrinkPass::new(
+                "swap_adjacent_blocks",
+                Box::new(|sh| sh.swap_adjacent_blocks()),
+            ),
+            ShrinkPass::new("shrink_floats", Box::new(|sh| sh.shrink_floats())),
+            ShrinkPass::new(
+                "redistribute_numeric_pairs",
+                Box::new(|sh| sh.redistribute_numeric_pairs()),
+            ),
+            ShrinkPass::new("shrink_bytes", Box::new(|sh| sh.shrink_bytes())),
+            ShrinkPass::new(
+                "redistribute_bytes_pairs",
+                Box::new(|sh| sh.redistribute_bytes_pairs()),
+            ),
+            ShrinkPass::new("shrink_strings", Box::new(|sh| sh.shrink_strings())),
+            ShrinkPass::new(
+                "lower_duplicated_characters",
+                Box::new(|sh| sh.lower_duplicated_characters()),
+            ),
+            ShrinkPass::new(
+                "normalize_unicode_chars",
+                Box::new(|sh| sh.normalize_unicode_chars()),
+            ),
+            ShrinkPass::new(
+                "redistribute_string_pairs",
+                Box::new(|sh| sh.redistribute_string_pairs()),
+            ),
+            ShrinkPass::new("lower_and_bump", Box::new(|sh| sh.lower_and_bump())),
+            ShrinkPass::new(
+                "try_shortening_via_increment",
+                Box::new(|sh| sh.try_shortening_via_increment()),
+            ),
+            ShrinkPass::new("mutate_and_shrink", Box::new(|sh| sh.mutate_and_shrink())),
+        ];
+        self.fixate_shrink_passes(&mut passes);
     }
 }
 
