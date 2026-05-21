@@ -152,6 +152,22 @@ impl<'a> Shrinker<'a> {
         if candidate_key == sort_key(&self.current_nodes) {
             return true;
         }
+        // Forced-node guard: a candidate may not differ from the
+        // current shrink target at any index marked `was_forced`.
+        // Mirrors Hypothesis's invariant that forced choices stay put
+        // through shrinking.  `replace` enforces this on its own
+        // single-position path; consider covers callers that build
+        // candidate sequences directly (try_shortening_via_increment,
+        // delete_chunks, span passes, …).
+        for (i, candidate) in nodes
+            .iter()
+            .enumerate()
+            .take(nodes.len().min(self.current_nodes.len()))
+        {
+            if self.current_nodes[i].was_forced && candidate.value != self.current_nodes[i].value {
+                return false;
+            }
+        }
         if self.improvements >= self.max_improvements {
             return false;
         }
@@ -469,3 +485,7 @@ pub(crate) fn find_integer(mut f: impl FnMut(usize) -> bool) -> usize {
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_spans_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_forced_node_tests.rs"]
+mod forced_node_tests;
