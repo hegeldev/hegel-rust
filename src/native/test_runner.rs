@@ -139,6 +139,8 @@ fn run_main(
         Database::Disabled => None,
     };
 
+    let mut persister = Persister::new(db.as_deref(), database_key);
+
     let mut ctx = EngineCtx::new(run_case);
 
     // Local data tree used by the generation phase to drive `for_probe`
@@ -194,6 +196,14 @@ fn run_main(
                     if run.nodes.len() != stored_choices.len() {
                         replay_aligned = false;
                     }
+                    // Re-save the realised choice sequence: the stored
+                    // raw bytes may not match `serialize_choices(run.nodes)`
+                    // if the replay realised a shorter prefix, and we
+                    // want the persister's "last saved primary" entry to
+                    // be byte-accurate for later downgrades.  Any stale
+                    // raw bytes still in primary are reconciled to
+                    // `secondary` by the end-of-run save.
+                    persister.record(&origin, &run.nodes);
                     update_interesting(&mut interesting, origin, run.nodes);
                 } else {
                     // Non-interesting (or invalid) replay: the stored
@@ -247,6 +257,7 @@ fn run_main(
             let origin = run.origin.clone().unwrap_or_default();
             first_bug_at = Some(calls);
             last_bug_at = Some(calls);
+            persister.record(&origin, &run.nodes);
             update_interesting(&mut interesting, origin, run.nodes.clone());
         }
     }
@@ -402,6 +413,7 @@ fn run_main(
                     first_bug_at = Some(calls);
                 }
                 last_bug_at = Some(calls);
+                persister.record(&origin, &run.nodes);
                 update_interesting(&mut interesting, origin, run.nodes.clone());
             } else if run.status == Status::Valid {
                 // Bump `calls` by the *actual* number of probes
@@ -417,6 +429,7 @@ fn run_main(
                         first_bug_at = Some(calls);
                     }
                     last_bug_at = Some(calls);
+                    persister.record(&origin, &mut_nodes);
                     update_interesting(&mut interesting, origin, mut_nodes);
                 }
             }
@@ -475,6 +488,7 @@ fn run_main(
 
             let target_origin = origin.clone();
             let shrunk = {
+                let persister_ref = &mut persister;
                 let mut shrinker = Shrinker::with_probe(
                     Box::new(|req: ShrinkRun| {
                         if verbosity == Verbosity::Verbose {
@@ -491,6 +505,14 @@ fn run_main(
                             } => ctx.run_probe_with_origin(prefix, seed, max_size, &target_origin),
                         };
                         calls += 1;
+                        // If this probe matched the target origin, persist it
+                        // immediately. The persister's sort-key check ensures
+                        // only strict improvements actually touch the disk,
+                        // and a Ctrl-C any time after this returns leaves the
+                        // best known counterexample saved to the primary key.
+                        if result.0 {
+                            persister_ref.record(&target_origin, &result.1);
+                        }
                         result
                     }),
                     verify.nodes,
@@ -668,6 +690,65 @@ fn update_interesting(
                 e.insert(nodes);
             }
         }
+    }
+}
+
+/// Incremental database-save bookkeeping. Mirrors Hypothesis's
+/// `save_choices` / `downgrade_choices` calls inside `test_function`: every
+/// time a new interesting result is found (or an existing one is
+/// shortlex-improved), the realised choice sequence is saved to the primary
+/// key and the displaced previous entry is moved to the secondary key.
+///
+/// Persisting incrementally — rather than only at the end of `run_main` — is
+/// what guarantees that a failure survives a Ctrl-C / SIGTERM mid-shrink:
+/// the moment the runner discovers the failure (and at every subsequent
+/// improvement), the bytes are on disk.
+struct Persister<'a> {
+    db: Option<&'a dyn TestCaseDatabase>,
+    database_key: Option<&'a str>,
+    /// For each origin we've saved at least once, the choice-node sequence
+    /// of the most recent save. Used to (a) decide whether a new result is
+    /// shortlex-smaller and therefore worth saving, and (b) compute the
+    /// bytes to downgrade when it is.
+    last_saved: HashMap<String, Vec<ChoiceNode>>,
+}
+
+impl<'a> Persister<'a> {
+    fn new(db: Option<&'a dyn TestCaseDatabase>, database_key: Option<&'a str>) -> Self {
+        Persister {
+            db,
+            database_key,
+            last_saved: HashMap::new(),
+        }
+    }
+
+    /// Record an interesting result for `origin`. If this is the first
+    /// sighting, or shortlex-precedes the previous save, the new bytes are
+    /// written to the primary key and any previously-saved bytes for this
+    /// origin are downgraded to the secondary key.
+    fn record(&mut self, origin: &str, nodes: &[ChoiceNode]) {
+        let Some(db) = self.db else { return };
+        let Some(key) = self.database_key else { return };
+        let key_bytes = key.as_bytes();
+        let new_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+        let new_bytes = serialize_choices(&new_choices);
+
+        let needs_save = match self.last_saved.get(origin) {
+            None => true,
+            Some(prev) => sort_key(nodes) < sort_key(prev),
+        };
+        if !needs_save {
+            return;
+        }
+
+        if let Some(prev) = self.last_saved.get(origin) {
+            let prev_choices: Vec<ChoiceValue> = prev.iter().map(|n| n.value.clone()).collect();
+            let prev_bytes = serialize_choices(&prev_choices);
+            let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
+            db.move_value(key_bytes, &secondary_key, &prev_bytes);
+        }
+        db.save(key_bytes, &new_bytes);
+        self.last_saved.insert(origin.to_string(), nodes.to_vec());
     }
 }
 
