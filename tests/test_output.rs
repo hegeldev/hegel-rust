@@ -449,6 +449,157 @@ fn main() {
     }
 }
 
+mod verbose_per_test_case_output {
+    //! In-process tests for the per-test-case verbose output: notes printing
+    //! in every test case, stop-reason lines for Invalid/Overrun, and the
+    //! panic diagnostic emitted as soon as a non-final test case fails.
+    //!
+    //! These tests capture output via `hegel::with_output_override`, which
+    //! also intercepts the new verbose output paths.
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::{Arc, Mutex};
+
+    use hegel::generators as gs;
+    use hegel::{Hegel, Settings, Verbosity};
+
+    fn collect_output<F>(verbosity: Verbosity, body: F) -> Vec<String>
+    where
+        F: FnMut(hegel::TestCase) + 'static,
+    {
+        collect_output_with_cases(verbosity, 20, body)
+    }
+
+    fn collect_output_with_cases<F>(verbosity: Verbosity, test_cases: u64, body: F) -> Vec<String>
+    where
+        F: FnMut(hegel::TestCase) + 'static,
+    {
+        let buf: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let buf_writer = buf.clone();
+        let sink: Arc<dyn Fn(&str) + Send + Sync> =
+            Arc::new(move |s: &str| buf_writer.lock().unwrap().push(s.to_string()));
+
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            hegel::with_output_override(sink, || {
+                Hegel::new(body)
+                    .settings(
+                        Settings::new()
+                            .verbosity(verbosity)
+                            .test_cases(test_cases)
+                            .database(None)
+                            .derandomize(true),
+                    )
+                    .run();
+            });
+        }));
+
+        buf.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn verbose_notes_print_in_every_test_case() {
+        // At Verbose, `note()` should emit on every test case, not just on
+        // the final replay. The exact number of test cases the backend
+        // actually executes is up to the engine (Hypothesis may
+        // short-circuit at derandomize), so we assert "more than one",
+        // which is the bit that wasn't true before this change.
+        let lines = collect_output(Verbosity::Verbose, |tc| {
+            let _ = tc.draw(gs::booleans());
+            tc.note("hello from a test case");
+        });
+        let n = lines
+            .iter()
+            .filter(|s| s.contains("hello from a test case"))
+            .count();
+        assert!(
+            n >= 2,
+            "expected the note to print in multiple test cases, got {} matches in {:?}",
+            n,
+            lines
+        );
+    }
+
+    #[test]
+    fn normal_mode_does_not_print_notes_for_non_final_test_cases() {
+        // Regression check on the original behavior: at Normal verbosity a
+        // passing run prints no notes at all (there's no final replay).
+        let lines = collect_output(Verbosity::Normal, |tc| {
+            let _ = tc.draw(gs::booleans());
+            tc.note("should not appear");
+        });
+        assert!(
+            !lines.iter().any(|s| s.contains("should not appear")),
+            "expected no notes at Normal verbosity, got {:?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn verbose_prints_stop_reason_for_failed_assumption() {
+        let lines = collect_output(Verbosity::Verbose, |tc| {
+            tc.assume(false);
+        });
+        assert!(
+            lines.iter().any(|s| s.contains("failed assumption")),
+            "expected a stop-reason line about a failed assumption, got {:?}",
+            lines
+        );
+    }
+
+    #[cfg(feature = "native")]
+    #[test]
+    fn verbose_prints_stop_reason_for_out_of_data() {
+        // A vec with a min_size larger than the native choice budget
+        // (`BUFFER_SIZE = 8192`) forces StopTest, which the lifecycle
+        // records as Overrun. The server backend triggers a
+        // Hypothesis-side `large_base_example` health check long before
+        // we can reach this codepath, so this test runs on native only.
+        // The tight integer range keeps the sampler quick — we only
+        // need to fill choice slots, not generate interesting values.
+        let lines = collect_output_with_cases(Verbosity::Verbose, 2, |tc| {
+            let _: Vec<i64> = tc.draw(
+                gs::vecs(gs::integers::<i64>().min_value(0).max_value(1))
+                    .min_size(9_000),
+            );
+        });
+        assert!(
+            lines.iter().any(|s| s.contains("out of data")),
+            "expected a stop-reason line about out of data, got {:?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn verbose_prints_full_panic_message_when_a_test_case_fails() {
+        // The full panic diagnostic ("thread '...' panicked at ...:\n<msg>")
+        // should appear as soon as a non-final test case fails, not only in
+        // the final summary.
+        let lines = collect_output(Verbosity::Verbose, |tc| {
+            let _ = tc.draw(gs::booleans());
+            panic!("the canary panic message");
+        });
+        assert!(
+            lines.iter().any(|s| s.contains("the canary panic message")),
+            "expected the panic message to appear during the verbose run, got {:?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn normal_mode_does_not_print_stop_reason_for_failed_assumption() {
+        // The new stop-reason lines must be silent at Normal verbosity.
+        let lines = collect_output(Verbosity::Normal, |tc| {
+            tc.assume(false);
+        });
+        assert!(
+            !lines
+                .iter()
+                .any(|s| s.contains("failed assumption") || s.contains("out of data")),
+            "did not expect any stop-reason lines at Normal verbosity, got {:?}",
+            lines
+        );
+    }
+}
+
 mod debug_information {
     use super::common::project::TempRustProject;
     use std::sync::OnceLock;
