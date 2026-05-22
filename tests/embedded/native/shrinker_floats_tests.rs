@@ -199,3 +199,40 @@ fn shrink_floats_negative_large_magnitude_uses_is_neg_branch() {
         _ => unreachable!(),
     }
 }
+
+/// Regression for the negative-bound `shrink_by_multiples` step.
+/// Starting from a huge-magnitude negative float with a predicate that
+/// admits everything `<= -3.0`, `shift_right` halves the magnitude
+/// until it overshoots to `-4.0` (because `-2.0` is rejected, but
+/// `-4.0` is accepted).  The follow-up `shrink_by_multiples(2)` /
+/// `(1)` then needs to peel the last unit off the magnitude to land
+/// on the exact predicate boundary at `-3.0`.  Before the fix, that
+/// loop was a no-op for `is_neg=true` (the `lo` bound was computed
+/// from `fc.min_value` instead of `fc.max_value`), so the shrinker
+/// stopped at `-4.0`.
+#[test]
+fn shrink_floats_negative_shrink_by_multiples_reaches_predicate_boundary() {
+    // 2^60 is well past `MAX_PRECISE_INTEGER` so the
+    // |v| >= MAX_PRECISE_INTEGER branch fires.
+    let v0 = -(1i64 << 60) as f64;
+    let initial = vec![float_node(v0, -(1i128 << 61) as f64, -1.0)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                let interesting = matches!(
+                    nodes[0].value,
+                    ChoiceValue::Float(v) if v <= -3.0 && v.is_finite()
+                );
+                (interesting, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.shrink_floats();
+    match shrinker.current_nodes[0].value {
+        ChoiceValue::Float(v) => assert_eq!(v, -3.0),
+        _ => unreachable!(),
+    }
+}

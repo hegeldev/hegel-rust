@@ -923,23 +923,9 @@ mod shrink_quality {
                 s < -150
             },
         );
-        // Sum is exactly -151 in every minimal counterexample, with all
-        // mass in the last two slots.  The canonical answer is
-        // `(-51, -100)`; a small fraction of seeds still converge on
-        // the neighbouring `(-52, -99)`, indicating residual
-        // non-determinism in the redistribute / shrink-passes
-        // interaction that has not yet been root-caused.  Pin the
-        // invariant rather than the exact split.
-        let (a, b, c, d, e) = result;
-        assert!(a.is_empty() && b.is_empty() && c.is_empty());
-        assert_eq!(d.len() + e.len(), 2);
-        assert_eq!(d.iter().chain(e.iter()).sum::<i64>(), -151);
-        let mags: Vec<i64> = d.iter().chain(e.iter()).map(|v| -v).collect();
-        let min = *mags.iter().min().unwrap();
-        let max = *mags.iter().max().unwrap();
-        assert!(
-            min >= 51 && max <= 100,
-            "(-{min}, -{max}) outside expected band"
+        assert_eq!(
+            result,
+            (vec![], vec![], vec![], vec![-51_i64], vec![-100_i64])
         );
     }
 }
