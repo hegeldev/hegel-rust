@@ -202,6 +202,40 @@ fn shrink_terminates_when_stalled() {
 }
 
 #[test]
+fn fixate_passes_does_full_run_even_when_stalled() {
+    // Port of Hypothesis `test_will_let_fixate_shrink_passes_do_a_full_run_through`.
+    // Starting target [0, 1, 2, ..., 19] with a predicate that
+    // requires exactly that order, set max_stall low and hand 5
+    // node_program passes.  Every pass should get at least one call
+    // even though the stall guard fires repeatedly.
+    let initial: Vec<ChoiceNode> = (0..20).map(int_node).collect();
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                let interesting = nodes
+                    .iter()
+                    .enumerate()
+                    .all(|(i, n)| matches!(n.value, ChoiceValue::Integer(v) if v == i as i128));
+                (interesting, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.max_stall = 5;
+    let mut passes: Vec<ShrinkPass> = (1..=5)
+        .map(|i| ShrinkPass::new("node_program", Box::new(move |sh| sh.node_program(i))))
+        .collect();
+    shrinker.fixate_shrink_passes(&mut passes);
+    // Every pass got at least one call — fixate didn't bail out
+    // before running the full pass list.
+    for sp in &passes {
+        assert!(sp.calls > 0, "pass {} never ran", sp.name);
+    }
+}
+
+#[test]
 fn fixate_shrink_passes_reorders_useful_passes_to_the_front() {
     // Pass A: does nothing (useless).  Pass B: actually shrinks the
     // integer.  After fixate, the next iteration should run B first.

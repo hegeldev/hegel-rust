@@ -747,3 +747,43 @@ fn test_retain_end_of_buffer() {
         v
     );
 }
+
+/// Port of Hypothesis `test_duplicate_nodes_that_go_away`
+/// (`tests/conjecture/test_shrinker.py`).  Two equal positive
+/// integers x, y followed by `x & 255` bytes each of value 1.
+/// Predicate: x == y AND the bytes set has at most one element.
+/// Minimum: (0, 0) with no trailing bytes — both x and y can shrink
+/// to zero together via `minimize_duplicated_choices`.
+#[test]
+fn test_duplicate_nodes_that_go_away() {
+    let g = hegel::compose!(|tc| {
+        let x: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(255));
+        let y: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(255));
+        let mut bytes: Vec<i64> = Vec::new();
+        for _ in 0..(x & 255) {
+            bytes.push(tc.draw(gs::integers::<i64>().min_value(0).max_value(255)));
+        }
+        (x, y, bytes)
+    });
+    let (x, y, b) = Minimal::new(g, |(x, y, b): &(i64, i64, Vec<i64>)| {
+        if x != y {
+            return false;
+        }
+        let set: std::collections::HashSet<&i64> = b.iter().collect();
+        set.len() <= 1
+    })
+    .test_cases(5000)
+    .run();
+    assert_eq!((x, y), (0, 0));
+    assert!(b.is_empty());
+}
+
+// `test_accidental_duplication` (Hypothesis
+// `tests/conjecture/test_shrinker.py`) deferred: the predicate
+// (`x == y AND x >= 5 AND uniform bytes`) is too narrow for
+// random search to find an initial counterexample within a
+// reasonable attempt budget.  Hypothesis bypasses this with
+// `@shrinking_from((12, 12) + (b"\2",) * 12)` — a fixture-based
+// approach we don't currently expose at integration level.  Port
+// requires either an embedded shrinker fixture or extending
+// `Minimal` to accept a seed counterexample.

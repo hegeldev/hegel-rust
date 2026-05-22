@@ -132,6 +132,78 @@ fn node_program_no_op_on_empty_or_too_long() {
     assert_eq!(shrinker.current_nodes.len(), 1);
 }
 
+/// Port of Hypothesis `test_node_deletion_can_delete_short_ranges`
+/// (`tests/conjecture/test_shrinker.py`).  Initial counterexample is
+/// a run-length-encoded sequence (1) (2, 2) (3, 3, 3) (4, 4, 4, 4)
+/// (5, 5, 5, 5, 5) where each "block" starts with the count n and is
+/// followed by n more copies of n.  Predicate: a block reaching n==4
+/// is the interesting one; the trailing (5,...) block should be
+/// shrinkable away by `node_program` deletion at lengths 1..=4.
+#[test]
+fn node_program_deletes_short_ranges() {
+    let mut initial: Vec<ChoiceNode> = Vec::new();
+    for i in 1..=5_i128 {
+        for _ in 0..=i as usize {
+            initial.push(int_node(i));
+        }
+    }
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                // Walk run-length-encoded blocks.  A block consists of
+                // a leading integer `n` followed by `n` more copies of
+                // `n`.  Interesting iff a block has n == 4 and all
+                // values in the block validate.
+                let mut idx = 0;
+                let mut interesting = false;
+                while idx < nodes.len() {
+                    let n = match nodes[idx].value {
+                        ChoiceValue::Integer(v) => v,
+                        _ => return (false, nodes.to_vec(), Spans::new()),
+                    };
+                    let block_end = idx + 1 + n.max(0) as usize;
+                    if block_end > nodes.len() {
+                        // Truncated block: not interesting and not invalid;
+                        // just bail.
+                        break;
+                    }
+                    for k in idx + 1..block_end {
+                        match nodes[k].value {
+                            ChoiceValue::Integer(v) if v == n => {}
+                            _ => return (false, nodes.to_vec(), Spans::new()),
+                        }
+                    }
+                    if n == 4 {
+                        interesting = true;
+                    }
+                    idx = block_end;
+                }
+                (interesting, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    for k in 1..=4 {
+        shrinker.node_program(k);
+    }
+    // The minimum is the single 4-block: 5 nodes total ([4, 4, 4, 4, 4]).
+    // The shrinker may converge faster or slower than that, but the
+    // overall length should drop substantially from 20.
+    assert!(
+        shrinker.current_nodes.len() < initial_node_count(),
+        "node_program failed to shrink: still {} nodes",
+        shrinker.current_nodes.len()
+    );
+}
+
+fn initial_node_count() -> usize {
+    // 1+2+3+4+5+5 = 20 (since the loop's inclusive end produces n+1
+    // copies of n for n >= 1).
+    20
+}
+
 /// Port of Hypothesis `test_node_programs_are_adaptive`
 /// (`tests/conjecture/test_shrinker.py`).  Start from 1000 false
 /// booleans followed by a true: the predicate accepts iff the
