@@ -407,10 +407,14 @@ impl<'a> Shrinker<'a> {
                 let (ChoiceKind::Integer(ic_i), ChoiceValue::Integer(v_i)) =
                     (&self.current_nodes[i].kind, &self.current_nodes[i].value)
                 else {
-                    continue;
+                    unreachable!(
+                        "int_indices is rebuilt on entry; kind-pun between iterations would have re-filtered i out"
+                    );
                 };
                 let ChoiceKind::Integer(ic_j) = &self.current_nodes[j].kind else {
-                    continue;
+                    unreachable!(
+                        "int_indices is rebuilt on entry; kind-pun between iterations would have re-filtered j out"
+                    );
                 };
                 let ChoiceValue::Integer(v_j) = self.current_nodes[j].value else {
                     unreachable!("kind/value mismatch: Integer kind with non-Integer value");
@@ -461,9 +465,9 @@ impl<'a> Shrinker<'a> {
                         }
                         let new_i = v_i - k;
                         let new_j = v_j - k;
-                        if !ic_i.validate(new_i) || !ic_j.validate(new_j) {
-                            return false;
-                        }
+                        // `replace` already calls `kind.validate`; the
+                        // pre-check here is redundant, so let invalid
+                        // candidates fall through to replace's check.
                         self.replace(&HashMap::from([
                             (i, ChoiceValue::Integer(new_i)),
                             (j, ChoiceValue::Integer(new_j)),
@@ -482,9 +486,6 @@ impl<'a> Shrinker<'a> {
                         }
                         let new_i = v_i + k;
                         let new_j = v_j + k;
-                        if !ic_i.validate(new_i) || !ic_j.validate(new_j) {
-                            return false;
-                        }
                         self.replace(&HashMap::from([
                             (i, ChoiceValue::Integer(new_i)),
                             (j, ChoiceValue::Integer(new_j)),
@@ -631,7 +632,7 @@ impl<'a> Shrinker<'a> {
                 let live_base = |sh: &Shrinker<'_>| -> i128 {
                     match sh.current_nodes[valid_capture[0]].value {
                         ChoiceValue::Integer(v) => v,
-                        _ => i128::MAX,
+                        _ => unreachable!("group filter only retains Integer-kind members"),
                     }
                 };
                 if live_base(self) > lo {
@@ -660,7 +661,7 @@ impl<'a> Shrinker<'a> {
                 let live_base = |sh: &Shrinker<'_>| -> i128 {
                     match sh.current_nodes[valid_capture[0]].value {
                         ChoiceValue::Integer(v) => v,
-                        _ => i128::MIN,
+                        _ => unreachable!("group filter only retains Integer-kind members"),
                     }
                 };
                 let neg_hi = -lo;

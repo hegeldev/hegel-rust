@@ -225,7 +225,6 @@ impl<'a> Shrinker<'a> {
                         };
                         for step in [2i128, 1] {
                             let i_capture = i;
-                            let fc_capture = fc.clone();
                             find_integer(|n| {
                                 let attempt = base_after - step * (n as i128);
                                 if attempt < lo {
@@ -237,9 +236,8 @@ impl<'a> Shrinker<'a> {
                                 } else {
                                     candidate_mag
                                 };
-                                if !fc_capture.validate(candidate) {
-                                    return false;
-                                }
+                                // `replace` checks `kind.validate`; the
+                                // pre-check here is redundant.
                                 self.replace(&HashMap::from([(
                                     i_capture,
                                     ChoiceValue::Float(candidate),
@@ -262,14 +260,14 @@ impl<'a> Shrinker<'a> {
                         // shrink; we try both.
                         for rounded in [scaled.floor(), scaled.ceil()] {
                             let candidate_mag = rounded / scale;
-                            if !candidate_mag.is_finite() {
-                                continue;
-                            }
-                            // Only consider values strictly smaller
-                            // (in lex order) than current.  A larger
-                            // rounded value would never improve the
-                            // sort_key.
-                            if float_to_index(candidate_mag) >= float_to_index(cur_abs) {
+                            // Skip values that wouldn't actually shrink
+                            // (or that aren't finite — `fc.validate`
+                            // would reject those anyway, but the
+                            // lex-index comparison needs a finite
+                            // operand).
+                            if !candidate_mag.is_finite()
+                                || float_to_index(candidate_mag) >= float_to_index(cur_abs)
+                            {
                                 continue;
                             }
                             let candidate = if is_neg {

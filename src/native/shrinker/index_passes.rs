@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use crate::native::bignum::{BigUint, Zero};
-use crate::native::core::{ChoiceNode, ChoiceValue};
+use crate::native::core::ChoiceValue;
 
 use super::Shrinker;
 
@@ -198,13 +198,10 @@ pub(super) fn try_bump_ij(
     j: usize,
     bump_val: &ChoiceValue,
 ) -> bool {
-    let nodes: &[ChoiceNode] = &shrinker.current_nodes;
-    if j >= nodes.len() {
-        return false;
-    }
-    if !nodes[j].kind.validate(bump_val) {
-        return false;
-    }
+    // `replace` checks `j < len` (via its `i >= attempt.len()`
+    // short-circuit) and `kind.validate(bump_val)` itself, so the
+    // pre-checks here would be redundant.  Let `replace` reject
+    // invalid attempts on its own.
     let replacements: HashMap<usize, ChoiceValue> = [(i, new_val.clone()), (j, bump_val.clone())]
         .into_iter()
         .collect();
