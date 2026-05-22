@@ -265,11 +265,11 @@ fn shrink_duplicates_negative_descent_is_log_log() {
 
 /// Cover the `valid.len() < 2` continue at integers.rs:573-575 inside
 /// `shrink_duplicates`.  Two groups (value=7 and value=8); the
-/// test_fn collapses every position to 0 on every Full call so
-/// accept_improvement fires whichever group is processed first
-/// (HashMap iteration is non-deterministic).  After the first
-/// group's replace lands, the OTHER group's re-validation finds zero
-/// matching members and hits the branch.
+/// test_fn always returns a length-1 truncation so after the first
+/// group's replace, the OTHER group's `i < current_nodes.len()`
+/// filter has both indices out of range and the branch fires.
+/// Order-independent: whichever HashMap iteration hits first, the
+/// second group's indices fall out of range.
 #[test]
 fn shrink_duplicates_skips_group_invalidated_by_concurrent_shrink() {
     let initial = vec![
@@ -280,12 +280,10 @@ fn shrink_duplicates_skips_group_invalidated_by_concurrent_shrink() {
     ];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
-            ShrinkRun::Full(nodes) => {
-                let len = nodes.len();
-                let zeros: Vec<ChoiceNode> =
-                    (0..len).map(|_| integer_node(0, 0, i128::MAX)).collect();
-                (true, zeros, Spans::new())
-            }
+            // Truncate to length 1.  After the first replace lands
+            // this, indices 2 and 3 (from the OTHER group) fall out
+            // of the `i < current_nodes.len()` filter range.
+            ShrinkRun::Full(_) => (true, vec![integer_node(0, 0, i128::MAX)], Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,

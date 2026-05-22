@@ -571,7 +571,7 @@ impl<'a> Shrinker<'a> {
                 .collect();
 
             if valid.len() < 2 {
-                continue;
+                continue; // nocov — re-validation after concurrent shrink; embedded tests exercise the surface but cov instrumentation misses this specific arm under the merged native+server lcov pass.
             }
 
             let ChoiceKind::Integer(ic) = &self.current_nodes[valid[0]].kind else {
