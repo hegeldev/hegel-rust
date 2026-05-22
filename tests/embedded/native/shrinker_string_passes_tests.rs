@@ -180,3 +180,31 @@ fn normalize_unicode_chars_does_nothing_on_non_string() {
         _ => unreachable!(),
     }
 }
+
+/// Port of Hypothesis `test_normalize_unicode_chars_respects_intervals`
+/// (`tests/conjecture/test_shrinker.py`).  When the string's
+/// allowed alphabet excludes the simpler ASCII form (e.g. the range
+/// [0xC0, 0xFF] contains 'À' but not 'A'), the pass must not produce
+/// out-of-alphabet replacements.  'À' should stay 'À'.
+#[test]
+fn normalize_unicode_chars_respects_intervals() {
+    let initial = vec![string_node_with(0xC0, 0xFF, vec![0xC0])];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.normalize_unicode_chars();
+    if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
+        // The 'A' base (0x41) sits outside the allowed range; 'À' (0xC0)
+        // remains unchanged.
+        assert!(
+            s.iter().all(|&cp| (0xC0..=0xFF).contains(&cp)),
+            "produced out-of-alphabet codepoints: {:?}",
+            s
+        );
+    }
+}
