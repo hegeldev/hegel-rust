@@ -226,4 +226,188 @@ mod replay_logic {
         run();
         assert_eq!(*last.lock().unwrap(), Some(0));
     }
+
+    /// Recursively count regular files under `dir`. Returns 0 if `dir`
+    /// does not exist. Used by the persistence tests below to check
+    /// whether the database has any stored entries without needing
+    /// access to internal hashing.
+    fn db_file_count(dir: &std::path::Path) -> usize {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(d) => d,
+            Err(_) => return 0,
+        };
+        let mut n = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                n += db_file_count(&path);
+            } else {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// Regression test: a failing test case must be persisted to the
+    /// database as soon as it is discovered, not only at the end of the
+    /// run. If the runner is killed (e.g. Ctrl+C during shrinking), the
+    /// initially-found failure — and any intermediate shrunk version —
+    /// must already be saved.
+    ///
+    /// This test exercises the discovery save: from inside the test
+    /// body, we observe the database directory. By the time the body is
+    /// invoked again (during shrinking), the previously-discovered
+    /// failing example must already be on disk.
+    #[test]
+    fn test_failure_persisted_immediately_when_discovered() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let db_path = temp_dir.path().to_str().unwrap().to_string();
+        let db_path_for_check = db_path.clone();
+
+        // Earliest call number (1-indexed) on which the test body
+        // observed at least one entry in the database. `None` means the
+        // body never saw a populated database during the run.
+        let observed_at: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
+        let observed_cl = Arc::clone(&observed_at);
+        let calls: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
+        let calls_cl = Arc::clone(&calls);
+        let db_root = std::path::PathBuf::from(&db_path_for_check);
+
+        run_expecting_failure(std::panic::AssertUnwindSafe(move || {
+            Hegel::new(move |tc: TestCase| {
+                {
+                    let mut c = calls_cl.lock().unwrap();
+                    *c += 1;
+                    if observed_cl.lock().unwrap().is_none() && db_file_count(&db_root) > 0 {
+                        *observed_cl.lock().unwrap() = Some(*c);
+                    }
+                }
+                let n: i64 = tc.draw(gs::integers::<i64>().min_value(0));
+                assert!(n < 1_000_000);
+            })
+            .settings(
+                Settings::new()
+                    .database(Some(db_path))
+                    .derandomize(false)
+                    .test_cases(1000),
+            )
+            .__database_key("test_failure_persisted_immediately_when_discovered".to_string())
+            .run();
+        }));
+
+        // Sanity check: the run actually performed more than one test case.
+        // (A failing test with shrinking will run many more.)
+        let total_calls = *calls.lock().unwrap();
+        assert!(
+            total_calls > 1,
+            "expected the run to make more than one test-case call, got {total_calls}"
+        );
+
+        // The database must have entries STRICTLY BEFORE the final test
+        // body call. If `observed_at` is `None` (db never populated) or
+        // equals `total_calls` (db only populated for the final replay),
+        // persistence happens too late and killing mid-shrink loses the
+        // failure.
+        let observed = *observed_at.lock().unwrap();
+        assert!(
+            observed.is_some_and(|o| o < total_calls),
+            "Database was not populated during the run \
+             (observed_at={observed:?}, total_calls={total_calls}). \
+             Killing the runner mid-shrink would lose the failure."
+        );
+    }
+
+    /// Stronger regression test: intermediate shrunk versions must
+    /// reach the database before the next test-body call. We snapshot
+    /// the DB file count on every body invocation; if the shrinker is
+    /// improving the DB incrementally, the count should change between
+    /// the first observation (single discovered failure) and the last
+    /// (potentially the smallest shrunk version). If saves are batched
+    /// to end-of-run, observed snapshots would either all be 0 or all
+    /// jump from 0 to N on the final replay alone.
+    #[test]
+    fn test_intermediate_shrinks_update_db_during_run() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let db_path = temp_dir.path().to_str().unwrap().to_string();
+        let db_root = std::path::PathBuf::from(&db_path);
+        let db_root_cl = db_root.clone();
+
+        // Distinct (file-count, total-bytes) snapshots observed by the
+        // body across all of its calls. A working incremental persister
+        // shows at least two distinct snapshots (the DB grows / shrinks
+        // as the shrinker makes progress); a broken one shows just
+        // `{(0, 0)}` (DB empty during the run) or a single non-empty
+        // snapshot reached only at the very end.
+        let snapshots: Arc<Mutex<std::collections::HashSet<(usize, usize)>>> =
+            Arc::new(Mutex::new(std::collections::HashSet::new()));
+        let snapshots_cl = Arc::clone(&snapshots);
+        let calls: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
+        let calls_cl = Arc::clone(&calls);
+
+        run_expecting_failure(std::panic::AssertUnwindSafe(move || {
+            Hegel::new(move |tc: TestCase| {
+                {
+                    *calls_cl.lock().unwrap() += 1;
+                    let (count, total_bytes) = db_summary(&db_root_cl);
+                    snapshots_cl.lock().unwrap().insert((count, total_bytes));
+                }
+                let n: i64 = tc.draw(gs::integers::<i64>().min_value(0));
+                let v: Vec<i64> = tc.draw(gs::vecs(gs::integers::<i64>()).min_size(0));
+                let _ = v;
+                assert!(n < 1_000_000);
+            })
+            .settings(
+                Settings::new()
+                    .database(Some(db_path))
+                    .derandomize(false)
+                    .test_cases(1000),
+            )
+            .__database_key("test_intermediate_shrinks_update_db_during_run".to_string())
+            .run();
+        }));
+
+        let snaps = snapshots.lock().unwrap().clone();
+        // Reached the body at least a few times.
+        let total = *calls.lock().unwrap();
+        assert!(total > 1, "expected multiple test-body calls, got {total}");
+
+        // The DB went through multiple distinct *non-empty* states during
+        // the run — i.e. the shrinker's improvements were persisted as
+        // they happened, not collapsed into a single end-of-run write.
+        // Without incremental persistence, the body sees only `(0, 0)`
+        // throughout shrinking and a single end-state on the final
+        // replay → at most one non-empty snapshot.
+        let distinct_non_empty = snaps.iter().filter(|&&(_, b)| b > 0).count();
+        assert!(
+            distinct_non_empty >= 2,
+            "Only saw {distinct_non_empty} distinct non-empty DB \
+             state(s) across {total} test-body calls (snapshots: \
+             {snaps:?}). The shrinker is not persisting intermediate \
+             improvements — killing it mid-shrink would lose progress."
+        );
+    }
+
+    /// Recursively compute `(file_count, total_bytes)` for everything
+    /// under `root`. Used by the persistence tests to summarise the
+    /// database state without depending on the internal hashing.
+    fn db_summary(root: &std::path::Path) -> (usize, usize) {
+        let entries = match std::fs::read_dir(root) {
+            Ok(d) => d,
+            Err(_) => return (0, 0),
+        };
+        let mut count = 0;
+        let mut total = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let (c, t) = db_summary(&path);
+                count += c;
+                total += t;
+            } else if let Ok(meta) = std::fs::metadata(&path) {
+                count += 1;
+                total += meta.len() as usize;
+            }
+        }
+        (count, total)
+    }
 }
