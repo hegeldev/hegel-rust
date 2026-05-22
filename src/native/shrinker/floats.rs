@@ -231,20 +231,21 @@ impl<'a> Shrinker<'a> {
                                     return false;
                                 }
                                 let candidate_mag = attempt as f64;
-                                // nocov start — for is_neg=true the
-                                // outer `lo` computation
+                                // For is_neg=true the outer `lo`
+                                // computation
                                 // (`(-fc.min_value).floor().max(0)`)
-                                // yields the magnitude bound, and the
-                                // `attempt < lo` guard above then
+                                // yields the upper magnitude bound,
+                                // so the `attempt < lo` guard above
                                 // rejects every probe before reaching
-                                // here.  Reaching this branch would
-                                // require `base_after > lo`, but
-                                // base_after is the post-shift_right
+                                // the `-candidate_mag` arm.  Reaching
+                                // it would require `base_after > lo`,
+                                // but base_after is the post-shift_right
                                 // magnitude (small) while lo equals
                                 // `|min_value|` (large).  The positive
-                                // branch above is exercised by every
+                                // branch is exercised by every
                                 // large-magnitude-positive float
                                 // shrink test.
+                                // nocov start
                                 let candidate = if is_neg {
                                     -candidate_mag
                                 } else {
