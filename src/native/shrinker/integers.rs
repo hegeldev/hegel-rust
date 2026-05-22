@@ -79,10 +79,10 @@ impl<'a> Shrinker<'a> {
                     if dist > 0 {
                         find_integer(|k| {
                             let shifted = (dist >> k.min(127)) as i128;
+                            // dist is u128 ≥ 0, so shifted ≥ 0 and
+                            // lo + shifted ≥ lo unconditionally — no
+                            // out-of-range guard needed.
                             let candidate = lo + shifted;
-                            if candidate < lo {
-                                return false;
-                            }
                             self.replace(&HashMap::from([(i, ChoiceValue::Integer(candidate))]))
                         });
                     }
@@ -177,10 +177,9 @@ impl<'a> Shrinker<'a> {
                     if dist > 0 {
                         find_integer(|k| {
                             let shifted = (dist >> k.min(127)) as i128;
+                            // Same monotonicity argument as the positive
+                            // branch: shifted ≥ 0, so lo + shifted ≥ lo.
                             let candidate_abs = lo + shifted;
-                            if candidate_abs < lo {
-                                return false;
-                            }
                             self.replace(&HashMap::from([(
                                 i,
                                 ChoiceValue::Integer(-candidate_abs),
@@ -244,9 +243,6 @@ impl<'a> Shrinker<'a> {
                                     find_integer(|k| {
                                         let shifted = (dist >> k.min(127)) as i128;
                                         let candidate = lo_pos + shifted;
-                                        if candidate < lo_pos {
-                                            return false;
-                                        }
                                         self.replace(&HashMap::from([(
                                             i,
                                             ChoiceValue::Integer(candidate),
@@ -629,39 +625,24 @@ impl<'a> Shrinker<'a> {
                     find_integer(|k| {
                         let shifted = (dist >> k.min(127)) as i128;
                         let candidate = lo + shifted;
-                        if candidate < lo {
-                            return false;
-                        }
                         group_replace(self, candidate)
                     });
                 }
-                let live_base = |sh: &Shrinker<'_>| -> Option<i128> {
+                let live_base = |sh: &Shrinker<'_>| -> i128 {
                     match sh.current_nodes[valid_capture[0]].value {
-                        ChoiceValue::Integer(v) => Some(v),
-                        _ => None,
+                        ChoiceValue::Integer(v) => v,
+                        _ => i128::MAX,
                     }
                 };
-                if matches!(live_base(self), Some(b) if b > lo) {
+                if live_base(self) > lo {
                     find_integer(|n| {
-                        let Some(base) = live_base(self) else {
-                            return false;
-                        };
-                        let attempt = base - 2 * (n as i128);
-                        if attempt < lo {
-                            return false;
-                        }
+                        let attempt = live_base(self).saturating_sub(2 * (n as i128));
                         group_replace(self, attempt)
                     });
                 }
-                if matches!(live_base(self), Some(b) if b > lo) {
+                if live_base(self) > lo {
                     find_integer(|n| {
-                        let Some(base) = live_base(self) else {
-                            return false;
-                        };
-                        let attempt = base - (n as i128);
-                        if attempt < lo {
-                            return false;
-                        }
+                        let attempt = live_base(self).saturating_sub(n as i128);
                         group_replace(self, attempt)
                     });
                 }
@@ -673,40 +654,25 @@ impl<'a> Shrinker<'a> {
                     find_integer(|k| {
                         let shifted = (dist >> k.min(127)) as i128;
                         let candidate_abs = lo + shifted;
-                        if candidate_abs < lo {
-                            return false;
-                        }
                         group_replace(self, -candidate_abs)
                     });
                 }
-                let live_base = |sh: &Shrinker<'_>| -> Option<i128> {
+                let live_base = |sh: &Shrinker<'_>| -> i128 {
                     match sh.current_nodes[valid_capture[0]].value {
-                        ChoiceValue::Integer(v) => Some(v),
-                        _ => None,
+                        ChoiceValue::Integer(v) => v,
+                        _ => i128::MIN,
                     }
                 };
                 let neg_hi = -lo;
-                if matches!(live_base(self), Some(b) if b < neg_hi) {
+                if live_base(self) < neg_hi {
                     find_integer(|n| {
-                        let Some(base) = live_base(self) else {
-                            return false;
-                        };
-                        let attempt = base + 2 * (n as i128);
-                        if attempt > neg_hi {
-                            return false;
-                        }
+                        let attempt = live_base(self).saturating_add(2 * (n as i128));
                         group_replace(self, attempt)
                     });
                 }
-                if matches!(live_base(self), Some(b) if b < neg_hi) {
+                if live_base(self) < neg_hi {
                     find_integer(|n| {
-                        let Some(base) = live_base(self) else {
-                            return false;
-                        };
-                        let attempt = base + (n as i128);
-                        if attempt > neg_hi {
-                            return false;
-                        }
+                        let attempt = live_base(self).saturating_add(n as i128);
                         group_replace(self, attempt)
                     });
                 }
