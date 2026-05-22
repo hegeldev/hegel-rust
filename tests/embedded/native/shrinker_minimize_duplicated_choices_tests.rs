@@ -264,12 +264,12 @@ fn shrink_duplicates_negative_descent_is_log_log() {
 }
 
 /// Cover the `valid.len() < 2` continue at integers.rs:573-575 inside
-/// `shrink_duplicates`.  Initial state has two groups (value=7 with
-/// indices [0,1] and value=8 with indices [2,3]).  After the
-/// value=7 group's first replace, the test_fn also rewrites positions
-/// 2 and 3 to a different value, so by the time the loop reaches the
-/// value=8 group, its `valid` filter rejects everything and the
-/// branch fires.
+/// `shrink_duplicates`.  Two groups (value=7 and value=8); the
+/// test_fn collapses every position to 0 on every Full call so
+/// accept_improvement fires whichever group is processed first
+/// (HashMap iteration is non-deterministic).  After the first
+/// group's replace lands, the OTHER group's re-validation finds zero
+/// matching members and hits the branch.
 #[test]
 fn shrink_duplicates_skips_group_invalidated_by_concurrent_shrink() {
     let initial = vec![
@@ -281,14 +281,10 @@ fn shrink_duplicates_skips_group_invalidated_by_concurrent_shrink() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
-                let mut out: Vec<ChoiceNode> = nodes.to_vec();
-                if out.len() >= 4 {
-                    // Rewrite the value=8 group to 999 so its post-shrink
-                    // re-validation has zero matching members.
-                    out[2] = integer_node(999, 0, i128::MAX);
-                    out[3] = integer_node(999, 0, i128::MAX);
-                }
-                (true, out, Spans::new())
+                let len = nodes.len();
+                let zeros: Vec<ChoiceNode> =
+                    (0..len).map(|_| integer_node(0, 0, i128::MAX)).collect();
+                (true, zeros, Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -296,13 +292,16 @@ fn shrink_duplicates_skips_group_invalidated_by_concurrent_shrink() {
         Spans::new(),
     );
     shrinker.shrink_duplicates();
-    // Just exercise the path; assertion is "doesn't panic".
 }
 
 /// Cover the `current_valid.len() < 2` return inside the
-/// `group_replace` closure (integers.rs:613-615).  Set up so that
-/// the test_fn truncates the sequence below the group size while
-/// the shift_right find_integer probe is running.
+/// `group_replace` closure (integers.rs:613-615).  Predicate accepts
+/// only positive nodes[0] and truncates the realised sequence to a
+/// single element.  The simplest step (set all to 0) is rejected;
+/// the find_integer shift_right probe lands a positive candidate that
+/// accept_improvement absorbs; the NEXT probe inside the same
+/// find_integer loop calls group_replace, whose `current_valid`
+/// filter now finds only one member in range and short-circuits.
 #[test]
 fn shrink_duplicates_group_replace_short_circuits_when_truncated() {
     let initial: Vec<ChoiceNode> = (0..5)
@@ -311,20 +310,17 @@ fn shrink_duplicates_group_replace_short_circuits_when_truncated() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
-                // After the first accepted shrink truncate the sequence
-                // to one node, so the next find_integer probe's
-                // `current_valid` filter has < 2 members.
                 let n = match nodes[0].value {
                     ChoiceValue::Integer(v) => v,
-                    _ => i128::MAX,
+                    _ => 0,
                 };
-                let truncated = if n < 1_000_000_000_000_000 {
-                    vec![nodes[0].clone()]
-                } else {
-                    nodes.to_vec()
-                };
-                let interesting = matches!(nodes[0].value, ChoiceValue::Integer(_));
-                (interesting, truncated, Spans::new())
+                if n <= 0 {
+                    return (false, nodes.to_vec(), Spans::new());
+                }
+                // Accept and truncate the realised sequence to one
+                // node so the next group_replace probe finds < 2
+                // valid members.
+                (true, vec![nodes[0].clone()], Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
