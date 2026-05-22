@@ -600,14 +600,15 @@ fn run_main(
             (Status::Interesting, Some(failure)) => {
                 failures.push(failure);
             }
-            // nocov — fires only when the final replay of a shrunk
-            // counterexample produces a non-Interesting status, which
-            // requires the test body to flip its outcome strictly
+            // Defensive branch — fires only when the final replay of a
+            // shrunk counterexample produces a non-Interesting status,
+            // which requires the test body to flip its outcome strictly
             // between the last shrink call and the final replay.
             // Deterministic reproduction needs precise call-count
             // alignment that's brittle in CI; the function itself is
-            // tested directly via `flaky_final_replay_panic_panics_with_diagnostic`.
-            _ => flaky_final_replay_panic(),
+            // tested directly via
+            // `flaky_final_replay_panic_panics_with_diagnostic`.
+            _ => flaky_final_replay_panic(), // nocov
         }
     }
 

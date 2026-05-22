@@ -174,16 +174,18 @@ fn as_integer_ratio_huge_value_overflows_to_none() {
 /// `shrink_floats`'s shift_right + shrink_by_multiples chain
 /// (`floats.rs:235`).  Requires a very-large-magnitude *negative*
 /// float so the |v| >= MAX_PRECISE_INTEGER branch fires and the
-/// shrink_by_multiples loop negates each candidate.
+/// shrink_by_multiples loop negates each candidate.  Bounded
+/// `min_value` so `lo` computes finitely and the inner `attempt <
+/// lo` check doesn't short-circuit before the negation runs.
 #[test]
 fn shrink_floats_negative_large_magnitude_uses_is_neg_branch() {
-    let initial = vec![float_node(-1e18, f64::NEG_INFINITY, f64::INFINITY)];
+    let initial = vec![float_node(-1e18, -1e20, 0.0)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
-                // Interesting iff first node is negative and finite.
+                // Interesting iff first node is < -1.0 and finite.
                 let interesting =
-                    matches!(nodes[0].value, ChoiceValue::Float(v) if v < 0.0 && v.is_finite());
+                    matches!(nodes[0].value, ChoiceValue::Float(v) if v < -1.0 && v.is_finite());
                 (interesting, nodes.to_vec(), Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
@@ -193,7 +195,7 @@ fn shrink_floats_negative_large_magnitude_uses_is_neg_branch() {
     );
     shrinker.shrink_floats();
     match shrinker.current_nodes[0].value {
-        ChoiceValue::Float(v) => assert!(v < 0.0 && v.is_finite()),
+        ChoiceValue::Float(v) => assert!(v < -1.0 && v.is_finite()),
         _ => unreachable!(),
     }
 }
