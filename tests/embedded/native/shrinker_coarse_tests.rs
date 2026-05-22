@@ -168,3 +168,63 @@ fn initial_coarse_reduction_keeps_same_shape_one_of() {
     assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
     assert_eq!(int_value(&shrinker.current_nodes[1]), 0);
 }
+
+/// Coverage for the probe-accept branch in
+/// `try_lower_node_as_alternative`: direct `replace` of the lowered
+/// selector is rejected, but the random-continuation probe finds a
+/// strictly smaller candidate.
+#[test]
+fn initial_coarse_reduction_accepts_probe_when_direct_replace_fails() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let initial = vec![
+        small_int_node(3),
+        small_int_node(0),
+        small_int_node(0),
+        small_int_node(0),
+    ];
+    // Track how many times the probe branch responded — used to assert
+    // we actually reached it.
+    let probe_calls = Rc::new(Cell::new(0_usize));
+    let probe_calls_for_closure = probe_calls.clone();
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run| match run {
+            ShrinkRun::Full(nodes) => {
+                let head = match nodes[0].value {
+                    ChoiceValue::Integer(v) => v,
+                    _ => return (false, nodes.to_vec(), Spans::new()),
+                };
+                if head == 3 && nodes.len() == 4 {
+                    // The initial counterexample.  Interesting.
+                    return (true, nodes.to_vec(), Spans::new());
+                }
+                if head == 0 && nodes.len() == 4 {
+                    // The coarse pass's zeroing probe.  Return a
+                    // different-shape realised sequence to flag
+                    // shape_changed = true.
+                    return (false, vec![small_int_node(0), small_int_node(0)], Spans::new());
+                }
+                // try_lower's direct `replace` lowers `head` to v in
+                // 0..3.  Reject those so the probe branch runs.
+                (false, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => {
+                probe_calls_for_closure.set(probe_calls_for_closure.get() + 1);
+                // Return a strictly shorter interesting sequence so
+                // sort_key < initial_key and the probe arm at
+                // `coarse.rs:96` fires.
+                (
+                    true,
+                    vec![small_int_node(0), small_int_node(0)],
+                    Spans::new(),
+                )
+            }
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.initial_coarse_reduction();
+    assert!(probe_calls.get() > 0, "probe branch was never reached");
+    assert_eq!(shrinker.current_nodes.len(), 2);
+}
