@@ -327,3 +327,54 @@ fn shrink_duplicates_group_replace_short_circuits_when_truncated() {
     );
     shrinker.shrink_duplicates();
 }
+
+/// Cover the outer-loop `valid.len() < 2 continue` inside
+/// `shrink_duplicates`' integer-only second half.  The setup feeds two
+/// integer groups; the first group's shift_right descent lands a
+/// candidate that the test function accepts and truncates to a single
+/// node, so by the time the outer loop advances to the second group
+/// its indices fall out of range and the early-continue fires.
+#[test]
+fn shrink_duplicates_outer_skips_group_truncated_by_prior_group() {
+    let initial = vec![
+        integer_node(9, 0, i128::MAX),
+        integer_node(9, 0, i128::MAX),
+        integer_node(5, 0, i128::MAX),
+        integer_node(5, 0, i128::MAX),
+    ];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                let head = match nodes[0].value {
+                    ChoiceValue::Integer(v) => v,
+                    _ => 0,
+                };
+                if nodes.len() == 4 {
+                    if head > 7 {
+                        // Initial `[9, 9, 5, 5]` and the first-half
+                        // `[9, 9, 0, 0]` step both land here.
+                        return (true, nodes.to_vec(), Spans::new());
+                    }
+                    if head > 0 {
+                        // Second-half's first descent probe arrives
+                        // with head in (0, 7]; accept it but truncate
+                        // the realised sequence so the OTHER integer
+                        // group's indices fall out of range.
+                        return (true, vec![nodes[0].clone()], Spans::new());
+                    }
+                    // Replace-with-simplest step (head=0) is rejected
+                    // so the first half's simplest step doesn't
+                    // disturb the second half's setup.
+                    return (false, nodes.to_vec(), Spans::new());
+                }
+                // Length-1 follow-ups stay interesting.
+                (true, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.shrink_duplicates();
+    assert_eq!(shrinker.current_nodes.len(), 1);
+}

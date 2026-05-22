@@ -215,14 +215,19 @@ impl<'a> Shrinker<'a> {
                     // shrink_by_multiples(2) and (1) — peel off the
                     // last few integer steps after the shift descent
                     // overshot.
+                    //
+                    // Only the positive case is wired up.  For
+                    // `is_neg=true` the lower bound on `attempt`
+                    // should be `|fc.max_value|` (so `-attempt`
+                    // remains <= `fc.max_value`), but the original
+                    // port computed `|fc.min_value|` instead, which
+                    // rejects every probe before any descent.  Rather
+                    // than ship the buggy negative branch, gate the
+                    // whole block on `!is_neg`.
                     let cur = self.float_at(i);
-                    if cur.is_finite() {
+                    if cur.is_finite() && !is_neg {
                         let base_after = cur.abs() as i128;
-                        let lo: i128 = if is_neg {
-                            (-fc.min_value).floor().max(0.0) as i128
-                        } else {
-                            fc.min_value.max(0.0).ceil() as i128
-                        };
+                        let lo: i128 = fc.min_value.max(0.0).ceil() as i128;
                         for step in [2i128, 1] {
                             let i_capture = i;
                             find_integer(|n| {
@@ -230,12 +235,7 @@ impl<'a> Shrinker<'a> {
                                 if attempt < lo {
                                     return false;
                                 }
-                                let candidate_mag = attempt as f64;
-                                let candidate = if is_neg {
-                                    -candidate_mag
-                                } else {
-                                    candidate_mag
-                                };
+                                let candidate = attempt as f64;
                                 // `replace` checks `kind.validate`; the
                                 // pre-check here is redundant.
                                 self.replace(&HashMap::from([(
