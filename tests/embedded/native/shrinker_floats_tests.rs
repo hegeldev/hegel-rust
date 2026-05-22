@@ -169,3 +169,31 @@ fn as_integer_ratio_huge_value_overflows_to_none() {
     // checked_shl on line 46 returns None.
     assert_eq!(as_integer_ratio(f64::MAX), None);
 }
+
+/// Cover the negative branch of `is_neg` ternary inside
+/// `shrink_floats`'s shift_right + shrink_by_multiples chain
+/// (`floats.rs:235`).  Requires a very-large-magnitude *negative*
+/// float so the |v| >= MAX_PRECISE_INTEGER branch fires and the
+/// shrink_by_multiples loop negates each candidate.
+#[test]
+fn shrink_floats_negative_large_magnitude_uses_is_neg_branch() {
+    let initial = vec![float_node(-1e18, f64::NEG_INFINITY, f64::INFINITY)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                // Interesting iff first node is negative and finite.
+                let interesting =
+                    matches!(nodes[0].value, ChoiceValue::Float(v) if v < 0.0 && v.is_finite());
+                (interesting, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.shrink_floats();
+    match shrinker.current_nodes[0].value {
+        ChoiceValue::Float(v) => assert!(v < 0.0 && v.is_finite()),
+        _ => unreachable!(),
+    }
+}

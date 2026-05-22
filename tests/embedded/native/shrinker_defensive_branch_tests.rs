@@ -58,27 +58,32 @@ fn try_replace_with_deletion_returns_true_on_early_success() {
 
 #[test]
 fn sort_values_break_when_concurrent_shrink_drops_valid_indices() {
-    // Drive `sort_values` against a test_fn that truncates the
-    // sequence on every Full run.  After the first replace succeeds,
-    // current_nodes is shorter; the next iteration's re-filter
-    // produces a `valid` whose len < j, hitting the previously-nocov
-    // break.
+    // Reject the initial full-sort attempt but accept individual swaps
+    // that truncate `current_nodes` to length 1.  After the first
+    // swap inside the insertion-sort fallback succeeds, the next
+    // iteration's re-filter produces `valid` whose len (1) < j (2),
+    // hitting the previously-nocov break at sequence.rs:92.
     use std::cell::Cell;
     use std::rc::Rc;
-    let calls = Rc::new(Cell::new(0_usize));
-    let calls_clone = calls.clone();
+    let saw_full_sort = Rc::new(Cell::new(false));
+    let saw_full_sort_clone = saw_full_sort.clone();
     let mut shrinker = Shrinker::with_probe(
         Box::new(move |run| match run {
             ShrinkRun::Full(nodes) => {
-                calls_clone.set(calls_clone.get() + 1);
-                // Always truncate to the first node so concurrent
-                // shrinks shorten current_nodes mid-pass.
+                if !saw_full_sort_clone.get() && nodes.len() == 4 {
+                    // First call is the full-sort attempt; reject it
+                    // so we fall through to the insertion-sort loop.
+                    saw_full_sort_clone.set(true);
+                    return (false, nodes.to_vec(), Spans::new());
+                }
+                // Subsequent calls (insertion-sort swaps): accept and
+                // truncate to a single node.
                 let truncated: Vec<ChoiceNode> = nodes.iter().take(1).cloned().collect();
                 (true, truncated, Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
-        vec![int_node(5), int_node(4), int_node(3), int_node(2)],
+        vec![int_node(40), int_node(30), int_node(20), int_node(10)],
         Spans::new(),
     );
     shrinker.sort_values();
