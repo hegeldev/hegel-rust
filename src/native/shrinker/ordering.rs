@@ -33,7 +33,6 @@ use super::find_integer;
 /// returns `true`, the caller has presumably updated whatever underlying
 /// state corresponds to that permutation; the function refreshes its
 /// `current` from the new ordering.
-#[allow(dead_code)]
 pub(super) fn shrink_ordering<T, K, F>(n: usize, mut keys: K, mut accept: F)
 where
     T: Ord,

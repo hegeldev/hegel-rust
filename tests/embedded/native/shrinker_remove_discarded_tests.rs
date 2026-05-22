@@ -1,4 +1,4 @@
-//! Unit tests for `Shrinker::remove_discarded` (Step 2).
+//! Unit tests for `Shrinker::remove_discarded`.
 //!
 //! Hypothesis reference: `shrinker.py:1290-1330`.
 

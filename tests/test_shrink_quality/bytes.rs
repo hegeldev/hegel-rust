@@ -13,7 +13,7 @@ fn test_redistribute_bytes_respects_max_size() {
     // The minimum-length, lex-smallest solution is `(a=7, b=8)`: any
     // shorter `a` would force `b > 8`, and any larger `a` is lex-bigger
     // (tuple shortlex prefers smaller `a` first). All bytes shrink to
-    // zero. Pre-N11 this was a `let _ = ...` smoke test.
+    // zero.
     let (a, b) = Minimal::new(
         gs::tuples!(
             gs::binary().min_size(5).max_size(10),
@@ -36,7 +36,7 @@ fn test_bytes_sorts_when_order_matters() {
     // The lex-minimum 3-byte sequence satisfying both is `[0, 1, 0]`:
     // sorted is `[0, 0, 1]`, so `v0 != sorted` ✓; contains 0x01 ✓; and
     // any lex-smaller candidate (`[0, 0, ?]`) is either sorted-equal or
-    // lacks 0x01. Pre-N11 this was a `let _ = ...` smoke test.
+    // lacks 0x01.
     let v0 = Minimal::new(gs::binary().min_size(3).max_size(3), |v0: &Vec<u8>| {
         if !v0.contains(&0x01u8) {
             return false;
@@ -69,8 +69,7 @@ fn test_bytes_redistribution_moves_all() {
 #[test]
 fn test_bytes_increment_shortens_sequence() {
     // Growing v0 by one byte lets the shrinker eliminate the dict entry,
-    // producing a shorter overall sequence. Regression for shrink quality
-    // found by pbtsmith.
+    // producing a shorter overall sequence.
     let (v0, v1) = Minimal::new(
         gs::tuples!(
             gs::binary().max_size(20),
@@ -111,7 +110,9 @@ fn test_lower_and_bump_stale_kind_after_replace() {
         let _: (bool, bool) = tc.draw(pair());
         v0
     });
-    let _ = minimal(g, |v: &Vec<bool>| !v.is_empty());
+    let result = minimal(g, |v: &Vec<bool>| !v.is_empty());
+    // Minimum non-empty Vec<bool> is the single-element [false].
+    assert_eq!(result, vec![false]);
 }
 
 /// Port of Hypothesis `test_can_quickly_shrink_to_trivial_collection`

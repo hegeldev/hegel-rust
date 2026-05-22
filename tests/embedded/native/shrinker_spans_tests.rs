@@ -1,4 +1,4 @@
-//! Tests for the shrinker-level span infrastructure introduced in Step 1.
+//! Tests for the shrinker-level span infrastructure.
 //!
 //! Covers:
 //! * `Shrinker::current_spans` is replaced when an improvement is accepted.
@@ -185,19 +185,6 @@ fn changed_nodes_clears_on_kind_change_in_place() {
     shrinker.consider(&[int_node(0), int_node(0)]);
     // Kind change → set cleared.
     assert!(shrinker.changed_nodes().is_empty());
-}
-
-#[test]
-fn is_trivial_recognises_forced_and_simplest() {
-    use crate::native::core::ChoiceNode;
-    let simplest = int_node(0);
-    let nontrivial = int_node(5);
-    let mut forced = int_node(5);
-    forced.was_forced = true;
-
-    assert!(ChoiceNode::is_trivial(&simplest));
-    assert!(!ChoiceNode::is_trivial(&nontrivial));
-    assert!(ChoiceNode::is_trivial(&forced));
 }
 
 #[test]

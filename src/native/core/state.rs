@@ -612,14 +612,6 @@ pub struct Span {
     pub discarded: bool,
 }
 
-impl Span {
-    /// True iff the choice at `idx` lies in this span's half-open range
-    /// `[start, end)`.
-    pub fn contains(&self, idx: usize) -> bool {
-        idx >= self.start && idx < self.end
-    }
-}
-
 /// Maximum nested span depth before the engine marks the test case
 /// `Status::Invalid`.  Mirrors Hypothesis's
 /// `internal/conjecture/data.py::MAX_DEPTH`.
@@ -719,28 +711,6 @@ impl Spans {
             .iter()
             .enumerate()
             .filter_map(|(j, s)| (s.parent == Some(i)).then_some(j))
-            .collect()
-    }
-
-    /// Indices of spans whose `parent` matches `parent_idx`.
-    ///
-    /// Passing `None` returns the root-level spans (`parent == None`),
-    /// matching Hypothesis's `ConjectureData.spans` traversal where the
-    /// root span has no parent.
-    pub fn children_of(&self, parent_idx: Option<usize>) -> Vec<usize> {
-        self.inner
-            .iter()
-            .enumerate()
-            .filter_map(|(j, s)| (s.parent == parent_idx).then_some(j))
-            .collect()
-    }
-
-    /// Indices of all spans whose label equals `label`.
-    pub fn with_label(&self, label: &str) -> Vec<usize> {
-        self.inner
-            .iter()
-            .enumerate()
-            .filter_map(|(j, s)| (s.label == label).then_some(j))
             .collect()
     }
 

@@ -1,4 +1,4 @@
-//! Unit tests for `Shrinker::initial_coarse_reduction` (Step 10).
+//! Unit tests for `Shrinker::initial_coarse_reduction`.
 //!
 //! Hypothesis reference: `shrinker.py:689-801`.
 

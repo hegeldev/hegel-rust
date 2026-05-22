@@ -1,4 +1,4 @@
-//! Unit tests for `Shrinker::lower_common_node_offset` (Step 6).
+//! Unit tests for `Shrinker::lower_common_node_offset`.
 //!
 //! Hypothesis reference: `shrinker.py:1017-1095`.
 

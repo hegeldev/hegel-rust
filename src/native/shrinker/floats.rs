@@ -76,7 +76,7 @@ impl<'a> Shrinker<'a> {
                 let v = *v;
                 let fc = fc.clone();
 
-                // Step 1: Try simplest.
+                // Try simplest.
                 let s = fc.simplest();
                 if ChoiceValue::Float(s) != ChoiceValue::Float(v) {
                     self.replace(&HashMap::from([(i, ChoiceValue::Float(s))]));
@@ -84,7 +84,7 @@ impl<'a> Shrinker<'a> {
 
                 let v = self.float_at(i);
 
-                // Step 2: Special-value transitions out of ±inf.
+                // Special-value transitions out of ±inf.
                 if v.is_infinite() {
                     if v < 0.0 && fc.validate(f64::INFINITY) {
                         self.replace(&HashMap::from([(i, ChoiceValue::Float(f64::INFINITY))]));
@@ -148,7 +148,7 @@ impl<'a> Shrinker<'a> {
                     continue;
                 }
 
-                // Step 3: Try negating if sign-negative (positive is simpler).
+                // Try negating if sign-negative (positive is simpler).
                 if v.is_sign_negative() {
                     let neg = -v;
                     if fc.validate(neg) {
@@ -231,27 +231,11 @@ impl<'a> Shrinker<'a> {
                                     return false;
                                 }
                                 let candidate_mag = attempt as f64;
-                                // For is_neg=true the outer `lo`
-                                // computation
-                                // (`(-fc.min_value).floor().max(0)`)
-                                // yields the upper magnitude bound,
-                                // so the `attempt < lo` guard above
-                                // rejects every probe before reaching
-                                // the `-candidate_mag` arm.  Reaching
-                                // it would require `base_after > lo`,
-                                // but base_after is the post-shift_right
-                                // magnitude (small) while lo equals
-                                // `|min_value|` (large).  The positive
-                                // branch is exercised by every
-                                // large-magnitude-positive float
-                                // shrink test.
-                                // nocov start
                                 let candidate = if is_neg {
                                     -candidate_mag
                                 } else {
                                     candidate_mag
                                 };
-                                // nocov end
                                 // `replace` checks `kind.validate`; the
                                 // pre-check here is redundant.
                                 self.replace(&HashMap::from([(

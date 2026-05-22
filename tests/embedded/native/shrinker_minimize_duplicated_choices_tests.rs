@@ -1,5 +1,5 @@
 //! Unit tests for the generalised `shrink_duplicates` /
-//! `minimize_duplicated_choices` (Step 7).
+//! `minimize_duplicated_choices`.
 //!
 //! Hypothesis reference: `shrinker.py:1379-1406`.
 

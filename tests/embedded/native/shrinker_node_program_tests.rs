@@ -1,4 +1,4 @@
-//! Unit tests for `Shrinker::node_program` (Step 11).
+//! Unit tests for `Shrinker::node_program`.
 //!
 //! Hypothesis references: `shrinker.py:1340-1376`, `shrinker.py:1857-1886`.
 

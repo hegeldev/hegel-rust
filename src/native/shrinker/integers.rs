@@ -511,35 +511,49 @@ impl<'a> Shrinker<'a> {
         // Group nodes by (kind discriminant, value).  The discriminant
         // gate keeps an Integer and a Bytes that happen to coexist with
         // the same numeric payload apart.
+        //
+        // `HashMap` iteration order is randomised, so we keep groups in
+        // source-position order (by smallest index) before processing —
+        // otherwise a `replace` that truncates `current_nodes` invalidates
+        // later groups in seed-dependent ways and the shrinker converges
+        // on neighbouring rather than canonical minima.
         let mut groups: HashMap<(std::mem::Discriminant<ChoiceKind>, ChoiceValue), Vec<usize>> =
             HashMap::new();
         for (i, node) in self.current_nodes.iter().enumerate() {
             let key = (std::mem::discriminant(&node.kind), node.value.clone());
             groups.entry(key).or_default().push(i);
         }
-        for (_key, indices) in groups.iter() {
+        let mut ordered_groups: Vec<_> = groups.into_iter().collect();
+        ordered_groups.sort_by_key(|(_, indices)| indices[0]);
+        for ((kind_disc, group_value), indices) in ordered_groups.iter() {
             if indices.len() < 2 {
+                continue;
+            }
+            // A prior group's `replace` may have truncated `current_nodes`
+            // (the test function can return a shorter realised sequence).
+            // Skip any indices that fell out of range, then make sure
+            // enough members still match the original group's
+            // (kind, value) before proposing a replacement.
+            let valid: Vec<usize> = indices
+                .iter()
+                .copied()
+                .filter(|&i| {
+                    i < self.current_nodes.len()
+                        && self.current_nodes[i].value == *group_value
+                        && std::mem::discriminant(&self.current_nodes[i].kind) == *kind_disc
+                })
+                .collect();
+            if valid.len() < 2 {
                 continue;
             }
             // Try the simplest-replacement step for every group.  For
             // boolean / float / bytes / string this is the main win; the
             // integer branch below adds a deeper binary search.
-            let first = &self.current_nodes[indices[0]];
-            let simplest = first.kind.simplest();
-            if simplest != first.value {
-                let replacements: HashMap<usize, ChoiceValue> = indices
-                    .iter()
-                    .filter(|&&i| {
-                        i < self.current_nodes.len()
-                            && self.current_nodes[i].value == first.value
-                            && std::mem::discriminant(&self.current_nodes[i].kind)
-                                == std::mem::discriminant(&first.kind)
-                    })
-                    .map(|&i| (i, simplest.clone()))
-                    .collect();
-                if replacements.len() >= 2 {
-                    self.replace(&replacements);
-                }
+            let simplest = self.current_nodes[valid[0]].kind.simplest();
+            if simplest != *group_value {
+                let replacements: HashMap<usize, ChoiceValue> =
+                    valid.iter().map(|&i| (i, simplest.clone())).collect();
+                self.replace(&replacements);
             }
         }
         // The remainder of this function is the legacy integer-only
@@ -554,8 +568,12 @@ impl<'a> Shrinker<'a> {
                 groups.entry(*v).or_default().push(i);
             }
         }
+        // Iterate groups in source-position order; see the comment above
+        // the first-half iteration for why HashMap randomisation matters.
+        let mut ordered_groups: Vec<_> = groups.into_iter().collect();
+        ordered_groups.sort_by_key(|(_, indices)| indices[0]);
 
-        for (value, indices) in groups {
+        for (value, indices) in ordered_groups {
             if indices.len() < 2 {
                 continue;
             }
@@ -571,7 +589,7 @@ impl<'a> Shrinker<'a> {
                 .collect();
 
             if valid.len() < 2 {
-                continue; // nocov — re-validation after concurrent shrink; embedded tests exercise the surface but cov instrumentation misses this specific arm under the merged native+server lcov pass.
+                continue;
             }
 
             let ChoiceKind::Integer(ic) = &self.current_nodes[valid[0]].kind else {
@@ -750,7 +768,10 @@ impl<'a> Shrinker<'a> {
             .map(|(&i, &target)| {
                 let v = match self.current_nodes[i].value {
                     ChoiceValue::Integer(v) => v,
-                    _ => unreachable!(),
+                    _ => unreachable!(
+                        "indices/ic_targets came from the integer-node filter above; \
+                         ChoiceNode invariant pairs Integer kind with Integer value"
+                    ),
                 };
                 if v >= target { 1 } else { -1 }
             })

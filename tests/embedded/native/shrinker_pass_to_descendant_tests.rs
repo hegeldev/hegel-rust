@@ -1,4 +1,4 @@
-//! Unit tests for `Shrinker::pass_to_descendant` (Step 4).
+//! Unit tests for `Shrinker::pass_to_descendant`.
 //!
 //! Hypothesis reference: `shrinker.py:959-1015`.
 

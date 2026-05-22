@@ -470,7 +470,7 @@ fn test_sort_stale_indices_after_punning() {
 }
 
 // ----------------------------------------------------------------------------
-// Step 7 (audit cleanup) — quality tests ported from Hypothesis.
+// Quality tests ported from Hypothesis.
 // ----------------------------------------------------------------------------
 
 /// Port of Hypothesis `test_multiple_empty_lists_are_independent`

@@ -82,13 +82,12 @@ fn find_integer_bails_when_exponential_probe_overflows() {
     let result = find_integer(|_| true);
     // The probe doubles `hi` from 5 upward; the final `lo` it returns
     // when checked_mul fails is the largest power-of-two-times-5 fitting
-    // in usize that successfully evaluated.
-    let expected_lo = (usize::MAX >> 1) | 1; // any usize >= 2^62 on 64-bit
+    // in usize that successfully evaluated — at least 2^60 on 64-bit
+    // platforms.
     assert!(
         result >= 1 << 60,
         "result {result} should be very large; expected >= 2^60"
     );
-    let _ = expected_lo;
 }
 
 #[test]

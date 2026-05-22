@@ -923,11 +923,13 @@ mod shrink_quality {
                 s < -150
             },
         );
-        // Sum is exactly -151 in all minimal counterexamples.  The
-        // canonical answer is (-51, -100) but other valid splits like
-        // (-52, -99) can arise depending on shrinker variance (see
-        // INSTRUCTIONS.md "Risks and watchouts").  Validate the
-        // semantic invariant rather than the exact split.
+        // Sum is exactly -151 in every minimal counterexample, with all
+        // mass in the last two slots.  The canonical answer is
+        // `(-51, -100)`; a small fraction of seeds still converge on
+        // the neighbouring `(-52, -99)`, indicating residual
+        // non-determinism in the redistribute / shrink-passes
+        // interaction that has not yet been root-caused.  Pin the
+        // invariant rather than the exact split.
         let (a, b, c, d, e) = result;
         assert!(a.is_empty() && b.is_empty() && c.is_empty());
         assert_eq!(d.len() + e.len(), 2);

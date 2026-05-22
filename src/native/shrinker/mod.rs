@@ -97,8 +97,8 @@ pub struct Shrinker<'a> {
     /// there's already significant headroom in `calls_at_last_shrink`.
     /// Our `calls` is shrinker-local and starts at zero, so 200 is
     /// too tight for predicates that need many cold calls between
-    /// the first few shrinks (the threshold landed mid-`test_bound5`
-    /// redistribute and flaked the result).
+    /// the first few shrinks — the threshold then lands mid-pass and
+    /// stalls on a sub-minimal target.
     pub max_stall: usize,
     /// Snapshot of `current_nodes` at the last call to
     /// [`Shrinker::clear_change_tracking`] (or construction).  Each `consider`
@@ -124,10 +124,11 @@ pub struct Shrinker<'a> {
     /// (a Python dict).  Test cases produce a few hundred to a
     /// few thousand distinct candidates; an unbounded cache caps
     /// memory at a few MB on the largest seen runs.  Bounding the
-    /// cache with FIFO / LRU eviction introduced a subtle
-    /// determinism issue in seed-dependent shrink trajectories
-    /// (some seeds for `test_bound5` reached `(-52, -99)` instead
-    /// of `(-51, -100)`), so eviction is simply dropped.
+    /// cache with FIFO / LRU eviction introduced seed-dependent
+    /// shrink trajectories that converged on neighbouring minima
+    /// (cache eviction interacts with the order in which
+    /// redistribute candidates are revisited), so eviction is
+    /// simply dropped.
     consider_cache: HashSet<Vec<(u8, NodeSortKey)>>,
 }
 
@@ -205,9 +206,9 @@ impl<'a> Shrinker<'a> {
         }
         // Only enforce the stall guard once we've found at least one
         // improvement.  Without warmup, predicates that need many calls
-        // to find the first shrink (e.g. `test_bound5` exploring a
-        // large redistribute search space) trip the guard before
-        // making any progress and stall on a sub-minimal target.
+        // to find the first shrink — e.g. searching a large
+        // redistribute space — trip the guard before making any
+        // progress and stall on a sub-minimal target.
         if self.improvements > 0
             && self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall
         {

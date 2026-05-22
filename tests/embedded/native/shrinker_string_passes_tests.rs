@@ -1,5 +1,5 @@
 //! Unit tests for `lower_duplicated_characters` and
-//! `normalize_unicode_chars` (Step 9).
+//! `normalize_unicode_chars`.
 //!
 //! Hypothesis references: `shrinker.py:1519-1581`, `shrinker.py:1583-1617`.
 

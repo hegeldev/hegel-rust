@@ -1,4 +1,4 @@
-//! Unit tests for `Shrinker::try_trivial_spans` (Step 3).
+//! Unit tests for `Shrinker::try_trivial_spans`.
 //!
 //! Hypothesis reference: `shrinker.py:1680-1708`.
 

@@ -984,16 +984,6 @@ impl ChoiceNode {
         }
     }
 
-    /// True iff this node can't usefully participate in further
-    /// shrinking — either it's at its kind's `simplest` value or it was
-    /// forced (and so can't be changed).  Mirrors Hypothesis's
-    /// `ChoiceNode.trivial` derived attribute; the shrinker's
-    /// `chooser.choose(..., lambda n: not n.trivial)` filters use it
-    /// throughout `shrinker.py`.
-    pub fn is_trivial(&self) -> bool {
-        self.was_forced || self.value == self.kind.simplest()
-    }
-
     pub fn sort_key(&self) -> NodeSortKey {
         match (&self.kind, &self.value) {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {

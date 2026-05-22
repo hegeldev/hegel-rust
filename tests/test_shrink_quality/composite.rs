@@ -245,9 +245,6 @@ fn test_finds_small_list_even_with_bad_lists() {
     // Python parametrises over seed in range(10); hegel's `minimal()` is
     // already derandomized, so we just run once and check the shrunk
     // counterexample is `[1001]`.
-    //
-    // `test_case.choice(n)` in pbtkit draws from [0, n] inclusive, so
-    // `test_case.choice(10000)` → `integers().min_value(0).max_value(10000)`.
     let bad_list = hegel::compose!(|tc| {
         let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(10));
         (0..n)
@@ -275,8 +272,10 @@ fn test_shrinking_mixed_choice_types_no_sort_crash() {
         }
         x
     });
-    // Any value is accepted — we're checking that shrinking doesn't crash.
-    let _ = minimal(g, |_: &i64| true);
+    // Any value is accepted, so the shrinker drives `x` to the
+    // simplest integer in `[0, 3]`.  When `x == 0` the trailing two
+    // booleans aren't drawn.
+    assert_eq!(minimal(g, |_: &i64| true), 0);
 }
 
 #[test]
@@ -290,8 +289,7 @@ fn test_shrinking_stale_indices_no_redistribute_crash() {
     // way to make three values in [0, 100] sum to > 150 is
     // `[0, 51, 100]`: 0 then the smallest second element such that
     // `0 + b + 100 > 150` (i.e., b=51) then the largest available value
-    // (100). Pre-N11 this was a `let _ = ...` smoke test asserting only
-    // "doesn't crash".
+    // (100).
     let g = hegel::compose!(|tc| {
         let n: i64 = tc.draw(gs::integers::<i64>().min_value(2).max_value(8));
         let vals: Vec<i64> = (0..n)
@@ -430,15 +428,16 @@ fn test_lower_and_bump_targets_booleans() {
         let v1: bool = tc.draw(gs::booleans());
         (v0, v1)
     });
-    // The failing condition always fires. We check the shrunk values:
-    // v0=0 + v1=true is simpler than v0=1 + v1=false under sort_key at
-    // position 0.
-    let (v0, _v1) = minimal(g, |_: &(i64, bool)| true);
-    assert_eq!(v0, 0);
+    // The predicate accepts every draw, so the shrinker drives both
+    // values to their simplest representation: `v0 = 0` (the only
+    // value in `[0, 1]` that hits sort_key 0) and `v1 = false` (the
+    // simplest boolean).  sort_key compares v0 before v1, so trading
+    // v1 for a lower v0 always wins.
+    assert_eq!(minimal(g, |_: &(i64, bool)| true), (0, false));
 }
 
 // Requires `try_shortening_via_increment` with prefix_nodes (value punning
-// across type-changing continuations) — `shrinking.index_passes` in pbtkit.
+// across type-changing continuations).
 #[test]
 fn test_increment_with_dependent_continuation() {
     // Shrink to the 5-draw path (via v1=true) not the 6-draw path (via
@@ -499,8 +498,7 @@ enum BoolIntOrInt {
 fn test_redistribute_stale_indices_with_one_of() {
     // Predicate: `Bool(true) | Two`. The first one_of branch (Bool)
     // matches via `Bool(true)`, which is the simplest matching variant
-    // (the one_of branch index drops to 0). Pre-N11 this was a
-    // `let _ = ...` smoke test asserting only "doesn't crash".
+    // (the one_of branch index drops to 0).
     let g = hegel::compose!(|tc| {
         let v0 = tc.draw(gs::one_of(vec![
             gs::booleans().map(BoolIntOrInt::Bool).boxed(),
@@ -533,8 +531,7 @@ fn test_lower_and_bump_stale_j_after_replace() {
     // generator structure (filter + flat_map + nested vecs). The test
     // body returns just `v0: bool`; predicate is `*v == true`, so the
     // shrunk minimum is `true` (any other draw shrinks to its simplest
-    // value, but they're discarded). Pre-N11 this was a `let _ = ...`
-    // smoke test — the assertion now both confirms "doesn't crash"
+    // value, but they're discarded). The assertion confirms "doesn't crash"
     // *and* "actually finds the minimum" in one shot.
     let g = hegel::compose!(|tc| {
         let v0: bool = tc.draw(gs::booleans());
@@ -669,7 +666,6 @@ fn test_mutate_skips_large_result() {
     // Predicate accepts every Vec<i64>, so the shrinker minimises every
     // value to its simplest. Each integer is in [0, 10] with the default
     // shrink_towards = 0, so the shrunk minimum is exactly 35 zeros.
-    // Pre-N11 this was a `let _ = ...` smoke test.
     let g = hegel::compose!(|tc| {
         (0..35)
             .map(|_| tc.draw(gs::integers::<i64>().min_value(0).max_value(10)))
@@ -680,7 +676,7 @@ fn test_mutate_skips_large_result() {
 }
 
 // ----------------------------------------------------------------------------
-// Step 8 (audit cleanup) — composite tests ported from Hypothesis.
+// Composite tests ported from Hypothesis.
 // ----------------------------------------------------------------------------
 
 /// Port of Hypothesis `test_can_expand_zeroed_region`

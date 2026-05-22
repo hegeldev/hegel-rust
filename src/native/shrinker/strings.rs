@@ -34,13 +34,13 @@ impl<'a> Shrinker<'a> {
                 }
             };
 
-            // Step 1: try simplest.
+            // Try simplest.
             let simplest = kind.simplest();
             if simplest != current {
                 self.replace(&HashMap::from([(i, ChoiceValue::String(simplest))]));
             }
 
-            // Step 2: shorten via linear scan up from min_size. For strings the
+            // Shorten via linear scan up from min_size. For strings the
             // per-codepoint key is not monotonic under prefix-taking (the suffix
             // we drop may have been the only "interesting" part), so a linear
             // scan is simpler and small.
@@ -54,7 +54,7 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            // Step 3: delete individual codepoints, right-to-left.
+            // Delete individual codepoints, right-to-left.
             let mut j = self.current_string(i).len();
             while j > 0 {
                 j -= 1;
@@ -67,7 +67,7 @@ impl<'a> Shrinker<'a> {
                 self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]));
             }
 
-            // Step 3.5: shrink duplicated codepoints simultaneously.
+            // Shrink duplicated codepoints simultaneously.
             //
             // When two or more positions hold the same codepoint and the
             // predicate links them (e.g. `decode(rle_encode(s)) != s`
@@ -139,7 +139,7 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            // Step 4: reduce each codepoint via a small set of semantic
+            // Reduce each codepoint via a small set of semantic
             // candidates (digits, ASCII letters, NFD base) followed by
             // `bin_search_down` over the remaining key range.
             //
@@ -189,7 +189,7 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            // Step 5: insertion-sort pass — swap adjacent out-of-order
+            // Insertion-sort pass — swap adjacent out-of-order
             // codepoints (under the alphabet's shrink ordering).
             let mut pos = 1;
             loop {

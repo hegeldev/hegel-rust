@@ -1,4 +1,4 @@
-//! Unit tests for `Shrinker::reorder_spans` (Step 5).
+//! Unit tests for `Shrinker::reorder_spans`.
 //!
 //! Hypothesis reference: `shrinker.py:1810-1855`.
 

@@ -1,4 +1,4 @@
-//! Unit tests for `Shrinker::minimize_individual_choices` (Step 8).
+//! Unit tests for `Shrinker::minimize_individual_choices`.
 //!
 //! Hypothesis reference: `shrinker.py:1710-1808`.
 
@@ -118,11 +118,11 @@ fn minimize_individual_choices_invokes_span_delete_fallback() {
 
 #[test]
 fn minimize_individual_choices_truncates_misaligned_string() {
-    // Step 16: lowering the integer at index 0 forces the trailing
-    // string to be truncated by the closure (mimicking a min_size that
-    // depends on the integer).  Direct replacement is rejected — the
-    // realised actual_str shorter than the candidate's string is the
-    // signal the misalignment-truncation retry needs.
+    // Lowering the integer at index 0 forces the trailing string to be
+    // truncated by the closure (mimicking a min_size that depends on
+    // the integer).  Direct replacement is rejected — the realised
+    // actual_str shorter than the candidate's string is the signal the
+    // misalignment-truncation retry needs.
     use crate::native::core::choices::StringChoice;
     use crate::native::intervalsets::IntervalSet;
 
@@ -273,8 +273,8 @@ fn minimize_individual_choices_size_dep_span_delete_succeeds() {
 
 #[test]
 fn minimize_individual_choices_truncates_misaligned_bytes() {
-    // Step 16, bytes variant.  Mirrors the string test but with a
-    // `Bytes` node downstream of the integer.
+    // Bytes variant of the misaligned-string test, with a `Bytes` node
+    // downstream of the integer.
     use crate::native::core::choices::BytesChoice;
 
     let initial = vec![

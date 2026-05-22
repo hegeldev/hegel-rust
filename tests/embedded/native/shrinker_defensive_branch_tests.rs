@@ -1,6 +1,5 @@
 //! Tests covering defensive branches in deletion.rs and sequence.rs
-//! that were previously masked by `// nocov` annotations (Step 5 of
-//! the audit cleanup).
+//! that were previously masked by `// nocov` annotations.
 
 use std::collections::HashMap;
 

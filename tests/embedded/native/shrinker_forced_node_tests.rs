@@ -1,4 +1,4 @@
-//! Regression tests for Step 15: every shrink pass must skip
+//! Regression tests asserting that every shrink pass must skip
 //! `was_forced=true` nodes.  Hypothesis enforces this via the
 //! `chooser.choose(..., lambda n: not n.was_forced)` predicate
 //! throughout `shrinker.py`; in the native shrinker we gate at the

@@ -126,8 +126,6 @@ fn test_integer_shrinks_negative_only_range() {
     );
 }
 
-// `choice(n)` in pbtkit draws from [0, n] inclusive, so `choice(1000)` →
-// `gs::integers::<i64>().min_value(0).max_value(1000)`.
 #[test]
 fn test_reduces_additive_pairs() {
     let (m, n) = Minimal::new(
@@ -225,8 +223,8 @@ fn test_can_simultaneously_lower_non_duplicated_nearby_integers() {
 }
 
 // ----------------------------------------------------------------------------
-// Step 8 (audit cleanup) — conjecture shrinker tests ported as
-// integration-level checks against the native runner.
+// Conjecture shrinker tests ported as integration-level checks against
+// the native runner.
 // ----------------------------------------------------------------------------
 
 /// Port of Hypothesis `test_zig_zags_quickly`
