@@ -545,21 +545,19 @@ mod verbose_per_test_case_output {
         );
     }
 
-    #[cfg(feature = "native")]
     #[test]
     fn verbose_prints_stop_reason_for_out_of_data() {
-        // A vec with a min_size larger than the native choice budget
-        // (`BUFFER_SIZE = 8192`) forces StopTest, which the lifecycle
-        // records as Overrun. The server backend triggers a
-        // Hypothesis-side `large_base_example` health check long before
-        // we can reach this codepath, so this test runs on native only.
-        // The tight integer range keeps the sampler quick — we only
-        // need to fill choice slots, not generate interesting values.
-        let lines = collect_output_with_cases(Verbosity::Verbose, 2, |tc| {
-            let _: Vec<i64> = tc.draw(
-                gs::vecs(gs::integers::<i64>().min_value(0).max_value(1))
-                    .min_size(9_000),
-            );
+        // A failing run over a `vecs(...).min_size(10)` body forces
+        // shrinking, and the shrinker's probes are capped at the
+        // current shrunk length: the body needs at least 10 element
+        // draws to satisfy `min_size`, so probes with too-tight budgets
+        // raise StopTest and surface as `Overrun` here. This is the
+        // natural way Overrun arises in practice and works on both
+        // backends.
+        let lines = collect_output(Verbosity::Verbose, |tc| {
+            let xs: Vec<i64> = tc.draw(gs::vecs(gs::integers::<i64>()).min_size(10));
+            let sum: i128 = xs.iter().map(|&x| i128::from(x)).sum();
+            assert!(sum < 1000);
         });
         assert!(
             lines.iter().any(|s| s.contains("out of data")),
