@@ -203,7 +203,11 @@ fn initial_coarse_reduction_accepts_probe_when_direct_replace_fails() {
                     // The coarse pass's zeroing probe.  Return a
                     // different-shape realised sequence to flag
                     // shape_changed = true.
-                    return (false, vec![small_int_node(0), small_int_node(0)], Spans::new());
+                    return (
+                        false,
+                        vec![small_int_node(0), small_int_node(0)],
+                        Spans::new(),
+                    );
                 }
                 // try_lower's direct `replace` lowers `head` to v in
                 // 0..3.  Reject those so the probe branch runs.
