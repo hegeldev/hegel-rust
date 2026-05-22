@@ -140,3 +140,31 @@ fn initial_coarse_reduction_skips_forced_node() {
     shrinker.initial_coarse_reduction();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 5);
 }
+
+/// Port of Hypothesis `test_shrinking_one_of_with_same_shape`
+/// (`tests/conjecture/test_shrinker.py`).  Initial counterexample
+/// `(1, 0)`: predicate accepts iff first integer is 1.  When the
+/// branch chosen by the integer doesn't change the trailing shape,
+/// `initial_coarse_reduction` should leave the pair untouched.
+#[test]
+fn initial_coarse_reduction_keeps_same_shape_one_of() {
+    let initial = vec![small_int_node(1), small_int_node(0)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                // Always interesting iff first value == 1.
+                let interesting = matches!(nodes[0].value, ChoiceValue::Integer(1));
+                (interesting, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.initial_coarse_reduction();
+    // Sequence should remain (1, 0); coarse phase doesn't lower the
+    // selector when there's no shape change to exploit.
+    assert_eq!(shrinker.current_nodes.len(), 2);
+    assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
+    assert_eq!(int_value(&shrinker.current_nodes[1]), 0);
+}

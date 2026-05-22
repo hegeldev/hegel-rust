@@ -337,3 +337,13 @@ fn minimize_individual_choices_no_op_on_already_simplest_node() {
     shrinker.minimize_individual_choices();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 0);
 }
+
+// `test_can_shrink_variable_draws_with_just_deletion` (Hypothesis
+// `tests/conjecture/test_shrinker.py`) is **DEFERRED**: the predicate
+// requires `minimize_individual_choices` to make a combined move
+// (lower the count `n` AND bump a trailing zero to nonzero, while
+// truncating the tail).  Hypothesis's `minimize_individual_choices`
+// chains with the lower-and-bump / span-delete fallback that our
+// native equivalent doesn't replicate one-to-one — a faithful port
+// needs a stitched test_fn plus the `lower_and_bump` pass interleaved.
+// Left for follow-up.
