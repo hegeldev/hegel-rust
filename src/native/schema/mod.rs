@@ -6,26 +6,35 @@
 // Split into submodules:
 //   numeric     — interpret_integer, interpret_boolean, interpret_constant
 //   float       — interpret_float
-//   text        — interpret_string, interpret_binary, StringAlphabet helpers
-//   regex       — interpret_regex, generate_hir_string
+//   bytes       — interpret_binary
+//   text        — interpret_string, IntervalSet helpers
+//   regex       — interpret_regex (Python-compatible regex strategy)
 //   collections — interpret_list, interpret_dict, interpret_tuple, interpret_one_of, interpret_sampled_from
-//   special     — date, time, datetime, ipv4, ipv6, domain, email, url
+//   special     — date, time, datetime, ip_address, uuid
+//   internet    — domain, email, url
 
+mod bytes;
 mod collections;
 mod float;
+mod internet;
 mod numeric;
+mod regex;
+mod special;
+mod text;
 
 use crate::cbor_utils::map_get;
-use crate::native::core::{ManyState, NativeTestCase, Status, StopTest};
+use crate::native::core::state::MAX_DEPTH;
+use crate::native::core::{ManyState, NativeTestCase, Span, Status, StopTest};
 use ciborium::Value;
 
 /// Interpret a CBOR schema and produce a value using the native test case.
 ///
-/// For leaf schemas (those that don't call `interpret_schema` recursively),
-/// records a span in `ntc.spans` so that span-mutation exploration can find
-/// structurally-duplicate values (e.g. two equal strings in a tuple).
-/// Compound schemas get their spans from the user-level `start_span` /
-/// `stop_span` commands that higher-level generators emit.
+/// Records an enclosing span around the dispatch so the shrinker sees every
+/// schema's result — leaf or compound — as a logical unit. The span's label
+/// is the schema-type string, and nested `interpret_schema` calls correctly
+/// attribute their parent through `ntc.span_stack`. Mirrors Hypothesis's
+/// `ConjectureData.draw`, which wraps every strategy draw in a matched
+/// `start_span` / `stop_span` pair.
 pub(crate) fn interpret_schema(
     ntc: &mut NativeTestCase,
     schema: &Value,
@@ -35,38 +44,58 @@ pub(crate) fn interpret_schema(
         .and_then(as_text)
         .expect("Schema must have a \"type\" field");
 
-    // Record spans for leaf schemas (no recursive interpret_schema calls).
-    let is_leaf = matches!(
-        schema_type,
-        "integer" | "boolean" | "float" | "sampled_from"
-    );
-    let span_start = if is_leaf { ntc.nodes.len() } else { 0 };
+    // Open a dispatch span. We push a Span directly rather than calling
+    // `start_span` because `start_span` takes a u64 label, and schema
+    // types are naturally strings. The structural-coverage stack stays
+    // untouched — coverage tags are a property of the u64 label space
+    // that user-level `start_span` uses.
+    let span_idx = ntc.spans.len();
+    let span_start = ntc.nodes.len();
+    let depth = ntc.span_stack.len() as u32;
+    let parent = ntc.span_stack.last().copied();
+    ntc.spans.push(Span {
+        start: span_start,
+        end: span_start,
+        label: schema_type.to_string(),
+        depth,
+        parent,
+        discarded: false,
+    });
+    ntc.span_stack.push(span_idx);
+    if depth + 1 > MAX_DEPTH && ntc.status.is_none() {
+        ntc.status = Some(Status::Invalid);
+        ntc.freeze();
+    }
 
-    // Native backs integer + boolean + float leaves, plus the compound
-    // schemas (tuple/list/dict/one_of/sampled_from) that recurse into them.
-    // Schemas backed by string/binary/regex/datetime/etc. leaves panic with
-    // todo!() until those schema interpreters land in a follow-up PR.
     let result = match schema_type {
         "integer" => numeric::interpret_integer(ntc, schema),
         "boolean" => numeric::interpret_boolean(ntc),
         "constant" => numeric::interpret_constant(schema),
         "null" => Ok(Value::Null),
         "float" => float::interpret_float(ntc, schema),
+        "binary" => bytes::interpret_binary(ntc, schema),
+        "string" => text::interpret_string(ntc, schema),
+        "regex" => regex::interpret_regex(ntc, schema),
         "tuple" => collections::interpret_tuple(ntc, schema),
         "one_of" => collections::interpret_one_of(ntc, schema),
         "sampled_from" => collections::interpret_sampled_from(ntc, schema),
         "list" => collections::interpret_list(ntc, schema),
         "dict" => collections::interpret_dict(ntc, schema),
-
-        "string" | "binary" | "regex" | "email" | "url" | "domain" | "ip_address" | "uuid"
-        | "ipv4" | "ipv6" | "date" | "time" | "datetime" => {
-            todo!("schema {:?} not yet supported in native mode", schema_type)
-        }
+        "date" => special::interpret_date(ntc),
+        "time" => special::interpret_time(ntc),
+        "datetime" => special::interpret_datetime(ntc),
+        "ip_address" => special::interpret_ip_address(ntc, schema),
+        "uuid" => special::interpret_uuid(ntc, schema),
+        "domain" => internet::interpret_domain(ntc, schema),
+        "email" => internet::interpret_email(ntc),
+        "url" => internet::interpret_url(ntc),
 
         other => panic!("Unknown schema type: {}", other),
     };
-    if is_leaf && result.is_ok() {
-        ntc.record_span(span_start, ntc.nodes.len(), schema_type.to_string());
+
+    ntc.span_stack.pop();
+    if let Some(span) = ntc.spans.get_mut(span_idx) {
+        span.end = ntc.nodes.len();
     }
     result
 }

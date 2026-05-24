@@ -1,9 +1,5 @@
 //! Tests for `tc.target()`, the public targeted property-based testing API.
 
-// The native backend does not yet implement targeting (`tc.target()` raises
-// `todo!()`), so every test in this file is gated on the server backend.
-#![cfg(not(feature = "native"))]
-
 mod common;
 
 use common::utils::expect_panic;
@@ -216,4 +212,98 @@ fn test_target_rewrite_compiles_in_hegel_test(tc: hegel::TestCase) {
     tc.target(n as f64);
     tc.target((n * 2) as f64);
     tc.target_labelled(n as f64, "explicit");
+}
+
+/// Targeting on a non-trailing draw whose value changes the number of
+/// downstream draws drives the hill-climber through the resize-restart
+/// branch of `hill_climb`. When `find_integer` flips `big` from false to
+/// true, the body draws five extra integers, and the next outer-loop
+/// iteration sees `current_nodes.len() != prev_len` and resets `i` to the
+/// new tail. The walk then re-encounters indices that were in the
+/// pre-resize `nodes_examined` set, exercising the already-examined skip.
+/// Targeting on a non-monotone score (peak at `n=10`) with `n` controlling
+/// a downstream loop drives the hill-climber through a sequence whose
+/// length changes mid-walk. From a random best near (but not at) the peak,
+/// `find_integer` steps `n` toward 10, shrinking or growing the realised
+/// choice sequence each commit, which trips the resize-restart at the
+/// next outer-loop iteration (and the already-examined skip, since
+/// `nodes_examined` from the pre-resize pass stays populated).
+#[test]
+fn test_targeting_walks_through_choice_count_change() {
+    // Score depends on both `n` and the downstream booleans: each `true`
+    // boolean contributes +1. Random sampling rarely produces "all
+    // booleans true", so hill_climb actually makes progress flipping
+    // them, then eventually reaches the integer at the head of the
+    // sequence — where `find_integer` grows `n`, the trial pulls extra
+    // booleans from the random fallback (some `true`, raising the
+    // score), and `current_nodes.len()` changes mid-walk. The next
+    // outer iteration trips the resize-restart, and the
+    // `nodes_examined` set from the pre-resize pass forces the
+    // already-examined skip on the way back down.
+    Hegel::new(|tc| {
+        let _filler1: bool = tc.draw(gs::booleans());
+        let _filler2: bool = tc.draw(gs::booleans());
+        let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(20));
+        let mut sum: i64 = 0;
+        for _ in 0..n {
+            if tc.draw(gs::booleans()) {
+                sum += 1;
+            }
+        }
+        tc.target(sum as f64);
+    })
+    .settings(
+        Settings::new()
+            .test_cases(500)
+            .database(None)
+            .derandomize(true),
+    )
+    .run();
+}
+
+/// Constant score means every perturbation is a lateral move. A non-trailing
+/// boolean whose flip adds five downstream draws is the canonical
+/// lateral-grow case — `try_replace`'s `!strict && grew` guard rejects it.
+/// A perturbation that drives the climbed integer onto an `assume()`-
+/// excluded value comes back from the runner with `Status::Invalid`;
+/// `try_replace` rejects it via its `trial.status < Status::Valid`
+/// guard rather than spuriously recording it as a step.
+#[test]
+fn test_targeting_rejects_perturbation_that_fails_assume() {
+    Hegel::new(|tc| {
+        let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(20));
+        tc.assume(n != 7);
+        // Peak at n=7, but n=7 is filtered out, so the best Valid sample
+        // is n=6 or n=8 (score = -1). Hill-climb walks toward n=7,
+        // hits the assume(), and `try_replace` rejects the Invalid trial.
+        tc.target(-((n - 7).saturating_abs() as f64));
+    })
+    .settings(
+        Settings::new()
+            .test_cases(500)
+            .database(None)
+            .derandomize(true),
+    )
+    .run();
+}
+
+#[test]
+fn test_targeting_rejects_growing_lateral_move() {
+    Hegel::new(|tc| {
+        let _filler: bool = tc.draw(gs::booleans());
+        let big: bool = tc.draw(gs::booleans());
+        if big {
+            for _ in 0..5 {
+                let _ = tc.draw(gs::booleans());
+            }
+        }
+        tc.target(1.0);
+    })
+    .settings(
+        Settings::new()
+            .test_cases(500)
+            .database(None)
+            .derandomize(true),
+    )
+    .run();
 }

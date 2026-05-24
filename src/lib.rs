@@ -231,6 +231,8 @@ pub(crate) mod server;
 pub(crate) mod settings;
 pub mod stateful;
 mod test_case;
+#[cfg(feature = "native")]
+pub(crate) mod unicodedata;
 #[doc(hidden)]
 pub use control::currently_in_test_context;
 pub use explicit_test_case::ExplicitTestCase;
@@ -299,11 +301,7 @@ pub use antithesis::TestLocation;
 /// #[hegel::test]
 /// fn generates_statuses(tc: hegel::TestCase) {
 ///     let generator = gs::default::<Status>()
-///         .Active(
-///             gs::default::<Status>()
-///                 .default_Active()
-///                 .since(gs::text().max_size(20))
-///         );
+///         .active(|g| g.since(gs::text().max_size(20)));
 ///     let status: Status = tc.draw(generator);
 /// }
 /// ```
@@ -366,6 +364,16 @@ pub use hegel_macros::state_machine;
 /// fn test_runs_many_more_times(tc: TestCase) {
 ///     let x: i32 = tc.draw(integers());
 ///     assert!(x + 0 == x);
+/// }
+/// ```
+///
+/// You can use other test attribute macros, like `tokio::test`, by putting them *before* `hegel::test`:
+///
+/// ```ignore
+/// #[tokio::test]
+/// #[hegel::test]
+/// async fn my_async_test() {
+///     // ...
 /// }
 /// ```
 pub use hegel_macros::test;

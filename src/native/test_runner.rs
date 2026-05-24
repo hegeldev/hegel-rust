@@ -42,6 +42,9 @@ pub struct RunResult {
     pub spans: Vec<Span>,
     pub origin: Option<String>,
     pub failure: Option<Failure>,
+    /// `tc.target()` observations recorded during the test case, keyed by
+    /// label. Empty for tests that don't call `tc.target()`.
+    pub target_observations: HashMap<String, f64>,
 }
 
 const RANDOM_GENERATION_BATCH: u64 = 10;
@@ -54,7 +57,15 @@ const FILTER_TOO_MUCH_THRESHOLD: u64 = 200;
 
 /// Cumulative wall-clock threshold across the generation phase before
 /// TooSlow fires.
-const TOO_SLOW_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1);
+///
+/// Hypothesis computes its equivalent threshold as `max(1s, 5 × deadline)`,
+/// which works out to 1s when the user has the default `deadline=200ms` set
+/// but 30s when the user sets `deadline=None`. Hegel-Rust deliberately
+/// doesn't have a `deadline` setting at all (tight timing on tests tends to
+/// be more trouble than it's worth in this ecosystem), which puts every
+/// Hegel run in the "deadline=None" regime — so the matching Hypothesis
+/// behaviour is the 30s threshold, not the 1s one.
+const TOO_SLOW_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Health checks (TooSlow / FilterTooMuch) are evaluated only while the run
 /// has fewer than this many valid examples on record.
@@ -128,6 +139,8 @@ fn run_main(
         Database::Disabled => None,
     };
 
+    let mut persister = Persister::new(db.as_deref(), database_key);
+
     let mut ctx = EngineCtx::new(run_case);
 
     // Local data tree used by the generation phase to drive `for_probe`
@@ -141,6 +154,9 @@ fn run_main(
     // is what makes a single test that fails with several distinct bugs
     // surface each one.
     let mut interesting: HashMap<String, Vec<ChoiceNode>> = HashMap::new();
+    let mut targeting = crate::native::targeting::TargetingState::new();
+    let mut target_schedule = crate::native::targeting::TargetingSchedule::new(max_examples);
+    let target_enabled = settings.phases.contains(&Phase::Target);
     let mut valid_test_cases: u64 = 0;
     let mut calls: u64 = 0;
     let mut test_is_trivial = false;
@@ -180,6 +196,14 @@ fn run_main(
                     if run.nodes.len() != stored_choices.len() {
                         replay_aligned = false;
                     }
+                    // Re-save the realised choice sequence: the stored
+                    // raw bytes may not match `serialize_choices(run.nodes)`
+                    // if the replay realised a shorter prefix, and we
+                    // want the persister's "last saved primary" entry to
+                    // be byte-accurate for later downgrades.  Any stale
+                    // raw bytes still in primary are reconciled to
+                    // `secondary` by the end-of-run save.
+                    persister.record(&origin, &run.nodes);
                     update_interesting(&mut interesting, origin, run.nodes);
                 } else {
                     // Non-interesting (or invalid) replay: the stored
@@ -206,6 +230,38 @@ fn run_main(
     let mut first_bug_at: Option<u64> = None;
     let mut last_bug_at: Option<u64> = None;
     let shrink_enabled = settings.phases.contains(&Phase::Shrink);
+
+    // All-simplest pre-trial. Mirrors Hypothesis's `cached_test_function(
+    // (ChoiceTemplate("simplest", count=None),))` call at the head of
+    // `engine.py::generate_new_examples`. Drawing every choice at its
+    // shrink-target value gives find-any tests over multi-component
+    // generators (e.g. midnight = h=m=s=μ=0 across four draws) a
+    // deterministic chance to hit the all-zeros joint event before
+    // random sampling — the joint event grows vanishingly unlikely as
+    // the number of components increases.
+    if settings.phases.contains(&Phase::Generate)
+        && !test_is_trivial
+        && calls < max_examples * 10
+        && interesting.is_empty()
+    {
+        let run = ctx.run(NativeTestCase::for_simplest(BUFFER_SIZE));
+        crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[]);
+        calls += 1;
+        if run.nodes.is_empty() && run.status >= Status::Invalid {
+            test_is_trivial = true;
+        }
+        if run.status >= Status::Valid {
+            valid_test_cases += 1;
+        }
+        if run.status == Status::Interesting {
+            let origin = run.origin.clone().unwrap_or_default();
+            first_bug_at = Some(calls);
+            last_bug_at = Some(calls);
+            persister.record(&origin, &run.nodes);
+            update_interesting(&mut interesting, origin, run.nodes.clone());
+        }
+    }
+
     while settings.phases.contains(&Phase::Generate)
         && !test_is_trivial
         && valid_test_cases < max_examples
@@ -268,6 +324,11 @@ fn run_main(
             }
             if run.status >= Status::Valid {
                 valid_test_cases += 1;
+                if !run.target_observations.is_empty() {
+                    let choices: Vec<ChoiceValue> =
+                        run.nodes.iter().map(|n| n.value.clone()).collect();
+                    targeting.record(&choices, &run.target_observations);
+                }
             }
 
             if run.status == Status::Invalid {
@@ -313,12 +374,46 @@ fn run_main(
             }
             // nocov end
 
+            // Fire `optimise_targets` periodically once enough valid
+            // examples have accumulated; mirrors Hypothesis's interleaved
+            // call from `generate_new_examples`. Counts share the
+            // generation budget — targeting trials count toward
+            // `valid_test_cases` and `calls`, so `max_examples` remains a
+            // hard cap across both. Skipped once a bug has been found
+            // (matching `optimise_targets`'s own short-circuit).
+            if target_enabled
+                && interesting.is_empty()
+                && !targeting.is_empty()
+                && target_schedule.should_fire(valid_test_cases)
+            {
+                let mut on_run = |run: &RunResult| {
+                    crate::native::data_tree::record_tree(
+                        &mut tree_root,
+                        &run.nodes,
+                        run.status,
+                        &[],
+                    );
+                };
+                let mut opt_ctx = crate::native::targeting::OptimiseCtx {
+                    engine: &mut ctx,
+                    interesting: &mut interesting,
+                    calls: &mut calls,
+                    valid_test_cases: &mut valid_test_cases,
+                    max_valid: max_examples,
+                    max_calls: max_examples * 10,
+                    rng: &mut rng,
+                    on_run: &mut on_run,
+                };
+                crate::native::targeting::optimise_targets(&mut targeting, &mut opt_ctx);
+            }
+
             if run.status == Status::Interesting {
                 let origin = run.origin.clone().unwrap_or_default();
                 if first_bug_at.is_none() {
                     first_bug_at = Some(calls);
                 }
                 last_bug_at = Some(calls);
+                persister.record(&origin, &run.nodes);
                 update_interesting(&mut interesting, origin, run.nodes.clone());
             } else if run.status == Status::Valid {
                 // Bump `calls` by the *actual* number of probes
@@ -334,6 +429,7 @@ fn run_main(
                         first_bug_at = Some(calls);
                     }
                     last_bug_at = Some(calls);
+                    persister.record(&origin, &mut_nodes);
                     update_interesting(&mut interesting, origin, mut_nodes);
                 }
             }
@@ -392,6 +488,7 @@ fn run_main(
 
             let target_origin = origin.clone();
             let shrunk = {
+                let persister_ref = &mut persister;
                 let mut shrinker = Shrinker::with_probe(
                     Box::new(|req: ShrinkRun| {
                         if verbosity == Verbosity::Verbose {
@@ -408,6 +505,14 @@ fn run_main(
                             } => ctx.run_probe_with_origin(prefix, seed, max_size, &target_origin),
                         };
                         calls += 1;
+                        // If this probe matched the target origin, persist it
+                        // immediately. The persister's sort-key check ensures
+                        // only strict improvements actually touch the disk,
+                        // and a Ctrl-C any time after this returns leaves the
+                        // best known counterexample saved to the primary key.
+                        if result.0 {
+                            persister_ref.record(&target_origin, &result.1);
+                        }
                         result
                     }),
                     verify.nodes,
@@ -588,6 +693,65 @@ fn update_interesting(
     }
 }
 
+/// Incremental database-save bookkeeping. Mirrors Hypothesis's
+/// `save_choices` / `downgrade_choices` calls inside `test_function`: every
+/// time a new interesting result is found (or an existing one is
+/// shortlex-improved), the realised choice sequence is saved to the primary
+/// key and the displaced previous entry is moved to the secondary key.
+///
+/// Persisting incrementally — rather than only at the end of `run_main` — is
+/// what guarantees that a failure survives a Ctrl-C / SIGTERM mid-shrink:
+/// the moment the runner discovers the failure (and at every subsequent
+/// improvement), the bytes are on disk.
+struct Persister<'a> {
+    db: Option<&'a dyn TestCaseDatabase>,
+    database_key: Option<&'a str>,
+    /// For each origin we've saved at least once, the choice-node sequence
+    /// of the most recent save. Used to (a) decide whether a new result is
+    /// shortlex-smaller and therefore worth saving, and (b) compute the
+    /// bytes to downgrade when it is.
+    last_saved: HashMap<String, Vec<ChoiceNode>>,
+}
+
+impl<'a> Persister<'a> {
+    fn new(db: Option<&'a dyn TestCaseDatabase>, database_key: Option<&'a str>) -> Self {
+        Persister {
+            db,
+            database_key,
+            last_saved: HashMap::new(),
+        }
+    }
+
+    /// Record an interesting result for `origin`. If this is the first
+    /// sighting, or shortlex-precedes the previous save, the new bytes are
+    /// written to the primary key and any previously-saved bytes for this
+    /// origin are downgraded to the secondary key.
+    fn record(&mut self, origin: &str, nodes: &[ChoiceNode]) {
+        let Some(db) = self.db else { return };
+        let Some(key) = self.database_key else { return };
+        let key_bytes = key.as_bytes();
+        let new_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+        let new_bytes = serialize_choices(&new_choices);
+
+        let needs_save = match self.last_saved.get(origin) {
+            None => true,
+            Some(prev) => sort_key(nodes) < sort_key(prev),
+        };
+        if !needs_save {
+            return;
+        }
+
+        if let Some(prev) = self.last_saved.get(origin) {
+            let prev_choices: Vec<ChoiceValue> = prev.iter().map(|n| n.value.clone()).collect();
+            let prev_bytes = serialize_choices(&prev_choices);
+            let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
+            db.move_value(key_bytes, &secondary_key, &prev_bytes);
+        }
+        db.save(key_bytes, &new_bytes);
+        self.last_saved.insert(origin.to_string(), nodes.to_vec());
+    }
+}
+
 /// Wraps the cross-backend `run_case` callback together with the
 /// non-determinism trie and the shrink-result cache, exposing the
 /// `NativeRunner` surface the surrounding shrinker, span-mutation, and
@@ -603,7 +767,7 @@ pub(crate) struct EngineCtx<'a> {
 }
 
 impl<'a> EngineCtx<'a> {
-    fn new(run_case: &'a mut dyn FnMut(Box<dyn DataSource>, bool)) -> Self {
+    pub(crate) fn new(run_case: &'a mut dyn FnMut(Box<dyn DataSource>, bool)) -> Self {
         EngineCtx {
             run_case,
             cache: HashMap::new(),
@@ -619,6 +783,7 @@ impl<'a> EngineCtx<'a> {
         (self.run_case)(Box::new(data_source), is_final);
         let nodes = NativeDataSource::take_nodes(&handle);
         let spans = NativeDataSource::take_spans(&handle);
+        let target_observations = NativeDataSource::take_target_observations(&handle);
         let tc_result = NativeDataSource::take_outcome(&handle);
 
         let (status, failure) = match tc_result {
@@ -635,6 +800,7 @@ impl<'a> EngineCtx<'a> {
             spans,
             origin,
             failure,
+            target_observations,
         }
     }
 
@@ -687,7 +853,7 @@ impl<'a> EngineCtx<'a> {
     }
 
     /// Run one test case as part of the search loop (not a final replay).
-    fn run(&mut self, ntc: NativeTestCase) -> RunResult {
+    pub(crate) fn run(&mut self, ntc: NativeTestCase) -> RunResult {
         self.execute(ntc, false)
     }
 }

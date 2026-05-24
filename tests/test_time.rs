@@ -1,5 +1,3 @@
-#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]
-
 mod common;
 
 use common::utils::assert_all_examples;
@@ -74,7 +72,6 @@ mod datetimes {
 
     // --- datetime tests ---
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_simplifies_towards_millenium() {
         // Hypothesis shrinks datetimes toward 2000-01-01T00:00:00.
@@ -89,7 +86,6 @@ mod datetimes {
         assert_eq!(microsecond, 0);
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_default_datetimes_are_naive() {
         assert_all_examples(gs::datetimes(), |s: &String| {
@@ -97,7 +93,6 @@ mod datetimes {
         });
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_allow_imaginary_is_not_an_error_for_naive_datetimes() {
         // gs::datetimes() always produces naive datetimes; allow_imaginary=False is a no-op
@@ -106,14 +101,12 @@ mod datetimes {
 
     // --- date tests ---
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_find_after_the_year_2000() {
         let d = minimal(gs::dates(), |s: &String| date_year(s) > 2000);
         assert_eq!(date_year(&d), 2001);
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_find_before_the_year_2000() {
         // Hypothesis shrinks toward 2000, so the minimal year < 2000 is 1999.
@@ -121,7 +114,6 @@ mod datetimes {
         assert_eq!(date_year(&d), 1999);
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_find_each_month() {
         for month in 1u32..=12 {
@@ -131,7 +123,6 @@ mod datetimes {
 
     // --- time tests ---
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_find_midnight() {
         find_any(gs::times(), |s: &String| {
@@ -140,26 +131,22 @@ mod datetimes {
         });
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_find_non_midnight() {
         let t = minimal(gs::times(), |s: &String| parse_time_parts(s).0 != 0);
         assert_eq!(parse_time_parts(&t).0, 1);
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_find_on_the_minute() {
         find_any(gs::times(), |s: &String| parse_time_parts(s).2 == 0);
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_find_off_the_minute() {
         find_any(gs::times(), |s: &String| parse_time_parts(s).2 != 0);
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_simplifies_towards_midnight() {
         let t = minimal(gs::times(), |_: &String| true);
@@ -170,7 +157,6 @@ mod datetimes {
         assert_eq!(microsecond, 0);
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_generate_naive_time() {
         find_any(gs::times(), |s: &String| {
@@ -178,7 +164,6 @@ mod datetimes {
         });
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_naive_times_are_naive() {
         assert_all_examples(gs::times(), |s: &String| {

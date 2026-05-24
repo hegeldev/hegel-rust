@@ -51,7 +51,6 @@ fn panic_on_data_source_error(e: DataSourceError) -> ! {
 }
 
 pub(crate) struct TestCaseGlobalData {
-    is_last_run: bool,
     mode: Mode,
     /// Fine-grained lock over the state shared between clones of a
     /// `TestCase`. Acquired briefly around each individual backend call
@@ -209,6 +208,24 @@ pub fn with_output_override<R>(sink: OutputSink, f: impl FnOnce() -> R) -> R {
     result
 }
 
+/// Return a clone of the currently-installed output sink, if any. Lets the
+/// run lifecycle's verbose output (stop-reason lines, per-test-case panic
+/// diagnostics) flow through `with_output_override` so tests can capture
+/// them in-process without having to spawn a subprocess.
+pub(crate) fn current_output_sink() -> Option<OutputSink> {
+    OUTPUT_OVERRIDE.with(|cell| cell.borrow().clone())
+}
+
+/// Emit a single line of verbose runner output, going through the
+/// installed output sink if there is one and otherwise to stderr.
+pub(crate) fn emit_verbose_line(msg: &str) {
+    if let Some(sink) = current_output_sink() {
+        sink(msg);
+    } else {
+        eprintln!("{}", msg);
+    }
+}
+
 fn panic_message(payload: &Box<dyn Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         s.to_string()
@@ -220,16 +237,21 @@ fn panic_message(payload: &Box<dyn Any + Send>) -> String {
 }
 
 impl TestCase {
-    pub(crate) fn new(data_source: Box<dyn DataSource>, is_last_run: bool, mode: Mode) -> Self {
-        let override_sink = OUTPUT_OVERRIDE.with(|cell| cell.borrow().clone());
+    pub(crate) fn new(
+        data_source: Box<dyn DataSource>,
+        is_last_run: bool,
+        mode: Mode,
+        verbose: bool,
+    ) -> Self {
+        let override_sink = current_output_sink();
+        let should_emit = is_last_run || verbose;
         let on_draw: OutputSink = match override_sink {
-            Some(sink) if is_last_run => sink,
-            _ if is_last_run => Arc::new(|msg| eprintln!("{}", msg)),
+            Some(sink) if should_emit => sink,
+            _ if should_emit => Arc::new(|msg| eprintln!("{}", msg)),
             _ => Arc::new(|_| {}),
         };
         TestCase {
             global: Arc::new(TestCaseGlobalData {
-                is_last_run,
                 mode,
                 shared: Mutex::new(SharedState {
                     data_source,
@@ -363,7 +385,9 @@ impl TestCase {
 
     /// Note a message which will be displayed with the reported failing test case.
     ///
-    /// Only prints during the final replay of a failing test case.
+    /// At the default verbosity, only prints during the final replay of a
+    /// failing test case. At [`Verbose`](crate::Verbosity::Verbose) or
+    /// higher, prints on every test case.
     ///
     /// # Example
     ///
@@ -377,9 +401,6 @@ impl TestCase {
     /// }
     /// ```
     pub fn note(&self, message: &str) {
-        if !self.global.is_last_run {
-            return;
-        }
         let local = self.local.borrow();
         let indent = local.indent;
         (local.on_draw)(&format!("{:indent$}{}", "", message, indent = indent));

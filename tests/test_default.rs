@@ -2,8 +2,8 @@
 
 mod common;
 
-use common::utils::check_can_generate_examples;
-use hegel::TestCase;
+use common::project::TempRustProject;
+use common::utils::{assert_all_examples, check_can_generate_examples};
 use hegel::generators as gs;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -13,13 +13,11 @@ fn test_default_bool() {
     check_can_generate_examples(gs::default::<bool>());
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_default_string() {
     check_can_generate_examples(gs::default::<String>());
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_default_char() {
     check_can_generate_examples(gs::default::<char>());
@@ -41,14 +39,12 @@ fn test_default_ints() {
     check_can_generate_examples(gs::default::<usize>());
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_default_floats() {
     check_can_generate_examples(gs::default::<f32>());
     check_can_generate_examples(gs::default::<f64>());
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_default_option() {
     check_can_generate_examples(gs::default::<Option<i32>>());
@@ -56,7 +52,6 @@ fn test_default_option() {
     check_can_generate_examples(gs::default::<Option<String>>());
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_default_vec() {
     check_can_generate_examples(gs::default::<Vec<i32>>());
@@ -64,7 +59,6 @@ fn test_default_vec() {
     check_can_generate_examples(gs::default::<Vec<bool>>());
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_default_array() {
     check_can_generate_examples(gs::default::<[bool; 2]>());
@@ -73,20 +67,17 @@ fn test_default_array() {
     check_can_generate_examples(gs::default::<[i32; 0]>());
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_default_hashmap() {
     check_can_generate_examples(gs::default::<HashMap<String, i32>>());
     check_can_generate_examples(gs::default::<HashMap<String, bool>>());
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_default_pathbuf() {
     check_can_generate_examples(gs::default::<PathBuf>());
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_default_tuple() {
     check_can_generate_examples(gs::default::<(i32, bool)>());
@@ -94,7 +85,6 @@ fn test_default_tuple() {
     check_can_generate_examples(gs::default::<(i32, bool, String, f64)>());
 }
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_default_nested() {
     check_can_generate_examples(gs::default::<Option<Vec<i32>>>());
@@ -107,10 +97,27 @@ fn test_default_nested() {
     check_can_generate_examples(gs::default::<[Option<i32>; 4]>());
 }
 
-#[hegel::test]
-fn test_default_can_infer_through_draw(tc: TestCase) {
-    // This doesn't test anything much at runtime. We are checking
-    // that the type checker can infer the type parameter to default
-    // rather than forcing us to write this as gs::default::<i32>
+#[test]
+fn test_default_supports_primitive_builder() {
+    let g = gs::default::<u32>().min_value(10).max_value(20);
+    assert_all_examples(g, |n: &u32| *n >= 10 && *n <= 20);
+}
+
+// see https://github.com/hegeldev/hegel-rust/issues/246 for context
+#[test]
+fn test_default_cant_infer_through_draw() {
+    TempRustProject::new()
+        .main_file(
+            r#"
+use hegel::generators as gs;
+
+fn _check(tc: &hegel::TestCase) {
     let _: i32 = tc.draw(gs::default());
+}
+
+fn main() {}
+"#,
+        )
+        .expect_failure("type annotations needed")
+        .cargo_run(&[]);
 }

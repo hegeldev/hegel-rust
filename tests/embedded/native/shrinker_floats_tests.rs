@@ -36,6 +36,38 @@ fn int_node(value: i128, min: i128, max: i128) -> ChoiceNode {
 }
 
 #[test]
+fn redistribute_pair_below_shrink_target_uses_raise_left_direction() {
+    // `v_i` starts negative (below its shrink target of `0.0`), so
+    // `redistribute_pair` picks `Direction::RaiseLeftLowerRight`: raise the
+    // first node toward 0, lower the second. The integration tests in
+    // `tests/test_shrink_quality/mixed_types.rs` only exercise the
+    // `LowerLeftRaiseRight` direction (both sides positive); without a
+    // deterministic case here this branch's coverage depends on the
+    // boundary-biased random sampler happening to draw a negative value.
+    let initial = vec![
+        float_node(-3.0, -100.0, 100.0),
+        float_node(5.0, -100.0, 100.0),
+    ];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            crate::native::shrinker::ShrinkRun::Full(nodes) => (true, nodes.to_vec()),
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new()),
+        }),
+        initial,
+    );
+    shrinker.redistribute_numeric_pairs();
+    let (a, b) = match (
+        &shrinker.current_nodes[0].value,
+        &shrinker.current_nodes[1].value,
+    ) {
+        (ChoiceValue::Float(a), ChoiceValue::Float(b)) => (*a, *b),
+        _ => unreachable!(),
+    };
+    assert!(a > -3.0, "v_i did not move up from -3.0 (got {a})");
+    assert!(b < 5.0, "v_j did not move down from 5.0 (got {b})");
+}
+
+#[test]
 fn redistribute_pair_bails_when_int_candidate_leaves_validate_range() {
     let initial = vec![float_node(3.0, -100.0, 100.0), int_node(2, 1, 10)];
     let mut shrinker = Shrinker::with_probe(

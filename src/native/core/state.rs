@@ -8,11 +8,15 @@ use rand::RngExt;
 use rand::rngs::SmallRng;
 
 use super::choices::{
-    BooleanChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, IntegerChoice,
-    InterestingOrigin, Status, StopTest,
+    BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceTemplate, ChoiceTemplateKind,
+    ChoiceValue, FloatChoice, IntegerChoice, InterestingOrigin, Status, StopTest, StringChoice,
 };
 use super::float_index::lex_to_float;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
+use crate::native::intervalsets::IntervalSet;
+use crate::native::statistics::{
+    Distribution, LogStudentTDistribution, PiecewiseDistribution, UniformDistribution,
+};
 
 /// State for a variable-length collection (port of Hypothesis's `many` class).
 pub struct ManyState {
@@ -26,28 +30,33 @@ pub struct ManyState {
 
 impl ManyState {
     pub fn new(min_size: usize, max_size: Option<usize>) -> Self {
-        let max_f = max_size.map_or(f64::INFINITY, |n| n as f64);
-        let min_f = min_size as f64;
-        let average = f64::min(f64::max(min_f * 2.0, min_f + 5.0), 0.5 * (min_f + max_f));
-        let desired_extra = average - min_f;
-        let max_extra = max_f - min_f;
-
-        let p_continue = if desired_extra >= max_extra {
-            0.99
-        } else if max_f.is_infinite() {
-            1.0 - 1.0 / (1.0 + desired_extra)
-        } else {
-            1.0 - 1.0 / (2.0 + desired_extra)
-        };
-
         ManyState {
             min_size,
-            max_size: max_f,
-            p_continue,
+            max_size: max_size.map_or(f64::INFINITY, |n| n as f64),
+            p_continue: length_p_continue(min_size, max_size),
             count: 0,
             rejections: 0,
             force_stop: false,
         }
+    }
+}
+
+/// Probability of extending a length draw beyond its current size. Port of
+/// Hypothesis's `many()`: length clusters around an `average_size` derived
+/// from `min(max(min_size * 2, min_size + 5), 0.5 * (min_size + max_size))`.
+pub(crate) fn length_p_continue(min_size: usize, max_size: Option<usize>) -> f64 {
+    let max_f = max_size.map_or(f64::INFINITY, |n| n as f64);
+    let min_f = min_size as f64;
+    let average = f64::min(f64::max(min_f * 2.0, min_f + 5.0), 0.5 * (min_f + max_f));
+    let desired_extra = average - min_f;
+    let max_extra = max_f - min_f;
+
+    if desired_extra >= max_extra {
+        0.99
+    } else if max_f.is_infinite() {
+        1.0 - 1.0 / (1.0 + desired_extra)
+    } else {
+        1.0 - 1.0 / (2.0 + desired_extra)
     }
 }
 
@@ -96,7 +105,84 @@ static GLOBAL_CONSTANTS_INTEGERS: LazyLock<Vec<i128>> = LazyLock::new(|| {
     base
 });
 
-/// Boundary-biased uniform sample for integers.
+/// Geometric-distribution length draw for variable-length collections.
+///
+/// Drawing length uniformly from `[min_size, max_size]` produces huge
+/// values when `max_size` is large; instead, the size follows a geometric
+/// variate with stop probability derived from [`length_p_continue`].
+///
+/// Hypothesis: `conjecture/providers.py::HypothesisProvider.draw_bytes`
+/// (and `draw_string`).
+fn many_draw_length(rng: &mut SmallRng, min_size: usize, max_size: usize) -> usize {
+    if min_size == max_size {
+        return min_size;
+    }
+    let p_continue = length_p_continue(min_size, Some(max_size));
+    // Geometric variate: `extra ~ floor(log(U) / log(p_continue))` for
+    // `U ~ Uniform(0, 1)`. `rng.random::<f64>()` returns `[0, 1)`, so `U`
+    // can be exactly `0` — that yields `-inf / log(p) = +inf` which
+    // saturates to `usize::MAX` via the float cast; the final `.min` clamps.
+    let u: f64 = rng.random();
+    let extra = (u.ln() / p_continue.ln()).floor();
+    assert!(extra >= 0.0);
+    min_size.saturating_add(extra as usize).min(max_size)
+}
+
+/// The shared integer distribution used by [`biased_integer_sample`] as
+/// the non-nasty fallback. Hypothesis: `INTEGERS_DISTRIBUTION` in
+/// `conjecture/providers.py` (PR HypothesisWorks/hypothesis#4728).
+/// A piecewise distribution composed of:
+///
+///   * uniform on `[-256, 256]` for the central core, and
+///   * a log-Student's-t (scale_bits = 13, df = 2) for the heavy outer
+///     tails — so magnitudes spread smoothly across many orders without
+///     the prior bucketed-bit-size cliffs.
+///
+/// Statically constructed because the constructor evaluates `Γ` and CDF
+/// integrals at the switchover; recomputing it per draw would dominate
+/// runtime.
+static INTEGERS_DISTRIBUTION: LazyLock<
+    PiecewiseDistribution<UniformDistribution, LogStudentTDistribution>,
+> = LazyLock::new(|| {
+    PiecewiseDistribution::new(
+        UniformDistribution::new(256.0),
+        LogStudentTDistribution::new(13.0, 2),
+        256.0,
+    )
+});
+
+/// Draw an integer in `[min_value, max_value]` from
+/// [`INTEGERS_DISTRIBUTION`] restricted to that range. Hypothesis:
+/// `HypothesisProvider._draw_integer_from_distribution`.
+///
+/// Falls back to a plain uniform draw when the CDF window across the
+/// requested range is too narrow for inverse-CDF sampling to be stable.
+/// Callers must ensure `min_value < max_value`; the `min == max` early
+/// return is handled at the [`biased_integer_sample`] call site.
+fn integer_sample_from_distribution(min_value: i128, max_value: i128, rng: &mut SmallRng) -> i128 {
+    let dist = &*INTEGERS_DISTRIBUTION;
+    // i128 endpoints can lose precision crossing into f64, but the final
+    // `clamp` mops up any out-of-range round-off so the contract holds.
+    let lo = dist.cdf(min_value as f64 - 0.5);
+    let hi = dist.cdf(max_value as f64 + 0.5);
+    // Bound from Hypothesis: a tighter CDF window than ~1e-13 leaves the
+    // inverse-CDF nothing to spread samples across, so collapse to uniform.
+    if hi - lo < 1e-13 {
+        return rng.random_range(min_value..=max_value);
+    }
+    // `inverse_cdf` requires strictly `0 < p < 1`. `rng.random::<f64>()`
+    // returns `[0, 1)`, so `p < hi ≤ 1` already; the only way to land on
+    // an endpoint is `p == 0.0`, which needs `lo == 0.0` and a zero-bit
+    // draw. `.max(f64::MIN_POSITIVE)` nudges that case to the smallest
+    // positive float — equivalent to the inverse-CDF at the very far
+    // tail, which the final `clamp` then brings back into range.
+    let p = (lo + rng.random::<f64>() * (hi - lo)).max(f64::MIN_POSITIVE);
+    // `f64 as i128` saturates out-of-range values to ±i128::MAX, then
+    // `clamp` brings them into the requested range.
+    (dist.inverse_cdf(p).round() as i128).clamp(min_value, max_value)
+}
+
+/// Boundary-biased sample for integers.
 ///
 /// Implements the "nasty value" boost used by both the
 /// [`NativeTestCase::draw_integer`] code path and the data-tree
@@ -110,7 +196,8 @@ static GLOBAL_CONSTANTS_INTEGERS: LazyLock<Vec<i128>> = LazyLock::new(|| {
 /// Returns a value in `[ic.min_value, ic.max_value]` (inclusive). With
 /// probability proportional to `nasty.len() * BOUNDARY_PROBABILITY` (≈ 0.5
 /// for unbounded ranges) the result is one of those nasty/interesting
-/// values; otherwise it's uniform across the range.
+/// values; otherwise it is drawn from [`INTEGERS_DISTRIBUTION`] restricted
+/// to the requested range.
 pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut SmallRng) -> i128 {
     if ic.min_value == ic.max_value {
         return ic.min_value;
@@ -188,7 +275,7 @@ pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut SmallRng) -> i
         let idx = rng.random_range(0..nasty.len());
         nasty[idx]
     } else {
-        rng.random_range(ic.min_value..=ic.max_value)
+        integer_sample_from_distribution(ic.min_value, ic.max_value, rng)
     }
 }
 
@@ -267,6 +354,194 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut SmallRng) -> f64 {
         }
     };
     if fc.validate(f) { f } else { fc.simplest() }
+}
+
+/// Boundary-biased sample for bytes. Draws the simplest (`min_size` zeros),
+/// the all-zeros minimum-plus-one length, or a single-`0xff` byte with
+/// probability proportional to `BOUNDARY_PROBABILITY × |nasty|`, falling
+/// back to a length drawn from [`many_draw_length`] with uniformly random
+/// byte values.
+pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut SmallRng) -> Vec<u8> {
+    let mut nasty: Vec<Vec<u8>> = vec![bc.simplest()];
+    if bc.min_size == 0 && bc.max_size > 0 {
+        nasty.push(vec![0u8]);
+    }
+    if bc.min_size <= 1 && bc.max_size >= 1 {
+        nasty.push(vec![0xffu8]);
+    }
+    let nasty_threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
+    if rng.random::<f64>() < nasty_threshold {
+        let idx = rng.random_range(0..nasty.len());
+        return nasty[idx].clone();
+    }
+    let len = many_draw_length(rng, bc.min_size, bc.max_size);
+    (0..len).map(|_| rng.random::<u8>()).collect()
+}
+
+/// Interesting string constants seeded from Hypothesis's GLOBAL_CONSTANTS
+/// (providers.py `_constant_strings`): logic keywords, numeric edge cases,
+/// common Unicode stress strings.  Stored as codepoint vectors so they can
+/// be validated against and inserted into the draw_string nasty pool.
+static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
+    let strings: &[&str] = &[
+        // strings interpretable as code / logic
+        "undefined",
+        "null",
+        "NULL",
+        "nil",
+        "NIL",
+        "true",
+        "false",
+        "True",
+        "False",
+        "TRUE",
+        "FALSE",
+        "None",
+        "none",
+        "if",
+        "then",
+        "else",
+        "__dict__",
+        "__proto__",
+        // strings interpretable as numbers
+        "0",
+        "1e100",
+        "0..0",
+        "0/0",
+        "1/0",
+        "+0.0",
+        "Infinity",
+        "-Infinity",
+        "Inf",
+        "INF",
+        "NaN",
+        "999999999999999999999999999999",
+        // common ASCII punctuation / special chars
+        ",./;'[]\\-=<>?:\"{}|_+!@#$%^&*()`~",
+        // common Unicode characters
+        "Ω≈ç√∫˜µ≤≥÷åß∂ƒ©˙∆˚¬…æœ∑´®†¥¨ˆøπ\u{201C}\u{2018}¡™£¢∞§¶•ªº–≠¸˛Ç◊ı˜Â¯˘¿ÅÍÎÏ˝ÓÔÒÚÆ☃Œ„´‰ˇÁ¨ˆØ∏\u{201D}\u{2019}`⁄€‹›ﬁﬂ‡°·‚—±",
+        // characters that increase in length when lowercased
+        "Ⱥ",
+        "Ⱦ",
+        // ligatures
+        "æœÆŒﬀʤʨß",
+        // emoticons
+        "(╯°□°）╯︵ ┻━┻)",
+        // emojis
+        "😍",
+        "🇺🇸",
+        "🏻",
+        "👍🏻",
+        // RTL text
+        "الكل في المجمو عة",
+        // Ogham text
+        "᚛ᚄᚓᚐᚋᚒᚄ ᚑᚄᚂᚑᚏᚅ᚜",
+        // Thai consonant + spacing vowel
+        "กา",
+        "ก ำกำ",
+        // mathematical bold/fraktur/script text
+        "𝐓𝐡𝐞 𝐪𝐮𝐢𝐜𝐤 𝐛𝐫𝐨𝐰𝐧 𝐟𝐨𝐱 𝐣𝐮𝐦𝐩𝐬 𝐨𝐯𝐞𝐫 𝐭𝐡𝐞 𝐥𝐚𝐳𝐲 𝐝𝐨𝐠",
+        "𝕿𝖍𝖊 𝖖𝖚𝖎𝖈𝖐 𝖇𝖗𝖔𝖜𝖓 𝖋𝖔𝖝 𝖏𝖚𝖒𝖕𝖘 𝖔𝖛𝖊𝖗 𝖙𝖍𝖊 𝖑𝖆𝖟𝖞 𝖉𝖔𝖌",
+        "𝑻𝒉𝒆 𝒒𝒖𝒊𝒄𝒌 𝒃𝒓𝒐𝒘𝒏 𝒇𝒐𝒙 𝒋𝒖𝒎𝒑𝒔 𝒐𝒗𝒆𝒓 𝒕𝒉𝒆 𝒍𝒂𝒛𝒚 𝒅𝒐𝒈",
+        "𝓣𝓱𝓮 𝓺𝓾𝓲𝓬𝓴 𝓫𝓻𝓸𝔀𝓷 𝓯𝓸𝔁 𝓳𝓾𝓶𝓹𝓼 𝓸𝓿𝓮𝓻 𝓽𝓱𝓮 𝓵𝓪𝔃𝔂 𝓭𝓸𝓰",
+        "𝕋𝕙𝕖 𝕢𝕦𝕚𝕔𝕜 𝕓𝕣𝕠𝕨𝕟 𝕗𝕠𝕩 𝕛𝕦𝕞𝕡𝕤 𝕠𝕧𝕖𝕣 𝕥𝕙𝕖 𝕝𝕒𝕫𝕪 𝕕𝕠𝕘",
+        // upside-down text
+        "ʇǝɯɐ ʇᴉs ɹolop ɯnsdᴉ ɯǝɹo˥",
+        // Windows reserved names
+        "NUL",
+        "COM1",
+        "LPT1",
+        // Scunthorpe problem
+        "Scunthorpe",
+        // zalgo text
+        "Ṱ̺̺̕o͞ ̷i̲̬͇̪͙n̝̗͕v̟̜̘̦͟o̶̙̰̠kè͚̮̺̪̹̱̤ ̖t̝͕̳̣̻̪͞h̼͓̲̦̳̘̲e͇̣̰̦̬͎ ̢̼̻̱̘h͚͎͙̜̣̲ͅi̦̲̣̰̤v̻͍e̺̭̳̪̰-m̢iͅn̖̺̞̲̯̰d̵̼̟͙̩̼̘̳ ̞̥̱̳̭r̛̗̘e͙p͠r̼̞̻̭̗e̺̠̣͟s̘͇̳͍̝͉e͉̥̯̞̲͚̬͜ǹ̬͎͎̟̖͇̤t͍̬̤͓̼̭͘ͅi̪̱n͠g̴͉ ͏͉ͅc̬̟h͡a̫̻̯͘o̫̟̖͍̙̝͉s̗̦̲.̨̹͈̣",
+        // examples from https://faultlore.com/blah/text-hates-you/
+        "मनीष منش",
+        "पन्ह पन्ह त्र र्च कृकृ ड्ड न्हृे إلا بسم الله",
+        "lorem لا بسم الله ipsum 你好1234你好",
+        // unconditional Unicode line-break characters (UAX #14)
+        "a\u{000A}b\u{000D}c\u{0085}d\u{000B}e\u{000C}f\u{2028}g\u{2029}h\u{000D}\u{000A}i",
+    ];
+    strings
+        .iter()
+        .map(|s| s.chars().map(|c| c as u32).collect::<Vec<u32>>())
+        .collect()
+});
+
+/// Boundary-biased sample for strings. Builds a "nasty" pool from the
+/// simplest values plus [`GLOBAL_CONSTANTS_STRINGS`] entries that satisfy
+/// the kind's constraint, drawing from it with probability proportional to
+/// `BOUNDARY_PROBABILITY × |nasty|`. Otherwise picks a small 1–10 codepoint
+/// sub-alphabet from the kind's [`IntervalSet`] (biased toward the
+/// first 256 shrink-order positions for large alphabets, matching
+/// `HypothesisProvider.draw_string`'s ASCII bias) and samples a
+/// length-`many_draw_length` string from it.
+///
+/// The sub-alphabet step concentrates draws into a small character set so
+/// that string-shape bugs (repeated characters, ordering, run-length) get
+/// exercised within a feasible test budget. A pure first-256 uniform draw
+/// from the full alphabet (~1.1M codepoints) almost never produces the
+/// `XXY`-shape strings that property tests of, for example, run-length
+/// encoding need to find.
+pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut SmallRng) -> Vec<u32> {
+    let nasty: Vec<Vec<u32>> = {
+        let simplest = sc.simplest();
+        let simplest_cp = sc.simplest_codepoint();
+        let mut v = vec![simplest];
+        if sc.min_size == 0 && sc.max_size > 0 {
+            v.push(Vec::new());
+        }
+        if sc.min_size <= 1 && sc.max_size >= 1 {
+            v.push(vec![simplest_cp]);
+        }
+        if sc.min_size <= 2 && sc.max_size >= 2 {
+            v.push(vec![simplest_cp, simplest_cp]);
+        }
+        for cps in GLOBAL_CONSTANTS_STRINGS.iter() {
+            if sc.validate(cps) && !v.contains(cps) {
+                v.push(cps.clone());
+            }
+        }
+        v
+    };
+    let nasty_threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
+    if rng.random::<f64>() < nasty_threshold {
+        let idx = rng.random_range(0..nasty.len());
+        return nasty[idx].clone();
+    }
+
+    let alpha = sc.intervals.len();
+    let pick_position = |rng: &mut SmallRng| -> usize {
+        if alpha > 256 {
+            if rng.random::<f64>() < 0.2 {
+                rng.random_range(256..alpha)
+            } else {
+                rng.random_range(0..256)
+            }
+        } else {
+            rng.random_range(0..alpha)
+        }
+    };
+
+    let alpha_size = rng.random_range(1..=10.min(alpha));
+    let mut sub_alphabet: Vec<u32> = Vec::with_capacity(alpha_size);
+    while sub_alphabet.len() < alpha_size {
+        let cp = sc.intervals.char_in_shrink_order(pick_position(rng)) as u32;
+        sub_alphabet.push(cp);
+    }
+
+    let len = many_draw_length(rng, sc.min_size, sc.max_size);
+    (0..len)
+        .map(|_| sub_alphabet[rng.random_range(0..sub_alphabet.len())])
+        .collect()
+}
+
+/// Convert a codepoint sequence to a Rust `String`, dropping any surrogate
+/// codepoints (`0xD800..=0xDFFF`). The engine never produces surrogates
+/// during generation (rejected by `validate` and by `biased_string_sample`),
+/// but a user-supplied prefix could feed one in.
+pub(crate) fn codepoints_to_string(cps: &[u32]) -> String {
+    cps.iter().filter_map(|&cp| char::from_u32(cp)).collect()
 }
 
 /// A pool of variable IDs for stateful testing.
@@ -503,6 +778,8 @@ pub trait DataObserver: Send {
     fn draw_boolean(&mut self, _value: bool, _was_forced: bool) {}
     fn draw_integer(&mut self, _value: i128, _was_forced: bool) {}
     fn draw_float(&mut self, _value: f64, _was_forced: bool) {}
+    fn draw_bytes(&mut self, _value: &[u8], _was_forced: bool) {}
+    fn draw_string(&mut self, _value: &str, _was_forced: bool) {}
     fn conclude_test(&mut self, _status: Status, _origin: Option<InterestingOrigin>) {}
 }
 
@@ -561,46 +838,41 @@ pub struct NativeTestCase {
     /// `None` for test cases concluded by [`Self::freeze`] directly
     /// (`Status::Valid`).  Mirrors `ConjectureData.interesting_origin`.
     interesting_origin: Option<InterestingOrigin>,
+    /// Optional template applied to every draw past the explicit `prefix`.
+    /// Mirrors the trailing `ChoiceTemplate` in `prefix + (template,)` from
+    /// Hypothesis's `engine.py::generate_new_examples`.  `count` is mutated
+    /// in-place as draws consume the template; when `count` reaches zero
+    /// the next draw is overrun (`Status::EarlyStop` + `StopTest`).
+    /// `None` means "no template" — draws past the prefix go to `rng` or
+    /// panic, as before.
+    trailing_template: Option<ChoiceTemplate>,
 }
 
 impl NativeTestCase {
     pub fn new_random(rng: SmallRng) -> Self {
-        NativeTestCase {
-            prefix: Vec::new(),
-            prefix_nodes: None,
-            rng: Some(rng),
-            max_size: BUFFER_SIZE,
-            nodes: Vec::new(),
-            status: None,
-            frozen: false,
-            collections: HashMap::new(),
-            next_collection_id: 0,
-            variable_pools: Vec::new(),
-            spans: Spans::new(),
-            span_stack: Vec::new(),
-            has_discards: false,
-            tags: HashSet::new(),
-            labels_for_structure_stack: Vec::new(),
-            observer: None,
-            interesting_origin: None,
-        }
+        Self::for_choices_and_template(&[], None, None, BUFFER_SIZE, None).with_random(rng)
     }
 
-    /// Construct a `NativeTestCase` that replays `choices` in order,
-    /// notifying `observer` after each draw and on conclusion.
+    /// Replay `choices` in order, then for every further draw resolve via
+    /// `trailing` if set.  Mirrors `ConjectureData.for_choices(prefix)` from
+    /// `hypothesis.internal.conjecture.data`, where `prefix` is
+    /// `choices + (trailing,)` when a trailing template is supplied.
     ///
-    /// Mirrors `ConjectureData.for_choices(choices, observer=observer)`
-    /// from `hypothesis.internal.conjecture.data`.
-    pub fn for_choices(
+    /// `max_size` is the upper bound on the total number of choices the test
+    /// case will make.  It is floored to `choices.len()` so a too-tight value
+    /// can never truncate the explicit prefix.
+    pub fn for_choices_and_template(
         choices: &[ChoiceValue],
         prefix_nodes: Option<&[ChoiceNode]>,
+        trailing: Option<ChoiceTemplate>,
+        max_size: usize,
         observer: Option<Box<dyn DataObserver>>,
     ) -> Self {
         NativeTestCase {
             prefix: choices.to_vec(),
             prefix_nodes: prefix_nodes.map(|n| n.to_vec()),
             rng: None,
-            max_size: choices.len(),
+            max_size: max_size.max(choices.len()),
             nodes: Vec::new(),
             status: None,
             frozen: false,
@@ -614,7 +886,37 @@ impl NativeTestCase {
             labels_for_structure_stack: Vec::new(),
             observer,
             interesting_origin: None,
+            trailing_template: trailing,
         }
+    }
+
+    /// A test case where every draw past the explicit prefix returns
+    /// `kind.simplest()` of the requested choice kind.  Mirrors Hypothesis's
+    /// `cached_test_function((ChoiceTemplate("simplest", count=None),))` at
+    /// the head of `engine.py::generate_new_examples`: a deterministic
+    /// all-simplest probe of the choice tree's "left leaf" before random
+    /// sampling begins.
+    pub fn for_simplest(max_size: usize) -> Self {
+        Self::for_choices_and_template(
+            &[],
+            None,
+            Some(ChoiceTemplate::simplest(None)),
+            max_size,
+            None,
+        )
+    }
+
+    /// Construct a `NativeTestCase` that replays `choices` in order,
+    /// notifying `observer` after each draw and on conclusion.
+    ///
+    /// Mirrors `ConjectureData.for_choices(choices, observer=observer)`
+    /// from `hypothesis.internal.conjecture.data`.
+    pub fn for_choices(
+        choices: &[ChoiceValue],
+        prefix_nodes: Option<&[ChoiceNode]>,
+        observer: Option<Box<dyn DataObserver>>,
+    ) -> Self {
+        Self::for_choices_and_template(choices, prefix_nodes, None, choices.len(), observer)
     }
 
     /// A test case that replays `prefix` for the first positions and then
@@ -625,49 +927,15 @@ impl NativeTestCase {
     /// `ConjectureData(prefix=..., random=..., max_size=...)`
     /// construction in `shrinking/mutation.py`.
     pub fn for_probe(prefix: &[ChoiceValue], rng: SmallRng, max_size: usize) -> Self {
-        NativeTestCase {
-            prefix: prefix.to_vec(),
-            prefix_nodes: None,
-            rng: Some(rng),
-            max_size,
-            nodes: Vec::new(),
-            status: None,
-            frozen: false,
-            collections: HashMap::new(),
-            next_collection_id: 0,
-            variable_pools: Vec::new(),
-            spans: Spans::new(),
-            span_stack: Vec::new(),
-            has_discards: false,
-            tags: HashSet::new(),
-            labels_for_structure_stack: Vec::new(),
-            observer: None,
-            interesting_origin: None,
-        }
+        Self::for_choices_and_template(prefix, None, None, max_size, None).with_random(rng)
     }
 
-    /// Record a finished span covering choice nodes `[start, end)` with the
-    /// given label.  The span is assigned a parent (the innermost
-    /// currently-open span, if any) and a depth (one greater than that
-    /// parent's depth, or 0 if there is no enclosing span).
-    ///
-    /// Used by leaf-schema interpretation in `schema/mod.rs` and by
-    /// `feature_flag` draws.  Higher-level callers should prefer
-    /// [`Self::start_span`] / [`Self::stop_span`], which preserve span-tree
-    /// structure for nested draws.
-    pub fn record_span(&mut self, start: usize, end: usize, label: String) {
-        if end > start {
-            let parent = self.span_stack.last().copied();
-            let depth = self.span_stack.len() as u32;
-            self.spans.push(Span {
-                start,
-                end,
-                label,
-                depth,
-                parent,
-                discarded: false,
-            });
-        }
+    /// Attach an RNG for post-prefix random draws.  Internal builder used by
+    /// `new_random` and `for_probe` to share the [`Self::for_choices_and_template`]
+    /// constructor without duplicating the struct literal.
+    fn with_random(mut self, rng: SmallRng) -> Self {
+        self.rng = Some(rng);
+        self
     }
 
     /// Open a new span at the current choice position, labelled with `label`.
@@ -849,6 +1117,85 @@ impl NativeTestCase {
         Ok(v)
     }
 
+    /// Draw a bytes value with length in `[min_size, max_size]`.
+    pub fn draw_bytes(&mut self, min_size: usize, max_size: usize) -> Result<Vec<u8>, StopTest> {
+        assert!(
+            min_size <= max_size,
+            "min_size ({min_size}) must be <= max_size ({max_size})"
+        );
+        let kind = BytesChoice { min_size, max_size };
+
+        let (value, was_forced) = self.resolve_choice(
+            &ChoiceKind::Bytes(kind.clone()),
+            || ChoiceValue::Bytes(kind.simplest()),
+            || ChoiceValue::Bytes(kind.unit()),
+            |v| matches!(v, ChoiceValue::Bytes(b) if kind.validate(b)),
+            |rng| ChoiceValue::Bytes(biased_bytes_sample(&kind, rng)),
+        )?;
+
+        let ChoiceValue::Bytes(v) = value else {
+            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
+        };
+
+        self.nodes.push(ChoiceNode {
+            kind: ChoiceKind::Bytes(kind),
+            value: ChoiceValue::Bytes(v.clone()),
+            was_forced,
+        });
+
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_bytes(&v, was_forced);
+        }
+
+        Ok(v)
+    }
+
+    /// Draw a Unicode string with length in `[min_size, max_size]` whose
+    /// codepoints lie in the given [`IntervalSet`] alphabet.
+    pub fn draw_string(
+        &mut self,
+        intervals: IntervalSet,
+        min_size: usize,
+        max_size: usize,
+    ) -> Result<String, StopTest> {
+        assert!(min_size <= max_size);
+        assert!(
+            !intervals.is_empty() || max_size == 0,
+            "draw_string with empty alphabet must have max_size == 0"
+        );
+
+        let kind = StringChoice {
+            intervals,
+            min_size,
+            max_size,
+        };
+
+        let (value, was_forced) = self.resolve_choice(
+            &ChoiceKind::String(kind.clone()),
+            || ChoiceValue::String(kind.simplest()),
+            || ChoiceValue::String(kind.unit()),
+            |v| matches!(v, ChoiceValue::String(s) if kind.validate(s)),
+            |rng| ChoiceValue::String(biased_string_sample(&kind, rng)),
+        )?;
+
+        let ChoiceValue::String(v) = value else {
+            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
+        };
+
+        self.nodes.push(ChoiceNode {
+            kind: ChoiceKind::String(kind),
+            value: ChoiceValue::String(v.clone()),
+            was_forced,
+        });
+
+        let s = codepoints_to_string(&v);
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_string(&s, was_forced);
+        }
+
+        Ok(s)
+    }
+
     /// Draw a boolean with probability `p` of being true.
     /// If `forced` is Some, the result is forced to that value.
     pub fn weighted(&mut self, p: f64, forced: Option<bool>) -> Result<bool, StopTest> {
@@ -922,30 +1269,50 @@ impl NativeTestCase {
 
         let idx = self.nodes.len();
 
+        // Branch 1: replay from the concrete prefix.  When the prefix value's
+        // recorded kind doesn't match the requested kind (e.g. a schema
+        // shifted between runs), `prefix_nodes` carries the original kind so
+        // we can route to `simplest()` or `unit()` of the *new* kind —
+        // Hypothesis's "punning" logic.
         if idx < self.prefix.len() {
             let prefix_value = &self.prefix[idx];
             if validate(prefix_value) {
-                Ok((prefix_value.clone(), false))
-            } else {
-                let is_simplest = self
-                    .prefix_nodes
-                    .as_ref()
-                    .and_then(|pn| pn.get(idx))
-                    .is_some_and(|pn| *prefix_value == pn.kind.simplest());
-
-                if is_simplest {
-                    Ok((simplest(), false))
-                } else {
-                    Ok((unit(), false))
-                }
+                return Ok((prefix_value.clone(), false));
             }
-        } else {
-            let rng = self
-                .rng
-                .as_mut()
-                .expect("No RNG available for random generation");
-            Ok((random(rng), false))
+            let is_simplest = self
+                .prefix_nodes
+                .as_ref()
+                .and_then(|pn| pn.get(idx))
+                .is_some_and(|pn| *prefix_value == pn.kind.simplest());
+            return Ok((if is_simplest { simplest() } else { unit() }, false));
         }
+
+        // Branch 2: trailing template (`prefix + (ChoiceTemplate, ...)` in
+        // Hypothesis).  Resolves every post-prefix draw to the template's
+        // kind, decrementing `count` if finite.  When `count` reaches zero
+        // the next draw marks overrun without producing a value — see the
+        // `ChoiceTemplate` docstring for the divergence from Hypothesis's
+        // literal off-by-one source.
+        if let Some(template) = self.trailing_template.as_mut() {
+            if matches!(template.count, Some(0)) {
+                self.status = Some(Status::EarlyStop);
+                return Err(StopTest);
+            }
+            let value = match template.kind {
+                ChoiceTemplateKind::Simplest => simplest(),
+            };
+            if let Some(c) = template.count.as_mut() {
+                *c -= 1;
+            }
+            return Ok((value, false));
+        }
+
+        // Branch 3: random fallback.
+        let rng = self
+            .rng
+            .as_mut()
+            .expect("No RNG available for random generation");
+        Ok((random(rng), false))
     }
 }
 

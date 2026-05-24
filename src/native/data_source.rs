@@ -5,6 +5,7 @@
 // the engine so it can read back the recorded nodes / spans and, via
 // `mark_complete`, the test case outcome after the test body returns.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -26,6 +27,10 @@ pub struct NativeTestCaseInner {
     /// in `run_lifecycle::run_test_case` guarantees won't happen — so the
     /// engine can safely unwrap when reading the outcome back.
     pub outcome: Option<TestCaseResult>,
+    /// `tc.target()` observations recorded during the test case, keyed by
+    /// label. Populated by [`DataSource::target_observation`]; read back by
+    /// the targeting phase via [`NativeDataSource::take_target_observations`].
+    pub target_observations: HashMap<String, f64>,
 }
 
 /// Shared handle to the per-test-case inner state.
@@ -43,7 +48,11 @@ impl NativeDataSource {
     /// state: choice nodes, spans, and the outcome reported by
     /// [`DataSource::mark_complete`].
     pub fn new(ntc: NativeTestCase) -> (Self, NativeTestCaseHandle) {
-        let inner = Arc::new(Mutex::new(NativeTestCaseInner { ntc, outcome: None }));
+        let inner = Arc::new(Mutex::new(NativeTestCaseInner {
+            ntc,
+            outcome: None,
+            target_observations: HashMap::new(),
+        }));
         let handle = Arc::clone(&inner);
         (
             NativeDataSource {
@@ -73,6 +82,19 @@ impl NativeDataSource {
             .spans
             .clone()
             .into_vec()
+    }
+
+    /// Drain the `tc.target()` observations the test body recorded.
+    ///
+    /// Used by the targeting phase in `test_runner` to read back per-label
+    /// scores after a test case completes.
+    pub fn take_target_observations(handle: &NativeTestCaseHandle) -> HashMap<String, f64> {
+        std::mem::take(
+            &mut handle
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .target_observations,
+        )
     }
 
     /// Read the outcome reported via [`DataSource::mark_complete`].
@@ -203,11 +225,26 @@ impl DataSource for NativeDataSource {
         })
     }
 
-    fn target_observation(&self, _score: f64, _label: &str) {
-        todo!(
-            "tc.target() is not yet supported by the native backend; \
-             Phase::Target will land in a follow-up PR"
-        );
+    fn target_observation(&self, score: f64, label: &str) {
+        // Mirror `ServerDataSource::target_observation` and upstream
+        // `hypothesis.control.target` (`control.py:354-356,372-376`): the
+        // observation must be finite and each label may be observed at
+        // most once per test case.
+        if !score.is_finite() {
+            panic!(
+                "tc.target({score}, label={label:?}) requires a finite score; \
+                 got non-finite value"
+            );
+        }
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if inner.target_observations.contains_key(label) {
+            panic!(
+                "tc.target({score}, label={label:?}) would overwrite previous \
+                 tc.target(_, label={label:?}); each label can be observed at \
+                 most once per test case"
+            );
+        }
+        inner.target_observations.insert(label.to_string(), score);
     }
 
     fn mark_complete(&self, result: &TestCaseResult) {

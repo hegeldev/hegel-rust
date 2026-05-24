@@ -3,7 +3,7 @@ members = [".", "hegel-macros"]
 
 [package]
 name = "hegeltest"
-version = "0.12.7"
+version = "0.14.11"
 edition = "2024"
 # if you bump this, also bump ci.yml and hegel-macros/Cargo.toml
 rust-version = "1.86"
@@ -41,7 +41,7 @@ tempfile = "3.0"
 ciborium = "0.2.2"
 crc32fast = "1.4"
 parking_lot = "0.12"
-hegeltest-macros = { version = "=0.12.7", path = "hegel-macros" }
+hegeltest-macros = { version = "=0.14.11", path = "hegel-macros" }
 # optional feature dependencies
 rand = { version = "0.10", optional = true }
 serde_json = { version = "1.0.61", optional = true }
@@ -59,6 +59,10 @@ rand = "0.10"
 serde_json = "1.0.61"
 insta = "1.47.2"
 ctor = "0.2"
+# Note: tokio 1.39 is when tokio started having the required compatibility
+# with other macros for #[hegel::test] to work with #[tokio::test]. See
+# https://github.com/tokio-rs/tokio/pull/6497
+tokio = { version = "1.39", features = ["macros", "rt"] }
 
 [features]
 default = []

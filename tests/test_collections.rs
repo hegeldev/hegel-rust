@@ -1,7 +1,3 @@
-// The compile-time assertion that `gs::vecs(...).unique(true)` requires
-// `PartialEq` on the element type lives in
-// tests/compile/fail/vec_unique_requires_partial_eq.rs, driven by `trybuild`.
-
 mod common;
 
 use hegel::TestCase;
@@ -237,7 +233,6 @@ fn test_hashmap_with_mapped_keys(tc: TestCase) {
     assert!(map.keys().all(|&k| k % 2 == 0));
 }
 
-#[cfg(not(feature = "native"))]
 #[hegel::test]
 fn test_binary_with_max_size(tc: TestCase) {
     let data = tc.draw(gs::binary().max_size(50));
@@ -517,13 +512,10 @@ mod nocover_sets {
     use std::collections::HashSet;
 
     use super::common::utils::assert_all_examples;
-    #[cfg(not(feature = "native"))]
     use super::common::utils::find_any;
     use hegel::generators as gs;
-    #[cfg(not(feature = "native"))]
     use hegel::generators::Generator;
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_draw_sets_of_hard_to_find_elements() {
         let rarebool = gs::floats::<f64>()

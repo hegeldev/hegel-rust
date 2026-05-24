@@ -1,8 +1,4 @@
-// Compile-time error behaviour of #[hegel::test] (duplicate #[test], zero or
-// two parameters) lives in tests/compile/fail/hegel_test_*.rs, driven by
-// `trybuild`.
-//
-// Below: ported tests merged from hypothesis/{testdecorators, flakiness,
+// Ported tests merged from hypothesis/{testdecorators, flakiness,
 // nocover_baseexception, nocover_nesting, nocover_limits,
 // nocover_unusual_settings_configs, pytest_runs, nocover_completion,
 // core} and pbtkit/core, each wrapped in its own private module.
@@ -13,7 +9,6 @@ use common::utils::expect_panic;
 use hegel::TestCase;
 use hegel::generators as gs;
 
-#[cfg(not(feature = "native"))]
 #[test]
 fn test_text_invalid_codec_panics() {
     expect_panic(
@@ -32,7 +27,6 @@ fn test_basic_usage(tc: TestCase) {
     tc.draw(gs::booleans());
 }
 
-#[cfg(not(feature = "native"))]
 #[hegel::test]
 fn test_characters(tc: TestCase) {
     let c: char = tc.draw(gs::characters());
@@ -61,6 +55,18 @@ fn test_with_multiple_named_args(tc: TestCase) {
 
 #[hegel::test(seed = Some(42))]
 fn test_with_seed(tc: TestCase) {
+    tc.draw(gs::booleans());
+}
+
+#[hegel::test]
+#[test]
+fn test_works_with_bare_test_attribute(tc: TestCase) {
+    tc.draw(gs::booleans());
+}
+
+#[hegel::test]
+#[::core::prelude::v1::test]
+fn test_works_with_prelude_test_attribute(tc: TestCase) {
     tc.draw(gs::booleans());
 }
 
@@ -100,7 +106,6 @@ mod testdecorators {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_str_addition_is_commutative() {
         find_any(
@@ -115,7 +120,6 @@ mod testdecorators {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_bytes_addition_is_commutative() {
         find_any(
@@ -146,7 +150,6 @@ mod testdecorators {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_float_addition_is_associative() {
         find_any(
@@ -194,7 +197,6 @@ mod testdecorators {
         find_any(gs::integers::<i64>(), |x: &i64| *x >= 0);
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_float_addition_cancels() {
         find_any(
@@ -206,7 +208,6 @@ mod testdecorators {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_be_given_keyword_args() {
         // @fails: find (x, name) with x > 0 and len(name) >= x.
@@ -216,7 +217,6 @@ mod testdecorators {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_one_of_produces_different_values() {
         find_any(
@@ -296,7 +296,6 @@ mod testdecorators {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_mix_sampling_with_generating() {
         find_any(
@@ -344,7 +343,6 @@ mod testdecorators {
         });
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_is_an_endpoint() {
         find_any(
@@ -360,21 +358,18 @@ mod testdecorators {
         }
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_is_ascii() {
         // @fails_with(UnicodeEncodeError): text() can produce non-ASCII characters.
         find_any(gs::text(), |x: &String| !x.is_ascii());
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_is_not_ascii() {
         // @fails: the test asserts x is not ascii, failing when x IS ascii.
         find_any(gs::text(), |x: &String| x.is_ascii());
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_find_string_with_duplicates() {
         find_any(gs::text().min_size(2), |s: &String| {
@@ -384,7 +379,6 @@ mod testdecorators {
         });
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_has_ascii() {
         // @fails: the test asserts at least one char is ASCII; fails when none are.
@@ -514,7 +508,6 @@ mod testdecorators {
         );
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_a_text() {
         assert_all_examples(gs::text().alphabet("a"), |x: &String| {
@@ -522,7 +515,6 @@ mod testdecorators {
         });
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_empty_text() {
         // text("") in Python generates only empty strings; max_size(0) is the Rust equivalent
@@ -530,7 +522,6 @@ mod testdecorators {
         assert_all_examples(gs::text().max_size(0), |x: &String| x.is_empty());
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_mixed_text() {
         assert_all_examples(gs::text().alphabet("abcdefg"), |x: &String| {
@@ -895,7 +886,6 @@ mod hypothesis_core {
     // `char` is always a Unicode scalar, so for "ascii" the round-trip reduces to
     // `c.is_ascii()` and for "utf-8" it is trivially true.
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_characters_codec_ascii_unbounded() {
         Hegel::new(|tc| {
@@ -906,7 +896,6 @@ mod hypothesis_core {
         .run();
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_characters_codec_ascii_max_codepoint_128() {
         Hegel::new(|tc| {
@@ -918,7 +907,6 @@ mod hypothesis_core {
         .run();
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_characters_codec_ascii_max_codepoint_100() {
         Hegel::new(|tc| {
@@ -930,7 +918,6 @@ mod hypothesis_core {
         .run();
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_characters_codec_utf8_unbounded() {
         Hegel::new(|tc| {
@@ -940,7 +927,6 @@ mod hypothesis_core {
         .run();
     }
 
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_characters_codec_utf8_exclude_cs() {
         // Rust `char` already excludes the surrogate range by construction, so

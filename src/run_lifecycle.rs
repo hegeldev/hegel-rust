@@ -280,8 +280,10 @@ pub(crate) fn run_test_case(
     test_fn: &mut dyn FnMut(TestCase),
     is_final: bool,
     mode: Mode,
+    verbosity: Verbosity,
 ) -> Result<TestCaseResult, Box<InternalError>> {
-    let tc = TestCase::new(data_source, is_final, mode);
+    let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
+    let tc = TestCase::new(data_source, is_final, mode, verbose);
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
 
     let tc_result = match &result {
@@ -324,6 +326,10 @@ pub(crate) fn run_test_case(
         }
     };
 
+    if verbose {
+        emit_verbose_test_case_outcome(&tc_result, is_final);
+    }
+
     tc.mark_complete(&tc_result);
 
     let _ = is_final;
@@ -353,6 +359,32 @@ fn append_captured_backtrace(
         }
     }
     // nocov end
+}
+
+/// Print a per-test-case line describing why this test case stopped, and
+/// — for genuine panics on non-final test cases — the full panic
+/// diagnostic. Final-replay panics are already covered by the run-level
+/// summary in [`drive`]; printing them here too would just duplicate the
+/// block.
+fn emit_verbose_test_case_outcome(result: &TestCaseResult, is_final: bool) {
+    match result {
+        TestCaseResult::Invalid => {
+            crate::test_case::emit_verbose_line("Test case stopped: failed assumption");
+        }
+        TestCaseResult::Overrun => {
+            crate::test_case::emit_verbose_line("Test case stopped: out of data");
+        }
+        TestCaseResult::Interesting(failure) if !is_final => {
+            // `diagnostic` already ends with a newline, so use `eprint!`-
+            // style emission (no extra newline). The sink interface only
+            // takes whole lines, so split on '\n' and drop the trailing
+            // empty piece if any.
+            for line in failure.diagnostic.trim_end_matches('\n').split('\n') {
+                crate::test_case::emit_verbose_line(line);
+            }
+        }
+        TestCaseResult::Valid | TestCaseResult::Interesting(_) => {}
+    }
 }
 
 /// Render the per-failure diagnostic block previously emitted inline.
@@ -417,8 +449,9 @@ pub(crate) fn drive<R, F>(
     let mut test_fn = test_fn;
     let got_interesting = AtomicBool::new(false);
     let mode = settings.mode;
+    let verbosity = settings.verbosity;
     let result = runner.run(settings, database_key, &mut |backend, is_final| {
-        match run_test_case(backend, &mut test_fn, is_final, mode) {
+        match run_test_case(backend, &mut test_fn, is_final, mode, verbosity) {
             Err(internal_err) => {
                 // Re-raise hegel-internal panics immediately as their own
                 // dedicated panic — no shrinking, no "Property test

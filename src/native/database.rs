@@ -203,15 +203,15 @@ pub(super) fn fnv_hex(s: &[u8]) -> String {
 /// Format:
 /// - 4-byte little-endian u32: number of choices
 /// - For each choice:
-///   - 1-byte type tag: 0=Integer, 1=Boolean, 2=Float
+///   - 1-byte type tag: 0=Integer, 1=Boolean, 2=Float, 3=Bytes, 4=String
 ///   - Value bytes:
 ///     - Integer: 16 bytes (i128 little-endian)
 ///     - Boolean: 1 byte (0 or 1)
 ///     - Float: 8 bytes (the f64 bit pattern, little-endian, so `-0.0` and
 ///       NaN payloads round-trip unchanged)
-///
-/// Other [`ChoiceValue`] variants are not yet supported by the native
-/// backend and serializing them panics with `todo!()`.
+///     - Bytes: 4 bytes (u32 little-endian length) followed by the raw bytes
+///     - String: 4 bytes (u32 little-endian codepoint count) followed by
+///       4 bytes per codepoint (u32 little-endian)
 pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + choices.len() * 17);
     let count = choices.len() as u32;
@@ -229,6 +229,20 @@ pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
             ChoiceValue::Float(v) => {
                 buf.push(2);
                 buf.extend_from_slice(&v.to_bits().to_le_bytes());
+            }
+            ChoiceValue::Bytes(v) => {
+                buf.push(3);
+                let len = v.len() as u32;
+                buf.extend_from_slice(&len.to_le_bytes());
+                buf.extend_from_slice(v);
+            }
+            ChoiceValue::String(v) => {
+                buf.push(4);
+                let len = v.len() as u32;
+                buf.extend_from_slice(&len.to_le_bytes());
+                for &cp in v {
+                    buf.extend_from_slice(&cp.to_le_bytes());
+                }
             }
         }
     }
@@ -279,6 +293,37 @@ pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
                 let bits = u64::from_le_bytes(bytes[pos..pos + 8].try_into().ok()?);
                 choices.push(ChoiceValue::Float(f64::from_bits(bits)));
                 pos += 8;
+            }
+            3 => {
+                pos += 1;
+                if pos + 4 > bytes.len() {
+                    return None;
+                }
+                let len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+                if pos + len > bytes.len() {
+                    return None;
+                }
+                choices.push(ChoiceValue::Bytes(bytes[pos..pos + len].to_vec()));
+                pos += len;
+            }
+            4 => {
+                pos += 1;
+                if pos + 4 > bytes.len() {
+                    return None;
+                }
+                let len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+                if pos + len.checked_mul(4)? > bytes.len() {
+                    return None;
+                }
+                let mut cps = Vec::with_capacity(len);
+                for _ in 0..len {
+                    let cp = u32::from_le_bytes(bytes[pos..pos + 4].try_into().ok()?);
+                    cps.push(cp);
+                    pos += 4;
+                }
+                choices.push(ChoiceValue::String(cps));
             }
             _ => return None,
         }

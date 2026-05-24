@@ -1,6 +1,7 @@
 // Choice types: the recorded decisions a test case makes.
 
 use crate::native::floats::sign_aware_lte;
+use crate::native::intervalsets::IntervalSet;
 
 /// An integer choice with bounded range.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,6 +175,266 @@ impl BooleanChoice {
         } else {
             None
         }
+    }
+}
+
+/// A bytes choice with bounded length.
+///
+/// Ordered by shortlex: shorter sequences are simpler, then lexicographic
+/// on the bytes themselves.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BytesChoice {
+    pub min_size: usize,
+    pub max_size: usize,
+}
+
+impl BytesChoice {
+    /// The simplest (most "shrunk") value: `min_size` zero bytes.
+    pub fn simplest(&self) -> Vec<u8> {
+        vec![0u8; self.min_size]
+    }
+
+    /// The second-simplest value, used for punning when types change.
+    /// If `min_size > 0`: the simplest except the last byte is 1.
+    /// Else if `max_size > 0`: a single `0x01` byte.
+    /// Else: the simplest (empty).
+    pub fn unit(&self) -> Vec<u8> {
+        if self.min_size > 0 {
+            let mut v = vec![0u8; self.min_size];
+            *v.last_mut().unwrap() = 1;
+            v
+        } else if self.max_size > 0 {
+            vec![1u8]
+        } else {
+            self.simplest()
+        }
+    }
+
+    pub fn validate(&self, value: &[u8]) -> bool {
+        self.min_size <= value.len() && value.len() <= self.max_size
+    }
+
+    /// Shortlex sort key: `(length, bytes)`.
+    pub fn sort_key(&self, value: &[u8]) -> (usize, Vec<u8>) {
+        (value.len(), value.to_vec())
+    }
+
+    /// Hypothesis: `core.py::BytesChoice.max_index`.
+    pub fn max_index(&self) -> crate::native::bignum::BigUint {
+        self.to_index(&vec![0xffu8; self.max_size])
+    }
+
+    /// Hypothesis: `core.py::BytesChoice.to_index`. Indexes byte sequences in
+    /// shortlex order over `[min_size, max_size]`: all length-`min_size`
+    /// sequences first, then length `min_size + 1`, and so on; within each
+    /// length, lexicographic on the bytes.
+    pub fn to_index(&self, value: &[u8]) -> crate::native::bignum::BigUint {
+        use crate::native::bignum::{BigUint, Zero};
+        let base = BigUint::from(256u32);
+        let mut offset = BigUint::zero();
+        for length in self.min_size..value.len() {
+            offset += base.pow(length as u32);
+        }
+        let mut position = BigUint::zero();
+        for &b in value {
+            position = position * &base + BigUint::from(b);
+        }
+        offset + position
+    }
+
+    /// Inverse of [`to_index`]. Returns `None` if the index is past the
+    /// last representable sequence.
+    #[allow(clippy::wrong_self_convention)]
+    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<Vec<u8>> {
+        use crate::native::bignum::BigUint;
+        let base = BigUint::from(256u32);
+        let mut remaining = index;
+        for length in self.min_size..=self.max_size {
+            let bucket = base.pow(length as u32);
+            if remaining < bucket {
+                let mut result: Vec<u8> = Vec::with_capacity(length);
+                for _ in 0..length {
+                    let b: u8 = (&remaining % &base)
+                        .try_into()
+                        .expect("byte < 256 fits in u8");
+                    result.push(b);
+                    remaining /= &base;
+                }
+                result.reverse();
+                return Some(result);
+            }
+            remaining -= bucket;
+        }
+        None
+    }
+}
+
+/// A string choice with bounded length and a Unicode codepoint alphabet
+/// represented as an [`IntervalSet`].
+///
+/// Values are sequences of Unicode codepoints (`Vec<u32>`) drawn from the
+/// `intervals` set. Ordered by shortlex under the alphabet-relative shrink
+/// ordering exposed by [`IntervalSet::index_from_char_in_shrink_order`]:
+/// `'0'` is the simplest character whenever the alphabet contains it,
+/// followed by `'1'`..`'9'`, `'A'`..`'Z'`, then characters below `'0'` in
+/// reverse, then characters above `'Z'` in natural order.
+///
+/// Mirrors Hypothesis's `StringConstraints { intervals: IntervalSet, ... }`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StringChoice {
+    pub intervals: IntervalSet,
+    pub min_size: usize,
+    pub max_size: usize,
+}
+
+impl StringChoice {
+    /// Position of `codepoint` in the alphabet's shrink-preferred ordering.
+    /// Panics if `codepoint` is not in the alphabet.
+    pub fn codepoint_key(&self, codepoint: u32) -> u32 {
+        let c = char::from_u32(codepoint).expect("non-surrogate codepoint");
+        self.intervals.index_from_char_in_shrink_order(c) as u32
+    }
+
+    /// Codepoint at shrink-order position `key`, or `None` if `key` is past
+    /// the alphabet's size.
+    pub fn key_to_codepoint(&self, key: u32) -> Option<u32> {
+        let key = key as usize;
+        if key >= self.intervals.len() {
+            return None;
+        }
+        Some(self.intervals.char_in_shrink_order(key) as u32)
+    }
+
+    /// The simplest codepoint in the alphabet (shrink-order position 0).
+    /// Panics on an empty alphabet — callers must reject empty alphabets at
+    /// the schema layer before constructing the `StringChoice`.
+    pub(crate) fn simplest_codepoint(&self) -> u32 {
+        assert!(
+            !self.intervals.is_empty(),
+            "StringChoice::simplest_codepoint: empty alphabet"
+        );
+        self.intervals.char_in_shrink_order(0) as u32
+    }
+
+    /// The simplest sequence of codepoints of length `min_size`, built
+    /// from repeated [`simplest_codepoint`].
+    pub fn simplest(&self) -> Vec<u32> {
+        vec![self.simplest_codepoint(); self.min_size]
+    }
+
+    /// Second-simplest codepoint sequence, used for type-punning during replay.
+    pub fn unit(&self) -> Vec<u32> {
+        let simplest_cp = self.simplest_codepoint();
+        // Pick the second-simplest character in the alphabet's shrink order
+        // (position 1). If the alphabet has only one character, fall back to
+        // lengthening the simplest, or to `simplest()` if the length is also
+        // fixed.
+        let second_cp = self.key_to_codepoint(1);
+        match second_cp {
+            Some(cp) if cp != simplest_cp => {
+                if self.min_size > 0 {
+                    let mut v = self.simplest();
+                    *v.last_mut().unwrap() = cp;
+                    v
+                } else if self.max_size > 0 {
+                    vec![cp]
+                } else {
+                    self.simplest()
+                }
+            }
+            _ => {
+                if self.min_size < self.max_size {
+                    vec![simplest_cp; self.min_size + 1]
+                } else {
+                    self.simplest()
+                }
+            }
+        }
+    }
+
+    pub fn validate(&self, value: &[u32]) -> bool {
+        if !(self.min_size <= value.len() && value.len() <= self.max_size) {
+            return false;
+        }
+        value.iter().all(|&cp| self.intervals.contains(cp))
+    }
+
+    /// Shortlex sort key: `(length, Vec<shrink_order_position>)`.
+    pub fn sort_key(&self, value: &[u32]) -> (usize, Vec<u32>) {
+        let keys: Vec<u32> = value.iter().map(|&cp| self.codepoint_key(cp)).collect();
+        (keys.len(), keys)
+    }
+
+    /// Cardinality of the alphabet.
+    pub fn alpha_size(&self) -> u64 {
+        self.intervals.len() as u64
+    }
+
+    /// Rank of `codepoint` in the alphabet's shrink-preferred ordering. Same
+    /// as [`codepoint_key`] but cast to the `u64` width used by the index
+    /// machinery.
+    pub fn codepoint_rank(&self, codepoint: u32) -> u64 {
+        u64::from(self.codepoint_key(codepoint))
+    }
+
+    /// Codepoint at the given shrink-order rank. Panics if `rank` exceeds
+    /// `alpha_size`.
+    pub fn codepoint_at_rank(&self, rank: u64) -> u32 {
+        self.key_to_codepoint(rank as u32)
+            .expect("rank within alpha_size")
+    }
+
+    /// Largest valid index for [`from_index`].
+    pub fn max_index(&self) -> crate::native::bignum::BigUint {
+        use crate::native::bignum::{BigUint, Zero};
+        let alpha = BigUint::from(self.alpha_size());
+        let mut total = BigUint::zero();
+        for length in self.min_size..=self.max_size {
+            total += alpha.pow(length as u32);
+        }
+        total - BigUint::from(1u32)
+    }
+
+    /// Shortlex index of `value` under this choice's shrink-ordered alphabet.
+    pub fn to_index(&self, value: &[u32]) -> crate::native::bignum::BigUint {
+        use crate::native::bignum::{BigUint, Zero};
+        let alpha = BigUint::from(self.alpha_size());
+        let mut offset = BigUint::zero();
+        for length in self.min_size..value.len() {
+            offset += alpha.pow(length as u32);
+        }
+        let mut position = BigUint::zero();
+        for &cp in value {
+            position = position * &alpha + BigUint::from(self.codepoint_rank(cp));
+        }
+        offset + position
+    }
+
+    /// Codepoint sequence at the given shortlex index, or `None` if `index`
+    /// exceeds the total bucket size.
+    #[allow(clippy::wrong_self_convention)]
+    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<Vec<u32>> {
+        use crate::native::bignum::{BigUint, Zero};
+        let alpha = BigUint::from(self.alpha_size());
+        assert!(!alpha.is_zero(), "StringChoice::from_index: empty alphabet");
+        let mut remaining = index;
+        for length in self.min_size..=self.max_size {
+            let bucket_size = alpha.pow(length as u32);
+            if remaining < bucket_size {
+                let mut cps: Vec<u32> = Vec::with_capacity(length);
+                for _ in 0..length {
+                    let r: u64 = (&remaining % &alpha)
+                        .try_into()
+                        .expect("rank < alpha_size fits in u64");
+                    cps.push(self.codepoint_at_rank(r));
+                    remaining /= &alpha;
+                }
+                cps.reverse();
+                return Some(cps);
+            }
+            remaining -= bucket_size;
+        }
+        None
     }
 }
 
@@ -451,6 +712,8 @@ pub enum ChoiceKind {
     Integer(IntegerChoice),
     Boolean(BooleanChoice),
     Float(FloatChoice),
+    Bytes(BytesChoice),
+    String(StringChoice),
 }
 
 /// The value produced by a choice.
@@ -459,16 +722,24 @@ pub enum ChoiceValue {
     Integer(i128),
     Boolean(bool),
     Float(f64),
+    Bytes(Vec<u8>),
+    /// A sequence of Unicode codepoints (raw `u32`s in `0..=0x10FFFF`). The
+    /// engine reasons internally about any codepoint, including surrogates;
+    /// conversion to `String` (with the surrogate filter) happens at the
+    /// user-facing boundary.
+    String(Vec<u32>),
 }
 
 /// Bit-exact equality for floats keeps `-0.0` distinct from `0.0` and
-/// preserves NaN payloads; integers and booleans use natural equality.
+/// preserves NaN payloads; other choice types use natural equality.
 impl PartialEq for ChoiceValue {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (ChoiceValue::Integer(a), ChoiceValue::Integer(b)) => a == b,
             (ChoiceValue::Boolean(a), ChoiceValue::Boolean(b)) => a == b,
             (ChoiceValue::Float(a), ChoiceValue::Float(b)) => a.to_bits() == b.to_bits(),
+            (ChoiceValue::Bytes(a), ChoiceValue::Bytes(b)) => a == b,
+            (ChoiceValue::String(a), ChoiceValue::String(b)) => a == b,
             _ => false,
         }
     }
@@ -483,6 +754,8 @@ impl std::hash::Hash for ChoiceValue {
             ChoiceValue::Integer(n) => n.hash(state),
             ChoiceValue::Boolean(b) => b.hash(state),
             ChoiceValue::Float(f) => f.to_bits().hash(state),
+            ChoiceValue::Bytes(v) => v.hash(state),
+            ChoiceValue::String(v) => v.hash(state),
         }
     }
 }
@@ -494,6 +767,8 @@ impl ChoiceKind {
             ChoiceKind::Integer(ic) => ChoiceValue::Integer(ic.simplest()),
             ChoiceKind::Boolean(bc) => ChoiceValue::Boolean(bc.simplest()),
             ChoiceKind::Float(fc) => ChoiceValue::Float(fc.simplest()),
+            ChoiceKind::Bytes(bc) => ChoiceValue::Bytes(bc.simplest()),
+            ChoiceKind::String(sc) => ChoiceValue::String(sc.simplest()),
         }
     }
 
@@ -505,6 +780,8 @@ impl ChoiceKind {
             ChoiceKind::Integer(ic) => ic.max_index(),
             ChoiceKind::Boolean(bc) => bc.max_index(),
             ChoiceKind::Float(fc) => fc.max_index(),
+            ChoiceKind::Bytes(bc) => bc.max_index(),
+            ChoiceKind::String(sc) => sc.max_index(),
         }
     }
 
@@ -516,6 +793,8 @@ impl ChoiceKind {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.to_index(*v),
             (ChoiceKind::Boolean(bc), ChoiceValue::Boolean(v)) => bc.to_index(*v),
             (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => fc.to_index(*v),
+            (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => bc.to_index(v),
+            (ChoiceKind::String(sc), ChoiceValue::String(v)) => sc.to_index(v),
             _ => panic!("ChoiceKind::to_index: kind/value mismatch"),
         }
     }
@@ -529,6 +808,8 @@ impl ChoiceKind {
             ChoiceKind::Integer(ic) => ic.from_index(index).map(ChoiceValue::Integer),
             ChoiceKind::Boolean(bc) => bc.from_index(index).map(ChoiceValue::Boolean),
             ChoiceKind::Float(fc) => fc.from_index(index).map(ChoiceValue::Float),
+            ChoiceKind::Bytes(bc) => bc.from_index(index).map(ChoiceValue::Bytes),
+            ChoiceKind::String(sc) => sc.from_index(index).map(ChoiceValue::String),
         }
     }
 
@@ -538,6 +819,8 @@ impl ChoiceKind {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.validate(*v),
             (ChoiceKind::Boolean(_), ChoiceValue::Boolean(_)) => true,
             (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => fc.validate(*v),
+            (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => bc.validate(v),
+            (ChoiceKind::String(sc), ChoiceValue::String(v)) => sc.validate(v),
             _ => false,
         }
     }
@@ -553,6 +836,8 @@ impl ChoiceKind {
             }
             ChoiceKind::Boolean(_) => BigUint::from(2u32),
             ChoiceKind::Float(fc) => fc.max_index() + BigUint::from(1u32),
+            ChoiceKind::Bytes(bc) => bc.max_index() + BigUint::from(1u32),
+            ChoiceKind::String(sc) => sc.max_index() + BigUint::from(1u32),
         }
     }
 
@@ -566,6 +851,12 @@ impl ChoiceKind {
             ChoiceKind::Boolean(_) => ChoiceValue::Boolean(rng.random::<bool>()),
             ChoiceKind::Float(fc) => {
                 ChoiceValue::Float(crate::native::core::state::biased_float_sample(fc, rng))
+            }
+            ChoiceKind::Bytes(bc) => {
+                ChoiceValue::Bytes(crate::native::core::state::biased_bytes_sample(bc, rng))
+            }
+            ChoiceKind::String(sc) => {
+                ChoiceValue::String(crate::native::core::state::biased_string_sample(sc, rng))
             }
         }
     }
@@ -600,6 +891,29 @@ impl ChoiceKind {
             ChoiceKind::Float(_) => {
                 unreachable!("FloatChoice max_children always exceeds u64::MAX cap")
             }
+            // For `BytesChoice` only the `max_size == 0` corner has a
+            // sensible enumeration (one empty value). Any non-zero
+            // `max_size` technically fits the `u64::MAX` cap up to
+            // `max_size = 7` (`Σ 256^k` through `k = 7` stays just under
+            // `2^64`), but the 256-way fan-out makes materialising the list
+            // pointless for any caller that would actually want it.
+            ChoiceKind::Bytes(bc) => {
+                if bc.max_size == 0 {
+                    Some(vec![ChoiceValue::Bytes(Vec::new())])
+                } else {
+                    None
+                }
+            }
+            // Mirror the `BytesChoice` arm: only `max_size == 0` has a sensible
+            // enumeration. Any larger size has alpha-way fan-out that makes
+            // materialising the list pointless even when it fits in `cap`.
+            ChoiceKind::String(sc) => {
+                if sc.max_size == 0 {
+                    Some(vec![ChoiceValue::String(Vec::new())])
+                } else {
+                    None
+                }
+            }
         }
     }
 }
@@ -610,6 +924,55 @@ pub struct ChoiceNode {
     pub kind: ChoiceKind,
     pub value: ChoiceValue,
     pub was_forced: bool,
+}
+
+/// Kind of fallback a [`ChoiceTemplate`] produces.  Mirrors Hypothesis's
+/// `Literal["simplest"]` field on `internal/conjecture/choice.ChoiceTemplate`.
+/// Carried as an enum so future kinds (`"random"`, etc., that Hypothesis has
+/// flirted with) can be added without changing the surrounding API.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ChoiceTemplateKind {
+    /// Resolve each templated draw to `kind.simplest()` of the requested
+    /// choice kind.
+    Simplest,
+}
+
+/// A deferred-resolution marker that drives every draw past the explicit
+/// `prefix` of a [`crate::native::core::NativeTestCase`].  Mirrors
+/// `ChoiceTemplate` from `hypothesis.internal.conjecture.choice`.
+///
+/// `count = None` is infinite — the template applies to every draw until
+/// the test case ends naturally (e.g. `max_size` is hit).  `count = Some(n)`
+/// produces exactly `n` resolved values, after which the next draw marks
+/// overrun (`Status::EarlyStop` + `StopTest`).
+///
+/// Hypothesis's literal source (`data.py::_pop_choice` lines 1054-1073)
+/// decrements the count *after* producing each value and then checks for
+/// `< 0`, which means a `count=N` template actually returns `N+1` values
+/// (the last one alongside the overrun status).  That looks like an
+/// unintentional off-by-one; we implement the cleaner "exactly N values,
+/// then overrun" semantics that the `count > 0` `__post_init__` assert
+/// suggests.  No current Hypothesis caller passes a finite count, so the
+/// divergence is invisible at the API boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChoiceTemplate {
+    pub kind: ChoiceTemplateKind,
+    pub count: Option<usize>,
+}
+
+impl ChoiceTemplate {
+    /// Build a [`ChoiceTemplateKind::Simplest`] template with the given
+    /// remaining-draws count.  `Some(0)` is rejected at construction time,
+    /// matching Hypothesis's `__post_init__` assertion.
+    pub fn simplest(count: Option<usize>) -> Self {
+        if let Some(n) = count {
+            assert!(n > 0, "ChoiceTemplate count must be positive (got 0)");
+        }
+        Self {
+            kind: ChoiceTemplateKind::Simplest,
+            count,
+        }
+    }
 }
 
 impl ChoiceNode {
@@ -625,24 +988,46 @@ impl ChoiceNode {
         match (&self.kind, &self.value) {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
                 let (abs, neg) = ic.sort_key(*v);
-                NodeSortKey(abs, neg)
+                NodeSortKey::Scalar(abs, neg)
             }
-            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => NodeSortKey(u128::from(*v), false),
+            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => {
+                NodeSortKey::Scalar(u128::from(*v), false)
+            }
             (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => {
                 let (mag, neg) = fc.sort_key(*v);
                 // `u64` widens losslessly into the `u128` magnitude slot used
                 // for integer sort keys: float and integer choices end up in a
                 // single totally-ordered space without losing precision.
-                NodeSortKey(u128::from(mag), neg)
+                NodeSortKey::Scalar(u128::from(mag), neg)
+            }
+            (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => {
+                let (len, bytes) = bc.sort_key(v);
+                NodeSortKey::Sequence(len, bytes.into_iter().map(u32::from).collect())
+            }
+            (ChoiceKind::String(sc), ChoiceValue::String(v)) => {
+                let (len, keys) = sc.sort_key(v);
+                NodeSortKey::Sequence(len, keys)
             }
             _ => unreachable!("mismatched choice kind and value"),
         }
     }
 }
 
-/// Comparable key for ordering choice nodes during shrinking: (magnitude, sign).
+/// Comparable key for ordering choice nodes during shrinking.
+///
+/// Scalar kinds (integer, boolean, float) compare on a fixed `(magnitude,
+/// sign)` pair; sequence kinds (bytes) compare shortlex on `(length,
+/// elements)`. Per-element keys are stored as `u32` so a future string
+/// choice kind (with codepoint-key elements up to `0x10FFFF`) can join the
+/// same shape without changing this type. Variants are never mixed at a
+/// given node position; `Scalar < Sequence` by derived enum order is a
+/// total-ordering fall-through for the sort key of an entire
+/// sequence-of-nodes that contains both shapes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct NodeSortKey(pub u128, pub bool);
+pub enum NodeSortKey {
+    Scalar(u128, bool),
+    Sequence(usize, Vec<u32>),
+}
 
 /// Shortlex sort key for a sequence of choice nodes.
 /// Shorter sequences are simpler; among equal lengths, smaller values win.

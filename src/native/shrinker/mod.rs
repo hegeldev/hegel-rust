@@ -9,13 +9,17 @@
 //                redistribute_integers, shrink_duplicates
 //   sequence   — sort_values, swap_adjacent_blocks
 //   floats     — shrink_floats, redistribute_numeric_pairs
+//   bytes      — shrink_bytes, redistribute_bytes_pairs
+//   strings    — shrink_strings
 
+mod bytes;
 mod deletion;
 mod floats;
 mod index_passes;
 mod integers;
 mod mutation;
 mod sequence;
+mod strings;
 
 use std::collections::HashMap;
 
@@ -187,6 +191,10 @@ impl<'a> Shrinker<'a> {
             self.swap_adjacent_blocks();
             self.shrink_floats();
             self.redistribute_numeric_pairs();
+            self.shrink_bytes();
+            self.redistribute_bytes_pairs();
+            self.shrink_strings();
+            self.redistribute_string_pairs();
             self.lower_and_bump();
             self.try_shortening_via_increment();
             self.mutate_and_shrink();
@@ -232,7 +240,7 @@ pub(super) fn bin_search_down(lo: i128, hi: i128, f: &mut impl FnMut(i128) -> bo
 /// Rust a predicate that accepts an unbounded range (e.g. a `lower_integers_together`
 /// pass over full-range `i128` nodes) would otherwise walk `hi` off the end
 /// of `usize`.
-pub(super) fn find_integer(mut f: impl FnMut(usize) -> bool) -> usize {
+pub(crate) fn find_integer(mut f: impl FnMut(usize) -> bool) -> usize {
     for i in 1..5 {
         if !f(i) {
             return i - 1;

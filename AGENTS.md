@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code), Codex 5.5, and other coding agents when working with code in this repository. The legacy `.claude` path is a symlink to `.agents`, and `.claude/CLAUDE.md` resolves back to this file so Claude and Codex share the same instructions.
 
 ## Overview
 
