@@ -276,7 +276,7 @@ use crate::TestCase;
 use crate::generators::{self as gs};
 use crate::native::test_runner::EngineCtx;
 use crate::run_lifecycle::run_test_case;
-use crate::runner::{Mode, Verbosity};
+use crate::settings::{Mode, Verbosity};
 use std::collections::HashMap as StdHashMap;
 
 fn run_optimise<F>(start: Vec<ChoiceValue>, start_score: f64, mut test_fn: F)
@@ -284,7 +284,7 @@ where
     F: FnMut(TestCase),
 {
     let mut run_case = move |ds: Box<dyn crate::backend::DataSource>, is_final: bool| {
-        run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+        run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal).unwrap();
     };
     let mut ctx = EngineCtx::new(&mut run_case);
 
