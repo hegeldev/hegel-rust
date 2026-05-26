@@ -219,6 +219,8 @@ pub mod backend;
 pub(crate) mod cbor_utils;
 pub(crate) mod cli;
 pub(crate) mod control;
+#[cfg(feature = "native")]
+pub mod embed;
 pub mod explicit_test_case;
 pub mod extras;
 pub mod generators;

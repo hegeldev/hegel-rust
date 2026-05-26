@@ -1,0 +1,24 @@
+[package]
+name = "hegeltest-c"
+version = "0.14.11"
+edition = "2024"
+rust-version = "1.86"
+license = "MIT"
+description = "C shared library bindings for Hegel's native engine."
+repository = "https://github.com/hegeldev/hegel-rust"
+homepage = "http://hegel.dev"
+publish = false
+
+[lib]
+name = "hegel"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+hegeltest = { path = "..", default-features = false, features = ["native"] }
+ciborium = "0.2.2"
+
+[build-dependencies]
+cbindgen = "0.29"
+
+[dev-dependencies]
+libloading = "0.8"

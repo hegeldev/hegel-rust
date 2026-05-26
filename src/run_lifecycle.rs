@@ -195,7 +195,7 @@ pub(crate) fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// site is captured as a `file:line:col` string and stored on the
 /// [`Failure`] so per-origin shrinking can key on it.
 pub(crate) fn run_test_case(
-    data_source: Box<dyn DataSource>,
+    data_source: Box<dyn DataSource + Send + Sync>,
     test_fn: &mut dyn FnMut(TestCase),
     is_final: bool,
     mode: Mode,

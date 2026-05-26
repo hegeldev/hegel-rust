@@ -76,6 +76,23 @@ check-conformance:
     uv run --with 'hegel-core==0.4.1' --with pytest --with hypothesis \
         pytest tests/conformance/test_conformance.py
 
+# Build the libhegel C shared library + checked-in C header.
+c-build:
+    cargo build -p hegeltest-c --release
+
+# Run the hegel-c smoke tests (Rust integration test that dlopens
+# libhegel) and build + run the example C program against the lib.
+c-test:
+    cargo test -p hegeltest-c
+    cc -o target/debug/echo hegel-c/examples/echo.c \
+        -Ihegel-c/include -Ltarget/debug -lhegel \
+        -Wl,-rpath,$(pwd)/target/debug
+    LD_LIBRARY_PATH=target/debug target/debug/echo
+
+# Regenerate hegel-c/include/hegel.h from the Rust source (no diff check).
+c-header:
+    HEGEL_C_HEADER_WRITE=1 cargo build -p hegeltest-c
+
 # these aliases are provided as ux improvements for local developers. CI should use the longer
 # forms.
 test: check-tests
