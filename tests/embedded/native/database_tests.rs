@@ -4,14 +4,20 @@
 
 use super::*;
 use crate::native::core::ChoiceValue;
+#[cfg(not(target_family = "wasm"))]
 use tempfile::TempDir;
 
+// The directory-backed database is filesystem-backed by design and therefore
+// not exercised on wasm targets, where the WASI std lacks support for the
+// path-resolution APIs that `tempfile` relies on.
+#[cfg(not(target_family = "wasm"))]
 fn fresh_db() -> (DirectoryTestCaseDatabase, TempDir) {
     let dir = TempDir::new().unwrap();
     let db = DirectoryTestCaseDatabase::new(dir.path().to_str().unwrap());
     (db, dir)
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn save_then_fetch_round_trips_a_value() {
     let (db, _dir) = fresh_db();
@@ -20,6 +26,7 @@ fn save_then_fetch_round_trips_a_value() {
     assert_eq!(fetched, vec![b"value".to_vec()]);
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn save_is_idempotent() {
     let (db, _dir) = fresh_db();
@@ -28,6 +35,7 @@ fn save_is_idempotent() {
     assert_eq!(db.fetch(b"key"), vec![b"value".to_vec()]);
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn delete_removes_a_saved_value() {
     let (db, _dir) = fresh_db();
@@ -36,6 +44,7 @@ fn delete_removes_a_saved_value() {
     assert!(db.fetch(b"key").is_empty());
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn delete_of_absent_value_is_silent() {
     let (db, _dir) = fresh_db();
@@ -43,12 +52,14 @@ fn delete_of_absent_value_is_silent() {
     assert!(db.fetch(b"key").is_empty());
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn fetch_of_absent_key_returns_empty() {
     let (db, _dir) = fresh_db();
     assert!(db.fetch(b"never-saved").is_empty());
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn move_value_within_same_key_is_a_resave() {
     // src == dst is the early-return branch in `move_value`.
@@ -58,6 +69,7 @@ fn move_value_within_same_key_is_a_resave() {
     assert_eq!(db.fetch(b"key"), vec![b"v".to_vec()]);
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn move_value_relocates_entry() {
     let (db, _dir) = fresh_db();
@@ -67,6 +79,7 @@ fn move_value_relocates_entry() {
     assert_eq!(db.fetch(b"dst"), vec![b"v".to_vec()]);
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn move_value_creates_dst_when_absent() {
     // Exercises the `if !self.key_path(dst).exists()` branch.
@@ -76,6 +89,7 @@ fn move_value_creates_dst_when_absent() {
     assert_eq!(db.fetch(b"brand-new-dst"), vec![b"v".to_vec()]);
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn move_value_falls_back_to_delete_save_when_rename_fails() {
     // `rename` fails when the source value file doesn't exist; the

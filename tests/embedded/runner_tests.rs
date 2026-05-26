@@ -72,6 +72,9 @@ fn test_is_in_ci_some_expected_variant() {
 // dead from a coverage perspective.  This test temporarily clears
 // the CI env vars and runs the engine through that arm.
 #[cfg(feature = "native")]
+// Exercises a filesystem-backed database default and changes the process CWD;
+// neither has support on WASI std, so we skip on wasm.
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
     use crate::Hegel;

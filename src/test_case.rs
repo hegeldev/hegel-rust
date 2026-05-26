@@ -492,7 +492,15 @@ impl TestCase {
     fn repeat_property_test(&self, body: &mut dyn FnMut()) -> ! {
         use crate::generators::{booleans, integers};
 
-        const MAX_SAFE_MIN_SIZE: usize = 1 << 40;
+        // hegel-core's collection machinery hits an internal AssertionError
+        // around float precision when min_size approaches 2^53, so we cap well
+        // below that on 64-bit platforms. On 32-bit targets (e.g. wasm32) the
+        // type's own range already keeps us safely below 2^53.
+        const MAX_SAFE_MIN_SIZE: usize = if usize::BITS >= 64 {
+            1usize << 40
+        } else {
+            usize::MAX
+        };
         let min_size = self.draw_silent(integers::<usize>().max_value(MAX_SAFE_MIN_SIZE));
 
         let mut collection = Collection::new(self, min_size, None);
