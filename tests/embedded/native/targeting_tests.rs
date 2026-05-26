@@ -283,10 +283,10 @@ fn run_optimise<F>(start: Vec<ChoiceValue>, start_score: f64, mut test_fn: F)
 where
     F: FnMut(TestCase),
 {
-    let mut run_case =
-        move |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
-            run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
-        };
+    let mut run_case = move |ds: Box<dyn crate::backend::DataSource + Send + Sync>,
+                             is_final: bool| {
+        run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+    };
     let mut ctx = EngineCtx::new(&mut run_case);
 
     let mut targeting = TargetingState::new();

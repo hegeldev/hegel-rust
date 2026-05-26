@@ -24,9 +24,9 @@ usize_is_size_t = true
 "HegelRunResult" = "hegel_run_result_t"
 "HegelFailure" = "hegel_failure_t"
 
-# Enums kept in PascalCase form so prefix_with_name produces clean
-# HEGEL_STATUS_VALID-style variants instead of HEGEL_STATUS_T_VALID.
-
+# Enum types are named hegel_*_t directly in the Rust source, with each
+# variant pre-prefixed (HEGEL_STATUS_VALID etc.), so cbindgen's automatic
+# prefix_with_name / rename_variants would double-mangle them. We leave
+# both off and rely on the source-level names verbatim.
 [enum]
-prefix_with_name = true
-rename_variants = "ScreamingSnakeCase"
+prefix_with_name = false

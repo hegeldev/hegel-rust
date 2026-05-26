@@ -83,21 +83,21 @@
 typedef enum {
     HEGEL_MODE_TEST_RUN = 0,
     HEGEL_MODE_SINGLE_TEST_CASE = 1,
-} HegelMode;
+} hegel_mode_t;
 
 typedef enum {
     HEGEL_VERBOSITY_QUIET = 0,
     HEGEL_VERBOSITY_NORMAL = 1,
     HEGEL_VERBOSITY_VERBOSE = 2,
     HEGEL_VERBOSITY_DEBUG = 3,
-} HegelVerbosity;
+} hegel_verbosity_t;
 
 typedef enum {
     HEGEL_STATUS_VALID = 0,
     HEGEL_STATUS_INVALID = 1,
     HEGEL_STATUS_OVERRUN = 2,
     HEGEL_STATUS_INTERESTING = 3,
-} HegelStatus;
+} hegel_status_t;
 
 typedef struct hegel_failure_t hegel_failure_t;
 
@@ -117,11 +117,11 @@ hegel_settings_t *hegel_settings_new(void);
 
 void hegel_settings_free(hegel_settings_t *s);
 
-void hegel_settings_mode(hegel_settings_t *s, HegelMode mode);
+void hegel_settings_mode(hegel_settings_t *s, hegel_mode_t mode);
 
 void hegel_settings_test_cases(hegel_settings_t *s, uint64_t n);
 
-void hegel_settings_verbosity(hegel_settings_t *s, HegelVerbosity v);
+void hegel_settings_verbosity(hegel_settings_t *s, hegel_verbosity_t v);
 
 void hegel_settings_seed(hegel_settings_t *s, uint64_t seed, bool has_seed);
 
@@ -176,7 +176,7 @@ int hegel_collection_reject(hegel_test_case_t *tc, int64_t collection_id, const 
 
 int hegel_target(hegel_test_case_t *tc, double value, const char *label);
 
-int hegel_mark_complete(hegel_test_case_t *tc, HegelStatus status, const char *origin);
+int hegel_mark_complete(hegel_test_case_t *tc, hegel_status_t status, const char *origin);
 
 bool hegel_test_case_is_final_replay(const hegel_test_case_t *tc);
 

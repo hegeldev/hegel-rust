@@ -81,13 +81,16 @@ c-build:
     cargo build -p hegeltest-c --release
 
 # Run the hegel-c smoke tests (Rust integration test that dlopens
-# libhegel) and build + run the example C program against the lib.
+# libhegel) and build + run every example C program against both the
+# shared (libhegel.so) and static (libhegel.a) builds. The static link
+# pulls in the same system libraries Rust's std needs (libdl/pthread/m
+# on Linux); --print-link-args from rustc would enumerate them, but
+# the set is stable enough to hard-code here.
 c-test:
     cargo test -p hegeltest-c
-    cc -o target/debug/echo hegel-c/examples/echo.c \
-        -Ihegel-c/include -Ltarget/debug -lhegel \
-        -Wl,-rpath,$(pwd)/target/debug
-    LD_LIBRARY_PATH=target/debug target/debug/echo
+    cargo build -p hegeltest-c
+    mkdir -p target/c-examples
+    scripts/c-examples-run.sh
 
 # Regenerate hegel-c/include/hegel.h from the Rust source (no diff check).
 c-header:

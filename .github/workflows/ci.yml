@@ -144,6 +144,32 @@ jobs:
       - name: Run tests
         run: just ${{ matrix.recipe }}
 
+  test-c-bindings:
+    # Builds libhegel (the C shared/static library in hegel-c/), runs
+    # the libloading-based Rust smoke tests, and then compiles every
+    # example C program in hegel-c/examples/ against both libhegel.so
+    # and libhegel.a, running each binary to check the linking modes
+    # actually work end-to-end.
+    name: test-c-bindings
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just
+
+      - name: Run C bindings test recipe
+        run: just c-test
+
   test-min-protocol:
     name: test-min-protocol
     runs-on: ubuntu-latest

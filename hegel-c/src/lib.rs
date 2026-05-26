@@ -51,29 +51,45 @@ pub const HEGEL_E_INTERNAL: c_int = -8;
 
 // ─── Enums mirrored to C ────────────────────────────────────────────────────
 
+// The enum types and variants use C naming directly. Rust complains about
+// the conventions (non_camel_case_types for the type, non_snake_case isn't
+// the right lint here — it's that variants aren't camelCase), so we silence
+// the lint. The payoff is that cbindgen produces clean idiomatic C:
+//
+//   typedef enum {
+//       HEGEL_STATUS_VALID = 0,
+//       ...
+//   } hegel_status_t;
+//
+// without the HEGEL_STATUS_T_VALID-style mangling we'd get from cbindgen's
+// `prefix_with_name`.
+
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub enum HegelStatus {
-    Valid = 0,
-    Invalid = 1,
-    Overrun = 2,
-    Interesting = 3,
+#[allow(non_camel_case_types)]
+pub enum hegel_status_t {
+    HEGEL_STATUS_VALID = 0,
+    HEGEL_STATUS_INVALID = 1,
+    HEGEL_STATUS_OVERRUN = 2,
+    HEGEL_STATUS_INTERESTING = 3,
 }
 
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub enum HegelMode {
-    TestRun = 0,
-    SingleTestCase = 1,
+#[allow(non_camel_case_types)]
+pub enum hegel_mode_t {
+    HEGEL_MODE_TEST_RUN = 0,
+    HEGEL_MODE_SINGLE_TEST_CASE = 1,
 }
 
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub enum HegelVerbosity {
-    Quiet = 0,
-    Normal = 1,
-    Verbose = 2,
-    Debug = 3,
+#[allow(non_camel_case_types)]
+pub enum hegel_verbosity_t {
+    HEGEL_VERBOSITY_QUIET = 0,
+    HEGEL_VERBOSITY_NORMAL = 1,
+    HEGEL_VERBOSITY_VERBOSE = 2,
+    HEGEL_VERBOSITY_DEBUG = 3,
 }
 
 // Bitmask constants for phases / health checks. Exported via cbindgen as
@@ -232,11 +248,11 @@ unsafe fn settings_mut<'a>(s: *mut HegelSettings) -> Option<&'a mut Settings> {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_mode(s: *mut HegelSettings, mode: HegelMode) {
+pub unsafe extern "C" fn hegel_settings_mode(s: *mut HegelSettings, mode: hegel_mode_t) {
     if let Some(inner) = unsafe { settings_mut(s) } {
         let m = match mode {
-            HegelMode::TestRun => Mode::TestRun,
-            HegelMode::SingleTestCase => Mode::SingleTestCase,
+            hegel_mode_t::HEGEL_MODE_TEST_RUN => Mode::TestRun,
+            hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE => Mode::SingleTestCase,
         };
         *inner = inner.clone().mode(m);
     }
@@ -250,13 +266,13 @@ pub unsafe extern "C" fn hegel_settings_test_cases(s: *mut HegelSettings, n: u64
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_verbosity(s: *mut HegelSettings, v: HegelVerbosity) {
+pub unsafe extern "C" fn hegel_settings_verbosity(s: *mut HegelSettings, v: hegel_verbosity_t) {
     if let Some(inner) = unsafe { settings_mut(s) } {
         let verbosity = match v {
-            HegelVerbosity::Quiet => Verbosity::Quiet,
-            HegelVerbosity::Normal => Verbosity::Normal,
-            HegelVerbosity::Verbose => Verbosity::Verbose,
-            HegelVerbosity::Debug => Verbosity::Debug,
+            hegel_verbosity_t::HEGEL_VERBOSITY_QUIET => Verbosity::Quiet,
+            hegel_verbosity_t::HEGEL_VERBOSITY_NORMAL => Verbosity::Normal,
+            hegel_verbosity_t::HEGEL_VERBOSITY_VERBOSE => Verbosity::Verbose,
+            hegel_verbosity_t::HEGEL_VERBOSITY_DEBUG => Verbosity::Debug,
         };
         *inner = inner.clone().verbosity(verbosity);
     }
@@ -304,11 +320,10 @@ pub unsafe extern "C" fn hegel_settings_database(s: *mut HegelSettings, database
 /// Set the database key used to scope stored / replayed examples for this run.
 /// `key = NULL` clears it (the default).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_database_key(
-    s: *mut HegelSettings,
-    key: *const c_char,
-) {
-    let Some(hs) = (unsafe { s.as_mut() }) else { return };
+pub unsafe extern "C" fn hegel_settings_database_key(s: *mut HegelSettings, key: *const c_char) {
+    let Some(hs) = (unsafe { s.as_mut() }) else {
+        return;
+    };
     if key.is_null() {
         hs.database_key = None;
         return;
@@ -744,7 +759,7 @@ pub unsafe extern "C" fn hegel_target(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_mark_complete(
     tc: *mut HegelTestCase,
-    status: HegelStatus,
+    status: hegel_status_t,
     origin: *const c_char,
 ) -> c_int {
     clear_last_error();
@@ -757,10 +772,10 @@ pub unsafe extern "C" fn hegel_mark_complete(
     }
 
     let outcome = match status {
-        HegelStatus::Valid => TestCaseResult::Valid,
-        HegelStatus::Invalid => TestCaseResult::Invalid,
-        HegelStatus::Overrun => TestCaseResult::Overrun,
-        HegelStatus::Interesting => {
+        hegel_status_t::HEGEL_STATUS_VALID => TestCaseResult::Valid,
+        hegel_status_t::HEGEL_STATUS_INVALID => TestCaseResult::Invalid,
+        hegel_status_t::HEGEL_STATUS_OVERRUN => TestCaseResult::Overrun,
+        hegel_status_t::HEGEL_STATUS_INTERESTING => {
             let origin_str = if origin.is_null() {
                 "Panic at <unknown>".to_string()
             } else {
