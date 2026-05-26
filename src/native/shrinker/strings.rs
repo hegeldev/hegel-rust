@@ -9,8 +9,7 @@
 // Reduction order is alphabet-relative: `StringChoice::codepoint_key`
 // returns each codepoint's position in `IntervalSet::char_in_shrink_order`,
 // so shrinking on `[a-z]` walks toward `'a'` while shrinking on
-// `[0-9A-Za-z]` walks toward `'0'`. Mirrors Hypothesis's per-element
-// shrinking in `internal/conjecture/shrinking/string.py`.
+// `[0-9A-Za-z]` walks toward `'0'`.
 
 use std::collections::HashMap;
 
@@ -34,13 +33,13 @@ impl<'a> Shrinker<'a> {
                 }
             };
 
-            // Step 1: try simplest.
+            // Try simplest.
             let simplest = kind.simplest();
             if simplest != current {
                 self.replace(&HashMap::from([(i, ChoiceValue::String(simplest))]));
             }
 
-            // Step 2: shorten via linear scan up from min_size. For strings the
+            // Shorten via linear scan up from min_size. For strings the
             // per-codepoint key is not monotonic under prefix-taking (the suffix
             // we drop may have been the only "interesting" part), so a linear
             // scan is simpler and small.
@@ -54,7 +53,7 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            // Step 3: delete individual codepoints, right-to-left.
+            // Delete individual codepoints, right-to-left.
             let mut j = self.current_string(i).len();
             while j > 0 {
                 j -= 1;
@@ -67,15 +66,14 @@ impl<'a> Shrinker<'a> {
                 self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]));
             }
 
-            // Step 3.5: shrink duplicated codepoints simultaneously.
+            // Shrink duplicated codepoints simultaneously.
             //
             // When two or more positions hold the same codepoint and the
             // predicate links them (e.g. `decode(rle_encode(s)) != s`
             // requires at least two positions to share a value to trigger
             // the bug), reducing one position alone breaks the link. This
             // pass tries replacing *every* instance of a duplicated
-            // codepoint at once, mirroring the per-value pass in
-            // Hypothesis's `Collection.run_step`.
+            // codepoint at once.
             let dup_codepoints: Vec<u32> = {
                 let cur = self.current_string(i);
                 let mut counts: HashMap<u32, usize> = HashMap::new();
@@ -139,7 +137,7 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            // Step 4: reduce each codepoint via a small set of semantic
+            // Reduce each codepoint via a small set of semantic
             // candidates (digits, ASCII letters, NFD base) followed by
             // `bin_search_down` over the remaining key range.
             //
@@ -151,9 +149,8 @@ impl<'a> Shrinker<'a> {
             // predicates: midpoint probes can miss valid simpler characters
             // sitting between failing midpoints (e.g. 'A' at key 17 when
             // shrinking from 'À' at a higher key — bin_search probes
-            // midpoints and might miss the basin). Same trap as upstream
-            // Hypothesis's per-element Integer shrinker
-            // (HypothesisWorks/hypothesis#4725).
+            // midpoints and might miss the basin). Same trap as the
+            // per-element Integer shrinker.
             //
             // The hybrid: try a fixed list of "obvious smaller candidates"
             // first to cover the common ASCII / Latin-with-diacritic basins,
@@ -189,7 +186,7 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            // Step 5: insertion-sort pass — swap adjacent out-of-order
+            // Insertion-sort pass — swap adjacent out-of-order
             // codepoints (under the alphabet's shrink ordering).
             let mut pos = 1;
             loop {
@@ -314,6 +311,116 @@ impl<'a> Shrinker<'a> {
             (j, ChoiceValue::String(new_t)),
         ]))
     }
+
+    /// For each pair of string nodes within distance 4, lower every
+    /// occurrence of a shared codepoint in *both* strings simultaneously.
+    ///
+    /// Handles the case where two strings must contain the same
+    /// character but the actual character value is free — we want to
+    /// drive both occurrences toward the alphabet's smallest member at
+    /// once.
+    pub(crate) fn lower_duplicated_characters(&mut self) {
+        let len = self.current_nodes.len();
+        for i in 0..len {
+            for j in (i + 1)..(i + 1 + 4).min(len) {
+                // Both must be String kinds.
+                let (kind_i, val_i) =
+                    match (&self.current_nodes[i].kind, &self.current_nodes[i].value) {
+                        (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
+                        _ => continue,
+                    };
+                let (kind_j, val_j) =
+                    match (&self.current_nodes[j].kind, &self.current_nodes[j].value) {
+                        (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
+                        _ => continue,
+                    };
+                let set_i: std::collections::BTreeSet<u32> = val_i.iter().copied().collect();
+                let set_j: std::collections::BTreeSet<u32> = val_j.iter().copied().collect();
+                let shared: Vec<u32> = set_i.intersection(&set_j).copied().collect();
+                for ch in shared {
+                    // Binary-search the codepoint key downward.
+                    let original_key = kind_i.codepoint_key(ch);
+                    if original_key == 0 {
+                        continue;
+                    }
+                    super::bin_search_down(0, original_key as i128, &mut |new_key| {
+                        // `key_to_codepoint(new_key)` is `Some` for
+                        // every key in `0..alpha_size`, and our search
+                        // upper bound is `original_key` which is itself
+                        // a valid alphabet position.  Likewise the
+                        // resulting `new_cp` differs from `ch` (whose
+                        // key was `original_key > new_key`) and the
+                        // validate calls succeed since both strings
+                        // stay within the alphabet.
+                        let new_cp = kind_i
+                            .key_to_codepoint(new_key as u32)
+                            .expect("key < original_key < alpha_size");
+                        debug_assert_ne!(new_cp, ch);
+                        let new_i: Vec<u32> = val_i
+                            .iter()
+                            .map(|&c| if c == ch { new_cp } else { c })
+                            .collect();
+                        let new_j: Vec<u32> = val_j
+                            .iter()
+                            .map(|&c| if c == ch { new_cp } else { c })
+                            .collect();
+                        debug_assert!(kind_i.validate(&new_i) && kind_j.validate(&new_j));
+                        self.replace(&HashMap::from([
+                            (i, ChoiceValue::String(new_i)),
+                            (j, ChoiceValue::String(new_j)),
+                        ]))
+                    });
+                }
+            }
+        }
+    }
+
+    /// Walk every string node and try replacing each codepoint with one
+    /// of its "natural simpler" variants — NFD base + case mappings.
+    ///
+    /// Complements `shrink_strings`' per-position search by trying the
+    /// semantically obvious replacements that lex-index bisection can
+    /// skip over.
+    pub(crate) fn normalize_unicode_chars(&mut self) {
+        let mut i = 0;
+        while i < self.current_nodes.len() {
+            let (kind, value) = match (&self.current_nodes[i].kind, &self.current_nodes[i].value) {
+                (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
+                _ => {
+                    i += 1;
+                    continue;
+                }
+            };
+            for pos in 0..value.len() {
+                let cp = value[pos];
+                let candidates = natural_simpler_chars(cp, &kind);
+                // `current_nodes[i]` is the same kind we matched at the
+                // top of the loop; only its value may have changed
+                // under intervening `replace` calls.
+                let cur = match &self.current_nodes[i].value {
+                    ChoiceValue::String(v) => v.clone(),
+                    _ => unreachable!("kind invariant violated mid-pass"),
+                };
+                if pos >= cur.len() || cur[pos] != cp {
+                    continue;
+                }
+                for replacement in candidates {
+                    let mut new_value = cur.clone();
+                    new_value[pos] = replacement;
+                    // `natural_simpler_chars` already filters
+                    // candidates to those `intervals.contains(c)`, and
+                    // the alphabet check is the only validate gate for
+                    // single-char replacements at fixed-length —
+                    // therefore the candidate is always valid.
+                    debug_assert!(kind.validate(&new_value));
+                    if self.replace(&HashMap::from([(i, ChoiceValue::String(new_value))])) {
+                        break;
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
 }
 
 /// "Obvious smaller" replacement codepoints to try for a character with
@@ -323,9 +430,46 @@ impl<'a> Shrinker<'a> {
 /// if it's a non-ASCII codepoint with a canonical decomposition that lands
 /// in-alphabet.
 ///
+/// Cross-string codepoint candidates from natural text transformations.
+///
+/// For codepoint `cp` under alphabet `intervals`, returns the
+/// candidates produced by:
+///
+/// * NFD decomposition (collapsing accented forms onto their base).
+/// * `to_lowercase` and `to_uppercase` case mappings.
+///
+/// Candidates are filtered to those that (a) lie inside `intervals`
+/// and (b) have a strictly smaller shrink-order key than the original,
+/// then sorted by that key.  Used by `normalize_unicode_chars` to
+/// directly try the most semantically obvious replacements.
+fn natural_simpler_chars(cp: u32, kind: &StringChoice) -> Vec<u32> {
+    use std::collections::BTreeSet;
+    let cur_key = kind.codepoint_key(cp);
+    let mut candidates: BTreeSet<u32> = BTreeSet::new();
+    if let Some(c) = char::from_u32(cp) {
+        for sub in c.to_lowercase() {
+            candidates.insert(sub as u32);
+        }
+        for sub in c.to_uppercase() {
+            candidates.insert(sub as u32);
+        }
+    }
+    if let Some(base) = unicodedata::nfd_base(cp) {
+        candidates.insert(base);
+    }
+    candidates.remove(&cp);
+    let mut filtered: Vec<(u32, u32)> = candidates
+        .into_iter()
+        .filter(|c| kind.intervals.contains(*c) && kind.codepoint_key(*c) < cur_key)
+        .map(|c| (kind.codepoint_key(c), c))
+        .collect();
+    filtered.sort();
+    filtered.into_iter().map(|(_, c)| c).collect()
+}
+
 /// Used by `shrink_strings` to escape predicate basins where neither a
-/// pure binary search nor a Hypothesis-style `find_integer` descent would
-/// reach the smaller-key target.
+/// pure binary search nor a `find_integer` descent would reach the
+/// smaller-key target.
 fn semantic_candidates(cp: u32, kind: &StringChoice) -> Vec<u32> {
     let mut out = Vec::with_capacity(64);
     let cur_key = kind.codepoint_key(cp);
@@ -357,3 +501,7 @@ fn semantic_candidates(cp: u32, kind: &StringChoice) -> Vec<u32> {
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_strings_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_string_passes_tests.rs"]
+mod string_passes_tests;

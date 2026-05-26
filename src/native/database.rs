@@ -1,13 +1,10 @@
 // Persistence layer for the native backend.
 //
-// Mirrors Hypothesis's `TestCaseDatabase` hierarchy
-// (resources/hypothesis/hypothesis-python/src/hypothesis/database.py): a
-// multi-value key/value store where each key maps to a *set* of values.
+// A multi-value key/value store where each key maps to a *set* of values.
 // The `TestCaseDatabase` trait captures the shared surface
-// (`save` / `fetch` / `delete` / `move_value`); `DirectoryTestCaseDatabase` is the
-// directory-backed implementation (mirroring
-// `DirectoryBasedExampleDatabase`) and `InMemoryNativeDatabase` is a
-// non-persistent sibling (mirroring `InMemoryExampleDatabase`).
+// (`save` / `fetch` / `delete` / `move_value`); `DirectoryTestCaseDatabase`
+// is the directory-backed implementation and `InMemoryNativeDatabase` is
+// a non-persistent sibling.
 //
 // Minimal-native: the change-listener / watcher infrastructure, the
 // `ReadOnly` / `Multiplexed` / `BackgroundWrite` wrapper databases, and
@@ -26,13 +23,11 @@
 // value bytes); they are kept here so that the replay path in
 // `test_runner.rs` can round-trip them.
 //
-// The on-disk format is deliberately not cross-compatible with
-// Hypothesis's `DirectoryBasedExampleDatabase`.  The `native:` key
-// prefix means even if a user accidentally points `database` at
-// `.hypothesis/examples`, our hashes are disjoint from Hypothesis's
-// and the two stores can't overwrite each other's entries.  It also
-// leaves room for a future `core:`-prefixed store (the eventual full
-// hegel-core backend) to live at the same `db_root`.
+// The `native:` key prefix ensures that even if a user accidentally
+// points `database` at a directory containing another store, our hashes
+// are disjoint and the two stores can't overwrite each other's entries.
+// It also leaves room for a future `core:`-prefixed store (the eventual
+// full hegel-core backend) to live at the same `db_root`.
 
 use std::path::PathBuf;
 
@@ -66,15 +61,14 @@ pub trait TestCaseDatabase: Send + Sync {
 }
 
 /// Name of the bookkeeping key under which every save() records its
-/// own key bytes. Mirrors Hypothesis's
-/// `DirectoryBasedExampleDatabase._metakeys_name` (`.hypothesis-keys`).
+/// own key bytes.
 pub const METAKEYS_NAME: &[u8] = b".hegel-keys";
 
-/// Prefix prepended to every key before it's hashed onto disk.  Keeps
-/// `DirectoryTestCaseDatabase`'s on-disk hashes disjoint from a Hypothesis store
-/// (or a future hegel `core:` store) that happens to share `db_root`:
-/// the formats aren't cross-compatible, so we never want their paths
-/// to coincide.
+/// Prefix prepended to every key before it's hashed onto disk. Keeps
+/// `DirectoryTestCaseDatabase`'s on-disk hashes disjoint from any other
+/// store that happens to share `db_root` (e.g. a future hegel `core:`
+/// store): the formats aren't cross-compatible, so we never want their
+/// paths to coincide.
 const KEY_PREFIX: &[u8] = b"native:";
 
 fn key_hash(key: &[u8]) -> String {
@@ -123,15 +117,15 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
     }
 
     fn save(&self, key: &[u8], value: &[u8]) {
-        // Hypothesis keeps a "metakeys" entry — a bookkeeping key whose
-        // values are the raw bytes of every other key ever saved. Avoid
-        // infinite recursion when we're already saving under it.
+        // The "metakeys" entry is a bookkeeping key whose values are the
+        // raw bytes of every other key ever saved. Avoid infinite
+        // recursion when we're already saving under it.
         if key_hash(key) != self.metakeys_hash {
             self.save(METAKEYS_NAME, key);
         }
         let dir = self.key_path(key);
         if std::fs::create_dir_all(&dir).is_err() {
-            return; // nocov — filesystem permission denial, not reachable in tests
+            return;
         }
         let path = self.value_path(key, value);
         if path.exists() {
@@ -160,15 +154,11 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
             self.save(METAKEYS_NAME, dst);
         }
         let dst_dir = self.key_path(dst);
-        // Filesystem permission denial; the dst_dir create_dir_all
-        // call always succeeds in the test harness.
-        // nocov start
         if std::fs::create_dir_all(&dst_dir).is_err() {
             self.delete(src, value);
             self.save(dst, value);
             return;
         }
-        // nocov end
         let src_path = self.value_path(src, value);
         let dst_path = self.value_path(dst, value);
         if std::fs::rename(&src_path, &dst_path).is_err() {

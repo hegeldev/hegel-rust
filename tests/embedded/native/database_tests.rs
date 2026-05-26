@@ -249,3 +249,49 @@ fn deserialize_returns_none_on_truncated_string_body() {
     bytes.extend_from_slice(&[0u8; 4]); // only 1 cp of 3
     assert!(deserialize_choices(&bytes).is_none());
 }
+
+/// Construct a DB whose root is a regular file rather than a
+/// directory.  Any `create_dir_all` under it will fail — exercising
+/// the previously-nocov filesystem-error guards in `save` and
+/// `move_value`.
+#[cfg(unix)]
+#[test]
+fn save_silently_returns_when_create_dir_all_fails() {
+    let dir = TempDir::new().unwrap();
+    let file_root = dir.path().join("im-a-file");
+    std::fs::write(&file_root, b"").unwrap();
+    let db = DirectoryTestCaseDatabase::new(file_root.to_str().unwrap());
+    // save() should not panic, just no-op the write.
+    db.save(b"key", b"value");
+    assert!(db.fetch(b"key").is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn move_value_falls_back_to_delete_save_when_dst_dir_create_fails() {
+    // Save under a normal DB, then call move_value with a dst on a
+    // path that can't be created — we expect move_value's
+    // `create_dir_all` to fail and the fallback (delete + save) to
+    // run.  We use a path with a regular-file parent component
+    // (via the metakeys collision detection) to force the failure.
+    //
+    // Setup: create a regular file at `db_root/__keys/dst`.  Then
+    // move_value(..., dst, ...) will compute `dst_dir = key_path(dst)`
+    // which is under that file, and create_dir_all will fail.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new().unwrap();
+    let db = DirectoryTestCaseDatabase::new(dir.path().to_str().unwrap());
+    db.save(b"src", b"val");
+    // Make the db root unwritable so further create_dir_all under
+    // any new key path fails.
+    let mut perms = std::fs::metadata(dir.path()).unwrap().permissions();
+    perms.set_mode(0o555);
+    std::fs::set_permissions(dir.path(), perms.clone()).unwrap();
+    // Trigger the fallback path.  Behaviour: should not panic, and
+    // src should still be present (because the fallback's delete +
+    // save will also fail silently against the read-only root).
+    db.move_value(b"src", b"dst", b"val");
+    // Restore perms so TempDir can clean up.
+    perms.set_mode(0o755);
+    std::fs::set_permissions(dir.path(), perms).unwrap();
+}

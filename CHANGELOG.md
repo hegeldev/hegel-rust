@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.14.12 - 2026-05-26
+
+This patch brings the native-mode shrinker (`--features native`) to feature
+parity with the upstream Hypothesis shrinker.
+
 ## 0.14.11 - 2026-05-24
 
 This patch makes `Verbosity::Verbose` (and `Verbosity::Debug`) actually show what's happening inside a run. Previously these levels only added a single `Running test case` line; everything else (drawn values, notes, panic messages) was suppressed until the final replay.
