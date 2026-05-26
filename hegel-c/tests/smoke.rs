@@ -59,6 +59,7 @@ type FnSettingsNew = unsafe extern "C" fn() -> *mut u8;
 type FnSettingsFree = unsafe extern "C" fn(*mut u8);
 type FnSettingsTestCases = unsafe extern "C" fn(*mut u8, u64);
 type FnSettingsDatabase = unsafe extern "C" fn(*mut u8, *const c_char);
+type FnSettingsDatabaseKey = unsafe extern "C" fn(*mut u8, *const c_char);
 type FnSettingsSeed = unsafe extern "C" fn(*mut u8, u64, bool);
 type FnSettingsDerandomize = unsafe extern "C" fn(*mut u8, bool);
 type FnRunStart = unsafe extern "C" fn(*const u8) -> *mut u8;
@@ -72,6 +73,7 @@ type FnRunResultPassed = unsafe extern "C" fn(*const u8) -> bool;
 type FnRunResultFailureCount = unsafe extern "C" fn(*const u8) -> usize;
 type FnRunResultFailure = unsafe extern "C" fn(*const u8, usize) -> *const u8;
 type FnFailureOrigin = unsafe extern "C" fn(*const u8) -> *const c_char;
+type FnFailurePanicMessage = unsafe extern "C" fn(*const u8) -> *const c_char;
 type FnLastErrorMessage = unsafe extern "C" fn() -> *const c_char;
 
 // Bundle of the symbols we use, so the test bodies stay readable.
@@ -80,6 +82,7 @@ struct Api<'a> {
     settings_free: Symbol<'a, FnSettingsFree>,
     settings_test_cases: Symbol<'a, FnSettingsTestCases>,
     settings_database: Symbol<'a, FnSettingsDatabase>,
+    settings_database_key: Symbol<'a, FnSettingsDatabaseKey>,
     settings_seed: Symbol<'a, FnSettingsSeed>,
     settings_derandomize: Symbol<'a, FnSettingsDerandomize>,
     run_start: Symbol<'a, FnRunStart>,
@@ -92,6 +95,7 @@ struct Api<'a> {
     run_result_failure_count: Symbol<'a, FnRunResultFailureCount>,
     run_result_failure: Symbol<'a, FnRunResultFailure>,
     failure_origin: Symbol<'a, FnFailureOrigin>,
+    failure_panic_message: Symbol<'a, FnFailurePanicMessage>,
     last_error_message: Symbol<'a, FnLastErrorMessage>,
 }
 
@@ -102,6 +106,7 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             settings_free: lib.get(b"hegel_settings_free\0").unwrap(),
             settings_test_cases: lib.get(b"hegel_settings_test_cases\0").unwrap(),
             settings_database: lib.get(b"hegel_settings_database\0").unwrap(),
+            settings_database_key: lib.get(b"hegel_settings_database_key\0").unwrap(),
             settings_seed: lib.get(b"hegel_settings_seed\0").unwrap(),
             settings_derandomize: lib.get(b"hegel_settings_derandomize\0").unwrap(),
             run_start: lib.get(b"hegel_run_start\0").unwrap(),
@@ -114,6 +119,7 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             run_result_failure_count: lib.get(b"hegel_run_result_failure_count\0").unwrap(),
             run_result_failure: lib.get(b"hegel_run_result_failure\0").unwrap(),
             failure_origin: lib.get(b"hegel_failure_origin\0").unwrap(),
+            failure_panic_message: lib.get(b"hegel_failure_panic_message\0").unwrap(),
             last_error_message: lib.get(b"hegel_last_error_message\0").unwrap(),
         }
     }
@@ -347,5 +353,215 @@ fn run_free_after_early_exit_does_not_hang() {
         (a.run_free)(run);
         (a.settings_free)(s);
         // Reaching here without deadlocking is the assertion.
+    }
+}
+
+/// Reproduces hegel-go report #2 via the C API: persist a failing example
+/// on run 1, then run 2 with the same database + key and confirm the
+/// first test case is a replay of the persisted (shrunk) failing value.
+///
+/// If this test passes but hegel-go still sees the bug, the issue is in
+/// hegel-go's database / key plumbing rather than in libhegel.
+#[test]
+fn libhegel_replays_persisted_failure_with_same_database_key() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    let tempdir = tempfile::TempDir::new().expect("tempdir");
+    let db_path = CString::new(tempdir.path().to_string_lossy().as_bytes()).unwrap();
+    let key = CString::new("replay-smoke").unwrap();
+    let schema = integer_schema(0, 2_000_000);
+
+    let predicate = |n: i128| n >= 1_000_000;
+
+    // ---- run 1 ----
+    let mut last_failure: Option<i128> = None;
+    unsafe {
+        let s = (a.settings_new)();
+        (a.settings_test_cases)(s, 200);
+        (a.settings_database)(s, db_path.as_ptr());
+        (a.settings_database_key)(s, key.as_ptr());
+        (a.settings_derandomize)(s, true);
+        (a.settings_seed)(s, 1, true);
+
+        let run = (a.run_start)(s);
+        loop {
+            let tc = (a.next_test_case)(run);
+            if tc.is_null() {
+                break;
+            }
+            let mut val_ptr: *const u8 = ptr::null();
+            let mut val_len: usize = 0;
+            let rc = (a.generate)(
+                tc,
+                schema.as_ptr(),
+                schema.len(),
+                &mut val_ptr,
+                &mut val_len,
+            );
+            if rc == -1 {
+                (a.mark_complete)(tc, CStatus::Overrun, ptr::null());
+                continue;
+            }
+            assert_eq!(rc, 0);
+            let v = decode(std::slice::from_raw_parts(val_ptr, val_len));
+            let Value::Integer(i) = v else {
+                panic!("expected integer")
+            };
+            let n: i128 = i.into();
+            if predicate(n) {
+                last_failure = Some(n);
+                let origin = CString::new("n >= 1_000_000").unwrap();
+                (a.mark_complete)(tc, CStatus::Interesting, origin.as_ptr());
+            } else {
+                (a.mark_complete)(tc, CStatus::Valid, ptr::null());
+            }
+        }
+        (a.run_free)(run);
+        (a.settings_free)(s);
+    }
+    assert!(last_failure.is_some(), "run 1 never observed the failure");
+
+    // ---- run 2: same key + same db, expect replay first ----
+    let mut first_seen: Option<i128> = None;
+    unsafe {
+        let s = (a.settings_new)();
+        (a.settings_test_cases)(s, 200);
+        (a.settings_database)(s, db_path.as_ptr());
+        (a.settings_database_key)(s, key.as_ptr());
+        (a.settings_derandomize)(s, true);
+        (a.settings_seed)(s, 1, true);
+
+        let run = (a.run_start)(s);
+        loop {
+            let tc = (a.next_test_case)(run);
+            if tc.is_null() {
+                break;
+            }
+            let mut val_ptr: *const u8 = ptr::null();
+            let mut val_len: usize = 0;
+            let rc = (a.generate)(
+                tc,
+                schema.as_ptr(),
+                schema.len(),
+                &mut val_ptr,
+                &mut val_len,
+            );
+            if rc == -1 {
+                (a.mark_complete)(tc, CStatus::Overrun, ptr::null());
+                continue;
+            }
+            assert_eq!(rc, 0);
+            let v = decode(std::slice::from_raw_parts(val_ptr, val_len));
+            let Value::Integer(i) = v else {
+                panic!("expected integer")
+            };
+            let n: i128 = i.into();
+            if first_seen.is_none() {
+                first_seen = Some(n);
+            }
+            if predicate(n) {
+                let origin = CString::new("n >= 1_000_000").unwrap();
+                (a.mark_complete)(tc, CStatus::Interesting, origin.as_ptr());
+            } else {
+                (a.mark_complete)(tc, CStatus::Valid, ptr::null());
+            }
+        }
+        (a.run_free)(run);
+        (a.settings_free)(s);
+    }
+
+    let first = first_seen.expect("run 2 never received a test case");
+    assert!(
+        predicate(first),
+        "expected replay of n>=1_000_000 as first test case, got n={}",
+        first
+    );
+}
+
+#[test]
+fn engine_panic_surfaces_as_failure_not_worker_crash() {
+    // Reproduces hegel-go report #1: a property whose draws are all
+    // rejected via `assume` triggers `FilterTooMuch` inside `run_main`,
+    // which `panic!`s the worker thread. Before catch_unwind was added
+    // around `run_native`, the worker died and the C caller saw a generic
+    // "worker terminated" error. After the fix, the panic message is
+    // wrapped in a `HegelFailure` and returned via `hegel_run_result`.
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    unsafe {
+        let s = (a.settings_new)();
+        (a.settings_test_cases)(s, 200);
+        let empty = CString::new("").unwrap();
+        (a.settings_database)(s, empty.as_ptr());
+        (a.settings_derandomize)(s, true);
+        (a.settings_seed)(s, 1, true);
+
+        let run = (a.run_start)(s);
+        let schema = integer_schema(0, 1_000_000);
+
+        // Reject everything we draw. The engine eventually trips
+        // FilterTooMuch and panics.
+        loop {
+            let tc = (a.next_test_case)(run);
+            if tc.is_null() {
+                break;
+            }
+            let mut val_ptr: *const u8 = ptr::null();
+            let mut val_len: usize = 0;
+            let rc = (a.generate)(
+                tc,
+                schema.as_ptr(),
+                schema.len(),
+                &mut val_ptr,
+                &mut val_len,
+            );
+            let _ = (val_ptr, val_len);
+            if rc == -1 {
+                (a.mark_complete)(tc, CStatus::Overrun, ptr::null());
+            } else {
+                (a.mark_complete)(tc, CStatus::Invalid, ptr::null());
+            }
+        }
+
+        let last_err = CStr::from_ptr((a.last_error_message)())
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            last_err, "",
+            "next_test_case loop ended with error instead of normal completion: {}",
+            last_err
+        );
+
+        let result = (a.run_result)(run);
+        assert!(
+            !result.is_null(),
+            "hegel_run_result returned NULL after engine panic; \
+             last_error = {}",
+            CStr::from_ptr((a.last_error_message)()).to_string_lossy()
+        );
+
+        // The run must be marked failing, with the FilterTooMuch panic
+        // text reachable through the failure API.
+        assert!(
+            !(a.run_result_passed)(result),
+            "expected failing run after engine panic"
+        );
+        assert!(
+            (a.run_result_failure_count)(result) >= 1,
+            "expected at least one failure for the engine panic"
+        );
+        let f = (a.run_result_failure)(result, 0);
+        assert!(!f.is_null());
+        let msg = CStr::from_ptr((a.failure_panic_message)(f)).to_string_lossy();
+        assert!(
+            msg.contains("FilterTooMuch") || msg.contains("FailedHealthCheck"),
+            "expected panic message to reference FilterTooMuch / FailedHealthCheck, got: {}",
+            msg
+        );
+
+        (a.run_free)(run);
+        (a.settings_free)(s);
     }
 }

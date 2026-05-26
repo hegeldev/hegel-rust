@@ -340,6 +340,7 @@ dependencies = [
  "ciborium",
  "hegeltest",
  "libloading",
+ "tempfile",
 ]
 
 [[package]]

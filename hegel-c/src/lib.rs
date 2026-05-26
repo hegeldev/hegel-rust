@@ -214,6 +214,35 @@ impl From<TestRunResult> for HegelRunResult {
     }
 }
 
+/// Extract a printable message from a `catch_unwind` panic payload.
+/// Mirrors the cross-backend helper in `hegel::run_lifecycle::panic_message`
+/// (which is `pub(crate)` and therefore not reachable from this crate).
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "Unknown panic".to_string()
+    }
+}
+
+/// Translate a panic raised by `run_native` (e.g. a health-check
+/// `panic!("FailedHealthCheck: ...")`) into a `TestRunResult` so the C
+/// caller can read the message through `hegel_failure_panic_message`
+/// rather than losing it to a worker-thread crash.
+fn engine_panic_to_test_run_result(payload: Box<dyn std::any::Any + Send>) -> TestRunResult {
+    let msg = panic_payload_message(payload);
+    TestRunResult {
+        passed: false,
+        failures: vec![Failure {
+            panic_message: msg.clone(),
+            diagnostic: format!("Engine panic: {}\n", msg),
+            origin: "Engine panic".to_string(),
+        }],
+    }
+}
+
 /// Replace interior NULs (which can't appear in C strings) with the
 /// REPLACEMENT CHARACTER's underline. Hegel-produced diagnostic strings
 /// shouldn't contain NULs, but defending against that here means the
@@ -398,30 +427,45 @@ pub unsafe extern "C" fn hegel_run_start(settings: *const HegelSettings) -> *mut
     let worker = thread::Builder::new()
         .name("hegel-worker".to_string())
         .spawn(move || {
-            let result = run_native(&settings, database_key.as_deref(), |ds, is_final| {
-                if abort_worker.load(Ordering::Acquire) {
-                    ds.mark_complete(&TestCaseResult::Valid);
-                    return;
-                }
-                let (ack_tx, ack_rx) = mpsc::channel();
-                let msg = WorkerMessage::TestCase {
-                    ds,
-                    is_final,
-                    ack: ack_tx,
-                };
-                if let Err(mpsc::SendError(returned)) = to_caller.send(msg) {
-                    // Caller dropped — recover the data source we just tried
-                    // to hand off and mark it complete so the engine can
-                    // make progress to its (now-irrelevant) end.
-                    if let WorkerMessage::TestCase { ds, .. } = returned {
+            // The engine itself can panic — currently `run_main` does this
+            // when a health check fails (FilterTooMuch, TooSlow). An
+            // unwinding worker thread would drop the sender and surface to
+            // the C caller as a generic "worker terminated" error, losing
+            // the panic message entirely. Catch the panic at the FFI
+            // boundary and translate it into a normal `TestRunResult` with
+            // `passed=false`, mirroring how the in-process Rust path
+            // surfaces engine errors as failure diagnostics.
+            let engine = std::panic::AssertUnwindSafe(|| {
+                run_native(&settings, database_key.as_deref(), |ds, is_final| {
+                    if abort_worker.load(Ordering::Acquire) {
                         ds.mark_complete(&TestCaseResult::Valid);
+                        return;
                     }
-                    return;
-                }
-                // Caller dropping the ack sender is treated the same as
-                // a successful ack — we're winding down regardless.
-                let _ = ack_rx.recv();
+                    let (ack_tx, ack_rx) = mpsc::channel();
+                    let msg = WorkerMessage::TestCase {
+                        ds,
+                        is_final,
+                        ack: ack_tx,
+                    };
+                    if let Err(mpsc::SendError(returned)) = to_caller.send(msg) {
+                        // Caller dropped — recover the data source we just
+                        // tried to hand off and mark it complete so the
+                        // engine can make progress to its (now-irrelevant)
+                        // end.
+                        if let WorkerMessage::TestCase { ds, .. } = returned {
+                            ds.mark_complete(&TestCaseResult::Valid);
+                        }
+                        return;
+                    }
+                    // Caller dropping the ack sender is treated the same as
+                    // a successful ack — we're winding down regardless.
+                    let _ = ack_rx.recv();
+                })
             });
+            let result = match std::panic::catch_unwind(engine) {
+                Ok(r) => r,
+                Err(payload) => engine_panic_to_test_run_result(payload),
+            };
             let _ = to_caller.send(WorkerMessage::Done(result));
         });
 

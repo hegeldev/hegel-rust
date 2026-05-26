@@ -22,3 +22,4 @@ cbindgen = "0.29"
 
 [dev-dependencies]
 libloading = "0.8"
+tempfile = "3"
