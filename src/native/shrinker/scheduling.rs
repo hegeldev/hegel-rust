@@ -34,9 +34,9 @@ fn next_rand(mut x: u64) -> u64 {
 /// "step" of the underlying pass and let the scheduler decide whether
 /// to call it again.
 pub struct ShrinkPass<'a> {
-    /// Display name; used by `pass_stats` (test-only) and intended for
-    /// debug-printing of a pass schedule.
-    #[allow(dead_code)]
+    /// Display name.  Read by `fixate_shrink_passes` for the per-pass
+    /// "Trying shrink pass: <name>" debug line and by
+    /// `Shrinker::shrink`'s end-of-run profile report.
     pub name: &'static str,
     /// The callable to run.
     pub run: Box<dyn FnMut(&mut Shrinker<'a>) + 'a>,
@@ -127,6 +127,10 @@ impl<'a> Shrinker<'a> {
                         shuffle_requested = true;
                     }
 
+                    if self.debug.is_some() {
+                        let name = passes[idx].name;
+                        self.debug_msg(&format!("Trying shrink pass: {name}"));
+                    }
                     passes[idx].calls += 1;
                     let prev_key = sort_key(&self.current_nodes);
                     let initial_calls = self.calls;
@@ -193,12 +197,12 @@ impl<'a> Shrinker<'a> {
         }
     }
 
-    /// Read-only access to per-pass stats; used by tests to assert that
-    /// `fixate_shrink_passes` actually drives each pass.
+    /// Read-only access to per-pass stats; used by `shrink`'s profile
+    /// report and by tests asserting that `fixate_shrink_passes` actually
+    /// drives each pass.
     ///
     /// Returns `(name, calls, shrinks, deletions)` tuples for each pass
     /// in `passes`.
-    #[cfg(test)]
     pub fn pass_stats(
         &self,
         passes: &[ShrinkPass<'a>],

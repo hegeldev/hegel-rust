@@ -55,6 +55,10 @@ pub enum ShrinkRun<'a> {
 /// `actual_spans` is the span tree recorded by the same run.
 pub type TestFn<'a> = dyn FnMut(ShrinkRun) -> (bool, Vec<ChoiceNode>, Spans) + 'a;
 
+/// A callback for shrinker debug output (per-pass-step lines and the
+/// end-of-shrink profiling report).  Wired only at `Verbosity::Debug`.
+pub type DebugFn<'a> = dyn FnMut(&str) + 'a;
+
 pub struct Shrinker<'a> {
     test_fn: Box<TestFn<'a>>,
     pub current_nodes: Vec<ChoiceNode>,
@@ -130,6 +134,11 @@ pub struct Shrinker<'a> {
     /// redistribute candidates are revisited), so eviction is
     /// simply dropped.
     consider_cache: HashSet<Vec<(u8, NodeSortKey)>>,
+    /// Optional debug callback.  When set, the shrinker emits
+    /// per-pass-step "Trying shrink pass: <name>" lines and an
+    /// end-of-shrink Hypothesis-style "Shrink pass profiling" report.
+    /// Wired by the test runner at `Verbosity::Debug`; unused otherwise.
+    pub(super) debug: Option<Box<DebugFn<'a>>>,
 }
 
 /// One-byte tag identifying a `ChoiceKind` variant — used by
@@ -169,6 +178,21 @@ impl<'a> Shrinker<'a> {
             max_stall: MAX_SHRINKS,
             all_changed_nodes: HashSet::new(),
             consider_cache: HashSet::new(),
+            debug: None,
+        }
+    }
+
+    /// Install a debug callback.  Each emitted message corresponds to
+    /// either the start of a pass step (`"Trying shrink pass: <name>"`)
+    /// or one line of the end-of-shrink profiling report.  Wired by the
+    /// test runner at `Verbosity::Debug`.
+    pub fn set_debug<F: FnMut(&str) + 'a>(&mut self, f: F) {
+        self.debug = Some(Box::new(f));
+    }
+
+    pub(super) fn debug_msg(&mut self, msg: &str) {
+        if let Some(d) = self.debug.as_mut() {
+            d(msg);
         }
     }
 
@@ -368,6 +392,65 @@ impl<'a> Shrinker<'a> {
         self.consider(&attempt)
     }
 
+    /// Format a Hypothesis-style end-of-shrink profile report and feed
+    /// it line-by-line to the debug callback.  Mirrors
+    /// `shrinker.py:460-489` ("Shrink pass profiling" block) — passes
+    /// with zero calls are filtered out, the remainder are split into
+    /// useful (`shrinks > 0`) and useless buckets, each bucket sorted
+    /// by `(-calls, deletions, shrinks)`.
+    fn emit_profile_report(
+        &mut self,
+        passes: &[ShrinkPass<'a>],
+        initial_size: usize,
+        initial_calls: usize,
+    ) {
+        if self.debug.is_none() {
+            return;
+        }
+        fn s(n: usize) -> &'static str {
+            if n == 1 { "" } else { "s" }
+        }
+        let stats = self.pass_stats(passes);
+        let total_calls = self.calls.saturating_sub(initial_calls);
+        let total_deleted = initial_size.saturating_sub(self.current_nodes.len());
+        let shrinks = self.improvements;
+        self.debug_msg("---------------------");
+        self.debug_msg("Shrink pass profiling");
+        self.debug_msg("---------------------");
+        self.debug_msg("");
+        self.debug_msg(&format!(
+            "Shrinking made a total of {total_calls} call{} of which {shrinks} shrank. \
+             This deleted {total_deleted} choice{} out of {initial_size}.",
+            s(total_calls),
+            s(total_deleted),
+        ));
+        for useful in [true, false] {
+            self.debug_msg("");
+            self.debug_msg(if useful {
+                "Useful passes:"
+            } else {
+                "Useless passes:"
+            });
+            self.debug_msg("");
+            let mut buckets: Vec<&(&'static str, usize, usize, usize)> = stats
+                .iter()
+                .filter(|(_, calls, shrinks, _)| *calls > 0 && ((*shrinks > 0) == useful))
+                .collect();
+            buckets.sort_by_key(|(_, calls, shrinks, deletions)| {
+                (std::cmp::Reverse(*calls), *deletions, *shrinks)
+            });
+            for (name, calls, shrinks, deletions) in buckets {
+                self.debug_msg(&format!(
+                    "  * {name} made {calls} call{} of which {shrinks} shrank, \
+                     deleting {deletions} choice{}.",
+                    s(*calls),
+                    s(*deletions),
+                ));
+            }
+        }
+        self.debug_msg("");
+    }
+
     /// Run all shrink passes repeatedly until no more progress or iteration cap.
     ///
     /// The pass order interleaves Hypothesis-ported passes with the
@@ -459,7 +542,10 @@ impl<'a> Shrinker<'a> {
             ),
             ShrinkPass::new("mutate_and_shrink", Box::new(|sh| sh.mutate_and_shrink())),
         ];
+        let initial_size = self.current_nodes.len();
+        let initial_calls = self.calls;
         self.fixate_shrink_passes(&mut passes);
+        self.emit_profile_report(&passes, initial_size, initial_calls);
     }
 }
 

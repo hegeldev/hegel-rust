@@ -510,6 +510,9 @@ fn run_main(
                 // main shrink loop to rerandomise small one_of-style
                 // branch selectors.
                 shrinker.initial_coarse_reduction();
+                if verbosity == Verbosity::Debug {
+                    shrinker.set_debug(|msg| eprintln!("{msg}"));
+                }
                 shrinker.shrink();
                 shrinker.current_nodes
             };
