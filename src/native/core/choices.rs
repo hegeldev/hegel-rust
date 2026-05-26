@@ -8,10 +8,9 @@ use crate::native::intervalsets::IntervalSet;
 pub struct IntegerChoice {
     pub min_value: i128,
     pub max_value: i128,
-    /// The "preferred" value the shrinker aims at — analogous to
-    /// upstream's `node.constraints["shrink_towards"]` (default 0).  All
-    /// of [`Self::simplest`], [`Self::unit`], and [`Self::sort_key`]
-    /// are anchored at `shrink_towards.clamp(min_value, max_value)`, so
+    /// The "preferred" value the shrinker aims at (default 0). All of
+    /// [`Self::simplest`], [`Self::unit`], and [`Self::sort_key`] are
+    /// anchored at `shrink_towards.clamp(min_value, max_value)`, so
     /// integer-shrinking passes converge on this value rather than on 0.
     pub shrink_towards: i128,
 }
@@ -26,9 +25,8 @@ impl IntegerChoice {
     }
 
     /// The simplest (most "shrunk") value: `shrink_towards` clamped to
-    /// the kind's range.  With the default `shrink_towards = 0` this is
-    /// `0` when in range and the closest endpoint otherwise — matching
-    /// pre-A21 behaviour.
+    /// the kind's range. With the default `shrink_towards = 0` this is
+    /// `0` when in range and the closest endpoint otherwise.
     pub fn simplest(&self) -> i128 {
         self.clamped_shrink_towards()
     }
@@ -51,18 +49,14 @@ impl IntegerChoice {
 
     /// Sort key for shrinking: smaller distance from `shrink_towards`
     /// is simpler, with values below `shrink_towards` ordered after
-    /// values above at the same distance (mirrors upstream's
-    /// `choice_to_index` semantics for integer kinds with non-zero
-    /// `shrink_towards`).  With the default `shrink_towards = 0` this
-    /// is `(value.unsigned_abs(), value < 0)` — matching pre-A21
-    /// behaviour.
+    /// values above at the same distance. With the default
+    /// `shrink_towards = 0` this is `(value.unsigned_abs(), value < 0)`.
     pub fn sort_key(&self, value: i128) -> (u128, bool) {
         let target = self.clamped_shrink_towards();
         let distance = value.wrapping_sub(target).unsigned_abs();
         (distance, value < target)
     }
 
-    /// Hypothesis: `core.py::IntegerChoice.max_index`.
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         use crate::native::bignum::BigUint;
         // max_value - min_value can exceed i128 positive range (e.g. full
@@ -71,7 +65,7 @@ impl IntegerChoice {
         let diff = (self.max_value as u128).wrapping_sub(self.min_value as u128);
         BigUint::from(diff)
     }
-    /// Hypothesis: `core.py::IntegerChoice.to_index`.
+
     pub fn to_index(&self, value: i128) -> crate::native::bignum::BigUint {
         use crate::native::bignum::{BigUint, Zero};
         let s = self.simplest();
@@ -98,7 +92,6 @@ impl IntegerChoice {
         count + BigUint::from(1u32)
     }
 
-    /// Hypothesis: `core.py::IntegerChoice.from_index`.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<i128> {
         use crate::native::bignum::{BigUint, Zero};
@@ -155,16 +148,14 @@ impl BooleanChoice {
         true
     }
 
-    /// Hypothesis: `core.py::BooleanChoice.max_index`.
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         crate::native::bignum::BigUint::from(1u32)
     }
-    /// Hypothesis: `core.py::BooleanChoice.to_index`.
+
     pub fn to_index(&self, value: bool) -> crate::native::bignum::BigUint {
         crate::native::bignum::BigUint::from(u32::from(value))
     }
 
-    /// Hypothesis: `core.py::BooleanChoice.from_index`.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<bool> {
         use crate::native::bignum::BigUint;
@@ -219,15 +210,13 @@ impl BytesChoice {
         (value.len(), value.to_vec())
     }
 
-    /// Hypothesis: `core.py::BytesChoice.max_index`.
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         self.to_index(&vec![0xffu8; self.max_size])
     }
 
-    /// Hypothesis: `core.py::BytesChoice.to_index`. Indexes byte sequences in
-    /// shortlex order over `[min_size, max_size]`: all length-`min_size`
-    /// sequences first, then length `min_size + 1`, and so on; within each
-    /// length, lexicographic on the bytes.
+    /// Indexes byte sequences in shortlex order over `[min_size, max_size]`:
+    /// all length-`min_size` sequences first, then length `min_size + 1`, and
+    /// so on; within each length, lexicographic on the bytes.
     pub fn to_index(&self, value: &[u8]) -> crate::native::bignum::BigUint {
         use crate::native::bignum::{BigUint, Zero};
         let base = BigUint::from(256u32);
@@ -278,8 +267,6 @@ impl BytesChoice {
 /// `'0'` is the simplest character whenever the alphabet contains it,
 /// followed by `'1'`..`'9'`, `'A'`..`'Z'`, then characters below `'0'` in
 /// reverse, then characters above `'Z'` in natural order.
-///
-/// Mirrors Hypothesis's `StringConstraints { intervals: IntervalSet, ... }`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StringChoice {
     pub intervals: IntervalSet,
@@ -590,18 +577,15 @@ impl FloatChoice {
         (float_to_index(mag), is_neg)
     }
 
-    /// Hypothesis: `core.py::FloatChoice.max_index`. Largest valid index for
-    /// [`from_index`]. Indexes the full finite range (both signs) followed
-    /// by `+inf`, `-inf`, then all NaN payloads.
+    /// Largest valid index for [`from_index`]. Indexes the full finite range
+    /// (both signs) followed by `+inf`, `-inf`, then all NaN payloads.
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         use crate::native::bignum::BigUint;
         // 2^52 NaN payloads (one bit forced to 1) × 2 signs = 2^53 NaN slots.
         max_finite_global_rank() + BigUint::from(2u32) + BigUint::from(1u64 << 53)
     }
 
-    /// Hypothesis: `core.py::FloatChoice.to_index`.
-    ///
-    /// Implementation note: a direct port of Hypothesis's
+    /// Implementation note: the naive formula
     /// `to_index = _float_to_index(value) - _float_to_index(simplest)` over
     /// the raw-index ordering would underflow whenever `value` is below
     /// `simplest` in raw-index terms (which can happen because `simplest`
@@ -614,7 +598,6 @@ impl FloatChoice {
         float_global_rank(value) - float_global_rank(self.simplest())
     }
 
-    /// Hypothesis: `core.py::FloatChoice.from_index`.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<f64> {
         let raw = float_global_rank(self.simplest()) + index;
@@ -677,7 +660,7 @@ fn float_from_global_rank(rank: crate::native::bignum::BigUint) -> Option<f64> {
             .try_into()
             .expect("mod 2 fits in u64");
         let mantissa_base: u64 = (nan_rel / BigUint::from(2u32)).try_into().ok()?;
-        // Force bit 51 to 1 so the mantissa is non-zero (matches Hypothesis).
+        // Force bit 51 to 1 so the mantissa is non-zero.
         let mantissa = mantissa_base | (1u64 << 51);
         let bits = (sign << 63) | (0x7FFu64 << 52) | mantissa;
         let v = f64::from_bits(bits);
@@ -773,8 +756,6 @@ impl ChoiceKind {
     }
 
     /// Largest valid index for [`from_index`].
-    ///
-    /// Hypothesis: `core.py::ChoiceType.max_index`.
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         match self {
             ChoiceKind::Integer(ic) => ic.max_index(),
@@ -786,8 +767,6 @@ impl ChoiceKind {
     }
 
     /// Convert a value to its dense index under this kind's sort order.
-    ///
-    /// Hypothesis: `core.py::ChoiceType.to_index`.
     pub fn to_index(&self, value: &ChoiceValue) -> crate::native::bignum::BigUint {
         match (self, value) {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.to_index(*v),
@@ -800,8 +779,6 @@ impl ChoiceKind {
     }
 
     /// Inverse of [`to_index`]. Returns `None` when the index is out of range.
-    ///
-    /// Hypothesis: `core.py::ChoiceType.from_index`.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<ChoiceValue> {
         match self {
@@ -826,7 +803,6 @@ impl ChoiceKind {
     }
 
     /// Cardinality of this kind's choice space.
-    /// Port of upstream's `compute_max_children`.
     pub fn max_children(&self) -> crate::native::bignum::BigUint {
         use crate::native::bignum::BigUint;
         match self {
@@ -926,10 +902,9 @@ pub struct ChoiceNode {
     pub was_forced: bool,
 }
 
-/// Kind of fallback a [`ChoiceTemplate`] produces.  Mirrors Hypothesis's
-/// `Literal["simplest"]` field on `internal/conjecture/choice.ChoiceTemplate`.
-/// Carried as an enum so future kinds (`"random"`, etc., that Hypothesis has
-/// flirted with) can be added without changing the surrounding API.
+/// Kind of fallback a [`ChoiceTemplate`] produces. Carried as an enum so
+/// future kinds (e.g. `"random"`) can be added without changing the
+/// surrounding API.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ChoiceTemplateKind {
     /// Resolve each templated draw to `kind.simplest()` of the requested
@@ -938,22 +913,12 @@ pub enum ChoiceTemplateKind {
 }
 
 /// A deferred-resolution marker that drives every draw past the explicit
-/// `prefix` of a [`crate::native::core::NativeTestCase`].  Mirrors
-/// `ChoiceTemplate` from `hypothesis.internal.conjecture.choice`.
+/// `prefix` of a [`crate::native::core::NativeTestCase`].
 ///
 /// `count = None` is infinite — the template applies to every draw until
-/// the test case ends naturally (e.g. `max_size` is hit).  `count = Some(n)`
+/// the test case ends naturally (e.g. `max_size` is hit). `count = Some(n)`
 /// produces exactly `n` resolved values, after which the next draw marks
 /// overrun (`Status::EarlyStop` + `StopTest`).
-///
-/// Hypothesis's literal source (`data.py::_pop_choice` lines 1054-1073)
-/// decrements the count *after* producing each value and then checks for
-/// `< 0`, which means a `count=N` template actually returns `N+1` values
-/// (the last one alongside the overrun status).  That looks like an
-/// unintentional off-by-one; we implement the cleaner "exactly N values,
-/// then overrun" semantics that the `count > 0` `__post_init__` assert
-/// suggests.  No current Hypothesis caller passes a finite count, so the
-/// divergence is invisible at the API boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChoiceTemplate {
     pub kind: ChoiceTemplateKind,
@@ -962,8 +927,7 @@ pub struct ChoiceTemplate {
 
 impl ChoiceTemplate {
     /// Build a [`ChoiceTemplateKind::Simplest`] template with the given
-    /// remaining-draws count.  `Some(0)` is rejected at construction time,
-    /// matching Hypothesis's `__post_init__` assertion.
+    /// remaining-draws count. `Some(0)` is rejected at construction time.
     pub fn simplest(count: Option<usize>) -> Self {
         if let Some(n) = count {
             assert!(n > 0, "ChoiceTemplate count must be positive (got 0)");
@@ -1023,7 +987,7 @@ impl ChoiceNode {
 /// given node position; `Scalar < Sequence` by derived enum order is a
 /// total-ordering fall-through for the sort key of an entire
 /// sequence-of-nodes that contains both shapes.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NodeSortKey {
     Scalar(u128, bool),
     Sequence(usize, Vec<u32>),

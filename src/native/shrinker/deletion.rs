@@ -1,10 +1,11 @@
-// Deletion-based shrink passes: delete_chunks, bind_deletion, try_replace_with_deletion.
+// Deletion-based shrink passes: delete_chunks, bind_deletion, try_replace_with_deletion,
+// minimize_individual_choices, node_program.
 
 use std::collections::HashMap;
 
-use crate::native::core::{ChoiceKind, ChoiceValue};
+use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, sort_key};
 
-use super::{Shrinker, bin_search_down};
+use super::{Shrinker, bin_search_down, find_integer};
 
 impl<'a> Shrinker<'a> {
     /// Try deleting chunks of choices from the sequence.
@@ -20,7 +21,7 @@ impl<'a> Shrinker<'a> {
                 // Only reached when a prior iteration shrank current_nodes to
                 // empty; with usize i we can't go negative, so we bail.
                 if i >= self.current_nodes.len() {
-                    break; // nocov — sequences that shrink to empty mid-pass are rare
+                    break;
                 }
                 let end = (i + k).min(self.current_nodes.len());
                 let mut attempt: Vec<_> = self.current_nodes[..i].to_vec();
@@ -57,8 +58,6 @@ impl<'a> Shrinker<'a> {
         }
     }
 
-    /// Port of Hypothesis's `bind_deletion`.
-    ///
     /// When a value controls the length of a downstream sequence (e.g.
     /// via flat_map), reducing that value may shorten the test case without
     /// keeping the result interesting. This pass detects that situation and
@@ -108,7 +107,7 @@ impl<'a> Shrinker<'a> {
         // First try a straight replace. consider() already calls test_fn and
         // records the interesting case; we'd just duplicate work by retrying.
         if self.replace(&HashMap::from([(idx, value.clone())])) {
-            return true; // nocov — early-success path; deletion fallback below covers the common case
+            return true;
         }
 
         // The replace couldn't narrow the result directly. Re-run the test to
@@ -119,7 +118,7 @@ impl<'a> Shrinker<'a> {
         let mut attempt = self.current_nodes.clone();
         attempt[idx] = attempt[idx].with_value(value);
 
-        let (_, actual_nodes) = (self.test_fn)(super::ShrinkRun::Full(&attempt));
+        let (_, actual_nodes, _) = (self.test_fn)(super::ShrinkRun::Full(&attempt));
         if actual_nodes.len() >= expected_len {
             return false;
         }
@@ -141,4 +140,232 @@ impl<'a> Shrinker<'a> {
         }
         false
     }
+
+    /// Per-node minimization with size-dependency deletion fallback.
+    ///
+    /// For each non-forced, non-simplest integer node, lowering it by
+    /// one often shortens the realised sequence because the integer
+    /// controlled a downstream collection size (the
+    /// `lists(integers(min_size=n))` flat-map pattern). When that
+    /// happens but the lowered candidate isn't directly interesting, we
+    /// try splicing out spans / nodes after the integer to recover an
+    /// interesting (shorter) candidate.
+    ///
+    /// Non-integer nodes are deferred to the existing per-type passes —
+    /// the unified driver only adds value for integers.
+    pub(crate) fn minimize_individual_choices(&mut self) {
+        let mut i = 0;
+        while i < self.current_nodes.len() {
+            let node = self.current_nodes[i].clone();
+            if node.was_forced {
+                i += 1;
+                continue;
+            }
+            let (ic, current_val) = match (&node.kind, &node.value) {
+                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), *v),
+                _ => {
+                    i += 1;
+                    continue;
+                }
+            };
+            let simplest = ic.simplest();
+            if current_val == simplest {
+                i += 1;
+                continue;
+            }
+
+            // Phase 1: regular shrink target — bin_search the integer
+            // toward simplest, accepting any candidate that consider()
+            // approves.
+            let initial_key = sort_key(&self.current_nodes);
+            bin_search_down(simplest, current_val, &mut |v| {
+                self.replace(&HashMap::from([(i, ChoiceValue::Integer(v))]))
+            });
+            if sort_key(&self.current_nodes) < initial_key {
+                // Made progress; move on.
+                i += 1;
+                continue;
+            }
+
+            // Phase 2: lower by exactly one, peek at the realised
+            // actual_nodes for misalignment + size-dependency.
+            //
+            // Re-read current_nodes since `bin_search_down` may have
+            // accepted candidates that shortened the sequence.  The
+            // outer `while i < self.current_nodes.len()` guard means
+            // `i` is still in range when we reach this point.
+            debug_assert!(i < self.current_nodes.len());
+            let original_len = self.current_nodes.len();
+            // Lower-by-one in the direction of simplest.
+            let towards = if current_val > simplest {
+                current_val - 1
+            } else {
+                current_val + 1
+            };
+            let mut lowered = self.current_nodes.clone();
+            lowered[i] = lowered[i].with_value(ChoiceValue::Integer(towards));
+
+            let (_, actual_nodes, actual_spans) = (self.test_fn)(super::ShrinkRun::Full(&lowered));
+
+            // Misalignment-truncation retry. Even when the sequence
+            // length didn't change, the realised draw of a string/bytes
+            // node at `k > i` may be shorter than the candidate (the
+            // test re-drew that node with a smaller min_size dictated
+            // by the lowered integer). Retry with the candidate
+            // truncated to the realised length.
+            //
+            // Runs independent of the size-dependency / deletion
+            // fallback below.
+            let mut misalignment_handled = false;
+            for k in (i + 1)..lowered.len().min(actual_nodes.len()) {
+                let cand = &lowered[k];
+                let actual_val = &actual_nodes[k].value;
+                let retry_value = match (&cand.value, actual_val) {
+                    (ChoiceValue::String(c), ChoiceValue::String(a)) if c.len() > a.len() => {
+                        Some(ChoiceValue::String(c[..a.len()].to_vec()))
+                    }
+                    (ChoiceValue::Bytes(c), ChoiceValue::Bytes(a)) if c.len() > a.len() => {
+                        Some(ChoiceValue::Bytes(c[..a.len()].to_vec()))
+                    }
+                    _ => None,
+                };
+                if let Some(rv) = retry_value {
+                    let mut candidate = lowered.clone();
+                    candidate[k] = candidate[k].with_value(rv);
+                    if self.consider(&candidate) && sort_key(&self.current_nodes) < initial_key {
+                        misalignment_handled = true;
+                        break;
+                    }
+                }
+            }
+            if misalignment_handled {
+                i += 1;
+                continue;
+            }
+
+            // Size-dependency fallback only applies when the realised
+            // run truncated the trailing sequence.
+            if actual_nodes.len() >= original_len || actual_nodes.len() <= i + 1 {
+                i += 1;
+                continue;
+            }
+
+            // Try deleting each span that starts after i.
+            let mut shrank = false;
+            for span_idx in 0..actual_spans.len() {
+                let span = &actual_spans[span_idx];
+                if span.start <= i || span.end > actual_nodes.len() || span.end <= span.start {
+                    continue;
+                }
+                let mut candidate: Vec<_> = actual_nodes[..span.start].to_vec();
+                candidate.extend_from_slice(&actual_nodes[span.end..]);
+                if self.consider(&candidate) && sort_key(&self.current_nodes) < initial_key {
+                    shrank = true;
+                    break;
+                }
+            }
+
+            if !shrank {
+                // Try deleting individual nodes after i.
+                for j in i + 1..actual_nodes.len() {
+                    let mut candidate: Vec<_> = actual_nodes[..j].to_vec();
+                    candidate.extend_from_slice(&actual_nodes[j + 1..]);
+                    if self.consider(&candidate) && sort_key(&self.current_nodes) < initial_key {
+                        break;
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
+
+    /// Adaptively delete `n` consecutive nodes at every position, with
+    /// `find_integer` powering the repeat-count probe.
+    ///
+    /// Walks each starting index `i`, tries deleting `[i, i+n)`; if that
+    /// lands, walks left to find the start of a contiguous deletable
+    /// region and then `find_integer`s the largest repeat count that
+    /// still keeps the candidate interesting.
+    ///
+    /// Each find_integer probe runs against a fixed snapshot taken when
+    /// the probe started, so the repeat semantics are stable regardless
+    /// of intervening shrink-target updates.
+    ///
+    /// This is `delete_chunks` rewritten as five named passes — one for
+    /// each `n in 1..=5` — and gives O(log k) test-function calls when
+    /// a long deletable region exists, vs. the linear O(k) of the legacy
+    /// loop. `delete_chunks` is kept alongside as the native fallback.
+    pub(crate) fn node_program(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
+        let mut i = 0;
+        while i + n <= self.current_nodes.len() {
+            // First try a single application at i against the current
+            // snapshot.
+            let snapshot = self.current_nodes.clone();
+            if !self.run_node_program(&snapshot, i, n, 1) {
+                i += 1;
+                continue;
+            }
+            // Walk left as far as the program still applies, against a
+            // fresh snapshot (the success may have shrunk the
+            // sequence).
+            let snapshot = self.current_nodes.clone();
+            let starting = i.min(snapshot.len());
+            let left_offset = find_integer(|k| {
+                if k * n > starting {
+                    return false;
+                }
+                let pos = starting - k * n;
+                self.run_node_program(&snapshot, pos, n, 1)
+            });
+            let start = starting.saturating_sub(left_offset * n);
+
+            // Adaptively grow the repeat count from `start`, again
+            // against a fresh snapshot.
+            let snapshot = self.current_nodes.clone();
+            find_integer(|k| self.run_node_program(&snapshot, start, n, k));
+
+            // Advance past the region we just consumed.  Moving forward
+            // by `n` guarantees progress on the next outer iteration.
+            i = start.saturating_add(n);
+        }
+    }
+
+    /// Apply the "delete n consecutive nodes" program `repeats` times at
+    /// position `i` of `original`, then ask `consider` whether the
+    /// resulting candidate is still interesting *and* an improvement.
+    ///
+    /// The deletion always operates on the supplied `original` snapshot,
+    /// so repeat counts are well-defined regardless of intermediate
+    /// shrink-target updates.
+    fn run_node_program(
+        &mut self,
+        original: &[ChoiceNode],
+        i: usize,
+        program_len: usize,
+        repeats: usize,
+    ) -> bool {
+        // `find_integer` starts probing at `n = 1`, so callers never
+        // ask for zero-repeat applications.  A debug_assert documents
+        // the precondition.
+        debug_assert!(repeats > 0);
+        let total_delete = program_len.saturating_mul(repeats);
+        if i + total_delete > original.len() {
+            return false;
+        }
+        let mut attempt = original[..i].to_vec();
+        attempt.extend_from_slice(&original[i + total_delete..]);
+        let initial_key = sort_key(&self.current_nodes);
+        self.consider(&attempt) && sort_key(&self.current_nodes) < initial_key
+    }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_minimize_individual_choices_tests.rs"]
+mod minimize_individual_choices_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_node_program_tests.rs"]
+mod node_program_tests;

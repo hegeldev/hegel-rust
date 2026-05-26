@@ -1,8 +1,8 @@
-// Core types for the native Hypothesis-style test engine.
+// Core types for the native test engine.
 //
 // Split into submodules:
 //   choices     — choice types (ChoiceKind, ChoiceNode, ChoiceValue, etc.)
-//   float_index — Hypothesis float lex ordering (float_to_index, index_to_float)
+//   float_index — float lex ordering (float_to_index, index_to_float)
 //   state       — NativeTestCase, ManyState, NativeVariables, Span
 
 pub(crate) mod choices;
@@ -13,13 +13,17 @@ pub use choices::{
     StringChoice, sort_key,
 };
 pub use float_index::{float_to_index, index_to_float};
-pub use state::{ManyState, NativeTestCase, NativeVariables, Span};
+pub use state::{ManyState, NativeTestCase, NativeVariables, Span, Spans};
 
 /// Maximum number of choices a single test case can make.
 pub const BUFFER_SIZE: usize = 8 * 1024;
 
-/// Maximum iterations of the outer shrink loop.
-pub const MAX_SHRINK_ITERATIONS: usize = 500;
-
 /// Probability of drawing a boundary/special value per special candidate.
 pub const BOUNDARY_PROBABILITY: f64 = 0.01;
+
+/// Hard cap on the number of successful shrink improvements per
+/// counterexample. Once the shrinker has accepted this many
+/// strictly-smaller candidates, further `consider` / `probe` calls
+/// short-circuit so the runner doesn't get stuck chasing diminishing
+/// returns on pathological inputs.
+pub const MAX_SHRINKS: usize = 500;

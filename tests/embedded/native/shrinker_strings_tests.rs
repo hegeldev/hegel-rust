@@ -1,4 +1,4 @@
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, StringChoice};
+use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans, StringChoice};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::shrinker::Shrinker;
 
@@ -21,10 +21,11 @@ fn string_node(value: Vec<u32>, min_codepoint: u32, max_codepoint: u32) -> Choic
 fn accepting_shrinker(nodes: Vec<ChoiceNode>) -> Shrinker<'static> {
     Shrinker::with_probe(
         Box::new(|run| match run {
-            crate::native::shrinker::ShrinkRun::Full(nodes) => (true, nodes.to_vec()),
-            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new()),
+            crate::native::shrinker::ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         nodes,
+        Spans::new(),
     )
 }
 
@@ -76,11 +77,12 @@ fn redistribute_string_pair_partial_move_triggers_bin_search() {
                     nodes.get(1).map(|n| &n.value),
                     Some(ChoiceValue::String(s)) if s.len() <= 3
                 );
-                (t_ok, nodes.to_vec())
+                (t_ok, nodes.to_vec(), Spans::new())
             }
-            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new()),
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
+        Spans::new(),
     );
     shrinker.redistribute_string_pairs();
     match &shrinker.current_nodes[1].value {
@@ -132,11 +134,12 @@ fn shrink_strings_duplicate_pass_bin_search_skips_after_val_eliminated() {
                             && s[0] == s[1]
                             && (s[0] == 100 || s[0] == 200)
                 );
-                (accept, nodes.to_vec())
+                (accept, nodes.to_vec(), Spans::new())
             }
-            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new()),
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
+        Spans::new(),
     );
     shrinker.shrink_strings();
     match &shrinker.current_nodes[0].value {
@@ -161,11 +164,12 @@ fn shrink_strings_semantic_candidate_falls_back_to_nfd_base_in_range() {
                         if s.len() == 1
                             && (b'A' as u32..=b'Z' as u32).contains(&s[0])
                 );
-                (accept, nodes.to_vec())
+                (accept, nodes.to_vec(), Spans::new())
             }
-            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new()),
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
+        Spans::new(),
     );
     shrinker.shrink_strings();
     match &shrinker.current_nodes[0].value {

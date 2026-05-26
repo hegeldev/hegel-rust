@@ -210,10 +210,8 @@ fn test_dictionary_minimizes_values() {
 
 #[test]
 fn test_minimize_multi_key_dicts() {
-    // Python's `gs.booleans().map(str)` produces "True"/"False" because that's
-    // what `str(bool)` yields. Rust's `bool::to_string` produces "true"/"false".
-    // The shrink behaviour is the same: minimal shrinks to a single entry with
-    // the bool=false key (whatever string it stringifies to).
+    // `bool::to_string` produces "true"/"false". The shrink should reach a
+    // single entry with the bool=false key.
     let result = minimal(
         gs::hashmaps(gs::booleans().map(|b| b.to_string()), gs::booleans()),
         |x: &HashMap<String, bool>| !x.is_empty(),
@@ -368,8 +366,7 @@ fn test_unique_list_shrinks_using_negative_values() {
     // Unique signed integer lists should shrink using negative values when
     // that gives smaller absolute values. With max_size=5 and a length>=5
     // condition, the minimal representative interleaves around zero rather
-    // than walking 0,1,2,3,4. Upstream asserts on the choice-sequence
-    // values [0,1,-1,2,-2]; we assert the equivalent on the resulting list.
+    // than walking 0,1,2,3,4 (choice-sequence values [0,1,-1,2,-2]).
     let v = Minimal::new(
         gs::vecs(gs::integers::<i64>().min_value(-10).max_value(10))
             .max_size(5)
@@ -467,4 +464,49 @@ fn test_sort_stale_indices_after_punning() {
         .settings(Settings::new().test_cases(1000).database(None))
         .run();
     }));
+}
+
+// ----------------------------------------------------------------------------
+// Collection shrink-quality tests.
+// ----------------------------------------------------------------------------
+
+/// The shrinker should reduce to two distinct empty inner lists.
+#[test]
+fn test_multiple_empty_lists_are_independent() {
+    let xs = minimal(
+        gs::vecs(gs::vecs(gs::booleans()).max_size(0)),
+        |t: &Vec<Vec<bool>>| t.len() >= 2,
+    );
+    assert_eq!(xs.len(), 2);
+    assert!(xs[0].is_empty() && xs[1].is_empty());
+}
+
+/// The empty hashmap is the minimal counterexample for any-predicate;
+/// a `len >= 3` predicate shrinks to a 3-entry map with simplest keys
+/// and empty string values.
+#[test]
+fn test_dictionary_empty_is_minimal() {
+    let result = minimal(
+        gs::hashmaps(gs::integers::<i64>(), gs::text()),
+        |_: &HashMap<i64, String>| true,
+    );
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_dictionary_at_least_three_entries() {
+    let x = minimal(
+        gs::hashmaps(gs::integers::<i64>(), gs::text()),
+        |t: &HashMap<i64, String>| t.len() >= 3,
+    );
+    assert!(x.len() >= 3);
+    let values: HashSet<&String> = x.values().collect();
+    // All values shrink to the empty string.
+    assert_eq!(values.len(), 1);
+    assert_eq!(*values.iter().next().unwrap(), "");
+    for k in x.keys() {
+        if *k < 0 {
+            assert!(x.contains_key(&(*k + 1)));
+        }
+    }
 }

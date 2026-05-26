@@ -137,6 +137,56 @@ fn spans_children_returns_direct_children() {
     assert_eq!(children1, vec![3]);
 }
 
+// ── Spans::trivial ────────────────────────────────────────────────────────
+
+#[test]
+fn spans_trivial_handles_simplest_forced_and_oob() {
+    use crate::native::core::choices::{BooleanChoice, ChoiceKind, ChoiceNode, ChoiceValue};
+    let kind = ChoiceKind::Boolean(BooleanChoice);
+    let simplest = ChoiceNode {
+        kind: kind.clone(),
+        value: ChoiceValue::Boolean(false),
+        was_forced: false,
+    };
+    let interesting = ChoiceNode {
+        kind: kind.clone(),
+        value: ChoiceValue::Boolean(true),
+        was_forced: false,
+    };
+    let forced_interesting = ChoiceNode {
+        kind,
+        value: ChoiceValue::Boolean(true),
+        was_forced: true,
+    };
+
+    let mut spans = Spans::new();
+    spans.push(Span {
+        start: 0,
+        end: 2,
+        label: "outer".to_string(),
+        depth: 0,
+        parent: None,
+        discarded: false,
+    });
+
+    // Both children simplest → trivial.
+    let nodes = vec![simplest.clone(), simplest.clone()];
+    assert!(spans.trivial(0, &nodes));
+
+    // A non-forced non-simplest child → not trivial.
+    let nodes = vec![simplest.clone(), interesting.clone()];
+    assert!(!spans.trivial(0, &nodes));
+
+    // A forced child counts as trivial even if its value isn't simplest.
+    let nodes = vec![simplest, forced_interesting];
+    assert!(spans.trivial(0, &nodes));
+
+    // Out-of-range span index returns false.
+    let other = Spans::new();
+    let empty: Vec<ChoiceNode> = Vec::new();
+    assert!(!other.trivial(7, &empty));
+}
+
 // ── Spans::into_vec ───────────────────────────────────────────────────────
 
 #[test]
@@ -646,12 +696,10 @@ fn draw_float_half_bounded_below_explores_finite_range() {
 
 // ── NativeTestCase::for_simplest ─────────────────────────────────────────────
 //
-// Mirrors the `cached_test_function((ChoiceTemplate("simplest", count=None),))`
-// pre-trial that Hypothesis's engine runs at the head of the Generate phase
-// (engine.py::generate_new_examples). Every draw must return the kind's
-// `simplest()` value — `shrink_towards` clamped to range for integers, 0.0
-// for floats, false for booleans, the empty / lower-bound size for bytes
-// and strings.
+// The all-simplest pre-trial run at the head of the Generate phase. Every
+// draw must return the kind's `simplest()` value — `shrink_towards`
+// clamped to range for integers, 0.0 for floats, false for booleans, the
+// empty / lower-bound size for bytes and strings.
 
 #[test]
 fn for_simplest_draws_integer_at_shrink_target_when_in_range() {
@@ -679,9 +727,9 @@ fn for_simplest_draws_integer_clamped_to_range_when_target_above() {
 
 #[test]
 fn for_simplest_propagates_across_many_draws() {
-    // The mode applies to every draw, not just the first. This is what makes
-    // Hypothesis-style "midnight = all four time components are zero" findable
-    // on a single pre-trial.
+    // The mode applies to every draw, not just the first. This is what
+    // makes "midnight = all four time components are zero" findable on
+    // a single pre-trial.
     let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
     for _ in 0..10 {
         assert_eq!(tc.draw_integer(0, 99).ok().unwrap(), 0);

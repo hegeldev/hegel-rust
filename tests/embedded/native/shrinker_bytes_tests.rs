@@ -1,5 +1,5 @@
 use super::*;
-use crate::native::core::ChoiceNode;
+use crate::native::core::{ChoiceNode, Spans};
 use crate::native::shrinker::Shrinker;
 
 fn bytes_node(value: Vec<u8>, min_size: usize, max_size: usize) -> ChoiceNode {
@@ -13,10 +13,11 @@ fn bytes_node(value: Vec<u8>, min_size: usize, max_size: usize) -> ChoiceNode {
 fn accepting_shrinker(nodes: Vec<ChoiceNode>) -> Shrinker<'static> {
     Shrinker::with_probe(
         Box::new(|run| match run {
-            crate::native::shrinker::ShrinkRun::Full(nodes) => (true, nodes.to_vec()),
-            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new()),
+            crate::native::shrinker::ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         nodes,
+        Spans::new(),
     )
 }
 
@@ -55,11 +56,12 @@ fn shrink_bytes_linear_scan_breaks_when_replace_shortens_below_sz() {
                     nodes.first().map(|n| &n.value),
                     Some(ChoiceValue::Bytes(b)) if b.as_slice() == [7]
                 );
-                (is_singleton_seven, nodes.to_vec())
+                (is_singleton_seven, nodes.to_vec(), Spans::new())
             }
-            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new()),
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
+        Spans::new(),
     );
     shrinker.shrink_bytes();
     match &shrinker.current_nodes[0].value {
@@ -91,11 +93,12 @@ fn redistribute_bytes_pair_partial_move_triggers_bin_search() {
                     nodes.get(1).map(|n| &n.value),
                     Some(ChoiceValue::Bytes(b)) if b.len() <= 3
                 );
-                (t_ok, nodes.to_vec())
+                (t_ok, nodes.to_vec(), Spans::new())
             }
-            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new()),
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
+        Spans::new(),
     );
     shrinker.redistribute_bytes_pairs();
     match &shrinker.current_nodes[1].value {
