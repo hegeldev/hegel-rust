@@ -1,6 +1,4 @@
 //! Unit tests for `Shrinker::initial_coarse_reduction`.
-//!
-//! Hypothesis reference: `shrinker.py:689-801`.
 
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
@@ -141,11 +139,10 @@ fn initial_coarse_reduction_skips_forced_node() {
     assert_eq!(int_value(&shrinker.current_nodes[0]), 5);
 }
 
-/// Port of Hypothesis `test_shrinking_one_of_with_same_shape`
-/// (`tests/conjecture/test_shrinker.py`).  Initial counterexample
-/// `(1, 0)`: predicate accepts iff first integer is 1.  When the
-/// branch chosen by the integer doesn't change the trailing shape,
-/// `initial_coarse_reduction` should leave the pair untouched.
+/// Initial counterexample `(1, 0)`: predicate accepts iff first integer
+/// is 1. When the branch chosen by the integer doesn't change the
+/// trailing shape, `initial_coarse_reduction` should leave the pair
+/// untouched.
 #[test]
 fn initial_coarse_reduction_keeps_same_shape_one_of() {
     let initial = vec![small_int_node(1), small_int_node(0)];

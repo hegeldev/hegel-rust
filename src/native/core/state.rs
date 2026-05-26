@@ -18,7 +18,7 @@ use crate::native::statistics::{
     Distribution, LogStudentTDistribution, PiecewiseDistribution, UniformDistribution,
 };
 
-/// State for a variable-length collection (port of Hypothesis's `many` class).
+/// State for a variable-length collection.
 pub struct ManyState {
     pub min_size: usize,
     pub max_size: f64,
@@ -41,9 +41,9 @@ impl ManyState {
     }
 }
 
-/// Probability of extending a length draw beyond its current size. Port of
-/// Hypothesis's `many()`: length clusters around an `average_size` derived
-/// from `min(max(min_size * 2, min_size + 5), 0.5 * (min_size + max_size))`.
+/// Probability of extending a length draw beyond its current size. Length
+/// clusters around an `average_size` derived from
+/// `min(max(min_size * 2, min_size + 5), 0.5 * (min_size + max_size))`.
 pub(crate) fn length_p_continue(min_size: usize, max_size: Option<usize>) -> f64 {
     let max_f = max_size.map_or(f64::INFINITY, |n| n as f64);
     let min_f = min_size as f64;
@@ -60,9 +60,9 @@ pub(crate) fn length_p_continue(min_size: usize, max_size: Option<usize>) -> f64
     }
 }
 
-/// Interesting integer constants seeded from Hypothesis's GLOBAL_CONSTANTS
-/// (providers.py): powers of 2 (2^16..2^65), powers of 10 (10^5..10^19),
-/// factorials (9!..20!), primorials — plus their ±1 neighbours and negations.
+/// Interesting integer constants: powers of 2 (2^16..2^65), powers of 10
+/// (10^5..10^19), factorials (9!..20!), primorials — plus their ±1
+/// neighbours and negations.
 static GLOBAL_CONSTANTS_INTEGERS: LazyLock<Vec<i128>> = LazyLock::new(|| {
     let mut base: Vec<i128> = Vec::new();
     // Powers of 2 (2^16 to 2^65)
@@ -110,9 +110,6 @@ static GLOBAL_CONSTANTS_INTEGERS: LazyLock<Vec<i128>> = LazyLock::new(|| {
 /// Drawing length uniformly from `[min_size, max_size]` produces huge
 /// values when `max_size` is large; instead, the size follows a geometric
 /// variate with stop probability derived from [`length_p_continue`].
-///
-/// Hypothesis: `conjecture/providers.py::HypothesisProvider.draw_bytes`
-/// (and `draw_string`).
 fn many_draw_length(rng: &mut SmallRng, min_size: usize, max_size: usize) -> usize {
     if min_size == max_size {
         return min_size;
@@ -129,9 +126,7 @@ fn many_draw_length(rng: &mut SmallRng, min_size: usize, max_size: usize) -> usi
 }
 
 /// The shared integer distribution used by [`biased_integer_sample`] as
-/// the non-nasty fallback. Hypothesis: `INTEGERS_DISTRIBUTION` in
-/// `conjecture/providers.py` (PR HypothesisWorks/hypothesis#4728).
-/// A piecewise distribution composed of:
+/// the non-nasty fallback. A piecewise distribution composed of:
 ///
 ///   * uniform on `[-256, 256]` for the central core, and
 ///   * a log-Student's-t (scale_bits = 13, df = 2) for the heavy outer
@@ -152,8 +147,7 @@ static INTEGERS_DISTRIBUTION: LazyLock<
 });
 
 /// Draw an integer in `[min_value, max_value]` from
-/// [`INTEGERS_DISTRIBUTION`] restricted to that range. Hypothesis:
-/// `HypothesisProvider._draw_integer_from_distribution`.
+/// [`INTEGERS_DISTRIBUTION`] restricted to that range.
 ///
 /// Falls back to a plain uniform draw when the CDF window across the
 /// requested range is too narrow for inverse-CDF sampling to be stable.
@@ -165,8 +159,8 @@ fn integer_sample_from_distribution(min_value: i128, max_value: i128, rng: &mut 
     // `clamp` mops up any out-of-range round-off so the contract holds.
     let lo = dist.cdf(min_value as f64 - 0.5);
     let hi = dist.cdf(max_value as f64 + 0.5);
-    // Bound from Hypothesis: a tighter CDF window than ~1e-13 leaves the
-    // inverse-CDF nothing to spread samples across, so collapse to uniform.
+    // A tighter CDF window than ~1e-13 leaves the inverse-CDF nothing to
+    // spread samples across, so collapse to uniform.
     if hi - lo < 1e-13 {
         return rng.random_range(min_value..=max_value);
     }
@@ -186,8 +180,7 @@ fn integer_sample_from_distribution(min_value: i128, max_value: i128, rng: &mut 
 ///
 /// Implements the "nasty value" boost used by both the
 /// [`NativeTestCase::draw_integer`] code path and the data-tree
-/// [`pick_non_exhausted_value`](crate::native::conjecture_runner) path
-/// during novel-prefix walks. Sharing the implementation keeps the two
+/// novel-prefix walk. Sharing the implementation keeps the two
 /// random-generation routes consistent: when `generate_novel_prefix`
 /// chooses a child to recurse into, it now picks special values
 /// (0, 1, ±powers-of-two, factorials, …) with the same frequency as
@@ -378,9 +371,8 @@ pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut SmallRng) -> Vec<u
     (0..len).map(|_| rng.random::<u8>()).collect()
 }
 
-/// Interesting string constants seeded from Hypothesis's GLOBAL_CONSTANTS
-/// (providers.py `_constant_strings`): logic keywords, numeric edge cases,
-/// common Unicode stress strings.  Stored as codepoint vectors so they can
+/// Interesting string constants: logic keywords, numeric edge cases,
+/// common Unicode stress strings. Stored as codepoint vectors so they can
 /// be validated against and inserted into the draw_string nasty pool.
 static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
     let strings: &[&str] = &[
@@ -473,9 +465,8 @@ static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
 /// the kind's constraint, drawing from it with probability proportional to
 /// `BOUNDARY_PROBABILITY × |nasty|`. Otherwise picks a small 1–10 codepoint
 /// sub-alphabet from the kind's [`IntervalSet`] (biased toward the
-/// first 256 shrink-order positions for large alphabets, matching
-/// `HypothesisProvider.draw_string`'s ASCII bias) and samples a
-/// length-`many_draw_length` string from it.
+/// first 256 shrink-order positions for large alphabets, an ASCII bias)
+/// and samples a length-`many_draw_length` string from it.
 ///
 /// The sub-alphabet step concentrates draws into a small character set so
 /// that string-shape bugs (repeated characters, ordering, run-length) get
@@ -545,8 +536,6 @@ pub(crate) fn codepoints_to_string(cps: &[u32]) -> String {
 }
 
 /// A pool of variable IDs for stateful testing.
-///
-/// Port of hegel-core's `Variables` class from server.py.
 pub struct NativeVariables {
     last_id: i128,
     variables: Vec<i128>,
@@ -597,8 +586,7 @@ impl NativeVariables {
 ///
 /// Recorded to enable span-mutation exploration (see `try_span_mutation`)
 /// and to expose the structure of a test case to the shrinker, mutator,
-/// and assertion-style tests.  Mirrors Hypothesis's `Span` in
-/// `internal/conjecture/data.py`.
+/// and assertion-style tests.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Span {
     pub start: usize,
@@ -613,17 +601,14 @@ pub struct Span {
 }
 
 /// Maximum nested span depth before the engine marks the test case
-/// `Status::Invalid`.  Mirrors Hypothesis's
-/// `internal/conjecture/data.py::MAX_DEPTH`.
+/// `Status::Invalid`.
 pub const MAX_DEPTH: u32 = 100;
 
 /// A tag identifying a structural-coverage class for a span label.
 ///
-/// Mirrors Hypothesis's `StructuralCoverageTag` in
-/// `internal/conjecture/data.py`.  Two tags compare equal iff they
-/// were produced from the same label, and [`structural_coverage`]
-/// interns them so that callers also get pointer-equal results for
-/// equal labels.
+/// Two tags compare equal iff they were produced from the same label, and
+/// [`structural_coverage`] interns them so that callers also get
+/// pointer-equal results for equal labels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct CoverageTag {
     pub label: u64,
@@ -635,8 +620,7 @@ static STRUCTURAL_COVERAGE_CACHE: LazyLock<Mutex<HashMap<u64, &'static CoverageT
 /// Look up (or insert) the [`CoverageTag`] for `label`.
 ///
 /// Repeated calls with the same `label` return the same `&'static`
-/// reference; this is the Rust analog of Hypothesis's
-/// `STRUCTURAL_COVERAGE_CACHE` interning in `data.py`.
+/// reference.
 pub fn structural_coverage(label: u64) -> &'static CoverageTag {
     let mut cache = STRUCTURAL_COVERAGE_CACHE.lock().unwrap();
     cache
@@ -645,13 +629,10 @@ pub fn structural_coverage(label: u64) -> &'static CoverageTag {
 }
 
 /// A collection of spans recorded during a single test case, with
-/// Python-style indexing semantics on top of [`Vec<Span>`].
+/// wrap-around signed indexing semantics on top of [`Vec<Span>`].
 ///
 /// Indexing accepts negative indices (`-1` is the last span) and panics
-/// with an "out of range" message on out-of-bounds access, matching the
-/// `IndexError` raised by Python's [`Spans`][1].
-///
-/// [1]: https://github.com/HypothesisWorks/hypothesis/blob/master/hypothesis-python/src/hypothesis/internal/conjecture/data.py
+/// with an "out of range" message on out-of-bounds access.
 #[derive(Clone, Debug, Default)]
 pub struct Spans {
     inner: Vec<Span>,
@@ -685,12 +666,12 @@ impl Spans {
     }
 
     /// Access by raw (non-negative) index, returning `None` on
-    /// out-of-bounds.  Mirrors `Vec::get`.
+    /// out-of-bounds. Analogous to `Vec::get`.
     pub fn get(&self, i: usize) -> Option<&Span> {
         self.inner.get(i)
     }
 
-    /// Access by signed index (Python-style: `-1` = last).  Returns
+    /// Access by signed index with wrap-around (`-1` = last).  Returns
     /// `None` for any out-of-range index.
     pub fn get_signed(&self, i: i64) -> Option<&Span> {
         let n = self.inner.len() as i64;
@@ -786,8 +767,6 @@ impl std::ops::Index<i64> for Spans {
 /// conclusion.  All methods have default no-op implementations so
 /// concrete observers only need to override the callbacks they care
 /// about.
-///
-/// Mirrors `hypothesis.internal.conjecture.data.DataObserver`.
 pub trait DataObserver: Send {
     fn draw_boolean(&mut self, _value: bool, _was_forced: bool) {}
     fn draw_integer(&mut self, _value: i128, _was_forced: bool) {}
@@ -797,9 +776,6 @@ pub trait DataObserver: Send {
     fn conclude_test(&mut self, _status: Status, _origin: Option<InterestingOrigin>) {}
 }
 
-/// Snapshot of a completed `NativeTestCase`'s observable state.
-///
-/// Mirrors the relevant subset of Hypothesis's `ConjectureResult`
 /// A test case backed by a sequence of typed choices.
 ///
 /// During random generation, choices are drawn from the RNG.
@@ -812,9 +788,9 @@ pub struct NativeTestCase {
     pub nodes: Vec<ChoiceNode>,
     pub status: Option<Status>,
     /// Set to `true` by [`Self::freeze`] on the first call; subsequent calls
-    /// are no-ops.  Mirrors `ConjectureData.frozen` in Python, which is a
-    /// dedicated boolean so that `conclude_test` can set `self.status` before
-    /// calling `freeze()` without triggering the idempotency early-return.
+    /// are no-ops. A dedicated boolean (rather than checking `status`) lets
+    /// `conclude_test` set `self.status` before calling `freeze()` without
+    /// triggering the idempotency early-return.
     frozen: bool,
     pub collections: HashMap<i64, ManyState>,
     next_collection_id: i64,
@@ -825,40 +801,36 @@ pub struct NativeTestCase {
     /// `stop_span` call.
     pub span_stack: Vec<usize>,
     /// True iff any `stop_span(discard=true)` has been observed during this test
-    /// case. Mirrors Hypothesis's `ConjectureData.has_discards`: filters that
-    /// retry mark the rejected attempts as discarded, which the shrinker uses
-    /// to prioritise removing them.
+    /// case. Filters that retry mark the rejected attempts as discarded, which
+    /// the shrinker uses to prioritise removing them.
     pub has_discards: bool,
     /// Structural-coverage tags accumulated by closing non-discarded
-    /// spans.  Mirrors `ConjectureData.tags` in `data.py`: when a span
-    /// closes without `discard`, every label collected by it (including
-    /// its non-discarded descendants) is added here as a
-    /// [`structural_coverage`] tag.  Discarded spans drop their labels
+    /// spans. When a span closes without `discard`, every label collected
+    /// by it (including its non-discarded descendants) is added here as a
+    /// [`structural_coverage`] tag. Discarded spans drop their labels
     /// (and their descendants' labels) on the floor.
     pub tags: HashSet<&'static CoverageTag>,
     /// Per-open-span sets of labels awaiting promotion into [`Self::tags`].
     ///
     /// Each `start_span` pushes a fresh `{label}` frame; `stop_span`
     /// pops it and either merges the frame into its parent (non-discard)
-    /// or discards it (discard).  When the outermost frame closes
+    /// or discards it (discard). When the outermost frame closes
     /// without discard, its labels are converted to [`CoverageTag`]s
-    /// and added to `tags`.  Mirrors `ConjectureData.labels_for_structure_stack`.
+    /// and added to `tags`.
     labels_for_structure_stack: Vec<HashSet<u64>>,
     /// Optional observer notified after each draw and on conclusion.
     /// Set by [`Self::for_choices`] and called by each draw method and
-    /// by [`Self::freeze`].  Mirrors `ConjectureData._observer`.
+    /// by [`Self::freeze`].
     observer: Option<Box<dyn DataObserver>>,
     /// The interesting origin set by [`Self::conclude_test`], if any.
     /// `None` for test cases concluded by [`Self::freeze`] directly
-    /// (`Status::Valid`).  Mirrors `ConjectureData.interesting_origin`.
+    /// (`Status::Valid`).
     interesting_origin: Option<InterestingOrigin>,
     /// Optional template applied to every draw past the explicit `prefix`.
-    /// Mirrors the trailing `ChoiceTemplate` in `prefix + (template,)` from
-    /// Hypothesis's `engine.py::generate_new_examples`.  `count` is mutated
-    /// in-place as draws consume the template; when `count` reaches zero
-    /// the next draw is overrun (`Status::EarlyStop` + `StopTest`).
-    /// `None` means "no template" — draws past the prefix go to `rng` or
-    /// panic, as before.
+    /// `count` is mutated in-place as draws consume the template; when
+    /// `count` reaches zero the next draw is overrun
+    /// (`Status::EarlyStop` + `StopTest`). `None` means "no template" —
+    /// draws past the prefix go to `rng` or panic, as before.
     trailing_template: Option<ChoiceTemplate>,
 }
 
@@ -868,9 +840,7 @@ impl NativeTestCase {
     }
 
     /// Replay `choices` in order, then for every further draw resolve via
-    /// `trailing` if set.  Mirrors `ConjectureData.for_choices(prefix)` from
-    /// `hypothesis.internal.conjecture.data`, where `prefix` is
-    /// `choices + (trailing,)` when a trailing template is supplied.
+    /// `trailing` if set.
     ///
     /// `max_size` is the upper bound on the total number of choices the test
     /// case will make.  It is floored to `choices.len()` so a too-tight value
@@ -905,9 +875,7 @@ impl NativeTestCase {
     }
 
     /// A test case where every draw past the explicit prefix returns
-    /// `kind.simplest()` of the requested choice kind.  Mirrors Hypothesis's
-    /// `cached_test_function((ChoiceTemplate("simplest", count=None),))` at
-    /// the head of `engine.py::generate_new_examples`: a deterministic
+    /// `kind.simplest()` of the requested choice kind. A deterministic
     /// all-simplest probe of the choice tree's "left leaf" before random
     /// sampling begins.
     pub fn for_simplest(max_size: usize) -> Self {
@@ -922,9 +890,6 @@ impl NativeTestCase {
 
     /// Construct a `NativeTestCase` that replays `choices` in order,
     /// notifying `observer` after each draw and on conclusion.
-    ///
-    /// Mirrors `ConjectureData.for_choices(choices, observer=observer)`
-    /// from `hypothesis.internal.conjecture.data`.
     pub fn for_choices(
         choices: &[ChoiceValue],
         prefix_nodes: Option<&[ChoiceNode]>,
@@ -937,9 +902,7 @@ impl NativeTestCase {
     /// draws randomly from `rng` for subsequent positions, up to a total of
     /// `max_size` choices.
     ///
-    /// Used by `mutate_and_shrink`; Hypothesis's equivalent
-    /// `ConjectureData(prefix=..., random=..., max_size=...)`
-    /// construction in `shrinking/mutation.py`.
+    /// Used by `mutate_and_shrink`.
     pub fn for_probe(prefix: &[ChoiceValue], rng: SmallRng, max_size: usize) -> Self {
         Self::for_choices_and_template(prefix, None, None, max_size, None).with_random(rng)
     }
@@ -1017,12 +980,11 @@ impl NativeTestCase {
     /// no terminal status was set during the run.
     ///
     /// Idempotent: calling `freeze()` on an already-frozen test case is
-    /// a no-op, mirroring `ConjectureData.freeze`'s early return on
-    /// `self.frozen` in `conjecture/data.py`.
+    /// a no-op (early return on `self.frozen`).
     ///
     /// Closes any currently-open spans, setting their `end` to the final
-    /// choice position (matching Hypothesis's behaviour where freeze
-    /// implicitly closes intervals left open by an exception or overrun).
+    /// choice position, so that freeze implicitly closes intervals left
+    /// open by an exception or overrun.
     pub fn freeze(&mut self) {
         if self.frozen {
             return;
@@ -1254,8 +1216,7 @@ impl NativeTestCase {
     }
     fn pre_choice(&mut self) -> Result<(), StopTest> {
         // A test case can become frozen mid-execution when `start_span`
-        // exceeds `MAX_DEPTH` and sets `status = Some(Status::Invalid)`,
-        // mirroring Hypothesis's `mark_invalid` from `ConjectureData.draw`.
+        // exceeds `MAX_DEPTH` and sets `status = Some(Status::Invalid)`.
         // Subsequent draws must propagate `StopTest` so the test halts.
         if self.status.is_some() {
             return Err(StopTest);
@@ -1269,8 +1230,8 @@ impl NativeTestCase {
 
     /// Resolve a choice value from forced, prefix, or random.
     ///
-    /// Implements Hypothesis's punning logic for replaying choice
-    /// sequences whose schema has shifted across runs.
+    /// Implements punning logic for replaying choice sequences whose
+    /// schema has shifted across runs.
     fn resolve_choice(
         &mut self,
         _kind: &ChoiceKind,
@@ -1283,11 +1244,11 @@ impl NativeTestCase {
 
         let idx = self.nodes.len();
 
-        // Branch 1: replay from the concrete prefix.  When the prefix value's
+        // Branch 1: replay from the concrete prefix. When the prefix value's
         // recorded kind doesn't match the requested kind (e.g. a schema
         // shifted between runs), `prefix_nodes` carries the original kind so
-        // we can route to `simplest()` or `unit()` of the *new* kind —
-        // Hypothesis's "punning" logic.
+        // we can route to `simplest()` or `unit()` of the *new* kind — the
+        // "punning" logic.
         if idx < self.prefix.len() {
             let prefix_value = &self.prefix[idx];
             if validate(prefix_value) {
@@ -1301,12 +1262,10 @@ impl NativeTestCase {
             return Ok((if is_simplest { simplest() } else { unit() }, false));
         }
 
-        // Branch 2: trailing template (`prefix + (ChoiceTemplate, ...)` in
-        // Hypothesis).  Resolves every post-prefix draw to the template's
-        // kind, decrementing `count` if finite.  When `count` reaches zero
-        // the next draw marks overrun without producing a value — see the
-        // `ChoiceTemplate` docstring for the divergence from Hypothesis's
-        // literal off-by-one source.
+        // Branch 2: trailing template. Resolves every post-prefix draw to
+        // the template's kind, decrementing `count` if finite. When `count`
+        // reaches zero the next draw marks overrun without producing a
+        // value.
         if let Some(template) = self.trailing_template.as_mut() {
             if matches!(template.count, Some(0)) {
                 self.status = Some(Status::EarlyStop);

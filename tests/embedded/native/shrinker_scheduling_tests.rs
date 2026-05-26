@@ -1,6 +1,4 @@
 //! Unit tests for `Shrinker::fixate_shrink_passes`.
-//!
-//! Hypothesis reference: `shrinker.py:837-929`.
 
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
@@ -163,11 +161,10 @@ fn max_stall_grows_after_shrink() {
 
 #[test]
 fn shrink_terminates_when_stalled() {
-    // Port of Hypothesis `test_will_terminate_stalled_shrinks`
-    // (`tests/conjecture/test_shrinker.py`).  Set up a predicate that
-    // accepts everything (so every shrink is interesting) but never
-    // makes the sequence smaller — the shrinker should bounce off the
-    // stall guard and terminate within `1 + 2 * max_stall` calls.
+    // Set up a predicate that accepts everything (so every shrink is
+    // interesting) but never makes the sequence smaller — the shrinker
+    // should bounce off the stall guard and terminate within
+    // `1 + 2 * max_stall` calls.
     use std::cell::Cell;
     use std::rc::Rc;
     let calls = Rc::new(Cell::new(0_usize));
@@ -188,11 +185,9 @@ fn shrink_terminates_when_stalled() {
     // Lower max_stall so the test is fast.
     shrinker.max_stall = 200;
     shrinker.shrink();
-    // Closure invocation count capped near max_stall — `2 * max_stall`
-    // matches the Hypothesis expectation `shrinker.calls <= 1 + 2 *
-    // shrinker.max_stall`.  Bumped slightly to account for fixate's
-    // per-iteration max_stall growth (which the original Hypothesis
-    // assertion allows for too).
+    // Closure invocation count capped near max_stall —
+    // `shrinker.calls <= 1 + 2 * shrinker.max_stall`. Bumped slightly to
+    // account for fixate's per-iteration max_stall growth.
     assert!(
         calls.get() <= 2 + 4 * shrinker.max_stall,
         "shrinker did not terminate fast enough: {} calls, max_stall {}",
@@ -203,11 +198,10 @@ fn shrink_terminates_when_stalled() {
 
 #[test]
 fn fixate_passes_does_full_run_even_when_stalled() {
-    // Port of Hypothesis `test_will_let_fixate_shrink_passes_do_a_full_run_through`.
-    // Starting target [0, 1, 2, ..., 19] with a predicate that
-    // requires exactly that order, set max_stall low and hand 5
-    // node_program passes.  Every pass should get at least one call
-    // even though the stall guard fires repeatedly.
+    // Starting target [0, 1, 2, ..., 19] with a predicate that requires
+    // exactly that order, set max_stall low and hand 5 node_program
+    // passes. Every pass should get at least one call even though the
+    // stall guard fires repeatedly.
     let initial: Vec<ChoiceNode> = (0..20).map(int_node).collect();
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
@@ -264,9 +258,8 @@ fn fixate_shrink_passes_reorders_useful_passes_to_the_front() {
 #[test]
 fn fixate_emits_debug_per_pass_step_when_debug_set() {
     // With a debug callback installed, fixate_shrink_passes emits one
-    // "Trying shrink pass: <name>" message per pass step.  Mirrors the
-    // per-call visibility the user gets from Hypothesis at
-    // Verbosity::Debug.
+    // "Trying shrink pass: <name>" message per pass step — the per-call
+    // visibility the user gets at Verbosity::Debug.
     use std::cell::RefCell;
     use std::rc::Rc;
     let log = Rc::new(RefCell::new(Vec::<String>::new()));
@@ -324,9 +317,9 @@ fn fixate_emits_no_debug_when_no_callback_set() {
 
 #[test]
 fn shrink_emits_profile_report_when_debug_set() {
-    // After shrink() finishes, the shrinker emits a Hypothesis-style
-    // "Shrink pass profiling" report listing per-pass call counts split
-    // into useful (shrinks > 0) and useless buckets.
+    // After shrink() finishes, the shrinker emits a "Shrink pass
+    // profiling" report listing per-pass call counts split into useful
+    // (shrinks > 0) and useless buckets.
     use std::cell::RefCell;
     use std::rc::Rc;
     let log = Rc::new(RefCell::new(Vec::<String>::new()));
@@ -369,8 +362,8 @@ fn shrink_emits_profile_report_when_debug_set() {
 
 #[test]
 fn shrink_profile_reports_singular_call_unit() {
-    // Singular/plural pluralization mirrors Hypothesis's `s()` helper:
-    // "1 call" (no s), "2 calls" (with s).  We exercise both branches.
+    // Singular/plural pluralization: "1 call" (no s), "2 calls" (with s).
+    // We exercise both branches.
     use std::cell::RefCell;
     use std::rc::Rc;
     let log = Rc::new(RefCell::new(Vec::<String>::new()));

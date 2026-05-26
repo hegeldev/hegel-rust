@@ -51,20 +51,15 @@ const RANDOM_GENERATION_BATCH: u64 = 10;
 const SPAN_MUTATION_ATTEMPTS: usize = 5;
 
 /// Maximum number of consecutive filtered (assume()-failed) test cases before
-/// FilterTooMuch is reported. Mirrors Hypothesis's `max_invalid_draws`,
-/// scaled up slightly to be less sensitive to mild filtering.
+/// FilterTooMuch is reported.
 const FILTER_TOO_MUCH_THRESHOLD: u64 = 200;
 
 /// Cumulative wall-clock threshold across the generation phase before
 /// TooSlow fires.
 ///
-/// Hypothesis computes its equivalent threshold as `max(1s, 5 × deadline)`,
-/// which works out to 1s when the user has the default `deadline=200ms` set
-/// but 30s when the user sets `deadline=None`. Hegel-Rust deliberately
-/// doesn't have a `deadline` setting at all (tight timing on tests tends to
-/// be more trouble than it's worth in this ecosystem), which puts every
-/// Hegel run in the "deadline=None" regime — so the matching Hypothesis
-/// behaviour is the 30s threshold, not the 1s one.
+/// Hegel-Rust deliberately doesn't have a `deadline` setting (tight timing
+/// on tests tends to be more trouble than it's worth in this ecosystem),
+/// so 30s is a generous fixed budget rather than a per-deadline scaling.
 const TOO_SLOW_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Health checks (TooSlow / FilterTooMuch) are evaluated only while the run
@@ -128,11 +123,9 @@ fn run_main(
     // `Database::Unset` is the non-CI default (set by `Settings::new` in
     // `src/runner.rs`); it means "the user didn't pick, so use the
     // sensible default." For parity with the server backend (which
-    // forwards `Unset` and lets the server pick its own default) and
-    // with upstream Hypothesis (whose `DirectoryBasedExampleDatabase`
-    // defaults to `.hypothesis/examples` relative to cwd), the native
-    // default is `.hegel/examples` relative to cwd. `Disabled` is the
-    // explicit opt-out; `Path(p)` is the explicit choice.
+    // forwards `Unset` and lets the server pick its own default), the
+    // native default is `.hegel/examples` relative to cwd. `Disabled`
+    // is the explicit opt-out; `Path(p)` is the explicit choice.
     let db: Option<Box<dyn TestCaseDatabase>> = match &settings.database {
         Database::Path(p) => Some(Box::new(DirectoryTestCaseDatabase::new(p))),
         Database::Unset => Some(Box::new(DirectoryTestCaseDatabase::new(".hegel/examples"))),
@@ -144,15 +137,13 @@ fn run_main(
     let mut ctx = EngineCtx::new(run_case);
 
     // Local data tree used by the generation phase to drive `for_probe`
-    // toward unexplored prefixes (mirrors `NativeConjectureRunner`'s
-    // `DataTreeNode`).
+    // toward unexplored prefixes.
     let mut tree_root = crate::native::data_tree::DataTreeNode::default();
 
     // Per-origin tracking: each distinct panic site (file:line:col captured
     // by [`crate::run_lifecycle::run_test_case`]) gets its own shrunk
-    // counterexample. Mirrors Hypothesis's `interesting_examples` map and
-    // is what makes a single test that fails with several distinct bugs
-    // surface each one.
+    // counterexample. This is what makes a single test that fails with
+    // several distinct bugs surface each one.
     let mut interesting: HashMap<String, Vec<ChoiceNode>> = HashMap::new();
     let mut targeting = crate::native::targeting::TargetingState::new();
     let mut target_schedule = crate::native::targeting::TargetingSchedule::new(max_examples);
@@ -166,12 +157,10 @@ fn run_main(
 
     // --- Database replay phase ---
     //
-    // Mirrors `engine.py`'s reuse step: every stored value is replayed,
-    // not just the first interesting one.  A test that previously
-    // discovered N distinct bugs has N stored choice sequences in the
-    // DB; each must be replayed so each bug's shrunk counterexample
-    // re-surfaces in `interesting`.  Pre-A23 the loop broke on the
-    // first interesting result, silently losing the rest.
+    // Every stored value is replayed, not just the first interesting
+    // one. A test that previously discovered N distinct bugs has N
+    // stored choice sequences in the DB; each must be replayed so each
+    // bug's shrunk counterexample re-surfaces in `interesting`.
     //
     // `replay_aligned` tracks whether *every* interesting replay's
     // realised choice sequence matches the stored prefix length —
@@ -222,21 +211,19 @@ fn run_main(
 
     // --- Generation phase ---
     //
-    // Mirrors `engine.py::should_generate_more`: pre-bug we run until
-    // either the `max_examples` budget or the choice tree is exhausted;
-    // post-bug we keep running for a bounded extra window so that a test
-    // with multiple distinct failure origins surfaces all of them, not
-    // just the first one to fire.
+    // Pre-bug we run until either the `max_examples` budget or the choice
+    // tree is exhausted; post-bug we keep running for a bounded extra
+    // window so that a test with multiple distinct failure origins
+    // surfaces all of them, not just the first one to fire.
     let mut first_bug_at: Option<u64> = None;
     let mut last_bug_at: Option<u64> = None;
     let shrink_enabled = settings.phases.contains(&Phase::Shrink);
 
-    // All-simplest pre-trial. Mirrors Hypothesis's `cached_test_function(
-    // (ChoiceTemplate("simplest", count=None),))` call at the head of
-    // `engine.py::generate_new_examples`. Drawing every choice at its
-    // shrink-target value gives find-any tests over multi-component
-    // generators (e.g. midnight = h=m=s=μ=0 across four draws) a
-    // deterministic chance to hit the all-zeros joint event before
+    // All-simplest pre-trial: a deterministic "draw every choice at its
+    // shrink target" probe before random generation starts. Gives
+    // find-any tests over multi-component generators (e.g. midnight =
+    // h=m=s=μ=0 across four draws) a chance to hit the all-zeros joint
+    // event before
     // random sampling — the joint event grows vanishingly unlikely as
     // the number of components increases.
     if settings.phases.contains(&Phase::Generate)
@@ -362,12 +349,11 @@ fn run_main(
             );
 
             // Fire `optimise_targets` periodically once enough valid
-            // examples have accumulated; mirrors Hypothesis's interleaved
-            // call from `generate_new_examples`. Counts share the
-            // generation budget — targeting trials count toward
-            // `valid_test_cases` and `calls`, so `max_examples` remains a
-            // hard cap across both. Skipped once a bug has been found
-            // (matching `optimise_targets`'s own short-circuit).
+            // examples have accumulated. Counts share the generation
+            // budget — targeting trials count toward `valid_test_cases`
+            // and `calls`, so `max_examples` remains a hard cap across
+            // both. Skipped once a bug has been found (matching
+            // `optimise_targets`'s own short-circuit).
             if target_enabled
                 && interesting.is_empty()
                 && !targeting.is_empty()
@@ -529,7 +515,7 @@ fn run_main(
         }
     } else if interesting.is_empty() && verbosity == Verbosity::Debug {
         // No bug found — nothing to shrink; left for symmetry with the
-        // ported `Test done.` line below.
+        // `Test done.` line below.
     } else if replay_aligned && verbosity == Verbosity::Debug {
         eprintln!("Skipping shrink: reused aligned database replay");
     }
@@ -537,10 +523,9 @@ fn run_main(
     // --- Save to database ---
     //
     // For each interesting origin, save the shrunk counterexample to
-    // primary.  Any *displaced* primary entry — present at start of
+    // primary. Any *displaced* primary entry — present at start of
     // run but no longer in `interesting` — moves to the
-    // `<key>.secondary` sub-corpus rather than disappearing, mirroring
-    // upstream's `engine.py::downgrade_choices` (lines 899-902).  The
+    // `<key>.secondary` sub-corpus rather than disappearing. The
     // secondary key is the historical fallback corpus the next reuse
     // pass consults if primary doesn't have enough entries.
     if let (Some(db_ref), Some(key)) = (&db, database_key) {
@@ -582,8 +567,8 @@ fn run_main(
     let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> = interesting.into_iter().collect();
     origins_sorted.sort_by_key(|origin| std::cmp::Reverse(sort_key(&origin.1)));
 
-    // Mirror Hypothesis's `report_multiple_bugs` setting: when `false`, drop
-    // all but the smallest origin (the one observed *last* under the
+    // When `report_multiple_failures` is `false`, drop all but the
+    // smallest origin (the one observed *last* under the
     // shortlex-descending sort above), so the runner surfaces a single
     // failure rather than every distinct bug Hegel found.
     if !settings.report_multiple_failures {
@@ -621,9 +606,8 @@ fn run_main(
     }
 }
 
-/// Mirrors `engine.py::should_generate_more`: pre-bug we always keep
-/// generating; post-bug we keep going just long enough to surface other
-/// distinct origins. The window comes from Hypothesis:
+/// Pre-bug we always keep generating; post-bug we keep going just long
+/// enough to surface other distinct origins. The window is
 /// `min(first_bug + 1000, last_bug * 2)`, with a minimum-call floor
 /// (`MIN_TEST_CALLS`) so very-cheap tests still produce a few extra probes.
 ///
@@ -722,11 +706,10 @@ fn update_interesting(
     }
 }
 
-/// Incremental database-save bookkeeping. Mirrors Hypothesis's
-/// `save_choices` / `downgrade_choices` calls inside `test_function`: every
-/// time a new interesting result is found (or an existing one is
-/// shortlex-improved), the realised choice sequence is saved to the primary
-/// key and the displaced previous entry is moved to the secondary key.
+/// Incremental database-save bookkeeping. Every time a new interesting
+/// result is found (or an existing one is shortlex-improved), the
+/// realised choice sequence is saved to the primary key and the
+/// displaced previous entry is moved to the secondary key.
 ///
 /// Persisting incrementally — rather than only at the end of `run_main` — is
 /// what guarantees that a failure survives a Ctrl-C / SIGTERM mid-shrink:
@@ -897,9 +880,8 @@ impl<'a> EngineCtx<'a> {
 /// the parent's prefix (when one contains the other, e.g. recursive tree
 /// structures) or replace both with identical choices from one donor.
 ///
-/// Port of Hypothesis's `generate_mutations_from`. Returns the mutated
-/// shrunk nodes plus the panic origin if the attempt produced an
-/// interesting result.
+/// Returns the mutated shrunk nodes plus the panic origin if the attempt
+/// produced an interesting result.
 /// Runs up to [`SPAN_MUTATION_ATTEMPTS`] span-mutation probes via `ctx`.
 /// Returns the mutated counterexample (if one was found) plus the number of
 /// `ctx.execute` calls that actually ran — N3 fix: pre-N3 the caller

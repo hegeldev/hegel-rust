@@ -57,9 +57,9 @@ impl<'a> Shrinker<'a> {
 
     /// Binary search integer values toward zero.
     ///
-    /// Port of Hypothesis's `binary_search_integer_towards_zero`. Includes a linear
-    /// scan of small values after binary search to handle non-monotonic functions
-    /// (e.g. sampled_from or test functions that panic on boundary values).
+    /// Includes a linear scan of small values after binary search to
+    /// handle non-monotonic functions (e.g. sampled_from or test functions
+    /// that panic on boundary values).
     pub(super) fn binary_search_integer_towards_zero(&mut self) {
         let mut i = 0;
         while i < self.current_nodes.len() {
@@ -69,12 +69,12 @@ impl<'a> Shrinker<'a> {
                 let ic = ic.clone();
                 if v > 0 {
                     let lo = ic.simplest().max(0);
-                    // shift_right adaptive descent (Hypothesis's
-                    // `Integer.shift_right`).  Probes `lo + (v - lo) >>
-                    // k` for k = 1, 2, 4, 8, ... via `find_integer`,
-                    // which is O(log log distance) rather than the
-                    // O(log distance) of a full `bin_search_down`.  For
-                    // distance 10^15 that's ~7 probes vs ~50.
+                    // shift_right adaptive descent. Probes
+                    // `lo + (v - lo) >> k` for k = 1, 2, 4, 8, ... via
+                    // `find_integer`, which is O(log log distance) rather
+                    // than the O(log distance) of a full
+                    // `bin_search_down`. For distance 10^15 that's
+                    // ~7 probes vs ~50.
                     let dist = (v - lo) as u128;
                     if dist > 0 {
                         find_integer(|k| {
@@ -103,10 +103,10 @@ impl<'a> Shrinker<'a> {
                             // Continue scanning even if not successful
                         }
                     }
-                    // Hypothesis's `Integer.shrink_by_multiples(2)` / `(1)`:
-                    // with a non-monotonic predicate (e.g. `|m - n| == 1`), pure
-                    // bin_search_down converges to the current value without ever
-                    // probing `cur - 2`. Hitting `cur - 2` is what lets the
+                    // shrink_by_multiples(2) / (1): with a non-monotonic
+                    // predicate (e.g. `|m - n| == 1`), pure bin_search_down
+                    // converges to the current value without ever probing
+                    // `cur - 2`. Hitting `cur - 2` is what lets the
                     // shrinker flip a linked pair from `(m, m+1)` down to
                     // `(m, m-1)` at the cost of one extra probe.
                     let ChoiceValue::Integer(base) = self.current_nodes[i].value else {
@@ -168,7 +168,7 @@ impl<'a> Shrinker<'a> {
                         }
                     }
                 } else if v < 0 {
-                    // Mirror of the positive branch.  `lo` is the
+                    // Mirror of the positive branch. `lo` is the
                     // absolute value of the simplest (clamped to 0
                     // below) and we shrink toward `lo` from `-v`
                     // before flipping the sign back.
@@ -193,8 +193,8 @@ impl<'a> Shrinker<'a> {
                         self.replace(&HashMap::from([(i, ChoiceValue::Integer(-c))]));
                     }
                     // shrink_by_multiples for the negative branch: probe
-                    // `cur + 2*n` / `cur + n` (moving toward zero). Mirrors
-                    // the positive-side block above.
+                    // `cur + 2*n` / `cur + n` (moving toward zero). Mirror
+                    // of the positive-side block above.
                     let ChoiceValue::Integer(base) = self.current_nodes[i].value else {
                         unreachable!(
                             "kind/value invariant violated: outer match guaranteed this variant"
@@ -269,11 +269,10 @@ impl<'a> Shrinker<'a> {
 
     /// Try redistributing value between pairs of integer choices.
     ///
-    /// Port of Hypothesis's `redistribute_integers`. For each pair of integer
-    /// nodes at various distances, tries moving value from i to j (or vice
-    /// versa) while keeping the total sum constant. Useful for sum-type
-    /// constraints where the minimal counterexample has one small and one
-    /// large value.
+    /// For each pair of integer nodes at various distances, tries moving
+    /// value from i to j (or vice versa) while keeping the total sum
+    /// constant. Useful for sum-type constraints where the minimal
+    /// counterexample has one small and one large value.
     pub(super) fn redistribute_integers(&mut self) {
         let int_indices: Vec<usize> = self
             .current_nodes
@@ -369,14 +368,14 @@ impl<'a> Shrinker<'a> {
     /// Lower pairs of nearby integer choices by the same amount
     /// simultaneously.
     ///
-    /// Port of Hypothesis's `lower_integers_together`. The individual passes
-    /// (`binary_search_integer_towards_zero`, `redistribute_integers`) walk
-    /// each integer alone; when two values are pinned together by a
-    /// predicate like `|m - n| == 1`, neither can move on its own without
-    /// breaking the predicate, and the shrinker falls into a zig-zag trap
-    /// that takes `O(m)` iterations to crawl down. By probing
-    /// `(v_i - k, v_j - k)` for geometrically growing `k` via
-    /// `find_integer`, this pass reaches the minimum in `O(log k)` probes.
+    /// The individual passes (`binary_search_integer_towards_zero`,
+    /// `redistribute_integers`) walk each integer alone; when two values
+    /// are pinned together by a predicate like `|m - n| == 1`, neither
+    /// can move on its own without breaking the predicate, and the
+    /// shrinker falls into a zig-zag trap that takes `O(m)` iterations
+    /// to crawl down. By probing `(v_i - k, v_j - k)` for geometrically
+    /// growing `k` via `find_integer`, this pass reaches the minimum in
+    /// `O(log k)` probes.
     pub(super) fn lower_integers_together(&mut self) {
         let int_indices: Vec<usize> = self
             .current_nodes
@@ -392,8 +391,8 @@ impl<'a> Shrinker<'a> {
             .collect();
 
         for pair_idx in 0..int_indices.len() {
-            // Hypothesis caps the look-ahead at 3 integers to avoid
-            // quadratic behaviour on long sequences.
+            // Cap the look-ahead at 3 integers to avoid quadratic behaviour
+            // on long sequences.
             for gap in 1..=3 {
                 if pair_idx + gap >= int_indices.len() {
                     break;
@@ -498,7 +497,6 @@ impl<'a> Shrinker<'a> {
 
     /// Try shrinking duplicate integer values simultaneously.
     ///
-    /// Port of Hypothesis's `minimize_duplicated_choices` (`shrinker.py:1379-1406`).
     /// For each group of nodes sharing `(ChoiceKind discriminant,
     /// ChoiceValue)`, tries simultaneous shrinking — handling cases
     /// where two duplicates must remain equal (e.g. a list element and a
@@ -614,13 +612,11 @@ impl<'a> Shrinker<'a> {
 
             // Shift-right adaptive descent of all members in lockstep,
             // followed by shrink_by_multiples(2) and (1) to land on the
-            // boundary.  Mirrors Hypothesis's `Integer.shift_right`
-            // applied to a duplicate group, and the per-node block
-            // earlier in this file.  Each probe re-reads the current
-            // value of `valid[0]` so the descent starts from the live
-            // shrink target — the previous bin_search_down captured the
-            // entry value and stalled on the second probe because every
-            // member had moved.
+            // boundary. Each probe re-reads the current value of
+            // `valid[0]` so the descent starts from the live shrink
+            // target — the previous bin_search_down captured the entry
+            // value and stalled on the second probe because every member
+            // had moved.
             let valid_capture = valid.clone();
             let group_replace = |sh: &mut Shrinker<'_>, candidate: i128| -> bool {
                 let current_valid: Vec<usize> = valid_capture
@@ -702,17 +698,16 @@ impl<'a> Shrinker<'a> {
     /// Break the zig-zag trap by lowering a common offset across every
     /// integer node that's changed since the last checkpoint.
     ///
-    /// Port of `shrinker.py:1017-1095` (`lower_common_node_offset`).  When
-    /// two integers `m, n` are linked by a predicate like `abs(m - n) > 1`,
-    /// the individual minimization passes can only step each toward
-    /// `shrink_towards` by one before the predicate flips; the next
-    /// iteration steps the other one by one; result: O(initial value)
-    /// iterations to zig-zag toward zero.
+    /// When two integers `m, n` are linked by a predicate like
+    /// `abs(m - n) > 1`, the individual minimization passes can only
+    /// step each toward `shrink_towards` by one before the predicate
+    /// flips; the next iteration steps the other one by one; result:
+    /// O(initial value) iterations to zig-zag toward zero.
     ///
     /// This pass observes that *all* changed integer nodes shrank by some
     /// non-zero common offset, and tries to lower that offset directly
     /// using a `find_integer` exponential probe — collapsing the zig-zag
-    /// into O(log v) iterations.  It probes both signs because the
+    /// into O(log v) iterations. It probes both signs because the
     /// nodes may be sitting above or below their shrink targets.
     ///
     /// Always called after a successful pass that may have changed
@@ -759,9 +754,9 @@ impl<'a> Shrinker<'a> {
         let residual: Vec<u128> = distances.iter().map(|d| d - offset).collect();
 
         // The predicate signs are deduced from the sign of `(v - target)`
-        // for each node.  Hypothesis shrinks the offset both directions
-        // to handle the case where the absolute distances are equal but
-        // the signs differ.
+        // for each node. Shrink the offset in both directions to handle
+        // the case where the absolute distances are equal but the signs
+        // differ.
         let signs: Vec<i128> = indices
             .iter()
             .zip(ic_targets.iter())
@@ -779,9 +774,7 @@ impl<'a> Shrinker<'a> {
 
         // Try lowering by an additional `n` units in both directions.
         // The candidate distance is `offset - n + residual`, applied with
-        // the original signs.  Hypothesis uses `Integer.shrink(offset, ...)`
-        // which is binary search; `find_integer` for the maximum n is the
-        // equivalent in our infrastructure.
+        // the original signs. `find_integer` finds the maximum n.
         for sign_multiplier in [1i128, -1] {
             find_integer(|n| {
                 if (n as u128) > offset {

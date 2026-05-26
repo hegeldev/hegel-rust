@@ -1,8 +1,6 @@
 //! Regression tests asserting that every shrink pass must skip
-//! `was_forced=true` nodes.  Hypothesis enforces this via the
-//! `chooser.choose(..., lambda n: not n.was_forced)` predicate
-//! throughout `shrinker.py`; in the native shrinker we gate at the
-//! top-level node loop of each pass.
+//! `was_forced=true` nodes. We gate at the top-level node loop of
+//! each pass.
 
 use crate::native::core::choices::{BooleanChoice, BytesChoice, FloatChoice, IntegerChoice};
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
@@ -145,12 +143,10 @@ fn mutate_and_shrink_skips_forced_node() {
 
 #[test]
 fn redistribute_numeric_pairs_skips_forced_integer() {
-    // Port of Hypothesis `test_redistribute_with_forced_node_integer`
-    // (`tests/conjecture/test_shrinker.py`).  Starting from (15, 10)
-    // with the second node forced and predicate `n1 + n2 > 20`, the
-    // redistribute_numeric_pairs pass should not modify the forced
-    // node — so the shrink target stays at (15, 10) and doesn't
-    // collapse to (11, 10).
+    // Starting from (15, 10) with the second node forced and predicate
+    // `n1 + n2 > 20`, the redistribute_numeric_pairs pass should not
+    // modify the forced node — so the shrink target stays at (15, 10)
+    // and doesn't collapse to (11, 10).
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {

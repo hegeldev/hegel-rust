@@ -1,6 +1,4 @@
 //! Unit tests for `Shrinker::reorder_spans`.
-//!
-//! Hypothesis reference: `shrinker.py:1810-1855`.
 
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};

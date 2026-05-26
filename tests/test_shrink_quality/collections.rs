@@ -210,10 +210,8 @@ fn test_dictionary_minimizes_values() {
 
 #[test]
 fn test_minimize_multi_key_dicts() {
-    // Python's `gs.booleans().map(str)` produces "True"/"False" because that's
-    // what `str(bool)` yields. Rust's `bool::to_string` produces "true"/"false".
-    // The shrink behaviour is the same: minimal shrinks to a single entry with
-    // the bool=false key (whatever string it stringifies to).
+    // `bool::to_string` produces "true"/"false". The shrink should reach a
+    // single entry with the bool=false key.
     let result = minimal(
         gs::hashmaps(gs::booleans().map(|b| b.to_string()), gs::booleans()),
         |x: &HashMap<String, bool>| !x.is_empty(),
@@ -368,8 +366,7 @@ fn test_unique_list_shrinks_using_negative_values() {
     // Unique signed integer lists should shrink using negative values when
     // that gives smaller absolute values. With max_size=5 and a length>=5
     // condition, the minimal representative interleaves around zero rather
-    // than walking 0,1,2,3,4. Upstream asserts on the choice-sequence
-    // values [0,1,-1,2,-2]; we assert the equivalent on the resulting list.
+    // than walking 0,1,2,3,4 (choice-sequence values [0,1,-1,2,-2]).
     let v = Minimal::new(
         gs::vecs(gs::integers::<i64>().min_value(-10).max_value(10))
             .max_size(5)
@@ -470,13 +467,10 @@ fn test_sort_stale_indices_after_punning() {
 }
 
 // ----------------------------------------------------------------------------
-// Quality tests ported from Hypothesis.
+// Collection shrink-quality tests.
 // ----------------------------------------------------------------------------
 
-/// Port of Hypothesis `test_multiple_empty_lists_are_independent`
-/// (`tests/quality/test_shrink_quality.py`).  Hypothesis uses
-/// `none()` for the inner element type; Rust uses unit `()`.  The
-/// shrinker should reduce to two distinct empty inner lists.
+/// The shrinker should reduce to two distinct empty inner lists.
 #[test]
 fn test_multiple_empty_lists_are_independent() {
     let xs = minimal(
@@ -487,7 +481,6 @@ fn test_multiple_empty_lists_are_independent() {
     assert!(xs[0].is_empty() && xs[1].is_empty());
 }
 
-/// Port of Hypothesis `test_dictionary` (`tests/quality/test_shrink_quality.py`).
 /// The empty hashmap is the minimal counterexample for any-predicate;
 /// a `len >= 3` predicate shrinks to a 3-entry map with simplest keys
 /// and empty string values.

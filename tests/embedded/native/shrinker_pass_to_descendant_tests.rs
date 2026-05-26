@@ -1,6 +1,4 @@
 //! Unit tests for `Shrinker::pass_to_descendant`.
-//!
-//! Hypothesis reference: `shrinker.py:959-1015`.
 
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};

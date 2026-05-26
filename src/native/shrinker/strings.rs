@@ -9,8 +9,7 @@
 // Reduction order is alphabet-relative: `StringChoice::codepoint_key`
 // returns each codepoint's position in `IntervalSet::char_in_shrink_order`,
 // so shrinking on `[a-z]` walks toward `'a'` while shrinking on
-// `[0-9A-Za-z]` walks toward `'0'`. Mirrors Hypothesis's per-element
-// shrinking in `internal/conjecture/shrinking/string.py`.
+// `[0-9A-Za-z]` walks toward `'0'`.
 
 use std::collections::HashMap;
 
@@ -74,8 +73,7 @@ impl<'a> Shrinker<'a> {
             // requires at least two positions to share a value to trigger
             // the bug), reducing one position alone breaks the link. This
             // pass tries replacing *every* instance of a duplicated
-            // codepoint at once, mirroring the per-value pass in
-            // Hypothesis's `Collection.run_step`.
+            // codepoint at once.
             let dup_codepoints: Vec<u32> = {
                 let cur = self.current_string(i);
                 let mut counts: HashMap<u32, usize> = HashMap::new();
@@ -151,9 +149,8 @@ impl<'a> Shrinker<'a> {
             // predicates: midpoint probes can miss valid simpler characters
             // sitting between failing midpoints (e.g. 'A' at key 17 when
             // shrinking from 'À' at a higher key — bin_search probes
-            // midpoints and might miss the basin). Same trap as upstream
-            // Hypothesis's per-element Integer shrinker
-            // (HypothesisWorks/hypothesis#4725).
+            // midpoints and might miss the basin). Same trap as the
+            // per-element Integer shrinker.
             //
             // The hybrid: try a fixed list of "obvious smaller candidates"
             // first to cover the common ASCII / Latin-with-diacritic basins,
@@ -318,7 +315,6 @@ impl<'a> Shrinker<'a> {
     /// For each pair of string nodes within distance 4, lower every
     /// occurrence of a shared codepoint in *both* strings simultaneously.
     ///
-    /// Port of `shrinker.py:1519-1581` (`lower_duplicated_characters`).
     /// Handles the case where two strings must contain the same
     /// character but the actual character value is free — we want to
     /// drive both occurrences toward the alphabet's smallest member at
@@ -382,7 +378,6 @@ impl<'a> Shrinker<'a> {
     /// Walk every string node and try replacing each codepoint with one
     /// of its "natural simpler" variants — NFD base + case mappings.
     ///
-    /// Port of `shrinker.py:1583-1617` (`normalize_unicode_chars`).
     /// Complements `shrink_strings`' per-position search by trying the
     /// semantically obvious replacements that lex-index bisection can
     /// skip over.
@@ -437,7 +432,6 @@ impl<'a> Shrinker<'a> {
 ///
 /// Cross-string codepoint candidates from natural text transformations.
 ///
-/// Port of Hypothesis's `_natural_simpler_chars` (`shrinker.py:94-119`).
 /// For codepoint `cp` under alphabet `intervals`, returns the
 /// candidates produced by:
 ///
@@ -474,8 +468,8 @@ fn natural_simpler_chars(cp: u32, kind: &StringChoice) -> Vec<u32> {
 }
 
 /// Used by `shrink_strings` to escape predicate basins where neither a
-/// pure binary search nor a Hypothesis-style `find_integer` descent would
-/// reach the smaller-key target.
+/// pure binary search nor a `find_integer` descent would reach the
+/// smaller-key target.
 fn semantic_candidates(cp: u32, kind: &StringChoice) -> Vec<u32> {
     let mut out = Vec::with_capacity(64);
     let cur_key = kind.codepoint_key(cp);

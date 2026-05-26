@@ -1,6 +1,4 @@
-// Shrinker for the native backend.
-//
-// Ported from Hypothesis. Reduces failing test cases to minimal
+// Shrinker for the native backend. Reduces failing test cases to minimal
 // counterexamples by systematically simplifying the choice sequence.
 //
 // Split into submodules:
@@ -35,8 +33,7 @@ use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINKS, NodeSortKey, Spa
 ///
 /// [`ShrinkRun::Full`] replays a full node sequence with punning (the shape used by
 /// most shrink passes). [`ShrinkRun::Probe`] replays a prefix of choice values and
-/// then draws randomly beyond it — needed by `mutate_and_shrink` (port of
-/// Hypothesis's `shrinking/mutation.py`).
+/// then draws randomly beyond it — needed by `mutate_and_shrink`.
 pub enum ShrinkRun<'a> {
     Full(&'a [ChoiceNode]),
     Probe {
@@ -68,18 +65,15 @@ pub struct Shrinker<'a> {
     /// current shrink target's structure.
     pub current_spans: Spans,
     /// Count of times `current_nodes` was replaced by a strictly smaller candidate.
-    /// Mirrors `engine.py::ConjectureRunner.shrinks` increments inside `test_function`.
     pub improvements: usize,
     /// The choice sequences that were displaced each time `current_nodes` improved.
     /// Used by `shrink_interesting_examples` to downgrade each predecessor to the
-    /// secondary key, mirroring `engine.py::downgrade_choices`.
+    /// secondary key.
     pub downgraded: Vec<Vec<ChoiceValue>>,
-    /// Cap on `improvements`.  Once `improvements >= max_improvements`,
+    /// Cap on `improvements`. Once `improvements >= max_improvements`,
     /// `consider` and `probe` short-circuit so the runner doesn't get
-    /// stuck chasing diminishing returns.  Defaults to [`MAX_SHRINKS`]
-    /// (mirrors Hypothesis's hard cap in
-    /// `internal/conjecture/engine.py`); tests can lower it for
-    /// controlled-budget assertions.
+    /// stuck chasing diminishing returns. Defaults to [`MAX_SHRINKS`];
+    /// tests can lower it for controlled-budget assertions.
     pub max_improvements: usize,
     /// Total number of times the test closure has been invoked through
     /// `consider` or `probe`.  Used together with `calls_at_last_shrink`
@@ -89,20 +83,16 @@ pub struct Shrinker<'a> {
     /// `accept_improvement`.  See `max_stall`.
     pub calls_at_last_shrink: usize,
     /// Once `calls - calls_at_last_shrink >= max_stall`, further
-    /// `consider` / `probe` invocations short-circuit.  Mirrors
-    /// Hypothesis's `shrinker.py:333-340, 387, 1139-1141`: grows on
-    /// every successful shrink by `max(max_stall, (calls -
-    /// calls_at_last_shrink) * 2)` so a long shrink search where
-    /// each step is expensive doesn't get cut off prematurely.
+    /// `consider` / `probe` invocations short-circuit. Grows on every
+    /// successful shrink by
+    /// `max(max_stall, (calls - calls_at_last_shrink) * 2)` so a long
+    /// shrink search where each step is expensive doesn't get cut off
+    /// prematurely.
     ///
-    /// Default is [`MAX_SHRINKS`] = 500.  Hypothesis defaults to 200
-    /// but its `Shrinker.calls` is shared with the engine's
-    /// generation-phase counter, so by the time shrinking starts
-    /// there's already significant headroom in `calls_at_last_shrink`.
-    /// Our `calls` is shrinker-local and starts at zero, so 200 is
-    /// too tight for predicates that need many cold calls between
-    /// the first few shrinks — the threshold then lands mid-pass and
-    /// stalls on a sub-minimal target.
+    /// Default is [`MAX_SHRINKS`] = 500. `calls` is shrinker-local and
+    /// starts at zero, so a tighter threshold lands mid-pass for
+    /// predicates that need many cold calls between the first few
+    /// shrinks and stalls on a sub-minimal target.
     pub max_stall: usize,
     /// Snapshot of `current_nodes` at the last call to
     /// [`Shrinker::clear_change_tracking`] (or construction).  Each `consider`
@@ -110,34 +100,31 @@ pub struct Shrinker<'a> {
     /// reports node indices whose `(kind, value)` differs.
     last_checkpoint_nodes: Vec<ChoiceNode>,
     /// Set of indices that changed (under structural identity) since the last
-    /// checkpoint.  `lower_common_node_offset` reads this to find correlated
-    /// integer nodes that keep shrinking together (`shrinker.py:1097-1131`).
+    /// checkpoint. `lower_common_node_offset` reads this to find correlated
+    /// integer nodes that keep shrinking together.
     all_changed_nodes: HashSet<usize>,
-    /// Bounded cache of *uninteresting* candidate sort_keys.  Mirrors
-    /// Hypothesis's `cached_test_function` (`shrinker.py:390-412`).
-    /// When two passes propose the same candidate (or one with the
-    /// same sort_key shape), the cached negative result lets
-    /// `consider` short-circuit without re-running the closure.
+    /// Negative-result cache of candidate sort_keys. When two passes
+    /// propose the same candidate (or one with the same sort_key shape),
+    /// the cached negative result lets `consider` short-circuit without
+    /// re-running the closure.
     ///
     /// Positive (interesting) results are *not* cached because
     /// `accept_improvement`'s `sort_key(actual) < sort_key(current)`
     /// check is relative to the live shrink target — a positive that
     /// didn't improve last time might improve now.
     ///
-    /// Unbounded — matches Hypothesis's `cached_test_function`
-    /// (a Python dict).  Test cases produce a few hundred to a
-    /// few thousand distinct candidates; an unbounded cache caps
-    /// memory at a few MB on the largest seen runs.  Bounding the
-    /// cache with FIFO / LRU eviction introduced seed-dependent
-    /// shrink trajectories that converged on neighbouring minima
-    /// (cache eviction interacts with the order in which
-    /// redistribute candidates are revisited), so eviction is
-    /// simply dropped.
+    /// Unbounded. Test cases produce a few hundred to a few thousand
+    /// distinct candidates; an unbounded cache caps memory at a few MB
+    /// on the largest seen runs. Bounding the cache with FIFO / LRU
+    /// eviction introduced seed-dependent shrink trajectories that
+    /// converged on neighbouring minima (cache eviction interacts with
+    /// the order in which redistribute candidates are revisited), so
+    /// eviction is simply dropped.
     consider_cache: HashSet<Vec<(u8, NodeSortKey)>>,
-    /// Optional debug callback.  When set, the shrinker emits
+    /// Optional debug callback. When set, the shrinker emits
     /// per-pass-step "Trying shrink pass: <name>" lines and an
-    /// end-of-shrink Hypothesis-style "Shrink pass profiling" report.
-    /// Wired by the test runner at `Verbosity::Debug`; unused otherwise.
+    /// end-of-shrink "Shrink pass profiling" report. Wired by the test
+    /// runner at `Verbosity::Debug`; unused otherwise.
     pub(super) debug: Option<Box<DebugFn<'a>>>,
 }
 
@@ -211,11 +198,10 @@ impl<'a> Shrinker<'a> {
         }
         // Forced-node guard: a candidate may not differ from the
         // current shrink target at any index marked `was_forced`.
-        // Mirrors Hypothesis's invariant that forced choices stay put
-        // through shrinking.  `replace` enforces this on its own
-        // single-position path; consider covers callers that build
-        // candidate sequences directly (try_shortening_via_increment,
-        // delete_chunks, span passes, …).
+        // Forced choices stay put through shrinking. `replace` enforces
+        // this on its own single-position path; consider covers callers
+        // that build candidate sequences directly
+        // (try_shortening_via_increment, delete_chunks, span passes, …).
         for (i, candidate) in nodes
             .iter()
             .enumerate()
@@ -238,12 +224,10 @@ impl<'a> Shrinker<'a> {
         {
             return false;
         }
-        // Negative-result cache: if we already asked the closure
-        // about a candidate with this sort_key and it was
-        // uninteresting, short-circuit.  Mirrors
-        // `cached_test_function` (`shrinker.py:390-412`), restricted
-        // to the negative case — see the field docstring for why
-        // positive results aren't cached.
+        // Negative-result cache: if we already asked the closure about a
+        // candidate with this sort_key and it was uninteresting,
+        // short-circuit. See the field docstring for why positive results
+        // aren't cached.
         // Cache key bundles the kind discriminant with the per-node
         // sort key: `NodeSortKey::Scalar(0, false)` is produced both
         // by `Boolean(false)` and `Integer(0)`, and a cache shared on
@@ -277,8 +261,6 @@ impl<'a> Shrinker<'a> {
     /// deterministic RNG seeded by `seed`, capped at `max_size` choices. If
     /// the resulting run is interesting and shortlex-smaller than
     /// `current_nodes`, update `current_nodes`.
-    ///
-    /// Port of Hypothesis's `shrinker.test_function(TestCase(prefix=..., random=...))`.
     pub(super) fn probe(&mut self, prefix: &[ChoiceValue], seed: u64, max_size: usize) {
         if self.improvements >= self.max_improvements {
             return;
@@ -305,7 +287,7 @@ impl<'a> Shrinker<'a> {
         self.downgraded.push(old);
         self.improvements += 1;
         // Grow max_stall so a long shrink search doesn't get cut off
-        // prematurely.  Mirrors `shrinker.py:1139-1141`.
+        // prematurely.
         let span = self.calls.saturating_sub(self.calls_at_last_shrink);
         let grown = span.saturating_mul(2);
         if grown > self.max_stall {
@@ -323,10 +305,10 @@ impl<'a> Shrinker<'a> {
 
     /// Update `changed` to reflect a diff between `prev` and `new`.
     ///
-    /// Mirrors `shrinker.py:1097-1131`: when shape (length, kinds) is preserved
-    /// across the improvement, indices whose value changed are unioned into
-    /// `changed`.  When shape changes the set is cleared — there's no stable
-    /// identity between old and new node positions.
+    /// When shape (length, kinds) is preserved across the improvement,
+    /// indices whose value changed are unioned into `changed`. When shape
+    /// changes the set is cleared — there's no stable identity between
+    /// old and new node positions.
     fn update_change_tracking(
         prev: &[ChoiceNode],
         new: &[ChoiceNode],
@@ -380,8 +362,7 @@ impl<'a> Shrinker<'a> {
                 return false;
             }
             if attempt[i].was_forced {
-                // Forced choices stay put — mirrors Hypothesis's
-                // `n.was_forced` check throughout the shrinker.
+                // Forced choices stay put.
                 return false;
             }
             if !attempt[i].kind.validate(v) {
@@ -392,12 +373,10 @@ impl<'a> Shrinker<'a> {
         self.consider(&attempt)
     }
 
-    /// Format a Hypothesis-style end-of-shrink profile report and feed
-    /// it line-by-line to the debug callback.  Mirrors
-    /// `shrinker.py:460-489` ("Shrink pass profiling" block) — passes
-    /// with zero calls are filtered out, the remainder are split into
-    /// useful (`shrinks > 0`) and useless buckets, each bucket sorted
-    /// by `(-calls, deletions, shrinks)`.
+    /// Format an end-of-shrink profile report and feed it line-by-line to
+    /// the debug callback. Passes with zero calls are filtered out, the
+    /// remainder are split into useful (`shrinks > 0`) and useless
+    /// buckets, each bucket sorted by `(-calls, deletions, shrinks)`.
     fn emit_profile_report(
         &mut self,
         passes: &[ShrinkPass<'a>],
@@ -453,9 +432,8 @@ impl<'a> Shrinker<'a> {
 
     /// Run all shrink passes repeatedly until no more progress or iteration cap.
     ///
-    /// The pass order interleaves Hypothesis-ported passes with the
-    /// native-only extras: span-aware structural passes first (cheap
-    /// when they apply), then deletion / zeroing, then the value-level
+    /// The pass order runs span-aware structural passes first (cheap when
+    /// they apply), then deletion / zeroing, then the value-level
     /// minimization passes, finishing with the index-generic and
     /// entropy-based passes.
     pub fn shrink(&mut self) {
@@ -475,8 +453,8 @@ impl<'a> Shrinker<'a> {
             ShrinkPass::new("try_trivial_spans", Box::new(|sh| sh.try_trivial_spans())),
             ShrinkPass::new("pass_to_descendant", Box::new(|sh| sh.pass_to_descendant())),
             ShrinkPass::new("reorder_spans", Box::new(|sh| sh.reorder_spans())),
-            // Node-program adaptive deletion (Hypothesis's
-            // `node_program("X" * n)` family).
+            // Node-program adaptive deletion (the `node_program("X" * n)`
+            // family).
             ShrinkPass::new("node_program_5", Box::new(|sh| sh.node_program(5))),
             ShrinkPass::new("node_program_4", Box::new(|sh| sh.node_program(4))),
             ShrinkPass::new("node_program_3", Box::new(|sh| sh.node_program(3))),
@@ -578,15 +556,14 @@ pub(super) fn bin_search_down(lo: i128, hi: i128, f: &mut impl FnMut(i128) -> bo
 /// Finds a (hopefully large) integer `n >= 0` such that `f(n)` is true and
 /// `f(n+1)` is false. `f(0)` is assumed to be true and is not checked.
 ///
-/// Port of Hypothesis's `junkdrawer.find_integer`. Used by shrink passes that
-/// want to maximise a step size — e.g. "lower both nodes by k" needs the
-/// largest k for which the joint replacement is still interesting.
+/// Used by shrink passes that want to maximise a step size — e.g. "lower
+/// both nodes by k" needs the largest k for which the joint replacement
+/// is still interesting.
 ///
 /// Uses `checked_mul` on the exponential probe and `lo + (hi - lo) / 2` on
-/// the binary-search midpoint: in Python this is arbitrary-precision, but in
-/// Rust a predicate that accepts an unbounded range (e.g. a `lower_integers_together`
-/// pass over full-range `i128` nodes) would otherwise walk `hi` off the end
-/// of `usize`.
+/// the binary-search midpoint: a predicate that accepts an unbounded range
+/// (e.g. a `lower_integers_together` pass over full-range `i128` nodes)
+/// would otherwise walk `hi` off the end of `usize`.
 pub(crate) fn find_integer(mut f: impl FnMut(usize) -> bool) -> usize {
     for i in 1..5 {
         if !f(i) {

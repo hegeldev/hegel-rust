@@ -115,10 +115,8 @@ fn test_lower_and_bump_stale_kind_after_replace() {
     assert_eq!(result, vec![false]);
 }
 
-/// Port of Hypothesis `test_can_quickly_shrink_to_trivial_collection`
-/// (`tests/conjecture/test_shrinker.py`).  A byte vector of length
-/// at least `n` shrinks to all-zero bytes of length `n`.  Exercises
-/// the per-node bytes minimization pass.
+/// A byte vector of length at least `n` shrinks to all-zero bytes of
+/// length `n`. Exercises the per-node bytes minimization pass.
 #[test]
 fn test_can_quickly_shrink_to_trivial_collection() {
     for n in [10usize, 50] {

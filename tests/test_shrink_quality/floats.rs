@@ -92,11 +92,7 @@ fn test_nan_canonicalization_prefers_finite_when_predicate_admits() {
     }
 }
 
-/// Translate of Hypothesis `test_minimal_fractions_1`
-/// (`tests/quality/test_shrink_quality.py`).  Hypothesis works with
-/// arbitrary `Fraction`s; the native runner shrinks `f64`s instead,
-/// but the intent is the same: the simplest finite value satisfying
-/// "true" should be 0.0.
+/// The simplest finite value satisfying "true" should be 0.0.
 #[test]
 fn test_minimal_fractions_1() {
     assert_eq!(
@@ -108,8 +104,7 @@ fn test_minimal_fractions_1() {
     );
 }
 
-/// Translate of Hypothesis `test_minimal_fractions_2`.  The simplest
-/// finite value satisfying `x >= 1` is 1.0.
+/// The simplest finite value satisfying `x >= 1` is 1.0.
 #[test]
 fn test_minimal_fractions_2() {
     assert_eq!(
@@ -121,11 +116,10 @@ fn test_minimal_fractions_2() {
     );
 }
 
-/// Port of Hypothesis `test_shrinks_downwards_to_integers`
-/// (`tests/quality/test_float_shrinking.py`).  The minimal float
-/// satisfying `x >= min_value` for `min_value >= 0` is `min_value.ceil()`.
-/// (Hypothesis's @given gates `f >= 0`; for negative `f` the minimum is
-/// `0.0` since the shrink target sits inside the allowed range.)
+/// The minimal float satisfying `x >= min_value` for `min_value >= 0`
+/// is `min_value.ceil()`. (For negative `min_value`, the minimum is
+/// `0.0` since the shrink target sits inside the allowed range — this
+/// test only checks the non-negative side.)
 #[test]
 fn test_shrinks_downwards_to_integers() {
     for f in [0.5_f64, 1.5, 7.25, 100.0] {
@@ -140,9 +134,8 @@ fn test_shrinks_downwards_to_integers() {
     }
 }
 
-/// Port of Hypothesis `test_shrinks_downwards_to_integers_when_fractional`
-/// (`tests/quality/test_float_shrinking.py`).  Strictly between `b`
-/// and `2^53`, the minimal fractional (non-integer) float is `b + 0.5`.
+/// Strictly between `b` and `2^53`, the minimal fractional
+/// (non-integer) float is `b + 0.5`.
 #[test]
 fn test_shrinks_downwards_to_integers_when_fractional() {
     for b in [1.0_f64, 5.0, 100.0, 12345.0] {
@@ -158,8 +151,7 @@ fn test_shrinks_downwards_to_integers_when_fractional() {
     }
 }
 
-/// Translate of Hypothesis `test_minimal_fractions_3`.  A list of
-/// at least 5 finite floats shrinks to five zeroes.
+/// A list of at least 5 finite floats shrinks to five zeroes.
 #[test]
 fn test_minimal_fractions_3() {
     let xs = minimal(

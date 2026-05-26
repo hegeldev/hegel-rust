@@ -1,9 +1,8 @@
-//! Tests for the `consider_cache`.  Previously the cache was bounded
+//! Tests for the `consider_cache`. Previously the cache was bounded
 //! at 4096 with `HashSet::iter().next()` eviction (implementation-
-//! defined).  After the audit it's unbounded — matching Hypothesis's
-//! Python-dict `cached_test_function` and avoiding the seed-dependent
-//! shrink-trajectory flake that any deterministic bounded-eviction
-//! strategy introduced in the native runner.
+//! defined). After the audit it's unbounded — avoiding the
+//! seed-dependent shrink-trajectory flake that any deterministic
+//! bounded-eviction strategy introduced in the native runner.
 //!
 //! Also covers the previously-nocov defensive branches of `replace`
 //! and `find_integer` so coverage is no longer escaped via annotation.
@@ -36,9 +35,9 @@ fn bool_node(value: bool) -> ChoiceNode {
 
 #[test]
 fn replace_rejects_index_past_end_of_current_nodes() {
-    // Mirrors the bind_deletion scenario: a `replace` is invoked with
+    // Reproduces the bind_deletion scenario: a `replace` is invoked with
     // an index that's beyond `current_nodes.len()` because an earlier
-    // call inside the same callback shortened the sequence.  We hit
+    // call inside the same callback shortened the sequence. We hit
     // it directly here.
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
@@ -55,9 +54,9 @@ fn replace_rejects_index_past_end_of_current_nodes() {
 
 #[test]
 fn replace_rejects_value_that_fails_kind_validate() {
-    // Mirrors the one_of branch-switch scenario: the kind at position
+    // Reproduces the one_of branch-switch scenario: the kind at position
     // i is now Boolean (after value-punning a previous shrink), but
-    // the caller still tries to assign an Integer.  validate() refuses;
+    // the caller still tries to assign an Integer. validate() refuses;
     // replace should return false rather than panic downstream.
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {

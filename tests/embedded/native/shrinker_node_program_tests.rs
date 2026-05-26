@@ -1,6 +1,4 @@
 //! Unit tests for `Shrinker::node_program`.
-//!
-//! Hypothesis references: `shrinker.py:1340-1376`, `shrinker.py:1857-1886`.
 
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
@@ -132,13 +130,12 @@ fn node_program_no_op_on_empty_or_too_long() {
     assert_eq!(shrinker.current_nodes.len(), 1);
 }
 
-/// Port of Hypothesis `test_node_deletion_can_delete_short_ranges`
-/// (`tests/conjecture/test_shrinker.py`).  Initial counterexample is
-/// a run-length-encoded sequence (1) (2, 2) (3, 3, 3) (4, 4, 4, 4)
-/// (5, 5, 5, 5, 5) where each "block" starts with the count n and is
-/// followed by n more copies of n.  Predicate: a block reaching n==4
-/// is the interesting one; the trailing (5,...) block should be
-/// shrinkable away by `node_program` deletion at lengths 1..=4.
+/// Initial counterexample is a run-length-encoded sequence
+/// (1) (2, 2) (3, 3, 3) (4, 4, 4, 4) (5, 5, 5, 5, 5) where each "block"
+/// starts with the count n and is followed by n more copies of n.
+/// Predicate: a block reaching n==4 is the interesting one; the
+/// trailing (5,...) block should be shrinkable away by `node_program`
+/// deletion at lengths 1..=4.
 #[test]
 fn node_program_deletes_short_ranges() {
     let mut initial: Vec<ChoiceNode> = Vec::new();
@@ -204,12 +201,10 @@ fn initial_node_count() -> usize {
     20
 }
 
-/// Port of Hypothesis `test_node_programs_are_adaptive`
-/// (`tests/conjecture/test_shrinker.py`).  Start from 1000 false
-/// booleans followed by a true: the predicate accepts iff the
-/// sequence eventually reaches a true.  `node_program("X")`
-/// (delete-one with adaptive `find_integer` repeats) should
-/// collapse to a single `true` within a tight call budget.
+/// Start from 1000 false booleans followed by a true: the predicate
+/// accepts iff the sequence eventually reaches a true. `node_program("X")`
+/// (delete-one with adaptive `find_integer` repeats) should collapse
+/// to a single `true` within a tight call budget.
 #[test]
 fn node_program_adaptively_deletes_long_false_run() {
     use crate::native::core::choices::BooleanChoice;
@@ -228,9 +223,9 @@ fn node_program_adaptively_deletes_long_false_run() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
-                // Predicate: at least one true present.  The realised
-                // sequence stops at the first true, mirroring
-                // Hypothesis's draw-until-true loop.
+                // Predicate: at least one true present. The realised
+                // sequence stops at the first true (draw-until-true
+                // semantics).
                 let mut realised: Vec<ChoiceNode> = Vec::new();
                 let mut interesting = false;
                 for n in nodes {

@@ -58,8 +58,6 @@ impl<'a> Shrinker<'a> {
         }
     }
 
-    /// Port of Hypothesis's `bind_deletion`.
-    ///
     /// When a value controls the length of a downstream sequence (e.g.
     /// via flat_map), reducing that value may shorten the test case without
     /// keeping the result interesting. This pass detects that situation and
@@ -145,18 +143,16 @@ impl<'a> Shrinker<'a> {
 
     /// Per-node minimization with size-dependency deletion fallback.
     ///
-    /// Port of `shrinker.py:1710-1808` (`minimize_individual_choices`).  For
-    /// each non-forced, non-simplest integer node, lowering it by one
-    /// often shortens the realised sequence because the integer
+    /// For each non-forced, non-simplest integer node, lowering it by
+    /// one often shortens the realised sequence because the integer
     /// controlled a downstream collection size (the
-    /// `lists(integers(min_size=n))` flat-map pattern).  When that
+    /// `lists(integers(min_size=n))` flat-map pattern). When that
     /// happens but the lowered candidate isn't directly interesting, we
     /// try splicing out spans / nodes after the integer to recover an
     /// interesting (shorter) candidate.
     ///
-    /// Non-integer nodes are deferred to the existing per-type passes
-    /// — the unified Hypothesis driver only adds value for integers,
-    /// per its own comment (`shrinker.py:1748-1756`).
+    /// Non-integer nodes are deferred to the existing per-type passes —
+    /// the unified driver only adds value for integers.
     pub(crate) fn minimize_individual_choices(&mut self) {
         let mut i = 0;
         while i < self.current_nodes.len() {
@@ -211,15 +207,15 @@ impl<'a> Shrinker<'a> {
 
             let (_, actual_nodes, actual_spans) = (self.test_fn)(super::ShrinkRun::Full(&lowered));
 
-            // Misalignment-truncation retry.  Even when the sequence
+            // Misalignment-truncation retry. Even when the sequence
             // length didn't change, the realised draw of a string/bytes
             // node at `k > i` may be shorter than the candidate (the
             // test re-drew that node with a smaller min_size dictated
-            // by the lowered integer).  Retry with the candidate
+            // by the lowered integer). Retry with the candidate
             // truncated to the realised length.
             //
-            // Mirrors `shrinker.py:1213-1242`.  Runs independent of
-            // the size-dependency / deletion fallback below.
+            // Runs independent of the size-dependency / deletion
+            // fallback below.
             let mut misalignment_handled = false;
             for k in (i + 1)..lowered.len().min(actual_nodes.len()) {
                 let cand = &lowered[k];
@@ -286,22 +282,19 @@ impl<'a> Shrinker<'a> {
     /// Adaptively delete `n` consecutive nodes at every position, with
     /// `find_integer` powering the repeat-count probe.
     ///
-    /// Port of `shrinker.py:1340-1376` (`node_program("X" * n)` /
-    /// `_node_program`) plus `run_node_program` (`shrinker.py:1857-1886`).
     /// Walks each starting index `i`, tries deleting `[i, i+n)`; if that
     /// lands, walks left to find the start of a contiguous deletable
     /// region and then `find_integer`s the largest repeat count that
     /// still keeps the candidate interesting.
     ///
     /// Each find_integer probe runs against a fixed snapshot taken when
-    /// the probe started — matching Hypothesis's `original` parameter
-    /// in `run_node_program` — so the repeat semantics line up with
-    /// upstream regardless of intervening shrink-target updates.
+    /// the probe started, so the repeat semantics are stable regardless
+    /// of intervening shrink-target updates.
     ///
     /// This is `delete_chunks` rewritten as five named passes — one for
     /// each `n in 1..=5` — and gives O(log k) test-function calls when
     /// a long deletable region exists, vs. the linear O(k) of the legacy
-    /// loop.  `delete_chunks` is kept alongside as the native fallback.
+    /// loop. `delete_chunks` is kept alongside as the native fallback.
     pub(crate) fn node_program(&mut self, n: usize) {
         if n == 0 {
             return;
@@ -344,9 +337,9 @@ impl<'a> Shrinker<'a> {
     /// position `i` of `original`, then ask `consider` whether the
     /// resulting candidate is still interesting *and* an improvement.
     ///
-    /// Mirrors `shrinker.py:1857-1886`: the deletion always operates on
-    /// the supplied `original` snapshot, so repeat counts are
-    /// well-defined regardless of intermediate shrink-target updates.
+    /// The deletion always operates on the supplied `original` snapshot,
+    /// so repeat counts are well-defined regardless of intermediate
+    /// shrink-target updates.
     fn run_node_program(
         &mut self,
         original: &[ChoiceNode],

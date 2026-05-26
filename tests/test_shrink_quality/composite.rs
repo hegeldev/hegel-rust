@@ -73,10 +73,10 @@ fn test_earlier_exit_produces_shorter_sequence() {
         }
         v0
     });
-    // The tail `len(v1) != 0` check in the upstream is always truthy
-    // because pairs always have length 2, so the shrinker gets to pick
-    // between the two "interesting" paths. We model this with a
-    // condition that's always true.
+    // The tail `len(v1) != 0` check is always truthy because pairs
+    // always have length 2, so the shrinker gets to pick between the
+    // two "interesting" paths. We model this with a condition that's
+    // always true.
     let v0 = minimal(g, |_: &bool| true);
     assert!(v0, "shrinker should prefer the shorter v0=true path");
 }
@@ -118,8 +118,8 @@ fn test_early_exit_via_flag_with_preceding_draws() {
     let (v0, v1, v2) = minimal(g, |(v0, v1, v2): &(bool, Vec<u8>, Vec<i64>)| {
         *v0 || v1.len() + v2.len() >= 20
     });
-    // Per the upstream, shrunk result is either (false, b'\x00'*20, [])
-    // or (true, b'', []). Both are valid outcomes.
+    // Shrunk result is either (false, b'\x00'*20, []) or (true, b'', []).
+    // Both are valid outcomes.
     let _ = (v0, v1, v2);
 }
 
@@ -165,8 +165,7 @@ fn test_shorter_path_via_later_assertion() {
         let _: (bool, f64) = tc.draw(pair());
         (v0, v1)
     });
-    // `len(v0)` in Python refers to the tuple length (always 2), so the
-    // second disjunct always fires. The shorter path is v1 empty.
+    // The predicate is trivially true, so the shorter path is v1 empty.
     let (_v0, v1) = minimal(test_data, |_: &((bool, f64), Vec<i64>)| true);
     assert!(v1.is_empty());
 }
@@ -238,12 +237,11 @@ fn test_shorter_path_when_guard_precedes_expensive_draw() {
     assert!(v0 > 0);
 }
 
-// --- Regression tests from test_core.py ---
+// --- Regression tests ---
 
 #[test]
 fn test_finds_small_list_even_with_bad_lists() {
-    // Python parametrises over seed in range(10); hegel's `minimal()` is
-    // already derandomized, so we just run once and check the shrunk
+    // `minimal()` is derandomized, so we run once and check the shrunk
     // counterexample is `[1001]`.
     let bad_list = hegel::compose!(|tc| {
         let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(10));
@@ -262,8 +260,8 @@ fn test_shrinking_mixed_choice_types_no_sort_crash() {
     // Mix integer and boolean choices — shrinking must not crash when the
     // type at a given position changes across iterations.
     //
-    // Upstream uses `tc.weighted(0.5)` which at p=0.5 is equivalent to
-    // drawing an unbiased boolean.
+    // `tc.weighted(0.5)` at p=0.5 is equivalent to drawing an unbiased
+    // boolean.
     let g = hegel::compose!(|tc| {
         let x: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(3));
         if x > 0 {
@@ -332,8 +330,8 @@ fn test_lower_and_bump_with_type_change() {
 
 #[test]
 fn test_lower_and_bump_explores_new_range() {
-    // Encodes the upstream's choice-sequence assertion [0, 0, 32, 0] as
-    // the shrunk tuple (v0, v1, v2, v3).
+    // Encodes the choice-sequence assertion [0, 0, 32, 0] as the shrunk
+    // tuple (v0, v1, v2, v3).
     let g = hegel::compose!(|tc| {
         let v0: i64 = tc.draw(gs::sampled_from(vec![32i64, 46]));
         let v1: i64 = tc.draw(gs::sampled_from(vec![32i64, 46]));
@@ -352,7 +350,7 @@ fn test_lower_and_bump_explores_new_range() {
     let (v0, v1, v2, v3) = Minimal::new(g, |(v0, _, v2, _): &(i64, i64, i64, i64)| v2 == v0)
         .test_cases(2000)
         .run();
-    // Upstream asserts the choice-sequence values are [0, 0, 32, 0]. For
+    // Asserts the choice-sequence values are [0, 0, 32, 0]. For
     // sampled_from(v0) the sampling index 0 maps to value 32 — the first
     // entry — so we check by *value*, not by index.
     assert_eq!(v2, v0);
@@ -389,9 +387,9 @@ fn test_lower_and_bump_tries_negative_values() {
     })
     .test_cases(2000)
     .run();
-    // Per the upstream: v2 = integer(0,0) → 0 with v3 = -1 is simpler than
-    // v2 = bool=true with v3 = 0. But the failing predicate here requires
-    // v2=bool; so that's what we get, and we check it's a simpler case.
+    // v2 = integer(0,0) → 0 with v3 = -1 is simpler than v2 = bool=true
+    // with v3 = 0. But the failing predicate here requires v2=bool; so
+    // that's what we get, and we check it's a simpler case.
     match v2 {
         BoolOrInt::Bool(true) => assert_eq!(v3, 0),
         BoolOrInt::Bool(false) => assert_eq!(v3, -1),
@@ -645,8 +643,8 @@ fn test_one_of_switches_to_shorter_branch() {
 
 #[test]
 fn test_mutate_exercises_index_probes() {
-    // Find a case where a > 5 and b is truthy. Upstream uses
-    // `tc.weighted(0.5)` for b, which is equivalent to `gs::booleans()`.
+    // Find a case where a > 5 and b is truthy. `tc.weighted(0.5)` for b
+    // is equivalent to `gs::booleans()`.
     let (a, b) = minimal(
         gs::tuples!(
             gs::integers::<i64>().min_value(0).max_value(10),
@@ -660,7 +658,7 @@ fn test_mutate_exercises_index_probes() {
 
 #[test]
 fn test_mutate_skips_large_result() {
-    // 35 integer draws — upstream asserts shrinking doesn't choke on the
+    // 35 integer draws — asserts shrinking doesn't choke on the
     // large-result early-return in `mutate_and_shrink`.
     //
     // Predicate accepts every Vec<i64>, so the shrinker minimises every
@@ -676,14 +674,12 @@ fn test_mutate_skips_large_result() {
 }
 
 // ----------------------------------------------------------------------------
-// Composite tests ported from Hypothesis.
+// Composite tests.
 // ----------------------------------------------------------------------------
 
-/// Port of Hypothesis `test_can_expand_zeroed_region`
-/// (`tests/conjecture/test_shrinker.py`).  Five integers; the
-/// predicate accepts iff all non-zero values appear before any
-/// zero.  The shrinker should compact to all zeroes (the predicate's
-/// "everything zero" branch).
+/// Five integers; the predicate accepts iff all non-zero values appear
+/// before any zero. The shrinker should compact to all zeroes (the
+/// predicate's "everything zero" branch).
 #[test]
 fn test_can_expand_zeroed_region() {
     let g = hegel::compose!(|tc| {
@@ -709,10 +705,8 @@ fn test_can_expand_zeroed_region() {
     assert_eq!(v, vec![0, 0, 0, 0, 0]);
 }
 
-/// Port of Hypothesis `test_retain_end_of_buffer`
-/// (`tests/conjecture/test_shrinker.py`).  The shrinker should
-/// preserve the trailing 0 sentinel while reducing the
-/// middle-of-sequence to minimal contents that still trigger the
+/// The shrinker should preserve the trailing 0 sentinel while reducing
+/// the middle-of-sequence to minimal contents that still trigger the
 /// 6-marker — converging on a sequence whose simplest form ends with
 /// the 6 and the terminator.
 #[test]
@@ -744,12 +738,10 @@ fn test_retain_end_of_buffer() {
     );
 }
 
-/// Port of Hypothesis `test_duplicate_nodes_that_go_away`
-/// (`tests/conjecture/test_shrinker.py`).  Two equal positive
-/// integers x, y followed by `x & 255` bytes each of value 1.
-/// Predicate: x == y AND the bytes set has at most one element.
-/// Minimum: (0, 0) with no trailing bytes — both x and y can shrink
-/// to zero together via `minimize_duplicated_choices`.
+/// Two equal positive integers x, y followed by `x & 255` bytes each of
+/// value 1. Predicate: x == y AND the bytes set has at most one element.
+/// Minimum: (0, 0) with no trailing bytes — both x and y can shrink to
+/// zero together via `minimize_duplicated_choices`.
 #[test]
 fn test_duplicate_nodes_that_go_away() {
     let g = hegel::compose!(|tc| {
@@ -774,12 +766,10 @@ fn test_duplicate_nodes_that_go_away() {
     assert!(b.is_empty());
 }
 
-// `test_accidental_duplication` (Hypothesis
-// `tests/conjecture/test_shrinker.py`) deferred: the predicate
-// (`x == y AND x >= 5 AND uniform bytes`) is too narrow for
-// random search to find an initial counterexample within a
-// reasonable attempt budget.  Hypothesis bypasses this with
-// `@shrinking_from((12, 12) + (b"\2",) * 12)` — a fixture-based
-// approach we don't currently expose at integration level.  Port
-// requires either an embedded shrinker fixture or extending
-// `Minimal` to accept a seed counterexample.
+// `test_accidental_duplication` deferred: the predicate
+// (`x == y AND x >= 5 AND uniform bytes`) is too narrow for random
+// search to find an initial counterexample within a reasonable
+// attempt budget. A fixture-based variant (seeded with a known
+// counterexample) would address this but requires either an embedded
+// shrinker fixture or extending `Minimal` to accept a seed
+// counterexample.

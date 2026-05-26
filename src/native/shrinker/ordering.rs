@@ -1,9 +1,9 @@
 //! Sequence-reordering primitive used by `reorder_spans`.
 //!
-//! Port of Hypothesis's `shrinking/ordering.py`.  The algorithm walks a
-//! permutation of `[0..n)` and tries to make the resulting key-ordered
-//! sequence more sorted under the supplied key function, leaving the
-//! length and the multiset of keys unchanged.  Three phases:
+//! The algorithm walks a permutation of `[0..n)` and tries to make the
+//! resulting key-ordered sequence more sorted under the supplied key
+//! function, leaving the length and the multiset of keys unchanged.
+//! Three phases:
 //!
 //! 1. Short-circuit: attempt a full sort.
 //! 2. `sort_regions`: adaptively grow a sorted-region from each index,
@@ -101,8 +101,8 @@ where
         return;
     }
     for i in 1..len - 1 {
-        // Skip already-locally-sorted positions, mirroring Hypothesis's
-        // `current[i-1] <= current[i] <= current[i+1]` short-circuit.
+        // Skip already-locally-sorted positions
+        // (`current[i-1] <= current[i] <= current[i+1]` short-circuit).
         if keys(current[i - 1]) <= keys(current[i]) && keys(current[i]) <= keys(current[i + 1]) {
             continue;
         }
@@ -157,10 +157,9 @@ where
     K: FnMut(usize) -> T,
     F: FnMut(&[usize]) -> bool,
 {
-    // Hypothesis's `assert a <= i < b` allows the boundary case
-    // `a == centre` (sort only the right side, with `split = 0`).
-    // Callers guarantee these conditions; a debug_assert documents
-    // the invariant.
+    // `a <= centre < b` allows the boundary case `a == centre`
+    // (sort only the right side, with `split = 0`). Callers guarantee
+    // these conditions; a debug_assert documents the invariant.
     debug_assert!(a <= centre && centre < b && b <= snapshot.len());
     let split = centre - a;
     let mut sides: Vec<usize> = snapshot[a..centre].to_vec();

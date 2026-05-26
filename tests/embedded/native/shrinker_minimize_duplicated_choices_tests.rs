@@ -1,7 +1,5 @@
 //! Unit tests for the generalised `shrink_duplicates` /
 //! `minimize_duplicated_choices`.
-//!
-//! Hypothesis reference: `shrinker.py:1379-1406`.
 
 use crate::native::core::choices::{
     BooleanChoice, BytesChoice, FloatChoice, IntegerChoice, StringChoice,

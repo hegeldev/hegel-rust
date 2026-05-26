@@ -1,6 +1,4 @@
 //! Unit tests for `Shrinker::try_trivial_spans`.
-//!
-//! Hypothesis reference: `shrinker.py:1680-1708`.
 
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};

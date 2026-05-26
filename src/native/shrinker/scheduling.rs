@@ -1,15 +1,13 @@
 //! Pass scheduling for the shrinker.
 //!
-//! Port of `shrinker.py:837-929` (`fixate_shrink_passes`).  Each pass is
-//! wrapped in a `ShrinkPass` with per-pass stats (calls, shrinks,
-//! deletions) and the outer loop re-sorts them by recent success so
-//! useful passes float to the front of the list.
+//! Each pass is wrapped in a `ShrinkPass` with per-pass stats (calls,
+//! shrinks, deletions) and the outer loop re-sorts them by recent
+//! success so useful passes float to the front of the list.
 //!
-//! Without a `ChoiceTree`/`Chooser` integration the "step" granularity
-//! is one whole pass invocation: a step is considered to have made
-//! progress when the shrink target's sort_key strictly decreased.  A
-//! finer-grained `&mut Chooser`-based step is a future refinement; the
-//! scheduling skeleton here stays the same either way.
+//! The "step" granularity is one whole pass invocation: a step is
+//! considered to have made progress when the shrink target's sort_key
+//! strictly decreased. A finer-grained step is a future refinement;
+//! the scheduling skeleton here stays the same either way.
 
 use crate::native::core::sort_key;
 
@@ -28,11 +26,10 @@ fn next_rand(mut x: u64) -> u64 {
 
 /// One scheduled shrink pass with per-pass statistics.
 ///
-/// Mirrors Hypothesis's `ShrinkPass` dataclass (`shrinker.py:122-140`).
 /// The `run` callback is invoked by [`Shrinker::fixate_shrink_passes`]
-/// with the active shrinker; each invocation should attempt one
-/// "step" of the underlying pass and let the scheduler decide whether
-/// to call it again.
+/// with the active shrinker; each invocation should attempt one "step"
+/// of the underlying pass and let the scheduler decide whether to call
+/// it again.
 pub struct ShrinkPass<'a> {
     /// Display name.  Read by `fixate_shrink_passes` for the per-pass
     /// "Trying shrink pass: <name>" debug line and by
@@ -64,36 +61,29 @@ impl<'a> ShrinkPass<'a> {
 impl<'a> Shrinker<'a> {
     /// Run the supplied list of passes to a fixed point.
     ///
-    /// Mirrors Hypothesis's `fixate_shrink_passes` (`shrinker.py:837-929`):
-    ///
     /// * Each outer iteration steps every pass up to `MAX_FAILURES = 20`
     ///   times in a row without progress.
     /// * Inside each per-pass loop, `Shrinker::max_stall` is grown to
     ///   `max(max_stall, 2 * max_calls_per_failing_step + (calls -
     ///   calls_at_loop_start))` so a long shrink search where each step
-    ///   is expensive doesn't get cut off by the stall guard
-    ///   (`shrinker.py:881-885`).
+    ///   is expensive doesn't get cut off by the stall guard.
     /// * Passes that fail `MAX_FAILURES/2` times in a row trigger a
     ///   stable-by-key, otherwise random shuffle of the remaining
     ///   passes for this outer iteration so we don't get stuck running
-    ///   them in the same useless order (`shrinker.py:897`).  This is
-    ///   coarser than Hypothesis's per-pass `random_order` Chooser
-    ///   switch (which requires `ChoiceTree`); pass-list-level
-    ///   shuffling is the closest analogue without that machinery.
+    ///   them in the same useless order.
     /// * Between outer iterations, passes are re-sorted by reorder key:
     ///   passes that deleted nodes (-1) come first, then passes that
     ///   changed shape (0), then useless passes (1).
     ///
     /// Returns when no pass made any progress over a full outer
-    /// iteration.  Called by [`Shrinker::shrink`].
+    /// iteration. Called by [`Shrinker::shrink`].
     pub fn fixate_shrink_passes(&mut self, passes: &mut [ShrinkPass<'a>]) {
         const MAX_FAILURES: usize = 20;
         let mut any_ran = true;
         let mut shuffle_state: u64 = 0x9E3779B97F4A7C15;
         while any_ran {
             any_ran = false;
-            // Try the cleanup pass once at the start of each loop —
-            // mirrors Hypothesis's `can_discard = self.remove_discarded()`.
+            // Try the cleanup pass once at the start of each loop.
             let mut can_discard = self.remove_discarded();
             let calls_at_loop_start = self.calls;
             let mut max_calls_per_failing_step: usize = 1;
@@ -107,12 +97,11 @@ impl<'a> Shrinker<'a> {
                 let before_key = sort_key(&self.current_nodes);
                 let mut failures: usize = 0;
 
-                // Without a `Chooser` integration, each pass is
-                // deterministic — running it again with the shrink target
-                // unchanged would simply repeat the same work.  We keep
-                // calling the pass while it strictly improves and stop
-                // as soon as it produces no change.  MAX_FAILURES is
-                // retained as an upper bound for safety.
+                // Each pass is deterministic — running it again with the
+                // shrink target unchanged would simply repeat the same
+                // work. We keep calling the pass while it strictly
+                // improves and stop as soon as it produces no change.
+                // MAX_FAILURES is retained as an upper bound for safety.
                 while failures < MAX_FAILURES {
                     // Grow max_stall to leave breathing room for the
                     // remainder of this outer iteration.

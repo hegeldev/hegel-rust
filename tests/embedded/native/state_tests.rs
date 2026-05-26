@@ -696,12 +696,10 @@ fn draw_float_half_bounded_below_explores_finite_range() {
 
 // ── NativeTestCase::for_simplest ─────────────────────────────────────────────
 //
-// Mirrors the `cached_test_function((ChoiceTemplate("simplest", count=None),))`
-// pre-trial that Hypothesis's engine runs at the head of the Generate phase
-// (engine.py::generate_new_examples). Every draw must return the kind's
-// `simplest()` value — `shrink_towards` clamped to range for integers, 0.0
-// for floats, false for booleans, the empty / lower-bound size for bytes
-// and strings.
+// The all-simplest pre-trial run at the head of the Generate phase. Every
+// draw must return the kind's `simplest()` value — `shrink_towards`
+// clamped to range for integers, 0.0 for floats, false for booleans, the
+// empty / lower-bound size for bytes and strings.
 
 #[test]
 fn for_simplest_draws_integer_at_shrink_target_when_in_range() {
@@ -729,9 +727,9 @@ fn for_simplest_draws_integer_clamped_to_range_when_target_above() {
 
 #[test]
 fn for_simplest_propagates_across_many_draws() {
-    // The mode applies to every draw, not just the first. This is what makes
-    // Hypothesis-style "midnight = all four time components are zero" findable
-    // on a single pre-trial.
+    // The mode applies to every draw, not just the first. This is what
+    // makes "midnight = all four time components are zero" findable on
+    // a single pre-trial.
     let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
     for _ in 0..10 {
         assert_eq!(tc.draw_integer(0, 99).ok().unwrap(), 0);

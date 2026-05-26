@@ -90,8 +90,8 @@ fn test_minimizes_towards_zero() {
     );
 }
 
-// Tests 10-12 mirror test_integer_shrinks_* from the upstream, which use
-// PbtkitState directly. The same shrink quality is verified via minimal().
+// Tests 10-12 verify the same shrink quality (negative range, binary
+// search, negative-only range) via `minimal()`.
 
 #[test]
 fn test_integer_shrinks_negative() {
@@ -140,10 +140,9 @@ fn test_reduces_additive_pairs() {
     assert_eq!((m, n), (1, 1000));
 }
 
-// Port of `tests/quality/test_shrink_quality.py::test_perfectly_shrinks_integers`.
-//
-// For an integer constraint that's reached only when `x >= n` (or `x <= n`
-// for negative n), the shrinker should land exactly on `n` — no slack.
+// For an integer constraint that's reached only when `x >= n` (or
+// `x <= n` for negative n), the shrinker should land exactly on `n` —
+// no slack.
 #[test]
 fn test_perfectly_shrinks_integers_positive() {
     for n in [3i64, 7, 42] {
@@ -160,11 +159,10 @@ fn test_perfectly_shrinks_integers_negative() {
     }
 }
 
-// Port of `tests/quality/test_shrink_quality.py::test_lowering_together_negative`.
-//
-// Two integers linked by `abs(m - n) <= 1` should collapse to `(0, 0)` quickly
-// when both are allowed to be negative.  Exercises `lower_integers_together`
-// and `lower_common_node_offset` driving both at once.
+// Two integers linked by `abs(m - n) <= 1` should collapse to `(0, 0)`
+// quickly when both are allowed to be negative. Exercises
+// `lower_integers_together` and `lower_common_node_offset` driving both
+// at once.
 #[test]
 fn test_lowering_together_negative() {
     let (m, n) = Minimal::new(
@@ -182,8 +180,6 @@ fn test_lowering_together_negative() {
     assert!(n.abs_diff(m) <= 1);
 }
 
-// Port of `tests/quality/test_shrink_quality.py::test_lowering_together_mixed`.
-//
 // Mixed-sign linked integer pair.
 #[test]
 fn test_lowering_together_mixed() {
@@ -205,8 +201,6 @@ fn test_lowering_together_mixed() {
     assert!(m - n <= 25);
 }
 
-// Port of `tests/conjecture/test_shrinker.py::test_can_simultaneously_lower_non_duplicated_nearby_integers`.
-//
 // Two non-duplicate integers within gap 3 that must both stay above 10.
 #[test]
 fn test_can_simultaneously_lower_non_duplicated_nearby_integers() {
@@ -223,15 +217,13 @@ fn test_can_simultaneously_lower_non_duplicated_nearby_integers() {
 }
 
 // ----------------------------------------------------------------------------
-// Conjecture shrinker tests ported as integration-level checks against
-// the native runner.
+// Integration-level shrinker checks against the native runner.
 // ----------------------------------------------------------------------------
 
-/// Port of Hypothesis `test_zig_zags_quickly`
-/// (`tests/conjecture/test_shrinker.py`).  A pair of nearly-equal
-/// positive integers should shrink to the minimal pair within a tight
-/// call budget — exercising `lower_common_node_offset`'s O(log v) zig-
-/// zag breaker rather than O(v) per-step descent.
+/// A pair of nearly-equal positive integers should shrink to the
+/// minimal pair within a tight call budget — exercising
+/// `lower_common_node_offset`'s O(log v) zig-zag breaker rather than
+/// O(v) per-step descent.
 #[test]
 fn test_zig_zags_quickly() {
     let (m, n) = Minimal::new(
@@ -248,11 +240,9 @@ fn test_zig_zags_quickly() {
     assert!((m, n) == (0, 1) || (m, n) == (1, 0));
 }
 
-/// Port of Hypothesis `test_shrinking_blocks_from_common_offset`
-/// (`tests/conjecture/test_shrinker.py`).  Initial counterexample
-/// (11, 10): predicate accepts any near-equal pair with at least one
-/// nonzero.  Lowering both by a common offset of 10 lands on (1, 0)
-/// or (0, 1).
+/// Initial counterexample (11, 10): predicate accepts any near-equal
+/// pair with at least one nonzero. Lowering both by a common offset of
+/// 10 lands on (1, 0) or (0, 1).
 #[test]
 fn test_shrinking_blocks_from_common_offset() {
     let (m, n) = Minimal::new(
@@ -267,10 +257,8 @@ fn test_shrinking_blocks_from_common_offset() {
     assert!((m, n) == (0, 1) || (m, n) == (1, 0));
 }
 
-/// Port of Hypothesis `test_zig_zags_quickly_with_shrink_towards`.
 /// Same shape as `test_zig_zags_quickly` but with a negative-leaning
-/// range — exercises the lower_common_node_offset on the negative
-/// side.
+/// range — exercises `lower_common_node_offset` on the negative side.
 #[test]
 fn test_zig_zags_quickly_with_shrink_towards() {
     let (m, n) = Minimal::new(

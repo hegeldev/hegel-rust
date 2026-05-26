@@ -3,8 +3,6 @@
 //! These passes consult [`Shrinker::current_spans`] to operate on
 //! structured sub-sequences of the choice list rather than individual
 //! nodes.
-//!
-//! Hypothesis source: `hypothesis/internal/conjecture/shrinker.py`.
 
 use super::ordering::shrink_ordering;
 use super::{ShrinkRun, Shrinker};
@@ -13,10 +11,9 @@ use crate::native::core::sort_key;
 impl<'a> Shrinker<'a> {
     /// Delete every contiguous non-overlapping discarded span in one pass.
     ///
-    /// Port of `shrinker.py:1290-1330` (`remove_discarded`).  Useful for
-    /// rejection-sampling data left behind by filtered strategies — that
-    /// whole region can usually be cut in a single attempt rather than
-    /// element-by-element.
+    /// Useful for rejection-sampling data left behind by filtered
+    /// strategies — that whole region can usually be cut in a single
+    /// attempt rather than element-by-element.
     ///
     /// Returns `true` if either (a) there was nothing to discard, or
     /// (b) the deletion attempts succeeded.  Returns `false` when the
@@ -57,11 +54,10 @@ impl<'a> Shrinker<'a> {
     }
 
     /// For every span in `current_spans`, try replacing its choices with their
-    /// kind-simplest values.  Forced choices stay put.
+    /// kind-simplest values. Forced choices stay put.
     ///
-    /// Port of `shrinker.py:1680-1708` (`try_trivial_spans`).  When the
-    /// attempted replacement isn't interesting but the test run still
-    /// produced a valid result, a second attempt is made using the
+    /// When the attempted replacement isn't interesting but the test run
+    /// still produced a valid result, a second attempt is made using the
     /// realised span content from the run — this lets recursive
     /// structures whose simplest form is shape-dependent (e.g. an
     /// inner span that becomes shorter under simplest values) still
@@ -97,8 +93,8 @@ impl<'a> Shrinker<'a> {
 
             // Manually invoke the closure so we keep hold of the actual
             // realised nodes and spans even when the attempt isn't an
-            // improvement — Hypothesis uses this to retry with the
-            // realised span content (see line 1705-1708).
+            // improvement — we retry with the realised span content
+            // below.
             let (is_interesting, actual_nodes, actual_spans) =
                 (self.test_fn)(ShrinkRun::Full(&attempt));
             if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
@@ -130,29 +126,23 @@ impl<'a> Shrinker<'a> {
 
     /// Replace each span with one of its same-label descendants.
     ///
-    /// Port of `shrinker.py:959-1015` (`pass_to_descendant`).  This is the
-    /// pass that lets recursive strategies — `st.deferred(lambda: ... |
-    /// st.tuples(rec, rec))` — collapse a tree onto one of its subtrees in
-    /// a single step, instead of having to chew through each layer
-    /// individually.
+    /// This is the pass that lets recursive strategies collapse a tree
+    /// onto one of its subtrees in a single step, instead of having to
+    /// chew through each layer individually.
     ///
     /// For every pair `(ancestor, descendant)` of same-label spans where
     /// the descendant is strictly contained in the ancestor and is
     /// strictly shorter, we splice the descendant's nodes in place of the
     /// ancestor's and ask the predicate whether that's still interesting.
     pub(crate) fn pass_to_descendant(&mut self) {
-        // Snapshot (start, end, label) tuples up front.  Each consider()
-        // may rebuild current_spans, which would invalidate live indices —
-        // re-reading from the snapshot after every consider would mean
-        // recomputing the per-label index every time.  Hypothesis runs
-        // this pass via a Chooser that tracks exhausted branches across
-        // pass invocations; that requires per-pass persistent state
-        // hooked into `fixate_shrink_passes` which we don't currently
-        // support.  Instead we iterate all candidates from the initial
-        // snapshot and let each consider() bail naturally on a stale
-        // ancestor — the negative-result cache in `consider` covers
-        // the cross-invocation deduplication ChoiceTree would otherwise
-        // give us.
+        // Snapshot (start, end, label) tuples up front. Each consider()
+        // may rebuild current_spans, which would invalidate live indices
+        // — re-reading from the snapshot after every consider would mean
+        // recomputing the per-label index every time. Instead we iterate
+        // all candidates from the initial snapshot and let each
+        // consider() bail naturally on a stale ancestor — the
+        // negative-result cache in `consider` covers cross-invocation
+        // deduplication.
         let spans: Vec<(usize, usize, String)> = self
             .current_spans
             .iter()
@@ -209,16 +199,16 @@ impl<'a> Shrinker<'a> {
 
     /// Reorder same-label sibling spans into a more-sorted permutation.
     ///
-    /// Port of `shrinker.py:1810-1855` (`reorder_spans`).  For each parent
-    /// span, for each label that appears more than once among its direct
-    /// children, run an [`shrink_ordering`] over the children indices,
-    /// keyed by the sort key of the child's realised node slice.
+    /// For each parent span, for each label that appears more than once
+    /// among its direct children, run an [`shrink_ordering`] over the
+    /// children indices, keyed by the sort key of the child's realised
+    /// node slice.
     ///
     /// Permutation by index keeps the multiset of children intact; the
     /// only thing that changes is *which* slice ends up at which start
-    /// position.  This is the pass that ensures `test_not_equal(x, y)`
-    /// collapses to a canonical `(x="", y="0")` rather than the symmetric
-    /// alternative.
+    /// position. This is the pass that ensures `test_not_equal(x, y)`
+    /// collapses to a canonical `(x="", y="0")` rather than the
+    /// symmetric alternative.
     pub(crate) fn reorder_spans(&mut self) {
         let parents: Vec<Option<usize>> = {
             // Build the set of parent indices that have direct children

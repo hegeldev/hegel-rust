@@ -1,11 +1,11 @@
 //! Pre-shrink coarse reduction phase.
 //!
-//! Port of `shrinker.py:689-801`.  The coarse reduction runs *once*
-//! before the main fixate loop, and re-randomises small integer
-//! choices that look like they might be `one_of` branch selectors.
-//! Lowering such a branch can require regenerating everything after
-//! it, so this work doesn't compose well with the lexicographic
-//! reductions in the main loop — hence the separate one-shot phase.
+//! The coarse reduction runs *once* before the main fixate loop, and
+//! re-randomises small integer choices that look like they might be
+//! `one_of` branch selectors. Lowering such a branch can require
+//! regenerating everything after it, so this work doesn't compose well
+//! with the lexicographic reductions in the main loop — hence the
+//! separate one-shot phase.
 
 use std::collections::HashMap;
 
@@ -22,8 +22,8 @@ impl<'a> Shrinker<'a> {
     }
 
     /// Walk small non-negative integer nodes and try to lower them as
-    /// `one_of` branch selectors (`shrinker.py:711-770`).  For each
-    /// candidate node with `value <= 10` and `min_value == 0`:
+    /// `one_of` branch selectors. For each candidate node with
+    /// `value <= 10` and `min_value == 0`:
     /// 1. Probe whether *zeroing* the node changes the shape of the
     ///    test case (length, or kinds at later positions).  If not, the
     ///    expensive re-randomisation isn't needed — the main loop's
@@ -69,8 +69,6 @@ impl<'a> Shrinker<'a> {
 
     /// Lower the integer at `i` to `v`, retrying the suffix as random
     /// continuations to repair any shape changes the lower caused.
-    ///
-    /// Port of `shrinker.py:772-801`.
     fn try_lower_node_as_alternative(&mut self, i: usize, v: i128) -> bool {
         // Callers iterate `i < self.current_nodes.len()`, so this is a
         // documented precondition.

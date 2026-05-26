@@ -1,6 +1,4 @@
 //! Unit tests for `Shrinker::lower_common_node_offset`.
-//!
-//! Hypothesis reference: `shrinker.py:1017-1095`.
 
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
@@ -44,8 +42,8 @@ fn lower_common_node_offset_noop_when_fewer_than_two_changes() {
     shrinker.consider(&[int_node(3, 0), int_node(5, 0)]);
     assert_eq!(shrinker.changed_nodes().len(), 1);
     shrinker.lower_common_node_offset();
-    // One-element set: pass should leave it alone (Hypothesis short-circuits
-    // at `len <= 1`).
+    // One-element set: pass should leave it alone (short-circuits at
+    // `len <= 1`).
     assert_eq!(int_value(&shrinker.current_nodes[0]), 3);
     assert_eq!(int_value(&shrinker.current_nodes[1]), 5);
 }

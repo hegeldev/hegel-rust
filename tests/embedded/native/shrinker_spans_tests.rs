@@ -3,8 +3,7 @@
 //! Covers:
 //! * `Shrinker::current_spans` is replaced when an improvement is accepted.
 //! * `Shrinker::changed_nodes` accumulates indices whose value differs from
-//!   the last `clear_change_tracking` checkpoint, mirroring
-//!   `shrinker.py:1097-1131`.
+//!   the last `clear_change_tracking` checkpoint.
 //! * `Shrinker::changed_nodes` resets when the shape (length / kind list)
 //!   changes — the diff between two structures of different shapes is not
 //!   well-defined.
@@ -144,7 +143,7 @@ fn changed_nodes_accumulates_diff_against_checkpoint() {
 fn changed_nodes_clears_on_shape_change() {
     // When a shrink changes the sequence's length, there's no stable index
     // identity between old and new, so `update_change_tracking` clears the
-    // set (`shrinker.py:1120`).
+    // set.
     let initial = vec![int_node(5), int_node(5), int_node(5)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {

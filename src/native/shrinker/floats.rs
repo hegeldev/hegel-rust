@@ -1,5 +1,5 @@
 // Float shrink passes: `shrink_floats` reduces individual float choices toward
-// the simplest value under Hypothesis's lex ordering, and
+// the simplest value under the float lex ordering, and
 // `redistribute_numeric_pairs` rebalances adjacent (float, float),
 // (float, integer), and (integer, float) pairs so sum-style predicates like
 // `a + b > 1000` can collapse to their joint minimum.
@@ -13,19 +13,18 @@ use crate::native::core::{
 
 use super::{ShrinkRun, Shrinker, bin_search_down, find_integer};
 
-/// Largest `f64` for which `n + 1.0 != n` holds — i.e., `2^53`.  Above
+/// Largest `f64` for which `n + 1.0 != n` holds — i.e., `2^53`. Above
 /// this magnitude consecutive integers stop being individually
 /// representable as `f64`, so any "redistribute" that bumps a float by
 /// 1 silently reads as a shrink without actually changing the value.
-/// Mirrors `hypothesis.internal.floats.MAX_PRECISE_INTEGER`.
 const MAX_PRECISE_INTEGER: f64 = (1u64 << 53) as f64;
 
 /// Decompose a positive finite float into `(m, n)` with `value == m / n`.
 ///
-/// Mirrors Python's `float.as_integer_ratio`. Returns `None` for values whose
-/// numerator or denominator doesn't fit in `u128`: subnormals (denominator
-/// `2^1074`) and huge normals (numerator > `2^127`) both overflow. Callers
-/// skip the integer-ratio shrink step for those.
+/// Returns `None` for values whose numerator or denominator doesn't fit
+/// in `u128`: subnormals (denominator `2^1074`) and huge normals
+/// (numerator > `2^127`) both overflow. Callers skip the integer-ratio
+/// shrink step for those.
 pub(super) fn as_integer_ratio(v: f64) -> Option<(u128, u128)> {
     debug_assert!(v.is_finite() && v > 0.0);
     let bits = v.to_bits();
@@ -52,7 +51,7 @@ pub(super) fn as_integer_ratio(v: f64) -> Option<(u128, u128)> {
 }
 
 impl<'a> Shrinker<'a> {
-    /// Shrink float choices toward simpler values using Hypothesis lex ordering.
+    /// Shrink float choices toward simpler values using the float lex ordering.
     ///
     /// Steps per float node:
     /// 1. Try replacing with simplest().
@@ -100,13 +99,12 @@ impl<'a> Shrinker<'a> {
 
                 let v = self.float_at(i);
 
-                // NaN canonicalization. Mirrors Python's
-                // `Float.short_circuit`, which considers
-                // `[sys.float_info.max, inf, nan]` when current is NaN so
-                // that unconstrained predicates escape to a finite value and
-                // `is_nan`-style predicates converge on the positive
-                // canonical NaN (`0x7ff8_0000_0000_0000`, smallest mantissa
-                // in lex order). The non-NaN candidates go through
+                // NaN canonicalization. Consider `[f64::MAX, INFINITY,
+                // NAN]` when current is NaN so that unconstrained
+                // predicates escape to a finite value and `is_nan`-style
+                // predicates converge on the positive canonical NaN
+                // (`0x7ff8_0000_0000_0000`, smallest mantissa in lex
+                // order). The non-NaN candidates go through
                 // `replace`/`consider` unchanged; the canonical-NaN
                 // fallback has to bypass `consider`'s sort-key shortcut,
                 // since all NaN bit patterns share
@@ -163,9 +161,6 @@ impl<'a> Shrinker<'a> {
 
                 // Step 4a: integer-magnitude reduction.
                 //
-                // Mirrors Hypothesis's `Float.run_step`
-                // (`shrinking/floats.py`):
-                //
                 // * For |v| >= 2^53 (the integer-only float range),
                 //   reduce the magnitude via `find_integer`-based
                 //   shift_right and shrink_by_multiples — O(log log
@@ -173,7 +168,7 @@ impl<'a> Shrinker<'a> {
                 //   `bin_search_down`.
                 // * For 0 < |v| < 2^53, try precision-dropping: round
                 //   `v * 2^p` to floor / ceil and divide back, for p
-                //   from 10 down to 0.  This is what lets values like
+                //   from 10 down to 0. This is what lets values like
                 //   999.5 collapse to 1000.0 when the predicate
                 //   admits the rounded form — neither shift_right
                 //   (starts at floor(v)) nor the lex-index bisection
@@ -256,11 +251,10 @@ impl<'a> Shrinker<'a> {
                     }
                 } else if v_abs.is_finite() && v_abs > 0.0 {
                     // Precision-dropping for sub-MAX_PRECISE_INTEGER
-                    // values.  `2_f64.powi(p)` ladder mirrors
-                    // Hypothesis's `for p in range(10, 0, -1)` loop;
-                    // the explicit `int(current)` probe at the end
-                    // covers values whose integer floor / ceil
-                    // satisfy the predicate.
+                    // values. The `2_f64.powi(p)` ladder runs `p` from
+                    // 10 down to 0; the explicit `int(current)` probe
+                    // at the end covers values whose integer floor /
+                    // ceil satisfy the predicate.
                     let cur_abs = self.float_at(i).abs();
                     for p in (0..=10).rev() {
                         let scale = (2_f64).powi(p);
@@ -315,15 +309,15 @@ impl<'a> Shrinker<'a> {
 
                 // Step 5: Integer-ratio numeric reduction.
                 //
-                // Port of Hypothesis `conjecture/shrinking/floats.py::Float.run_step`
-                // tail: decompose v = m/n exactly and binary-search the integer
-                // part k of `divmod(m, n)` toward zero, keeping the fractional
-                // remainder r/n fixed. Catches shrinks like 2.5 → 1.5 under
-                // `fract(x) == 0.5` where neither the integer-range search
-                // (Step 4a) nor the lex-index bisection (Step 4b) visit 1.5:
-                // integer candidates have fract 0, and lex-bisection midpoints
-                // are powers of 2 whose decoded values sit near 1.0 without
-                // preserving the fractional half.
+                // Decompose v = m/n exactly and binary-search the integer
+                // part k of `divmod(m, n)` toward zero, keeping the
+                // fractional remainder r/n fixed. Catches shrinks like
+                // 2.5 → 1.5 under `fract(x) == 0.5` where neither the
+                // integer-range search (Step 4a) nor the lex-index
+                // bisection (Step 4b) visit 1.5: integer candidates have
+                // fract 0, and lex-bisection midpoints are powers of 2
+                // whose decoded values sit near 1.0 without preserving
+                // the fractional half.
                 //
                 // Uses strict `sort_key`-reduction as the accept predicate so a
                 // candidate that is merely interesting but lex-larger than
@@ -370,14 +364,13 @@ impl<'a> Shrinker<'a> {
 
     /// Redistribute magnitude across nearby numeric pairs.
     ///
-    /// Port of Hypothesis's `redistribute_numeric_pairs`. For sum-style
-    /// constraints (`a + b > 1000`), shrinking `a` toward 0 alone breaks
-    /// the predicate; the pair only collapses to its minimum when `a` is
-    /// reduced and `b` is raised by the same amount in lockstep. Walks pairs
-    /// `(i, j)` where `j - i` is small (cap 4 to avoid quadratic scans), at
-    /// least one side is a non-trivial Float, and probes
-    /// `(v_i - k, v_j + k)` (or `(v_i + k, v_j - k)` if `v_i` is below its
-    /// shrink target). Maximises `k` via `find_integer`.
+    /// For sum-style constraints (`a + b > 1000`), shrinking `a` toward 0
+    /// alone breaks the predicate; the pair only collapses to its minimum
+    /// when `a` is reduced and `b` is raised by the same amount in
+    /// lockstep. Walks pairs `(i, j)` where `j - i` is small (cap 4 to
+    /// avoid quadratic scans), at least one side is a non-trivial Float,
+    /// and probes `(v_i - k, v_j + k)` (or `(v_i + k, v_j - k)` if `v_i`
+    /// is below its shrink target). Maximises `k` via `find_integer`.
     ///
     /// Pure Integer-Integer pairs are already handled by
     /// [`Shrinker::redistribute_integers`] — this pass complements it by
@@ -403,12 +396,12 @@ impl<'a> Shrinker<'a> {
                 ) {
                     continue;
                 }
-                // MAX_PRECISE_INTEGER guard (shrinker.py:1356-1358): for
-                // a Float node, skip if the value is non-finite or has
-                // `|v| >= 2^53`.  Above that magnitude `f + 1 == f` so
-                // the redistribute math reads as a shrink without
-                // actually reducing the value — we'd waste calls and
-                // possibly accept lossy "no-op" candidates.
+                // MAX_PRECISE_INTEGER guard: for a Float node, skip if
+                // the value is non-finite or has `|v| >= 2^53`. Above
+                // that magnitude `f + 1 == f` so the redistribute math
+                // reads as a shrink without actually reducing the value
+                // — we'd waste calls and possibly accept lossy "no-op"
+                // candidates.
                 if !can_choose_for_redistribute(&self.current_nodes[i])
                     || !can_choose_for_redistribute(&self.current_nodes[j])
                 {
@@ -423,10 +416,10 @@ impl<'a> Shrinker<'a> {
     }
 }
 
-/// `node.constraints["shrink_towards"]` for floats is fixed at 0 in
-/// upstream and we don't carry it in [`FloatChoice`]; the only
-/// node-level filter `redistribute_numeric_pairs` needs is the
-/// MAX_PRECISE_INTEGER / NaN / inf check from `shrinker.py:1356-1358`.
+/// Float `shrink_towards` is fixed at 0 and we don't carry it in
+/// [`FloatChoice`]; the only node-level filter
+/// `redistribute_numeric_pairs` needs is the MAX_PRECISE_INTEGER / NaN
+/// / inf check below.
 fn can_choose_for_redistribute(node: &ChoiceNode) -> bool {
     // Caller (`redistribute_numeric_pairs`) has already filtered out
     // non-numeric kinds via `is_float_or_integer`, so anything outside
@@ -501,11 +494,10 @@ fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) {
         Direction::RaiseLeftLowerRight
     };
 
-    // Upstream `shrinker.py:1404-1405` guards against `cand_j` crossing
-    // `MAX_PRECISE_INTEGER` here. We don't need that: the sort-key check
-    // in `consider`/`replace` rejects any candidate whose `|cand_i|` grows
-    // beyond the prior accept, which always trips well before `cand_j`
-    // reaches `2^53`.
+    // No explicit MAX_PRECISE_INTEGER guard on `cand_j`: the sort-key
+    // check in `consider`/`replace` rejects any candidate whose
+    // `|cand_i|` grows beyond the prior accept, which always trips well
+    // before `cand_j` reaches `2^53`.
     find_integer(|k| {
         let (cand_i, cand_j) = apply_delta(&v_i, &v_j, k as i128, dir);
         let Some(val_i) = build_value(&kind_i, cand_i) else {

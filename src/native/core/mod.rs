@@ -1,8 +1,8 @@
-// Core types for the native Hypothesis-style test engine.
+// Core types for the native test engine.
 //
 // Split into submodules:
 //   choices     — choice types (ChoiceKind, ChoiceNode, ChoiceValue, etc.)
-//   float_index — Hypothesis float lex ordering (float_to_index, index_to_float)
+//   float_index — float lex ordering (float_to_index, index_to_float)
 //   state       — NativeTestCase, ManyState, NativeVariables, Span
 
 pub(crate) mod choices;
@@ -22,9 +22,8 @@ pub const BUFFER_SIZE: usize = 8 * 1024;
 pub const BOUNDARY_PROBABILITY: f64 = 0.01;
 
 /// Hard cap on the number of successful shrink improvements per
-/// counterexample.  Mirrors Hypothesis's `MAX_SHRINKS` in
-/// `internal/conjecture/engine.py`.  Once the shrinker has accepted
-/// this many strictly-smaller candidates, further `consider` /
-/// `probe` calls short-circuit so the runner doesn't get stuck
-/// chasing diminishing returns on pathological inputs.
+/// counterexample. Once the shrinker has accepted this many
+/// strictly-smaller candidates, further `consider` / `probe` calls
+/// short-circuit so the runner doesn't get stuck chasing diminishing
+/// returns on pathological inputs.
 pub const MAX_SHRINKS: usize = 500;

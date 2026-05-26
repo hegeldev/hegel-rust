@@ -51,8 +51,6 @@ fn test_string_insertion_sort_swap_succeeds() {
     assert_eq!(s, "ab");
 }
 
-// Port of `tests/quality/test_shrink_quality.py::test_minimize_duplicated_characters_within_a_choice`.
-//
 // Strings that contain at least 3 of the same character *and* at least
 // two different characters should collapse to "000A"-style minimal
 // forms after `shrink_strings`' duplicate-codepoint pass fires.
@@ -86,8 +84,6 @@ fn test_minimize_duplicated_characters_within_a_choice() {
     assert!(counts.len() >= 2);
 }
 
-// Port of `tests/quality/test_shrink_quality.py::test_shrink_strips_accent_to_ascii_letter`.
-//
 // `normalize_unicode_chars` should peel accents off latin letters when
 // the predicate is satisfied by the base form.
 #[test]
@@ -104,9 +100,8 @@ fn test_shrink_strips_accent_to_ascii_letter() {
     assert!(s.chars().count() == 1);
 }
 
-// Port of `tests/quality/test_shrink_quality.py::test_shrink_text_differs_from_lower_to_ascii`.
-// Hypothesis regression: text shrinking previously got stuck on a
-// high-codepoint accented letter rather than converging to ASCII 'A'.
+// Regression: text shrinking previously got stuck on a high-codepoint
+// accented letter rather than converging to ASCII 'A'.
 #[test]
 fn test_shrink_text_differs_from_lower_to_ascii() {
     let s = Minimal::new(gs::text().min_size(1).max_size(8), |s: &String| {
@@ -115,16 +110,15 @@ fn test_shrink_text_differs_from_lower_to_ascii() {
     .test_cases(10000)
     .run();
     // Counterexample: a single-character string that differs from its
-    // lowercased form.  Ideally "A", but a single non-lower character
-    // is the property under test.  (Hypothesis lands on "A" reliably;
-    // native runner does so most of the time but is seed-dependent
-    // for the trickier accented inputs, so we assert the structural
-    // property and tolerate a non-canonical accented variant.)
+    // lowercased form. Ideally "A", but a single non-lower character is
+    // the property under test. The native runner lands on "A" most of
+    // the time but is seed-dependent for the trickier accented inputs,
+    // so we assert the structural property and tolerate a non-canonical
+    // accented variant.
     assert_eq!(s.chars().count(), 1);
     assert!(s != s.to_lowercase());
 }
 
-// Port of `tests/quality/test_shrink_quality.py::test_shrink_text_differs_from_upper_to_ascii`.
 #[test]
 fn test_shrink_text_differs_from_upper_to_ascii() {
     let s = Minimal::new(gs::text().min_size(1).max_size(8), |s: &String| {
@@ -136,7 +130,6 @@ fn test_shrink_text_differs_from_upper_to_ascii() {
     assert!(s != s.to_uppercase());
 }
 
-// Port of `tests/quality/test_shrink_quality.py::test_shrink_decomposes_compatibility_form_to_ascii`.
 // Codepoints that NFKD-decompose to ASCII letters (e.g. Mathematical
 // Bold Capital T) should reduce to the bare letter when the
 // predicate also matches it.
@@ -152,14 +145,12 @@ fn test_shrink_decomposes_compatibility_form_to_ascii() {
     assert_eq!(s, "T");
 }
 
-// Port of `tests/quality/test_shrink_quality.py::test_shrink_ligature_to_base_character`.
 // 'fi' (U+FB01) NFKD-decomposes to "fi"; the shrinker should land on
 // a single ASCII letter (either "F" or "f") when the predicate accepts
-// any 'f'-like character.  Upstream asserts the strict `"F"` minimum,
-// which the Linux server backend reproduces, but the Windows server
-// backend deterministically stops at "f" — the test still validates
-// the meaningful contract (single ASCII letter, satisfies the
-// predicate) without pinning the case.
+// any 'f'-like character. The Linux server backend lands on the strict
+// `"F"` minimum, but the Windows server backend deterministically stops
+// at "f" — the test validates the meaningful contract (single ASCII
+// letter, satisfies the predicate) without pinning the case.
 #[test]
 fn test_shrink_ligature_to_base_character() {
     let s = Minimal::new(gs::text().min_size(1).max_size(8), |s: &String| {

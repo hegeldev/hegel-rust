@@ -1,7 +1,5 @@
 //! Unit tests for `lower_duplicated_characters` and
 //! `normalize_unicode_chars`.
-//!
-//! Hypothesis references: `shrinker.py:1519-1581`, `shrinker.py:1583-1617`.
 
 use crate::native::core::choices::StringChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
@@ -181,11 +179,9 @@ fn normalize_unicode_chars_does_nothing_on_non_string() {
     }
 }
 
-/// Port of Hypothesis `test_normalize_unicode_chars_respects_intervals`
-/// (`tests/conjecture/test_shrinker.py`).  When the string's
-/// allowed alphabet excludes the simpler ASCII form (e.g. the range
-/// [0xC0, 0xFF] contains 'À' but not 'A'), the pass must not produce
-/// out-of-alphabet replacements.  'À' should stay 'À'.
+/// When the string's allowed alphabet excludes the simpler ASCII form
+/// (e.g. the range [0xC0, 0xFF] contains 'À' but not 'A'), the pass
+/// must not produce out-of-alphabet replacements. 'À' should stay 'À'.
 #[test]
 fn normalize_unicode_chars_respects_intervals() {
     let initial = vec![string_node_with(0xC0, 0xFF, vec![0xC0])];

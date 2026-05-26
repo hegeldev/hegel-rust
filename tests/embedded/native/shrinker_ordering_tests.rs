@@ -1,7 +1,5 @@
 //! Unit tests for the `Ordering` shrinker primitive used by
 //! `reorder_spans`.
-//!
-//! Hypothesis reference: `shrinking/ordering.py`.
 
 use super::shrink_ordering;
 

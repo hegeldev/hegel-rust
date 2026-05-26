@@ -9,14 +9,14 @@ use super::Shrinker;
 impl<'a> Shrinker<'a> {
     /// Try sorting groups of same-type choices by sort key.
     ///
-    /// Port of Hypothesis's `sort_values`. Groups choices by type and tries
-    /// sorting each group so simpler values come first, enabling other
-    /// passes to further reduce the leading choices. First attempts a
-    /// full sort; if that fails the `consider` predicate, falls back to
-    /// an insertion-sort loop where each adjacent swap is validated
-    /// individually. The fallback matters when earlier swaps cause
-    /// structural changes (e.g. value punning on collection-bearing
-    /// kinds) that would make the full sort's replace unreachable.
+    /// Groups choices by type and tries sorting each group so simpler
+    /// values come first, enabling other passes to further reduce the
+    /// leading choices. First attempts a full sort; if that fails the
+    /// `consider` predicate, falls back to an insertion-sort loop where
+    /// each adjacent swap is validated individually. The fallback
+    /// matters when earlier swaps cause structural changes (e.g. value
+    /// punning on collection-bearing kinds) that would make the full
+    /// sort's replace unreachable.
     pub(super) fn sort_values(&mut self) {
         // Sort integer choices by absolute value.
         self.sort_values_integers();
@@ -74,10 +74,10 @@ impl<'a> Shrinker<'a> {
             }
         }
 
-        // Insertion-sort fallback (Hypothesis's `feature_enabled("collections")`
-        // branch of `_try_sort_group`). Each iteration refreshes the valid
-        // indices because a prior successful swap can shorten current_nodes
-        // or change kinds at fixed positions via value punning.
+        // Insertion-sort fallback. Each iteration refreshes the valid
+        // indices because a prior successful swap can shorten
+        // current_nodes or change kinds at fixed positions via value
+        // punning.
         for pos in 1..indices.len() {
             let mut j = pos;
             while j > 0 {
@@ -110,13 +110,11 @@ impl<'a> Shrinker<'a> {
         }
     }
 
-    /// Port of Hypothesis's `swap_adjacent_blocks`.
-    ///
-    /// For each block size 2..=8, tries swapping adjacent blocks of the same
-    /// type structure (same sequence of choice kinds). This handles cases like
-    /// list entries where each entry spans multiple choices (e.g. [continue,
-    /// value]) and the sorting pass can't swap individual values without
-    /// breaking structure.
+    /// For each block size 2..=8, tries swapping adjacent blocks of the
+    /// same type structure (same sequence of choice kinds). This handles
+    /// cases like list entries where each entry spans multiple choices
+    /// (e.g. [continue, value]) and the sorting pass can't swap
+    /// individual values without breaking structure.
     pub(super) fn swap_adjacent_blocks(&mut self) {
         for block_size in 2usize..=8 {
             let mut i = 0;

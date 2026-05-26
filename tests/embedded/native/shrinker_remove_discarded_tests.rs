@@ -1,6 +1,4 @@
 //! Unit tests for `Shrinker::remove_discarded`.
-//!
-//! Hypothesis reference: `shrinker.py:1290-1330`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -65,8 +63,7 @@ fn remove_discarded_returns_true_when_no_discards() {
 #[test]
 fn remove_discarded_skips_zero_length_discarded_span() {
     // `span.end > span.start` is required — empty discarded spans never
-    // contribute to the deletion list (Hypothesis line 1311
-    // `ex.choice_count > 0` guard).
+    // contribute to the deletion list (the `ex.choice_count > 0` guard).
     let initial = vec![int_node(7)];
     let mut spans = Spans::new();
     spans.push(span(0, 0, true)); // zero-length discarded
@@ -137,7 +134,7 @@ fn remove_discarded_deletes_non_overlapping_regions_in_reverse() {
 fn remove_discarded_skips_nested_discarded_spans() {
     // The outer span (1..5) is discarded; the inner span (2..3) is also
     // discarded but lies entirely inside the outer one — the outer
-    // deletion subsumes it, and Hypothesis's `ex.start >= discarded[-1][-1]`
+    // deletion subsumes it, and the `ex.start >= discarded[-1][-1]`
     // guard skips the inner.
     let initial = vec![
         int_node(0),
