@@ -102,6 +102,51 @@ jobs:
       - name: Run tests
         run: just check-tests-native
 
+  test-wasm:
+    # Runs the native engine's lib tests under wasmtime, for each
+    # supported wasm target.  Hegel's property runner relies on
+    # `catch_unwind`, so we need nightly + `-Z build-std` to recompile
+    # `std` with `panic = "unwind"`, plus the wasm exception-handling
+    # proposal enabled in wasmtime.  Integration tests are not run on
+    # wasm — see `justfile` for context.
+    name: test-wasm (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [wasm32-wasip1, wasm32-wasip2]
+    env:
+      WASMTIME_VERSION: v45.0.0
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust nightly with rust-src
+        run: |
+          rustup toolchain install nightly --profile minimal --component rust-src
+          rustup target add ${{ matrix.target }} --toolchain nightly
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: ${{ matrix.target }}
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just
+
+      - name: Install wasmtime
+        run: |
+          ARCH=$(uname -m)
+          URL="https://github.com/bytecodealliance/wasmtime/releases/download/${WASMTIME_VERSION}/wasmtime-${WASMTIME_VERSION}-${ARCH}-linux.tar.xz"
+          curl -sSfL "$URL" -o wasmtime.tar.xz
+          tar -xJf wasmtime.tar.xz
+          echo "$PWD/wasmtime-${WASMTIME_VERSION}-${ARCH}-linux" >> "$GITHUB_PATH"
+
+      - name: Run tests
+        run: just check-tests-wasm ${{ matrix.target }}
+
   test-all-features:
     name: test-all-features (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
     runs-on: ${{ matrix.os }}
@@ -378,7 +423,7 @@ jobs:
   release:
     name: release
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust'
-    needs: [lint, test, test-native, test-all-features, test-minimal-versions, docs, coverage, conformance, nix, whole-repo]
+    needs: [lint, test, test-native, test-wasm, test-all-features, test-minimal-versions, docs, coverage, conformance, nix, whole-repo]
     runs-on: ubuntu-latest
     permissions:
       contents: write

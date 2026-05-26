@@ -20,6 +20,23 @@ check-tests-all-features-windows:
 check-tests-native:
     RUST_BACKTRACE=1 cargo test --features native
 
+# Run the native engine's lib tests under wasm via wasmtime. Requires
+# nightly Rust (for `-Z build-std`), the rust-src component, the matching
+# wasm target installed for nightly, and `wasmtime` on PATH. Hegel
+# intrinsically relies on `catch_unwind`, so we recompile std with
+# `panic = "unwind"` and run wasmtime with the exception-handling
+# proposal enabled.
+#
+# Integration tests in `tests/` are skipped — they all depend on
+# `tests/common/mod.rs`, which uses `#[ctor]` and `set_current_dir`,
+# neither of which work on wasm.
+check-tests-wasm target:
+    RUST_BACKTRACE=1 \
+        RUSTFLAGS="-C panic=unwind -C target-feature=+exception-handling" \
+        CARGO_TARGET_WASM32_WASIP1_RUNNER='wasmtime -W exceptions=y --dir=/tmp::/tmp --env=TMPDIR=/tmp' \
+        CARGO_TARGET_WASM32_WASIP2_RUNNER='wasmtime -W exceptions=y --dir=/tmp::/tmp --env=TMPDIR=/tmp' \
+        cargo +nightly test -Z build-std=std,panic_unwind --no-default-features --features native --target {{target}} --lib
+
 check-tests-minimal-versions:
     # This is an annoyingly specific check and feels like it overly couples CI concerns and check
     # concerns. I don't have a better proposal right now.
