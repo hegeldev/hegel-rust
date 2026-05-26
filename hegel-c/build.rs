@@ -15,6 +15,19 @@ fn main() {
     println!("cargo:rerun-if-changed=src/lib.rs");
     println!("cargo:rerun-if-changed=cbindgen.toml");
 
+    // Skip cbindgen entirely when cargo is verifying a packaged copy of the
+    // crate (`cargo package --workspace` builds each member in an isolated
+    // target/package/<name>-<version>/ directory). In that context cbindgen's
+    // cargo-metadata call sees a copy of the lockfile that no longer matches
+    // the workspace's own, and the drift check is meaningless against the
+    // packaged source anyway — the header is checked into git and is what
+    // ships in the tarball.
+    if crate_dir.components().any(|c| c.as_os_str() == "package")
+        && crate_dir.components().any(|c| c.as_os_str() == "target")
+    {
+        return;
+    }
+
     let config = cbindgen::Config::from_file(crate_dir.join("cbindgen.toml"))
         .expect("loading cbindgen.toml");
 

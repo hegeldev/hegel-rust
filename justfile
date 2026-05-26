@@ -87,8 +87,11 @@ c-build:
 # on Linux); --print-link-args from rustc would enumerate them, but
 # the set is stable enough to hard-code here.
 c-test:
-    cargo test -p hegeltest-c
+    # Build the cdylib first so the smoke tests can dlopen it. `cargo test`
+    # alone doesn't produce the cdylib artifact (libloading-based tests
+    # don't declare a build-link dependency on it).
     cargo build -p hegeltest-c
+    cargo test -p hegeltest-c
     mkdir -p target/c-examples
     scripts/c-examples-run.sh
 

@@ -60,14 +60,11 @@ def set_version(cargo_toml: Path, new_version: str) -> None:
     cargo_toml.write_text(new_text)
 
 
-def set_macros_dep_version(cargo_toml: Path, new_version: str) -> None:
+def set_dep_version(cargo_toml: Path, dep_name: str, new_version: str) -> None:
     text = cargo_toml.read_text()
-    new_text = re.sub(
-        r'hegeltest-macros = \{ version = "=[^"]+"',
-        f'hegeltest-macros = {{ version = "={new_version}"',
-        text,
-        count=2,
-    )
+    pattern = rf'{re.escape(dep_name)} = \{{ version = "=[^"]+"'
+    replacement = f'{dep_name} = {{ version = "={new_version}"'
+    new_text = re.sub(pattern, replacement, text, count=2)
     cargo_toml.write_text(new_text)
 
 
@@ -137,7 +134,9 @@ def release() -> None:
 
     set_version(ROOT / "Cargo.toml", new_version)
     set_version(ROOT / "hegel-macros" / "Cargo.toml", new_version)
-    set_macros_dep_version(ROOT / "Cargo.toml", new_version)
+    set_version(ROOT / "hegel-c" / "Cargo.toml", new_version)
+    set_dep_version(ROOT / "Cargo.toml", "hegeltest-macros", new_version)
+    set_dep_version(ROOT / "hegel-c" / "Cargo.toml", "hegeltest", new_version)
 
     # regenerate lockfiles after version bump
     subprocess.run(["cargo", "update", "--workspace"], check=True, cwd=ROOT)
@@ -165,6 +164,7 @@ def release() -> None:
         "Cargo.toml",
         "Cargo.lock",
         "hegel-macros/Cargo.toml",
+        "hegel-c/Cargo.toml",
         "tests/conformance/rust/Cargo.lock",
         "CHANGELOG.md",
         cwd=ROOT,
