@@ -151,6 +151,6 @@ pub trait TestRunner {
         &self,
         settings: &Settings,
         database_key: Option<&str>,
-        run_case: &mut dyn FnMut(Box<dyn DataSource>, bool),
+        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
     ) -> TestRunResult;
 }

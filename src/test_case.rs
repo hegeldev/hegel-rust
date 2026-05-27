@@ -62,7 +62,7 @@ pub(crate) struct TestCaseGlobalData {
 }
 
 pub(crate) struct SharedState {
-    data_source: Box<dyn DataSource>,
+    data_source: Box<dyn DataSource + Send + Sync>,
     draw_state: DrawState,
 }
 
@@ -238,7 +238,7 @@ fn panic_message(payload: &Box<dyn Any + Send>) -> String {
 
 impl TestCase {
     pub(crate) fn new(
-        data_source: Box<dyn DataSource>,
+        data_source: Box<dyn DataSource + Send + Sync>,
         is_last_run: bool,
         mode: Mode,
         verbose: bool,

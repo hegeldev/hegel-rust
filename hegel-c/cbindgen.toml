@@ -1,0 +1,32 @@
+language = "C"
+header = """
+/*
+ * libhegel — C bindings for Hegel's native property-based testing engine.
+ *
+ * This header is generated from hegel-c/src/lib.rs by cbindgen. Do not
+ * edit it directly; re-run `just c-header` after changing the Rust source.
+ */"""
+include_guard = "HEGEL_H"
+pragma_once = false
+cpp_compat = true
+sys_includes = ["stddef.h", "stdint.h", "stdbool.h"]
+no_includes = true
+tab_width = 4
+documentation = true
+documentation_style = "c"
+style = "type"
+usize_is_size_t = true
+
+[export.rename]
+"HegelRun" = "hegel_run_t"
+"HegelSettings" = "hegel_settings_t"
+"HegelTestCase" = "hegel_test_case_t"
+"HegelRunResult" = "hegel_run_result_t"
+"HegelFailure" = "hegel_failure_t"
+
+# Enum types are named hegel_*_t directly in the Rust source, with each
+# variant pre-prefixed (HEGEL_STATUS_VALID etc.), so cbindgen's automatic
+# prefix_with_name / rename_variants would double-mangle them. We leave
+# both off and rely on the source-level names verbatim.
+[enum]
+prefix_with_name = false

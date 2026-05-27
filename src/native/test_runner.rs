@@ -74,7 +74,7 @@ impl TestRunner for NativeTestRunner {
         &self,
         settings: &Settings,
         database_key: Option<&str>,
-        run_case: &mut dyn FnMut(Box<dyn DataSource>, bool),
+        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
     ) -> TestRunResult {
         if settings.mode == Mode::SingleTestCase {
             return run_single(settings, run_case);
@@ -86,7 +86,7 @@ impl TestRunner for NativeTestRunner {
 /// Run a single test case (used by `Mode::SingleTestCase`).
 fn run_single(
     settings: &Settings,
-    run_case: &mut dyn FnMut(Box<dyn DataSource>, bool),
+    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
 ) -> TestRunResult {
     // Honour `settings.seed` / `settings.derandomize` here for the same
     // reason `run_main` does: callers (Antithesis runs especially) pass
@@ -114,7 +114,7 @@ fn run_single(
 fn run_main(
     settings: &Settings,
     database_key: Option<&str>,
-    run_case: &mut dyn FnMut(Box<dyn DataSource>, bool),
+    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
 ) -> TestRunResult {
     let mut rng = create_rng(settings, database_key);
     let max_examples = settings.test_cases;
@@ -774,12 +774,14 @@ impl<'a> Persister<'a> {
 /// `run_test_case(_, _, _, mode, _)` per invocation), so by the time
 /// `run_case` reaches us the mode is already plumbed.
 pub(crate) struct EngineCtx<'a> {
-    run_case: &'a mut dyn FnMut(Box<dyn DataSource>, bool),
+    run_case: &'a mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
     cache: HashMap<Vec<ChoiceValue>, RunResult>,
 }
 
 impl<'a> EngineCtx<'a> {
-    pub(crate) fn new(run_case: &'a mut dyn FnMut(Box<dyn DataSource>, bool)) -> Self {
+    pub(crate) fn new(
+        run_case: &'a mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+    ) -> Self {
         EngineCtx {
             run_case,
             cache: HashMap::new(),

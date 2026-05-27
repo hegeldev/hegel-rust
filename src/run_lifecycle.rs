@@ -213,7 +213,12 @@ pub(crate) fn unknown_panic_info() -> PanicInfo {
 }
 
 /// Extract a string message from a panic payload.
-pub(crate) fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+///
+/// `pub` so that the libhegel C bindings (`hegel-c`) can use it from their
+/// own `catch_unwind` wrapper around `run_native`. Not part of the
+/// supported public surface — `#[doc(hidden)]`.
+#[doc(hidden)]
+pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         s.to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {
@@ -276,7 +281,7 @@ pub(crate) fn is_hegel_file(file_path: &str) -> bool {
 /// it. On the hegel-internal panic path no [`TestCase::mark_complete`] is
 /// sent — the caller is expected to re-raise the error immediately.
 pub(crate) fn run_test_case(
-    data_source: Box<dyn DataSource>,
+    data_source: Box<dyn DataSource + Send + Sync>,
     test_fn: &mut dyn FnMut(TestCase),
     is_final: bool,
     mode: Mode,
