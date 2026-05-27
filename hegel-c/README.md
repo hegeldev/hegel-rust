@@ -15,34 +15,3 @@ rather than building this crate yourself:
 Each release publishes `libhegel-<goos>-<goarch>.<ext>` and a matching
 `.sha256` sidecar for `linux/amd64`, `linux/arm64`, `darwin/amd64`,
 `darwin/arm64`, `windows/amd64`, and `windows/arm64`.
-
-For Go specifically, [hegel-go](https://github.com/hegeldev/hegel-go)
-already wraps libhegel with a downloader that pins to a particular
-release and verifies the SHA-256.
-
-## Building from source
-
-```sh
-cargo build -p hegeltest-c --release
-```
-
-The cdylib lands in `target/release/libhegel.{so,dylib,dll}`. The
-header is regenerated at build time and the build fails if
-`include/hegel.h` differs from the generated output, so checking in a
-stale header is impossible. To accept a header diff, set
-`HEGEL_C_HEADER_WRITE=1` and rebuild.
-
-## API shape
-
-The caller drives its own outer loop — there is no callback from Rust
-into C on the hot path. Per-test-case primitives (`hegel_generate`,
-`hegel_start_span`, `hegel_stop_span`, `hegel_new_collection`,
-`hegel_collection_more`, `hegel_collection_reject`, `hegel_target`,
-`hegel_mark_complete`) map 1:1 to `DataSource` trait methods on the
-underlying engine, with CBOR schemas passed as opaque byte buffers.
-
-See `include/hegel.h` for the full surface and the examples under
-[`examples/`](examples) — `echo.c` (passing property), `failing.c`
-(failing property + shrunk-result inspection), and
-`spans_collections.c` (variable-length structures via span +
-collection primitives).
