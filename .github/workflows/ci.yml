@@ -149,11 +149,19 @@ jobs:
     # the libloading-based Rust smoke tests, and then compiles every
     # example C program in hegel-c/examples/ against both libhegel.so
     # and libhegel.a, running each binary to check the linking modes
-    # actually work end-to-end.
-    name: test-c-bindings
-    runs-on: ubuntu-latest
+    # actually work end-to-end. Runs on every native runner where we
+    # publish a release binary; symbol-visibility, libloading behavior,
+    # and Windows-specific calling conventions only get exercised by
+    # actually running the smoke tests on each OS. The example C
+    # programs are bash-driven and only run on Unix runners.
+    name: test-c-bindings (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
