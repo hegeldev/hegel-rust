@@ -34,6 +34,7 @@ use crate::runner::Settings;
 ///
 /// Returns the aggregated [`TestRunResult`] describing whether the run
 /// passed and listing any distinct failures the engine surfaced.
+#[doc(hidden)]
 pub fn run_native(
     settings: &Settings,
     database_key: Option<&str>,

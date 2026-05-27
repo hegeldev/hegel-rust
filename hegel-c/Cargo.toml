@@ -7,7 +7,7 @@ license = "MIT"
 description = "C shared library bindings for Hegel's native engine."
 repository = "https://github.com/hegeldev/hegel-rust"
 homepage = "http://hegel.dev"
-publish = false
+readme = "README.md"
 
 [lib]
 name = "hegel"
