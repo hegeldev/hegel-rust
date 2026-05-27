@@ -173,7 +173,12 @@ pub(crate) fn unknown_panic_info() -> (String, String, String, Backtrace) {
 
 /// Extract a string message from a panic payload. Pre-N1 this was duplicated
 /// in `src/native/runner.rs:11`; that copy now re-exports this one.
-pub(crate) fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+///
+/// `pub` so that the libhegel C bindings (`hegel-c`) can use it from their
+/// own `catch_unwind` wrapper around `run_native`. Not part of the
+/// supported public surface — `#[doc(hidden)]`.
+#[doc(hidden)]
+pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         s.to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {
@@ -195,7 +200,7 @@ pub(crate) fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// site is captured as a `file:line:col` string and stored on the
 /// [`Failure`] so per-origin shrinking can key on it.
 pub(crate) fn run_test_case(
-    data_source: Box<dyn DataSource>,
+    data_source: Box<dyn DataSource + Send + Sync>,
     test_fn: &mut dyn FnMut(TestCase),
     is_final: bool,
     mode: Mode,

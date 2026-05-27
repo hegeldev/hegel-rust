@@ -179,7 +179,7 @@ impl ServerTestRunner {
     fn run_single_test_case(
         &self,
         settings: &Settings,
-        run_case: &mut dyn FnMut(Box<dyn DataSource>, bool),
+        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
     ) -> TestRunResult {
         let session = HegelSession::get();
         let connection = &session.connection;
@@ -268,7 +268,7 @@ impl TestRunner for ServerTestRunner {
         &self,
         settings: &Settings,
         database_key: Option<&str>,
-        run_case: &mut dyn FnMut(Box<dyn DataSource>, bool),
+        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
     ) -> TestRunResult {
         if settings.mode == Mode::SingleTestCase {
             return self.run_single_test_case(settings, run_case);

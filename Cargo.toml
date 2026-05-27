@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "hegel-macros"]
+members = [".", "hegel-macros", "hegel-c"]
 
 [package]
 name = "hegeltest"

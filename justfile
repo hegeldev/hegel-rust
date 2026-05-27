@@ -76,6 +76,45 @@ check-conformance:
     uv run --with 'hegel-core==0.4.1' --with pytest --with hypothesis \
         pytest tests/conformance/test_conformance.py
 
+# Build the libhegel C shared library + checked-in C header.
+c-build:
+    cargo build -p hegeltest-c --release
+
+# Run the hegel-c smoke tests (Rust integration test that dlopens
+# libhegel) and build + run every example C program against both the
+# shared (libhegel.so) and static (libhegel.a) builds. The static link
+# pulls in the same system libraries Rust's std needs (libdl/pthread/m
+# on Linux); --print-link-args from rustc would enumerate them, but
+# the set is stable enough to hard-code here.
+c-test: c-test-smoke c-test-examples
+
+# Cross-platform half of `c-test`: build the cdylib + run the
+# libloading-based smoke tests. Works on Linux, macOS, and Windows.
+c-test-smoke:
+    # Build the cdylib first so the smoke tests can dlopen it. `cargo test`
+    # alone doesn't produce the cdylib artifact (libloading-based tests
+    # don't declare a build-link dependency on it).
+    cargo build -p hegeltest-c
+    cargo test -p hegeltest-c
+
+# Unix-only half of `c-test`: compile + run the example C programs in
+# hegel-c/examples/ against both libhegel.so and libhegel.a (and the
+# darwin equivalents). The driver is a bash script that assumes a
+# Unix-style toolchain (cc + ld); a Windows port is a separate
+# follow-up.
+[unix]
+c-test-examples:
+    mkdir -p target/c-examples
+    scripts/c-examples-run.sh
+
+[windows]
+c-test-examples:
+    @echo "Skipping c-test-examples on Windows (bash-based driver, follow-up)"
+
+# Regenerate hegel-c/include/hegel.h from the Rust source (no diff check).
+c-header:
+    HEGEL_C_HEADER_WRITE=1 cargo build -p hegeltest-c
+
 # these aliases are provided as ux improvements for local developers. CI should use the longer
 # forms.
 test: check-tests
