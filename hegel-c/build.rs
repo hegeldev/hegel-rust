@@ -47,8 +47,17 @@ fn main() {
         return;
     }
 
-    let existing = fs::read_to_string(&header_path).unwrap_or_default();
-    if existing != new_text {
+    // Normalise line endings before comparing. Git on Windows runners
+    // defaults to `core.autocrlf=true`, which rewrites LF -> CRLF on
+    // checkout — so a header that lives as LF in the repo arrives as
+    // CRLF on disk, and cbindgen's freshly-generated copy (always LF)
+    // wouldn't match it byte-for-byte. The `.gitattributes` entry for
+    // `*.h` pins the checked-in line endings; this normalisation is the
+    // defensive belt-and-braces.
+    let existing_raw = fs::read_to_string(&header_path).unwrap_or_default();
+    let existing = existing_raw.replace("\r\n", "\n");
+    let new_text_lf = new_text.replace("\r\n", "\n");
+    if existing != new_text_lf {
         panic!(
             "include/hegel.h is out of date. Run `HEGEL_C_HEADER_WRITE=1 cargo build -p hegeltest-c` to refresh it."
         );
