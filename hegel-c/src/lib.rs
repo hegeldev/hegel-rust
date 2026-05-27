@@ -800,6 +800,26 @@ pub unsafe extern "C" fn hegel_target(
     HEGEL_OK
 }
 
+/// Mark this test case complete with the given status.
+///
+/// `origin` is used only when `status == HEGEL_STATUS_INTERESTING`; for
+/// other statuses it can be NULL. It identifies *which bug* this failure
+/// is — two failures with identical origin strings are treated as the
+/// same bug and shrunk together; failures with different origins are
+/// treated as distinct bugs and the shrink budget is *partitioned*
+/// across them.
+///
+/// This makes the choice of origin string load-bearing for shrinker
+/// quality. In particular, bindings that recover from a host-language
+/// panic to call this function MUST NOT pass the recovered panic value
+/// (or its stringification) as origin if that value depends on the
+/// failing draw — every distinct draw would then look like a fresh bug
+/// to the engine and the shrinker would never converge.
+///
+/// The conventional shape is `"Panic at <file>:<line>"` — i.e. derive
+/// origin from the *location* of the failing assertion, not the
+/// assertion's message. hegel-rust's own panic-to-failure path does
+/// exactly this (see `src/run_lifecycle.rs`).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_mark_complete(
     tc: *mut HegelTestCase,

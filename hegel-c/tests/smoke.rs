@@ -138,10 +138,27 @@ fn decode(bytes: &[u8]) -> Value {
 }
 
 fn integer_schema(min: i64, max: i64) -> Vec<u8> {
+    integer_schema_with_order(min, max, &["type", "min_value", "max_value"])
+}
+
+/// Build the integer schema with a caller-chosen CBOR key order. Go's
+/// map iteration is intentionally randomised, so a Go-emitted schema
+/// hits libhegel with `max_value, type, min_value` (or any other
+/// permutation) — semantically equivalent to Rust's
+/// declaration-ordered emission but with different bytes. Used to
+/// regression-check that the engine's schema deserializer is truly
+/// order-agnostic.
+fn integer_schema_with_order(min: i64, max: i64, order: &[&str]) -> Vec<u8> {
     let mut entries: Vec<(Value, Value)> = Vec::new();
-    entries.push((Value::Text("type".into()), Value::Text("integer".into())));
-    entries.push((Value::Text("min_value".into()), Value::Integer(min.into())));
-    entries.push((Value::Text("max_value".into()), Value::Integer(max.into())));
+    for key in order {
+        let v = match *key {
+            "type" => Value::Text("integer".into()),
+            "min_value" => Value::Integer(min.into()),
+            "max_value" => Value::Integer(max.into()),
+            other => panic!("unknown schema key {other}"),
+        };
+        entries.push((Value::Text((*key).into()), v));
+    }
     encode(&Value::Map(entries))
 }
 
@@ -564,4 +581,163 @@ fn engine_panic_surfaces_as_failure_not_worker_crash() {
         (a.run_free)(run);
         (a.settings_free)(s);
     }
+}
+
+/// Drive a `n >= 1_000_000` property through libhegel's C API across a
+/// sweep of derandomized seeds. Reproduces the experiment in the
+/// hegel-go shrinker-flake report, but at the libhegel boundary
+/// (libloading) rather than from Go. If the engine reaches
+/// `1_000_000` exactly through Rust's `embed::run_native` path (50/50
+/// seeds, verified in the embed tests) but not through the C path,
+/// the channel/worker shim in `hegel-c` is doing something measurable.
+///
+/// Run with `--ignored` because it's a 50-seed loop and adds ~10s to
+/// the smoke suite.
+#[test]
+#[ignore = "shrinker sweep — slow; run via --ignored for diagnostics"]
+fn shrinker_reaches_boundary_via_c_api_sweep() {
+    shrinker_sweep_with_schema_order(&["type", "min_value", "max_value"], "rust-order");
+}
+
+/// Same sweep with Go's map-iteration-style key ordering. If hit rate
+/// differs from the Rust-order sweep, schema deserialization in the
+/// engine is order-sensitive somewhere.
+#[test]
+#[ignore = "shrinker sweep — slow; run via --ignored for diagnostics"]
+fn shrinker_reaches_boundary_via_c_api_sweep_go_key_order() {
+    shrinker_sweep_with_schema_order(&["max_value", "type", "min_value"], "go-order");
+}
+
+/// Characterization test for the origin contract: when the caller
+/// passes a *unique origin per failing draw* (e.g. when a binding
+/// uses `panic(fmt.Sprintf("n=%d", n))` and forwards the panic
+/// message as origin), the engine treats each as a distinct bug and
+/// partitions its shrink budget across them. This test exists so a
+/// future change to that partitioning behavior is loud — and so a
+/// binding-author searching the codebase for `unique origins` finds
+/// the explanation in one place.
+///
+/// Concretely: holding the schema and seed range constant, switching
+/// from a stable per-bug origin to a per-value origin drops the
+/// boundary hit rate from ~100/100 to ~16/100. The Rust-side embed
+/// API (`hegel::embed::run_native`) does not have this problem
+/// because hegel-rust's panic handler derives origin from panic
+/// *location*, not value (`format!("Panic at {}", location)` in
+/// `src/run_lifecycle.rs`).
+///
+/// Bindings that want hegel-rust-like behavior should derive origin
+/// from the panic source location (file:line) rather than the panic
+/// message.
+#[test]
+#[ignore = "shrinker characterization — slow; run via --ignored for diagnostics"]
+fn shrinker_partitions_budget_across_unique_origins() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+    let (hits, _) = run_shrinker_sweep(
+        &a,
+        &["type", "min_value", "max_value"],
+        OriginStyle::PerDrawValue,
+        1..=100,
+    );
+    eprintln!("[unique-origins] boundary hit rate: {hits}/100");
+    // The exact rate varies with shrinker tuning; just assert it's
+    // markedly worse than the stable-origin case (100/100). A
+    // regression that pushed this above 70/100 would mean either the
+    // shrinker stopped partitioning by origin (unlikely; documented
+    // contract) or the test stopped exercising the partitioning path.
+    assert!(
+        hits < 70,
+        "expected partitioned-budget hit rate to be well below stable-origin's 100/100, got {hits}/100"
+    );
+}
+
+#[derive(Copy, Clone)]
+enum OriginStyle {
+    Constant,
+    PerDrawValue,
+}
+
+fn shrinker_sweep_with_schema_order(order: &[&str], label: &str) {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+    let (hits, observed) = run_shrinker_sweep(&a, order, OriginStyle::Constant, 1..=100);
+    eprintln!("[{label}] C-API shrinker boundary hit rate: {hits}/100");
+    eprintln!("[{label}] values: {observed:?}");
+    assert!(
+        hits >= 50,
+        "[{label}] C-API shrinker only reached boundary {hits}/100; values: {observed:?}"
+    );
+}
+
+fn run_shrinker_sweep(
+    a: &Api<'_>,
+    order: &[&str],
+    origin_style: OriginStyle,
+    seeds: std::ops::RangeInclusive<u64>,
+) -> (u32, Vec<i128>) {
+    let schema = integer_schema_with_order(i64::MIN, i64::MAX, order);
+    let empty = CString::new("").unwrap();
+    let constant_origin = CString::new("n >= 1_000_000").unwrap();
+
+    let mut hits = 0u32;
+    let mut observed = Vec::<i128>::new();
+    for seed in seeds {
+        let mut last_failing: Option<i128> = None;
+        unsafe {
+            let s = (a.settings_new)();
+            (a.settings_test_cases)(s, 100);
+            (a.settings_database)(s, empty.as_ptr());
+            (a.settings_derandomize)(s, true);
+            (a.settings_seed)(s, seed, true);
+
+            let run = (a.run_start)(s);
+            loop {
+                let tc = (a.next_test_case)(run);
+                if tc.is_null() {
+                    break;
+                }
+                let mut val_ptr: *const u8 = ptr::null();
+                let mut val_len: usize = 0;
+                let rc = (a.generate)(
+                    tc,
+                    schema.as_ptr(),
+                    schema.len(),
+                    &mut val_ptr,
+                    &mut val_len,
+                );
+                if rc == -1 {
+                    (a.mark_complete)(tc, CStatus::Overrun, ptr::null());
+                    continue;
+                }
+                assert_eq!(rc, 0);
+                let v = decode(std::slice::from_raw_parts(val_ptr, val_len));
+                let Value::Integer(i) = v else {
+                    panic!("expected integer")
+                };
+                let n: i128 = i.into();
+                if n >= 1_000_000 {
+                    last_failing = Some(n);
+                    let origin_cs: CString;
+                    let origin_ptr = match origin_style {
+                        OriginStyle::Constant => constant_origin.as_ptr(),
+                        OriginStyle::PerDrawValue => {
+                            origin_cs = CString::new(format!("n={n}")).unwrap();
+                            origin_cs.as_ptr()
+                        }
+                    };
+                    (a.mark_complete)(tc, CStatus::Interesting, origin_ptr);
+                } else {
+                    (a.mark_complete)(tc, CStatus::Valid, ptr::null());
+                }
+            }
+            (a.run_free)(run);
+            (a.settings_free)(s);
+        }
+        let final_value = last_failing.unwrap_or(i128::MIN);
+        observed.push(final_value);
+        if final_value == 1_000_000 {
+            hits += 1;
+        }
+    }
+    (hits, observed)
 }

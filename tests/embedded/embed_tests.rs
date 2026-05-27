@@ -113,10 +113,65 @@ fn run_native_replays_persisted_failure_on_second_run() {
 }
 
 /// Hegel-go report #3 regression: a `n >= 1_000_000` property over int64
-/// must shrink to exactly 1_000_000 (the predicate boundary). The
-/// hegel-go report saw 2^20-1 (1_048_575); the shrinker improvements that
-/// landed before this PR was rebased onto main fixed it. This test
-/// guards against the regression coming back.
+/// must shrink to exactly 1_000_000 (the predicate boundary).
+///
+/// The hegel-go agent's follow-up report (run across 100 derandomized
+/// seeds with `WithTestCases(100)`) measured a 16% hit rate over the
+/// full i64 range and 39% on `[0, 2_000_000]`. We sweep 50 seeds here
+/// rather than one — the bar isn't "100% of seeds reach the boundary"
+/// (which would over-fit to the current shrinker), but rather "well
+/// over half do." If the rate drops back to single digits this test
+/// will fail and surface the shrinker regression.
+#[test]
+fn run_native_shrinks_predicate_boundary_seed_sweep() {
+    use crate::backend::Failure;
+
+    let mut hits = 0u32;
+    let mut last_values = Vec::<i128>::new();
+    for seed in 0u64..50 {
+        let settings = Settings::new()
+            .test_cases(100)
+            .seed(Some(seed))
+            .derandomize(true)
+            .database(None);
+        let last = std::sync::Mutex::new(None::<i128>);
+        let _ = run_native(&settings, None, |ds, _is_final| {
+            let schema = cbor_map! {
+                "type" => "integer",
+                "min_value" => i64::MIN,
+                "max_value" => i64::MAX,
+            };
+            if let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema) {
+                let n: i128 = i.into();
+                if n >= 1_000_000 {
+                    *last.lock().unwrap() = Some(n);
+                    ds.mark_complete(&TestCaseResult::Interesting(Failure {
+                        panic_message: "n >= 1_000_000".to_string(),
+                        diagnostic: "n >= 1_000_000\n".to_string(),
+                        origin: "n >= 1_000_000".to_string(),
+                    }));
+                    return;
+                }
+            }
+            ds.mark_complete(&TestCaseResult::Valid);
+        });
+        let observed = last.lock().unwrap().unwrap();
+        last_values.push(observed);
+        if observed == 1_000_000 {
+            hits += 1;
+        }
+    }
+    eprintln!("shrinker reached boundary {hits}/50; values: {last_values:?}");
+    assert!(
+        hits >= 25,
+        "shrinker reached the boundary only {}/50 times; observed values: {:?}",
+        hits,
+        last_values
+    );
+}
+
+/// Single-seed version of the boundary test, retained as a fast-feedback
+/// gate that surfaces total regressions on the lucky-seed path.
 #[test]
 fn run_native_shrinks_predicate_boundary_to_exact_value() {
     use crate::backend::Failure;
