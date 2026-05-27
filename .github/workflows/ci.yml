@@ -540,7 +540,15 @@ jobs:
   # Release for the just-pushed tag. The first racer creates the release;
   # the rest upload into it with --clobber so re-runs are idempotent.
   release-binaries:
-    name: release-binaries (${{ matrix.goos }}-${{ matrix.goarch }})
+    # `platform` is the primary matrix dimension; the include entries
+    # specialise the runner / Rust target / file extension for each
+    # platform. Structuring it this way lets GitHub's auto-suffix render
+    # cleanly as "release-binaries (linux-amd64)" etc. when the matrix
+    # expands, and lets the *skipped* form collapse to a single
+    # "release-binaries" entry on non-release pushes — instead of
+    # showing the literal `${{ matrix.X }}` template, which GitHub does
+    # not interpolate when a job-level `if:` evaluates to false before
+    # matrix expansion.
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.skipped != 'true'
     needs: release
     permissions:
@@ -548,16 +556,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        platform:
+          - linux-amd64
+          - linux-arm64
+          - darwin-amd64
+          - darwin-arm64
+          - windows-amd64
+          - windows-arm64
         include:
-          - { runner: ubuntu-latest,    target: x86_64-unknown-linux-gnu,    goos: linux,   goarch: amd64, ext: so }
-          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu,   goos: linux,   goarch: arm64, ext: so }
-          - { runner: macos-13,         target: x86_64-apple-darwin,         goos: darwin,  goarch: amd64, ext: dylib }
-          - { runner: macos-14,         target: aarch64-apple-darwin,        goos: darwin,  goarch: arm64, ext: dylib }
-          - { runner: windows-latest,   target: x86_64-pc-windows-msvc,      goos: windows, goarch: amd64, ext: dll }
+          - { platform: linux-amd64,   runner: ubuntu-latest,    target: x86_64-unknown-linux-gnu,    goos: linux,   goarch: amd64, ext: so }
+          - { platform: linux-arm64,   runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu,   goos: linux,   goarch: arm64, ext: so }
+          - { platform: darwin-amd64,  runner: macos-13,         target: x86_64-apple-darwin,         goos: darwin,  goarch: amd64, ext: dylib }
+          - { platform: darwin-arm64,  runner: macos-14,         target: aarch64-apple-darwin,        goos: darwin,  goarch: arm64, ext: dylib }
+          - { platform: windows-amd64, runner: windows-latest,   target: x86_64-pc-windows-msvc,      goos: windows, goarch: amd64, ext: dll }
           # aarch64-pc-windows-msvc is cross-compiled from the x86_64 runner.
           # MSVC has had built-in arm64 cross since VS 2017+ and
           # windows-latest ships the toolchain.
-          - { runner: windows-latest,   target: aarch64-pc-windows-msvc,     goos: windows, goarch: arm64, ext: dll }
+          - { platform: windows-arm64, runner: windows-latest,   target: aarch64-pc-windows-msvc,     goos: windows, goarch: arm64, ext: dll }
     runs-on: ${{ matrix.runner }}
     env:
       VERSION: ${{ needs.release.outputs.version }}
