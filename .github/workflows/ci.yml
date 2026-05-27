@@ -411,6 +411,12 @@ jobs:
       # id-token: "enables the workflow to request and use an OIDC token from GitHub's OIDC provider".
       # Used by our trusted publishing flow
       id-token: write
+    # Expose the new tag/version to `release-binaries` (cross-platform cdylib
+    # builds). `skipped` lets that job no-op cleanly on non-release pushes;
+    # `version` is the post-bump version it tags / uploads against.
+    outputs:
+      skipped: ${{ steps.check.outputs.skip == 'true' }}
+      version: ${{ steps.released-version.outputs.version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -444,6 +450,13 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           HEGEL_RELEASE_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: python .github/scripts/release.py release
+
+      - name: Capture released version
+        id: released-version
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust
         if: steps.check.outputs.skip != 'true'
@@ -485,3 +498,144 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: python .github/scripts/release.py push-or-pr
+
+  # Cross-platform cdylib builds for libhegel (the C-ABI shared library
+  # produced by the `hegeltest-c` crate). Triggers after the `release` job
+  # has tagged a new version; each matrix entry builds for one Go-style
+  # (GOOS, GOARCH) target, renames the cdylib to the
+  # `libhegel-<goos>-<goarch>.<ext>` shape that hegel-go's downloader
+  # expects, computes a SHA-256 sidecar, and uploads both to the GitHub
+  # Release for the just-pushed tag. The first racer creates the release;
+  # the rest upload into it with --clobber so re-runs are idempotent.
+  release-binaries:
+    name: release-binaries (${{ matrix.goos }}-${{ matrix.goarch }})
+    if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.skipped != 'true'
+    needs: release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest,    target: x86_64-unknown-linux-gnu,    goos: linux,   goarch: amd64, ext: so }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu,   goos: linux,   goarch: arm64, ext: so }
+          - { runner: macos-13,         target: x86_64-apple-darwin,         goos: darwin,  goarch: amd64, ext: dylib }
+          - { runner: macos-14,         target: aarch64-apple-darwin,        goos: darwin,  goarch: arm64, ext: dylib }
+          - { runner: windows-latest,   target: x86_64-pc-windows-msvc,      goos: windows, goarch: amd64, ext: dll }
+          # aarch64-pc-windows-msvc is cross-compiled from the x86_64 runner.
+          # MSVC has had built-in arm64 cross since VS 2017+ and
+          # windows-latest ships the toolchain.
+          - { runner: windows-latest,   target: aarch64-pc-windows-msvc,     goos: windows, goarch: arm64, ext: dll }
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          # The release job tags before pushing the bump commit; fetch
+          # tags so we can check out the new tag rather than gambling on
+          # main's HEAD pointer.
+          fetch-depth: 0
+          ref: refs/tags/v${{ needs.release.outputs.version }}
+
+      - name: Install Rust + target
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+
+      - name: Build cdylib
+        run: cargo build -p hegeltest-c --release --target ${{ matrix.target }}
+
+      - name: Stage asset + sha256
+        id: stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="libhegel-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.ext }}"
+          case "${{ matrix.goos }}" in
+            windows) built="target/${{ matrix.target }}/release/hegel.dll" ;;
+            darwin)  built="target/${{ matrix.target }}/release/libhegel.dylib" ;;
+            linux)   built="target/${{ matrix.target }}/release/libhegel.so" ;;
+            *) echo "unknown goos: ${{ matrix.goos }}" >&2; exit 1 ;;
+          esac
+          if [ ! -f "$built" ]; then
+            echo "expected cdylib output $built missing" >&2
+            ls -la "target/${{ matrix.target }}/release/" || true
+            exit 1
+          fi
+          cp "$built" "$asset"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$asset" > "$asset.sha256"
+          else
+            # macOS doesn't ship sha256sum but ships shasum.
+            shasum -a 256 "$asset" > "$asset.sha256"
+          fi
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSET: ${{ steps.stage.outputs.asset }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          asset="$ASSET"
+          # The first racer creates the Release; the rest see "already
+          # exists" from `gh release create` and fall through to upload.
+          # `--clobber` makes re-runs (e.g. after a flaked build) idempotent.
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --title "$tag" \
+              --notes "libhegel binaries for $tag. See CHANGELOG.md for the full changelog." \
+              || true
+          fi
+          gh release upload "$tag" "$asset" "$asset.sha256" --clobber
+
+  # Independent post-condition check that every expected libhegel asset is
+  # present on the Release. `release-binaries` uses `fail-fast: false` so
+  # failed-platform diagnostics aren't lost; this aggregator job fails
+  # loudly when any expected asset (or its sidecar) is missing, satisfying
+  # go-reports.md item 6: "Update the release workflow to fail if any
+  # expected asset is missing."
+  release-binaries-verify:
+    name: release-binaries-verify
+    if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.skipped != 'true'
+    needs: [release, release-binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - name: Check that every expected asset uploaded
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          expected=(
+            libhegel-linux-amd64.so
+            libhegel-linux-arm64.so
+            libhegel-darwin-amd64.dylib
+            libhegel-darwin-arm64.dylib
+            libhegel-windows-amd64.dll
+            libhegel-windows-arm64.dll
+          )
+          actual=$(gh release view "$tag" --repo "$REPO" --json assets --jq '.assets[].name')
+          missing=()
+          for a in "${expected[@]}"; do
+            grep -qxF "$a" <<<"$actual" || missing+=("$a")
+            grep -qxF "$a.sha256" <<<"$actual" || missing+=("$a.sha256")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "Release $tag is missing assets:"
+            printf '  %s\n' "${missing[@]}"
+            exit 1
+          fi
+          echo "All expected libhegel assets present on $tag."
