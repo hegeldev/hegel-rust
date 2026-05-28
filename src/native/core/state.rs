@@ -176,6 +176,82 @@ fn integer_sample_from_distribution(min_value: i128, max_value: i128, rng: &mut 
     (dist.inverse_cdf(p).round() as i128).clamp(min_value, max_value)
 }
 
+/// Hand-picked "interesting" boundary values: powers of two and their
+/// neighbours, plus the `i{16,32,64}::{MIN,MAX}` boundaries. Merged into
+/// [`SORTED_NASTY_POOL`] at startup.
+static INTERESTING_INTEGERS: &[i128] = &[
+    0,
+    1,
+    -1,
+    2,
+    -2,
+    7,
+    -7,
+    8,
+    -8,
+    15,
+    -15,
+    16,
+    -16,
+    31,
+    -31,
+    32,
+    -32,
+    63,
+    -63,
+    64,
+    -64,
+    127,
+    -127,
+    128,
+    -128,
+    255,
+    -255,
+    256,
+    -256,
+    511,
+    -511,
+    512,
+    -512,
+    1023,
+    -1023,
+    1024,
+    -1024,
+    2047,
+    -2047,
+    2048,
+    -2048,
+    4095,
+    -4095,
+    4096,
+    -4096,
+    8191,
+    -8191,
+    8192,
+    -8192,
+    i16::MAX as i128,
+    i16::MIN as i128,
+    i32::MAX as i128,
+    i32::MIN as i128,
+    i64::MAX as i128,
+    i64::MIN as i128,
+];
+
+/// Sorted, deduped union of [`INTERESTING_INTEGERS`] and
+/// [`GLOBAL_CONSTANTS_INTEGERS`]. Used by [`biased_integer_sample`] to find
+/// the in-range boundary candidates via two `partition_point` calls instead
+/// of an O(n²) per-call dedup loop.
+static SORTED_NASTY_POOL: LazyLock<Vec<i128>> = LazyLock::new(|| {
+    let mut all: Vec<i128> = INTERESTING_INTEGERS
+        .iter()
+        .copied()
+        .chain(GLOBAL_CONSTANTS_INTEGERS.iter().copied())
+        .collect();
+    all.sort_unstable();
+    all.dedup();
+    all
+});
+
 /// Boundary-biased sample for integers.
 ///
 /// Implements the "nasty value" boost used by both the
@@ -187,86 +263,37 @@ fn integer_sample_from_distribution(min_value: i128, max_value: i128, rng: &mut 
 /// `draw_integer` does for fresh draws.
 ///
 /// Returns a value in `[ic.min_value, ic.max_value]` (inclusive). With
-/// probability proportional to `nasty.len() * BOUNDARY_PROBABILITY` (≈ 0.5
-/// for unbounded ranges) the result is one of those nasty/interesting
-/// values; otherwise it is drawn from [`INTEGERS_DISTRIBUTION`] restricted
-/// to the requested range.
+/// probability proportional to `count * BOUNDARY_PROBABILITY` (≈ 0.5 for
+/// unbounded ranges, where `count` is the number of in-range boundary
+/// values including `min_value` and `max_value`) the result is one of those
+/// nasty/interesting values; otherwise it is drawn from
+/// [`INTEGERS_DISTRIBUTION`] restricted to the requested range.
 pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut SmallRng) -> i128 {
     if ic.min_value == ic.max_value {
         return ic.min_value;
     }
-    let mut nasty: Vec<i128> = vec![ic.min_value, ic.max_value];
-    let interesting: &[i128] = &[
-        0,
-        1,
-        -1,
-        2,
-        -2,
-        7,
-        -7,
-        8,
-        -8,
-        15,
-        -15,
-        16,
-        -16,
-        31,
-        -31,
-        32,
-        -32,
-        63,
-        -63,
-        64,
-        -64,
-        127,
-        -127,
-        128,
-        -128,
-        255,
-        -255,
-        256,
-        -256,
-        511,
-        -511,
-        512,
-        -512,
-        1023,
-        -1023,
-        1024,
-        -1024,
-        2047,
-        -2047,
-        2048,
-        -2048,
-        4095,
-        -4095,
-        4096,
-        -4096,
-        8191,
-        -8191,
-        8192,
-        -8192,
-        i16::MAX as i128,
-        i16::MIN as i128,
-        i32::MAX as i128,
-        i32::MIN as i128,
-        i64::MAX as i128,
-        i64::MIN as i128,
-    ];
-    for &v in interesting {
-        if ic.validate(v) && !nasty.contains(&v) {
-            nasty.push(v);
-        }
-    }
-    for &v in GLOBAL_CONSTANTS_INTEGERS.iter() {
-        if ic.validate(v) && !nasty.contains(&v) {
-            nasty.push(v);
-        }
-    }
-    let threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
+    // The static boundary pool is sorted, so the in-range subset is a
+    // contiguous slice that two binary searches locate in O(log n).
+    let pool = &*SORTED_NASTY_POOL;
+    let lo = pool.partition_point(|&v| v < ic.min_value);
+    let hi = pool.partition_point(|&v| v <= ic.max_value);
+    let static_slice = &pool[lo..hi];
+    // `ic.min_value` / `ic.max_value` are always candidates; add them only
+    // if the static slice doesn't already cover them (then `min < max` past
+    // the early return guarantees they're distinct).
+    let need_min = static_slice.first() != Some(&ic.min_value);
+    let need_max = static_slice.last() != Some(&ic.max_value);
+    let count = static_slice.len() + (need_min as usize) + (need_max as usize);
+    let threshold = count as f64 * BOUNDARY_PROBABILITY;
     if rng.random::<f64>() < threshold {
-        let idx = rng.random_range(0..nasty.len());
-        nasty[idx]
+        let idx = rng.random_range(0..count);
+        if need_min && idx == 0 {
+            ic.min_value
+        } else if need_max && idx == count - 1 {
+            ic.max_value
+        } else {
+            static_slice[idx - need_min as usize]
+        }
     } else {
         integer_sample_from_distribution(ic.min_value, ic.max_value, rng)
     }
@@ -296,16 +323,23 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut SmallRng) -> f64 {
         f64::MAX,
         -f64::MAX,
     ];
-    let nasty: Vec<f64> = candidates
-        .iter()
-        .copied()
-        .filter(|&v| fc.validate(v))
-        .collect();
-    let nasty_threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
+    let valid_count = candidates.iter().filter(|&&v| fc.validate(v)).count();
+    let nasty_threshold = valid_count as f64 * BOUNDARY_PROBABILITY;
 
     if rng.random::<f64>() < nasty_threshold {
-        let idx = rng.random_range(0..nasty.len());
-        return nasty[idx];
+        let idx = rng.random_range(0..valid_count);
+        // Walk the fixed-size array again to find the idx-th in-range entry.
+        // 12 elements, no allocation; cheaper than the legacy Vec<f64>.
+        let mut skip = idx;
+        for &v in candidates.iter() {
+            if fc.validate(v) {
+                if skip == 0 {
+                    return v;
+                }
+                skip -= 1;
+            }
+        }
+        unreachable!("valid_count agrees with the second validate pass");
     }
     let f = if bounded {
         let r: f64 = rng.random();
@@ -355,17 +389,26 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut SmallRng) -> f64 {
 /// back to a length drawn from [`many_draw_length`] with uniformly random
 /// byte values.
 pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut SmallRng) -> Vec<u8> {
-    let mut nasty: Vec<Vec<u8>> = vec![bc.simplest()];
-    if bc.min_size == 0 && bc.max_size > 0 {
-        nasty.push(vec![0u8]);
-    }
-    if bc.min_size <= 1 && bc.max_size >= 1 {
-        nasty.push(vec![0xffu8]);
-    }
-    let nasty_threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
+    let want_zero = bc.min_size == 0 && bc.max_size > 0;
+    let want_ff = bc.min_size <= 1 && bc.max_size >= 1;
+    // At most 3 candidates: simplest(), [0x00], [0xff]. Compute the count
+    // without materialising the Vec<Vec<u8>>, then synthesise the chosen one.
+    let count = 1 + want_zero as usize + want_ff as usize;
+    let nasty_threshold = count as f64 * BOUNDARY_PROBABILITY;
     if rng.random::<f64>() < nasty_threshold {
-        let idx = rng.random_range(0..nasty.len());
-        return nasty[idx].clone();
+        let mut slot = rng.random_range(0..count);
+        if slot == 0 {
+            return bc.simplest();
+        }
+        slot -= 1;
+        if want_zero {
+            if slot == 0 {
+                return vec![0u8];
+            }
+            slot -= 1;
+        }
+        debug_assert!(want_ff && slot == 0);
+        return vec![0xffu8];
     }
     let len = many_draw_length(rng, bc.min_size, bc.max_size);
     (0..len).map(|_| rng.random::<u8>()).collect()
@@ -463,7 +506,7 @@ static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
 /// Boundary-biased sample for strings. Builds a "nasty" pool from the
 /// simplest values plus [`GLOBAL_CONSTANTS_STRINGS`] entries that satisfy
 /// the kind's constraint, drawing from it with probability proportional to
-/// `BOUNDARY_PROBABILITY × |nasty|`. Otherwise picks a small 1–10 codepoint
+/// `count * BOUNDARY_PROBABILITY`. Otherwise picks a small 1–10 codepoint
 /// sub-alphabet from the kind's [`IntervalSet`] (biased toward the
 /// first 256 shrink-order positions for large alphabets, an ASCII bias)
 /// and samples a length-`many_draw_length` string from it.
@@ -475,30 +518,59 @@ static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
 /// `XXY`-shape strings that property tests of, for example, run-length
 /// encoding need to find.
 pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut SmallRng) -> Vec<u32> {
-    let nasty: Vec<Vec<u32>> = {
-        let simplest = sc.simplest();
-        let simplest_cp = sc.simplest_codepoint();
-        let mut v = vec![simplest];
-        if sc.min_size == 0 && sc.max_size > 0 {
-            v.push(Vec::new());
+    let want_empty = sc.min_size == 0 && sc.max_size > 0;
+    let want_one = sc.min_size <= 1 && sc.max_size >= 1;
+    let want_two = sc.min_size <= 2 && sc.max_size >= 2;
+    let small_count = 1 + want_empty as usize + want_one as usize + want_two as usize;
+    // Count the in-range global candidates without materialising them. The
+    // pool only has ~70 entries; one validate pass is cheap and avoids the
+    // per-call `Vec<Vec<u32>>` allocation and the legacy O(n²) `contains`.
+    // Note: the legacy code also deduped against the small-candidate set, but
+    // those entries are all monomorphic runs of `simplest_codepoint()`, none
+    // of which occur in `GLOBAL_CONSTANTS_STRINGS` — so the dedup never fired
+    // in practice.
+    let global_pool = &*GLOBAL_CONSTANTS_STRINGS;
+    let valid_global_count = global_pool.iter().filter(|cps| sc.validate(cps)).count();
+    let count = small_count + valid_global_count;
+    let threshold = count as f64 * BOUNDARY_PROBABILITY;
+    if rng.random::<f64>() < threshold {
+        let idx = rng.random_range(0..count);
+        if idx < small_count {
+            // Materialise the chosen small candidate. Order is fixed:
+            // simplest, then empty, [cp], [cp, cp] in the conditional slots.
+            let simplest_cp = sc.simplest_codepoint();
+            let mut slot = idx;
+            if slot == 0 {
+                return sc.simplest();
+            }
+            slot -= 1;
+            if want_empty {
+                if slot == 0 {
+                    return Vec::new();
+                }
+                slot -= 1;
+            }
+            if want_one {
+                if slot == 0 {
+                    return vec![simplest_cp];
+                }
+                slot -= 1;
+            }
+            debug_assert!(want_two && slot == 0);
+            return vec![simplest_cp, simplest_cp];
         }
-        if sc.min_size <= 1 && sc.max_size >= 1 {
-            v.push(vec![simplest_cp]);
-        }
-        if sc.min_size <= 2 && sc.max_size >= 2 {
-            v.push(vec![simplest_cp, simplest_cp]);
-        }
-        for cps in GLOBAL_CONSTANTS_STRINGS.iter() {
-            if sc.validate(cps) && !v.contains(cps) {
-                v.push(cps.clone());
+        // Walk the global pool again to find the `(idx - small_count)`-th
+        // in-range entry. Two passes of ~70 ≪ the old `clone` + `contains`.
+        let mut skip = idx - small_count;
+        for cps in global_pool.iter() {
+            if sc.validate(cps) {
+                if skip == 0 {
+                    return cps.clone();
+                }
+                skip -= 1;
             }
         }
-        v
-    };
-    let nasty_threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
-    if rng.random::<f64>() < nasty_threshold {
-        let idx = rng.random_range(0..nasty.len());
-        return nasty[idx].clone();
+        unreachable!("valid_global_count agrees with the second validate pass");
     }
 
     let alpha = sc.intervals.len();
