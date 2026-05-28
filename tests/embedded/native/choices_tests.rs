@@ -251,8 +251,8 @@ fn integer_choice_from_index_overflowing_u128_returns_none() {
     // strictly larger than that has no valid value. The u128-native
     // implementation short-circuits via the `u128::try_from` step.
     let ic = integer_choice(i128::MIN, i128::MAX);
-    let too_big =
-        crate::native::bignum::BigUint::from(u128::MAX) + crate::native::bignum::BigUint::from(1u32);
+    let too_big = crate::native::bignum::BigUint::from(u128::MAX)
+        + crate::native::bignum::BigUint::from(1u32);
     assert_eq!(ic.from_index(too_big), None);
 }
 
