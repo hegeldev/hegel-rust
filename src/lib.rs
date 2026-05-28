@@ -255,6 +255,33 @@ pub use test_case::{
 #[doc(hidden)]
 pub use antithesis::TestLocation;
 
+// Internal re-exports for benches/. Gated on the private `__bench` feature so
+// the items remain `pub(crate)` for normal builds; the bench harness opts in
+// with `--features __bench`. Functions are wrapped (rather than re-exported)
+// because the originals are `pub(crate)` in `native::core::state`.
+#[doc(hidden)]
+#[cfg(feature = "__bench")]
+pub mod __bench {
+    pub use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, StringChoice};
+    pub use crate::native::intervalsets::IntervalSet;
+
+    pub fn biased_integer_sample(ic: &IntegerChoice, rng: &mut rand::rngs::SmallRng) -> i128 {
+        crate::native::core::state::biased_integer_sample(ic, rng)
+    }
+
+    pub fn biased_string_sample(sc: &StringChoice, rng: &mut rand::rngs::SmallRng) -> Vec<u32> {
+        crate::native::core::state::biased_string_sample(sc, rng)
+    }
+
+    pub fn biased_bytes_sample(bc: &BytesChoice, rng: &mut rand::rngs::SmallRng) -> Vec<u8> {
+        crate::native::core::state::biased_bytes_sample(bc, rng)
+    }
+
+    pub fn biased_float_sample(fc: &FloatChoice, rng: &mut rand::rngs::SmallRng) -> f64 {
+        crate::native::core::state::biased_float_sample(fc, rng)
+    }
+}
+
 /// Derive a generator for a struct or enum.
 ///
 /// This implements [`DefaultGenerator`](generators::DefaultGenerator) for the type,
