@@ -3,7 +3,7 @@ members = [".", "hegel-macros", "hegel-c"]
 
 [package]
 name = "hegeltest"
-version = "0.14.12"
+version = "0.14.13"
 edition = "2024"
 # if you bump this, also bump ci.yml and hegel-macros/Cargo.toml
 rust-version = "1.86"
