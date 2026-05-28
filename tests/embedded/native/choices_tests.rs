@@ -476,3 +476,127 @@ fn string_choice_from_index_past_max_returns_none() {
             .is_none()
     );
 }
+
+// ── NodeSortKeyRef + NodesSortKey ───────────────────────────────────────────
+//
+// Direct tests for the allocation-free comparison machinery. Most of the
+// engine reaches these through `sort_key(...) < sort_key(...)`, but the
+// `PartialEq::eq`, `PartialOrd::partial_cmp`, and cross-variant Scalar↔Sequence
+// paths only fire in defensive branches.
+
+fn integer_node(min: i128, max: i128, value: i128) -> ChoiceNode {
+    ChoiceNode {
+        kind: ChoiceKind::Integer(IntegerChoice {
+            min_value: min,
+            max_value: max,
+            shrink_towards: 0,
+        }),
+        value: ChoiceValue::Integer(value),
+        was_forced: false,
+    }
+}
+
+fn bytes_node(min: usize, max: usize, value: Vec<u8>) -> ChoiceNode {
+    ChoiceNode {
+        kind: ChoiceKind::Bytes(BytesChoice {
+            min_size: min,
+            max_size: max,
+        }),
+        value: ChoiceValue::Bytes(value),
+        was_forced: false,
+    }
+}
+
+fn string_node(intervals: Vec<(u32, u32)>, min: usize, max: usize, value: Vec<u32>) -> ChoiceNode {
+    ChoiceNode {
+        kind: ChoiceKind::String(string_choice(intervals, min, max)),
+        value: ChoiceValue::String(value),
+        was_forced: false,
+    }
+}
+
+#[test]
+fn node_sort_key_ref_scalar_equality_and_partial_cmp() {
+    use std::cmp::Ordering;
+    let a = integer_node(-10, 10, 3);
+    let b = integer_node(-10, 10, 3);
+    let c = integer_node(-10, 10, 4);
+    // PartialEq::eq path (direct `==`, not through cmp).
+    assert!(a.sort_key_ref() == b.sort_key_ref());
+    assert!(a.sort_key_ref() != c.sort_key_ref());
+    // PartialOrd::partial_cmp path (used by `<`/`>`).
+    assert_eq!(
+        a.sort_key_ref().partial_cmp(&c.sort_key_ref()),
+        Some(Ordering::Less)
+    );
+}
+
+#[test]
+fn node_sort_key_ref_bytes_orders_shortlex() {
+    let short = bytes_node(0, 4, vec![0xff, 0xff]);
+    let longer = bytes_node(0, 4, vec![0x00, 0x00, 0x00]);
+    // Shortlex: shorter wins regardless of element values.
+    assert!(short.sort_key_ref() < longer.sort_key_ref());
+    let equal_a = bytes_node(0, 4, vec![1, 2, 3]);
+    let equal_b = bytes_node(0, 4, vec![1, 2, 3]);
+    assert!(equal_a.sort_key_ref() == equal_b.sort_key_ref());
+    // Same length: lex on bytes.
+    let lex_lo = bytes_node(0, 4, vec![1, 2, 3]);
+    let lex_hi = bytes_node(0, 4, vec![1, 2, 4]);
+    assert!(lex_lo.sort_key_ref() < lex_hi.sort_key_ref());
+}
+
+#[test]
+fn node_sort_key_ref_string_orders_by_codepoint_key() {
+    // In a `[a-z]` alphabet, codepoint_key('a')=0 < codepoint_key('b')=1.
+    let a = string_node(
+        vec![(b'a' as u32, b'z' as u32)],
+        0,
+        4,
+        vec![b'a' as u32, b'a' as u32],
+    );
+    let b = string_node(
+        vec![(b'a' as u32, b'z' as u32)],
+        0,
+        4,
+        vec![b'a' as u32, b'b' as u32],
+    );
+    assert!(a.sort_key_ref() < b.sort_key_ref());
+    let a2 = string_node(
+        vec![(b'a' as u32, b'z' as u32)],
+        0,
+        4,
+        vec![b'a' as u32, b'a' as u32],
+    );
+    assert!(a.sort_key_ref() == a2.sort_key_ref());
+}
+
+#[test]
+fn node_sort_key_ref_cross_variant_scalar_lt_sequence() {
+    // Engine guarantees kinds don't change at a given index, but the
+    // total ordering on `NodeSortKeyRef` mirrors the derived ordering on
+    // `NodeSortKey`: `Scalar < Sequence`.
+    let scalar = integer_node(0, 10, 5);
+    let bytes_seq = bytes_node(0, 4, vec![0, 0]);
+    let str_seq = string_node(vec![(b'a' as u32, b'z' as u32)], 0, 4, vec![b'a' as u32]);
+    assert!(scalar.sort_key_ref() < bytes_seq.sort_key_ref());
+    assert!(scalar.sort_key_ref() < str_seq.sort_key_ref());
+    assert!(bytes_seq.sort_key_ref() > scalar.sort_key_ref());
+}
+
+#[test]
+fn nodes_sort_key_shortlex_orders_by_length_then_element() {
+    use crate::native::core::sort_key;
+    let a = vec![integer_node(0, 10, 1)];
+    let b = vec![integer_node(0, 10, 1), integer_node(0, 10, 0)];
+    assert!(sort_key(&a) < sort_key(&b));
+    let same_a = vec![integer_node(0, 10, 2), integer_node(0, 10, 3)];
+    let same_b = vec![integer_node(0, 10, 2), integer_node(0, 10, 3)];
+    assert!(sort_key(&same_a) == sort_key(&same_b));
+    let elem_lo = vec![integer_node(0, 10, 1), integer_node(0, 10, 2)];
+    let elem_hi = vec![integer_node(0, 10, 1), integer_node(0, 10, 5)];
+    assert!(sort_key(&elem_lo) < sort_key(&elem_hi));
+    // Empty sequence is simplest.
+    let empty: Vec<ChoiceNode> = Vec::new();
+    assert!(sort_key(&empty) < sort_key(&a));
+}

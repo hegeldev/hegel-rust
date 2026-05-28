@@ -993,10 +993,163 @@ pub enum NodeSortKey {
     Sequence(usize, Vec<u32>),
 }
 
+/// Allocation-free borrowed view of a [`ChoiceNode`]'s sort key.
+///
+/// `Ord` matches [`NodeSortKey`]'s ordering exactly: `Scalar < Sequence`
+/// cross-variant, scalar variants by `(magnitude, sign)`, sequence variants
+/// shortlex on length then per-element keys. The per-element keys for
+/// `Bytes` and `String` are resolved lazily during comparison —
+/// `String` defers `codepoint_key` to the moment of compare — so no
+/// `Vec<u32>` ever gets allocated.
+pub enum NodeSortKeyRef<'a> {
+    Scalar(u128, bool),
+    Bytes(&'a [u8]),
+    String(&'a StringChoice, &'a [u32]),
+}
+
+impl<'a> NodeSortKeyRef<'a> {
+    fn category(&self) -> u8 {
+        match self {
+            NodeSortKeyRef::Scalar(..) => 0,
+            NodeSortKeyRef::Bytes(..) | NodeSortKeyRef::String(..) => 1,
+        }
+    }
+
+    /// Length of the underlying element sequence. Only meaningful for
+    /// sequence variants; the only call site (the sequence-vs-sequence
+    /// arm of `cmp`) gates on category() before invoking.
+    fn seq_len(&self) -> usize {
+        match self {
+            NodeSortKeyRef::Bytes(b) => b.len(),
+            NodeSortKeyRef::String(_, cps) => cps.len(),
+            NodeSortKeyRef::Scalar(..) => unreachable!("seq_len on scalar"),
+        }
+    }
+
+    /// `i`-th per-element key in the sort-order alphabet. `i` must be in
+    /// `0..self.seq_len()`. Calling on `Scalar` is unreachable in the
+    /// only call sites (sequence-element comparison).
+    fn seq_key_at(&self, i: usize) -> u32 {
+        match self {
+            NodeSortKeyRef::Bytes(b) => b[i] as u32,
+            NodeSortKeyRef::String(sc, cps) => sc.codepoint_key(cps[i]),
+            NodeSortKeyRef::Scalar(..) => unreachable!("seq_key_at on scalar"),
+        }
+    }
+}
+
+impl<'a> PartialEq for NodeSortKeyRef<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl<'a> Eq for NodeSortKeyRef<'a> {}
+
+impl<'a> PartialOrd for NodeSortKeyRef<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a> Ord for NodeSortKeyRef<'a> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match (self, other) {
+            (NodeSortKeyRef::Scalar(am, an), NodeSortKeyRef::Scalar(bm, bn)) => {
+                (am, an).cmp(&(bm, bn))
+            }
+            (NodeSortKeyRef::Scalar(..), _) | (_, NodeSortKeyRef::Scalar(..)) => {
+                self.category().cmp(&other.category())
+            }
+            _ => {
+                // Both sides are sequence variants.
+                let la = self.seq_len();
+                let lb = other.seq_len();
+                match la.cmp(&lb) {
+                    Ordering::Equal => {}
+                    ord => return ord,
+                }
+                for i in 0..la {
+                    match self.seq_key_at(i).cmp(&other.seq_key_at(i)) {
+                        Ordering::Equal => continue,
+                        ord => return ord,
+                    }
+                }
+                Ordering::Equal
+            }
+        }
+    }
+}
+
+impl ChoiceNode {
+    /// Borrowed counterpart of [`Self::sort_key`]. Returns a
+    /// [`NodeSortKeyRef`] that borrows the node's value (and, for
+    /// `String`, its choice config). Same ordering, no allocation.
+    pub fn sort_key_ref(&self) -> NodeSortKeyRef<'_> {
+        match (&self.kind, &self.value) {
+            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
+                let (abs, neg) = ic.sort_key(*v);
+                NodeSortKeyRef::Scalar(abs, neg)
+            }
+            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => {
+                NodeSortKeyRef::Scalar(u128::from(*v), false)
+            }
+            (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => {
+                let (mag, neg) = fc.sort_key(*v);
+                NodeSortKeyRef::Scalar(u128::from(mag), neg)
+            }
+            (ChoiceKind::Bytes(_), ChoiceValue::Bytes(v)) => NodeSortKeyRef::Bytes(v),
+            (ChoiceKind::String(sc), ChoiceValue::String(v)) => NodeSortKeyRef::String(sc, v),
+            _ => unreachable!("mismatched choice kind and value"),
+        }
+    }
+}
+
+/// Shortlex sort key for a sequence of choice nodes, as a borrowed view.
+/// Shorter sequences are simpler; among equal lengths, smaller per-element
+/// keys win. Comparison is allocation-free: per-element keys are resolved
+/// lazily and the first inequality short-circuits.
+#[derive(Clone, Copy)]
+pub struct NodesSortKey<'a>(pub &'a [ChoiceNode]);
+
+impl<'a> PartialEq for NodesSortKey<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl<'a> Eq for NodesSortKey<'a> {}
+
+impl<'a> PartialOrd for NodesSortKey<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a> Ord for NodesSortKey<'a> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match self.0.len().cmp(&other.0.len()) {
+            Ordering::Equal => {}
+            ord => return ord,
+        }
+        for (a, b) in self.0.iter().zip(other.0.iter()) {
+            match a.sort_key_ref().cmp(&b.sort_key_ref()) {
+                Ordering::Equal => continue,
+                ord => return ord,
+            }
+        }
+        Ordering::Equal
+    }
+}
+
 /// Shortlex sort key for a sequence of choice nodes.
 /// Shorter sequences are simpler; among equal lengths, smaller values win.
-pub fn sort_key(nodes: &[ChoiceNode]) -> (usize, Vec<NodeSortKey>) {
-    (nodes.len(), nodes.iter().map(|n| n.sort_key()).collect())
+/// Returns a borrowed view that compares allocation-free; see
+/// [`NodesSortKey::to_owned`] when a long-lived snapshot is needed.
+pub fn sort_key(nodes: &[ChoiceNode]) -> NodesSortKey<'_> {
+    NodesSortKey(nodes)
 }
 
 /// Test case status, ordered from least to most "significant".

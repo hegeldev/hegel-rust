@@ -87,10 +87,10 @@ impl<'a> Shrinker<'a> {
             .collect();
         prefix.push(ChoiceValue::Integer(v));
         let max_size = self.current_nodes.len() + 16;
-        let initial_key = crate::native::core::sort_key(&self.current_nodes);
+        let epoch = self.improvements;
         for seed in 0..3u64 {
             self.probe(&prefix, seed, max_size);
-            if crate::native::core::sort_key(&self.current_nodes) < initial_key {
+            if self.improvements > epoch {
                 return true;
             }
         }
