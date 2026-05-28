@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.14 - 2026-05-28
+
+This release contains only internal refactoring that should have no user-visible impact.
+
 ## 0.14.12 - 2026-05-26
 
 This patch brings the native-mode shrinker (`--features native`) to feature
