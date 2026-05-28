@@ -132,6 +132,8 @@ impl<'a> Shrinker<'a> {
                         if is_interesting
                             && sort_key(&actual_nodes) <= sort_key(&self.current_nodes)
                         {
+                            // Both `NodesSortKey` temporaries drop before
+                            // this mutation, so the borrows are released.
                             self.current_nodes = actual_nodes;
                             self.current_spans = actual_spans;
                         }
@@ -343,9 +345,9 @@ impl<'a> Shrinker<'a> {
                                 if !fc.validate(candidate) {
                                     return false;
                                 }
-                                let prev_key = sort_key(&self.current_nodes);
+                                let epoch = self.improvements;
                                 self.replace(&HashMap::from([(i, ChoiceValue::Float(candidate))]));
-                                sort_key(&self.current_nodes) < prev_key
+                                self.improvements > epoch
                             });
                         }
                     }

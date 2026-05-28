@@ -565,7 +565,10 @@ fn run_main(
     // the returned `TestRunResult::failures`, which `drive` then turns into
     // either the single-failure or multi-failure outer panic.
     let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> = interesting.into_iter().collect();
-    origins_sorted.sort_by_key(|origin| std::cmp::Reverse(sort_key(&origin.1)));
+    // Descending sort_key order. `sort_by` instead of `sort_by_key` because
+    // `NodesSortKey` borrows from the origin's nodes and the key would
+    // otherwise outlive its borrow.
+    origins_sorted.sort_by(|a, b| sort_key(&b.1).cmp(&sort_key(&a.1)));
 
     // When `report_multiple_failures` is `false`, drop all but the
     // smallest origin (the one observed *last* under the

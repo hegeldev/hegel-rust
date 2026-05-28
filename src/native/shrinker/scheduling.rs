@@ -5,11 +5,10 @@
 //! success so useful passes float to the front of the list.
 //!
 //! The "step" granularity is one whole pass invocation: a step is
-//! considered to have made progress when the shrink target's sort_key
-//! strictly decreased. A finer-grained step is a future refinement;
-//! the scheduling skeleton here stays the same either way.
-
-use crate::native::core::sort_key;
+//! considered to have made progress when `Shrinker::improvements` —
+//! the count of accepted strict shrinks — bumped during the pass. A
+//! finer-grained step is a future refinement; the scheduling skeleton
+//! here stays the same either way.
 
 use super::Shrinker;
 
@@ -94,7 +93,7 @@ impl<'a> Shrinker<'a> {
                     can_discard = self.remove_discarded();
                 }
                 let before_nodes_len = self.current_nodes.len();
-                let before_key = sort_key(&self.current_nodes);
+                let epoch_before_pass = self.improvements;
                 let mut failures: usize = 0;
 
                 // Each pass is deterministic — running it again with the
@@ -102,6 +101,11 @@ impl<'a> Shrinker<'a> {
                 // work. We keep calling the pass while it strictly
                 // improves and stop as soon as it produces no change.
                 // MAX_FAILURES is retained as an upper bound for safety.
+                //
+                // `improvements` increments only when `accept_improvement`
+                // commits a strictly-smaller candidate, so its delta
+                // across a pass invocation is exactly "did the pass shrink
+                // anything?" — no per-iteration `sort_key` snapshot needed.
                 while failures < MAX_FAILURES {
                     // Grow max_stall to leave breathing room for the
                     // remainder of this outer iteration.
@@ -121,11 +125,10 @@ impl<'a> Shrinker<'a> {
                         self.debug_msg(&format!("Trying shrink pass: {name}"));
                     }
                     passes[idx].calls += 1;
-                    let prev_key = sort_key(&self.current_nodes);
+                    let epoch_before_iter = self.improvements;
                     let initial_calls = self.calls;
                     (passes[idx].run)(self);
-                    let now_key = sort_key(&self.current_nodes);
-                    if now_key < prev_key {
+                    if self.improvements > epoch_before_iter {
                         passes[idx].shrinks += 1;
                         if self.current_nodes.len() < before_nodes_len {
                             passes[idx].deletions += 1;
@@ -145,7 +148,7 @@ impl<'a> Shrinker<'a> {
 
                 reorder_keys[idx] = if self.current_nodes.len() < before_nodes_len {
                     -1
-                } else if sort_key(&self.current_nodes) < before_key {
+                } else if self.improvements > epoch_before_pass {
                     0
                 } else {
                     1
