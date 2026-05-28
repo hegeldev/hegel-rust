@@ -157,6 +157,105 @@ fn integer_full_i128_range_is_two_pow_128() {
     assert_eq!(kind.max_children(), expected);
 }
 
+// ── IntegerChoice::to_index / from_index round-trips ────────────────────────
+//
+// `to_index` and `from_index` are inverses over the value range. The shrinker
+// uses both heavily, so the round-trip property anchors any future
+// optimisation of the binary-search implementation.
+
+fn integer_choice(min: i128, max: i128) -> IntegerChoice {
+    IntegerChoice {
+        min_value: min,
+        max_value: max,
+        shrink_towards: 0,
+    }
+}
+
+#[test]
+fn integer_choice_index_round_trip_symmetric_around_zero() {
+    let ic = integer_choice(-10, 10);
+    for v in -10i128..=10 {
+        let idx = ic.to_index(v);
+        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+    }
+}
+
+#[test]
+fn integer_choice_index_round_trip_all_positive() {
+    let ic = integer_choice(5, 25);
+    for v in 5i128..=25 {
+        let idx = ic.to_index(v);
+        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+    }
+}
+
+#[test]
+fn integer_choice_index_round_trip_all_negative() {
+    let ic = integer_choice(-25, -5);
+    for v in -25i128..=-5 {
+        let idx = ic.to_index(v);
+        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+    }
+}
+
+#[test]
+fn integer_choice_index_round_trip_asymmetric() {
+    // shrink_towards = 0 sits 5 above the floor and 100 below the ceiling.
+    let ic = integer_choice(-5, 100);
+    for v in -5i128..=100 {
+        let idx = ic.to_index(v);
+        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+    }
+}
+
+#[test]
+fn integer_choice_index_round_trip_full_i128_range() {
+    // Boundary cases for the full i128 range: above + below = u128::MAX, so
+    // any u128-native binary search must handle exactly the largest valid d.
+    let ic = integer_choice(i128::MIN, i128::MAX);
+    for v in [
+        0i128,
+        1,
+        -1,
+        i128::MIN,
+        i128::MAX,
+        i128::MIN + 1,
+        i128::MAX - 1,
+        1 << 100,
+        -(1 << 100),
+    ] {
+        let idx = ic.to_index(v);
+        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+    }
+}
+
+#[test]
+fn integer_choice_index_round_trip_single_value() {
+    let ic = integer_choice(42, 42);
+    let idx = ic.to_index(42);
+    assert_eq!(idx, crate::native::bignum::BigUint::from(0u32));
+    assert_eq!(ic.from_index(idx), Some(42));
+}
+
+#[test]
+fn integer_choice_from_index_past_max_returns_none() {
+    let ic = integer_choice(0, 5);
+    // Range has 6 values (indices 0..=5); index 100 is past max.
+    let big = crate::native::bignum::BigUint::from(100u32);
+    assert_eq!(ic.from_index(big), None);
+}
+
+#[test]
+fn integer_choice_from_index_overflowing_u128_returns_none() {
+    // Even on the full i128 range, max_index is `u128::MAX` — any index
+    // strictly larger than that has no valid value. The u128-native
+    // implementation short-circuits via the `u128::try_from` step.
+    let ic = integer_choice(i128::MIN, i128::MAX);
+    let too_big =
+        crate::native::bignum::BigUint::from(u128::MAX) + crate::native::bignum::BigUint::from(1u32);
+    assert_eq!(ic.from_index(too_big), None);
+}
+
 #[test]
 fn boolean_is_always_two() {
     assert_eq!((ChoiceKind::Boolean(BooleanChoice)).max_children(), bu(2));
