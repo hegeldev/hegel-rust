@@ -372,6 +372,7 @@ dependencies = [
  "ctor",
  "hegeltest-macros",
  "insta",
+ "is-terminal",
  "jiff",
  "num-bigint",
  "num-traits",
