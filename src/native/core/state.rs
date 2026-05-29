@@ -319,7 +319,7 @@ fn biguint_sample_in_range(min: &BigInt, max: &BigInt, rng: &mut SmallRng) -> Bi
     if min == max {
         return min.clone();
     }
-    let span: BigUint = (max - min).magnitude().clone();
+    let span: BigUint = (max - min).magnitude();
     let bits = span.bits();
 
     // In-range "nasty" candidates: the bounds, 0, ±1, and small powers of two

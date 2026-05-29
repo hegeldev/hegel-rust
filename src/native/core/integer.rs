@@ -221,7 +221,7 @@ impl Integer for BigInt {
     }
 
     fn abs_diff(&self, other: &Self) -> BigUint {
-        (self - other).magnitude().clone()
+        (self - other).magnitude()
     }
 
     fn add_unsigned(&self, delta: &BigUint) -> Self {
