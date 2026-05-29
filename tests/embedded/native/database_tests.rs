@@ -95,10 +95,10 @@ fn move_value_falls_back_to_delete_save_when_rename_fails() {
 #[test]
 fn round_trip_integer_choices() {
     let choices = vec![
-        ChoiceValue::Integer(0),
-        ChoiceValue::Integer(-1),
-        ChoiceValue::Integer(i128::MAX),
-        ChoiceValue::Integer(i128::MIN),
+        ChoiceValue::Integer(AnyInteger::I128(0)),
+        ChoiceValue::Integer(AnyInteger::I128(-1)),
+        ChoiceValue::Integer(AnyInteger::I128(i128::MAX)),
+        ChoiceValue::Integer(AnyInteger::I128(i128::MIN)),
     ];
     let bytes = serialize_choices(&choices);
     assert_eq!(deserialize_choices(&bytes), Some(choices));
@@ -108,7 +108,7 @@ fn round_trip_integer_choices() {
 fn round_trip_mixed_choices() {
     let choices = vec![
         ChoiceValue::Boolean(false),
-        ChoiceValue::Integer(42),
+        ChoiceValue::Integer(AnyInteger::I128(42)),
         ChoiceValue::Boolean(true),
     ];
     let bytes = serialize_choices(&choices);
@@ -129,11 +129,62 @@ fn deserialize_returns_none_on_missing_type_tag() {
 
 #[test]
 fn deserialize_returns_none_on_truncated_integer_body() {
-    // count = 1, type tag 0 (Integer), but fewer than 16 bytes follow.
+    // count = 1, type tag 0 (Integer), width sub-tag 4 (i128), but fewer than
+    // the 16 bytes an i128 needs.
     let mut bytes = 1u32.to_le_bytes().to_vec();
     bytes.push(0); // type tag = Integer
+    bytes.push(4); // width sub-tag = i128
     bytes.extend_from_slice(&[0u8; 8]); // only 8 of 16 needed bytes
     assert!(deserialize_choices(&bytes).is_none());
+}
+
+#[test]
+fn deserialize_returns_none_on_missing_integer_width_subtag() {
+    // count = 1, type tag 0 (Integer), but no width sub-tag.
+    let mut bytes = 1u32.to_le_bytes().to_vec();
+    bytes.push(0);
+    assert!(deserialize_choices(&bytes).is_none());
+}
+
+#[test]
+fn deserialize_returns_none_on_unknown_integer_width_subtag() {
+    let mut bytes = 1u32.to_le_bytes().to_vec();
+    bytes.push(0); // Integer
+    bytes.push(99); // unknown width sub-tag
+    assert!(deserialize_choices(&bytes).is_none());
+}
+
+#[test]
+fn deserialize_returns_none_on_truncated_bigint_body() {
+    let mut bytes = 1u32.to_le_bytes().to_vec();
+    bytes.push(0); // Integer
+    bytes.push(10); // width sub-tag = BigInt
+    bytes.extend_from_slice(&4u32.to_le_bytes()); // claims 4 magnitude bytes
+    bytes.push(0xFF); // only 1 provided
+    assert!(deserialize_choices(&bytes).is_none());
+}
+
+#[test]
+fn serialize_roundtrips_all_integer_widths() {
+    use crate::native::core::AnyInteger;
+    let values = vec![
+        ChoiceValue::Integer(AnyInteger::I8(-12)),
+        ChoiceValue::Integer(AnyInteger::I16(-1234)),
+        ChoiceValue::Integer(AnyInteger::I32(-123456)),
+        ChoiceValue::Integer(AnyInteger::I64(-1234567890)),
+        ChoiceValue::Integer(AnyInteger::I128(i128::MIN)),
+        ChoiceValue::Integer(AnyInteger::U8(200)),
+        ChoiceValue::Integer(AnyInteger::U16(60000)),
+        ChoiceValue::Integer(AnyInteger::U32(4_000_000_000)),
+        ChoiceValue::Integer(AnyInteger::U64(u64::MAX)),
+        ChoiceValue::Integer(AnyInteger::U128(u128::MAX)),
+        ChoiceValue::Integer(AnyInteger::Big(
+            crate::native::bignum::BigInt::from(i128::MIN) * crate::native::bignum::BigInt::from(7),
+        )),
+        ChoiceValue::Integer(AnyInteger::Big(crate::native::bignum::BigInt::from(0))),
+    ];
+    let bytes = serialize_choices(&values);
+    assert_eq!(deserialize_choices(&bytes), Some(values));
 }
 
 #[test]

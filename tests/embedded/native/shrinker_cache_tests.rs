@@ -7,6 +7,7 @@
 //! Also covers the previously-nocov defensive branches of `replace`
 //! and `find_integer` so coverage is no longer escaped via annotation.
 
+use crate::native::core::choices::AnyInteger;
 use std::collections::HashMap;
 
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
@@ -15,12 +16,15 @@ use crate::native::shrinker::{ShrinkRun, Shrinker, find_integer};
 
 fn int_node(value: i128) -> ChoiceNode {
     ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: i128::MIN + 1,
-            max_value: i128::MAX,
-            shrink_towards: 0,
-        }),
-        value: ChoiceValue::Integer(value),
+        kind: ChoiceKind::Integer(
+            IntegerChoice {
+                min_value: i128::MIN + 1,
+                max_value: i128::MAX,
+                shrink_towards: 0,
+            }
+            .into(),
+        ),
+        value: ChoiceValue::Integer(AnyInteger::I128(value)),
         was_forced: false,
     }
 }
@@ -48,7 +52,7 @@ fn replace_rejects_index_past_end_of_current_nodes() {
         Spans::new(),
     );
     let mut values = HashMap::new();
-    values.insert(99, ChoiceValue::Integer(0));
+    values.insert(99, ChoiceValue::Integer(AnyInteger::I128(0)));
     assert!(!shrinker.replace(&values));
 }
 
@@ -67,7 +71,7 @@ fn replace_rejects_value_that_fails_kind_validate() {
         Spans::new(),
     );
     let mut values = HashMap::new();
-    values.insert(0, ChoiceValue::Integer(42));
+    values.insert(0, ChoiceValue::Integer(AnyInteger::I128(42)));
     assert!(!shrinker.replace(&values));
 }
 
@@ -100,7 +104,7 @@ fn consider_cache_short_circuits_repeat_lookups() {
         Box::new(move |run| match run {
             ShrinkRun::Full(nodes) => {
                 let v = match nodes[0].value {
-                    ChoiceValue::Integer(v) => v,
+                    ChoiceValue::Integer(AnyInteger::I128(v)) => v,
                     _ => unreachable!(),
                 };
                 seen_clone.borrow_mut().push(v);
@@ -141,7 +145,7 @@ fn consider_cache_distinguishes_kind_punned_candidates() {
             ShrinkRun::Full(nodes) => {
                 let tag = match nodes[0].value {
                     ChoiceValue::Boolean(_) => "bool",
-                    ChoiceValue::Integer(_) => "int",
+                    ChoiceValue::Integer(AnyInteger::I128(_)) => "int",
                     _ => "other",
                 };
                 seen_clone.borrow_mut().push(tag);

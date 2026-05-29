@@ -14,14 +14,14 @@ use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 
 use crate::native::bignum::BigUint;
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Status};
+use crate::native::core::{AnyInteger, ChoiceKind, ChoiceNode, ChoiceValue, Status};
 
 /// Hashable choice-value key. `f64` is keyed by its bit pattern so `-0.0`
 /// stays distinct from `0.0` and individual NaN payloads are tracked
 /// separately — both matter for novel-prefix exhaustion accounting.
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum ChoiceValueKey {
-    Integer(i128),
+    Integer(AnyInteger),
     Boolean(bool),
     Float(u64),
     Bytes(Vec<u8>),
@@ -31,7 +31,7 @@ enum ChoiceValueKey {
 impl From<&ChoiceValue> for ChoiceValueKey {
     fn from(v: &ChoiceValue) -> Self {
         match v {
-            ChoiceValue::Integer(n) => ChoiceValueKey::Integer(*n),
+            ChoiceValue::Integer(n) => ChoiceValueKey::Integer(n.clone()),
             ChoiceValue::Boolean(b) => ChoiceValueKey::Boolean(*b),
             ChoiceValue::Float(f) => ChoiceValueKey::Float(f.to_bits()),
             ChoiceValue::Bytes(b) => ChoiceValueKey::Bytes(b.clone()),

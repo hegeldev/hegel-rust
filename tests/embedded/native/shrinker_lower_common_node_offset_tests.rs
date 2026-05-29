@@ -1,24 +1,28 @@
 //! Unit tests for `Shrinker::lower_common_node_offset`.
 
+use crate::native::core::choices::AnyInteger;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128, shrink_towards: i128) -> ChoiceNode {
     ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: i128::MIN,
-            max_value: i128::MAX,
-            shrink_towards,
-        }),
-        value: ChoiceValue::Integer(value),
+        kind: ChoiceKind::Integer(
+            IntegerChoice {
+                min_value: i128::MIN,
+                max_value: i128::MAX,
+                shrink_towards,
+            }
+            .into(),
+        ),
+        value: ChoiceValue::Integer(AnyInteger::I128(value)),
         was_forced: false,
     }
 }
 
 fn int_value(node: &ChoiceNode) -> i128 {
     match node.value {
-        ChoiceValue::Integer(v) => v,
+        ChoiceValue::Integer(AnyInteger::I128(v)) => v,
         _ => unreachable!(),
     }
 }
@@ -58,11 +62,11 @@ fn lower_common_node_offset_collapses_zig_zag_pair() {
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
                 let m = match nodes[0].value {
-                    ChoiceValue::Integer(v) => v,
+                    ChoiceValue::Integer(AnyInteger::I128(v)) => v,
                     _ => unreachable!(),
                 };
                 let n = match nodes[1].value {
-                    ChoiceValue::Integer(v) => v,
+                    ChoiceValue::Integer(AnyInteger::I128(v)) => v,
                     _ => unreachable!(),
                 };
                 (

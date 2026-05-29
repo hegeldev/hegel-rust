@@ -107,11 +107,14 @@ fn integer_choice_unit_single_value_range() {
 fn choice_kind_to_index_panics_on_kind_value_mismatch() {
     // Asking an Integer kind to index a Boolean value is a programmer error;
     // ChoiceKind::to_index must panic loudly rather than return a bogus index.
-    let kind = ChoiceKind::Integer(IntegerChoice {
-        min_value: 0,
-        max_value: 100,
-        shrink_towards: 0,
-    });
+    let kind = ChoiceKind::Integer(
+        IntegerChoice {
+            min_value: 0,
+            max_value: 100,
+            shrink_towards: 0,
+        }
+        .into(),
+    );
     let _ = kind.to_index(&ChoiceValue::Boolean(true));
 }
 
@@ -127,31 +130,40 @@ fn bu(n: u64) -> crate::native::bignum::BigUint {
 
 #[test]
 fn integer_bounded_range_gives_exact_count() {
-    let kind = ChoiceKind::Integer(IntegerChoice {
-        min_value: 0,
-        max_value: 200,
-        shrink_towards: 0,
-    });
+    let kind = ChoiceKind::Integer(
+        IntegerChoice {
+            min_value: 0,
+            max_value: 200,
+            shrink_towards: 0,
+        }
+        .into(),
+    );
     assert_eq!(kind.max_children(), bu(201));
 }
 
 #[test]
 fn integer_negative_range_gives_exact_count() {
-    let kind = ChoiceKind::Integer(IntegerChoice {
-        min_value: -10,
-        max_value: 10,
-        shrink_towards: 0,
-    });
+    let kind = ChoiceKind::Integer(
+        IntegerChoice {
+            min_value: -10,
+            max_value: 10,
+            shrink_towards: 0,
+        }
+        .into(),
+    );
     assert_eq!(kind.max_children(), bu(21));
 }
 
 #[test]
 fn integer_full_i128_range_is_two_pow_128() {
-    let kind = ChoiceKind::Integer(IntegerChoice {
-        min_value: i128::MIN,
-        max_value: i128::MAX,
-        shrink_towards: 0,
-    });
+    let kind = ChoiceKind::Integer(
+        IntegerChoice {
+            min_value: i128::MIN,
+            max_value: i128::MAX,
+            shrink_towards: 0,
+        }
+        .into(),
+    );
     // 2^128 = u128::MAX + 1.
     let expected = crate::native::bignum::BigUint::from(u128::MAX) + bu(1);
     assert_eq!(kind.max_children(), expected);
@@ -163,7 +175,7 @@ fn integer_full_i128_range_is_two_pow_128() {
 // uses both heavily, so the round-trip property anchors any future
 // optimisation of the binary-search implementation.
 
-fn integer_choice(min: i128, max: i128) -> IntegerChoice {
+fn integer_choice(min: i128, max: i128) -> IntegerChoice<i128> {
     IntegerChoice {
         min_value: min,
         max_value: max,
@@ -175,7 +187,7 @@ fn integer_choice(min: i128, max: i128) -> IntegerChoice {
 fn integer_choice_index_round_trip_symmetric_around_zero() {
     let ic = integer_choice(-10, 10);
     for v in -10i128..=10 {
-        let idx = ic.to_index(v);
+        let idx = ic.to_index(&v);
         assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
     }
 }
@@ -184,7 +196,7 @@ fn integer_choice_index_round_trip_symmetric_around_zero() {
 fn integer_choice_index_round_trip_all_positive() {
     let ic = integer_choice(5, 25);
     for v in 5i128..=25 {
-        let idx = ic.to_index(v);
+        let idx = ic.to_index(&v);
         assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
     }
 }
@@ -193,7 +205,7 @@ fn integer_choice_index_round_trip_all_positive() {
 fn integer_choice_index_round_trip_all_negative() {
     let ic = integer_choice(-25, -5);
     for v in -25i128..=-5 {
-        let idx = ic.to_index(v);
+        let idx = ic.to_index(&v);
         assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
     }
 }
@@ -203,7 +215,7 @@ fn integer_choice_index_round_trip_asymmetric() {
     // shrink_towards = 0 sits 5 above the floor and 100 below the ceiling.
     let ic = integer_choice(-5, 100);
     for v in -5i128..=100 {
-        let idx = ic.to_index(v);
+        let idx = ic.to_index(&v);
         assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
     }
 }
@@ -224,7 +236,7 @@ fn integer_choice_index_round_trip_full_i128_range() {
         1 << 100,
         -(1 << 100),
     ] {
-        let idx = ic.to_index(v);
+        let idx = ic.to_index(&v);
         assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
     }
 }
@@ -232,7 +244,7 @@ fn integer_choice_index_round_trip_full_i128_range() {
 #[test]
 fn integer_choice_index_round_trip_single_value() {
     let ic = integer_choice(42, 42);
-    let idx = ic.to_index(42);
+    let idx = ic.to_index(&42);
     assert_eq!(idx, crate::native::bignum::BigUint::from(0u32));
     assert_eq!(ic.from_index(idx), Some(42));
 }
@@ -585,12 +597,15 @@ fn string_choice_from_index_past_max_returns_none() {
 
 fn integer_node(min: i128, max: i128, value: i128) -> ChoiceNode {
     ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: min,
-            max_value: max,
-            shrink_towards: 0,
-        }),
-        value: ChoiceValue::Integer(value),
+        kind: ChoiceKind::Integer(
+            IntegerChoice {
+                min_value: min,
+                max_value: max,
+                shrink_towards: 0,
+            }
+            .into(),
+        ),
+        value: ChoiceValue::Integer(AnyInteger::I128(value)),
         was_forced: false,
     }
 }

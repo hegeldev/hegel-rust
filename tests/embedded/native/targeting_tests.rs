@@ -1,15 +1,19 @@
 use super::*;
+use crate::native::core::choices::AnyInteger;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{BytesChoice, FloatChoice};
 
 fn integer_node(value: i128, min_value: i128, max_value: i128) -> ChoiceNode {
     ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
-            min_value,
-            max_value,
-            shrink_towards: 0,
-        }),
-        value: ChoiceValue::Integer(value),
+        kind: ChoiceKind::Integer(
+            IntegerChoice {
+                min_value,
+                max_value,
+                shrink_towards: 0,
+            }
+            .into(),
+        ),
+        value: ChoiceValue::Integer(AnyInteger::I128(value)),
         was_forced: false,
     }
 }
@@ -47,7 +51,7 @@ fn targeting_state_starts_empty() {
 #[test]
 fn targeting_state_records_first_observation() {
     let mut state = TargetingState::new();
-    let choices = vec![ChoiceValue::Integer(7)];
+    let choices = vec![ChoiceValue::Integer(AnyInteger::I128(7))];
     let obs = std::collections::HashMap::from([("score".to_string(), 1.5)]);
     state.record(&choices, &obs);
     assert!(!state.is_empty());
@@ -57,8 +61,8 @@ fn targeting_state_records_first_observation() {
 #[test]
 fn targeting_state_overwrites_only_on_strict_improvement() {
     let mut state = TargetingState::new();
-    let choices_a = vec![ChoiceValue::Integer(1)];
-    let choices_b = vec![ChoiceValue::Integer(2)];
+    let choices_a = vec![ChoiceValue::Integer(AnyInteger::I128(1))];
+    let choices_b = vec![ChoiceValue::Integer(AnyInteger::I128(2))];
     state.record(
         &choices_a,
         &std::collections::HashMap::from([("s".to_string(), 1.0)]),
@@ -86,7 +90,7 @@ fn targeting_state_overwrites_only_on_strict_improvement() {
 #[test]
 fn targeting_state_tracks_multiple_labels_independently() {
     let mut state = TargetingState::new();
-    let choices = vec![ChoiceValue::Integer(0)];
+    let choices = vec![ChoiceValue::Integer(AnyInteger::I128(0))];
     state.record(
         &choices,
         &std::collections::HashMap::from([("a".to_string(), 1.0), ("b".to_string(), 2.0)]),
@@ -162,11 +166,14 @@ fn is_climbable_rejects_strings() {
 
 #[test]
 fn is_climbable_returns_false_for_value_and_kind_mismatch() {
-    let int_kind = ChoiceKind::Integer(IntegerChoice {
-        min_value: 0,
-        max_value: 10,
-        shrink_towards: 0,
-    });
+    let int_kind = ChoiceKind::Integer(
+        IntegerChoice {
+            min_value: 0,
+            max_value: 10,
+            shrink_towards: 0,
+        }
+        .into(),
+    );
     // Wrong-shape pairing: a bytes value with an integer kind is never
     // produced by the engine, but `is_climbable` defensively rejects it.
     assert!(!is_climbable(&ChoiceValue::Bytes(vec![0]), &int_kind));
@@ -177,8 +184,14 @@ fn is_climbable_returns_false_for_value_and_kind_mismatch() {
 #[test]
 fn step_choice_integer_adds_delta_within_range() {
     let node = integer_node(5, 0, 100);
-    assert_eq!(step_choice(&node, 3), Some(ChoiceValue::Integer(8)));
-    assert_eq!(step_choice(&node, -5), Some(ChoiceValue::Integer(0)));
+    assert_eq!(
+        step_choice(&node, 3),
+        Some(ChoiceValue::Integer(AnyInteger::I128(8)))
+    );
+    assert_eq!(
+        step_choice(&node, -5),
+        Some(ChoiceValue::Integer(AnyInteger::I128(0)))
+    );
 }
 
 #[test]
@@ -254,7 +267,7 @@ fn step_choice_rejects_mismatched_value_and_kind() {
     use crate::native::core::choices::BooleanChoice;
     let node = ChoiceNode {
         kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Integer(0),
+        value: ChoiceValue::Integer(AnyInteger::I128(0)),
         was_forced: false,
     };
     assert_eq!(step_choice(&node, 1), None);
@@ -324,8 +337,8 @@ fn hill_climb_resize_restart_and_already_examined_skip() {
     // fallback so `current_nodes.len()` grows mid-walk.
     let start = vec![
         ChoiceValue::Boolean(false),
-        ChoiceValue::Integer(2),
-        ChoiceValue::Integer(2),
+        ChoiceValue::Integer(AnyInteger::I128(2)),
+        ChoiceValue::Integer(AnyInteger::I128(2)),
         ChoiceValue::Boolean(false),
         ChoiceValue::Boolean(false),
     ];
@@ -366,7 +379,7 @@ fn hill_climb_rejects_lateral_grow() {
 /// short-circuited.
 #[test]
 fn hill_climb_rejects_invalid_trial_status() {
-    let start = vec![ChoiceValue::Integer(6)];
+    let start = vec![ChoiceValue::Integer(AnyInteger::I128(6))];
     run_optimise(start, -1.0, |tc| {
         let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(20));
         tc.assume(n != 7);
@@ -385,7 +398,7 @@ fn hill_climb_rejects_invalid_trial_status() {
 /// explicitly.
 #[test]
 fn hill_climb_returns_zero_when_initial_replay_invalid() {
-    let start = vec![ChoiceValue::Integer(7)];
+    let start = vec![ChoiceValue::Integer(AnyInteger::I128(7))];
     run_optimise(start, 0.0, |tc| {
         let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(20));
         tc.assume(n != 7);
@@ -401,7 +414,7 @@ fn hill_climb_returns_zero_when_initial_replay_invalid() {
 /// trial comes back `Status::Interesting`.
 #[test]
 fn run_trial_records_interesting_result_into_ctx() {
-    let start = vec![ChoiceValue::Integer(6)];
+    let start = vec![ChoiceValue::Integer(AnyInteger::I128(6))];
     run_optimise(start, -1.0, |tc| {
         let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(20));
         assert_ne!(n, 7);

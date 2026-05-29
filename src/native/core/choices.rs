@@ -1,141 +1,371 @@
 // Choice types: the recorded decisions a test case makes.
 
+use super::integer::{Integer, UnsignedDistance};
+use crate::native::bignum::{BigInt, BigUint, ToPrimitive, Zero};
 use crate::native::floats::sign_aware_lte;
 use crate::native::intervalsets::IntervalSet;
 
-/// An integer choice with bounded range.
+/// Sort-key magnitude for an integer choice: `u128` in the common (native)
+/// case, [`BigUint`] only when a [`BigInt`] choice's shrink distance exceeds
+/// `u128`. A [`Self::Big`] always holds a value strictly greater than
+/// `u128::MAX` (see [`Self::from_biguint`]), which is what makes the [`Ord`]
+/// impl a correct total order: every `Big` sorts after every `Small`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IntegerChoice {
-    pub min_value: i128,
-    pub max_value: i128,
+pub enum IntMagnitude {
+    Small(u128),
+    Big(BigUint),
+}
+
+impl IntMagnitude {
+    /// Build from a [`BigUint`], normalising any value `<= u128::MAX` down to
+    /// [`Self::Small`] so the `Small` / `Big` ranges never overlap.
+    pub fn from_biguint(v: BigUint) -> Self {
+        match v.to_u128() {
+            Some(small) => IntMagnitude::Small(small),
+            None => IntMagnitude::Big(v),
+        }
+    }
+}
+
+impl Ord for IntMagnitude {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match (self, other) {
+            (IntMagnitude::Small(a), IntMagnitude::Small(b)) => a.cmp(b),
+            (IntMagnitude::Big(a), IntMagnitude::Big(b)) => a.cmp(b),
+            // A normalised `Big` always exceeds `u128::MAX >= any Small`.
+            (IntMagnitude::Small(_), IntMagnitude::Big(_)) => Ordering::Less,
+            (IntMagnitude::Big(_), IntMagnitude::Small(_)) => Ordering::Greater,
+        }
+    }
+}
+
+impl PartialOrd for IntMagnitude {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// An integer choice with bounded range, generic over the value type `T`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IntegerChoice<T: Integer> {
+    pub min_value: T,
+    pub max_value: T,
     /// The "preferred" value the shrinker aims at (default 0). All of
     /// [`Self::simplest`], [`Self::unit`], and [`Self::sort_key`] are
     /// anchored at `shrink_towards.clamp(min_value, max_value)`, so
     /// integer-shrinking passes converge on this value rather than on 0.
-    pub shrink_towards: i128,
+    pub shrink_towards: T,
 }
 
-impl IntegerChoice {
+impl<T: Integer> IntegerChoice<T> {
     /// The shrink-target value clamped into the kind's range.  All shrink
     /// helpers compare against this rather than the raw `shrink_towards`
     /// to keep behaviour well-defined when callers pass an out-of-range
     /// hint.
-    pub(crate) fn clamped_shrink_towards(&self) -> i128 {
-        self.shrink_towards.clamp(self.min_value, self.max_value)
+    pub(crate) fn clamped_shrink_towards(&self) -> T {
+        self.shrink_towards
+            .clone()
+            .clamp(self.min_value.clone(), self.max_value.clone())
     }
 
     /// The simplest (most "shrunk") value: `shrink_towards` clamped to
     /// the kind's range. With the default `shrink_towards = 0` this is
     /// `0` when in range and the closest endpoint otherwise.
-    pub fn simplest(&self) -> i128 {
+    pub fn simplest(&self) -> T {
         self.clamped_shrink_towards()
     }
 
     /// The second simplest value, used for punning when types change.
-    pub fn unit(&self) -> i128 {
+    pub fn unit(&self) -> T {
         let s = self.simplest();
-        if self.validate(s + 1) {
-            s + 1
-        } else if self.validate(s - 1) {
-            s - 1
-        } else {
-            s
+        if let Some(succ) = s.checked_succ() {
+            if self.validate(&succ) {
+                return succ;
+            }
         }
+        if let Some(pred) = s.checked_pred() {
+            if self.validate(&pred) {
+                return pred;
+            }
+        }
+        s
     }
 
-    pub fn validate(&self, value: i128) -> bool {
-        self.min_value <= value && value <= self.max_value
+    pub fn validate(&self, value: &T) -> bool {
+        self.min_value <= *value && *value <= self.max_value
     }
 
     /// Sort key for shrinking: smaller distance from `shrink_towards`
     /// is simpler, with values below `shrink_towards` ordered after
     /// values above at the same distance. With the default
     /// `shrink_towards = 0` this is `(value.unsigned_abs(), value < 0)`.
-    pub fn sort_key(&self, value: i128) -> (u128, bool) {
+    pub fn sort_key(&self, value: &T) -> (IntMagnitude, bool) {
         let target = self.clamped_shrink_towards();
-        let distance = value.wrapping_sub(target).unsigned_abs();
-        (distance, value < target)
+        let distance = value.abs_diff(&target);
+        (distance.to_magnitude(), *value < target)
     }
 
-    pub fn max_index(&self) -> crate::native::bignum::BigUint {
-        use crate::native::bignum::BigUint;
-        // max_value - min_value can exceed i128 positive range (e.g. full
-        // i128 span). Two's-complement wrapping_sub reinterpreted as u128
-        // recovers the correct non-negative distance.
-        let diff = (self.max_value as u128).wrapping_sub(self.min_value as u128);
-        BigUint::from(diff)
+    pub fn max_index(&self) -> BigUint {
+        // max_value - min_value can exceed the value type's positive range
+        // (e.g. full i128 span). `abs_diff` recovers the non-negative distance.
+        self.max_value.abs_diff(&self.min_value).to_biguint()
     }
 
-    pub fn to_index(&self, value: i128) -> crate::native::bignum::BigUint {
-        use crate::native::bignum::{BigUint, Zero};
+    pub fn to_index(&self, value: &T) -> BigUint {
         let s = self.simplest();
-        if value == s {
+        if *value == s {
             return BigUint::zero();
         }
         // `above` / `below` are the distances from `simplest` to the bounds.
-        // Both fit in u128 individually; their sum (`max - min`) also fits in
-        // u128 — so the entire computation runs in native arithmetic and
-        // converts to `BigUint` only at the very end.
-        let above: u128 = (self.max_value as u128).wrapping_sub(s as u128);
-        let below: u128 = (s as u128).wrapping_sub(self.min_value as u128);
-        let d_abs: u128 = if value > s {
-            (value as u128).wrapping_sub(s as u128)
-        } else {
-            (s as u128).wrapping_sub(value as u128)
-        };
-        let d_minus_one = d_abs - 1;
-        let mut count: u128 = d_minus_one.min(above) + d_minus_one.min(below);
-        if value > s {
-            return BigUint::from(count + 1);
+        // For native `T` the whole computation runs in `u128`; only the final
+        // result converts to `BigUint`.
+        let above = self.max_value.abs_diff(&s);
+        let below = s.abs_diff(&self.min_value);
+        let d_abs = value.abs_diff(&s);
+        let one = <T::Unsigned as UnsignedDistance>::one();
+        let d_minus_one = d_abs.minus(&one);
+        let mut count = d_minus_one
+            .min_with(&above)
+            .plus(&d_minus_one.min_with(&below));
+        if *value > s {
+            return count.plus(&one).to_biguint();
         }
         if d_abs <= above {
-            count += 1;
+            count = count.plus(&one);
         }
-        BigUint::from(count + 1)
+        count.plus(&one).to_biguint()
     }
 
     #[allow(clippy::wrong_self_convention)]
-    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<i128> {
-        use crate::native::bignum::Zero;
+    pub fn from_index(&self, index: BigUint) -> Option<T> {
         let s = self.simplest();
         if index.is_zero() {
             return Some(s);
         }
-        let above: u128 = (self.max_value as u128).wrapping_sub(s as u128);
-        let below: u128 = (s as u128).wrapping_sub(self.min_value as u128);
-        // `max_index` is `above + below`, which fits in u128, so any valid
-        // index does too. An over-range `BigUint` index (no valid value)
-        // short-circuits here without entering the binary search.
-        let Ok(index_u) = u128::try_from(&index) else {
-            return None;
-        };
+        let above = self.max_value.abs_diff(&s);
+        let below = s.abs_diff(&self.min_value);
+        // An over-range index (no valid value) short-circuits here without
+        // entering the binary search.
+        let index_u = <T::Unsigned as UnsignedDistance>::try_from_biguint(&index)?;
+        let one = <T::Unsigned as UnsignedDistance>::one();
         // Binary search for smallest `d >= 1` with `count(d) >= index_u`,
-        // where `count(d) = min(d, above) + min(d, below)`. The smallest such
-        // `d` is at most `max(above, below) <= u128::MAX`, so u128 suffices.
-        let mut lo: u128 = 1;
-        let mut hi: u128 = above.max(below);
+        // where `count(d) = min(d, above) + min(d, below)`.
+        let mut lo = one.clone();
+        let mut hi = above.max_with(&below);
         while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let total = mid.min(above) + mid.min(below);
+            let mid = lo.plus(&hi.minus(&lo).halve());
+            let total = mid.min_with(&above).plus(&mid.min_with(&below));
             if total >= index_u {
                 hi = mid;
             } else {
-                lo = mid + 1;
+                lo = mid.plus(&one);
             }
         }
         let d = lo;
-        let total_at_d = d.min(above) + d.min(below);
+        let total_at_d = d.min_with(&above).plus(&d.min_with(&below));
         if total_at_d < index_u {
             return None;
         }
-        let d_minus_one = d - 1;
-        let before = d_minus_one.min(above) + d_minus_one.min(below);
-        let pos_in_d = index_u - before;
-        if pos_in_d == 1 && d <= above {
-            return Some((s as u128).wrapping_add(d) as i128);
+        let d_minus_one = d.minus(&one);
+        let before = d_minus_one
+            .min_with(&above)
+            .plus(&d_minus_one.min_with(&below));
+        let pos_in_d = index_u.minus(&before);
+        if pos_in_d == one && d <= above {
+            return Some(s.add_unsigned(&d));
         }
         debug_assert!(d <= below);
-        Some((s as u128).wrapping_sub(d) as i128)
+        Some(s.sub_unsigned(&d))
+    }
+}
+
+/// Convenience for the common `i128` parametrisation (used widely in tests and
+/// by callers that haven't been migrated to a narrower width).
+impl From<IntegerChoice<i128>> for AnyIntegerChoice {
+    fn from(choice: IntegerChoice<i128>) -> Self {
+        AnyIntegerChoice::I128(choice)
+    }
+}
+
+impl From<i128> for AnyInteger {
+    fn from(value: i128) -> Self {
+        AnyInteger::I128(value)
+    }
+}
+
+/// Type-erased [`IntegerChoice`] stored in a choice node: one case per
+/// parametrisation of the generic type. A single inner enum keeps
+/// [`ChoiceKind`] to one `Integer` variant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AnyIntegerChoice {
+    I8(IntegerChoice<i8>),
+    I16(IntegerChoice<i16>),
+    I32(IntegerChoice<i32>),
+    I64(IntegerChoice<i64>),
+    I128(IntegerChoice<i128>),
+    U8(IntegerChoice<u8>),
+    U16(IntegerChoice<u16>),
+    U32(IntegerChoice<u32>),
+    U64(IntegerChoice<u64>),
+    U128(IntegerChoice<u128>),
+    Big(IntegerChoice<BigInt>),
+}
+
+/// Type-erased integer value stored in a choice node.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum AnyInteger {
+    I8(i8),
+    I16(i16),
+    I32(i32),
+    I64(i64),
+    I128(i128),
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+    U128(u128),
+    Big(BigInt),
+}
+
+/// Dispatch on an [`AnyIntegerChoice`], binding the inner typed choice as `$c`.
+macro_rules! dispatch_choice {
+    ($self:expr, $c:ident => $body:expr) => {
+        match $self {
+            AnyIntegerChoice::I8($c) => $body,
+            AnyIntegerChoice::I16($c) => $body,
+            AnyIntegerChoice::I32($c) => $body,
+            AnyIntegerChoice::I64($c) => $body,
+            AnyIntegerChoice::I128($c) => $body,
+            AnyIntegerChoice::U8($c) => $body,
+            AnyIntegerChoice::U16($c) => $body,
+            AnyIntegerChoice::U32($c) => $body,
+            AnyIntegerChoice::U64($c) => $body,
+            AnyIntegerChoice::U128($c) => $body,
+            AnyIntegerChoice::Big($c) => $body,
+        }
+    };
+}
+
+/// Dispatch on a value-matched `(AnyIntegerChoice, AnyInteger)` pair, binding
+/// the typed choice as `$c` and the typed value as `$v`. The trailing arm is
+/// genuinely unreachable: a node's kind and value variants are always the same
+/// width (both produced by one `draw_integer::<T>`).
+macro_rules! dispatch_choice_value {
+    ($choice:expr, $value:expr, $c:ident, $v:ident => $body:expr) => {
+        match ($choice, $value) {
+            (AnyIntegerChoice::I8($c), AnyInteger::I8($v)) => $body,
+            (AnyIntegerChoice::I16($c), AnyInteger::I16($v)) => $body,
+            (AnyIntegerChoice::I32($c), AnyInteger::I32($v)) => $body,
+            (AnyIntegerChoice::I64($c), AnyInteger::I64($v)) => $body,
+            (AnyIntegerChoice::I128($c), AnyInteger::I128($v)) => $body,
+            (AnyIntegerChoice::U8($c), AnyInteger::U8($v)) => $body,
+            (AnyIntegerChoice::U16($c), AnyInteger::U16($v)) => $body,
+            (AnyIntegerChoice::U32($c), AnyInteger::U32($v)) => $body,
+            (AnyIntegerChoice::U64($c), AnyInteger::U64($v)) => $body,
+            (AnyIntegerChoice::U128($c), AnyInteger::U128($v)) => $body,
+            (AnyIntegerChoice::Big($c), AnyInteger::Big($v)) => $body,
+            _ => unreachable!("integer choice/value width mismatch"),
+        }
+    };
+}
+
+impl AnyInteger {
+    /// This value as a [`BigInt`].
+    pub fn to_bigint(&self) -> BigInt {
+        match self {
+            AnyInteger::I8(v) => v.to_bigint(),
+            AnyInteger::I16(v) => v.to_bigint(),
+            AnyInteger::I32(v) => v.to_bigint(),
+            AnyInteger::I64(v) => v.to_bigint(),
+            AnyInteger::I128(v) => v.to_bigint(),
+            AnyInteger::U8(v) => v.to_bigint(),
+            AnyInteger::U16(v) => v.to_bigint(),
+            AnyInteger::U32(v) => v.to_bigint(),
+            AnyInteger::U64(v) => v.to_bigint(),
+            AnyInteger::U128(v) => v.to_bigint(),
+            AnyInteger::Big(v) => v.clone(),
+        }
+    }
+}
+
+impl AnyIntegerChoice {
+    pub fn simplest(&self) -> AnyInteger {
+        dispatch_choice!(self, c => c.simplest().wrap_value())
+    }
+
+    pub fn unit(&self) -> AnyInteger {
+        dispatch_choice!(self, c => c.unit().wrap_value())
+    }
+
+    pub fn validate(&self, value: &AnyInteger) -> bool {
+        // Compared via `BigInt` rather than the value-matched dispatch: during
+        // prefix replay a recorded value of one width can be validated against
+        // a choice of another width (a schema shift between runs), and that
+        // must report `false` rather than hit the width-mismatch `unreachable`.
+        let v = value.to_bigint();
+        self.min_bigint() <= v && v <= self.max_bigint()
+    }
+
+    pub fn sort_key(&self, value: &AnyInteger) -> (IntMagnitude, bool) {
+        dispatch_choice_value!(self, value, c, v => c.sort_key(v))
+    }
+
+    pub fn max_index(&self) -> BigUint {
+        dispatch_choice!(self, c => c.max_index())
+    }
+
+    pub fn to_index(&self, value: &AnyInteger) -> BigUint {
+        dispatch_choice_value!(self, value, c, v => c.to_index(v))
+    }
+
+    #[allow(clippy::wrong_self_convention)]
+    pub fn from_index(&self, index: BigUint) -> Option<AnyInteger> {
+        dispatch_choice!(self, c => c.from_index(index).map(Integer::wrap_value))
+    }
+
+    /// Cardinality of this choice's value space (`span + 1`).
+    pub fn max_children(&self) -> BigUint {
+        self.max_index() + BigUint::from(1u32)
+    }
+
+    /// `min_value` as a [`BigInt`].
+    pub fn min_bigint(&self) -> BigInt {
+        dispatch_choice!(self, c => c.min_value.to_bigint())
+    }
+
+    /// `max_value` as a [`BigInt`].
+    pub fn max_bigint(&self) -> BigInt {
+        dispatch_choice!(self, c => c.max_value.to_bigint())
+    }
+
+    /// `simplest()` as a [`BigInt`].
+    pub fn simplest_bigint(&self) -> BigInt {
+        dispatch_choice!(self, c => c.simplest().to_bigint())
+    }
+
+    /// The clamped shrink target as a [`BigInt`].
+    pub fn clamped_shrink_towards_bigint(&self) -> BigInt {
+        dispatch_choice!(self, c => c.clamped_shrink_towards().to_bigint())
+    }
+
+    /// Build a same-width [`AnyInteger`] from a [`BigInt`], or `None` if the
+    /// value does not fit this choice's width. Used by the (BigInt-based)
+    /// shrinker and targeting to write candidates back into a node.
+    pub fn value_from_bigint(&self, v: &BigInt) -> Option<AnyInteger> {
+        match self {
+            AnyIntegerChoice::I8(_) => i8::from_bigint(v).map(Integer::wrap_value),
+            AnyIntegerChoice::I16(_) => i16::from_bigint(v).map(Integer::wrap_value),
+            AnyIntegerChoice::I32(_) => i32::from_bigint(v).map(Integer::wrap_value),
+            AnyIntegerChoice::I64(_) => i64::from_bigint(v).map(Integer::wrap_value),
+            AnyIntegerChoice::I128(_) => i128::from_bigint(v).map(Integer::wrap_value),
+            AnyIntegerChoice::U8(_) => u8::from_bigint(v).map(Integer::wrap_value),
+            AnyIntegerChoice::U16(_) => u16::from_bigint(v).map(Integer::wrap_value),
+            AnyIntegerChoice::U32(_) => u32::from_bigint(v).map(Integer::wrap_value),
+            AnyIntegerChoice::U64(_) => u64::from_bigint(v).map(Integer::wrap_value),
+            AnyIntegerChoice::U128(_) => u128::from_bigint(v).map(Integer::wrap_value),
+            AnyIntegerChoice::Big(_) => BigInt::from_bigint(v).map(Integer::wrap_value),
+        }
     }
 }
 
@@ -696,7 +926,7 @@ fn max_finite_global_rank() -> crate::native::bignum::BigUint {
 /// The kind of choice made at a particular point.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChoiceKind {
-    Integer(IntegerChoice),
+    Integer(AnyIntegerChoice),
     Boolean(BooleanChoice),
     Float(FloatChoice),
     Bytes(BytesChoice),
@@ -706,7 +936,7 @@ pub enum ChoiceKind {
 /// The value produced by a choice.
 #[derive(Clone, Debug)]
 pub enum ChoiceValue {
-    Integer(i128),
+    Integer(AnyInteger),
     Boolean(bool),
     Float(f64),
     Bytes(Vec<u8>),
@@ -773,7 +1003,7 @@ impl ChoiceKind {
     /// Convert a value to its dense index under this kind's sort order.
     pub fn to_index(&self, value: &ChoiceValue) -> crate::native::bignum::BigUint {
         match (self, value) {
-            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.to_index(*v),
+            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.to_index(v),
             (ChoiceKind::Boolean(bc), ChoiceValue::Boolean(v)) => bc.to_index(*v),
             (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => fc.to_index(*v),
             (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => bc.to_index(v),
@@ -797,7 +1027,7 @@ impl ChoiceKind {
     /// Whether `value` is a valid draw for this kind.
     pub fn validate(&self, value: &ChoiceValue) -> bool {
         match (self, value) {
-            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.validate(*v),
+            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.validate(v),
             (ChoiceKind::Boolean(_), ChoiceValue::Boolean(_)) => true,
             (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => fc.validate(*v),
             (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => bc.validate(v),
@@ -810,10 +1040,7 @@ impl ChoiceKind {
     pub fn max_children(&self) -> crate::native::bignum::BigUint {
         use crate::native::bignum::BigUint;
         match self {
-            ChoiceKind::Integer(ic) => {
-                let diff = (ic.max_value as u128).wrapping_sub(ic.min_value as u128);
-                BigUint::from(diff) + BigUint::from(1u32)
-            }
+            ChoiceKind::Integer(ic) => ic.max_children(),
             ChoiceKind::Boolean(_) => BigUint::from(2u32),
             ChoiceKind::Float(fc) => fc.max_index() + BigUint::from(1u32),
             ChoiceKind::Bytes(bc) => bc.max_index() + BigUint::from(1u32),
@@ -850,11 +1077,17 @@ impl ChoiceKind {
         }
         match self {
             ChoiceKind::Integer(ic) => {
+                // The `max_children <= cap` gate above bounds the span, so this
+                // `BigInt` walk runs a small, known number of iterations.
                 let mut v = Vec::new();
-                let mut n = ic.min_value;
+                let mut n = ic.min_bigint();
+                let max = ic.max_bigint();
                 loop {
-                    v.push(ChoiceValue::Integer(n));
-                    if n == ic.max_value {
+                    v.push(ChoiceValue::Integer(
+                        ic.value_from_bigint(&n)
+                            .expect("in-range value fits the choice's width"),
+                    ));
+                    if n == max {
                         break;
                     }
                     n += 1;
@@ -955,8 +1188,11 @@ impl ChoiceNode {
     pub fn sort_key(&self) -> NodeSortKey {
         match (&self.kind, &self.value) {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
-                let (abs, neg) = ic.sort_key(*v);
-                NodeSortKey::Scalar(abs, neg)
+                let (mag, neg) = ic.sort_key(v);
+                match mag {
+                    IntMagnitude::Small(m) => NodeSortKey::Scalar(m, neg),
+                    IntMagnitude::Big(m) => NodeSortKey::BigScalar(m, neg),
+                }
             }
             (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => {
                 NodeSortKey::Scalar(u128::from(*v), false)
@@ -988,25 +1224,36 @@ impl ChoiceNode {
 /// elements)`. Per-element keys are stored as `u32` so a future string
 /// choice kind (with codepoint-key elements up to `0x10FFFF`) can join the
 /// same shape without changing this type. Variants are never mixed at a
-/// given node position; `Scalar < Sequence` by derived enum order is a
-/// total-ordering fall-through for the sort key of an entire
-/// sequence-of-nodes that contains both shapes.
+/// given node position; the cross-variant order `Scalar < BigScalar <
+/// Sequence` (by derived enum order) is a total-ordering fall-through for the
+/// sort key of an entire sequence-of-nodes that contains different shapes.
+///
+/// `BigScalar` is the integer-magnitude case that overflows `u128` (only
+/// reachable for a `BigInt` choice with a shrink distance beyond `u128`). A
+/// `BigScalar` magnitude is always `> u128::MAX`, so the derived order — which
+/// ranks every `Scalar` below every `BigScalar` — is the correct numeric
+/// ordering, and the common `Scalar` path (integers, floats, booleans) keeps
+/// its cheap fixed-width compare.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NodeSortKey {
     Scalar(u128, bool),
+    BigScalar(crate::native::bignum::BigUint, bool),
     Sequence(usize, Vec<u32>),
 }
 
 /// Allocation-free borrowed view of a [`ChoiceNode`]'s sort key.
 ///
-/// `Ord` matches [`NodeSortKey`]'s ordering exactly: `Scalar < Sequence`
-/// cross-variant, scalar variants by `(magnitude, sign)`, sequence variants
-/// shortlex on length then per-element keys. The per-element keys for
+/// `Ord` matches [`NodeSortKey`]'s ordering exactly: `Scalar < BigScalar <
+/// Sequence` cross-variant, scalar variants by `(magnitude, sign)`, sequence
+/// variants shortlex on length then per-element keys. The per-element keys for
 /// `Bytes` and `String` are resolved lazily during comparison —
 /// `String` defers `codepoint_key` to the moment of compare — so no
-/// `Vec<u32>` ever gets allocated.
+/// `Vec<u32>` ever gets allocated. `BigScalar` (the rare `BigInt` distance
+/// beyond `u128`) owns its [`BigUint`] magnitude; floats and native integers
+/// never take that arm, so the common path stays allocation-free.
 pub enum NodeSortKeyRef<'a> {
     Scalar(u128, bool),
+    BigScalar(crate::native::bignum::BigUint, bool),
     Bytes(&'a [u8]),
     String(&'a StringChoice, &'a [u32]),
 }
@@ -1015,7 +1262,8 @@ impl<'a> NodeSortKeyRef<'a> {
     fn category(&self) -> u8 {
         match self {
             NodeSortKeyRef::Scalar(..) => 0,
-            NodeSortKeyRef::Bytes(..) | NodeSortKeyRef::String(..) => 1,
+            NodeSortKeyRef::BigScalar(..) => 1,
+            NodeSortKeyRef::Bytes(..) | NodeSortKeyRef::String(..) => 2,
         }
     }
 
@@ -1026,7 +1274,9 @@ impl<'a> NodeSortKeyRef<'a> {
         match self {
             NodeSortKeyRef::Bytes(b) => b.len(),
             NodeSortKeyRef::String(_, cps) => cps.len(),
-            NodeSortKeyRef::Scalar(..) => unreachable!("seq_len on scalar"),
+            NodeSortKeyRef::Scalar(..) | NodeSortKeyRef::BigScalar(..) => {
+                unreachable!("seq_len on scalar")
+            }
         }
     }
 
@@ -1037,7 +1287,9 @@ impl<'a> NodeSortKeyRef<'a> {
         match self {
             NodeSortKeyRef::Bytes(b) => b[i] as u32,
             NodeSortKeyRef::String(sc, cps) => sc.codepoint_key(cps[i]),
-            NodeSortKeyRef::Scalar(..) => unreachable!("seq_key_at on scalar"),
+            NodeSortKeyRef::Scalar(..) | NodeSortKeyRef::BigScalar(..) => {
+                unreachable!("seq_key_at on scalar")
+            }
         }
     }
 }
@@ -1063,7 +1315,11 @@ impl<'a> Ord for NodeSortKeyRef<'a> {
             (NodeSortKeyRef::Scalar(am, an), NodeSortKeyRef::Scalar(bm, bn)) => {
                 (am, an).cmp(&(bm, bn))
             }
-            (NodeSortKeyRef::Scalar(..), _) | (_, NodeSortKeyRef::Scalar(..)) => {
+            (NodeSortKeyRef::BigScalar(am, an), NodeSortKeyRef::BigScalar(bm, bn)) => {
+                (am, an).cmp(&(bm, bn))
+            }
+            (NodeSortKeyRef::Scalar(..) | NodeSortKeyRef::BigScalar(..), _)
+            | (_, NodeSortKeyRef::Scalar(..) | NodeSortKeyRef::BigScalar(..)) => {
                 self.category().cmp(&other.category())
             }
             _ => {
@@ -1093,8 +1349,11 @@ impl ChoiceNode {
     pub fn sort_key_ref(&self) -> NodeSortKeyRef<'_> {
         match (&self.kind, &self.value) {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
-                let (abs, neg) = ic.sort_key(*v);
-                NodeSortKeyRef::Scalar(abs, neg)
+                let (mag, neg) = ic.sort_key(v);
+                match mag {
+                    IntMagnitude::Small(m) => NodeSortKeyRef::Scalar(m, neg),
+                    IntMagnitude::Big(m) => NodeSortKeyRef::BigScalar(m, neg),
+                }
             }
             (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => {
                 NodeSortKeyRef::Scalar(u128::from(*v), false)

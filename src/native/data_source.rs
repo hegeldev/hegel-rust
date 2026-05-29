@@ -227,7 +227,7 @@ impl DataSource for NativeDataSource {
             // Draw index from `[0, n-1]`.  Shrink towards `n-1`
             // (last added = most recent) by drawing `k` from
             // `[0, n-1]` and using `index = n-1-k`.
-            let k = ntc.draw_integer(0, n - 1)?;
+            let k = ntc.draw_integer::<i128>(0, n - 1)?;
             let variable_id = active[(n - 1 - k) as usize];
             if consume {
                 ntc.variable_pools[pool_idx].consume(variable_id);

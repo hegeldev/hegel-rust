@@ -27,7 +27,10 @@ pub use scheduling::ShrinkPass;
 
 use std::collections::{HashMap, HashSet};
 
-use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINKS, NodeSortKey, Spans, sort_key};
+use crate::native::bignum::BigInt;
+use crate::native::core::{
+    ChoiceKind, ChoiceNode, ChoiceValue, MAX_SHRINKS, NodeSortKey, Spans, sort_key,
+};
 
 /// Request passed to the shrinker's test function.
 ///
@@ -366,7 +369,20 @@ impl<'a> Shrinker<'a> {
             if !attempt[i].kind.validate(v) {
                 return false;
             }
-            attempt[i] = attempt[i].with_value(v.clone());
+            // Integer values must be expressed in the target node's width — a
+            // pass may move a value between integer nodes of different widths
+            // (e.g. `sort_values`). Coerce to the node's width so the stored
+            // node stays width-consistent; an out-of-width value is rejected.
+            let coerced = match (&attempt[i].kind, v) {
+                (ChoiceKind::Integer(ic), ChoiceValue::Integer(av)) => {
+                    match ic.value_from_bigint(&av.to_bigint()) {
+                        Some(c) => ChoiceValue::Integer(c),
+                        None => return false,
+                    }
+                }
+                _ => v.clone(),
+            };
+            attempt[i] = attempt[i].with_value(coerced);
         }
         self.consider(&attempt)
     }
@@ -543,6 +559,31 @@ pub(super) fn bin_search_down(lo: i128, hi: i128, f: &mut impl FnMut(i128) -> bo
     while lo.checked_add(1).is_some_and(|n| n < hi) {
         let mid = lo + (hi - lo) / 2;
         if f(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    hi
+}
+
+/// [`BigInt`] counterpart of [`bin_search_down`], used by the integer shrink
+/// passes which now carry values as arbitrary-precision integers. Same
+/// contract: assumes `f(hi)` is true, returns the smallest locally-true value
+/// in `[lo, hi]`.
+pub(super) fn bin_search_down_big(
+    lo: BigInt,
+    hi: BigInt,
+    f: &mut impl FnMut(&BigInt) -> bool,
+) -> BigInt {
+    if f(&lo) {
+        return lo;
+    }
+    let mut lo = lo;
+    let mut hi = hi;
+    while &lo + 1 < hi {
+        let mid = &lo + (&hi - &lo) / 2;
+        if f(&mid) {
             hi = mid;
         } else {
             lo = mid;

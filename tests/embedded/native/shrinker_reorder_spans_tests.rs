@@ -1,17 +1,21 @@
 //! Unit tests for `Shrinker::reorder_spans`.
 
+use crate::native::core::choices::AnyInteger;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
     ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: i128::MIN,
-            max_value: i128::MAX,
-            shrink_towards: 0,
-        }),
-        value: ChoiceValue::Integer(value),
+        kind: ChoiceKind::Integer(
+            IntegerChoice {
+                min_value: i128::MIN,
+                max_value: i128::MAX,
+                shrink_towards: 0,
+            }
+            .into(),
+        ),
+        value: ChoiceValue::Integer(AnyInteger::I128(value)),
         was_forced: false,
     }
 }
@@ -49,7 +53,7 @@ fn reorder_spans_sorts_same_label_siblings() {
         .current_nodes
         .iter()
         .map(|n| match &n.value {
-            ChoiceValue::Integer(v) => *v,
+            ChoiceValue::Integer(AnyInteger::I128(v)) => *v,
             _ => unreachable!(),
         })
         .collect();
@@ -78,7 +82,7 @@ fn reorder_spans_skips_singleton_groups() {
         .current_nodes
         .iter()
         .map(|n| match &n.value {
-            ChoiceValue::Integer(v) => *v,
+            ChoiceValue::Integer(AnyInteger::I128(v)) => *v,
             _ => unreachable!(),
         })
         .collect();
@@ -116,7 +120,7 @@ fn reorder_spans_handles_multi_node_siblings() {
         .current_nodes
         .iter()
         .map(|n| match &n.value {
-            ChoiceValue::Integer(v) => *v,
+            ChoiceValue::Integer(AnyInteger::I128(v)) => *v,
             _ => unreachable!(),
         })
         .collect();

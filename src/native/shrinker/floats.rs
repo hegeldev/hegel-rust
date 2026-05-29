@@ -6,7 +6,8 @@
 
 use std::collections::HashMap;
 
-use crate::native::core::choices::IntegerChoice;
+use crate::native::bignum::{BigInt, ToPrimitive};
+use crate::native::core::choices::AnyIntegerChoice;
 use crate::native::core::{
     ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, float_to_index, index_to_float, sort_key,
 };
@@ -452,6 +453,12 @@ fn is_trivial(node: &ChoiceNode) -> bool {
     }
 }
 
+/// f64 of a [`BigInt`] for the redistribute direction heuristic; out-of-range
+/// magnitudes saturate to infinity, which the sort-key check then rejects.
+fn bigint_as_f64(n: &BigInt) -> f64 {
+    n.to_f64().unwrap_or(f64::INFINITY)
+}
+
 /// Direction the integer-pair search moves `node[i]` in.
 ///
 /// `v_i` is reduced toward its shrink target (0 for floats, simplest() for
@@ -468,9 +475,10 @@ fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) {
         &shrinker.current_nodes[i].kind,
         &shrinker.current_nodes[i].value,
     ) {
-        (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => {
-            (NumericValue::Integer(*n), NumericKind::Integer(ic.clone()))
-        }
+        (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => (
+            NumericValue::Integer(n.to_bigint()),
+            NumericKind::Integer(ic.clone()),
+        ),
         (ChoiceKind::Float(fc), ChoiceValue::Float(f)) => {
             (NumericValue::Float(*f), NumericKind::Float(fc.clone()))
         }
@@ -480,9 +488,10 @@ fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) {
         &shrinker.current_nodes[j].kind,
         &shrinker.current_nodes[j].value,
     ) {
-        (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => {
-            (NumericValue::Integer(*n), NumericKind::Integer(ic.clone()))
-        }
+        (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => (
+            NumericValue::Integer(n.to_bigint()),
+            NumericKind::Integer(ic.clone()),
+        ),
         (ChoiceKind::Float(fc), ChoiceValue::Float(f)) => {
             (NumericValue::Float(*f), NumericKind::Float(fc.clone()))
         }
@@ -520,30 +529,30 @@ enum Direction {
     RaiseLeftLowerRight,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum NumericValue {
-    Integer(i128),
+    Integer(BigInt),
     Float(f64),
 }
 
 impl NumericValue {
-    fn as_f64(self) -> f64 {
+    fn as_f64(&self) -> f64 {
         match self {
-            NumericValue::Integer(n) => n as f64,
-            NumericValue::Float(f) => f,
+            NumericValue::Integer(n) => bigint_as_f64(n),
+            NumericValue::Float(f) => *f,
         }
     }
 }
 
 #[derive(Clone)]
 enum NumericKind {
-    Integer(IntegerChoice),
+    Integer(AnyIntegerChoice),
     Float(FloatChoice),
 }
 
 fn shrink_target(kind: &NumericKind) -> f64 {
     match kind {
-        NumericKind::Integer(ic) => ic.simplest() as f64,
+        NumericKind::Integer(ic) => bigint_as_f64(&ic.simplest_bigint()),
         NumericKind::Float(_) => 0.0,
     }
 }
@@ -564,7 +573,7 @@ fn apply_delta(
 
 fn add_int(v: &NumericValue, k: i128) -> NumericValue {
     match v {
-        NumericValue::Integer(n) => NumericValue::Integer(n.saturating_add(k)),
+        NumericValue::Integer(n) => NumericValue::Integer(n + BigInt::from(k)),
         NumericValue::Float(f) => NumericValue::Float(*f + k as f64),
     }
 }
@@ -573,9 +582,10 @@ fn build_value(kind: &NumericKind, candidate: NumericValue) -> Option<ChoiceValu
     // `apply_delta` preserves the variant of each input, so only the
     // matching kind/value combinations are reachable from `redistribute_pair`.
     match (kind, candidate) {
-        (NumericKind::Integer(ic), NumericValue::Integer(n)) => {
-            ic.validate(n).then_some(ChoiceValue::Integer(n))
-        }
+        (NumericKind::Integer(ic), NumericValue::Integer(n)) => ic
+            .value_from_bigint(&n)
+            .filter(|av| ic.validate(av))
+            .map(ChoiceValue::Integer),
         (NumericKind::Float(fc), NumericValue::Float(f)) => {
             fc.validate(f).then_some(ChoiceValue::Float(f))
         }

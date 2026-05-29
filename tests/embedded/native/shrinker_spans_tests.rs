@@ -9,18 +9,22 @@
 //!   well-defined.
 //! * `Shrinker::clear_change_tracking` empties the set and rebaselines.
 
+use crate::native::core::choices::AnyInteger;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
     ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: i128::MIN,
-            max_value: i128::MAX,
-            shrink_towards: 0,
-        }),
-        value: ChoiceValue::Integer(value),
+        kind: ChoiceKind::Integer(
+            IntegerChoice {
+                min_value: i128::MIN,
+                max_value: i128::MAX,
+                shrink_towards: 0,
+            }
+            .into(),
+        ),
+        value: ChoiceValue::Integer(AnyInteger::I128(value)),
         was_forced: false,
     }
 }
@@ -195,7 +199,7 @@ fn forced_nodes_survive_every_shrinker_pass() {
     let initial = vec![int_node(9), forced, int_node(11)];
     let snapshot_forced_idx = 1;
     let initial_forced_value = match initial[snapshot_forced_idx].value {
-        ChoiceValue::Integer(v) => v,
+        ChoiceValue::Integer(AnyInteger::I128(v)) => v,
         _ => unreachable!(),
     };
 
@@ -221,7 +225,7 @@ fn forced_nodes_survive_every_shrinker_pass() {
     ];
     shrinker.fixate_shrink_passes(&mut passes);
     let value = match shrinker.current_nodes[snapshot_forced_idx].value {
-        ChoiceValue::Integer(v) => v,
+        ChoiceValue::Integer(AnyInteger::I128(v)) => v,
         _ => unreachable!(),
     };
     assert_eq!(value, initial_forced_value);

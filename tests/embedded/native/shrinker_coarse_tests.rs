@@ -1,36 +1,42 @@
 //! Unit tests for `Shrinker::initial_coarse_reduction`.
 
-use crate::native::core::choices::IntegerChoice;
+use crate::native::core::choices::{AnyInteger, AnyIntegerChoice, IntegerChoice};
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn small_int_node(value: i128) -> ChoiceNode {
     ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: 0,
-            max_value: 10,
-            shrink_towards: 0,
-        }),
-        value: ChoiceValue::Integer(value),
+        kind: ChoiceKind::Integer(
+            IntegerChoice {
+                min_value: 0,
+                max_value: 10,
+                shrink_towards: 0,
+            }
+            .into(),
+        ),
+        value: ChoiceValue::Integer(AnyInteger::I128(value)),
         was_forced: false,
     }
 }
 
 fn big_range_int_node(value: i128) -> ChoiceNode {
     ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: 0,
-            max_value: 1_000_000,
-            shrink_towards: 0,
-        }),
-        value: ChoiceValue::Integer(value),
+        kind: ChoiceKind::Integer(
+            IntegerChoice {
+                min_value: 0,
+                max_value: 1_000_000,
+                shrink_towards: 0,
+            }
+            .into(),
+        ),
+        value: ChoiceValue::Integer(AnyInteger::I128(value)),
         was_forced: false,
     }
 }
 
 fn int_value(node: &ChoiceNode) -> i128 {
     match node.value {
-        ChoiceValue::Integer(v) => v,
+        ChoiceValue::Integer(AnyInteger::I128(v)) => v,
         _ => unreachable!(),
     }
 }
@@ -68,7 +74,7 @@ fn initial_coarse_reduction_lowers_when_shape_depends_on_value() {
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
                 let n = match nodes.first().map(|n| &n.value) {
-                    Some(ChoiceValue::Integer(v)) => *v as usize,
+                    Some(ChoiceValue::Integer(AnyInteger::I128(v))) => *v as usize,
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
                 let actual: Vec<_> = nodes[..1 + n.min(nodes.len() - 1)].to_vec();
@@ -106,7 +112,7 @@ fn initial_coarse_reduction_skips_non_zero_min_value() {
     // Node has min_value=1; not a one_of selector pattern (those start
     // from zero).  Should be left alone.
     let mut node = small_int_node(3);
-    if let ChoiceKind::Integer(ic) = &mut node.kind {
+    if let ChoiceKind::Integer(AnyIntegerChoice::I128(ic)) = &mut node.kind {
         ic.min_value = 1;
     }
     let initial = vec![node];
@@ -150,7 +156,8 @@ fn initial_coarse_reduction_keeps_same_shape_one_of() {
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
                 // Always interesting iff first value == 1.
-                let interesting = matches!(nodes[0].value, ChoiceValue::Integer(1));
+                let interesting =
+                    matches!(nodes[0].value, ChoiceValue::Integer(AnyInteger::I128(1)));
                 (interesting, nodes.to_vec(), Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
@@ -189,7 +196,7 @@ fn initial_coarse_reduction_accepts_probe_when_direct_replace_fails() {
         Box::new(move |run| match run {
             ShrinkRun::Full(nodes) => {
                 let head = match nodes[0].value {
-                    ChoiceValue::Integer(v) => v,
+                    ChoiceValue::Integer(AnyInteger::I128(v)) => v,
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
                 if head == 3 && nodes.len() == 4 {

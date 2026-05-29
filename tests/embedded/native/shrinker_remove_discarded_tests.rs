@@ -1,5 +1,6 @@
 //! Unit tests for `Shrinker::remove_discarded`.
 
+use crate::native::core::choices::AnyInteger;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -9,12 +10,15 @@ use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
     ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: i128::MIN,
-            max_value: i128::MAX,
-            shrink_towards: 0,
-        }),
-        value: ChoiceValue::Integer(value),
+        kind: ChoiceKind::Integer(
+            IntegerChoice {
+                min_value: i128::MIN,
+                max_value: i128::MAX,
+                shrink_towards: 0,
+            }
+            .into(),
+        ),
+        value: ChoiceValue::Integer(AnyInteger::I128(value)),
         was_forced: false,
     }
 }
@@ -91,7 +95,7 @@ fn remove_discarded_deletes_a_single_discarded_region() {
         .current_nodes
         .iter()
         .map(|n| match &n.value {
-            ChoiceValue::Integer(v) => *v,
+            ChoiceValue::Integer(AnyInteger::I128(v)) => *v,
             _ => unreachable!(),
         })
         .collect();
@@ -123,7 +127,7 @@ fn remove_discarded_deletes_non_overlapping_regions_in_reverse() {
         .current_nodes
         .iter()
         .map(|n| match &n.value {
-            ChoiceValue::Integer(v) => *v,
+            ChoiceValue::Integer(AnyInteger::I128(v)) => *v,
             _ => unreachable!(),
         })
         .collect();
@@ -155,7 +159,7 @@ fn remove_discarded_skips_nested_discarded_spans() {
         .current_nodes
         .iter()
         .map(|n| match &n.value {
-            ChoiceValue::Integer(v) => *v,
+            ChoiceValue::Integer(AnyInteger::I128(v)) => *v,
             _ => unreachable!(),
         })
         .collect();

@@ -122,7 +122,7 @@ fn draw_domain(ntc: &mut NativeTestCase, max_length: usize) -> Result<String, En
         !eligible.is_empty(),
         "domain max_length={max_length} leaves no eligible TLDs"
     );
-    let idx = ntc.draw_integer(0, (eligible.len() - 1) as i128)? as usize;
+    let idx = ntc.draw_integer::<i128>(0, (eligible.len() - 1) as i128)? as usize;
     let tld = eligible[idx];
 
     // Random recase: each char is flipped with p=0.5 (i.e. result is upper
@@ -172,7 +172,7 @@ fn draw_domain(ntc: &mut NativeTestCase, max_length: usize) -> Result<String, En
 /// constraint by coercing index 3 to alphanumeric whenever index 2 was
 /// drawn as a hyphen, producing the same alphabet without a retry loop.
 fn draw_dns_label(ntc: &mut NativeTestCase, max_len: usize) -> Result<String, EngineError> {
-    let len = ntc.draw_integer(1, max_len as i128)? as usize;
+    let len = ntc.draw_integer::<i128>(1, max_len as i128)? as usize;
     let mut s = String::with_capacity(len);
     s.push(draw_ascii_letter(ntc)?);
     if len > 1 {
@@ -190,13 +190,13 @@ fn draw_dns_label(ntc: &mut NativeTestCase, max_len: usize) -> Result<String, En
 }
 
 fn draw_ascii_letter(ntc: &mut NativeTestCase) -> Result<char, EngineError> {
-    let i = ntc.draw_integer(0, 51)? as u8;
+    let i = ntc.draw_integer::<i128>(0, 51)? as u8;
     let b = if i < 26 { b'a' + i } else { b'A' + (i - 26) };
     Ok(b as char)
 }
 
 fn draw_ascii_alnum(ntc: &mut NativeTestCase) -> Result<char, EngineError> {
-    let i = ntc.draw_integer(0, 61)? as u8;
+    let i = ntc.draw_integer::<i128>(0, 61)? as u8;
     let b = if i < 26 {
         b'a' + i
     } else if i < 52 {
@@ -208,7 +208,7 @@ fn draw_ascii_alnum(ntc: &mut NativeTestCase) -> Result<char, EngineError> {
 }
 
 fn draw_ascii_alnum_or_hyphen(ntc: &mut NativeTestCase) -> Result<char, EngineError> {
-    let i = ntc.draw_integer(0, 62)? as u8;
+    let i = ntc.draw_integer::<i128>(0, 62)? as u8;
     let b = if i < 26 {
         b'a' + i
     } else if i < 52 {
@@ -261,7 +261,7 @@ pub(super) fn interpret_url(ntc: &mut NativeTestCase) -> Result<Value, EngineErr
     // `st.just("") | ports` is a `one_of` over two alternatives — uniform
     // index selection. The port range matches `integers(1, 65535)`.
     let port = if ntc.weighted(0.5, None)? {
-        format!(":{}", ntc.draw_integer(1, 65535)?)
+        format!(":{}", ntc.draw_integer::<i128>(1, 65535)?)
     } else {
         String::new()
     };

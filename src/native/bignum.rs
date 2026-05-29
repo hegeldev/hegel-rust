@@ -8,5 +8,5 @@
 //! keeps the backend choice localised: swapping `num-bigint` for e.g.
 //! `malachite` later would only touch this file.
 
-pub use num_bigint::BigUint;
-pub use num_traits::Zero;
+pub use num_bigint::{BigInt, BigUint, Sign};
+pub use num_traits::{Signed, ToPrimitive, Zero};

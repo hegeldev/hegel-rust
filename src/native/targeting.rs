@@ -359,11 +359,12 @@ pub(crate) fn is_climbable(value: &ChoiceValue, kind: &ChoiceKind) -> bool {
 pub(crate) fn step_choice(node: &ChoiceNode, delta: i128) -> Option<ChoiceValue> {
     match (&node.value, &node.kind) {
         (ChoiceValue::Integer(v), ChoiceKind::Integer(kind)) => {
-            let new = v.saturating_add(delta);
-            if !kind.validate(new) {
+            let new = v.to_bigint() + crate::native::bignum::BigInt::from(delta);
+            let value = kind.value_from_bigint(&new)?;
+            if !kind.validate(&value) {
                 return None;
             }
-            Some(ChoiceValue::Integer(new))
+            Some(ChoiceValue::Integer(value))
         }
         (ChoiceValue::Float(v), ChoiceKind::Float(kind)) => {
             let new = v + delta as f64;

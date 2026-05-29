@@ -1,17 +1,21 @@
 //! Unit tests for `Shrinker::node_program`.
 
+use crate::native::core::choices::AnyInteger;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
     ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: 0,
-            max_value: 100,
-            shrink_towards: 0,
-        }),
-        value: ChoiceValue::Integer(value),
+        kind: ChoiceKind::Integer(
+            IntegerChoice {
+                min_value: 0,
+                max_value: 100,
+                shrink_towards: 0,
+            }
+            .into(),
+        ),
+        value: ChoiceValue::Integer(AnyInteger::I128(value)),
         was_forced: false,
     }
 }
@@ -155,7 +159,7 @@ fn node_program_deletes_short_ranges() {
                 let mut interesting = false;
                 while idx < nodes.len() {
                     let n = match nodes[idx].value {
-                        ChoiceValue::Integer(v) => v,
+                        ChoiceValue::Integer(AnyInteger::I128(v)) => v,
                         _ => return (false, nodes.to_vec(), Spans::new()),
                     };
                     let block_end = idx + 1 + n.max(0) as usize;
@@ -166,7 +170,7 @@ fn node_program_deletes_short_ranges() {
                     }
                     for k in idx + 1..block_end {
                         match nodes[k].value {
-                            ChoiceValue::Integer(v) if v == n => {}
+                            ChoiceValue::Integer(AnyInteger::I128(v)) if v == n => {}
                             _ => return (false, nodes.to_vec(), Spans::new()),
                         }
                     }

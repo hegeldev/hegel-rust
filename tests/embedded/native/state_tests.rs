@@ -415,7 +415,7 @@ fn data_observer_draw_boolean_default_is_no_op() {
 #[test]
 fn data_observer_draw_integer_default_is_no_op() {
     let mut obs = NoopObserver;
-    obs.draw_integer(42, false); // must not panic
+    obs.draw_integer(&AnyInteger::I128(42), false); // must not panic
 }
 
 #[test]
@@ -530,25 +530,25 @@ fn freeze_notifies_observer_on_conclude_test() {
 fn draw_integer_notifies_observer() {
     use std::sync::{Arc, Mutex};
     struct IntObserver {
-        captured: Arc<Mutex<Option<(i128, bool)>>>,
+        captured: Arc<Mutex<Option<(AnyInteger, bool)>>>,
     }
     impl DataObserver for IntObserver {
-        fn draw_integer(&mut self, value: i128, was_forced: bool) {
-            *self.captured.lock().unwrap() = Some((value, was_forced));
+        fn draw_integer(&mut self, value: &AnyInteger, was_forced: bool) {
+            *self.captured.lock().unwrap() = Some((value.clone(), was_forced));
         }
     }
     let captured = Arc::new(Mutex::new(None));
-    let choices = vec![ChoiceValue::Integer(99)];
+    let choices = vec![ChoiceValue::Integer(AnyInteger::I128(99))];
     let obs = Box::new(IntObserver {
         captured: captured.clone(),
     });
     let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
-    let v = tc.draw_integer(0, 100).ok().unwrap();
+    let v = tc.draw_integer::<i128>(0, 100).ok().unwrap();
     assert_eq!(v, 99);
     // The observer must have captured the prefix-replayed value with
     // was_forced=false.
     let recorded = captured.lock().unwrap().take();
-    assert_eq!(recorded, Some((99, false)));
+    assert_eq!(recorded, Some((AnyInteger::I128(99), false)));
 }
 
 // ── NativeTestCase::draw_float with observer ──────────────────────────────
@@ -705,7 +705,7 @@ fn draw_float_half_bounded_below_explores_finite_range() {
 fn for_simplest_draws_integer_at_shrink_target_when_in_range() {
     let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
     // shrink_towards=0 is hardcoded; for [0, 23] that's in range → simplest = 0.
-    let v = tc.draw_integer(0, 23).ok().unwrap();
+    let v = tc.draw_integer::<i128>(0, 23).ok().unwrap();
     assert_eq!(v, 0);
 }
 
@@ -713,7 +713,7 @@ fn for_simplest_draws_integer_at_shrink_target_when_in_range() {
 fn for_simplest_draws_integer_clamped_to_range_when_target_below() {
     let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
     // shrink_towards=0 below min=5 → simplest clamps to 5.
-    let v = tc.draw_integer(5, 100).ok().unwrap();
+    let v = tc.draw_integer::<i128>(5, 100).ok().unwrap();
     assert_eq!(v, 5);
 }
 
@@ -721,7 +721,7 @@ fn for_simplest_draws_integer_clamped_to_range_when_target_below() {
 fn for_simplest_draws_integer_clamped_to_range_when_target_above() {
     let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
     // shrink_towards=0 above max=-1 → simplest clamps to -1.
-    let v = tc.draw_integer(-100, -1).ok().unwrap();
+    let v = tc.draw_integer::<i128>(-100, -1).ok().unwrap();
     assert_eq!(v, -1);
 }
 
@@ -732,7 +732,7 @@ fn for_simplest_propagates_across_many_draws() {
     // a single pre-trial.
     let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
     for _ in 0..10 {
-        assert_eq!(tc.draw_integer(0, 99).ok().unwrap(), 0);
+        assert_eq!(tc.draw_integer::<i128>(0, 99).ok().unwrap(), 0);
     }
 }
 
@@ -765,8 +765,8 @@ fn for_simplest_is_independent_of_seed() {
     let mut a = NativeTestCase::for_simplest(BUFFER_SIZE);
     let mut b = NativeTestCase::for_simplest(BUFFER_SIZE);
     for _ in 0..5 {
-        let va = a.draw_integer(0, 1000).ok().unwrap();
-        let vb = b.draw_integer(0, 1000).ok().unwrap();
+        let va = a.draw_integer::<i128>(0, 1000).ok().unwrap();
+        let vb = b.draw_integer::<i128>(0, 1000).ok().unwrap();
         assert_eq!(va, vb);
         assert_eq!(va, 0);
     }
@@ -778,7 +778,7 @@ fn for_simplest_records_choice_nodes() {
     // engine can inspect what was drawn and feed the trace into the data
     // tree / shrinker if the test ends up Interesting.
     let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
-    let _ = tc.draw_integer(0, 23).ok().unwrap();
+    let _ = tc.draw_integer::<i128>(0, 23).ok().unwrap();
     let _ = tc.weighted(0.5, None).ok().unwrap();
     assert_eq!(tc.nodes.len(), 2);
 }
@@ -800,7 +800,7 @@ fn template_simplest_infinite_resolves_every_draw_to_simplest() {
         None,
     );
     for _ in 0..5 {
-        assert_eq!(tc.draw_integer(-100, 100).ok().unwrap(), 0);
+        assert_eq!(tc.draw_integer::<i128>(-100, 100).ok().unwrap(), 0);
     }
     assert!(!tc.weighted(0.5, None).ok().unwrap());
 }
@@ -815,16 +815,16 @@ fn template_simplest_finite_count_n_produces_exactly_n_values() {
         None,
     );
     for _ in 0..3 {
-        assert_eq!(tc.draw_integer(0, 100).ok().unwrap(), 0);
+        assert_eq!(tc.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
     }
     // 4th draw is the overrun edge: returns Err and sets EarlyStop.
-    assert!(tc.draw_integer(0, 100).is_err());
+    assert!(tc.draw_integer::<i128>(0, 100).is_err());
     assert_eq!(tc.status, Some(Status::EarlyStop));
 }
 
 #[test]
 fn template_concrete_prefix_then_template() {
-    let prefix = vec![ChoiceValue::Integer(42)];
+    let prefix = vec![ChoiceValue::Integer(AnyInteger::I128(42))];
     let mut tc = NativeTestCase::for_choices_and_template(
         &prefix,
         None,
@@ -833,10 +833,10 @@ fn template_concrete_prefix_then_template() {
         None,
     );
     // First draw replays the concrete prefix entry.
-    assert_eq!(tc.draw_integer(0, 100).ok().unwrap(), 42);
+    assert_eq!(tc.draw_integer::<i128>(0, 100).ok().unwrap(), 42);
     // Subsequent draws fall through to the template → simplest().
-    assert_eq!(tc.draw_integer(0, 100).ok().unwrap(), 0);
-    assert_eq!(tc.draw_integer(0, 100).ok().unwrap(), 0);
+    assert_eq!(tc.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
+    assert_eq!(tc.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
 }
 
 #[test]
@@ -858,7 +858,7 @@ fn template_concrete_prefix_with_punning_then_template() {
         None,
     );
     // Draw 1: kind mismatch + non-simplest original → unit().
-    let v = tc.draw_integer(-100, 100).ok().unwrap();
+    let v = tc.draw_integer::<i128>(-100, 100).ok().unwrap();
     assert_eq!(
         v,
         IntegerChoice {
@@ -869,7 +869,7 @@ fn template_concrete_prefix_with_punning_then_template() {
         .unit()
     );
     // Draw 2: template branch → simplest().
-    assert_eq!(tc.draw_integer(0, 100).ok().unwrap(), 0);
+    assert_eq!(tc.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
 }
 
 #[test]
@@ -890,8 +890,8 @@ fn for_simplest_wrapper_matches_template_with_count_none() {
         None,
     );
     for _ in 0..5 {
-        let va = a.draw_integer(-10, 10).ok().unwrap();
-        let vb = b.draw_integer(-10, 10).ok().unwrap();
+        let va = a.draw_integer::<i128>(-10, 10).ok().unwrap();
+        let vb = b.draw_integer::<i128>(-10, 10).ok().unwrap();
         assert_eq!(va, vb);
         assert_eq!(va, 0);
     }
@@ -908,9 +908,9 @@ fn template_overrun_status_matches_max_size_overrun() {
         100,
         None,
     );
-    assert_eq!(tc_count.draw_integer(0, 100).ok().unwrap(), 0);
-    assert_eq!(tc_count.draw_integer(0, 100).ok().unwrap(), 0);
-    assert!(tc_count.draw_integer(0, 100).is_err());
+    assert_eq!(tc_count.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
+    assert_eq!(tc_count.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
+    assert!(tc_count.draw_integer::<i128>(0, 100).is_err());
     assert_eq!(tc_count.status, Some(Status::EarlyStop));
 }
 
@@ -926,75 +926,63 @@ fn template_count_decrements_on_each_draw() {
         None,
     );
     for _ in 0..3 {
-        let _ = tc.draw_integer(0, 100).ok().unwrap();
+        let _ = tc.draw_integer::<i128>(0, 100).ok().unwrap();
     }
     assert_eq!(tc.trailing_template.as_ref().unwrap().count, Some(0));
-    assert!(tc.draw_integer(0, 100).is_err());
+    assert!(tc.draw_integer::<i128>(0, 100).is_err());
     // After overrun, count stays at 0 (we don't underflow into wraparound).
     assert_eq!(tc.trailing_template.as_ref().unwrap().count, Some(0));
 }
 
 // ── biased_integer_sample / new piecewise distribution ────────────────────
 
-fn ic(min_value: i128, max_value: i128) -> IntegerChoice {
-    IntegerChoice {
-        min_value,
-        max_value,
-        shrink_towards: 0,
-    }
-}
-
 #[test]
 fn biased_integer_sample_stays_in_range_for_small_bounds() {
-    let kind = ic(0, 100);
     let mut rng = SmallRng::seed_from_u64(1);
     for _ in 0..1000 {
-        let v = biased_integer_sample(&kind, &mut rng);
-        assert!(kind.validate(v), "out of range: {v}");
+        let v = biased_i128_sample(0, 100, &mut rng);
+        assert!((0..=100).contains(&v), "out of range: {v}");
     }
 }
 
 #[test]
 fn biased_integer_sample_stays_in_range_for_wide_bounds() {
-    let kind = ic(i64::MIN as i128, i64::MAX as i128);
     let mut rng = SmallRng::seed_from_u64(2);
     for _ in 0..2000 {
-        let v = biased_integer_sample(&kind, &mut rng);
-        assert!(kind.validate(v), "out of range: {v}");
+        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
+        assert!(
+            (i64::MIN as i128..=i64::MAX as i128).contains(&v),
+            "out of range: {v}"
+        );
     }
 }
 
 #[test]
 fn biased_integer_sample_stays_in_range_for_full_i128() {
-    let kind = ic(i128::MIN, i128::MAX);
     let mut rng = SmallRng::seed_from_u64(3);
     for _ in 0..1000 {
-        let v = biased_integer_sample(&kind, &mut rng);
-        assert!(kind.validate(v), "out of range: {v}");
+        // Range is the whole i128 domain, so any returned value is in range;
+        // the assertion is implicit (no panic / overflow).
+        let _ = biased_i128_sample(i128::MIN, i128::MAX, &mut rng);
     }
 }
 
 #[test]
 fn biased_integer_sample_collapses_when_min_equals_max() {
-    let kind = ic(42, 42);
     let mut rng = SmallRng::seed_from_u64(4);
     for _ in 0..100 {
-        assert_eq!(biased_integer_sample(&kind, &mut rng), 42);
+        assert_eq!(biased_i128_sample(42, 42, &mut rng), 42);
     }
 }
 
 #[test]
 fn biased_integer_sample_produces_diverse_magnitudes_unbounded() {
-    // The new piecewise distribution should produce values across many
-    // orders of magnitude when the range is wide. Use a generous bound on
-    // how many distinct magnitudes we should see — the test is about
-    // avoiding the prior collapse-to-uniform behaviour, not about exact
-    // shape.
-    let kind = ic(i64::MIN as i128, i64::MAX as i128);
+    // The piecewise distribution should produce values across many orders of
+    // magnitude when the range is wide.
     let mut rng = SmallRng::seed_from_u64(5);
     let mut magnitudes: HashSet<i32> = HashSet::new();
     for _ in 0..2000 {
-        let v = biased_integer_sample(&kind, &mut rng);
+        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
         // bucket by bit-length of |v|
         let mag = if v == 0 {
             0
@@ -1003,9 +991,6 @@ fn biased_integer_sample_produces_diverse_magnitudes_unbounded() {
         };
         magnitudes.insert(mag);
     }
-    // A uniform-only distribution on [i64::MIN, i64::MAX] would land almost
-    // every sample in the top few bits, hitting maybe 3-5 distinct buckets.
-    // The piecewise log-student-t should comfortably exceed that.
     assert!(
         magnitudes.len() >= 10,
         "expected >= 10 magnitude buckets, got {}",
@@ -1015,22 +1000,15 @@ fn biased_integer_sample_produces_diverse_magnitudes_unbounded() {
 
 #[test]
 fn biased_integer_sample_concentrates_around_zero_when_unbounded() {
-    // Inner uniform on [-256, 256] gets non-trivial probability mass.
-    // Across many samples we should see values land inside [-256, 256]
-    // far more often than chance for the wider range would suggest.
-    let kind = ic(i64::MIN as i128, i64::MAX as i128);
     let mut rng = SmallRng::seed_from_u64(6);
     let mut in_inner = 0;
     let total = 2000;
     for _ in 0..total {
-        let v = biased_integer_sample(&kind, &mut rng);
+        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
         if v.unsigned_abs() <= 256 {
             in_inner += 1;
         }
     }
-    // For a strictly uniform distribution on [i64::MIN, i64::MAX], the
-    // probability of |v| <= 256 is ~513/2^64 ≈ 0. We require at least
-    // 5% to confirm the piecewise distribution is doing its job.
     let fraction = in_inner as f64 / total as f64;
     assert!(
         fraction > 0.05,
@@ -1040,23 +1018,12 @@ fn biased_integer_sample_concentrates_around_zero_when_unbounded() {
 
 #[test]
 fn biased_integer_sample_log_skewed_bounded_range_favours_smaller_magnitudes() {
-    // For a range that doesn't include 0 (so the inner uniform branch
-    // doesn't dominate) and avoids most of the constants pool, the
-    // restricted log-student-t should favour values near the smaller
-    // end. The old uniform-fallback would produce a near-uniform
-    // distribution on the range, so its median would land near the
-    // midpoint.
-    let kind = ic(10_000, 10_000_000);
     let mut rng = SmallRng::seed_from_u64(11);
     let mut samples: Vec<i128> = (0..2000)
-        .map(|_| biased_integer_sample(&kind, &mut rng))
+        .map(|_| biased_i128_sample(10_000, 10_000_000, &mut rng))
         .collect();
     samples.sort();
     let median = samples[samples.len() / 2];
-    // Midpoint of the uniform fallback would be ~5_000_000. The new
-    // distribution should land well below that. We use 1_000_000 as a
-    // generous upper bound that the uniform fallback would clear with
-    // overwhelming probability.
     assert!(
         median < 1_000_000,
         "median {median} is too high; expected log-skewed distribution"
@@ -1065,16 +1032,12 @@ fn biased_integer_sample_log_skewed_bounded_range_favours_smaller_magnitudes() {
 
 #[test]
 fn biased_integer_sample_narrow_range_uses_uniform_fallback() {
-    // Very-narrow ranges where the CDF window is below the 1e-13 threshold
-    // should fall back to uniform sampling. min == max - 1 is the
-    // smallest non-trivial range; this test exercises the fallback.
-    let kind = ic(0, 1);
     let mut rng = SmallRng::seed_from_u64(7);
     let mut seen_zero = false;
     let mut seen_one = false;
     for _ in 0..200 {
-        let v = biased_integer_sample(&kind, &mut rng);
-        assert!(kind.validate(v), "out of range: {v}");
+        let v = biased_i128_sample(0, 1, &mut rng);
+        assert!((0..=1).contains(&v), "out of range: {v}");
         match v {
             0 => seen_zero = true,
             1 => seen_one = true,
@@ -1085,6 +1048,44 @@ fn biased_integer_sample_narrow_range_uses_uniform_fallback() {
         }
     }
     assert!(seen_zero && seen_one);
+}
+
+// ── Erased `biased_integer_sample` over `AnyIntegerChoice` ─────────────────
+
+/// The erased entry point dispatches by width: a `u8` choice fits the i128
+/// fast path and must round-trip back into the `U8` variant in range.
+#[test]
+fn biased_integer_sample_erased_small_width_stays_in_range() {
+    let kind = AnyIntegerChoice::U8(IntegerChoice {
+        min_value: 0u8,
+        max_value: 200u8,
+        shrink_towards: 0u8,
+    });
+    let mut rng = SmallRng::seed_from_u64(21);
+    for _ in 0..500 {
+        let v = biased_integer_sample(&kind, &mut rng);
+        assert!(kind.validate(&v), "out of range: {v:?}");
+        assert!(matches!(v, AnyInteger::U8(_)));
+    }
+}
+
+/// A `BigInt` choice whose span exceeds `i128` exercises the big-range
+/// sampler (`biguint_sample_in_range`) and its nasty pool.
+#[test]
+fn biased_integer_sample_erased_bigint_beyond_i128_stays_in_range() {
+    use crate::native::bignum::BigInt;
+    let min = BigInt::from(i128::MIN) * BigInt::from(1_000_000);
+    let max = BigInt::from(i128::MAX) * BigInt::from(1_000_000);
+    let kind = AnyIntegerChoice::Big(IntegerChoice {
+        min_value: min.clone(),
+        max_value: max.clone(),
+        shrink_towards: BigInt::from(0),
+    });
+    let mut rng = SmallRng::seed_from_u64(22);
+    for _ in 0..500 {
+        let v = biased_integer_sample(&kind, &mut rng);
+        assert!(kind.validate(&v), "out of range: {v:?}");
+    }
 }
 
 #[test]
