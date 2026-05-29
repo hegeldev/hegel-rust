@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.17 - 2026-05-29
+
+This release only affects libhegel users and is otherwise a pure refactoring.
+
+In libhegel, an invalid schema would abort the process improperly when the rust code panicked. Now the rust code uses Result everywhere internally and properly propagates these errors to callers.
+
 ## 0.14.16 - 2026-05-29
 
 This patch makes some improvements to the libhegel C bindings, and has no other user-visible effect.
