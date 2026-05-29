@@ -121,8 +121,8 @@ fn choice_kind_to_index_panics_on_kind_value_mismatch() {
 // `hypothesis-python/tests/conjecture/test_utils.py` plus hegel-specific
 // checks for the choice kinds hegel's native engine actually records.
 
-fn bu(n: u64) -> crate::native::bignum::BigUint {
-    crate::native::bignum::BigUint::from(n)
+fn bu(n: u64) -> crate::native::bignum::BigInt {
+    crate::native::bignum::BigInt::from(n)
 }
 
 #[test]
@@ -153,7 +153,7 @@ fn integer_full_i128_range_is_two_pow_128() {
         shrink_towards: 0,
     });
     // 2^128 = u128::MAX + 1.
-    let expected = crate::native::bignum::BigUint::from(u128::MAX) + bu(1);
+    let expected = crate::native::bignum::BigInt::from(u128::MAX) + bu(1);
     assert_eq!(kind.max_children(), expected);
 }
 
@@ -233,7 +233,7 @@ fn integer_choice_index_round_trip_full_i128_range() {
 fn integer_choice_index_round_trip_single_value() {
     let ic = integer_choice(42, 42);
     let idx = ic.to_index(42);
-    assert_eq!(idx, crate::native::bignum::BigUint::from(0u32));
+    assert_eq!(idx, crate::native::bignum::BigInt::from(0u32));
     assert_eq!(ic.from_index(idx), Some(42));
 }
 
@@ -241,7 +241,7 @@ fn integer_choice_index_round_trip_single_value() {
 fn integer_choice_from_index_past_max_returns_none() {
     let ic = integer_choice(0, 5);
     // Range has 6 values (indices 0..=5); index 100 is past max.
-    let big = crate::native::bignum::BigUint::from(100u32);
+    let big = crate::native::bignum::BigInt::from(100u32);
     assert_eq!(ic.from_index(big), None);
 }
 
@@ -251,8 +251,8 @@ fn integer_choice_from_index_overflowing_u128_returns_none() {
     // strictly larger than that has no valid value. The u128-native
     // implementation short-circuits via the `u128::try_from` step.
     let ic = integer_choice(i128::MIN, i128::MAX);
-    let too_big = crate::native::bignum::BigUint::from(u128::MAX)
-        + crate::native::bignum::BigUint::from(1u32);
+    let too_big =
+        crate::native::bignum::BigInt::from(u128::MAX) + crate::native::bignum::BigInt::from(1u32);
     assert_eq!(ic.from_index(too_big), None);
 }
 
@@ -449,7 +449,7 @@ fn bytes_choice_from_index_past_max_returns_none() {
         max_size: 1,
     };
     assert!(
-        bc.from_index(crate::native::bignum::BigUint::from(1000u32))
+        bc.from_index(crate::native::bignum::BigInt::from(1000u32))
             .is_none()
     );
 }
@@ -571,7 +571,7 @@ fn string_choice_from_index_past_max_returns_none() {
     let sc = string_choice(vec![(b'a' as u32, b'b' as u32)], 0, 1);
     // Sequences of length 0 or 1 over a 2-char alphabet: 1 + 2 = 3 options.
     assert!(
-        sc.from_index(crate::native::bignum::BigUint::from(1000u32))
+        sc.from_index(crate::native::bignum::BigInt::from(1000u32))
             .is_none()
     );
 }

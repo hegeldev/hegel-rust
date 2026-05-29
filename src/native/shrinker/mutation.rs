@@ -9,7 +9,7 @@
 //! Run as a last resort: mutations increase entropy, creating more work
 //! for subsequent deterministic passes.
 
-use crate::native::bignum::BigUint;
+use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceValue;
 
 use super::Shrinker;
@@ -77,7 +77,7 @@ impl<'a> Shrinker<'a> {
                     j_offset += 1;
 
                     let kind_j = self.current_nodes[j].kind.clone();
-                    let Some(unit_val) = kind_j.from_index(BigUint::from(1u32)) else {
+                    let Some(unit_val) = kind_j.from_index(BigInt::from(1u32)) else {
                         continue;
                     };
                     // Build prefix: values up to i, new_val at i, then for
@@ -107,9 +107,9 @@ impl<'a> Shrinker<'a> {
 /// Offset `current_idx` by `delta * sign`, returning `None` if the
 /// result would be negative.  Hypothesis works in Python ints, which
 /// are arbitrary-precision and signed; the Rust port runs on a
-/// `BigUint` and handles the negative-result case explicitly.
-fn index_offset(current_idx: &BigUint, delta: u32, sign: i32) -> Option<BigUint> {
-    let delta_big = BigUint::from(delta);
+/// `BigInt` and handles the negative-result case explicitly.
+fn index_offset(current_idx: &BigInt, delta: u32, sign: i32) -> Option<BigInt> {
+    let delta_big = BigInt::from(delta);
     if sign >= 0 {
         Some(current_idx + delta_big)
     } else if current_idx < &delta_big {

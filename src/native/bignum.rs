@@ -27,11 +27,6 @@ use std::fmt;
 use num_bigint::{BigInt as RawBigInt, Sign};
 use num_traits::{Pow, ToPrimitive};
 
-// Temporary re-exports kept while the index/sort-key machinery is migrated off
-// `num_bigint::BigUint` onto [`BigInt`]. Removed in the migration step.
-pub use num_bigint::BigUint;
-pub use num_traits::Zero;
-
 /// A signed integer that is allocation-free for values that fit in `i128` and
 /// transparently widens to an arbitrary-precision representation otherwise.
 ///
@@ -317,6 +312,20 @@ macro_rules! impl_try_into_unsigned {
     )*};
 }
 impl_try_into_unsigned!(u8 => to_u8, u32 => to_u32, u64 => to_u64, usize => to_usize, u128 => to_u128);
+
+/// Owned `TryFrom<BigInt>` for each primitive, delegating to the borrowed impl
+/// (call sites frequently `.try_into()` an owned arithmetic temporary).
+macro_rules! impl_try_from_owned {
+    ($($t:ty),*) => {$(
+        impl TryFrom<BigInt> for $t {
+            type Error = ();
+            fn try_from(v: BigInt) -> Result<$t, ()> {
+                <$t>::try_from(&v)
+            }
+        }
+    )*};
+}
+impl_try_from_owned!(i128, u8, u32, u64, usize, u128);
 
 /// Generate the four owned/borrowed combinations of a binary operator from a
 /// single `(&BigInt, &BigInt) -> BigInt` core.

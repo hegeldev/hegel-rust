@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::native::bignum::{BigUint, Zero};
+use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceValue;
 
 use super::Shrinker;
@@ -37,15 +37,15 @@ impl<'a> Shrinker<'a> {
                 // does (e.g. sampled_from where only index 0 satisfies a
                 // downstream constraint).
                 let mut decrement_targets: Vec<ChoiceValue> = Vec::new();
-                if current_idx > BigUint::from(1u32) {
+                if current_idx > BigInt::from(1u32) {
                     let v0 = kind_i
-                        .from_index(BigUint::zero())
+                        .from_index(BigInt::zero())
                         .expect("from_index(0) is simplest and always valid");
                     decrement_targets.push(v0);
                 }
                 // `from_index(current_idx - 1)` can be None for bounded float
                 // ranges with gaps.
-                if let Some(v_prev) = kind_i.from_index(&current_idx - BigUint::from(1u32)) {
+                if let Some(v_prev) = kind_i.from_index(&current_idx - BigInt::from(1u32)) {
                     if !decrement_targets.contains(&v_prev) {
                         decrement_targets.push(v_prev);
                     }
@@ -87,7 +87,7 @@ impl<'a> Shrinker<'a> {
                         let target_idx = kind_j.to_index(&self.current_nodes[j].value);
                         let mut bumped_any_relative = false;
                         for bump in [1u32, 2, 4] {
-                            let candidate_idx = &target_idx + BigUint::from(bump);
+                            let candidate_idx = &target_idx + BigInt::from(bump);
                             if let Some(bumped) = kind_j.from_index(candidate_idx) {
                                 if try_bump_ij(self, i, new_val, j, &bumped) {
                                     bumped_any_relative = true;
@@ -97,19 +97,19 @@ impl<'a> Shrinker<'a> {
                         }
                         if !bumped_any_relative {
                             let max_j = kind_j.max_index();
-                            let mut p = BigUint::from(1u32);
+                            let mut p = BigInt::from(1u32);
                             for _ in 0..8 {
                                 if p > max_j {
                                     break;
                                 }
-                                let p_minus_one = &p - BigUint::from(1u32);
+                                let p_minus_one = &p - BigInt::from(1u32);
                                 if let Some(v) = kind_j.from_index(p_minus_one) {
                                     try_bump_ij(self, i, new_val, j, &v);
                                 }
                                 if let Some(v) = kind_j.from_index(p.clone()) {
                                     try_bump_ij(self, i, new_val, j, &v);
                                 }
-                                p *= BigUint::from(2u32);
+                                p *= BigInt::from(2u32);
                             }
                         }
                     }
@@ -134,7 +134,7 @@ impl<'a> Shrinker<'a> {
 
             let mut candidates: Vec<ChoiceValue> = Vec::new();
             for d in [1u32, 2, 4, 8, 16] {
-                let t = &current_idx + BigUint::from(d);
+                let t = &current_idx + BigInt::from(d);
                 if let Some(v) = kind.from_index(t) {
                     if v != node.value && !candidates.contains(&v) {
                         candidates.push(v);

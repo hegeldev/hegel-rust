@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 
-use crate::native::bignum::BigUint;
+use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Status};
 
 /// Hashable choice-value key. `f64` is keyed by its bit pattern so `-0.0`
@@ -77,7 +77,7 @@ impl DataTreeNode {
         }
         if let Some(ref kind) = self.kind {
             let max_c = kind.max_children();
-            if BigUint::from(self.children.len() as u64) >= max_c {
+            if BigInt::from(self.children.len() as u64) >= max_c {
                 let all_exhausted = self.children.values_mut().all(|c| c.check_exhausted());
                 if all_exhausted {
                     self.is_exhausted = true;
