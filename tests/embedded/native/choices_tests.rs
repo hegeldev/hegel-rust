@@ -169,6 +169,88 @@ fn integer_full_i128_range_is_two_pow_128() {
     assert_eq!(kind.max_children(), expected);
 }
 
+// ── ChoiceKind::max_children_saturating ─────────────────────────────────────
+//
+// `max_children_saturating(cap)` must equal `min(max_children(), cap)` for
+// every kind, computed without materialising the huge sequence-cardinality
+// `BigUint` (the `pow` that dominated generation profiles).
+
+#[test]
+fn max_children_saturating_boolean() {
+    let kind = ChoiceKind::Boolean(BooleanChoice);
+    assert_eq!(kind.max_children_saturating(1), 1); // capped below the count
+    assert_eq!(kind.max_children_saturating(10), 2); // exact
+}
+
+#[test]
+fn max_children_saturating_integer_native() {
+    let kind = ChoiceKind::Integer(
+        IntegerChoice {
+            min_value: 0,
+            max_value: 200,
+            shrink_towards: 0,
+        }
+        .into(),
+    );
+    assert_eq!(kind.max_children_saturating(1000), 201); // exact (span + 1)
+    assert_eq!(kind.max_children_saturating(50), 50); // capped
+}
+
+#[test]
+fn max_children_saturating_integer_beyond_u128_saturates_to_cap() {
+    use crate::native::bignum::{BigInt, BigUint};
+    use crate::native::core::integer::Integer;
+    // A span wider than u128 makes `max_index().to_u128()` return `None`, so
+    // the result saturates to `cap` instead of the astronomical exact count.
+    let ic = IntegerChoice {
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(BigUint::from(2u32).pow(200)),
+        shrink_towards: BigInt::from(0),
+    };
+    let kind = ChoiceKind::Integer(BigInt::wrap_choice(ic));
+    assert_eq!(kind.max_children_saturating(100), 100);
+}
+
+#[test]
+fn max_children_saturating_float_matches_capped_exact() {
+    use crate::native::bignum::ToPrimitive;
+    let kind = ChoiceKind::Float(fc(0.0, 1.0, false, false));
+    let exact = kind.max_children().to_u128().unwrap();
+    assert_eq!(kind.max_children_saturating(u128::MAX), exact); // large cap: exact
+    assert_eq!(kind.max_children_saturating(5), 5); // small cap: saturates
+}
+
+#[test]
+fn max_children_saturating_bytes() {
+    // min 0, max 2: 256^0 + 256^1 + 256^2 = 65793.
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 0,
+        max_size: 2,
+    });
+    assert_eq!(kind.max_children_saturating(u128::MAX), 65793);
+    assert_eq!(kind.max_children_saturating(1000), 1000); // returns at the cap
+
+    // min 2, max 3 skips the len-0 and len-1 terms: 256^2 + 256^3 = 16842752.
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 2,
+        max_size: 3,
+    });
+    assert_eq!(kind.max_children_saturating(u128::MAX), 16_842_752);
+}
+
+#[test]
+fn max_children_saturating_string() {
+    // Alphabet 'a'..'z' = 26; min 0, max 2: 1 + 26 + 676 = 703.
+    let kind = ChoiceKind::String(string_choice(vec![(b'a' as u32, b'z' as u32)], 0, 2));
+    assert_eq!(kind.max_children_saturating(u128::MAX), 703);
+
+    // A near-full Unicode alphabet makes `power` overflow u128 within the
+    // length range, exercising the saturating multiply: the total pins at the
+    // (here maximal) cap.
+    let kind = ChoiceKind::String(string_choice(vec![(0, 0x10FFFF)], 0, 40));
+    assert_eq!(kind.max_children_saturating(u128::MAX), u128::MAX);
+}
+
 // ── IntegerChoice::to_index / from_index round-trips ────────────────────────
 //
 // `to_index` and `from_index` are inverses over the value range. The shrinker

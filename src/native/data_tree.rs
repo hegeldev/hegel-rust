@@ -13,7 +13,6 @@ use std::collections::HashMap;
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 
-use crate::native::bignum::BigUint;
 use crate::native::core::{AnyInteger, ChoiceKind, ChoiceNode, ChoiceValue, Status};
 
 /// Hashable choice-value key. `f64` is keyed by its bit pattern so `-0.0`
@@ -76,8 +75,14 @@ impl DataTreeNode {
             return true;
         }
         if let Some(ref kind) = self.kind {
-            let max_c = kind.max_children();
-            if BigUint::from(self.children.len() as u64) >= max_c {
+            // Exhausted iff every possible child value has its own node. We only
+            // need `max_children <= explored`, and `explored` is a small count,
+            // so the saturating form avoids building the huge cardinality
+            // `BigUint` (and its `pow`) that `max_children()` would for sequence
+            // kinds: `max_children_saturating(explored + 1) <= explored` is
+            // exactly `max_children <= explored`.
+            let explored = self.children.len() as u128;
+            if kind.max_children_saturating(explored + 1) <= explored {
                 let all_exhausted = self.children.values_mut().all(|c| c.check_exhausted());
                 if all_exhausted {
                     self.is_exhausted = true;

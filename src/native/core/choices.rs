@@ -971,6 +971,34 @@ impl std::hash::Hash for ChoiceValue {
     }
 }
 
+/// `Σ_{len=min_size..=max_size} alphabet^len` — the number of distinct
+/// sequences over an `alphabet`-symbol set — saturating at `cap`.
+///
+/// Backs [`ChoiceKind::max_children_saturating`] for the `Bytes` / `String`
+/// kinds: it accumulates in `u128` and returns `cap` the instant the running
+/// total reaches it, so a huge `max_size` never forces a multi-hundred-bit
+/// `BigUint`. `saturating_mul` pins `power` at `u128::MAX` once the alphabet
+/// outgrows the word, which then drives `total` to `cap` on the next term.
+fn sequence_max_children_saturating(
+    alphabet: u128,
+    min_size: usize,
+    max_size: usize,
+    cap: u128,
+) -> u128 {
+    let mut total: u128 = 0;
+    let mut power: u128 = 1; // alphabet^0
+    for len in 0..=max_size {
+        if len >= min_size {
+            total = total.saturating_add(power);
+            if total >= cap {
+                return cap;
+            }
+        }
+        power = power.saturating_mul(alphabet);
+    }
+    total
+}
+
 impl ChoiceKind {
     /// The simplest value for this choice kind.
     pub fn simplest(&self) -> ChoiceValue {
@@ -1039,6 +1067,41 @@ impl ChoiceKind {
             ChoiceKind::Float(fc) => fc.max_index() + BigUint::from(1u32),
             ChoiceKind::Bytes(bc) => bc.max_index() + BigUint::from(1u32),
             ChoiceKind::String(sc) => sc.max_index() + BigUint::from(1u32),
+        }
+    }
+
+    /// `min(max_children(), cap)`, computed *without* materialising the exact
+    /// cardinality for sequence kinds.
+    ///
+    /// The data-tree exhaustion check only needs to compare a node's
+    /// cardinality against a small explored-child count, never the exact value.
+    /// [`max_children`](Self::max_children) for a `Bytes`/`String` choice is
+    /// `Σ alphabet^len` — a `BigUint` of up to hundreds of bits whose
+    /// `BigUint::pow` dominated generation in profiles. This variant sums in
+    /// saturating `u128` and stops the moment the running total reaches `cap`,
+    /// so the astronomically-large powers are never built. Scalar kinds reuse
+    /// their (cheap, `pow`-free) `max_index`, saturating any value past `u128`
+    /// to `cap`.
+    pub fn max_children_saturating(&self, cap: u128) -> u128 {
+        use crate::native::bignum::ToPrimitive;
+        let scalar = |max_index: crate::native::bignum::BigUint| {
+            max_index
+                .to_u128()
+                .map_or(cap, |mi| mi.saturating_add(1).min(cap))
+        };
+        match self {
+            ChoiceKind::Boolean(_) => 2u128.min(cap),
+            ChoiceKind::Integer(ic) => scalar(ic.max_index()),
+            ChoiceKind::Float(fc) => scalar(fc.max_index()),
+            ChoiceKind::Bytes(bc) => {
+                sequence_max_children_saturating(256, bc.min_size, bc.max_size, cap)
+            }
+            ChoiceKind::String(sc) => sequence_max_children_saturating(
+                sc.intervals.len() as u128,
+                sc.min_size,
+                sc.max_size,
+                cap,
+            ),
         }
     }
 
