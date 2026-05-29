@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.15 - 2026-05-29
+
+This patch improves the performance of the native backend (`--features native`). The changes are internal only and have no user-visible effect on behaviour.
+
 ## 0.14.14 - 2026-05-28
 
 This release contains only internal refactoring that should have no user-visible impact.
