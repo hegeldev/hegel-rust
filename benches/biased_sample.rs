@@ -19,7 +19,7 @@ use hegel::__bench::{
     biased_float_sample, biased_integer_sample, biased_string_sample,
 };
 
-fn integer_cases() -> Vec<(&'static str, IntegerChoice)> {
+fn integer_cases() -> Vec<(&'static str, IntegerChoice<i128>)> {
     vec![
         (
             "i64_unbounded",
