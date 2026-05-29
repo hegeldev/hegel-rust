@@ -161,6 +161,23 @@ fn deserialize_returns_none_on_unknown_type_tag() {
 }
 
 #[test]
+fn round_trip_integer_choices_across_widths() {
+    // Small, full-i128, and beyond-i128 (both signs) integers all survive the
+    // length-prefixed two's-complement serialisation.
+    let choices = vec![
+        ChoiceValue::Integer(BigInt::from(0)),
+        ChoiceValue::Integer(BigInt::from(-1)),
+        ChoiceValue::Integer(BigInt::from(i128::MAX)),
+        ChoiceValue::Integer(BigInt::from(i128::MIN)),
+        ChoiceValue::Integer(BigInt::from(u128::MAX)),
+        ChoiceValue::Integer(BigInt::from(2).pow(200)),
+        ChoiceValue::Integer(-BigInt::from(2).pow(300)),
+    ];
+    let bytes = serialize_choices(&choices);
+    assert_eq!(deserialize_choices(&bytes).unwrap(), choices);
+}
+
+#[test]
 fn round_trip_float_choices_preserves_bit_pattern() {
     let choices = vec![
         ChoiceValue::Float(0.0),

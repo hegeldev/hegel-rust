@@ -1,10 +1,11 @@
 // Collection schema interpreters: list, dict, tuple, one_of, sampled_from.
 
 use crate::cbor_utils::{as_bool, as_u64, map_get};
+use crate::native::bignum::BigInt;
 use crate::native::core::{ManyState, NativeTestCase, StopTest};
 use ciborium::Value;
 
-use super::{cbor_to_i128, interpret_schema, many_more, many_reject};
+use super::{cbor_to_bigint, interpret_schema, many_more, many_reject};
 
 pub(super) fn interpret_tuple(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
     let elements = match map_get(schema, "elements") {
@@ -120,11 +121,23 @@ fn bounded_integer_range(schema: &Value) -> Option<(i128, i128)> {
     if schema_type != "integer" {
         return None;
     }
-    let min_val = cbor_to_i128(map_get(schema, "min_value")?);
-    let max_val = cbor_to_i128(map_get(schema, "max_value")?);
-    if !(1..=10_000).contains(&(max_val - min_val + 1)) {
+    let min_val = cbor_to_bigint(map_get(schema, "min_value")?);
+    let max_val = cbor_to_bigint(map_get(schema, "max_value")?);
+    // The without-replacement optimisation only applies to small ranges; a
+    // span outside `1..=10_000` (including any span too wide to fit i128)
+    // returns None and falls back to the general path.
+    let span = &max_val - &min_val + BigInt::one();
+    let Ok(span) = i128::try_from(&span) else {
+        return None;
+    };
+    if !(1..=10_000).contains(&span) {
         return None;
     }
+    // Span is small, but the bounds themselves must still fit i128 for the
+    // materialised `min_val..=max_val` walk below.
+    let (Ok(min_val), Ok(max_val)) = (i128::try_from(&min_val), i128::try_from(&max_val)) else {
+        return None;
+    };
     Some((min_val, max_val))
 }
 

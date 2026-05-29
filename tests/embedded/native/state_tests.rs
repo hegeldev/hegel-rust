@@ -1112,3 +1112,46 @@ fn integer_sample_from_distribution_uniform_fallback_for_indistinguishable_bound
         "uniform fallback should produce values across the range"
     );
 }
+
+// ── arbitrary-precision (> i128) bounds ────────────────────────────────────
+
+#[test]
+fn draw_integer_big_handles_narrow_range_beyond_i128() {
+    // Bounds entirely beyond i128 (around 2^200), narrow span: every draw must
+    // land in range. Exercises the uniform-fallback bigint path (the capped
+    // f64 CDF window collapses far out in the tail).
+    let min = BigInt::from(2).pow(200);
+    let max = &min + &BigInt::from(1000);
+    for seed in 0..64u64 {
+        let mut tc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
+        let v = tc.draw_integer_big(&min, &max).ok().unwrap();
+        assert!(v >= min && v <= max, "out of range: {v}");
+        assert!(matches!(v, BigInt::Big(_)));
+    }
+}
+
+#[test]
+fn draw_integer_big_handles_wide_range_beyond_i128() {
+    // A genuinely huge span (>> u128) drives the bigint uniform sampler's
+    // random-byte / modulo branch.
+    let min = BigInt::from(2).pow(200);
+    let max = BigInt::from(2).pow(400);
+    for seed in 0..64u64 {
+        let mut tc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
+        let v = tc.draw_integer_big(&min, &max).ok().unwrap();
+        assert!(v >= min && v <= max, "out of range: {v}");
+    }
+}
+
+#[test]
+fn draw_integer_big_half_beyond_i128_straddling_range() {
+    // min within i128, max beyond: the CDF path runs against the capped
+    // window and clamps back into [min, max].
+    let min = BigInt::from(-1000);
+    let max = BigInt::from(2).pow(200);
+    for seed in 0..64u64 {
+        let mut tc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
+        let v = tc.draw_integer_big(&min, &max).ok().unwrap();
+        assert!(v >= min && v <= max, "out of range: {v}");
+    }
+}

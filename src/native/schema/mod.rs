@@ -23,6 +23,7 @@ mod special;
 mod text;
 
 use crate::cbor_utils::map_get;
+use crate::native::bignum::BigInt;
 use crate::native::core::state::MAX_DEPTH;
 use crate::native::core::{ManyState, NativeTestCase, Span, Status, StopTest};
 use ciborium::Value;
@@ -141,81 +142,43 @@ pub(crate) fn many_reject(ntc: &mut NativeTestCase, state: &mut ManyState) -> Re
     Ok(())
 }
 
-/// Convert a CBOR value to i128, handling bignum tags.
-///
-/// For positive bignums (tag 2) that exceed i128::MAX (e.g. u128::MAX),
-/// we saturate at i128::MAX so the integer range remains valid.
-pub(super) fn cbor_to_i128(value: &Value) -> i128 {
+/// Convert a CBOR value to an arbitrary-precision [`BigInt`], handling bignum
+/// tags (tag 2 positive, tag 3 negative) of any width. Unlike [`cbor_to_i128`]
+/// this never saturates, so integer choices can carry bounds of any magnitude.
+pub(super) fn cbor_to_bigint(value: &Value) -> BigInt {
     match value {
-        Value::Integer(i) => (*i).into(),
+        Value::Integer(i) => BigInt::from(i128::from(*i)),
         Value::Tag(2, inner) => {
-            // CBOR tag 2: positive bignum (big-endian bytes)
             let Value::Bytes(bytes) = inner.as_ref() else {
                 panic!("Expected Bytes inside bignum tag 2, got {:?}", inner)
             };
-            let mut n = 0u128;
-            for b in bytes {
-                n = (n << 8) | (*b as u128);
-            }
-            // Saturating cast: values above i128::MAX (e.g. u128::MAX) cap at i128::MAX.
-            i128::try_from(n).unwrap_or(i128::MAX)
+            BigInt::from_unsigned_be_bytes(bytes)
         }
         Value::Tag(3, inner) => {
-            // CBOR tag 3: negative bignum, value is -1 - n
+            // CBOR tag 3: negative bignum, value is `-1 - n`.
             let Value::Bytes(bytes) = inner.as_ref() else {
                 panic!("Expected Bytes inside bignum tag 3, got {:?}", inner)
             };
-            let mut n = 0u128;
-            for b in bytes {
-                n = (n << 8) | (*b as u128);
-            }
-            // Safe: -1 - n where n <= i128::MAX is always representable.
-            -1i128 - i128::try_from(n).unwrap_or(i128::MAX)
+            -BigInt::one() - BigInt::from_unsigned_be_bytes(bytes)
         }
         _ => panic!("Expected CBOR integer, got {:?}", value),
     }
 }
 
-/// Return true if the CBOR value is a positive bignum (tag 2) whose value exceeds i128::MAX.
-fn bignum_overflows_i128(value: &Value) -> bool {
-    match value {
-        Value::Tag(2, inner) => {
-            let Value::Bytes(bytes) = inner.as_ref() else {
-                return false;
-            };
-            // Value overflows i128 if it needs more than 16 bytes, or if the high bit
-            // of a 16-byte value is set (i.e. > i128::MAX).
-            if bytes.len() > 16 {
-                return true;
-            }
-            if bytes.len() == 16 && bytes[0] >= 0x80 {
-                return true;
-            }
-            // Also check: if any byte beyond what i128 can hold is non-zero.
-            let mut n = 0u128;
-            for b in bytes {
-                n = (n << 8) | (*b as u128);
-            }
-            n > i128::MAX as u128
-        }
-        _ => false,
+/// Encode a [`BigInt`] as CBOR. Values within `i128` reuse [`i128_to_cbor`]
+/// (direct integer / serde); larger magnitudes use CBOR bignum tags
+/// (tag 2 positive, tag 3 negative `-1 - n`) with big-endian minimal bytes.
+pub(super) fn bigint_to_cbor(v: &BigInt) -> Value {
+    if let Ok(n) = i128::try_from(v) {
+        return i128_to_cbor(n);
     }
-}
-
-/// Encode a u128 value as CBOR. Values up to u64::MAX use normal integer encoding;
-/// larger values use CBOR positive bignum tag 2 with big-endian bytes.
-fn u128_to_cbor(v: u128) -> Value {
-    if let Ok(n) = u64::try_from(v) {
-        return Value::Integer(n.into());
+    if *v >= BigInt::zero() {
+        Value::Tag(2, Box::new(Value::Bytes(v.to_unsigned_be_bytes())))
+    } else {
+        // value = -1 - n  =>  n = -1 - value = -(value + 1), non-negative.
+        let n = -(v + BigInt::one());
+        Value::Tag(3, Box::new(Value::Bytes(n.to_unsigned_be_bytes())))
     }
-    // Encode as CBOR tag 2 (positive bignum), big-endian, minimal encoding.
-    let bytes = v.to_be_bytes();
-    // Strip leading zero bytes for minimal encoding.
-    let first_nonzero = bytes
-        .iter()
-        .position(|&b| b != 0)
-        .unwrap_or(bytes.len() - 1);
-    Value::Tag(2, Box::new(Value::Bytes(bytes[first_nonzero..].to_vec())))
 }
 
 /// Convert an i128 to a CBOR value.

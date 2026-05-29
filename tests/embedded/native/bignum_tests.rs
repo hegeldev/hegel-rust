@@ -319,6 +319,37 @@ fn bit_length_and_unsigned_bytes() {
 }
 
 #[test]
+fn big_endian_magnitude_bytes_round_trip() {
+    assert_eq!(BigInt::Small(0).to_unsigned_be_bytes(), vec![0]);
+    assert_eq!(BigInt::Small(258).to_unsigned_be_bytes(), vec![1, 2]);
+    // Magnitude only — sign is dropped.
+    assert_eq!(BigInt::Small(-258).to_unsigned_be_bytes(), vec![1, 2]);
+    assert_eq!(BigInt::from_unsigned_be_bytes(&[1, 2]), BigInt::Small(258));
+    // A magnitude beyond i128 round-trips through Big.
+    let big = big_pos();
+    assert_eq!(
+        BigInt::from_unsigned_be_bytes(&big.to_unsigned_be_bytes()),
+        big
+    );
+}
+
+#[test]
+fn signed_le_bytes_round_trip() {
+    for v in [
+        BigInt::Small(0),
+        BigInt::Small(1),
+        BigInt::Small(-1),
+        BigInt::Small(i128::MAX),
+        BigInt::Small(i128::MIN),
+        big_pos(),
+        big_neg(),
+    ] {
+        let bytes = v.to_signed_le_bytes();
+        assert_eq!(BigInt::from_signed_le_bytes(&bytes), v);
+    }
+}
+
+#[test]
 fn hash_and_eq_are_consistent_across_variants() {
     use std::collections::HashSet;
     let mut set = HashSet::new();

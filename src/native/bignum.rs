@@ -153,6 +153,19 @@ impl BigInt {
         BigInt::from_raw(RawBigInt::from_bytes_le(Sign::Plus, bytes))
     }
 
+    /// Big-endian, minimal-length magnitude bytes of `|self|` (matching CBOR
+    /// bignum encoding). Zero yields a single `0` byte.
+    pub fn to_unsigned_be_bytes(&self) -> Vec<u8> {
+        let (_sign, bytes) = self.to_raw().to_bytes_be();
+        bytes
+    }
+
+    /// Construct a non-negative `BigInt` from big-endian unsigned bytes (CBOR
+    /// bignum magnitude).
+    pub fn from_unsigned_be_bytes(bytes: &[u8]) -> BigInt {
+        BigInt::from_raw(RawBigInt::from_bytes_be(Sign::Plus, bytes))
+    }
+
     /// Minimal two's-complement little-endian byte encoding, for persistence.
     /// Round-trips through [`Self::from_signed_le_bytes`].
     pub fn to_signed_le_bytes(&self) -> Vec<u8> {

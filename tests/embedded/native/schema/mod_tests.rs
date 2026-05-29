@@ -189,41 +189,66 @@ fn many_reject_marks_invalid_when_cannot_reach_min_size() {
     assert_eq!(ntc.status, Some(Status::Invalid));
 }
 
-// ── cbor_to_i128 panic branches ─────────────────────────────────────────────
+// ── integer schema with bounds beyond i128 ─────────────────────────────────
+
+#[test]
+fn interpret_integer_handles_bounds_beyond_i128() {
+    use crate::native::bignum::BigInt;
+    use ciborium::Value;
+    let min = BigInt::from(2).pow(200);
+    let max = &min + &BigInt::from(1_000_000);
+    let schema = Value::Map(vec![
+        (Value::Text("type".into()), Value::Text("integer".into())),
+        (Value::Text("min_value".into()), bigint_to_cbor(&min)),
+        (Value::Text("max_value".into()), bigint_to_cbor(&max)),
+    ]);
+    for seed in 0..16u64 {
+        let mut ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
+        let result = interpret_schema(&mut ntc, &schema).ok().unwrap();
+        let v = cbor_to_bigint(&result);
+        assert!(v >= min && v <= max, "out of range: {v}");
+    }
+}
+
+// ── cbor_to_bigint panic branches ───────────────────────────────────────────
 
 #[test]
 #[should_panic(expected = "Expected Bytes inside bignum tag 2")]
-fn cbor_to_i128_tag2_non_bytes_panics() {
+fn cbor_to_bigint_tag2_non_bytes_panics() {
     let bad = Value::Tag(2, Box::new(Value::Integer(1.into())));
-    let _ = cbor_to_i128(&bad);
+    let _ = cbor_to_bigint(&bad);
 }
 
 #[test]
 #[should_panic(expected = "Expected Bytes inside bignum tag 3")]
-fn cbor_to_i128_tag3_non_bytes_panics() {
+fn cbor_to_bigint_tag3_non_bytes_panics() {
     let bad = Value::Tag(3, Box::new(Value::Integer(1.into())));
-    let _ = cbor_to_i128(&bad);
+    let _ = cbor_to_bigint(&bad);
 }
 
 #[test]
 #[should_panic(expected = "Expected CBOR integer")]
-fn cbor_to_i128_non_integer_panics() {
-    let _ = cbor_to_i128(&Value::Bool(true));
+fn cbor_to_bigint_non_integer_panics() {
+    let _ = cbor_to_bigint(&Value::Bool(true));
 }
 
-// ── bignum_overflows_i128 branches ──────────────────────────────────────────
+// ── cbor_to_bigint / bigint_to_cbor round-trips ─────────────────────────────
 
 #[test]
-fn bignum_overflows_i128_false_for_non_tag2() {
-    assert!(!bignum_overflows_i128(&Value::Integer(5.into())));
-    // Tag 2 with malformed (non-Bytes) inner also reports false.
-    let malformed = Value::Tag(2, Box::new(Value::Integer(1.into())));
-    assert!(!bignum_overflows_i128(&malformed));
-}
-
-#[test]
-fn bignum_overflows_i128_true_for_more_than_16_bytes() {
-    let bytes = vec![0xFFu8; 17];
-    let big = Value::Tag(2, Box::new(Value::Bytes(bytes)));
-    assert!(bignum_overflows_i128(&big));
+fn cbor_bigint_round_trips_across_widths() {
+    use crate::native::bignum::BigInt;
+    // Small ints, u64-range, beyond-i128 positive (tag 2), and negative
+    // beyond-i128 (tag 3) all round-trip through CBOR.
+    let cases = [
+        BigInt::from(0),
+        BigInt::from(-1),
+        BigInt::from(u64::MAX),
+        BigInt::from(u128::MAX),
+        BigInt::from(i128::MIN),
+        BigInt::from(u128::MAX) * BigInt::from(u128::MAX),
+        -(BigInt::from(u128::MAX) * BigInt::from(u128::MAX)),
+    ];
+    for v in cases {
+        assert_eq!(cbor_to_bigint(&bigint_to_cbor(&v)), v);
+    }
 }
