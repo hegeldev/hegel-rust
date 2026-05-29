@@ -1116,6 +1116,40 @@ fn integer_sample_from_distribution_uniform_fallback_for_indistinguishable_bound
 // ── arbitrary-precision (> i128) bounds ────────────────────────────────────
 
 #[test]
+fn integer_sample_from_distribution_cdf_path_beyond_i128() {
+    // min within i128, max beyond: the bigint branch runs the capped f64 CDF
+    // path (window non-degenerate) and clamps the rounded result into range.
+    // Called directly because biased_integer_sample's nasty pool would
+    // otherwise dominate this range and skip the distribution path.
+    let mut rng = SmallRng::seed_from_u64(17);
+    let min = BigInt::from(-1000);
+    let max = BigInt::from(2).pow(200);
+    for _ in 0..64 {
+        let v = integer_sample_from_distribution(&min, &max, &mut rng);
+        assert!(v >= min && v <= max, "out of range: {v}");
+    }
+}
+
+#[test]
+fn uniform_bigint_covers_u128_and_wider_spans() {
+    let mut rng = SmallRng::seed_from_u64(3);
+    // Span exactly u128::MAX exercises the `rng.random::<u128>()` branch.
+    let lo = BigInt::from(0);
+    let hi = BigInt::from(u128::MAX);
+    for _ in 0..64 {
+        let v = uniform_bigint(&lo, &hi, &mut rng);
+        assert!(v >= lo && v <= hi);
+    }
+    // A span wider than u128 exercises the random-byte / modulo branch.
+    let lo = BigInt::from(2).pow(200);
+    let hi = BigInt::from(2).pow(400);
+    for _ in 0..64 {
+        let v = uniform_bigint(&lo, &hi, &mut rng);
+        assert!(v >= lo && v <= hi);
+    }
+}
+
+#[test]
 fn draw_integer_big_handles_narrow_range_beyond_i128() {
     // Bounds entirely beyond i128 (around 2^200), narrow span: every draw must
     // land in range. Exercises the uniform-fallback bigint path (the capped

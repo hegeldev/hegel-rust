@@ -31,6 +31,50 @@ fn accepting_shrinker(initial: Vec<ChoiceNode>) -> Shrinker<'static> {
     )
 }
 
+/// An integer node whose value exceeds `i128` (bounds wide enough to hold it).
+/// The specialized integer shrink passes leave such nodes to the generic
+/// index passes, exercising their `int_view`-returns-`None` skip branches.
+fn huge_int_node() -> ChoiceNode {
+    ChoiceNode {
+        kind: ChoiceKind::Integer(IntegerChoice {
+            min_value: BigInt::from(0),
+            max_value: BigInt::from(2).pow(300),
+            shrink_towards: BigInt::from(0),
+        }),
+        value: ChoiceValue::Integer(BigInt::from(2).pow(200)),
+        was_forced: false,
+    }
+}
+
+#[test]
+fn binary_search_skips_value_beyond_i128() {
+    // int_view returns None for a > i128 value → the pass advances without
+    // touching it (the generic index passes handle huge values).
+    let mut shrinker = accepting_shrinker(vec![huge_int_node()]);
+    shrinker.binary_search_integer_towards_zero();
+    match &shrinker.current_nodes[0].value {
+        ChoiceValue::Integer(v) => assert_eq!(*v, BigInt::from(2).pow(200)),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn redistribute_integers_skips_pairs_beyond_i128() {
+    // Three > i128 nodes: the first pair's int_view fails with pair_idx > 0
+    // (decrement + continue), then again at pair_idx == 0 (break).
+    let mut shrinker = accepting_shrinker(vec![huge_int_node(), huge_int_node(), huge_int_node()]);
+    shrinker.redistribute_integers();
+    assert_eq!(shrinker.current_nodes.len(), 3);
+}
+
+#[test]
+fn lower_integers_together_skips_values_beyond_i128() {
+    // A pair of > i128 values trips the int_view break.
+    let mut shrinker = accepting_shrinker(vec![huge_int_node(), huge_int_node()]);
+    shrinker.lower_integers_together();
+    assert_eq!(shrinker.current_nodes.len(), 2);
+}
+
 #[test]
 fn delete_chunks_handles_empty_initial_sequence() {
     // Starting from an empty sequence, the outer loop's

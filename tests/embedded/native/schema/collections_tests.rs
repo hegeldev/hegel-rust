@@ -229,6 +229,34 @@ fn interpret_list_unique_large_range_falls_back_to_rejection() {
     assert_eq!(items.len(), 1);
 }
 
+#[test]
+fn bounded_integer_range_rejects_bounds_beyond_i128() {
+    use crate::native::bignum::BigInt;
+    use ciborium::Value;
+    let tag2 = |b: &BigInt| Value::Tag(2, Box::new(Value::Bytes(b.to_unsigned_be_bytes())));
+
+    // Span wider than i128 (0 .. 2^200): the span itself doesn't fit i128.
+    let wide = Value::Map(vec![
+        (Value::Text("type".into()), Value::Text("integer".into())),
+        (Value::Text("min_value".into()), Value::Integer(0.into())),
+        (
+            Value::Text("max_value".into()),
+            tag2(&BigInt::from(2).pow(200)),
+        ),
+    ]);
+    assert!(bounded_integer_range(&wide).is_none());
+
+    // Narrow span (6) but bounds beyond i128: span fits, the bounds don't.
+    let min = BigInt::from(2).pow(200);
+    let max = &min + &BigInt::from(5);
+    let narrow = Value::Map(vec![
+        (Value::Text("type".into()), Value::Text("integer".into())),
+        (Value::Text("min_value".into()), tag2(&min)),
+        (Value::Text("max_value".into()), tag2(&max)),
+    ]);
+    assert!(bounded_integer_range(&narrow).is_none());
+}
+
 // ── interpret_dict ──────────────────────────────────────────────────────────
 
 #[test]

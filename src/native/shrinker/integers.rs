@@ -165,7 +165,10 @@ impl<'a> Shrinker<'a> {
                     } else {
                         8
                     };
-                    let cur_v = saturate_i128(self.integer_value_at(i));
+                    let cur_v = match &self.current_nodes[i].value {
+                        ChoiceValue::Integer(v) => saturate_i128(v),
+                        _ => unreachable!("integer pass operates only on integer nodes"),
+                    };
                     for c in lo..lo.saturating_add(scan_count).min(cur_v) {
                         if !self
                             .replace(&HashMap::from([(i, ChoiceValue::Integer(BigInt::from(c)))]))
@@ -179,7 +182,10 @@ impl<'a> Shrinker<'a> {
                     // `cur - 2`. Hitting `cur - 2` is what lets the
                     // shrinker flip a linked pair from `(m, m+1)` down to
                     // `(m, m-1)` at the cost of one extra probe.
-                    let base = saturate_i128(self.integer_value_at(i));
+                    let base = match &self.current_nodes[i].value {
+                        ChoiceValue::Integer(v) => saturate_i128(v),
+                        _ => unreachable!("integer pass operates only on integer nodes"),
+                    };
                     if base > lo {
                         find_integer(|n| {
                             let attempt = base - 2 * (n as i128);
@@ -192,7 +198,10 @@ impl<'a> Shrinker<'a> {
                             )]))
                         });
                     }
-                    let base = saturate_i128(self.integer_value_at(i));
+                    let base = match &self.current_nodes[i].value {
+                        ChoiceValue::Integer(v) => saturate_i128(v),
+                        _ => unreachable!("integer pass operates only on integer nodes"),
+                    };
                     if base > lo {
                         find_integer(|n| {
                             let attempt = base - (n as i128);
@@ -207,7 +216,10 @@ impl<'a> Shrinker<'a> {
                     }
                     // Also try negative values with smaller absolute value (simpler).
                     if view.min_value < 0 {
-                        let cur_v = saturate_i128(self.integer_value_at(i));
+                        let cur_v = match &self.current_nodes[i].value {
+                            ChoiceValue::Integer(v) => saturate_i128(v),
+                            _ => unreachable!("integer pass operates only on integer nodes"),
+                        };
                         if cur_v > 0 {
                             let upper = (cur_v - 1).min(view.min_value.saturating_neg());
                             if upper >= 1 {
@@ -268,7 +280,10 @@ impl<'a> Shrinker<'a> {
                     // shrink_by_multiples for the negative branch: probe
                     // `cur + 2*n` / `cur + n` (moving toward zero). Mirror
                     // of the positive-side block above.
-                    let base = saturate_i128(self.integer_value_at(i));
+                    let base = match &self.current_nodes[i].value {
+                        ChoiceValue::Integer(v) => saturate_i128(v),
+                        _ => unreachable!("integer pass operates only on integer nodes"),
+                    };
                     let neg_hi = -lo;
                     if base < neg_hi {
                         find_integer(|n| {
@@ -282,7 +297,10 @@ impl<'a> Shrinker<'a> {
                             )]))
                         });
                     }
-                    let base = saturate_i128(self.integer_value_at(i));
+                    let base = match &self.current_nodes[i].value {
+                        ChoiceValue::Integer(v) => saturate_i128(v),
+                        _ => unreachable!("integer pass operates only on integer nodes"),
+                    };
                     if base < neg_hi {
                         find_integer(|n| {
                             let attempt = base + (n as i128);
@@ -297,7 +315,10 @@ impl<'a> Shrinker<'a> {
                     }
                     // Also try positive values with smaller absolute value (simpler).
                     if view.max_value > 0 {
-                        let cur_v = saturate_i128(self.integer_value_at(i));
+                        let cur_v = match &self.current_nodes[i].value {
+                            ChoiceValue::Integer(v) => saturate_i128(v),
+                            _ => unreachable!("integer pass operates only on integer nodes"),
+                        };
                         if cur_v < 0 {
                             let upper = (-cur_v - 1).min(view.max_value);
                             if upper >= 1 {
