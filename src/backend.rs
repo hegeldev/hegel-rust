@@ -2,6 +2,11 @@ use crate::Settings;
 use ciborium::Value;
 
 /// Error returned by [`DataSource`] methods when an operation cannot complete.
+///
+/// Not part of the public API: this is an implementation detail of the
+/// backend machinery (primarily for libhegel embedding) and may change in any
+/// release, including gaining new variants.
+#[doc(hidden)]
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum DataSourceError {
