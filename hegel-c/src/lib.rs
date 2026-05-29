@@ -28,6 +28,7 @@ use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char, c_int};
 use std::ptr;
 use std::sync::Arc;
+use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
@@ -606,6 +607,38 @@ pub unsafe extern "C" fn hegel_settings_suppress_health_check(s: *mut HegelSetti
 
 // ─── Run lifecycle ──────────────────────────────────────────────────────────
 
+static WORKER_PANIC_HOOK: Once = Once::new();
+
+/// The name given to the engine worker thread spawned by `hegel_run_start`.
+/// Used both when building the thread and by the panic hook to recognise
+/// which panics to swallow.
+const WORKER_THREAD_NAME: &str = "hegel-worker";
+
+/// Install (once) a process-global panic hook that swallows the default
+/// `thread '…' panicked at <file>:<line>:<col>` stderr line for panics
+/// raised on the engine worker thread.
+///
+/// Every engine panic (a failed health check like `FilterTooMuch`, an
+/// internal invariant) is raised on the worker thread, is already caught by
+/// the worker's `catch_unwind`, and is translated into a clean
+/// `TestRunResult` failure surfaced through `hegel_run_result` /
+/// `hegel_failure_*`. Letting the default hook *also* dump a Rust-internal
+/// source location to the embedding process's stderr is pure noise — a C
+/// consumer has no use for `src/native/test_runner.rs:329:21`, and it leaks
+/// implementation detail. Panics on any other thread (notably the caller's
+/// own thread) fall through to the previous hook unchanged.
+fn install_worker_panic_hook() {
+    WORKER_PANIC_HOOK.call_once(|| {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if std::thread::current().name() == Some(WORKER_THREAD_NAME) {
+                return;
+            }
+            prev(info);
+        }));
+    });
+}
+
 /// Start a property-test run with the given settings. Returns a handle
 /// the caller pulls test cases out of via `hegel_next_test_case`.
 ///
@@ -620,6 +653,7 @@ pub unsafe extern "C" fn hegel_settings_suppress_health_check(s: *mut HegelSetti
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_start(settings: *const HegelSettings) -> *mut HegelRun {
     clear_last_error();
+    install_worker_panic_hook();
     let Some(handle) = (unsafe { settings.as_ref() }) else {
         set_last_error("hegel_run_start: settings pointer is null");
         return ptr::null_mut();
@@ -632,7 +666,7 @@ pub unsafe extern "C" fn hegel_run_start(settings: *const HegelSettings) -> *mut
     let abort_worker = Arc::clone(&abort);
 
     let worker = thread::Builder::new()
-        .name("hegel-worker".to_string())
+        .name(WORKER_THREAD_NAME.to_string())
         .spawn(move || {
             // The engine itself can panic — currently `run_main` does this
             // when a health check fails (FilterTooMuch, TooSlow). An

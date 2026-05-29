@@ -606,6 +606,11 @@ fn engine_panic_surfaces_as_failure_not_worker_crash() {
     // around `run_native`, the worker died and the C caller saw a generic
     // "worker terminated" error. After the fix, the panic message is
     // wrapped in a `HegelFailure` and returned via `hegel_run_result`.
+    //
+    // This also exercises libhegel's worker-thread panic hook: the engine
+    // panic must NOT print a `thread 'hegel-worker' panicked at <file>:<line>`
+    // line to the test process's stderr (it's caught and surfaced through the
+    // failure API instead).
     let lib = unsafe { load() };
     let a = unsafe { bind(&lib) };
 
