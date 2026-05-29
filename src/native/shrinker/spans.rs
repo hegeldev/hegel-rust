@@ -65,9 +65,11 @@ impl<'a> Shrinker<'a> {
     pub(crate) fn try_trivial_spans(&mut self) {
         let mut i = 0;
         while i < self.current_spans.len() {
-            // Snapshot before any mutation so we can detect whether the
-            // first attempt improved the shrink target.
-            let prev_key = sort_key(&self.current_nodes);
+            // Capture the shrink epoch before any mutation so we can
+            // detect whether the first attempt improved the shrink
+            // target. `improvements` only bumps on a strict shrink, so
+            // its delta is exactly "did we shrink?".
+            let epoch_before = self.improvements;
             let span = self.current_spans[i].clone();
             if span.end > self.current_nodes.len() {
                 i += 1;
@@ -110,7 +112,7 @@ impl<'a> Shrinker<'a> {
             //
             // `if let` chains stabilised after MSRV 1.86, so this is
             // spelled out as nested conditions instead.
-            if sort_key(&self.current_nodes) == prev_key {
+            if self.improvements == epoch_before {
                 if let Some(new_span) = actual_spans.get(i) {
                     if new_span.start <= new_span.end && new_span.end <= actual_nodes.len() {
                         let mut spliced = self.current_nodes[..span.start].to_vec();
@@ -264,21 +266,21 @@ impl<'a> Shrinker<'a> {
                 let snapshot_nodes = self.current_nodes.clone();
 
                 // The keys for sorting are the sort_keys of each child's
-                // realised node slice.  Computed up front since the
-                // closure may be called O(n log n) times.
-                let mut cached_keys: Vec<(usize, Vec<crate::native::core::NodeSortKey>)> =
-                    Vec::with_capacity(endpoints.len());
-                for &(s, e) in endpoints.iter() {
-                    cached_keys.push(sort_key(&snapshot_nodes[s..e]));
-                }
+                // realised node slice.  `NodesSortKey` is a `Copy` view
+                // over `snapshot_nodes` — the snapshot lives until after
+                // `shrink_ordering` returns, so cached refs stay valid.
+                let cached_keys: Vec<crate::native::core::NodesSortKey<'_>> = endpoints
+                    .iter()
+                    .map(|&(s, e)| sort_key(&snapshot_nodes[s..e]))
+                    .collect();
 
                 // Snapshot is needed to translate a permutation back into a
                 // full node list: prefix + ordered slices + suffix.  We
                 // splice into the *snapshot* not the live current_nodes,
                 // because each accept call may modify current_nodes.
-                shrink_ordering::<(usize, Vec<crate::native::core::NodeSortKey>), _, _>(
+                shrink_ordering::<crate::native::core::NodesSortKey<'_>, _, _>(
                     n,
-                    |i| cached_keys[i].clone(),
+                    |i| cached_keys[i],
                     |permutation| {
                         // Build the candidate by interleaving the
                         // permuted slices with the unchanged regions

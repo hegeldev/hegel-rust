@@ -72,66 +72,70 @@ impl IntegerChoice {
         if value == s {
             return BigUint::zero();
         }
-        let above = BigUint::from((self.max_value as u128).wrapping_sub(s as u128));
-        let below = BigUint::from((s as u128).wrapping_sub(self.min_value as u128));
-        let d_abs_u = if value > s {
+        // `above` / `below` are the distances from `simplest` to the bounds.
+        // Both fit in u128 individually; their sum (`max - min`) also fits in
+        // u128 — so the entire computation runs in native arithmetic and
+        // converts to `BigUint` only at the very end.
+        let above: u128 = (self.max_value as u128).wrapping_sub(s as u128);
+        let below: u128 = (s as u128).wrapping_sub(self.min_value as u128);
+        let d_abs: u128 = if value > s {
             (value as u128).wrapping_sub(s as u128)
         } else {
             (s as u128).wrapping_sub(value as u128)
         };
-        let d_abs = BigUint::from(d_abs_u);
-        let d_minus_one = &d_abs - BigUint::from(1u32);
-        let mut count = std::cmp::min(&d_minus_one, &above).clone()
-            + std::cmp::min(&d_minus_one, &below).clone();
+        let d_minus_one = d_abs - 1;
+        let mut count: u128 = d_minus_one.min(above) + d_minus_one.min(below);
         if value > s {
-            return count + BigUint::from(1u32);
+            return BigUint::from(count + 1);
         }
         if d_abs <= above {
-            count += BigUint::from(1u32);
+            count += 1;
         }
-        count + BigUint::from(1u32)
+        BigUint::from(count + 1)
     }
 
     #[allow(clippy::wrong_self_convention)]
     pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<i128> {
-        use crate::native::bignum::{BigUint, Zero};
+        use crate::native::bignum::Zero;
         let s = self.simplest();
         if index.is_zero() {
             return Some(s);
         }
-        let above_u = (self.max_value as u128).wrapping_sub(s as u128);
-        let below_u = (s as u128).wrapping_sub(self.min_value as u128);
-        let above = BigUint::from(above_u);
-        let below = BigUint::from(below_u);
-        let mut lo = BigUint::from(1u32);
-        let mut hi = &above + &below;
-        let two = BigUint::from(2u32);
+        let above: u128 = (self.max_value as u128).wrapping_sub(s as u128);
+        let below: u128 = (s as u128).wrapping_sub(self.min_value as u128);
+        // `max_index` is `above + below`, which fits in u128, so any valid
+        // index does too. An over-range `BigUint` index (no valid value)
+        // short-circuits here without entering the binary search.
+        let Ok(index_u) = u128::try_from(&index) else {
+            return None;
+        };
+        // Binary search for smallest `d >= 1` with `count(d) >= index_u`,
+        // where `count(d) = min(d, above) + min(d, below)`. The smallest such
+        // `d` is at most `max(above, below) <= u128::MAX`, so u128 suffices.
+        let mut lo: u128 = 1;
+        let mut hi: u128 = above.max(below);
         while lo < hi {
-            let mid = (&lo + &hi) / &two;
-            let total = std::cmp::min(&mid, &above).clone() + std::cmp::min(&mid, &below).clone();
-            if total >= index {
+            let mid = lo + (hi - lo) / 2;
+            let total = mid.min(above) + mid.min(below);
+            if total >= index_u {
                 hi = mid;
             } else {
-                lo = mid + BigUint::from(1u32);
+                lo = mid + 1;
             }
         }
         let d = lo;
-        let total_at_d = std::cmp::min(&d, &above).clone() + std::cmp::min(&d, &below).clone();
-        if total_at_d < index {
+        let total_at_d = d.min(above) + d.min(below);
+        if total_at_d < index_u {
             return None;
         }
-        let d_minus_one = &d - BigUint::from(1u32);
-        let before = std::cmp::min(&d_minus_one, &above).clone()
-            + std::cmp::min(&d_minus_one, &below).clone();
-        let pos_in_d = &index - before;
-        let d_u: u128 = (&d)
-            .try_into()
-            .expect("d fits in u128 (range is <= u128::MAX)");
-        if pos_in_d == BigUint::from(1u32) && d <= above {
-            return Some((s as u128).wrapping_add(d_u) as i128);
+        let d_minus_one = d - 1;
+        let before = d_minus_one.min(above) + d_minus_one.min(below);
+        let pos_in_d = index_u - before;
+        if pos_in_d == 1 && d <= above {
+            return Some((s as u128).wrapping_add(d) as i128);
         }
         debug_assert!(d <= below);
-        Some((s as u128).wrapping_sub(d_u) as i128)
+        Some((s as u128).wrapping_sub(d) as i128)
     }
 }
 
@@ -993,10 +997,163 @@ pub enum NodeSortKey {
     Sequence(usize, Vec<u32>),
 }
 
+/// Allocation-free borrowed view of a [`ChoiceNode`]'s sort key.
+///
+/// `Ord` matches [`NodeSortKey`]'s ordering exactly: `Scalar < Sequence`
+/// cross-variant, scalar variants by `(magnitude, sign)`, sequence variants
+/// shortlex on length then per-element keys. The per-element keys for
+/// `Bytes` and `String` are resolved lazily during comparison —
+/// `String` defers `codepoint_key` to the moment of compare — so no
+/// `Vec<u32>` ever gets allocated.
+pub enum NodeSortKeyRef<'a> {
+    Scalar(u128, bool),
+    Bytes(&'a [u8]),
+    String(&'a StringChoice, &'a [u32]),
+}
+
+impl<'a> NodeSortKeyRef<'a> {
+    fn category(&self) -> u8 {
+        match self {
+            NodeSortKeyRef::Scalar(..) => 0,
+            NodeSortKeyRef::Bytes(..) | NodeSortKeyRef::String(..) => 1,
+        }
+    }
+
+    /// Length of the underlying element sequence. Only meaningful for
+    /// sequence variants; the only call site (the sequence-vs-sequence
+    /// arm of `cmp`) gates on category() before invoking.
+    fn seq_len(&self) -> usize {
+        match self {
+            NodeSortKeyRef::Bytes(b) => b.len(),
+            NodeSortKeyRef::String(_, cps) => cps.len(),
+            NodeSortKeyRef::Scalar(..) => unreachable!("seq_len on scalar"),
+        }
+    }
+
+    /// `i`-th per-element key in the sort-order alphabet. `i` must be in
+    /// `0..self.seq_len()`. Calling on `Scalar` is unreachable in the
+    /// only call sites (sequence-element comparison).
+    fn seq_key_at(&self, i: usize) -> u32 {
+        match self {
+            NodeSortKeyRef::Bytes(b) => b[i] as u32,
+            NodeSortKeyRef::String(sc, cps) => sc.codepoint_key(cps[i]),
+            NodeSortKeyRef::Scalar(..) => unreachable!("seq_key_at on scalar"),
+        }
+    }
+}
+
+impl<'a> PartialEq for NodeSortKeyRef<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl<'a> Eq for NodeSortKeyRef<'a> {}
+
+impl<'a> PartialOrd for NodeSortKeyRef<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a> Ord for NodeSortKeyRef<'a> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match (self, other) {
+            (NodeSortKeyRef::Scalar(am, an), NodeSortKeyRef::Scalar(bm, bn)) => {
+                (am, an).cmp(&(bm, bn))
+            }
+            (NodeSortKeyRef::Scalar(..), _) | (_, NodeSortKeyRef::Scalar(..)) => {
+                self.category().cmp(&other.category())
+            }
+            _ => {
+                // Both sides are sequence variants.
+                let la = self.seq_len();
+                let lb = other.seq_len();
+                match la.cmp(&lb) {
+                    Ordering::Equal => {}
+                    ord => return ord,
+                }
+                for i in 0..la {
+                    match self.seq_key_at(i).cmp(&other.seq_key_at(i)) {
+                        Ordering::Equal => continue,
+                        ord => return ord,
+                    }
+                }
+                Ordering::Equal
+            }
+        }
+    }
+}
+
+impl ChoiceNode {
+    /// Borrowed counterpart of [`Self::sort_key`]. Returns a
+    /// [`NodeSortKeyRef`] that borrows the node's value (and, for
+    /// `String`, its choice config). Same ordering, no allocation.
+    pub fn sort_key_ref(&self) -> NodeSortKeyRef<'_> {
+        match (&self.kind, &self.value) {
+            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
+                let (abs, neg) = ic.sort_key(*v);
+                NodeSortKeyRef::Scalar(abs, neg)
+            }
+            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => {
+                NodeSortKeyRef::Scalar(u128::from(*v), false)
+            }
+            (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => {
+                let (mag, neg) = fc.sort_key(*v);
+                NodeSortKeyRef::Scalar(u128::from(mag), neg)
+            }
+            (ChoiceKind::Bytes(_), ChoiceValue::Bytes(v)) => NodeSortKeyRef::Bytes(v),
+            (ChoiceKind::String(sc), ChoiceValue::String(v)) => NodeSortKeyRef::String(sc, v),
+            _ => unreachable!("mismatched choice kind and value"),
+        }
+    }
+}
+
+/// Shortlex sort key for a sequence of choice nodes, as a borrowed view.
+/// Shorter sequences are simpler; among equal lengths, smaller per-element
+/// keys win. Comparison is allocation-free: per-element keys are resolved
+/// lazily and the first inequality short-circuits.
+#[derive(Clone, Copy)]
+pub struct NodesSortKey<'a>(pub &'a [ChoiceNode]);
+
+impl<'a> PartialEq for NodesSortKey<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl<'a> Eq for NodesSortKey<'a> {}
+
+impl<'a> PartialOrd for NodesSortKey<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a> Ord for NodesSortKey<'a> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match self.0.len().cmp(&other.0.len()) {
+            Ordering::Equal => {}
+            ord => return ord,
+        }
+        for (a, b) in self.0.iter().zip(other.0.iter()) {
+            match a.sort_key_ref().cmp(&b.sort_key_ref()) {
+                Ordering::Equal => continue,
+                ord => return ord,
+            }
+        }
+        Ordering::Equal
+    }
+}
+
 /// Shortlex sort key for a sequence of choice nodes.
 /// Shorter sequences are simpler; among equal lengths, smaller values win.
-pub fn sort_key(nodes: &[ChoiceNode]) -> (usize, Vec<NodeSortKey>) {
-    (nodes.len(), nodes.iter().map(|n| n.sort_key()).collect())
+/// Returns a borrowed view that compares allocation-free; see
+/// [`NodesSortKey::to_owned`] when a long-lived snapshot is needed.
+pub fn sort_key(nodes: &[ChoiceNode]) -> NodesSortKey<'_> {
+    NodesSortKey(nodes)
 }
 
 /// Test case status, ordered from least to most "significant".

@@ -192,8 +192,7 @@ impl<'a> Shrinker<'a> {
     /// punning replaces values that no longer fit the kind at that
     /// position after a one_of branch switch.
     pub fn consider(&mut self, nodes: &[ChoiceNode]) -> bool {
-        let candidate_key = sort_key(nodes);
-        if candidate_key == sort_key(&self.current_nodes) {
+        if sort_key(nodes) == sort_key(&self.current_nodes) {
             return true;
         }
         // Forced-node guard: a candidate may not differ from the
@@ -235,8 +234,7 @@ impl<'a> Shrinker<'a> {
         // candidates that the test_fn would in fact accept.
         let cache_key: Vec<(u8, NodeSortKey)> = nodes
             .iter()
-            .zip(candidate_key.1.iter())
-            .map(|(node, sk)| (kind_tag(&node.kind), sk.clone()))
+            .map(|node| (kind_tag(&node.kind), node.sort_key()))
             .collect();
         if self.consider_cache.contains(&cache_key) {
             return false;

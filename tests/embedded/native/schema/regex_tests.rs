@@ -9,6 +9,7 @@
 //! generator's draw distribution.
 
 use super::*;
+use crate::native::core::ChoiceValue;
 use crate::native::re::constants::{
     AtCode, ChCode, SRE_FLAG_DOTALL, SRE_FLAG_IGNORECASE, SRE_FLAG_MULTILINE,
 };
@@ -709,4 +710,26 @@ fn build_in_set_negated_ascii_only_excludes_nonascii() {
     let out = build_in_set(&items, SRE_FLAG_ASCII, &Some(alphabet));
     // Every char in the output must be ASCII and not 'a'.
     assert!(out.iter().all(|c| (*c as u32) < 128 && *c != 'a'));
+}
+
+// ----- generate_op: IGNORECASE literal rejected by the alphabet -----
+
+#[test]
+fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
+    // `(?i)a`: the literal 'a' swapcases to 'A', so `generate_op` draws
+    // `which` to choose between the two cases. With an alphabet that only
+    // allows 'A', forcing `which = 0` picks the lowercase 'a', which the
+    // alphabet rejects, so the test case is marked invalid.
+    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(0)], None, None);
+    let mut state = GenState {
+        groups: HashMap::new(),
+        flags: SRE_FLAG_IGNORECASE,
+        pending_lookaheads: Vec::new(),
+        in_cache: HashMap::new(),
+    };
+    let alphabet = Some(IntervalSet::new(vec![('A' as u32, 'A' as u32)]));
+    let mut out = String::new();
+    let result = generate_op(&mut ntc, &lit('a'), &mut state, &alphabet, &mut out);
+    assert!(result.is_err());
+    assert_eq!(ntc.status, Some(Status::Invalid));
 }
