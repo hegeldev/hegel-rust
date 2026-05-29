@@ -69,6 +69,9 @@ type FnRunFree = unsafe extern "C" fn(*mut u8);
 type FnGenerate =
     unsafe extern "C" fn(*mut u8, *const u8, usize, *mut *const u8, *mut usize) -> c_int;
 type FnMarkComplete = unsafe extern "C" fn(*mut u8, CStatus, *const c_char) -> c_int;
+type FnNewPool = unsafe extern "C" fn(*mut u8, *mut i64) -> c_int;
+type FnPoolAdd = unsafe extern "C" fn(*mut u8, i64, *mut i64) -> c_int;
+type FnPoolGenerate = unsafe extern "C" fn(*mut u8, i64, bool, *mut i64) -> c_int;
 type FnRunResultPassed = unsafe extern "C" fn(*const u8) -> bool;
 type FnRunResultFailureCount = unsafe extern "C" fn(*const u8) -> usize;
 type FnRunResultFailure = unsafe extern "C" fn(*const u8, usize) -> *const u8;
@@ -91,6 +94,9 @@ struct Api<'a> {
     run_free: Symbol<'a, FnRunFree>,
     generate: Symbol<'a, FnGenerate>,
     mark_complete: Symbol<'a, FnMarkComplete>,
+    new_pool: Symbol<'a, FnNewPool>,
+    pool_add: Symbol<'a, FnPoolAdd>,
+    pool_generate: Symbol<'a, FnPoolGenerate>,
     run_result_passed: Symbol<'a, FnRunResultPassed>,
     run_result_failure_count: Symbol<'a, FnRunResultFailureCount>,
     run_result_failure: Symbol<'a, FnRunResultFailure>,
@@ -115,6 +121,9 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             run_free: lib.get(b"hegel_run_free\0").unwrap(),
             generate: lib.get(b"hegel_generate\0").unwrap(),
             mark_complete: lib.get(b"hegel_mark_complete\0").unwrap(),
+            new_pool: lib.get(b"hegel_new_pool\0").unwrap(),
+            pool_add: lib.get(b"hegel_pool_add\0").unwrap(),
+            pool_generate: lib.get(b"hegel_pool_generate\0").unwrap(),
             run_result_passed: lib.get(b"hegel_run_result_passed\0").unwrap(),
             run_result_failure_count: lib.get(b"hegel_run_result_failure_count\0").unwrap(),
             run_result_failure: lib.get(b"hegel_run_result_failure\0").unwrap(),
@@ -306,6 +315,99 @@ fn libhegel_reports_shrunk_failure() {
             "expected failure origin to contain 'n >= 5 failed', got: {}",
             origin_back
         );
+
+        (a.run_free)(run);
+        (a.settings_free)(s);
+    }
+}
+
+#[test]
+fn libhegel_pool_primitives_draw_added_variables() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    unsafe {
+        let s = (a.settings_new)();
+        (a.settings_test_cases)(s, 25);
+        let empty = CString::new("").unwrap();
+        (a.settings_database)(s, empty.as_ptr());
+        (a.settings_derandomize)(s, true);
+        (a.settings_seed)(s, 3, true);
+
+        let run = (a.run_start)(s);
+        assert!(!run.is_null());
+
+        let mut saw_pool_draw = false;
+        let mut saw_empty_stop = false;
+        loop {
+            let tc = (a.next_test_case)(run);
+            if tc.is_null() {
+                let err = CStr::from_ptr((a.last_error_message)()).to_string_lossy();
+                assert_eq!(err, "", "next_test_case returned NULL with error: {}", err);
+                break;
+            }
+
+            // Build a pool and register three variables.
+            let mut pool_id: i64 = -1;
+            let rc = (a.new_pool)(tc, &mut pool_id);
+            assert_eq!(rc, 0, "new_pool failed: rc={}", rc);
+
+            let mut added = Vec::new();
+            for _ in 0..3 {
+                let mut var_id: i64 = -1;
+                let rc = (a.pool_add)(tc, pool_id, &mut var_id);
+                assert_eq!(rc, 0, "pool_add failed: rc={}", rc);
+                added.push(var_id);
+            }
+            // pool_add hands out a fresh, strictly increasing id each time.
+            assert_eq!(added, vec![1, 2, 3]);
+
+            // Non-consuming draw: returns one of the added ids and leaves
+            // the pool unchanged. `pool_generate` can report STOP_TEST if
+            // the engine's choice budget is exhausted mid-shrink, so treat
+            // that the same way the other primitives do.
+            let mut drawn: i64 = -1;
+            let rc = (a.pool_generate)(tc, pool_id, false, &mut drawn);
+            if rc == -1 {
+                (a.mark_complete)(tc, CStatus::Overrun, ptr::null());
+                continue;
+            }
+            assert_eq!(rc, 0, "pool_generate failed: rc={}", rc);
+            assert!(added.contains(&drawn), "drew unknown variable {}", drawn);
+            saw_pool_draw = true;
+
+            // Consume every variable, then confirm the now-empty pool
+            // reports STOP_TEST on the next draw.
+            let mut consumed = 0;
+            for _ in 0..3 {
+                let mut v: i64 = -1;
+                let rc = (a.pool_generate)(tc, pool_id, true, &mut v);
+                if rc == -1 {
+                    break;
+                }
+                assert_eq!(rc, 0, "consuming pool_generate failed: rc={}", rc);
+                assert!(added.contains(&v), "consumed unknown variable {}", v);
+                consumed += 1;
+            }
+            if consumed == 3 {
+                let mut v: i64 = -1;
+                let rc = (a.pool_generate)(tc, pool_id, true, &mut v);
+                assert_eq!(rc, -1, "expected STOP_TEST on empty pool, got rc={}", rc);
+                saw_empty_stop = true;
+            }
+
+            (a.mark_complete)(tc, CStatus::Valid, ptr::null());
+        }
+
+        assert!(saw_pool_draw, "expected at least one successful pool draw");
+        assert!(
+            saw_empty_stop,
+            "expected to drain a pool to empty at least once"
+        );
+
+        let result = (a.run_result)(run);
+        assert!(!result.is_null());
+        assert!((a.run_result_passed)(result), "expected passing run");
 
         (a.run_free)(run);
         (a.settings_free)(s);

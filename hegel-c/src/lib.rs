@@ -1043,6 +1043,103 @@ pub unsafe extern "C" fn hegel_collection_reject(
     }
 }
 
+/// Create a new engine-managed *variable pool* for stateful testing.
+///
+/// A pool tracks a set of opaque variable ids that the engine can draw
+/// from and shrink over — the primitive behind hegel-rust's
+/// `stateful::Variables` and `#[hegel::state_machine]`. The caller keeps
+/// its own mapping from variable id to the actual value it generated
+/// (mirroring how `Variables<T>` holds a `HashMap<i64, T>`).
+///
+/// On success writes the new pool's id into `*out_pool_id` and returns
+/// `HEGEL_OK`. The id is opaque; pass it to subsequent `hegel_pool_add`
+/// / `hegel_pool_generate` calls on the *same* test case.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_new_pool(tc: *mut HegelTestCase, out_pool_id: *mut i64) -> c_int {
+    clear_last_error();
+    let tc = match unsafe { tc_mut(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_pool_id.is_null() {
+        set_last_error("hegel_new_pool: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.ds.new_pool() {
+        Ok(id) => {
+            unsafe { *out_pool_id = id };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(e),
+    }
+}
+
+/// Register a new variable in the pool. The engine assigns it a fresh
+/// id, which the caller associates with the value it just generated.
+///
+/// On success writes the new variable's id into `*out_variable_id` and
+/// returns `HEGEL_OK`. `pool_id` must be an id returned by
+/// `hegel_new_pool` on this test case.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_pool_add(
+    tc: *mut HegelTestCase,
+    pool_id: i64,
+    out_variable_id: *mut i64,
+) -> c_int {
+    clear_last_error();
+    let tc = match unsafe { tc_mut(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_variable_id.is_null() {
+        set_last_error("hegel_pool_add: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.ds.pool_add(pool_id) {
+        Ok(id) => {
+            unsafe { *out_variable_id = id };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(e),
+    }
+}
+
+/// Draw a variable id from the pool, letting the engine choose (and
+/// shrink) which previously-added variable to reuse. When
+/// `consume = true` the drawn variable is removed from the pool (model a
+/// destructive action); when `false` it stays available for future
+/// draws.
+///
+/// On success writes the chosen variable id into `*out_variable_id` and
+/// returns `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` if the pool currently
+/// has no active variables — the caller should guard against that (e.g.
+/// only draw when it knows it has added at least one variable) or treat
+/// it like any other budget-exhaustion outcome.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_pool_generate(
+    tc: *mut HegelTestCase,
+    pool_id: i64,
+    consume: bool,
+    out_variable_id: *mut i64,
+) -> c_int {
+    clear_last_error();
+    let tc = match unsafe { tc_mut(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_variable_id.is_null() {
+        set_last_error("hegel_pool_generate: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.ds.pool_generate(pool_id, consume) {
+        Ok(id) => {
+            unsafe { *out_variable_id = id };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(e),
+    }
+}
+
 /// Record a numeric observation under `label` for the engine's
 /// targeting phase to hill-climb toward. Higher values are "more
 /// interesting"; the engine biases later test cases toward inputs that

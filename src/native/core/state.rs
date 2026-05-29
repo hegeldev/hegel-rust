@@ -609,9 +609,9 @@ pub(crate) fn codepoints_to_string(cps: &[u32]) -> String {
 
 /// A pool of variable IDs for stateful testing.
 pub struct NativeVariables {
-    last_id: i128,
-    variables: Vec<i128>,
-    removed: std::collections::HashSet<i128>,
+    last_id: i64,
+    variables: Vec<i64>,
+    removed: std::collections::HashSet<i64>,
 }
 
 impl NativeVariables {
@@ -624,14 +624,14 @@ impl NativeVariables {
     }
 
     /// Add a new variable and return its ID.
-    pub fn next(&mut self) -> i128 {
+    pub fn next(&mut self) -> i64 {
         self.last_id += 1;
         self.variables.push(self.last_id);
         self.last_id
     }
 
     /// Return the IDs of variables that have not been consumed, in order.
-    pub fn active(&self) -> Vec<i128> {
+    pub fn active(&self) -> Vec<i64> {
         self.variables
             .iter()
             .filter(|id| !self.removed.contains(*id))
@@ -640,7 +640,7 @@ impl NativeVariables {
     }
 
     /// Mark a variable as consumed and trim trailing consumed variables.
-    pub fn consume(&mut self, variable_id: i128) {
+    pub fn consume(&mut self, variable_id: i64) {
         self.removed.insert(variable_id);
         while let Some(&last) = self.variables.last() {
             if self.removed.contains(&last) {

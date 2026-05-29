@@ -59,14 +59,14 @@ pub trait DataSource: Send + Sync {
     ) -> Result<(), DataSourceError>;
 
     /// Create a new variable pool. Returns an opaque pool id.
-    fn new_pool(&self) -> Result<i128, DataSourceError>;
+    fn new_pool(&self) -> Result<i64, DataSourceError>;
 
     /// Register a new variable in the pool. Returns the variable id.
-    fn pool_add(&self, pool_id: i128) -> Result<i128, DataSourceError>;
+    fn pool_add(&self, pool_id: i64) -> Result<i64, DataSourceError>;
 
     /// Draw a variable id from the pool.
     /// If `consume` is true, the variable is removed from the pool.
-    fn pool_generate(&self, pool_id: i128, consume: bool) -> Result<i128, DataSourceError>;
+    fn pool_generate(&self, pool_id: i64, consume: bool) -> Result<i64, DataSourceError>;
 
     /// Record a targeting observation for the current test case.
     ///
