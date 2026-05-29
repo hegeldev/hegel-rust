@@ -14,11 +14,6 @@ use libloading::{Library, Symbol};
 // ─── Library loading ────────────────────────────────────────────────────────
 
 fn lib_path() -> PathBuf {
-    // The crate is part of a workspace, so the cdylib lands in
-    // ../target/{debug,release}/libhegel.<ext>. `cargo test` builds the debug
-    // profile by default; for --release tests we look there too.
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target_dir = manifest_dir.parent().unwrap().join("target");
     let filename = if cfg!(target_os = "macos") {
         "libhegel.dylib"
     } else if cfg!(target_os = "windows") {
@@ -26,6 +21,23 @@ fn lib_path() -> PathBuf {
     } else {
         "libhegel.so"
     };
+    // `HEGEL_C_LIB_DIR` lets the harness load a library built into a separate
+    // target dir — e.g. the `panic = "abort"` build produced by
+    // `just c-test-abort`, which proves no panic crosses the FFI boundary.
+    if let Ok(dir) = std::env::var("HEGEL_C_LIB_DIR") {
+        let candidate = PathBuf::from(dir).join(filename);
+        assert!(
+            candidate.exists(),
+            "HEGEL_C_LIB_DIR is set but {} does not exist",
+            candidate.display()
+        );
+        return candidate;
+    }
+    // The crate is part of a workspace, so the cdylib lands in
+    // ../target/{debug,release}/libhegel.<ext>. `cargo test` builds the debug
+    // profile by default; for --release tests we look there too.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let target_dir = manifest_dir.parent().unwrap().join("target");
     for profile in ["debug", "release"] {
         let candidate = target_dir.join(profile).join(filename);
         if candidate.exists() {
@@ -232,6 +244,66 @@ fn libhegel_runs_passing_property() {
         assert!((a.run_result_passed)(result), "expected passing run");
         assert_eq!((a.run_result_failure_count)(result), 0);
 
+        (a.run_free)(run);
+        (a.settings_free)(s);
+    }
+}
+
+/// HEGEL_E_INVALID_ARG from hegel.h.
+const HEGEL_E_INVALID_ARG: c_int = -5;
+
+#[test]
+fn invalid_schema_returns_error_not_abort() {
+    // Reproduces the hegel-java report: a plausible-but-wrong schema type
+    // (`{"type":"ipv4"}`) used to `panic!("Unknown schema type")` inside the
+    // engine, which — crossing the `extern "C"` boundary — aborted the host
+    // process (SIGABRT). It must now return HEGEL_E_INVALID_ARG with a
+    // diagnostic in hegel_last_error_message and leave the process running.
+    // Under the `panic = "abort"` build (`just c-test-abort`) this test only
+    // passes if no panic is reachable on the schema-interpretation path.
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    unsafe {
+        let s = (a.settings_new)();
+        (a.settings_test_cases)(s, 1);
+        let empty = CString::new("").unwrap();
+        (a.settings_database)(s, empty.as_ptr());
+        (a.settings_derandomize)(s, true);
+        (a.settings_seed)(s, 1, true);
+
+        let run = (a.run_start)(s);
+        assert!(!run.is_null());
+
+        let tc = (a.next_test_case)(run);
+        assert!(!tc.is_null(), "expected a test case");
+
+        // Several distinct malformed schemas, each of which previously
+        // panicked at a different site in the interpreter.
+        let unknown_type = encode(&Value::Map(vec![(
+            Value::Text("type".into()),
+            Value::Text("ipv4".into()),
+        )]));
+        let bad_codec = encode(&Value::Map(vec![
+            (Value::Text("type".into()), Value::Text("string".into())),
+            (Value::Text("codec".into()), Value::Text("ebcdic".into())),
+        ]));
+        for bad in [unknown_type, bad_codec] {
+            let mut val_ptr: *const u8 = ptr::null();
+            let mut val_len: usize = 0;
+            let rc = (a.generate)(tc, bad.as_ptr(), bad.len(), &mut val_ptr, &mut val_len);
+            assert_eq!(
+                rc, HEGEL_E_INVALID_ARG,
+                "invalid schema should return HEGEL_E_INVALID_ARG, got rc={rc}"
+            );
+            let err = CStr::from_ptr((a.last_error_message)()).to_string_lossy();
+            assert!(
+                !err.is_empty(),
+                "expected a diagnostic message for the invalid schema"
+            );
+        }
+
+        (a.mark_complete)(tc, CStatus::Invalid, ptr::null());
         (a.run_free)(run);
         (a.settings_free)(s);
     }

@@ -24,8 +24,18 @@ mod text;
 
 use crate::cbor_utils::map_get;
 use crate::native::core::state::MAX_DEPTH;
-use crate::native::core::{ManyState, NativeTestCase, Span, Status, StopTest};
+use crate::native::core::{EngineError, ManyState, NativeTestCase, Span, Status};
 use ciborium::Value;
+
+/// Look up a required schema field, returning [`EngineError::InvalidArgument`]
+/// (rather than panicking) when it is absent. Used for fields whose presence
+/// is part of the schema contract — a missing one means the caller's schema
+/// is malformed.
+pub(super) fn require<'a>(schema: &'a Value, field: &str) -> Result<&'a Value, EngineError> {
+    map_get(schema, field).ok_or_else(|| {
+        EngineError::InvalidArgument(format!("schema is missing required \"{field}\" field"))
+    })
+}
 
 /// Interpret a CBOR schema and produce a value using the native test case.
 ///
@@ -38,11 +48,11 @@ use ciborium::Value;
 pub(crate) fn interpret_schema(
     ntc: &mut NativeTestCase,
     schema: &Value,
-) -> Result<Value, StopTest> {
+) -> Result<Value, EngineError> {
     use crate::cbor_utils::as_text;
-    let schema_type = map_get(schema, "type")
-        .and_then(as_text)
-        .expect("Schema must have a \"type\" field");
+    let schema_type = map_get(schema, "type").and_then(as_text).ok_or_else(|| {
+        EngineError::InvalidArgument("schema is missing a string \"type\" field".to_string())
+    })?;
 
     // Open a dispatch span. We push a Span directly rather than calling
     // `start_span` because `start_span` takes a u64 label, and schema
@@ -90,7 +100,9 @@ pub(crate) fn interpret_schema(
         "email" => internet::interpret_email(ntc),
         "url" => internet::interpret_url(ntc),
 
-        other => panic!("Unknown schema type: {}", other),
+        other => Err(EngineError::InvalidArgument(format!(
+            "unknown schema type: {other:?}"
+        ))),
     };
 
     ntc.span_stack.pop();
@@ -102,7 +114,10 @@ pub(crate) fn interpret_schema(
 
 /// Advance the many state by one element.  Returns true if another
 /// element should be drawn.  Mirrors `Hypothesis`'s `many.more()`.
-pub(crate) fn many_more(ntc: &mut NativeTestCase, state: &mut ManyState) -> Result<bool, StopTest> {
+pub(crate) fn many_more(
+    ntc: &mut NativeTestCase,
+    state: &mut ManyState,
+) -> Result<bool, EngineError> {
     let should_continue = if state.min_size as f64 == state.max_size {
         // Fixed size: draw exactly min_size elements.
         state.count < state.min_size
@@ -126,14 +141,17 @@ pub(crate) fn many_more(ntc: &mut NativeTestCase, state: &mut ManyState) -> Resu
 }
 
 /// Reject the last drawn element.  Mirrors Hypothesis's `many.reject()`.
-pub(crate) fn many_reject(ntc: &mut NativeTestCase, state: &mut ManyState) -> Result<(), StopTest> {
+pub(crate) fn many_reject(
+    ntc: &mut NativeTestCase,
+    state: &mut ManyState,
+) -> Result<(), EngineError> {
     assert!(state.count > 0);
     state.count -= 1;
     state.rejections += 1;
     if state.rejections > std::cmp::max(3, 2 * state.count) {
         if state.count < state.min_size {
             ntc.status = Some(Status::Invalid);
-            return Err(StopTest);
+            return Err(EngineError::StopTest);
         } else {
             state.force_stop = true;
         }
@@ -144,35 +162,44 @@ pub(crate) fn many_reject(ntc: &mut NativeTestCase, state: &mut ManyState) -> Re
 /// Convert a CBOR value to i128, handling bignum tags.
 ///
 /// For positive bignums (tag 2) that exceed i128::MAX (e.g. u128::MAX),
-/// we saturate at i128::MAX so the integer range remains valid.
-pub(super) fn cbor_to_i128(value: &Value) -> i128 {
+/// we saturate at i128::MAX so the integer range remains valid. Returns
+/// [`EngineError::InvalidArgument`] for any value that is not a CBOR
+/// integer (or a malformed bignum tag), since that means the caller's
+/// schema is invalid.
+pub(super) fn cbor_to_i128(value: &Value) -> Result<i128, EngineError> {
     match value {
-        Value::Integer(i) => (*i).into(),
+        Value::Integer(i) => Ok((*i).into()),
         Value::Tag(2, inner) => {
             // CBOR tag 2: positive bignum (big-endian bytes)
             let Value::Bytes(bytes) = inner.as_ref() else {
-                panic!("Expected Bytes inside bignum tag 2, got {:?}", inner)
+                return Err(EngineError::InvalidArgument(format!(
+                    "expected bytes inside bignum tag 2, got {inner:?}"
+                )));
             };
             let mut n = 0u128;
             for b in bytes {
                 n = (n << 8) | (*b as u128);
             }
             // Saturating cast: values above i128::MAX (e.g. u128::MAX) cap at i128::MAX.
-            i128::try_from(n).unwrap_or(i128::MAX)
+            Ok(i128::try_from(n).unwrap_or(i128::MAX))
         }
         Value::Tag(3, inner) => {
             // CBOR tag 3: negative bignum, value is -1 - n
             let Value::Bytes(bytes) = inner.as_ref() else {
-                panic!("Expected Bytes inside bignum tag 3, got {:?}", inner)
+                return Err(EngineError::InvalidArgument(format!(
+                    "expected bytes inside bignum tag 3, got {inner:?}"
+                )));
             };
             let mut n = 0u128;
             for b in bytes {
                 n = (n << 8) | (*b as u128);
             }
             // Safe: -1 - n where n <= i128::MAX is always representable.
-            -1i128 - i128::try_from(n).unwrap_or(i128::MAX)
+            Ok(-1i128 - i128::try_from(n).unwrap_or(i128::MAX))
         }
-        _ => panic!("Expected CBOR integer, got {:?}", value),
+        _ => Err(EngineError::InvalidArgument(format!(
+            "expected a CBOR integer, got {value:?}"
+        ))),
     }
 }
 

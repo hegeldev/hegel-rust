@@ -1,15 +1,22 @@
 // Collection schema interpreters: list, dict, tuple, one_of, sampled_from.
 
 use crate::cbor_utils::{as_bool, as_u64, map_get};
-use crate::native::core::{ManyState, NativeTestCase, StopTest};
+use crate::native::core::{EngineError, ManyState, NativeTestCase};
 use ciborium::Value;
 
-use super::{cbor_to_i128, interpret_schema, many_more, many_reject};
+use super::{cbor_to_i128, interpret_schema, many_more, many_reject, require};
 
-pub(super) fn interpret_tuple(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
-    let elements = match map_get(schema, "elements") {
-        Some(Value::Array(arr)) => arr,
-        _ => panic!("tuple schema must have elements array"),
+pub(super) fn interpret_tuple(
+    ntc: &mut NativeTestCase,
+    schema: &Value,
+) -> Result<Value, EngineError> {
+    let elements = match require(schema, "elements")? {
+        Value::Array(arr) => arr,
+        other => {
+            return Err(EngineError::InvalidArgument(format!(
+                "tuple schema \"elements\" must be an array, got {other:?}"
+            )));
+        }
     };
     let mut results = Vec::with_capacity(elements.len());
     for element_schema in elements {
@@ -21,15 +28,15 @@ pub(super) fn interpret_tuple(ntc: &mut NativeTestCase, schema: &Value) -> Resul
 pub(super) fn interpret_one_of(
     ntc: &mut NativeTestCase,
     schema: &Value,
-) -> Result<Value, StopTest> {
-    let generators = match map_get(schema, "generators") {
-        Some(Value::Array(arr)) => arr,
-        _ => panic!("one_of schema must have generators array"),
+) -> Result<Value, EngineError> {
+    let generators = match require(schema, "generators")? {
+        Value::Array(arr) if !arr.is_empty() => arr,
+        _ => {
+            return Err(EngineError::InvalidArgument(
+                "one_of schema \"generators\" must be a non-empty array".to_string(),
+            ));
+        }
     };
-    assert!(
-        !generators.is_empty(),
-        "one_of schema must have at least one generator"
-    );
     let idx = ntc.draw_integer(0, generators.len() as i128 - 1)?;
     let value = interpret_schema(ntc, &generators[idx as usize])?;
     Ok(Value::Array(vec![
@@ -41,21 +48,24 @@ pub(super) fn interpret_one_of(
 pub(super) fn interpret_sampled_from(
     ntc: &mut NativeTestCase,
     schema: &Value,
-) -> Result<Value, StopTest> {
-    let values = match map_get(schema, "values") {
-        Some(Value::Array(arr)) => arr,
-        _ => panic!("sampled_from schema must have values array"),
+) -> Result<Value, EngineError> {
+    let values = match require(schema, "values")? {
+        Value::Array(arr) if !arr.is_empty() => arr,
+        _ => {
+            return Err(EngineError::InvalidArgument(
+                "sampled_from schema \"values\" must be a non-empty array".to_string(),
+            ));
+        }
     };
-    assert!(
-        !values.is_empty(),
-        "sampled_from schema must have at least one value"
-    );
     let idx = ntc.draw_integer(0, values.len() as i128 - 1)?;
     Ok(encode_schema_value(&values[idx as usize]))
 }
 
-pub(super) fn interpret_list(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
-    let element_schema = map_get(schema, "elements").expect("list schema must have elements");
+pub(super) fn interpret_list(
+    ntc: &mut NativeTestCase,
+    schema: &Value,
+) -> Result<Value, EngineError> {
+    let element_schema = require(schema, "elements")?;
     let min_size = map_get(schema, "min_size").and_then(as_u64).unwrap_or(0) as usize;
     let max_size = map_get(schema, "max_size")
         .and_then(as_u64)
@@ -96,7 +106,7 @@ fn interpret_unique_integer_list(
     max_size: Option<usize>,
     min_val: i128,
     range_size: usize,
-) -> Result<Value, StopTest> {
+) -> Result<Value, EngineError> {
     let effective_max = max_size.map_or(range_size, |m| m.min(range_size));
     let mut state = ManyState::new(min_size, Some(effective_max));
     let mut remaining: Vec<i128> = (min_val..min_val + range_size as i128).collect();
@@ -120,17 +130,23 @@ fn bounded_integer_range(schema: &Value) -> Option<(i128, i128)> {
     if schema_type != "integer" {
         return None;
     }
-    let min_val = cbor_to_i128(map_get(schema, "min_value")?);
-    let max_val = cbor_to_i128(map_get(schema, "max_value")?);
+    // Treat unparseable bounds as "not a bounded range" and fall back to the
+    // generic list path, which surfaces the real `InvalidArgument` when it
+    // interprets the element schema.
+    let min_val = cbor_to_i128(map_get(schema, "min_value")?).ok()?;
+    let max_val = cbor_to_i128(map_get(schema, "max_value")?).ok()?;
     if !(1..=10_000).contains(&(max_val - min_val + 1)) {
         return None;
     }
     Some((min_val, max_val))
 }
 
-pub(super) fn interpret_dict(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
-    let key_schema = map_get(schema, "keys").expect("dict schema must have keys");
-    let val_schema = map_get(schema, "values").expect("dict schema must have values");
+pub(super) fn interpret_dict(
+    ntc: &mut NativeTestCase,
+    schema: &Value,
+) -> Result<Value, EngineError> {
+    let key_schema = require(schema, "keys")?;
+    let val_schema = require(schema, "values")?;
     let min_size = map_get(schema, "min_size").and_then(as_u64).unwrap_or(0) as usize;
     let max_size = map_get(schema, "max_size")
         .and_then(as_u64)

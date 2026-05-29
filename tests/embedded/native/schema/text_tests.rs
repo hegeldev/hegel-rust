@@ -15,7 +15,7 @@ fn schema(builder: fn(&mut Vec<(ciborium::Value, ciborium::Value)>)) -> ciborium
 #[test]
 fn build_intervals_default_excludes_surrogates() {
     let s = schema(|_| {});
-    let iv = build_intervals(&s);
+    let iv = build_intervals(&s).unwrap();
     // 0..=0x10FFFF minus the 2048-codepoint surrogate block.
     assert_eq!(iv.len(), 0x110000 - 2048);
     assert!(!iv.contains(0xD800));
@@ -28,7 +28,7 @@ fn build_intervals_codec_ascii() {
         "type" => "string",
         "codec" => "ascii",
     };
-    let iv = build_intervals(&s);
+    let iv = build_intervals(&s).unwrap();
     assert_eq!(iv.len(), 128);
     assert!(iv.contains(0));
     assert!(iv.contains(127));
@@ -41,17 +41,18 @@ fn build_intervals_codec_latin1() {
         "type" => "string",
         "codec" => "latin-1",
     };
-    assert_eq!(build_intervals(&s).len(), 256);
+    assert_eq!(build_intervals(&s).unwrap().len(), 256);
 }
 
 #[test]
-#[should_panic(expected = "Invalid codec")]
-fn build_intervals_unknown_codec_panics() {
+fn build_intervals_unknown_codec_is_invalid_argument() {
     let s = cbor_map! {
         "type" => "string",
         "codec" => "ebcdic",
     };
-    build_intervals(&s);
+    let err = build_intervals(&s).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("invalid codec"));
 }
 
 #[test]
@@ -61,7 +62,7 @@ fn build_intervals_codepoint_range() {
         "min_codepoint" => b'a' as u64,
         "max_codepoint" => b'z' as u64,
     };
-    let iv = build_intervals(&s);
+    let iv = build_intervals(&s).unwrap();
     assert_eq!(iv.len(), 26);
 }
 
@@ -72,7 +73,7 @@ fn build_intervals_range_straddles_surrogates() {
         "min_codepoint" => 0xD700u64,
         "max_codepoint" => 0xE100u64,
     };
-    let iv = build_intervals(&s);
+    let iv = build_intervals(&s).unwrap();
     // [0xD700..=0xD7FF] ∪ [0xE000..=0xE100] = 0x100 + 0x101 codepoints.
     assert_eq!(iv.len(), 0x100 + 0x101);
 }
@@ -84,7 +85,7 @@ fn build_intervals_range_entirely_in_surrogates_is_empty() {
         "min_codepoint" => 0xD800u64,
         "max_codepoint" => 0xDFFFu64,
     };
-    assert_eq!(build_intervals(&s).len(), 0);
+    assert_eq!(build_intervals(&s).unwrap().len(), 0);
 }
 
 #[test]
@@ -94,7 +95,7 @@ fn build_intervals_categories_subset_intersects_base() {
         "type" => "string",
         "categories" => cbor_array![ciborium::Value::Text("Nd".into())],
     };
-    let iv = build_intervals(&s);
+    let iv = build_intervals(&s).unwrap();
     // BMP has multiple Nd ranges; at minimum '0'..='9' are present.
     assert!(iv.contains(b'0' as u32));
     assert!(iv.contains(b'9' as u32));
@@ -108,7 +109,7 @@ fn build_intervals_exclude_categories_subtracts_from_base() {
         "codec" => "ascii",
         "exclude_categories" => cbor_array![ciborium::Value::Text("Cc".into())],
     };
-    let iv = build_intervals(&s);
+    let iv = build_intervals(&s).unwrap();
     // ASCII (128) minus control characters (33: 0x00..=0x1F + 0x7F).
     assert_eq!(iv.len(), 128 - 33);
     assert!(!iv.contains(0));
@@ -123,7 +124,7 @@ fn build_intervals_exclude_characters_subtracts() {
         "max_codepoint" => b'z' as u64,
         "exclude_characters" => "aeiou",
     };
-    let iv = build_intervals(&s);
+    let iv = build_intervals(&s).unwrap();
     assert_eq!(iv.len(), 21);
     assert!(!iv.contains(b'a' as u32));
     assert!(iv.contains(b'b' as u32));
@@ -136,7 +137,7 @@ fn build_intervals_include_characters_unions_in() {
         "categories" => cbor_array![],
         "include_characters" => "xyz",
     };
-    let iv = build_intervals(&s);
+    let iv = build_intervals(&s).unwrap();
     assert_eq!(iv.len(), 3);
     assert!(iv.contains(b'x' as u32));
 }
@@ -148,29 +149,31 @@ fn build_intervals_include_characters_drops_surrogates() {
         "categories" => cbor_array![],
         "include_characters" => "ab",
     };
-    let iv = build_intervals(&s);
+    let iv = build_intervals(&s).unwrap();
     assert_eq!(iv.len(), 2);
 }
 
 #[test]
-#[should_panic(expected = "InvalidArgument")]
-fn build_intervals_invalid_category_panics() {
+fn build_intervals_invalid_category_is_invalid_argument() {
     let s = cbor_map! {
         "type" => "string",
         "categories" => cbor_array![ciborium::Value::Text("Xx".into())],
     };
-    build_intervals(&s);
+    let err = build_intervals(&s).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("valid Unicode category"));
 }
 
 #[test]
-#[should_panic(expected = "overlap")]
-fn build_intervals_overlap_between_include_and_exclude_panics() {
+fn build_intervals_overlap_between_include_and_exclude_is_invalid_argument() {
     let s = cbor_map! {
         "type" => "string",
         "include_characters" => "abc",
         "exclude_characters" => "bcd",
     };
-    build_intervals(&s);
+    let err = build_intervals(&s).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("overlap"));
 }
 
 #[test]
@@ -180,8 +183,8 @@ fn build_intervals_caches_repeated_schema() {
         "min_codepoint" => b'a' as u64,
         "max_codepoint" => b'z' as u64,
     };
-    let a = build_intervals(&s);
-    let b = build_intervals(&s);
+    let a = build_intervals(&s).unwrap();
+    let b = build_intervals(&s).unwrap();
     assert_eq!(a.len(), b.len());
 }
 
@@ -196,7 +199,7 @@ fn build_intervals_unions_multiple_categories() {
             ciborium::Value::Text("Ll".into()),
         ],
     };
-    let iv = build_intervals(&s);
+    let iv = build_intervals(&s).unwrap();
     // Both 'A' (Lu) and 'a' (Ll) are present.
     assert!(iv.contains(b'A' as u32));
     assert!(iv.contains(b'a' as u32));
@@ -214,7 +217,7 @@ fn build_intervals_category_with_run_into_surrogates() {
         "type" => "string",
         "categories" => cbor_array![ciborium::Value::Text("Lo".into())],
     };
-    let iv = build_intervals(&s);
+    let iv = build_intervals(&s).unwrap();
     assert!(iv.contains(0xD7A3));
     assert!(!iv.contains(0xD800));
 }
@@ -228,7 +231,7 @@ fn build_intervals_category_running_to_bmp_end() {
         "type" => "string",
         "categories" => cbor_array![ciborium::Value::Text("Cn".into())],
     };
-    let iv = build_intervals(&s);
+    let iv = build_intervals(&s).unwrap();
     assert!(iv.contains(0xFFFF));
 }
 
@@ -242,7 +245,7 @@ fn build_intervals_treats_non_array_categories_field_as_absent() {
         "codec" => "ascii",
         "categories" => "not-an-array",
     };
-    let iv = build_intervals(&s);
+    let iv = build_intervals(&s).unwrap();
     // 128 ASCII codepoints (no category filter applied).
     assert_eq!(iv.len(), 128);
 }

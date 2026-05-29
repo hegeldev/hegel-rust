@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::cbor_utils::{as_bool, as_text, map_get};
-use crate::native::core::{ManyState, NativeTestCase, Status, StopTest};
+use crate::native::core::{EngineError, ManyState, NativeTestCase, Status};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::re::constants::{
     AtCode, ChCode, SRE_FLAG_ASCII, SRE_FLAG_DOTALL, SRE_FLAG_IGNORECASE, SRE_FLAG_MULTILINE,
@@ -26,18 +26,26 @@ fn is_surrogate_cp(cp: u32) -> bool {
     (0xD800..=0xDFFF).contains(&cp)
 }
 
-pub(super) fn interpret_regex(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
+pub(super) fn interpret_regex(
+    ntc: &mut NativeTestCase,
+    schema: &Value,
+) -> Result<Value, EngineError> {
     let pattern = map_get(schema, "pattern")
         .and_then(as_text)
-        .expect("regex schema must have pattern");
+        .ok_or_else(|| {
+            EngineError::InvalidArgument(
+                "regex schema is missing a string \"pattern\" field".to_string(),
+            )
+        })?;
     let fullmatch = map_get(schema, "fullmatch")
         .and_then(as_bool)
         .unwrap_or(false);
     let alphabet_schema = map_get(schema, "alphabet");
-    let alphabet = alphabet_schema.map(build_intervals);
+    let alphabet = alphabet_schema.map(build_intervals).transpose()?;
 
-    let parsed = parse_pattern(pattern, 0)
-        .unwrap_or_else(|e| panic!("invalid regex pattern {:?}: {}", pattern, e));
+    let parsed = parse_pattern(pattern, 0).map_err(|e| {
+        EngineError::InvalidArgument(format!("invalid regex pattern {pattern:?}: {e}"))
+    })?;
 
     let mut state = GenState {
         groups: HashMap::new(),
@@ -128,7 +136,7 @@ fn draw_pad(
     ntc: &mut NativeTestCase,
     alphabet: &Option<IntervalSet>,
     out: &mut String,
-) -> Result<(), StopTest> {
+) -> Result<(), EngineError> {
     let n = ntc.draw_integer(0, 10)?;
     for _ in 0..n {
         let c = draw_any_char(ntc, alphabet)?;
@@ -165,7 +173,7 @@ fn draw_prefix(
     parsed: &ParsedPattern,
     alphabet: &Option<IntervalSet>,
     out: &mut String,
-) -> Result<(), StopTest> {
+) -> Result<(), EngineError> {
     // Mirror of hypothesis.regex_strategy's left-pad logic.
     if let Some(OpCode::At(at)) = effective_first(&parsed.pattern) {
         match at {
@@ -190,7 +198,7 @@ fn draw_suffix(
     parsed: &ParsedPattern,
     alphabet: &Option<IntervalSet>,
     out: &mut String,
-) -> Result<(), StopTest> {
+) -> Result<(), EngineError> {
     // Mirror of hypothesis.regex_strategy's right-pad logic.
     if let Some(OpCode::At(at)) = effective_last(&parsed.pattern) {
         match at {
@@ -219,7 +227,7 @@ fn generate_subpattern(
     state: &mut GenState,
     alphabet: &Option<IntervalSet>,
     out: &mut String,
-) -> Result<(), StopTest> {
+) -> Result<(), EngineError> {
     for op in &sp.data {
         generate_op(ntc, op, state, alphabet, out)?;
     }
@@ -231,7 +239,7 @@ fn generate_op(
     state: &mut GenState,
     alphabet: &Option<IntervalSet>,
     out: &mut String,
-) -> Result<(), StopTest> {
+) -> Result<(), EngineError> {
     match op {
         OpCode::Literal(cp) => {
             let c = codepoint_to_char(*cp);
@@ -636,7 +644,7 @@ fn alphabet_allows(alphabet: &Option<IntervalSet>, c: char) -> bool {
 fn draw_any_char(
     ntc: &mut NativeTestCase,
     alphabet: &Option<IntervalSet>,
-) -> Result<char, StopTest> {
+) -> Result<char, EngineError> {
     match alphabet {
         None => {
             let cp = ntc.draw_integer(32, 126)?;
@@ -660,7 +668,7 @@ fn emit_from_chars(
     ntc: &mut NativeTestCase,
     chars: &[char],
     out: &mut String,
-) -> Result<(), StopTest> {
+) -> Result<(), EngineError> {
     if chars.is_empty() {
         mark_invalid(ntc)?;
     }
@@ -682,9 +690,9 @@ fn emit_from_chars(
     Ok(())
 }
 
-fn mark_invalid(ntc: &mut NativeTestCase) -> Result<(), StopTest> {
+fn mark_invalid(ntc: &mut NativeTestCase) -> Result<(), EngineError> {
     ntc.status = Some(Status::Invalid);
-    Err(StopTest)
+    Err(EngineError::StopTest)
 }
 
 fn codepoint_to_char(cp: u32) -> char {

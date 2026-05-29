@@ -1169,8 +1169,31 @@ pub enum Status {
     Interesting = 3,
 }
 
-/// Raised when a test case should stop executing.
-pub struct StopTest;
+/// Error raised while interpreting a schema / drawing from the engine.
+///
+/// `StopTest` is the overwhelmingly common case: normal data-exhaustion
+/// control flow that ends the current test case. `InvalidArgument` carries a
+/// caller-supplied-schema diagnostic that must surface as an error
+/// (libhegel: `HEGEL_E_INVALID_ARG`) or a panic (main library), but never an
+/// uncaught panic that crosses the FFI boundary and aborts the host process.
+#[derive(Debug)]
+pub enum EngineError {
+    /// The test case ran out of data and should stop executing.
+    StopTest,
+    /// A caller-supplied schema was semantically invalid (unknown type,
+    /// empty character set, unparseable regex, etc.). The string is a
+    /// human-readable diagnostic.
+    InvalidArgument(String),
+}
+
+impl std::fmt::Display for EngineError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EngineError::StopTest => write!(f, "test case should stop executing (StopTest)"),
+            EngineError::InvalidArgument(msg) => write!(f, "{msg}"),
+        }
+    }
+}
 
 /// Opaque key identifying one source of "interesting" outcomes
 /// (one bug). Matches the cross-backend protocol contract: it's

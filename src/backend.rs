@@ -3,6 +3,7 @@ use ciborium::Value;
 
 /// Error returned by [`DataSource`] methods when an operation cannot complete.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum DataSourceError {
     /// The backend ran out of data for this test case.
     StopTest,
@@ -11,6 +12,11 @@ pub enum DataSourceError {
     Assume,
     /// The backend returned an error (e.g. invalid arguments, internal error).
     ServerError(String),
+    /// A caller-supplied argument (typically a schema) was semantically
+    /// invalid. The main library converts this to a panic at the API surface;
+    /// libhegel maps it to `HEGEL_E_INVALID_ARG` with the message exposed via
+    /// `hegel_last_error_message`. Carries a human-readable diagnostic.
+    InvalidArgument(String),
 }
 
 impl std::fmt::Display for DataSourceError {
@@ -21,6 +27,7 @@ impl std::fmt::Display for DataSourceError {
             }
             DataSourceError::Assume => write!(f, "Backend rejected the current draw (Assume)"),
             DataSourceError::ServerError(msg) => write!(f, "{}", msg),
+            DataSourceError::InvalidArgument(msg) => write!(f, "{}", msg),
         }
     }
 }

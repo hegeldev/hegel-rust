@@ -1,13 +1,13 @@
 // Bytes schema interpreter.
 
 use crate::cbor_utils::{as_u64, map_get};
-use crate::native::core::{NativeTestCase, StopTest};
+use crate::native::core::{EngineError, NativeTestCase};
 use ciborium::Value;
 
 pub(super) fn interpret_binary(
     ntc: &mut NativeTestCase,
     schema: &Value,
-) -> Result<Value, StopTest> {
+) -> Result<Value, EngineError> {
     let min_size = map_get(schema, "min_size").and_then(as_u64).unwrap_or(0) as usize;
     // Unbounded `max_size` falls back to a generous ceiling — Hypothesis's
     // server backend also truncates generation at some finite cap, and

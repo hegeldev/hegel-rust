@@ -876,6 +876,19 @@ fn translate_ds_error(e: DataSourceError) -> c_int {
             set_last_error(&msg);
             HEGEL_E_BACKEND
         }
+        // A caller-supplied schema was semantically invalid (e.g. an unknown
+        // type string). Surface it as HEGEL_E_INVALID_ARG with the diagnostic
+        // in hegel_last_error_message — never a panic across the FFI boundary.
+        DataSourceError::InvalidArgument(msg) => {
+            set_last_error(&msg);
+            HEGEL_E_INVALID_ARG
+        }
+        // `DataSourceError` is `#[non_exhaustive]`; treat any future variant as
+        // a backend error rather than failing to compile or panicking.
+        other => {
+            set_last_error(&other.to_string());
+            HEGEL_E_BACKEND
+        }
     }
 }
 

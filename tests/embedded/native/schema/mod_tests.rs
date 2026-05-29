@@ -13,11 +13,21 @@ fn fresh_ntc() -> NativeTestCase {
 }
 
 #[test]
-#[should_panic(expected = "Unknown schema type: mystery")]
-fn interpret_schema_unknown_type_panics() {
+fn interpret_schema_unknown_type_is_invalid_argument() {
     let mut ntc = fresh_ntc();
     let schema = cbor_map! { "type" => "mystery" };
-    let _ = interpret_schema(&mut ntc, &schema);
+    let err = interpret_schema(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("unknown schema type"));
+}
+
+#[test]
+fn interpret_schema_missing_type_is_invalid_argument() {
+    let mut ntc = fresh_ntc();
+    let schema = cbor_map! { "min_value" => 0 };
+    let err = interpret_schema(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("\"type\""));
 }
 
 // ── Every schema dispatch records an enclosing span ─────────────────────────
@@ -192,23 +202,26 @@ fn many_reject_marks_invalid_when_cannot_reach_min_size() {
 // ── cbor_to_i128 panic branches ─────────────────────────────────────────────
 
 #[test]
-#[should_panic(expected = "Expected Bytes inside bignum tag 2")]
-fn cbor_to_i128_tag2_non_bytes_panics() {
+fn cbor_to_i128_tag2_non_bytes_is_invalid_argument() {
     let bad = Value::Tag(2, Box::new(Value::Integer(1.into())));
-    let _ = cbor_to_i128(&bad);
+    let err = cbor_to_i128(&bad).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("bignum tag 2"));
 }
 
 #[test]
-#[should_panic(expected = "Expected Bytes inside bignum tag 3")]
-fn cbor_to_i128_tag3_non_bytes_panics() {
+fn cbor_to_i128_tag3_non_bytes_is_invalid_argument() {
     let bad = Value::Tag(3, Box::new(Value::Integer(1.into())));
-    let _ = cbor_to_i128(&bad);
+    let err = cbor_to_i128(&bad).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("bignum tag 3"));
 }
 
 #[test]
-#[should_panic(expected = "Expected CBOR integer")]
-fn cbor_to_i128_non_integer_panics() {
-    let _ = cbor_to_i128(&Value::Bool(true));
+fn cbor_to_i128_non_integer_is_invalid_argument() {
+    let err = cbor_to_i128(&Value::Bool(true)).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("CBOR integer"));
 }
 
 // ── bignum_overflows_i128 branches ──────────────────────────────────────────

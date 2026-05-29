@@ -1,23 +1,29 @@
 // Float schema interpreter.
 
 use crate::cbor_utils::{as_bool, as_u64, map_get};
-use crate::native::core::{NativeTestCase, StopTest};
+use crate::native::core::{EngineError, NativeTestCase};
 use ciborium::Value;
 
-pub(super) fn interpret_float(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
+pub(super) fn interpret_float(
+    ntc: &mut NativeTestCase,
+    schema: &Value,
+) -> Result<Value, EngineError> {
     let width: u64 = map_get(schema, "width").and_then(as_u64).unwrap_or(64);
     // `width=64` is backed by `f64` and `width=32` by `f64` rounded to
-    // `f32` precision (no `f16` Rust type yet). The schema is constructed
-    // by Rust generators, so any other value is a Rust-side bug — fail
-    // loud at the boundary rather than silently treating it as f64.
+    // `f32` precision (no `f16` Rust type yet). Any other value means the
+    // caller's schema is invalid.
     if width != 32 && width != 64 {
-        panic!("unsupported float width: {width} — Hegel supports widths 32 and 64");
+        return Err(EngineError::InvalidArgument(format!(
+            "unsupported float width: {width} — Hegel supports widths 32 and 64"
+        )));
     }
     let min_value = map_get(schema, "min_value")
         .map(cbor_to_f64)
+        .transpose()?
         .unwrap_or(f64::NEG_INFINITY);
     let max_value = map_get(schema, "max_value")
         .map(cbor_to_f64)
+        .transpose()?
         .unwrap_or(f64::INFINITY);
     let allow_nan = map_get(schema, "allow_nan")
         .and_then(as_bool)
@@ -82,12 +88,17 @@ pub(super) fn interpret_float(ntc: &mut NativeTestCase, schema: &Value) -> Resul
     Ok(Value::Float(v))
 }
 
-/// Extract an f64 from a CBOR value (Float or Integer).
-fn cbor_to_f64(value: &Value) -> f64 {
+/// Extract an f64 from a CBOR value (Float or Integer). Returns
+/// [`EngineError::InvalidArgument`] for any other value, since a float
+/// bound that is neither a float nor an integer means the caller's schema
+/// is invalid.
+fn cbor_to_f64(value: &Value) -> Result<f64, EngineError> {
     match value {
-        Value::Float(f) => *f,
-        Value::Integer(i) => i128::from(*i) as f64,
-        _ => panic!("Expected CBOR float/integer, got {:?}", value),
+        Value::Float(f) => Ok(*f),
+        Value::Integer(i) => Ok(i128::from(*i) as f64),
+        _ => Err(EngineError::InvalidArgument(format!(
+            "expected a CBOR float or integer, got {value:?}"
+        ))),
     }
 }
 

@@ -326,27 +326,29 @@ fn run_main(
                         .suppress_health_check
                         .contains(&HealthCheck::FilterTooMuch)
                 {
-                    panic!(
+                    return health_check_failure(format!(
                         "FailedHealthCheck: FilterTooMuch — it looks like this \
                          test is filtering out too many inputs. \
                          {invalid_calls} inputs were filtered out by assume() \
                          before any valid input was generated. \
                          If this is expected, suppress the check with \
                          suppress_health_check = [HealthCheck::FilterTooMuch]."
-                    );
+                    ));
                 }
             } else {
                 invalid_calls = 0;
             }
 
-            too_slow_check(
+            if let Some(msg) = too_slow_check(
                 valid_test_cases,
                 total_test_time,
                 TOO_SLOW_THRESHOLD,
                 settings
                     .suppress_health_check
                     .contains(&HealthCheck::TooSlow),
-            );
+            ) {
+                return health_check_failure(msg);
+            }
 
             // Fire `optimise_targets` periodically once enough valid
             // examples have accumulated. Counts share the generation
@@ -421,13 +423,13 @@ fn run_main(
             .contains(&HealthCheck::FilterTooMuch)
         && invalid_calls > 0
     {
-        panic!(
+        return health_check_failure(format!(
             "FailedHealthCheck: FilterTooMuch — every reachable input was \
              filtered out by assume() before any valid input was generated. \
              {invalid_calls} inputs were filtered out across the full search \
              space. If this is expected, suppress the check with \
              suppress_health_check = [HealthCheck::FilterTooMuch]."
-        );
+        ));
     }
 
     // --- Shrinking phase ---
@@ -450,13 +452,7 @@ fn run_main(
             let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
             let verify = ctx.run(verify_ntc);
             if verify.status != Status::Interesting {
-                panic!(
-                    "Flaky test detected: Your test produced different outcomes \
-                     when run with the same generated data — it failed when it \
-                     previously succeeded, or succeeded when it previously failed. \
-                     This usually means your test depends on external state such as \
-                     global variables, system time, or external random number generators."
-                );
+                return health_check_failure(flaky_diagnostic());
             }
 
             let target_origin = origin.clone();
@@ -596,10 +592,9 @@ fn run_main(
             // which requires the test body to flip its outcome strictly
             // between the last shrink call and the final replay.
             // Deterministic reproduction needs precise call-count
-            // alignment that's brittle in CI; the function itself is
-            // tested directly via
-            // `flaky_final_replay_panic_panics_with_diagnostic`.
-            _ => flaky_final_replay_panic(), // nocov
+            // alignment that's brittle in CI; the message builder itself is
+            // tested directly via `flaky_diagnostic_mentions_flaky`.
+            _ => return health_check_failure(flaky_diagnostic()), // nocov
         }
     }
 
@@ -623,42 +618,65 @@ fn run_main(
 const MIN_TEST_CALLS: u64 = 10;
 const POST_BUG_EXTRA_CALLS: u64 = 1000;
 
-/// Panics with the `FailedHealthCheck: TooSlow` message when input
-/// generation has consumed more than `threshold` of wall-clock time
-/// without producing `HEALTH_CHECK_MAX_VALID` valid examples, unless
-/// the user has explicitly suppressed the check.
+/// Returns the `FailedHealthCheck: TooSlow` message when input generation
+/// has consumed more than `threshold` of wall-clock time without producing
+/// `HEALTH_CHECK_MAX_VALID` valid examples, unless the user has explicitly
+/// suppressed the check; otherwise returns `None`.
 ///
-/// Extracted from the runner's main loop so a unit test can exercise
-/// both the panicking and the suppressed branches without needing to
-/// stall the in-process test harness for `TOO_SLOW_THRESHOLD` of
-/// real time.
+/// Returning the message (rather than panicking) lets the caller fold it
+/// into a failing [`TestRunResult`] so no panic crosses the FFI boundary
+/// (see [`health_check_failure`]). Extracted from the runner's main loop so
+/// a unit test can exercise both branches without stalling the in-process
+/// harness for `TOO_SLOW_THRESHOLD` of real time.
 pub(crate) fn too_slow_check(
     valid_test_cases: u64,
     total_test_time: std::time::Duration,
     threshold: std::time::Duration,
     suppressed: bool,
-) {
+) -> Option<String> {
     if valid_test_cases < HEALTH_CHECK_MAX_VALID && total_test_time > threshold && !suppressed {
-        panic!(
+        Some(format!(
             "FailedHealthCheck: TooSlow — input generation is slow: \
              only {valid_test_cases} valid inputs after {:?} (threshold \
              {:?}). Slow generation makes property testing much less \
              effective. If this is expected, suppress the check with \
              suppress_health_check = [HealthCheck::TooSlow].",
             total_test_time, threshold
-        );
+        ))
+    } else {
+        None
     }
 }
 
-#[cold]
-pub(crate) fn flaky_final_replay_panic() -> ! {
-    panic!(
-        "Flaky test detected: Your test produced different outcomes \
-         when run with the same generated data — it failed when it \
-         previously succeeded, or succeeded when it previously failed. \
-         This usually means your test depends on external state such as \
-         global variables, system time, or external random number generators."
-    );
+/// Diagnostic for a flaky test — one whose outcome changed when re-run with
+/// the same generated data. Returned as a message (rather than panicked) so
+/// the caller can fold it into a failing [`TestRunResult`].
+pub(crate) fn flaky_diagnostic() -> String {
+    "Flaky test detected: Your test produced different outcomes \
+     when run with the same generated data — it failed when it \
+     previously succeeded, or succeeded when it previously failed. \
+     This usually means your test depends on external state such as \
+     global variables, system time, or external random number generators."
+        .to_string()
+}
+
+/// Build a failing [`TestRunResult`] from a health-check diagnostic.
+///
+/// Health-check failures (FilterTooMuch / TooSlow / flaky) are reported as a
+/// normal failing run rather than via `panic!`, so that an in-process engine
+/// driven over FFI (libhegel) surfaces them as a result the caller can
+/// inspect instead of an uncaught panic that aborts the host process. The
+/// main library still turns this into a panic at its API surface, preserving
+/// its existing behaviour.
+fn health_check_failure(message: String) -> TestRunResult {
+    TestRunResult {
+        passed: false,
+        failures: vec![Failure {
+            panic_message: message.clone(),
+            diagnostic: format!("{message}\n"),
+            origin: "FailedHealthCheck".to_string(),
+        }],
+    }
 }
 
 fn should_generate_more(
