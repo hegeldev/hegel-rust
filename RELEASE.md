@@ -1,6 +1,6 @@
-RELEASE_TYPE: minor
+RELEASE_TYPE: patch
 
-This release adds variable-pool support to the libhegel C bindings, closing the
+This patch adds variable-pool support to the libhegel C bindings, closing the
 last feature-parity gap between the native C API and the in-process Rust engine.
 
 Variable pools are the primitive behind stateful testing (`stateful::Variables`
@@ -23,10 +23,8 @@ A caller keeps its own map from variable id to the value it generated, exactly
 as `Variables<T>` holds a `HashMap`. `hegel_pool_generate` returns
 `HEGEL_E_STOP_TEST` when the pool has no active variables.
 
-As part of this, the pool methods on the public `backend::DataSource` trait
-(`new_pool`, `pool_add`, `pool_generate`) now use `i64` for pool and variable
-ids instead of `i128`. The previous `i128` was an artifact of the infallible
-CBOR-integer conversion and was never needed — pool ids are small counters, and
-this matches the `i64` already used for collection ids. Code that implements or
-calls `DataSource` directly with these methods will need to update its id types;
-the user-facing `stateful::Variables` API is unchanged.
+As part of this, the pool methods on the internal `DataSource` trait now use
+`i64` for pool and variable ids instead of `i128`. The previous `i128` was an
+artifact of the infallible CBOR-integer conversion and was never needed — pool
+ids are small counters, and this matches the `i64` already used for collection
+ids. The user-facing `stateful::Variables` API is unchanged.
