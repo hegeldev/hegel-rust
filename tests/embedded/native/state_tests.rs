@@ -1114,3 +1114,23 @@ fn integer_sample_from_distribution_uniform_fallback_for_indistinguishable_bound
         "uniform fallback should produce values across the range"
     );
 }
+
+/// A `BigInt` choice with `min == max` beyond i128 collapses to that single
+/// value (the `biguint_sample_in_range` early return).
+#[test]
+fn biased_integer_sample_erased_bigint_single_value() {
+    use crate::native::bignum::BigInt;
+    let fixed = BigInt::from(i128::MAX) * BigInt::from(1_000_000);
+    let kind = AnyIntegerChoice::Big(IntegerChoice {
+        min_value: fixed.clone(),
+        max_value: fixed.clone(),
+        shrink_towards: BigInt::from(0),
+    });
+    let mut rng = SmallRng::seed_from_u64(23);
+    for _ in 0..20 {
+        assert_eq!(
+            biased_integer_sample(&kind, &mut rng),
+            AnyInteger::Big(fixed.clone())
+        );
+    }
+}

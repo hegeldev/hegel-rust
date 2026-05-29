@@ -725,3 +725,173 @@ fn engine_error_display_covers_both_variants() {
         "nope"
     );
 }
+
+// ── Parametric coverage across every Integer width ──────────────────────────
+//
+// Exercises the generic `IntegerChoice<T>` methods (and thus each of the 11
+// `Integer` trait impls) plus the erased `AnyIntegerChoice` dispatch for every
+// parametrisation: native widths reuse the u128 algorithm, `BigInt` uses
+// `BigUint`.
+
+use crate::native::core::integer::Integer;
+
+fn check_width<T: Integer>(min: T, max: T, values: &[T]) {
+    let ic = IntegerChoice {
+        min_value: min.clone(),
+        max_value: max.clone(),
+        shrink_towards: T::zero(),
+    };
+    let max_index = ic.max_index();
+    // simplest / unit are always valid draws.
+    assert!(ic.validate(&ic.simplest()));
+    assert!(ic.validate(&ic.unit()));
+    for v in values {
+        assert!(ic.validate(v), "value should validate");
+        let idx = ic.to_index(v);
+        assert!(idx <= max_index, "index within max_index");
+        assert_eq!(
+            ic.from_index(idx).as_ref(),
+            Some(v),
+            "to/from_index round-trip"
+        );
+        // sort_key is total and finite.
+        let _ = ic.sort_key(v);
+    }
+
+    // Erased dispatch: every forwarding method, for this variant.
+    let any = T::wrap_choice(ic.clone());
+    assert_eq!(any.simplest(), ic.simplest().wrap_value());
+    assert_eq!(any.unit(), ic.unit().wrap_value());
+    assert_eq!(any.max_index(), max_index);
+    assert!(any.max_children() > max_index);
+    assert_eq!(any.min_bigint(), min.to_bigint());
+    assert_eq!(any.max_bigint(), max.to_bigint());
+    assert_eq!(any.simplest_bigint(), ic.simplest().to_bigint());
+    let _ = any.clamped_shrink_towards_bigint();
+    for v in values {
+        let v_any = v.clone().wrap_value();
+        assert!(any.validate(&v_any));
+        let idx = any.to_index(&v_any);
+        assert_eq!(any.from_index(idx), Some(v_any.clone()));
+        let _ = any.sort_key(&v_any);
+        assert_eq!(any.value_from_bigint(&v.to_bigint()), Some(v_any.clone()));
+        assert_eq!(v_any.to_bigint(), v.to_bigint());
+    }
+}
+
+#[test]
+fn integer_choice_all_native_signed_widths() {
+    check_width::<i8>(i8::MIN, i8::MAX, &[i8::MIN, -1, 0, 1, i8::MAX]);
+    check_width::<i16>(i16::MIN, i16::MAX, &[i16::MIN, -1, 0, 1, i16::MAX]);
+    check_width::<i32>(i32::MIN, i32::MAX, &[i32::MIN, -1, 0, 1, i32::MAX]);
+    check_width::<i64>(i64::MIN, i64::MAX, &[i64::MIN, -1, 0, 1, i64::MAX]);
+    check_width::<i128>(i128::MIN, i128::MAX, &[i128::MIN, -1, 0, 1, i128::MAX]);
+}
+
+#[test]
+fn integer_choice_all_native_unsigned_widths() {
+    check_width::<u8>(0, u8::MAX, &[0, 1, 127, u8::MAX]);
+    check_width::<u16>(0, u16::MAX, &[0, 1, u16::MAX]);
+    check_width::<u32>(0, u32::MAX, &[0, 1, u32::MAX]);
+    check_width::<u64>(0, u64::MAX, &[0, 1, u64::MAX]);
+    check_width::<u128>(0, u128::MAX, &[0, 1, u128::MAX]);
+}
+
+#[test]
+fn integer_choice_bigint_width() {
+    use crate::native::bignum::BigInt;
+    let min = BigInt::from(i128::MIN) * BigInt::from(1000);
+    let max = BigInt::from(i128::MAX) * BigInt::from(1000);
+    let values = [
+        min.clone(),
+        BigInt::from(-1),
+        BigInt::from(0),
+        BigInt::from(1),
+        BigInt::from(i128::MAX),
+        max.clone(),
+    ];
+    check_width::<BigInt>(min, max, &values);
+    // A single-value BigInt range: `unit()` must fall through `checked_succ`
+    // (out of range) to `checked_pred` (also out of range) back to simplest.
+    check_width::<BigInt>(BigInt::from(5), BigInt::from(5), &[BigInt::from(5)]);
+}
+
+#[test]
+fn bigint_unwrap_value_matches_only_big_variant() {
+    use crate::native::bignum::BigInt;
+    assert_eq!(
+        <BigInt as Integer>::unwrap_value(&AnyInteger::Big(BigInt::from(9))),
+        Some(BigInt::from(9))
+    );
+    // A non-Big (cross-width) value does not unwrap as BigInt.
+    assert_eq!(<BigInt as Integer>::unwrap_value(&AnyInteger::I8(3)), None);
+}
+
+// ── IntMagnitude ordering / normalisation ──────────────────────────────────
+
+#[test]
+fn int_magnitude_orders_and_normalises() {
+    use crate::native::bignum::BigUint;
+    // Small < Small numerically.
+    assert!(IntMagnitude::Small(1) < IntMagnitude::Small(2));
+    // from_biguint normalises a <= u128::MAX value down to Small.
+    assert_eq!(
+        IntMagnitude::from_biguint(BigUint::from(5u32)),
+        IntMagnitude::Small(5)
+    );
+    assert_eq!(
+        IntMagnitude::from_biguint(BigUint::from(u128::MAX)),
+        IntMagnitude::Small(u128::MAX)
+    );
+    // Above u128::MAX stays Big and sorts after every Small.
+    let big = IntMagnitude::from_biguint(BigUint::from(u128::MAX) + BigUint::from(1u32));
+    assert!(matches!(big, IntMagnitude::Big(_)));
+    assert!(IntMagnitude::Small(u128::MAX) < big);
+    // Big < Big numerically, and Big sorts strictly after Small (Greater arm).
+    let big2 = IntMagnitude::from_biguint(BigUint::from(u128::MAX) + BigUint::from(2u32));
+    assert!(big < big2);
+    assert!(big > IntMagnitude::Small(0));
+}
+
+// ── NodeSortKey::BigScalar ordering (BigInt distances beyond u128) ──────────
+
+fn big_integer_node(distance_beyond_u128: u32) -> ChoiceNode {
+    use crate::native::bignum::BigInt;
+    let huge = BigInt::from(u128::MAX) * BigInt::from(4) + BigInt::from(distance_beyond_u128);
+    let kind = IntegerChoice {
+        min_value: BigInt::from(0),
+        max_value: huge.clone(),
+        shrink_towards: BigInt::from(0),
+    };
+    ChoiceNode {
+        kind: ChoiceKind::Integer(BigInt::wrap_choice(kind)),
+        value: ChoiceValue::Integer(AnyInteger::Big(huge)),
+        was_forced: false,
+    }
+}
+
+#[test]
+fn node_sort_key_bigscalar_orders_after_scalar_and_before_sequence() {
+    use crate::native::core::sort_key;
+    // A native integer node (Scalar) sorts before a BigInt node whose distance
+    // exceeds u128 (BigScalar).
+    let scalar = vec![integer_node(0, 100, 50)];
+    let big = vec![big_integer_node(0)];
+    assert!(sort_key(&scalar) < sort_key(&big));
+    // Two BigScalars order by magnitude.
+    let big_small = vec![big_integer_node(0)];
+    let big_large = vec![big_integer_node(7)];
+    assert!(sort_key(&big_small) < sort_key(&big_large));
+    // BigScalar (scalar category) sorts before any bytes sequence.
+    let bytes = vec![ChoiceNode {
+        kind: ChoiceKind::Bytes(BytesChoice {
+            min_size: 0,
+            max_size: 4,
+        }),
+        value: ChoiceValue::Bytes(vec![1, 2, 3]),
+        was_forced: false,
+    }];
+    assert!(sort_key(&big) < sort_key(&bytes));
+    // The owned NodeSortKey matches the borrowed comparison.
+    assert!(big_small[0].sort_key() < big_large[0].sort_key());
+}

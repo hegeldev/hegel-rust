@@ -188,12 +188,6 @@ impl From<IntegerChoice<i128>> for AnyIntegerChoice {
     }
 }
 
-impl From<i128> for AnyInteger {
-    fn from(value: i128) -> Self {
-        AnyInteger::I128(value)
-    }
-}
-
 /// Type-erased [`IntegerChoice`] stored in a choice node: one case per
 /// parametrisation of the generic type. A single inner enum keeps
 /// [`ChoiceKind`] to one `Integer` variant.

@@ -130,11 +130,6 @@ pub trait Integer: Clone + Eq + Ord + std::fmt::Debug + Send + Sync + 'static {
     /// Convert from a [`BigInt`], or `None` if it falls outside this type.
     fn from_bigint(v: &BigInt) -> Option<Self>;
 
-    /// This type's minimum/maximum as a [`BigInt`], or `None` if unbounded
-    /// (only [`BigInt`] itself). Used by the schema width selector.
-    fn min_bound() -> Option<BigInt>;
-    fn max_bound() -> Option<BigInt>;
-
     /// Type-erasure glue: wrap a typed choice / value into the homogeneous
     /// [`AnyIntegerChoice`] / [`AnyInteger`] stored in choice nodes, and the
     /// inverse downcast.
@@ -186,14 +181,6 @@ macro_rules! impl_integer_native {
 
             fn from_bigint(v: &BigInt) -> Option<Self> {
                 v.$to_prim()
-            }
-
-            fn min_bound() -> Option<BigInt> {
-                Some(BigInt::from(<$t>::MIN))
-            }
-
-            fn max_bound() -> Option<BigInt> {
-                Some(BigInt::from(<$t>::MAX))
             }
 
             fn wrap_choice(choice: IntegerChoice<Self>) -> AnyIntegerChoice {
@@ -259,14 +246,6 @@ impl Integer for BigInt {
 
     fn from_bigint(v: &BigInt) -> Option<Self> {
         Some(v.clone())
-    }
-
-    fn min_bound() -> Option<BigInt> {
-        None
-    }
-
-    fn max_bound() -> Option<BigInt> {
-        None
     }
 
     fn wrap_choice(choice: IntegerChoice<Self>) -> AnyIntegerChoice {

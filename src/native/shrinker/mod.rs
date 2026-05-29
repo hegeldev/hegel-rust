@@ -372,14 +372,14 @@ impl<'a> Shrinker<'a> {
             // Integer values must be expressed in the target node's width — a
             // pass may move a value between integer nodes of different widths
             // (e.g. `sort_values`). Coerce to the node's width so the stored
-            // node stays width-consistent; an out-of-width value is rejected.
+            // node stays width-consistent. The `validate` check above already
+            // guarantees the value lies in `[min, max] ⊆ width`, so the
+            // conversion cannot fail.
             let coerced = match (&attempt[i].kind, v) {
-                (ChoiceKind::Integer(ic), ChoiceValue::Integer(av)) => {
-                    match ic.value_from_bigint(&av.to_bigint()) {
-                        Some(c) => ChoiceValue::Integer(c),
-                        None => return false,
-                    }
-                }
+                (ChoiceKind::Integer(ic), ChoiceValue::Integer(av)) => ChoiceValue::Integer(
+                    ic.value_from_bigint(&av.to_bigint())
+                        .unwrap_or_else(|| unreachable!("validated integer fits the node's width")),
+                ),
                 _ => v.clone(),
             };
             attempt[i] = attempt[i].with_value(coerced);

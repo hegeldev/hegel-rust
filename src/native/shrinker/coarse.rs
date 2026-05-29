@@ -8,7 +8,7 @@
 //! separate one-shot phase.
 
 use crate::native::bignum::BigInt;
-use crate::native::core::{ChoiceKind, ChoiceValue};
+use crate::native::core::{AnyInteger, ChoiceKind, ChoiceValue};
 
 use super::{ShrinkRun, Shrinker};
 
@@ -85,16 +85,14 @@ impl<'a> Shrinker<'a> {
             return true;
         }
         // Couldn't lower directly; re-randomise the suffix via `probe`.
-        // Use the lowered prefix as the probe's prefix and let the
-        // engine pick a random continuation.
-        let Some(lowered_value) = self.int_replacement(i, v) else {
-            return false;
-        };
+        // Use the lowered prefix as the probe's prefix and let the engine pick
+        // a random continuation. The prefix is replayed (and width-coerced) by
+        // `for_choices`, so a `BigInt`-wrapped value is fine here.
         let mut prefix: Vec<ChoiceValue> = self.current_nodes[..i]
             .iter()
             .map(|n| n.value.clone())
             .collect();
-        prefix.push(lowered_value);
+        prefix.push(ChoiceValue::Integer(AnyInteger::Big(v.clone())));
         let max_size = self.current_nodes.len() + 16;
         let epoch = self.improvements;
         for seed in 0..3u64 {

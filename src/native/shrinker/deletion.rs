@@ -87,12 +87,11 @@ impl<'a> Shrinker<'a> {
             let expected_len = self.current_nodes.len();
 
             // Binary-search smaller integer values; for each candidate, try
-            // replace-with-deletion.
-            let changed = bin_search_down_big(simplest, current_val, &mut |v| match self
-                .int_replacement(i, v)
-            {
-                Some(value) => self.try_replace_with_deletion(i, value, expected_len),
-                None => false,
+            // replace-with-deletion. `try_replace_with_deletion` only deletes
+            // nodes *after* `i`, so `i` stays in range across probes.
+            let changed = bin_search_down_big(simplest, current_val, &mut |v| {
+                let value = self.int_replacement(i, v);
+                self.try_replace_with_deletion(i, value, expected_len)
             });
             let _ = changed;
 
@@ -211,10 +210,9 @@ impl<'a> Shrinker<'a> {
             } else {
                 &current_val + BigInt::from(1)
             };
-            let Some(towards_value) = self.int_replacement(i, &towards) else {
-                i += 1;
-                continue;
-            };
+            // `towards` is `current_val ± 1` toward `simplest`, so it stays
+            // within `[min, max] ⊆ width` and `i` is in range.
+            let towards_value = self.int_replacement(i, &towards);
             let mut lowered = self.current_nodes.clone();
             lowered[i] = lowered[i].with_value(towards_value);
 

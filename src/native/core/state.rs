@@ -341,7 +341,10 @@ fn biguint_sample_in_range(min: &BigInt, max: &BigInt, rng: &mut SmallRng) -> Bi
     nasty.sort();
     nasty.dedup();
 
-    let threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
+    // Cap at 0.5 so the uniform branch always keeps meaningful probability —
+    // a wide span's nasty pool can otherwise be large enough that
+    // `count * BOUNDARY_PROBABILITY` exceeds 1 and the uniform draw never runs.
+    let threshold = (nasty.len() as f64 * BOUNDARY_PROBABILITY).min(0.5);
     if rng.random::<f64>() < threshold {
         let idx = rng.random_range(0..nasty.len());
         return nasty[idx].clone();
@@ -353,11 +356,13 @@ fn biguint_sample_in_range(min: &BigInt, max: &BigInt, rng: &mut SmallRng) -> Bi
 /// Uniformly draw a [`BigUint`] in `[0, span]` by rejection sampling masked
 /// `span.bits()`-bit values. The acceptance probability is at least 1/2 per
 /// attempt (the mask bounds candidates to `[0, 2^bits - 1]` and `span >=
-/// 2^(bits-1)`), so this terminates quickly.
+/// 2^(bits-1)`), so this terminates quickly. Callers (only
+/// [`biguint_sample_in_range`], past its `min == max` early return) always pass
+/// a strictly positive span, so `bits >= 1`.
 fn sample_biguint_at_most(span: &BigUint, rng: &mut SmallRng) -> BigUint {
     let bits = span.bits();
     if bits == 0 {
-        return BigUint::from(0u32);
+        unreachable!("sample_biguint_at_most requires a positive span");
     }
     let n_bytes = bits.div_ceil(8) as usize;
     let top_bits = (bits % 8) as u32;

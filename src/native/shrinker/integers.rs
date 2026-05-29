@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use crate::native::bignum::{BigInt, Sign, Signed, ToPrimitive};
-use crate::native::core::{ChoiceKind, ChoiceValue};
+use crate::native::core::{AnyInteger, ChoiceKind, ChoiceValue};
 
 use super::{Shrinker, bin_search_down_big, find_integer};
 
@@ -25,35 +25,38 @@ impl<'a> Shrinker<'a> {
         }
     }
 
-    /// Build a width-correct integer replacement value for node `i`, or `None`
-    /// if the index is out of range, the node isn't an integer (a kind-pun can
-    /// happen mid-probe), or `candidate` doesn't fit the node's integer width.
-    pub(super) fn int_replacement(&self, i: usize, candidate: &BigInt) -> Option<ChoiceValue> {
-        let ChoiceKind::Integer(ic) = &self.current_nodes.get(i)?.kind else {
-            return None;
+    /// Build a width-correct integer replacement value for node `i`. Callers
+    /// (`bind_deletion`, `minimize_individual_choices`) only invoke this for an
+    /// in-range integer node with a candidate inside `[min, max] ⊆ width`, so
+    /// neither the kind nor the width conversion can fail.
+    pub(super) fn int_replacement(&self, i: usize, candidate: &BigInt) -> ChoiceValue {
+        let ChoiceKind::Integer(ic) = &self.current_nodes[i].kind else {
+            unreachable!("int_replacement on non-integer node")
         };
-        ic.value_from_bigint(candidate).map(ChoiceValue::Integer)
+        ChoiceValue::Integer(
+            ic.value_from_bigint(candidate)
+                .unwrap_or_else(|| unreachable!("candidate fits the node's width")),
+        )
     }
 
-    /// Attempt to replace node `i` with `candidate`; `false` if it doesn't fit
-    /// the node's width or the replacement isn't accepted.
+    /// Attempt to replace node `i` with `candidate`. The candidate is handed to
+    /// [`Shrinker::replace`], which range-checks it and coerces it to the
+    /// node's width (rejecting out-of-range candidates), so this stays correct
+    /// for any node width.
     pub(super) fn replace_int(&mut self, i: usize, candidate: &BigInt) -> bool {
-        match self.int_replacement(i, candidate) {
-            Some(value) => self.replace(&HashMap::from([(i, value)])),
-            None => false,
-        }
+        self.replace(&HashMap::from([(
+            i,
+            ChoiceValue::Integer(AnyInteger::Big(candidate.clone())),
+        )]))
     }
 
-    /// Attempt to replace two integer nodes simultaneously; `false` if either
-    /// candidate doesn't fit its node's width or the replacement isn't accepted.
+    /// Attempt to replace two integer nodes simultaneously; `replace`
+    /// range-checks and width-coerces each candidate.
     pub(super) fn replace_two(&mut self, i: usize, vi: &BigInt, j: usize, vj: &BigInt) -> bool {
-        let Some(val_i) = self.int_replacement(i, vi) else {
-            return false;
-        };
-        let Some(val_j) = self.int_replacement(j, vj) else {
-            return false;
-        };
-        self.replace(&HashMap::from([(i, val_i), (j, val_j)]))
+        self.replace(&HashMap::from([
+            (i, ChoiceValue::Integer(AnyInteger::Big(vi.clone()))),
+            (j, ChoiceValue::Integer(AnyInteger::Big(vj.clone()))),
+        ]))
     }
 
     /// Replace blocks of choices with their simplest values.
@@ -167,7 +170,13 @@ impl<'a> Shrinker<'a> {
                     find_integer(|n| {
                         let attempt = &base - BigInt::from(n as u64);
                         if attempt < lo {
-                            return false;
+                            // Unreachable: a step-1 probe reaches `attempt < lo`
+                            // only after `replace(lo)` succeeds, but a successful
+                            // `replace(lo)` means `lo` is interesting, in which
+                            // case the linear scan above already landed on `lo`
+                            // and `base > lo` is false. (The step-2 probe can hit
+                            // its guard because it skips over `lo`.)
+                            unreachable!("step-1 descent cannot cross below `lo`");
                         }
                         self.replace_int(i, &attempt)
                     });
@@ -235,7 +244,11 @@ impl<'a> Shrinker<'a> {
                     find_integer(|n| {
                         let attempt = &base + BigInt::from(n as u64);
                         if attempt > neg_hi {
-                            return false;
+                            // Unreachable for the same reason as the positive
+                            // step-1 descent: it cannot cross past `neg_hi`
+                            // without first landing on it, which the linear scan
+                            // would already have done.
+                            unreachable!("step-1 descent cannot cross past `neg_hi`");
                         }
                         self.replace_int(i, &attempt)
                     });
@@ -560,7 +573,7 @@ impl<'a> Shrinker<'a> {
             if simplest != value {
                 let replacements: HashMap<usize, ChoiceValue> = valid
                     .iter()
-                    .filter_map(|&i| self.int_replacement(i, &simplest).map(|val| (i, val)))
+                    .map(|&i| (i, ChoiceValue::Integer(AnyInteger::Big(simplest.clone()))))
                     .collect();
                 self.replace(&replacements);
             }
@@ -582,15 +595,10 @@ impl<'a> Shrinker<'a> {
                 if current_valid.len() < 2 {
                     return false;
                 }
-                let mut replacements: HashMap<usize, ChoiceValue> = HashMap::new();
-                for &i in &current_valid {
-                    match sh.int_replacement(i, candidate) {
-                        Some(val) => {
-                            replacements.insert(i, val);
-                        }
-                        None => return false,
-                    }
-                }
+                let replacements: HashMap<usize, ChoiceValue> = current_valid
+                    .iter()
+                    .map(|&i| (i, ChoiceValue::Integer(AnyInteger::Big(candidate.clone()))))
+                    .collect();
                 sh.replace(&replacements)
             };
             let live_base = |sh: &Shrinker<'_>| -> BigInt {
@@ -737,12 +745,8 @@ impl<'a> Shrinker<'a> {
                     } else {
                         &ic_targets[k] - &new_distance
                     };
-                    match self.int_replacement(indices[k], &new_value) {
-                        Some(val) => {
-                            replacements.insert(indices[k], val);
-                        }
-                        None => return false,
-                    }
+                    replacements
+                        .insert(indices[k], ChoiceValue::Integer(AnyInteger::Big(new_value)));
                 }
                 self.replace(&replacements)
             });

@@ -262,3 +262,35 @@ fn bigint_to_cbor_roundtrips_across_magnitudes() {
         assert_eq!(cbor_to_bigint(&encoded), original);
     }
 }
+
+#[test]
+fn interpret_integer_draws_real_bigint_beyond_u128() {
+    // Bounds well outside the u128 range force the `BigInt` width (the
+    // `draw_in_range` fallback) and the big-range sampler. Looping exercises
+    // both the nasty-pool and the uniform (`sample_biguint_at_most`) branches.
+    // Seeing a value beyond ±u128::MAX confirms a genuine arbitrary-precision
+    // value was generated rather than a saturated one.
+    let u128_max = BigInt::from(u128::MAX);
+    let min = &u128_max * BigInt::from(-1_000_000);
+    let max = &u128_max * BigInt::from(1_000_000);
+    let schema = cbor_map! {
+        "type" => "integer",
+        "min_value" => bigint_to_cbor(&min),
+        "max_value" => bigint_to_cbor(&max),
+    };
+    let neg_u128_max = -&u128_max;
+    let mut saw_beyond_u128 = false;
+    for seed in 0..200u64 {
+        let mut ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
+        let value = interpret_schema(&mut ntc, &schema).ok().unwrap();
+        let decoded = cbor_to_bigint(&value);
+        assert!(decoded >= min && decoded <= max, "out of range: {decoded}");
+        if decoded > u128_max || decoded < neg_u128_max {
+            saw_beyond_u128 = true;
+        }
+    }
+    assert!(
+        saw_beyond_u128,
+        "expected at least one value beyond the u128 range"
+    );
+}
