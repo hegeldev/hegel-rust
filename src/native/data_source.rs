@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use ciborium::Value;
 
 use crate::backend::{DataSource, DataSourceError, TestCaseResult};
-use crate::native::core::{ChoiceNode, ManyState, NativeTestCase, Span, StopTest};
+use crate::native::core::{ChoiceNode, EngineError, ManyState, NativeTestCase, Span};
 use crate::native::schema;
 
 /// Per-test-case state shared between `NativeDataSource` and the engine
@@ -110,7 +110,7 @@ impl NativeDataSource {
             .expect("mark_complete must be called for every test case")
     }
 
-    /// Returns true if a previous request triggered a StopTest abort.
+    /// Returns true if a previous request triggered a EngineError abort.
     /// Test-only helper — not part of the `DataSource` interface, so
     /// callers must hold a concrete `&NativeDataSource`.
     #[cfg(test)]
@@ -119,20 +119,29 @@ impl NativeDataSource {
     }
 
     /// Acquire the test-case state under the abort guard.  Returns
-    /// `StopTest` immediately if a previous call has already aborted
-    /// the test case so subsequent draws short-circuit without
+    /// `DataSourceError::StopTest` immediately if a previous call has already
+    /// aborted the test case so subsequent draws short-circuit without
     /// touching `ntc`.
     fn with_ntc<R>(
         &self,
-        f: impl FnOnce(&mut NativeTestCase) -> Result<R, StopTest>,
+        f: impl FnOnce(&mut NativeTestCase) -> Result<R, EngineError>,
     ) -> Result<R, DataSourceError> {
         if self.aborted.load(Ordering::Relaxed) {
             return Err(DataSourceError::StopTest);
         }
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        f(&mut inner.ntc).map_err(|_stop| {
-            self.aborted.store(true, Ordering::Relaxed);
-            DataSourceError::StopTest
+        f(&mut inner.ntc).map_err(|e| match e {
+            EngineError::StopTest => {
+                // Budget exhausted: latch the abort flag so subsequent draws
+                // short-circuit without touching `ntc`.
+                self.aborted.store(true, Ordering::Relaxed);
+                DataSourceError::StopTest
+            }
+            // A semantically-invalid schema is not budget exhaustion — do not
+            // latch `aborted`; carry the diagnostic through so the main
+            // library can panic with it and libhegel can return it as an
+            // error code.
+            EngineError::InvalidArgument(msg) => DataSourceError::InvalidArgument(msg),
         })
     }
 }
@@ -210,7 +219,7 @@ impl DataSource for NativeDataSource {
             let active = ntc.variable_pools[pool_idx].active();
             if active.is_empty() {
                 // No variables available: mark the test case invalid.
-                return Err(StopTest);
+                return Err(EngineError::StopTest);
             }
             // Index arithmetic uses `i128` to match `draw_integer`; the
             // variable ids drawn out of `active` are `i64`.

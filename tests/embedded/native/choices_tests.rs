@@ -699,3 +699,14 @@ fn nodes_sort_key_shortlex_orders_by_length_then_element() {
     let empty: Vec<ChoiceNode> = Vec::new();
     assert!(sort_key(&empty) < sort_key(&a));
 }
+
+// ── EngineError Display ──────────────────────────────────────────────────────
+
+#[test]
+fn engine_error_display_covers_both_variants() {
+    assert!(EngineError::StopTest.to_string().contains("StopTest"));
+    assert_eq!(
+        EngineError::InvalidArgument("nope".to_string()).to_string(),
+        "nope"
+    );
+}

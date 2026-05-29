@@ -112,6 +112,19 @@ fn pool_generate_on_empty_pool_returns_stop_test() {
 }
 
 #[test]
+fn generate_invalid_schema_maps_to_invalid_argument_without_aborting() {
+    let (ds, _handle) = random_source();
+    let schema = cbor_map! { "type" => "no-such-type" };
+    let err = ds.generate(&schema).unwrap_err();
+    assert!(matches!(err, DataSourceError::InvalidArgument(_)));
+    // A schema error is not data exhaustion: the test case is not latched as
+    // aborted, so a (valid) subsequent draw still dispatches normally.
+    assert!(!ds.test_aborted());
+    let good = cbor_map! { "type" => "integer", "min_value" => 0, "max_value" => 0 };
+    assert!(ds.generate(&good).is_ok());
+}
+
+#[test]
 fn generate_stoptest_sets_aborted_and_short_circuits() {
     let (ds, _handle) = exhausted_source();
     let schema = cbor_map! {

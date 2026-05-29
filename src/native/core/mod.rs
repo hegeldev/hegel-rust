@@ -9,8 +9,8 @@ pub(crate) mod choices;
 pub(crate) mod float_index;
 pub(crate) mod state;
 pub use choices::{
-    BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, NodeSortKey, NodesSortKey,
-    Status, StopTest, StringChoice, sort_key,
+    BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, EngineError, FloatChoice, NodeSortKey,
+    NodesSortKey, Status, StringChoice, sort_key,
 };
 pub use float_index::{float_to_index, index_to_float};
 pub use state::{ManyState, NativeTestCase, NativeVariables, Span, Spans};

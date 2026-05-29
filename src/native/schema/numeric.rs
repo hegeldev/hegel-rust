@@ -1,19 +1,18 @@
 // Numeric schema interpreters: integer, boolean, constant.
 
-use crate::native::core::{NativeTestCase, StopTest};
+use crate::native::core::{EngineError, NativeTestCase};
 use ciborium::Value;
 
-use super::{bignum_overflows_i128, cbor_to_i128, i128_to_cbor, u128_to_cbor};
-use crate::cbor_utils::map_get;
+use super::{bignum_overflows_i128, cbor_to_i128, i128_to_cbor, require, u128_to_cbor};
 
 pub(super) fn interpret_integer(
     ntc: &mut NativeTestCase,
     schema: &Value,
-) -> Result<Value, StopTest> {
-    let min_cbor = map_get(schema, "min_value").expect("integer schema must have min_value");
-    let max_cbor = map_get(schema, "max_value").expect("integer schema must have max_value");
-    let min_value = cbor_to_i128(min_cbor);
-    let max_value = cbor_to_i128(max_cbor);
+) -> Result<Value, EngineError> {
+    let min_cbor = require(schema, "min_value")?;
+    let max_cbor = require(schema, "max_value")?;
+    let min_value = cbor_to_i128(min_cbor)?;
+    let max_value = cbor_to_i128(max_cbor)?;
 
     // If max saturated because it exceeded i128::MAX (e.g. u128::MAX), draw using
     // a selector + two 64-bit halves to cover the full u128 range.
@@ -38,12 +37,16 @@ pub(super) fn interpret_integer(
     Ok(i128_to_cbor(v))
 }
 
-pub(super) fn interpret_boolean(ntc: &mut NativeTestCase) -> Result<Value, StopTest> {
+pub(super) fn interpret_boolean(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
     let v = ntc.weighted(0.5, None)?;
     Ok(Value::Bool(v))
 }
 
-pub(super) fn interpret_constant(schema: &Value) -> Result<Value, StopTest> {
-    let value = map_get(schema, "value").expect("constant schema must have value");
+pub(super) fn interpret_constant(schema: &Value) -> Result<Value, EngineError> {
+    let value = require(schema, "value")?;
     Ok(value.clone())
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/schema/numeric_tests.rs"]
+mod tests;

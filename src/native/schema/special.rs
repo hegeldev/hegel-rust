@@ -8,7 +8,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 
 use crate::cbor_utils::map_get;
-use crate::native::core::{NativeTestCase, StopTest};
+use crate::native::core::{EngineError, NativeTestCase};
 use ciborium::Value;
 
 /// Encode a `String` as a CBOR tag-91 value, the wire format used by the hegel
@@ -39,7 +39,7 @@ fn days_in_month(year: i128, month: i128) -> i128 {
 /// offset from 2000 to get the same shrink target. The observable
 /// distribution is identical because `biased_integer_sample` boosts the
 /// endpoints (here ±offset bounds) at the same rate either way.
-pub(super) fn interpret_date(ntc: &mut NativeTestCase) -> Result<Value, StopTest> {
+pub(super) fn interpret_date(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
     let (year, month, day) = draw_date(ntc)?;
     Ok(encode_string(format!("{year:04}-{month:02}-{day:02}")))
 }
@@ -47,7 +47,7 @@ pub(super) fn interpret_date(ntc: &mut NativeTestCase) -> Result<Value, StopTest
 /// `time` schema → `HH:MM:SS` or `HH:MM:SS.ffffff`, matching
 /// `st.times().isoformat()`. The fractional part is present iff
 /// `microsecond != 0` (Python's `time.isoformat()` semantics).
-pub(super) fn interpret_time(ntc: &mut NativeTestCase) -> Result<Value, StopTest> {
+pub(super) fn interpret_time(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
     let (hour, minute, second, microsecond) = draw_time(ntc)?;
     Ok(encode_string(format_time(
         hour,
@@ -60,7 +60,7 @@ pub(super) fn interpret_time(ntc: &mut NativeTestCase) -> Result<Value, StopTest
 /// `datetime` schema → `YYYY-MM-DDTHH:MM:SS[.ffffff]`, matching
 /// `st.datetimes().isoformat()`. As with `interpret_time`, the fractional
 /// seconds appear only when non-zero.
-pub(super) fn interpret_datetime(ntc: &mut NativeTestCase) -> Result<Value, StopTest> {
+pub(super) fn interpret_datetime(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
     let (year, month, day) = draw_date(ntc)?;
     let (hour, minute, second, microsecond) = draw_time(ntc)?;
     let time_part = format_time(hour, minute, second, microsecond);
@@ -69,14 +69,14 @@ pub(super) fn interpret_datetime(ntc: &mut NativeTestCase) -> Result<Value, Stop
     )))
 }
 
-fn draw_date(ntc: &mut NativeTestCase) -> Result<(i128, i128, i128), StopTest> {
+fn draw_date(ntc: &mut NativeTestCase) -> Result<(i128, i128, i128), EngineError> {
     let year = 2000 + ntc.draw_integer(1 - 2000, 9999 - 2000)?;
     let month = ntc.draw_integer(1, 12)?;
     let day = ntc.draw_integer(1, days_in_month(year, month))?;
     Ok((year, month, day))
 }
 
-fn draw_time(ntc: &mut NativeTestCase) -> Result<(i128, i128, i128, i128), StopTest> {
+fn draw_time(ntc: &mut NativeTestCase) -> Result<(i128, i128, i128, i128), EngineError> {
     let hour = ntc.draw_integer(0, 23)?;
     let minute = ntc.draw_integer(0, 59)?;
     let second = ntc.draw_integer(0, 59)?;
@@ -110,7 +110,10 @@ fn format_time(hour: i128, minute: i128, second: i128, microsecond: i128) -> Str
 /// "uuids never produce nil" property carries over. The proper fix is a
 /// non-recording RNG-direct draw API on `NativeTestCase` to mirror Hypothesis
 /// exactly — out of scope for this PR.
-pub(super) fn interpret_uuid(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
+pub(super) fn interpret_uuid(
+    ntc: &mut NativeTestCase,
+    schema: &Value,
+) -> Result<Value, EngineError> {
     use crate::cbor_utils::as_u64;
     let version = map_get(schema, "version").and_then(as_u64).map(|v| v as u8);
 
@@ -293,19 +296,23 @@ fn parse_v6_cidr(s: &str) -> V6Network {
 pub(super) fn interpret_ip_address(
     ntc: &mut NativeTestCase,
     schema: &Value,
-) -> Result<Value, StopTest> {
+) -> Result<Value, EngineError> {
     use crate::cbor_utils::as_u64;
-    let version = map_get(schema, "version")
-        .and_then(as_u64)
-        .expect("ip_address schema must have a \"version\" field");
+    let version = map_get(schema, "version").and_then(as_u64).ok_or_else(|| {
+        EngineError::InvalidArgument(
+            "ip_address schema is missing an integer \"version\" field".to_string(),
+        )
+    })?;
     match version {
         4 => interpret_ipv4(ntc),
         6 => interpret_ipv6(ntc),
-        _ => panic!("ip_address: unsupported version {version}; expected 4 or 6"),
+        other => Err(EngineError::InvalidArgument(format!(
+            "ip_address: unsupported version {other}; expected 4 or 6"
+        ))),
     }
 }
 
-fn interpret_ipv4(ntc: &mut NativeTestCase) -> Result<Value, StopTest> {
+fn interpret_ipv4(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
     // one_of([random_bytes, sampled_from(SPECIAL).flatmap(in_network)]).
     let addr_int: u32 = if ntc.draw_integer(0, 1)? == 0 {
         // Four uniform bytes — `binary(min_size=4, max_size=4).map(IPv4Address)`.
@@ -326,7 +333,7 @@ fn interpret_ipv4(ntc: &mut NativeTestCase) -> Result<Value, StopTest> {
     Ok(encode_string(Ipv4Addr::from(addr_int).to_string()))
 }
 
-fn interpret_ipv6(ntc: &mut NativeTestCase) -> Result<Value, StopTest> {
+fn interpret_ipv6(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
     let addr_int: u128 = if ntc.draw_integer(0, 1)? == 0 {
         // 16 uniform bytes via two 64-bit halves.
         let hi = ntc.draw_integer(0, u64::MAX as i128)? as u64;

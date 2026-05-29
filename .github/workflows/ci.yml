@@ -178,6 +178,14 @@ jobs:
       - name: Run C bindings test recipe
         run: just c-test
 
+      # Build libhegel with `panic = "abort"` and re-run the smoke tests + C
+      # examples against it. Proves no panic crosses the FFI boundary on the
+      # tested paths (an invalid schema that aborted instead of returning
+      # HEGEL_E_INVALID_ARG would crash the process and fail this step). The
+      # recipe is a no-op on Windows (bash-driven examples).
+      - name: Run C bindings under panic=abort
+        run: just c-test-abort
+
   test-min-protocol:
     name: test-min-protocol
     runs-on: ubuntu-latest

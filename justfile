@@ -111,6 +111,26 @@ c-test-examples:
 c-test-examples:
     @echo "Skipping c-test-examples on Windows (bash-based driver, follow-up)"
 
+# Build libhegel with `panic = "abort"` and run the smoke tests + C examples
+# against it. This proves no panic is reachable across the FFI boundary on
+# the tested paths: under abort, any panic aborts the process, so an
+# invalid-schema test that crashed instead of returning HEGEL_E_INVALID_ARG
+# would fail the run (the original hegel-java SIGABRT). The cdylib/staticlib
+# are built into a separate target dir so they don't clobber the unwind
+# artifacts; the smoke-test harness itself stays unwind (so its own
+# assertions report normally) and is pointed at the abort artifacts via
+# HEGEL_C_LIB_DIR.
+[unix]
+c-test-abort:
+    RUSTFLAGS="-C panic=abort" CARGO_TARGET_DIR=target/abort cargo build -p hegeltest-c
+    HEGEL_C_LIB_DIR={{justfile_directory()}}/target/abort/debug cargo test -p hegeltest-c
+    mkdir -p target/c-examples
+    HEGEL_C_LIB_DIR={{justfile_directory()}}/target/abort/debug scripts/c-examples-run.sh
+
+[windows]
+c-test-abort:
+    @echo "Skipping c-test-abort on Windows (bash-based driver, follow-up)"
+
 # Regenerate hegel-c/include/hegel.h from the Rust source (no diff check).
 c-header:
     HEGEL_C_HEADER_WRITE=1 cargo build -p hegeltest-c

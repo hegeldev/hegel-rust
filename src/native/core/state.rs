@@ -9,7 +9,7 @@ use rand::rngs::SmallRng;
 
 use super::choices::{
     BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceTemplate, ChoiceTemplateKind,
-    ChoiceValue, FloatChoice, IntegerChoice, InterestingOrigin, Status, StopTest, StringChoice,
+    ChoiceValue, EngineError, FloatChoice, IntegerChoice, InterestingOrigin, Status, StringChoice,
 };
 use super::float_index::lex_to_float;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
@@ -901,7 +901,7 @@ pub struct NativeTestCase {
     /// Optional template applied to every draw past the explicit `prefix`.
     /// `count` is mutated in-place as draws consume the template; when
     /// `count` reaches zero the next draw is overrun
-    /// (`Status::EarlyStop` + `StopTest`). `None` means "no template" —
+    /// (`Status::EarlyStop` + `EngineError`). `None` means "no template" —
     /// draws past the prefix go to `rng` or panic, as before.
     trailing_template: Option<ChoiceTemplate>,
 }
@@ -1086,7 +1086,7 @@ impl NativeTestCase {
     }
 
     /// Draw a random integer in [min_value, max_value].
-    pub fn draw_integer(&mut self, min_value: i128, max_value: i128) -> Result<i128, StopTest> {
+    pub fn draw_integer(&mut self, min_value: i128, max_value: i128) -> Result<i128, EngineError> {
         assert!(
             min_value <= max_value,
             "Invalid range [{min_value}, {max_value}]"
@@ -1132,7 +1132,7 @@ impl NativeTestCase {
         max_value: f64,
         allow_nan: bool,
         allow_infinity: bool,
-    ) -> Result<f64, StopTest> {
+    ) -> Result<f64, EngineError> {
         let kind = FloatChoice {
             min_value,
             max_value,
@@ -1166,7 +1166,7 @@ impl NativeTestCase {
     }
 
     /// Draw a bytes value with length in `[min_size, max_size]`.
-    pub fn draw_bytes(&mut self, min_size: usize, max_size: usize) -> Result<Vec<u8>, StopTest> {
+    pub fn draw_bytes(&mut self, min_size: usize, max_size: usize) -> Result<Vec<u8>, EngineError> {
         assert!(
             min_size <= max_size,
             "min_size ({min_size}) must be <= max_size ({max_size})"
@@ -1205,7 +1205,7 @@ impl NativeTestCase {
         intervals: IntervalSet,
         min_size: usize,
         max_size: usize,
-    ) -> Result<String, StopTest> {
+    ) -> Result<String, EngineError> {
         assert!(min_size <= max_size);
         assert!(
             !intervals.is_empty() || max_size == 0,
@@ -1246,7 +1246,7 @@ impl NativeTestCase {
 
     /// Draw a boolean with probability `p` of being true.
     /// If `forced` is Some, the result is forced to that value.
-    pub fn weighted(&mut self, p: f64, forced: Option<bool>) -> Result<bool, StopTest> {
+    pub fn weighted(&mut self, p: f64, forced: Option<bool>) -> Result<bool, EngineError> {
         let kind = BooleanChoice;
 
         let forced_value = forced.or(if p <= 0.0 {
@@ -1286,16 +1286,16 @@ impl NativeTestCase {
 
         Ok(v)
     }
-    fn pre_choice(&mut self) -> Result<(), StopTest> {
+    fn pre_choice(&mut self) -> Result<(), EngineError> {
         // A test case can become frozen mid-execution when `start_span`
         // exceeds `MAX_DEPTH` and sets `status = Some(Status::Invalid)`.
-        // Subsequent draws must propagate `StopTest` so the test halts.
+        // Subsequent draws must propagate `EngineError` so the test halts.
         if self.status.is_some() {
-            return Err(StopTest);
+            return Err(EngineError::StopTest);
         }
         if self.nodes.len() >= self.max_size {
             self.status = Some(Status::EarlyStop);
-            return Err(StopTest);
+            return Err(EngineError::StopTest);
         }
         Ok(())
     }
@@ -1311,7 +1311,7 @@ impl NativeTestCase {
         unit: impl FnOnce() -> ChoiceValue,
         validate: impl FnOnce(&ChoiceValue) -> bool,
         random: impl FnOnce(&mut SmallRng) -> ChoiceValue,
-    ) -> Result<(ChoiceValue, bool), StopTest> {
+    ) -> Result<(ChoiceValue, bool), EngineError> {
         self.pre_choice()?;
 
         let idx = self.nodes.len();
@@ -1341,7 +1341,7 @@ impl NativeTestCase {
         if let Some(template) = self.trailing_template.as_mut() {
             if matches!(template.count, Some(0)) {
                 self.status = Some(Status::EarlyStop);
-                return Err(StopTest);
+                return Err(EngineError::StopTest);
             }
             let value = match template.kind {
                 ChoiceTemplateKind::Simplest => simplest(),

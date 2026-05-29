@@ -47,6 +47,11 @@ fn panic_on_data_source_error(e: DataSourceError) -> ! {
         DataSourceError::StopTest => panic!("{}", STOP_TEST_STRING),
         DataSourceError::Assume => panic!("{}", ASSUME_FAIL_STRING), // nocov
         DataSourceError::ServerError(msg) => panic!("{}", msg),
+        // A semantically-invalid schema. In the main library this only fires
+        // if a generator builds a malformed schema (a bug), so we surface the
+        // diagnostic as a panic. libhegel never reaches here — it maps the
+        // error to `HEGEL_E_INVALID_ARG` instead.
+        DataSourceError::InvalidArgument(msg) => panic!("{}", msg),
     }
 }
 

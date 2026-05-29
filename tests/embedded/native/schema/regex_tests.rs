@@ -733,3 +733,26 @@ fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
     assert!(result.is_err());
     assert_eq!(ntc.status, Some(Status::Invalid));
 }
+
+// ----- interpret_regex: caller-reachable InvalidArgument paths -----
+
+#[test]
+fn interpret_regex_missing_pattern_is_invalid_argument() {
+    use crate::cbor_utils::cbor_map;
+    let mut ntc = NativeTestCase::for_choices(&[], None, None);
+    let schema = cbor_map! { "type" => "regex" };
+    let err = interpret_regex(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("pattern"));
+}
+
+#[test]
+fn interpret_regex_unparseable_pattern_is_invalid_argument() {
+    use crate::cbor_utils::cbor_map;
+    let mut ntc = NativeTestCase::for_choices(&[], None, None);
+    // An unbalanced group is a parse error in the Python-compatible parser.
+    let schema = cbor_map! { "type" => "regex", "pattern" => "(unclosed" };
+    let err = interpret_regex(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("invalid regex pattern"));
+}

@@ -2,18 +2,19 @@ use super::*;
 
 #[test]
 fn cbor_to_f64_from_integer() {
-    assert_eq!(cbor_to_f64(&Value::Integer(42.into())), 42.0);
+    assert_eq!(cbor_to_f64(&Value::Integer(42.into())).unwrap(), 42.0);
 }
 
 #[test]
 fn cbor_to_f64_from_negative_integer() {
-    assert_eq!(cbor_to_f64(&Value::Integer((-7i64).into())), -7.0);
+    assert_eq!(cbor_to_f64(&Value::Integer((-7i64).into())).unwrap(), -7.0);
 }
 
 #[test]
-#[should_panic(expected = "Expected CBOR float/integer")]
-fn cbor_to_f64_panics_on_non_numeric() {
-    let _ = cbor_to_f64(&Value::Bool(true));
+fn cbor_to_f64_non_numeric_is_invalid_argument() {
+    let err = cbor_to_f64(&Value::Bool(true)).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("CBOR float or integer"));
 }
 
 // interpret_float must reject widths outside `{32, 64}`: Hypothesis only
@@ -22,7 +23,6 @@ fn cbor_to_f64_panics_on_non_numeric() {
 // treating unknown widths as f64.
 
 #[test]
-#[should_panic(expected = "unsupported float width")]
 fn interpret_float_rejects_width_16() {
     use crate::cbor_utils::cbor_map;
     use crate::native::core::NativeTestCase;
@@ -30,11 +30,12 @@ fn interpret_float_rejects_width_16() {
     use rand::rngs::SmallRng;
     let mut ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(0));
     let schema = cbor_map! { "type" => "float", "width" => 16 };
-    let _ = interpret_float(&mut ntc, &schema);
+    let err = interpret_float(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("unsupported float width"));
 }
 
 #[test]
-#[should_panic(expected = "unsupported float width")]
 fn interpret_float_rejects_width_128() {
     use crate::cbor_utils::cbor_map;
     use crate::native::core::NativeTestCase;
@@ -42,7 +43,22 @@ fn interpret_float_rejects_width_128() {
     use rand::rngs::SmallRng;
     let mut ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(0));
     let schema = cbor_map! { "type" => "float", "width" => 128 };
-    let _ = interpret_float(&mut ntc, &schema);
+    let err = interpret_float(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("unsupported float width"));
+}
+
+#[test]
+fn interpret_float_non_numeric_bound_is_invalid_argument() {
+    use crate::cbor_utils::cbor_map;
+    use crate::native::core::NativeTestCase;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+    let mut ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(0));
+    let schema = cbor_map! { "type" => "float", "min_value" => "low" };
+    let err = interpret_float(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("CBOR float or integer"));
 }
 
 #[test]
