@@ -86,13 +86,13 @@ impl<M> Rule<M> {
 
 /// A pool of previously generated values.
 pub struct Variables<T> {
-    pool_id: i128,
+    pool_id: i64,
     tc: TestCase,
-    values: HashMap<i128, T>,
+    values: HashMap<i64, T>,
 }
 
 impl<T> Variables<T> {
-    fn pool_generate(&self, consume: bool) -> i128 {
+    fn pool_generate(&self, consume: bool) -> i64 {
         match self
             .tc
             .with_data_source(|ds| ds.pool_generate(self.pool_id, consume))
@@ -116,7 +116,7 @@ impl<T> Variables<T> {
 
     /// Add a value to the pool.
     pub fn add(&mut self, v: T) {
-        let variable_id: i128 = match self.tc.with_data_source(|ds| ds.pool_add(self.pool_id)) {
+        let variable_id: i64 = match self.tc.with_data_source(|ds| ds.pool_add(self.pool_id)) {
             Ok(id) => id,
             Err(_) => {
                 panic!("{}", STOP_TEST_STRING); // nocov

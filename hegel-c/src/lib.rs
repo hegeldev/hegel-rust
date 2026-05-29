@@ -28,6 +28,7 @@ use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char, c_int};
 use std::ptr;
 use std::sync::Arc;
+use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
@@ -606,6 +607,38 @@ pub unsafe extern "C" fn hegel_settings_suppress_health_check(s: *mut HegelSetti
 
 // ─── Run lifecycle ──────────────────────────────────────────────────────────
 
+static WORKER_PANIC_HOOK: Once = Once::new();
+
+/// The name given to the engine worker thread spawned by `hegel_run_start`.
+/// Used both when building the thread and by the panic hook to recognise
+/// which panics to swallow.
+const WORKER_THREAD_NAME: &str = "hegel-worker";
+
+/// Install (once) a process-global panic hook that swallows the default
+/// `thread '…' panicked at <file>:<line>:<col>` stderr line for panics
+/// raised on the engine worker thread.
+///
+/// Every engine panic (a failed health check like `FilterTooMuch`, an
+/// internal invariant) is raised on the worker thread, is already caught by
+/// the worker's `catch_unwind`, and is translated into a clean
+/// `TestRunResult` failure surfaced through `hegel_run_result` /
+/// `hegel_failure_*`. Letting the default hook *also* dump a Rust-internal
+/// source location to the embedding process's stderr is pure noise — a C
+/// consumer has no use for `src/native/test_runner.rs:329:21`, and it leaks
+/// implementation detail. Panics on any other thread (notably the caller's
+/// own thread) fall through to the previous hook unchanged.
+fn install_worker_panic_hook() {
+    WORKER_PANIC_HOOK.call_once(|| {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if std::thread::current().name() == Some(WORKER_THREAD_NAME) {
+                return;
+            }
+            prev(info);
+        }));
+    });
+}
+
 /// Start a property-test run with the given settings. Returns a handle
 /// the caller pulls test cases out of via `hegel_next_test_case`.
 ///
@@ -620,6 +653,7 @@ pub unsafe extern "C" fn hegel_settings_suppress_health_check(s: *mut HegelSetti
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_start(settings: *const HegelSettings) -> *mut HegelRun {
     clear_last_error();
+    install_worker_panic_hook();
     let Some(handle) = (unsafe { settings.as_ref() }) else {
         set_last_error("hegel_run_start: settings pointer is null");
         return ptr::null_mut();
@@ -632,7 +666,7 @@ pub unsafe extern "C" fn hegel_run_start(settings: *const HegelSettings) -> *mut
     let abort_worker = Arc::clone(&abort);
 
     let worker = thread::Builder::new()
-        .name("hegel-worker".to_string())
+        .name(WORKER_THREAD_NAME.to_string())
         .spawn(move || {
             // The engine itself can panic — currently `run_main` does this
             // when a health check fails (FilterTooMuch, TooSlow). An
@@ -1039,6 +1073,103 @@ pub unsafe extern "C" fn hegel_collection_reject(
     };
     match tc.ds.collection_reject(collection_id, why_str) {
         Ok(()) => HEGEL_OK,
+        Err(e) => translate_ds_error(e),
+    }
+}
+
+/// Create a new engine-managed *variable pool* for stateful testing.
+///
+/// A pool tracks a set of opaque variable ids that the engine can draw
+/// from and shrink over — the primitive behind hegel-rust's
+/// `stateful::Variables` and `#[hegel::state_machine]`. The caller keeps
+/// its own mapping from variable id to the actual value it generated
+/// (mirroring how `Variables<T>` holds a `HashMap<i64, T>`).
+///
+/// On success writes the new pool's id into `*out_pool_id` and returns
+/// `HEGEL_OK`. The id is opaque; pass it to subsequent `hegel_pool_add`
+/// / `hegel_pool_generate` calls on the *same* test case.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_new_pool(tc: *mut HegelTestCase, out_pool_id: *mut i64) -> c_int {
+    clear_last_error();
+    let tc = match unsafe { tc_mut(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_pool_id.is_null() {
+        set_last_error("hegel_new_pool: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.ds.new_pool() {
+        Ok(id) => {
+            unsafe { *out_pool_id = id };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(e),
+    }
+}
+
+/// Register a new variable in the pool. The engine assigns it a fresh
+/// id, which the caller associates with the value it just generated.
+///
+/// On success writes the new variable's id into `*out_variable_id` and
+/// returns `HEGEL_OK`. `pool_id` must be an id returned by
+/// `hegel_new_pool` on this test case.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_pool_add(
+    tc: *mut HegelTestCase,
+    pool_id: i64,
+    out_variable_id: *mut i64,
+) -> c_int {
+    clear_last_error();
+    let tc = match unsafe { tc_mut(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_variable_id.is_null() {
+        set_last_error("hegel_pool_add: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.ds.pool_add(pool_id) {
+        Ok(id) => {
+            unsafe { *out_variable_id = id };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(e),
+    }
+}
+
+/// Draw a variable id from the pool, letting the engine choose (and
+/// shrink) which previously-added variable to reuse. When
+/// `consume = true` the drawn variable is removed from the pool (model a
+/// destructive action); when `false` it stays available for future
+/// draws.
+///
+/// On success writes the chosen variable id into `*out_variable_id` and
+/// returns `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` if the pool currently
+/// has no active variables — the caller should guard against that (e.g.
+/// only draw when it knows it has added at least one variable) or treat
+/// it like any other budget-exhaustion outcome.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_pool_generate(
+    tc: *mut HegelTestCase,
+    pool_id: i64,
+    consume: bool,
+    out_variable_id: *mut i64,
+) -> c_int {
+    clear_last_error();
+    let tc = match unsafe { tc_mut(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_variable_id.is_null() {
+        set_last_error("hegel_pool_generate: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.ds.pool_generate(pool_id, consume) {
+        Ok(id) => {
+            unsafe { *out_variable_id = id };
+            HEGEL_OK
+        }
         Err(e) => translate_ds_error(e),
     }
 }

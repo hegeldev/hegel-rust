@@ -215,6 +215,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub(crate) mod antithesis;
+#[doc(hidden)]
 pub mod backend;
 pub(crate) mod cbor_utils;
 pub(crate) mod cli;

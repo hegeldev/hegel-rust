@@ -230,23 +230,29 @@ impl DataSource for ServerDataSource {
         // nocov end
     }
 
-    fn new_pool(&self) -> Result<i128, DataSourceError> {
+    fn new_pool(&self) -> Result<i64, DataSourceError> {
         let response = self.send_request("new_pool", &cbor_map! {})?;
         match response {
-            Value::Integer(i) => Ok(i.into()),
+            Value::Integer(i) => {
+                let n: i128 = i.into();
+                Ok(n as i64)
+            }
             other => panic!("Expected integer response for pool id, got {:?}", other), // nocov
         }
     }
 
-    fn pool_add(&self, pool_id: i128) -> Result<i128, DataSourceError> {
+    fn pool_add(&self, pool_id: i64) -> Result<i64, DataSourceError> {
         let response = self.send_request("pool_add", &cbor_map! {"pool_id" => pool_id})?;
         match response {
-            Value::Integer(i) => Ok(i.into()),
+            Value::Integer(i) => {
+                let n: i128 = i.into();
+                Ok(n as i64)
+            }
             other => panic!("Expected integer response for variable id, got {:?}", other), // nocov
         }
     }
 
-    fn pool_generate(&self, pool_id: i128, consume: bool) -> Result<i128, DataSourceError> {
+    fn pool_generate(&self, pool_id: i64, consume: bool) -> Result<i64, DataSourceError> {
         let response = self.send_request(
             "pool_generate",
             &cbor_map! {
@@ -255,7 +261,10 @@ impl DataSource for ServerDataSource {
             },
         )?;
         match response {
-            Value::Integer(i) => Ok(i.into()),
+            Value::Integer(i) => {
+                let n: i128 = i.into();
+                Ok(n as i64)
+            }
             other => panic!("Expected integer response for variable id, got {:?}", other), // nocov
         }
     }

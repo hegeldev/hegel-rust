@@ -528,6 +528,49 @@ int hegel_collection_more(hegel_test_case_t *tc, int64_t collection_id, bool *ou
 int hegel_collection_reject(hegel_test_case_t *tc, int64_t collection_id, const char *why);
 
 /*
+ Create a new engine-managed *variable pool* for stateful testing.
+
+ A pool tracks a set of opaque variable ids that the engine can draw
+ from and shrink over — the primitive behind hegel-rust's
+ `stateful::Variables` and `#[hegel::state_machine]`. The caller keeps
+ its own mapping from variable id to the actual value it generated
+ (mirroring how `Variables<T>` holds a `HashMap<i64, T>`).
+
+ On success writes the new pool's id into `*out_pool_id` and returns
+ `HEGEL_OK`. The id is opaque; pass it to subsequent `hegel_pool_add`
+ / `hegel_pool_generate` calls on the *same* test case.
+ */
+int hegel_new_pool(hegel_test_case_t *tc, int64_t *out_pool_id);
+
+/*
+ Register a new variable in the pool. The engine assigns it a fresh
+ id, which the caller associates with the value it just generated.
+
+ On success writes the new variable's id into `*out_variable_id` and
+ returns `HEGEL_OK`. `pool_id` must be an id returned by
+ `hegel_new_pool` on this test case.
+ */
+int hegel_pool_add(hegel_test_case_t *tc, int64_t pool_id, int64_t *out_variable_id);
+
+/*
+ Draw a variable id from the pool, letting the engine choose (and
+ shrink) which previously-added variable to reuse. When
+ `consume = true` the drawn variable is removed from the pool (model a
+ destructive action); when `false` it stays available for future
+ draws.
+
+ On success writes the chosen variable id into `*out_variable_id` and
+ returns `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` if the pool currently
+ has no active variables — the caller should guard against that (e.g.
+ only draw when it knows it has added at least one variable) or treat
+ it like any other budget-exhaustion outcome.
+ */
+int hegel_pool_generate(hegel_test_case_t *tc,
+                        int64_t pool_id,
+                        bool consume,
+                        int64_t *out_variable_id);
+
+/*
  Record a numeric observation under `label` for the engine's
  targeting phase to hill-climb toward. Higher values are "more
  interesting"; the engine biases later test cases toward inputs that

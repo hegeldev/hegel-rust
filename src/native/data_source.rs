@@ -191,20 +191,20 @@ impl DataSource for NativeDataSource {
         })
     }
 
-    fn new_pool(&self) -> Result<i128, DataSourceError> {
+    fn new_pool(&self) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
-            let pool_id = ntc.variable_pools.len() as i128;
+            let pool_id = ntc.variable_pools.len() as i64;
             ntc.variable_pools
                 .push(crate::native::core::NativeVariables::new());
             Ok(pool_id)
         })
     }
 
-    fn pool_add(&self, pool_id: i128) -> Result<i128, DataSourceError> {
+    fn pool_add(&self, pool_id: i64) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| Ok(ntc.variable_pools[pool_id as usize].next()))
     }
 
-    fn pool_generate(&self, pool_id: i128, consume: bool) -> Result<i128, DataSourceError> {
+    fn pool_generate(&self, pool_id: i64, consume: bool) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
             let pool_idx = pool_id as usize;
             let active = ntc.variable_pools[pool_idx].active();
@@ -212,6 +212,8 @@ impl DataSource for NativeDataSource {
                 // No variables available: mark the test case invalid.
                 return Err(StopTest);
             }
+            // Index arithmetic uses `i128` to match `draw_integer`; the
+            // variable ids drawn out of `active` are `i64`.
             let n = active.len() as i128;
             // Draw index from `[0, n-1]`.  Shrink towards `n-1`
             // (last added = most recent) by drawing `k` from
