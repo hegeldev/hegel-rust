@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.16 - 2026-05-29
+
+This patch makes some improvements to the libhegel C bindings, and has no other user-visible effect.
+
 ## 0.14.15 - 2026-05-29
 
 This patch improves the performance of the native backend (`--features native`). The changes are internal only and have no user-visible effect on behaviour.
