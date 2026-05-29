@@ -1,5 +1,6 @@
 //! Unit tests for `lower_duplicated_characters` and
 //! `normalize_unicode_chars`.
+use crate::native::bignum::BigInt;
 
 use crate::native::core::choices::StringChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
@@ -52,11 +53,11 @@ fn lower_duplicated_characters_skips_non_string_neighbour() {
         string_node_with(b'a' as u32, b'z' as u32, vec![b'b' as u32]),
         ChoiceNode {
             kind: ChoiceKind::Integer(IntegerChoice {
-                min_value: 0,
-                max_value: 100,
-                shrink_towards: 0,
+                min_value: BigInt::from(0),
+                max_value: BigInt::from(100),
+                shrink_towards: BigInt::from(0),
             }),
-            value: ChoiceValue::Integer(7),
+            value: ChoiceValue::Integer(BigInt::from(7)),
             was_forced: false,
         },
     ];
@@ -173,7 +174,7 @@ fn normalize_unicode_chars_does_nothing_on_non_string() {
         Spans::new(),
     );
     shrinker.normalize_unicode_chars();
-    match shrinker.current_nodes[0].value {
+    match &shrinker.current_nodes[0].value {
         ChoiceValue::Boolean(b) => assert!(b),
         _ => unreachable!(),
     }

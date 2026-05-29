@@ -1,4 +1,5 @@
 use super::*;
+use crate::native::bignum::BigInt;
 
 // ── IntegerChoice::simplest ─────────────────────────────────────────────────
 //
@@ -8,9 +9,9 @@ use super::*;
 fn integer_choice_simplest_spans_zero() {
     assert_eq!(
         IntegerChoice {
-            min_value: -10,
-            max_value: 10,
-            shrink_towards: 0,
+            min_value: BigInt::from(-10),
+            max_value: BigInt::from(10),
+            shrink_towards: BigInt::from(0),
         }
         .simplest(),
         0
@@ -21,9 +22,9 @@ fn integer_choice_simplest_spans_zero() {
 fn integer_choice_simplest_all_positive() {
     assert_eq!(
         IntegerChoice {
-            min_value: 5,
-            max_value: 100,
-            shrink_towards: 0,
+            min_value: BigInt::from(5),
+            max_value: BigInt::from(100),
+            shrink_towards: BigInt::from(0),
         }
         .simplest(),
         5
@@ -34,9 +35,9 @@ fn integer_choice_simplest_all_positive() {
 fn integer_choice_simplest_all_negative() {
     assert_eq!(
         IntegerChoice {
-            min_value: -100,
-            max_value: -5,
-            shrink_towards: 0,
+            min_value: BigInt::from(-100),
+            max_value: BigInt::from(-5),
+            shrink_towards: BigInt::from(0),
         }
         .simplest(),
         -5
@@ -51,9 +52,9 @@ fn integer_choice_simplest_all_negative() {
 fn integer_choice_unit_spans_zero() {
     assert_eq!(
         IntegerChoice {
-            min_value: -10,
-            max_value: 10,
-            shrink_towards: 0,
+            min_value: BigInt::from(-10),
+            max_value: BigInt::from(10),
+            shrink_towards: BigInt::from(0),
         }
         .unit(),
         1
@@ -64,9 +65,9 @@ fn integer_choice_unit_spans_zero() {
 fn integer_choice_unit_all_positive() {
     assert_eq!(
         IntegerChoice {
-            min_value: 5,
-            max_value: 100,
-            shrink_towards: 0,
+            min_value: BigInt::from(5),
+            max_value: BigInt::from(100),
+            shrink_towards: BigInt::from(0),
         }
         .unit(),
         6
@@ -79,9 +80,9 @@ fn integer_choice_unit_all_negative() {
     // simplest - 1 = -6.
     assert_eq!(
         IntegerChoice {
-            min_value: -100,
-            max_value: -5,
-            shrink_towards: 0,
+            min_value: BigInt::from(-100),
+            max_value: BigInt::from(-5),
+            shrink_towards: BigInt::from(0),
         }
         .unit(),
         -6
@@ -93,9 +94,9 @@ fn integer_choice_unit_single_value_range() {
     // When the range is a single value, unit falls back to simplest.
     assert_eq!(
         IntegerChoice {
-            min_value: 5,
-            max_value: 5,
-            shrink_towards: 0,
+            min_value: BigInt::from(5),
+            max_value: BigInt::from(5),
+            shrink_towards: BigInt::from(0),
         }
         .unit(),
         5
@@ -108,9 +109,9 @@ fn choice_kind_to_index_panics_on_kind_value_mismatch() {
     // Asking an Integer kind to index a Boolean value is a programmer error;
     // ChoiceKind::to_index must panic loudly rather than return a bogus index.
     let kind = ChoiceKind::Integer(IntegerChoice {
-        min_value: 0,
-        max_value: 100,
-        shrink_towards: 0,
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(100),
+        shrink_towards: BigInt::from(0),
     });
     let _ = kind.to_index(&ChoiceValue::Boolean(true));
 }
@@ -128,9 +129,9 @@ fn bu(n: u64) -> crate::native::bignum::BigInt {
 #[test]
 fn integer_bounded_range_gives_exact_count() {
     let kind = ChoiceKind::Integer(IntegerChoice {
-        min_value: 0,
-        max_value: 200,
-        shrink_towards: 0,
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(200),
+        shrink_towards: BigInt::from(0),
     });
     assert_eq!(kind.max_children(), bu(201));
 }
@@ -138,9 +139,9 @@ fn integer_bounded_range_gives_exact_count() {
 #[test]
 fn integer_negative_range_gives_exact_count() {
     let kind = ChoiceKind::Integer(IntegerChoice {
-        min_value: -10,
-        max_value: 10,
-        shrink_towards: 0,
+        min_value: BigInt::from(-10),
+        max_value: BigInt::from(10),
+        shrink_towards: BigInt::from(0),
     });
     assert_eq!(kind.max_children(), bu(21));
 }
@@ -148,9 +149,9 @@ fn integer_negative_range_gives_exact_count() {
 #[test]
 fn integer_full_i128_range_is_two_pow_128() {
     let kind = ChoiceKind::Integer(IntegerChoice {
-        min_value: i128::MIN,
-        max_value: i128::MAX,
-        shrink_towards: 0,
+        min_value: BigInt::from(i128::MIN),
+        max_value: BigInt::from(i128::MAX),
+        shrink_towards: BigInt::from(0),
     });
     // 2^128 = u128::MAX + 1.
     let expected = crate::native::bignum::BigInt::from(u128::MAX) + bu(1);
@@ -165,9 +166,9 @@ fn integer_full_i128_range_is_two_pow_128() {
 
 fn integer_choice(min: i128, max: i128) -> IntegerChoice {
     IntegerChoice {
-        min_value: min,
-        max_value: max,
-        shrink_towards: 0,
+        min_value: BigInt::from(min),
+        max_value: BigInt::from(max),
+        shrink_towards: BigInt::from(0),
     }
 }
 
@@ -176,7 +177,11 @@ fn integer_choice_index_round_trip_symmetric_around_zero() {
     let ic = integer_choice(-10, 10);
     for v in -10i128..=10 {
         let idx = ic.to_index(v);
-        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+        assert_eq!(
+            ic.from_index(idx),
+            Some(BigInt::from(v)),
+            "round-trip failed for v={v}"
+        );
     }
 }
 
@@ -185,7 +190,11 @@ fn integer_choice_index_round_trip_all_positive() {
     let ic = integer_choice(5, 25);
     for v in 5i128..=25 {
         let idx = ic.to_index(v);
-        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+        assert_eq!(
+            ic.from_index(idx),
+            Some(BigInt::from(v)),
+            "round-trip failed for v={v}"
+        );
     }
 }
 
@@ -194,7 +203,11 @@ fn integer_choice_index_round_trip_all_negative() {
     let ic = integer_choice(-25, -5);
     for v in -25i128..=-5 {
         let idx = ic.to_index(v);
-        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+        assert_eq!(
+            ic.from_index(idx),
+            Some(BigInt::from(v)),
+            "round-trip failed for v={v}"
+        );
     }
 }
 
@@ -204,7 +217,11 @@ fn integer_choice_index_round_trip_asymmetric() {
     let ic = integer_choice(-5, 100);
     for v in -5i128..=100 {
         let idx = ic.to_index(v);
-        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+        assert_eq!(
+            ic.from_index(idx),
+            Some(BigInt::from(v)),
+            "round-trip failed for v={v}"
+        );
     }
 }
 
@@ -225,7 +242,11 @@ fn integer_choice_index_round_trip_full_i128_range() {
         -(1 << 100),
     ] {
         let idx = ic.to_index(v);
-        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+        assert_eq!(
+            ic.from_index(idx),
+            Some(BigInt::from(v)),
+            "round-trip failed for v={v}"
+        );
     }
 }
 
@@ -234,7 +255,7 @@ fn integer_choice_index_round_trip_single_value() {
     let ic = integer_choice(42, 42);
     let idx = ic.to_index(42);
     assert_eq!(idx, crate::native::bignum::BigInt::from(0u32));
-    assert_eq!(ic.from_index(idx), Some(42));
+    assert_eq!(ic.from_index(idx), Some(BigInt::from(42)));
 }
 
 #[test]
@@ -586,11 +607,11 @@ fn string_choice_from_index_past_max_returns_none() {
 fn integer_node(min: i128, max: i128, value: i128) -> ChoiceNode {
     ChoiceNode {
         kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: min,
-            max_value: max,
-            shrink_towards: 0,
+            min_value: BigInt::from(min),
+            max_value: BigInt::from(max),
+            shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(value),
+        value: ChoiceValue::Integer(BigInt::from(value)),
         was_forced: false,
     }
 }

@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{
     ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, float_to_index, index_to_float, sort_key,
@@ -468,9 +469,10 @@ fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) {
         &shrinker.current_nodes[i].kind,
         &shrinker.current_nodes[i].value,
     ) {
-        (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => {
-            (NumericValue::Integer(*n), NumericKind::Integer(ic.clone()))
-        }
+        (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => (
+            NumericValue::Integer(n.clone()),
+            NumericKind::Integer(ic.clone()),
+        ),
         (ChoiceKind::Float(fc), ChoiceValue::Float(f)) => {
             (NumericValue::Float(*f), NumericKind::Float(fc.clone()))
         }
@@ -480,9 +482,10 @@ fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) {
         &shrinker.current_nodes[j].kind,
         &shrinker.current_nodes[j].value,
     ) {
-        (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => {
-            (NumericValue::Integer(*n), NumericKind::Integer(ic.clone()))
-        }
+        (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => (
+            NumericValue::Integer(n.clone()),
+            NumericKind::Integer(ic.clone()),
+        ),
         (ChoiceKind::Float(fc), ChoiceValue::Float(f)) => {
             (NumericValue::Float(*f), NumericKind::Float(fc.clone()))
         }
@@ -520,17 +523,17 @@ enum Direction {
     RaiseLeftLowerRight,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum NumericValue {
-    Integer(i128),
+    Integer(BigInt),
     Float(f64),
 }
 
 impl NumericValue {
-    fn as_f64(self) -> f64 {
+    fn as_f64(&self) -> f64 {
         match self {
-            NumericValue::Integer(n) => n as f64,
-            NumericValue::Float(f) => f,
+            NumericValue::Integer(n) => n.to_f64(),
+            NumericValue::Float(f) => *f,
         }
     }
 }
@@ -543,7 +546,7 @@ enum NumericKind {
 
 fn shrink_target(kind: &NumericKind) -> f64 {
     match kind {
-        NumericKind::Integer(ic) => ic.simplest() as f64,
+        NumericKind::Integer(ic) => ic.simplest().to_f64(),
         NumericKind::Float(_) => 0.0,
     }
 }
@@ -564,7 +567,7 @@ fn apply_delta(
 
 fn add_int(v: &NumericValue, k: i128) -> NumericValue {
     match v {
-        NumericValue::Integer(n) => NumericValue::Integer(n.saturating_add(k)),
+        NumericValue::Integer(n) => NumericValue::Integer(n + BigInt::from(k)),
         NumericValue::Float(f) => NumericValue::Float(*f + k as f64),
     }
 }
@@ -574,7 +577,7 @@ fn build_value(kind: &NumericKind, candidate: NumericValue) -> Option<ChoiceValu
     // matching kind/value combinations are reachable from `redistribute_pair`.
     match (kind, candidate) {
         (NumericKind::Integer(ic), NumericValue::Integer(n)) => {
-            ic.validate(n).then_some(ChoiceValue::Integer(n))
+            ic.validate(&n).then_some(ChoiceValue::Integer(n))
         }
         (NumericKind::Float(fc), NumericValue::Float(f)) => {
             fc.validate(f).then_some(ChoiceValue::Float(f))

@@ -300,6 +300,25 @@ fn to_f64_conversion() {
 }
 
 #[test]
+fn bit_length_and_unsigned_bytes() {
+    assert_eq!(BigInt::Small(0).bit_length(), 0);
+    assert_eq!(BigInt::Small(1).bit_length(), 1);
+    assert_eq!(BigInt::Small(255).bit_length(), 8);
+    assert_eq!(BigInt::Small(-256).bit_length(), 9);
+    assert_eq!(BigInt::Small(i128::MIN).bit_length(), 128);
+    // A Big magnitude reports more than 128 bits.
+    assert!(big_pos().bit_length() >= 128);
+
+    // Round-trip a magnitude through little-endian bytes.
+    assert_eq!(BigInt::from_unsigned_le_bytes(&[]), BigInt::Small(0));
+    assert_eq!(BigInt::from_unsigned_le_bytes(&[0, 0]), BigInt::Small(0));
+    assert_eq!(BigInt::from_unsigned_le_bytes(&[1, 1]), BigInt::Small(257));
+    // 17 bytes → exceeds i128 → Big.
+    let seventeen = BigInt::from_unsigned_le_bytes(&[0xff; 17]);
+    assert!(matches!(seventeen, BigInt::Big(_)));
+}
+
+#[test]
 fn hash_and_eq_are_consistent_across_variants() {
     use std::collections::HashSet;
     let mut set = HashSet::new();

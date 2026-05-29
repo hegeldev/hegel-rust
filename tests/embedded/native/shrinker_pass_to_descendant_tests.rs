@@ -1,4 +1,5 @@
 //! Unit tests for `Shrinker::pass_to_descendant`.
+use crate::native::bignum::BigInt;
 
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
@@ -7,11 +8,11 @@ use crate::native::shrinker::{ShrinkRun, Shrinker};
 fn int_node(value: i128) -> ChoiceNode {
     ChoiceNode {
         kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: i128::MIN,
-            max_value: i128::MAX,
-            shrink_towards: 0,
+            min_value: BigInt::from(i128::MIN),
+            max_value: BigInt::from(i128::MAX),
+            shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(value),
+        value: ChoiceValue::Integer(BigInt::from(value)),
         was_forced: false,
     }
 }
@@ -60,7 +61,7 @@ fn pass_to_descendant_replaces_outer_with_inner_same_label() {
         .current_nodes
         .iter()
         .map(|n| match &n.value {
-            ChoiceValue::Integer(v) => *v,
+            ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
             _ => unreachable!(),
         })
         .collect();

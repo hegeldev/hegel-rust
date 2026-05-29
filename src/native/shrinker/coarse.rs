@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceKind, ChoiceValue};
 
 use super::{ShrinkRun, Shrinker};
@@ -36,19 +37,21 @@ impl<'a> Shrinker<'a> {
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
             let (ic, current_val) = match (&node.kind, &node.value) {
-                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), *v),
+                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.clone()),
                 _ => {
                     i += 1;
                     continue;
                 }
             };
-            if node.was_forced || current_val > 10 || ic.min_value != 0 {
+            if node.was_forced || current_val > BigInt::from(10) || ic.min_value != BigInt::zero() {
                 i += 1;
                 continue;
             }
+            // `current_val` is now in `0..=10`, so it fits `i128`.
+            let current_val = i128::try_from(&current_val).expect("guarded to <= 10");
             // Probe: does zeroing the node change the shape?
             let mut zeroed = self.current_nodes.clone();
-            zeroed[i] = zeroed[i].with_value(ChoiceValue::Integer(0));
+            zeroed[i] = zeroed[i].with_value(ChoiceValue::Integer(BigInt::zero()));
             let (_, zero_actual, _) = (self.test_fn)(ShrinkRun::Full(&zeroed));
             let shape_changed = zero_actual.len() != self.current_nodes.len()
                 || (i + 1..self.current_nodes.len()).any(|j| {
@@ -74,7 +77,7 @@ impl<'a> Shrinker<'a> {
         // documented precondition.
         debug_assert!(i < self.current_nodes.len());
         // First try the bare lowering.
-        let lowered = self.replace(&HashMap::from([(i, ChoiceValue::Integer(v))]));
+        let lowered = self.replace(&HashMap::from([(i, ChoiceValue::Integer(BigInt::from(v)))]));
         if lowered {
             return true;
         }
@@ -85,7 +88,7 @@ impl<'a> Shrinker<'a> {
             .iter()
             .map(|n| n.value.clone())
             .collect();
-        prefix.push(ChoiceValue::Integer(v));
+        prefix.push(ChoiceValue::Integer(BigInt::from(v)));
         let max_size = self.current_nodes.len() + 16;
         let epoch = self.improvements;
         for seed in 0..3u64 {

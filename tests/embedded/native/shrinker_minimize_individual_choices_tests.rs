@@ -1,4 +1,5 @@
 //! Unit tests for `Shrinker::minimize_individual_choices`.
+use crate::native::bignum::BigInt;
 
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
@@ -7,11 +8,11 @@ use crate::native::shrinker::{ShrinkRun, Shrinker};
 fn int_node(value: i128) -> ChoiceNode {
     ChoiceNode {
         kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: 0,
-            max_value: 100,
-            shrink_towards: 0,
+            min_value: BigInt::from(0),
+            max_value: BigInt::from(100),
+            shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(value),
+        value: ChoiceValue::Integer(BigInt::from(value)),
         was_forced: false,
     }
 }
@@ -23,8 +24,8 @@ fn forced_int_node(value: i128) -> ChoiceNode {
 }
 
 fn int_value(node: &ChoiceNode) -> i128 {
-    match node.value {
-        ChoiceValue::Integer(v) => v,
+    match &node.value {
+        ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
         _ => unreachable!(),
     }
 }
@@ -80,7 +81,7 @@ fn minimize_individual_choices_invokes_span_delete_fallback() {
             ShrinkRun::Full(nodes) => {
                 // Read the integer at index 0.
                 let count = match nodes.first().map(|n| &n.value) {
-                    Some(ChoiceValue::Integer(v)) => *v as usize,
+                    Some(ChoiceValue::Integer(v)) => usize::try_from(v).unwrap(),
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
                 let needed_len = 1 + count;
@@ -145,7 +146,7 @@ fn minimize_individual_choices_truncates_misaligned_string() {
                 // equals N (so a too-long candidate is rejected unless
                 // truncation lines them up).
                 let n = match nodes.first().map(|n| &n.value) {
-                    Some(ChoiceValue::Integer(v)) => *v as usize,
+                    Some(ChoiceValue::Integer(v)) => usize::try_from(v).unwrap(),
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
                 let candidate_str_len = match nodes.get(1).map(|n| &n.value) {
@@ -199,11 +200,11 @@ fn minimize_individual_choices_size_dep_single_node_delete_succeeds() {
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
                 let int_v = match nodes.first().map(|n| &n.value) {
-                    Some(ChoiceValue::Integer(v)) => *v,
+                    Some(ChoiceValue::Integer(v)) => v.clone(),
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
                 // Auto-truncate: actual length = 1 + int_v.
-                let needed_len = 1usize.saturating_add(int_v as usize);
+                let needed_len = 1usize.saturating_add(usize::try_from(&int_v).unwrap());
                 let actual_len = needed_len.min(nodes.len());
                 let actual: Vec<ChoiceNode> = nodes[..actual_len].to_vec();
                 // Predicate: original state (int=2, len=3) OR the
@@ -234,10 +235,10 @@ fn minimize_individual_choices_size_dep_span_delete_succeeds() {
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
                 let int_v = match nodes.first().map(|n| &n.value) {
-                    Some(ChoiceValue::Integer(v)) => *v,
+                    Some(ChoiceValue::Integer(v)) => v.clone(),
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
-                let needed_len = 1usize.saturating_add(int_v as usize);
+                let needed_len = 1usize.saturating_add(usize::try_from(&int_v).unwrap());
                 let actual_len = needed_len.min(nodes.len());
                 let actual: Vec<ChoiceNode> = nodes[..actual_len].to_vec();
                 let mut spans = Spans::new();
@@ -290,7 +291,7 @@ fn minimize_individual_choices_truncates_misaligned_bytes() {
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
                 let n = match nodes.first().map(|n| &n.value) {
-                    Some(ChoiceValue::Integer(v)) => *v as usize,
+                    Some(ChoiceValue::Integer(v)) => usize::try_from(v).unwrap(),
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
                 let candidate_len = match nodes.get(1).map(|n| &n.value) {

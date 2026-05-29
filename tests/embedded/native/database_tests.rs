@@ -3,6 +3,7 @@
 // `serialize_choices` / `deserialize_choices` round-trip.
 
 use super::*;
+use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceValue;
 use tempfile::TempDir;
 
@@ -95,10 +96,10 @@ fn move_value_falls_back_to_delete_save_when_rename_fails() {
 #[test]
 fn round_trip_integer_choices() {
     let choices = vec![
-        ChoiceValue::Integer(0),
-        ChoiceValue::Integer(-1),
-        ChoiceValue::Integer(i128::MAX),
-        ChoiceValue::Integer(i128::MIN),
+        ChoiceValue::Integer(BigInt::from(0)),
+        ChoiceValue::Integer(BigInt::from(-1)),
+        ChoiceValue::Integer(BigInt::from(i128::MAX)),
+        ChoiceValue::Integer(BigInt::from(i128::MIN)),
     ];
     let bytes = serialize_choices(&choices);
     assert_eq!(deserialize_choices(&bytes), Some(choices));
@@ -108,7 +109,7 @@ fn round_trip_integer_choices() {
 fn round_trip_mixed_choices() {
     let choices = vec![
         ChoiceValue::Boolean(false),
-        ChoiceValue::Integer(42),
+        ChoiceValue::Integer(BigInt::from(42)),
         ChoiceValue::Boolean(true),
     ];
     let bytes = serialize_choices(&choices);
@@ -129,11 +130,19 @@ fn deserialize_returns_none_on_missing_type_tag() {
 
 #[test]
 fn deserialize_returns_none_on_truncated_integer_body() {
-    // count = 1, type tag 0 (Integer), but fewer than 16 bytes follow.
+    // count = 1, type tag 0 (Integer), a length prefix claiming 16 magnitude
+    // bytes, but fewer actually follow.
     let mut bytes = 1u32.to_le_bytes().to_vec();
     bytes.push(0); // type tag = Integer
-    bytes.extend_from_slice(&[0u8; 8]); // only 8 of 16 needed bytes
+    bytes.extend_from_slice(&16u32.to_le_bytes()); // claims 16 magnitude bytes
+    bytes.extend_from_slice(&[0u8; 8]); // only 8 provided
     assert!(deserialize_choices(&bytes).is_none());
+
+    // Also: the length prefix itself is truncated (< 4 bytes after the tag).
+    let mut short = 1u32.to_le_bytes().to_vec();
+    short.push(0);
+    short.extend_from_slice(&[0u8; 2]);
+    assert!(deserialize_choices(&short).is_none());
 }
 
 #[test]

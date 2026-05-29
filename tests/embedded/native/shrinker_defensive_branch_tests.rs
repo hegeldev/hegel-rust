@@ -1,5 +1,6 @@
 //! Tests covering defensive branches in deletion.rs and sequence.rs
 //! that were previously masked by `// nocov` annotations.
+use crate::native::bignum::BigInt;
 
 use std::collections::HashMap;
 
@@ -10,11 +11,11 @@ use crate::native::shrinker::{ShrinkRun, Shrinker};
 fn int_node(value: i128) -> ChoiceNode {
     ChoiceNode {
         kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: i128::MIN + 1,
-            max_value: i128::MAX,
-            shrink_towards: 0,
+            min_value: BigInt::from(i128::MIN + 1),
+            max_value: BigInt::from(i128::MAX),
+            shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(value),
+        value: ChoiceValue::Integer(BigInt::from(value)),
         was_forced: false,
     }
 }
@@ -47,10 +48,10 @@ fn try_replace_with_deletion_returns_true_on_early_success() {
     // simplest value succeeds straight through the early-success
     // path that the nocov masked.
     let mut shrinker = accepting_shrinker(vec![int_node(42), int_node(7)]);
-    let ok = shrinker.try_replace_with_deletion(0, ChoiceValue::Integer(0), 2);
+    let ok = shrinker.try_replace_with_deletion(0, ChoiceValue::Integer(BigInt::from(0)), 2);
     assert!(ok);
-    match shrinker.current_nodes[0].value {
-        ChoiceValue::Integer(v) => assert_eq!(v, 0),
+    match &shrinker.current_nodes[0].value {
+        ChoiceValue::Integer(v) => assert_eq!(*v, 0),
         _ => unreachable!(),
     }
 }
@@ -209,7 +210,7 @@ fn replace_short_circuits_on_index_past_end_of_attempt() {
     // doesn't depend on iteration order.
     let mut shrinker = accepting_shrinker(vec![int_node(5)]);
     let mut values = HashMap::new();
-    values.insert(0, ChoiceValue::Integer(0));
-    values.insert(10, ChoiceValue::Integer(0));
+    values.insert(0, ChoiceValue::Integer(BigInt::from(0)));
+    values.insert(10, ChoiceValue::Integer(BigInt::from(0)));
     assert!(!shrinker.replace(&values));
 }

@@ -15,8 +15,8 @@ use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
 use hegel::__bench::{
-    BytesChoice, FloatChoice, IntegerChoice, IntervalSet, StringChoice, biased_bytes_sample,
-    biased_float_sample, biased_integer_sample, biased_string_sample,
+    BigInt, BytesChoice, FloatChoice, IntegerChoice, IntervalSet, StringChoice,
+    biased_bytes_sample, biased_float_sample, biased_integer_sample, biased_string_sample,
 };
 
 fn integer_cases() -> Vec<(&'static str, IntegerChoice)> {
@@ -24,33 +24,33 @@ fn integer_cases() -> Vec<(&'static str, IntegerChoice)> {
         (
             "i64_unbounded",
             IntegerChoice {
-                min_value: i64::MIN as i128,
-                max_value: i64::MAX as i128,
-                shrink_towards: 0,
+                min_value: BigInt::from(i64::MIN),
+                max_value: BigInt::from(i64::MAX),
+                shrink_towards: BigInt::from(0),
             },
         ),
         (
             "i32_unbounded",
             IntegerChoice {
-                min_value: i32::MIN as i128,
-                max_value: i32::MAX as i128,
-                shrink_towards: 0,
+                min_value: BigInt::from(i32::MIN),
+                max_value: BigInt::from(i32::MAX),
+                shrink_towards: BigInt::from(0),
             },
         ),
         (
             "small_window_0_100",
             IntegerChoice {
-                min_value: 0,
-                max_value: 100,
-                shrink_towards: 0,
+                min_value: BigInt::from(0),
+                max_value: BigInt::from(100),
+                shrink_towards: BigInt::from(0),
             },
         ),
         (
             "tight_window_42_43",
             IntegerChoice {
-                min_value: 42,
-                max_value: 43,
-                shrink_towards: 42,
+                min_value: BigInt::from(42),
+                max_value: BigInt::from(43),
+                shrink_towards: BigInt::from(42),
             },
         ),
     ]

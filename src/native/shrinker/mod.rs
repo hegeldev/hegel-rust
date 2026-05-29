@@ -27,6 +27,7 @@ pub use scheduling::ShrinkPass;
 
 use std::collections::{HashMap, HashSet};
 
+use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINKS, NodeSortKey, Spans, sort_key};
 
 /// Request passed to the shrinker's test function.
@@ -543,6 +544,30 @@ pub(super) fn bin_search_down(lo: i128, hi: i128, f: &mut impl FnMut(i128) -> bo
     while lo.checked_add(1).is_some_and(|n| n < hi) {
         let mid = lo + (hi - lo) / 2;
         if f(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    hi
+}
+
+/// `BigInt` counterpart of [`bin_search_down`], for shrinking integer values
+/// of arbitrary magnitude. No overflow guard is needed since `BigInt` grows as
+/// required.
+pub(super) fn bin_search_down_big(
+    lo: BigInt,
+    hi: BigInt,
+    f: &mut impl FnMut(&BigInt) -> bool,
+) -> BigInt {
+    if f(&lo) {
+        return lo;
+    }
+    let mut lo = lo;
+    let mut hi = hi;
+    while &lo + &BigInt::one() < hi {
+        let mid = &lo + &((&hi - &lo) / BigInt::from(2u32));
+        if f(&mid) {
             hi = mid;
         } else {
             lo = mid;

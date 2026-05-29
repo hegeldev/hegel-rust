@@ -31,6 +31,7 @@
 
 use std::path::PathBuf;
 
+use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceValue;
 
 /// Multi-value key/value store backing the native engine's replay phase.
@@ -195,7 +196,9 @@ pub(super) fn fnv_hex(s: &[u8]) -> String {
 /// - For each choice:
 ///   - 1-byte type tag: 0=Integer, 1=Boolean, 2=Float, 3=Bytes, 4=String
 ///   - Value bytes:
-///     - Integer: 16 bytes (i128 little-endian)
+///     - Integer: 4 bytes (u32 little-endian byte count) followed by that many
+///       bytes of minimal two's-complement little-endian magnitude (so values
+///       of any width round-trip)
 ///     - Boolean: 1 byte (0 or 1)
 ///     - Float: 8 bytes (the f64 bit pattern, little-endian, so `-0.0` and
 ///       NaN payloads round-trip unchanged)
@@ -210,7 +213,9 @@ pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
         match choice {
             ChoiceValue::Integer(v) => {
                 buf.push(0);
-                buf.extend_from_slice(&v.to_le_bytes());
+                let bytes = v.to_signed_le_bytes();
+                buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+                buf.extend_from_slice(&bytes);
             }
             ChoiceValue::Boolean(v) => {
                 buf.push(1);
@@ -260,12 +265,17 @@ pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
         match bytes[pos] {
             0 => {
                 pos += 1;
-                if pos + 16 > bytes.len() {
+                if pos + 4 > bytes.len() {
                     return None;
                 }
-                let v = i128::from_le_bytes(bytes[pos..pos + 16].try_into().ok()?);
+                let len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+                if pos + len > bytes.len() {
+                    return None;
+                }
+                let v = BigInt::from_signed_le_bytes(&bytes[pos..pos + len]);
                 choices.push(ChoiceValue::Integer(v));
-                pos += 16;
+                pos += len;
             }
             1 => {
                 pos += 1;

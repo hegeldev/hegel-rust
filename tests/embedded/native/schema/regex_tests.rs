@@ -9,6 +9,7 @@
 //! generator's draw distribution.
 
 use super::*;
+use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceValue;
 use crate::native::re::constants::{
     AtCode, ChCode, SRE_FLAG_DOTALL, SRE_FLAG_IGNORECASE, SRE_FLAG_MULTILINE,
@@ -720,7 +721,7 @@ fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
     // `which` to choose between the two cases. With an alphabet that only
     // allows 'A', forcing `which = 0` picks the lowercase 'a', which the
     // alphabet rejects, so the test case is marked invalid.
-    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(0)], None, None);
+    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
     let mut state = GenState {
         groups: HashMap::new(),
         flags: SRE_FLAG_IGNORECASE,

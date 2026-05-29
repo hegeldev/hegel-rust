@@ -359,8 +359,8 @@ pub(crate) fn is_climbable(value: &ChoiceValue, kind: &ChoiceKind) -> bool {
 pub(crate) fn step_choice(node: &ChoiceNode, delta: i128) -> Option<ChoiceValue> {
     match (&node.value, &node.kind) {
         (ChoiceValue::Integer(v), ChoiceKind::Integer(kind)) => {
-            let new = v.saturating_add(delta);
-            if !kind.validate(new) {
+            let new = v + crate::native::bignum::BigInt::from(delta);
+            if !kind.validate(&new) {
                 return None;
             }
             Some(ChoiceValue::Integer(new))

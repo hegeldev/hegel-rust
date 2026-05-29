@@ -1,6 +1,7 @@
 //! Regression tests asserting that every shrink pass must skip
 //! `was_forced=true` nodes. We gate at the top-level node loop of
 //! each pass.
+use crate::native::bignum::BigInt;
 
 use crate::native::core::choices::{BooleanChoice, BytesChoice, FloatChoice, IntegerChoice};
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
@@ -9,11 +10,11 @@ use crate::native::shrinker::{ShrinkRun, Shrinker};
 fn int_node(value: i128, was_forced: bool) -> ChoiceNode {
     ChoiceNode {
         kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: i128::MIN + 1,
-            max_value: i128::MAX,
-            shrink_towards: 0,
+            min_value: BigInt::from(i128::MIN + 1),
+            max_value: BigInt::from(i128::MAX),
+            shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(value),
+        value: ChoiceValue::Integer(BigInt::from(value)),
         was_forced,
     }
 }
@@ -62,8 +63,8 @@ fn accepting_shrinker(initial: Vec<ChoiceNode>) -> Shrinker<'static> {
 }
 
 fn assert_integer_at(shrinker: &Shrinker<'_>, idx: usize, expected: i128) {
-    match shrinker.current_nodes[idx].value {
-        ChoiceValue::Integer(v) => assert_eq!(v, expected, "node {idx}"),
+    match &shrinker.current_nodes[idx].value {
+        ChoiceValue::Integer(v) => assert_eq!(*v, expected, "node {idx}"),
         _ => unreachable!(),
     }
 }
@@ -117,8 +118,8 @@ fn shrink_bytes_skips_forced_node() {
 fn shrink_floats_skips_forced_node() {
     let mut shrinker = accepting_shrinker(vec![float_node(123.5, true), float_node(7.5, false)]);
     shrinker.shrink_floats();
-    match shrinker.current_nodes[0].value {
-        ChoiceValue::Float(v) => assert_eq!(v, 123.5),
+    match &shrinker.current_nodes[0].value {
+        ChoiceValue::Float(v) => assert_eq!(*v, 123.5),
         _ => unreachable!(),
     }
 }
@@ -152,8 +153,8 @@ fn redistribute_numeric_pairs_skips_forced_integer() {
             ShrinkRun::Full(nodes) => {
                 let sum: i128 = nodes
                     .iter()
-                    .filter_map(|n| match n.value {
-                        ChoiceValue::Integer(v) => Some(v),
+                    .filter_map(|n| match &n.value {
+                        ChoiceValue::Integer(v) => Some(i128::try_from(v).unwrap()),
                         _ => None,
                     })
                     .sum();
@@ -165,11 +166,11 @@ fn redistribute_numeric_pairs_skips_forced_integer() {
             int_node(15, false),
             ChoiceNode {
                 kind: ChoiceKind::Integer(IntegerChoice {
-                    min_value: 0,
-                    max_value: 100,
-                    shrink_towards: 0,
+                    min_value: BigInt::from(0),
+                    max_value: BigInt::from(100),
+                    shrink_towards: BigInt::from(0),
                 }),
-                value: ChoiceValue::Integer(10),
+                value: ChoiceValue::Integer(BigInt::from(10)),
                 was_forced: true,
             },
         ],

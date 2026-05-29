@@ -1,4 +1,5 @@
 use super::*;
+use crate::native::bignum::BigInt;
 use crate::native::core::Spans;
 use crate::native::shrinker::Shrinker;
 
@@ -27,11 +28,11 @@ fn float_node(value: f64, min: f64, max: f64) -> ChoiceNode {
 fn int_node(value: i128, min: i128, max: i128) -> ChoiceNode {
     ChoiceNode {
         kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: min,
-            max_value: max,
-            shrink_towards: 0,
+            min_value: BigInt::from(min),
+            max_value: BigInt::from(max),
+            shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(value),
+        value: ChoiceValue::Integer(BigInt::from(value)),
         was_forced: false,
     }
 }
@@ -134,8 +135,8 @@ fn shrink_floats_canonicalizes_nan_to_finite_when_predicate_admits() {
     shrinker.shrink_floats();
     // After canonicalization the node holds `f64::MAX` (first accepted
     // candidate in the iteration order) rather than the original NaN.
-    match shrinker.current_nodes[0].value {
-        ChoiceValue::Float(f) => assert_eq!(f, f64::MAX),
+    match &shrinker.current_nodes[0].value {
+        ChoiceValue::Float(f) => assert_eq!(*f, f64::MAX),
         _ => unreachable!(),
     }
 }
@@ -194,8 +195,8 @@ fn shrink_floats_negative_large_magnitude_uses_is_neg_branch() {
         Spans::new(),
     );
     shrinker.shrink_floats();
-    match shrinker.current_nodes[0].value {
-        ChoiceValue::Float(v) => assert!(v < -1.0 && v.is_finite()),
+    match &shrinker.current_nodes[0].value {
+        ChoiceValue::Float(v) => assert!(*v < -1.0 && v.is_finite()),
         _ => unreachable!(),
     }
 }
@@ -231,8 +232,8 @@ fn shrink_floats_negative_shrink_by_multiples_reaches_predicate_boundary() {
         Spans::new(),
     );
     shrinker.shrink_floats();
-    match shrinker.current_nodes[0].value {
-        ChoiceValue::Float(v) => assert_eq!(v, -3.0),
+    match &shrinker.current_nodes[0].value {
+        ChoiceValue::Float(v) => assert_eq!(*v, -3.0),
         _ => unreachable!(),
     }
 }

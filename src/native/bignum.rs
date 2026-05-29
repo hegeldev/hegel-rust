@@ -138,6 +138,32 @@ impl BigInt {
         }
     }
 
+    /// Number of bits in the magnitude `|self|`; `0` for zero.
+    pub fn bit_length(&self) -> u64 {
+        match self {
+            BigInt::Small(x) => u64::from(128 - x.unsigned_abs().leading_zeros()),
+            BigInt::Big(b) => b.bits(),
+        }
+    }
+
+    /// Construct a non-negative `BigInt` from little-endian unsigned bytes.
+    /// Used by the arbitrary-precision uniform sampler to turn random bytes
+    /// into a magnitude.
+    pub fn from_unsigned_le_bytes(bytes: &[u8]) -> BigInt {
+        BigInt::from_raw(RawBigInt::from_bytes_le(Sign::Plus, bytes))
+    }
+
+    /// Minimal two's-complement little-endian byte encoding, for persistence.
+    /// Round-trips through [`Self::from_signed_le_bytes`].
+    pub fn to_signed_le_bytes(&self) -> Vec<u8> {
+        self.to_raw().to_signed_bytes_le()
+    }
+
+    /// Inverse of [`Self::to_signed_le_bytes`].
+    pub fn from_signed_le_bytes(bytes: &[u8]) -> BigInt {
+        BigInt::from_raw(RawBigInt::from_signed_bytes_le(bytes))
+    }
+
     /// Lossy conversion to `f64`. `Small` casts directly; a `Big` goes through
     /// `num_bigint`, which already saturates an out-of-range magnitude to the
     /// signed infinity (so the `unwrap_or` default is only a belt-and-braces
@@ -236,6 +262,32 @@ impl PartialOrd for BigInt {
     }
 }
 
+/// Ergonomic comparison against `i128` (an `i128` always lands in the `Small`
+/// variant, so these are allocation-free).
+impl PartialEq<i128> for BigInt {
+    fn eq(&self, other: &i128) -> bool {
+        *self == BigInt::Small(*other)
+    }
+}
+
+impl PartialEq<BigInt> for i128 {
+    fn eq(&self, other: &BigInt) -> bool {
+        BigInt::Small(*self) == *other
+    }
+}
+
+impl PartialOrd<i128> for BigInt {
+    fn partial_cmp(&self, other: &i128) -> Option<Ordering> {
+        Some(self.cmp(&BigInt::Small(*other)))
+    }
+}
+
+impl PartialOrd<BigInt> for i128 {
+    fn partial_cmp(&self, other: &BigInt) -> Option<Ordering> {
+        Some(BigInt::Small(*self).cmp(other))
+    }
+}
+
 impl fmt::Display for BigInt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -281,6 +333,14 @@ impl From<bool> for BigInt {
 impl From<RawBigInt> for BigInt {
     fn from(v: RawBigInt) -> BigInt {
         BigInt::from_raw(v)
+    }
+}
+
+/// Cloning conversion from a borrow, so APIs taking `impl Into<BigInt>` accept
+/// `&BigInt` without the caller writing `.clone()`.
+impl From<&BigInt> for BigInt {
+    fn from(v: &BigInt) -> BigInt {
+        v.clone()
     }
 }
 

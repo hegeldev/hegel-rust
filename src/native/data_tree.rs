@@ -21,7 +21,7 @@ use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Status};
 /// separately — both matter for novel-prefix exhaustion accounting.
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum ChoiceValueKey {
-    Integer(i128),
+    Integer(BigInt),
     Boolean(bool),
     Float(u64),
     Bytes(Vec<u8>),
@@ -31,7 +31,7 @@ enum ChoiceValueKey {
 impl From<&ChoiceValue> for ChoiceValueKey {
     fn from(v: &ChoiceValue) -> Self {
         match v {
-            ChoiceValue::Integer(n) => ChoiceValueKey::Integer(*n),
+            ChoiceValue::Integer(n) => ChoiceValueKey::Integer(n.clone()),
             ChoiceValue::Boolean(b) => ChoiceValueKey::Boolean(*b),
             ChoiceValue::Float(f) => ChoiceValueKey::Float(f.to_bits()),
             ChoiceValue::Bytes(b) => ChoiceValueKey::Bytes(b.clone()),

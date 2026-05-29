@@ -1,4 +1,5 @@
 use super::*;
+use crate::native::bignum::BigInt;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -415,7 +416,7 @@ fn data_observer_draw_boolean_default_is_no_op() {
 #[test]
 fn data_observer_draw_integer_default_is_no_op() {
     let mut obs = NoopObserver;
-    obs.draw_integer(42, false); // must not panic
+    obs.draw_integer(&BigInt::from(42), false); // must not panic
 }
 
 #[test]
@@ -533,12 +534,12 @@ fn draw_integer_notifies_observer() {
         captured: Arc<Mutex<Option<(i128, bool)>>>,
     }
     impl DataObserver for IntObserver {
-        fn draw_integer(&mut self, value: i128, was_forced: bool) {
-            *self.captured.lock().unwrap() = Some((value, was_forced));
+        fn draw_integer(&mut self, value: &BigInt, was_forced: bool) {
+            *self.captured.lock().unwrap() = Some((i128::try_from(value).unwrap(), was_forced));
         }
     }
     let captured = Arc::new(Mutex::new(None));
-    let choices = vec![ChoiceValue::Integer(99)];
+    let choices = vec![ChoiceValue::Integer(BigInt::from(99))];
     let obs = Box::new(IntObserver {
         captured: captured.clone(),
     });
@@ -824,7 +825,7 @@ fn template_simplest_finite_count_n_produces_exactly_n_values() {
 
 #[test]
 fn template_concrete_prefix_then_template() {
-    let prefix = vec![ChoiceValue::Integer(42)];
+    let prefix = vec![ChoiceValue::Integer(BigInt::from(42))];
     let mut tc = NativeTestCase::for_choices_and_template(
         &prefix,
         None,
@@ -862,9 +863,9 @@ fn template_concrete_prefix_with_punning_then_template() {
     assert_eq!(
         v,
         IntegerChoice {
-            min_value: -100,
-            max_value: 100,
-            shrink_towards: 0,
+            min_value: BigInt::from(-100),
+            max_value: BigInt::from(100),
+            shrink_towards: BigInt::from(0),
         }
         .unit()
     );
@@ -938,9 +939,9 @@ fn template_count_decrements_on_each_draw() {
 
 fn ic(min_value: i128, max_value: i128) -> IntegerChoice {
     IntegerChoice {
-        min_value,
-        max_value,
-        shrink_towards: 0,
+        min_value: BigInt::from(min_value),
+        max_value: BigInt::from(max_value),
+        shrink_towards: BigInt::from(0),
     }
 }
 
@@ -950,7 +951,7 @@ fn biased_integer_sample_stays_in_range_for_small_bounds() {
     let mut rng = SmallRng::seed_from_u64(1);
     for _ in 0..1000 {
         let v = biased_integer_sample(&kind, &mut rng);
-        assert!(kind.validate(v), "out of range: {v}");
+        assert!(kind.validate(&v), "out of range: {v}");
     }
 }
 
@@ -960,7 +961,7 @@ fn biased_integer_sample_stays_in_range_for_wide_bounds() {
     let mut rng = SmallRng::seed_from_u64(2);
     for _ in 0..2000 {
         let v = biased_integer_sample(&kind, &mut rng);
-        assert!(kind.validate(v), "out of range: {v}");
+        assert!(kind.validate(&v), "out of range: {v}");
     }
 }
 
@@ -970,7 +971,7 @@ fn biased_integer_sample_stays_in_range_for_full_i128() {
     let mut rng = SmallRng::seed_from_u64(3);
     for _ in 0..1000 {
         let v = biased_integer_sample(&kind, &mut rng);
-        assert!(kind.validate(v), "out of range: {v}");
+        assert!(kind.validate(&v), "out of range: {v}");
     }
 }
 
@@ -996,11 +997,7 @@ fn biased_integer_sample_produces_diverse_magnitudes_unbounded() {
     for _ in 0..2000 {
         let v = biased_integer_sample(&kind, &mut rng);
         // bucket by bit-length of |v|
-        let mag = if v == 0 {
-            0
-        } else {
-            128 - v.unsigned_abs().leading_zeros() as i32
-        };
+        let mag = v.bit_length() as i32;
         magnitudes.insert(mag);
     }
     // A uniform-only distribution on [i64::MIN, i64::MAX] would land almost
@@ -1024,7 +1021,7 @@ fn biased_integer_sample_concentrates_around_zero_when_unbounded() {
     let total = 2000;
     for _ in 0..total {
         let v = biased_integer_sample(&kind, &mut rng);
-        if v.unsigned_abs() <= 256 {
+        if v.abs() <= 256 {
             in_inner += 1;
         }
     }
@@ -1048,11 +1045,11 @@ fn biased_integer_sample_log_skewed_bounded_range_favours_smaller_magnitudes() {
     // midpoint.
     let kind = ic(10_000, 10_000_000);
     let mut rng = SmallRng::seed_from_u64(11);
-    let mut samples: Vec<i128> = (0..2000)
+    let mut samples: Vec<BigInt> = (0..2000)
         .map(|_| biased_integer_sample(&kind, &mut rng))
         .collect();
     samples.sort();
-    let median = samples[samples.len() / 2];
+    let median = samples[samples.len() / 2].clone();
     // Midpoint of the uniform fallback would be ~5_000_000. The new
     // distribution should land well below that. We use 1_000_000 as a
     // generous upper bound that the uniform fallback would clear with
@@ -1074,11 +1071,13 @@ fn biased_integer_sample_narrow_range_uses_uniform_fallback() {
     let mut seen_one = false;
     for _ in 0..200 {
         let v = biased_integer_sample(&kind, &mut rng);
-        assert!(kind.validate(v), "out of range: {v}");
-        match v {
-            0 => seen_zero = true,
-            1 => seen_one = true,
-            _ => unreachable!(),
+        assert!(kind.validate(&v), "out of range: {v}");
+        if v == 0 {
+            seen_zero = true;
+        } else if v == 1 {
+            seen_one = true;
+        } else {
+            unreachable!();
         }
         if seen_zero && seen_one {
             break;
@@ -1099,7 +1098,7 @@ fn integer_sample_from_distribution_uniform_fallback_for_indistinguishable_bound
     let max = i128::MAX;
     let mut all_endpoints = true;
     for _ in 0..50 {
-        let v = integer_sample_from_distribution(min, max, &mut rng);
+        let v = integer_sample_from_distribution(&BigInt::from(min), &BigInt::from(max), &mut rng);
         assert!(v >= min && v <= max, "out of range: {v}");
         if v != min && v != max {
             all_endpoints = false;

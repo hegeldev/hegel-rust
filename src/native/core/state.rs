@@ -13,6 +13,7 @@ use super::choices::{
 };
 use super::float_index::lex_to_float;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
+use crate::native::bignum::BigInt;
 use crate::native::intervalsets::IntervalSet;
 use crate::native::statistics::{
     Distribution, LogStudentTDistribution, PiecewiseDistribution, UniformDistribution,
@@ -153,7 +154,11 @@ static INTEGERS_DISTRIBUTION: LazyLock<
 /// requested range is too narrow for inverse-CDF sampling to be stable.
 /// Callers must ensure `min_value < max_value`; the `min == max` early
 /// return is handled at the [`biased_integer_sample`] call site.
-fn integer_sample_from_distribution(min_value: i128, max_value: i128, rng: &mut SmallRng) -> i128 {
+fn integer_sample_from_distribution_i128(
+    min_value: i128,
+    max_value: i128,
+    rng: &mut SmallRng,
+) -> i128 {
     let dist = &*INTEGERS_DISTRIBUTION;
     // i128 endpoints can lose precision crossing into f64, but the final
     // `clamp` mops up any out-of-range round-off so the contract holds.
@@ -174,6 +179,64 @@ fn integer_sample_from_distribution(min_value: i128, max_value: i128, rng: &mut 
     // `f64 as i128` saturates out-of-range values to ±i128::MAX, then
     // `clamp` brings them into the requested range.
     (dist.inverse_cdf(p).round() as i128).clamp(min_value, max_value)
+}
+
+/// `BigInt` generalisation of [`integer_sample_from_distribution_i128`].
+///
+/// When both bounds fit `i128` this is exactly the legacy i128 sampler
+/// (preserving its distribution), so the overwhelmingly common case is
+/// unchanged. When a bound exceeds `i128`, the f64-CDF distribution is still
+/// used over the bounds capped at `±2^127` (mirroring Hypothesis, which caps
+/// effectively-unbounded magnitudes), with the result clamped back into
+/// `[min, max]`; if that capped window collapses (both bounds far out in the
+/// same tail) it falls back to a uniform draw over the true `BigInt` range.
+fn integer_sample_from_distribution(
+    min_value: &BigInt,
+    max_value: &BigInt,
+    rng: &mut SmallRng,
+) -> BigInt {
+    if let (Ok(lo), Ok(hi)) = (i128::try_from(min_value), i128::try_from(max_value)) {
+        return BigInt::from(integer_sample_from_distribution_i128(lo, hi, rng));
+    }
+    let dist = &*INTEGERS_DISTRIBUTION;
+    // Cap the sampling window at ±2^127 so a random draw stays within i128 and
+    // never produces an absurdly large magnitude; the explicit bound is still
+    // reachable as a "nasty" candidate in `biased_integer_sample`.
+    let cap = 2f64.powi(127);
+    let min_f = min_value.to_f64().max(-cap);
+    let max_f = max_value.to_f64().min(cap);
+    let lo = dist.cdf(min_f - 0.5);
+    let hi = dist.cdf(max_f + 0.5);
+    if hi - lo < 1e-13 {
+        return uniform_bigint(min_value, max_value, rng);
+    }
+    let p = (lo + rng.random::<f64>() * (hi - lo)).max(f64::MIN_POSITIVE);
+    let v = dist.inverse_cdf(p).round() as i128;
+    BigInt::from(v).clamp_to(min_value, max_value)
+}
+
+/// Uniform draw of a `BigInt` in `[min, max]` (inclusive).
+///
+/// Spans up to `u128::MAX` (which covers every fixed-width integer type,
+/// including the full `i128`/`u128` ranges) sample a native `u128` offset. A
+/// wider span — only reachable for genuinely arbitrary-precision bounds —
+/// draws random bytes covering the span's bit length and reduces them modulo
+/// `span + 1` (a negligible modulo bias is irrelevant for a fuzzing sampler).
+fn uniform_bigint(min_value: &BigInt, max_value: &BigInt, rng: &mut SmallRng) -> BigInt {
+    let span = max_value - min_value;
+    if let Ok(span_u) = u128::try_from(&span) {
+        let offset = if span_u == u128::MAX {
+            rng.random::<u128>()
+        } else {
+            rng.random_range(0..=span_u)
+        };
+        return min_value + BigInt::from(offset);
+    }
+    let modulus = &span + &BigInt::one();
+    let nbytes = (modulus.bit_length() as usize / 8) + 1;
+    let bytes: Vec<u8> = (0..nbytes).map(|_| rng.random::<u8>()).collect();
+    let r = BigInt::from_unsigned_le_bytes(&bytes);
+    min_value + (r % modulus)
 }
 
 /// Hand-picked "interesting" boundary values: powers of two and their
@@ -268,34 +331,36 @@ static SORTED_NASTY_POOL: LazyLock<Vec<i128>> = LazyLock::new(|| {
 /// values including `min_value` and `max_value`) the result is one of those
 /// nasty/interesting values; otherwise it is drawn from
 /// [`INTEGERS_DISTRIBUTION`] restricted to the requested range.
-pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut SmallRng) -> i128 {
+pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut SmallRng) -> BigInt {
     if ic.min_value == ic.max_value {
-        return ic.min_value;
+        return ic.min_value.clone();
     }
-    // The static boundary pool is sorted, so the in-range subset is a
-    // contiguous slice that two binary searches locate in O(log n).
+    // The static boundary pool is sorted `i128`s, so the subset in
+    // `[min_value, max_value]` is a contiguous slice located by two binary
+    // searches. The bounds are `BigInt` (possibly beyond `i128`) but the
+    // `BigInt`↔`i128` comparison operators compare without allocating.
     let pool = &*SORTED_NASTY_POOL;
-    let lo = pool.partition_point(|&v| v < ic.min_value);
-    let hi = pool.partition_point(|&v| v <= ic.max_value);
+    let lo = pool.partition_point(|&v| ic.min_value > v);
+    let hi = pool.partition_point(|&v| ic.max_value >= v);
     let static_slice = &pool[lo..hi];
     // `ic.min_value` / `ic.max_value` are always candidates; add them only
     // if the static slice doesn't already cover them (then `min < max` past
     // the early return guarantees they're distinct).
-    let need_min = static_slice.first() != Some(&ic.min_value);
-    let need_max = static_slice.last() != Some(&ic.max_value);
+    let need_min = static_slice.first().is_none_or(|&v| ic.min_value != v);
+    let need_max = static_slice.last().is_none_or(|&v| ic.max_value != v);
     let count = static_slice.len() + (need_min as usize) + (need_max as usize);
     let threshold = count as f64 * BOUNDARY_PROBABILITY;
     if rng.random::<f64>() < threshold {
         let idx = rng.random_range(0..count);
         if need_min && idx == 0 {
-            ic.min_value
+            ic.min_value.clone()
         } else if need_max && idx == count - 1 {
-            ic.max_value
+            ic.max_value.clone()
         } else {
-            static_slice[idx - need_min as usize]
+            BigInt::from(static_slice[idx - need_min as usize])
         }
     } else {
-        integer_sample_from_distribution(ic.min_value, ic.max_value, rng)
+        integer_sample_from_distribution(&ic.min_value, &ic.max_value, rng)
     }
 }
 
@@ -841,7 +906,7 @@ impl std::ops::Index<i64> for Spans {
 /// about.
 pub trait DataObserver: Send {
     fn draw_boolean(&mut self, _value: bool, _was_forced: bool) {}
-    fn draw_integer(&mut self, _value: i128, _was_forced: bool) {}
+    fn draw_integer(&mut self, _value: &BigInt, _was_forced: bool) {}
     fn draw_float(&mut self, _value: f64, _was_forced: bool) {}
     fn draw_bytes(&mut self, _value: &[u8], _was_forced: bool) {}
     fn draw_string(&mut self, _value: &str, _was_forced: bool) {}
@@ -1085,24 +1150,39 @@ impl NativeTestCase {
         id
     }
 
-    /// Draw a random integer in [min_value, max_value].
+    /// Draw a random integer in `[min_value, max_value]`, returning it as an
+    /// `i128`. Convenience wrapper around [`Self::draw_integer_big`] for the
+    /// many internal call sites whose ranges fit comfortably in `i128`; the
+    /// result is guaranteed in `[min_value, max_value]` and therefore fits.
     pub fn draw_integer(&mut self, min_value: i128, max_value: i128) -> Result<i128, StopTest> {
+        let v = self.draw_integer_big(&BigInt::from(min_value), &BigInt::from(max_value))?;
+        Ok(i128::try_from(&v).expect("draw_integer result lies within its i128 bounds"))
+    }
+
+    /// Draw a random integer in `[min_value, max_value]` with arbitrary-precision
+    /// bounds. The schema interpreter uses this directly so integer choices can
+    /// span any magnitude.
+    pub fn draw_integer_big(
+        &mut self,
+        min_value: &BigInt,
+        max_value: &BigInt,
+    ) -> Result<BigInt, StopTest> {
         assert!(
             min_value <= max_value,
             "Invalid range [{min_value}, {max_value}]"
         );
 
         let kind = IntegerChoice {
-            min_value,
-            max_value,
-            shrink_towards: 0,
+            min_value: min_value.clone(),
+            max_value: max_value.clone(),
+            shrink_towards: BigInt::zero(),
         };
 
         let (value, was_forced) = self.resolve_choice(
             &ChoiceKind::Integer(kind.clone()),
             || ChoiceValue::Integer(kind.simplest()),
             || ChoiceValue::Integer(kind.unit()),
-            |v| matches!(v, ChoiceValue::Integer(n) if kind.validate(*n)),
+            |v| matches!(v, ChoiceValue::Integer(n) if kind.validate(n)),
             |rng| ChoiceValue::Integer(biased_integer_sample(&kind, rng)),
         )?;
 
@@ -1112,12 +1192,12 @@ impl NativeTestCase {
 
         self.nodes.push(ChoiceNode {
             kind: ChoiceKind::Integer(kind),
-            value: ChoiceValue::Integer(v),
+            value: ChoiceValue::Integer(v.clone()),
             was_forced,
         });
 
         if let Some(ref mut obs) = self.observer {
-            obs.draw_integer(v, was_forced);
+            obs.draw_integer(&v, was_forced);
         }
 
         Ok(v)

@@ -152,7 +152,7 @@ impl<'a> Shrinker<'a> {
             for e in 0u32..11 {
                 let magnitude: i128 = 1i128 << e;
                 for &sign in &[1i128, -1] {
-                    let candidate_val = ChoiceValue::Integer(sign * magnitude);
+                    let candidate_val = ChoiceValue::Integer(BigInt::from(sign * magnitude));
                     if kind.validate(&candidate_val)
                         && candidate_val != node.value
                         && !candidates.contains(&candidate_val)
