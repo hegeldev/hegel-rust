@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.18 - 2026-05-30
+
+Internal refactoring of the native engine's integer representation to use a generic `IntegerChoice` type, and switch from `num-bigint` to `dashu-int` for big integer support.
+
 ## 0.14.17 - 2026-05-29
 
 This release only affects libhegel users and is otherwise a pure refactoring.
