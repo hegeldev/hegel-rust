@@ -79,7 +79,7 @@ impl TestRunner for NativeTestRunner {
         if settings.mode == Mode::SingleTestCase {
             return run_single(settings, run_case);
         }
-        run_main(settings, database_key, run_case)
+        run_main(settings, database_key, run_case, TOO_SLOW_THRESHOLD)
     }
 }
 
@@ -115,6 +115,9 @@ fn run_main(
     settings: &Settings,
     database_key: Option<&str>,
     run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+    // Injected (rather than read from the `TOO_SLOW_THRESHOLD` constant) so a
+    // test can trip the TooSlow check deterministically without a 30s sleep.
+    too_slow_threshold: std::time::Duration,
 ) -> TestRunResult {
     let mut rng = create_rng(settings, database_key);
     let max_examples = settings.test_cases;
@@ -348,7 +351,7 @@ fn run_main(
             if let Some(msg) = too_slow_check(
                 valid_test_cases,
                 total_test_time,
-                TOO_SLOW_THRESHOLD,
+                too_slow_threshold,
                 settings
                     .suppress_health_check
                     .contains(&HealthCheck::TooSlow),
