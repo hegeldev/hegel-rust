@@ -13,8 +13,8 @@ use crate::unicodedata;
 use ciborium::Value;
 
 /// Default upper bound for `max_size` when the schema doesn't set one.
-/// Matches the cap Hypothesis uses in its server-side `text` strategy so
-/// generation doesn't run away on unbounded sizes.
+/// Matches the cap Hypothesis uses in its `text` strategy so generation
+/// doesn't run away on unbounded sizes.
 const DEFAULT_MAX_SIZE: usize = 100;
 
 pub(super) fn interpret_string(

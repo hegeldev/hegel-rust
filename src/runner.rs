@@ -14,8 +14,14 @@ pub enum HealthCheck {
     /// Test execution is too slow.
     TooSlow,
     /// Generated test cases are too large.
+    ///
+    /// Reserved for parity with Hypothesis; the native engine does not yet
+    /// raise this, so suppressing it is currently a no-op.
     TestCasesTooLarge,
     /// The smallest natural input is very large.
+    ///
+    /// Reserved for parity with Hypothesis; the native engine does not yet
+    /// raise this, so suppressing it is currently a no-op.
     LargeInitialTestCase,
 }
 

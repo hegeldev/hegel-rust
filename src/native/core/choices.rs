@@ -1314,10 +1314,9 @@ impl std::fmt::Display for EngineError {
 }
 
 /// Opaque key identifying one source of "interesting" outcomes
-/// (one bug). Matches the cross-backend protocol contract: it's
-/// whatever string `tc.mark_complete(status, origin)` carries, and
-/// the native runner keys [`InterestingExample`]s on equality of
-/// these strings.
+/// (one bug). It's whatever string `tc.mark_complete(status, origin)`
+/// carries, and the native runner keys [`InterestingExample`]s on
+/// equality of these strings.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct InterestingOrigin(pub String);
 

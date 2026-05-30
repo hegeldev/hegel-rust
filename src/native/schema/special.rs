@@ -12,8 +12,8 @@ use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{EngineError, NativeTestCase};
 use ciborium::Value;
 
-/// Encode a `String` as a CBOR tag-91 value, the wire format used by the hegel
-/// server for strings (`HEGEL_STRING_TAG = 91` in `hegel.schema`).
+/// Encode a `String` as a CBOR tag-91 value, the Hegel wire format for strings
+/// (`HEGEL_STRING_TAG = 91` in `hegel.schema`).
 fn encode_string(s: String) -> Value {
     Value::Tag(91, Box::new(Value::Bytes(s.into_bytes())))
 }
