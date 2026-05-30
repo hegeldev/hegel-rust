@@ -360,11 +360,7 @@ pub(crate) fn step_choice(node: &ChoiceNode, delta: i128) -> Option<ChoiceValue>
     match (&node.value, node.kind.as_ref()) {
         (ChoiceValue::Integer(v), ChoiceKind::Integer(kind)) => {
             let new = v + crate::native::bignum::BigInt::from(delta);
-            let value = kind.value_from_bigint(&new)?;
-            if !kind.validate(&value) {
-                return None;
-            }
-            Some(ChoiceValue::Integer(value))
+            Some(ChoiceValue::Integer(kind.value_from_bigint(&new)?))
         }
         (ChoiceValue::Float(v), ChoiceKind::Float(kind)) => {
             let new = v + delta as f64;

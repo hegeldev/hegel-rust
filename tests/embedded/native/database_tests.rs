@@ -118,32 +118,73 @@ fn round_trip_mixed_choices() {
 
 #[test]
 fn deserialize_legacy_per_width_integers_as_bigint() {
-    // Build a payload using the old per-width sub-tags (0–9) by hand,
+    // Build a payload using every old per-width sub-tag (0–9) by hand,
     // then verify deserialize_choices converts them to BigInt values.
     let mut bytes = Vec::new();
-    // count = 3 (one i128, one u64, one i8)
-    bytes.extend_from_slice(&3u32.to_le_bytes());
+    bytes.extend_from_slice(&10u32.to_le_bytes());
 
-    // choice 0: Integer, sub-tag 4 (i128), value = 42
-    bytes.push(0); // type tag = Integer
-    bytes.push(4); // sub-tag = i128
-    bytes.extend_from_slice(&42i128.to_le_bytes());
-
-    // choice 1: Integer, sub-tag 8 (u64), value = u64::MAX
+    // sub-tag 0: i8
     bytes.push(0);
-    bytes.push(8); // sub-tag = u64
-    bytes.extend_from_slice(&u64::MAX.to_le_bytes());
-
-    // choice 2: Integer, sub-tag 0 (i8), value = -1
     bytes.push(0);
-    bytes.push(0); // sub-tag = i8
     bytes.extend_from_slice(&(-1i8).to_le_bytes());
 
+    // sub-tag 1: i16
+    bytes.push(0);
+    bytes.push(1);
+    bytes.extend_from_slice(&(-256i16).to_le_bytes());
+
+    // sub-tag 2: i32
+    bytes.push(0);
+    bytes.push(2);
+    bytes.extend_from_slice(&70000i32.to_le_bytes());
+
+    // sub-tag 3: i64
+    bytes.push(0);
+    bytes.push(3);
+    bytes.extend_from_slice(&i64::MIN.to_le_bytes());
+
+    // sub-tag 4: i128
+    bytes.push(0);
+    bytes.push(4);
+    bytes.extend_from_slice(&42i128.to_le_bytes());
+
+    // sub-tag 5: u8
+    bytes.push(0);
+    bytes.push(5);
+    bytes.extend_from_slice(&255u8.to_le_bytes());
+
+    // sub-tag 6: u16
+    bytes.push(0);
+    bytes.push(6);
+    bytes.extend_from_slice(&1000u16.to_le_bytes());
+
+    // sub-tag 7: u32
+    bytes.push(0);
+    bytes.push(7);
+    bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+
+    // sub-tag 8: u64
+    bytes.push(0);
+    bytes.push(8);
+    bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+
+    // sub-tag 9: u128
+    bytes.push(0);
+    bytes.push(9);
+    bytes.extend_from_slice(&u128::MAX.to_le_bytes());
+
     let result = deserialize_choices(&bytes).unwrap();
-    assert_eq!(result.len(), 3);
-    assert_eq!(result[0], ChoiceValue::Integer(BigInt::from(42)));
-    assert_eq!(result[1], ChoiceValue::Integer(BigInt::from(u64::MAX)));
-    assert_eq!(result[2], ChoiceValue::Integer(BigInt::from(-1)));
+    assert_eq!(result.len(), 10);
+    assert_eq!(result[0], ChoiceValue::Integer(BigInt::from(-1)));
+    assert_eq!(result[1], ChoiceValue::Integer(BigInt::from(-256)));
+    assert_eq!(result[2], ChoiceValue::Integer(BigInt::from(70000)));
+    assert_eq!(result[3], ChoiceValue::Integer(BigInt::from(i64::MIN)));
+    assert_eq!(result[4], ChoiceValue::Integer(BigInt::from(42)));
+    assert_eq!(result[5], ChoiceValue::Integer(BigInt::from(255)));
+    assert_eq!(result[6], ChoiceValue::Integer(BigInt::from(1000)));
+    assert_eq!(result[7], ChoiceValue::Integer(BigInt::from(u32::MAX)));
+    assert_eq!(result[8], ChoiceValue::Integer(BigInt::from(u64::MAX)));
+    assert_eq!(result[9], ChoiceValue::Integer(BigInt::from(u128::MAX)));
 }
 
 #[test]
