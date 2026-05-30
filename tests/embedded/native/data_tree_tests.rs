@@ -182,7 +182,7 @@ fn simulate_returns_interesting_conclusion() {
     let mut root = DataTreeNode::default();
     record_tree(&mut root, &[int_node(0, 100, 7)], Status::Interesting, &[]);
     assert_eq!(
-        simulate(&root, &[ChoiceValue::Integer(7)]),
+        simulate(&root, &[ChoiceValue::Integer(BigInt::from(7))]),
         Some(Status::Interesting)
     );
 }
@@ -192,11 +192,11 @@ fn simulate_follows_forced_value_ignoring_prefix() {
     // A forced draw ignores the replayed prefix value and always reproduces
     // the recorded (forced) value, so simulation must follow the single
     // forced child even when the supplied choice differs.
-    let forced_true = ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Boolean(true),
-        was_forced: true,
-    };
+    let forced_true = ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(true),
+        true,
+    );
     let mut root = DataTreeNode::default();
     record_tree(&mut root, &[forced_true], Status::Valid, &[]);
 
@@ -220,9 +220,12 @@ fn simulate_puns_out_of_range_prefix_to_unit() {
 
     // 999 is out of range → punned to unit() == 1 → matches the recorded path.
     assert_eq!(
-        simulate(&root, &[ChoiceValue::Integer(999)]),
+        simulate(&root, &[ChoiceValue::Integer(BigInt::from(999))]),
         Some(Status::Valid)
     );
     // 7 is in range → used as-is → diverges from the recorded value (1).
-    assert_eq!(simulate(&root, &[ChoiceValue::Integer(7)]), None);
+    assert_eq!(
+        simulate(&root, &[ChoiceValue::Integer(BigInt::from(7))]),
+        None
+    );
 }

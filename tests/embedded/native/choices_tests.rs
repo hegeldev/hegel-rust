@@ -791,9 +791,9 @@ fn choice_kind_unit_dispatches_to_each_sub_kind() {
     // replays) must forward to the matching sub-kind's `unit()` for every
     // variant.
     let ic = IntegerChoice {
-        min_value: 0,
-        max_value: 10,
-        shrink_towards: 0,
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(10),
+        shrink_towards: BigInt::from(0),
     };
     assert_eq!(
         ChoiceKind::Integer(ic.clone()).unit(),

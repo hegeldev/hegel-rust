@@ -1,35 +1,36 @@
 //! Unit tests for the sequence-ordering shrink pass (`sort_values`).
 
+use crate::native::bignum::BigInt;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: 0,
-            max_value: 100,
-            shrink_towards: 0,
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
+            min_value: BigInt::from(0),
+            max_value: BigInt::from(100),
+            shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(value),
-        was_forced: false,
-    }
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Boolean(value),
-        was_forced: false,
-    }
+    ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(value),
+        false,
+    )
 }
 
 fn int_values(shrinker: &Shrinker) -> Vec<i128> {
     shrinker
         .current_nodes
         .iter()
-        .map(|n| match n.value {
-            ChoiceValue::Integer(v) => v,
+        .map(|n| match &n.value {
+            ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
             _ => unreachable!(),
         })
         .collect()

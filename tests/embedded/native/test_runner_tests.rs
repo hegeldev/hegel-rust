@@ -99,11 +99,11 @@ where
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Boolean(value),
-        was_forced: false,
-    }
+    ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(value),
+        false,
+    )
 }
 
 #[test]
