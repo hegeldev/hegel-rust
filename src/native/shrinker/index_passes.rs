@@ -149,8 +149,6 @@ impl<'a> Shrinker<'a> {
 
             // Also try powers of 2 (and negatives) as raw values. This covers
             // large index-space jumps that exponential index probing misses.
-            // Built at the node's own integer width so the resulting
-            // `AnyInteger` variant matches the choice's kind.
             if let ChoiceKind::Integer(ic) = &kind {
                 for e in 0u32..11 {
                     let magnitude = BigInt::from(1u64 << e);

@@ -377,7 +377,7 @@ impl<'a> Shrinker<'a> {
             // conversion cannot fail.
             let coerced = match (&attempt[i].kind, v) {
                 (ChoiceKind::Integer(ic), ChoiceValue::Integer(av)) => ChoiceValue::Integer(
-                    ic.value_from_bigint(&av.to_bigint())
+                    ic.value_from_bigint(av)
                         .unwrap_or_else(|| unreachable!("validated integer fits the node's width")),
                 ),
                 _ => v.clone(),

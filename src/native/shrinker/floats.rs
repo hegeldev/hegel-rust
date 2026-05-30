@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use crate::native::bignum::{BigInt, ToPrimitive};
-use crate::native::core::choices::AnyIntegerChoice;
+use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{
     ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, float_to_index, index_to_float, sort_key,
 };
@@ -476,7 +476,7 @@ fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) {
         &shrinker.current_nodes[i].value,
     ) {
         (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => (
-            NumericValue::Integer(n.to_bigint()),
+            NumericValue::Integer(n.clone()),
             NumericKind::Integer(ic.clone()),
         ),
         (ChoiceKind::Float(fc), ChoiceValue::Float(f)) => {
@@ -489,7 +489,7 @@ fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) {
         &shrinker.current_nodes[j].value,
     ) {
         (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => (
-            NumericValue::Integer(n.to_bigint()),
+            NumericValue::Integer(n.clone()),
             NumericKind::Integer(ic.clone()),
         ),
         (ChoiceKind::Float(fc), ChoiceValue::Float(f)) => {
@@ -546,13 +546,13 @@ impl NumericValue {
 
 #[derive(Clone)]
 enum NumericKind {
-    Integer(AnyIntegerChoice),
+    Integer(IntegerChoice),
     Float(FloatChoice),
 }
 
 fn shrink_target(kind: &NumericKind) -> f64 {
     match kind {
-        NumericKind::Integer(ic) => bigint_as_f64(&ic.simplest_bigint()),
+        NumericKind::Integer(ic) => bigint_as_f64(&ic.simplest()),
         NumericKind::Float(_) => 0.0,
     }
 }

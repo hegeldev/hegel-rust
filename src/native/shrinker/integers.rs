@@ -2,17 +2,16 @@
 // binary_search_integer_towards_zero, redistribute_integers, shrink_duplicates,
 // lower_common_node_offset.
 //
-// Integer choice values are type-erased (`AnyInteger`) and may be arbitrarily
-// large, so these passes extract each value as a `BigInt`, do their arithmetic
-// in arbitrary precision, and write candidates back through
-// `AnyIntegerChoice::value_from_bigint` (which re-narrows to the node's actual
-// width and rejects out-of-range candidates). Shrinking is far colder than
-// generation, so the `BigInt` allocation here is acceptable.
+// Integer choice values use `BigInt` directly, so these passes do their
+// arithmetic in arbitrary precision and write candidates back through
+// `IntegerChoice::value_from_bigint` (which rejects out-of-range candidates).
+// Shrinking is far colder than generation, so the `BigInt` allocation here is
+// acceptable.
 
 use std::collections::HashMap;
 
 use crate::native::bignum::{BigInt, Sign, Signed, ToPrimitive};
-use crate::native::core::{AnyInteger, ChoiceKind, ChoiceValue};
+use crate::native::core::{ChoiceKind, ChoiceValue};
 
 use super::{Shrinker, bin_search_down_big, find_integer};
 
@@ -20,7 +19,7 @@ impl<'a> Shrinker<'a> {
     /// Current integer value at node `i` as a [`BigInt`].
     pub(super) fn int_value_bigint(&self, i: usize) -> BigInt {
         match &self.current_nodes[i].value {
-            ChoiceValue::Integer(v) => v.to_bigint(),
+            ChoiceValue::Integer(v) => v.clone(),
             _ => unreachable!("int_value_bigint on non-integer node"),
         }
     }
@@ -46,7 +45,7 @@ impl<'a> Shrinker<'a> {
     pub(super) fn replace_int(&mut self, i: usize, candidate: &BigInt) -> bool {
         self.replace(&HashMap::from([(
             i,
-            ChoiceValue::Integer(AnyInteger::Big(candidate.clone())),
+            ChoiceValue::Integer(candidate.clone()),
         )]))
     }
 
@@ -54,8 +53,8 @@ impl<'a> Shrinker<'a> {
     /// range-checks and width-coerces each candidate.
     pub(super) fn replace_two(&mut self, i: usize, vi: &BigInt, j: usize, vj: &BigInt) -> bool {
         self.replace(&HashMap::from([
-            (i, ChoiceValue::Integer(AnyInteger::Big(vi.clone()))),
-            (j, ChoiceValue::Integer(AnyInteger::Big(vj.clone()))),
+            (i, ChoiceValue::Integer(vi.clone())),
+            (j, ChoiceValue::Integer(vj.clone())),
         ]))
     }
 
@@ -87,15 +86,15 @@ impl<'a> Shrinker<'a> {
             if let (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) =
                 (&self.current_nodes[i].kind, &self.current_nodes[i].value)
             {
-                let v = v.to_bigint();
+                let v = v.clone();
                 let simplest = ic.simplest();
-                if v != ic.simplest_bigint() {
+                if v != ic.simplest() {
                     self.replace(&HashMap::from([(i, ChoiceValue::Integer(simplest))]));
                 }
                 // Re-read in case the replace changed things.
                 if i < self.current_nodes.len() {
                     if let ChoiceValue::Integer(v) = &self.current_nodes[i].value {
-                        let v = v.to_bigint();
+                        let v = v.clone();
                         if v.sign() == Sign::Minus {
                             self.replace_int(i, &(-&v));
                         }
@@ -122,9 +121,9 @@ impl<'a> Shrinker<'a> {
                 }
             };
             let v = self.int_value_bigint(i);
-            let range_size = ic.max_bigint() - ic.min_bigint() + BigInt::from(1);
+            let range_size = ic.max_value.clone() - ic.min_value.clone() + BigInt::from(1);
             if v.sign() == Sign::Plus {
-                let lo = ic.simplest_bigint().max(BigInt::from(0));
+                let lo = ic.simplest().max(BigInt::from(0));
                 // shift_right adaptive descent. Probes `lo + (v - lo) >> k`
                 // for k = 1, 2, 4, 8, ... via `find_integer`, which is
                 // O(log log distance) rather than the O(log distance) of a
@@ -182,10 +181,10 @@ impl<'a> Shrinker<'a> {
                     });
                 }
                 // Also try negative values with smaller absolute value (simpler).
-                if ic.min_bigint().sign() == Sign::Minus {
+                if ic.min_value.clone().sign() == Sign::Minus {
                     let cur_v = self.int_value_bigint(i);
                     if cur_v.sign() == Sign::Plus {
-                        let upper = (&cur_v - BigInt::from(1)).min(-ic.min_bigint());
+                        let upper = (&cur_v - BigInt::from(1)).min(-ic.min_value.clone());
                         if upper >= BigInt::from(1) {
                             // Seed at -upper, then shift-right-descend the
                             // absolute value toward 1 via find_integer.
@@ -206,7 +205,7 @@ impl<'a> Shrinker<'a> {
                 // Mirror of the positive branch. `lo` is the absolute value of
                 // the simplest (clamped to 0) and we shrink toward `lo` from
                 // `-v` before flipping the sign back.
-                let lo = (-ic.simplest_bigint()).max(BigInt::from(0));
+                let lo = (-ic.simplest()).max(BigInt::from(0));
                 let dist = ((-&v) - &lo).max(BigInt::from(0));
                 if dist.sign() == Sign::Plus {
                     let max_shift = dist.bits() as usize + 1;
@@ -254,15 +253,15 @@ impl<'a> Shrinker<'a> {
                     });
                 }
                 // Also try positive values with smaller absolute value (simpler).
-                if ic.max_bigint().sign() == Sign::Plus {
+                if ic.max_value.clone().sign() == Sign::Plus {
                     let cur_v = self.int_value_bigint(i);
                     if cur_v.sign() == Sign::Minus {
-                        let upper = ((-&cur_v) - BigInt::from(1)).min(ic.max_bigint());
+                        let upper = ((-&cur_v) - BigInt::from(1)).min(ic.max_value.clone());
                         if upper >= BigInt::from(1) {
                             // Seed at +upper, then shift-right-descend toward
                             // lo_pos via find_integer.
                             self.replace_int(i, &upper);
-                            let lo_pos = ic.simplest_bigint().max(BigInt::from(0));
+                            let lo_pos = ic.simplest().max(BigInt::from(0));
                             let dist = &upper - &lo_pos;
                             if dist.sign() == Sign::Plus {
                                 let max_shift = dist.bits() as usize + 1;
@@ -348,7 +347,7 @@ impl<'a> Shrinker<'a> {
                 let prev_i = self.int_value_bigint(i);
                 let prev_j = self.int_value_bigint(j);
                 let simplest_i = match &self.current_nodes[i].kind {
-                    ChoiceKind::Integer(ic) => ic.simplest_bigint(),
+                    ChoiceKind::Integer(ic) => ic.simplest(),
                     _ => unreachable!(
                         "kind/value invariant violated: outer match guaranteed this variant"
                     ),
@@ -416,14 +415,14 @@ impl<'a> Shrinker<'a> {
                 let (ic_i, v_i) = match (&self.current_nodes[i].kind, &self.current_nodes[i].value)
                 {
                     (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
-                        (ic.clone(), v.to_bigint())
+                        (ic.clone(), v.clone())
                     }
                     _ => unreachable!(
                         "int_indices is rebuilt on entry; kind-pun between iterations would have re-filtered i out"
                     ),
                 };
                 let v_j = match &self.current_nodes[j].value {
-                    ChoiceValue::Integer(v) => v.to_bigint(),
+                    ChoiceValue::Integer(v) => v.clone(),
                     _ => unreachable!("kind/value mismatch: Integer kind with non-Integer value"),
                 };
 
@@ -434,7 +433,7 @@ impl<'a> Shrinker<'a> {
                 // constraints bind first. Direction is decided by the i-th
                 // element (shortlex dominates on element 0): move it toward its
                 // own shrink target, the j-th follows.
-                let st_i = ic_i.clamped_shrink_towards_bigint();
+                let st_i = ic_i.clamped_shrink_towards();
 
                 // Lower direction: run when v_i > st_i. Largest useful k is
                 // `v_i - st_i` (the i-th's distance to st).
@@ -534,7 +533,7 @@ impl<'a> Shrinker<'a> {
         let mut groups: HashMap<BigInt, Vec<usize>> = HashMap::new();
         for (i, node) in self.current_nodes.iter().enumerate() {
             if let (ChoiceKind::Integer(_), ChoiceValue::Integer(v)) = (&node.kind, &node.value) {
-                groups.entry(v.to_bigint()).or_default().push(i);
+                groups.entry(v.clone()).or_default().push(i);
             }
         }
         // Iterate groups in source-position order; see the comment above
@@ -553,7 +552,7 @@ impl<'a> Shrinker<'a> {
                 .copied()
                 .filter(|&i| {
                     i < self.current_nodes.len()
-                        && matches!(&self.current_nodes[i].value, ChoiceValue::Integer(v) if v.to_bigint() == value)
+                        && matches!(&self.current_nodes[i].value, ChoiceValue::Integer(v) if v.clone() == value)
                 })
                 .collect();
 
@@ -569,11 +568,11 @@ impl<'a> Shrinker<'a> {
             };
 
             // Try setting all to simplest simultaneously.
-            let simplest = ic.simplest_bigint();
+            let simplest = ic.simplest();
             if simplest != value {
                 let replacements: HashMap<usize, ChoiceValue> = valid
                     .iter()
-                    .map(|&i| (i, ChoiceValue::Integer(AnyInteger::Big(simplest.clone()))))
+                    .map(|&i| (i, ChoiceValue::Integer(simplest.clone())))
                     .collect();
                 self.replace(&replacements);
             }
@@ -597,18 +596,18 @@ impl<'a> Shrinker<'a> {
                 }
                 let replacements: HashMap<usize, ChoiceValue> = current_valid
                     .iter()
-                    .map(|&i| (i, ChoiceValue::Integer(AnyInteger::Big(candidate.clone()))))
+                    .map(|&i| (i, ChoiceValue::Integer(candidate.clone())))
                     .collect();
                 sh.replace(&replacements)
             };
             let live_base = |sh: &Shrinker<'_>| -> BigInt {
                 match &sh.current_nodes[valid_capture[0]].value {
-                    ChoiceValue::Integer(v) => v.to_bigint(),
+                    ChoiceValue::Integer(v) => v.clone(),
                     _ => unreachable!("group filter only retains Integer-kind members"),
                 }
             };
             if cur_value.sign() == Sign::Plus {
-                let lo = ic.simplest_bigint().max(BigInt::from(0));
+                let lo = ic.simplest().max(BigInt::from(0));
                 let dist = &cur_value - &lo;
                 if dist.sign() == Sign::Plus {
                     let max_shift = dist.bits() as usize + 1;
@@ -630,7 +629,7 @@ impl<'a> Shrinker<'a> {
                     });
                 }
             } else if cur_value.sign() == Sign::Minus {
-                let lo = (-ic.simplest_bigint()).max(BigInt::from(0));
+                let lo = (-ic.simplest()).max(BigInt::from(0));
                 let dist = ((-&cur_value) - &lo).max(BigInt::from(0));
                 if dist.sign() == Sign::Plus {
                     let max_shift = dist.bits() as usize + 1;
@@ -682,7 +681,7 @@ impl<'a> Shrinker<'a> {
             debug_assert!(i < self.current_nodes.len());
             let (target, v) = match (&self.current_nodes[i].kind, &self.current_nodes[i].value) {
                 (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
-                    (ic.clamped_shrink_towards_bigint(), v.to_bigint())
+                    (ic.clamped_shrink_towards(), v.clone())
                 }
                 _ => continue,
             };
@@ -718,7 +717,7 @@ impl<'a> Shrinker<'a> {
             .zip(ic_targets.iter())
             .map(|(&i, target)| {
                 let v = match &self.current_nodes[i].value {
-                    ChoiceValue::Integer(v) => v.to_bigint(),
+                    ChoiceValue::Integer(v) => v.clone(),
                     _ => unreachable!(
                         "indices/ic_targets came from the integer-node filter above; \
                          ChoiceNode invariant pairs Integer kind with Integer value"
@@ -746,7 +745,7 @@ impl<'a> Shrinker<'a> {
                         &ic_targets[k] - &new_distance
                     };
                     replacements
-                        .insert(indices[k], ChoiceValue::Integer(AnyInteger::Big(new_value)));
+                        .insert(indices[k], ChoiceValue::Integer(new_value));
                 }
                 self.replace(&replacements)
             });

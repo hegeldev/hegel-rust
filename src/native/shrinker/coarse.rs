@@ -8,7 +8,7 @@
 //! separate one-shot phase.
 
 use crate::native::bignum::BigInt;
-use crate::native::core::{AnyInteger, ChoiceKind, ChoiceValue};
+use crate::native::core::{ChoiceKind, ChoiceValue};
 
 use super::{ShrinkRun, Shrinker};
 
@@ -35,7 +35,7 @@ impl<'a> Shrinker<'a> {
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
             let (ic, current_val) = match (&node.kind, &node.value) {
-                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.to_bigint()),
+                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.clone()),
                 _ => {
                     i += 1;
                     continue;
@@ -43,7 +43,7 @@ impl<'a> Shrinker<'a> {
             };
             if node.was_forced
                 || current_val > BigInt::from(10)
-                || ic.min_bigint() != BigInt::from(0)
+                || ic.min_value.clone() != BigInt::from(0)
             {
                 i += 1;
                 continue;
@@ -92,7 +92,7 @@ impl<'a> Shrinker<'a> {
             .iter()
             .map(|n| n.value.clone())
             .collect();
-        prefix.push(ChoiceValue::Integer(AnyInteger::Big(v.clone())));
+        prefix.push(ChoiceValue::Integer(v.clone()));
         let max_size = self.current_nodes.len() + 16;
         let epoch = self.improvements;
         for seed in 0..3u64 {

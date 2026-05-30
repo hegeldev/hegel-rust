@@ -37,7 +37,7 @@ impl<'a> Shrinker<'a> {
                         (ChoiceKind::Integer(ic), ChoiceValue::Integer(v))
                             if *v != ic.simplest() =>
                         {
-                            ic.value_from_bigint(&(v.to_bigint() - 1))
+                            ic.value_from_bigint(&(v.clone() - 1))
                                 .map(ChoiceValue::Integer)
                         }
                         (ChoiceKind::Boolean(_), ChoiceValue::Boolean(true)) => {
@@ -71,14 +71,14 @@ impl<'a> Shrinker<'a> {
 
             // Only process integer nodes — these control sequence lengths.
             let (current_val, ic) = match (&node.kind, &node.value) {
-                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (v.to_bigint(), ic.clone()),
+                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (v.clone(), ic.clone()),
                 _ => {
                     i += 1;
                     continue;
                 }
             };
 
-            let simplest = ic.simplest_bigint();
+            let simplest = ic.simplest();
             if current_val == simplest {
                 i += 1;
                 continue;
@@ -166,13 +166,13 @@ impl<'a> Shrinker<'a> {
                 continue;
             }
             let (ic, current_val) = match (&node.kind, &node.value) {
-                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.to_bigint()),
+                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.clone()),
                 _ => {
                     i += 1;
                     continue;
                 }
             };
-            let simplest = ic.simplest_bigint();
+            let simplest = ic.simplest();
             if current_val == simplest {
                 i += 1;
                 continue;
