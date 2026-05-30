@@ -72,7 +72,9 @@ impl<'a> Shrinker<'a> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let node = &self.current_nodes[i];
-            if let (ChoiceKind::Float(fc), ChoiceValue::Float(v)) = (node.kind.as_ref(), &node.value) {
+            if let (ChoiceKind::Float(fc), ChoiceValue::Float(v)) =
+                (node.kind.as_ref(), &node.value)
+            {
                 let v = *v;
                 let fc = fc.clone();
 
@@ -394,7 +396,10 @@ impl<'a> Shrinker<'a> {
                 }
                 // Skip pure Int-Int — covered by redistribute_integers.
                 if matches!(
-                    (self.current_nodes[i].kind.as_ref(), self.current_nodes[j].kind.as_ref()),
+                    (
+                        self.current_nodes[i].kind.as_ref(),
+                        self.current_nodes[j].kind.as_ref()
+                    ),
                     (ChoiceKind::Integer(_), ChoiceKind::Integer(_))
                 ) {
                     continue;

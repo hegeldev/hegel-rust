@@ -316,10 +316,9 @@ impl<'a> Shrinker<'a> {
         changed: &mut HashSet<usize>,
     ) {
         let shape_preserved = prev.len() == new.len()
-            && prev
-                .iter()
-                .zip(new.iter())
-                .all(|(a, b)| std::mem::discriminant(a.kind.as_ref()) == std::mem::discriminant(b.kind.as_ref()));
+            && prev.iter().zip(new.iter()).all(|(a, b)| {
+                std::mem::discriminant(a.kind.as_ref()) == std::mem::discriminant(b.kind.as_ref())
+            });
         if !shape_preserved {
             changed.clear();
             return;

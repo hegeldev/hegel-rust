@@ -83,9 +83,10 @@ impl<'a> Shrinker<'a> {
     pub(super) fn swap_integer_sign(&mut self) {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            if let (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) =
-                (self.current_nodes[i].kind.as_ref(), &self.current_nodes[i].value)
-            {
+            if let (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) = (
+                self.current_nodes[i].kind.as_ref(),
+                &self.current_nodes[i].value,
+            ) {
                 let v = v.clone();
                 let simplest = ic.simplest();
                 if v != ic.simplest() {
@@ -412,8 +413,10 @@ impl<'a> Shrinker<'a> {
                     break;
                 }
 
-                let (ic_i, v_i) = match (self.current_nodes[i].kind.as_ref(), &self.current_nodes[i].value)
-                {
+                let (ic_i, v_i) = match (
+                    self.current_nodes[i].kind.as_ref(),
+                    &self.current_nodes[i].value,
+                ) {
                     (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.clone()),
                     _ => unreachable!(
                         "int_indices is rebuilt on entry; kind-pun between iterations would have re-filtered i out"
@@ -489,7 +492,10 @@ impl<'a> Shrinker<'a> {
         let mut groups: HashMap<(std::mem::Discriminant<ChoiceKind>, ChoiceValue), Vec<usize>> =
             HashMap::new();
         for (i, node) in self.current_nodes.iter().enumerate() {
-            let key = (std::mem::discriminant(node.kind.as_ref()), node.value.clone());
+            let key = (
+                std::mem::discriminant(node.kind.as_ref()),
+                node.value.clone(),
+            );
             groups.entry(key).or_default().push(i);
         }
         let mut ordered_groups: Vec<_> = groups.into_iter().collect();
@@ -530,7 +536,9 @@ impl<'a> Shrinker<'a> {
         // pass.
         let mut groups: HashMap<BigInt, Vec<usize>> = HashMap::new();
         for (i, node) in self.current_nodes.iter().enumerate() {
-            if let (ChoiceKind::Integer(_), ChoiceValue::Integer(v)) = (node.kind.as_ref(), &node.value) {
+            if let (ChoiceKind::Integer(_), ChoiceValue::Integer(v)) =
+                (node.kind.as_ref(), &node.value)
+            {
                 groups.entry(v.clone()).or_default().push(i);
             }
         }
@@ -677,7 +685,10 @@ impl<'a> Shrinker<'a> {
             // `changed` came from `update_change_tracking`, which only
             // populates indices < current_nodes.len().
             debug_assert!(i < self.current_nodes.len());
-            let (target, v) = match (self.current_nodes[i].kind.as_ref(), &self.current_nodes[i].value) {
+            let (target, v) = match (
+                self.current_nodes[i].kind.as_ref(),
+                &self.current_nodes[i].value,
+            ) {
                 (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
                     (ic.clamped_shrink_towards(), v.clone())
                 }

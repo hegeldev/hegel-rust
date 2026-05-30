@@ -143,21 +143,9 @@ fn spans_children_returns_direct_children() {
 fn spans_trivial_handles_simplest_forced_and_oob() {
     use crate::native::core::choices::{BooleanChoice, ChoiceKind, ChoiceNode, ChoiceValue};
     let kind = ChoiceKind::Boolean(BooleanChoice);
-    let simplest = ChoiceNode::new(
-        kind.clone(),
-        ChoiceValue::Boolean(false),
-        false,
-    );
-    let interesting = ChoiceNode::new(
-        kind.clone(),
-        ChoiceValue::Boolean(true),
-        false,
-    );
-    let forced_interesting = ChoiceNode::new(
-        kind,
-        ChoiceValue::Boolean(true),
-        true,
-    );
+    let simplest = ChoiceNode::new(kind.clone(), ChoiceValue::Boolean(false), false);
+    let interesting = ChoiceNode::new(kind.clone(), ChoiceValue::Boolean(true), false);
+    let forced_interesting = ChoiceNode::new(kind, ChoiceValue::Boolean(true), true);
 
     let mut spans = Spans::new();
     spans.push(Span {

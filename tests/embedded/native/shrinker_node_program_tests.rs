@@ -210,11 +210,13 @@ fn initial_node_count() -> usize {
 fn node_program_adaptively_deletes_long_false_run() {
     use crate::native::core::choices::BooleanChoice;
     let mut initial: Vec<ChoiceNode> = (0..1000)
-        .map(|_| ChoiceNode::new(
-            ChoiceKind::Boolean(BooleanChoice),
-            ChoiceValue::Boolean(false),
-            false,
-        ))
+        .map(|_| {
+            ChoiceNode::new(
+                ChoiceKind::Boolean(BooleanChoice),
+                ChoiceValue::Boolean(false),
+                false,
+            )
+        })
         .collect();
     initial.push(ChoiceNode::new(
         ChoiceKind::Boolean(BooleanChoice),

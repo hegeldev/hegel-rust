@@ -40,7 +40,13 @@ impl<'a> Shrinker<'a> {
             .current_nodes
             .iter()
             .enumerate()
-            .filter_map(|(i, n)| if matches_kind(n.kind.as_ref()) { Some(i) } else { None })
+            .filter_map(|(i, n)| {
+                if matches_kind(n.kind.as_ref()) {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
             .collect();
 
         if indices.len() < 2 {
@@ -85,7 +91,8 @@ impl<'a> Shrinker<'a> {
                     .iter()
                     .copied()
                     .filter(|&i| {
-                        i < self.current_nodes.len() && matches_kind(self.current_nodes[i].kind.as_ref())
+                        i < self.current_nodes.len()
+                            && matches_kind(self.current_nodes[i].kind.as_ref())
                     })
                     .collect();
                 if j >= valid.len() {
