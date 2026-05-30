@@ -1,5 +1,3 @@
-#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]
-
 mod common;
 
 use std::sync::OnceLock;
@@ -53,7 +51,6 @@ fn verbose_verbosity_failing_run_exercises_trying_example_eprintln() {
     assert!(result.is_err(), "expected the property to fail");
 }
 
-#[cfg(feature = "native")]
 #[test]
 fn tree_exhausted_filter_too_much_fires_on_tiny_filtered_domain() {
     // `tc.assume(false)` over a boolean draw exhausts the choice tree
@@ -84,7 +81,6 @@ fn tree_exhausted_filter_too_much_fires_on_tiny_filtered_domain() {
     );
 }
 
-#[cfg(feature = "native")]
 #[test]
 fn db_replay_drops_corrupted_stored_entry() {
     // Pre-populate the database with garbage bytes at the key
@@ -122,7 +118,6 @@ fn db_replay_drops_corrupted_stored_entry() {
     assert!(!key_dir.join(fnv_hex(garbage)).exists());
 }
 
-#[cfg(feature = "native")]
 #[test]
 fn debug_verbosity_replay_aligned_emits_skipping_shrink_message() {
     // First run: save a counterexample to the database.  Second run:
@@ -162,7 +157,6 @@ fn debug_verbosity_replay_aligned_emits_skipping_shrink_message() {
     assert!(second.is_err(), "second run should also fail");
 }
 
-#[cfg(feature = "native")]
 fn fnv_hex(s: &[u8]) -> String {
     // Inline copy of `src/native/database.rs::fnv_hex`; the symbol there
     // isn't re-exported.
@@ -389,11 +383,6 @@ fn main() {
                 .expect_failure("")
         })
     }
-
-    // test_prints_intermediate_in_success dropped on test-port: client-side
-    // Verbosity::Verbose doesn't reach the Hypothesis server (which is launched
-    // with `--verbosity normal` from server::session::init), so the
-    // "Running test case" progress line never appears in stderr.
 
     #[test]
     fn test_does_not_log_in_quiet_mode() {

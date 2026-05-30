@@ -191,7 +191,7 @@ When the generator's options interact in nontrivial ways (e.g. `floats()` with `
 
 ### Test 6 / 8 — Skip
 
-Conformance binaries (`tests/conformance/rust/src/bin/`) and explicit edge-case tests are **not** part of the standard test set for new generators. Don't add them.
+Explicit edge-case tests are **not** part of the standard test set for new generators. Don't add them.
 
 ## Final checklist
 

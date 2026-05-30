@@ -240,10 +240,9 @@ impl DataSource for NativeDataSource {
     }
 
     fn target_observation(&self, score: f64, label: &str) {
-        // Mirror `ServerDataSource::target_observation` and upstream
-        // `hypothesis.control.target` (`control.py:354-356,372-376`): the
-        // observation must be finite and each label may be observed at
-        // most once per test case.
+        // Mirror upstream `hypothesis.control.target`
+        // (`control.py:354-356,372-376`): the observation must be finite and
+        // each label may be observed at most once per test case.
         if !score.is_finite() {
             panic!(
                 "tc.target({score}, label={label:?}) requires a finite score; \
@@ -264,9 +263,8 @@ impl DataSource for NativeDataSource {
     fn mark_complete(&self, result: &TestCaseResult) {
         // Record the outcome on the shared handle so the engine can read
         // it via `take_outcome` after the test body returns.  This is the
-        // sole cross-backend channel for per-test-case results — both the
-        // server backend and this one consume `mark_complete` through the
-        // same `DataSource` interface.
+        // channel for per-test-case results, consumed through the
+        // `DataSource` interface.
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.outcome = Some(result.clone());
     }

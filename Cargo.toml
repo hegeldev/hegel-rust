@@ -42,10 +42,12 @@ ciborium = "0.2.2"
 crc32fast = "1.4"
 parking_lot = "0.12"
 hegeltest-macros = { version = "=0.14.18", path = "hegel-macros" }
+# The native engine always needs rand (random generation) and dashu-int
+# (arbitrary-precision integers), so both are non-optional.
+rand = { version = "0.10" }
+dashu-int = { version = "0.4.1", default-features = false, features = ["std"] }
 # optional feature dependencies
-rand = { version = "0.10", optional = true }
 serde_json = { version = "1.0.61", optional = true }
-dashu-int = { version = "0.4.1", default-features = false, features = ["std"], optional = true }
 # opting out of the clock, now, and wasmbind features.
 # 0.4.41 is the minimum version that has WeekdaySet.
 chrono = { version = "0.4.41", default-features = false, features = ["std"], optional = true }
@@ -75,9 +77,11 @@ required-features = ["__bench"]
 
 [features]
 default = []
-rand = ["dep:rand"]
+# Enables the `extras::rand::randoms()` generator. `rand` itself is a
+# non-optional dependency (the native engine uses it), so this feature only
+# gates the extra public API surface, not the dependency.
+rand = []
 antithesis = ["dep:serde_json"]
-native = ["dep:rand", "dep:dashu-int"]
 chrono = ["dep:chrono"]
 jiff = ["dep:jiff"]
 serde_json = ["dep:serde_json"]
@@ -85,7 +89,7 @@ serde_json = ["dep:serde_json"]
 serde_json_raw_value = ["serde_json", "serde_json/raw_value"]
 # Internal: re-exports private items needed by `benches/`. Not part of the
 # public API; depend on at your peril.
-__bench = ["native"]
+__bench = []
 
 [package.metadata.docs.rs]
 all-features = true

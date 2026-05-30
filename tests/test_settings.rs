@@ -49,8 +49,8 @@ fn test_settings_verbosity() {
 
 #[test]
 fn test_settings_verbosity_debug() {
-    // Exercises the debug-mode eprintln paths in ServerDataSource::send_request
-    // and ServerTestRunner::run (REQUEST, RESPONSE, run_test response, events, test done).
+    // Exercises the debug-mode eprintln paths in the native engine
+    // (per-test-case status lines and the "Test done." summary).
     let mut count = 0;
 
     hegel::Hegel::new(|tc| {

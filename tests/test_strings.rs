@@ -647,11 +647,6 @@ mod simple_strings {
         assert_all_examples(gs::text().max_codepoint(127), |s: &String| s.is_ascii());
     }
 
-    // Under native this generates strings of up to 1M codepoints per case;
-    // server-side the schema is sent over once and Hypothesis caps the actual
-    // draw, so the test runs in seconds. Re-ungate once the engine has a
-    // budget for runaway-size generation.
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_can_set_max_size_large() {
         assert_all_examples(gs::text().max_size(1_000_000), |_: &String| true);
@@ -1532,7 +1527,6 @@ mod regex_tests {
     // the server backend rejects these patterns up front
     // (`IncompatibleWithAlphabet`, `FAILURE not implemented`).
 
-    #[cfg(feature = "native")]
     #[test]
     fn literal_outside_alphabet_is_rejected_but_retried() {
         // The literal 'a' is outside the alphabet's [b-z] range, so every
@@ -1547,7 +1541,6 @@ mod regex_tests {
         );
     }
 
-    #[cfg(feature = "native")]
     #[test]
     fn ignorecase_literal_swapcase_outside_alphabet() {
         // IGNORECASE + restricted alphabet that allows only uppercase: half
@@ -1570,7 +1563,6 @@ mod regex_tests {
         check_can_generate_examples(gs::from_regex(r".*\A"));
     }
 
-    #[cfg(feature = "native")]
     #[test]
     fn explicit_failure_pattern() {
         // `(?!)?` — the inner negative-lookahead-with-empty-body parses
@@ -1579,7 +1571,6 @@ mod regex_tests {
         check_can_generate_examples(gs::from_regex(r"(?!)?"));
     }
 
-    #[cfg(feature = "native")]
     #[test]
     fn ascii_flag_positive_set_with_nonascii_literal() {
         // `(?a)[]?` — non-ASCII literal in a positive class with
@@ -1588,7 +1579,6 @@ mod regex_tests {
         check_can_generate_examples(gs::from_regex("(?a)[\u{0080}]?"));
     }
 
-    #[cfg(feature = "native")]
     #[test]
     fn positive_set_outside_alphabet() {
         // `[a-z]?` with an alphabet that excludes a-z forces the
@@ -1603,7 +1593,6 @@ mod regex_tests {
         );
     }
 
-    #[cfg(feature = "native")]
     #[test]
     fn ascii_flag_negated_set_with_nonascii_alphabet() {
         // `(?a)[^a]?` with a non-ASCII alphabet — every non-ASCII char
@@ -1615,7 +1604,6 @@ mod regex_tests {
         );
     }
 
-    #[cfg(feature = "native")]
     #[test]
     fn padded_pattern_with_empty_alphabet_intervals() {
         // `categories=[]` with no `include_characters` makes

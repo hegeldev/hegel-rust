@@ -369,103 +369,23 @@ def _run_lcov_phase(features: str, output: Path, label: str) -> None:
         sys.exit(1)
 
 
-def _merge_lcov(inputs: list[Path], output: Path) -> None:
-    """Union-merge several LCOV files into `output`.
-
-    For each source file, line `N` is treated as covered if it's covered
-    in ANY input.  Counts are aggregated as the max over inputs (LCOV's
-    DA: lines are `DA:<line>,<count>`).  Function and branch records
-    (`FN/FNDA/BRDA`) are similarly combined.
-    """
-    from collections import defaultdict
-
-    # source file -> {line_number -> max_count}
-    per_file_lines: dict[str, dict[int, int]] = defaultdict(dict)
-    # source file -> {function_name -> max_hit_count}
-    per_file_fn: dict[str, dict[str, int]] = defaultdict(dict)
-    # source file -> {function_name -> declaration_line}
-    per_file_fn_decl: dict[str, dict[str, int]] = defaultdict(dict)
-
-    for path in inputs:
-        if not path.exists():
-            continue
-        current: str | None = None
-        with path.open() as f:
-            for raw in f:
-                line = raw.rstrip("\n")
-                if line.startswith("SF:"):
-                    current = line[3:]
-                elif line == "end_of_record":
-                    current = None
-                elif current is None:
-                    continue
-                elif line.startswith("DA:"):
-                    n, _, count = line[3:].partition(",")
-                    if n and count:
-                        ln, c = int(n), int(count)
-                        prev = per_file_lines[current].get(ln, 0)
-                        per_file_lines[current][ln] = max(prev, c)
-                elif line.startswith("FN:"):
-                    decl_line, _, name = line[3:].partition(",")
-                    if decl_line and name:
-                        per_file_fn_decl[current][name] = int(decl_line)
-                elif line.startswith("FNDA:"):
-                    count, _, name = line[5:].partition(",")
-                    if count and name:
-                        prev = per_file_fn[current].get(name, 0)
-                        per_file_fn[current][name] = max(prev, int(count))
-
-    with output.open("w") as f:
-        for source in sorted(per_file_lines):
-            f.write("TN:\n")
-            f.write(f"SF:{source}\n")
-            for name, decl in sorted(per_file_fn_decl[source].items()):
-                f.write(f"FN:{decl},{name}\n")
-            for name, count in sorted(per_file_fn[source].items()):
-                f.write(f"FNDA:{count},{name}\n")
-            for ln in sorted(per_file_lines[source]):
-                f.write(f"DA:{ln},{per_file_lines[source][ln]}\n")
-            f.write("end_of_record\n")
-
-
 def run_coverage() -> Path:
     """Run coverage analysis and generate LCOV report.
 
-    The `native` feature swaps the python server backend for an
-    in-process Rust one, which doesn't yet implement the schemas
-    `gs::dates` / `gs::times` / `gs::text` / `gs::binary` etc. use.
-    The jiff, serde_json, rand and several top-level tests are
-    therefore gated to the server backend, so a single
-    `--all-features` coverage pass either fails (todo!()) or leaves
-    big swaths of `src/extras/*` and `src/native/*` uncovered.
-
-    Run two coverage passes with disjoint feature sets and
-    union-merge the resulting LCOV files: the first pass covers the
-    server backend, the jiff / chrono / serde_json bindings, and the
-    text / float / etc. surface area; the second covers
-    `src/native/`.  A line is treated as covered if it's covered in
-    either.
+    A single `cargo llvm-cov` pass with every additive feature enabled.
+    The native engine is always compiled now, so one pass covers
+    `src/native/*` alongside the chrono / jiff / serde_json / rand
+    binding surfaces and the core generators.
     """
     print("Running coverage analysis...")
     lcov_path = Path("lcov.info")
-    server_lcov = Path("lcov-server.info")
-    native_lcov = Path("lcov-native.info")
-
     _run_lcov_phase(
         features="rand,antithesis,chrono,jiff,serde_json,serde_json_raw_value",
-        output=server_lcov,
-        label="server backend, no native",
+        output=lcov_path,
+        label="all features",
     )
-    _run_lcov_phase(
-        features="rand,native",
-        output=native_lcov,
-        label="native backend",
-    )
-
-    print("  Merging LCOV outputs...")
-    _merge_lcov([server_lcov, native_lcov], lcov_path)
     if not lcov_path.exists():
-        print("ERROR: merged lcov.info was not generated", file=sys.stderr)
+        print("ERROR: lcov.info was not generated", file=sys.stderr)
         sys.exit(1)
     return lcov_path
 

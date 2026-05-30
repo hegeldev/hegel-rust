@@ -326,10 +326,7 @@ where
     ///
     /// Panics if any test case fails.
     pub fn run(self) {
-        #[cfg(feature = "native")]
         let runner = crate::native::test_runner::NativeTestRunner;
-        #[cfg(not(feature = "native"))]
-        let runner = crate::server::session::ServerTestRunner;
 
         crate::run_lifecycle::drive(
             runner,

@@ -5,11 +5,10 @@
 //! `drive` function that takes a [`TestRunner`] implementation, hands it a
 //! `run_case` callback, and surfaces the run-level result.
 //!
-//! Both the server-protocol backend (`crate::server::session::ServerTestRunner`)
-//! and the native engine backend (`crate::native::test_runner::NativeTestRunner`)
-//! plug into this lifecycle. Each backend is free to do whatever it likes
+//! The native engine backend (`crate::native::test_runner::NativeTestRunner`)
+//! plugs into this lifecycle. The backend is free to do whatever it likes
 //! inside its `TestRunner::run` to decide which test cases to run; the
-//! lifecycle owns everything that's identical across backends — installing
+//! lifecycle owns everything that's independent of the backend — installing
 //! the panic hook, wrapping each test body with `catch_unwind` plus
 //! `mark_complete`, the antithesis integration, and the final
 //! `panic!("Property test failed: ...")` re-raise.
@@ -192,11 +191,10 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// any panic and translating it to a [`TestCaseResult`].
 ///
 /// Reports the outcome back through the [`DataSource`] interface via
-/// [`TestCase::mark_complete`]: that is the single cross-backend channel
-/// for per-test-case results.  Both backends consume it the same way (the
-/// server forwards it to Hypothesis; the native engine reads it back off
-/// the data-source handle); neither backend looks at the return value of
-/// this function for the outcome.  On the `Interesting` path the panic
+/// [`TestCase::mark_complete`]: that is the channel for per-test-case
+/// results.  The native engine reads it back off the data-source handle;
+/// the return value of this function is not used for the outcome.  On the
+/// `Interesting` path the panic
 /// site is captured as a `file:line:col` string and stored on the
 /// [`Failure`] so per-origin shrinking can key on it.
 pub(crate) fn run_test_case(

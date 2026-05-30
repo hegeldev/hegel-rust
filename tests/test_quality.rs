@@ -544,12 +544,6 @@ mod shrink_quality {
         assert_eq!((a, b), (1, 1000));
     }
 
-    // Flaky on native: the bounded-float shrinker sometimes drives the
-    // joint minimum down to (1.0, 1000.0) and sometimes gets stuck at
-    // intermediate values like (203.0, 798.0). The `_mixed_float_int`,
-    // `_mixed_int_float`, and `_separated_float` variants share the same
-    // shrinker-quality issue.
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_sum_of_pair_float() {
         let (a, b) = minimal(
@@ -563,8 +557,6 @@ mod shrink_quality {
         assert_eq!(b, 1000.0);
     }
 
-    // Flaky on native — same shrinker get-stuck issue as `_float`.
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_sum_of_pair_mixed_float_int() {
         let (a, b) = minimal(
@@ -578,8 +570,6 @@ mod shrink_quality {
         assert_eq!(b, 1000);
     }
 
-    // Flaky on native — same shrinker get-stuck issue as `_float`.
-    #[cfg(not(feature = "native"))]
     #[test]
     fn test_sum_of_pair_mixed_int_float() {
         let (a, b) = minimal(

@@ -1,7 +1,7 @@
 //! Native [`TestRunner`] implementation.
 //!
-//! `NativeTestRunner` plugs into the same [`crate::run_lifecycle::drive`]
-//! pipeline as the server backend's `ServerTestRunner`.  The trait
+//! `NativeTestRunner` plugs into the [`crate::run_lifecycle::drive`]
+//! pipeline.  The trait
 //! method [`TestRunner::run`] is the engine driver: it owns the
 //! database replay, generation, shrinking, and final-replay phases,
 //! and uses the supplied `run_case` callback to actually execute each
@@ -122,9 +122,8 @@ fn run_main(
 
     // `Database::Unset` is the non-CI default (set by `Settings::new` in
     // `src/runner.rs`); it means "the user didn't pick, so use the
-    // sensible default." For parity with the server backend (which
-    // forwards `Unset` and lets the server pick its own default), the
-    // native default is `.hegel/examples` relative to cwd. `Disabled`
+    // sensible default." The native default is `.hegel/examples` relative
+    // to cwd, matching Hypothesis's default example database. `Disabled`
     // is the explicit opt-out; `Path(p)` is the explicit choice.
     let db: Option<Box<dyn TestCaseDatabase>> = match &settings.database {
         Database::Path(p) => Some(Box::new(DirectoryTestCaseDatabase::new(p))),

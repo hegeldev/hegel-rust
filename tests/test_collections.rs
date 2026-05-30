@@ -271,7 +271,7 @@ fn test_vec_no_partial_eq_compiles_without_unique() {
 #[hegel::test]
 fn test_vec_non_basic_generator_with_max_size(tc: TestCase) {
     // filter() removes as_basic(), forcing the non-basic Collection path.
-    // max_size exercises the map_insert("max_size") branch in ServerDataSource::new_collection.
+    // max_size exercises the bounded-collection path in the engine.
     let vec: Vec<i32> = tc.draw(gs::vecs(gs::integers::<i32>().filter(|_| true)).max_size(5));
     assert!(vec.len() <= 5);
 }

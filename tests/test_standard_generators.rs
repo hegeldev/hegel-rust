@@ -1,5 +1,3 @@
-#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]
-
 //! Tests verifying that standard generator types can produce examples.
 //!
 //! Each entry checks both the generator itself and a `vecs(generator)` wrapper,
@@ -99,7 +97,6 @@ draw_example_tests!(
     dict_bool_int,
     gs::hashmaps(gs::booleans(), gs::integers::<i64>())
 );
-#[cfg(not(feature = "native"))]
 draw_example_tests!(dict_text_bool, gs::hashmaps(gs::text(), gs::booleans()));
 draw_example_tests!(
     one_of_int_or_bool_tuple,
@@ -141,47 +138,38 @@ draw_example_tests_with_predicate!(
         .max_value(1i128 << 64),
     |x: &i128| *x >= -(1i128 << 32) && *x <= 1i128 << 64
 );
-#[cfg(not(feature = "native"))]
 draw_example_tests!(floats, gs::floats::<f64>());
-#[cfg(not(feature = "native"))]
 draw_example_tests_with_predicate!(
     floats_bounded,
     gs::floats::<f64>().min_value(-2.0).max_value(3.0),
     |x: &f64| (-2.0..=3.0).contains(x)
 );
-#[cfg(not(feature = "native"))]
 draw_example_tests_with_predicate!(
     floats_min_only,
     gs::floats::<f64>().min_value(-2.0),
     |x: &f64| *x >= -2.0
 );
-#[cfg(not(feature = "native"))]
 draw_example_tests_with_predicate!(
     floats_max_neg_zero,
     gs::floats::<f64>().max_value(-0.0),
     |x: &f64| *x <= -0.0
 );
-#[cfg(not(feature = "native"))]
 draw_example_tests_with_predicate!(
     floats_min_zero,
     gs::floats::<f64>().min_value(0.0),
     |x: &f64| *x >= 0.0
 );
-#[cfg(not(feature = "native"))]
 draw_example_tests_with_predicate!(
     floats_exact,
     gs::floats::<f64>().min_value(3.14).max_value(3.14),
     |x: &f64| *x == 3.14
 );
-#[cfg(not(feature = "native"))]
 draw_example_tests!(text, gs::text());
-#[cfg(not(feature = "native"))]
 draw_example_tests!(binary, gs::binary());
 draw_example_tests!(booleans, gs::booleans());
 draw_example_tests!(tuple_booleans, gs::tuples!(gs::booleans(), gs::booleans()));
 draw_example_tests!(hashsets_integers, gs::hashsets(gs::integers::<i64>()));
 draw_example_tests!(nested_lists, gs::vecs(gs::vecs(gs::booleans())));
-#[cfg(not(feature = "native"))]
 draw_example_tests_with_predicate!(
     list_exact_floats,
     gs::vecs(gs::floats::<f64>().min_value(0.0).max_value(0.0)),
@@ -204,7 +192,6 @@ draw_example_tests_with_predicate!(
     gs::integers::<i64>().filter(|x: &i64| *x > 100 || *x < -100),
     |x: &i64| *x > 100 || *x < -100
 );
-#[cfg(not(feature = "native"))]
 draw_example_tests!(
     floats_full_range,
     gs::floats::<f64>().min_value(-f64::MAX).max_value(f64::MAX)

@@ -14,7 +14,7 @@ name = "hegel"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-hegeltest = { version = "=0.14.18", path = "..", default-features = false, features = ["native"] }
+hegeltest = { version = "=0.14.18", path = "..", default-features = false }
 ciborium = "0.2.2"
 
 [build-dependencies]

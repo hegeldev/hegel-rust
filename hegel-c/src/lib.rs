@@ -872,10 +872,6 @@ fn translate_ds_error(e: DataSourceError) -> c_int {
     match e {
         DataSourceError::StopTest => HEGEL_E_STOP_TEST,
         DataSourceError::Assume => HEGEL_E_ASSUME,
-        DataSourceError::ServerError(msg) => {
-            set_last_error(&msg);
-            HEGEL_E_BACKEND
-        }
         // A caller-supplied schema was semantically invalid (e.g. an unknown
         // type string). Surface it as HEGEL_E_INVALID_ARG with the diagnostic
         // in hegel_last_error_message — never a panic across the FFI boundary.

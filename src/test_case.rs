@@ -46,7 +46,6 @@ fn panic_on_data_source_error(e: DataSourceError) -> ! {
     match e {
         DataSourceError::StopTest => panic!("{}", STOP_TEST_STRING),
         DataSourceError::Assume => panic!("{}", ASSUME_FAIL_STRING), // nocov
-        DataSourceError::ServerError(msg) => panic!("{}", msg),
         // A semantically-invalid schema. In the main library this only fires
         // if a generator builds a malformed schema (a bug), so we surface the
         // diagnostic as a panic. libhegel never reaches here — it maps the
@@ -617,11 +616,10 @@ impl TestCase {
 
     /// Send `mark_complete` on this test case's data source.
     ///
-    /// Both backends use this to communicate the outcome — the full
-    /// [`TestCaseResult`], including any captured [`Failure`] — to whatever
-    /// owns the per-test-case bookkeeping (Hypothesis on the server backend;
-    /// the native engine, via a per-test-case outcome handle, on the native
-    /// backend).
+    /// Used to communicate the outcome — the full [`TestCaseResult`],
+    /// including any captured [`Failure`] — to whatever owns the
+    /// per-test-case bookkeeping (the native engine, via a per-test-case
+    /// outcome handle).
     pub(crate) fn mark_complete(&self, result: &crate::backend::TestCaseResult) {
         self.with_data_source(|ds| ds.mark_complete(result));
     }

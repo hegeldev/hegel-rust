@@ -1,6 +1,6 @@
 //! In-process tests for the runner's multi-failure reporting path.
 //!
-//! The runner has three failure-reporting branches (`src/server/runner.rs`):
+//! The runner has three failure-reporting branches (`src/run_lifecycle.rs`):
 //!   - empty (`Property test failed: unknown`)
 //!   - single failure (legacy `Property test failed: <msg>`)
 //!   - multi-failure (new `Property-based test failed with N distinct failures.`)
