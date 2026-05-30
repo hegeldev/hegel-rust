@@ -6,10 +6,11 @@
 // is the directory-backed implementation and `InMemoryNativeDatabase` is
 // a non-persistent sibling.
 //
-// Minimal-native: the change-listener / watcher infrastructure, the
-// `ReadOnly` / `Multiplexed` / `BackgroundWrite` wrapper databases, and
-// the cross-process tempfile-rename dance live in the full native
-// branch but are not part of this minimal version.
+// Minimal-native: the change-listener / watcher infrastructure and the
+// `ReadOnly` / `Multiplexed` / `BackgroundWrite` wrapper databases live in
+// the full native branch but are not part of this minimal version. Value
+// writes go through a temp-file-plus-rename so a reader (possibly another
+// process sharing `.hegel/examples`) never observes a partial value.
 //
 // # On-disk format
 //
@@ -132,7 +133,16 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
         if path.exists() {
             return;
         }
-        let _ = std::fs::write(&path, value);
+        // Write to a temp file in the same directory, then atomically rename it
+        // into place, so a concurrent reader never sees a partially-written
+        // value. (The value's content is fixed by its path — its own hash — so
+        // racing writers of the same value are harmless.)
+        if let Ok(mut tmp) = tempfile::NamedTempFile::new_in(&dir) {
+            use std::io::Write;
+            if tmp.write_all(value).is_ok() {
+                let _ = tmp.persist(&path);
+            }
+        }
     }
 
     fn delete(&self, key: &[u8], value: &[u8]) {
