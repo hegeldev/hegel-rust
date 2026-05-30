@@ -15,7 +15,7 @@
 //! [`ChoiceKind`](super::choices::ChoiceKind) interface already demands. Only
 //! `BigInt` needs `BigUint` throughout.
 
-use super::choices::{AnyInteger, AnyIntegerChoice, IntMagnitude, IntegerChoice};
+use super::choices::{AnyInteger, AnyIntegerChoice, IntegerChoice};
 use crate::native::bignum::{BigInt, BigUint, ToPrimitive, Zero};
 
 /// The unsigned-distance type associated with an [`Integer`]: the magnitudes
@@ -39,7 +39,6 @@ pub trait UnsignedDistance: Clone + Ord {
     fn to_biguint(&self) -> BigUint;
     /// `None` when `v` exceeds this type's range (an out-of-range index).
     fn try_from_biguint(v: &BigUint) -> Option<Self>;
-    fn to_magnitude(self) -> IntMagnitude;
 }
 
 impl UnsignedDistance for u128 {
@@ -67,9 +66,6 @@ impl UnsignedDistance for u128 {
     fn try_from_biguint(v: &BigUint) -> Option<Self> {
         v.to_u128()
     }
-    fn to_magnitude(self) -> IntMagnitude {
-        IntMagnitude::Small(self)
-    }
 }
 
 impl UnsignedDistance for BigUint {
@@ -96,9 +92,6 @@ impl UnsignedDistance for BigUint {
     }
     fn try_from_biguint(v: &BigUint) -> Option<Self> {
         Some(v.clone())
-    }
-    fn to_magnitude(self) -> IntMagnitude {
-        IntMagnitude::from_biguint(self)
     }
 }
 

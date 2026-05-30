@@ -1,50 +1,9 @@
 // Choice types: the recorded decisions a test case makes.
 
 use super::integer::{Integer, UnsignedDistance};
-use crate::native::bignum::{BigInt, BigUint, ToPrimitive, Zero};
+use crate::native::bignum::{BigInt, BigUint, Zero};
 use crate::native::floats::sign_aware_lte;
 use crate::native::intervalsets::IntervalSet;
-
-/// Sort-key magnitude for an integer choice: `u128` in the common (native)
-/// case, [`BigUint`] only when a [`BigInt`] choice's shrink distance exceeds
-/// `u128`. A [`Self::Big`] always holds a value strictly greater than
-/// `u128::MAX` (see [`Self::from_biguint`]), which is what makes the [`Ord`]
-/// impl a correct total order: every `Big` sorts after every `Small`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum IntMagnitude {
-    Small(u128),
-    Big(BigUint),
-}
-
-impl IntMagnitude {
-    /// Build from a [`BigUint`], normalising any value `<= u128::MAX` down to
-    /// [`Self::Small`] so the `Small` / `Big` ranges never overlap.
-    pub fn from_biguint(v: BigUint) -> Self {
-        match v.to_u128() {
-            Some(small) => IntMagnitude::Small(small),
-            None => IntMagnitude::Big(v),
-        }
-    }
-}
-
-impl Ord for IntMagnitude {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        use std::cmp::Ordering;
-        match (self, other) {
-            (IntMagnitude::Small(a), IntMagnitude::Small(b)) => a.cmp(b),
-            (IntMagnitude::Big(a), IntMagnitude::Big(b)) => a.cmp(b),
-            // A normalised `Big` always exceeds `u128::MAX >= any Small`.
-            (IntMagnitude::Small(_), IntMagnitude::Big(_)) => Ordering::Less,
-            (IntMagnitude::Big(_), IntMagnitude::Small(_)) => Ordering::Greater,
-        }
-    }
-}
-
-impl PartialOrd for IntMagnitude {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
 
 /// An integer choice with bounded range, generic over the value type `T`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,10 +59,10 @@ impl<T: Integer> IntegerChoice<T> {
     /// is simpler, with values below `shrink_towards` ordered after
     /// values above at the same distance. With the default
     /// `shrink_towards = 0` this is `(value.unsigned_abs(), value < 0)`.
-    pub fn sort_key(&self, value: &T) -> (IntMagnitude, bool) {
+    pub fn sort_key(&self, value: &T) -> (BigUint, bool) {
         let target = self.clamped_shrink_towards();
         let distance = value.abs_diff(&target);
-        (distance.to_magnitude(), *value < target)
+        (distance.to_biguint(), *value < target)
     }
 
     pub fn max_index(&self) -> BigUint {
@@ -301,7 +260,7 @@ impl AnyIntegerChoice {
         self.min_bigint() <= v && v <= self.max_bigint()
     }
 
-    pub fn sort_key(&self, value: &AnyInteger) -> (IntMagnitude, bool) {
+    pub fn sort_key(&self, value: &AnyInteger) -> (BigUint, bool) {
         dispatch_choice_value!(self, value, c, v => c.sort_key(v))
     }
 
@@ -1246,20 +1205,14 @@ impl ChoiceNode {
         match (&self.kind, &self.value) {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
                 let (mag, neg) = ic.sort_key(v);
-                match mag {
-                    IntMagnitude::Small(m) => NodeSortKey::Scalar(m, neg),
-                    IntMagnitude::Big(m) => NodeSortKey::BigScalar(m, neg),
-                }
+                NodeSortKey::Scalar(mag, neg)
             }
             (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => {
-                NodeSortKey::Scalar(u128::from(*v), false)
+                NodeSortKey::Scalar(BigUint::from(u32::from(*v)), false)
             }
             (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => {
                 let (mag, neg) = fc.sort_key(*v);
-                // `u64` widens losslessly into the `u128` magnitude slot used
-                // for integer sort keys: float and integer choices end up in a
-                // single totally-ordered space without losing precision.
-                NodeSortKey::Scalar(u128::from(mag), neg)
+                NodeSortKey::Scalar(BigUint::from(mag), neg)
             }
             (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => {
                 let (len, bytes) = bc.sort_key(v);
@@ -1276,41 +1229,29 @@ impl ChoiceNode {
 
 /// Comparable key for ordering choice nodes during shrinking.
 ///
-/// Scalar kinds (integer, boolean, float) compare on a fixed `(magnitude,
-/// sign)` pair; sequence kinds (bytes) compare shortlex on `(length,
-/// elements)`. Per-element keys are stored as `u32` so a future string
-/// choice kind (with codepoint-key elements up to `0x10FFFF`) can join the
-/// same shape without changing this type. Variants are never mixed at a
-/// given node position; the cross-variant order `Scalar < BigScalar <
-/// Sequence` (by derived enum order) is a total-ordering fall-through for the
-/// sort key of an entire sequence-of-nodes that contains different shapes.
-///
-/// `BigScalar` is the integer-magnitude case that overflows `u128` (only
-/// reachable for a `BigInt` choice with a shrink distance beyond `u128`). A
-/// `BigScalar` magnitude is always `> u128::MAX`, so the derived order — which
-/// ranks every `Scalar` below every `BigScalar` — is the correct numeric
-/// ordering, and the common `Scalar` path (integers, floats, booleans) keeps
-/// its cheap fixed-width compare.
+/// Scalar kinds (integer, boolean, float) compare on a `(magnitude, sign)`
+/// pair; sequence kinds (bytes, strings) compare shortlex on `(length,
+/// elements)`. Per-element keys are stored as `u32` so the string choice kind
+/// (with codepoint-key elements up to `0x10FFFF`) fits the same shape.
+/// Variants are never mixed at a given node position; the cross-variant order
+/// `Scalar < Sequence` (by derived enum order) is a total-ordering
+/// fall-through for the sort key of an entire sequence-of-nodes that contains
+/// different shapes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NodeSortKey {
-    Scalar(u128, bool),
-    BigScalar(crate::native::bignum::BigUint, bool),
+    Scalar(crate::native::bignum::BigUint, bool),
     Sequence(usize, Vec<u32>),
 }
 
-/// Allocation-free borrowed view of a [`ChoiceNode`]'s sort key.
+/// Borrowed view of a [`ChoiceNode`]'s sort key.
 ///
-/// `Ord` matches [`NodeSortKey`]'s ordering exactly: `Scalar < BigScalar <
-/// Sequence` cross-variant, scalar variants by `(magnitude, sign)`, sequence
-/// variants shortlex on length then per-element keys. The per-element keys for
-/// `Bytes` and `String` are resolved lazily during comparison —
-/// `String` defers `codepoint_key` to the moment of compare — so no
-/// `Vec<u32>` ever gets allocated. `BigScalar` (the rare `BigInt` distance
-/// beyond `u128`) owns its [`BigUint`] magnitude; floats and native integers
-/// never take that arm, so the common path stays allocation-free.
+/// `Ord` matches [`NodeSortKey`]'s ordering exactly: `Scalar < Sequence`
+/// cross-variant, scalar by `(magnitude, sign)`, sequence variants shortlex on
+/// length then per-element keys. The per-element keys for `Bytes` and `String`
+/// are resolved lazily during comparison — `String` defers `codepoint_key` to
+/// the moment of compare — so no `Vec<u32>` ever gets allocated.
 pub enum NodeSortKeyRef<'a> {
-    Scalar(u128, bool),
-    BigScalar(crate::native::bignum::BigUint, bool),
+    Scalar(crate::native::bignum::BigUint, bool),
     Bytes(&'a [u8]),
     String(&'a StringChoice, &'a [u32]),
 }
@@ -1319,8 +1260,7 @@ impl<'a> NodeSortKeyRef<'a> {
     fn category(&self) -> u8 {
         match self {
             NodeSortKeyRef::Scalar(..) => 0,
-            NodeSortKeyRef::BigScalar(..) => 1,
-            NodeSortKeyRef::Bytes(..) | NodeSortKeyRef::String(..) => 2,
+            NodeSortKeyRef::Bytes(..) | NodeSortKeyRef::String(..) => 1,
         }
     }
 
@@ -1331,9 +1271,7 @@ impl<'a> NodeSortKeyRef<'a> {
         match self {
             NodeSortKeyRef::Bytes(b) => b.len(),
             NodeSortKeyRef::String(_, cps) => cps.len(),
-            NodeSortKeyRef::Scalar(..) | NodeSortKeyRef::BigScalar(..) => {
-                unreachable!("seq_len on scalar")
-            }
+            NodeSortKeyRef::Scalar(..) => unreachable!("seq_len on scalar"),
         }
     }
 
@@ -1344,9 +1282,7 @@ impl<'a> NodeSortKeyRef<'a> {
         match self {
             NodeSortKeyRef::Bytes(b) => b[i] as u32,
             NodeSortKeyRef::String(sc, cps) => sc.codepoint_key(cps[i]),
-            NodeSortKeyRef::Scalar(..) | NodeSortKeyRef::BigScalar(..) => {
-                unreachable!("seq_key_at on scalar")
-            }
+            NodeSortKeyRef::Scalar(..) => unreachable!("seq_key_at on scalar"),
         }
     }
 }
@@ -1372,11 +1308,7 @@ impl<'a> Ord for NodeSortKeyRef<'a> {
             (NodeSortKeyRef::Scalar(am, an), NodeSortKeyRef::Scalar(bm, bn)) => {
                 (am, an).cmp(&(bm, bn))
             }
-            (NodeSortKeyRef::BigScalar(am, an), NodeSortKeyRef::BigScalar(bm, bn)) => {
-                (am, an).cmp(&(bm, bn))
-            }
-            (NodeSortKeyRef::Scalar(..) | NodeSortKeyRef::BigScalar(..), _)
-            | (_, NodeSortKeyRef::Scalar(..) | NodeSortKeyRef::BigScalar(..)) => {
+            (NodeSortKeyRef::Scalar(..), _) | (_, NodeSortKeyRef::Scalar(..)) => {
                 self.category().cmp(&other.category())
             }
             _ => {
@@ -1407,17 +1339,14 @@ impl ChoiceNode {
         match (&self.kind, &self.value) {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
                 let (mag, neg) = ic.sort_key(v);
-                match mag {
-                    IntMagnitude::Small(m) => NodeSortKeyRef::Scalar(m, neg),
-                    IntMagnitude::Big(m) => NodeSortKeyRef::BigScalar(m, neg),
-                }
+                NodeSortKeyRef::Scalar(mag, neg)
             }
             (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => {
-                NodeSortKeyRef::Scalar(u128::from(*v), false)
+                NodeSortKeyRef::Scalar(BigUint::from(u32::from(*v)), false)
             }
             (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => {
                 let (mag, neg) = fc.sort_key(*v);
-                NodeSortKeyRef::Scalar(u128::from(mag), neg)
+                NodeSortKeyRef::Scalar(BigUint::from(mag), neg)
             }
             (ChoiceKind::Bytes(_), ChoiceValue::Bytes(v)) => NodeSortKeyRef::Bytes(v),
             (ChoiceKind::String(sc), ChoiceValue::String(v)) => NodeSortKeyRef::String(sc, v),

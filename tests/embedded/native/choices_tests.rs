@@ -909,33 +909,7 @@ fn bigint_unwrap_value_matches_only_big_variant() {
     assert_eq!(<BigInt as Integer>::unwrap_value(&AnyInteger::I8(3)), None);
 }
 
-// ── IntMagnitude ordering / normalisation ──────────────────────────────────
-
-#[test]
-fn int_magnitude_orders_and_normalises() {
-    use crate::native::bignum::BigUint;
-    // Small < Small numerically.
-    assert!(IntMagnitude::Small(1) < IntMagnitude::Small(2));
-    // from_biguint normalises a <= u128::MAX value down to Small.
-    assert_eq!(
-        IntMagnitude::from_biguint(BigUint::from(5u32)),
-        IntMagnitude::Small(5)
-    );
-    assert_eq!(
-        IntMagnitude::from_biguint(BigUint::from(u128::MAX)),
-        IntMagnitude::Small(u128::MAX)
-    );
-    // Above u128::MAX stays Big and sorts after every Small.
-    let big = IntMagnitude::from_biguint(BigUint::from(u128::MAX) + BigUint::from(1u32));
-    assert!(matches!(big, IntMagnitude::Big(_)));
-    assert!(IntMagnitude::Small(u128::MAX) < big);
-    // Big < Big numerically, and Big sorts strictly after Small (Greater arm).
-    let big2 = IntMagnitude::from_biguint(BigUint::from(u128::MAX) + BigUint::from(2u32));
-    assert!(big < big2);
-    assert!(big > IntMagnitude::Small(0));
-}
-
-// ── NodeSortKey::BigScalar ordering (BigInt distances beyond u128) ──────────
+// ── NodeSortKey ordering for BigInt distances beyond u128 ────────────────────
 
 fn big_integer_node(distance_beyond_u128: u32) -> ChoiceNode {
     use crate::native::bignum::BigInt;
@@ -953,18 +927,18 @@ fn big_integer_node(distance_beyond_u128: u32) -> ChoiceNode {
 }
 
 #[test]
-fn node_sort_key_bigscalar_orders_after_scalar_and_before_sequence() {
+fn node_sort_key_big_integer_orders_correctly() {
     use crate::native::core::sort_key;
-    // A native integer node (Scalar) sorts before a BigInt node whose distance
-    // exceeds u128 (BigScalar).
+    // A native integer node sorts before a BigInt node whose distance
+    // exceeds u128.
     let scalar = vec![integer_node(0, 100, 50)];
     let big = vec![big_integer_node(0)];
     assert!(sort_key(&scalar) < sort_key(&big));
-    // Two BigScalars order by magnitude.
+    // Two big-integer nodes order by magnitude.
     let big_small = vec![big_integer_node(0)];
     let big_large = vec![big_integer_node(7)];
     assert!(sort_key(&big_small) < sort_key(&big_large));
-    // BigScalar (scalar category) sorts before any bytes sequence.
+    // Scalar sort keys sort before any bytes sequence.
     let bytes = vec![ChoiceNode {
         kind: ChoiceKind::Bytes(BytesChoice {
             min_size: 0,

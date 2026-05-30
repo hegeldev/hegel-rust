@@ -132,8 +132,8 @@ fn consider_cache_short_circuits_repeat_lookups() {
 
 #[test]
 fn consider_cache_distinguishes_kind_punned_candidates() {
-    // Boolean(false) and Integer(0) share the same `NodeSortKey::Scalar(0,
-    // false)`.  Without a kind tag in the cache key, a cache hit on the
+    // Boolean(false) and Integer(0) share the same `Scalar(0, false)` sort
+    // key.  Without a kind tag in the cache key, a cache hit on the
     // boolean false would mask a kind-punned Integer(0) candidate that
     // the test_fn should still get to evaluate.
     use std::cell::RefCell;

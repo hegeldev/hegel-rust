@@ -231,8 +231,8 @@ impl<'a> Shrinker<'a> {
         // short-circuit. See the field docstring for why positive results
         // aren't cached.
         // Cache key bundles the kind discriminant with the per-node
-        // sort key: `NodeSortKey::Scalar(0, false)` is produced both
-        // by `Boolean(false)` and `Integer(0)`, and a cache shared on
+        // sort key: `Scalar(0, false)` is produced both by
+        // `Boolean(false)` and `Integer(0)`, and a cache shared on
         // sort_key alone would falsely short-circuit kind-punned
         // candidates that the test_fn would in fact accept.
         let cache_key: Vec<(u8, NodeSortKey)> = nodes
