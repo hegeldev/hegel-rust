@@ -165,3 +165,7 @@ impl<'a> Shrinker<'a> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_sequence_tests.rs"]
+mod tests;
