@@ -209,11 +209,15 @@ fn span_mutation_does_not_re_execute_identical_proposals() {
 
             let mut tree = DataTreeNode::default();
             let mut rng = SmallRng::seed_from_u64(0);
-            let (result, attempts) = try_span_mutation(&nodes, &spans, &mut rng, ctx, &mut tree);
+            let mut valid = 0u64;
+            let (result, attempts) =
+                try_span_mutation(&nodes, &spans, &mut rng, ctx, &mut tree, &mut valid, 100);
 
             assert!(result.is_none());
             assert_eq!(attempts, 1);
             assert_eq!(count.get(), 1);
+            // The single valid execution consumed one unit of the budget.
+            assert_eq!(valid, 1);
         },
     );
 }
@@ -253,12 +257,57 @@ fn span_mutation_returns_interesting_proposal() {
 
             let mut tree = DataTreeNode::default();
             let mut rng = SmallRng::seed_from_u64(0);
-            let (result, attempts) = try_span_mutation(&nodes, &spans, &mut rng, ctx, &mut tree);
+            let mut valid = 0u64;
+            let (result, attempts) =
+                try_span_mutation(&nodes, &spans, &mut rng, ctx, &mut tree, &mut valid, 100);
 
             let (_nodes, origin) = result.expect("the first proposal should be Interesting");
             assert!(origin.contains("Panic"));
             assert_eq!(attempts, 1);
             assert_eq!(count.get(), 1);
+            // An Interesting probe is not a valid example; budget untouched.
+            assert_eq!(valid, 0);
+        },
+    );
+}
+
+#[test]
+fn span_mutation_stops_when_example_budget_is_full() {
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    with_counting_ctx(
+        |tc| {
+            tc.draw(crate::generators::booleans());
+        },
+        |ctx, count| {
+            let nodes = vec![
+                bool_node(false),
+                bool_node(true),
+                bool_node(false),
+                bool_node(true),
+            ];
+            let span = |start, end| Span {
+                start,
+                end,
+                label: "L".to_string(),
+                depth: 0,
+                parent: None,
+                discarded: false,
+            };
+            let spans = vec![span(0, 4), span(1, 3)];
+
+            let mut tree = DataTreeNode::default();
+            let mut rng = SmallRng::seed_from_u64(0);
+            // Budget already full: no probe should run.
+            let mut valid = 100u64;
+            let (result, attempts) =
+                try_span_mutation(&nodes, &spans, &mut rng, ctx, &mut tree, &mut valid, 100);
+
+            assert!(result.is_none());
+            assert_eq!(attempts, 0);
+            assert_eq!(count.get(), 0);
+            assert_eq!(valid, 100);
         },
     );
 }

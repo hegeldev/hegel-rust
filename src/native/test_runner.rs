@@ -396,8 +396,15 @@ fn run_main(
                 // have ≥2 occurrences (or when the first probe fires
                 // Interesting) the closure short-circuits below
                 // `SPAN_MUTATION_ATTEMPTS`.
-                let (mutation_result, mutation_attempts) =
-                    try_span_mutation(&run.nodes, &run.spans, &mut rng, &mut ctx, &mut tree_root);
+                let (mutation_result, mutation_attempts) = try_span_mutation(
+                    &run.nodes,
+                    &run.spans,
+                    &mut rng,
+                    &mut ctx,
+                    &mut tree_root,
+                    &mut valid_test_cases,
+                    max_examples,
+                );
                 calls += mutation_attempts as u64;
                 if let Some((mut_nodes, origin)) = mutation_result {
                     if first_bug_at.is_none() {
@@ -966,19 +973,27 @@ impl<'a> EngineCtx<'a> {
 /// execution — matching Hypothesis, which routes mutations through
 /// `cached_test_function`.
 ///
+/// A span mutation is itself a generated test case, so each probe that
+/// *actually executes* and is valid consumes the same `max_examples` budget
+/// as a freshly generated example: it bumps `*valid_test_cases`, and the
+/// probe loop stops as soon as that budget is full. (In Hypothesis the
+/// mutation executions go through `cached_test_function` → `test_function`,
+/// which increments `valid_examples` exactly as a fresh draw does; cache/tree
+/// hits bypass it and so cost nothing.) Without this the native backend ran
+/// `max_examples` fresh cases *plus* up to five mutations each, executing the
+/// test several times more often than Hypothesis.
+///
 /// Returns the mutated counterexample (if one was found) plus the number of
-/// probes that *actually executed* the test body — both the
-/// `SPAN_MUTATION_ATTEMPTS` iteration cap and the cache/tree short-circuits
-/// keep this at or below the maximum, so the caller's `calls` counter only
-/// ever grows by real runs. (Pre-N3 the caller unconditionally added
-/// `SPAN_MUTATION_ATTEMPTS`, even when no labels with ≥2 occurrences exist —
-/// multi is empty → 0 probes run — or when a probe fired Interesting early.)
+/// probes that actually executed the test body, which the caller adds to its
+/// `calls` counter.
 fn try_span_mutation(
     nodes: &[ChoiceNode],
     spans: &[Span],
     rng: &mut SmallRng,
     ctx: &mut EngineCtx<'_>,
     tree_root: &mut crate::native::data_tree::DataTreeNode,
+    valid_test_cases: &mut u64,
+    max_examples: u64,
 ) -> (Option<(Vec<ChoiceNode>, String)>, usize) {
     use std::collections::HashSet;
 
@@ -1006,6 +1021,11 @@ fn try_span_mutation(
 
     let mut attempts: usize = 0;
     for _ in 0..SPAN_MUTATION_ATTEMPTS {
+        // A mutation probe is a generated example: once the example budget is
+        // full there is no room for another, so stop proposing.
+        if *valid_test_cases >= max_examples {
+            break;
+        }
         let group = &multi[rng.random_range(0..multi.len())];
         let i_a = rng.random_range(0..group.len());
         let mut i_b = rng.random_range(0..group.len() - 1);
@@ -1049,6 +1069,11 @@ fn try_span_mutation(
         let (run, executed) = ctx.cached_run(&attempt, tree_root);
         if executed {
             attempts += 1;
+            // A valid mutation execution is a valid example and consumes the
+            // budget, exactly like a freshly generated one.
+            if run.status == Status::Valid {
+                *valid_test_cases += 1;
+            }
         }
         if run.status == Status::Interesting {
             let origin = run.origin.unwrap_or_default();
