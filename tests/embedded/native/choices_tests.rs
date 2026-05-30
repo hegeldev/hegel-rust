@@ -8,12 +8,12 @@ use super::*;
 fn integer_choice_simplest_spans_zero() {
     assert_eq!(
         IntegerChoice {
-            min_value: -10,
-            max_value: 10,
-            shrink_towards: 0,
+            min_value: BigInt::from(-10),
+            max_value: BigInt::from(10),
+            shrink_towards: BigInt::from(0),
         }
         .simplest(),
-        0
+        BigInt::from(0)
     );
 }
 
@@ -21,12 +21,12 @@ fn integer_choice_simplest_spans_zero() {
 fn integer_choice_simplest_all_positive() {
     assert_eq!(
         IntegerChoice {
-            min_value: 5,
-            max_value: 100,
-            shrink_towards: 0,
+            min_value: BigInt::from(5),
+            max_value: BigInt::from(100),
+            shrink_towards: BigInt::from(0),
         }
         .simplest(),
-        5
+        BigInt::from(5)
     );
 }
 
@@ -34,12 +34,12 @@ fn integer_choice_simplest_all_positive() {
 fn integer_choice_simplest_all_negative() {
     assert_eq!(
         IntegerChoice {
-            min_value: -100,
-            max_value: -5,
-            shrink_towards: 0,
+            min_value: BigInt::from(-100),
+            max_value: BigInt::from(-5),
+            shrink_towards: BigInt::from(0),
         }
         .simplest(),
-        -5
+        BigInt::from(-5)
     );
 }
 
@@ -51,12 +51,12 @@ fn integer_choice_simplest_all_negative() {
 fn integer_choice_unit_spans_zero() {
     assert_eq!(
         IntegerChoice {
-            min_value: -10,
-            max_value: 10,
-            shrink_towards: 0,
+            min_value: BigInt::from(-10),
+            max_value: BigInt::from(10),
+            shrink_towards: BigInt::from(0),
         }
         .unit(),
-        1
+        BigInt::from(1)
     );
 }
 
@@ -64,12 +64,12 @@ fn integer_choice_unit_spans_zero() {
 fn integer_choice_unit_all_positive() {
     assert_eq!(
         IntegerChoice {
-            min_value: 5,
-            max_value: 100,
-            shrink_towards: 0,
+            min_value: BigInt::from(5),
+            max_value: BigInt::from(100),
+            shrink_towards: BigInt::from(0),
         }
         .unit(),
-        6
+        BigInt::from(6)
     );
 }
 
@@ -79,12 +79,12 @@ fn integer_choice_unit_all_negative() {
     // simplest - 1 = -6.
     assert_eq!(
         IntegerChoice {
-            min_value: -100,
-            max_value: -5,
-            shrink_towards: 0,
+            min_value: BigInt::from(-100),
+            max_value: BigInt::from(-5),
+            shrink_towards: BigInt::from(0),
         }
         .unit(),
-        -6
+        BigInt::from(-6)
     );
 }
 
@@ -93,12 +93,12 @@ fn integer_choice_unit_single_value_range() {
     // When the range is a single value, unit falls back to simplest.
     assert_eq!(
         IntegerChoice {
-            min_value: 5,
-            max_value: 5,
-            shrink_towards: 0,
+            min_value: BigInt::from(5),
+            max_value: BigInt::from(5),
+            shrink_towards: BigInt::from(0),
         }
         .unit(),
-        5
+        BigInt::from(5)
     );
 }
 
@@ -107,14 +107,11 @@ fn integer_choice_unit_single_value_range() {
 fn choice_kind_to_index_panics_on_kind_value_mismatch() {
     // Asking an Integer kind to index a Boolean value is a programmer error;
     // ChoiceKind::to_index must panic loudly rather than return a bogus index.
-    let kind = ChoiceKind::Integer(
-        IntegerChoice {
-            min_value: 0,
-            max_value: 100,
-            shrink_towards: 0,
-        }
-        .into(),
-    );
+    let kind = ChoiceKind::Integer(IntegerChoice {
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(100),
+        shrink_towards: BigInt::from(0),
+    });
     let _ = kind.to_index(&ChoiceValue::Boolean(true));
 }
 
@@ -130,40 +127,31 @@ fn bu(n: u64) -> crate::native::bignum::BigUint {
 
 #[test]
 fn integer_bounded_range_gives_exact_count() {
-    let kind = ChoiceKind::Integer(
-        IntegerChoice {
-            min_value: 0,
-            max_value: 200,
-            shrink_towards: 0,
-        }
-        .into(),
-    );
+    let kind = ChoiceKind::Integer(IntegerChoice {
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(200),
+        shrink_towards: BigInt::from(0),
+    });
     assert_eq!(kind.max_children(), bu(201));
 }
 
 #[test]
 fn integer_negative_range_gives_exact_count() {
-    let kind = ChoiceKind::Integer(
-        IntegerChoice {
-            min_value: -10,
-            max_value: 10,
-            shrink_towards: 0,
-        }
-        .into(),
-    );
+    let kind = ChoiceKind::Integer(IntegerChoice {
+        min_value: BigInt::from(-10),
+        max_value: BigInt::from(10),
+        shrink_towards: BigInt::from(0),
+    });
     assert_eq!(kind.max_children(), bu(21));
 }
 
 #[test]
 fn integer_full_i128_range_is_two_pow_128() {
-    let kind = ChoiceKind::Integer(
-        IntegerChoice {
-            min_value: i128::MIN,
-            max_value: i128::MAX,
-            shrink_towards: 0,
-        }
-        .into(),
-    );
+    let kind = ChoiceKind::Integer(IntegerChoice {
+        min_value: BigInt::from(i128::MIN),
+        max_value: BigInt::from(i128::MAX),
+        shrink_towards: BigInt::from(0),
+    });
     // 2^128 = u128::MAX + 1.
     let expected = crate::native::bignum::BigUint::from(u128::MAX) + bu(1);
     assert_eq!(kind.max_children(), expected);
@@ -184,22 +172,18 @@ fn max_children_saturating_boolean() {
 
 #[test]
 fn max_children_saturating_integer_native() {
-    let kind = ChoiceKind::Integer(
-        IntegerChoice {
-            min_value: 0,
-            max_value: 200,
-            shrink_towards: 0,
-        }
-        .into(),
-    );
+    let kind = ChoiceKind::Integer(IntegerChoice {
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(200),
+        shrink_towards: BigInt::from(0),
+    });
     assert_eq!(kind.max_children_saturating(1000), 201); // exact (span + 1)
     assert_eq!(kind.max_children_saturating(50), 50); // capped
 }
 
 #[test]
 fn max_children_saturating_integer_beyond_u128_saturates_to_cap() {
-    use crate::native::bignum::{BigInt, BigUint};
-    use crate::native::core::integer::Integer;
+    use crate::native::bignum::BigUint;
     // A span wider than u128 makes `max_index().to_u128()` return `None`, so
     // the result saturates to `cap` instead of the astronomical exact count.
     let ic = IntegerChoice {
@@ -207,7 +191,7 @@ fn max_children_saturating_integer_beyond_u128_saturates_to_cap() {
         max_value: BigInt::from(BigUint::from(2u32).pow(200)),
         shrink_towards: BigInt::from(0),
     };
-    let kind = ChoiceKind::Integer(BigInt::wrap_choice(ic));
+    let kind = ChoiceKind::Integer(ic);
     assert_eq!(kind.max_children_saturating(100), 100);
 }
 
@@ -257,11 +241,11 @@ fn max_children_saturating_string() {
 // uses both heavily, so the round-trip property anchors any future
 // optimisation of the binary-search implementation.
 
-fn integer_choice(min: i128, max: i128) -> IntegerChoice<i128> {
+fn integer_choice(min: i128, max: i128) -> IntegerChoice {
     IntegerChoice {
-        min_value: min,
-        max_value: max,
-        shrink_towards: 0,
+        min_value: BigInt::from(min),
+        max_value: BigInt::from(max),
+        shrink_towards: BigInt::from(0),
     }
 }
 
@@ -269,8 +253,9 @@ fn integer_choice(min: i128, max: i128) -> IntegerChoice<i128> {
 fn integer_choice_index_round_trip_symmetric_around_zero() {
     let ic = integer_choice(-10, 10);
     for v in -10i128..=10 {
-        let idx = ic.to_index(&v);
-        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+        let bv = BigInt::from(v);
+        let idx = ic.to_index(&bv);
+        assert_eq!(ic.from_index(idx), Some(bv), "round-trip failed for v={v}");
     }
 }
 
@@ -278,8 +263,9 @@ fn integer_choice_index_round_trip_symmetric_around_zero() {
 fn integer_choice_index_round_trip_all_positive() {
     let ic = integer_choice(5, 25);
     for v in 5i128..=25 {
-        let idx = ic.to_index(&v);
-        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+        let bv = BigInt::from(v);
+        let idx = ic.to_index(&bv);
+        assert_eq!(ic.from_index(idx), Some(bv), "round-trip failed for v={v}");
     }
 }
 
@@ -287,8 +273,9 @@ fn integer_choice_index_round_trip_all_positive() {
 fn integer_choice_index_round_trip_all_negative() {
     let ic = integer_choice(-25, -5);
     for v in -25i128..=-5 {
-        let idx = ic.to_index(&v);
-        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+        let bv = BigInt::from(v);
+        let idx = ic.to_index(&bv);
+        assert_eq!(ic.from_index(idx), Some(bv), "round-trip failed for v={v}");
     }
 }
 
@@ -297,8 +284,9 @@ fn integer_choice_index_round_trip_asymmetric() {
     // shrink_towards = 0 sits 5 above the floor and 100 below the ceiling.
     let ic = integer_choice(-5, 100);
     for v in -5i128..=100 {
-        let idx = ic.to_index(&v);
-        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+        let bv = BigInt::from(v);
+        let idx = ic.to_index(&bv);
+        assert_eq!(ic.from_index(idx), Some(bv), "round-trip failed for v={v}");
     }
 }
 
@@ -318,17 +306,18 @@ fn integer_choice_index_round_trip_full_i128_range() {
         1 << 100,
         -(1 << 100),
     ] {
-        let idx = ic.to_index(&v);
-        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+        let bv = BigInt::from(v);
+        let idx = ic.to_index(&bv);
+        assert_eq!(ic.from_index(idx), Some(bv), "round-trip failed for v={v}");
     }
 }
 
 #[test]
 fn integer_choice_index_round_trip_single_value() {
     let ic = integer_choice(42, 42);
-    let idx = ic.to_index(&42);
+    let idx = ic.to_index(&BigInt::from(42));
     assert_eq!(idx, crate::native::bignum::BigUint::from(0u32));
-    assert_eq!(ic.from_index(idx), Some(42));
+    assert_eq!(ic.from_index(idx), Some(BigInt::from(42)));
 }
 
 #[test]
@@ -679,15 +668,12 @@ fn string_choice_from_index_past_max_returns_none() {
 
 fn integer_node(min: i128, max: i128, value: i128) -> ChoiceNode {
     ChoiceNode {
-        kind: ChoiceKind::Integer(
-            IntegerChoice {
-                min_value: min,
-                max_value: max,
-                shrink_towards: 0,
-            }
-            .into(),
-        ),
-        value: ChoiceValue::Integer(AnyInteger::I128(value)),
+        kind: ChoiceKind::Integer(IntegerChoice {
+            min_value: BigInt::from(min),
+            max_value: BigInt::from(max),
+            shrink_towards: BigInt::from(0),
+        }),
+        value: ChoiceValue::Integer(BigInt::from(value)),
         was_forced: false,
     }
 }
@@ -808,120 +794,17 @@ fn engine_error_display_covers_both_variants() {
     );
 }
 
-// ── Parametric coverage across every Integer width ──────────────────────────
-//
-// Exercises the generic `IntegerChoice<T>` methods (and thus each of the 11
-// `Integer` trait impls) plus the erased `AnyIntegerChoice` dispatch for every
-// parametrisation: native widths reuse the u128 algorithm, `BigInt` uses
-// `BigUint`.
-
-use crate::native::core::integer::Integer;
-
-fn check_width<T: Integer>(min: T, max: T, values: &[T]) {
-    let ic = IntegerChoice {
-        min_value: min.clone(),
-        max_value: max.clone(),
-        shrink_towards: T::zero(),
-    };
-    let max_index = ic.max_index();
-    // simplest / unit are always valid draws.
-    assert!(ic.validate(&ic.simplest()));
-    assert!(ic.validate(&ic.unit()));
-    for v in values {
-        assert!(ic.validate(v), "value should validate");
-        let idx = ic.to_index(v);
-        assert!(idx <= max_index, "index within max_index");
-        assert_eq!(
-            ic.from_index(idx).as_ref(),
-            Some(v),
-            "to/from_index round-trip"
-        );
-        // sort_key is total and finite.
-        let _ = ic.sort_key(v);
-    }
-
-    // Erased dispatch: every forwarding method, for this variant.
-    let any = T::wrap_choice(ic.clone());
-    assert_eq!(any.simplest(), ic.simplest().wrap_value());
-    assert_eq!(any.unit(), ic.unit().wrap_value());
-    assert_eq!(any.max_index(), max_index);
-    assert!(any.max_children() > max_index);
-    assert_eq!(any.min_bigint(), min.to_bigint());
-    assert_eq!(any.max_bigint(), max.to_bigint());
-    assert_eq!(any.simplest_bigint(), ic.simplest().to_bigint());
-    let _ = any.clamped_shrink_towards_bigint();
-    for v in values {
-        let v_any = v.clone().wrap_value();
-        assert!(any.validate(&v_any));
-        let idx = any.to_index(&v_any);
-        assert_eq!(any.from_index(idx), Some(v_any.clone()));
-        let _ = any.sort_key(&v_any);
-        assert_eq!(any.value_from_bigint(&v.to_bigint()), Some(v_any.clone()));
-        assert_eq!(v_any.to_bigint(), v.to_bigint());
-    }
-}
-
-#[test]
-fn integer_choice_all_native_signed_widths() {
-    check_width::<i8>(i8::MIN, i8::MAX, &[i8::MIN, -1, 0, 1, i8::MAX]);
-    check_width::<i16>(i16::MIN, i16::MAX, &[i16::MIN, -1, 0, 1, i16::MAX]);
-    check_width::<i32>(i32::MIN, i32::MAX, &[i32::MIN, -1, 0, 1, i32::MAX]);
-    check_width::<i64>(i64::MIN, i64::MAX, &[i64::MIN, -1, 0, 1, i64::MAX]);
-    check_width::<i128>(i128::MIN, i128::MAX, &[i128::MIN, -1, 0, 1, i128::MAX]);
-}
-
-#[test]
-fn integer_choice_all_native_unsigned_widths() {
-    check_width::<u8>(0, u8::MAX, &[0, 1, 127, u8::MAX]);
-    check_width::<u16>(0, u16::MAX, &[0, 1, u16::MAX]);
-    check_width::<u32>(0, u32::MAX, &[0, 1, u32::MAX]);
-    check_width::<u64>(0, u64::MAX, &[0, 1, u64::MAX]);
-    check_width::<u128>(0, u128::MAX, &[0, 1, u128::MAX]);
-}
-
-#[test]
-fn integer_choice_bigint_width() {
-    use crate::native::bignum::BigInt;
-    let min = BigInt::from(i128::MIN) * BigInt::from(1000);
-    let max = BigInt::from(i128::MAX) * BigInt::from(1000);
-    let values = [
-        min.clone(),
-        BigInt::from(-1),
-        BigInt::from(0),
-        BigInt::from(1),
-        BigInt::from(i128::MAX),
-        max.clone(),
-    ];
-    check_width::<BigInt>(min, max, &values);
-    // A single-value BigInt range: `unit()` must fall through `checked_succ`
-    // (out of range) to `checked_pred` (also out of range) back to simplest.
-    check_width::<BigInt>(BigInt::from(5), BigInt::from(5), &[BigInt::from(5)]);
-}
-
-#[test]
-fn bigint_unwrap_value_matches_only_big_variant() {
-    use crate::native::bignum::BigInt;
-    assert_eq!(
-        <BigInt as Integer>::unwrap_value(&AnyInteger::Big(BigInt::from(9))),
-        Some(BigInt::from(9))
-    );
-    // A non-Big (cross-width) value does not unwrap as BigInt.
-    assert_eq!(<BigInt as Integer>::unwrap_value(&AnyInteger::I8(3)), None);
-}
-
 // ── NodeSortKey ordering for BigInt distances beyond u128 ────────────────────
 
 fn big_integer_node(distance_beyond_u128: u32) -> ChoiceNode {
-    use crate::native::bignum::BigInt;
     let huge = BigInt::from(u128::MAX) * BigInt::from(4) + BigInt::from(distance_beyond_u128);
-    let kind = IntegerChoice {
-        min_value: BigInt::from(0),
-        max_value: huge.clone(),
-        shrink_towards: BigInt::from(0),
-    };
     ChoiceNode {
-        kind: ChoiceKind::Integer(BigInt::wrap_choice(kind)),
-        value: ChoiceValue::Integer(AnyInteger::Big(huge)),
+        kind: ChoiceKind::Integer(IntegerChoice {
+            min_value: BigInt::from(0),
+            max_value: huge.clone(),
+            shrink_towards: BigInt::from(0),
+        }),
+        value: ChoiceValue::Integer(huge),
         was_forced: false,
     }
 }

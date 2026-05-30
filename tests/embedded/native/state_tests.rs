@@ -415,7 +415,7 @@ fn data_observer_draw_boolean_default_is_no_op() {
 #[test]
 fn data_observer_draw_integer_default_is_no_op() {
     let mut obs = NoopObserver;
-    obs.draw_integer(&AnyInteger::I128(42), false); // must not panic
+    obs.draw_integer(&BigInt::from(42), false); // must not panic
 }
 
 #[test]
@@ -530,15 +530,15 @@ fn freeze_notifies_observer_on_conclude_test() {
 fn draw_integer_notifies_observer() {
     use std::sync::{Arc, Mutex};
     struct IntObserver {
-        captured: Arc<Mutex<Option<(AnyInteger, bool)>>>,
+        captured: Arc<Mutex<Option<(BigInt, bool)>>>,
     }
     impl DataObserver for IntObserver {
-        fn draw_integer(&mut self, value: &AnyInteger, was_forced: bool) {
+        fn draw_integer(&mut self, value: &BigInt, was_forced: bool) {
             *self.captured.lock().unwrap() = Some((value.clone(), was_forced));
         }
     }
     let captured = Arc::new(Mutex::new(None));
-    let choices = vec![ChoiceValue::Integer(AnyInteger::I128(99))];
+    let choices = vec![ChoiceValue::Integer(BigInt::from(99))];
     let obs = Box::new(IntObserver {
         captured: captured.clone(),
     });
@@ -548,7 +548,7 @@ fn draw_integer_notifies_observer() {
     // The observer must have captured the prefix-replayed value with
     // was_forced=false.
     let recorded = captured.lock().unwrap().take();
-    assert_eq!(recorded, Some((AnyInteger::I128(99), false)));
+    assert_eq!(recorded, Some((BigInt::from(99), false)));
 }
 
 // ── NativeTestCase::draw_float with observer ──────────────────────────────
@@ -824,7 +824,7 @@ fn template_simplest_finite_count_n_produces_exactly_n_values() {
 
 #[test]
 fn template_concrete_prefix_then_template() {
-    let prefix = vec![ChoiceValue::Integer(AnyInteger::I128(42))];
+    let prefix = vec![ChoiceValue::Integer(BigInt::from(42))];
     let mut tc = NativeTestCase::for_choices_and_template(
         &prefix,
         None,
@@ -859,15 +859,15 @@ fn template_concrete_prefix_with_punning_then_template() {
     );
     // Draw 1: kind mismatch + non-simplest original → unit().
     let v = tc.draw_integer::<i128>(-100, 100).ok().unwrap();
-    assert_eq!(
-        v,
-        IntegerChoice {
-            min_value: -100,
-            max_value: 100,
-            shrink_towards: 0,
-        }
-        .unit()
-    );
+    let expected_unit: i128 = IntegerChoice {
+        min_value: BigInt::from(-100),
+        max_value: BigInt::from(100),
+        shrink_towards: BigInt::from(0),
+    }
+    .unit()
+    .try_into()
+    .unwrap();
+    assert_eq!(v, expected_unit);
     // Draw 2: template branch → simplest().
     assert_eq!(tc.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
 }
@@ -1050,22 +1050,21 @@ fn biased_integer_sample_narrow_range_uses_uniform_fallback() {
     assert!(seen_zero && seen_one);
 }
 
-// ── Erased `biased_integer_sample` over `AnyIntegerChoice` ─────────────────
+// ── Erased `biased_integer_sample` over `IntegerChoice` ─────────────────
 
-/// The erased entry point dispatches by width: a `u8` choice fits the i128
-/// fast path and must round-trip back into the `U8` variant in range.
+/// The erased entry point uses BigInt; a small range fits the i128
+/// fast path and must produce values in range.
 #[test]
 fn biased_integer_sample_erased_small_width_stays_in_range() {
-    let kind = AnyIntegerChoice::U8(IntegerChoice {
-        min_value: 0u8,
-        max_value: 200u8,
-        shrink_towards: 0u8,
-    });
+    let kind = IntegerChoice {
+        min_value: BigInt::from(0u8),
+        max_value: BigInt::from(200u8),
+        shrink_towards: BigInt::from(0u8),
+    };
     let mut rng = SmallRng::seed_from_u64(21);
     for _ in 0..500 {
         let v = biased_integer_sample(&kind, &mut rng);
         assert!(kind.validate(&v), "out of range: {v:?}");
-        assert!(matches!(v, AnyInteger::U8(_)));
     }
 }
 
@@ -1073,14 +1072,13 @@ fn biased_integer_sample_erased_small_width_stays_in_range() {
 /// sampler (`biguint_sample_in_range`) and its nasty pool.
 #[test]
 fn biased_integer_sample_erased_bigint_beyond_i128_stays_in_range() {
-    use crate::native::bignum::BigInt;
     let min = BigInt::from(i128::MIN) * BigInt::from(1_000_000);
     let max = BigInt::from(i128::MAX) * BigInt::from(1_000_000);
-    let kind = AnyIntegerChoice::Big(IntegerChoice {
-        min_value: min.clone(),
-        max_value: max.clone(),
+    let kind = IntegerChoice {
+        min_value: min,
+        max_value: max,
         shrink_towards: BigInt::from(0),
-    });
+    };
     let mut rng = SmallRng::seed_from_u64(22);
     for _ in 0..500 {
         let v = biased_integer_sample(&kind, &mut rng);
@@ -1119,18 +1117,14 @@ fn integer_sample_from_distribution_uniform_fallback_for_indistinguishable_bound
 /// value (the `biguint_sample_in_range` early return).
 #[test]
 fn biased_integer_sample_erased_bigint_single_value() {
-    use crate::native::bignum::BigInt;
     let fixed = BigInt::from(i128::MAX) * BigInt::from(1_000_000);
-    let kind = AnyIntegerChoice::Big(IntegerChoice {
+    let kind = IntegerChoice {
         min_value: fixed.clone(),
         max_value: fixed.clone(),
         shrink_towards: BigInt::from(0),
-    });
+    };
     let mut rng = SmallRng::seed_from_u64(23);
     for _ in 0..20 {
-        assert_eq!(
-            biased_integer_sample(&kind, &mut rng),
-            AnyInteger::Big(fixed.clone())
-        );
+        assert_eq!(biased_integer_sample(&kind, &mut rng), fixed.clone());
     }
 }
