@@ -878,3 +878,66 @@ fn node_sort_key_big_integer_orders_correctly() {
     // The owned NodeSortKey matches the borrowed comparison.
     assert!(big_small[0].sort_key() < big_large[0].sort_key());
 }
+
+// ── ChoiceKind::max_index_saturating ──────────────────────────────────────
+
+#[test]
+fn max_index_saturating_caps_huge_sequence_without_blowup() {
+    use crate::native::bignum::BigUint;
+    // A bytes node with a million-byte ceiling: the true max_index is a
+    // BigUint of millions of bits. Saturating must return the cap cheaply
+    // (no `pow(1_000_000)`), so this test returns ~instantly.
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 0,
+        max_size: 1_000_000,
+    });
+    assert_eq!(kind.max_index_saturating(1000), BigUint::from(1000u32));
+}
+
+#[test]
+fn max_index_saturating_is_exact_for_small_sequence() {
+    // When the whole space is below the cap, the exact max_index is returned.
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 0,
+        max_size: 1,
+    });
+    assert_eq!(kind.max_index_saturating(1000), kind.max_index());
+}
+
+#[test]
+fn max_index_saturating_is_exact_for_scalars() {
+    // Scalar kinds have a cheap max_index and are never capped, even when it
+    // exceeds the cap.
+    use crate::native::bignum::BigUint;
+    let kind = ChoiceKind::Integer(IntegerChoice {
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(5),
+        shrink_towards: BigInt::from(0),
+    });
+    assert_eq!(kind.max_index_saturating(2), BigUint::from(5u32));
+    assert_eq!(kind.max_index_saturating(2), kind.max_index());
+}
+
+#[test]
+fn to_index_bounded_declines_only_long_sequences() {
+    // A long bytes value declines (its index would be astronomically large);
+    // short sequences and scalars return the exact index.
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 0,
+        max_size: 1_000_000,
+    });
+    assert!(
+        kind.to_index_bounded(&ChoiceValue::Bytes(vec![0u8; 300]))
+            .is_none()
+    );
+    let short = ChoiceValue::Bytes(vec![1, 2, 3]);
+    assert_eq!(kind.to_index_bounded(&short), Some(kind.to_index(&short)));
+
+    let int_kind = ChoiceKind::Integer(IntegerChoice {
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(5),
+        shrink_towards: BigInt::from(0),
+    });
+    let v = ChoiceValue::Integer(BigInt::from(4));
+    assert_eq!(int_kind.to_index_bounded(&v), Some(int_kind.to_index(&v)));
+}

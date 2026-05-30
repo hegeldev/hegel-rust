@@ -882,6 +882,54 @@ impl ChoiceKind {
         }
     }
 
+    /// `min(max_index(), cap)`, computed without materialising the
+    /// astronomically-large `Σ alphabet^len` cardinality for sequence kinds.
+    ///
+    /// Scalar kinds return their exact (cheap) `max_index`; the cap only bounds
+    /// `Bytes`/`String`, whose true `max_index` for a large `max_size` is a
+    /// `BigUint` of millions of bits. The index-shortening shrink passes only
+    /// need a bounded "large index" probe — never the exact top of a huge
+    /// string/bytes space — so capping here avoids a shrink-time blowup.
+    pub fn max_index_saturating(&self, cap: u128) -> crate::native::bignum::BigUint {
+        use crate::native::bignum::BigUint;
+        match self {
+            ChoiceKind::Bytes(_) | ChoiceKind::String(_) => {
+                // max_children == max_index + 1, so cap max_children at cap + 1.
+                BigUint::from(
+                    self.max_children_saturating(cap.saturating_add(1))
+                        .saturating_sub(1),
+                )
+            }
+            _ => self.max_index(),
+        }
+    }
+
+    /// `to_index(value)` when the index is cheap to compute, else `None`.
+    ///
+    /// The sequence index is `Σ alphabet^len`, exponential in the value's
+    /// length, so for a long `String`/`Bytes` value `to_index` would build —
+    /// and the shrink passes would then operate on — an astronomically large
+    /// `BigUint`. The index-based passes decline such nodes (the
+    /// length-reduction and dedicated per-element passes shrink them first;
+    /// once short enough the index passes re-engage). Scalar kinds always
+    /// return `Some` (their index is cheap).
+    pub fn to_index_bounded(&self, value: &ChoiceValue) -> Option<crate::native::bignum::BigUint> {
+        // Keeps `to_index` well under a millisecond; far above the length of
+        // any realistic minimal counterexample (length-reduction passes shrink
+        // longer sequences before the index passes need them).
+        const SEQ_INDEX_LEN_CAP: usize = 256;
+        let too_long = match (self, value) {
+            (ChoiceKind::String(_), ChoiceValue::String(v)) => v.len() > SEQ_INDEX_LEN_CAP,
+            (ChoiceKind::Bytes(_), ChoiceValue::Bytes(v)) => v.len() > SEQ_INDEX_LEN_CAP,
+            _ => false,
+        };
+        if too_long {
+            None
+        } else {
+            Some(self.to_index(value))
+        }
+    }
+
     /// Random value sampled from this kind's domain (with kind-appropriate bias).
     pub fn random_value(&self, rng: &mut rand::rngs::SmallRng) -> ChoiceValue {
         use rand::RngExt;

@@ -32,7 +32,12 @@ impl<'a> Shrinker<'a> {
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
             let kind = node.kind.clone();
-            let current_idx = kind.to_index(&node.value);
+            let Some(current_idx) = kind.to_index_bounded(&node.value) else {
+                // A long string/bytes value would make `to_index` build a huge
+                // BigUint; let the length-reduction passes shorten it first.
+                i += 1;
+                continue;
+            };
 
             // Small index offsets (±1 through ±5), keeping only indices >= 0
             // that produce distinct values from `node.value`.

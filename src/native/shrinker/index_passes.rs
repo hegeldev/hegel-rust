@@ -10,6 +10,12 @@ use crate::native::core::{ChoiceKind, ChoiceValue};
 
 use super::Shrinker;
 
+/// Cap for the "largest index" probes below. Comfortably exceeds the small
+/// powers of two these passes try, while keeping `max_index_saturating` from
+/// materialising a huge `Σ alphabet^len` for large-`max_size` string/bytes
+/// nodes.
+const MAX_INDEX_PROBE_CAP: u128 = 1 << 32;
+
 impl<'a> Shrinker<'a> {
     /// For each indexed node not at simplest, try decrementing it (lowering
     /// the index) and bumping a later node (raising its index).
@@ -25,7 +31,12 @@ impl<'a> Shrinker<'a> {
                 let i = idx;
                 let node_i = self.current_nodes[i].clone();
                 let kind_i = node_i.kind.clone();
-                let current_idx = kind_i.to_index(&node_i.value);
+                let Some(current_idx) = kind_i.to_index_bounded(&node_i.value) else {
+                    // A long string/bytes value makes `to_index` astronomically
+                    // large; the length-reduction passes shorten it first.
+                    idx += 1;
+                    continue;
+                };
                 if current_idx.is_zero() {
                     idx += 1;
                     continue;
@@ -84,19 +95,26 @@ impl<'a> Shrinker<'a> {
                     // iterations).
                     if j < self.current_nodes.len() {
                         let kind_j = self.current_nodes[j].kind.clone();
-                        let target_idx = kind_j.to_index(&self.current_nodes[j].value);
                         let mut bumped_any_relative = false;
-                        for bump in [1u32, 2, 4] {
-                            let candidate_idx = &target_idx + BigUint::from(bump);
-                            if let Some(bumped) = kind_j.from_index(candidate_idx) {
-                                if try_bump_ij(self, i, new_val, j, &bumped) {
-                                    bumped_any_relative = true;
-                                    break;
+                        // Relative bumps need the current value's index; skip
+                        // them for a long string/bytes value (the absolute
+                        // probe below still runs). `max_index_saturating` keeps
+                        // that probe cheap regardless of `max_size`.
+                        if let Some(target_idx) =
+                            kind_j.to_index_bounded(&self.current_nodes[j].value)
+                        {
+                            for bump in [1u32, 2, 4] {
+                                let candidate_idx = &target_idx + BigUint::from(bump);
+                                if let Some(bumped) = kind_j.from_index(candidate_idx) {
+                                    if try_bump_ij(self, i, new_val, j, &bumped) {
+                                        bumped_any_relative = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
                         if !bumped_any_relative {
-                            let max_j = kind_j.max_index();
+                            let max_j = kind_j.max_index_saturating(MAX_INDEX_PROBE_CAP);
                             let mut p = BigUint::from(1u32);
                             for _ in 0..8 {
                                 if p > max_j {
@@ -130,18 +148,22 @@ impl<'a> Shrinker<'a> {
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
             let kind = node.kind.clone();
-            let current_idx = kind.to_index(&node.value);
 
             let mut candidates: Vec<ChoiceValue> = Vec::new();
-            for d in [1u32, 2, 4, 8, 16] {
-                let t = &current_idx + BigUint::from(d);
-                if let Some(v) = kind.from_index(t) {
-                    if v != node.value && !candidates.contains(&v) {
-                        candidates.push(v);
+            // The small-increment candidates need the current value's index;
+            // skip them for a long string/bytes value (the absolute-max and
+            // integer power-of-two probes below don't need it).
+            if let Some(current_idx) = kind.to_index_bounded(&node.value) {
+                for d in [1u32, 2, 4, 8, 16] {
+                    let t = &current_idx + BigUint::from(d);
+                    if let Some(v) = kind.from_index(t) {
+                        if v != node.value && !candidates.contains(&v) {
+                            candidates.push(v);
+                        }
                     }
                 }
             }
-            if let Some(v) = kind.from_index(kind.max_index()) {
+            if let Some(v) = kind.from_index(kind.max_index_saturating(MAX_INDEX_PROBE_CAP)) {
                 if v != node.value && !candidates.contains(&v) {
                     candidates.push(v);
                 }
