@@ -180,3 +180,39 @@ fn lower_common_node_offset_skips_non_integer_nodes() {
     assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
     assert_eq!(int_value(&shrinker.current_nodes[3]), 0);
 }
+
+fn bytes_node(value: Vec<u8>) -> ChoiceNode {
+    ChoiceNode::new(
+        ChoiceKind::Bytes(crate::native::core::choices::BytesChoice {
+            min_size: 0,
+            max_size: 1_000_000,
+        }),
+        ChoiceValue::Bytes(value),
+        false,
+    )
+}
+
+#[test]
+fn index_passes_decline_long_sequence_without_blowup() {
+    // A long bytes value whose kind has a huge `max_size`: the index-based
+    // passes must decline it via `to_index_bounded` (rather than build a
+    // multi-megabit index) and leave it unchanged. With the old code this
+    // either hung or returned a giant BigUint.
+    let initial = vec![bytes_node(vec![7u8; 300]), int_node(5, 0)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    // Both passes decline the long node (`to_index_bounded` -> None) and skip
+    // it, leaving it untouched — crucially never building its huge index.
+    shrinker.lower_and_bump();
+    shrinker.mutate_and_shrink();
+    match &shrinker.current_nodes[0].value {
+        ChoiceValue::Bytes(v) => assert_eq!(v.len(), 300, "long value should be left untouched"),
+        other => panic!("expected bytes, got {other:?}"),
+    }
+}

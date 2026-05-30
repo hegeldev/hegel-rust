@@ -941,3 +941,18 @@ fn to_index_bounded_declines_only_long_sequences() {
     let v = ChoiceValue::Integer(BigInt::from(4));
     assert_eq!(int_kind.to_index_bounded(&v), Some(int_kind.to_index(&v)));
 }
+
+#[test]
+fn string_max_index_uses_dispatch_arm() {
+    // Cover the `ChoiceKind::max_index` String arm. Alphabet {a,b,c}, lengths
+    // 0..=2: 3^0 + 3^1 + 3^2 = 13 sequences, so the max index is 12.
+    let kind = ChoiceKind::String(StringChoice {
+        intervals: IntervalSet::new(vec![(b'a' as u32, b'c' as u32)]),
+        min_size: 0,
+        max_size: 2,
+    });
+    assert_eq!(
+        kind.max_index(),
+        crate::native::bignum::BigUint::from(12u32)
+    );
+}

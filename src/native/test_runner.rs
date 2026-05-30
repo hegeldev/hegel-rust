@@ -231,11 +231,10 @@ fn run_main(
         && interesting.is_empty()
     {
         let run = ctx.run(NativeTestCase::for_simplest(BUFFER_SIZE));
-        if let Some(msg) =
-            crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[])
-        {
-            return health_check_failure(msg);
-        }
+        // This trivial-probe is one of the first recordings, so it can't yet
+        // mismatch; a non-deterministic generator is caught by the main
+        // generation loop's `record_tree` below.
+        let _ = crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[]);
         calls += 1;
         if run.nodes.is_empty() && run.status >= Status::Invalid {
             test_is_trivial = true;

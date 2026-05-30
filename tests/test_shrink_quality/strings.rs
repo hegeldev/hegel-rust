@@ -165,9 +165,10 @@ fn test_shrink_ligature_to_base_character() {
 #[test]
 fn test_shrink_large_max_size_string_does_not_blow_up() {
     // Regression: shrinking a node with a very large `max_size` used to
-    // materialise `Σ alphabet^len` (a multi-megabit BigUint) in the
-    // index-based passes (`max_index` / `to_index`), hanging the shrink. It
-    // must now complete and reach the minimal value.
+    // materialise `Σ alphabet^len` (a multi-megabit BigUint) via `max_index`
+    // in the index-based passes, hanging the shrink. It must now complete and
+    // reach the minimal value. (The `to_index_bounded` length guard is covered
+    // directly in the shrinker embedded tests.)
     let s = minimal(gs::text().max_size(1_000_000), |x: &String| {
         x.chars().count() >= 10
     });
