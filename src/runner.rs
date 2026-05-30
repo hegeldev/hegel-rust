@@ -85,7 +85,7 @@ pub enum Verbosity {
     Normal,
     /// Show more detail about the test run.
     Verbose,
-    /// Show protocol-level debug information.
+    /// Show low-level engine debug information.
     Debug,
 }
 
