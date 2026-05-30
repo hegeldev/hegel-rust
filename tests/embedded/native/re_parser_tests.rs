@@ -2172,3 +2172,43 @@ fn err_class_range_with_category_endpoint() {
     let err = parse_err(r"[\d-z]");
     assert!(err.msg.contains("bad character range"), "{}", err.msg);
 }
+
+// ----- Surrogate codepoints can't appear in a Rust string -----
+
+#[test]
+fn err_surrogate_u_escape() {
+    // Python's `re` treats `\uD800` as a (surrogate) literal, but a Rust
+    // `String` cannot hold a surrogate, so we reject it rather than panic
+    // when building the character set. Covers both the in-class and
+    // out-of-class `\u` arms (the valid-codepoint branch is covered by the
+    // `A` / `é` tests above).
+    for pat in [r"\uD800", r"\uDFFF", r"[\uD800]", r"[^\uD800]"] {
+        let err = parse_err(pat);
+        assert!(err.msg.contains("surrogate"), "{}: {}", pat, err.msg);
+    }
+}
+
+#[test]
+fn err_z_anchor_not_supported() {
+    // CPython's `re` only has `\Z`; `\z` is "bad escape \z".
+    let err = parse_err(r"\z");
+    assert!(err.msg.contains("bad escape"), "{}", err.msg);
+    // `\Z` is still accepted.
+    parse_pattern(r"\Z", 0).unwrap();
+}
+
+#[test]
+fn err_deeply_nested_groups() {
+    // A pathologically nested pattern must surface a clean error rather than
+    // overflowing the stack.
+    let pat = format!("{}a{}", "(?:".repeat(5000), ")".repeat(5000));
+    let err = parse_err(&pat);
+    assert!(err.msg.contains("nesting"), "{}", err.msg);
+}
+
+#[test]
+fn moderately_nested_groups_parse() {
+    // Well within the nesting limit.
+    let pat = format!("{}a{}", "(?:".repeat(20), ")".repeat(20));
+    parse_pattern(&pat, 0).unwrap();
+}

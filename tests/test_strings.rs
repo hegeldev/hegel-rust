@@ -858,11 +858,47 @@ mod nocover_emails {
 
 mod regex_tests {
     use crate::common::utils::{
-        FindAny, assert_all_examples, assert_no_examples, check_can_generate_examples, find_any,
+        FindAny, assert_all_examples, assert_no_examples, check_can_generate_examples,
+        expect_panic, find_any,
     };
     use hegel::generators::{self as gs};
     use hegel::{HealthCheck, Hegel, Settings};
     use regex::Regex;
+
+    fn expect_regex_rejected(pattern: &'static str, message: &str) {
+        // A pattern the native engine can't represent must surface as a clean
+        // (catchable) error, not crash the process. `\uD800` is a surrogate
+        // (Python accepts it, but a Rust `String` can't hold one); the deeply
+        // nested pattern would otherwise overflow the stack.
+        expect_panic(
+            move || {
+                Hegel::new(move |tc| {
+                    tc.draw(gs::from_regex(pattern));
+                })
+                .settings(Settings::new().test_cases(1).database(None))
+                .run();
+            },
+            message,
+        );
+    }
+
+    #[test]
+    fn surrogate_pattern_is_rejected_not_crashing() {
+        expect_regex_rejected(r"\uD800", "surrogate");
+    }
+
+    #[test]
+    fn deeply_nested_pattern_is_rejected_not_crashing() {
+        expect_regex_rejected(
+            concat!(
+                "(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:",
+                "(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:",
+                "(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:(?:a",
+                ")))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))",
+            ),
+            "nesting",
+        );
+    }
 
     // test_matching: omitted — validates Python-internal category constants
     // (SPACE_CHARS, UNICODE_DIGIT_CATEGORIES, etc.) with no hegel-rust counterpart.

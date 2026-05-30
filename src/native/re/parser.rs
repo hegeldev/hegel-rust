@@ -402,7 +402,6 @@ fn lookup_category(escape: &str) -> Option<CategoryCode> {
         "\\S" => Some(CategoryCode::In(ChCode::NotSpace)),
         "\\w" => Some(CategoryCode::In(ChCode::Word)),
         "\\W" => Some(CategoryCode::In(ChCode::NotWord)),
-        "\\z" => Some(CategoryCode::At(AtCode::EndString)),
         "\\Z" => Some(CategoryCode::At(AtCode::EndString)),
         _ => None,
     }
@@ -465,6 +464,12 @@ fn class_escape(source: &mut Tokenizer, escape: &str) -> ParseResult<ClassEscape
             let hex: String = escape.chars().skip(2).collect();
             let n = u32::from_str_radix(&hex, 16)
                 .expect("getwhile only emits HEXDIGITS, so radix-16 parse cannot fail");
+            if char::from_u32(n).is_none() {
+                return Err(source.error(
+                    &format!("surrogate codepoint {} cannot appear in a string", escape),
+                    escape.chars().count(),
+                ));
+            }
             Ok(ClassEscapeResult::Literal(n))
         }
         'U' => {
@@ -568,6 +573,12 @@ fn escape_code(
             let hex: String = escape.chars().skip(2).collect();
             let n = u32::from_str_radix(&hex, 16)
                 .expect("getwhile only emits HEXDIGITS, so radix-16 parse cannot fail");
+            if char::from_u32(n).is_none() {
+                return Err(source.error(
+                    &format!("surrogate codepoint {} cannot appear in a string", escape),
+                    escape.chars().count(),
+                ));
+            }
             Ok(EscapeResult::Literal(n))
         }
         'U' => {
@@ -773,6 +784,9 @@ fn parse(
     nested: u32,
     first: bool,
 ) -> ParseResult<SubPattern> {
+    if nested > MAX_NESTING {
+        return Err(source.error("regex nesting too deep", 0));
+    }
     let mut subpattern = SubPattern::new();
 
     loop {
