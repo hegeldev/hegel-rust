@@ -773,6 +773,21 @@ impl ChoiceKind {
         }
     }
 
+    /// The "unit" value for this choice kind — the fallback a replayed draw
+    /// resolves to when its prefix value fails this kind's validation and no
+    /// original-kind information is available to pun towards `simplest()`.
+    /// Mirrors the `unit()` branch of
+    /// [`crate::native::core::state::NativeTestCase::resolve_choice`].
+    pub fn unit(&self) -> ChoiceValue {
+        match self {
+            ChoiceKind::Integer(ic) => ChoiceValue::Integer(ic.unit()),
+            ChoiceKind::Boolean(bc) => ChoiceValue::Boolean(bc.unit()),
+            ChoiceKind::Float(fc) => ChoiceValue::Float(fc.unit()),
+            ChoiceKind::Bytes(bc) => ChoiceValue::Bytes(bc.unit()),
+            ChoiceKind::String(sc) => ChoiceValue::String(sc.unit()),
+        }
+    }
+
     /// Largest valid index for [`from_index`].
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         match self {
