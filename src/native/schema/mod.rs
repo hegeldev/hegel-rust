@@ -166,24 +166,30 @@ pub(crate) fn many_reject(
 /// Returns [`EngineError::InvalidArgument`] for any value that is not a CBOR
 /// integer (or a malformed bignum tag), since that means the caller's
 /// schema is invalid.
-pub(super) fn cbor_to_bigint(value: &Value) -> BigInt {
+pub(super) fn cbor_to_bigint(value: &Value) -> Result<BigInt, EngineError> {
     match value {
-        Value::Integer(i) => BigInt::from(i128::from(*i)),
+        Value::Integer(i) => Ok(BigInt::from(i128::from(*i))),
         Value::Tag(2, inner) => {
             // CBOR tag 2: positive bignum (big-endian bytes).
             let Value::Bytes(bytes) = inner.as_ref() else {
-                panic!("Expected Bytes inside bignum tag 2, got {inner:?}");
+                return Err(EngineError::InvalidArgument(format!(
+                    "expected bytes inside bignum tag 2, got {inner:?}"
+                )));
             };
-            BigInt::from_bytes_be(Sign::Plus, bytes)
+            Ok(BigInt::from_bytes_be(Sign::Plus, bytes))
         }
         Value::Tag(3, inner) => {
             // CBOR tag 3: negative bignum, value is `-1 - n`.
             let Value::Bytes(bytes) = inner.as_ref() else {
-                panic!("Expected Bytes inside bignum tag 3, got {inner:?}");
+                return Err(EngineError::InvalidArgument(format!(
+                    "expected bytes inside bignum tag 3, got {inner:?}"
+                )));
             };
-            -BigInt::from_bytes_be(Sign::Plus, bytes) - 1
+            Ok(-BigInt::from_bytes_be(Sign::Plus, bytes) - 1)
         }
-        _ => panic!("Expected CBOR integer, got {value:?}"),
+        _ => Err(EngineError::InvalidArgument(format!(
+            "expected CBOR integer, got {value:?}"
+        ))),
     }
 }
 

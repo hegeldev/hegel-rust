@@ -1172,7 +1172,11 @@ impl NativeTestCase {
     /// schema bounds (`i8`..`i128`, `u8`..`u128`, or [`BigInt`] for unbounded
     /// ranges). The drawn value is type-erased into an [`AnyInteger`] for
     /// storage in the choice node.
-    pub fn draw_integer<T: Integer>(&mut self, min_value: T, max_value: T) -> Result<T, EngineError> {
+    pub fn draw_integer<T: Integer>(
+        &mut self,
+        min_value: T,
+        max_value: T,
+    ) -> Result<T, EngineError> {
         assert!(
             min_value <= max_value,
             "Invalid range [{min_value:?}, {max_value:?}]"

@@ -131,8 +131,8 @@ fn bounded_integer_range(schema: &Value) -> Option<(i128, i128)> {
     if schema_type != "integer" {
         return None;
     }
-    let min_val = cbor_to_bigint(map_get(schema, "min_value")?);
-    let max_val = cbor_to_bigint(map_get(schema, "max_value")?);
+    let min_val = cbor_to_bigint(map_get(schema, "min_value")?).ok()?;
+    let max_val = cbor_to_bigint(map_get(schema, "max_value")?).ok()?;
     let span = &max_val - &min_val + 1;
     if !(BigInt::from(1)..=BigInt::from(10_000)).contains(&span) {
         return None;

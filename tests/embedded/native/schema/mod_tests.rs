@@ -199,35 +199,41 @@ fn many_reject_marks_invalid_when_cannot_reach_min_size() {
     assert_eq!(ntc.status, Some(Status::Invalid));
 }
 
-// ── cbor_to_bigint panic branches ───────────────────────────────────────────
+// ── cbor_to_bigint error branches ───────────────────────────────────────────
 
 #[test]
-#[should_panic(expected = "Expected Bytes inside bignum tag 2")]
-fn cbor_to_bigint_tag2_non_bytes_panics() {
+fn cbor_to_bigint_tag2_non_bytes_is_invalid_argument() {
     let bad = Value::Tag(2, Box::new(Value::Integer(1.into())));
-    cbor_to_bigint(&bad);
+    let err = cbor_to_bigint(&bad).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("bignum tag 2"));
 }
 
 #[test]
-#[should_panic(expected = "Expected Bytes inside bignum tag 3")]
-fn cbor_to_bigint_tag3_non_bytes_panics() {
+fn cbor_to_bigint_tag3_non_bytes_is_invalid_argument() {
     let bad = Value::Tag(3, Box::new(Value::Integer(1.into())));
-    cbor_to_bigint(&bad);
+    let err = cbor_to_bigint(&bad).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("bignum tag 3"));
 }
 
 #[test]
-#[should_panic(expected = "Expected CBOR integer")]
-fn cbor_to_bigint_non_integer_panics() {
-    cbor_to_bigint(&Value::Bool(true));
+fn cbor_to_bigint_non_integer_is_invalid_argument() {
+    let err = cbor_to_bigint(&Value::Bool(true)).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("CBOR integer"));
 }
 
 // ── cbor_to_bigint / bigint_to_cbor round-trips ─────────────────────────────
 
 #[test]
 fn cbor_to_bigint_plain_integer() {
-    assert_eq!(cbor_to_bigint(&Value::Integer(42.into())), BigInt::from(42));
     assert_eq!(
-        cbor_to_bigint(&Value::Integer((-7).into())),
+        cbor_to_bigint(&Value::Integer(42.into())).unwrap(),
+        BigInt::from(42)
+    );
+    assert_eq!(
+        cbor_to_bigint(&Value::Integer((-7).into())).unwrap(),
         BigInt::from(-7)
     );
 }
@@ -236,14 +242,14 @@ fn cbor_to_bigint_plain_integer() {
 fn cbor_to_bigint_positive_bignum_tag2() {
     // 0x01_00 big-endian = 256.
     let v = Value::Tag(2, Box::new(Value::Bytes(vec![0x01, 0x00])));
-    assert_eq!(cbor_to_bigint(&v), BigInt::from(256));
+    assert_eq!(cbor_to_bigint(&v).unwrap(), BigInt::from(256));
 }
 
 #[test]
 fn cbor_to_bigint_negative_bignum_tag3() {
     // tag 3 encodes -1 - n; n = 255 here, so value = -256.
     let v = Value::Tag(3, Box::new(Value::Bytes(vec![0xFF])));
-    assert_eq!(cbor_to_bigint(&v), BigInt::from(-256));
+    assert_eq!(cbor_to_bigint(&v).unwrap(), BigInt::from(-256));
 }
 
 #[test]
@@ -259,7 +265,7 @@ fn bigint_to_cbor_roundtrips_across_magnitudes() {
     ];
     for original in cases {
         let encoded = bigint_to_cbor(&original);
-        assert_eq!(cbor_to_bigint(&encoded), original);
+        assert_eq!(cbor_to_bigint(&encoded).unwrap(), original);
     }
 }
 
@@ -283,7 +289,7 @@ fn interpret_integer_draws_real_bigint_beyond_u128() {
     for seed in 0..200u64 {
         let mut ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
         let value = interpret_schema(&mut ntc, &schema).ok().unwrap();
-        let decoded = cbor_to_bigint(&value);
+        let decoded = cbor_to_bigint(&value).unwrap();
         assert!(decoded >= min && decoded <= max, "out of range: {decoded}");
         if decoded > u128_max || decoded < neg_u128_max {
             saw_beyond_u128 = true;

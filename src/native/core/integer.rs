@@ -104,9 +104,9 @@ impl UnsignedDistance for BigUint {
 
 /// An integer type usable as the value of an [`IntegerChoice`].
 ///
-/// Implemented for `i8`..`i128`, `u8`..`u128`, and [`BigInt`]. The associated
+/// Implemented for `i8`..`i128`, `u8`..`u128`, and `BigInt`. The associated
 /// [`Unsigned`](Integer::Unsigned) type is `u128` for native widths and
-/// [`BigUint`] for `BigInt`.
+/// `BigUint` for `BigInt`.
 pub trait Integer: Clone + Eq + Ord + std::fmt::Debug + Send + Sync + 'static {
     type Unsigned: UnsignedDistance;
 
@@ -127,11 +127,11 @@ pub trait Integer: Clone + Eq + Ord + std::fmt::Debug + Send + Sync + 'static {
     fn checked_pred(&self) -> Option<Self>;
 
     fn to_bigint(&self) -> BigInt;
-    /// Convert from a [`BigInt`], or `None` if it falls outside this type.
+    /// Convert from a `BigInt`, or `None` if it falls outside this type.
     fn from_bigint(v: &BigInt) -> Option<Self>;
 
     /// Type-erasure glue: wrap a typed choice / value into the homogeneous
-    /// [`AnyIntegerChoice`] / [`AnyInteger`] stored in choice nodes, and the
+    /// `AnyIntegerChoice` / `AnyInteger` stored in choice nodes, and the
     /// inverse downcast.
     fn wrap_choice(choice: IntegerChoice<Self>) -> AnyIntegerChoice;
     fn wrap_value(self) -> AnyInteger;
