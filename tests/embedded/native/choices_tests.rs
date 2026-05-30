@@ -956,3 +956,22 @@ fn string_max_index_uses_dispatch_arm() {
         crate::native::bignum::BigUint::from(12u32)
     );
 }
+
+#[test]
+fn max_children_dispatch_for_sequence_kinds() {
+    // Cover the Bytes/String arms of `ChoiceKind::max_children` (only the
+    // saturating variant is used in production now, so exercise these
+    // directly). Bytes lengths 0..=2 over 256 symbols: 1 + 256 + 65536.
+    let bytes = ChoiceKind::Bytes(BytesChoice {
+        min_size: 0,
+        max_size: 2,
+    });
+    assert_eq!(bytes.max_children(), bu(1 + 256 + 65536));
+    // String alphabet {a,b,c}, lengths 0..=2: 1 + 3 + 9.
+    let string = ChoiceKind::String(StringChoice {
+        intervals: IntervalSet::new(vec![(b'a' as u32, b'c' as u32)]),
+        min_size: 0,
+        max_size: 2,
+    });
+    assert_eq!(string.max_children(), bu(13));
+}
