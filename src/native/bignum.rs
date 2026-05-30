@@ -41,13 +41,8 @@ pub struct BigUint(UBig);
 /// `num-traits`-style narrowing conversions. Each returns `None` when the value
 /// falls outside the target type's range.
 pub trait ToPrimitive {
-    fn to_i8(&self) -> Option<i8>;
-    fn to_i16(&self) -> Option<i16>;
-    fn to_i32(&self) -> Option<i32>;
     fn to_i64(&self) -> Option<i64>;
     fn to_i128(&self) -> Option<i128>;
-    fn to_u8(&self) -> Option<u8>;
-    fn to_u16(&self) -> Option<u16>;
     fn to_u32(&self) -> Option<u32>;
     fn to_u64(&self) -> Option<u64>;
     fn to_u128(&self) -> Option<u128>;
@@ -226,26 +221,11 @@ impl Signed for BigInt {
 macro_rules! impl_to_primitive {
     ($wrapper:ident) => {
         impl ToPrimitive for $wrapper {
-            fn to_i8(&self) -> Option<i8> {
-                i8::try_from(&self.0).ok()
-            }
-            fn to_i16(&self) -> Option<i16> {
-                i16::try_from(&self.0).ok()
-            }
-            fn to_i32(&self) -> Option<i32> {
-                i32::try_from(&self.0).ok()
-            }
             fn to_i64(&self) -> Option<i64> {
                 i64::try_from(&self.0).ok()
             }
             fn to_i128(&self) -> Option<i128> {
                 i128::try_from(&self.0).ok()
-            }
-            fn to_u8(&self) -> Option<u8> {
-                u8::try_from(&self.0).ok()
-            }
-            fn to_u16(&self) -> Option<u16> {
-                u16::try_from(&self.0).ok()
             }
             fn to_u32(&self) -> Option<u32> {
                 u32::try_from(&self.0).ok()

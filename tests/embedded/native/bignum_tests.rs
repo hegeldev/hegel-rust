@@ -117,38 +117,23 @@ fn signed_abs() {
 #[test]
 fn to_primitive_bigint() {
     let v = i(100);
-    assert_eq!(v.to_i8(), Some(100));
-    assert_eq!(v.to_i16(), Some(100));
-    assert_eq!(v.to_i32(), Some(100));
     assert_eq!(v.to_i64(), Some(100));
     assert_eq!(v.to_i128(), Some(100));
-    assert_eq!(v.to_u8(), Some(100));
-    assert_eq!(v.to_u16(), Some(100));
     assert_eq!(v.to_u32(), Some(100));
     assert_eq!(v.to_u64(), Some(100));
     assert_eq!(v.to_u128(), Some(100));
     assert_eq!(v.to_f64(), Some(100.0));
-
-    // Out-of-range narrowing returns None.
-    assert_eq!(i(1000).to_i8(), None);
-    assert_eq!(i(-1).to_u8(), None);
 }
 
 #[test]
 fn to_primitive_biguint() {
     let v = u(100);
-    assert_eq!(v.to_i8(), Some(100));
-    assert_eq!(v.to_i16(), Some(100));
-    assert_eq!(v.to_i32(), Some(100));
     assert_eq!(v.to_i64(), Some(100));
     assert_eq!(v.to_i128(), Some(100));
-    assert_eq!(v.to_u8(), Some(100));
-    assert_eq!(v.to_u16(), Some(100));
     assert_eq!(v.to_u32(), Some(100));
     assert_eq!(v.to_u64(), Some(100));
     assert_eq!(v.to_u128(), Some(100));
     assert_eq!(v.to_f64(), Some(100.0));
-    assert_eq!(u(256).to_u8(), None);
 }
 
 #[test]
