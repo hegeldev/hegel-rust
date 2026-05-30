@@ -243,18 +243,22 @@ impl DataSource for NativeDataSource {
         // Mirror upstream `hypothesis.control.target`
         // (`control.py:354-356,372-376`): the observation must be finite and
         // each label may be observed at most once per test case.
+        // These are usage errors, not discovered counterexamples. Prefix the
+        // message so the lifecycle aborts the run with it rather than shrinking
+        // it as a "failure" (see `TARGET_USAGE_ERROR_PREFIX`).
+        let prefix = crate::test_case::TARGET_USAGE_ERROR_PREFIX;
         if !score.is_finite() {
             panic!(
-                "tc.target({score}, label={label:?}) requires a finite score; \
-                 got non-finite value"
+                "{prefix}tc.target({score}, label={label:?}) requires a finite \
+                 score; got non-finite value"
             );
         }
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if inner.target_observations.contains_key(label) {
             panic!(
-                "tc.target({score}, label={label:?}) would overwrite previous \
-                 tc.target(_, label={label:?}); each label can be observed at \
-                 most once per test case"
+                "{prefix}tc.target({score}, label={label:?}) would overwrite \
+                 previous tc.target(_, label={label:?}); each label can be \
+                 observed at most once per test case"
             );
         }
         inner.target_observations.insert(label.to_string(), score);
