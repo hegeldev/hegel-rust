@@ -277,7 +277,7 @@ macro_rules! impl_from_int {
     };
 }
 impl_from_int!(
-    BigInt, IBig, i8, i16, i32, i64, i128, u8, u16, u32, u64, u128
+    BigInt, IBig, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
 );
 impl_from_int!(BigUint, UBig, u8, u16, u32, u64, u128);
 
@@ -299,7 +299,25 @@ macro_rules! impl_try_into_native {
         )*
     };
 }
-impl_try_into_native!(i8, i16, i32, i64, i128, u8, u16, u32, u64, u128);
+impl_try_into_native!(
+    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
+);
+
+macro_rules! impl_try_from_owned_bigint {
+    ($($t:ty),*) => {
+        $(
+            impl TryFrom<BigInt> for $t {
+                type Error = ();
+                fn try_from(v: BigInt) -> Result<$t, ()> {
+                    <$t>::try_from(&v)
+                }
+            }
+        )*
+    };
+}
+impl_try_from_owned_bigint!(
+    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
+);
 
 macro_rules! impl_try_into_native_uint {
     ($($t:ty),*) => {

@@ -32,7 +32,7 @@
 use std::path::PathBuf;
 
 use crate::native::bignum::BigInt;
-use crate::native::core::{AnyInteger, ChoiceValue};
+use crate::native::core::ChoiceValue;
 
 /// Multi-value key/value store backing the native engine's replay phase.
 ///
@@ -196,10 +196,10 @@ pub(super) fn fnv_hex(s: &[u8]) -> String {
 /// - For each choice:
 ///   - 1-byte type tag: 0=Integer, 1=Boolean, 2=Float, 3=Bytes, 4=String
 ///   - Value bytes:
-///     - Integer: a 1-byte width sub-tag (0=i8…4=i128, 5=u8…9=u128, 10=BigInt)
-///       followed by the value's little-endian bytes (1/2/4/8/16 for native
-///       widths; for BigInt, a 4-byte little-endian length and that many
-///       two's-complement little-endian magnitude bytes)
+///     - Integer: a 1-byte width sub-tag (always 10=BigInt for new writes;
+///       sub-tags 0–9 are still accepted on read for backward compat)
+///       followed by a 4-byte little-endian length and that many
+///       two's-complement little-endian bytes
 ///     - Boolean: 1 byte (0 or 1)
 ///     - Float: 8 bytes (the f64 bit pattern, little-endian, so `-0.0` and
 ///       NaN payloads round-trip unchanged)
@@ -243,66 +243,49 @@ pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
     buf
 }
 
-/// Encode a type-erased [`AnyInteger`]: a 1-byte width sub-tag followed by the
-/// value bytes (see [`serialize_choices`] for the layout).
-fn serialize_any_integer(buf: &mut Vec<u8>, v: &AnyInteger) {
-    macro_rules! native {
-        ($sub:expr, $n:expr) => {{
-            buf.push($sub);
-            buf.extend_from_slice(&$n.to_le_bytes());
-        }};
-    }
-    match v {
-        AnyInteger::I8(n) => native!(0, n),
-        AnyInteger::I16(n) => native!(1, n),
-        AnyInteger::I32(n) => native!(2, n),
-        AnyInteger::I64(n) => native!(3, n),
-        AnyInteger::I128(n) => native!(4, n),
-        AnyInteger::U8(n) => native!(5, n),
-        AnyInteger::U16(n) => native!(6, n),
-        AnyInteger::U32(n) => native!(7, n),
-        AnyInteger::U64(n) => native!(8, n),
-        AnyInteger::U128(n) => native!(9, n),
-        AnyInteger::Big(n) => {
-            buf.push(10);
-            let mag = n.to_signed_bytes_le();
-            buf.extend_from_slice(&(mag.len() as u32).to_le_bytes());
-            buf.extend_from_slice(&mag);
-        }
-    }
+/// Encode a [`BigInt`] as sub-tag 10 followed by a length-prefixed
+/// two's-complement little-endian byte sequence (see [`serialize_choices`]).
+fn serialize_any_integer(buf: &mut Vec<u8>, v: &BigInt) {
+    buf.push(10);
+    let mag = v.to_signed_bytes_le();
+    buf.extend_from_slice(&(mag.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&mag);
 }
 
-/// Inverse of [`serialize_any_integer`]. Returns the decoded value and the new
-/// read position, or `None` on truncation / an unknown width sub-tag.
-fn deserialize_any_integer(bytes: &[u8], pos: usize) -> Option<(AnyInteger, usize)> {
+/// Inverse of [`serialize_any_integer`]. Returns the decoded `BigInt` and the
+/// new read position, or `None` on truncation / an unknown width sub-tag.
+///
+/// Sub-tags 0–9 (legacy per-width formats) are still accepted for backward
+/// compatibility; they are converted to `BigInt` on read.
+fn deserialize_any_integer(bytes: &[u8], pos: usize) -> Option<(BigInt, usize)> {
     let sub = *bytes.get(pos)?;
     let mut pos = pos + 1;
     macro_rules! native {
-        ($t:ty, $variant:ident) => {{
+        ($t:ty) => {{
             const N: usize = std::mem::size_of::<$t>();
             let raw: [u8; N] = bytes.get(pos..pos + N)?.try_into().ok()?;
             pos += N;
-            AnyInteger::$variant(<$t>::from_le_bytes(raw))
+            BigInt::from(<$t>::from_le_bytes(raw))
         }};
     }
     let value = match sub {
-        0 => native!(i8, I8),
-        1 => native!(i16, I16),
-        2 => native!(i32, I32),
-        3 => native!(i64, I64),
-        4 => native!(i128, I128),
-        5 => native!(u8, U8),
-        6 => native!(u16, U16),
-        7 => native!(u32, U32),
-        8 => native!(u64, U64),
-        9 => native!(u128, U128),
+        0 => native!(i8),
+        1 => native!(i16),
+        2 => native!(i32),
+        3 => native!(i64),
+        4 => native!(i128),
+        5 => native!(u8),
+        6 => native!(u16),
+        7 => native!(u32),
+        8 => native!(u64),
+        9 => native!(u128),
         10 => {
             let len_raw: [u8; 4] = bytes.get(pos..pos + 4)?.try_into().ok()?;
             pos += 4;
             let len = u32::from_le_bytes(len_raw) as usize;
             let mag = bytes.get(pos..pos + len)?;
             pos += len;
-            AnyInteger::Big(BigInt::from_signed_bytes_le(mag))
+            BigInt::from_signed_bytes_le(mag)
         }
         _ => return None,
     };

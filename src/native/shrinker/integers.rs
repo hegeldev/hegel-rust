@@ -414,9 +414,7 @@ impl<'a> Shrinker<'a> {
 
                 let (ic_i, v_i) = match (&self.current_nodes[i].kind, &self.current_nodes[i].value)
                 {
-                    (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
-                        (ic.clone(), v.clone())
-                    }
+                    (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.clone()),
                     _ => unreachable!(
                         "int_indices is rebuilt on entry; kind-pun between iterations would have re-filtered i out"
                     ),
@@ -744,8 +742,7 @@ impl<'a> Shrinker<'a> {
                     } else {
                         &ic_targets[k] - &new_distance
                     };
-                    replacements
-                        .insert(indices[k], ChoiceValue::Integer(new_value));
+                    replacements.insert(indices[k], ChoiceValue::Integer(new_value));
                 }
                 self.replace(&replacements)
             });

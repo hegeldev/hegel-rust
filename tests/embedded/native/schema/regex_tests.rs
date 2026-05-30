@@ -721,8 +721,7 @@ fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
     // `which` to choose between the two cases. With an alphabet that only
     // allows 'A', forcing `which = 0` picks the lowercase 'a', which the
     // alphabet rejects, so the test case is marked invalid.
-    let mut ntc =
-        NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
+    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
     let mut state = GenState {
         groups: HashMap::new(),
         flags: SRE_FLAG_IGNORECASE,

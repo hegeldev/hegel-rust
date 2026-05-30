@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use ciborium::Value;
 
 use crate::backend::{DataSource, DataSourceError, TestCaseResult};
+use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{ChoiceNode, EngineError, ManyState, NativeTestCase, Span};
 use crate::native::schema;
 
@@ -221,14 +222,16 @@ impl DataSource for NativeDataSource {
                 // No variables available: mark the test case invalid.
                 return Err(EngineError::StopTest);
             }
-            // Index arithmetic uses `i128` to match `draw_integer`; the
-            // variable ids drawn out of `active` are `i64`.
-            let n = active.len() as i128;
+            // The variable ids drawn out of `active` are `i64`.
+            let n = active.len();
             // Draw index from `[0, n-1]`.  Shrink towards `n-1`
             // (last added = most recent) by drawing `k` from
             // `[0, n-1]` and using `index = n-1-k`.
-            let k = ntc.draw_integer::<i128>(0, n - 1)?;
-            let variable_id = active[(n - 1 - k) as usize];
+            let k = ntc
+                .draw_integer(BigInt::from(0), BigInt::from(n as i64 - 1))?
+                .to_i128()
+                .unwrap() as usize;
+            let variable_id = active[n - 1 - k];
             if consume {
                 ntc.variable_pools[pool_idx].consume(variable_id);
             }

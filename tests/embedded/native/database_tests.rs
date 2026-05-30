@@ -3,6 +3,7 @@
 // `serialize_choices` / `deserialize_choices` round-trip.
 
 use super::*;
+use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceValue;
 use tempfile::TempDir;
 
@@ -95,10 +96,10 @@ fn move_value_falls_back_to_delete_save_when_rename_fails() {
 #[test]
 fn round_trip_integer_choices() {
     let choices = vec![
-        ChoiceValue::Integer(AnyInteger::I128(0)),
-        ChoiceValue::Integer(AnyInteger::I128(-1)),
-        ChoiceValue::Integer(AnyInteger::I128(i128::MAX)),
-        ChoiceValue::Integer(AnyInteger::I128(i128::MIN)),
+        ChoiceValue::Integer(BigInt::from(0)),
+        ChoiceValue::Integer(BigInt::from(-1)),
+        ChoiceValue::Integer(BigInt::from(i128::MAX)),
+        ChoiceValue::Integer(BigInt::from(i128::MIN)),
     ];
     let bytes = serialize_choices(&choices);
     assert_eq!(deserialize_choices(&bytes), Some(choices));
@@ -108,11 +109,41 @@ fn round_trip_integer_choices() {
 fn round_trip_mixed_choices() {
     let choices = vec![
         ChoiceValue::Boolean(false),
-        ChoiceValue::Integer(AnyInteger::I128(42)),
+        ChoiceValue::Integer(BigInt::from(42)),
         ChoiceValue::Boolean(true),
     ];
     let bytes = serialize_choices(&choices);
     assert_eq!(deserialize_choices(&bytes), Some(choices));
+}
+
+#[test]
+fn deserialize_legacy_per_width_integers_as_bigint() {
+    // Build a payload using the old per-width sub-tags (0–9) by hand,
+    // then verify deserialize_choices converts them to BigInt values.
+    let mut bytes = Vec::new();
+    // count = 3 (one i128, one u64, one i8)
+    bytes.extend_from_slice(&3u32.to_le_bytes());
+
+    // choice 0: Integer, sub-tag 4 (i128), value = 42
+    bytes.push(0); // type tag = Integer
+    bytes.push(4); // sub-tag = i128
+    bytes.extend_from_slice(&42i128.to_le_bytes());
+
+    // choice 1: Integer, sub-tag 8 (u64), value = u64::MAX
+    bytes.push(0);
+    bytes.push(8); // sub-tag = u64
+    bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+
+    // choice 2: Integer, sub-tag 0 (i8), value = -1
+    bytes.push(0);
+    bytes.push(0); // sub-tag = i8
+    bytes.extend_from_slice(&(-1i8).to_le_bytes());
+
+    let result = deserialize_choices(&bytes).unwrap();
+    assert_eq!(result.len(), 3);
+    assert_eq!(result[0], ChoiceValue::Integer(BigInt::from(42)));
+    assert_eq!(result[1], ChoiceValue::Integer(BigInt::from(u64::MAX)));
+    assert_eq!(result[2], ChoiceValue::Integer(BigInt::from(-1)));
 }
 
 #[test]
@@ -165,23 +196,20 @@ fn deserialize_returns_none_on_truncated_bigint_body() {
 }
 
 #[test]
-fn serialize_roundtrips_all_integer_widths() {
-    use crate::native::core::AnyInteger;
+fn serialize_roundtrips_various_integer_values() {
     let values = vec![
-        ChoiceValue::Integer(AnyInteger::I8(-12)),
-        ChoiceValue::Integer(AnyInteger::I16(-1234)),
-        ChoiceValue::Integer(AnyInteger::I32(-123456)),
-        ChoiceValue::Integer(AnyInteger::I64(-1234567890)),
-        ChoiceValue::Integer(AnyInteger::I128(i128::MIN)),
-        ChoiceValue::Integer(AnyInteger::U8(200)),
-        ChoiceValue::Integer(AnyInteger::U16(60000)),
-        ChoiceValue::Integer(AnyInteger::U32(4_000_000_000)),
-        ChoiceValue::Integer(AnyInteger::U64(u64::MAX)),
-        ChoiceValue::Integer(AnyInteger::U128(u128::MAX)),
-        ChoiceValue::Integer(AnyInteger::Big(
-            crate::native::bignum::BigInt::from(i128::MIN) * crate::native::bignum::BigInt::from(7),
-        )),
-        ChoiceValue::Integer(AnyInteger::Big(crate::native::bignum::BigInt::from(0))),
+        ChoiceValue::Integer(BigInt::from(-12i8)),
+        ChoiceValue::Integer(BigInt::from(-1234i16)),
+        ChoiceValue::Integer(BigInt::from(-123456i32)),
+        ChoiceValue::Integer(BigInt::from(-1234567890i64)),
+        ChoiceValue::Integer(BigInt::from(i128::MIN)),
+        ChoiceValue::Integer(BigInt::from(200u8)),
+        ChoiceValue::Integer(BigInt::from(60000u16)),
+        ChoiceValue::Integer(BigInt::from(4_000_000_000u32)),
+        ChoiceValue::Integer(BigInt::from(u64::MAX)),
+        ChoiceValue::Integer(BigInt::from(u128::MAX)),
+        ChoiceValue::Integer(BigInt::from(i128::MIN) * BigInt::from(7)),
+        ChoiceValue::Integer(BigInt::from(0)),
     ];
     let bytes = serialize_choices(&values);
     assert_eq!(deserialize_choices(&bytes), Some(values));

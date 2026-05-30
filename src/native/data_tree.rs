@@ -13,14 +13,15 @@ use std::collections::HashMap;
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 
-use crate::native::core::{AnyInteger, ChoiceKind, ChoiceNode, ChoiceValue, Status};
+use crate::native::bignum::BigInt;
+use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Status};
 
 /// Hashable choice-value key. `f64` is keyed by its bit pattern so `-0.0`
 /// stays distinct from `0.0` and individual NaN payloads are tracked
 /// separately — both matter for novel-prefix exhaustion accounting.
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum ChoiceValueKey {
-    Integer(AnyInteger),
+    Integer(BigInt),
     Boolean(bool),
     Float(u64),
     Bytes(Vec<u8>),

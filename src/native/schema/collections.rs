@@ -38,12 +38,10 @@ pub(super) fn interpret_one_of(
             ));
         }
     };
-    let idx = ntc.draw_integer::<i128>(0, generators.len() as i128 - 1)?;
-    let value = interpret_schema(ntc, &generators[idx as usize])?;
-    Ok(Value::Array(vec![
-        Value::Integer((idx as i64).into()),
-        value,
-    ]))
+    let idx = ntc.draw_integer(BigInt::from(0), BigInt::from(generators.len() as i64 - 1))?;
+    let idx_i64 = idx.to_i128().unwrap() as i64;
+    let value = interpret_schema(ntc, &generators[idx_i64 as usize])?;
+    Ok(Value::Array(vec![Value::Integer(idx_i64.into()), value]))
 }
 
 pub(super) fn interpret_sampled_from(
@@ -58,8 +56,10 @@ pub(super) fn interpret_sampled_from(
             ));
         }
     };
-    let idx = ntc.draw_integer::<i128>(0, values.len() as i128 - 1)?;
-    Ok(encode_schema_value(&values[idx as usize]))
+    let idx = ntc.draw_integer(BigInt::from(0), BigInt::from(values.len() as i64 - 1))?;
+    Ok(encode_schema_value(
+        &values[idx.to_i128().unwrap() as usize],
+    ))
 }
 
 pub(super) fn interpret_list(
@@ -117,7 +117,10 @@ fn interpret_unique_integer_list(
         if remaining.is_empty() || !many_more(ntc, &mut state)? {
             break;
         }
-        let j = ntc.draw_integer::<i128>(0, remaining.len() as i128 - 1)? as usize;
+        let j = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(remaining.len() as i64 - 1))?
+            .to_i128()
+            .unwrap() as usize;
         let value = remaining.remove(j);
         results.push(Value::Integer((value as i64).into()));
     }

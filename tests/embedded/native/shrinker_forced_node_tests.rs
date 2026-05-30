@@ -64,7 +64,9 @@ fn accepting_shrinker(initial: Vec<ChoiceNode>) -> Shrinker<'static> {
 
 fn assert_integer_at(shrinker: &Shrinker<'_>, idx: usize, expected: i128) {
     match &shrinker.current_nodes[idx].value {
-        ChoiceValue::Integer(v) => assert_eq!(i128::try_from(v.clone()).unwrap(), expected, "node {idx}"),
+        ChoiceValue::Integer(v) => {
+            assert_eq!(i128::try_from(v.clone()).unwrap(), expected, "node {idx}")
+        }
         _ => unreachable!(),
     }
 }

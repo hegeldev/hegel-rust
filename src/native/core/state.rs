@@ -8,14 +8,12 @@ use rand::RngExt;
 use rand::rngs::SmallRng;
 
 use super::choices::{
-    AnyInteger, AnyIntegerChoice, BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode,
-    ChoiceTemplate, ChoiceTemplateKind, ChoiceValue, EngineError, FloatChoice, IntegerChoice,
-    InterestingOrigin, Status, StringChoice,
+    BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceTemplate, ChoiceTemplateKind,
+    ChoiceValue, EngineError, FloatChoice, IntegerChoice, InterestingOrigin, Status, StringChoice,
 };
 use super::float_index::lex_to_float;
-use super::integer::Integer;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
-use crate::native::bignum::{BigInt, BigUint, ToPrimitive};
+use crate::native::bignum::{BigInt, BigUint, ToPrimitive, Zero};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::statistics::{
     Distribution, LogStudentTDistribution, PiecewiseDistribution, UniformDistribution,
@@ -266,15 +264,11 @@ static SORTED_NASTY_POOL: LazyLock<Vec<i128>> = LazyLock::new(|| {
 /// distribution — and re-widens the result into the choice's concrete type.
 /// Otherwise (a `BigInt` choice, or a `u128` range past `i128::MAX`) it falls
 /// back to [`biguint_sample_in_range`].
-pub(crate) fn biased_integer_sample(ic: &AnyIntegerChoice, rng: &mut SmallRng) -> AnyInteger {
-    let min = ic.min_bigint();
-    let max = ic.max_bigint();
-    let value = match (min.to_i128(), max.to_i128()) {
+pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut SmallRng) -> BigInt {
+    match (ic.min_value.to_i128(), ic.max_value.to_i128()) {
         (Some(min_i), Some(max_i)) => BigInt::from(biased_i128_sample(min_i, max_i, rng)),
-        _ => biguint_sample_in_range(&min, &max, rng),
-    };
-    ic.value_from_bigint(&value)
-        .expect("sampled value lies in range and fits the choice's width")
+        _ => biguint_sample_in_range(&ic.min_value, &ic.max_value, rng),
+    }
 }
 
 /// The original i128 nasty-pool + distribution sampler, returning a value in
@@ -922,7 +916,7 @@ impl std::ops::Index<i64> for Spans {
 /// about.
 pub trait DataObserver: Send {
     fn draw_boolean(&mut self, _value: bool, _was_forced: bool) {}
-    fn draw_integer(&mut self, _value: &AnyInteger, _was_forced: bool) {}
+    fn draw_integer(&mut self, _value: &BigInt, _was_forced: bool) {}
     fn draw_float(&mut self, _value: f64, _was_forced: bool) {}
     fn draw_bytes(&mut self, _value: &[u8], _was_forced: bool) {}
     fn draw_string(&mut self, _value: &str, _was_forced: bool) {}
@@ -1168,15 +1162,16 @@ impl NativeTestCase {
 
     /// Draw a random integer in `[min_value, max_value]`.
     ///
-    /// Generic over the value type `T`: callers pick the width that matches the
-    /// schema bounds (`i8`..`i128`, `u8`..`u128`, or [`BigInt`] for unbounded
-    /// ranges). The drawn value is type-erased into an [`AnyInteger`] for
-    /// storage in the choice node.
-    pub fn draw_integer<T: Integer>(
+    /// The type parameter `T` determines the input and output type.
+    /// Internally all arithmetic uses `BigInt`; the bounds are widened on
+    /// entry and the result is narrowed back to `T` on exit.
+    pub fn draw_integer<T: Into<BigInt> + TryFrom<BigInt>>(
         &mut self,
         min_value: T,
         max_value: T,
     ) -> Result<T, EngineError> {
+        let min_value = min_value.into();
+        let max_value = max_value.into();
         assert!(
             min_value <= max_value,
             "Invalid range [{min_value:?}, {max_value:?}]"
@@ -1185,45 +1180,34 @@ impl NativeTestCase {
         let kind = IntegerChoice {
             min_value,
             max_value,
-            shrink_towards: T::zero(),
+            shrink_towards: BigInt::zero(),
         };
-        let any_kind = T::wrap_choice(kind.clone());
 
         let (value, was_forced) = self.resolve_choice(
-            &ChoiceKind::Integer(any_kind.clone()),
-            || ChoiceValue::Integer(kind.simplest().wrap_value()),
-            || ChoiceValue::Integer(kind.unit().wrap_value()),
-            |v| matches!(v, ChoiceValue::Integer(n) if any_kind.validate(n)),
-            |rng| ChoiceValue::Integer(biased_integer_sample(&any_kind, rng)),
+            &ChoiceKind::Integer(kind.clone()),
+            || ChoiceValue::Integer(kind.simplest()),
+            || ChoiceValue::Integer(kind.unit()),
+            |v| matches!(v, ChoiceValue::Integer(n) if kind.validate(n)),
+            |rng| ChoiceValue::Integer(biased_integer_sample(&kind, rng)),
         )?;
 
-        let ChoiceValue::Integer(any) = value else {
+        let ChoiceValue::Integer(v) = value else {
             unreachable!("kind/value invariant violated: outer match guaranteed this variant")
         };
-        // A replayed prefix value can carry a different width than the one this
-        // draw requests (a schema shift between runs). `validate` already
-        // confirmed it is numerically in range, so coerce it to `T` and
-        // re-wrap, keeping the stored node's value width-consistent with its
-        // kind.
-        let v = match T::unwrap_value(&any) {
-            Some(v) => v,
-            None => {
-                T::from_bigint(&any.to_bigint()).expect("validated value fits the requested width")
-            }
-        };
-        let any = v.clone().wrap_value();
 
         if let Some(ref mut obs) = self.observer {
-            obs.draw_integer(&any, was_forced);
+            obs.draw_integer(&v, was_forced);
         }
 
         self.nodes.push(ChoiceNode {
-            kind: ChoiceKind::Integer(any_kind),
-            value: ChoiceValue::Integer(any),
+            kind: ChoiceKind::Integer(kind),
+            value: ChoiceValue::Integer(v.clone()),
             was_forced,
         });
 
-        Ok(v)
+        Ok(T::try_from(v)
+            .ok()
+            .expect("validated value fits the requested width"))
     }
 
     /// Draw a floating-point value in `[min_value, max_value]`. NaN is drawn

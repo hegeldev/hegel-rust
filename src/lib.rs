@@ -263,17 +263,15 @@ pub use antithesis::TestLocation;
 #[doc(hidden)]
 #[cfg(feature = "__bench")]
 pub mod __bench {
+    pub use crate::native::bignum::BigInt;
     pub use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, StringChoice};
-    pub use crate::native::core::integer::Integer;
     pub use crate::native::intervalsets::IntervalSet;
 
-    pub fn biased_integer_sample<T: Integer>(
-        ic: &IntegerChoice<T>,
+    pub fn biased_integer_sample(
+        ic: &IntegerChoice,
         rng: &mut rand::rngs::SmallRng,
-    ) -> T {
-        let any = T::wrap_choice(ic.clone());
-        let value = crate::native::core::state::biased_integer_sample(&any, rng);
-        T::unwrap_value(&value).expect("sampled value matches the choice's width")
+    ) -> crate::native::bignum::BigInt {
+        crate::native::core::state::biased_integer_sample(ic, rng)
     }
 
     pub fn biased_string_sample(sc: &StringChoice, rng: &mut rand::rngs::SmallRng) -> Vec<u32> {

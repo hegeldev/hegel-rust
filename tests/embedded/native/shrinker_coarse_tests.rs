@@ -151,8 +151,7 @@ fn initial_coarse_reduction_keeps_same_shape_one_of() {
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
                 // Always interesting iff first value == 1.
-                let interesting =
-                    nodes[0].value == ChoiceValue::Integer(BigInt::from(1));
+                let interesting = nodes[0].value == ChoiceValue::Integer(BigInt::from(1));
                 (interesting, nodes.to_vec(), Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
