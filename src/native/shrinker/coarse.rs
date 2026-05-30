@@ -34,7 +34,7 @@ impl<'a> Shrinker<'a> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
-            let (ic, current_val) = match (&node.kind, &node.value) {
+            let (ic, current_val) = match (node.kind.as_ref(), &node.value) {
                 (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.clone()),
                 _ => {
                     i += 1;
@@ -58,8 +58,8 @@ impl<'a> Shrinker<'a> {
             let shape_changed = zero_actual.len() != self.current_nodes.len()
                 || (i + 1..self.current_nodes.len()).any(|j| {
                     j >= zero_actual.len()
-                        || std::mem::discriminant(&self.current_nodes[j].kind)
-                            != std::mem::discriminant(&zero_actual[j].kind)
+                        || std::mem::discriminant(self.current_nodes[j].kind.as_ref())
+                            != std::mem::discriminant(zero_actual[j].kind.as_ref())
                 });
             if shape_changed {
                 let mut v = BigInt::from(0);

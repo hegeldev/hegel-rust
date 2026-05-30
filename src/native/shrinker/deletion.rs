@@ -33,7 +33,7 @@ impl<'a> Shrinker<'a> {
                     // Try decrementing the preceding choice (helps with
                     // collection length counters).
                     let prev = &attempt[i - 1];
-                    let decremented = match (&prev.kind, &prev.value) {
+                    let decremented = match (prev.kind.as_ref(), &prev.value) {
                         (ChoiceKind::Integer(ic), ChoiceValue::Integer(v))
                             if *v != ic.simplest() =>
                         {
@@ -70,7 +70,7 @@ impl<'a> Shrinker<'a> {
             let node = self.current_nodes[i].clone();
 
             // Only process integer nodes — these control sequence lengths.
-            let (current_val, ic) = match (&node.kind, &node.value) {
+            let (current_val, ic) = match (node.kind.as_ref(), &node.value) {
                 (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (v.clone(), ic.clone()),
                 _ => {
                     i += 1;
@@ -165,7 +165,7 @@ impl<'a> Shrinker<'a> {
                 i += 1;
                 continue;
             }
-            let (ic, current_val) = match (&node.kind, &node.value) {
+            let (ic, current_val) = match (node.kind.as_ref(), &node.value) {
                 (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.clone()),
                 _ => {
                     i += 1;

@@ -40,7 +40,7 @@ impl<'a> Shrinker<'a> {
             .current_nodes
             .iter()
             .enumerate()
-            .filter_map(|(i, n)| if matches_kind(&n.kind) { Some(i) } else { None })
+            .filter_map(|(i, n)| if matches_kind(n.kind.as_ref()) { Some(i) } else { None })
             .collect();
 
         if indices.len() < 2 {
@@ -85,7 +85,7 @@ impl<'a> Shrinker<'a> {
                     .iter()
                     .copied()
                     .filter(|&i| {
-                        i < self.current_nodes.len() && matches_kind(&self.current_nodes[i].kind)
+                        i < self.current_nodes.len() && matches_kind(self.current_nodes[i].kind.as_ref())
                     })
                     .collect();
                 if j >= valid.len() {
@@ -123,10 +123,10 @@ impl<'a> Shrinker<'a> {
 
                 // Check that both blocks have matching type structure.
                 let types_a: Vec<std::mem::Discriminant<ChoiceKind>> = (0..block_size)
-                    .map(|k| std::mem::discriminant(&self.current_nodes[i + k].kind))
+                    .map(|k| std::mem::discriminant(self.current_nodes[i + k].kind.as_ref()))
                     .collect();
                 let types_b: Vec<std::mem::Discriminant<ChoiceKind>> = (0..block_size)
-                    .map(|k| std::mem::discriminant(&self.current_nodes[j + k].kind))
+                    .map(|k| std::mem::discriminant(self.current_nodes[j + k].kind.as_ref()))
                     .collect();
 
                 if types_a != types_b {

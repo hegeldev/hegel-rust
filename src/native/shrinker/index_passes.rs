@@ -149,7 +149,7 @@ impl<'a> Shrinker<'a> {
 
             // Also try powers of 2 (and negatives) as raw values. This covers
             // large index-space jumps that exponential index probing misses.
-            if let ChoiceKind::Integer(ic) = &kind {
+            if let ChoiceKind::Integer(ic) = kind.as_ref() {
                 for e in 0u32..11 {
                     let magnitude = BigInt::from(1u64 << e);
                     for sign in [BigInt::from(1), BigInt::from(-1)] {

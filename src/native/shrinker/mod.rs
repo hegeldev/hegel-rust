@@ -319,7 +319,7 @@ impl<'a> Shrinker<'a> {
             && prev
                 .iter()
                 .zip(new.iter())
-                .all(|(a, b)| std::mem::discriminant(&a.kind) == std::mem::discriminant(&b.kind));
+                .all(|(a, b)| std::mem::discriminant(a.kind.as_ref()) == std::mem::discriminant(b.kind.as_ref()));
         if !shape_preserved {
             changed.clear();
             return;
@@ -375,7 +375,7 @@ impl<'a> Shrinker<'a> {
             // node stays width-consistent. The `validate` check above already
             // guarantees the value lies in `[min, max] ⊆ width`, so the
             // conversion cannot fail.
-            let coerced = match (&attempt[i].kind, v) {
+            let coerced = match (attempt[i].kind.as_ref(), v) {
                 (ChoiceKind::Integer(ic), ChoiceValue::Integer(av)) => ChoiceValue::Integer(
                     ic.value_from_bigint(av)
                         .unwrap_or_else(|| unreachable!("validated integer fits the node's width")),

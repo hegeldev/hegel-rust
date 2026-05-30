@@ -72,7 +72,7 @@ impl<'a> Shrinker<'a> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let node = &self.current_nodes[i];
-            if let (ChoiceKind::Float(fc), ChoiceValue::Float(v)) = (&node.kind, &node.value) {
+            if let (ChoiceKind::Float(fc), ChoiceValue::Float(v)) = (node.kind.as_ref(), &node.value) {
                 let v = *v;
                 let fc = fc.clone();
 
@@ -387,14 +387,14 @@ impl<'a> Shrinker<'a> {
                     break;
                 }
                 let j = i + gap;
-                if !is_float_or_integer(&self.current_nodes[i].kind)
-                    || !is_float_or_integer(&self.current_nodes[j].kind)
+                if !is_float_or_integer(self.current_nodes[i].kind.as_ref())
+                    || !is_float_or_integer(self.current_nodes[j].kind.as_ref())
                 {
                     continue;
                 }
                 // Skip pure Int-Int — covered by redistribute_integers.
                 if matches!(
-                    (&self.current_nodes[i].kind, &self.current_nodes[j].kind),
+                    (self.current_nodes[i].kind.as_ref(), self.current_nodes[j].kind.as_ref()),
                     (ChoiceKind::Integer(_), ChoiceKind::Integer(_))
                 ) {
                     continue;
@@ -427,7 +427,7 @@ fn can_choose_for_redistribute(node: &ChoiceNode) -> bool {
     // Caller (`redistribute_numeric_pairs`) has already filtered out
     // non-numeric kinds via `is_float_or_integer`, so anything outside
     // matched-(Int, Int) / (Float, Float) is unreachable here.
-    match (&node.kind, &node.value) {
+    match (node.kind.as_ref(), &node.value) {
         (ChoiceKind::Float(_), ChoiceValue::Float(f)) => {
             f.is_finite() && f.abs() < MAX_PRECISE_INTEGER
         }
@@ -446,7 +446,7 @@ fn is_float_or_integer(k: &ChoiceKind) -> bool {
 fn is_trivial(node: &ChoiceNode) -> bool {
     // Only called by `redistribute_numeric_pairs` after the
     // `is_float_or_integer` filter, so Booleans cannot appear.
-    match (&node.kind, &node.value) {
+    match (node.kind.as_ref(), &node.value) {
         (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => *v == ic.simplest(),
         (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => !v.is_finite() || *v == fc.simplest(),
         _ => unreachable!("filtered by is_float_or_integer; ChoiceNode invariant otherwise"),
@@ -472,7 +472,7 @@ fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) {
     // every branch outside (Int, Int) / (Float finite, Float finite) is
     // unreachable here.
     let (v_i, kind_i) = match (
-        &shrinker.current_nodes[i].kind,
+        shrinker.current_nodes[i].kind.as_ref(),
         &shrinker.current_nodes[i].value,
     ) {
         (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => (
@@ -485,7 +485,7 @@ fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) {
         _ => unreachable!("redistribute_pair gated on is_float_or_integer + is_trivial"),
     };
     let (v_j, kind_j) = match (
-        &shrinker.current_nodes[j].kind,
+        shrinker.current_nodes[j].kind.as_ref(),
         &shrinker.current_nodes[j].value,
     ) {
         (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => (
