@@ -1,5 +1,6 @@
 //! Unit tests for `Shrinker::remove_discarded`.
 
+use crate::native::bignum::BigInt;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -8,23 +9,23 @@ use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: i128::MIN,
-            max_value: i128::MAX,
-            shrink_towards: 0,
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
+            min_value: BigInt::from(i128::MIN),
+            max_value: BigInt::from(i128::MAX),
+            shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(value),
-        was_forced: false,
-    }
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Boolean(value),
-        was_forced: false,
-    }
+    ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(value),
+        false,
+    )
 }
 
 fn span(start: usize, end: usize, discarded: bool) -> Span {
@@ -91,7 +92,7 @@ fn remove_discarded_deletes_a_single_discarded_region() {
         .current_nodes
         .iter()
         .map(|n| match &n.value {
-            ChoiceValue::Integer(v) => *v,
+            ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
             _ => unreachable!(),
         })
         .collect();
@@ -123,7 +124,7 @@ fn remove_discarded_deletes_non_overlapping_regions_in_reverse() {
         .current_nodes
         .iter()
         .map(|n| match &n.value {
-            ChoiceValue::Integer(v) => *v,
+            ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
             _ => unreachable!(),
         })
         .collect();
@@ -155,7 +156,7 @@ fn remove_discarded_skips_nested_discarded_spans() {
         .current_nodes
         .iter()
         .map(|n| match &n.value {
-            ChoiceValue::Integer(v) => *v,
+            ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
             _ => unreachable!(),
         })
         .collect();

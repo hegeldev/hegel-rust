@@ -8,6 +8,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 
 use crate::cbor_utils::map_get;
+use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{EngineError, NativeTestCase};
 use ciborium::Value;
 
@@ -70,17 +71,39 @@ pub(super) fn interpret_datetime(ntc: &mut NativeTestCase) -> Result<Value, Engi
 }
 
 fn draw_date(ntc: &mut NativeTestCase) -> Result<(i128, i128, i128), EngineError> {
-    let year = 2000 + ntc.draw_integer(1 - 2000, 9999 - 2000)?;
-    let month = ntc.draw_integer(1, 12)?;
-    let day = ntc.draw_integer(1, days_in_month(year, month))?;
+    let year = 2000
+        + ntc
+            .draw_integer(BigInt::from(1 - 2000), BigInt::from(9999 - 2000))?
+            .to_i128()
+            .unwrap();
+    let month = ntc
+        .draw_integer(BigInt::from(1), BigInt::from(12))?
+        .to_i128()
+        .unwrap();
+    let day = ntc
+        .draw_integer(BigInt::from(1), BigInt::from(days_in_month(year, month)))?
+        .to_i128()
+        .unwrap();
     Ok((year, month, day))
 }
 
 fn draw_time(ntc: &mut NativeTestCase) -> Result<(i128, i128, i128, i128), EngineError> {
-    let hour = ntc.draw_integer(0, 23)?;
-    let minute = ntc.draw_integer(0, 59)?;
-    let second = ntc.draw_integer(0, 59)?;
-    let microsecond = ntc.draw_integer(0, 999_999)?;
+    let hour = ntc
+        .draw_integer(BigInt::from(0), BigInt::from(23))?
+        .to_i128()
+        .unwrap();
+    let minute = ntc
+        .draw_integer(BigInt::from(0), BigInt::from(59))?
+        .to_i128()
+        .unwrap();
+    let second = ntc
+        .draw_integer(BigInt::from(0), BigInt::from(59))?
+        .to_i128()
+        .unwrap();
+    let microsecond = ntc
+        .draw_integer(BigInt::from(0), BigInt::from(999_999))?
+        .to_i128()
+        .unwrap();
     Ok((hour, minute, second, microsecond))
 }
 
@@ -118,8 +141,14 @@ pub(super) fn interpret_uuid(
     let version = map_get(schema, "version").and_then(as_u64).map(|v| v as u8);
 
     // Two 64-bit halves: u64::MAX fits comfortably in i128 so the draw is in range.
-    let hi = ntc.draw_integer(0, u64::MAX as i128)? as u64;
-    let lo = ntc.draw_integer(0, u64::MAX as i128)? as u64;
+    let hi = ntc
+        .draw_integer(BigInt::from(0), BigInt::from(u64::MAX))?
+        .to_u64()
+        .unwrap();
+    let lo = ntc
+        .draw_integer(BigInt::from(0), BigInt::from(u64::MAX))?
+        .to_u64()
+        .unwrap();
     let mut n: u128 = (u128::from(hi) << 64) | u128::from(lo);
 
     if let Some(v) = version {
@@ -314,36 +343,76 @@ pub(super) fn interpret_ip_address(
 
 fn interpret_ipv4(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
     // one_of([random_bytes, sampled_from(SPECIAL).flatmap(in_network)]).
-    let addr_int: u32 = if ntc.draw_integer(0, 1)? == 0 {
+    let addr_int: u32 = if ntc
+        .draw_integer(BigInt::from(0), BigInt::from(1))?
+        .to_i128()
+        .unwrap()
+        == 0
+    {
         // Four uniform bytes — `binary(min_size=4, max_size=4).map(IPv4Address)`.
-        let a = ntc.draw_integer(0, 255)? as u32;
-        let b = ntc.draw_integer(0, 255)? as u32;
-        let c = ntc.draw_integer(0, 255)? as u32;
-        let d = ntc.draw_integer(0, 255)? as u32;
+        let a = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(255))?
+            .to_u32()
+            .unwrap();
+        let b = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(255))?
+            .to_u32()
+            .unwrap();
+        let c = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(255))?
+            .to_u32()
+            .unwrap();
+        let d = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(255))?
+            .to_u32()
+            .unwrap();
         (a << 24) | (b << 16) | (c << 8) | d
     } else {
         let nets = &*SPECIAL_IPV4_NETWORKS;
-        let idx = ntc.draw_integer(0, (nets.len() - 1) as i128)? as usize;
+        let idx = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(nets.len() as i64 - 1))?
+            .to_i128()
+            .unwrap() as usize;
         let net = &nets[idx];
         // integers(int(network[0]), int(network[-1])) — drawn as
         // base + offset so the i128 cast never sees a value above i128::MAX.
-        let offset = ntc.draw_integer(0, net.size_minus_1 as i128)? as u32;
+        let offset = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(net.size_minus_1))?
+            .to_u32()
+            .unwrap();
         net.base + offset
     };
     Ok(encode_string(Ipv4Addr::from(addr_int).to_string()))
 }
 
 fn interpret_ipv6(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
-    let addr_int: u128 = if ntc.draw_integer(0, 1)? == 0 {
+    let addr_int: u128 = if ntc
+        .draw_integer(BigInt::from(0), BigInt::from(1))?
+        .to_i128()
+        .unwrap()
+        == 0
+    {
         // 16 uniform bytes via two 64-bit halves.
-        let hi = ntc.draw_integer(0, u64::MAX as i128)? as u64;
-        let lo = ntc.draw_integer(0, u64::MAX as i128)? as u64;
+        let hi = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(u64::MAX))?
+            .to_u64()
+            .unwrap();
+        let lo = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(u64::MAX))?
+            .to_u64()
+            .unwrap();
         (u128::from(hi) << 64) | u128::from(lo)
     } else {
         let nets = &*SPECIAL_IPV6_NETWORKS;
-        let idx = ntc.draw_integer(0, (nets.len() - 1) as i128)? as usize;
+        let idx = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(nets.len() as i64 - 1))?
+            .to_i128()
+            .unwrap() as usize;
         let net = &nets[idx];
-        let offset = ntc.draw_integer(0, net.size_minus_1 as i128)? as u128;
+        let offset = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(net.size_minus_1))?
+            .to_u128()
+            .unwrap();
         net.base + offset
     };
     Ok(encode_string(Ipv6Addr::from(addr_int).to_string()))

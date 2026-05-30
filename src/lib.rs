@@ -263,10 +263,14 @@ pub use antithesis::TestLocation;
 #[doc(hidden)]
 #[cfg(feature = "__bench")]
 pub mod __bench {
+    pub use crate::native::bignum::BigInt;
     pub use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, StringChoice};
     pub use crate::native::intervalsets::IntervalSet;
 
-    pub fn biased_integer_sample(ic: &IntegerChoice, rng: &mut rand::rngs::SmallRng) -> i128 {
+    pub fn biased_integer_sample(
+        ic: &IntegerChoice,
+        rng: &mut rand::rngs::SmallRng,
+    ) -> crate::native::bignum::BigInt {
         crate::native::core::state::biased_integer_sample(ic, rng)
     }
 

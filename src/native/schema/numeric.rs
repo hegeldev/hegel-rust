@@ -3,7 +3,7 @@
 use crate::native::core::{EngineError, NativeTestCase};
 use ciborium::Value;
 
-use super::{bignum_overflows_i128, cbor_to_i128, i128_to_cbor, require, u128_to_cbor};
+use super::{bigint_to_cbor, cbor_to_bigint, require};
 
 pub(super) fn interpret_integer(
     ntc: &mut NativeTestCase,
@@ -11,30 +11,10 @@ pub(super) fn interpret_integer(
 ) -> Result<Value, EngineError> {
     let min_cbor = require(schema, "min_value")?;
     let max_cbor = require(schema, "max_value")?;
-    let min_value = cbor_to_i128(min_cbor)?;
-    let max_value = cbor_to_i128(max_cbor)?;
-
-    // If max saturated because it exceeded i128::MAX (e.g. u128::MAX), draw using
-    // a selector + two 64-bit halves to cover the full u128 range.
-    if bignum_overflows_i128(max_cbor) {
-        let min_value_u128 = if min_value >= 0 { min_value as u128 } else { 0 };
-        // Selector: 0 = min_value, 1 = u128::MAX, else = random two-halves.
-        let selector = ntc.draw_integer(0, 99)?;
-        match selector {
-            0 => return Ok(u128_to_cbor(min_value_u128)),
-            1 => return Ok(u128_to_cbor(u128::MAX)),
-            _ => {}
-        }
-        let hi = ntc.draw_integer(0, u64::MAX as i128)?;
-        let lo = ntc.draw_integer(0, u64::MAX as i128)?;
-        let v = ((hi as u128) << 64) | (lo as u128);
-        // Clamp to [min_value_u128, u128::MAX]. Values below min are vanishingly
-        // rare (prob ≈ min/2^128) but must be handled for correctness.
-        return Ok(u128_to_cbor(v.max(min_value_u128)));
-    }
-
-    let v = ntc.draw_integer(min_value, max_value)?;
-    Ok(i128_to_cbor(v))
+    let min = cbor_to_bigint(min_cbor)?;
+    let max = cbor_to_bigint(max_cbor)?;
+    let value = ntc.draw_integer(min, max)?;
+    Ok(bigint_to_cbor(&value))
 }
 
 pub(super) fn interpret_boolean(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {

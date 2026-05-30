@@ -27,7 +27,10 @@ pub use scheduling::ShrinkPass;
 
 use std::collections::{HashMap, HashSet};
 
-use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINKS, NodeSortKey, Spans, sort_key};
+use crate::native::bignum::BigInt;
+use crate::native::core::{
+    ChoiceKind, ChoiceNode, ChoiceValue, MAX_SHRINKS, NodeSortKey, Spans, sort_key,
+};
 
 /// Request passed to the shrinker's test function.
 ///
@@ -228,8 +231,8 @@ impl<'a> Shrinker<'a> {
         // short-circuit. See the field docstring for why positive results
         // aren't cached.
         // Cache key bundles the kind discriminant with the per-node
-        // sort key: `NodeSortKey::Scalar(0, false)` is produced both
-        // by `Boolean(false)` and `Integer(0)`, and a cache shared on
+        // sort key: `Scalar(0, false)` is produced both by
+        // `Boolean(false)` and `Integer(0)`, and a cache shared on
         // sort_key alone would falsely short-circuit kind-punned
         // candidates that the test_fn would in fact accept.
         let cache_key: Vec<(u8, NodeSortKey)> = nodes
@@ -313,10 +316,9 @@ impl<'a> Shrinker<'a> {
         changed: &mut HashSet<usize>,
     ) {
         let shape_preserved = prev.len() == new.len()
-            && prev
-                .iter()
-                .zip(new.iter())
-                .all(|(a, b)| std::mem::discriminant(&a.kind) == std::mem::discriminant(&b.kind));
+            && prev.iter().zip(new.iter()).all(|(a, b)| {
+                std::mem::discriminant(a.kind.as_ref()) == std::mem::discriminant(b.kind.as_ref())
+            });
         if !shape_preserved {
             changed.clear();
             return;
@@ -366,7 +368,20 @@ impl<'a> Shrinker<'a> {
             if !attempt[i].kind.validate(v) {
                 return false;
             }
-            attempt[i] = attempt[i].with_value(v.clone());
+            // Integer values must be expressed in the target node's width — a
+            // pass may move a value between integer nodes of different widths
+            // (e.g. `sort_values`). Coerce to the node's width so the stored
+            // node stays width-consistent. The `validate` check above already
+            // guarantees the value lies in `[min, max] ⊆ width`, so the
+            // conversion cannot fail.
+            let coerced = match (attempt[i].kind.as_ref(), v) {
+                (ChoiceKind::Integer(ic), ChoiceValue::Integer(av)) => ChoiceValue::Integer(
+                    ic.value_from_bigint(av)
+                        .unwrap_or_else(|| unreachable!("validated integer fits the node's width")),
+                ),
+                _ => v.clone(),
+            };
+            attempt[i] = attempt[i].with_value(coerced);
         }
         self.consider(&attempt)
     }
@@ -543,6 +558,31 @@ pub(super) fn bin_search_down(lo: i128, hi: i128, f: &mut impl FnMut(i128) -> bo
     while lo.checked_add(1).is_some_and(|n| n < hi) {
         let mid = lo + (hi - lo) / 2;
         if f(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    hi
+}
+
+/// [`BigInt`] counterpart of [`bin_search_down`], used by the integer shrink
+/// passes which now carry values as arbitrary-precision integers. Same
+/// contract: assumes `f(hi)` is true, returns the smallest locally-true value
+/// in `[lo, hi]`.
+pub(super) fn bin_search_down_big(
+    lo: BigInt,
+    hi: BigInt,
+    f: &mut impl FnMut(&BigInt) -> bool,
+) -> BigInt {
+    if f(&lo) {
+        return lo;
+    }
+    let mut lo = lo;
+    let mut hi = hi;
+    while &lo + 1 < hi {
+        let mid = &lo + (&hi - &lo) / 2;
+        if f(&mid) {
             hi = mid;
         } else {
             lo = mid;

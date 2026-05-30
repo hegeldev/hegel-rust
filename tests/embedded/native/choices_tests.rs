@@ -8,12 +8,12 @@ use super::*;
 fn integer_choice_simplest_spans_zero() {
     assert_eq!(
         IntegerChoice {
-            min_value: -10,
-            max_value: 10,
-            shrink_towards: 0,
+            min_value: BigInt::from(-10),
+            max_value: BigInt::from(10),
+            shrink_towards: BigInt::from(0),
         }
         .simplest(),
-        0
+        BigInt::from(0)
     );
 }
 
@@ -21,12 +21,12 @@ fn integer_choice_simplest_spans_zero() {
 fn integer_choice_simplest_all_positive() {
     assert_eq!(
         IntegerChoice {
-            min_value: 5,
-            max_value: 100,
-            shrink_towards: 0,
+            min_value: BigInt::from(5),
+            max_value: BigInt::from(100),
+            shrink_towards: BigInt::from(0),
         }
         .simplest(),
-        5
+        BigInt::from(5)
     );
 }
 
@@ -34,12 +34,12 @@ fn integer_choice_simplest_all_positive() {
 fn integer_choice_simplest_all_negative() {
     assert_eq!(
         IntegerChoice {
-            min_value: -100,
-            max_value: -5,
-            shrink_towards: 0,
+            min_value: BigInt::from(-100),
+            max_value: BigInt::from(-5),
+            shrink_towards: BigInt::from(0),
         }
         .simplest(),
-        -5
+        BigInt::from(-5)
     );
 }
 
@@ -51,12 +51,12 @@ fn integer_choice_simplest_all_negative() {
 fn integer_choice_unit_spans_zero() {
     assert_eq!(
         IntegerChoice {
-            min_value: -10,
-            max_value: 10,
-            shrink_towards: 0,
+            min_value: BigInt::from(-10),
+            max_value: BigInt::from(10),
+            shrink_towards: BigInt::from(0),
         }
         .unit(),
-        1
+        BigInt::from(1)
     );
 }
 
@@ -64,12 +64,12 @@ fn integer_choice_unit_spans_zero() {
 fn integer_choice_unit_all_positive() {
     assert_eq!(
         IntegerChoice {
-            min_value: 5,
-            max_value: 100,
-            shrink_towards: 0,
+            min_value: BigInt::from(5),
+            max_value: BigInt::from(100),
+            shrink_towards: BigInt::from(0),
         }
         .unit(),
-        6
+        BigInt::from(6)
     );
 }
 
@@ -79,12 +79,12 @@ fn integer_choice_unit_all_negative() {
     // simplest - 1 = -6.
     assert_eq!(
         IntegerChoice {
-            min_value: -100,
-            max_value: -5,
-            shrink_towards: 0,
+            min_value: BigInt::from(-100),
+            max_value: BigInt::from(-5),
+            shrink_towards: BigInt::from(0),
         }
         .unit(),
-        -6
+        BigInt::from(-6)
     );
 }
 
@@ -93,12 +93,12 @@ fn integer_choice_unit_single_value_range() {
     // When the range is a single value, unit falls back to simplest.
     assert_eq!(
         IntegerChoice {
-            min_value: 5,
-            max_value: 5,
-            shrink_towards: 0,
+            min_value: BigInt::from(5),
+            max_value: BigInt::from(5),
+            shrink_towards: BigInt::from(0),
         }
         .unit(),
-        5
+        BigInt::from(5)
     );
 }
 
@@ -108,9 +108,9 @@ fn choice_kind_to_index_panics_on_kind_value_mismatch() {
     // Asking an Integer kind to index a Boolean value is a programmer error;
     // ChoiceKind::to_index must panic loudly rather than return a bogus index.
     let kind = ChoiceKind::Integer(IntegerChoice {
-        min_value: 0,
-        max_value: 100,
-        shrink_towards: 0,
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(100),
+        shrink_towards: BigInt::from(0),
     });
     let _ = kind.to_index(&ChoiceValue::Boolean(true));
 }
@@ -128,9 +128,9 @@ fn bu(n: u64) -> crate::native::bignum::BigUint {
 #[test]
 fn integer_bounded_range_gives_exact_count() {
     let kind = ChoiceKind::Integer(IntegerChoice {
-        min_value: 0,
-        max_value: 200,
-        shrink_towards: 0,
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(200),
+        shrink_towards: BigInt::from(0),
     });
     assert_eq!(kind.max_children(), bu(201));
 }
@@ -138,9 +138,9 @@ fn integer_bounded_range_gives_exact_count() {
 #[test]
 fn integer_negative_range_gives_exact_count() {
     let kind = ChoiceKind::Integer(IntegerChoice {
-        min_value: -10,
-        max_value: 10,
-        shrink_towards: 0,
+        min_value: BigInt::from(-10),
+        max_value: BigInt::from(10),
+        shrink_towards: BigInt::from(0),
     });
     assert_eq!(kind.max_children(), bu(21));
 }
@@ -148,13 +148,91 @@ fn integer_negative_range_gives_exact_count() {
 #[test]
 fn integer_full_i128_range_is_two_pow_128() {
     let kind = ChoiceKind::Integer(IntegerChoice {
-        min_value: i128::MIN,
-        max_value: i128::MAX,
-        shrink_towards: 0,
+        min_value: BigInt::from(i128::MIN),
+        max_value: BigInt::from(i128::MAX),
+        shrink_towards: BigInt::from(0),
     });
     // 2^128 = u128::MAX + 1.
     let expected = crate::native::bignum::BigUint::from(u128::MAX) + bu(1);
     assert_eq!(kind.max_children(), expected);
+}
+
+// ── ChoiceKind::max_children_saturating ─────────────────────────────────────
+//
+// `max_children_saturating(cap)` must equal `min(max_children(), cap)` for
+// every kind, computed without materialising the huge sequence-cardinality
+// `BigUint` (the `pow` that dominated generation profiles).
+
+#[test]
+fn max_children_saturating_boolean() {
+    let kind = ChoiceKind::Boolean(BooleanChoice);
+    assert_eq!(kind.max_children_saturating(1), 1); // capped below the count
+    assert_eq!(kind.max_children_saturating(10), 2); // exact
+}
+
+#[test]
+fn max_children_saturating_integer_native() {
+    let kind = ChoiceKind::Integer(IntegerChoice {
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(200),
+        shrink_towards: BigInt::from(0),
+    });
+    assert_eq!(kind.max_children_saturating(1000), 201); // exact (span + 1)
+    assert_eq!(kind.max_children_saturating(50), 50); // capped
+}
+
+#[test]
+fn max_children_saturating_integer_beyond_u128_saturates_to_cap() {
+    use crate::native::bignum::BigUint;
+    // A span wider than u128 makes `max_index().to_u128()` return `None`, so
+    // the result saturates to `cap` instead of the astronomical exact count.
+    let ic = IntegerChoice {
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(BigUint::from(2u32).pow(200)),
+        shrink_towards: BigInt::from(0),
+    };
+    let kind = ChoiceKind::Integer(ic);
+    assert_eq!(kind.max_children_saturating(100), 100);
+}
+
+#[test]
+fn max_children_saturating_float_matches_capped_exact() {
+    use crate::native::bignum::ToPrimitive;
+    let kind = ChoiceKind::Float(fc(0.0, 1.0, false, false));
+    let exact = kind.max_children().to_u128().unwrap();
+    assert_eq!(kind.max_children_saturating(u128::MAX), exact); // large cap: exact
+    assert_eq!(kind.max_children_saturating(5), 5); // small cap: saturates
+}
+
+#[test]
+fn max_children_saturating_bytes() {
+    // min 0, max 2: 256^0 + 256^1 + 256^2 = 65793.
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 0,
+        max_size: 2,
+    });
+    assert_eq!(kind.max_children_saturating(u128::MAX), 65793);
+    assert_eq!(kind.max_children_saturating(1000), 1000); // returns at the cap
+
+    // min 2, max 3 skips the len-0 and len-1 terms: 256^2 + 256^3 = 16842752.
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 2,
+        max_size: 3,
+    });
+    assert_eq!(kind.max_children_saturating(u128::MAX), 16_842_752);
+}
+
+#[test]
+fn max_children_saturating_string() {
+    // Alphabet 'a'..'z' = 26; min 0, max 2: 1 + 26 + 676 = 703.
+    let kind = ChoiceKind::String(string_choice(vec![(b'a' as u32, b'z' as u32)], 0, 2));
+    assert_eq!(kind.max_children_saturating(u128::MAX), 703);
+
+    // A near-full Unicode alphabet makes `power` overflow u128 within the
+    // length range, exercising the saturating multiply: the total pins at the
+    // (here maximal) cap.
+    let kind = ChoiceKind::String(string_choice(vec![(0, 0x10FFFF)], 0, 40));
+    assert_eq!(kind.max_children_saturating(u128::MAX), u128::MAX);
 }
 
 // ── IntegerChoice::to_index / from_index round-trips ────────────────────────
@@ -165,9 +243,9 @@ fn integer_full_i128_range_is_two_pow_128() {
 
 fn integer_choice(min: i128, max: i128) -> IntegerChoice {
     IntegerChoice {
-        min_value: min,
-        max_value: max,
-        shrink_towards: 0,
+        min_value: BigInt::from(min),
+        max_value: BigInt::from(max),
+        shrink_towards: BigInt::from(0),
     }
 }
 
@@ -175,8 +253,9 @@ fn integer_choice(min: i128, max: i128) -> IntegerChoice {
 fn integer_choice_index_round_trip_symmetric_around_zero() {
     let ic = integer_choice(-10, 10);
     for v in -10i128..=10 {
-        let idx = ic.to_index(v);
-        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+        let bv = BigInt::from(v);
+        let idx = ic.to_index(&bv);
+        assert_eq!(ic.from_index(idx), Some(bv), "round-trip failed for v={v}");
     }
 }
 
@@ -184,8 +263,9 @@ fn integer_choice_index_round_trip_symmetric_around_zero() {
 fn integer_choice_index_round_trip_all_positive() {
     let ic = integer_choice(5, 25);
     for v in 5i128..=25 {
-        let idx = ic.to_index(v);
-        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+        let bv = BigInt::from(v);
+        let idx = ic.to_index(&bv);
+        assert_eq!(ic.from_index(idx), Some(bv), "round-trip failed for v={v}");
     }
 }
 
@@ -193,8 +273,9 @@ fn integer_choice_index_round_trip_all_positive() {
 fn integer_choice_index_round_trip_all_negative() {
     let ic = integer_choice(-25, -5);
     for v in -25i128..=-5 {
-        let idx = ic.to_index(v);
-        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+        let bv = BigInt::from(v);
+        let idx = ic.to_index(&bv);
+        assert_eq!(ic.from_index(idx), Some(bv), "round-trip failed for v={v}");
     }
 }
 
@@ -203,8 +284,9 @@ fn integer_choice_index_round_trip_asymmetric() {
     // shrink_towards = 0 sits 5 above the floor and 100 below the ceiling.
     let ic = integer_choice(-5, 100);
     for v in -5i128..=100 {
-        let idx = ic.to_index(v);
-        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+        let bv = BigInt::from(v);
+        let idx = ic.to_index(&bv);
+        assert_eq!(ic.from_index(idx), Some(bv), "round-trip failed for v={v}");
     }
 }
 
@@ -224,17 +306,18 @@ fn integer_choice_index_round_trip_full_i128_range() {
         1 << 100,
         -(1 << 100),
     ] {
-        let idx = ic.to_index(v);
-        assert_eq!(ic.from_index(idx), Some(v), "round-trip failed for v={v}");
+        let bv = BigInt::from(v);
+        let idx = ic.to_index(&bv);
+        assert_eq!(ic.from_index(idx), Some(bv), "round-trip failed for v={v}");
     }
 }
 
 #[test]
 fn integer_choice_index_round_trip_single_value() {
     let ic = integer_choice(42, 42);
-    let idx = ic.to_index(42);
+    let idx = ic.to_index(&BigInt::from(42));
     assert_eq!(idx, crate::native::bignum::BigUint::from(0u32));
-    assert_eq!(ic.from_index(idx), Some(42));
+    assert_eq!(ic.from_index(idx), Some(BigInt::from(42)));
 }
 
 #[test]
@@ -584,34 +667,34 @@ fn string_choice_from_index_past_max_returns_none() {
 // paths only fire in defensive branches.
 
 fn integer_node(min: i128, max: i128, value: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: min,
-            max_value: max,
-            shrink_towards: 0,
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
+            min_value: BigInt::from(min),
+            max_value: BigInt::from(max),
+            shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(value),
-        was_forced: false,
-    }
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 fn bytes_node(min: usize, max: usize, value: Vec<u8>) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Bytes(BytesChoice {
+    ChoiceNode::new(
+        ChoiceKind::Bytes(BytesChoice {
             min_size: min,
             max_size: max,
         }),
-        value: ChoiceValue::Bytes(value),
-        was_forced: false,
-    }
+        ChoiceValue::Bytes(value),
+        false,
+    )
 }
 
 fn string_node(intervals: Vec<(u32, u32)>, min: usize, max: usize, value: Vec<u32>) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::String(string_choice(intervals, min, max)),
-        value: ChoiceValue::String(value),
-        was_forced: false,
-    }
+    ChoiceNode::new(
+        ChoiceKind::String(string_choice(intervals, min, max)),
+        ChoiceValue::String(value),
+        false,
+    )
 }
 
 #[test]
@@ -709,4 +792,45 @@ fn engine_error_display_covers_both_variants() {
         EngineError::InvalidArgument("nope".to_string()).to_string(),
         "nope"
     );
+}
+
+// ── NodeSortKey ordering for BigInt distances beyond u128 ────────────────────
+
+fn big_integer_node(distance_beyond_u128: u32) -> ChoiceNode {
+    let huge = BigInt::from(u128::MAX) * BigInt::from(4) + BigInt::from(distance_beyond_u128);
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
+            min_value: BigInt::from(0),
+            max_value: huge.clone(),
+            shrink_towards: BigInt::from(0),
+        }),
+        ChoiceValue::Integer(huge),
+        false,
+    )
+}
+
+#[test]
+fn node_sort_key_big_integer_orders_correctly() {
+    use crate::native::core::sort_key;
+    // A native integer node sorts before a BigInt node whose distance
+    // exceeds u128.
+    let scalar = vec![integer_node(0, 100, 50)];
+    let big = vec![big_integer_node(0)];
+    assert!(sort_key(&scalar) < sort_key(&big));
+    // Two big-integer nodes order by magnitude.
+    let big_small = vec![big_integer_node(0)];
+    let big_large = vec![big_integer_node(7)];
+    assert!(sort_key(&big_small) < sort_key(&big_large));
+    // Scalar sort keys sort before any bytes sequence.
+    let bytes = vec![ChoiceNode::new(
+        ChoiceKind::Bytes(BytesChoice {
+            min_size: 0,
+            max_size: 4,
+        }),
+        ChoiceValue::Bytes(vec![1, 2, 3]),
+        false,
+    )];
+    assert!(sort_key(&big) < sort_key(&bytes));
+    // The owned NodeSortKey matches the borrowed comparison.
+    assert!(big_small[0].sort_key() < big_large[0].sort_key());
 }

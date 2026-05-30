@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{
     ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, float_to_index, index_to_float, sort_key,
@@ -71,7 +72,9 @@ impl<'a> Shrinker<'a> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let node = &self.current_nodes[i];
-            if let (ChoiceKind::Float(fc), ChoiceValue::Float(v)) = (&node.kind, &node.value) {
+            if let (ChoiceKind::Float(fc), ChoiceValue::Float(v)) =
+                (node.kind.as_ref(), &node.value)
+            {
                 let v = *v;
                 let fc = fc.clone();
 
@@ -386,14 +389,17 @@ impl<'a> Shrinker<'a> {
                     break;
                 }
                 let j = i + gap;
-                if !is_float_or_integer(&self.current_nodes[i].kind)
-                    || !is_float_or_integer(&self.current_nodes[j].kind)
+                if !is_float_or_integer(self.current_nodes[i].kind.as_ref())
+                    || !is_float_or_integer(self.current_nodes[j].kind.as_ref())
                 {
                     continue;
                 }
                 // Skip pure Int-Int — covered by redistribute_integers.
                 if matches!(
-                    (&self.current_nodes[i].kind, &self.current_nodes[j].kind),
+                    (
+                        self.current_nodes[i].kind.as_ref(),
+                        self.current_nodes[j].kind.as_ref()
+                    ),
                     (ChoiceKind::Integer(_), ChoiceKind::Integer(_))
                 ) {
                     continue;
@@ -426,7 +432,7 @@ fn can_choose_for_redistribute(node: &ChoiceNode) -> bool {
     // Caller (`redistribute_numeric_pairs`) has already filtered out
     // non-numeric kinds via `is_float_or_integer`, so anything outside
     // matched-(Int, Int) / (Float, Float) is unreachable here.
-    match (&node.kind, &node.value) {
+    match (node.kind.as_ref(), &node.value) {
         (ChoiceKind::Float(_), ChoiceValue::Float(f)) => {
             f.is_finite() && f.abs() < MAX_PRECISE_INTEGER
         }
@@ -445,11 +451,17 @@ fn is_float_or_integer(k: &ChoiceKind) -> bool {
 fn is_trivial(node: &ChoiceNode) -> bool {
     // Only called by `redistribute_numeric_pairs` after the
     // `is_float_or_integer` filter, so Booleans cannot appear.
-    match (&node.kind, &node.value) {
+    match (node.kind.as_ref(), &node.value) {
         (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => *v == ic.simplest(),
         (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => !v.is_finite() || *v == fc.simplest(),
         _ => unreachable!("filtered by is_float_or_integer; ChoiceNode invariant otherwise"),
     }
+}
+
+/// f64 of a [`BigInt`] for the redistribute direction heuristic; out-of-range
+/// magnitudes saturate to infinity, which the sort-key check then rejects.
+fn bigint_as_f64(n: &BigInt) -> f64 {
+    n.to_f64().unwrap_or(f64::INFINITY)
 }
 
 /// Direction the integer-pair search moves `node[i]` in.
@@ -465,24 +477,26 @@ fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) {
     // every branch outside (Int, Int) / (Float finite, Float finite) is
     // unreachable here.
     let (v_i, kind_i) = match (
-        &shrinker.current_nodes[i].kind,
+        shrinker.current_nodes[i].kind.as_ref(),
         &shrinker.current_nodes[i].value,
     ) {
-        (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => {
-            (NumericValue::Integer(*n), NumericKind::Integer(ic.clone()))
-        }
+        (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => (
+            NumericValue::Integer(n.clone()),
+            NumericKind::Integer(ic.clone()),
+        ),
         (ChoiceKind::Float(fc), ChoiceValue::Float(f)) => {
             (NumericValue::Float(*f), NumericKind::Float(fc.clone()))
         }
         _ => unreachable!("redistribute_pair gated on is_float_or_integer + is_trivial"),
     };
     let (v_j, kind_j) = match (
-        &shrinker.current_nodes[j].kind,
+        shrinker.current_nodes[j].kind.as_ref(),
         &shrinker.current_nodes[j].value,
     ) {
-        (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => {
-            (NumericValue::Integer(*n), NumericKind::Integer(ic.clone()))
-        }
+        (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => (
+            NumericValue::Integer(n.clone()),
+            NumericKind::Integer(ic.clone()),
+        ),
         (ChoiceKind::Float(fc), ChoiceValue::Float(f)) => {
             (NumericValue::Float(*f), NumericKind::Float(fc.clone()))
         }
@@ -520,17 +534,17 @@ enum Direction {
     RaiseLeftLowerRight,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum NumericValue {
-    Integer(i128),
+    Integer(BigInt),
     Float(f64),
 }
 
 impl NumericValue {
-    fn as_f64(self) -> f64 {
+    fn as_f64(&self) -> f64 {
         match self {
-            NumericValue::Integer(n) => n as f64,
-            NumericValue::Float(f) => f,
+            NumericValue::Integer(n) => bigint_as_f64(n),
+            NumericValue::Float(f) => *f,
         }
     }
 }
@@ -543,7 +557,7 @@ enum NumericKind {
 
 fn shrink_target(kind: &NumericKind) -> f64 {
     match kind {
-        NumericKind::Integer(ic) => ic.simplest() as f64,
+        NumericKind::Integer(ic) => bigint_as_f64(&ic.simplest()),
         NumericKind::Float(_) => 0.0,
     }
 }
@@ -564,7 +578,7 @@ fn apply_delta(
 
 fn add_int(v: &NumericValue, k: i128) -> NumericValue {
     match v {
-        NumericValue::Integer(n) => NumericValue::Integer(n.saturating_add(k)),
+        NumericValue::Integer(n) => NumericValue::Integer(n + BigInt::from(k)),
         NumericValue::Float(f) => NumericValue::Float(*f + k as f64),
     }
 }
@@ -573,9 +587,10 @@ fn build_value(kind: &NumericKind, candidate: NumericValue) -> Option<ChoiceValu
     // `apply_delta` preserves the variant of each input, so only the
     // matching kind/value combinations are reachable from `redistribute_pair`.
     match (kind, candidate) {
-        (NumericKind::Integer(ic), NumericValue::Integer(n)) => {
-            ic.validate(n).then_some(ChoiceValue::Integer(n))
-        }
+        (NumericKind::Integer(ic), NumericValue::Integer(n)) => ic
+            .value_from_bigint(&n)
+            .filter(|av| ic.validate(av))
+            .map(ChoiceValue::Integer),
         (NumericKind::Float(fc), NumericValue::Float(f)) => {
             fc.validate(f).then_some(ChoiceValue::Float(f))
         }

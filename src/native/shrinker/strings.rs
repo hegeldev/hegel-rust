@@ -23,10 +23,10 @@ impl<'a> Shrinker<'a> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let (kind, current) = match (
-                self.current_nodes[i].kind.clone(),
+                self.current_nodes[i].kind.as_ref(),
                 self.current_nodes[i].value.clone(),
             ) {
-                (ChoiceKind::String(sc), ChoiceValue::String(s)) => (sc, s),
+                (ChoiceKind::String(sc), ChoiceValue::String(s)) => (sc.clone(), s),
                 _ => {
                     i += 1;
                     continue;
@@ -250,7 +250,7 @@ impl<'a> Shrinker<'a> {
         self.current_nodes
             .iter()
             .enumerate()
-            .filter_map(|(i, n)| match &n.kind {
+            .filter_map(|(i, n)| match n.kind.as_ref() {
                 ChoiceKind::String(_) => Some(i),
                 _ => None,
             })
@@ -260,7 +260,7 @@ impl<'a> Shrinker<'a> {
     fn redistribute_string_pair(&mut self, i: usize, j: usize) {
         let s = self.current_string(i);
         let t = self.current_string(j);
-        let kind_j = match &self.current_nodes[j].kind {
+        let kind_j = match self.current_nodes[j].kind.as_ref() {
             ChoiceKind::String(kj) => kj.clone(),
             _ => unreachable!("kind/value invariant violated: outer match guaranteed this variant"),
         };
@@ -324,16 +324,20 @@ impl<'a> Shrinker<'a> {
         for i in 0..len {
             for j in (i + 1)..(i + 1 + 4).min(len) {
                 // Both must be String kinds.
-                let (kind_i, val_i) =
-                    match (&self.current_nodes[i].kind, &self.current_nodes[i].value) {
-                        (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
-                        _ => continue,
-                    };
-                let (kind_j, val_j) =
-                    match (&self.current_nodes[j].kind, &self.current_nodes[j].value) {
-                        (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
-                        _ => continue,
-                    };
+                let (kind_i, val_i) = match (
+                    self.current_nodes[i].kind.as_ref(),
+                    &self.current_nodes[i].value,
+                ) {
+                    (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
+                    _ => continue,
+                };
+                let (kind_j, val_j) = match (
+                    self.current_nodes[j].kind.as_ref(),
+                    &self.current_nodes[j].value,
+                ) {
+                    (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
+                    _ => continue,
+                };
                 let set_i: std::collections::BTreeSet<u32> = val_i.iter().copied().collect();
                 let set_j: std::collections::BTreeSet<u32> = val_j.iter().copied().collect();
                 let shared: Vec<u32> = set_i.intersection(&set_j).copied().collect();
@@ -384,7 +388,10 @@ impl<'a> Shrinker<'a> {
     pub(crate) fn normalize_unicode_chars(&mut self) {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            let (kind, value) = match (&self.current_nodes[i].kind, &self.current_nodes[i].value) {
+            let (kind, value) = match (
+                self.current_nodes[i].kind.as_ref(),
+                &self.current_nodes[i].value,
+            ) {
                 (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
                 _ => {
                     i += 1;

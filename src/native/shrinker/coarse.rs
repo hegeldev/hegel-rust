@@ -7,8 +7,7 @@
 //! with the lexicographic reductions in the main loop — hence the
 //! separate one-shot phase.
 
-use std::collections::HashMap;
-
+use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceKind, ChoiceValue};
 
 use super::{ShrinkRun, Shrinker};
@@ -35,32 +34,40 @@ impl<'a> Shrinker<'a> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
-            let (ic, current_val) = match (&node.kind, &node.value) {
-                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), *v),
+            let (ic, current_val) = match (node.kind.as_ref(), &node.value) {
+                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.clone()),
                 _ => {
                     i += 1;
                     continue;
                 }
             };
-            if node.was_forced || current_val > 10 || ic.min_value != 0 {
+            if node.was_forced
+                || current_val > BigInt::from(10)
+                || ic.min_value.clone() != BigInt::from(0)
+            {
                 i += 1;
                 continue;
             }
             // Probe: does zeroing the node change the shape?
+            let zero_val = ic
+                .value_from_bigint(&BigInt::from(0))
+                .expect("0 fits a min==0 integer choice");
             let mut zeroed = self.current_nodes.clone();
-            zeroed[i] = zeroed[i].with_value(ChoiceValue::Integer(0));
+            zeroed[i] = zeroed[i].with_value(ChoiceValue::Integer(zero_val));
             let (_, zero_actual, _) = (self.test_fn)(ShrinkRun::Full(&zeroed));
             let shape_changed = zero_actual.len() != self.current_nodes.len()
                 || (i + 1..self.current_nodes.len()).any(|j| {
                     j >= zero_actual.len()
-                        || std::mem::discriminant(&self.current_nodes[j].kind)
-                            != std::mem::discriminant(&zero_actual[j].kind)
+                        || std::mem::discriminant(self.current_nodes[j].kind.as_ref())
+                            != std::mem::discriminant(zero_actual[j].kind.as_ref())
                 });
             if shape_changed {
-                for v in 0..current_val {
-                    if self.try_lower_node_as_alternative(i, v) {
+                let mut v = BigInt::from(0);
+                while v < current_val {
+                    if self.try_lower_node_as_alternative(i, &v) {
                         break;
                     }
+                    v += 1;
                 }
             }
             i += 1;
@@ -69,23 +76,23 @@ impl<'a> Shrinker<'a> {
 
     /// Lower the integer at `i` to `v`, retrying the suffix as random
     /// continuations to repair any shape changes the lower caused.
-    fn try_lower_node_as_alternative(&mut self, i: usize, v: i128) -> bool {
+    fn try_lower_node_as_alternative(&mut self, i: usize, v: &BigInt) -> bool {
         // Callers iterate `i < self.current_nodes.len()`, so this is a
         // documented precondition.
         debug_assert!(i < self.current_nodes.len());
         // First try the bare lowering.
-        let lowered = self.replace(&HashMap::from([(i, ChoiceValue::Integer(v))]));
-        if lowered {
+        if self.replace_int(i, v) {
             return true;
         }
         // Couldn't lower directly; re-randomise the suffix via `probe`.
-        // Use the lowered prefix as the probe's prefix and let the
-        // engine pick a random continuation.
+        // Use the lowered prefix as the probe's prefix and let the engine pick
+        // a random continuation. The prefix is replayed (and width-coerced) by
+        // `for_choices`, so a `BigInt`-wrapped value is fine here.
         let mut prefix: Vec<ChoiceValue> = self.current_nodes[..i]
             .iter()
             .map(|n| n.value.clone())
             .collect();
-        prefix.push(ChoiceValue::Integer(v));
+        prefix.push(ChoiceValue::Integer(v.clone()));
         let max_size = self.current_nodes.len() + 16;
         let epoch = self.improvements;
         for seed in 0..3u64 {

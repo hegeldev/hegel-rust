@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::cbor_utils::{as_bool, as_text, map_get};
+use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{EngineError, ManyState, NativeTestCase, Status};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::re::constants::{
@@ -137,7 +138,10 @@ fn draw_pad(
     alphabet: &Option<IntervalSet>,
     out: &mut String,
 ) -> Result<(), EngineError> {
-    let n = ntc.draw_integer(0, 10)?;
+    let n = ntc
+        .draw_integer(BigInt::from(0), BigInt::from(10))?
+        .to_i128()
+        .unwrap();
     for _ in 0..n {
         let c = draw_any_char(ntc, alphabet)?;
         out.push(c);
@@ -246,7 +250,10 @@ fn generate_op(
             if state.flags & SRE_FLAG_IGNORECASE != 0 {
                 let sw = char_swapcase(c);
                 if sw != c {
-                    let which = ntc.draw_integer(0, 1)?;
+                    let which = ntc
+                        .draw_integer(BigInt::from(0), BigInt::from(1))?
+                        .to_i128()
+                        .unwrap();
                     let pick = if which == 0 { c } else { sw };
                     if !alphabet_allows(alphabet, pick) {
                         mark_invalid(ntc)?;
@@ -325,7 +332,10 @@ fn generate_op(
             }
         }
         OpCode::Branch(items) => {
-            let idx = ntc.draw_integer(0, items.len() as i128 - 1)? as usize;
+            let idx = ntc
+                .draw_integer(BigInt::from(0), BigInt::from(items.len() as i64 - 1))?
+                .to_i128()
+                .unwrap() as usize;
             generate_subpattern(ntc, &items[idx], state, alphabet, out)?;
         }
         OpCode::Subpattern {
@@ -647,7 +657,10 @@ fn draw_any_char(
 ) -> Result<char, EngineError> {
     match alphabet {
         None => {
-            let cp = ntc.draw_integer(32, 126)?;
+            let cp = ntc
+                .draw_integer(BigInt::from(32), BigInt::from(126))?
+                .to_i128()
+                .unwrap();
             Ok(char::from_u32(cp as u32).expect("ASCII codepoint"))
         }
         Some(intervals) => {
@@ -656,7 +669,10 @@ fn draw_any_char(
                 mark_invalid(ntc)?;
                 unreachable!("mark_invalid returns Err — control flow does not reach here")
             }
-            let idx = ntc.draw_integer(0, n as i128 - 1)?;
+            let idx = ntc
+                .draw_integer(BigInt::from(0), BigInt::from(n as i64 - 1))?
+                .to_i128()
+                .unwrap();
             let cp = intervals
                 .get(idx as isize)
                 .expect("draw_integer respects len bound");
@@ -678,13 +694,19 @@ fn emit_from_chars(
     // the low codepoints (ASCII / control chars). Without this bias,
     // interesting characters like '\n' are astronomically rare draws out of
     // the full BMP alphabet.
-    let n = chars.len() as i128;
+    let n = chars.len();
     let idx = if n > 256 && ntc.weighted(0.8, None)? {
-        ntc.draw_integer(0, 255)? as usize
+        ntc.draw_integer(BigInt::from(0), BigInt::from(255))?
+            .to_i128()
+            .unwrap() as usize
     } else if n > 256 {
-        ntc.draw_integer(256, n - 1)? as usize
+        ntc.draw_integer(BigInt::from(256), BigInt::from(n as i64 - 1))?
+            .to_i128()
+            .unwrap() as usize
     } else {
-        ntc.draw_integer(0, n - 1)? as usize
+        ntc.draw_integer(BigInt::from(0), BigInt::from(n as i64 - 1))?
+            .to_i128()
+            .unwrap() as usize
     };
     out.push(chars[idx]);
     Ok(())

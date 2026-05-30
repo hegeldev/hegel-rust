@@ -3,6 +3,7 @@
 // generate_novel_prefix exhaustion branches.
 
 use super::*;
+use crate::native::bignum::BigInt;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Status};
 use rand::SeedableRng;
@@ -10,26 +11,26 @@ use rand::rngs::SmallRng;
 
 fn int_kind(min: i128, max: i128) -> ChoiceKind {
     ChoiceKind::Integer(IntegerChoice {
-        min_value: min,
-        max_value: max,
-        shrink_towards: 0,
+        min_value: BigInt::from(min),
+        max_value: BigInt::from(max),
+        shrink_towards: BigInt::from(0),
     })
 }
 
 fn int_node(min: i128, max: i128, value: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: int_kind(min, max),
-        value: ChoiceValue::Integer(value),
-        was_forced: false,
-    }
+    ChoiceNode::new(
+        int_kind(min, max),
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Boolean(value),
-        was_forced: false,
-    }
+    ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(value),
+        false,
+    )
 }
 
 #[test]
@@ -61,7 +62,7 @@ fn record_tree_kill_depths_marks_inner_nodes_exhausted() {
         // returned prefix doesn't pass through the killed branch.
         assert!(
             prefix.is_empty()
-                || prefix.first() != Some(&ChoiceValue::Integer(0))
+                || prefix.first() != Some(&ChoiceValue::Integer(BigInt::from(0)))
                 || prefix.len() == 1
         );
     }

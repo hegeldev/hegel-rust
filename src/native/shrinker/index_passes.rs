@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 
-use crate::native::bignum::{BigUint, Zero};
-use crate::native::core::ChoiceValue;
+use crate::native::bignum::{BigInt, BigUint, Zero};
+use crate::native::core::{ChoiceKind, ChoiceValue};
 
 use super::Shrinker;
 
@@ -149,15 +149,20 @@ impl<'a> Shrinker<'a> {
 
             // Also try powers of 2 (and negatives) as raw values. This covers
             // large index-space jumps that exponential index probing misses.
-            for e in 0u32..11 {
-                let magnitude: i128 = 1i128 << e;
-                for &sign in &[1i128, -1] {
-                    let candidate_val = ChoiceValue::Integer(sign * magnitude);
-                    if kind.validate(&candidate_val)
-                        && candidate_val != node.value
-                        && !candidates.contains(&candidate_val)
-                    {
-                        candidates.push(candidate_val);
+            if let ChoiceKind::Integer(ic) = kind.as_ref() {
+                for e in 0u32..11 {
+                    let magnitude = BigInt::from(1u64 << e);
+                    for sign in [BigInt::from(1), BigInt::from(-1)] {
+                        let Some(av) = ic.value_from_bigint(&(sign * &magnitude)) else {
+                            continue;
+                        };
+                        let candidate_val = ChoiceValue::Integer(av);
+                        if kind.validate(&candidate_val)
+                            && candidate_val != node.value
+                            && !candidates.contains(&candidate_val)
+                        {
+                            candidates.push(candidate_val);
+                        }
                     }
                 }
             }

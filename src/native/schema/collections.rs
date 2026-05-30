@@ -1,10 +1,11 @@
 // Collection schema interpreters: list, dict, tuple, one_of, sampled_from.
 
 use crate::cbor_utils::{as_bool, as_u64, map_get};
+use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{EngineError, ManyState, NativeTestCase};
 use ciborium::Value;
 
-use super::{cbor_to_i128, interpret_schema, many_more, many_reject, require};
+use super::{cbor_to_bigint, interpret_schema, many_more, many_reject, require};
 
 pub(super) fn interpret_tuple(
     ntc: &mut NativeTestCase,
@@ -37,12 +38,10 @@ pub(super) fn interpret_one_of(
             ));
         }
     };
-    let idx = ntc.draw_integer(0, generators.len() as i128 - 1)?;
-    let value = interpret_schema(ntc, &generators[idx as usize])?;
-    Ok(Value::Array(vec![
-        Value::Integer((idx as i64).into()),
-        value,
-    ]))
+    let idx = ntc.draw_integer(BigInt::from(0), BigInt::from(generators.len() as i64 - 1))?;
+    let idx_i64 = idx.to_i128().unwrap() as i64;
+    let value = interpret_schema(ntc, &generators[idx_i64 as usize])?;
+    Ok(Value::Array(vec![Value::Integer(idx_i64.into()), value]))
 }
 
 pub(super) fn interpret_sampled_from(
@@ -57,8 +56,10 @@ pub(super) fn interpret_sampled_from(
             ));
         }
     };
-    let idx = ntc.draw_integer(0, values.len() as i128 - 1)?;
-    Ok(encode_schema_value(&values[idx as usize]))
+    let idx = ntc.draw_integer(BigInt::from(0), BigInt::from(values.len() as i64 - 1))?;
+    Ok(encode_schema_value(
+        &values[idx.to_i128().unwrap() as usize],
+    ))
 }
 
 pub(super) fn interpret_list(
@@ -116,7 +117,10 @@ fn interpret_unique_integer_list(
         if remaining.is_empty() || !many_more(ntc, &mut state)? {
             break;
         }
-        let j = ntc.draw_integer(0, remaining.len() as i128 - 1)? as usize;
+        let j = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(remaining.len() as i64 - 1))?
+            .to_i128()
+            .unwrap() as usize;
         let value = remaining.remove(j);
         results.push(Value::Integer((value as i64).into()));
     }
@@ -130,15 +134,16 @@ fn bounded_integer_range(schema: &Value) -> Option<(i128, i128)> {
     if schema_type != "integer" {
         return None;
     }
-    // Treat unparseable bounds as "not a bounded range" and fall back to the
-    // generic list path, which surfaces the real `InvalidArgument` when it
-    // interprets the element schema.
-    let min_val = cbor_to_i128(map_get(schema, "min_value")?).ok()?;
-    let max_val = cbor_to_i128(map_get(schema, "max_value")?).ok()?;
-    if !(1..=10_000).contains(&(max_val - min_val + 1)) {
+    let min_val = cbor_to_bigint(map_get(schema, "min_value")?).ok()?;
+    let max_val = cbor_to_bigint(map_get(schema, "max_value")?).ok()?;
+    let span = &max_val - &min_val + 1;
+    if !(BigInt::from(1)..=BigInt::from(10_000)).contains(&span) {
         return None;
     }
-    Some((min_val, max_val))
+    // The span check above guarantees both bounds fit comfortably in i128
+    // unless they are themselves astronomically large; in that rare case bail
+    // out of the small-range optimisation rather than truncate.
+    Some((min_val.to_i128()?, max_val.to_i128()?))
 }
 
 pub(super) fn interpret_dict(

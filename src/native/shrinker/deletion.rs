@@ -3,9 +3,10 @@
 
 use std::collections::HashMap;
 
+use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue};
 
-use super::{Shrinker, bin_search_down, find_integer};
+use super::{Shrinker, bin_search_down_big, find_integer};
 
 impl<'a> Shrinker<'a> {
     /// Try deleting chunks of choices from the sequence.
@@ -32,11 +33,12 @@ impl<'a> Shrinker<'a> {
                     // Try decrementing the preceding choice (helps with
                     // collection length counters).
                     let prev = &attempt[i - 1];
-                    let decremented = match (&prev.kind, &prev.value) {
+                    let decremented = match (prev.kind.as_ref(), &prev.value) {
                         (ChoiceKind::Integer(ic), ChoiceValue::Integer(v))
                             if *v != ic.simplest() =>
                         {
-                            Some(ChoiceValue::Integer(v - 1))
+                            ic.value_from_bigint(&(v.clone() - 1))
+                                .map(ChoiceValue::Integer)
                         }
                         (ChoiceKind::Boolean(_), ChoiceValue::Boolean(true)) => {
                             Some(ChoiceValue::Boolean(false))
@@ -68,8 +70,8 @@ impl<'a> Shrinker<'a> {
             let node = self.current_nodes[i].clone();
 
             // Only process integer nodes — these control sequence lengths.
-            let (current_val, ic) = match (&node.kind, &node.value) {
-                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (*v, ic.clone()),
+            let (current_val, ic) = match (node.kind.as_ref(), &node.value) {
+                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (v.clone(), ic.clone()),
                 _ => {
                     i += 1;
                     continue;
@@ -85,9 +87,11 @@ impl<'a> Shrinker<'a> {
             let expected_len = self.current_nodes.len();
 
             // Binary-search smaller integer values; for each candidate, try
-            // replace-with-deletion.
-            let changed = bin_search_down(simplest, current_val, &mut |v| {
-                self.try_replace_with_deletion(i, ChoiceValue::Integer(v), expected_len)
+            // replace-with-deletion. `try_replace_with_deletion` only deletes
+            // nodes *after* `i`, so `i` stays in range across probes.
+            let changed = bin_search_down_big(simplest, current_val, &mut |v| {
+                let value = self.int_replacement(i, v);
+                self.try_replace_with_deletion(i, value, expected_len)
             });
             let _ = changed;
 
@@ -161,8 +165,8 @@ impl<'a> Shrinker<'a> {
                 i += 1;
                 continue;
             }
-            let (ic, current_val) = match (&node.kind, &node.value) {
-                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), *v),
+            let (ic, current_val) = match (node.kind.as_ref(), &node.value) {
+                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.clone()),
                 _ => {
                     i += 1;
                     continue;
@@ -182,8 +186,8 @@ impl<'a> Shrinker<'a> {
             // (see `accept_improvement`), so its delta is "did we shrink?"
             // without needing a snapshot of the prior sort_key.
             let epoch_phase1 = self.improvements;
-            bin_search_down(simplest, current_val, &mut |v| {
-                self.replace(&HashMap::from([(i, ChoiceValue::Integer(v))]))
+            bin_search_down_big(simplest.clone(), current_val.clone(), &mut |v| {
+                self.replace_int(i, v)
             });
             if self.improvements > epoch_phase1 {
                 // Made progress; move on.
@@ -202,12 +206,15 @@ impl<'a> Shrinker<'a> {
             let original_len = self.current_nodes.len();
             // Lower-by-one in the direction of simplest.
             let towards = if current_val > simplest {
-                current_val - 1
+                &current_val - BigInt::from(1)
             } else {
-                current_val + 1
+                &current_val + BigInt::from(1)
             };
+            // `towards` is `current_val ± 1` toward `simplest`, so it stays
+            // within `[min, max] ⊆ width` and `i` is in range.
+            let towards_value = self.int_replacement(i, &towards);
             let mut lowered = self.current_nodes.clone();
-            lowered[i] = lowered[i].with_value(ChoiceValue::Integer(towards));
+            lowered[i] = lowered[i].with_value(towards_value);
 
             let (_, actual_nodes, actual_spans) = (self.test_fn)(super::ShrinkRun::Full(&lowered));
 

@@ -3,11 +3,11 @@ use crate::native::core::{ChoiceNode, Spans};
 use crate::native::shrinker::Shrinker;
 
 fn bytes_node(value: Vec<u8>, min_size: usize, max_size: usize) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Bytes(BytesChoice { min_size, max_size }),
-        value: ChoiceValue::Bytes(value),
-        was_forced: false,
-    }
+    ChoiceNode::new(
+        ChoiceKind::Bytes(BytesChoice { min_size, max_size }),
+        ChoiceValue::Bytes(value),
+        false,
+    )
 }
 
 fn accepting_shrinker(nodes: Vec<ChoiceNode>) -> Shrinker<'static> {
