@@ -1,6 +1,7 @@
 use super::*;
+use crate::native::bignum::BigInt;
 use crate::native::core::Spans;
-use crate::native::core::choices::{AnyInteger, IntegerChoice};
+use crate::native::core::choices::IntegerChoice;
 use crate::native::shrinker::Shrinker;
 
 // ── redistribute_pair: cand_j out-of-range ────────────────────────────────
@@ -27,15 +28,12 @@ fn float_node(value: f64, min: f64, max: f64) -> ChoiceNode {
 
 fn int_node(value: i128, min: i128, max: i128) -> ChoiceNode {
     ChoiceNode {
-        kind: ChoiceKind::Integer(
-            IntegerChoice {
-                min_value: min,
-                max_value: max,
-                shrink_towards: 0,
-            }
-            .into(),
-        ),
-        value: ChoiceValue::Integer(AnyInteger::I128(value)),
+        kind: ChoiceKind::Integer(IntegerChoice {
+            min_value: BigInt::from(min),
+            max_value: BigInt::from(max),
+            shrink_towards: BigInt::from(0),
+        }),
+        value: ChoiceValue::Integer(BigInt::from(value)),
         was_forced: false,
     }
 }
@@ -90,8 +88,8 @@ fn redistribute_pair_bails_when_int_candidate_leaves_validate_range() {
         &shrinker.current_nodes[0].value,
         &shrinker.current_nodes[1].value,
     ) {
-        (ChoiceValue::Float(_), ChoiceValue::Integer(AnyInteger::I128(n))) => {
-            assert!((1..=10).contains(n));
+        (ChoiceValue::Float(_), ChoiceValue::Integer(n)) => {
+            assert!((1..=10).contains(&i128::try_from(n).unwrap()));
         }
         _ => unreachable!(),
     }

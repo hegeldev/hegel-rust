@@ -1,28 +1,25 @@
 //! Unit tests for `Shrinker::lower_common_node_offset`.
 
-use crate::native::core::choices::AnyInteger;
+use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128, shrink_towards: i128) -> ChoiceNode {
     ChoiceNode {
-        kind: ChoiceKind::Integer(
-            IntegerChoice {
-                min_value: i128::MIN,
-                max_value: i128::MAX,
-                shrink_towards,
-            }
-            .into(),
-        ),
-        value: ChoiceValue::Integer(AnyInteger::I128(value)),
+        kind: ChoiceKind::Integer(IntegerChoice {
+            min_value: BigInt::from(i128::MIN),
+            max_value: BigInt::from(i128::MAX),
+            shrink_towards: BigInt::from(shrink_towards),
+        }),
+        value: ChoiceValue::Integer(BigInt::from(value)),
         was_forced: false,
     }
 }
 
 fn int_value(node: &ChoiceNode) -> i128 {
-    match node.value {
-        ChoiceValue::Integer(AnyInteger::I128(v)) => v,
+    match &node.value {
+        ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
         _ => unreachable!(),
     }
 }
@@ -61,12 +58,12 @@ fn lower_common_node_offset_collapses_zig_zag_pair() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
-                let m = match nodes[0].value {
-                    ChoiceValue::Integer(AnyInteger::I128(v)) => v,
+                let m = match &nodes[0].value {
+                    ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
                     _ => unreachable!(),
                 };
-                let n = match nodes[1].value {
-                    ChoiceValue::Integer(AnyInteger::I128(v)) => v,
+                let n = match &nodes[1].value {
+                    ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
                     _ => unreachable!(),
                 };
                 (

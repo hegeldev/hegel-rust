@@ -1,21 +1,18 @@
 //! Unit tests for `Shrinker::try_trivial_spans`.
 
-use crate::native::core::choices::AnyInteger;
+use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
     ChoiceNode {
-        kind: ChoiceKind::Integer(
-            IntegerChoice {
-                min_value: i128::MIN,
-                max_value: i128::MAX,
-                shrink_towards: 0,
-            }
-            .into(),
-        ),
-        value: ChoiceValue::Integer(AnyInteger::I128(value)),
+        kind: ChoiceKind::Integer(IntegerChoice {
+            min_value: BigInt::from(i128::MIN),
+            max_value: BigInt::from(i128::MAX),
+            shrink_towards: BigInt::from(0),
+        }),
+        value: ChoiceValue::Integer(BigInt::from(value)),
         was_forced: false,
     }
 }
@@ -63,7 +60,7 @@ fn try_trivial_spans_zeroes_non_forced_children() {
         .current_nodes
         .iter()
         .map(|n| match &n.value {
-            ChoiceValue::Integer(AnyInteger::I128(v)) => *v,
+            ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
             _ => unreachable!(),
         })
         .collect();
@@ -97,7 +94,7 @@ fn try_trivial_spans_preserves_forced_children() {
         .current_nodes
         .iter()
         .map(|n| match &n.value {
-            ChoiceValue::Integer(AnyInteger::I128(v)) => *v,
+            ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
             _ => unreachable!(),
         })
         .collect();
@@ -152,8 +149,8 @@ fn try_trivial_spans_handles_oversized_span_end() {
     shrinker.try_trivial_spans();
     // No change — the oversized span was skipped.
     assert_eq!(shrinker.current_nodes.len(), 1);
-    match shrinker.current_nodes[0].value {
-        ChoiceValue::Integer(AnyInteger::I128(v)) => assert_eq!(v, 5),
+    match &shrinker.current_nodes[0].value {
+        ChoiceValue::Integer(v) => assert_eq!(i128::try_from(v).unwrap(), 5),
         _ => unreachable!(),
     }
 }
@@ -205,9 +202,9 @@ fn try_trivial_spans_retries_with_realised_span_content() {
         &shrinker.current_nodes[0].value,
         &shrinker.current_nodes[1].value,
     ) {
-        (ChoiceValue::Integer(AnyInteger::I128(a)), ChoiceValue::Integer(AnyInteger::I128(b))) => {
-            assert_eq!(*a, 2);
-            assert_eq!(*b, 7);
+        (ChoiceValue::Integer(a), ChoiceValue::Integer(b)) => {
+            assert_eq!(i128::try_from(a.clone()).unwrap(), 2);
+            assert_eq!(i128::try_from(b.clone()).unwrap(), 7);
         }
         _ => unreachable!(),
     }

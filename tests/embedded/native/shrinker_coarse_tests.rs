@@ -1,42 +1,37 @@
 //! Unit tests for `Shrinker::initial_coarse_reduction`.
 
-use crate::native::core::choices::{AnyInteger, AnyIntegerChoice, IntegerChoice};
+use crate::native::bignum::BigInt;
+use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn small_int_node(value: i128) -> ChoiceNode {
     ChoiceNode {
-        kind: ChoiceKind::Integer(
-            IntegerChoice {
-                min_value: 0,
-                max_value: 10,
-                shrink_towards: 0,
-            }
-            .into(),
-        ),
-        value: ChoiceValue::Integer(AnyInteger::I128(value)),
+        kind: ChoiceKind::Integer(IntegerChoice {
+            min_value: BigInt::from(0),
+            max_value: BigInt::from(10),
+            shrink_towards: BigInt::from(0),
+        }),
+        value: ChoiceValue::Integer(BigInt::from(value)),
         was_forced: false,
     }
 }
 
 fn big_range_int_node(value: i128) -> ChoiceNode {
     ChoiceNode {
-        kind: ChoiceKind::Integer(
-            IntegerChoice {
-                min_value: 0,
-                max_value: 1_000_000,
-                shrink_towards: 0,
-            }
-            .into(),
-        ),
-        value: ChoiceValue::Integer(AnyInteger::I128(value)),
+        kind: ChoiceKind::Integer(IntegerChoice {
+            min_value: BigInt::from(0),
+            max_value: BigInt::from(1_000_000),
+            shrink_towards: BigInt::from(0),
+        }),
+        value: ChoiceValue::Integer(BigInt::from(value)),
         was_forced: false,
     }
 }
 
 fn int_value(node: &ChoiceNode) -> i128 {
-    match node.value {
-        ChoiceValue::Integer(AnyInteger::I128(v)) => v,
+    match &node.value {
+        ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
         _ => unreachable!(),
     }
 }
@@ -74,7 +69,7 @@ fn initial_coarse_reduction_lowers_when_shape_depends_on_value() {
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
                 let n = match nodes.first().map(|n| &n.value) {
-                    Some(ChoiceValue::Integer(AnyInteger::I128(v))) => *v as usize,
+                    Some(ChoiceValue::Integer(v)) => i128::try_from(v.clone()).unwrap() as usize,
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
                 let actual: Vec<_> = nodes[..1 + n.min(nodes.len() - 1)].to_vec();
@@ -112,8 +107,8 @@ fn initial_coarse_reduction_skips_non_zero_min_value() {
     // Node has min_value=1; not a one_of selector pattern (those start
     // from zero).  Should be left alone.
     let mut node = small_int_node(3);
-    if let ChoiceKind::Integer(AnyIntegerChoice::I128(ic)) = &mut node.kind {
-        ic.min_value = 1;
+    if let ChoiceKind::Integer(ic) = &mut node.kind {
+        ic.min_value = BigInt::from(1);
     }
     let initial = vec![node];
     let mut shrinker = Shrinker::with_probe(
@@ -157,7 +152,7 @@ fn initial_coarse_reduction_keeps_same_shape_one_of() {
             ShrinkRun::Full(nodes) => {
                 // Always interesting iff first value == 1.
                 let interesting =
-                    matches!(nodes[0].value, ChoiceValue::Integer(AnyInteger::I128(1)));
+                    nodes[0].value == ChoiceValue::Integer(BigInt::from(1));
                 (interesting, nodes.to_vec(), Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
@@ -195,8 +190,8 @@ fn initial_coarse_reduction_accepts_probe_when_direct_replace_fails() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(move |run| match run {
             ShrinkRun::Full(nodes) => {
-                let head = match nodes[0].value {
-                    ChoiceValue::Integer(AnyInteger::I128(v)) => v,
+                let head = match &nodes[0].value {
+                    ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
                 if head == 3 && nodes.len() == 4 {
