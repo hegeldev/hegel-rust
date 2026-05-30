@@ -231,7 +231,11 @@ fn run_main(
         && interesting.is_empty()
     {
         let run = ctx.run(NativeTestCase::for_simplest(BUFFER_SIZE));
-        crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[]);
+        if let Some(msg) =
+            crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[])
+        {
+            return health_check_failure(msg);
+        }
         calls += 1;
         if run.nodes.is_empty() && run.status >= Status::Invalid {
             test_is_trivial = true;
@@ -290,7 +294,11 @@ fn run_main(
 
             let tc_start = std::time::Instant::now();
             let run = ctx.run(ntc);
-            crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[]);
+            if let Some(msg) =
+                crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[])
+            {
+                return health_check_failure(msg);
+            }
             let elapsed = tc_start.elapsed();
             calls += 1;
 
@@ -361,7 +369,10 @@ fn run_main(
                 && target_schedule.should_fire(valid_test_cases)
             {
                 let mut on_run = |run: &RunResult| {
-                    crate::native::data_tree::record_tree(
+                    // A non-determinism mismatch here is dropped: it's a
+                    // generator property, so the next main-loop `record_tree`
+                    // (above) re-detects it and returns a clean failure.
+                    let _ = crate::native::data_tree::record_tree(
                         &mut tree_root,
                         &run.nodes,
                         run.status,

@@ -34,13 +34,15 @@ fn bool_node(value: bool) -> ChoiceNode {
 }
 
 #[test]
-#[should_panic(expected = "non-deterministic")]
-fn record_tree_panics_on_kind_mismatch() {
-    // First record an integer node at position 0; recording a boolean
-    // node at the same position trips the non-determinism panic.
+fn record_tree_reports_kind_mismatch() {
+    // First record an integer node at position 0; recording a boolean node at
+    // the same position reports the non-determinism (rather than panicking, so
+    // an FFI-driven engine doesn't abort).
     let mut root = DataTreeNode::default();
-    record_tree(&mut root, &[int_node(0, 10, 0)], Status::Valid, &[]);
-    record_tree(&mut root, &[bool_node(false)], Status::Valid, &[]);
+    assert!(record_tree(&mut root, &[int_node(0, 10, 0)], Status::Valid, &[]).is_none());
+    let msg = record_tree(&mut root, &[bool_node(false)], Status::Valid, &[])
+        .expect("kind mismatch should be reported");
+    assert!(msg.contains("non-deterministic"), "{msg}");
 }
 
 #[test]
