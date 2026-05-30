@@ -9,6 +9,7 @@
 //! so the walker can short-circuit dead branches.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
@@ -42,7 +43,7 @@ impl From<&ChoiceValue> for ChoiceValueKey {
 
 #[derive(Default)]
 pub(crate) struct DataTreeNode {
-    kind: Option<ChoiceKind>,
+    kind: Option<Arc<ChoiceKind>>,
     children: HashMap<ChoiceValueKey, Box<DataTreeNode>>,
     /// Terminal status if the test case ended at this node. Only set
     /// when the recording run concluded with `Status >= Invalid`.
@@ -218,7 +219,7 @@ pub(crate) fn generate_novel_prefix(
     let mut prefix = Vec::new();
     let mut current = tree_root;
     while let Some(ref kind) = current.kind {
-        let Some(value) = pick_non_exhausted_value(kind, &current.children, rng) else {
+        let Some(value) = pick_non_exhausted_value(kind.as_ref(), &current.children, rng) else {
             break;
         };
         let key = ChoiceValueKey::from(&value);

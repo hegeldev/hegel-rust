@@ -6,27 +6,27 @@ use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn small_int_node(value: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
             min_value: BigInt::from(0),
             max_value: BigInt::from(10),
             shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(BigInt::from(value)),
-        was_forced: false,
-    }
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 fn big_range_int_node(value: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
             min_value: BigInt::from(0),
             max_value: BigInt::from(1_000_000),
             shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(BigInt::from(value)),
-        was_forced: false,
-    }
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 fn int_value(node: &ChoiceNode) -> i128 {
@@ -107,7 +107,7 @@ fn initial_coarse_reduction_skips_non_zero_min_value() {
     // Node has min_value=1; not a one_of selector pattern (those start
     // from zero).  Should be left alone.
     let mut node = small_int_node(3);
-    if let ChoiceKind::Integer(ic) = &mut node.kind {
+    if let ChoiceKind::Integer(ic) = std::sync::Arc::make_mut(&mut node.kind) {
         ic.min_value = BigInt::from(1);
     }
     let initial = vec![node];

@@ -14,28 +14,28 @@ use crate::native::shrinker::Shrinker;
 // its `max_value`.
 
 fn float_node(value: f64, min: f64, max: f64) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Float(FloatChoice {
+    ChoiceNode::new(
+        ChoiceKind::Float(FloatChoice {
             min_value: min,
             max_value: max,
             allow_nan: false,
             allow_infinity: false,
         }),
-        value: ChoiceValue::Float(value),
-        was_forced: false,
-    }
+        ChoiceValue::Float(value),
+        false,
+    )
 }
 
 fn int_node(value: i128, min: i128, max: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
             min_value: BigInt::from(min),
             max_value: BigInt::from(max),
             shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(BigInt::from(value)),
-        was_forced: false,
-    }
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 #[test]
@@ -107,16 +107,16 @@ fn redistribute_pair_bails_when_int_candidate_leaves_validate_range() {
 
 #[test]
 fn shrink_floats_canonicalizes_nan_to_finite_when_predicate_admits() {
-    let initial = vec![ChoiceNode {
-        kind: ChoiceKind::Float(FloatChoice {
+    let initial = vec![ChoiceNode::new(
+        ChoiceKind::Float(FloatChoice {
             min_value: f64::NEG_INFINITY,
             max_value: f64::INFINITY,
             allow_nan: true,
             allow_infinity: true,
         }),
-        value: ChoiceValue::Float(f64::NAN),
-        was_forced: false,
-    }];
+        ChoiceValue::Float(f64::NAN),
+        false,
+    )];
     // Predicate: accept NaN, infinity, or `f64::MAX`. The canonicalization
     // tries `f64::MAX` first and accepts it.
     let mut shrinker = Shrinker::with_probe(

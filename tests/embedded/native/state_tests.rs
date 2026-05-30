@@ -143,21 +143,21 @@ fn spans_children_returns_direct_children() {
 fn spans_trivial_handles_simplest_forced_and_oob() {
     use crate::native::core::choices::{BooleanChoice, ChoiceKind, ChoiceNode, ChoiceValue};
     let kind = ChoiceKind::Boolean(BooleanChoice);
-    let simplest = ChoiceNode {
-        kind: kind.clone(),
-        value: ChoiceValue::Boolean(false),
-        was_forced: false,
-    };
-    let interesting = ChoiceNode {
-        kind: kind.clone(),
-        value: ChoiceValue::Boolean(true),
-        was_forced: false,
-    };
-    let forced_interesting = ChoiceNode {
+    let simplest = ChoiceNode::new(
+        kind.clone(),
+        ChoiceValue::Boolean(false),
+        false,
+    );
+    let interesting = ChoiceNode::new(
+        kind.clone(),
+        ChoiceValue::Boolean(true),
+        false,
+    );
+    let forced_interesting = ChoiceNode::new(
         kind,
-        value: ChoiceValue::Boolean(true),
-        was_forced: true,
-    };
+        ChoiceValue::Boolean(true),
+        true,
+    );
 
     let mut spans = Spans::new();
     spans.push(Span {
@@ -845,11 +845,11 @@ fn template_concrete_prefix_with_punning_then_template() {
     // punning routes the first draw to unit() (since the original wasn't
     // "simplest"), and the template kicks in for subsequent draws.
     let prefix = vec![ChoiceValue::Boolean(true)];
-    let prefix_nodes = vec![ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Boolean(true),
-        was_forced: false,
-    }];
+    let prefix_nodes = vec![ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(true),
+        false,
+    )];
     let mut tc = NativeTestCase::for_choices_and_template(
         &prefix,
         Some(&prefix_nodes),

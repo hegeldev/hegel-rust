@@ -7,15 +7,15 @@ fn intervals(min: u32, max: u32) -> IntervalSet {
 }
 
 fn string_node(value: Vec<u32>, min_codepoint: u32, max_codepoint: u32) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::String(StringChoice {
+    ChoiceNode::new(
+        ChoiceKind::String(StringChoice {
             intervals: intervals(min_codepoint, max_codepoint),
             min_size: 0,
             max_size: 32,
         }),
-        value: ChoiceValue::String(value),
-        was_forced: false,
-    }
+        ChoiceValue::String(value),
+        false,
+    )
 }
 
 fn accepting_shrinker(nodes: Vec<ChoiceNode>) -> Shrinker<'static> {

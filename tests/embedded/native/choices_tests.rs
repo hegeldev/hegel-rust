@@ -667,34 +667,34 @@ fn string_choice_from_index_past_max_returns_none() {
 // paths only fire in defensive branches.
 
 fn integer_node(min: i128, max: i128, value: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
             min_value: BigInt::from(min),
             max_value: BigInt::from(max),
             shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(BigInt::from(value)),
-        was_forced: false,
-    }
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 fn bytes_node(min: usize, max: usize, value: Vec<u8>) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Bytes(BytesChoice {
+    ChoiceNode::new(
+        ChoiceKind::Bytes(BytesChoice {
             min_size: min,
             max_size: max,
         }),
-        value: ChoiceValue::Bytes(value),
-        was_forced: false,
-    }
+        ChoiceValue::Bytes(value),
+        false,
+    )
 }
 
 fn string_node(intervals: Vec<(u32, u32)>, min: usize, max: usize, value: Vec<u32>) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::String(string_choice(intervals, min, max)),
-        value: ChoiceValue::String(value),
-        was_forced: false,
-    }
+    ChoiceNode::new(
+        ChoiceKind::String(string_choice(intervals, min, max)),
+        ChoiceValue::String(value),
+        false,
+    )
 }
 
 #[test]
@@ -798,15 +798,15 @@ fn engine_error_display_covers_both_variants() {
 
 fn big_integer_node(distance_beyond_u128: u32) -> ChoiceNode {
     let huge = BigInt::from(u128::MAX) * BigInt::from(4) + BigInt::from(distance_beyond_u128);
-    ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
             min_value: BigInt::from(0),
             max_value: huge.clone(),
             shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(huge),
-        was_forced: false,
-    }
+        ChoiceValue::Integer(huge),
+        false,
+    )
 }
 
 #[test]
@@ -822,14 +822,14 @@ fn node_sort_key_big_integer_orders_correctly() {
     let big_large = vec![big_integer_node(7)];
     assert!(sort_key(&big_small) < sort_key(&big_large));
     // Scalar sort keys sort before any bytes sequence.
-    let bytes = vec![ChoiceNode {
-        kind: ChoiceKind::Bytes(BytesChoice {
+    let bytes = vec![ChoiceNode::new(
+        ChoiceKind::Bytes(BytesChoice {
             min_size: 0,
             max_size: 4,
         }),
-        value: ChoiceValue::Bytes(vec![1, 2, 3]),
-        was_forced: false,
-    }];
+        ChoiceValue::Bytes(vec![1, 2, 3]),
+        false,
+    )];
     assert!(sort_key(&big) < sort_key(&bytes));
     // The owned NodeSortKey matches the borrowed comparison.
     assert!(big_small[0].sort_key() < big_large[0].sort_key());

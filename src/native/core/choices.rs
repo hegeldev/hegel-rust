@@ -1,5 +1,7 @@
 // Choice types: the recorded decisions a test case makes.
 
+use std::sync::Arc;
+
 use crate::native::bignum::{BigInt, BigUint, Zero};
 use crate::native::floats::sign_aware_lte;
 use crate::native::intervalsets::IntervalSet;
@@ -943,9 +945,14 @@ impl ChoiceKind {
 }
 
 /// A single recorded choice in a test case.
+///
+/// The `kind` is wrapped in `Arc` because the shrinker clones entire
+/// `Vec<ChoiceNode>` vectors thousands of times per shrink run, while the
+/// kind almost never changes. This turns three `BigInt` deep-clones per
+/// integer node into a single pointer bump.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChoiceNode {
-    pub kind: ChoiceKind,
+    pub kind: Arc<ChoiceKind>,
     pub value: ChoiceValue,
     pub was_forced: bool,
 }
@@ -988,16 +995,24 @@ impl ChoiceTemplate {
 }
 
 impl ChoiceNode {
+    pub fn new(kind: ChoiceKind, value: ChoiceValue, was_forced: bool) -> Self {
+        Self {
+            kind: Arc::new(kind),
+            value,
+            was_forced,
+        }
+    }
+
     pub fn with_value(&self, value: ChoiceValue) -> ChoiceNode {
         ChoiceNode {
-            kind: self.kind.clone(),
+            kind: Arc::clone(&self.kind),
             value,
             was_forced: self.was_forced,
         }
     }
 
     pub fn sort_key(&self) -> NodeSortKey {
-        match (&self.kind, &self.value) {
+        match (self.kind.as_ref(), &self.value) {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
                 let (mag, neg) = ic.sort_key(v);
                 NodeSortKey::Scalar(mag, neg)
@@ -1131,7 +1146,7 @@ impl ChoiceNode {
     /// [`NodeSortKeyRef`] that borrows the node's value (and, for
     /// `String`, its choice config). Same ordering, no allocation.
     pub fn sort_key_ref(&self) -> NodeSortKeyRef<'_> {
-        match (&self.kind, &self.value) {
+        match (self.kind.as_ref(), &self.value) {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
                 let (mag, neg) = ic.sort_key(v);
                 NodeSortKeyRef::Scalar(mag, neg)

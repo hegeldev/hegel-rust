@@ -4,36 +4,36 @@ use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{BytesChoice, FloatChoice};
 
 fn integer_node(value: i128, min_value: i128, max_value: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
             min_value: BigInt::from(min_value),
             max_value: BigInt::from(max_value),
             shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(BigInt::from(value)),
-        was_forced: false,
-    }
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 fn float_node(value: f64) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Float(FloatChoice {
+    ChoiceNode::new(
+        ChoiceKind::Float(FloatChoice {
             min_value: f64::NEG_INFINITY,
             max_value: f64::INFINITY,
             allow_nan: false,
             allow_infinity: true,
         }),
-        value: ChoiceValue::Float(value),
-        was_forced: false,
-    }
+        ChoiceValue::Float(value),
+        false,
+    )
 }
 
 fn bytes_node(value: Vec<u8>, min_size: usize, max_size: usize) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Bytes(BytesChoice { min_size, max_size }),
-        value: ChoiceValue::Bytes(value),
-        was_forced: false,
-    }
+    ChoiceNode::new(
+        ChoiceKind::Bytes(BytesChoice { min_size, max_size }),
+        ChoiceValue::Bytes(value),
+        false,
+    )
 }
 
 // ── TargetingState ────────────────────────────────────────────────────────
@@ -132,11 +132,11 @@ fn schedule_for_small_max_examples_never_fires_in_range() {
 fn is_climbable_accepts_integer_float_boolean_bytes() {
     let int_node = integer_node(0, 0, 10);
     let float_node = float_node(0.0);
-    let bool_node = ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Boolean(true),
-        was_forced: false,
-    };
+    let bool_node = ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(true),
+        false,
+    );
     let bytes_node = bytes_node(vec![0], 0, 8);
     for node in [&int_node, &float_node, &bool_node, &bytes_node] {
         assert!(
@@ -207,11 +207,11 @@ fn step_choice_float_adds_delta_as_f64() {
 #[test]
 fn step_choice_boolean_only_steps_by_one() {
     use crate::native::core::choices::BooleanChoice;
-    let node = ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Boolean(false),
-        was_forced: false,
-    };
+    let node = ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(false),
+        false,
+    );
     assert_eq!(step_choice(&node, 1), Some(ChoiceValue::Boolean(true)));
     assert_eq!(step_choice(&node, -1), Some(ChoiceValue::Boolean(false)));
     assert_eq!(step_choice(&node, 0), Some(ChoiceValue::Boolean(false)));
@@ -259,11 +259,11 @@ fn step_choice_bytes_returns_none_when_overflows_max_size() {
 #[test]
 fn step_choice_rejects_mismatched_value_and_kind() {
     use crate::native::core::choices::BooleanChoice;
-    let node = ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Integer(BigInt::from(0)),
-        was_forced: false,
-    };
+    let node = ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Integer(BigInt::from(0)),
+        false,
+    );
     assert_eq!(step_choice(&node, 1), None);
 }
 

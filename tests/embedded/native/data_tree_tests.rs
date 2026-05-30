@@ -18,19 +18,19 @@ fn int_kind(min: i128, max: i128) -> ChoiceKind {
 }
 
 fn int_node(min: i128, max: i128, value: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: int_kind(min, max),
-        value: ChoiceValue::Integer(BigInt::from(value)),
-        was_forced: false,
-    }
+    ChoiceNode::new(
+        int_kind(min, max),
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Boolean(value),
-        was_forced: false,
-    }
+    ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(value),
+        false,
+    )
 }
 
 #[test]

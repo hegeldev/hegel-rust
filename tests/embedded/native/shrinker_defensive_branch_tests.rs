@@ -9,15 +9,15 @@ use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
             min_value: BigInt::from(i128::MIN + 1),
             max_value: BigInt::from(i128::MAX),
             shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(BigInt::from(value)),
-        was_forced: false,
-    }
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 fn accepting_shrinker(initial: Vec<ChoiceNode>) -> Shrinker<'static> {
@@ -144,11 +144,11 @@ fn lower_integers_together_skips_kind_punning() {
             ShrinkRun::Full(nodes) => {
                 let mut out: Vec<ChoiceNode> = nodes.to_vec();
                 if out.len() >= 2 {
-                    out[1] = ChoiceNode {
-                        kind: ChoiceKind::Boolean(BooleanChoice),
-                        value: ChoiceValue::Boolean(true),
-                        was_forced: false,
-                    };
+                    out[1] = ChoiceNode::new(
+                        ChoiceKind::Boolean(BooleanChoice),
+                        ChoiceValue::Boolean(true),
+                        false,
+                    );
                 }
                 (true, out, Spans::new())
             }

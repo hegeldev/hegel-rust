@@ -8,15 +8,15 @@ use crate::native::intervalsets::IntervalSet;
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn string_node_with(min_cp: u32, max_cp: u32, value: Vec<u32>) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::String(StringChoice {
+    ChoiceNode::new(
+        ChoiceKind::String(StringChoice {
             intervals: IntervalSet::new(vec![(min_cp, max_cp)]),
             min_size: 0,
             max_size: 32,
         }),
-        value: ChoiceValue::String(value),
-        was_forced: false,
-    }
+        ChoiceValue::String(value),
+        false,
+    )
 }
 
 #[test]
@@ -51,15 +51,15 @@ fn lower_duplicated_characters_skips_non_string_neighbour() {
     use crate::native::core::choices::IntegerChoice;
     let initial = vec![
         string_node_with(b'a' as u32, b'z' as u32, vec![b'b' as u32]),
-        ChoiceNode {
-            kind: ChoiceKind::Integer(IntegerChoice {
+        ChoiceNode::new(
+            ChoiceKind::Integer(IntegerChoice {
                 min_value: BigInt::from(0),
                 max_value: BigInt::from(100),
                 shrink_towards: BigInt::from(0),
             }),
-            value: ChoiceValue::Integer(BigInt::from(7)),
-            was_forced: false,
-        },
+            ChoiceValue::Integer(BigInt::from(7)),
+            false,
+        ),
     ];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
@@ -160,11 +160,11 @@ fn normalize_unicode_chars_handles_string_truncated_by_closure() {
 #[test]
 fn normalize_unicode_chars_does_nothing_on_non_string() {
     use crate::native::core::choices::BooleanChoice;
-    let initial = vec![ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Boolean(true),
-        was_forced: false,
-    }];
+    let initial = vec![ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(true),
+        false,
+    )];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),

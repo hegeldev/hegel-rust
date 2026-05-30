@@ -10,59 +10,59 @@ use crate::native::intervalsets::IntervalSet;
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Boolean(value),
-        was_forced: false,
-    }
+    ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(value),
+        false,
+    )
 }
 
 fn float_node(value: f64) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Float(FloatChoice {
+    ChoiceNode::new(
+        ChoiceKind::Float(FloatChoice {
             min_value: f64::NEG_INFINITY,
             max_value: f64::INFINITY,
             allow_nan: false,
             allow_infinity: false,
         }),
-        value: ChoiceValue::Float(value),
-        was_forced: false,
-    }
+        ChoiceValue::Float(value),
+        false,
+    )
 }
 
 fn bytes_node(value: Vec<u8>) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Bytes(BytesChoice {
+    ChoiceNode::new(
+        ChoiceKind::Bytes(BytesChoice {
             min_size: 0,
             max_size: 16,
         }),
-        value: ChoiceValue::Bytes(value),
-        was_forced: false,
-    }
+        ChoiceValue::Bytes(value),
+        false,
+    )
 }
 
 fn integer_node(value: i128, min_value: i128, max_value: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
             min_value: BigInt::from(min_value),
             max_value: BigInt::from(max_value),
             shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(BigInt::from(value)),
-        was_forced: false,
-    }
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 fn string_node(value: Vec<u32>) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::String(StringChoice {
+    ChoiceNode::new(
+        ChoiceKind::String(StringChoice {
             intervals: IntervalSet::new(vec![(0, 0x10FFFF)]),
             min_size: 0,
             max_size: 16,
         }),
-        value: ChoiceValue::String(value),
-        was_forced: false,
-    }
+        ChoiceValue::String(value),
+        false,
+    )
 }
 
 fn accepting_shrinker(initial: Vec<ChoiceNode>) -> Shrinker<'static> {

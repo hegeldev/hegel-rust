@@ -1199,11 +1199,11 @@ impl NativeTestCase {
             obs.draw_integer(&v, was_forced);
         }
 
-        self.nodes.push(ChoiceNode {
-            kind: ChoiceKind::Integer(kind),
-            value: ChoiceValue::Integer(v.clone()),
+        self.nodes.push(ChoiceNode::new(
+            ChoiceKind::Integer(kind),
+            ChoiceValue::Integer(v.clone()),
             was_forced,
-        });
+        ));
 
         Ok(T::try_from(v)
             .ok()
@@ -1239,11 +1239,11 @@ impl NativeTestCase {
             unreachable!("kind/value invariant violated: outer match guaranteed this variant")
         };
 
-        self.nodes.push(ChoiceNode {
-            kind: ChoiceKind::Float(kind),
-            value: ChoiceValue::Float(v),
+        self.nodes.push(ChoiceNode::new(
+            ChoiceKind::Float(kind),
+            ChoiceValue::Float(v),
             was_forced,
-        });
+        ));
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_float(v, was_forced);
@@ -1272,11 +1272,11 @@ impl NativeTestCase {
             unreachable!("kind/value invariant violated: outer match guaranteed this variant")
         };
 
-        self.nodes.push(ChoiceNode {
-            kind: ChoiceKind::Bytes(kind),
-            value: ChoiceValue::Bytes(v.clone()),
+        self.nodes.push(ChoiceNode::new(
+            ChoiceKind::Bytes(kind),
+            ChoiceValue::Bytes(v.clone()),
             was_forced,
-        });
+        ));
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_bytes(&v, was_forced);
@@ -1317,11 +1317,11 @@ impl NativeTestCase {
             unreachable!("kind/value invariant violated: outer match guaranteed this variant")
         };
 
-        self.nodes.push(ChoiceNode {
-            kind: ChoiceKind::String(kind),
-            value: ChoiceValue::String(v.clone()),
+        self.nodes.push(ChoiceNode::new(
+            ChoiceKind::String(kind),
+            ChoiceValue::String(v.clone()),
             was_forced,
-        });
+        ));
 
         let s = codepoints_to_string(&v);
         if let Some(ref mut obs) = self.observer {
@@ -1361,11 +1361,11 @@ impl NativeTestCase {
             unreachable!("kind/value invariant violated: outer match guaranteed this variant")
         };
 
-        self.nodes.push(ChoiceNode {
-            kind: ChoiceKind::Boolean(kind),
-            value: ChoiceValue::Boolean(v),
+        self.nodes.push(ChoiceNode::new(
+            ChoiceKind::Boolean(kind),
+            ChoiceValue::Boolean(v),
             was_forced,
-        });
+        ));
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_boolean(v, was_forced);

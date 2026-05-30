@@ -6,15 +6,15 @@ use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128, shrink_towards: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
             min_value: BigInt::from(i128::MIN),
             max_value: BigInt::from(i128::MAX),
             shrink_towards: BigInt::from(shrink_towards),
         }),
-        value: ChoiceValue::Integer(BigInt::from(value)),
-        was_forced: false,
-    }
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 fn int_value(node: &ChoiceNode) -> i128 {
@@ -127,21 +127,21 @@ fn lower_common_node_offset_handles_negative_shrink_target() {
 #[test]
 fn lower_common_node_offset_skips_non_integer_nodes() {
     use crate::native::core::choices::{BooleanChoice, FloatChoice};
-    let bool_node = ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Boolean(true),
-        was_forced: false,
-    };
-    let float_node = ChoiceNode {
-        kind: ChoiceKind::Float(FloatChoice {
+    let bool_node = ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(true),
+        false,
+    );
+    let float_node = ChoiceNode::new(
+        ChoiceKind::Float(FloatChoice {
             min_value: f64::NEG_INFINITY,
             max_value: f64::INFINITY,
             allow_nan: false,
             allow_infinity: false,
         }),
-        value: ChoiceValue::Float(3.0),
-        was_forced: false,
-    };
+        ChoiceValue::Float(3.0),
+        false,
+    );
     let initial = vec![int_node(5, 0), bool_node, float_node, int_node(7, 0)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
@@ -154,21 +154,21 @@ fn lower_common_node_offset_skips_non_integer_nodes() {
     // Manufacture a multi-index change set including the bool and float.
     shrinker.consider(&[
         int_node(3, 0),
-        ChoiceNode {
-            kind: ChoiceKind::Boolean(BooleanChoice),
-            value: ChoiceValue::Boolean(false),
-            was_forced: false,
-        },
-        ChoiceNode {
-            kind: ChoiceKind::Float(FloatChoice {
+        ChoiceNode::new(
+            ChoiceKind::Boolean(BooleanChoice),
+            ChoiceValue::Boolean(false),
+            false,
+        ),
+        ChoiceNode::new(
+            ChoiceKind::Float(FloatChoice {
                 min_value: f64::NEG_INFINITY,
                 max_value: f64::INFINITY,
                 allow_nan: false,
                 allow_infinity: false,
             }),
-            value: ChoiceValue::Float(0.0),
-            was_forced: false,
-        },
+            ChoiceValue::Float(0.0),
+            false,
+        ),
         int_node(2, 0),
     ]);
     assert!(shrinker.changed_nodes().len() >= 3);

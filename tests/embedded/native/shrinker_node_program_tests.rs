@@ -6,15 +6,15 @@ use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
             min_value: BigInt::from(0),
             max_value: BigInt::from(100),
             shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(BigInt::from(value)),
-        was_forced: false,
-    }
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 #[test]
@@ -210,17 +210,17 @@ fn initial_node_count() -> usize {
 fn node_program_adaptively_deletes_long_false_run() {
     use crate::native::core::choices::BooleanChoice;
     let mut initial: Vec<ChoiceNode> = (0..1000)
-        .map(|_| ChoiceNode {
-            kind: ChoiceKind::Boolean(BooleanChoice),
-            value: ChoiceValue::Boolean(false),
-            was_forced: false,
-        })
+        .map(|_| ChoiceNode::new(
+            ChoiceKind::Boolean(BooleanChoice),
+            ChoiceValue::Boolean(false),
+            false,
+        ))
         .collect();
-    initial.push(ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Boolean(true),
-        was_forced: false,
-    });
+    initial.push(ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(true),
+        false,
+    ));
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {

@@ -6,15 +6,15 @@ use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
             min_value: BigInt::from(0),
             max_value: BigInt::from(100),
             shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(BigInt::from(value)),
-        was_forced: false,
-    }
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 fn forced_int_node(value: i128) -> ChoiceNode {
@@ -127,15 +127,15 @@ fn minimize_individual_choices_truncates_misaligned_string() {
 
     let initial = vec![
         int_node(3),
-        ChoiceNode {
-            kind: ChoiceKind::String(StringChoice {
+        ChoiceNode::new(
+            ChoiceKind::String(StringChoice {
                 intervals: IntervalSet::new(vec![(b'a' as u32, b'z' as u32)]),
                 min_size: 0,
                 max_size: 16,
             }),
-            value: ChoiceValue::String(vec![b'a' as u32, b'a' as u32, b'a' as u32]),
-            was_forced: false,
-        },
+            ChoiceValue::String(vec![b'a' as u32, b'a' as u32, b'a' as u32]),
+            false,
+        ),
     ];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
@@ -278,14 +278,14 @@ fn minimize_individual_choices_truncates_misaligned_bytes() {
 
     let initial = vec![
         int_node(3),
-        ChoiceNode {
-            kind: ChoiceKind::Bytes(BytesChoice {
+        ChoiceNode::new(
+            ChoiceKind::Bytes(BytesChoice {
                 min_size: 0,
                 max_size: 16,
             }),
-            value: ChoiceValue::Bytes(vec![1, 2, 3]),
-            was_forced: false,
-        },
+            ChoiceValue::Bytes(vec![1, 2, 3]),
+            false,
+        ),
     ];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {

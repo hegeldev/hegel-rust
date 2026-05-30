@@ -29,7 +29,7 @@ impl<'a> Shrinker<'a> {
     /// in-range integer node with a candidate inside `[min, max] ⊆ width`, so
     /// neither the kind nor the width conversion can fail.
     pub(super) fn int_replacement(&self, i: usize, candidate: &BigInt) -> ChoiceValue {
-        let ChoiceKind::Integer(ic) = &self.current_nodes[i].kind else {
+        let ChoiceKind::Integer(ic) = self.current_nodes[i].kind.as_ref() else {
             unreachable!("int_replacement on non-integer node")
         };
         ChoiceValue::Integer(
@@ -84,7 +84,7 @@ impl<'a> Shrinker<'a> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             if let (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) =
-                (&self.current_nodes[i].kind, &self.current_nodes[i].value)
+                (self.current_nodes[i].kind.as_ref(), &self.current_nodes[i].value)
             {
                 let v = v.clone();
                 let simplest = ic.simplest();
@@ -113,7 +113,7 @@ impl<'a> Shrinker<'a> {
     pub(super) fn binary_search_integer_towards_zero(&mut self) {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            let ic = match &self.current_nodes[i].kind {
+            let ic = match self.current_nodes[i].kind.as_ref() {
                 ChoiceKind::Integer(ic) => ic.clone(),
                 _ => {
                     i += 1;
@@ -303,7 +303,7 @@ impl<'a> Shrinker<'a> {
             .iter()
             .enumerate()
             .filter_map(|(i, n)| {
-                if matches!(n.kind, ChoiceKind::Integer(_)) {
+                if matches!(n.kind.as_ref(), ChoiceKind::Integer(_)) {
                     Some(i)
                 } else {
                     None
@@ -322,7 +322,7 @@ impl<'a> Shrinker<'a> {
                     .iter()
                     .enumerate()
                     .filter_map(|(i, node)| {
-                        if matches!(node.kind, ChoiceKind::Integer(_)) {
+                        if matches!(node.kind.as_ref(), ChoiceKind::Integer(_)) {
                             Some(i)
                         } else {
                             None
@@ -346,7 +346,7 @@ impl<'a> Shrinker<'a> {
 
                 let prev_i = self.int_value_bigint(i);
                 let prev_j = self.int_value_bigint(j);
-                let simplest_i = match &self.current_nodes[i].kind {
+                let simplest_i = match self.current_nodes[i].kind.as_ref() {
                     ChoiceKind::Integer(ic) => ic.simplest(),
                     _ => unreachable!(
                         "kind/value invariant violated: outer match guaranteed this variant"
@@ -391,7 +391,7 @@ impl<'a> Shrinker<'a> {
             .iter()
             .enumerate()
             .filter_map(|(i, n)| {
-                if matches!(n.kind, ChoiceKind::Integer(_)) {
+                if matches!(n.kind.as_ref(), ChoiceKind::Integer(_)) {
                     Some(i)
                 } else {
                     None
@@ -412,7 +412,7 @@ impl<'a> Shrinker<'a> {
                     break;
                 }
 
-                let (ic_i, v_i) = match (&self.current_nodes[i].kind, &self.current_nodes[i].value)
+                let (ic_i, v_i) = match (self.current_nodes[i].kind.as_ref(), &self.current_nodes[i].value)
                 {
                     (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.clone()),
                     _ => unreachable!(
@@ -489,7 +489,7 @@ impl<'a> Shrinker<'a> {
         let mut groups: HashMap<(std::mem::Discriminant<ChoiceKind>, ChoiceValue), Vec<usize>> =
             HashMap::new();
         for (i, node) in self.current_nodes.iter().enumerate() {
-            let key = (std::mem::discriminant(&node.kind), node.value.clone());
+            let key = (std::mem::discriminant(node.kind.as_ref()), node.value.clone());
             groups.entry(key).or_default().push(i);
         }
         let mut ordered_groups: Vec<_> = groups.into_iter().collect();
@@ -509,7 +509,7 @@ impl<'a> Shrinker<'a> {
                 .filter(|&i| {
                     i < self.current_nodes.len()
                         && self.current_nodes[i].value == *group_value
-                        && std::mem::discriminant(&self.current_nodes[i].kind) == *kind_disc
+                        && std::mem::discriminant(self.current_nodes[i].kind.as_ref()) == *kind_disc
                 })
                 .collect();
             if valid.len() < 2 {
@@ -530,7 +530,7 @@ impl<'a> Shrinker<'a> {
         // pass.
         let mut groups: HashMap<BigInt, Vec<usize>> = HashMap::new();
         for (i, node) in self.current_nodes.iter().enumerate() {
-            if let (ChoiceKind::Integer(_), ChoiceValue::Integer(v)) = (&node.kind, &node.value) {
+            if let (ChoiceKind::Integer(_), ChoiceValue::Integer(v)) = (node.kind.as_ref(), &node.value) {
                 groups.entry(v.clone()).or_default().push(i);
             }
         }
@@ -558,7 +558,7 @@ impl<'a> Shrinker<'a> {
                 continue;
             }
 
-            let ic = match &self.current_nodes[valid[0]].kind {
+            let ic = match self.current_nodes[valid[0]].kind.as_ref() {
                 ChoiceKind::Integer(ic) => ic.clone(),
                 _ => unreachable!(
                     "kind/value invariant violated: outer match guaranteed this variant"
@@ -677,7 +677,7 @@ impl<'a> Shrinker<'a> {
             // `changed` came from `update_change_tracking`, which only
             // populates indices < current_nodes.len().
             debug_assert!(i < self.current_nodes.len());
-            let (target, v) = match (&self.current_nodes[i].kind, &self.current_nodes[i].value) {
+            let (target, v) = match (self.current_nodes[i].kind.as_ref(), &self.current_nodes[i].value) {
                 (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
                     (ic.clamped_shrink_towards(), v.clone())
                 }
