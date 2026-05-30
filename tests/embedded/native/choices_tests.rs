@@ -783,6 +783,50 @@ fn nodes_sort_key_shortlex_orders_by_length_then_element() {
     assert!(sort_key(&empty) < sort_key(&a));
 }
 
+// ── ChoiceKind::unit dispatch ────────────────────────────────────────────────
+
+#[test]
+fn choice_kind_unit_dispatches_to_each_sub_kind() {
+    // `ChoiceKind::unit()` (used by data-tree simulation to predict punned
+    // replays) must forward to the matching sub-kind's `unit()` for every
+    // variant.
+    let ic = IntegerChoice {
+        min_value: 0,
+        max_value: 10,
+        shrink_towards: 0,
+    };
+    assert_eq!(
+        ChoiceKind::Integer(ic.clone()).unit(),
+        ChoiceValue::Integer(ic.unit())
+    );
+
+    assert_eq!(
+        ChoiceKind::Boolean(BooleanChoice).unit(),
+        ChoiceValue::Boolean(BooleanChoice.unit())
+    );
+
+    let fch = fc(0.0, 10.0, false, false);
+    assert_eq!(
+        ChoiceKind::Float(fch.clone()).unit(),
+        ChoiceValue::Float(fch.unit())
+    );
+
+    let bc = BytesChoice {
+        min_size: 0,
+        max_size: 4,
+    };
+    assert_eq!(
+        ChoiceKind::Bytes(bc.clone()).unit(),
+        ChoiceValue::Bytes(bc.unit())
+    );
+
+    let sc = string_choice(vec![(b'a' as u32, b'z' as u32)], 0, 4);
+    assert_eq!(
+        ChoiceKind::String(sc.clone()).unit(),
+        ChoiceValue::String(sc.unit())
+    );
+}
+
 // ── EngineError Display ──────────────────────────────────────────────────────
 
 #[test]

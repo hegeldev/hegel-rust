@@ -44,6 +44,12 @@ impl From<&ChoiceValue> for ChoiceValueKey {
 #[derive(Default)]
 pub(crate) struct DataTreeNode {
     kind: Option<Arc<ChoiceKind>>,
+    /// Whether the draw made *from* this node was forced (set alongside
+    /// `kind` on first visit). Forcing is deterministic given the prefix, so
+    /// a forced position has exactly one child — the forced value — and a
+    /// replay's prefix value at that position is ignored. [`simulate`] needs
+    /// this to predict realised values correctly.
+    forced: bool,
     children: HashMap<ChoiceValueKey, Box<DataTreeNode>>,
     /// Terminal status if the test case ended at this node. Only set
     /// when the recording run concluded with `Status >= Invalid`.
@@ -131,6 +137,7 @@ pub(crate) fn record_tree(
             }
             None => {
                 node.kind = Some(first.kind.clone());
+                node.forced = first.was_forced;
             }
             _ => {}
         }
@@ -231,6 +238,71 @@ pub(crate) fn generate_novel_prefix(
         }
     }
     prefix
+}
+
+/// Predict the outcome of replaying `choices` through
+/// [`super::core::NativeTestCase::for_choices`] *without* running the test
+/// body, by walking them through the recorded tree. Port of the subset of
+/// Hypothesis's `DataTree.simulate_test_function` the runner needs.
+///
+/// The walk reproduces how `resolve_choice` turns a replayed prefix value
+/// into the *realised* value the tree is keyed on, which is **not** always
+/// the prefix value itself:
+///
+/// * At a **forced** position the prefix value is ignored and the draw
+///   always yields the single recorded (forced) value; the prefix cursor
+///   still advances past the skipped slot.
+/// * At an unforced position whose prefix value fails the requested kind's
+///   validation, the draw puns to `kind.unit()` (there is no original-kind
+///   information for a bare `for_choices` replay, so the `simplest()` branch
+///   never applies).
+///
+/// Returns `Some(status)` when the walk reaches a recorded conclusion
+/// (either because a previous run terminated exactly here, or because it
+/// terminated at a prefix of `choices` whose trailing values are never
+/// read). Returns `None` — Hypothesis's `PreviouslyUnseenBehaviour` — when
+/// the realised path diverges from anything seen before, or when `choices`
+/// runs out while the tree still expects another draw (a real run would
+/// overrun, which `for_choices` never records as a conclusion); in both
+/// cases the caller must actually execute to learn the outcome.
+///
+/// Only `Status >= Invalid` is ever recorded as a conclusion (see
+/// [`record_tree`]), so `EarlyStop` is never returned.
+pub(crate) fn simulate(tree_root: &DataTreeNode, choices: &[ChoiceValue]) -> Option<Status> {
+    let mut current = tree_root;
+    // `i` tracks the prefix cursor, which equals `nodes.len()` in the real
+    // run: every draw — forced or not — advances it by one.
+    let mut i = 0usize;
+    loop {
+        // A run terminated here drawing fewer choices than we walked past;
+        // its outcome is fixed regardless of any later values.
+        if let Some(status) = current.conclusion {
+            return Some(status);
+        }
+        // No draw was ever made from this node (and it didn't conclude), so
+        // the path beyond it is unknown.
+        let kind = current.kind.as_ref()?;
+        // `for_choices` caps `max_size` at `choices.len()`, so the draw that
+        // would read position `choices.len()` overruns (EarlyStop) — and
+        // that is never recorded as a conclusion. We can't predict it.
+        if i >= choices.len() {
+            return None;
+        }
+        let next = if current.forced {
+            // Forced: ignore the prefix value, follow the single recorded
+            // (forced) child.
+            current.children.values().next()?
+        } else {
+            let realised = if kind.validate(&choices[i]) {
+                choices[i].clone()
+            } else {
+                kind.unit()
+            };
+            current.children.get(&ChoiceValueKey::from(&realised))?
+        };
+        i += 1;
+        current = next;
+    }
 }
 
 /// Concatenate `database_key + b"." + sub` to derive a sub-corpus key.

@@ -397,7 +397,7 @@ fn run_main(
                 // Interesting) the closure short-circuits below
                 // `SPAN_MUTATION_ATTEMPTS`.
                 let (mutation_result, mutation_attempts) =
-                    try_span_mutation(&run.nodes, &run.spans, &mut rng, &mut ctx);
+                    try_span_mutation(&run.nodes, &run.spans, &mut rng, &mut ctx, &mut tree_root);
                 calls += mutation_attempts as u64;
                 if let Some((mut_nodes, origin)) = mutation_result {
                     if first_bug_at.is_none() {
@@ -897,6 +897,61 @@ impl<'a> EngineCtx<'a> {
     pub(crate) fn run(&mut self, ntc: NativeTestCase) -> RunResult {
         self.execute(ntc, false)
     }
+
+    /// Hypothesis's `cached_test_function`, ported: replay `choices` only
+    /// when their outcome isn't already known. First the exact-input data
+    /// cache is consulted; failing that, `choices` are *simulated* against
+    /// the generation `tree_root` (read-only) — if that simulation reaches a
+    /// recorded conclusion without hitting a previously-unseen draw, the test
+    /// body is not run at all. Only a genuinely novel sequence (or a
+    /// known-`Interesting` one, whose nodes/origin the tree can't carry)
+    /// falls through to a real [`Self::execute`], whose result is memoised in
+    /// the data cache.
+    ///
+    /// The realised result is deliberately *not* recorded back into
+    /// `tree_root`. The tree drives generation's `generate_novel_prefix`
+    /// walk, whose RNG consumption depends on the tree's shape; folding the
+    /// mutation pass's paths into it would perturb that walk and so shift the
+    /// entire (seeded) generation trajectory — changing *which* inputs and
+    /// mutations are explored — for no gain to this cache, which only needs
+    /// to recognise paths generation already covered. Leaving the tree
+    /// generation-only keeps the search identical to the pre-cache behaviour
+    /// (where mutations never touched the tree) while still skipping the
+    /// redundant re-executions; the data cache catches exact mutation repeats
+    /// the tree can't.
+    ///
+    /// Returns the result plus whether the test body actually ran, so
+    /// callers charge their execution budget to real runs only. Span
+    /// mutation proposes many sequences whose paths are already covered by
+    /// generation (e.g. duplicating a span the test never reads past);
+    /// pre-cache the native backend ran the body for every one of them,
+    /// executing the test several times more often than Hypothesis.
+    fn cached_run(
+        &mut self,
+        choices: &[ChoiceValue],
+        tree_root: &mut crate::native::data_tree::DataTreeNode,
+    ) -> (RunResult, bool) {
+        if let Some(cached) = self.cache.get(choices) {
+            return (cached.clone(), false);
+        }
+        if let Some(status) = crate::native::data_tree::simulate(tree_root, choices) {
+            if status != Status::Interesting {
+                let result = RunResult {
+                    status,
+                    nodes: Vec::new(),
+                    spans: Vec::new(),
+                    origin: None,
+                    failure: None,
+                    target_observations: HashMap::new(),
+                };
+                return (result, false);
+            }
+        }
+        let ntc = NativeTestCase::for_choices(choices, None, None);
+        let run = self.execute(ntc, false);
+        self.cache.insert(choices.to_vec(), run.clone());
+        (run, true)
+    }
 }
 
 /// Try span mutation: find two spans with the same label and either duplicate
@@ -905,18 +960,25 @@ impl<'a> EngineCtx<'a> {
 ///
 /// Returns the mutated shrunk nodes plus the panic origin if the attempt
 /// produced an interesting result.
-/// Runs up to [`SPAN_MUTATION_ATTEMPTS`] span-mutation probes via `ctx`.
+/// Makes up to [`SPAN_MUTATION_ATTEMPTS`] span-mutation probes through
+/// [`EngineCtx::cached_run`], so a proposed sequence whose path is already
+/// covered by the `tree_root` (or sits in the data cache) costs no test-body
+/// execution — matching Hypothesis, which routes mutations through
+/// `cached_test_function`.
+///
 /// Returns the mutated counterexample (if one was found) plus the number of
-/// `ctx.execute` calls that actually ran — N3 fix: pre-N3 the caller
-/// unconditionally added `SPAN_MUTATION_ATTEMPTS` to its `calls` counter,
-/// even when no labels with ≥2 occurrences exist (multi is empty → 0 probes
-/// run) or when a probe fired Interesting on attempt 1 (only 1 probe ran).
-/// The accounting now reflects what actually happened.
+/// probes that *actually executed* the test body — both the
+/// `SPAN_MUTATION_ATTEMPTS` iteration cap and the cache/tree short-circuits
+/// keep this at or below the maximum, so the caller's `calls` counter only
+/// ever grows by real runs. (Pre-N3 the caller unconditionally added
+/// `SPAN_MUTATION_ATTEMPTS`, even when no labels with ≥2 occurrences exist —
+/// multi is empty → 0 probes run — or when a probe fired Interesting early.)
 fn try_span_mutation(
     nodes: &[ChoiceNode],
     spans: &[Span],
     rng: &mut SmallRng,
     ctx: &mut EngineCtx<'_>,
+    tree_root: &mut crate::native::data_tree::DataTreeNode,
 ) -> (Option<(Vec<ChoiceNode>, String)>, usize) {
     use std::collections::HashSet;
 
@@ -984,9 +1046,10 @@ fn try_span_mutation(
             out
         };
 
-        let ntc = NativeTestCase::for_choices(&attempt, None, None);
-        let run = ctx.execute(ntc, false);
-        attempts += 1;
+        let (run, executed) = ctx.cached_run(&attempt, tree_root);
+        if executed {
+            attempts += 1;
+        }
         if run.status == Status::Interesting {
             let origin = run.origin.unwrap_or_default();
             return (Some((run.nodes, origin)), attempts);

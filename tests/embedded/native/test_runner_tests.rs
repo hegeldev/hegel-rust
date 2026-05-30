@@ -63,3 +63,202 @@ fn too_slow_check_quiet_when_enough_valid_cases() {
 fn flaky_diagnostic_mentions_flaky() {
     assert!(flaky_diagnostic().contains("Flaky test detected"));
 }
+
+// ── cached_run / span-mutation caching ──
+//
+// Span mutation proposes choice sequences whose paths are frequently
+// already covered by generation. Pre-fix the native backend ran the test
+// body for every proposal (`ctx.execute`), executing the test ~6× as often
+// as Hypothesis, which routes mutations through `cached_test_function`.
+// These tests pin the cache/tree short-circuits that close that gap.
+
+use std::cell::Cell;
+use std::rc::Rc;
+
+use crate::native::core::ChoiceKind;
+use crate::native::core::choices::BooleanChoice;
+use crate::native::data_tree::{DataTreeNode, record_tree};
+use crate::run_lifecycle::run_test_case;
+
+/// Build an [`EngineCtx`] whose `run_case` runs `test_fn` and counts how many
+/// times the test body actually executed, then hand both to `body`.
+fn with_counting_ctx<T, B>(mut test_fn: T, body: B)
+where
+    T: FnMut(crate::TestCase),
+    B: FnOnce(&mut EngineCtx<'_>, &Rc<Cell<usize>>),
+{
+    crate::run_lifecycle::init_panic_hook();
+    let exec_count = Rc::new(Cell::new(0usize));
+    let counter = exec_count.clone();
+    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
+        counter.set(counter.get() + 1);
+        run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+    };
+    let mut ctx = EngineCtx::new(&mut run_case);
+    body(&mut ctx, &exec_count);
+}
+
+fn bool_node(value: bool) -> ChoiceNode {
+    ChoiceNode {
+        kind: ChoiceKind::Boolean(BooleanChoice),
+        value: ChoiceValue::Boolean(value),
+        was_forced: false,
+    }
+}
+
+#[test]
+fn cached_run_skips_execution_when_tree_knows_the_path() {
+    with_counting_ctx(
+        |tc| {
+            tc.draw(crate::generators::booleans());
+        },
+        |ctx, count| {
+            // The tree already records a one-boolean run that concluded
+            // Valid; replaying that path (plus an unread trailing choice,
+            // as a duplicated span would produce) must not run the body.
+            let mut tree = DataTreeNode::default();
+            record_tree(&mut tree, &[bool_node(false)], Status::Valid, &[]);
+
+            let (run, executed) = ctx.cached_run(
+                &[ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)],
+                &mut tree,
+            );
+            assert_eq!(run.status, Status::Valid);
+            assert!(!executed);
+            assert_eq!(count.get(), 0);
+        },
+    );
+}
+
+#[test]
+fn cached_run_executes_novel_then_serves_repeat_from_cache() {
+    with_counting_ctx(
+        |tc| {
+            tc.draw(crate::generators::booleans());
+        },
+        |ctx, count| {
+            let mut tree = DataTreeNode::default();
+            let choices = [ChoiceValue::Boolean(true)];
+
+            let (first, executed_first) = ctx.cached_run(&choices, &mut tree);
+            assert!(executed_first);
+            assert_eq!(count.get(), 1);
+
+            // A second identical replay is served without re-running.
+            let (second, executed_second) = ctx.cached_run(&choices, &mut tree);
+            assert!(!executed_second);
+            assert_eq!(count.get(), 1);
+            assert_eq!(first.status, second.status);
+        },
+    );
+}
+
+#[test]
+fn cached_run_reexecutes_known_interesting_path_to_recover_payload() {
+    // The tree can record that a path was Interesting but not the failure's
+    // nodes/origin, so a cached_run on a tree-known Interesting path falls
+    // through to a real execution to recover that payload.
+    with_counting_ctx(
+        |tc| {
+            if tc.draw(crate::generators::booleans()) {
+                panic!("boom");
+            }
+        },
+        |ctx, count| {
+            let mut tree = DataTreeNode::default();
+            record_tree(&mut tree, &[bool_node(true)], Status::Interesting, &[]);
+
+            let (run, executed) = ctx.cached_run(&[ChoiceValue::Boolean(true)], &mut tree);
+            assert_eq!(run.status, Status::Interesting);
+            assert!(executed);
+            assert_eq!(count.get(), 1);
+            assert!(run.origin.is_some());
+        },
+    );
+}
+
+#[test]
+fn span_mutation_does_not_re_execute_identical_proposals() {
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    with_counting_ctx(
+        |tc| {
+            tc.draw(crate::generators::booleans());
+        },
+        |ctx, count| {
+            // Two spans of the same label, one nested in the other. Every
+            // span-mutation attempt then proposes the *same* duplicated
+            // choice sequence, so only the first proposal runs the body and
+            // the rest are served from the cache.
+            let nodes = vec![
+                bool_node(false),
+                bool_node(true),
+                bool_node(false),
+                bool_node(true),
+            ];
+            let span = |start, end| Span {
+                start,
+                end,
+                label: "L".to_string(),
+                depth: 0,
+                parent: None,
+                discarded: false,
+            };
+            let spans = vec![span(0, 4), span(1, 3)];
+
+            let mut tree = DataTreeNode::default();
+            let mut rng = SmallRng::seed_from_u64(0);
+            let (result, attempts) = try_span_mutation(&nodes, &spans, &mut rng, ctx, &mut tree);
+
+            assert!(result.is_none());
+            assert_eq!(attempts, 1);
+            assert_eq!(count.get(), 1);
+        },
+    );
+}
+
+#[test]
+fn span_mutation_returns_interesting_proposal() {
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    with_counting_ctx(
+        // Panics on a `false` draw, so the all-`false` mutated proposal is
+        // Interesting.
+        |tc| {
+            if !tc.draw(crate::generators::booleans()) {
+                panic!("boom on false");
+            }
+        },
+        |ctx, count| {
+            // Nested same-label spans → the deterministic proposal duplicates
+            // the (false) prefix, and the body's single draw resolves to
+            // `false` → Interesting on the first probe.
+            let nodes = vec![
+                bool_node(false),
+                bool_node(false),
+                bool_node(false),
+                bool_node(false),
+            ];
+            let span = |start, end| Span {
+                start,
+                end,
+                label: "L".to_string(),
+                depth: 0,
+                parent: None,
+                discarded: false,
+            };
+            let spans = vec![span(0, 4), span(1, 3)];
+
+            let mut tree = DataTreeNode::default();
+            let mut rng = SmallRng::seed_from_u64(0);
+            let (result, attempts) = try_span_mutation(&nodes, &spans, &mut rng, ctx, &mut tree);
+
+            let (_nodes, origin) = result.expect("the first proposal should be Interesting");
+            assert!(origin.contains("Panic"));
+            assert_eq!(attempts, 1);
+            assert_eq!(count.get(), 1);
+        },
+    );
+}

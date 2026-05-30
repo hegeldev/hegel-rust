@@ -108,3 +108,121 @@ fn generate_novel_prefix_terminates_when_subtree_exhausted() {
     // Tree is now exhausted; novel prefix is empty (root.is_exhausted is true).
     assert!(prefix.is_empty());
 }
+
+#[test]
+fn simulate_unseen_on_empty_tree() {
+    // Nothing recorded: any choices are previously-unseen behaviour.
+    let root = DataTreeNode::default();
+    assert_eq!(simulate(&root, &[ChoiceValue::Boolean(false)]), None);
+    assert_eq!(simulate(&root, &[]), None);
+}
+
+#[test]
+fn simulate_returns_recorded_conclusion_for_exact_match() {
+    let mut root = DataTreeNode::default();
+    record_tree(&mut root, &[bool_node(false)], Status::Valid, &[]);
+    assert_eq!(
+        simulate(&root, &[ChoiceValue::Boolean(false)]),
+        Some(Status::Valid)
+    );
+}
+
+#[test]
+fn simulate_ignores_trailing_choices_past_a_conclusion() {
+    // The recorded run drew a single boolean and concluded; replaying a
+    // longer sequence that shares that prefix never reads past the first
+    // choice, so the outcome is the recorded one — this is the fixed-shape
+    // case span mutation hits when it duplicates a span the test ignores.
+    let mut root = DataTreeNode::default();
+    record_tree(&mut root, &[bool_node(false)], Status::Invalid, &[]);
+    assert_eq!(
+        simulate(
+            &root,
+            &[
+                ChoiceValue::Boolean(false),
+                ChoiceValue::Boolean(true),
+                ChoiceValue::Boolean(true),
+            ],
+        ),
+        Some(Status::Invalid)
+    );
+}
+
+#[test]
+fn simulate_unseen_when_path_diverges() {
+    // The recorded path went through `false`; `true` is an unrecorded
+    // child, so the outcome is unknown.
+    let mut root = DataTreeNode::default();
+    record_tree(
+        &mut root,
+        &[bool_node(false), bool_node(false)],
+        Status::Valid,
+        &[],
+    );
+    assert_eq!(simulate(&root, &[ChoiceValue::Boolean(true)]), None);
+}
+
+#[test]
+fn simulate_unseen_when_choices_run_out_mid_path() {
+    // The recorded run drew two booleans; supplying only the first leaves
+    // the tree still expecting a draw, so the real run would read past what
+    // we hold — report unseen rather than guessing.
+    let mut root = DataTreeNode::default();
+    record_tree(
+        &mut root,
+        &[bool_node(false), bool_node(true)],
+        Status::Valid,
+        &[],
+    );
+    assert_eq!(simulate(&root, &[ChoiceValue::Boolean(false)]), None);
+}
+
+#[test]
+fn simulate_returns_interesting_conclusion() {
+    let mut root = DataTreeNode::default();
+    record_tree(&mut root, &[int_node(0, 100, 7)], Status::Interesting, &[]);
+    assert_eq!(
+        simulate(&root, &[ChoiceValue::Integer(7)]),
+        Some(Status::Interesting)
+    );
+}
+
+#[test]
+fn simulate_follows_forced_value_ignoring_prefix() {
+    // A forced draw ignores the replayed prefix value and always reproduces
+    // the recorded (forced) value, so simulation must follow the single
+    // forced child even when the supplied choice differs.
+    let forced_true = ChoiceNode {
+        kind: ChoiceKind::Boolean(BooleanChoice),
+        value: ChoiceValue::Boolean(true),
+        was_forced: true,
+    };
+    let mut root = DataTreeNode::default();
+    record_tree(&mut root, &[forced_true], Status::Valid, &[]);
+
+    // Supplying `false` (≠ the forced `true`) still resolves to the forced
+    // path and its conclusion.
+    assert_eq!(
+        simulate(&root, &[ChoiceValue::Boolean(false)]),
+        Some(Status::Valid)
+    );
+}
+
+#[test]
+fn simulate_puns_out_of_range_prefix_to_unit() {
+    // For Integer{0,10}, simplest() == 0 and unit() == 1. A replayed prefix
+    // value outside the range fails validation and puns to unit() (a bare
+    // `for_choices` replay has no original-kind info, so the `simplest()`
+    // branch never applies), so a recorded path through the unit value is
+    // matched.
+    let mut root = DataTreeNode::default();
+    record_tree(&mut root, &[int_node(0, 10, 1)], Status::Valid, &[]);
+
+    // 999 is out of range → punned to unit() == 1 → matches the recorded path.
+    assert_eq!(
+        simulate(&root, &[ChoiceValue::Integer(999)]),
+        Some(Status::Valid)
+    );
+    // 7 is in range → used as-is → diverges from the recorded value (1).
+    assert_eq!(simulate(&root, &[ChoiceValue::Integer(7)]), None);
+}
