@@ -952,9 +952,11 @@ impl ChoiceKind {
 
     /// Every possible value of this kind, if the total count fits under `cap`.
     pub fn enumerate(&self, cap: u64) -> Option<Vec<ChoiceValue>> {
-        use crate::native::bignum::BigUint;
-        let max_c = self.max_children();
-        if max_c > BigUint::from(cap) {
+        // Use the saturating count: a large-`max_size` `Bytes`/`String` kind
+        // would otherwise build its astronomically-large `Σ alphabet^len`
+        // cardinality here just to discard it. We only need to know whether it
+        // exceeds `cap`.
+        if self.max_children_saturating(cap as u128 + 1) > cap as u128 {
             return None;
         }
         match self {

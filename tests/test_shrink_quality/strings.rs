@@ -174,3 +174,16 @@ fn test_shrink_large_max_size_string_does_not_blow_up() {
     });
     assert_eq!(s, "0".repeat(10));
 }
+
+#[test]
+fn test_large_max_size_string_with_easy_predicate_does_not_hang() {
+    // Regression: a frequently-satisfied predicate at a huge `max_size` drives
+    // the generation phase through many novel-prefix picks, each of which
+    // called `ChoiceKind::enumerate` -> the non-saturating `max_children()`,
+    // building `Σ alphabet^len` for `max_size = 1_000_000` on every case and
+    // hanging the run. It must now complete and shrink to the minimal value.
+    let s = minimal(gs::text().max_size(1_000_000), |x: &String| {
+        x.chars().count() >= 3
+    });
+    assert_eq!(s, "000");
+}
