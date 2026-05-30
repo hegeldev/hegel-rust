@@ -245,10 +245,9 @@ impl<'a> Shrinker<'a> {
 
         self.calls += 1;
         let (is_interesting, actual_nodes, actual_spans) = (self.test_fn)(ShrinkRun::Full(nodes));
-        // Bounded cache with FIFO eviction: drop the oldest entry once
-        // we exceed 4096.  Insertion-order is recorded explicitly in
-        // `consider_cache_order` — `HashSet::iter` makes no order
-        // guarantee, so the previous version was effectively random.
+        // Cache the choice sequences we've already found uninteresting so we
+        // don't re-run the test on them. The set is unbounded — see the field
+        // docstring for why that's acceptable in practice.
         if !is_interesting {
             self.consider_cache.insert(cache_key);
         }

@@ -606,6 +606,12 @@ impl<'a> Shrinker<'a> {
                     .collect();
                 sh.replace(&replacements)
             };
+            // `valid_capture[0]` is the lowest index in the duplicate group, so
+            // it is drawn before any other member and `group_replace` only ever
+            // forces it to an `Integer` value (never shortening the sequence
+            // below it or punning its kind). It therefore remains an in-range
+            // Integer node for the life of this descent — direct indexing here
+            // can't go out of bounds or hit the `unreachable!`.
             let live_base = |sh: &Shrinker<'_>| -> BigInt {
                 match &sh.current_nodes[valid_capture[0]].value {
                     ChoiceValue::Integer(v) => v.clone(),
@@ -674,7 +680,11 @@ impl<'a> Shrinker<'a> {
     /// Always called after a successful pass that may have changed
     /// integer values; clears the change-tracking set on exit.
     pub(crate) fn lower_common_node_offset(&mut self) {
-        let changed: Vec<usize> = self.changed_nodes().iter().copied().collect();
+        let mut changed: Vec<usize> = self.changed_nodes().iter().copied().collect();
+        // `changed_nodes` is a `HashSet`; sort for a deterministic, run-to-run
+        // stable iteration order (the per-index probes below should not depend
+        // on `HashSet`'s per-process ordering).
+        changed.sort_unstable();
         if changed.len() <= 1 {
             return;
         }
