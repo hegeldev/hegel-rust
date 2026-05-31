@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.19 - 2026-05-31
+
+This patch fixes two bugs in the native feature.
+
+1. test case limits were not properly being respected, leading to running up to 5x as many test cases as requested
+2. some checks that were supposed to prevent duplicate test cases were not properly being honoured, leading to duplicate tests
+
 ## 0.14.18 - 2026-05-30
 
 Internal refactoring of the native engine's integer representation to use a generic `IntegerChoice` type, and switch from `num-bigint` to `dashu-int` for big integer support.
