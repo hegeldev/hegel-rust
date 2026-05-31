@@ -995,9 +995,12 @@ fn try_span_mutation(
     valid_test_cases: &mut u64,
     max_examples: u64,
 ) -> (Option<(Vec<ChoiceNode>, String)>, usize) {
-    use std::collections::HashSet;
-
-    let mut by_label: HashMap<&str, HashSet<(usize, usize)>> = HashMap::new();
+    // Fast, non-DoS-resistant hashers: these maps are keyed by our own span
+    // labels / extents (never adversarial) and are rebuilt for every recorded
+    // result, so the default SipHash showed up prominently in generation
+    // profiles. FxHash is a clear win here.
+    let mut by_label: rustc_hash::FxHashMap<&str, rustc_hash::FxHashSet<(usize, usize)>> =
+        rustc_hash::FxHashMap::default();
     for span in spans.iter() {
         by_label
             .entry(span.label.as_str())
