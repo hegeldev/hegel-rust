@@ -41,6 +41,12 @@ pub(crate) const STOP_TEST_STRING: &str = "__HEGEL_STOP_TEST";
 /// successfully, record it as Valid".
 pub(crate) const LOOP_DONE_STRING: &str = "__HEGEL_LOOP_DONE";
 
+/// Panic-message prefix marking a misuse of `tc.target()` (a non-finite score
+/// or a label observed more than once in a single test case). The lifecycle
+/// recognises this prefix and aborts the run with the stripped message rather
+/// than treating it as a discovered counterexample to be shrunk.
+pub(crate) const TARGET_USAGE_ERROR_PREFIX: &str = "__HEGEL_TARGET_USAGE_ERROR:";
+
 /// Panic with the appropriate sentinel for the given data source error.
 fn panic_on_data_source_error(e: DataSourceError) -> ! {
     match e {

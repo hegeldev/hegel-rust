@@ -307,3 +307,54 @@ fn test_targeting_rejects_growing_lateral_move() {
     )
     .run();
 }
+
+// These assert native-engine behaviour (the server backend reports target
+// misuse differently), so they only run under `--features native`.
+#[cfg(feature = "native")]
+mod usage_errors {
+    use super::{Hegel, Settings};
+
+    fn run_and_capture_panic(body: impl FnMut(hegel::TestCase) + std::panic::UnwindSafe) -> String {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            Hegel::new(body)
+                .settings(Settings::new().test_cases(50).database(None))
+                .run();
+        }));
+        let payload = result.expect_err("expected the run to abort");
+        payload
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_default()
+    }
+
+    /// A non-finite target score is a usage error: the run aborts with a clear
+    /// message, rather than misreporting it as a discovered counterexample.
+    #[test]
+    fn target_non_finite_score_is_usage_error() {
+        let msg = run_and_capture_panic(|tc| tc.target(f64::NAN));
+        assert!(msg.contains("finite"), "{msg}");
+        assert!(
+            !msg.contains("Property test failed"),
+            "usage error should not be reported as a property failure: {msg}"
+        );
+
+        let msg = run_and_capture_panic(|tc| tc.target(f64::INFINITY));
+        assert!(msg.contains("finite"), "{msg}");
+        assert!(!msg.contains("Property test failed"), "{msg}");
+    }
+
+    /// Observing the same target label twice in one test case is a usage error.
+    #[test]
+    fn target_duplicate_label_is_usage_error() {
+        let msg = run_and_capture_panic(|tc| {
+            tc.target_labelled(1.0, "dup");
+            tc.target_labelled(2.0, "dup");
+        });
+        assert!(
+            msg.contains("at most once") || msg.contains("overwrite"),
+            "{msg}"
+        );
+        assert!(!msg.contains("Property test failed"), "{msg}");
+    }
+}
