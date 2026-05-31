@@ -13,7 +13,7 @@ use ciborium::Value;
 
 use crate::backend::{DataSource, DataSourceError, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
-use crate::native::core::{ChoiceNode, EngineError, ManyState, NativeTestCase, Span};
+use crate::native::core::{ChoiceNode, EngineError, ManyState, NativeTestCase, Span, Status};
 use crate::native::schema;
 use crate::test_case::invalid_argument;
 
@@ -110,6 +110,24 @@ impl NativeDataSource {
             .outcome
             .take()
             .expect("mark_complete must be called for every test case")
+    }
+
+    /// Read the engine's internal terminal status for the test case.
+    ///
+    /// `with_ntc` reports every `EngineError::StopTest` to the runner as a
+    /// `StopTest` (-> [`TestCaseResult::Overrun`]) — it has to, because that
+    /// error doubles as the collection layer's "stop drawing" control-flow
+    /// signal and cannot be reclassified there without breaking generation. So
+    /// a real choice-budget overrun (`Status::EarlyStop`) and a test case the
+    /// engine rejected as invalid (an over-deep span, or a unique collection
+    /// out of distinct values — both `Status::Invalid`) arrive at the runner
+    /// indistinguishable. The engine records the real reason here, letting the
+    /// runner recover the `EarlyStop` vs `Invalid` distinction it needs to
+    /// record the data tree correctly and to drive the size health checks.
+    /// (A failed `assume()` never reaches this path — it is its own `Invalid`
+    /// outcome, not a `StopTest`.)
+    pub fn take_status(handle: &NativeTestCaseHandle) -> Option<Status> {
+        handle.lock().unwrap_or_else(|e| e.into_inner()).ntc.status
     }
 
     /// Returns true if a previous request triggered a EngineError abort.

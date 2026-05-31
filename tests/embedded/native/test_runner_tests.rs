@@ -393,3 +393,94 @@ fn run_main_reports_too_slow_at_call_site() {
         result.failures
     );
 }
+
+// ── TestCasesTooLarge (too_large_check) ──
+
+#[test]
+fn too_large_check_reports_when_over_threshold_and_unsuppressed() {
+    let msg = too_large_check(
+        /* valid */ 0, /* overrun */ 20, /* suppressed */ false,
+    );
+    assert!(msg.is_some());
+    assert!(msg.unwrap().contains("TestCasesTooLarge"));
+}
+
+#[test]
+fn too_large_check_quiet_when_suppressed() {
+    assert!(too_large_check(0, 20, true).is_none());
+}
+
+#[test]
+fn too_large_check_quiet_when_under_threshold() {
+    assert!(too_large_check(0, 19, false).is_none());
+}
+
+#[test]
+fn too_large_check_quiet_when_enough_valid_cases() {
+    assert!(too_large_check(10, 100, false).is_none());
+}
+
+// ── LargeInitialTestCase (large_initial_check) ──
+
+#[test]
+fn large_initial_check_reports_on_overrun() {
+    // An overrun surfaces as Status::Invalid plus `overran = true`.
+    let msg = large_initial_check(true, Status::Invalid, 0, false);
+    assert!(msg.unwrap().contains("LargeInitialTestCase"));
+}
+
+#[test]
+fn large_initial_check_reports_on_large_valid_example() {
+    // node_count * 2 > BUFFER_SIZE.
+    let msg = large_initial_check(false, Status::Valid, BUFFER_SIZE, false);
+    assert!(msg.unwrap().contains("LargeInitialTestCase"));
+}
+
+#[test]
+fn large_initial_check_quiet_for_small_valid_example() {
+    assert!(large_initial_check(false, Status::Valid, 1, false).is_none());
+}
+
+#[test]
+fn large_initial_check_quiet_when_suppressed() {
+    assert!(large_initial_check(true, Status::Invalid, 0, true).is_none());
+}
+
+#[test]
+fn large_initial_check_quiet_for_interesting() {
+    // A bug found at the simplest example is reported as a failure, not a
+    // health-check failure.
+    assert!(large_initial_check(false, Status::Interesting, BUFFER_SIZE, false).is_none());
+}
+
+// ── overrun vs invalid distinction ──
+
+#[test]
+fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
+    // Regression: the engine raises `StopTest` (-> `TestCaseResult::Overrun`)
+    // for a genuine choice-budget overrun, which the runner must report as
+    // `Status::EarlyStop` — not `Status::Invalid`. `record_tree` only records a
+    // conclusion for `status >= Invalid`, so mislabelling an overrun `Invalid`
+    // would pin the path into the data tree as a permanent dead-end even though
+    // "ran out of data here" is not a stable outcome.
+    with_counting_ctx(
+        |tc| {
+            // Two draws against a one-choice budget: the second overruns.
+            tc.draw(crate::generators::booleans());
+            tc.draw(crate::generators::booleans());
+        },
+        |ctx, _count| {
+            let run = ctx.run(NativeTestCase::for_simplest(1));
+            assert_eq!(run.status, Status::EarlyStop);
+            assert!(run.overran);
+
+            // The overrun path is therefore not concluded in the tree: a later
+            // walk of the same prefix must re-execute (returns `None`) rather
+            // than serve a cached dead-end.
+            let mut tree = DataTreeNode::default();
+            record_tree(&mut tree, &run.nodes, run.status, &[]);
+            let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
+            assert_eq!(crate::native::data_tree::simulate(&tree, &choices), None);
+        },
+    );
+}

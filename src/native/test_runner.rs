@@ -44,6 +44,12 @@ pub struct RunResult {
     /// `tc.target()` observations recorded during the test case, keyed by
     /// label. Empty for tests that don't call `tc.target()`.
     pub target_observations: HashMap<String, f64>,
+    /// Whether the test case genuinely overran the choice buffer (drew more
+    /// data than the budget allows), i.e. ended in `Status::EarlyStop`. Distinct
+    /// from an invalid test case (`Status::Invalid` — a failed `assume()`, or a
+    /// unique collection out of distinct values); the `TestCasesTooLarge` /
+    /// `LargeInitialTestCase` health checks only count a true overrun.
+    pub overran: bool,
 }
 
 const RANDOM_GENERATION_BATCH: u64 = 10;
@@ -73,9 +79,15 @@ const INVALID_TARGET_CONFIDENCE: f64 = 0.99;
 /// so 30s is a generous fixed budget rather than a per-deadline scaling.
 const TOO_SLOW_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Health checks (TooSlow / FilterTooMuch) are evaluated only while the run
-/// has fewer than this many valid test cases on record.
+/// Health checks (TooSlow / FilterTooMuch / TestCasesTooLarge) are evaluated
+/// only while the run has fewer than this many valid examples on record.
 const HEALTH_CHECK_MAX_VALID: u64 = 10;
+
+/// Number of oversized (overrun) test cases — those that exhaust the choice
+/// buffer before completing — that trips TestCasesTooLarge while the run still
+/// has fewer than `HEALTH_CHECK_MAX_VALID` valid examples. Mirrors
+/// Hypothesis's `max_overrun_draws`.
+const MAX_OVERRUN_DRAWS: u64 = 20;
 
 /// Native backend's [`TestRunner`] implementation.
 pub struct NativeTestRunner;
@@ -280,6 +292,19 @@ fn run_main(
             persister.record(&origin, &run.nodes);
             update_interesting(&mut interesting, origin, run.nodes.clone());
         }
+        // The simplest example is Hypothesis's "zero" example: if even it
+        // overruns or already uses more than half the buffer, shrinking will
+        // be ineffective.
+        if let Some(msg) = large_initial_check(
+            run.overran,
+            run.status,
+            run.nodes.len(),
+            settings
+                .suppress_health_check
+                .contains(&HealthCheck::LargeInitialTestCase),
+        ) {
+            return health_check_failure(msg);
+        }
     }
 
     while settings.phases.contains(&Phase::Generate)
@@ -383,8 +408,17 @@ fn run_main(
                     ));
                 }
             }
-            if run.status == Status::EarlyStop {
+            if run.overran {
                 overrun_test_cases += 1;
+            }
+            if let Some(msg) = too_large_check(
+                valid_test_cases,
+                overrun_test_cases,
+                settings
+                    .suppress_health_check
+                    .contains(&HealthCheck::TestCasesTooLarge),
+            ) {
+                return health_check_failure(msg);
             }
 
             if let Some(msg) = too_slow_check(
@@ -710,6 +744,65 @@ pub(crate) fn too_slow_check(
     }
 }
 
+/// Returns the `FailedHealthCheck: TestCasesTooLarge` message once
+/// `MAX_OVERRUN_DRAWS` test cases have overrun the choice buffer while the run
+/// still has fewer than `HEALTH_CHECK_MAX_VALID` valid examples, unless the
+/// check is suppressed; otherwise `None`. Mirrors Hypothesis's `data_too_large`
+/// health check.
+pub(crate) fn too_large_check(
+    valid_test_cases: u64,
+    overrun_test_cases: u64,
+    suppressed: bool,
+) -> Option<String> {
+    if valid_test_cases < HEALTH_CHECK_MAX_VALID
+        && overrun_test_cases >= MAX_OVERRUN_DRAWS
+        && !suppressed
+    {
+        Some(format!(
+            "FailedHealthCheck: TestCasesTooLarge — generated inputs routinely \
+             exceeded the maximum size: {valid_test_cases} inputs were generated \
+             successfully, while {overrun_test_cases} inputs overran the buffer during \
+             generation. Testing with inputs this large is slow and shrinks \
+             poorly. Try reducing the amount of data generated, e.g. a smaller \
+             min_size on collections like gs::vecs(). If this is expected, \
+             suppress the check with \
+             suppress_health_check = [HealthCheck::TestCasesTooLarge]."
+        ))
+    } else {
+        None
+    }
+}
+
+/// Returns the `FailedHealthCheck: LargeInitialTestCase` message when the
+/// smallest natural example either overran the buffer or, while valid, used
+/// more than half of it, unless the check is suppressed; otherwise `None`.
+/// Mirrors Hypothesis's `large_base_example` health check.
+pub(crate) fn large_initial_check(
+    overran: bool,
+    status: Status,
+    node_count: usize,
+    suppressed: bool,
+) -> Option<String> {
+    if suppressed {
+        return None;
+    }
+    let too_large =
+        overran || (status == Status::Valid && node_count.saturating_mul(2) > BUFFER_SIZE);
+    if too_large {
+        Some(
+            "FailedHealthCheck: LargeInitialTestCase — the smallest natural input \
+             for this test is very large, which makes it hard to generate and \
+             shrink good inputs. Consider reducing the amount of data generated, \
+             or introducing small alternatives (e.g. `gs::one_of` with an empty \
+             option). If this is expected, suppress the check with \
+             suppress_health_check = [HealthCheck::LargeInitialTestCase]."
+                .to_string(),
+        )
+    } else {
+        None
+    }
+}
+
 /// Diagnostic for a flaky test — one whose outcome changed when re-run with
 /// the same generated data. Returned as a message (rather than panicked) so
 /// the caller can fold it into a failing [`TestRunResult`].
@@ -914,12 +1007,33 @@ impl<'a> EngineCtx<'a> {
         let target_observations = NativeDataSource::take_target_observations(&handle);
         let tc_result = NativeDataSource::take_outcome(&handle);
 
+        // The runner only sees the lossy `TestCaseResult::Overrun` for *any*
+        // engine `StopTest` (a draw can't report more than "the backend
+        // stopped"), but the engine itself recorded *why* it stopped: a genuine
+        // choice-budget overrun leaves `Status::EarlyStop`, whereas a test case
+        // it rejected as invalid (a unique collection out of distinct values, an
+        // over-deep span) leaves `Status::Invalid`. Recover that distinction
+        // here, at the outcome boundary, rather than upstream where `StopTest`
+        // is mapped — because `EngineError::StopTest` doubles as the collection
+        // layer's "stop drawing" control-flow signal, so reclassifying it there
+        // would break generation, not merely relabel the outcome.
+        //
+        // The overrun case must become `EarlyStop`, not `Invalid`: `record_tree`
+        // only records a conclusion for `status >= Invalid`, so an overrun
+        // mislabelled `Invalid` would be pinned into the data tree as a
+        // permanent dead-end — yet "ran out of data here" is not a stable
+        // outcome (other data continues the path), so it must go unrecorded.
+        let internal_status = NativeDataSource::take_status(&handle);
         let (status, failure) = match tc_result {
             TestCaseResult::Valid => (Status::Valid, None),
             TestCaseResult::Invalid => (Status::Invalid, None),
-            TestCaseResult::Overrun => (Status::EarlyStop, None),
+            TestCaseResult::Overrun => match internal_status {
+                Some(Status::EarlyStop) => (Status::EarlyStop, None),
+                _ => (Status::Invalid, None),
+            },
             TestCaseResult::Interesting(f) => (Status::Interesting, Some(f)),
         };
+        let overran = status == Status::EarlyStop;
         let origin = failure.as_ref().map(|f| f.origin.clone());
 
         RunResult {
@@ -929,6 +1043,7 @@ impl<'a> EngineCtx<'a> {
             origin,
             failure,
             target_observations,
+            overran,
         }
     }
 
@@ -1036,6 +1151,7 @@ impl<'a> EngineCtx<'a> {
                     origin: None,
                     failure: None,
                     target_observations: HashMap::new(),
+                    overran: false,
                 };
                 return (result, false);
             }
