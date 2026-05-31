@@ -57,6 +57,12 @@ fn panic_on_data_source_error(e: DataSourceError) -> ! {
 
 pub(crate) struct TestCaseGlobalData {
     mode: Mode,
+    /// Whether drawn-value records and notes are surfaced for this test case
+    /// (true on the final replay of a failure, or when verbose output is on).
+    /// When false `on_draw` is a no-op, so the draw-recording bookkeeping in
+    /// [`TestCase::record_named_draw`] (display-name allocation + `Debug`
+    /// rendering of the value) can be skipped entirely.
+    emit: bool,
     /// Fine-grained lock over the state shared between clones of a
     /// `TestCase`. Acquired briefly around each individual backend call
     /// and around each mutation of the draw-tracking bookkeeping, not
@@ -258,6 +264,7 @@ impl TestCase {
         TestCase {
             global: Arc::new(TestCaseGlobalData {
                 mode,
+                emit: should_emit,
                 shared: Mutex::new(SharedState {
                     data_source,
                     draw_state: DrawState {
@@ -543,6 +550,15 @@ impl TestCase {
     }
 
     fn record_named_draw<T: std::fmt::Debug>(&self, value: &T, name: &str, repeatable: bool) {
+        // The drawn-value record is only ever surfaced through `on_draw`, which
+        // is a no-op unless this is the final replay or verbose output is on.
+        // On ordinary generation/shrinking runs we therefore skip the
+        // display-name allocation and the (often expensive, e.g. Unicode) Debug
+        // render entirely. The usage-error checks below still run every test
+        // case so that misuse fails deterministically, not only on a failure's
+        // final replay.
+        let emit = self.global.emit;
+
         let display_name = self.with_shared(|shared| {
             let draw_state = &mut shared.draw_state;
 
@@ -555,19 +571,28 @@ impl TestCase {
                         name, prev, repeatable
                     );
                 }
-                _ => {
+                Some(_) => {}
+                // Only the first occurrence of a name needs to allocate the key.
+                None => {
                     draw_state
                         .named_draw_repeatable
                         .insert(name.to_string(), repeatable);
                 }
             }
 
-            let count = draw_state
-                .named_draw_counts
-                .entry(name.to_string())
-                .or_insert(0);
-            *count += 1;
-            let current_count = *count;
+            // Look the counter up by `&str` first so repeated draws of the same
+            // name (e.g. a `draw` inside a loop) don't allocate a fresh key on
+            // every call.
+            let current_count = match draw_state.named_draw_counts.get_mut(name) {
+                Some(count) => {
+                    *count += 1;
+                    *count
+                }
+                None => {
+                    draw_state.named_draw_counts.insert(name.to_string(), 1);
+                    1
+                }
+            };
 
             if !repeatable && current_count > 1 {
                 panic!(
@@ -577,7 +602,13 @@ impl TestCase {
                 );
             }
 
-            if repeatable {
+            // Display-name uniqueness bookkeeping is output-only; skip it (and
+            // its allocations) when nothing will be emitted.
+            if !emit {
+                return None;
+            }
+
+            let display = if repeatable {
                 let mut candidate = current_count;
                 loop {
                     let name = format!("{}_{}", name, candidate);
@@ -590,8 +621,13 @@ impl TestCase {
                 let name = name.to_string();
                 draw_state.allocated_display_names.insert(name.clone());
                 name
-            }
+            };
+            Some(display)
         });
+
+        let Some(display_name) = display_name else {
+            return;
+        };
 
         let local = self.local.borrow();
         let indent = local.indent;
@@ -765,3 +801,7 @@ pub mod labels {
     pub const SAMPLED_FROM: u64 = 14;
     pub const ENUM_VARIANT: u64 = 15;
 }
+
+#[cfg(test)]
+#[path = "../tests/embedded/test_case_tests.rs"]
+mod tests;
