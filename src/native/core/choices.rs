@@ -84,31 +84,34 @@ impl IntegerChoice {
         }
         let above = (&self.max_value - &s).magnitude();
         let below = (&s - &self.min_value).magnitude();
-        let one = BigUint::from(1u32);
-        let mut lo = one.clone();
-        let mut hi = std::cmp::max(&above, &below).clone();
-        while lo < hi {
-            let mid = &lo + (&(&hi - &lo) >> 1u32);
-            let total = std::cmp::min(&mid, &above) + std::cmp::min(&mid, &below);
-            if total >= index {
-                hi = mid;
-            } else {
-                lo = mid + &one;
-            }
-        }
-        let d = lo;
-        let total_at_d = std::cmp::min(&d, &above) + std::cmp::min(&d, &below);
-        if total_at_d < index {
+        // Values are enumerated by increasing distance `d` from `s`, emitting
+        // the up value `s + d` before the down value `s - d` at each distance,
+        // and dropping whichever side has run past its bound. The number of
+        // values within distance `d` is therefore
+        //     total(d) = min(d, above) + min(d, below),
+        // a piecewise-linear function of `d` with breakpoints at `a` and `b`
+        // (the smaller and larger of `above`/`below`):
+        //     d <= a       -> 2d        (both sides live)
+        //     a < d <= b   -> a + d     (small side exhausted)
+        //     d >  b       -> a + b     (both sides exhausted = max_index)
+        // Each regime inverts in closed form, so no search over `d` is needed.
+        if index > &above + &below {
             return None;
         }
-        let d_minus_one = &d - &one;
-        let before = std::cmp::min(&d_minus_one, &above) + std::cmp::min(&d_minus_one, &below);
-        let pos_in_d = &index - &before;
-        if pos_in_d == one && d <= above {
-            return Some(s + BigInt::from(d));
-        }
-        debug_assert!(d <= below);
-        Some(s - BigInt::from(d))
+        let two_a = std::cmp::min(&above, &below) << 1usize;
+        let one = BigUint::from(1u32);
+        let (d, up) = if index <= two_a {
+            // Both sides live: index 2d-1 is `s + d`, index 2d is `s - d`.
+            let d = (&index + &one) >> 1u32;
+            let up = !(&index % &BigUint::from(2u32)).is_zero();
+            (d, up)
+        } else {
+            // Only the larger side continues, one value per distance beyond `a`.
+            let d = &index - std::cmp::min(&above, &below);
+            (d, above > below)
+        };
+        let d = BigInt::from(d);
+        if up { Some(s + d) } else { Some(s - d) }
     }
 
     pub fn max_children(&self) -> BigUint {
