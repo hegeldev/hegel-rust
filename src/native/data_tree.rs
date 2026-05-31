@@ -8,8 +8,9 @@
 //! drawn, an optional terminal `Status`, and a cached exhaustion flag
 //! so the walker can short-circuit dead branches.
 
-use std::collections::HashMap;
 use std::sync::Arc;
+
+use rustc_hash::FxHashMap;
 
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
@@ -50,7 +51,7 @@ pub(crate) struct DataTreeNode {
     /// replay's prefix value at that position is ignored. [`simulate`] needs
     /// this to predict realised values correctly.
     forced: bool,
-    children: HashMap<ChoiceValueKey, Box<DataTreeNode>>,
+    children: FxHashMap<ChoiceValueKey, Box<DataTreeNode>>,
     /// Terminal status if the test case ended at this node. Only set
     /// when the recording run concluded with `Status >= Invalid`.
     conclusion: Option<Status>,
@@ -182,7 +183,7 @@ const ENUMERATION_CAP: u64 = 1024;
 /// exhausted too).
 fn pick_non_exhausted_value(
     kind: &ChoiceKind,
-    children: &HashMap<ChoiceValueKey, Box<DataTreeNode>>,
+    children: &FxHashMap<ChoiceValueKey, Box<DataTreeNode>>,
     rng: &mut SmallRng,
 ) -> Option<ChoiceValue> {
     for _ in 0..10 {
