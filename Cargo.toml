@@ -73,6 +73,14 @@ name = "biased_sample"
 harness = false
 required-features = ["__bench"]
 
+# End-to-end engine benchmarks (full generate + shrink runs). These only use
+# the public API, so they need `native` (the in-process backend) rather than
+# the internal `__bench` re-exports.
+[[bench]]
+name = "engine"
+harness = false
+required-features = ["native"]
+
 [features]
 default = []
 rand = ["dep:rand"]
