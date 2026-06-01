@@ -68,17 +68,10 @@ const FILTER_TOO_MUCH_THRESHOLD: u64 = 50;
 /// it before doing so. Hypothesis uses `r = 0.01`, `c = 0.99` to feed
 /// `_invalid_thresholds`; see
 /// <https://github.com/HypothesisWorks/hypothesis/issues/4623> for the
-/// derivation.
+/// derivation. With these, [`invalid_thresholds`] yields `(458, 100)`, so an
+/// always-reject test gives up after 459 cases.
 const INVALID_TARGET_RATE: f64 = 0.01;
 const INVALID_TARGET_CONFIDENCE: f64 = 0.99;
-
-/// `(base, per_valid)` terms of the generation-phase invalid budget, computed
-/// once from [`invalid_thresholds`]. The run keeps generating while
-/// `(invalid + overrun)` draws stay within `base + per_valid * valid`. With
-/// Hypothesis's `r = 0.01`, `c = 0.99` this is `(458, 100)`, so an always-reject
-/// test gives up after 459 cases.
-static INVALID_THRESHOLDS: std::sync::LazyLock<(u64, u64)> =
-    std::sync::LazyLock::new(|| invalid_thresholds(INVALID_TARGET_RATE, INVALID_TARGET_CONFIDENCE));
 
 /// Cumulative wall-clock threshold across the generation phase before
 /// TooSlow fires.
@@ -188,6 +181,10 @@ fn run_main(
     // many unique values from a small pool) is not mistaken for over-filtering.
     let mut invalid_calls: u64 = 0;
     let mut filtered_draws: u64 = 0;
+    // `(base, per_valid)` of the generation-phase invalid budget, computed once
+    // per run (the formula uses floating-point `ln`/`ceil`, which can't run in
+    // const context).
+    let invalid_budget = invalid_thresholds(INVALID_TARGET_RATE, INVALID_TARGET_CONFIDENCE);
     let mut total_test_time = std::time::Duration::ZERO;
     let mut replay_aligned = false;
 
@@ -264,7 +261,7 @@ fn run_main(
     // the number of components increases.
     if settings.phases.contains(&Phase::Generate)
         && !test_is_trivial
-        && within_invalid_budget(invalid_calls, valid_test_cases)
+        && within_invalid_budget(invalid_calls, valid_test_cases, invalid_budget)
         && interesting.is_empty()
     {
         let run = ctx.run(NativeTestCase::for_simplest(BUFFER_SIZE));
@@ -300,7 +297,7 @@ fn run_main(
     while settings.phases.contains(&Phase::Generate)
         && !test_is_trivial
         && valid_test_cases < max_examples
-        && within_invalid_budget(invalid_calls, valid_test_cases)
+        && within_invalid_budget(invalid_calls, valid_test_cases, invalid_budget)
         && !tree_root.is_exhausted
         && should_generate_more(
             interesting.is_empty(),
@@ -313,7 +310,7 @@ fn run_main(
         for _ in 0..RANDOM_GENERATION_BATCH {
             if test_is_trivial
                 || valid_test_cases >= max_examples
-                || !within_invalid_budget(invalid_calls, valid_test_cases)
+                || !within_invalid_budget(invalid_calls, valid_test_cases, invalid_budget)
                 || tree_root.is_exhausted
                 || !should_generate_more(
                     interesting.is_empty(),
@@ -770,11 +767,11 @@ fn invalid_thresholds(r: f64, c: f64) -> (u64, u64) {
 /// Hypothesis's invalid-rate stop condition for the generation phase
 /// (`engine.py`'s `should_generate_more`): the run keeps generating while
 /// `(invalid + overrun)` draws stay within `base + per_valid * valid`, with
-/// `(base, per_valid)` from [`invalid_thresholds`]. The native backend folds
-/// overruns into [`Status::Invalid`], so `invalid_calls` already counts both.
-/// Returns `true` while there is still budget to draw more.
-fn within_invalid_budget(invalid_calls: u64, valid_test_cases: u64) -> bool {
-    let (base, per_valid) = *INVALID_THRESHOLDS;
+/// `budget = (base, per_valid)` from [`invalid_thresholds`]. The native backend
+/// folds overruns into [`Status::Invalid`], so `invalid_calls` already counts
+/// both. Returns `true` while there is still budget to draw more.
+fn within_invalid_budget(invalid_calls: u64, valid_test_cases: u64, budget: (u64, u64)) -> bool {
+    let (base, per_valid) = budget;
     invalid_calls <= base + per_valid * valid_test_cases
 }
 
