@@ -4,7 +4,7 @@ use syn::{Attribute, FnArg, ItemFn};
 
 use crate::common::{
     SettingsAttrArgs, build_explicit_blocks, extract_explicit_test_cases, extract_ident_from_pat,
-    rewrite_draws_in_block,
+    extract_reproduce_failure, rewrite_draws_in_block,
 };
 
 // Vendored from tokio 1fc450aefba4b05cdff9b7825ca5e39cccb3780e (thanks!)
@@ -95,6 +95,11 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(err) => return err,
     };
 
+    let reproduce_blob = match extract_reproduce_failure(&mut func.attrs) {
+        Ok(blob) => blob,
+        Err(err) => return err,
+    };
+
     let body = {
         let mut body = (*func.block).clone();
         if let Some(test_case_name) = extract_ident_from_pat(param_pat) {
@@ -105,6 +110,17 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let test_name = func.sig.ident.to_string();
     let settings_expr = test_args.to_settings_expr();
+    // Append `.reproduce_failure(Some((<expr>).to_string()))` so the run
+    // replays only the encoded example. The blob expression flows straight
+    // from the attribute into generated code (`.to_string()` accepts a string
+    // literal, a `const`/`static` `&str`, or a `String`); decoding happens at
+    // runtime.
+    let settings_expr = match &reproduce_blob {
+        Some(blob) => {
+            quote! { (#settings_expr).reproduce_failure(Some((#blob).to_string())) }
+        }
+        None => settings_expr,
+    };
     let explicit_blocks = build_explicit_blocks(&explicit_cases, param_pat, &body);
 
     let new_body: TokenStream = quote! {

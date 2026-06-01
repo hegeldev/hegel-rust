@@ -70,6 +70,7 @@ enum CStatus {
 type FnSettingsNew = unsafe extern "C" fn() -> *mut u8;
 type FnSettingsFree = unsafe extern "C" fn(*mut u8);
 type FnSettingsTestCases = unsafe extern "C" fn(*mut u8, u64);
+type FnSettingsMode = unsafe extern "C" fn(*mut u8, c_int);
 type FnSettingsDatabase = unsafe extern "C" fn(*mut u8, *const c_char);
 type FnSettingsDatabaseKey = unsafe extern "C" fn(*mut u8, *const c_char);
 type FnSettingsSeed = unsafe extern "C" fn(*mut u8, u64, bool);
@@ -89,6 +90,8 @@ type FnRunResultFailureCount = unsafe extern "C" fn(*const u8) -> usize;
 type FnRunResultFailure = unsafe extern "C" fn(*const u8, usize) -> *const u8;
 type FnFailureOrigin = unsafe extern "C" fn(*const u8) -> *const c_char;
 type FnFailurePanicMessage = unsafe extern "C" fn(*const u8) -> *const c_char;
+type FnFailureReproduceBlob = unsafe extern "C" fn(*const u8) -> *const c_char;
+type FnSettingsReproduceFailure = unsafe extern "C" fn(*mut u8, *const c_char);
 type FnLastErrorMessage = unsafe extern "C" fn() -> *const c_char;
 
 // Bundle of the symbols we use, so the test bodies stay readable.
@@ -96,6 +99,7 @@ struct Api<'a> {
     settings_new: Symbol<'a, FnSettingsNew>,
     settings_free: Symbol<'a, FnSettingsFree>,
     settings_test_cases: Symbol<'a, FnSettingsTestCases>,
+    settings_mode: Symbol<'a, FnSettingsMode>,
     settings_database: Symbol<'a, FnSettingsDatabase>,
     settings_database_key: Symbol<'a, FnSettingsDatabaseKey>,
     settings_seed: Symbol<'a, FnSettingsSeed>,
@@ -114,6 +118,8 @@ struct Api<'a> {
     run_result_failure: Symbol<'a, FnRunResultFailure>,
     failure_origin: Symbol<'a, FnFailureOrigin>,
     failure_panic_message: Symbol<'a, FnFailurePanicMessage>,
+    failure_reproduce_blob: Symbol<'a, FnFailureReproduceBlob>,
+    settings_reproduce_failure: Symbol<'a, FnSettingsReproduceFailure>,
     last_error_message: Symbol<'a, FnLastErrorMessage>,
 }
 
@@ -123,6 +129,7 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             settings_new: lib.get(b"hegel_settings_new\0").unwrap(),
             settings_free: lib.get(b"hegel_settings_free\0").unwrap(),
             settings_test_cases: lib.get(b"hegel_settings_test_cases\0").unwrap(),
+            settings_mode: lib.get(b"hegel_settings_mode\0").unwrap(),
             settings_database: lib.get(b"hegel_settings_database\0").unwrap(),
             settings_database_key: lib.get(b"hegel_settings_database_key\0").unwrap(),
             settings_seed: lib.get(b"hegel_settings_seed\0").unwrap(),
@@ -141,6 +148,8 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             run_result_failure: lib.get(b"hegel_run_result_failure\0").unwrap(),
             failure_origin: lib.get(b"hegel_failure_origin\0").unwrap(),
             failure_panic_message: lib.get(b"hegel_failure_panic_message\0").unwrap(),
+            failure_reproduce_blob: lib.get(b"hegel_failure_reproduce_blob\0").unwrap(),
+            settings_reproduce_failure: lib.get(b"hegel_settings_reproduce_failure\0").unwrap(),
             last_error_message: lib.get(b"hegel_last_error_message\0").unwrap(),
         }
     }
@@ -390,6 +399,149 @@ fn libhegel_reports_shrunk_failure() {
 
         (a.run_free)(run);
         (a.settings_free)(s);
+    }
+}
+
+/// Drive the `n < 5` failing property to completion and return the
+/// reproduce blob of the first failure. Shared by the round-trip test below.
+unsafe fn drive_failing_property(a: &Api, run: *mut u8) {
+    let schema = integer_schema(0, 100);
+    let origin = CString::new("n >= 5 failed").unwrap();
+    loop {
+        let tc = unsafe { (a.next_test_case)(run) };
+        if tc.is_null() {
+            break;
+        }
+        let mut val_ptr: *const u8 = ptr::null();
+        let mut val_len: usize = 0;
+        let rc = unsafe {
+            (a.generate)(
+                tc,
+                schema.as_ptr(),
+                schema.len(),
+                &mut val_ptr,
+                &mut val_len,
+            )
+        };
+        if rc == -1 {
+            unsafe { (a.mark_complete)(tc, CStatus::Overrun, ptr::null()) };
+            continue;
+        }
+        assert_eq!(rc, 0, "unexpected generate rc={}", rc);
+        let v = decode(unsafe { std::slice::from_raw_parts(val_ptr, val_len) });
+        let Value::Integer(i) = v else {
+            panic!("expected int")
+        };
+        let n: i128 = i.into();
+        if n < 5 {
+            unsafe { (a.mark_complete)(tc, CStatus::Valid, ptr::null()) };
+        } else {
+            unsafe { (a.mark_complete)(tc, CStatus::Interesting, origin.as_ptr()) };
+        }
+    }
+}
+
+#[test]
+fn libhegel_reproduce_blob_round_trips() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    unsafe {
+        // First run: discover a failure and capture its reproduce blob.
+        let s = (a.settings_new)();
+        (a.settings_test_cases)(s, 200);
+        let empty = CString::new("").unwrap();
+        (a.settings_database)(s, empty.as_ptr());
+        (a.settings_derandomize)(s, true);
+        (a.settings_seed)(s, 0xc0ffee, true);
+
+        let run = (a.run_start)(s);
+        drive_failing_property(&a, run);
+
+        let result = (a.run_result)(run);
+        assert!(!(a.run_result_passed)(result), "expected a failing run");
+        let f = (a.run_result_failure)(result, 0);
+        assert!(!f.is_null());
+        let blob_ptr = (a.failure_reproduce_blob)(f);
+        assert!(
+            !blob_ptr.is_null(),
+            "expected a reproduce blob on the failure"
+        );
+        // Copy out of the run-owned buffer before freeing the run.
+        let blob = CStr::from_ptr(blob_ptr).to_owned();
+        (a.run_free)(run);
+        (a.settings_free)(s);
+
+        // Second run: replay only that blob. It must reproduce the failure
+        // and hand the same blob back.
+        let s2 = (a.settings_new)();
+        (a.settings_database)(s2, empty.as_ptr());
+        (a.settings_reproduce_failure)(s2, blob.as_ptr());
+
+        let run2 = (a.run_start)(s2);
+        drive_failing_property(&a, run2);
+
+        let result2 = (a.run_result)(run2);
+        assert!(
+            !(a.run_result_passed)(result2),
+            "expected the replayed blob to reproduce the failure"
+        );
+        assert_eq!(
+            (a.run_result_failure_count)(result2),
+            1,
+            "reproduce mode should surface exactly the one replayed failure"
+        );
+        let f2 = (a.run_result_failure)(result2, 0);
+        let origin_back = CStr::from_ptr((a.failure_origin)(f2)).to_string_lossy();
+        assert!(
+            origin_back.contains("n >= 5 failed"),
+            "unexpected origin: {origin_back}"
+        );
+        let blob2 = CStr::from_ptr((a.failure_reproduce_blob)(f2)).to_owned();
+        assert_eq!(blob, blob2, "round-tripped blob should match");
+
+        (a.run_free)(run2);
+        (a.settings_free)(s2);
+    }
+}
+
+#[test]
+fn libhegel_reproduce_blob_replays_in_single_test_case_mode() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    unsafe {
+        // Discover a failure and its blob via a normal run.
+        let s = (a.settings_new)();
+        (a.settings_test_cases)(s, 200);
+        let empty = CString::new("").unwrap();
+        (a.settings_database)(s, empty.as_ptr());
+        (a.settings_derandomize)(s, true);
+        (a.settings_seed)(s, 0xc0ffee, true);
+        let run = (a.run_start)(s);
+        drive_failing_property(&a, run);
+        let result = (a.run_result)(run);
+        let f = (a.run_result_failure)(result, 0);
+        let blob = CStr::from_ptr((a.failure_reproduce_blob)(f)).to_owned();
+        (a.run_free)(run);
+        (a.settings_free)(s);
+
+        // Replay the blob with HEGEL_MODE_SINGLE_TEST_CASE (= 1) set. The blob
+        // must take precedence over the mode and still reproduce the failure.
+        let s2 = (a.settings_new)();
+        (a.settings_database)(s2, empty.as_ptr());
+        (a.settings_mode)(s2, 1);
+        (a.settings_reproduce_failure)(s2, blob.as_ptr());
+        let run2 = (a.run_start)(s2);
+        drive_failing_property(&a, run2);
+        let result2 = (a.run_result)(run2);
+        assert!(
+            !(a.run_result_passed)(result2),
+            "blob should reproduce even in single-test-case mode"
+        );
+        assert_eq!((a.run_result_failure_count)(result2), 1);
+        (a.run_free)(run2);
+        (a.settings_free)(s2);
     }
 }
 

@@ -7,6 +7,7 @@
 // the user's test.
 
 pub mod bignum;
+pub mod blob;
 pub mod core;
 pub mod data_source;
 pub mod data_tree;

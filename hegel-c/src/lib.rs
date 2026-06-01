@@ -361,6 +361,10 @@ pub struct HegelFailure {
     panic_message: CString,
     diagnostic: CString,
     origin: CString,
+    /// Base64 failure blob encoding the minimal counterexample's choice
+    /// sequence, or `None` when the engine produced no blob (e.g. a
+    /// health-check failure). Read via `hegel_failure_reproduce_blob`.
+    reproduce_blob: Option<CString>,
 }
 
 impl From<Failure> for HegelFailure {
@@ -369,6 +373,11 @@ impl From<Failure> for HegelFailure {
             panic_message: cstring_lossy(&f.panic_message),
             diagnostic: cstring_lossy(&f.diagnostic),
             origin: cstring_lossy(&f.origin),
+            // The base64 alphabet has no NUL, so this is an
+            // invariant: error loudly if it's ever broken.
+            reproduce_blob: f
+                .reproduce_blob
+                .map(|b| CString::new(b).expect("reproduce blob is base64 and contains no NUL")),
         }
     }
 }
@@ -394,6 +403,7 @@ fn engine_panic_to_test_run_result(payload: Box<dyn std::any::Any + Send>) -> Te
             panic_message: msg.clone(),
             diagnostic: format!("Engine panic: {}\n", msg),
             origin: "Engine panic".to_string(),
+            reproduce_blob: None,
         }],
     }
 }
@@ -549,6 +559,36 @@ pub unsafe extern "C" fn hegel_settings_database_key(s: *mut HegelSettings, key:
     match unsafe { CStr::from_ptr(key) }.to_str() {
         Ok(k) => hs.database_key = Some(k.to_string()),
         Err(_) => set_last_error("hegel_settings_database_key: key is not valid UTF-8"),
+    }
+}
+
+/// Replay a single failing example from a base64 failure blob instead of
+/// generating fresh test cases.
+///
+/// A failure blob — obtained from `hegel_failure_reproduce_blob` on a prior
+/// run — encodes a counterexample's choice sequence. When set, the engine
+/// decodes it and runs exactly that one example, bypassing generation and
+/// shrinking. A blob that cannot be decoded, or that no longer reproduces a
+/// failure, surfaces as a failing run with an explanatory diagnostic rather
+/// than a pass.
+///
+/// - `blob = NULL` → clear it (the default; run normally).
+/// - Otherwise → replay the example encoded by `blob`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_reproduce_failure(
+    s: *mut HegelSettings,
+    blob: *const c_char,
+) {
+    let Some(inner) = (unsafe { settings_mut(s) }) else {
+        return;
+    };
+    if blob.is_null() {
+        *inner = inner.clone().reproduce_failure(None);
+        return;
+    }
+    match unsafe { CStr::from_ptr(blob) }.to_str() {
+        Ok(b) => *inner = inner.clone().reproduce_failure(Some(b.to_string())),
+        Err(_) => set_last_error("hegel_settings_reproduce_failure: blob is not valid UTF-8"),
     }
 }
 
@@ -1274,6 +1314,7 @@ pub unsafe extern "C" fn hegel_mark_complete(
                 panic_message: origin_str.clone(),
                 diagnostic: format!("Failure reported by C caller: {}\n", origin_str),
                 origin: origin_str,
+                reproduce_blob: None,
             })
         }
     };
@@ -1368,6 +1409,22 @@ pub unsafe extern "C" fn hegel_failure_diagnostic(f: *const HegelFailure) -> *co
 pub unsafe extern "C" fn hegel_failure_origin(f: *const HegelFailure) -> *const c_char {
     match unsafe { f.as_ref() } {
         Some(f) => f.origin.as_ptr(),
+        None => ptr::null(),
+    }
+}
+
+/// The failure's reproduce blob — a base64 string encoding the minimal
+/// counterexample's choice sequence, suitable for deterministic replay via
+/// `hegel_settings_reproduce_failure`. Returns NULL if `f` is NULL or the
+/// engine produced no blob for this failure. The pointer is borrowed from the
+/// parent `hegel_run_result_t` and stays valid until `hegel_run_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_failure_reproduce_blob(f: *const HegelFailure) -> *const c_char {
+    match unsafe { f.as_ref() } {
+        Some(f) => match &f.reproduce_blob {
+            Some(blob) => blob.as_ptr(),
+            None => ptr::null(),
+        },
         None => ptr::null(),
     }
 }

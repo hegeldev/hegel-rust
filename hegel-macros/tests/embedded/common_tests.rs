@@ -99,3 +99,49 @@ fn test_target_inside_nested_fn_is_left_alone() {
         "rewriting must not descend into nested fn items, got: {out}"
     );
 }
+
+fn rendered(blob: Option<syn::Expr>) -> String {
+    quote! { #blob }.to_string()
+}
+
+#[test]
+fn extract_reproduce_failure_pulls_out_a_string_literal_and_removes_the_attr() {
+    let mut attrs: Vec<syn::Attribute> =
+        vec![syn::parse_quote!(#[hegel::reproduce_failure("AAEC")])];
+    let blob = extract_reproduce_failure(&mut attrs).unwrap();
+    assert_eq!(rendered(blob), r#""AAEC""#);
+    assert!(attrs.is_empty(), "the attribute should be consumed");
+}
+
+#[test]
+fn extract_reproduce_failure_accepts_a_variable_or_const() {
+    // Not just literals — any expression (e.g. a const/variable) is allowed.
+    let mut attrs: Vec<syn::Attribute> =
+        vec![syn::parse_quote!(#[hegel::reproduce_failure(MY_BLOB)])];
+    let blob = extract_reproduce_failure(&mut attrs).unwrap();
+    assert_eq!(rendered(blob), "MY_BLOB");
+}
+
+#[test]
+fn extract_reproduce_failure_returns_none_when_absent() {
+    let mut attrs: Vec<syn::Attribute> = vec![syn::parse_quote!(#[inline])];
+    let blob = extract_reproduce_failure(&mut attrs).unwrap();
+    assert!(blob.is_none());
+    assert_eq!(attrs.len(), 1, "unrelated attributes are left in place");
+}
+
+#[test]
+fn extract_reproduce_failure_rejects_more_than_one() {
+    let mut attrs: Vec<syn::Attribute> = vec![
+        syn::parse_quote!(#[hegel::reproduce_failure("a")]),
+        syn::parse_quote!(#[hegel::reproduce_failure("b")]),
+    ];
+    assert!(extract_reproduce_failure(&mut attrs).is_err());
+}
+
+#[test]
+fn extract_reproduce_failure_rejects_empty_args() {
+    // No expression at all isn't a valid blob argument.
+    let mut attrs: Vec<syn::Attribute> = vec![syn::parse_quote!(#[hegel::reproduce_failure()])];
+    assert!(extract_reproduce_failure(&mut attrs).is_err());
+}

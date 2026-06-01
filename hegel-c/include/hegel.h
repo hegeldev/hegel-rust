@@ -391,6 +391,22 @@ void hegel_settings_database(hegel_settings_t *s, const char *database);
 void hegel_settings_database_key(hegel_settings_t *s, const char *key);
 
 /*
+ Replay a single failing example from a base64 failure blob instead of
+ generating fresh test cases.
+
+ A failure blob — obtained from `hegel_failure_reproduce_blob` on a prior
+ run — encodes a counterexample's choice sequence. When set, the engine
+ decodes it and runs exactly that one example, bypassing generation and
+ shrinking. A blob that cannot be decoded, or that no longer reproduces a
+ failure, surfaces as a failing run with an explanatory diagnostic rather
+ than a pass.
+
+ - `blob = NULL` → clear it (the default; run normally).
+ - Otherwise → replay the example encoded by `blob`.
+ */
+void hegel_settings_reproduce_failure(hegel_settings_t *s, const char *blob);
+
+/*
  Enable a specific set of phases via a `HEGEL_PHASE_*` bitmask.
  Phases not listed in the bitmask are disabled. The default is
  `HEGEL_PHASE_ALL`. Setting this to 0 produces a run that does
@@ -654,6 +670,15 @@ const char *hegel_failure_diagnostic(const hegel_failure_t *f);
  string.
  */
 const char *hegel_failure_origin(const hegel_failure_t *f);
+
+/*
+ The failure's reproduce blob — a base64 string encoding the minimal
+ counterexample's choice sequence, suitable for deterministic replay via
+ `hegel_settings_reproduce_failure`. Returns NULL if `f` is NULL or the
+ engine produced no blob for this failure. The pointer is borrowed from the
+ parent `hegel_run_result_t` and stays valid until `hegel_run_free`.
+ */
+const char *hegel_failure_reproduce_blob(const hegel_failure_t *f);
 
 /*
  Most recent error message from libhegel on the calling thread, or

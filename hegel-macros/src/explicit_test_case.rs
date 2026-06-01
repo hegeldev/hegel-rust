@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use syn::ItemFn;
 
 /// Check if an attribute's path is `hegel::test`.
-fn has_hegel_test_attr(func: &ItemFn) -> bool {
+pub(crate) fn has_hegel_test_attr(func: &ItemFn) -> bool {
     func.attrs.iter().any(|attr| {
         let segments: Vec<_> = attr.path().segments.iter().collect();
         segments.len() == 2 && segments[0].ident == "hegel" && segments[1].ident == "test"
