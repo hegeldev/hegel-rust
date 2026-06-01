@@ -58,4 +58,123 @@ mod health_checks {
         )
         .run();
     }
+
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Regression for the high-rejection-rate divergence Ethan reported: with
+    /// FilterTooMuch suppressed, an always-rejecting test used to run
+    /// `max_examples * 10` cases (1000 for the default 100), because the
+    /// native generation loop capped on `calls < max_examples * 10` regardless
+    /// of the rejection rate. Hypothesis instead stops once the invalid budget
+    /// `INVALID_THRESHOLD_BASE + INVALID_PER_VALID * valid` is exceeded — for a
+    /// run that never produces a valid example that is `458 + 0`, so the run
+    /// gives up after exactly 459 cases. This pins the ported behaviour.
+    #[cfg(feature = "native")]
+    #[test]
+    fn always_reject_with_suppression_stops_at_invalid_budget() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let c = Arc::clone(&count);
+        Hegel::new(move |tc: TestCase| {
+            c.fetch_add(1, Ordering::SeqCst);
+            // A wide domain so the choice tree never exhausts; every input is
+            // rejected, so no valid example is ever produced.
+            let _: i64 = tc.draw(gs::integers::<i64>());
+            tc.reject();
+        })
+        .settings(
+            Settings::new()
+                .test_cases(100)
+                .database(None)
+                .derandomize(true)
+                .suppress_health_check([HealthCheck::FilterTooMuch]),
+        )
+        .run();
+
+        let n = count.load(Ordering::SeqCst);
+        assert_eq!(
+            n, 459,
+            "always-reject with no valid examples should stop at the invalid \
+             budget (459 cases), not the old max_examples*10 cap; got {n}"
+        );
+    }
+
+    /// Regression for the FilterTooMuch threshold divergence: the native check
+    /// used to require 200 *consecutive* rejects with *zero* valid examples,
+    /// whereas Hypothesis trips at 50 *total* invalid draws while fewer than 10
+    /// valid examples have been seen. With an always-rejecting test the check
+    /// must now fire on the 50th invalid draw.
+    #[cfg(feature = "native")]
+    #[test]
+    fn always_reject_trips_filter_too_much_at_fifty() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let c = Arc::clone(&count);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Hegel::new(move |tc: TestCase| {
+                c.fetch_add(1, Ordering::SeqCst);
+                let _: i64 = tc.draw(gs::integers::<i64>());
+                tc.reject();
+            })
+            .settings(
+                Settings::new()
+                    .test_cases(100)
+                    .database(None)
+                    .derandomize(true),
+            )
+            .run();
+        }));
+
+        let msg = result
+            .expect_err("expected FilterTooMuch health-check panic")
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            msg.contains("FilterTooMuch"),
+            "expected FilterTooMuch panic, got {msg:?}"
+        );
+        let n = count.load(Ordering::SeqCst);
+        assert_eq!(
+            n, 50,
+            "FilterTooMuch should trip on the 50th invalid draw, got {n}"
+        );
+    }
+
+    /// Regression for the `valid == 0` half of the FilterTooMuch divergence:
+    /// the old native check could never fire once a single valid example had
+    /// been produced (it reset its consecutive-reject counter on every
+    /// non-invalid run and required `valid == 0`). Hypothesis keeps the check
+    /// live until 10 valid examples accumulate. A test with a low-but-nonzero
+    /// acceptance rate produces a handful of valid examples long before 50
+    /// invalid draws pile up, so the check must still trip — under the old
+    /// behaviour this run completed vacuously instead.
+    #[cfg(feature = "native")]
+    #[test]
+    fn low_acceptance_rate_trips_filter_too_much_despite_some_valid() {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Hegel::new(|tc: TestCase| {
+                let n: i64 = tc.draw(gs::integers::<i64>());
+                // ~6% acceptance: a few valid examples appear before 50
+                // invalid draws accumulate, but valid stays well below 10.
+                tc.assume(n.rem_euclid(16) == 0);
+            })
+            .settings(
+                Settings::new()
+                    .test_cases(100)
+                    .database(None)
+                    .derandomize(true),
+            )
+            .run();
+        }));
+
+        let msg = result
+            .expect_err("expected FilterTooMuch health-check panic")
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            msg.contains("FilterTooMuch"),
+            "expected FilterTooMuch panic even with some valid examples, got {msg:?}"
+        );
+    }
 }
