@@ -63,17 +63,22 @@ const SPAN_MUTATION_ATTEMPTS: usize = 5;
 /// (`engine.py`).
 const FILTER_TOO_MUCH_THRESHOLD: u64 = 50;
 
-/// Base term of the generation-phase invalid budget, ported from Hypothesis's
-/// `INVALID_THRESHOLD_BASE` (`engine.py`). Once `(invalid + overrun)` draws
-/// exceed `INVALID_THRESHOLD_BASE + INVALID_PER_VALID * valid_examples` the run
-/// gives up on generating more — it is then ~99% confident the true valid rate
-/// is below 1%. Replaces the old fixed `max_examples * 10` cap, which ran a
-/// high-rejection-rate generator far longer than Hypothesis would.
-const INVALID_THRESHOLD_BASE: u64 = 458;
+/// Target valid rate `r` below which the generation phase gives up, and the
+/// confidence `c` with which we want to conclude the true valid rate is below
+/// it before doing so. Hypothesis uses `r = 0.01`, `c = 0.99` to feed
+/// `_invalid_thresholds`; see
+/// <https://github.com/HypothesisWorks/hypothesis/issues/4623> for the
+/// derivation.
+const INVALID_TARGET_RATE: f64 = 0.01;
+const INVALID_TARGET_CONFIDENCE: f64 = 0.99;
 
-/// Per-valid-example slope of the invalid budget, ported from Hypothesis's
-/// `INVALID_PER_VALID` (`engine.py`).
-const INVALID_PER_VALID: u64 = 100;
+/// `(base, per_valid)` terms of the generation-phase invalid budget, computed
+/// once from [`invalid_thresholds`]. The run keeps generating while
+/// `(invalid + overrun)` draws stay within `base + per_valid * valid`. With
+/// Hypothesis's `r = 0.01`, `c = 0.99` this is `(458, 100)`, so an always-reject
+/// test gives up after 459 cases.
+static INVALID_THRESHOLDS: std::sync::LazyLock<(u64, u64)> =
+    std::sync::LazyLock::new(|| invalid_thresholds(INVALID_TARGET_RATE, INVALID_TARGET_CONFIDENCE));
 
 /// Cumulative wall-clock threshold across the generation phase before
 /// TooSlow fires.
@@ -365,10 +370,9 @@ fn run_main(
                 }
             }
 
-            // Both counters are running totals — they are *not* reset on a
-            // valid run — matching Hypothesis, which tracks cumulative
-            // `invalid_examples` / `overrun_examples` rather than a consecutive
-            // streak. `invalid_calls` (invalid+overrun) feeds the budget;
+            // Both counters are cumulative across the run, matching
+            // Hypothesis's `invalid_examples` / `overrun_examples`.
+            // `invalid_calls` (invalid+overrun) feeds the budget;
             // `filtered_draws` (genuine rejections only) feeds the health check.
             if run.status == Status::Invalid {
                 invalid_calls += 1;
@@ -748,14 +752,30 @@ fn health_check_failure(message: String) -> TestRunResult {
     }
 }
 
+/// Port of Hypothesis's `_invalid_thresholds` (`engine.py`): returns the
+/// `(base, per_valid)` terms of the generation-phase invalid budget, derived so
+/// that once `(invalid + overrun)` draws exceed `base + per_valid * valid` we
+/// are `c`-confident the true valid rate is below `r`.
+///
+/// ```text
+/// base    = ceil(log(1 - c) / log(1 - r)) - 1
+/// per_valid = ceil(1 / r)
+/// ```
+fn invalid_thresholds(r: f64, c: f64) -> (u64, u64) {
+    let base = ((1.0 - c).ln() / (1.0 - r).ln()).ceil() - 1.0;
+    let per_valid = (1.0 / r).ceil();
+    (base as u64, per_valid as u64)
+}
+
 /// Hypothesis's invalid-rate stop condition for the generation phase
-/// (`engine.py`'s `should_generate_more` / `_invalid_thresholds`): the run
-/// keeps generating while `(invalid + overrun)` draws stay within
-/// `INVALID_THRESHOLD_BASE + INVALID_PER_VALID * valid`. The native backend
-/// folds overruns into [`Status::Invalid`], so `invalid_calls` already counts
-/// both. Returns `true` while there is still budget to draw more.
+/// (`engine.py`'s `should_generate_more`): the run keeps generating while
+/// `(invalid + overrun)` draws stay within `base + per_valid * valid`, with
+/// `(base, per_valid)` from [`invalid_thresholds`]. The native backend folds
+/// overruns into [`Status::Invalid`], so `invalid_calls` already counts both.
+/// Returns `true` while there is still budget to draw more.
 fn within_invalid_budget(invalid_calls: u64, valid_test_cases: u64) -> bool {
-    invalid_calls <= INVALID_THRESHOLD_BASE + INVALID_PER_VALID * valid_test_cases
+    let (base, per_valid) = *INVALID_THRESHOLDS;
+    invalid_calls <= base + per_valid * valid_test_cases
 }
 
 fn should_generate_more(
