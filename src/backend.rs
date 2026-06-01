@@ -114,13 +114,10 @@ pub struct Failure {
     /// counterexample.
     pub origin: String,
     /// Portable reproducer for this failing example: a base64 "failure blob"
-    /// encoding the minimal counterexample's choice sequence (see
-    /// [`crate::native::blob`]). `Some` only on the native backend's final
-    /// replay, where the shrunk choices are available; `None` everywhere else
-    /// (per-test-case failures before the engine attaches it, health-check
-    /// failures, and the server backend, which has no choice sequence to
-    /// encode). Paste into `#[hegel::reproduce_failure("…")]` or feed to
-    /// [`crate::Settings::reproduce_failure`] to replay it.
+    /// encoding the minimal counterexample's choice sequence. `Some` only on
+    /// the native backend's final replay, where the shrunk choices are available;
+    /// `None` everywhere else. Paste into `#[hegel::reproduce_failure("…")]` or
+    /// feed to [`crate::Settings::reproduce_failure`] to replay it.
     pub reproduce_blob: Option<String>,
 }
 

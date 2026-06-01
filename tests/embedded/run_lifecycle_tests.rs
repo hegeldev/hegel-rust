@@ -205,7 +205,7 @@ fn reproducer_line_emits_attribute_when_enabled_and_present() {
 // A stub runner returns a pre-built failing `TestRunResult` (without touching
 // the `run_case` callback), so `drive`'s single- and multi-failure output
 // paths can be exercised — including the per-failure reproducer line — and
-// the distinct panic messages asserted. 
+// the distinct panic messages asserted.
 
 struct StubRunner {
     failures: Vec<crate::backend::Failure>,

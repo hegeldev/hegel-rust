@@ -6,6 +6,7 @@
 // span-mutation, novel-prefix generation) that runs in the same process as
 // the user's test.
 
+pub mod base64;
 pub mod bignum;
 pub mod blob;
 pub mod core;

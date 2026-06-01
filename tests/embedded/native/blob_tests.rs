@@ -1,8 +1,10 @@
 // Embedded tests for src/native/blob.rs — exercise the failure-blob
-// encode/decode round-trip (both raw and zlib-compressed forms), the
-// inline base64 codec, and every defensive `decode_failure` rejection.
+// encode/decode round-trip (both raw and zlib-compressed forms) and every
+// defensive `decode_failure` rejection. (The base64 codec itself is covered
+// by `base64_tests.rs`.)
 
 use super::*;
+use crate::native::base64::{base64_decode, base64_encode};
 use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceValue;
 
@@ -93,27 +95,4 @@ fn decode_rejects_raw_payload_that_is_not_valid_choices() {
     // Prefix says raw, but the payload is too short to be a choice sequence.
     let blob = base64_encode(&[PREFIX_RAW, 0xAB]);
     assert!(decode_failure(&blob).is_none());
-}
-
-#[test]
-fn base64_round_trips_all_byte_values_and_lengths() {
-    // Covers every alphabet range plus all three trailing-chunk paddings
-    // (len % 3 == 0, 1, 2).
-    for len in [0usize, 1, 2, 3, 255, 256] {
-        let data: Vec<u8> = (0..len).map(|i| (i % 256) as u8).collect();
-        let encoded = base64_encode(&data);
-        assert_eq!(base64_decode(&encoded).unwrap(), data, "len={len}");
-    }
-}
-
-#[test]
-fn base64_decode_rejects_padding_outside_the_final_quad() {
-    // Padding in a non-final quad is invalid.
-    assert!(base64_decode("AB==CDEF").is_none());
-}
-
-#[test]
-fn base64_decode_rejects_a_lone_third_position_pad() {
-    // "=X" — a padded third position forces a padded fourth.
-    assert!(base64_decode("AB=C").is_none());
 }

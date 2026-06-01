@@ -107,17 +107,7 @@ pub struct Settings {
     pub(crate) suppress_health_check: Vec<HealthCheck>,
     pub(crate) phases: Vec<Phase>,
     pub(crate) report_multiple_failures: bool,
-    /// When `Some`, a base64 failure blob (see [`crate::native::blob`]) to
-    /// replay instead of generating fresh test cases. The native engine
-    /// decodes it to a choice sequence and runs exactly that one example,
-    /// bypassing generation and shrinking. `None` (the default) runs a normal
-    /// generative test. Honoured only by the native backend.
     pub(crate) reproduce_failure: Option<String>,
-    /// When `true`, a failing run prints a copy-pasteable
-    /// `#[hegel::reproduce_failure("…")]` line for the counterexample.
-    /// Defaults to `false` — opt in when you want the reproducer in the
-    /// output. Has effect only on the native backend (the only one that
-    /// produces a blob).
     pub(crate) print_blob: bool,
 }
 
@@ -209,10 +199,9 @@ impl Settings {
     /// Replay a single failing example from a base64 failure blob instead of
     /// generating fresh test cases, or `None` (the default) to run normally.
     ///
-    /// A failure blob encodes the choice sequence of a counterexample (see
-    /// [`crate::native::blob`]); enable [`print_blob`](Self::print_blob) to
-    /// have a native failure print one. When set, the native engine decodes
-    /// it and runs exactly that one
+    /// A failure blob encodes the choice sequence of a counterexample.
+    /// Enable [`print_blob`](Self::print_blob) to have a native failure print one.
+    /// When set, the native engine decodes it and runs exactly that one
     /// example — bypassing generation and shrinking — so you can reproduce a
     /// CI failure locally and deterministically. This is the programmatic
     /// equivalent of the `#[hegel::reproduce_failure("…")]` attribute.
