@@ -86,7 +86,7 @@ impl TestRunner for NativeTestRunner {
         if settings.mode == Mode::SingleTestCase {
             return run_single(settings, run_case);
         }
-        run_main(settings, database_key, run_case)
+        run_main(settings, database_key, run_case, TOO_SLOW_THRESHOLD)
     }
 }
 
@@ -170,6 +170,9 @@ fn run_main(
     settings: &Settings,
     database_key: Option<&str>,
     run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+    // Injected (rather than read from the `TOO_SLOW_THRESHOLD` constant) so a
+    // test can trip the TooSlow check deterministically without a 30s sleep.
+    too_slow_threshold: std::time::Duration,
 ) -> TestRunResult {
     let mut rng = create_rng(settings, database_key);
     let max_examples = settings.test_cases;
@@ -287,7 +290,10 @@ fn run_main(
         && interesting.is_empty()
     {
         let run = ctx.run(NativeTestCase::for_simplest(BUFFER_SIZE));
-        crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[]);
+        // This trivial-probe is one of the first recordings, so it can't yet
+        // mismatch; a non-deterministic generator is caught by the main
+        // generation loop's `record_tree` below.
+        let _ = crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[]);
         calls += 1;
         if run.nodes.is_empty() && run.status >= Status::Invalid {
             test_is_trivial = true;
@@ -346,7 +352,11 @@ fn run_main(
 
             let tc_start = std::time::Instant::now();
             let run = ctx.run(ntc);
-            crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[]);
+            if let Some(msg) =
+                crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[])
+            {
+                return health_check_failure(msg);
+            }
             let elapsed = tc_start.elapsed();
             calls += 1;
 
@@ -397,7 +407,7 @@ fn run_main(
             if let Some(msg) = too_slow_check(
                 valid_test_cases,
                 total_test_time,
-                TOO_SLOW_THRESHOLD,
+                too_slow_threshold,
                 settings
                     .suppress_health_check
                     .contains(&HealthCheck::TooSlow),
@@ -417,7 +427,10 @@ fn run_main(
                 && target_schedule.should_fire(valid_test_cases)
             {
                 let mut on_run = |run: &RunResult| {
-                    crate::native::data_tree::record_tree(
+                    // A non-determinism mismatch here is dropped: it's a
+                    // generator property, so the next main-loop `record_tree`
+                    // (above) re-detects it and returns a clean failure.
+                    let _ = crate::native::data_tree::record_tree(
                         &mut tree_root,
                         &run.nodes,
                         run.status,
@@ -504,7 +517,11 @@ fn run_main(
                 total
             );
         }
-        let origins: Vec<String> = interesting.keys().cloned().collect();
+        let mut origins: Vec<String> = interesting.keys().cloned().collect();
+        // Deterministic shrink order: `interesting` is a `HashMap`, whose key
+        // order is randomised per process, and each origin's shrink shares the
+        // run-level call budget.
+        origins.sort();
         for origin in origins {
             let initial = interesting.get(&origin).cloned().unwrap_or_default();
 
@@ -1052,9 +1069,12 @@ fn try_span_mutation(
     valid_test_cases: &mut u64,
     max_examples: u64,
 ) -> (Option<(Vec<ChoiceNode>, String)>, usize) {
-    use std::collections::HashSet;
-
-    let mut by_label: HashMap<&str, HashSet<(usize, usize)>> = HashMap::new();
+    // Fast, non-DoS-resistant hashers: these maps are keyed by our own span
+    // labels / extents (never adversarial) and are rebuilt for every recorded
+    // result, so the default SipHash showed up prominently in generation
+    // profiles. FxHash is a clear win here.
+    let mut by_label: rustc_hash::FxHashMap<&str, rustc_hash::FxHashSet<(usize, usize)>> =
+        rustc_hash::FxHashMap::default();
     for span in spans.iter() {
         by_label
             .entry(span.label.as_str())

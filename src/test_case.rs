@@ -41,17 +41,84 @@ pub(crate) const STOP_TEST_STRING: &str = "__HEGEL_STOP_TEST";
 /// successfully, record it as Valid".
 pub(crate) const LOOP_DONE_STRING: &str = "__HEGEL_LOOP_DONE";
 
+/// Panic-message prefix marking an **invalid-argument (usage) error**: the
+/// caller configured the test in a way the framework can't honour — a
+/// generator bound with `max < min`, a float range that contains no values,
+/// an empty `sampled_from`/`one_of`, a non-finite `tc.target()` score, and so
+/// on. These are mistakes in how the test is *written*, not properties that
+/// failed on some input.
+///
+/// When such an error is detected *inside* a running test body (while a draw
+/// builds or interprets a schema, or in `tc.target()`), the panic would
+/// otherwise be classified by `run_lifecycle::run_test_case` as a discovered
+/// counterexample and shrunk. This prefix lets the lifecycle recognise the
+/// panic and abort the run with the stripped message instead. The marker is
+/// only attached inside a test context (see [`raise_invalid_argument`]), so it
+/// never escapes to the user.
+pub(crate) const INVALID_ARGUMENT_PREFIX: &str = "__HEGEL_INVALID_ARGUMENT:";
+
+/// Panic with an invalid-argument (usage) error carrying `message`.
+///
+/// The same usage error can be detected either while a test case is running
+/// (e.g. an inline `tc.draw(gs::sampled_from(&[]))`, or a bound check inside a
+/// schema build) or up front, before any run (constructing a generator and
+/// validating its arguments eagerly). To read cleanly in both cases:
+///
+/// - **Inside a test context**, the message is panicked with
+///   [`INVALID_ARGUMENT_PREFIX`] prepended so the lifecycle re-raises it as a
+///   clean usage error rather than shrinking it as a counterexample.
+/// - **Outside any test run**, there is no lifecycle to strip a marker, so the
+///   message is panicked directly.
+///
+/// Either way the user sees only the bare message; the marker never escapes.
+/// Prefer the [`invalid_argument!`] macro, which formats its arguments.
+#[track_caller]
+pub(crate) fn raise_invalid_argument(message: std::fmt::Arguments<'_>) -> ! {
+    if crate::control::currently_in_test_context() {
+        panic!("{INVALID_ARGUMENT_PREFIX}{message}");
+    } else {
+        panic!("{message}");
+    }
+}
+
+/// Raise an invalid-argument (usage) error, formatting like [`format!`].
+///
+/// Use this for every caller-configuration mistake a generator or
+/// `tc.target()` detects, in place of a bare `panic!`. See
+/// [`raise_invalid_argument`] for how the message is surfaced in and out of a
+/// test run.
+macro_rules! invalid_argument {
+    ($($arg:tt)*) => {
+        $crate::test_case::raise_invalid_argument(::std::format_args!($($arg)*))
+    };
+}
+pub(crate) use invalid_argument;
+
 /// Panic with the appropriate sentinel for the given data source error.
 fn panic_on_data_source_error(e: DataSourceError) -> ! {
     match e {
         DataSourceError::StopTest => panic!("{}", STOP_TEST_STRING),
         DataSourceError::Assume => panic!("{}", ASSUME_FAIL_STRING), // nocov
-        DataSourceError::ServerError(msg) => panic!("{}", msg),
-        // A semantically-invalid schema. In the main library this only fires
-        // if a generator builds a malformed schema (a bug), so we surface the
-        // diagnostic as a panic. libhegel never reaches here — it maps the
-        // error to `HEGEL_E_INVALID_ARG` instead.
-        DataSourceError::InvalidArgument(msg) => panic!("{}", msg),
+        // The server backend has no dedicated invalid-argument variant on the
+        // wire: it reports a misconfigured generator as a `ServerError` whose
+        // message names Hypothesis's `InvalidArgument` exception. Surface those
+        // as usage errors (a clean abort), exactly like the native backend's
+        // `InvalidArgument` below; a genuine server error still panics with its
+        // message and is reported as a failure.
+        DataSourceError::ServerError(msg) => {
+            if msg.contains("InvalidArgument") {
+                invalid_argument!("{}", msg)
+            } else {
+                panic!("{}", msg)
+            }
+        }
+        // A caller-supplied argument (typically a generator's schema) was
+        // semantically invalid: e.g. a range with no representable values, or
+        // a `sampled_from` over an empty set. This is a usage error, not a
+        // discovered counterexample, so raise it with the invalid-argument
+        // prefix and let the lifecycle abort the run cleanly. libhegel never
+        // reaches here — it maps the error to `HEGEL_E_INVALID_ARG` instead.
+        DataSourceError::InvalidArgument(msg) => invalid_argument!("{}", msg),
     }
 }
 
@@ -525,6 +592,12 @@ impl TestCase {
                     let msg = panic_message(&e);
                     if msg == ASSUME_FAIL_STRING {
                     } else if msg == STOP_TEST_STRING {
+                        resume_unwind(e);
+                    } else if msg.starts_with(INVALID_ARGUMENT_PREFIX) {
+                        // A usage error (bad generator argument, `tc.target()`
+                        // misuse) is terminal: re-raise it directly so the
+                        // lifecycle aborts the run, without the marker draw the
+                        // counterexample path below adds.
                         resume_unwind(e);
                     } else {
                         self.draw_silent(booleans());

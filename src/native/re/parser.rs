@@ -402,7 +402,6 @@ fn lookup_category(escape: &str) -> Option<CategoryCode> {
         "\\S" => Some(CategoryCode::In(ChCode::NotSpace)),
         "\\w" => Some(CategoryCode::In(ChCode::Word)),
         "\\W" => Some(CategoryCode::In(ChCode::NotWord)),
-        "\\z" => Some(CategoryCode::At(AtCode::EndString)),
         "\\Z" => Some(CategoryCode::At(AtCode::EndString)),
         _ => None,
     }
@@ -773,6 +772,9 @@ fn parse(
     nested: u32,
     first: bool,
 ) -> ParseResult<SubPattern> {
+    if nested > MAX_NESTING {
+        return Err(source.error("regex nesting too deep", 0));
+    }
     let mut subpattern = SubPattern::new();
 
     loop {

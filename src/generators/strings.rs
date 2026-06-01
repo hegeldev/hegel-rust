@@ -1,5 +1,6 @@
 use super::{BasicGenerator, Generator, TestCase};
 use crate::cbor_utils::{cbor_array, cbor_map, map_extend, map_insert};
+use crate::test_case::invalid_argument;
 use ciborium::Value;
 
 /// Categories that include surrogate codepoints. Rust strings cannot contain
@@ -45,11 +46,12 @@ impl CharacterFields {
         }
         if let Some(ref cats) = self.categories {
             for cat in cats {
-                assert!(
-                    !SURROGATE_CATEGORIES.contains(&cat.as_str()),
-                    "Category \"{cat}\" includes surrogate codepoints (Cs), \
-                     which Rust strings cannot represent."
-                );
+                if SURROGATE_CATEGORIES.contains(&cat.as_str()) {
+                    invalid_argument!(
+                        "Category \"{cat}\" includes surrogate codepoints (Cs), \
+                         which Rust strings cannot represent."
+                    );
+                }
             }
             let arr = Value::Array(cats.iter().map(|c| Value::from(c.as_str())).collect());
             map_insert(&mut schema, "categories", arr);
@@ -168,12 +170,13 @@ impl TextGenerator {
     }
 
     fn build_schema(&self) -> Value {
-        assert!(
-            !(self.alphabet_called && self.char_param_called),
-            "Cannot combine .alphabet() with character methods."
-        );
+        if self.alphabet_called && self.char_param_called {
+            invalid_argument!("Cannot combine .alphabet() with character methods.");
+        }
         if let Some(max) = self.max_size {
-            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
         }
 
         let mut schema = cbor_map! {
@@ -394,7 +397,9 @@ impl BinaryGenerator {
 
     fn build_schema(&self) -> Value {
         if let Some(max) = self.max_size {
-            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
         }
 
         let mut schema = cbor_map! {
@@ -478,10 +483,9 @@ impl DomainGenerator {
     }
 
     fn build_schema(&self) -> Value {
-        assert!(
-            self.max_length >= 4 && self.max_length <= 255,
-            "max_length must be between 4 and 255"
-        );
+        if !(self.max_length >= 4 && self.max_length <= 255) {
+            invalid_argument!("max_length must be between 4 and 255");
+        }
 
         cbor_map! {
             "type" => "domain",
