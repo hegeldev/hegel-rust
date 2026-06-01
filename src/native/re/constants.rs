@@ -8,6 +8,15 @@
 pub const MAXREPEAT: u32 = u32::MAX;
 pub const MAXGROUPS: u32 = 500;
 
+/// Maximum group/alternation nesting depth. CPython relies on the interpreter
+/// recursion limit to raise a (catchable) `RecursionError` on pathologically
+/// nested patterns; the native parser and generator recurse on the Rust stack,
+/// so we bound the depth explicitly and surface a clean parse error instead of
+/// overflowing the stack. `parse`/`parse_sub` add ~2 to the depth per nested
+/// group, so this allows well over 50 levels of real nesting while staying far
+/// below what would exhaust a small (e.g. 2 MiB) thread stack.
+pub const MAX_NESTING: u32 = 100;
+
 pub const SRE_FLAG_IGNORECASE: u32 = 2;
 pub const SRE_FLAG_LOCALE: u32 = 4;
 pub const SRE_FLAG_MULTILINE: u32 = 8;
