@@ -1,5 +1,6 @@
 use super::{BasicGenerator, BoxedGenerator, Generator, TestCase, integers, labels};
 use crate::cbor_utils::{cbor_array, cbor_map};
+use crate::test_case::invalid_argument;
 use ciborium::Value;
 use std::borrow::Cow;
 use std::marker::PhantomData;
@@ -60,10 +61,9 @@ where
     S: Into<Cow<'a, [T]>>,
 {
     let elements = elements.into();
-    assert!(
-        !elements.is_empty(),
-        "Collection passed to sampled_from cannot be empty"
-    );
+    if elements.is_empty() {
+        invalid_argument!("Collection passed to sampled_from cannot be empty");
+    }
     SampledFromGenerator { elements }
 }
 
@@ -117,10 +117,9 @@ where
     I: IntoIterator<Item = BoxedGenerator<'a, T>>,
 {
     let generators: Vec<BoxedGenerator<'a, T>> = generators.into_iter().collect();
-    assert!(
-        !generators.is_empty(),
-        "one_of requires at least one generator"
-    );
+    if generators.is_empty() {
+        invalid_argument!("one_of requires at least one generator");
+    }
     OneOfGenerator { generators }
 }
 

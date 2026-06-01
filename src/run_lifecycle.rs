@@ -24,7 +24,9 @@ use crate::antithesis::TestLocation;
 use crate::backend::{DataSource, Failure, TestCaseResult, TestRunner};
 use crate::control::{currently_in_test_context, with_test_context};
 use crate::runner::{Mode, Phase, Settings};
-use crate::test_case::{ASSUME_FAIL_STRING, LOOP_DONE_STRING, STOP_TEST_STRING, TestCase};
+use crate::test_case::{
+    ASSUME_FAIL_STRING, INVALID_ARGUMENT_PREFIX, LOOP_DONE_STRING, STOP_TEST_STRING, TestCase,
+};
 
 static PANIC_HOOK_INIT: Once = Once::new();
 
@@ -223,6 +225,12 @@ pub(crate) fn run_test_case(
                 TestCaseResult::Overrun
             } else if msg == LOOP_DONE_STRING {
                 TestCaseResult::Valid
+            } else if let Some(stripped) = msg.strip_prefix(INVALID_ARGUMENT_PREFIX) {
+                // An invalid-argument (usage) error is a mistake in how the
+                // test is configured, not a discovered counterexample: abort
+                // the run with the message instead of recording it as
+                // `Interesting` and shrinking it.
+                std::panic::resume_unwind(Box::new(stripped.to_string()));
             } else {
                 let (thread_name, thread_id, location, backtrace) =
                     take_panic_info().unwrap_or_else(unknown_panic_info);

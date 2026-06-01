@@ -1,5 +1,6 @@
 use super::{BasicGenerator, BoxedGenerator, Collection, Generator, TestCase, labels};
 use crate::cbor_utils::{cbor_map, map_insert};
+use crate::test_case::invalid_argument;
 use ciborium::Value;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -47,7 +48,9 @@ where
 {
     fn do_draw(&self, tc: &TestCase) -> Vec<T> {
         if let Some(max) = self.max_size {
-            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
         }
         if let Some(basic) = self.as_basic() {
             basic.do_draw(tc)
@@ -72,7 +75,9 @@ where
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, Vec<T>>> {
         if let Some(max) = self.max_size {
-            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
         }
         if self.unique_by.is_some() {
             return None;
@@ -155,7 +160,9 @@ where
 {
     fn do_draw(&self, tc: &TestCase) -> HashSet<T> {
         if let Some(max) = self.max_size {
-            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
         }
         if let Some(basic) = self.as_basic() {
             basic.do_draw(tc)
@@ -181,7 +188,9 @@ where
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, HashSet<T>>> {
         if let Some(max) = self.max_size {
-            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
         }
         let basic = self.elements.as_basic()?;
 
@@ -248,7 +257,9 @@ where
 {
     fn do_draw(&self, tc: &TestCase) -> HashMap<KT, VT> {
         if let Some(max) = self.max_size {
-            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
         }
         if let Some(basic) = self.as_basic() {
             basic.do_draw(tc)
@@ -280,7 +291,9 @@ where
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, HashMap<KT, VT>>> {
         if let Some(max) = self.max_size {
-            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
         }
         let keys_basic = self.keys.as_basic()?;
         let values_basic = self.values.as_basic()?;

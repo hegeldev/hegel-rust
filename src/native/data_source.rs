@@ -15,6 +15,7 @@ use crate::backend::{DataSource, DataSourceError, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{ChoiceNode, EngineError, ManyState, NativeTestCase, Span};
 use crate::native::schema;
+use crate::test_case::invalid_argument;
 
 /// Per-test-case state shared between `NativeDataSource` and the engine
 /// that owns the handle.  The engine constructs both halves up-front,
@@ -243,16 +244,18 @@ impl DataSource for NativeDataSource {
         // Mirror `ServerDataSource::target_observation` and upstream
         // `hypothesis.control.target` (`control.py:354-356,372-376`): the
         // observation must be finite and each label may be observed at
-        // most once per test case.
+        // most once per test case. These are usage errors, not discovered
+        // counterexamples, so raise them via `invalid_argument!` for a clean
+        // abort instead of letting the lifecycle shrink them as a "failure".
         if !score.is_finite() {
-            panic!(
+            invalid_argument!(
                 "tc.target({score}, label={label:?}) requires a finite score; \
                  got non-finite value"
             );
         }
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if inner.target_observations.contains_key(label) {
-            panic!(
+            invalid_argument!(
                 "tc.target({score}, label={label:?}) would overwrite previous \
                  tc.target(_, label={label:?}); each label can be observed at \
                  most once per test case"

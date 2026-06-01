@@ -1,4 +1,4 @@
-use crate::test_case::{TestCase, labels};
+use crate::test_case::{TestCase, invalid_argument, labels};
 use ciborium::Value;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -294,7 +294,7 @@ where
             .enumerate_values()
             .is_some_and(|valid| valid.is_empty())
         {
-            panic!(
+            invalid_argument!(
                 "Unsatisfiable filter: all values from the source generator \
                  are rejected by the filter predicate"
             );

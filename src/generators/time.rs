@@ -1,5 +1,6 @@
 use super::{BasicGenerator, Generator};
 use crate::cbor_utils::cbor_map;
+use crate::test_case::invalid_argument;
 use std::time::Duration;
 
 /// Generator for [`Duration`] values. Created by [`durations()`].
@@ -25,10 +26,9 @@ impl DurationGenerator {
     }
 
     fn build_schema(&self) -> ciborium::Value {
-        assert!(
-            self.min_nanos <= self.max_nanos,
-            "Cannot have max_value < min_value"
-        );
+        if self.min_nanos > self.max_nanos {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
         cbor_map! {
             "type" => "integer",
             "min_value" => self.min_nanos,
