@@ -1,0 +1,3 @@
+RELEASE_TYPE: patch
+
+This patch fixes how invalid-argument (usage) errors are reported. Misconfiguring a generator — `max_value` below `min_value`, a float range that contains no values, an empty `sampled_from`/`one_of`, an unsatisfiable filter — or misusing `tc.target()` (a non-finite score, or the same label twice in one test case) is a mistake in how the test is written, not a property that failed. Previously such errors were caught mid-draw and misreported (and pointlessly shrunk) as a discovered counterexample ("Property test failed: ..."); now the run aborts immediately with the error message. All of these errors share a single mechanism, so the reporting is consistent across generators and across the server and native (`--features native`) backends.
