@@ -33,7 +33,7 @@ fn decode_string(v: ciborium::Value) -> String {
 /// (e.g. "at least one draw is a 127.x.x.x address").
 fn collect<F>(n: u64, mut f: F) -> Vec<String>
 where
-    F: FnMut(&mut NativeTestCase) -> Result<ciborium::Value, crate::native::core::StopTest>,
+    F: FnMut(&mut NativeTestCase) -> Result<ciborium::Value, crate::native::core::EngineError>,
 {
     (0..n)
         .filter_map(|seed| {
@@ -273,19 +273,21 @@ fn interpret_ipv6_hits_special_ranges() {
 }
 
 #[test]
-#[should_panic(expected = "ip_address: unsupported version 5")]
-fn interpret_ip_address_unknown_version_panics() {
+fn interpret_ip_address_unknown_version_is_invalid_argument() {
     let mut ntc = fresh_ntc(0);
     let schema = cbor_map! { "type" => "ip_address", "version" => 5u64 };
-    let _ = interpret_ip_address(&mut ntc, &schema);
+    let err = interpret_ip_address(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("unsupported version 5"));
 }
 
 #[test]
-#[should_panic(expected = "ip_address schema must have a \"version\" field")]
-fn interpret_ip_address_missing_version_panics() {
+fn interpret_ip_address_missing_version_is_invalid_argument() {
     let mut ntc = fresh_ntc(0);
     let schema = cbor_map! { "type" => "ip_address" };
-    let _ = interpret_ip_address(&mut ntc, &schema);
+    let err = interpret_ip_address(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("\"version\""));
 }
 
 // ── interpret_uuid: distribution across versions ─────────────────────────────

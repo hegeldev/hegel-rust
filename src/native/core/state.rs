@@ -9,10 +9,11 @@ use rand::rngs::SmallRng;
 
 use super::choices::{
     BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceTemplate, ChoiceTemplateKind,
-    ChoiceValue, FloatChoice, IntegerChoice, InterestingOrigin, Status, StopTest, StringChoice,
+    ChoiceValue, EngineError, FloatChoice, IntegerChoice, InterestingOrigin, Status, StringChoice,
 };
 use super::float_index::lex_to_float;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
+use crate::native::bignum::{BigInt, BigUint, ToPrimitive, Zero};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::statistics::{
     Distribution, LogStudentTDistribution, PiecewiseDistribution, UniformDistribution,
@@ -176,99 +177,200 @@ fn integer_sample_from_distribution(min_value: i128, max_value: i128, rng: &mut 
     (dist.inverse_cdf(p).round() as i128).clamp(min_value, max_value)
 }
 
-/// Boundary-biased sample for integers.
+/// Hand-picked "interesting" boundary values: powers of two and their
+/// neighbours, plus the `i{16,32,64}::{MIN,MAX}` boundaries. Merged into
+/// [`SORTED_NASTY_POOL`] at startup.
+static INTERESTING_INTEGERS: &[i128] = &[
+    0,
+    1,
+    -1,
+    2,
+    -2,
+    7,
+    -7,
+    8,
+    -8,
+    15,
+    -15,
+    16,
+    -16,
+    31,
+    -31,
+    32,
+    -32,
+    63,
+    -63,
+    64,
+    -64,
+    127,
+    -127,
+    128,
+    -128,
+    255,
+    -255,
+    256,
+    -256,
+    511,
+    -511,
+    512,
+    -512,
+    1023,
+    -1023,
+    1024,
+    -1024,
+    2047,
+    -2047,
+    2048,
+    -2048,
+    4095,
+    -4095,
+    4096,
+    -4096,
+    8191,
+    -8191,
+    8192,
+    -8192,
+    i16::MAX as i128,
+    i16::MIN as i128,
+    i32::MAX as i128,
+    i32::MIN as i128,
+    i64::MAX as i128,
+    i64::MIN as i128,
+];
+
+/// Sorted, deduped union of [`INTERESTING_INTEGERS`] and
+/// [`GLOBAL_CONSTANTS_INTEGERS`]. Used by [`biased_integer_sample`] to find
+/// the in-range boundary candidates via two `partition_point` calls instead
+/// of an O(n²) per-call dedup loop.
+static SORTED_NASTY_POOL: LazyLock<Vec<i128>> = LazyLock::new(|| {
+    let mut all: Vec<i128> = INTERESTING_INTEGERS
+        .iter()
+        .copied()
+        .chain(GLOBAL_CONSTANTS_INTEGERS.iter().copied())
+        .collect();
+    all.sort_unstable();
+    all.dedup();
+    all
+});
+
+/// Boundary-biased sample for a type-erased integer choice.
 ///
 /// Implements the "nasty value" boost used by both the
-/// [`NativeTestCase::draw_integer`] code path and the data-tree
-/// novel-prefix walk. Sharing the implementation keeps the two
-/// random-generation routes consistent: when `generate_novel_prefix`
-/// chooses a child to recurse into, it now picks special values
-/// (0, 1, ±powers-of-two, factorials, …) with the same frequency as
-/// `draw_integer` does for fresh draws.
+/// [`NativeTestCase::draw_integer`] code path and the data-tree novel-prefix
+/// walk, keeping the two random-generation routes consistent.
 ///
-/// Returns a value in `[ic.min_value, ic.max_value]` (inclusive). With
-/// probability proportional to `nasty.len() * BOUNDARY_PROBABILITY` (≈ 0.5
-/// for unbounded ranges) the result is one of those nasty/interesting
-/// values; otherwise it is drawn from [`INTEGERS_DISTRIBUTION`] restricted
-/// to the requested range.
-pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut SmallRng) -> i128 {
-    if ic.min_value == ic.max_value {
-        return ic.min_value;
+/// When the choice's span fits `i128` (the overwhelmingly common case) this
+/// runs the native [`biased_i128_sample`] — nasty pool plus heavy-tailed
+/// distribution — and re-widens the result into the choice's concrete type.
+/// Otherwise (a `BigInt` choice, or a `u128` range past `i128::MAX`) it falls
+/// back to [`biguint_sample_in_range`].
+pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut SmallRng) -> BigInt {
+    match (ic.min_value.to_i128(), ic.max_value.to_i128()) {
+        (Some(min_i), Some(max_i)) => BigInt::from(biased_i128_sample(min_i, max_i, rng)),
+        _ => biguint_sample_in_range(&ic.min_value, &ic.max_value, rng),
     }
-    let mut nasty: Vec<i128> = vec![ic.min_value, ic.max_value];
-    let interesting: &[i128] = &[
-        0,
-        1,
-        -1,
-        2,
-        -2,
-        7,
-        -7,
-        8,
-        -8,
-        15,
-        -15,
-        16,
-        -16,
-        31,
-        -31,
-        32,
-        -32,
-        63,
-        -63,
-        64,
-        -64,
-        127,
-        -127,
-        128,
-        -128,
-        255,
-        -255,
-        256,
-        -256,
-        511,
-        -511,
-        512,
-        -512,
-        1023,
-        -1023,
-        1024,
-        -1024,
-        2047,
-        -2047,
-        2048,
-        -2048,
-        4095,
-        -4095,
-        4096,
-        -4096,
-        8191,
-        -8191,
-        8192,
-        -8192,
-        i16::MAX as i128,
-        i16::MIN as i128,
-        i32::MAX as i128,
-        i32::MIN as i128,
-        i64::MAX as i128,
-        i64::MIN as i128,
-    ];
-    for &v in interesting {
-        if ic.validate(v) && !nasty.contains(&v) {
+}
+
+/// The original i128 nasty-pool + distribution sampler, returning a value in
+/// `[min_value, max_value]`.
+fn biased_i128_sample(min_value: i128, max_value: i128, rng: &mut SmallRng) -> i128 {
+    if min_value == max_value {
+        return min_value;
+    }
+    // The static boundary pool is sorted, so the in-range subset is a
+    // contiguous slice that two binary searches locate in O(log n).
+    let pool = &*SORTED_NASTY_POOL;
+    let lo = pool.partition_point(|&v| v < min_value);
+    let hi = pool.partition_point(|&v| v <= max_value);
+    let static_slice = &pool[lo..hi];
+    // `min_value` / `max_value` are always candidates; add them only
+    // if the static slice doesn't already cover them (then `min < max` past
+    // the early return guarantees they're distinct).
+    let need_min = static_slice.first() != Some(&min_value);
+    let need_max = static_slice.last() != Some(&max_value);
+    let count = static_slice.len() + (need_min as usize) + (need_max as usize);
+    let threshold = count as f64 * BOUNDARY_PROBABILITY;
+    if rng.random::<f64>() < threshold {
+        let idx = rng.random_range(0..count);
+        if need_min && idx == 0 {
+            min_value
+        } else if need_max && idx == count - 1 {
+            max_value
+        } else {
+            static_slice[idx - need_min as usize]
+        }
+    } else {
+        integer_sample_from_distribution(min_value, max_value, rng)
+    }
+}
+
+/// Boundary-biased sample for an integer range too wide for `i128` (a `BigInt`
+/// choice, or a `u128` range past `i128::MAX`). With probability proportional
+/// to the in-range nasty count it returns one of `{min, max, 0, ±1, ±2^k}`;
+/// otherwise it draws a roughly-uniform value in `[min, max]` via rejection
+/// sampling over the span's bit length.
+fn biguint_sample_in_range(min: &BigInt, max: &BigInt, rng: &mut SmallRng) -> BigInt {
+    if min == max {
+        return min.clone();
+    }
+    let span: BigUint = (max - min).magnitude();
+    let bits = span.bits();
+
+    // In-range "nasty" candidates: the bounds, 0, ±1, and small powers of two
+    // (capped so a huge span doesn't build an unboundedly long pool).
+    let mut nasty: Vec<BigInt> = vec![min.clone(), max.clone()];
+    let push_in_range = |v: BigInt, nasty: &mut Vec<BigInt>| {
+        if &v >= min && &v <= max {
             nasty.push(v);
         }
+    };
+    push_in_range(BigInt::from(0), &mut nasty);
+    push_in_range(BigInt::from(1), &mut nasty);
+    push_in_range(BigInt::from(-1), &mut nasty);
+    for k in 0..=bits.min(128) {
+        let p2 = BigInt::from(BigUint::from(1u32) << (k as usize));
+        push_in_range(-p2.clone(), &mut nasty);
+        push_in_range(p2, &mut nasty);
     }
-    for &v in GLOBAL_CONSTANTS_INTEGERS.iter() {
-        if ic.validate(v) && !nasty.contains(&v) {
-            nasty.push(v);
-        }
-    }
-    let threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
+    nasty.sort();
+    nasty.dedup();
+
+    // Cap at 0.5 so the uniform branch always keeps meaningful probability —
+    // a wide span's nasty pool can otherwise be large enough that
+    // `count * BOUNDARY_PROBABILITY` exceeds 1 and the uniform draw never runs.
+    let threshold = (nasty.len() as f64 * BOUNDARY_PROBABILITY).min(0.5);
     if rng.random::<f64>() < threshold {
         let idx = rng.random_range(0..nasty.len());
-        nasty[idx]
-    } else {
-        integer_sample_from_distribution(ic.min_value, ic.max_value, rng)
+        return nasty[idx].clone();
+    }
+
+    min + BigInt::from(sample_biguint_at_most(&span, rng))
+}
+
+/// Uniformly draw a [`BigUint`] in `[0, span]` by rejection sampling masked
+/// `span.bits()`-bit values. The acceptance probability is at least 1/2 per
+/// attempt (the mask bounds candidates to `[0, 2^bits - 1]` and `span >=
+/// 2^(bits-1)`), so this terminates quickly. Callers (only
+/// [`biguint_sample_in_range`], past its `min == max` early return) always pass
+/// a strictly positive span, so `bits >= 1`.
+fn sample_biguint_at_most(span: &BigUint, rng: &mut SmallRng) -> BigUint {
+    let bits = span.bits();
+    if bits == 0 {
+        unreachable!("sample_biguint_at_most requires a positive span");
+    }
+    let n_bytes = bits.div_ceil(8) as usize;
+    let top_bits = (bits % 8) as u32;
+    loop {
+        let mut bytes: Vec<u8> = (0..n_bytes).map(|_| rng.random::<u8>()).collect();
+        if top_bits != 0 {
+            let mask = (1u8 << top_bits) - 1;
+            let last = bytes.len() - 1;
+            bytes[last] &= mask;
+        }
+        let candidate = BigUint::from_bytes_le(&bytes);
+        if &candidate <= span {
+            return candidate;
+        }
     }
 }
 
@@ -296,16 +398,23 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut SmallRng) -> f64 {
         f64::MAX,
         -f64::MAX,
     ];
-    let nasty: Vec<f64> = candidates
-        .iter()
-        .copied()
-        .filter(|&v| fc.validate(v))
-        .collect();
-    let nasty_threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
+    let valid_count = candidates.iter().filter(|&&v| fc.validate(v)).count();
+    let nasty_threshold = valid_count as f64 * BOUNDARY_PROBABILITY;
 
     if rng.random::<f64>() < nasty_threshold {
-        let idx = rng.random_range(0..nasty.len());
-        return nasty[idx];
+        let idx = rng.random_range(0..valid_count);
+        // Walk the fixed-size array again to find the idx-th in-range entry.
+        // 12 elements, no allocation; cheaper than the legacy Vec<f64>.
+        let mut skip = idx;
+        for &v in candidates.iter() {
+            if fc.validate(v) {
+                if skip == 0 {
+                    return v;
+                }
+                skip -= 1;
+            }
+        }
+        unreachable!("valid_count agrees with the second validate pass");
     }
     let f = if bounded {
         let r: f64 = rng.random();
@@ -355,17 +464,26 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut SmallRng) -> f64 {
 /// back to a length drawn from [`many_draw_length`] with uniformly random
 /// byte values.
 pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut SmallRng) -> Vec<u8> {
-    let mut nasty: Vec<Vec<u8>> = vec![bc.simplest()];
-    if bc.min_size == 0 && bc.max_size > 0 {
-        nasty.push(vec![0u8]);
-    }
-    if bc.min_size <= 1 && bc.max_size >= 1 {
-        nasty.push(vec![0xffu8]);
-    }
-    let nasty_threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
+    let want_zero = bc.min_size == 0 && bc.max_size > 0;
+    let want_ff = bc.min_size <= 1 && bc.max_size >= 1;
+    // At most 3 candidates: simplest(), [0x00], [0xff]. Compute the count
+    // without materialising the Vec<Vec<u8>>, then synthesise the chosen one.
+    let count = 1 + want_zero as usize + want_ff as usize;
+    let nasty_threshold = count as f64 * BOUNDARY_PROBABILITY;
     if rng.random::<f64>() < nasty_threshold {
-        let idx = rng.random_range(0..nasty.len());
-        return nasty[idx].clone();
+        let mut slot = rng.random_range(0..count);
+        if slot == 0 {
+            return bc.simplest();
+        }
+        slot -= 1;
+        if want_zero {
+            if slot == 0 {
+                return vec![0u8];
+            }
+            slot -= 1;
+        }
+        debug_assert!(want_ff && slot == 0);
+        return vec![0xffu8];
     }
     let len = many_draw_length(rng, bc.min_size, bc.max_size);
     (0..len).map(|_| rng.random::<u8>()).collect()
@@ -463,7 +581,7 @@ static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
 /// Boundary-biased sample for strings. Builds a "nasty" pool from the
 /// simplest values plus [`GLOBAL_CONSTANTS_STRINGS`] entries that satisfy
 /// the kind's constraint, drawing from it with probability proportional to
-/// `BOUNDARY_PROBABILITY × |nasty|`. Otherwise picks a small 1–10 codepoint
+/// `count * BOUNDARY_PROBABILITY`. Otherwise picks a small 1–10 codepoint
 /// sub-alphabet from the kind's [`IntervalSet`] (biased toward the
 /// first 256 shrink-order positions for large alphabets, an ASCII bias)
 /// and samples a length-`many_draw_length` string from it.
@@ -475,30 +593,59 @@ static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
 /// `XXY`-shape strings that property tests of, for example, run-length
 /// encoding need to find.
 pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut SmallRng) -> Vec<u32> {
-    let nasty: Vec<Vec<u32>> = {
-        let simplest = sc.simplest();
-        let simplest_cp = sc.simplest_codepoint();
-        let mut v = vec![simplest];
-        if sc.min_size == 0 && sc.max_size > 0 {
-            v.push(Vec::new());
+    let want_empty = sc.min_size == 0 && sc.max_size > 0;
+    let want_one = sc.min_size <= 1 && sc.max_size >= 1;
+    let want_two = sc.min_size <= 2 && sc.max_size >= 2;
+    let small_count = 1 + want_empty as usize + want_one as usize + want_two as usize;
+    // Count the in-range global candidates without materialising them. The
+    // pool only has ~70 entries; one validate pass is cheap and avoids the
+    // per-call `Vec<Vec<u32>>` allocation and the legacy O(n²) `contains`.
+    // Note: the legacy code also deduped against the small-candidate set, but
+    // those entries are all monomorphic runs of `simplest_codepoint()`, none
+    // of which occur in `GLOBAL_CONSTANTS_STRINGS` — so the dedup never fired
+    // in practice.
+    let global_pool = &*GLOBAL_CONSTANTS_STRINGS;
+    let valid_global_count = global_pool.iter().filter(|cps| sc.validate(cps)).count();
+    let count = small_count + valid_global_count;
+    let threshold = count as f64 * BOUNDARY_PROBABILITY;
+    if rng.random::<f64>() < threshold {
+        let idx = rng.random_range(0..count);
+        if idx < small_count {
+            // Materialise the chosen small candidate. Order is fixed:
+            // simplest, then empty, [cp], [cp, cp] in the conditional slots.
+            let simplest_cp = sc.simplest_codepoint();
+            let mut slot = idx;
+            if slot == 0 {
+                return sc.simplest();
+            }
+            slot -= 1;
+            if want_empty {
+                if slot == 0 {
+                    return Vec::new();
+                }
+                slot -= 1;
+            }
+            if want_one {
+                if slot == 0 {
+                    return vec![simplest_cp];
+                }
+                slot -= 1;
+            }
+            debug_assert!(want_two && slot == 0);
+            return vec![simplest_cp, simplest_cp];
         }
-        if sc.min_size <= 1 && sc.max_size >= 1 {
-            v.push(vec![simplest_cp]);
-        }
-        if sc.min_size <= 2 && sc.max_size >= 2 {
-            v.push(vec![simplest_cp, simplest_cp]);
-        }
-        for cps in GLOBAL_CONSTANTS_STRINGS.iter() {
-            if sc.validate(cps) && !v.contains(cps) {
-                v.push(cps.clone());
+        // Walk the global pool again to find the `(idx - small_count)`-th
+        // in-range entry. Two passes of ~70 ≪ the old `clone` + `contains`.
+        let mut skip = idx - small_count;
+        for cps in global_pool.iter() {
+            if sc.validate(cps) {
+                if skip == 0 {
+                    return cps.clone();
+                }
+                skip -= 1;
             }
         }
-        v
-    };
-    let nasty_threshold = nasty.len() as f64 * BOUNDARY_PROBABILITY;
-    if rng.random::<f64>() < nasty_threshold {
-        let idx = rng.random_range(0..nasty.len());
-        return nasty[idx].clone();
+        unreachable!("valid_global_count agrees with the second validate pass");
     }
 
     let alpha = sc.intervals.len();
@@ -537,9 +684,9 @@ pub(crate) fn codepoints_to_string(cps: &[u32]) -> String {
 
 /// A pool of variable IDs for stateful testing.
 pub struct NativeVariables {
-    last_id: i128,
-    variables: Vec<i128>,
-    removed: std::collections::HashSet<i128>,
+    last_id: i64,
+    variables: Vec<i64>,
+    removed: std::collections::HashSet<i64>,
 }
 
 impl NativeVariables {
@@ -552,14 +699,14 @@ impl NativeVariables {
     }
 
     /// Add a new variable and return its ID.
-    pub fn next(&mut self) -> i128 {
+    pub fn next(&mut self) -> i64 {
         self.last_id += 1;
         self.variables.push(self.last_id);
         self.last_id
     }
 
     /// Return the IDs of variables that have not been consumed, in order.
-    pub fn active(&self) -> Vec<i128> {
+    pub fn active(&self) -> Vec<i64> {
         self.variables
             .iter()
             .filter(|id| !self.removed.contains(*id))
@@ -568,7 +715,7 @@ impl NativeVariables {
     }
 
     /// Mark a variable as consumed and trim trailing consumed variables.
-    pub fn consume(&mut self, variable_id: i128) {
+    pub fn consume(&mut self, variable_id: i64) {
         self.removed.insert(variable_id);
         while let Some(&last) = self.variables.last() {
             if self.removed.contains(&last) {
@@ -769,7 +916,7 @@ impl std::ops::Index<i64> for Spans {
 /// about.
 pub trait DataObserver: Send {
     fn draw_boolean(&mut self, _value: bool, _was_forced: bool) {}
-    fn draw_integer(&mut self, _value: i128, _was_forced: bool) {}
+    fn draw_integer(&mut self, _value: &BigInt, _was_forced: bool) {}
     fn draw_float(&mut self, _value: f64, _was_forced: bool) {}
     fn draw_bytes(&mut self, _value: &[u8], _was_forced: bool) {}
     fn draw_string(&mut self, _value: &str, _was_forced: bool) {}
@@ -829,7 +976,7 @@ pub struct NativeTestCase {
     /// Optional template applied to every draw past the explicit `prefix`.
     /// `count` is mutated in-place as draws consume the template; when
     /// `count` reaches zero the next draw is overrun
-    /// (`Status::EarlyStop` + `StopTest`). `None` means "no template" —
+    /// (`Status::EarlyStop` + `EngineError`). `None` means "no template" —
     /// draws past the prefix go to `rng` or panic, as before.
     trailing_template: Option<ChoiceTemplate>,
 }
@@ -1013,24 +1160,34 @@ impl NativeTestCase {
         id
     }
 
-    /// Draw a random integer in [min_value, max_value].
-    pub fn draw_integer(&mut self, min_value: i128, max_value: i128) -> Result<i128, StopTest> {
+    /// Draw a random integer in `[min_value, max_value]`.
+    ///
+    /// The type parameter `T` determines the input and output type.
+    /// Internally all arithmetic uses `BigInt`; the bounds are widened on
+    /// entry and the result is narrowed back to `T` on exit.
+    pub fn draw_integer<T: Into<BigInt> + TryFrom<BigInt>>(
+        &mut self,
+        min_value: T,
+        max_value: T,
+    ) -> Result<T, EngineError> {
+        let min_value = min_value.into();
+        let max_value = max_value.into();
         assert!(
             min_value <= max_value,
-            "Invalid range [{min_value}, {max_value}]"
+            "Invalid range [{min_value:?}, {max_value:?}]"
         );
 
         let kind = IntegerChoice {
             min_value,
             max_value,
-            shrink_towards: 0,
+            shrink_towards: BigInt::zero(),
         };
 
         let (value, was_forced) = self.resolve_choice(
             &ChoiceKind::Integer(kind.clone()),
             || ChoiceValue::Integer(kind.simplest()),
             || ChoiceValue::Integer(kind.unit()),
-            |v| matches!(v, ChoiceValue::Integer(n) if kind.validate(*n)),
+            |v| matches!(v, ChoiceValue::Integer(n) if kind.validate(n)),
             |rng| ChoiceValue::Integer(biased_integer_sample(&kind, rng)),
         )?;
 
@@ -1038,17 +1195,19 @@ impl NativeTestCase {
             unreachable!("kind/value invariant violated: outer match guaranteed this variant")
         };
 
-        self.nodes.push(ChoiceNode {
-            kind: ChoiceKind::Integer(kind),
-            value: ChoiceValue::Integer(v),
-            was_forced,
-        });
-
         if let Some(ref mut obs) = self.observer {
-            obs.draw_integer(v, was_forced);
+            obs.draw_integer(&v, was_forced);
         }
 
-        Ok(v)
+        self.nodes.push(ChoiceNode::new(
+            ChoiceKind::Integer(kind),
+            ChoiceValue::Integer(v.clone()),
+            was_forced,
+        ));
+
+        Ok(T::try_from(v)
+            .ok()
+            .expect("validated value fits the requested width"))
     }
 
     /// Draw a floating-point value in `[min_value, max_value]`. NaN is drawn
@@ -1060,7 +1219,7 @@ impl NativeTestCase {
         max_value: f64,
         allow_nan: bool,
         allow_infinity: bool,
-    ) -> Result<f64, StopTest> {
+    ) -> Result<f64, EngineError> {
         let kind = FloatChoice {
             min_value,
             max_value,
@@ -1080,11 +1239,11 @@ impl NativeTestCase {
             unreachable!("kind/value invariant violated: outer match guaranteed this variant")
         };
 
-        self.nodes.push(ChoiceNode {
-            kind: ChoiceKind::Float(kind),
-            value: ChoiceValue::Float(v),
+        self.nodes.push(ChoiceNode::new(
+            ChoiceKind::Float(kind),
+            ChoiceValue::Float(v),
             was_forced,
-        });
+        ));
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_float(v, was_forced);
@@ -1094,7 +1253,7 @@ impl NativeTestCase {
     }
 
     /// Draw a bytes value with length in `[min_size, max_size]`.
-    pub fn draw_bytes(&mut self, min_size: usize, max_size: usize) -> Result<Vec<u8>, StopTest> {
+    pub fn draw_bytes(&mut self, min_size: usize, max_size: usize) -> Result<Vec<u8>, EngineError> {
         assert!(
             min_size <= max_size,
             "min_size ({min_size}) must be <= max_size ({max_size})"
@@ -1113,11 +1272,11 @@ impl NativeTestCase {
             unreachable!("kind/value invariant violated: outer match guaranteed this variant")
         };
 
-        self.nodes.push(ChoiceNode {
-            kind: ChoiceKind::Bytes(kind),
-            value: ChoiceValue::Bytes(v.clone()),
+        self.nodes.push(ChoiceNode::new(
+            ChoiceKind::Bytes(kind),
+            ChoiceValue::Bytes(v.clone()),
             was_forced,
-        });
+        ));
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_bytes(&v, was_forced);
@@ -1133,7 +1292,7 @@ impl NativeTestCase {
         intervals: IntervalSet,
         min_size: usize,
         max_size: usize,
-    ) -> Result<String, StopTest> {
+    ) -> Result<String, EngineError> {
         assert!(min_size <= max_size);
         assert!(
             !intervals.is_empty() || max_size == 0,
@@ -1158,11 +1317,11 @@ impl NativeTestCase {
             unreachable!("kind/value invariant violated: outer match guaranteed this variant")
         };
 
-        self.nodes.push(ChoiceNode {
-            kind: ChoiceKind::String(kind),
-            value: ChoiceValue::String(v.clone()),
+        self.nodes.push(ChoiceNode::new(
+            ChoiceKind::String(kind),
+            ChoiceValue::String(v.clone()),
             was_forced,
-        });
+        ));
 
         let s = codepoints_to_string(&v);
         if let Some(ref mut obs) = self.observer {
@@ -1174,7 +1333,7 @@ impl NativeTestCase {
 
     /// Draw a boolean with probability `p` of being true.
     /// If `forced` is Some, the result is forced to that value.
-    pub fn weighted(&mut self, p: f64, forced: Option<bool>) -> Result<bool, StopTest> {
+    pub fn weighted(&mut self, p: f64, forced: Option<bool>) -> Result<bool, EngineError> {
         let kind = BooleanChoice;
 
         let forced_value = forced.or(if p <= 0.0 {
@@ -1202,11 +1361,11 @@ impl NativeTestCase {
             unreachable!("kind/value invariant violated: outer match guaranteed this variant")
         };
 
-        self.nodes.push(ChoiceNode {
-            kind: ChoiceKind::Boolean(kind),
-            value: ChoiceValue::Boolean(v),
+        self.nodes.push(ChoiceNode::new(
+            ChoiceKind::Boolean(kind),
+            ChoiceValue::Boolean(v),
             was_forced,
-        });
+        ));
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_boolean(v, was_forced);
@@ -1214,16 +1373,16 @@ impl NativeTestCase {
 
         Ok(v)
     }
-    fn pre_choice(&mut self) -> Result<(), StopTest> {
+    fn pre_choice(&mut self) -> Result<(), EngineError> {
         // A test case can become frozen mid-execution when `start_span`
         // exceeds `MAX_DEPTH` and sets `status = Some(Status::Invalid)`.
-        // Subsequent draws must propagate `StopTest` so the test halts.
+        // Subsequent draws must propagate `EngineError` so the test halts.
         if self.status.is_some() {
-            return Err(StopTest);
+            return Err(EngineError::StopTest);
         }
         if self.nodes.len() >= self.max_size {
             self.status = Some(Status::EarlyStop);
-            return Err(StopTest);
+            return Err(EngineError::StopTest);
         }
         Ok(())
     }
@@ -1239,7 +1398,7 @@ impl NativeTestCase {
         unit: impl FnOnce() -> ChoiceValue,
         validate: impl FnOnce(&ChoiceValue) -> bool,
         random: impl FnOnce(&mut SmallRng) -> ChoiceValue,
-    ) -> Result<(ChoiceValue, bool), StopTest> {
+    ) -> Result<(ChoiceValue, bool), EngineError> {
         self.pre_choice()?;
 
         let idx = self.nodes.len();
@@ -1269,7 +1428,7 @@ impl NativeTestCase {
         if let Some(template) = self.trailing_template.as_mut() {
             if matches!(template.count, Some(0)) {
                 self.status = Some(Status::EarlyStop);
-                return Err(StopTest);
+                return Err(EngineError::StopTest);
             }
             let value = match template.kind {
                 ChoiceTemplateKind::Simplest => simplest(),

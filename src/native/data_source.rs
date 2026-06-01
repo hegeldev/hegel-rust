@@ -12,8 +12,10 @@ use std::sync::{Arc, Mutex};
 use ciborium::Value;
 
 use crate::backend::{DataSource, DataSourceError, TestCaseResult};
-use crate::native::core::{ChoiceNode, ManyState, NativeTestCase, Span, StopTest};
+use crate::native::bignum::{BigInt, ToPrimitive};
+use crate::native::core::{ChoiceNode, EngineError, ManyState, NativeTestCase, Span};
 use crate::native::schema;
+use crate::test_case::invalid_argument;
 
 /// Per-test-case state shared between `NativeDataSource` and the engine
 /// that owns the handle.  The engine constructs both halves up-front,
@@ -110,7 +112,7 @@ impl NativeDataSource {
             .expect("mark_complete must be called for every test case")
     }
 
-    /// Returns true if a previous request triggered a StopTest abort.
+    /// Returns true if a previous request triggered a EngineError abort.
     /// Test-only helper — not part of the `DataSource` interface, so
     /// callers must hold a concrete `&NativeDataSource`.
     #[cfg(test)]
@@ -119,20 +121,29 @@ impl NativeDataSource {
     }
 
     /// Acquire the test-case state under the abort guard.  Returns
-    /// `StopTest` immediately if a previous call has already aborted
-    /// the test case so subsequent draws short-circuit without
+    /// `DataSourceError::StopTest` immediately if a previous call has already
+    /// aborted the test case so subsequent draws short-circuit without
     /// touching `ntc`.
     fn with_ntc<R>(
         &self,
-        f: impl FnOnce(&mut NativeTestCase) -> Result<R, StopTest>,
+        f: impl FnOnce(&mut NativeTestCase) -> Result<R, EngineError>,
     ) -> Result<R, DataSourceError> {
         if self.aborted.load(Ordering::Relaxed) {
             return Err(DataSourceError::StopTest);
         }
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        f(&mut inner.ntc).map_err(|_stop| {
-            self.aborted.store(true, Ordering::Relaxed);
-            DataSourceError::StopTest
+        f(&mut inner.ntc).map_err(|e| match e {
+            EngineError::StopTest => {
+                // Budget exhausted: latch the abort flag so subsequent draws
+                // short-circuit without touching `ntc`.
+                self.aborted.store(true, Ordering::Relaxed);
+                DataSourceError::StopTest
+            }
+            // A semantically-invalid schema is not budget exhaustion — do not
+            // latch `aborted`; carry the diagnostic through so the main
+            // library can panic with it and libhegel can return it as an
+            // error code.
+            EngineError::InvalidArgument(msg) => DataSourceError::InvalidArgument(msg),
         })
     }
 }
@@ -191,33 +202,37 @@ impl DataSource for NativeDataSource {
         })
     }
 
-    fn new_pool(&self) -> Result<i128, DataSourceError> {
+    fn new_pool(&self) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
-            let pool_id = ntc.variable_pools.len() as i128;
+            let pool_id = ntc.variable_pools.len() as i64;
             ntc.variable_pools
                 .push(crate::native::core::NativeVariables::new());
             Ok(pool_id)
         })
     }
 
-    fn pool_add(&self, pool_id: i128) -> Result<i128, DataSourceError> {
+    fn pool_add(&self, pool_id: i64) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| Ok(ntc.variable_pools[pool_id as usize].next()))
     }
 
-    fn pool_generate(&self, pool_id: i128, consume: bool) -> Result<i128, DataSourceError> {
+    fn pool_generate(&self, pool_id: i64, consume: bool) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
             let pool_idx = pool_id as usize;
             let active = ntc.variable_pools[pool_idx].active();
             if active.is_empty() {
                 // No variables available: mark the test case invalid.
-                return Err(StopTest);
+                return Err(EngineError::StopTest);
             }
-            let n = active.len() as i128;
+            // The variable ids drawn out of `active` are `i64`.
+            let n = active.len();
             // Draw index from `[0, n-1]`.  Shrink towards `n-1`
             // (last added = most recent) by drawing `k` from
             // `[0, n-1]` and using `index = n-1-k`.
-            let k = ntc.draw_integer(0, n - 1)?;
-            let variable_id = active[(n - 1 - k) as usize];
+            let k = ntc
+                .draw_integer(BigInt::from(0), BigInt::from(n as i64 - 1))?
+                .to_i128()
+                .unwrap() as usize;
+            let variable_id = active[n - 1 - k];
             if consume {
                 ntc.variable_pools[pool_idx].consume(variable_id);
             }
@@ -229,16 +244,18 @@ impl DataSource for NativeDataSource {
         // Mirror `ServerDataSource::target_observation` and upstream
         // `hypothesis.control.target` (`control.py:354-356,372-376`): the
         // observation must be finite and each label may be observed at
-        // most once per test case.
+        // most once per test case. These are usage errors, not discovered
+        // counterexamples, so raise them via `invalid_argument!` for a clean
+        // abort instead of letting the lifecycle shrink them as a "failure".
         if !score.is_finite() {
-            panic!(
+            invalid_argument!(
                 "tc.target({score}, label={label:?}) requires a finite score; \
                  got non-finite value"
             );
         }
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if inner.target_observations.contains_key(label) {
-            panic!(
+            invalid_argument!(
                 "tc.target({score}, label={label:?}) would overwrite previous \
                  tc.target(_, label={label:?}); each label can be observed at \
                  most once per test case"

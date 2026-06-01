@@ -3,7 +3,7 @@ members = [".", "hegel-macros", "hegel-c"]
 
 [package]
 name = "hegeltest"
-version = "0.14.12"
+version = "0.14.24"
 edition = "2024"
 # if you bump this, also bump ci.yml and hegel-macros/Cargo.toml
 rust-version = "1.86"
@@ -41,12 +41,16 @@ tempfile = "3.0"
 ciborium = "0.2.2"
 crc32fast = "1.4"
 parking_lot = "0.12"
-hegeltest-macros = { version = "=0.14.12", path = "hegel-macros" }
+hegeltest-macros = { version = "=0.14.24", path = "hegel-macros" }
 # optional feature dependencies
 rand = { version = "0.10", optional = true }
 serde_json = { version = "1.0.61", optional = true }
-num-bigint = { version = "0.4.6", optional = true }
-num-traits = { version = "0.2", optional = true }
+dashu-int = { version = "0.4.1", default-features = false, features = ["std"], optional = true }
+# Fast, non-DoS-resistant hasher for the native engine's internal maps
+# (data tree + span-mutation bookkeeping; keys are our own choice values /
+# span labels, never adversarial). Replaces the default SipHash, which
+# profiling showed prominently on the generation hot path.
+rustc-hash = { version = "2", optional = true }
 # opting out of the clock, now, and wasmbind features.
 # 0.4.41 is the minimum version that has WeekdaySet.
 chrono = { version = "0.4.41", default-features = false, features = ["std"], optional = true }
@@ -59,21 +63,34 @@ rand = "0.10"
 serde_json = "1.0.61"
 insta = "1.47.2"
 ctor = "0.2"
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+# Not used directly: this is a `-Z minimal-versions` floor. criterion pulls in
+# `is-terminal`, and its pre-0.4.13 releases depend on a `rustix 0.37.0` that no
+# longer compiles on current nightly. 0.4.13 dropped the rustix dependency.
+is-terminal = "0.4.13"
 # Note: tokio 1.39 is when tokio started having the required compatibility
 # with other macros for #[hegel::test] to work with #[tokio::test]. See
 # https://github.com/tokio-rs/tokio/pull/6497
 tokio = { version = "1.39", features = ["macros", "rt"] }
 
+[[bench]]
+name = "biased_sample"
+harness = false
+required-features = ["__bench"]
+
 [features]
 default = []
 rand = ["dep:rand"]
 antithesis = ["dep:serde_json"]
-native = ["dep:rand", "dep:num-bigint", "dep:num-traits"]
+native = ["dep:rand", "dep:dashu-int", "dep:rustc-hash"]
 chrono = ["dep:chrono"]
 jiff = ["dep:jiff"]
 serde_json = ["dep:serde_json"]
 # Enables the serde_json/raw_value feature. Enables generators for serde_json::value::RawValue.
 serde_json_raw_value = ["serde_json", "serde_json/raw_value"]
+# Internal: re-exports private items needed by `benches/`. Not part of the
+# public API; depend on at your peril.
+__bench = ["native"]
 
 [package.metadata.docs.rs]
 all-features = true

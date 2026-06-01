@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.14.24 - 2026-06-01
+
+This patch bundles a batch of fixes and improvements, most of them to the native engine (`--features native`).
+
+- Invalid-argument (usage) errors are now reported uniformly. Misconfiguring a generator — `max_value` below `min_value`, a float range that contains no values, an empty `sampled_from`/`one_of`, an unsatisfiable filter — or misusing `tc.target()` (a non-finite score, or the same label twice in one test case) is a mistake in how the test is written, not a property that failed. Previously such errors were caught mid-draw and misreported (and pointlessly shrunk) as a discovered counterexample ("Property test failed: ..."); now the run aborts immediately with the error message, consistently across generators and across the server and native backends.
+- The native engine uses a faster hasher (FxHash) for its internal lookup tables, which are keyed only by Hegel's own data and never by adversarial input. This speeds up generation across all generators, most noticeably for tests that make many draws per test case.
+- The native engine now iterates targeting labels, shrink origins, and changed-node indices in a deterministic order, so a seeded run with multiple targets or failure origins is reproducible run-to-run.
+- A non-deterministic generator on the native backend (one whose choice kind changes at the same position across runs) is now reported as a failing run instead of panicking, so it no longer aborts the process when the engine is driven over FFI.
+- The native backend writes example-database values atomically (temp file plus rename), so a process sharing the database directory can't observe a partially-written value.
+- The native regex parser now rejects the `\z` anchor (matching CPython's `re`, which only supports `\Z`) and rejects patterns nested beyond a fixed depth with a clear error instead of overflowing the stack on pathologically nested groups.
+- Internal change: the native TooSlow health-check threshold is passed into the engine rather than read from a constant, so it can be tested deterministically. No user-visible behaviour change.
+
+## 0.14.23 - 2026-06-01
+
+Prebuilt `libhegel` binaries are no longer published for Intel macOS (`darwin/amd64`). The `macos-13` (x86_64) GitHub-hosted runners are scarce and routinely left the release job stuck for hours waiting for a runner, and we do not support Intel Macs. Apple-silicon macOS (`darwin/arm64`), Linux, and Windows binaries are unaffected; Intel-mac users can still build the `hegeltest-c` crate themselves.
+
+## 0.14.22 - 2026-06-01
+
+This patch improves the performance of generation by improving how we generate schemas to pass to the underlying engine.
+
+## 0.14.21 - 2026-06-01
+
+This patch improves the performance of generating and shrinking bounded integers, and of any generator built on them (collection sizes, sampled-from indices, and similar).
+
+## 0.14.20 - 2026-06-01
+
+This patch improves the performance of running tests. Previously every draw on every test case paid a formatting cost even though the rendered text was discarded, now this formatting is skipped unless the printed result is needed. The improvement is largest for values that are expensive to format, such as strings and collections.
+
+## 0.14.19 - 2026-05-31
+
+This patch fixes two bugs in the native feature.
+
+1. test case limits were not properly being respected, leading to running up to 5x as many test cases as requested
+2. some checks that were supposed to prevent duplicate test cases were not properly being honoured, leading to duplicate tests
+
+## 0.14.18 - 2026-05-30
+
+Internal refactoring of the native engine's integer representation to use a generic `IntegerChoice` type, and switch from `num-bigint` to `dashu-int` for big integer support.
+
+## 0.14.17 - 2026-05-29
+
+This release only affects libhegel users and is otherwise a pure refactoring.
+
+In libhegel, an invalid schema would abort the process improperly when the rust code panicked. Now the rust code uses Result everywhere internally and properly propagates these errors to callers.
+
+## 0.14.16 - 2026-05-29
+
+This patch makes some improvements to the libhegel C bindings, and has no other user-visible effect.
+
+## 0.14.15 - 2026-05-29
+
+This patch improves the performance of the native backend (`--features native`). The changes are internal only and have no user-visible effect on behaviour.
+
+## 0.14.14 - 2026-05-28
+
+This release contains only internal refactoring that should have no user-visible impact.
+
 ## 0.14.12 - 2026-05-26
 
 This patch brings the native-mode shrinker (`--features native`) to feature

@@ -31,6 +31,7 @@
 
 use std::path::PathBuf;
 
+use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceValue;
 
 /// Multi-value key/value store backing the native engine's replay phase.
@@ -131,7 +132,16 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
         if path.exists() {
             return;
         }
-        let _ = std::fs::write(&path, value);
+        // Write to a temp file in the same directory, then atomically rename it
+        // into place, so a concurrent reader never sees a partially-written
+        // value. (The value's content is fixed by its path — its own hash — so
+        // racing writers of the same value are harmless.)
+        if let Ok(mut tmp) = tempfile::NamedTempFile::new_in(&dir) {
+            use std::io::Write;
+            if tmp.write_all(value).is_ok() {
+                let _ = tmp.persist(&path);
+            }
+        }
     }
 
     fn delete(&self, key: &[u8], value: &[u8]) {
@@ -195,7 +205,10 @@ pub(super) fn fnv_hex(s: &[u8]) -> String {
 /// - For each choice:
 ///   - 1-byte type tag: 0=Integer, 1=Boolean, 2=Float, 3=Bytes, 4=String
 ///   - Value bytes:
-///     - Integer: 16 bytes (i128 little-endian)
+///     - Integer: a 1-byte width sub-tag (always 10=BigInt for new writes;
+///       sub-tags 0–9 are still accepted on read for backward compat)
+///       followed by a 4-byte little-endian length and that many
+///       two's-complement little-endian bytes
 ///     - Boolean: 1 byte (0 or 1)
 ///     - Float: 8 bytes (the f64 bit pattern, little-endian, so `-0.0` and
 ///       NaN payloads round-trip unchanged)
@@ -210,7 +223,7 @@ pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
         match choice {
             ChoiceValue::Integer(v) => {
                 buf.push(0);
-                buf.extend_from_slice(&v.to_le_bytes());
+                serialize_any_integer(&mut buf, v);
             }
             ChoiceValue::Boolean(v) => {
                 buf.push(1);
@@ -239,6 +252,55 @@ pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
     buf
 }
 
+/// Encode a [`BigInt`] as sub-tag 10 followed by a length-prefixed
+/// two's-complement little-endian byte sequence (see [`serialize_choices`]).
+fn serialize_any_integer(buf: &mut Vec<u8>, v: &BigInt) {
+    buf.push(10);
+    let mag = v.to_signed_bytes_le();
+    buf.extend_from_slice(&(mag.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&mag);
+}
+
+/// Inverse of [`serialize_any_integer`]. Returns the decoded `BigInt` and the
+/// new read position, or `None` on truncation / an unknown width sub-tag.
+///
+/// Sub-tags 0–9 (legacy per-width formats) are still accepted for backward
+/// compatibility; they are converted to `BigInt` on read.
+fn deserialize_any_integer(bytes: &[u8], pos: usize) -> Option<(BigInt, usize)> {
+    let sub = *bytes.get(pos)?;
+    let mut pos = pos + 1;
+    macro_rules! native {
+        ($t:ty) => {{
+            const N: usize = std::mem::size_of::<$t>();
+            let raw: [u8; N] = bytes.get(pos..pos + N)?.try_into().ok()?;
+            pos += N;
+            BigInt::from(<$t>::from_le_bytes(raw))
+        }};
+    }
+    let value = match sub {
+        0 => native!(i8),
+        1 => native!(i16),
+        2 => native!(i32),
+        3 => native!(i64),
+        4 => native!(i128),
+        5 => native!(u8),
+        6 => native!(u16),
+        7 => native!(u32),
+        8 => native!(u64),
+        9 => native!(u128),
+        10 => {
+            let len_raw: [u8; 4] = bytes.get(pos..pos + 4)?.try_into().ok()?;
+            pos += 4;
+            let len = u32::from_le_bytes(len_raw) as usize;
+            let mag = bytes.get(pos..pos + len)?;
+            pos += len;
+            BigInt::from_signed_bytes_le(mag)
+        }
+        _ => return None,
+    };
+    Some((value, pos))
+}
+
 /// Decode a byte slice produced by [`serialize_choices`].
 ///
 /// Returns `None` if the data is truncated, malformed, or contains an
@@ -260,12 +322,9 @@ pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
         match bytes[pos] {
             0 => {
                 pos += 1;
-                if pos + 16 > bytes.len() {
-                    return None;
-                }
-                let v = i128::from_le_bytes(bytes[pos..pos + 16].try_into().ok()?);
-                choices.push(ChoiceValue::Integer(v));
-                pos += 16;
+                let (value, new_pos) = deserialize_any_integer(bytes, pos)?;
+                pos = new_pos;
+                choices.push(ChoiceValue::Integer(value));
             }
             1 => {
                 pos += 1;

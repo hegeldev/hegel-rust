@@ -35,11 +35,21 @@ fn interpret_tuple_returns_array_of_elements() {
 }
 
 #[test]
-#[should_panic(expected = "tuple schema must have elements array")]
-fn interpret_tuple_without_elements_panics() {
+fn interpret_tuple_without_elements_is_invalid_argument() {
     let mut ntc = fresh_ntc();
     let schema = cbor_map! { "type" => "tuple" };
-    let _ = interpret_tuple(&mut ntc, &schema);
+    let err = interpret_tuple(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("elements"));
+}
+
+#[test]
+fn interpret_tuple_non_array_elements_is_invalid_argument() {
+    let mut ntc = fresh_ntc();
+    let schema = cbor_map! { "type" => "tuple", "elements" => 7 };
+    let err = interpret_tuple(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("must be an array"));
 }
 
 // ── interpret_one_of ────────────────────────────────────────────────────────
@@ -73,22 +83,24 @@ fn interpret_one_of_selects_a_branch() {
 }
 
 #[test]
-#[should_panic(expected = "one_of schema must have generators array")]
-fn interpret_one_of_without_generators_panics() {
+fn interpret_one_of_without_generators_is_invalid_argument() {
     let mut ntc = fresh_ntc();
     let schema = cbor_map! { "type" => "one_of" };
-    let _ = interpret_one_of(&mut ntc, &schema);
+    let err = interpret_one_of(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("generators"));
 }
 
 #[test]
-#[should_panic(expected = "one_of schema must have at least one generator")]
-fn interpret_one_of_empty_generators_panics() {
+fn interpret_one_of_empty_generators_is_invalid_argument() {
     let mut ntc = fresh_ntc();
     let schema = cbor_map! {
         "type" => "one_of",
         "generators" => Vec::<Value>::new(),
     };
-    let _ = interpret_one_of(&mut ntc, &schema);
+    let err = interpret_one_of(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("non-empty"));
 }
 
 // ── interpret_sampled_from ──────────────────────────────────────────────────
@@ -125,25 +137,55 @@ fn interpret_sampled_from_returns_non_text_as_is() {
 }
 
 #[test]
-#[should_panic(expected = "sampled_from schema must have values array")]
-fn interpret_sampled_from_without_values_panics() {
+fn interpret_sampled_from_without_values_is_invalid_argument() {
     let mut ntc = fresh_ntc();
     let schema = cbor_map! { "type" => "sampled_from" };
-    let _ = interpret_sampled_from(&mut ntc, &schema);
+    let err = interpret_sampled_from(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("values"));
 }
 
 #[test]
-#[should_panic(expected = "sampled_from schema must have at least one value")]
-fn interpret_sampled_from_empty_values_panics() {
+fn interpret_sampled_from_empty_values_is_invalid_argument() {
     let mut ntc = fresh_ntc();
     let schema = cbor_map! {
         "type" => "sampled_from",
         "values" => Vec::<Value>::new(),
     };
-    let _ = interpret_sampled_from(&mut ntc, &schema);
+    let err = interpret_sampled_from(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("non-empty"));
 }
 
 // ── interpret_list ──────────────────────────────────────────────────────────
+
+#[test]
+fn interpret_list_without_elements_is_invalid_argument() {
+    let mut ntc = fresh_ntc();
+    let schema = cbor_map! { "type" => "list" };
+    let err = interpret_list(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("elements"));
+}
+
+#[test]
+fn interpret_list_unique_with_invalid_integer_bounds_falls_back() {
+    // A `unique` integer list whose bounds are not CBOR integers can't take
+    // the bounded-range fast path (`bounded_integer_range` returns `None`);
+    // the generic path then surfaces the real `InvalidArgument` when it
+    // interprets the element schema.
+    let mut ntc = fresh_ntc();
+    let schema = cbor_map! {
+        "type" => "list",
+        "unique" => true,
+        "min_size" => 1u64,
+        "elements" => cbor_map! {
+            "type" => "integer", "min_value" => "lo", "max_value" => 5,
+        },
+    };
+    let err = interpret_list(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+}
 
 #[test]
 fn interpret_list_with_fixed_size_returns_that_many_elements() {
@@ -230,6 +272,27 @@ fn interpret_list_unique_large_range_falls_back_to_rejection() {
 }
 
 // ── interpret_dict ──────────────────────────────────────────────────────────
+
+#[test]
+fn interpret_dict_without_keys_is_invalid_argument() {
+    let mut ntc = fresh_ntc();
+    let schema = cbor_map! { "type" => "dict" };
+    let err = interpret_dict(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("keys"));
+}
+
+#[test]
+fn interpret_dict_without_values_is_invalid_argument() {
+    let mut ntc = fresh_ntc();
+    let schema = cbor_map! {
+        "type" => "dict",
+        "keys" => cbor_map! { "type" => "integer", "min_value" => 0, "max_value" => 1 },
+    };
+    let err = interpret_dict(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("values"));
+}
 
 #[test]
 fn interpret_dict_with_fixed_size_returns_pairs() {

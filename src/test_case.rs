@@ -41,17 +41,95 @@ pub(crate) const STOP_TEST_STRING: &str = "__HEGEL_STOP_TEST";
 /// successfully, record it as Valid".
 pub(crate) const LOOP_DONE_STRING: &str = "__HEGEL_LOOP_DONE";
 
+/// Panic-message prefix marking an **invalid-argument (usage) error**: the
+/// caller configured the test in a way the framework can't honour — a
+/// generator bound with `max < min`, a float range that contains no values,
+/// an empty `sampled_from`/`one_of`, a non-finite `tc.target()` score, and so
+/// on. These are mistakes in how the test is *written*, not properties that
+/// failed on some input.
+///
+/// When such an error is detected *inside* a running test body (while a draw
+/// builds or interprets a schema, or in `tc.target()`), the panic would
+/// otherwise be classified by `run_lifecycle::run_test_case` as a discovered
+/// counterexample and shrunk. This prefix lets the lifecycle recognise the
+/// panic and abort the run with the stripped message instead. The marker is
+/// only attached inside a test context (see [`raise_invalid_argument`]), so it
+/// never escapes to the user.
+pub(crate) const INVALID_ARGUMENT_PREFIX: &str = "__HEGEL_INVALID_ARGUMENT:";
+
+/// Panic with an invalid-argument (usage) error carrying `message`.
+///
+/// The same usage error can be detected either while a test case is running
+/// (e.g. an inline `tc.draw(gs::sampled_from(&[]))`, or a bound check inside a
+/// schema build) or up front, before any run (constructing a generator and
+/// validating its arguments eagerly). To read cleanly in both cases:
+///
+/// - **Inside a test context**, the message is panicked with
+///   [`INVALID_ARGUMENT_PREFIX`] prepended so the lifecycle re-raises it as a
+///   clean usage error rather than shrinking it as a counterexample.
+/// - **Outside any test run**, there is no lifecycle to strip a marker, so the
+///   message is panicked directly.
+///
+/// Either way the user sees only the bare message; the marker never escapes.
+/// Prefer the [`invalid_argument!`] macro, which formats its arguments.
+#[track_caller]
+pub(crate) fn raise_invalid_argument(message: std::fmt::Arguments<'_>) -> ! {
+    if crate::control::currently_in_test_context() {
+        panic!("{INVALID_ARGUMENT_PREFIX}{message}");
+    } else {
+        panic!("{message}");
+    }
+}
+
+/// Raise an invalid-argument (usage) error, formatting like [`format!`].
+///
+/// Use this for every caller-configuration mistake a generator or
+/// `tc.target()` detects, in place of a bare `panic!`. See
+/// [`raise_invalid_argument`] for how the message is surfaced in and out of a
+/// test run.
+macro_rules! invalid_argument {
+    ($($arg:tt)*) => {
+        $crate::test_case::raise_invalid_argument(::std::format_args!($($arg)*))
+    };
+}
+pub(crate) use invalid_argument;
+
 /// Panic with the appropriate sentinel for the given data source error.
 fn panic_on_data_source_error(e: DataSourceError) -> ! {
     match e {
         DataSourceError::StopTest => panic!("{}", STOP_TEST_STRING),
         DataSourceError::Assume => panic!("{}", ASSUME_FAIL_STRING), // nocov
-        DataSourceError::ServerError(msg) => panic!("{}", msg),
+        // The server backend has no dedicated invalid-argument variant on the
+        // wire: it reports a misconfigured generator as a `ServerError` whose
+        // message names Hypothesis's `InvalidArgument` exception. Surface those
+        // as usage errors (a clean abort), exactly like the native backend's
+        // `InvalidArgument` below; a genuine server error still panics with its
+        // message and is reported as a failure.
+        DataSourceError::ServerError(msg) => {
+            if msg.contains("InvalidArgument") {
+                invalid_argument!("{}", msg)
+            } else {
+                panic!("{}", msg)
+            }
+        }
+        // A caller-supplied argument (typically a generator's schema) was
+        // semantically invalid: e.g. a range with no representable values, or
+        // a `sampled_from` over an empty set. This is a usage error, not a
+        // discovered counterexample, so raise it with the invalid-argument
+        // prefix and let the lifecycle abort the run cleanly. libhegel never
+        // reaches here — it maps the error to `HEGEL_E_INVALID_ARG` instead.
+        DataSourceError::InvalidArgument(msg) => invalid_argument!("{}", msg),
     }
 }
 
 pub(crate) struct TestCaseGlobalData {
     mode: Mode,
+    /// Whether drawn-value records and notes are surfaced for this test case
+    /// (true on the final replay of a failure, or when verbose output is on).
+    /// When false `on_draw` is a no-op, so the draw-recording bookkeeping in
+    /// [`TestCase::record_named_draw`] (display-name allocation + `Debug`
+    /// rendering of the value) can be skipped entirely.
+    emit: bool,
     /// Fine-grained lock over the state shared between clones of a
     /// `TestCase`. Acquired briefly around each individual backend call
     /// and around each mutation of the draw-tracking bookkeeping, not
@@ -253,6 +331,7 @@ impl TestCase {
         TestCase {
             global: Arc::new(TestCaseGlobalData {
                 mode,
+                emit: should_emit,
                 shared: Mutex::new(SharedState {
                     data_source,
                     draw_state: DrawState {
@@ -514,6 +593,12 @@ impl TestCase {
                     if msg == ASSUME_FAIL_STRING {
                     } else if msg == STOP_TEST_STRING {
                         resume_unwind(e);
+                    } else if msg.starts_with(INVALID_ARGUMENT_PREFIX) {
+                        // A usage error (bad generator argument, `tc.target()`
+                        // misuse) is terminal: re-raise it directly so the
+                        // lifecycle aborts the run, without the marker draw the
+                        // counterexample path below adds.
+                        resume_unwind(e);
                     } else {
                         self.draw_silent(booleans());
                         resume_unwind(e);
@@ -538,6 +623,15 @@ impl TestCase {
     }
 
     fn record_named_draw<T: std::fmt::Debug>(&self, value: &T, name: &str, repeatable: bool) {
+        // The drawn-value record is only ever surfaced through `on_draw`, which
+        // is a no-op unless this is the final replay or verbose output is on.
+        // On ordinary generation/shrinking runs we therefore skip the
+        // display-name allocation and the (often expensive, e.g. Unicode) Debug
+        // render entirely. The usage-error checks below still run every test
+        // case so that misuse fails deterministically, not only on a failure's
+        // final replay.
+        let emit = self.global.emit;
+
         let display_name = self.with_shared(|shared| {
             let draw_state = &mut shared.draw_state;
 
@@ -550,19 +644,28 @@ impl TestCase {
                         name, prev, repeatable
                     );
                 }
-                _ => {
+                Some(_) => {}
+                // Only the first occurrence of a name needs to allocate the key.
+                None => {
                     draw_state
                         .named_draw_repeatable
                         .insert(name.to_string(), repeatable);
                 }
             }
 
-            let count = draw_state
-                .named_draw_counts
-                .entry(name.to_string())
-                .or_insert(0);
-            *count += 1;
-            let current_count = *count;
+            // Look the counter up by `&str` first so repeated draws of the same
+            // name (e.g. a `draw` inside a loop) don't allocate a fresh key on
+            // every call.
+            let current_count = match draw_state.named_draw_counts.get_mut(name) {
+                Some(count) => {
+                    *count += 1;
+                    *count
+                }
+                None => {
+                    draw_state.named_draw_counts.insert(name.to_string(), 1);
+                    1
+                }
+            };
 
             if !repeatable && current_count > 1 {
                 panic!(
@@ -572,7 +675,13 @@ impl TestCase {
                 );
             }
 
-            if repeatable {
+            // Display-name uniqueness bookkeeping is output-only; skip it (and
+            // its allocations) when nothing will be emitted.
+            if !emit {
+                return None;
+            }
+
+            let display = if repeatable {
                 let mut candidate = current_count;
                 loop {
                     let name = format!("{}_{}", name, candidate);
@@ -585,8 +694,13 @@ impl TestCase {
                 let name = name.to_string();
                 draw_state.allocated_display_names.insert(name.clone());
                 name
-            }
+            };
+            Some(display)
         });
+
+        let Some(display_name) = display_name else {
+            return;
+        };
 
         let local = self.local.borrow();
         let indent = local.indent;
@@ -760,3 +874,7 @@ pub mod labels {
     pub const SAMPLED_FROM: u64 = 14;
     pub const ENUM_VARIANT: u64 = 15;
 }
+
+#[cfg(test)]
+#[path = "../tests/embedded/test_case_tests.rs"]
+mod tests;

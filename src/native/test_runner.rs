@@ -79,7 +79,7 @@ impl TestRunner for NativeTestRunner {
         if settings.mode == Mode::SingleTestCase {
             return run_single(settings, run_case);
         }
-        run_main(settings, database_key, run_case)
+        run_main(settings, database_key, run_case, TOO_SLOW_THRESHOLD)
     }
 }
 
@@ -115,6 +115,9 @@ fn run_main(
     settings: &Settings,
     database_key: Option<&str>,
     run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+    // Injected (rather than read from the `TOO_SLOW_THRESHOLD` constant) so a
+    // test can trip the TooSlow check deterministically without a 30s sleep.
+    too_slow_threshold: std::time::Duration,
 ) -> TestRunResult {
     let mut rng = create_rng(settings, database_key);
     let max_examples = settings.test_cases;
@@ -232,7 +235,10 @@ fn run_main(
         && interesting.is_empty()
     {
         let run = ctx.run(NativeTestCase::for_simplest(BUFFER_SIZE));
-        crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[]);
+        // This trivial-probe is one of the first recordings, so it can't yet
+        // mismatch; a non-deterministic generator is caught by the main
+        // generation loop's `record_tree` below.
+        let _ = crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[]);
         calls += 1;
         if run.nodes.is_empty() && run.status >= Status::Invalid {
             test_is_trivial = true;
@@ -291,7 +297,11 @@ fn run_main(
 
             let tc_start = std::time::Instant::now();
             let run = ctx.run(ntc);
-            crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[]);
+            if let Some(msg) =
+                crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[])
+            {
+                return health_check_failure(msg);
+            }
             let elapsed = tc_start.elapsed();
             calls += 1;
 
@@ -326,27 +336,29 @@ fn run_main(
                         .suppress_health_check
                         .contains(&HealthCheck::FilterTooMuch)
                 {
-                    panic!(
+                    return health_check_failure(format!(
                         "FailedHealthCheck: FilterTooMuch — it looks like this \
                          test is filtering out too many inputs. \
                          {invalid_calls} inputs were filtered out by assume() \
                          before any valid input was generated. \
                          If this is expected, suppress the check with \
                          suppress_health_check = [HealthCheck::FilterTooMuch]."
-                    );
+                    ));
                 }
             } else {
                 invalid_calls = 0;
             }
 
-            too_slow_check(
+            if let Some(msg) = too_slow_check(
                 valid_test_cases,
                 total_test_time,
-                TOO_SLOW_THRESHOLD,
+                too_slow_threshold,
                 settings
                     .suppress_health_check
                     .contains(&HealthCheck::TooSlow),
-            );
+            ) {
+                return health_check_failure(msg);
+            }
 
             // Fire `optimise_targets` periodically once enough valid
             // examples have accumulated. Counts share the generation
@@ -360,7 +372,10 @@ fn run_main(
                 && target_schedule.should_fire(valid_test_cases)
             {
                 let mut on_run = |run: &RunResult| {
-                    crate::native::data_tree::record_tree(
+                    // A non-determinism mismatch here is dropped: it's a
+                    // generator property, so the next main-loop `record_tree`
+                    // (above) re-detects it and returns a clean failure.
+                    let _ = crate::native::data_tree::record_tree(
                         &mut tree_root,
                         &run.nodes,
                         run.status,
@@ -394,8 +409,15 @@ fn run_main(
                 // have ≥2 occurrences (or when the first probe fires
                 // Interesting) the closure short-circuits below
                 // `SPAN_MUTATION_ATTEMPTS`.
-                let (mutation_result, mutation_attempts) =
-                    try_span_mutation(&run.nodes, &run.spans, &mut rng, &mut ctx);
+                let (mutation_result, mutation_attempts) = try_span_mutation(
+                    &run.nodes,
+                    &run.spans,
+                    &mut rng,
+                    &mut ctx,
+                    &mut tree_root,
+                    &mut valid_test_cases,
+                    max_examples,
+                );
                 calls += mutation_attempts as u64;
                 if let Some((mut_nodes, origin)) = mutation_result {
                     if first_bug_at.is_none() {
@@ -421,13 +443,13 @@ fn run_main(
             .contains(&HealthCheck::FilterTooMuch)
         && invalid_calls > 0
     {
-        panic!(
+        return health_check_failure(format!(
             "FailedHealthCheck: FilterTooMuch — every reachable input was \
              filtered out by assume() before any valid input was generated. \
              {invalid_calls} inputs were filtered out across the full search \
              space. If this is expected, suppress the check with \
              suppress_health_check = [HealthCheck::FilterTooMuch]."
-        );
+        ));
     }
 
     // --- Shrinking phase ---
@@ -440,7 +462,11 @@ fn run_main(
                 total
             );
         }
-        let origins: Vec<String> = interesting.keys().cloned().collect();
+        let mut origins: Vec<String> = interesting.keys().cloned().collect();
+        // Deterministic shrink order: `interesting` is a `HashMap`, whose key
+        // order is randomised per process, and each origin's shrink shares the
+        // run-level call budget.
+        origins.sort();
         for origin in origins {
             let initial = interesting.get(&origin).cloned().unwrap_or_default();
 
@@ -450,13 +476,7 @@ fn run_main(
             let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
             let verify = ctx.run(verify_ntc);
             if verify.status != Status::Interesting {
-                panic!(
-                    "Flaky test detected: Your test produced different outcomes \
-                     when run with the same generated data — it failed when it \
-                     previously succeeded, or succeeded when it previously failed. \
-                     This usually means your test depends on external state such as \
-                     global variables, system time, or external random number generators."
-                );
+                return health_check_failure(flaky_diagnostic());
             }
 
             let target_origin = origin.clone();
@@ -565,7 +585,10 @@ fn run_main(
     // the returned `TestRunResult::failures`, which `drive` then turns into
     // either the single-failure or multi-failure outer panic.
     let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> = interesting.into_iter().collect();
-    origins_sorted.sort_by_key(|origin| std::cmp::Reverse(sort_key(&origin.1)));
+    // Descending sort_key order. `sort_by` instead of `sort_by_key` because
+    // `NodesSortKey` borrows from the origin's nodes and the key would
+    // otherwise outlive its borrow.
+    origins_sorted.sort_by(|a, b| sort_key(&b.1).cmp(&sort_key(&a.1)));
 
     // When `report_multiple_failures` is `false`, drop all but the
     // smallest origin (the one observed *last* under the
@@ -593,10 +616,9 @@ fn run_main(
             // which requires the test body to flip its outcome strictly
             // between the last shrink call and the final replay.
             // Deterministic reproduction needs precise call-count
-            // alignment that's brittle in CI; the function itself is
-            // tested directly via
-            // `flaky_final_replay_panic_panics_with_diagnostic`.
-            _ => flaky_final_replay_panic(), // nocov
+            // alignment that's brittle in CI; the message builder itself is
+            // tested directly via `flaky_diagnostic_mentions_flaky`.
+            _ => return health_check_failure(flaky_diagnostic()), // nocov
         }
     }
 
@@ -620,42 +642,65 @@ fn run_main(
 const MIN_TEST_CALLS: u64 = 10;
 const POST_BUG_EXTRA_CALLS: u64 = 1000;
 
-/// Panics with the `FailedHealthCheck: TooSlow` message when input
-/// generation has consumed more than `threshold` of wall-clock time
-/// without producing `HEALTH_CHECK_MAX_VALID` valid examples, unless
-/// the user has explicitly suppressed the check.
+/// Returns the `FailedHealthCheck: TooSlow` message when input generation
+/// has consumed more than `threshold` of wall-clock time without producing
+/// `HEALTH_CHECK_MAX_VALID` valid examples, unless the user has explicitly
+/// suppressed the check; otherwise returns `None`.
 ///
-/// Extracted from the runner's main loop so a unit test can exercise
-/// both the panicking and the suppressed branches without needing to
-/// stall the in-process test harness for `TOO_SLOW_THRESHOLD` of
-/// real time.
+/// Returning the message (rather than panicking) lets the caller fold it
+/// into a failing [`TestRunResult`] so no panic crosses the FFI boundary
+/// (see [`health_check_failure`]). Extracted from the runner's main loop so
+/// a unit test can exercise both branches without stalling the in-process
+/// harness for `TOO_SLOW_THRESHOLD` of real time.
 pub(crate) fn too_slow_check(
     valid_test_cases: u64,
     total_test_time: std::time::Duration,
     threshold: std::time::Duration,
     suppressed: bool,
-) {
+) -> Option<String> {
     if valid_test_cases < HEALTH_CHECK_MAX_VALID && total_test_time > threshold && !suppressed {
-        panic!(
+        Some(format!(
             "FailedHealthCheck: TooSlow — input generation is slow: \
              only {valid_test_cases} valid inputs after {:?} (threshold \
              {:?}). Slow generation makes property testing much less \
              effective. If this is expected, suppress the check with \
              suppress_health_check = [HealthCheck::TooSlow].",
             total_test_time, threshold
-        );
+        ))
+    } else {
+        None
     }
 }
 
-#[cold]
-pub(crate) fn flaky_final_replay_panic() -> ! {
-    panic!(
-        "Flaky test detected: Your test produced different outcomes \
-         when run with the same generated data — it failed when it \
-         previously succeeded, or succeeded when it previously failed. \
-         This usually means your test depends on external state such as \
-         global variables, system time, or external random number generators."
-    );
+/// Diagnostic for a flaky test — one whose outcome changed when re-run with
+/// the same generated data. Returned as a message (rather than panicked) so
+/// the caller can fold it into a failing [`TestRunResult`].
+pub(crate) fn flaky_diagnostic() -> String {
+    "Flaky test detected: Your test produced different outcomes \
+     when run with the same generated data — it failed when it \
+     previously succeeded, or succeeded when it previously failed. \
+     This usually means your test depends on external state such as \
+     global variables, system time, or external random number generators."
+        .to_string()
+}
+
+/// Build a failing [`TestRunResult`] from a health-check diagnostic.
+///
+/// Health-check failures (FilterTooMuch / TooSlow / flaky) are reported as a
+/// normal failing run rather than via `panic!`, so that an in-process engine
+/// driven over FFI (libhegel) surfaces them as a result the caller can
+/// inspect instead of an uncaught panic that aborts the host process. The
+/// main library still turns this into a panic at its API surface, preserving
+/// its existing behaviour.
+fn health_check_failure(message: String) -> TestRunResult {
+    TestRunResult {
+        passed: false,
+        failures: vec![Failure {
+            panic_message: message.clone(),
+            diagnostic: format!("{message}\n"),
+            origin: "FailedHealthCheck".to_string(),
+        }],
+    }
 }
 
 fn should_generate_more(
@@ -876,6 +921,61 @@ impl<'a> EngineCtx<'a> {
     pub(crate) fn run(&mut self, ntc: NativeTestCase) -> RunResult {
         self.execute(ntc, false)
     }
+
+    /// Hypothesis's `cached_test_function`, ported: replay `choices` only
+    /// when their outcome isn't already known. First the exact-input data
+    /// cache is consulted; failing that, `choices` are *simulated* against
+    /// the generation `tree_root` (read-only) — if that simulation reaches a
+    /// recorded conclusion without hitting a previously-unseen draw, the test
+    /// body is not run at all. Only a genuinely novel sequence (or a
+    /// known-`Interesting` one, whose nodes/origin the tree can't carry)
+    /// falls through to a real [`Self::execute`], whose result is memoised in
+    /// the data cache.
+    ///
+    /// The realised result is deliberately *not* recorded back into
+    /// `tree_root`. The tree drives generation's `generate_novel_prefix`
+    /// walk, whose RNG consumption depends on the tree's shape; folding the
+    /// mutation pass's paths into it would perturb that walk and so shift the
+    /// entire (seeded) generation trajectory — changing *which* inputs and
+    /// mutations are explored — for no gain to this cache, which only needs
+    /// to recognise paths generation already covered. Leaving the tree
+    /// generation-only keeps the search identical to the pre-cache behaviour
+    /// (where mutations never touched the tree) while still skipping the
+    /// redundant re-executions; the data cache catches exact mutation repeats
+    /// the tree can't.
+    ///
+    /// Returns the result plus whether the test body actually ran, so
+    /// callers charge their execution budget to real runs only. Span
+    /// mutation proposes many sequences whose paths are already covered by
+    /// generation (e.g. duplicating a span the test never reads past);
+    /// pre-cache the native backend ran the body for every one of them,
+    /// executing the test several times more often than Hypothesis.
+    fn cached_run(
+        &mut self,
+        choices: &[ChoiceValue],
+        tree_root: &mut crate::native::data_tree::DataTreeNode,
+    ) -> (RunResult, bool) {
+        if let Some(cached) = self.cache.get(choices) {
+            return (cached.clone(), false);
+        }
+        if let Some(status) = crate::native::data_tree::simulate(tree_root, choices) {
+            if status != Status::Interesting {
+                let result = RunResult {
+                    status,
+                    nodes: Vec::new(),
+                    spans: Vec::new(),
+                    origin: None,
+                    failure: None,
+                    target_observations: HashMap::new(),
+                };
+                return (result, false);
+            }
+        }
+        let ntc = NativeTestCase::for_choices(choices, None, None);
+        let run = self.execute(ntc, false);
+        self.cache.insert(choices.to_vec(), run.clone());
+        (run, true)
+    }
 }
 
 /// Try span mutation: find two spans with the same label and either duplicate
@@ -884,22 +984,40 @@ impl<'a> EngineCtx<'a> {
 ///
 /// Returns the mutated shrunk nodes plus the panic origin if the attempt
 /// produced an interesting result.
-/// Runs up to [`SPAN_MUTATION_ATTEMPTS`] span-mutation probes via `ctx`.
+/// Makes up to [`SPAN_MUTATION_ATTEMPTS`] span-mutation probes through
+/// [`EngineCtx::cached_run`], so a proposed sequence whose path is already
+/// covered by the `tree_root` (or sits in the data cache) costs no test-body
+/// execution — matching Hypothesis, which routes mutations through
+/// `cached_test_function`.
+///
+/// A span mutation is itself a generated test case, so each probe that
+/// *actually executes* and is valid consumes the same `max_examples` budget
+/// as a freshly generated example: it bumps `*valid_test_cases`, and the
+/// probe loop stops as soon as that budget is full. (In Hypothesis the
+/// mutation executions go through `cached_test_function` → `test_function`,
+/// which increments `valid_examples` exactly as a fresh draw does; cache/tree
+/// hits bypass it and so cost nothing.) Without this the native backend ran
+/// `max_examples` fresh cases *plus* up to five mutations each, executing the
+/// test several times more often than Hypothesis.
+///
 /// Returns the mutated counterexample (if one was found) plus the number of
-/// `ctx.execute` calls that actually ran — N3 fix: pre-N3 the caller
-/// unconditionally added `SPAN_MUTATION_ATTEMPTS` to its `calls` counter,
-/// even when no labels with ≥2 occurrences exist (multi is empty → 0 probes
-/// run) or when a probe fired Interesting on attempt 1 (only 1 probe ran).
-/// The accounting now reflects what actually happened.
+/// probes that actually executed the test body, which the caller adds to its
+/// `calls` counter.
 fn try_span_mutation(
     nodes: &[ChoiceNode],
     spans: &[Span],
     rng: &mut SmallRng,
     ctx: &mut EngineCtx<'_>,
+    tree_root: &mut crate::native::data_tree::DataTreeNode,
+    valid_test_cases: &mut u64,
+    max_examples: u64,
 ) -> (Option<(Vec<ChoiceNode>, String)>, usize) {
-    use std::collections::HashSet;
-
-    let mut by_label: HashMap<&str, HashSet<(usize, usize)>> = HashMap::new();
+    // Fast, non-DoS-resistant hashers: these maps are keyed by our own span
+    // labels / extents (never adversarial) and are rebuilt for every recorded
+    // result, so the default SipHash showed up prominently in generation
+    // profiles. FxHash is a clear win here.
+    let mut by_label: rustc_hash::FxHashMap<&str, rustc_hash::FxHashSet<(usize, usize)>> =
+        rustc_hash::FxHashMap::default();
     for span in spans.iter() {
         by_label
             .entry(span.label.as_str())
@@ -923,6 +1041,11 @@ fn try_span_mutation(
 
     let mut attempts: usize = 0;
     for _ in 0..SPAN_MUTATION_ATTEMPTS {
+        // A mutation probe is a generated example: once the example budget is
+        // full there is no room for another, so stop proposing.
+        if *valid_test_cases >= max_examples {
+            break;
+        }
         let group = &multi[rng.random_range(0..multi.len())];
         let i_a = rng.random_range(0..group.len());
         let mut i_b = rng.random_range(0..group.len() - 1);
@@ -963,9 +1086,15 @@ fn try_span_mutation(
             out
         };
 
-        let ntc = NativeTestCase::for_choices(&attempt, None, None);
-        let run = ctx.execute(ntc, false);
-        attempts += 1;
+        let (run, executed) = ctx.cached_run(&attempt, tree_root);
+        if executed {
+            attempts += 1;
+            // A valid mutation execution is a valid example and consumes the
+            // budget, exactly like a freshly generated one.
+            if run.status == Status::Valid {
+                *valid_test_cases += 1;
+            }
+        }
         if run.status == Status::Interesting {
             let origin = run.origin.unwrap_or_default();
             return (Some((run.nodes, origin)), attempts);

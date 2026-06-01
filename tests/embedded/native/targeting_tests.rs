@@ -1,38 +1,39 @@
 use super::*;
+use crate::native::bignum::BigInt;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{BytesChoice, FloatChoice};
 
 fn integer_node(value: i128, min_value: i128, max_value: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
-            min_value,
-            max_value,
-            shrink_towards: 0,
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
+            min_value: BigInt::from(min_value),
+            max_value: BigInt::from(max_value),
+            shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(value),
-        was_forced: false,
-    }
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 fn float_node(value: f64) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Float(FloatChoice {
+    ChoiceNode::new(
+        ChoiceKind::Float(FloatChoice {
             min_value: f64::NEG_INFINITY,
             max_value: f64::INFINITY,
             allow_nan: false,
             allow_infinity: true,
         }),
-        value: ChoiceValue::Float(value),
-        was_forced: false,
-    }
+        ChoiceValue::Float(value),
+        false,
+    )
 }
 
 fn bytes_node(value: Vec<u8>, min_size: usize, max_size: usize) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Bytes(BytesChoice { min_size, max_size }),
-        value: ChoiceValue::Bytes(value),
-        was_forced: false,
-    }
+    ChoiceNode::new(
+        ChoiceKind::Bytes(BytesChoice { min_size, max_size }),
+        ChoiceValue::Bytes(value),
+        false,
+    )
 }
 
 // ── TargetingState ────────────────────────────────────────────────────────
@@ -47,7 +48,7 @@ fn targeting_state_starts_empty() {
 #[test]
 fn targeting_state_records_first_observation() {
     let mut state = TargetingState::new();
-    let choices = vec![ChoiceValue::Integer(7)];
+    let choices = vec![ChoiceValue::Integer(BigInt::from(7))];
     let obs = std::collections::HashMap::from([("score".to_string(), 1.5)]);
     state.record(&choices, &obs);
     assert!(!state.is_empty());
@@ -57,8 +58,8 @@ fn targeting_state_records_first_observation() {
 #[test]
 fn targeting_state_overwrites_only_on_strict_improvement() {
     let mut state = TargetingState::new();
-    let choices_a = vec![ChoiceValue::Integer(1)];
-    let choices_b = vec![ChoiceValue::Integer(2)];
+    let choices_a = vec![ChoiceValue::Integer(BigInt::from(1))];
+    let choices_b = vec![ChoiceValue::Integer(BigInt::from(2))];
     state.record(
         &choices_a,
         &std::collections::HashMap::from([("s".to_string(), 1.0)]),
@@ -86,7 +87,7 @@ fn targeting_state_overwrites_only_on_strict_improvement() {
 #[test]
 fn targeting_state_tracks_multiple_labels_independently() {
     let mut state = TargetingState::new();
-    let choices = vec![ChoiceValue::Integer(0)];
+    let choices = vec![ChoiceValue::Integer(BigInt::from(0))];
     state.record(
         &choices,
         &std::collections::HashMap::from([("a".to_string(), 1.0), ("b".to_string(), 2.0)]),
@@ -131,11 +132,11 @@ fn schedule_for_small_max_examples_never_fires_in_range() {
 fn is_climbable_accepts_integer_float_boolean_bytes() {
     let int_node = integer_node(0, 0, 10);
     let float_node = float_node(0.0);
-    let bool_node = ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Boolean(true),
-        was_forced: false,
-    };
+    let bool_node = ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(true),
+        false,
+    );
     let bytes_node = bytes_node(vec![0], 0, 8);
     for node in [&int_node, &float_node, &bool_node, &bytes_node] {
         assert!(
@@ -163,9 +164,9 @@ fn is_climbable_rejects_strings() {
 #[test]
 fn is_climbable_returns_false_for_value_and_kind_mismatch() {
     let int_kind = ChoiceKind::Integer(IntegerChoice {
-        min_value: 0,
-        max_value: 10,
-        shrink_towards: 0,
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(10),
+        shrink_towards: BigInt::from(0),
     });
     // Wrong-shape pairing: a bytes value with an integer kind is never
     // produced by the engine, but `is_climbable` defensively rejects it.
@@ -177,8 +178,14 @@ fn is_climbable_returns_false_for_value_and_kind_mismatch() {
 #[test]
 fn step_choice_integer_adds_delta_within_range() {
     let node = integer_node(5, 0, 100);
-    assert_eq!(step_choice(&node, 3), Some(ChoiceValue::Integer(8)));
-    assert_eq!(step_choice(&node, -5), Some(ChoiceValue::Integer(0)));
+    assert_eq!(
+        step_choice(&node, 3),
+        Some(ChoiceValue::Integer(BigInt::from(8)))
+    );
+    assert_eq!(
+        step_choice(&node, -5),
+        Some(ChoiceValue::Integer(BigInt::from(0)))
+    );
 }
 
 #[test]
@@ -200,11 +207,11 @@ fn step_choice_float_adds_delta_as_f64() {
 #[test]
 fn step_choice_boolean_only_steps_by_one() {
     use crate::native::core::choices::BooleanChoice;
-    let node = ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Boolean(false),
-        was_forced: false,
-    };
+    let node = ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(false),
+        false,
+    );
     assert_eq!(step_choice(&node, 1), Some(ChoiceValue::Boolean(true)));
     assert_eq!(step_choice(&node, -1), Some(ChoiceValue::Boolean(false)));
     assert_eq!(step_choice(&node, 0), Some(ChoiceValue::Boolean(false)));
@@ -252,11 +259,11 @@ fn step_choice_bytes_returns_none_when_overflows_max_size() {
 #[test]
 fn step_choice_rejects_mismatched_value_and_kind() {
     use crate::native::core::choices::BooleanChoice;
-    let node = ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Integer(0),
-        was_forced: false,
-    };
+    let node = ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Integer(BigInt::from(0)),
+        false,
+    );
     assert_eq!(step_choice(&node, 1), None);
 }
 
@@ -324,8 +331,8 @@ fn hill_climb_resize_restart_and_already_examined_skip() {
     // fallback so `current_nodes.len()` grows mid-walk.
     let start = vec![
         ChoiceValue::Boolean(false),
-        ChoiceValue::Integer(2),
-        ChoiceValue::Integer(2),
+        ChoiceValue::Integer(BigInt::from(2)),
+        ChoiceValue::Integer(BigInt::from(2)),
         ChoiceValue::Boolean(false),
         ChoiceValue::Boolean(false),
     ];
@@ -366,7 +373,7 @@ fn hill_climb_rejects_lateral_grow() {
 /// short-circuited.
 #[test]
 fn hill_climb_rejects_invalid_trial_status() {
-    let start = vec![ChoiceValue::Integer(6)];
+    let start = vec![ChoiceValue::Integer(BigInt::from(6))];
     run_optimise(start, -1.0, |tc| {
         let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(20));
         tc.assume(n != 7);
@@ -385,7 +392,7 @@ fn hill_climb_rejects_invalid_trial_status() {
 /// explicitly.
 #[test]
 fn hill_climb_returns_zero_when_initial_replay_invalid() {
-    let start = vec![ChoiceValue::Integer(7)];
+    let start = vec![ChoiceValue::Integer(BigInt::from(7))];
     run_optimise(start, 0.0, |tc| {
         let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(20));
         tc.assume(n != 7);
@@ -401,7 +408,7 @@ fn hill_climb_returns_zero_when_initial_replay_invalid() {
 /// trial comes back `Status::Interesting`.
 #[test]
 fn run_trial_records_interesting_result_into_ctx() {
-    let start = vec![ChoiceValue::Integer(6)];
+    let start = vec![ChoiceValue::Integer(BigInt::from(6))];
     run_optimise(start, -1.0, |tc| {
         let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(20));
         assert_ne!(n, 7);

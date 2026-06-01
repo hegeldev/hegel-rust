@@ -2,6 +2,7 @@ use crate::backend::{DataSource, DataSourceError, TestCaseResult};
 use crate::cbor_utils::{cbor_map, map_insert};
 use crate::server::protocol::{Connection, Stream};
 use crate::settings::Verbosity;
+use crate::test_case::invalid_argument;
 use ciborium::Value;
 
 use std::collections::HashSet;
@@ -230,23 +231,29 @@ impl DataSource for ServerDataSource {
         // nocov end
     }
 
-    fn new_pool(&self) -> Result<i128, DataSourceError> {
+    fn new_pool(&self) -> Result<i64, DataSourceError> {
         let response = self.send_request("new_pool", &cbor_map! {})?;
         match response {
-            Value::Integer(i) => Ok(i.into()),
+            Value::Integer(i) => {
+                let n: i128 = i.into();
+                Ok(n as i64)
+            }
             other => panic!("Expected integer response for pool id, got {:?}", other), // nocov
         }
     }
 
-    fn pool_add(&self, pool_id: i128) -> Result<i128, DataSourceError> {
+    fn pool_add(&self, pool_id: i64) -> Result<i64, DataSourceError> {
         let response = self.send_request("pool_add", &cbor_map! {"pool_id" => pool_id})?;
         match response {
-            Value::Integer(i) => Ok(i.into()),
+            Value::Integer(i) => {
+                let n: i128 = i.into();
+                Ok(n as i64)
+            }
             other => panic!("Expected integer response for variable id, got {:?}", other), // nocov
         }
     }
 
-    fn pool_generate(&self, pool_id: i128, consume: bool) -> Result<i128, DataSourceError> {
+    fn pool_generate(&self, pool_id: i64, consume: bool) -> Result<i64, DataSourceError> {
         let response = self.send_request(
             "pool_generate",
             &cbor_map! {
@@ -255,7 +262,10 @@ impl DataSource for ServerDataSource {
             },
         )?;
         match response {
-            Value::Integer(i) => Ok(i.into()),
+            Value::Integer(i) => {
+                let n: i128 = i.into();
+                Ok(n as i64)
+            }
             other => panic!("Expected integer response for variable id, got {:?}", other), // nocov
         }
     }
@@ -268,14 +278,14 @@ impl DataSource for ServerDataSource {
         // the Python server, surfacing as a CBOR round-trip error rather
         // than a clean client-side panic.
         if !score.is_finite() {
-            panic!(
+            invalid_argument!(
                 "tc.target({score}, label={label:?}) requires a finite score; \
                  got non-finite value"
             );
         }
         let mut seen = self.target_labels.lock().unwrap_or_else(|e| e.into_inner());
         if !seen.insert(label.to_string()) {
-            panic!(
+            invalid_argument!(
                 "tc.target({score}, label={label:?}) would overwrite previous \
                  tc.target(_, label={label:?}); each label can be observed at \
                  most once per test case"

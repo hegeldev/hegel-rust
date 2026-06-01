@@ -1,14 +1,63 @@
 // Integer-based shrink passes: zero_choices, swap_integer_sign,
 // binary_search_integer_towards_zero, redistribute_integers, shrink_duplicates,
 // lower_common_node_offset.
+//
+// Integer choice values use `BigInt` directly, so these passes do their
+// arithmetic in arbitrary precision and write candidates back through
+// `IntegerChoice::value_from_bigint` (which rejects out-of-range candidates).
+// Shrinking is far colder than generation, so the `BigInt` allocation here is
+// acceptable.
 
 use std::collections::HashMap;
 
+use crate::native::bignum::{BigInt, Sign, Signed, ToPrimitive};
 use crate::native::core::{ChoiceKind, ChoiceValue};
 
-use super::{Shrinker, bin_search_down, find_integer};
+use super::{Shrinker, bin_search_down_big, find_integer};
 
 impl<'a> Shrinker<'a> {
+    /// Current integer value at node `i` as a [`BigInt`].
+    pub(super) fn int_value_bigint(&self, i: usize) -> BigInt {
+        match &self.current_nodes[i].value {
+            ChoiceValue::Integer(v) => v.clone(),
+            _ => unreachable!("int_value_bigint on non-integer node"),
+        }
+    }
+
+    /// Build a width-correct integer replacement value for node `i`. Callers
+    /// (`bind_deletion`, `minimize_individual_choices`) only invoke this for an
+    /// in-range integer node with a candidate inside `[min, max] ⊆ width`, so
+    /// neither the kind nor the width conversion can fail.
+    pub(super) fn int_replacement(&self, i: usize, candidate: &BigInt) -> ChoiceValue {
+        let ChoiceKind::Integer(ic) = self.current_nodes[i].kind.as_ref() else {
+            unreachable!("int_replacement on non-integer node")
+        };
+        ChoiceValue::Integer(
+            ic.value_from_bigint(candidate)
+                .unwrap_or_else(|| unreachable!("candidate fits the node's width")),
+        )
+    }
+
+    /// Attempt to replace node `i` with `candidate`. The candidate is handed to
+    /// [`Shrinker::replace`], which range-checks it and coerces it to the
+    /// node's width (rejecting out-of-range candidates), so this stays correct
+    /// for any node width.
+    pub(super) fn replace_int(&mut self, i: usize, candidate: &BigInt) -> bool {
+        self.replace(&HashMap::from([(
+            i,
+            ChoiceValue::Integer(candidate.clone()),
+        )]))
+    }
+
+    /// Attempt to replace two integer nodes simultaneously; `replace`
+    /// range-checks and width-coerces each candidate.
+    pub(super) fn replace_two(&mut self, i: usize, vi: &BigInt, j: usize, vj: &BigInt) -> bool {
+        self.replace(&HashMap::from([
+            (i, ChoiceValue::Integer(vi.clone())),
+            (j, ChoiceValue::Integer(vj.clone())),
+        ]))
+    }
+
     /// Replace blocks of choices with their simplest values.
     pub(super) fn zero_choices(&mut self) {
         let mut k = self.current_nodes.len();
@@ -34,19 +83,21 @@ impl<'a> Shrinker<'a> {
     pub(super) fn swap_integer_sign(&mut self) {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            let node = &self.current_nodes[i];
-            if let (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) = (&node.kind, &node.value) {
-                let v = *v;
+            if let (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) = (
+                self.current_nodes[i].kind.as_ref(),
+                &self.current_nodes[i].value,
+            ) {
+                let v = v.clone();
+                let simplest = ic.simplest();
                 if v != ic.simplest() {
-                    self.replace(&HashMap::from([(i, ChoiceValue::Integer(ic.simplest()))]));
+                    self.replace(&HashMap::from([(i, ChoiceValue::Integer(simplest))]));
                 }
-                // Re-read in case the replace changed things
+                // Re-read in case the replace changed things.
                 if i < self.current_nodes.len() {
-                    if let (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) =
-                        (&self.current_nodes[i].kind, &self.current_nodes[i].value)
-                    {
-                        if *v < 0 && ic.validate(-*v) {
-                            self.replace(&HashMap::from([(i, ChoiceValue::Integer(-*v))]));
+                    if let ChoiceValue::Integer(v) = &self.current_nodes[i].value {
+                        let v = v.clone();
+                        if v.sign() == Sign::Minus {
+                            self.replace_int(i, &(-&v));
                         }
                     }
                 }
@@ -63,201 +114,175 @@ impl<'a> Shrinker<'a> {
     pub(super) fn binary_search_integer_towards_zero(&mut self) {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            let node = &self.current_nodes[i];
-            if let (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) = (&node.kind, &node.value) {
-                let v = *v;
-                let ic = ic.clone();
-                if v > 0 {
-                    let lo = ic.simplest().max(0);
-                    // shift_right adaptive descent. Probes
-                    // `lo + (v - lo) >> k` for k = 1, 2, 4, 8, ... via
-                    // `find_integer`, which is O(log log distance) rather
-                    // than the O(log distance) of a full
-                    // `bin_search_down`. For distance 10^15 that's
-                    // ~7 probes vs ~50.
-                    let dist = (v - lo) as u128;
-                    if dist > 0 {
-                        find_integer(|k| {
-                            let shifted = (dist >> k.min(127)) as i128;
-                            // dist is u128 ≥ 0, so shifted ≥ 0 and
-                            // lo + shifted ≥ lo unconditionally — no
-                            // out-of-range guard needed.
-                            let candidate = lo + shifted;
-                            self.replace(&HashMap::from([(i, ChoiceValue::Integer(candidate))]))
-                        });
-                    }
-                    // Linear scan small values for non-monotonic functions.
-                    let range_size = ic.max_value.saturating_sub(ic.min_value).saturating_add(1);
-                    let scan_count = if range_size <= 128 {
-                        range_size.min(32)
-                    } else {
-                        8
-                    };
-                    let ChoiceValue::Integer(cur_v) = self.current_nodes[i].value else {
-                        unreachable!(
-                            "kind/value invariant violated: outer match guaranteed this variant"
-                        )
-                    };
-                    for c in lo..lo.saturating_add(scan_count).min(cur_v) {
-                        if !self.replace(&HashMap::from([(i, ChoiceValue::Integer(c))])) {
-                            // Continue scanning even if not successful
+            let ic = match self.current_nodes[i].kind.as_ref() {
+                ChoiceKind::Integer(ic) => ic.clone(),
+                _ => {
+                    i += 1;
+                    continue;
+                }
+            };
+            let v = self.int_value_bigint(i);
+            let range_size = ic.max_value.clone() - ic.min_value.clone() + BigInt::from(1);
+            if v.sign() == Sign::Plus {
+                let lo = ic.simplest().max(BigInt::from(0));
+                // shift_right adaptive descent. Probes `lo + (v - lo) >> k`
+                // for k = 1, 2, 4, 8, ... via `find_integer`, which is
+                // O(log log distance) rather than the O(log distance) of a
+                // full `bin_search_down`.
+                let dist = &v - &lo;
+                if dist.sign() == Sign::Plus {
+                    let max_shift = dist.bits() as usize + 1;
+                    find_integer(|k| {
+                        let candidate = &lo + (&dist >> k.min(max_shift));
+                        self.replace_int(i, &candidate)
+                    });
+                }
+                // Linear scan small values for non-monotonic functions.
+                let scan_count: i64 = if range_size <= BigInt::from(128) {
+                    range_size.to_i64().unwrap().min(32)
+                } else {
+                    8
+                };
+                let cur_v = self.int_value_bigint(i);
+                let scan_hi = (&lo + BigInt::from(scan_count)).min(cur_v);
+                let mut c = lo.clone();
+                while c < scan_hi {
+                    self.replace_int(i, &c);
+                    c += 1;
+                }
+                // shrink_by_multiples(2) / (1): with a non-monotonic predicate
+                // (e.g. `|m - n| == 1`), pure descent converges to the current
+                // value without ever probing `cur - 2`. Hitting `cur - 2` is
+                // what lets the shrinker flip a linked pair from `(m, m+1)` down
+                // to `(m, m-1)` at the cost of one extra probe.
+                let base = self.int_value_bigint(i);
+                if base > lo {
+                    find_integer(|n| {
+                        let attempt = &base - BigInt::from(2u64 * n as u64);
+                        if attempt < lo {
+                            return false;
                         }
-                    }
-                    // shrink_by_multiples(2) / (1): with a non-monotonic
-                    // predicate (e.g. `|m - n| == 1`), pure bin_search_down
-                    // converges to the current value without ever probing
-                    // `cur - 2`. Hitting `cur - 2` is what lets the
-                    // shrinker flip a linked pair from `(m, m+1)` down to
-                    // `(m, m-1)` at the cost of one extra probe.
-                    let ChoiceValue::Integer(base) = self.current_nodes[i].value else {
-                        unreachable!(
-                            "kind/value invariant violated: outer match guaranteed this variant"
-                        )
-                    };
-                    if base > lo {
-                        find_integer(|n| {
-                            let attempt = base - 2 * (n as i128);
-                            if attempt < lo {
-                                return false;
-                            }
-                            self.replace(&HashMap::from([(i, ChoiceValue::Integer(attempt))]))
-                        });
-                    }
-                    let ChoiceValue::Integer(base) = self.current_nodes[i].value else {
-                        unreachable!(
-                            "kind/value invariant violated: outer match guaranteed this variant"
-                        )
-                    };
-                    if base > lo {
-                        find_integer(|n| {
-                            let attempt = base - (n as i128);
-                            if attempt < lo {
-                                return false;
-                            }
-                            self.replace(&HashMap::from([(i, ChoiceValue::Integer(attempt))]))
-                        });
-                    }
-                    // Also try negative values with smaller absolute value (simpler).
-                    if ic.min_value < 0 {
-                        let ChoiceValue::Integer(cur_v) = self.current_nodes[i].value else {
-                            unreachable!(
-                                "kind/value invariant violated: outer match guaranteed this variant"
-                            )
-                        };
-                        if cur_v > 0 {
-                            let upper = (cur_v - 1).min(ic.min_value.saturating_neg());
-                            if upper >= 1 {
-                                // Seed at -upper, then shift-right-descend the
-                                // absolute value toward 1 via find_integer.
-                                self.replace(&HashMap::from([(i, ChoiceValue::Integer(-upper))]));
-                                let dist = (upper - 1) as u128;
-                                if dist > 0 {
-                                    find_integer(|k| {
-                                        let shifted = (dist >> k.min(127)) as i128;
-                                        let candidate_abs = 1 + shifted;
-                                        if candidate_abs < 1 {
-                                            return false;
-                                        }
-                                        self.replace(&HashMap::from([(
-                                            i,
-                                            ChoiceValue::Integer(-candidate_abs),
-                                        )]))
-                                    });
-                                }
+                        self.replace_int(i, &attempt)
+                    });
+                }
+                let base = self.int_value_bigint(i);
+                if base > lo {
+                    find_integer(|n| {
+                        let attempt = &base - BigInt::from(n as u64);
+                        if attempt < lo {
+                            // Unreachable: a step-1 probe reaches `attempt < lo`
+                            // only after `replace(lo)` succeeds, but a successful
+                            // `replace(lo)` means `lo` is interesting, in which
+                            // case the linear scan above already landed on `lo`
+                            // and `base > lo` is false. (The step-2 probe can hit
+                            // its guard because it skips over `lo`.)
+                            unreachable!("step-1 descent cannot cross below `lo`");
+                        }
+                        self.replace_int(i, &attempt)
+                    });
+                }
+                // Also try negative values with smaller absolute value (simpler).
+                if ic.min_value.clone().sign() == Sign::Minus {
+                    let cur_v = self.int_value_bigint(i);
+                    if cur_v.sign() == Sign::Plus {
+                        let upper = (&cur_v - BigInt::from(1)).min(-ic.min_value.clone());
+                        if upper >= BigInt::from(1) {
+                            // Seed at -upper, then shift-right-descend the
+                            // absolute value toward 1 via find_integer.
+                            self.replace_int(i, &(-&upper));
+                            let dist = &upper - BigInt::from(1);
+                            if dist.sign() == Sign::Plus {
+                                let max_shift = dist.bits() as usize + 1;
+                                find_integer(|k| {
+                                    let candidate_abs =
+                                        BigInt::from(1) + (&dist >> k.min(max_shift));
+                                    self.replace_int(i, &(-&candidate_abs))
+                                });
                             }
                         }
                     }
-                } else if v < 0 {
-                    // Mirror of the positive branch. `lo` is the
-                    // absolute value of the simplest (clamped to 0
-                    // below) and we shrink toward `lo` from `-v`
-                    // before flipping the sign back.
-                    let lo = ic.simplest().min(0).saturating_abs();
-                    let dist = ((-v) as u128).saturating_sub(lo as u128);
-                    if dist > 0 {
-                        find_integer(|k| {
-                            let shifted = (dist >> k.min(127)) as i128;
-                            // Same monotonicity argument as the positive
-                            // branch: shifted ≥ 0, so lo + shifted ≥ lo.
-                            let candidate_abs = lo + shifted;
-                            self.replace(&HashMap::from([(
-                                i,
-                                ChoiceValue::Integer(-candidate_abs),
-                            )]))
-                        });
-                    }
-                    // Linear scan small negative values for non-monotonic functions.
-                    let range_size = ic.max_value.saturating_sub(ic.min_value).saturating_add(1);
-                    let neg_scan = if range_size <= 128 { (-v).min(32) } else { 8 };
-                    for c in 1..neg_scan {
-                        self.replace(&HashMap::from([(i, ChoiceValue::Integer(-c))]));
-                    }
-                    // shrink_by_multiples for the negative branch: probe
-                    // `cur + 2*n` / `cur + n` (moving toward zero). Mirror
-                    // of the positive-side block above.
-                    let ChoiceValue::Integer(base) = self.current_nodes[i].value else {
-                        unreachable!(
-                            "kind/value invariant violated: outer match guaranteed this variant"
-                        )
-                    };
-                    let neg_hi = -lo;
-                    if base < neg_hi {
-                        find_integer(|n| {
-                            let attempt = base + 2 * (n as i128);
-                            if attempt > neg_hi {
-                                return false;
+                }
+            } else if v.sign() == Sign::Minus {
+                // Mirror of the positive branch. `lo` is the absolute value of
+                // the simplest (clamped to 0) and we shrink toward `lo` from
+                // `-v` before flipping the sign back.
+                let lo = (-ic.simplest()).max(BigInt::from(0));
+                let dist = ((-&v) - &lo).max(BigInt::from(0));
+                if dist.sign() == Sign::Plus {
+                    let max_shift = dist.bits() as usize + 1;
+                    find_integer(|k| {
+                        let candidate_abs = &lo + (&dist >> k.min(max_shift));
+                        self.replace_int(i, &(-&candidate_abs))
+                    });
+                }
+                // Linear scan small negative values for non-monotonic functions.
+                let neg_scan: i64 = if range_size <= BigInt::from(128) {
+                    (-&v).min(BigInt::from(32)).to_i64().unwrap()
+                } else {
+                    8
+                };
+                let mut c: i64 = 1;
+                while c < neg_scan {
+                    self.replace_int(i, &BigInt::from(-c));
+                    c += 1;
+                }
+                // shrink_by_multiples for the negative branch: probe
+                // `cur + 2*n` / `cur + n` (moving toward zero).
+                let base = self.int_value_bigint(i);
+                let neg_hi = -&lo;
+                if base < neg_hi {
+                    find_integer(|n| {
+                        let attempt = &base + BigInt::from(2u64 * n as u64);
+                        if attempt > neg_hi {
+                            return false;
+                        }
+                        self.replace_int(i, &attempt)
+                    });
+                }
+                let base = self.int_value_bigint(i);
+                if base < neg_hi {
+                    find_integer(|n| {
+                        let attempt = &base + BigInt::from(n as u64);
+                        if attempt > neg_hi {
+                            // Unreachable for the same reason as the positive
+                            // step-1 descent: it cannot cross past `neg_hi`
+                            // without first landing on it, which the linear scan
+                            // would already have done.
+                            unreachable!("step-1 descent cannot cross past `neg_hi`");
+                        }
+                        self.replace_int(i, &attempt)
+                    });
+                }
+                // Also try positive values with smaller absolute value (simpler).
+                if ic.max_value.clone().sign() == Sign::Plus {
+                    let cur_v = self.int_value_bigint(i);
+                    if cur_v.sign() == Sign::Minus {
+                        let upper = ((-&cur_v) - BigInt::from(1)).min(ic.max_value.clone());
+                        if upper >= BigInt::from(1) {
+                            // Seed at +upper, then shift-right-descend toward
+                            // lo_pos via find_integer.
+                            self.replace_int(i, &upper);
+                            let lo_pos = ic.simplest().max(BigInt::from(0));
+                            let dist = &upper - &lo_pos;
+                            if dist.sign() == Sign::Plus {
+                                let max_shift = dist.bits() as usize + 1;
+                                find_integer(|k| {
+                                    let candidate = &lo_pos + (&dist >> k.min(max_shift));
+                                    self.replace_int(i, &candidate)
+                                });
                             }
-                            self.replace(&HashMap::from([(i, ChoiceValue::Integer(attempt))]))
-                        });
-                    }
-                    let ChoiceValue::Integer(base) = self.current_nodes[i].value else {
-                        unreachable!(
-                            "kind/value invariant violated: outer match guaranteed this variant"
-                        )
-                    };
-                    if base < neg_hi {
-                        find_integer(|n| {
-                            let attempt = base + (n as i128);
-                            if attempt > neg_hi {
-                                return false;
-                            }
-                            self.replace(&HashMap::from([(i, ChoiceValue::Integer(attempt))]))
-                        });
-                    }
-                    // Also try positive values with smaller absolute value (simpler).
-                    if ic.max_value > 0 {
-                        let ChoiceValue::Integer(cur_v) = self.current_nodes[i].value else {
-                            unreachable!(
-                                "kind/value invariant violated: outer match guaranteed this variant"
-                            )
-                        };
-                        if cur_v < 0 {
-                            let upper = (-cur_v - 1).min(ic.max_value);
-                            if upper >= 1 {
-                                // Seed at +upper, then shift-right-descend
-                                // toward lo_pos via find_integer.
-                                self.replace(&HashMap::from([(i, ChoiceValue::Integer(upper))]));
-                                let lo_pos = ic.simplest().max(0);
-                                let dist = (upper - lo_pos) as u128;
-                                if dist > 0 {
-                                    find_integer(|k| {
-                                        let shifted = (dist >> k.min(127)) as i128;
-                                        let candidate = lo_pos + shifted;
-                                        self.replace(&HashMap::from([(
-                                            i,
-                                            ChoiceValue::Integer(candidate),
-                                        )]))
-                                    });
-                                }
-                                // Linear scan positive values.
-                                let scan_count = if range_size <= 128 {
-                                    range_size.min(32)
-                                } else {
-                                    8
-                                };
-                                for c in lo_pos..lo_pos.saturating_add(scan_count).min(upper + 1) {
-                                    self.replace(&HashMap::from([(i, ChoiceValue::Integer(c))]));
-                                }
+                            // Linear scan positive values.
+                            let scan_count: i64 = if range_size <= BigInt::from(128) {
+                                range_size.to_i64().unwrap().min(32)
+                            } else {
+                                8
+                            };
+                            let scan_hi =
+                                (&lo_pos + BigInt::from(scan_count)).min(&upper + BigInt::from(1));
+                            let mut c = lo_pos.clone();
+                            while c < scan_hi {
+                                self.replace_int(i, &c);
+                                c += 1;
                             }
                         }
                     }
@@ -279,7 +304,7 @@ impl<'a> Shrinker<'a> {
             .iter()
             .enumerate()
             .filter_map(|(i, n)| {
-                if matches!(n.kind, ChoiceKind::Integer(_)) {
+                if matches!(n.kind.as_ref(), ChoiceKind::Integer(_)) {
                     Some(i)
                 } else {
                     None
@@ -298,7 +323,7 @@ impl<'a> Shrinker<'a> {
                     .iter()
                     .enumerate()
                     .filter_map(|(i, node)| {
-                        if matches!(node.kind, ChoiceKind::Integer(_)) {
+                        if matches!(node.kind.as_ref(), ChoiceKind::Integer(_)) {
                             Some(i)
                         } else {
                             None
@@ -306,9 +331,9 @@ impl<'a> Shrinker<'a> {
                     })
                     .collect();
 
-                // Defensive edge case: only reached when a prior
-                // shrink removed enough integer nodes that
-                // `pair_idx + gap` overshoots the new length.
+                // Defensive edge case: only reached when a prior shrink removed
+                // enough integer nodes that `pair_idx + gap` overshoots the new
+                // length.
                 if pair_idx + gap >= current_ints.len() {
                     if pair_idx == 0 {
                         break;
@@ -320,40 +345,27 @@ impl<'a> Shrinker<'a> {
                 let i = current_ints[pair_idx];
                 let j = current_ints[pair_idx + gap];
 
-                let ChoiceValue::Integer(prev_i) = self.current_nodes[i].value else {
-                    unreachable!(
+                let prev_i = self.int_value_bigint(i);
+                let prev_j = self.int_value_bigint(j);
+                let simplest_i = match self.current_nodes[i].kind.as_ref() {
+                    ChoiceKind::Integer(ic) => ic.simplest(),
+                    _ => unreachable!(
                         "kind/value invariant violated: outer match guaranteed this variant"
-                    )
+                    ),
                 };
-                let ChoiceValue::Integer(prev_j) = self.current_nodes[j].value else {
-                    unreachable!(
-                        "kind/value invariant violated: outer match guaranteed this variant"
-                    )
-                };
-
-                let ChoiceKind::Integer(ic_i) = &self.current_nodes[i].kind else {
-                    unreachable!(
-                        "kind/value invariant violated: outer match guaranteed this variant"
-                    )
-                };
-                let simplest_i = ic_i.simplest();
 
                 if prev_i != simplest_i {
-                    if prev_i > 0 {
-                        bin_search_down(0, prev_i, &mut |v| {
-                            let delta = prev_i - v;
-                            self.replace(&HashMap::from([
-                                (i, ChoiceValue::Integer(v)),
-                                (j, ChoiceValue::Integer(prev_j + delta)),
-                            ]))
+                    if prev_i.sign() == Sign::Plus {
+                        bin_search_down_big(BigInt::from(0), prev_i.clone(), &mut |v| {
+                            let new_j = &prev_j + (&prev_i - v);
+                            self.replace_two(i, v, j, &new_j)
                         });
-                    } else if prev_i < 0 {
-                        bin_search_down(0, -prev_i, &mut |a| {
-                            let delta = prev_i + a; // = -(|prev_i| - a)
-                            self.replace(&HashMap::from([
-                                (i, ChoiceValue::Integer(-a)),
-                                (j, ChoiceValue::Integer(prev_j + delta)),
-                            ]))
+                    } else if prev_i.sign() == Sign::Minus {
+                        bin_search_down_big(BigInt::from(0), -&prev_i, &mut |a| {
+                            // delta = prev_i + a = -(|prev_i| - a)
+                            let new_i = -a;
+                            let new_j = &prev_j + (&prev_i + a);
+                            self.replace_two(i, &new_i, j, &new_j)
                         });
                     }
                 }
@@ -365,24 +377,22 @@ impl<'a> Shrinker<'a> {
             }
         }
     }
+
     /// Lower pairs of nearby integer choices by the same amount
     /// simultaneously.
     ///
-    /// The individual passes (`binary_search_integer_towards_zero`,
-    /// `redistribute_integers`) walk each integer alone; when two values
-    /// are pinned together by a predicate like `|m - n| == 1`, neither
-    /// can move on its own without breaking the predicate, and the
-    /// shrinker falls into a zig-zag trap that takes `O(m)` iterations
-    /// to crawl down. By probing `(v_i - k, v_j - k)` for geometrically
-    /// growing `k` via `find_integer`, this pass reaches the minimum in
-    /// `O(log k)` probes.
+    /// When two values are pinned together by a predicate like `|m - n| == 1`,
+    /// neither can move on its own without breaking the predicate, and the
+    /// shrinker falls into a zig-zag trap. By probing `(v_i - k, v_j - k)` for
+    /// geometrically growing `k` via `find_integer`, this pass reaches the
+    /// minimum in `O(log k)` probes.
     pub(super) fn lower_integers_together(&mut self) {
         let int_indices: Vec<usize> = self
             .current_nodes
             .iter()
             .enumerate()
             .filter_map(|(i, n)| {
-                if matches!(n.kind, ChoiceKind::Integer(_)) {
+                if matches!(n.kind.as_ref(), ChoiceKind::Integer(_)) {
                     Some(i)
                 } else {
                     None
@@ -403,92 +413,56 @@ impl<'a> Shrinker<'a> {
                     break;
                 }
 
-                let (ChoiceKind::Integer(ic_i), ChoiceValue::Integer(v_i)) =
-                    (&self.current_nodes[i].kind, &self.current_nodes[i].value)
-                else {
-                    unreachable!(
+                let (ic_i, v_i) = match (
+                    self.current_nodes[i].kind.as_ref(),
+                    &self.current_nodes[i].value,
+                ) {
+                    (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.clone()),
+                    _ => unreachable!(
                         "int_indices is rebuilt on entry; kind-pun between iterations would have re-filtered i out"
-                    );
+                    ),
                 };
-                let ChoiceKind::Integer(ic_j) = &self.current_nodes[j].kind else {
-                    unreachable!(
-                        "int_indices is rebuilt on entry; kind-pun between iterations would have re-filtered j out"
-                    );
+                let v_j = match &self.current_nodes[j].value {
+                    ChoiceValue::Integer(v) => v.clone(),
+                    _ => unreachable!("kind/value mismatch: Integer kind with non-Integer value"),
                 };
-                let ChoiceValue::Integer(v_j) = self.current_nodes[j].value else {
-                    unreachable!("kind/value mismatch: Integer kind with non-Integer value");
-                };
-                let v_i = *v_i;
-                let ic_i = ic_i.clone();
-                let ic_j = ic_j.clone();
 
                 // N10: cap k at the i-th element's distance from
-                // `shrink_towards`. Pre-N10 each direction's `find_integer`
-                // probe assumed a monotone predicate in k, but A21's
-                // `shrink_towards`-aware sort_key turned the score
-                // U-shaped: moving past `shrink_towards` makes sort_key
-                // grow again. The exponential probe (5, 10, 20, …) then
-                // jumped past the elbow and committed a worse-than-optimal
-                // pair (e.g. `[-3, -2]` with `st=5` ended at `[7, 8]`
-                // instead of `[5, 6]`).
-                //
-                // Why d_i (the i-th element's distance), not min/max of
-                // both? Sort_key compares element-wise via shortlex; the
-                // 0-th element (= sort_key of i-th node) dominates the
-                // tuple comparison. Sort_key(v_i + k) is uniquely
-                // minimised at k = st_i - v_i (raise) or k = v_i - st_i
-                // (lower), where v_i lands exactly at st_i. Beyond that,
-                // it grows. So the optimal k for the pair is d_i; capping
-                // there keeps find_integer's predicate monotone, and
-                // validate() trims further if v_j's constraints kick in
-                // first.
+                // `shrink_towards`. The sort_key score is U-shaped around
+                // `shrink_towards`, so capping keeps `find_integer`'s probe
+                // monotone; `validate()` (via `replace`) trims further if v_j's
+                // constraints bind first. Direction is decided by the i-th
+                // element (shortlex dominates on element 0): move it toward its
+                // own shrink target, the j-th follows.
                 let st_i = ic_i.clamped_shrink_towards();
-                let st_j = ic_j.clamped_shrink_towards();
 
-                // Direction is determined by the i-th element (shortlex
-                // dominates on element 0): move it toward its own st.
-                // The j-th element follows. If j is on the same side of
-                // its st, joint motion is unambiguously better; if j is
-                // on the opposite side, j's sort_key grows but i's gain
-                // wins the shortlex comparison.
-                let _ = st_j;
-
-                // Lower direction: run when v_i > st_i. The largest
-                // useful k is `v_i - st_i` (the i-th's distance to st).
+                // Lower direction: run when v_i > st_i. Largest useful k is
+                // `v_i - st_i` (the i-th's distance to st).
                 if v_i > st_i {
-                    let max_k = v_i - st_i;
+                    let max_k = &v_i - &st_i;
                     find_integer(|n| {
-                        let k = n as i128;
+                        let k = BigInt::from(n as u64);
                         if k > max_k {
                             return false;
                         }
-                        let new_i = v_i - k;
-                        let new_j = v_j - k;
-                        // `replace` already calls `kind.validate`; the
-                        // pre-check here is redundant, so let invalid
-                        // candidates fall through to replace's check.
-                        self.replace(&HashMap::from([
-                            (i, ChoiceValue::Integer(new_i)),
-                            (j, ChoiceValue::Integer(new_j)),
-                        ]))
+                        let new_i = &v_i - &k;
+                        let new_j = &v_j - &k;
+                        self.replace_two(i, &new_i, j, &new_j)
                     });
                 }
 
-                // Raise direction: run when v_i < st_i. Largest useful
-                // k: `st_i - v_i`.
+                // Raise direction: run when v_i < st_i. Largest useful k:
+                // `st_i - v_i`.
                 if v_i < st_i {
-                    let max_k = st_i - v_i;
+                    let max_k = &st_i - &v_i;
                     find_integer(|n| {
-                        let k = n as i128;
+                        let k = BigInt::from(n as u64);
                         if k > max_k {
                             return false;
                         }
-                        let new_i = v_i + k;
-                        let new_j = v_j + k;
-                        self.replace(&HashMap::from([
-                            (i, ChoiceValue::Integer(new_i)),
-                            (j, ChoiceValue::Integer(new_j)),
-                        ]))
+                        let new_i = &v_i + &k;
+                        let new_j = &v_j + &k;
+                        self.replace_two(i, &new_i, j, &new_j)
                     });
                 }
             }
@@ -518,7 +492,10 @@ impl<'a> Shrinker<'a> {
         let mut groups: HashMap<(std::mem::Discriminant<ChoiceKind>, ChoiceValue), Vec<usize>> =
             HashMap::new();
         for (i, node) in self.current_nodes.iter().enumerate() {
-            let key = (std::mem::discriminant(&node.kind), node.value.clone());
+            let key = (
+                std::mem::discriminant(node.kind.as_ref()),
+                node.value.clone(),
+            );
             groups.entry(key).or_default().push(i);
         }
         let mut ordered_groups: Vec<_> = groups.into_iter().collect();
@@ -538,7 +515,7 @@ impl<'a> Shrinker<'a> {
                 .filter(|&i| {
                     i < self.current_nodes.len()
                         && self.current_nodes[i].value == *group_value
-                        && std::mem::discriminant(&self.current_nodes[i].kind) == *kind_disc
+                        && std::mem::discriminant(self.current_nodes[i].kind.as_ref()) == *kind_disc
                 })
                 .collect();
             if valid.len() < 2 {
@@ -556,14 +533,13 @@ impl<'a> Shrinker<'a> {
         }
         // The remainder of this function is the legacy integer-only
         // binary-search loop, kept verbatim so the existing tests still
-        // pass; conceptually this work could move into the unified
-        // `minimize_individual_choices` driver, but
-        // `shrink_duplicates`' "step duplicates together" semantics
-        // aren't covered there.
-        let mut groups: HashMap<i128, Vec<usize>> = HashMap::new();
+        // pass.
+        let mut groups: HashMap<BigInt, Vec<usize>> = HashMap::new();
         for (i, node) in self.current_nodes.iter().enumerate() {
-            if let (ChoiceKind::Integer(_), ChoiceValue::Integer(v)) = (&node.kind, &node.value) {
-                groups.entry(*v).or_default().push(i);
+            if let (ChoiceKind::Integer(_), ChoiceValue::Integer(v)) =
+                (node.kind.as_ref(), &node.value)
+            {
+                groups.entry(v.clone()).or_default().push(i);
             }
         }
         // Iterate groups in source-position order; see the comment above
@@ -582,7 +558,7 @@ impl<'a> Shrinker<'a> {
                 .copied()
                 .filter(|&i| {
                     i < self.current_nodes.len()
-                        && matches!(&self.current_nodes[i].value, ChoiceValue::Integer(v) if *v == value)
+                        && matches!(&self.current_nodes[i].value, ChoiceValue::Integer(v) if v.clone() == value)
                 })
                 .collect();
 
@@ -590,35 +566,32 @@ impl<'a> Shrinker<'a> {
                 continue;
             }
 
-            let ChoiceKind::Integer(ic) = &self.current_nodes[valid[0]].kind else {
-                unreachable!("kind/value invariant violated: outer match guaranteed this variant")
+            let ic = match self.current_nodes[valid[0]].kind.as_ref() {
+                ChoiceKind::Integer(ic) => ic.clone(),
+                _ => unreachable!(
+                    "kind/value invariant violated: outer match guaranteed this variant"
+                ),
             };
-            let ic = ic.clone();
 
             // Try setting all to simplest simultaneously.
             let simplest = ic.simplest();
             if simplest != value {
                 let replacements: HashMap<usize, ChoiceValue> = valid
                     .iter()
-                    .map(|&i| (i, ChoiceValue::Integer(simplest)))
+                    .map(|&i| (i, ChoiceValue::Integer(simplest.clone())))
                     .collect();
                 self.replace(&replacements);
             }
 
             // Re-read current value after possible replacement.
-            let ChoiceValue::Integer(cur_value) = self.current_nodes[valid[0]].value else {
-                unreachable!("kind/value invariant violated: outer match guaranteed this variant")
-            };
+            let cur_value = self.int_value_bigint(valid[0]);
 
             // Shift-right adaptive descent of all members in lockstep,
             // followed by shrink_by_multiples(2) and (1) to land on the
-            // boundary. Each probe re-reads the current value of
-            // `valid[0]` so the descent starts from the live shrink
-            // target — the previous bin_search_down captured the entry
-            // value and stalled on the second probe because every member
-            // had moved.
+            // boundary. Each probe re-reads the current value of `valid[0]`
+            // so the descent starts from the live shrink target.
             let valid_capture = valid.clone();
-            let group_replace = |sh: &mut Shrinker<'_>, candidate: i128| -> bool {
+            let group_replace = |sh: &mut Shrinker<'_>, candidate: &BigInt| -> bool {
                 let current_valid: Vec<usize> = valid_capture
                     .iter()
                     .copied()
@@ -629,66 +602,59 @@ impl<'a> Shrinker<'a> {
                 }
                 let replacements: HashMap<usize, ChoiceValue> = current_valid
                     .iter()
-                    .map(|&i| (i, ChoiceValue::Integer(candidate)))
+                    .map(|&i| (i, ChoiceValue::Integer(candidate.clone())))
                     .collect();
                 sh.replace(&replacements)
             };
-            if cur_value > 0 {
-                let lo = ic.simplest().max(0);
-                let dist = (cur_value - lo) as u128;
-                if dist > 0 {
-                    find_integer(|k| {
-                        let shifted = (dist >> k.min(127)) as i128;
-                        let candidate = lo + shifted;
-                        group_replace(self, candidate)
-                    });
+            let live_base = |sh: &Shrinker<'_>| -> BigInt {
+                match &sh.current_nodes[valid_capture[0]].value {
+                    ChoiceValue::Integer(v) => v.clone(),
+                    _ => unreachable!("group filter only retains Integer-kind members"),
                 }
-                let live_base = |sh: &Shrinker<'_>| -> i128 {
-                    match sh.current_nodes[valid_capture[0]].value {
-                        ChoiceValue::Integer(v) => v,
-                        _ => unreachable!("group filter only retains Integer-kind members"),
-                    }
-                };
-                if live_base(self) > lo {
-                    find_integer(|n| {
-                        let attempt = live_base(self).saturating_sub(2 * (n as i128));
-                        group_replace(self, attempt)
+            };
+            if cur_value.sign() == Sign::Plus {
+                let lo = ic.simplest().max(BigInt::from(0));
+                let dist = &cur_value - &lo;
+                if dist.sign() == Sign::Plus {
+                    let max_shift = dist.bits() as usize + 1;
+                    find_integer(|k| {
+                        let candidate = &lo + (&dist >> k.min(max_shift));
+                        group_replace(self, &candidate)
                     });
                 }
                 if live_base(self) > lo {
                     find_integer(|n| {
-                        let attempt = live_base(self).saturating_sub(n as i128);
-                        group_replace(self, attempt)
+                        let attempt = live_base(self) - BigInt::from(2u64 * n as u64);
+                        group_replace(self, &attempt)
                     });
                 }
-            } else if cur_value < 0 {
-                let lo = ic.simplest().min(0).saturating_abs();
-                let v_abs = -cur_value;
-                let dist = (v_abs - lo) as u128;
-                if dist > 0 {
+                if live_base(self) > lo {
+                    find_integer(|n| {
+                        let attempt = live_base(self) - BigInt::from(n as u64);
+                        group_replace(self, &attempt)
+                    });
+                }
+            } else if cur_value.sign() == Sign::Minus {
+                let lo = (-ic.simplest()).max(BigInt::from(0));
+                let dist = ((-&cur_value) - &lo).max(BigInt::from(0));
+                if dist.sign() == Sign::Plus {
+                    let max_shift = dist.bits() as usize + 1;
                     find_integer(|k| {
-                        let shifted = (dist >> k.min(127)) as i128;
-                        let candidate_abs = lo + shifted;
-                        group_replace(self, -candidate_abs)
+                        let candidate_abs = &lo + (&dist >> k.min(max_shift));
+                        group_replace(self, &(-&candidate_abs))
                     });
                 }
-                let live_base = |sh: &Shrinker<'_>| -> i128 {
-                    match sh.current_nodes[valid_capture[0]].value {
-                        ChoiceValue::Integer(v) => v,
-                        _ => unreachable!("group filter only retains Integer-kind members"),
-                    }
-                };
-                let neg_hi = -lo;
+                let neg_hi = -&lo;
                 if live_base(self) < neg_hi {
                     find_integer(|n| {
-                        let attempt = live_base(self).saturating_add(2 * (n as i128));
-                        group_replace(self, attempt)
+                        let attempt = live_base(self) + BigInt::from(2u64 * n as u64);
+                        group_replace(self, &attempt)
                     });
                 }
                 if live_base(self) < neg_hi {
                     find_integer(|n| {
-                        let attempt = live_base(self).saturating_add(n as i128);
-                        group_replace(self, attempt)
+                        let attempt = live_base(self) + BigInt::from(n as u64);
+                        group_replace(self, &attempt)
                     });
                 }
             }
@@ -701,99 +667,94 @@ impl<'a> Shrinker<'a> {
     /// When two integers `m, n` are linked by a predicate like
     /// `abs(m - n) > 1`, the individual minimization passes can only
     /// step each toward `shrink_towards` by one before the predicate
-    /// flips; the next iteration steps the other one by one; result:
-    /// O(initial value) iterations to zig-zag toward zero.
-    ///
-    /// This pass observes that *all* changed integer nodes shrank by some
-    /// non-zero common offset, and tries to lower that offset directly
-    /// using a `find_integer` exponential probe — collapsing the zig-zag
-    /// into O(log v) iterations. It probes both signs because the
-    /// nodes may be sitting above or below their shrink targets.
+    /// flips. This pass observes that *all* changed integer nodes shrank by
+    /// some non-zero common offset, and tries to lower that offset directly
+    /// using a `find_integer` exponential probe.
     ///
     /// Always called after a successful pass that may have changed
-    /// integer values; clears the change-tracking set on exit so the
-    /// next round starts from the new shrink target.
+    /// integer values; clears the change-tracking set on exit.
     pub(crate) fn lower_common_node_offset(&mut self) {
-        let changed: Vec<usize> = self.changed_nodes().iter().copied().collect();
+        let mut changed: Vec<usize> = self.changed_nodes().iter().copied().collect();
+        // `changed_nodes` is a `HashSet`; sort for a deterministic, run-to-run
+        // stable iteration order.
+        changed.sort_unstable();
         if changed.len() <= 1 {
             return;
         }
         let mut indices: Vec<usize> = Vec::new();
-        let mut ic_targets: Vec<i128> = Vec::new();
-        let mut distances: Vec<u128> = Vec::new();
+        let mut ic_targets: Vec<BigInt> = Vec::new();
+        let mut distances: Vec<BigInt> = Vec::new();
         for &i in &changed {
             // `changed` came from `update_change_tracking`, which only
-            // populates indices < current_nodes.len() (it clears the
-            // set when the sequence shape changes).  A debug_assert
-            // documents the invariant.
+            // populates indices < current_nodes.len().
             debug_assert!(i < self.current_nodes.len());
-            let node = &self.current_nodes[i];
-            let (ic, v) = match (&node.kind, &node.value) {
-                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), *v),
+            let (target, v) = match (
+                self.current_nodes[i].kind.as_ref(),
+                &self.current_nodes[i].value,
+            ) {
+                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
+                    (ic.clamped_shrink_towards(), v.clone())
+                }
                 _ => continue,
             };
-            let target = ic.clamped_shrink_towards();
             if v == target {
                 // Already trivial; can't offset further.
                 continue;
             }
+            distances.push((&v - &target).abs());
             indices.push(i);
             ic_targets.push(target);
-            distances.push(v.abs_diff(target));
         }
         if indices.len() <= 1 {
             return;
         }
-        let offset = *distances.iter().min().expect("non-empty by check above");
-        // `offset > 0`: every entry in `distances` came from `v.abs_diff(target)`
-        // for `v != target` (the loop above skips equal entries), so all
-        // distances are strictly positive.
-        debug_assert!(offset > 0);
-        // residual_v[k] = distance[k] - offset; the "common offset" portion
-        // is what we'll try to drive toward zero.
-        let residual: Vec<u128> = distances.iter().map(|d| d - offset).collect();
+        let offset = distances
+            .iter()
+            .min()
+            .expect("non-empty by check above")
+            .clone();
+        // `offset > 0`: every entry in `distances` came from a `v != target`
+        // node (the loop above skips equal entries), so all are strictly
+        // positive.
+        debug_assert!(offset.sign() == Sign::Plus);
+        // residual[k] = distance[k] - offset; the "common offset" portion is
+        // what we'll try to drive toward zero.
+        let residual: Vec<BigInt> = distances.iter().map(|d| d - &offset).collect();
 
-        // The predicate signs are deduced from the sign of `(v - target)`
-        // for each node. Shrink the offset in both directions to handle
-        // the case where the absolute distances are equal but the signs
-        // differ.
+        // The predicate signs are deduced from the sign of `(v - target)` for
+        // each node. Shrink the offset in both directions to handle the case
+        // where absolute distances are equal but signs differ.
         let signs: Vec<i128> = indices
             .iter()
             .zip(ic_targets.iter())
-            .map(|(&i, &target)| {
-                let v = match self.current_nodes[i].value {
-                    ChoiceValue::Integer(v) => v,
+            .map(|(&i, target)| {
+                let v = match &self.current_nodes[i].value {
+                    ChoiceValue::Integer(v) => v.clone(),
                     _ => unreachable!(
                         "indices/ic_targets came from the integer-node filter above; \
                          ChoiceNode invariant pairs Integer kind with Integer value"
                     ),
                 };
-                if v >= target { 1 } else { -1 }
+                if &v >= target { 1 } else { -1 }
             })
             .collect();
 
         // Try lowering by an additional `n` units in both directions.
-        // The candidate distance is `offset - n + residual`, applied with
-        // the original signs. `find_integer` finds the maximum n.
         for sign_multiplier in [1i128, -1] {
             find_integer(|n| {
-                if (n as u128) > offset {
+                let n_big = BigInt::from(n as u64);
+                if n_big > offset {
                     return false;
                 }
-                let new_offset = offset - n as u128;
+                let new_offset = &offset - &n_big;
                 let mut replacements: HashMap<usize, ChoiceValue> = HashMap::new();
                 for k in 0..indices.len() {
-                    let new_distance = new_offset + residual[k];
-                    // `new_distance <= original_distances[k]` is guaranteed
-                    // by the `(n as u128) > offset` check above:
-                    // `new_distance = (offset - n) + residual[k]
-                    //                = (distance[k] - n)
-                    //                ≤ distance[k]`.
+                    let new_distance = &new_offset + &residual[k];
                     let effective_sign = signs[k] * sign_multiplier;
                     let new_value = if effective_sign >= 0 {
-                        ic_targets[k].saturating_add_unsigned(new_distance)
+                        &ic_targets[k] + &new_distance
                     } else {
-                        ic_targets[k].saturating_sub_unsigned(new_distance)
+                        &ic_targets[k] - &new_distance
                     };
                     replacements.insert(indices[k], ChoiceValue::Integer(new_value));
                 }

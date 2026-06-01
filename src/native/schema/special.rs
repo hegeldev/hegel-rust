@@ -8,7 +8,8 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 
 use crate::cbor_utils::map_get;
-use crate::native::core::{NativeTestCase, StopTest};
+use crate::native::bignum::{BigInt, ToPrimitive};
+use crate::native::core::{EngineError, NativeTestCase};
 use ciborium::Value;
 
 /// Encode a `String` as a CBOR tag-91 value, the wire format used by the hegel
@@ -39,7 +40,7 @@ fn days_in_month(year: i128, month: i128) -> i128 {
 /// offset from 2000 to get the same shrink target. The observable
 /// distribution is identical because `biased_integer_sample` boosts the
 /// endpoints (here ±offset bounds) at the same rate either way.
-pub(super) fn interpret_date(ntc: &mut NativeTestCase) -> Result<Value, StopTest> {
+pub(super) fn interpret_date(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
     let (year, month, day) = draw_date(ntc)?;
     Ok(encode_string(format!("{year:04}-{month:02}-{day:02}")))
 }
@@ -47,7 +48,7 @@ pub(super) fn interpret_date(ntc: &mut NativeTestCase) -> Result<Value, StopTest
 /// `time` schema → `HH:MM:SS` or `HH:MM:SS.ffffff`, matching
 /// `st.times().isoformat()`. The fractional part is present iff
 /// `microsecond != 0` (Python's `time.isoformat()` semantics).
-pub(super) fn interpret_time(ntc: &mut NativeTestCase) -> Result<Value, StopTest> {
+pub(super) fn interpret_time(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
     let (hour, minute, second, microsecond) = draw_time(ntc)?;
     Ok(encode_string(format_time(
         hour,
@@ -60,7 +61,7 @@ pub(super) fn interpret_time(ntc: &mut NativeTestCase) -> Result<Value, StopTest
 /// `datetime` schema → `YYYY-MM-DDTHH:MM:SS[.ffffff]`, matching
 /// `st.datetimes().isoformat()`. As with `interpret_time`, the fractional
 /// seconds appear only when non-zero.
-pub(super) fn interpret_datetime(ntc: &mut NativeTestCase) -> Result<Value, StopTest> {
+pub(super) fn interpret_datetime(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
     let (year, month, day) = draw_date(ntc)?;
     let (hour, minute, second, microsecond) = draw_time(ntc)?;
     let time_part = format_time(hour, minute, second, microsecond);
@@ -69,18 +70,40 @@ pub(super) fn interpret_datetime(ntc: &mut NativeTestCase) -> Result<Value, Stop
     )))
 }
 
-fn draw_date(ntc: &mut NativeTestCase) -> Result<(i128, i128, i128), StopTest> {
-    let year = 2000 + ntc.draw_integer(1 - 2000, 9999 - 2000)?;
-    let month = ntc.draw_integer(1, 12)?;
-    let day = ntc.draw_integer(1, days_in_month(year, month))?;
+fn draw_date(ntc: &mut NativeTestCase) -> Result<(i128, i128, i128), EngineError> {
+    let year = 2000
+        + ntc
+            .draw_integer(BigInt::from(1 - 2000), BigInt::from(9999 - 2000))?
+            .to_i128()
+            .unwrap();
+    let month = ntc
+        .draw_integer(BigInt::from(1), BigInt::from(12))?
+        .to_i128()
+        .unwrap();
+    let day = ntc
+        .draw_integer(BigInt::from(1), BigInt::from(days_in_month(year, month)))?
+        .to_i128()
+        .unwrap();
     Ok((year, month, day))
 }
 
-fn draw_time(ntc: &mut NativeTestCase) -> Result<(i128, i128, i128, i128), StopTest> {
-    let hour = ntc.draw_integer(0, 23)?;
-    let minute = ntc.draw_integer(0, 59)?;
-    let second = ntc.draw_integer(0, 59)?;
-    let microsecond = ntc.draw_integer(0, 999_999)?;
+fn draw_time(ntc: &mut NativeTestCase) -> Result<(i128, i128, i128, i128), EngineError> {
+    let hour = ntc
+        .draw_integer(BigInt::from(0), BigInt::from(23))?
+        .to_i128()
+        .unwrap();
+    let minute = ntc
+        .draw_integer(BigInt::from(0), BigInt::from(59))?
+        .to_i128()
+        .unwrap();
+    let second = ntc
+        .draw_integer(BigInt::from(0), BigInt::from(59))?
+        .to_i128()
+        .unwrap();
+    let microsecond = ntc
+        .draw_integer(BigInt::from(0), BigInt::from(999_999))?
+        .to_i128()
+        .unwrap();
     Ok((hour, minute, second, microsecond))
 }
 
@@ -110,13 +133,22 @@ fn format_time(hour: i128, minute: i128, second: i128, microsecond: i128) -> Str
 /// "uuids never produce nil" property carries over. The proper fix is a
 /// non-recording RNG-direct draw API on `NativeTestCase` to mirror Hypothesis
 /// exactly — out of scope for this PR.
-pub(super) fn interpret_uuid(ntc: &mut NativeTestCase, schema: &Value) -> Result<Value, StopTest> {
+pub(super) fn interpret_uuid(
+    ntc: &mut NativeTestCase,
+    schema: &Value,
+) -> Result<Value, EngineError> {
     use crate::cbor_utils::as_u64;
     let version = map_get(schema, "version").and_then(as_u64).map(|v| v as u8);
 
     // Two 64-bit halves: u64::MAX fits comfortably in i128 so the draw is in range.
-    let hi = ntc.draw_integer(0, u64::MAX as i128)? as u64;
-    let lo = ntc.draw_integer(0, u64::MAX as i128)? as u64;
+    let hi = ntc
+        .draw_integer(BigInt::from(0), BigInt::from(u64::MAX))?
+        .to_u64()
+        .unwrap();
+    let lo = ntc
+        .draw_integer(BigInt::from(0), BigInt::from(u64::MAX))?
+        .to_u64()
+        .unwrap();
     let mut n: u128 = (u128::from(hi) << 64) | u128::from(lo);
 
     if let Some(v) = version {
@@ -293,50 +325,94 @@ fn parse_v6_cidr(s: &str) -> V6Network {
 pub(super) fn interpret_ip_address(
     ntc: &mut NativeTestCase,
     schema: &Value,
-) -> Result<Value, StopTest> {
+) -> Result<Value, EngineError> {
     use crate::cbor_utils::as_u64;
-    let version = map_get(schema, "version")
-        .and_then(as_u64)
-        .expect("ip_address schema must have a \"version\" field");
+    let version = map_get(schema, "version").and_then(as_u64).ok_or_else(|| {
+        EngineError::InvalidArgument(
+            "ip_address schema is missing an integer \"version\" field".to_string(),
+        )
+    })?;
     match version {
         4 => interpret_ipv4(ntc),
         6 => interpret_ipv6(ntc),
-        _ => panic!("ip_address: unsupported version {version}; expected 4 or 6"),
+        other => Err(EngineError::InvalidArgument(format!(
+            "ip_address: unsupported version {other}; expected 4 or 6"
+        ))),
     }
 }
 
-fn interpret_ipv4(ntc: &mut NativeTestCase) -> Result<Value, StopTest> {
+fn interpret_ipv4(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
     // one_of([random_bytes, sampled_from(SPECIAL).flatmap(in_network)]).
-    let addr_int: u32 = if ntc.draw_integer(0, 1)? == 0 {
+    let addr_int: u32 = if ntc
+        .draw_integer(BigInt::from(0), BigInt::from(1))?
+        .to_i128()
+        .unwrap()
+        == 0
+    {
         // Four uniform bytes — `binary(min_size=4, max_size=4).map(IPv4Address)`.
-        let a = ntc.draw_integer(0, 255)? as u32;
-        let b = ntc.draw_integer(0, 255)? as u32;
-        let c = ntc.draw_integer(0, 255)? as u32;
-        let d = ntc.draw_integer(0, 255)? as u32;
+        let a = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(255))?
+            .to_u32()
+            .unwrap();
+        let b = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(255))?
+            .to_u32()
+            .unwrap();
+        let c = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(255))?
+            .to_u32()
+            .unwrap();
+        let d = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(255))?
+            .to_u32()
+            .unwrap();
         (a << 24) | (b << 16) | (c << 8) | d
     } else {
         let nets = &*SPECIAL_IPV4_NETWORKS;
-        let idx = ntc.draw_integer(0, (nets.len() - 1) as i128)? as usize;
+        let idx = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(nets.len() as i64 - 1))?
+            .to_i128()
+            .unwrap() as usize;
         let net = &nets[idx];
         // integers(int(network[0]), int(network[-1])) — drawn as
         // base + offset so the i128 cast never sees a value above i128::MAX.
-        let offset = ntc.draw_integer(0, net.size_minus_1 as i128)? as u32;
+        let offset = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(net.size_minus_1))?
+            .to_u32()
+            .unwrap();
         net.base + offset
     };
     Ok(encode_string(Ipv4Addr::from(addr_int).to_string()))
 }
 
-fn interpret_ipv6(ntc: &mut NativeTestCase) -> Result<Value, StopTest> {
-    let addr_int: u128 = if ntc.draw_integer(0, 1)? == 0 {
+fn interpret_ipv6(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
+    let addr_int: u128 = if ntc
+        .draw_integer(BigInt::from(0), BigInt::from(1))?
+        .to_i128()
+        .unwrap()
+        == 0
+    {
         // 16 uniform bytes via two 64-bit halves.
-        let hi = ntc.draw_integer(0, u64::MAX as i128)? as u64;
-        let lo = ntc.draw_integer(0, u64::MAX as i128)? as u64;
+        let hi = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(u64::MAX))?
+            .to_u64()
+            .unwrap();
+        let lo = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(u64::MAX))?
+            .to_u64()
+            .unwrap();
         (u128::from(hi) << 64) | u128::from(lo)
     } else {
         let nets = &*SPECIAL_IPV6_NETWORKS;
-        let idx = ntc.draw_integer(0, (nets.len() - 1) as i128)? as usize;
+        let idx = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(nets.len() as i64 - 1))?
+            .to_i128()
+            .unwrap() as usize;
         let net = &nets[idx];
-        let offset = ntc.draw_integer(0, net.size_minus_1 as i128)? as u128;
+        let offset = ntc
+            .draw_integer(BigInt::from(0), BigInt::from(net.size_minus_1))?
+            .to_u128()
+            .unwrap();
         net.base + offset
     };
     Ok(encode_string(Ipv6Addr::from(addr_int).to_string()))

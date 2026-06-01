@@ -2,7 +2,13 @@ use crate::Settings;
 use ciborium::Value;
 
 /// Error returned by [`DataSource`] methods when an operation cannot complete.
+///
+/// Not part of the public API: this is an implementation detail of the
+/// backend machinery (primarily for libhegel embedding) and may change in any
+/// release, including gaining new variants.
+#[doc(hidden)]
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum DataSourceError {
     /// The backend ran out of data for this test case.
     StopTest,
@@ -11,6 +17,11 @@ pub enum DataSourceError {
     Assume,
     /// The backend returned an error (e.g. invalid arguments, internal error).
     ServerError(String),
+    /// A caller-supplied argument (typically a schema) was semantically
+    /// invalid. The main library converts this to a panic at the API surface;
+    /// libhegel maps it to `HEGEL_E_INVALID_ARG` with the message exposed via
+    /// `hegel_last_error_message`. Carries a human-readable diagnostic.
+    InvalidArgument(String),
 }
 
 impl std::fmt::Display for DataSourceError {
@@ -21,6 +32,7 @@ impl std::fmt::Display for DataSourceError {
             }
             DataSourceError::Assume => write!(f, "Backend rejected the current draw (Assume)"),
             DataSourceError::ServerError(msg) => write!(f, "{}", msg),
+            DataSourceError::InvalidArgument(msg) => write!(f, "{}", msg),
         }
     }
 }
@@ -59,14 +71,14 @@ pub trait DataSource: Send + Sync {
     ) -> Result<(), DataSourceError>;
 
     /// Create a new variable pool. Returns an opaque pool id.
-    fn new_pool(&self) -> Result<i128, DataSourceError>;
+    fn new_pool(&self) -> Result<i64, DataSourceError>;
 
     /// Register a new variable in the pool. Returns the variable id.
-    fn pool_add(&self, pool_id: i128) -> Result<i128, DataSourceError>;
+    fn pool_add(&self, pool_id: i64) -> Result<i64, DataSourceError>;
 
     /// Draw a variable id from the pool.
     /// If `consume` is true, the variable is removed from the pool.
-    fn pool_generate(&self, pool_id: i128, consume: bool) -> Result<i128, DataSourceError>;
+    fn pool_generate(&self, pool_id: i64, consume: bool) -> Result<i64, DataSourceError>;
 
     /// Record a targeting observation for the current test case.
     ///

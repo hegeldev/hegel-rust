@@ -8,7 +8,9 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 INCLUDE="$ROOT/hegel-c/include"
-LIBDIR="$ROOT/target/debug"
+# HEGEL_C_LIB_DIR lets the caller point at a library built into a separate
+# target dir — e.g. the panic=abort build produced by `just c-test-abort`.
+LIBDIR="${HEGEL_C_LIB_DIR:-$ROOT/target/debug}"
 OUT="$ROOT/target/c-examples"
 mkdir -p "$OUT"
 

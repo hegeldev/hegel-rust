@@ -344,6 +344,16 @@ mod replay_logic {
         let calls: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
         let calls_cl = Arc::clone(&calls);
 
+        // Boundary chosen so the minimal counterexample (n =
+        // BOUNDARY, v = []) cannot be drawn directly by random
+        // generation. The native integer sampler heavily biases toward
+        // "nasty" constants (powers of two/ten, factorials, etc. plus
+        // ±1 neighbours); 1_234_567 is in none of those sets, so the
+        // shrinker is guaranteed to have multi-step work to do
+        // converging on it — and therefore guaranteed to emit
+        // intermediate persister saves.
+        const BOUNDARY: i64 = 1_234_567;
+
         run_expecting_failure(std::panic::AssertUnwindSafe(move || {
             Hegel::new(move |tc: TestCase| {
                 {
@@ -354,7 +364,7 @@ mod replay_logic {
                 let n: i64 = tc.draw(gs::integers::<i64>().min_value(0));
                 let v: Vec<i64> = tc.draw(gs::vecs(gs::integers::<i64>()).min_size(0));
                 let _ = v;
-                assert!(n < 1_000_000);
+                assert!(n < BOUNDARY);
             })
             .settings(
                 Settings::new()

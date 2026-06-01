@@ -312,10 +312,18 @@ mod shrink_quality {
 
     #[test]
     fn test_duplicate_containment() {
-        let (xs, x): (Vec<i64>, i64) = minimal(
+        // This counterexample is discovered by a span mutation that copies one
+        // integer's span over another. Span mutations are generated examples
+        // and consume the `test_cases` budget like any other, so finding it
+        // needs a few hundred more examples than the 500 default — previously
+        // this passed only because mutations ran *outside* the budget, letting
+        // a 500-example run secretly execute several thousand cases.
+        let (xs, x): (Vec<i64>, i64) = Minimal::new(
             gs::tuples!(gs::vecs(gs::integers::<i64>()), gs::integers::<i64>()),
             |(xs, x): &(Vec<i64>, i64)| xs.iter().filter(|&&v| v == *x).count() > 1,
-        );
+        )
+        .test_cases(1000)
+        .run();
         assert_eq!(xs, vec![0, 0]);
         assert_eq!(x, 0);
     }

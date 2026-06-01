@@ -13,11 +13,21 @@ fn fresh_ntc() -> NativeTestCase {
 }
 
 #[test]
-#[should_panic(expected = "Unknown schema type: mystery")]
-fn interpret_schema_unknown_type_panics() {
+fn interpret_schema_unknown_type_is_invalid_argument() {
     let mut ntc = fresh_ntc();
     let schema = cbor_map! { "type" => "mystery" };
-    let _ = interpret_schema(&mut ntc, &schema);
+    let err = interpret_schema(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("unknown schema type"));
+}
+
+#[test]
+fn interpret_schema_missing_type_is_invalid_argument() {
+    let mut ntc = fresh_ntc();
+    let schema = cbor_map! { "min_value" => 0 };
+    let err = interpret_schema(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("\"type\""));
 }
 
 // ── Every schema dispatch records an enclosing span ─────────────────────────
@@ -189,41 +199,104 @@ fn many_reject_marks_invalid_when_cannot_reach_min_size() {
     assert_eq!(ntc.status, Some(Status::Invalid));
 }
 
-// ── cbor_to_i128 panic branches ─────────────────────────────────────────────
+// ── cbor_to_bigint error branches ───────────────────────────────────────────
 
 #[test]
-#[should_panic(expected = "Expected Bytes inside bignum tag 2")]
-fn cbor_to_i128_tag2_non_bytes_panics() {
+fn cbor_to_bigint_tag2_non_bytes_is_invalid_argument() {
     let bad = Value::Tag(2, Box::new(Value::Integer(1.into())));
-    let _ = cbor_to_i128(&bad);
+    let err = cbor_to_bigint(&bad).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("bignum tag 2"));
 }
 
 #[test]
-#[should_panic(expected = "Expected Bytes inside bignum tag 3")]
-fn cbor_to_i128_tag3_non_bytes_panics() {
+fn cbor_to_bigint_tag3_non_bytes_is_invalid_argument() {
     let bad = Value::Tag(3, Box::new(Value::Integer(1.into())));
-    let _ = cbor_to_i128(&bad);
+    let err = cbor_to_bigint(&bad).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("bignum tag 3"));
 }
 
 #[test]
-#[should_panic(expected = "Expected CBOR integer")]
-fn cbor_to_i128_non_integer_panics() {
-    let _ = cbor_to_i128(&Value::Bool(true));
+fn cbor_to_bigint_non_integer_is_invalid_argument() {
+    let err = cbor_to_bigint(&Value::Bool(true)).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("CBOR integer"));
 }
 
-// ── bignum_overflows_i128 branches ──────────────────────────────────────────
+// ── cbor_to_bigint / bigint_to_cbor round-trips ─────────────────────────────
 
 #[test]
-fn bignum_overflows_i128_false_for_non_tag2() {
-    assert!(!bignum_overflows_i128(&Value::Integer(5.into())));
-    // Tag 2 with malformed (non-Bytes) inner also reports false.
-    let malformed = Value::Tag(2, Box::new(Value::Integer(1.into())));
-    assert!(!bignum_overflows_i128(&malformed));
+fn cbor_to_bigint_plain_integer() {
+    assert_eq!(
+        cbor_to_bigint(&Value::Integer(42.into())).unwrap(),
+        BigInt::from(42)
+    );
+    assert_eq!(
+        cbor_to_bigint(&Value::Integer((-7).into())).unwrap(),
+        BigInt::from(-7)
+    );
 }
 
 #[test]
-fn bignum_overflows_i128_true_for_more_than_16_bytes() {
-    let bytes = vec![0xFFu8; 17];
-    let big = Value::Tag(2, Box::new(Value::Bytes(bytes)));
-    assert!(bignum_overflows_i128(&big));
+fn cbor_to_bigint_positive_bignum_tag2() {
+    // 0x01_00 big-endian = 256.
+    let v = Value::Tag(2, Box::new(Value::Bytes(vec![0x01, 0x00])));
+    assert_eq!(cbor_to_bigint(&v).unwrap(), BigInt::from(256));
+}
+
+#[test]
+fn cbor_to_bigint_negative_bignum_tag3() {
+    // tag 3 encodes -1 - n; n = 255 here, so value = -256.
+    let v = Value::Tag(3, Box::new(Value::Bytes(vec![0xFF])));
+    assert_eq!(cbor_to_bigint(&v).unwrap(), BigInt::from(-256));
+}
+
+#[test]
+fn bigint_to_cbor_roundtrips_across_magnitudes() {
+    // Spans the i64 (negative), u64 (above i64::MAX), positive-bignum
+    // (above u64::MAX), and negative-bignum (below i64::MIN) encodings.
+    let cases = [
+        BigInt::from(0),
+        BigInt::from(-5),
+        BigInt::from(u64::MAX),
+        BigInt::from(u128::MAX),
+        BigInt::from(i128::MIN) * BigInt::from(1_000_000),
+    ];
+    for original in cases {
+        let encoded = bigint_to_cbor(&original);
+        assert_eq!(cbor_to_bigint(&encoded).unwrap(), original);
+    }
+}
+
+#[test]
+fn interpret_integer_draws_real_bigint_beyond_u128() {
+    // Bounds well outside the u128 range force the `BigInt` width (the
+    // `draw_in_range` fallback) and the big-range sampler. Looping exercises
+    // both the nasty-pool and the uniform (`sample_biguint_at_most`) branches.
+    // Seeing a value beyond ±u128::MAX confirms a genuine arbitrary-precision
+    // value was generated rather than a saturated one.
+    let u128_max = BigInt::from(u128::MAX);
+    let min = &u128_max * BigInt::from(-1_000_000);
+    let max = &u128_max * BigInt::from(1_000_000);
+    let schema = cbor_map! {
+        "type" => "integer",
+        "min_value" => bigint_to_cbor(&min),
+        "max_value" => bigint_to_cbor(&max),
+    };
+    let neg_u128_max = -&u128_max;
+    let mut saw_beyond_u128 = false;
+    for seed in 0..200u64 {
+        let mut ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
+        let value = interpret_schema(&mut ntc, &schema).ok().unwrap();
+        let decoded = cbor_to_bigint(&value).unwrap();
+        assert!(decoded >= min && decoded <= max, "out of range: {decoded}");
+        if decoded > u128_max || decoded < neg_u128_max {
+            saw_beyond_u128 = true;
+        }
+    }
+    assert!(
+        saw_beyond_u128,
+        "expected at least one value beyond the u128 range"
+    );
 }

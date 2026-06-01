@@ -23,9 +23,20 @@ mod special;
 mod text;
 
 use crate::cbor_utils::map_get;
+use crate::native::bignum::{BigInt, Sign, ToPrimitive};
 use crate::native::core::state::MAX_DEPTH;
-use crate::native::core::{ManyState, NativeTestCase, Span, Status, StopTest};
+use crate::native::core::{EngineError, ManyState, NativeTestCase, Span, Status};
 use ciborium::Value;
+
+/// Look up a required schema field, returning [`EngineError::InvalidArgument`]
+/// (rather than panicking) when it is absent. Used for fields whose presence
+/// is part of the schema contract — a missing one means the caller's schema
+/// is malformed.
+pub(super) fn require<'a>(schema: &'a Value, field: &str) -> Result<&'a Value, EngineError> {
+    map_get(schema, field).ok_or_else(|| {
+        EngineError::InvalidArgument(format!("schema is missing required \"{field}\" field"))
+    })
+}
 
 /// Interpret a CBOR schema and produce a value using the native test case.
 ///
@@ -38,11 +49,11 @@ use ciborium::Value;
 pub(crate) fn interpret_schema(
     ntc: &mut NativeTestCase,
     schema: &Value,
-) -> Result<Value, StopTest> {
+) -> Result<Value, EngineError> {
     use crate::cbor_utils::as_text;
-    let schema_type = map_get(schema, "type")
-        .and_then(as_text)
-        .expect("Schema must have a \"type\" field");
+    let schema_type = map_get(schema, "type").and_then(as_text).ok_or_else(|| {
+        EngineError::InvalidArgument("schema is missing a string \"type\" field".to_string())
+    })?;
 
     // Open a dispatch span. We push a Span directly rather than calling
     // `start_span` because `start_span` takes a u64 label, and schema
@@ -90,7 +101,9 @@ pub(crate) fn interpret_schema(
         "email" => internet::interpret_email(ntc),
         "url" => internet::interpret_url(ntc),
 
-        other => panic!("Unknown schema type: {}", other),
+        other => Err(EngineError::InvalidArgument(format!(
+            "unknown schema type: {other:?}"
+        ))),
     };
 
     ntc.span_stack.pop();
@@ -102,7 +115,10 @@ pub(crate) fn interpret_schema(
 
 /// Advance the many state by one element.  Returns true if another
 /// element should be drawn.  Mirrors `Hypothesis`'s `many.more()`.
-pub(crate) fn many_more(ntc: &mut NativeTestCase, state: &mut ManyState) -> Result<bool, StopTest> {
+pub(crate) fn many_more(
+    ntc: &mut NativeTestCase,
+    state: &mut ManyState,
+) -> Result<bool, EngineError> {
     let should_continue = if state.min_size as f64 == state.max_size {
         // Fixed size: draw exactly min_size elements.
         state.count < state.min_size
@@ -126,14 +142,17 @@ pub(crate) fn many_more(ntc: &mut NativeTestCase, state: &mut ManyState) -> Resu
 }
 
 /// Reject the last drawn element.  Mirrors Hypothesis's `many.reject()`.
-pub(crate) fn many_reject(ntc: &mut NativeTestCase, state: &mut ManyState) -> Result<(), StopTest> {
+pub(crate) fn many_reject(
+    ntc: &mut NativeTestCase,
+    state: &mut ManyState,
+) -> Result<(), EngineError> {
     assert!(state.count > 0);
     state.count -= 1;
     state.rejections += 1;
     if state.rejections > std::cmp::max(3, 2 * state.count) {
         if state.count < state.min_size {
             ntc.status = Some(Status::Invalid);
-            return Err(StopTest);
+            return Err(EngineError::StopTest);
         } else {
             state.force_stop = true;
         }
@@ -141,96 +160,57 @@ pub(crate) fn many_reject(ntc: &mut NativeTestCase, state: &mut ManyState) -> Re
     Ok(())
 }
 
-/// Convert a CBOR value to i128, handling bignum tags.
+/// Convert a CBOR value to a [`BigInt`], handling bignum tags. Unlike the old
+/// `cbor_to_i128` this is exact — arbitrarily large magnitudes are preserved.
 ///
-/// For positive bignums (tag 2) that exceed i128::MAX (e.g. u128::MAX),
-/// we saturate at i128::MAX so the integer range remains valid.
-pub(super) fn cbor_to_i128(value: &Value) -> i128 {
+/// Returns [`EngineError::InvalidArgument`] for any value that is not a CBOR
+/// integer (or a malformed bignum tag), since that means the caller's
+/// schema is invalid.
+pub(super) fn cbor_to_bigint(value: &Value) -> Result<BigInt, EngineError> {
     match value {
-        Value::Integer(i) => (*i).into(),
+        Value::Integer(i) => Ok(BigInt::from(i128::from(*i))),
         Value::Tag(2, inner) => {
-            // CBOR tag 2: positive bignum (big-endian bytes)
+            // CBOR tag 2: positive bignum (big-endian bytes).
             let Value::Bytes(bytes) = inner.as_ref() else {
-                panic!("Expected Bytes inside bignum tag 2, got {:?}", inner)
+                return Err(EngineError::InvalidArgument(format!(
+                    "expected bytes inside bignum tag 2, got {inner:?}"
+                )));
             };
-            let mut n = 0u128;
-            for b in bytes {
-                n = (n << 8) | (*b as u128);
-            }
-            // Saturating cast: values above i128::MAX (e.g. u128::MAX) cap at i128::MAX.
-            i128::try_from(n).unwrap_or(i128::MAX)
+            Ok(BigInt::from_bytes_be(Sign::Plus, bytes))
         }
         Value::Tag(3, inner) => {
-            // CBOR tag 3: negative bignum, value is -1 - n
+            // CBOR tag 3: negative bignum, value is `-1 - n`.
             let Value::Bytes(bytes) = inner.as_ref() else {
-                panic!("Expected Bytes inside bignum tag 3, got {:?}", inner)
+                return Err(EngineError::InvalidArgument(format!(
+                    "expected bytes inside bignum tag 3, got {inner:?}"
+                )));
             };
-            let mut n = 0u128;
-            for b in bytes {
-                n = (n << 8) | (*b as u128);
-            }
-            // Safe: -1 - n where n <= i128::MAX is always representable.
-            -1i128 - i128::try_from(n).unwrap_or(i128::MAX)
+            Ok(-BigInt::from_bytes_be(Sign::Plus, bytes) - 1)
         }
-        _ => panic!("Expected CBOR integer, got {:?}", value),
+        _ => Err(EngineError::InvalidArgument(format!(
+            "expected CBOR integer, got {value:?}"
+        ))),
     }
 }
 
-/// Return true if the CBOR value is a positive bignum (tag 2) whose value exceeds i128::MAX.
-fn bignum_overflows_i128(value: &Value) -> bool {
-    match value {
-        Value::Tag(2, inner) => {
-            let Value::Bytes(bytes) = inner.as_ref() else {
-                return false;
-            };
-            // Value overflows i128 if it needs more than 16 bytes, or if the high bit
-            // of a 16-byte value is set (i.e. > i128::MAX).
-            if bytes.len() > 16 {
-                return true;
-            }
-            if bytes.len() == 16 && bytes[0] >= 0x80 {
-                return true;
-            }
-            // Also check: if any byte beyond what i128 can hold is non-zero.
-            let mut n = 0u128;
-            for b in bytes {
-                n = (n << 8) | (*b as u128);
-            }
-            n > i128::MAX as u128
-        }
-        _ => false,
-    }
-}
-
-/// Encode a u128 value as CBOR. Values up to u64::MAX use normal integer encoding;
-/// larger values use CBOR positive bignum tag 2 with big-endian bytes.
-fn u128_to_cbor(v: u128) -> Value {
-    if let Ok(n) = u64::try_from(v) {
+/// Convert a [`BigInt`] to a CBOR value. Values that fit `i64`/`u64` use the
+/// direct integer encoding; larger magnitudes use the CBOR bignum tags
+/// (2 = non-negative, 3 = negative, each carrying minimal big-endian bytes).
+pub(super) fn bigint_to_cbor(v: &BigInt) -> Value {
+    if let Some(n) = v.to_i64() {
         return Value::Integer(n.into());
     }
-    // Encode as CBOR tag 2 (positive bignum), big-endian, minimal encoding.
-    let bytes = v.to_be_bytes();
-    // Strip leading zero bytes for minimal encoding.
-    let first_nonzero = bytes
-        .iter()
-        .position(|&b| b != 0)
-        .unwrap_or(bytes.len() - 1);
-    Value::Tag(2, Box::new(Value::Bytes(bytes[first_nonzero..].to_vec())))
-}
-
-/// Convert an i128 to a CBOR value.
-///
-/// ciborium's Integer type supports up to i64/u64 directly. For values
-/// that fit, we use the direct conversion. Values outside that range
-/// use serialization via serde.
-fn i128_to_cbor(v: i128) -> Value {
-    if let Ok(n) = i64::try_from(v) {
-        Value::Integer(n.into())
-    } else if let Ok(n) = u64::try_from(v) {
-        Value::Integer(n.into())
+    if let Some(n) = v.to_u64() {
+        return Value::Integer(n.into());
+    }
+    if v.sign() == Sign::Minus {
+        // Tag 3 stores `n` where the value is `-1 - n`, i.e. `n = |v| - 1`.
+        let n = (-v) - BigInt::from(1);
+        let (_sign, bytes) = n.to_bytes_be();
+        Value::Tag(3, Box::new(Value::Bytes(bytes)))
     } else {
-        // For values outside i64/u64 range, serialize through serde
-        crate::cbor_utils::cbor_serialize(&v)
+        let (_sign, bytes) = v.to_bytes_be();
+        Value::Tag(2, Box::new(Value::Bytes(bytes)))
     }
 }
 

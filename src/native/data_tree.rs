@@ -8,12 +8,14 @@
 //! drawn, an optional terminal `Status`, and a cached exhaustion flag
 //! so the walker can short-circuit dead branches.
 
-use std::collections::HashMap;
+use std::sync::Arc;
+
+use rustc_hash::FxHashMap;
 
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 
-use crate::native::bignum::BigUint;
+use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Status};
 
 /// Hashable choice-value key. `f64` is keyed by its bit pattern so `-0.0`
@@ -21,7 +23,7 @@ use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Status};
 /// separately — both matter for novel-prefix exhaustion accounting.
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum ChoiceValueKey {
-    Integer(i128),
+    Integer(BigInt),
     Boolean(bool),
     Float(u64),
     Bytes(Vec<u8>),
@@ -31,7 +33,7 @@ enum ChoiceValueKey {
 impl From<&ChoiceValue> for ChoiceValueKey {
     fn from(v: &ChoiceValue) -> Self {
         match v {
-            ChoiceValue::Integer(n) => ChoiceValueKey::Integer(*n),
+            ChoiceValue::Integer(n) => ChoiceValueKey::Integer(n.clone()),
             ChoiceValue::Boolean(b) => ChoiceValueKey::Boolean(*b),
             ChoiceValue::Float(f) => ChoiceValueKey::Float(f.to_bits()),
             ChoiceValue::Bytes(b) => ChoiceValueKey::Bytes(b.clone()),
@@ -42,8 +44,14 @@ impl From<&ChoiceValue> for ChoiceValueKey {
 
 #[derive(Default)]
 pub(crate) struct DataTreeNode {
-    kind: Option<ChoiceKind>,
-    children: HashMap<ChoiceValueKey, Box<DataTreeNode>>,
+    kind: Option<Arc<ChoiceKind>>,
+    /// Whether the draw made *from* this node was forced (set alongside
+    /// `kind` on first visit). Forcing is deterministic given the prefix, so
+    /// a forced position has exactly one child — the forced value — and a
+    /// replay's prefix value at that position is ignored. [`simulate`] needs
+    /// this to predict realised values correctly.
+    forced: bool,
+    children: FxHashMap<ChoiceValueKey, Box<DataTreeNode>>,
     /// Terminal status if the test case ended at this node. Only set
     /// when the recording run concluded with `Status >= Invalid`.
     conclusion: Option<Status>,
@@ -76,8 +84,14 @@ impl DataTreeNode {
             return true;
         }
         if let Some(ref kind) = self.kind {
-            let max_c = kind.max_children();
-            if BigUint::from(self.children.len() as u64) >= max_c {
+            // Exhausted iff every possible child value has its own node. We only
+            // need `max_children <= explored`, and `explored` is a small count,
+            // so the saturating form avoids building the huge cardinality
+            // `BigUint` (and its `pow`) that `max_children()` would for sequence
+            // kinds: `max_children_saturating(explored + 1) <= explored` is
+            // exactly `max_children <= explored`.
+            let explored = self.children.len() as u128;
+            if kind.max_children_saturating(explored + 1) <= explored {
                 let all_exhausted = self.children.values_mut().all(|c| c.check_exhausted());
                 if all_exhausted {
                     self.is_exhausted = true;
@@ -89,19 +103,23 @@ impl DataTreeNode {
     }
 }
 
-/// Walk `nodes` through `tree_root`, asserting that the schema at every
-/// position matches what was observed on previous runs. A mismatch
-/// panics with a non-determinism wording. Records the terminal `status`
-/// at the leaf (if the test concluded cleanly) and propagates
-/// exhaustion up the path so `generate_novel_prefix` can skip dead
-/// branches. `kill_depths` flags spans closed with `discard=true`
-/// (mirrors Python's `kill_branch()`).
+/// Walk `nodes` through `tree_root`, checking that the schema at every
+/// position matches what was observed on previous runs. Records the terminal
+/// `status` at the leaf (if the test concluded cleanly) and propagates
+/// exhaustion up the path so `generate_novel_prefix` can skip dead branches.
+/// `kill_depths` flags spans closed with `discard=true` (mirrors Python's
+/// `kill_branch()`).
+///
+/// Returns `Some(message)` if a non-determinism mismatch was detected (the
+/// schema at a position changed from a previous run), so the caller can fold
+/// it into a failing [`TestRunResult`] rather than panicking — keeping it from
+/// aborting an in-process engine driven over FFI. Returns `None` otherwise.
 pub(crate) fn record_tree(
     tree_root: &mut DataTreeNode,
     nodes: &[ChoiceNode],
     status: Status,
     kill_depths: &[usize],
-) {
+) -> Option<String> {
     // Iterative descent: a single-path walk can be thousands deep and
     // a recursive walk would blow the stack.
     let mut path: Vec<*mut DataTreeNode> = Vec::with_capacity(nodes.len() + 1);
@@ -115,15 +133,16 @@ pub(crate) fn record_tree(
         let node = unsafe { &mut *parent_ptr };
         match &node.kind {
             Some(expected_kind) if *expected_kind != first.kind => {
-                panic!(
+                return Some(format!(
                     "Your data generation is non-deterministic: at the same choice \
                      position with the same prefix, the schema changed from {:?} to {:?}. \
                      This usually means a generator depends on global mutable state.",
                     expected_kind, first.kind
-                );
+                ));
             }
             None => {
                 node.kind = Some(first.kind.clone());
+                node.forced = first.was_forced;
             }
             _ => {}
         }
@@ -156,6 +175,8 @@ pub(crate) fn record_tree(
         let node = unsafe { &mut *p };
         node.check_exhausted();
     }
+
+    None
 }
 
 /// Small-domain cap for enumeration fallback in
@@ -168,7 +189,7 @@ const ENUMERATION_CAP: u64 = 1024;
 /// exhausted too).
 fn pick_non_exhausted_value(
     kind: &ChoiceKind,
-    children: &HashMap<ChoiceValueKey, Box<DataTreeNode>>,
+    children: &FxHashMap<ChoiceValueKey, Box<DataTreeNode>>,
     rng: &mut SmallRng,
 ) -> Option<ChoiceValue> {
     for _ in 0..10 {
@@ -212,7 +233,7 @@ pub(crate) fn generate_novel_prefix(
     let mut prefix = Vec::new();
     let mut current = tree_root;
     while let Some(ref kind) = current.kind {
-        let Some(value) = pick_non_exhausted_value(kind, &current.children, rng) else {
+        let Some(value) = pick_non_exhausted_value(kind.as_ref(), &current.children, rng) else {
             break;
         };
         let key = ChoiceValueKey::from(&value);
@@ -224,6 +245,71 @@ pub(crate) fn generate_novel_prefix(
         }
     }
     prefix
+}
+
+/// Predict the outcome of replaying `choices` through
+/// [`super::core::NativeTestCase::for_choices`] *without* running the test
+/// body, by walking them through the recorded tree. Port of the subset of
+/// Hypothesis's `DataTree.simulate_test_function` the runner needs.
+///
+/// The walk reproduces how `resolve_choice` turns a replayed prefix value
+/// into the *realised* value the tree is keyed on, which is **not** always
+/// the prefix value itself:
+///
+/// * At a **forced** position the prefix value is ignored and the draw
+///   always yields the single recorded (forced) value; the prefix cursor
+///   still advances past the skipped slot.
+/// * At an unforced position whose prefix value fails the requested kind's
+///   validation, the draw puns to `kind.unit()` (there is no original-kind
+///   information for a bare `for_choices` replay, so the `simplest()` branch
+///   never applies).
+///
+/// Returns `Some(status)` when the walk reaches a recorded conclusion
+/// (either because a previous run terminated exactly here, or because it
+/// terminated at a prefix of `choices` whose trailing values are never
+/// read). Returns `None` — Hypothesis's `PreviouslyUnseenBehaviour` — when
+/// the realised path diverges from anything seen before, or when `choices`
+/// runs out while the tree still expects another draw (a real run would
+/// overrun, which `for_choices` never records as a conclusion); in both
+/// cases the caller must actually execute to learn the outcome.
+///
+/// Only `Status >= Invalid` is ever recorded as a conclusion (see
+/// [`record_tree`]), so `EarlyStop` is never returned.
+pub(crate) fn simulate(tree_root: &DataTreeNode, choices: &[ChoiceValue]) -> Option<Status> {
+    let mut current = tree_root;
+    // `i` tracks the prefix cursor, which equals `nodes.len()` in the real
+    // run: every draw — forced or not — advances it by one.
+    let mut i = 0usize;
+    loop {
+        // A run terminated here drawing fewer choices than we walked past;
+        // its outcome is fixed regardless of any later values.
+        if let Some(status) = current.conclusion {
+            return Some(status);
+        }
+        // No draw was ever made from this node (and it didn't conclude), so
+        // the path beyond it is unknown.
+        let kind = current.kind.as_ref()?;
+        // `for_choices` caps `max_size` at `choices.len()`, so the draw that
+        // would read position `choices.len()` overruns (EarlyStop) — and
+        // that is never recorded as a conclusion. We can't predict it.
+        if i >= choices.len() {
+            return None;
+        }
+        let next = if current.forced {
+            // Forced: ignore the prefix value, follow the single recorded
+            // (forced) child.
+            current.children.values().next()?
+        } else {
+            let realised = if kind.validate(&choices[i]) {
+                choices[i].clone()
+            } else {
+                kind.unit()
+            };
+            current.children.get(&ChoiceValueKey::from(&realised))?
+        };
+        i += 1;
+        current = next;
+    }
 }
 
 /// Concatenate `database_key + b"." + sub` to derive a sub-corpus key.

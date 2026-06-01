@@ -1,90 +1,74 @@
 // Choice types: the recorded decisions a test case makes.
 
+use std::sync::Arc;
+
+use crate::native::bignum::{BigInt, BigUint, Zero};
 use crate::native::floats::sign_aware_lte;
 use crate::native::intervalsets::IntervalSet;
 
-/// An integer choice with bounded range.
+/// An integer choice with bounded range, using `BigInt` for all widths.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IntegerChoice {
-    pub min_value: i128,
-    pub max_value: i128,
+    pub min_value: BigInt,
+    pub max_value: BigInt,
     /// The "preferred" value the shrinker aims at (default 0). All of
     /// [`Self::simplest`], [`Self::unit`], and [`Self::sort_key`] are
     /// anchored at `shrink_towards.clamp(min_value, max_value)`, so
     /// integer-shrinking passes converge on this value rather than on 0.
-    pub shrink_towards: i128,
+    pub shrink_towards: BigInt,
 }
 
 impl IntegerChoice {
-    /// The shrink-target value clamped into the kind's range.  All shrink
-    /// helpers compare against this rather than the raw `shrink_towards`
-    /// to keep behaviour well-defined when callers pass an out-of-range
-    /// hint.
-    pub(crate) fn clamped_shrink_towards(&self) -> i128 {
-        self.shrink_towards.clamp(self.min_value, self.max_value)
+    pub(crate) fn clamped_shrink_towards(&self) -> BigInt {
+        self.shrink_towards
+            .clone()
+            .clamp(self.min_value.clone(), self.max_value.clone())
     }
 
-    /// The simplest (most "shrunk") value: `shrink_towards` clamped to
-    /// the kind's range. With the default `shrink_towards = 0` this is
-    /// `0` when in range and the closest endpoint otherwise.
-    pub fn simplest(&self) -> i128 {
+    pub fn simplest(&self) -> BigInt {
         self.clamped_shrink_towards()
     }
 
-    /// The second simplest value, used for punning when types change.
-    pub fn unit(&self) -> i128 {
+    pub fn unit(&self) -> BigInt {
         let s = self.simplest();
-        if self.validate(s + 1) {
-            s + 1
-        } else if self.validate(s - 1) {
-            s - 1
-        } else {
-            s
+        let succ = &s + BigInt::from(1);
+        if self.validate(&succ) {
+            return succ;
         }
+        let pred = &s - BigInt::from(1);
+        if self.validate(&pred) {
+            return pred;
+        }
+        s
     }
 
-    pub fn validate(&self, value: i128) -> bool {
-        self.min_value <= value && value <= self.max_value
+    pub fn validate(&self, value: &BigInt) -> bool {
+        self.min_value <= *value && *value <= self.max_value
     }
 
-    /// Sort key for shrinking: smaller distance from `shrink_towards`
-    /// is simpler, with values below `shrink_towards` ordered after
-    /// values above at the same distance. With the default
-    /// `shrink_towards = 0` this is `(value.unsigned_abs(), value < 0)`.
-    pub fn sort_key(&self, value: i128) -> (u128, bool) {
+    pub fn sort_key(&self, value: &BigInt) -> (BigUint, bool) {
         let target = self.clamped_shrink_towards();
-        let distance = value.wrapping_sub(target).unsigned_abs();
-        (distance, value < target)
+        let distance = (value - &target).magnitude();
+        (distance, *value < target)
     }
 
-    pub fn max_index(&self) -> crate::native::bignum::BigUint {
-        use crate::native::bignum::BigUint;
-        // max_value - min_value can exceed i128 positive range (e.g. full
-        // i128 span). Two's-complement wrapping_sub reinterpreted as u128
-        // recovers the correct non-negative distance.
-        let diff = (self.max_value as u128).wrapping_sub(self.min_value as u128);
-        BigUint::from(diff)
+    pub fn max_index(&self) -> BigUint {
+        (&self.max_value - &self.min_value).magnitude()
     }
 
-    pub fn to_index(&self, value: i128) -> crate::native::bignum::BigUint {
-        use crate::native::bignum::{BigUint, Zero};
+    pub fn to_index(&self, value: &BigInt) -> BigUint {
         let s = self.simplest();
-        if value == s {
+        if *value == s {
             return BigUint::zero();
         }
-        let above = BigUint::from((self.max_value as u128).wrapping_sub(s as u128));
-        let below = BigUint::from((s as u128).wrapping_sub(self.min_value as u128));
-        let d_abs_u = if value > s {
-            (value as u128).wrapping_sub(s as u128)
-        } else {
-            (s as u128).wrapping_sub(value as u128)
-        };
-        let d_abs = BigUint::from(d_abs_u);
-        let d_minus_one = &d_abs - BigUint::from(1u32);
-        let mut count = std::cmp::min(&d_minus_one, &above).clone()
-            + std::cmp::min(&d_minus_one, &below).clone();
-        if value > s {
-            return count + BigUint::from(1u32);
+        let above = (&self.max_value - &s).magnitude();
+        let below = (&s - &self.min_value).magnitude();
+        let d_abs = (value - &s).magnitude();
+        let one = BigUint::from(1u32);
+        let d_minus_one = &d_abs - &one;
+        let mut count = std::cmp::min(&d_minus_one, &above) + std::cmp::min(&d_minus_one, &below);
+        if *value > s {
+            return count + &one;
         }
         if d_abs <= above {
             count += BigUint::from(1u32);
@@ -93,45 +77,53 @@ impl IntegerChoice {
     }
 
     #[allow(clippy::wrong_self_convention)]
-    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<i128> {
-        use crate::native::bignum::{BigUint, Zero};
+    pub fn from_index(&self, index: BigUint) -> Option<BigInt> {
         let s = self.simplest();
         if index.is_zero() {
             return Some(s);
         }
-        let above_u = (self.max_value as u128).wrapping_sub(s as u128);
-        let below_u = (s as u128).wrapping_sub(self.min_value as u128);
-        let above = BigUint::from(above_u);
-        let below = BigUint::from(below_u);
-        let mut lo = BigUint::from(1u32);
-        let mut hi = &above + &below;
-        let two = BigUint::from(2u32);
-        while lo < hi {
-            let mid = (&lo + &hi) / &two;
-            let total = std::cmp::min(&mid, &above).clone() + std::cmp::min(&mid, &below).clone();
-            if total >= index {
-                hi = mid;
-            } else {
-                lo = mid + BigUint::from(1u32);
-            }
-        }
-        let d = lo;
-        let total_at_d = std::cmp::min(&d, &above).clone() + std::cmp::min(&d, &below).clone();
-        if total_at_d < index {
+        let above = (&self.max_value - &s).magnitude();
+        let below = (&s - &self.min_value).magnitude();
+        // Values are enumerated by increasing distance `d` from `s`, emitting
+        // the up value `s + d` before the down value `s - d` at each distance,
+        // and dropping whichever side has run past its bound. The number of
+        // values within distance `d` is therefore
+        //     total(d) = min(d, above) + min(d, below),
+        // a piecewise-linear function of `d` with breakpoints at `a` and `b`
+        // (the smaller and larger of `above`/`below`):
+        //     d <= a       -> 2d        (both sides live)
+        //     a < d <= b   -> a + d     (small side exhausted)
+        //     d >  b       -> a + b     (both sides exhausted = max_index)
+        // Each regime inverts in closed form, so no search over `d` is needed.
+        if index > &above + &below {
             return None;
         }
-        let d_minus_one = &d - BigUint::from(1u32);
-        let before = std::cmp::min(&d_minus_one, &above).clone()
-            + std::cmp::min(&d_minus_one, &below).clone();
-        let pos_in_d = &index - before;
-        let d_u: u128 = (&d)
-            .try_into()
-            .expect("d fits in u128 (range is <= u128::MAX)");
-        if pos_in_d == BigUint::from(1u32) && d <= above {
-            return Some((s as u128).wrapping_add(d_u) as i128);
+        let two_a = std::cmp::min(&above, &below) << 1usize;
+        let one = BigUint::from(1u32);
+        let (d, up) = if index <= two_a {
+            // Both sides live: index 2d-1 is `s + d`, index 2d is `s - d`.
+            let d = (&index + &one) >> 1u32;
+            let up = !(&index % &BigUint::from(2u32)).is_zero();
+            (d, up)
+        } else {
+            // Only the larger side continues, one value per distance beyond `a`.
+            let d = &index - std::cmp::min(&above, &below);
+            (d, above > below)
+        };
+        let d = BigInt::from(d);
+        if up { Some(s + d) } else { Some(s - d) }
+    }
+
+    pub fn max_children(&self) -> BigUint {
+        self.max_index() + BigUint::from(1u32)
+    }
+
+    pub fn value_from_bigint(&self, v: &BigInt) -> Option<BigInt> {
+        if self.validate(v) {
+            Some(v.clone())
+        } else {
+            None
         }
-        debug_assert!(d <= below);
-        Some((s as u128).wrapping_sub(d_u) as i128)
     }
 }
 
@@ -702,7 +694,7 @@ pub enum ChoiceKind {
 /// The value produced by a choice.
 #[derive(Clone, Debug)]
 pub enum ChoiceValue {
-    Integer(i128),
+    Integer(BigInt),
     Boolean(bool),
     Float(f64),
     Bytes(Vec<u8>),
@@ -743,15 +735,59 @@ impl std::hash::Hash for ChoiceValue {
     }
 }
 
+/// `Σ_{len=min_size..=max_size} alphabet^len` — the number of distinct
+/// sequences over an `alphabet`-symbol set — saturating at `cap`.
+///
+/// Backs [`ChoiceKind::max_children_saturating`] for the `Bytes` / `String`
+/// kinds: it accumulates in `u128` and returns `cap` the instant the running
+/// total reaches it, so a huge `max_size` never forces a multi-hundred-bit
+/// `BigUint`. `saturating_mul` pins `power` at `u128::MAX` once the alphabet
+/// outgrows the word, which then drives `total` to `cap` on the next term.
+fn sequence_max_children_saturating(
+    alphabet: u128,
+    min_size: usize,
+    max_size: usize,
+    cap: u128,
+) -> u128 {
+    let mut total: u128 = 0;
+    let mut power: u128 = 1; // alphabet^0
+    for len in 0..=max_size {
+        if len >= min_size {
+            total = total.saturating_add(power);
+            if total >= cap {
+                return cap;
+            }
+        }
+        power = power.saturating_mul(alphabet);
+    }
+    total
+}
+
 impl ChoiceKind {
     /// The simplest value for this choice kind.
     pub fn simplest(&self) -> ChoiceValue {
         match self {
             ChoiceKind::Integer(ic) => ChoiceValue::Integer(ic.simplest()),
+
             ChoiceKind::Boolean(bc) => ChoiceValue::Boolean(bc.simplest()),
             ChoiceKind::Float(fc) => ChoiceValue::Float(fc.simplest()),
             ChoiceKind::Bytes(bc) => ChoiceValue::Bytes(bc.simplest()),
             ChoiceKind::String(sc) => ChoiceValue::String(sc.simplest()),
+        }
+    }
+
+    /// The "unit" value for this choice kind — the fallback a replayed draw
+    /// resolves to when its prefix value fails this kind's validation and no
+    /// original-kind information is available to pun towards `simplest()`.
+    /// Mirrors the `unit()` branch of
+    /// [`crate::native::core::state::NativeTestCase::resolve_choice`].
+    pub fn unit(&self) -> ChoiceValue {
+        match self {
+            ChoiceKind::Integer(ic) => ChoiceValue::Integer(ic.unit()),
+            ChoiceKind::Boolean(bc) => ChoiceValue::Boolean(bc.unit()),
+            ChoiceKind::Float(fc) => ChoiceValue::Float(fc.unit()),
+            ChoiceKind::Bytes(bc) => ChoiceValue::Bytes(bc.unit()),
+            ChoiceKind::String(sc) => ChoiceValue::String(sc.unit()),
         }
     }
 
@@ -769,7 +805,7 @@ impl ChoiceKind {
     /// Convert a value to its dense index under this kind's sort order.
     pub fn to_index(&self, value: &ChoiceValue) -> crate::native::bignum::BigUint {
         match (self, value) {
-            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.to_index(*v),
+            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.to_index(v),
             (ChoiceKind::Boolean(bc), ChoiceValue::Boolean(v)) => bc.to_index(*v),
             (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => fc.to_index(*v),
             (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => bc.to_index(v),
@@ -793,7 +829,7 @@ impl ChoiceKind {
     /// Whether `value` is a valid draw for this kind.
     pub fn validate(&self, value: &ChoiceValue) -> bool {
         match (self, value) {
-            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.validate(*v),
+            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.validate(v),
             (ChoiceKind::Boolean(_), ChoiceValue::Boolean(_)) => true,
             (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => fc.validate(*v),
             (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => bc.validate(v),
@@ -806,14 +842,46 @@ impl ChoiceKind {
     pub fn max_children(&self) -> crate::native::bignum::BigUint {
         use crate::native::bignum::BigUint;
         match self {
-            ChoiceKind::Integer(ic) => {
-                let diff = (ic.max_value as u128).wrapping_sub(ic.min_value as u128);
-                BigUint::from(diff) + BigUint::from(1u32)
-            }
+            ChoiceKind::Integer(ic) => ic.max_children(),
             ChoiceKind::Boolean(_) => BigUint::from(2u32),
             ChoiceKind::Float(fc) => fc.max_index() + BigUint::from(1u32),
             ChoiceKind::Bytes(bc) => bc.max_index() + BigUint::from(1u32),
             ChoiceKind::String(sc) => sc.max_index() + BigUint::from(1u32),
+        }
+    }
+
+    /// `min(max_children(), cap)`, computed *without* materialising the exact
+    /// cardinality for sequence kinds.
+    ///
+    /// The data-tree exhaustion check only needs to compare a node's
+    /// cardinality against a small explored-child count, never the exact value.
+    /// [`max_children`](Self::max_children) for a `Bytes`/`String` choice is
+    /// `Σ alphabet^len` — a `BigUint` of up to hundreds of bits whose
+    /// `BigUint::pow` dominated generation in profiles. This variant sums in
+    /// saturating `u128` and stops the moment the running total reaches `cap`,
+    /// so the astronomically-large powers are never built. Scalar kinds reuse
+    /// their (cheap, `pow`-free) `max_index`, saturating any value past `u128`
+    /// to `cap`.
+    pub fn max_children_saturating(&self, cap: u128) -> u128 {
+        use crate::native::bignum::ToPrimitive;
+        let scalar = |max_index: crate::native::bignum::BigUint| {
+            max_index
+                .to_u128()
+                .map_or(cap, |mi| mi.saturating_add(1).min(cap))
+        };
+        match self {
+            ChoiceKind::Boolean(_) => 2u128.min(cap),
+            ChoiceKind::Integer(ic) => scalar(ic.max_index()),
+            ChoiceKind::Float(fc) => scalar(fc.max_index()),
+            ChoiceKind::Bytes(bc) => {
+                sequence_max_children_saturating(256, bc.min_size, bc.max_size, cap)
+            }
+            ChoiceKind::String(sc) => sequence_max_children_saturating(
+                sc.intervals.len() as u128,
+                sc.min_size,
+                sc.max_size,
+                cap,
+            ),
         }
     }
 
@@ -847,9 +915,9 @@ impl ChoiceKind {
         match self {
             ChoiceKind::Integer(ic) => {
                 let mut v = Vec::new();
-                let mut n = ic.min_value;
+                let mut n = ic.min_value.clone();
                 loop {
-                    v.push(ChoiceValue::Integer(n));
+                    v.push(ChoiceValue::Integer(n.clone()));
                     if n == ic.max_value {
                         break;
                     }
@@ -895,9 +963,14 @@ impl ChoiceKind {
 }
 
 /// A single recorded choice in a test case.
+///
+/// The `kind` is wrapped in `Arc` because the shrinker clones entire
+/// `Vec<ChoiceNode>` vectors thousands of times per shrink run, while the
+/// kind almost never changes. This turns three `BigInt` deep-clones per
+/// integer node into a single pointer bump.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChoiceNode {
-    pub kind: ChoiceKind,
+    pub kind: Arc<ChoiceKind>,
     pub value: ChoiceValue,
     pub was_forced: bool,
 }
@@ -940,29 +1013,34 @@ impl ChoiceTemplate {
 }
 
 impl ChoiceNode {
+    pub fn new(kind: ChoiceKind, value: ChoiceValue, was_forced: bool) -> Self {
+        Self {
+            kind: Arc::new(kind),
+            value,
+            was_forced,
+        }
+    }
+
     pub fn with_value(&self, value: ChoiceValue) -> ChoiceNode {
         ChoiceNode {
-            kind: self.kind.clone(),
+            kind: Arc::clone(&self.kind),
             value,
             was_forced: self.was_forced,
         }
     }
 
     pub fn sort_key(&self) -> NodeSortKey {
-        match (&self.kind, &self.value) {
+        match (self.kind.as_ref(), &self.value) {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
-                let (abs, neg) = ic.sort_key(*v);
-                NodeSortKey::Scalar(abs, neg)
+                let (mag, neg) = ic.sort_key(v);
+                NodeSortKey::Scalar(mag, neg)
             }
             (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => {
-                NodeSortKey::Scalar(u128::from(*v), false)
+                NodeSortKey::Scalar(BigUint::from(u32::from(*v)), false)
             }
             (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => {
                 let (mag, neg) = fc.sort_key(*v);
-                // `u64` widens losslessly into the `u128` magnitude slot used
-                // for integer sort keys: float and integer choices end up in a
-                // single totally-ordered space without losing precision.
-                NodeSortKey::Scalar(u128::from(mag), neg)
+                NodeSortKey::Scalar(BigUint::from(mag), neg)
             }
             (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => {
                 let (len, bytes) = bc.sort_key(v);
@@ -979,24 +1057,176 @@ impl ChoiceNode {
 
 /// Comparable key for ordering choice nodes during shrinking.
 ///
-/// Scalar kinds (integer, boolean, float) compare on a fixed `(magnitude,
-/// sign)` pair; sequence kinds (bytes) compare shortlex on `(length,
-/// elements)`. Per-element keys are stored as `u32` so a future string
-/// choice kind (with codepoint-key elements up to `0x10FFFF`) can join the
-/// same shape without changing this type. Variants are never mixed at a
-/// given node position; `Scalar < Sequence` by derived enum order is a
-/// total-ordering fall-through for the sort key of an entire
-/// sequence-of-nodes that contains both shapes.
+/// Scalar kinds (integer, boolean, float) compare on a `(magnitude, sign)`
+/// pair; sequence kinds (bytes, strings) compare shortlex on `(length,
+/// elements)`. Per-element keys are stored as `u32` so the string choice kind
+/// (with codepoint-key elements up to `0x10FFFF`) fits the same shape.
+/// Variants are never mixed at a given node position; the cross-variant order
+/// `Scalar < Sequence` (by derived enum order) is a total-ordering
+/// fall-through for the sort key of an entire sequence-of-nodes that contains
+/// different shapes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NodeSortKey {
-    Scalar(u128, bool),
+    Scalar(crate::native::bignum::BigUint, bool),
     Sequence(usize, Vec<u32>),
+}
+
+/// Borrowed view of a [`ChoiceNode`]'s sort key.
+///
+/// `Ord` matches [`NodeSortKey`]'s ordering exactly: `Scalar < Sequence`
+/// cross-variant, scalar by `(magnitude, sign)`, sequence variants shortlex on
+/// length then per-element keys. The per-element keys for `Bytes` and `String`
+/// are resolved lazily during comparison — `String` defers `codepoint_key` to
+/// the moment of compare — so no `Vec<u32>` ever gets allocated.
+pub enum NodeSortKeyRef<'a> {
+    Scalar(crate::native::bignum::BigUint, bool),
+    Bytes(&'a [u8]),
+    String(&'a StringChoice, &'a [u32]),
+}
+
+impl<'a> NodeSortKeyRef<'a> {
+    fn category(&self) -> u8 {
+        match self {
+            NodeSortKeyRef::Scalar(..) => 0,
+            NodeSortKeyRef::Bytes(..) | NodeSortKeyRef::String(..) => 1,
+        }
+    }
+
+    /// Length of the underlying element sequence. Only meaningful for
+    /// sequence variants; the only call site (the sequence-vs-sequence
+    /// arm of `cmp`) gates on category() before invoking.
+    fn seq_len(&self) -> usize {
+        match self {
+            NodeSortKeyRef::Bytes(b) => b.len(),
+            NodeSortKeyRef::String(_, cps) => cps.len(),
+            NodeSortKeyRef::Scalar(..) => unreachable!("seq_len on scalar"),
+        }
+    }
+
+    /// `i`-th per-element key in the sort-order alphabet. `i` must be in
+    /// `0..self.seq_len()`. Calling on `Scalar` is unreachable in the
+    /// only call sites (sequence-element comparison).
+    fn seq_key_at(&self, i: usize) -> u32 {
+        match self {
+            NodeSortKeyRef::Bytes(b) => b[i] as u32,
+            NodeSortKeyRef::String(sc, cps) => sc.codepoint_key(cps[i]),
+            NodeSortKeyRef::Scalar(..) => unreachable!("seq_key_at on scalar"),
+        }
+    }
+}
+
+impl<'a> PartialEq for NodeSortKeyRef<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl<'a> Eq for NodeSortKeyRef<'a> {}
+
+impl<'a> PartialOrd for NodeSortKeyRef<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a> Ord for NodeSortKeyRef<'a> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match (self, other) {
+            (NodeSortKeyRef::Scalar(am, an), NodeSortKeyRef::Scalar(bm, bn)) => {
+                (am, an).cmp(&(bm, bn))
+            }
+            (NodeSortKeyRef::Scalar(..), _) | (_, NodeSortKeyRef::Scalar(..)) => {
+                self.category().cmp(&other.category())
+            }
+            _ => {
+                // Both sides are sequence variants.
+                let la = self.seq_len();
+                let lb = other.seq_len();
+                match la.cmp(&lb) {
+                    Ordering::Equal => {}
+                    ord => return ord,
+                }
+                for i in 0..la {
+                    match self.seq_key_at(i).cmp(&other.seq_key_at(i)) {
+                        Ordering::Equal => continue,
+                        ord => return ord,
+                    }
+                }
+                Ordering::Equal
+            }
+        }
+    }
+}
+
+impl ChoiceNode {
+    /// Borrowed counterpart of [`Self::sort_key`]. Returns a
+    /// [`NodeSortKeyRef`] that borrows the node's value (and, for
+    /// `String`, its choice config). Same ordering, no allocation.
+    pub fn sort_key_ref(&self) -> NodeSortKeyRef<'_> {
+        match (self.kind.as_ref(), &self.value) {
+            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
+                let (mag, neg) = ic.sort_key(v);
+                NodeSortKeyRef::Scalar(mag, neg)
+            }
+            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => {
+                NodeSortKeyRef::Scalar(BigUint::from(u32::from(*v)), false)
+            }
+            (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => {
+                let (mag, neg) = fc.sort_key(*v);
+                NodeSortKeyRef::Scalar(BigUint::from(mag), neg)
+            }
+            (ChoiceKind::Bytes(_), ChoiceValue::Bytes(v)) => NodeSortKeyRef::Bytes(v),
+            (ChoiceKind::String(sc), ChoiceValue::String(v)) => NodeSortKeyRef::String(sc, v),
+            _ => unreachable!("mismatched choice kind and value"),
+        }
+    }
+}
+
+/// Shortlex sort key for a sequence of choice nodes, as a borrowed view.
+/// Shorter sequences are simpler; among equal lengths, smaller per-element
+/// keys win. Comparison is allocation-free: per-element keys are resolved
+/// lazily and the first inequality short-circuits.
+#[derive(Clone, Copy)]
+pub struct NodesSortKey<'a>(pub &'a [ChoiceNode]);
+
+impl<'a> PartialEq for NodesSortKey<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl<'a> Eq for NodesSortKey<'a> {}
+
+impl<'a> PartialOrd for NodesSortKey<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a> Ord for NodesSortKey<'a> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match self.0.len().cmp(&other.0.len()) {
+            Ordering::Equal => {}
+            ord => return ord,
+        }
+        for (a, b) in self.0.iter().zip(other.0.iter()) {
+            match a.sort_key_ref().cmp(&b.sort_key_ref()) {
+                Ordering::Equal => continue,
+                ord => return ord,
+            }
+        }
+        Ordering::Equal
+    }
 }
 
 /// Shortlex sort key for a sequence of choice nodes.
 /// Shorter sequences are simpler; among equal lengths, smaller values win.
-pub fn sort_key(nodes: &[ChoiceNode]) -> (usize, Vec<NodeSortKey>) {
-    (nodes.len(), nodes.iter().map(|n| n.sort_key()).collect())
+/// Returns a borrowed view that compares allocation-free; see
+/// [`NodesSortKey::to_owned`] when a long-lived snapshot is needed.
+pub fn sort_key(nodes: &[ChoiceNode]) -> NodesSortKey<'_> {
+    NodesSortKey(nodes)
 }
 
 /// Test case status, ordered from least to most "significant".
@@ -1012,8 +1242,31 @@ pub enum Status {
     Interesting = 3,
 }
 
-/// Raised when a test case should stop executing.
-pub struct StopTest;
+/// Error raised while interpreting a schema / drawing from the engine.
+///
+/// `StopTest` is the overwhelmingly common case: normal data-exhaustion
+/// control flow that ends the current test case. `InvalidArgument` carries a
+/// caller-supplied-schema diagnostic that must surface as an error
+/// (libhegel: `HEGEL_E_INVALID_ARG`) or a panic (main library), but never an
+/// uncaught panic that crosses the FFI boundary and aborts the host process.
+#[derive(Debug)]
+pub enum EngineError {
+    /// The test case ran out of data and should stop executing.
+    StopTest,
+    /// A caller-supplied schema was semantically invalid (unknown type,
+    /// empty character set, unparseable regex, etc.). The string is a
+    /// human-readable diagnostic.
+    InvalidArgument(String),
+}
+
+impl std::fmt::Display for EngineError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EngineError::StopTest => write!(f, "test case should stop executing (StopTest)"),
+            EngineError::InvalidArgument(msg) => write!(f, "{msg}"),
+        }
+    }
+}
 
 /// Opaque key identifying one source of "interesting" outcomes
 /// (one bug). Matches the cross-backend protocol contract: it's

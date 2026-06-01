@@ -2172,3 +2172,28 @@ fn err_class_range_with_category_endpoint() {
     let err = parse_err(r"[\d-z]");
     assert!(err.msg.contains("bad character range"), "{}", err.msg);
 }
+
+#[test]
+fn err_z_anchor_not_supported() {
+    // CPython's `re` only has `\Z`; `\z` is "bad escape \z".
+    let err = parse_err(r"\z");
+    assert!(err.msg.contains("bad escape"), "{}", err.msg);
+    // `\Z` is still accepted.
+    parse_pattern(r"\Z", 0).unwrap();
+}
+
+#[test]
+fn err_deeply_nested_groups() {
+    // A pathologically nested pattern must surface a clean error rather than
+    // overflowing the stack.
+    let pat = format!("{}a{}", "(?:".repeat(5000), ")".repeat(5000));
+    let err = parse_err(&pat);
+    assert!(err.msg.contains("nesting"), "{}", err.msg);
+}
+
+#[test]
+fn moderately_nested_groups_parse() {
+    // Well within the nesting limit.
+    let pat = format!("{}a{}", "(?:".repeat(20), ")".repeat(20));
+    parse_pattern(&pat, 0).unwrap();
+}

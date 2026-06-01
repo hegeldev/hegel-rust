@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::cbor_utils::{as_text, as_u64, map_get};
-use crate::native::core::{NativeTestCase, StopTest};
+use crate::native::core::{EngineError, NativeTestCase};
 use crate::native::intervalsets::IntervalSet;
 use crate::unicodedata;
 use ciborium::Value;
@@ -20,23 +20,26 @@ const DEFAULT_MAX_SIZE: usize = 100;
 pub(super) fn interpret_string(
     ntc: &mut NativeTestCase,
     schema: &Value,
-) -> Result<Value, StopTest> {
+) -> Result<Value, EngineError> {
     let min_size = map_get(schema, "min_size").and_then(as_u64).unwrap_or(0) as usize;
     let max_size = map_get(schema, "max_size")
         .and_then(as_u64)
         .map(|n| n as usize)
         .unwrap_or(min_size.max(DEFAULT_MAX_SIZE));
 
-    let intervals = build_intervals(schema);
+    let intervals = build_intervals(schema)?;
     if intervals.is_empty() && max_size > 0 {
         // Empty alphabets are a schema-level error — Hypothesis raises
-        // `InvalidArgument` at strategy-construction time, but the Hegel
-        // protocol can't catch it that early, so panic at draw time.
-        panic!(
+        // `InvalidArgument` at strategy-construction time. The Hegel protocol
+        // can't catch it that early, so surface it as an error at draw time.
+        // The "InvalidArgument" token matches the cross-backend (server)
+        // wording so backend-agnostic tests recognise the same failure.
+        return Err(EngineError::InvalidArgument(
             "InvalidArgument: No valid characters in the specified range. \
              The schema's codec/codepoint/category/include/exclude constraints \
              leave no characters available."
-        );
+                .to_string(),
+        ));
     }
 
     let s = ntc.draw_string(intervals, min_size, max_size)?;
@@ -46,7 +49,7 @@ pub(super) fn interpret_string(
 /// Build the effective character alphabet for a string schema, memoised by
 /// the schema's canonical CBOR encoding. Mirrors Hypothesis's
 /// `limited_category_index_cache` in `internal/charmap.py`.
-pub(super) fn build_intervals(schema: &Value) -> IntervalSet {
+pub(super) fn build_intervals(schema: &Value) -> Result<IntervalSet, EngineError> {
     type Cache = Mutex<HashMap<Vec<u8>, Arc<IntervalSet>>>;
     static CACHE: OnceLock<Cache> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -56,20 +59,26 @@ pub(super) fn build_intervals(schema: &Value) -> IntervalSet {
     // un-encodable values (which `Value` rules out by construction).
     ciborium::into_writer(schema, &mut key).expect("CBOR encoding of schema cannot fail");
     if let Some(cached) = cache.lock().unwrap().get(&key) {
-        return (**cached).clone();
+        return Ok((**cached).clone());
     }
-    let computed = Arc::new(build_intervals_uncached(schema));
+    // Only successful results are cached; an invalid schema returns the error
+    // and leaves the cache untouched.
+    let computed = Arc::new(build_intervals_uncached(schema)?);
     cache.lock().unwrap().insert(key, Arc::clone(&computed));
-    (*computed).clone()
+    Ok((*computed).clone())
 }
 
-fn build_intervals_uncached(schema: &Value) -> IntervalSet {
+fn build_intervals_uncached(schema: &Value) -> Result<IntervalSet, EngineError> {
     let codec = map_get(schema, "codec").and_then(as_text);
     let (mut cp_min, mut cp_max): (u32, u32) = match codec {
         Some("ascii") => (0, 127),
         Some("latin-1") | Some("iso-8859-1") => (0, 255),
         Some("utf-8") | None => (0, 0x10FFFF),
-        Some(other) => panic!("Invalid codec: {}", other),
+        Some(other) => {
+            return Err(EngineError::InvalidArgument(format!(
+                "invalid codec: {other}"
+            )));
+        }
     };
 
     if let Some(min_cp) = map_get(schema, "min_codepoint").and_then(as_u64) {
@@ -95,7 +104,9 @@ fn build_intervals_uncached(schema: &Value) -> IntervalSet {
         .chain(exclude_categories.iter().flatten())
     {
         if !is_valid_category(cat) {
-            panic!("InvalidArgument: {cat:?} is not a valid Unicode category.");
+            return Err(EngineError::InvalidArgument(format!(
+                "{cat:?} is not a valid Unicode category"
+            )));
         }
     }
 
@@ -104,10 +115,10 @@ fn build_intervals_uncached(schema: &Value) -> IntervalSet {
         if !overlap.is_empty() {
             let incl_str: String = incl.iter().collect();
             let excl_str: String = excl.iter().collect();
-            panic!(
-                "InvalidArgument: Characters {overlap:?} are present in both \
+            return Err(EngineError::InvalidArgument(format!(
+                "characters {overlap:?} are present in both \
                  include_characters={incl_str:?} and exclude_characters={excl_str:?} (overlap)"
-            );
+            )));
         }
     }
 
@@ -178,7 +189,7 @@ fn build_intervals_uncached(schema: &Value) -> IntervalSet {
         }
     }
 
-    intervals
+    Ok(intervals)
 }
 
 /// Build an [`IntervalSet`] containing `[min, max]` with the surrogate block

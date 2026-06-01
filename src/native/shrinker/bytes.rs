@@ -14,7 +14,7 @@ impl<'a> Shrinker<'a> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let (min_size, current) = match (
-                self.current_nodes[i].kind.clone(),
+                self.current_nodes[i].kind.as_ref(),
                 self.current_nodes[i].value.clone(),
             ) {
                 (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => (bc.min_size, v),
@@ -144,7 +144,7 @@ impl<'a> Shrinker<'a> {
         self.current_nodes
             .iter()
             .enumerate()
-            .filter_map(|(i, n)| match &n.kind {
+            .filter_map(|(i, n)| match n.kind.as_ref() {
                 ChoiceKind::Bytes(_) => Some(i),
                 _ => None,
             })
@@ -154,7 +154,7 @@ impl<'a> Shrinker<'a> {
     fn redistribute_bytes_pair(&mut self, i: usize, j: usize) {
         let s = self.current_byte_value(i);
         let t = self.current_byte_value(j);
-        let kind_j = match &self.current_nodes[j].kind {
+        let kind_j = match self.current_nodes[j].kind.as_ref() {
             ChoiceKind::Bytes(kj) => kj.clone(),
             _ => unreachable!("kind/value invariant violated: outer match guaranteed this variant"),
         };

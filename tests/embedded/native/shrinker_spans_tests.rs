@@ -9,28 +9,29 @@
 //!   well-defined.
 //! * `Shrinker::clear_change_tracking` empties the set and rebaselines.
 
+use crate::native::bignum::BigInt;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Integer(IntegerChoice {
-            min_value: i128::MIN,
-            max_value: i128::MAX,
-            shrink_towards: 0,
+    ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
+            min_value: BigInt::from(i128::MIN),
+            max_value: BigInt::from(i128::MAX),
+            shrink_towards: BigInt::from(0),
         }),
-        value: ChoiceValue::Integer(value),
-        was_forced: false,
-    }
+        ChoiceValue::Integer(BigInt::from(value)),
+        false,
+    )
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode {
-        kind: ChoiceKind::Boolean(BooleanChoice),
-        value: ChoiceValue::Boolean(value),
-        was_forced: false,
-    }
+    ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(value),
+        false,
+    )
 }
 
 fn span(start: usize, end: usize, label: &str) -> Span {
@@ -194,8 +195,8 @@ fn forced_nodes_survive_every_shrinker_pass() {
     forced.was_forced = true;
     let initial = vec![int_node(9), forced, int_node(11)];
     let snapshot_forced_idx = 1;
-    let initial_forced_value = match initial[snapshot_forced_idx].value {
-        ChoiceValue::Integer(v) => v,
+    let initial_forced_value = match &initial[snapshot_forced_idx].value {
+        ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
         _ => unreachable!(),
     };
 
@@ -220,8 +221,8 @@ fn forced_nodes_survive_every_shrinker_pass() {
         ShrinkPass::new("shrink_duplicates", Box::new(|sh| sh.shrink_duplicates())),
     ];
     shrinker.fixate_shrink_passes(&mut passes);
-    let value = match shrinker.current_nodes[snapshot_forced_idx].value {
-        ChoiceValue::Integer(v) => v,
+    let value = match &shrinker.current_nodes[snapshot_forced_idx].value {
+        ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
         _ => unreachable!(),
     };
     assert_eq!(value, initial_forced_value);

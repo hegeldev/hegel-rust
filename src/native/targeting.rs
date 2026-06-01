@@ -161,7 +161,11 @@ fn run_trial(
 /// Hill-climb every target until no further improvements are found or the
 /// budget is exhausted. Mirrors `engine.py::optimise_targets`.
 pub(crate) fn optimise_targets(targeting: &mut TargetingState, ctx: &mut OptimiseCtx<'_, '_, '_>) {
-    let targets: Vec<String> = targeting.best_observed_targets.keys().cloned().collect();
+    let mut targets: Vec<String> = targeting.best_observed_targets.keys().cloned().collect();
+    // Iterate in a deterministic order: each hill-climb consumes the shared
+    // call budget, so `HashMap`'s per-process-randomised key order would make a
+    // seeded multi-target run non-reproducible.
+    targets.sort();
     let mut max_improvements: usize = 10;
     loop {
         let prev_calls = *ctx.calls;
@@ -232,7 +236,7 @@ fn hill_climb(
             continue;
         }
         let node = &current_nodes[idx];
-        if !node.was_forced && is_climbable(&node.value, &node.kind) {
+        if !node.was_forced && is_climbable(&node.value, node.kind.as_ref()) {
             let len_before = current_nodes.len();
             // Hill-climb in the +1 direction. `find_integer` itself is the
             // general `junkdrawer.find_integer` from `shrinker/mod.rs`: it
@@ -357,13 +361,10 @@ pub(crate) fn is_climbable(value: &ChoiceValue, kind: &ChoiceKind) -> bool {
 /// `optimiser.py::Optimiser.attempt_replace` (lines 130-156) plus the
 /// `choice_permitted(new_choice, node.constraints)` post-check.
 pub(crate) fn step_choice(node: &ChoiceNode, delta: i128) -> Option<ChoiceValue> {
-    match (&node.value, &node.kind) {
+    match (&node.value, node.kind.as_ref()) {
         (ChoiceValue::Integer(v), ChoiceKind::Integer(kind)) => {
-            let new = v.saturating_add(delta);
-            if !kind.validate(new) {
-                return None;
-            }
-            Some(ChoiceValue::Integer(new))
+            let new = v + crate::native::bignum::BigInt::from(delta);
+            Some(ChoiceValue::Integer(kind.value_from_bigint(&new)?))
         }
         (ChoiceValue::Float(v), ChoiceKind::Float(kind)) => {
             let new = v + delta as f64;
