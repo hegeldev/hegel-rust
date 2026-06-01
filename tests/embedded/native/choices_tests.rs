@@ -340,6 +340,37 @@ fn integer_choice_from_index_overflowing_u128_returns_none() {
 }
 
 #[test]
+fn integer_choice_index_round_trip_nonzero_shrink_towards() {
+    // shrink_towards is the index-0 anchor and biases the up/down interleave,
+    // so exercise a non-zero one (inside range) across the full span.
+    let ic = IntegerChoice {
+        min_value: BigInt::from(-5),
+        max_value: BigInt::from(40),
+        shrink_towards: BigInt::from(7),
+    };
+    for v in -5i128..=40 {
+        let bv = BigInt::from(v);
+        let idx = ic.to_index(&bv);
+        assert_eq!(ic.from_index(idx), Some(bv), "round-trip failed for v={v}");
+    }
+}
+
+#[test]
+fn integer_choice_index_round_trip_shrink_towards_clamped_outside_range() {
+    // shrink_towards below min clamps to min, making the choice one-sided.
+    let ic = IntegerChoice {
+        min_value: BigInt::from(10),
+        max_value: BigInt::from(30),
+        shrink_towards: BigInt::from(-100),
+    };
+    for v in 10i128..=30 {
+        let bv = BigInt::from(v);
+        let idx = ic.to_index(&bv);
+        assert_eq!(ic.from_index(idx), Some(bv), "round-trip failed for v={v}");
+    }
+}
+
+#[test]
 fn boolean_is_always_two() {
     assert_eq!((ChoiceKind::Boolean(BooleanChoice)).max_children(), bu(2));
 }
