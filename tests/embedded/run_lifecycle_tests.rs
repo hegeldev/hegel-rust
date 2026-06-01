@@ -199,3 +199,114 @@ fn format_backtrace_short_strips_through_filter() {
     let out = format_backtrace(&bt, false);
     assert_eq!(out, filter_short_backtrace(&format!("{}", bt)));
 }
+
+// ── run_lifecycle: hegel-internal panics are re-raised, not swallowed ─────
+//
+// When a draw panics from *inside* hegel's own source (here, an unexpected
+// `ServerError` surfaced by `panic_on_data_source_error` in `test_case.rs`),
+// `run_test_case` must classify it as an [`InternalError`] and `drive` must
+// re-raise it immediately rather than shrinking it as a discovered
+// counterexample. This exercises that path in-process (the subprocess tests
+// in `tests/test_internal_errors.rs` pin the exact user-visible format).
+
+/// A [`DataSource`] whose `generate` always fails with a non-usage
+/// `ServerError`, simulating an unexpected server response. The draw path
+/// turns this into a `panic!` from inside hegel's own `test_case.rs`.
+struct ServerErrorDataSource;
+
+impl DataSource for ServerErrorDataSource {
+    fn generate(
+        &self,
+        _schema: &ciborium::Value,
+    ) -> Result<ciborium::Value, crate::backend::DataSourceError> {
+        Err(crate::backend::DataSourceError::ServerError(
+            "Server error (RequestError): simulated internal failure".to_string(),
+        ))
+    }
+    fn start_span(&self, _label: u64) -> Result<(), crate::backend::DataSourceError> {
+        Ok(())
+    }
+    fn stop_span(&self, _discard: bool) -> Result<(), crate::backend::DataSourceError> {
+        Ok(())
+    }
+    fn new_collection(
+        &self,
+        _min_size: u64,
+        _max_size: Option<u64>,
+    ) -> Result<i64, crate::backend::DataSourceError> {
+        unimplemented!()
+    }
+    fn collection_more(
+        &self,
+        _collection_id: i64,
+    ) -> Result<bool, crate::backend::DataSourceError> {
+        unimplemented!()
+    }
+    fn collection_reject(
+        &self,
+        _collection_id: i64,
+        _why: Option<&str>,
+    ) -> Result<(), crate::backend::DataSourceError> {
+        unimplemented!()
+    }
+    fn new_pool(&self) -> Result<i64, crate::backend::DataSourceError> {
+        unimplemented!()
+    }
+    fn pool_add(&self, _pool_id: i64) -> Result<i64, crate::backend::DataSourceError> {
+        unimplemented!()
+    }
+    fn pool_generate(
+        &self,
+        _pool_id: i64,
+        _consume: bool,
+    ) -> Result<i64, crate::backend::DataSourceError> {
+        unimplemented!()
+    }
+    fn target_observation(&self, _score: f64, _label: &str) {
+        unimplemented!()
+    }
+    fn mark_complete(&self, _result: &TestCaseResult) {}
+}
+
+/// A [`TestRunner`] that runs exactly one test case against
+/// [`ServerErrorDataSource`]. The case panics from inside hegel, so `drive`
+/// re-raises before `run` can return — hence the `unreachable!`.
+struct InternalErrorRunner;
+
+impl TestRunner for InternalErrorRunner {
+    fn run(
+        &self,
+        _settings: &Settings,
+        _database_key: Option<&str>,
+        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+    ) -> crate::backend::TestRunResult {
+        run_case(Box::new(ServerErrorDataSource), true);
+        unreachable!("run_case must re-raise the internal error before returning")
+    }
+}
+
+#[test]
+fn drive_reraises_hegel_internal_panic_as_internal_error() {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        drive(
+            InternalErrorRunner,
+            |tc: TestCase| {
+                let _ = tc.draw(crate::generators::booleans());
+            },
+            &Settings::new(),
+            None,
+            None,
+        );
+    }));
+    let payload = result.expect_err("expected drive to re-raise the internal error");
+    let msg = payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default();
+    // The re-raised panic carries the internal-error framing, the originating
+    // hegel source file, and the original message — not a "property failed".
+    assert!(msg.contains("hegel internal error at"), "{msg}");
+    assert!(msg.contains("test_case.rs"), "{msg}");
+    assert!(msg.contains("simulated internal failure"), "{msg}");
+}
