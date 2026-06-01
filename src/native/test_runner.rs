@@ -462,7 +462,11 @@ fn run_main(
                 total
             );
         }
-        let origins: Vec<String> = interesting.keys().cloned().collect();
+        let mut origins: Vec<String> = interesting.keys().cloned().collect();
+        // Deterministic shrink order: `interesting` is a `HashMap`, whose key
+        // order is randomised per process, and each origin's shrink shares the
+        // run-level call budget.
+        origins.sort();
         for origin in origins {
             let initial = interesting.get(&origin).cloned().unwrap_or_default();
 
