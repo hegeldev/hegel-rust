@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.22 - 2026-06-01
+
+This patch improves the performance of generation by improving how we generate schemas to pass to the underlying engine.
+
 ## 0.14.21 - 2026-06-01
 
 This patch improves the performance of generating and shrinking bounded integers, and of any generator built on them (collection sizes, sampled-from indices, and similar).
