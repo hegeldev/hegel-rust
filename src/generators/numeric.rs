@@ -1,5 +1,6 @@
 use super::{BasicGenerator, Generator};
 use crate::cbor_utils::{cbor_map, cbor_serialize, map_insert};
+use crate::test_case::invalid_argument;
 use ciborium::Value;
 use std::marker::PhantomData;
 
@@ -93,7 +94,9 @@ impl<T: Integer + serde::Serialize> IntegerGenerator<T> {
     fn build_schema(&self) -> Value {
         let min = self.min.unwrap_or(T::MIN);
         let max = self.max.unwrap_or(T::MAX);
-        assert!(min <= max, "Cannot have max_value < min_value");
+        if min > max {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
 
         cbor_map! {
             "type" => "integer",
@@ -186,11 +189,19 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
         let has_max = self.max.is_some();
 
         if let (Some(min), Some(max)) = (self.min, self.max) {
-            assert!(min <= max, "Cannot have max_value < min_value");
+            // Reject `max < min`, and also a NaN bound (which compares
+            // unordered, i.e. `partial_cmp` is `None`) — matching the original
+            // `!(min <= max)` check.
+            if !matches!(
+                min.partial_cmp(&max),
+                Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+            ) {
+                invalid_argument!("Cannot have max_value < min_value");
+            }
             // Reject the sign-aware-empty range min=+0.0, max=-0.0: the
             // backends treat -0.0 < +0.0, so this range contains no floats.
             if !sign_aware_lte(min, max) {
-                panic!(
+                invalid_argument!(
                     "InvalidArgument: There are no {width}-bit floating-point \
                      values between min_value=0.0 and max_value=-0.0"
                 );
@@ -202,7 +213,7 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
             let max_f = max.to_f64();
             let zero_pair = min_f == 0.0 && max_f == 0.0;
             if (min_f == max_f || zero_pair) && (self.exclude_min || self.exclude_max) {
-                panic!(
+                invalid_argument!(
                     "InvalidArgument: exclude_min/exclude_max leave no \
                      {width}-bit floating-point values in [{min_f}, {max_f}]"
                 );
@@ -213,13 +224,13 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
         // max_value=-inf) demands the next representable value beyond an
         // unbounded endpoint, which doesn't exist.
         if self.exclude_min && self.min.is_some_and(|v| v.to_f64() == f64::INFINITY) {
-            panic!(
+            invalid_argument!(
                 "InvalidArgument: exclude_min=true with min_value=+inf leaves \
                  no {width}-bit floating-point values"
             );
         }
         if self.exclude_max && self.max.is_some_and(|v| v.to_f64() == f64::NEG_INFINITY) {
-            panic!(
+            invalid_argument!(
                 "InvalidArgument: exclude_max=true with max_value=-inf leaves \
                  no {width}-bit floating-point values"
             );
@@ -229,10 +240,10 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
         let allow_infinity = self.allow_infinity.unwrap_or(!has_min || !has_max);
 
         if allow_nan && (has_min || has_max) {
-            panic!("Cannot have allow_nan=true with min_value or max_value");
+            invalid_argument!("Cannot have allow_nan=true with min_value or max_value");
         }
         if allow_infinity && has_min && has_max {
-            panic!("Cannot have allow_infinity=true with both min_value and max_value");
+            invalid_argument!("Cannot have allow_infinity=true with both min_value and max_value");
         }
 
         let mut schema = cbor_map! {

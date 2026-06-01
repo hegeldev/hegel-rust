@@ -311,3 +311,26 @@ fn span_mutation_stops_when_example_budget_is_full() {
         },
     );
 }
+
+#[test]
+fn run_main_reports_too_slow_at_call_site() {
+    // Drive `run_main` with a zero TooSlow threshold so the (otherwise
+    // 30s-gated) call-site early-return fires deterministically — instead of
+    // relying on a test happening to exceed 30s of generation under coverage
+    // instrumentation. The body draws a value so each case is non-trivial.
+    crate::run_lifecycle::init_panic_hook();
+    let mut test_fn = |tc: crate::TestCase| {
+        tc.draw(crate::generators::booleans());
+    };
+    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
+        run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+    };
+    let settings = Settings::new().test_cases(100).database(None);
+    let result = run_main(&settings, None, &mut run_case, Duration::ZERO);
+    assert!(!result.passed);
+    assert!(
+        result.failures[0].panic_message.contains("TooSlow"),
+        "{:?}",
+        result.failures
+    );
+}

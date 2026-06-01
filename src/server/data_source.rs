@@ -2,6 +2,7 @@ use crate::backend::{DataSource, DataSourceError, TestCaseResult};
 use crate::cbor_utils::{cbor_map, map_insert};
 use crate::runner::Verbosity;
 use crate::server::protocol::{Connection, Stream};
+use crate::test_case::invalid_argument;
 use ciborium::Value;
 
 use std::collections::HashSet;
@@ -277,14 +278,14 @@ impl DataSource for ServerDataSource {
         // the Python server, surfacing as a CBOR round-trip error rather
         // than a clean client-side panic.
         if !score.is_finite() {
-            panic!(
+            invalid_argument!(
                 "tc.target({score}, label={label:?}) requires a finite score; \
                  got non-finite value"
             );
         }
         let mut seen = self.target_labels.lock().unwrap_or_else(|e| e.into_inner());
         if !seen.insert(label.to_string()) {
-            panic!(
+            invalid_argument!(
                 "tc.target({score}, label={label:?}) would overwrite previous \
                  tc.target(_, label={label:?}); each label can be observed at \
                  most once per test case"

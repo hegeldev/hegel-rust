@@ -674,7 +674,10 @@ impl<'a> Shrinker<'a> {
     /// Always called after a successful pass that may have changed
     /// integer values; clears the change-tracking set on exit.
     pub(crate) fn lower_common_node_offset(&mut self) {
-        let changed: Vec<usize> = self.changed_nodes().iter().copied().collect();
+        let mut changed: Vec<usize> = self.changed_nodes().iter().copied().collect();
+        // `changed_nodes` is a `HashSet`; sort for a deterministic, run-to-run
+        // stable iteration order.
+        changed.sort_unstable();
         if changed.len() <= 1 {
             return;
         }

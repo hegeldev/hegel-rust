@@ -132,7 +132,16 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
         if path.exists() {
             return;
         }
-        let _ = std::fs::write(&path, value);
+        // Write to a temp file in the same directory, then atomically rename it
+        // into place, so a concurrent reader never sees a partially-written
+        // value. (The value's content is fixed by its path — its own hash — so
+        // racing writers of the same value are harmless.)
+        if let Ok(mut tmp) = tempfile::NamedTempFile::new_in(&dir) {
+            use std::io::Write;
+            if tmp.write_all(value).is_ok() {
+                let _ = tmp.persist(&path);
+            }
+        }
     }
 
     fn delete(&self, key: &[u8], value: &[u8]) {

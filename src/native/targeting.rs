@@ -161,7 +161,11 @@ fn run_trial(
 /// Hill-climb every target until no further improvements are found or the
 /// budget is exhausted. Mirrors `engine.py::optimise_targets`.
 pub(crate) fn optimise_targets(targeting: &mut TargetingState, ctx: &mut OptimiseCtx<'_, '_, '_>) {
-    let targets: Vec<String> = targeting.best_observed_targets.keys().cloned().collect();
+    let mut targets: Vec<String> = targeting.best_observed_targets.keys().cloned().collect();
+    // Iterate in a deterministic order: each hill-climb consumes the shared
+    // call budget, so `HashMap`'s per-process-randomised key order would make a
+    // seeded multi-target run non-reproducible.
+    targets.sort();
     let mut max_improvements: usize = 10;
     loop {
         let prev_calls = *ctx.calls;
