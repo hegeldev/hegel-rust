@@ -2172,3 +2172,12 @@ fn err_class_range_with_category_endpoint() {
     let err = parse_err(r"[\d-z]");
     assert!(err.msg.contains("bad character range"), "{}", err.msg);
 }
+
+#[test]
+fn err_z_anchor_not_supported() {
+    // CPython's `re` only has `\Z`; `\z` is "bad escape \z".
+    let err = parse_err(r"\z");
+    assert!(err.msg.contains("bad escape"), "{}", err.msg);
+    // `\Z` is still accepted.
+    parse_pattern(r"\Z", 0).unwrap();
+}
