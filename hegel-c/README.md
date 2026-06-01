@@ -13,5 +13,6 @@ rather than building this crate yourself:
 > <https://github.com/hegeldev/hegel-rust/releases>
 
 Each release publishes `libhegel-<goos>-<goarch>.<ext>` and a matching
-`.sha256` sidecar for `linux/amd64`, `linux/arm64`, `darwin/amd64`,
-`darwin/arm64`, `windows/amd64`, and `windows/arm64`.
+`.sha256` sidecar for `linux/amd64`, `linux/arm64`, `darwin/arm64`,
+`windows/amd64`, and `windows/arm64`. Intel macOS (`darwin/amd64`) is not
+published; build the crate yourself if you need it.

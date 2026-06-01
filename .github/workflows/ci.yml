@@ -567,14 +567,16 @@ jobs:
         platform:
           - linux-amd64
           - linux-arm64
-          - darwin-amd64
           - darwin-arm64
           - windows-amd64
           - windows-arm64
         include:
           - { platform: linux-amd64,   runner: ubuntu-latest,    target: x86_64-unknown-linux-gnu,    goos: linux,   goarch: amd64, ext: so }
           - { platform: linux-arm64,   runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu,   goos: linux,   goarch: arm64, ext: so }
-          - { platform: darwin-amd64,  runner: macos-13,         target: x86_64-apple-darwin,         goos: darwin,  goarch: amd64, ext: dylib }
+          # Intel macOS (darwin-amd64) is intentionally not built: the
+          # macos-13 (x86_64) runners are scarce and routinely leave the
+          # release job stuck for hours waiting for a runner, and we do not
+          # support Intel Macs. Apple-silicon macOS is covered below.
           - { platform: darwin-arm64,  runner: macos-14,         target: aarch64-apple-darwin,        goos: darwin,  goarch: arm64, ext: dylib }
           - { platform: windows-amd64, runner: windows-latest,   target: x86_64-pc-windows-msvc,      goos: windows, goarch: amd64, ext: dll }
           # aarch64-pc-windows-msvc is cross-compiled from the x86_64 runner.
@@ -677,7 +679,6 @@ jobs:
           expected=(
             libhegel-linux-amd64.so
             libhegel-linux-arm64.so
-            libhegel-darwin-amd64.dylib
             libhegel-darwin-arm64.dylib
             libhegel-windows-amd64.dll
             libhegel-windows-arm64.dll
