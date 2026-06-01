@@ -102,9 +102,12 @@ pub fn as_bool(value: &Value) -> Option<bool> {
 }
 
 pub fn cbor_serialize<T: serde::Serialize>(value: &T) -> Value {
-    let mut bytes = Vec::new();
-    ciborium::into_writer(value, &mut bytes).expect("CBOR serialization failed");
-    ciborium::from_reader(&bytes[..]).expect("CBOR deserialization failed")
+    // Build the `Value` directly via ciborium's value serializer rather than
+    // round-tripping through an encoded byte buffer. Both produce the same
+    // `Value`, but this skips a `Vec<u8>` allocation plus the encode+decode
+    // work on every call — and this runs on the generation hot path (e.g.
+    // `build_schema` serialises each integer/float bound on every draw).
+    Value::serialized(value).expect("CBOR serialization failed")
 }
 
 #[cfg(test)]
