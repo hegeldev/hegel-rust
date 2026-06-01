@@ -260,8 +260,7 @@ pub(crate) fn run_test_case(
 }
 
 /// Print a per-test-case line describing why this test case stopped, and
-/// — for genuine panics on non-final test cases — the full panic
-/// diagnostic.
+/// — for genuine panics on non-final test cases — the full panic diagnostic.
 fn emit_verbose_test_case_outcome(result: &TestCaseResult, is_final: bool) {
     match result {
         TestCaseResult::Invalid => {
@@ -356,7 +355,7 @@ pub(crate) fn drive<R, F>(
     F: FnMut(TestCase),
 {
     init_panic_hook();
-    if !settings.phases.contains(&Phase::Generate) {
+    if settings.reproduce_failure.is_none() && !settings.phases.contains(&Phase::Generate) {
         return;
     }
 

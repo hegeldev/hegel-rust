@@ -113,11 +113,10 @@ pub struct Failure {
     /// which bug they trigger and shrink each origin to its own minimal
     /// counterexample.
     pub origin: String,
-    /// Portable reproducer for this failing example: a base64 "failure blob"
-    /// encoding the minimal counterexample's choice sequence. `Some` only on
-    /// the native backend's final replay, where the shrunk choices are available;
-    /// `None` everywhere else. Paste into `#[hegel::reproduce_failure("…")]` or
-    /// feed to [`crate::Settings::reproduce_failure`] to replay it.
+    /// A base64 "failure blob" encoding the minimal counterexample's choice sequence.
+    /// `Some` only on the native backend's final replay, where the shrunk choices
+    /// are available; `None` everywhere else. Paste into `#[hegel::reproduce_failure("…")]`
+    /// or feed to [`crate::Settings::reproduce_failure`] to replay it.
     pub reproduce_blob: Option<String>,
 }
 

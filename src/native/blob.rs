@@ -20,14 +20,13 @@
 // tiny choice sequences a shrunk counterexample usually has, the zlib header
 // overhead loses and the raw form wins (so most blobs carry prefix `0`); for
 // large sequences the compressed form wins. The inner `serialize_choices`
-// encoding (see [`crate::native::database`]) is Hegel's own, so a blob is
-// only portable between matching Hegel versions.
+// encoding (see [`crate::native::database`]) is Hegel's own, so it is only
+/// guaranteed to reproduce a failure within a specific version of Hegel.
 //
 // [`decode_failure`] reverses every step and returns `None` on *any*
 // malformation (bad base64, unknown prefix byte, corrupt zlib stream, or a
 // payload [`deserialize_choices`] rejects). Callers treat `None` as "this
 // blob can't be replayed" and panic.
-
 use crate::native::base64::{base64_decode, base64_encode};
 use crate::native::core::ChoiceValue;
 use crate::native::database::{deserialize_choices, serialize_choices};

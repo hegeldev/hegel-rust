@@ -380,9 +380,7 @@ pub use hegel_macros::explicit_test_case;
 /// ```
 ///
 /// Paste that attribute **below** `#[hegel::test]` and the next run will
-/// decode the blob's choice sequence and run *only* that example —
-/// bypassing generation and shrinking — so the failure reproduces
-/// deterministically.
+/// decode the blob's choice sequence and run *only* that example.
 ///
 /// ```ignore
 /// #[hegel::test]
@@ -405,7 +403,7 @@ pub use hegel_macros::explicit_test_case;
 /// ```
 ///
 /// The blob encodes Hegel's internal choice sequence, so it is only
-/// portable between matching Hegel versions.
+/// guaranteed to reproduce a failure within a specific version of Hegel.
 /// A blob that can't be decoded (corrupt or from an incompatible version),
 /// or that no longer reproduces a failure, surfaces as a failing run with
 /// an explanatory message.

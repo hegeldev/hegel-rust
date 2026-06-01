@@ -119,20 +119,13 @@ fn run_single(
 /// Replay a single failing example encoded as a base64 failure blob (used by
 /// [`Settings::reproduce_failure`](crate::Settings::reproduce_failure)).
 ///
-/// Decodes the blob to a choice sequence and runs exactly that one example —
-/// no database, generation, targeting, or shrinking.
+/// Decodes the blob to a choice sequence and runs exactly that one sequence.
 ///
-/// An undecodable blob is invalid *input* (not a property failure or a
-/// health-check condition), so it panics outright rather than producing a
-/// `TestRunResult` failure. A blob that decodes but no longer reproduces a
-/// failure surfaces as a failing run rather than silently passing.
-///
-/// NB: when reached via `Hegel::run`, `run_lifecycle::drive` short-circuits
-/// the whole run if `Phase::Generate` is absent, so the reproduce path relies
-/// on the default phase set being retained (the `#[hegel::reproduce_failure]`
-/// macro only *adds* `.reproduce_failure(...)`; it never strips phases). The
-/// FFI / `run_native` path calls the runner directly; libhegel's worker
-/// catches the panic and surfaces it as a failure.
+/// Two failure outcomes are distinguished:
+/// - an **undecodable** blob is invalid *input*, so it panics outright (over
+///   FFI, libhegel's worker catches the panic and surfaces it as a failure);
+/// - a blob that **decodes but no longer reproduces** the failure is reported
+///   as its own [`TestRunResult`] failure (origin `"reproduce_failure"`).
 fn run_reproduce(
     blob: &str,
     run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
@@ -154,13 +147,21 @@ fn run_reproduce(
                 failures: vec![failure],
             }
         }
-        // The blob decoded and replayed, but the test no longer fails on it:
-        // surface that explicitly rather than silently passing.
-        _ => health_check_failure(
-            "reproduce_failure: the supplied failure blob no longer reproduces a \
-             failure. The test may have been fixed, or the blob is stale."
-                .to_string(),
-        ),
+        // Decoded and replayed, but the test no longer fails on it.
+        _ => {
+            let message = "reproduce_failure: the supplied failure blob no longer \
+                           reproduces a failure. The failure may have been fixed, or \
+                           the blob is stale.";
+            TestRunResult {
+                passed: false,
+                failures: vec![Failure {
+                    panic_message: message.to_string(),
+                    diagnostic: format!("{message}\n"),
+                    origin: String::from("reproduce_failure"),
+                    reproduce_blob: None,
+                }],
+            }
+        }
     }
 }
 

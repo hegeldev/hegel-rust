@@ -265,3 +265,44 @@ fn drive_multiple_failures_prints_each_reproducer_and_panics() {
         "unexpected panic message: {msg}"
     );
 }
+
+// `drive` short-circuits a run that lacks `Phase::Generate` — except when a
+// reproduce blob is set, which must replay regardless of the phase selection.
+
+#[test]
+fn drive_runs_reproduce_even_without_generate_phase() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct RecordingRunner(Rc<Cell<bool>>);
+    impl crate::backend::TestRunner for RecordingRunner {
+        fn run(
+            &self,
+            _settings: &crate::runner::Settings,
+            _database_key: Option<&str>,
+            _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+        ) -> crate::backend::TestRunResult {
+            self.0.set(true);
+            crate::backend::TestRunResult {
+                passed: true,
+                failures: vec![],
+            }
+        }
+    }
+
+    let ran = Rc::new(Cell::new(false));
+    let settings = crate::runner::Settings::new()
+        .reproduce_failure(Some("some-blob".to_string()))
+        .phases([]); // no Phase::Generate
+    drive(
+        RecordingRunner(ran.clone()),
+        |_tc: TestCase| {},
+        &settings,
+        None,
+        None,
+    );
+    assert!(
+        ran.get(),
+        "reproduce_failure must run the runner regardless of phases"
+    );
+}

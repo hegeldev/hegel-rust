@@ -425,6 +425,8 @@ fn run_native_reproduce_blob_that_no_longer_fails_is_reported() {
         "unexpected diagnostic: {}",
         result.failures[0].diagnostic
     );
+    // Reported as its own failure, not framed as a health-check failure.
+    assert_eq!(result.failures[0].origin, "reproduce_failure");
 }
 
 #[test]
