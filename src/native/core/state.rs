@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::{LazyLock, Mutex};
 
-use rand::RngExt;
+use rand::{Rng, RngExt};
 
 use crate::native::rng::EngineRng;
 
@@ -488,6 +488,29 @@ pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<
     }
     let len = many_draw_length(rng, bc.min_size, bc.max_size);
     (0..len).map(|_| rng.random::<u8>()).collect()
+}
+
+/// Sample a boolean that is `true` with probability `p`, spending exactly one
+/// byte of entropy regardless of `p`.
+///
+/// Port of Hypothesis's `BytestringProvider.draw_boolean`: draw a single byte
+/// `n ∈ [0, 256)` and return `n >= falsey`, where
+/// `falsey = max(1, floor(256 * (1 - p)))`. The `floor` keeps `falsey <= 255`
+/// (so at least `n == 255` stays truthy for tiny `p`), and the `max(1, …)`
+/// keeps at least `n == 0` falsey for `p` near one. A probability needing more
+/// than 8 bits is approximated, but only slightly.
+///
+/// Callers must pass `0.0 < p < 1.0`; the `p <= 0` / `p >= 1` cases are forced
+/// without consuming entropy by [`NativeTestCase::weighted`].
+///
+/// Using a single byte (rather than a full `f64`, which would burn 8 bytes per
+/// boolean) matters for the urandom backend, where every byte is
+/// fuzzer-controlled entropy and a one-bit decision should cost one byte.
+pub(crate) fn weighted_boolean_sample(p: f64, rng: &mut EngineRng) -> bool {
+    let falsey = (256.0 * (1.0 - p)).floor().max(1.0) as u32;
+    let mut byte = [0u8; 1];
+    rng.fill_bytes(&mut byte);
+    u32::from(byte[0]) >= falsey
 }
 
 /// Interesting string constants: logic keywords, numeric edge cases,
@@ -1354,7 +1377,7 @@ impl NativeTestCase {
                 || ChoiceValue::Boolean(kind.simplest()),
                 || ChoiceValue::Boolean(kind.unit()),
                 |v| matches!(v, ChoiceValue::Boolean(_)),
-                |rng| ChoiceValue::Boolean(rng.random::<f64>() <= p),
+                |rng| ChoiceValue::Boolean(weighted_boolean_sample(p, rng)),
             )?
         };
 

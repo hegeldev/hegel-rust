@@ -1111,3 +1111,39 @@ fn biased_integer_sample_erased_bigint_single_value() {
         assert_eq!(biased_integer_sample(&kind, &mut rng), fixed.clone());
     }
 }
+
+/// The weighted-boolean draw must spend exactly one byte of entropy
+/// (Hypothesis's `BytestringProvider` approach), not a full `f64`. The urandom
+/// backend feeds every byte from the fuzzer, so a one-bit decision must cost
+/// one byte. Regression for an earlier `rng.random::<f64>() <= p` that burned
+/// eight bytes per boolean.
+#[test]
+fn weighted_boolean_sample_consumes_exactly_one_byte() {
+    use rand::Rng;
+    let mut a = EngineRng::seeded(12345);
+    let mut b = EngineRng::seeded(12345);
+    let result = weighted_boolean_sample(0.5, &mut a);
+    let mut byte = [0u8; 1];
+    b.fill_bytes(&mut byte);
+    // The decision compares the single drawn byte against the falsey threshold.
+    let falsey = (256.0_f64 * (1.0 - 0.5)).floor().max(1.0) as u32; // 128
+    assert_eq!(result, u32::from(byte[0]) >= falsey);
+    // Exactly one byte was consumed: the two RNGs are now in lockstep, which
+    // would not hold had the draw read a u32 (4 bytes) or an f64 (8 bytes).
+    assert_eq!(a.next_u64(), b.next_u64());
+}
+
+/// `p` still controls the probability of `true` under the byte-based draw.
+#[test]
+fn weighted_boolean_sample_respects_probability() {
+    let mut rng = EngineRng::seeded(99);
+    let n = 5000usize;
+    let high = (0..n)
+        .filter(|_| weighted_boolean_sample(0.9, &mut rng))
+        .count();
+    let low = (0..n)
+        .filter(|_| weighted_boolean_sample(0.1, &mut rng))
+        .count();
+    assert!(high > n * 3 / 4, "p=0.9 produced only {high}/{n} trues");
+    assert!(low < n / 4, "p=0.1 produced {low}/{n} trues");
+}
