@@ -248,7 +248,12 @@ fn run_main(
     // the number of components increases.
     if settings.phases.contains(&Phase::Generate)
         && !test_is_trivial
-        && within_invalid_budget(invalid_test_cases, overrun_test_cases, valid_test_cases, invalid_budget)
+        && within_invalid_budget(
+            invalid_test_cases,
+            overrun_test_cases,
+            valid_test_cases,
+            invalid_budget,
+        )
         && interesting.is_empty()
     {
         let run = ctx.run(NativeTestCase::for_simplest(BUFFER_SIZE));
@@ -281,7 +286,12 @@ fn run_main(
     while settings.phases.contains(&Phase::Generate)
         && !test_is_trivial
         && valid_test_cases < max_test_cases
-        && within_invalid_budget(invalid_test_cases, overrun_test_cases, valid_test_cases, invalid_budget)
+        && within_invalid_budget(
+            invalid_test_cases,
+            overrun_test_cases,
+            valid_test_cases,
+            invalid_budget,
+        )
         && !tree_root.is_exhausted
         && should_generate_more(
             interesting.is_empty(),
@@ -294,7 +304,12 @@ fn run_main(
         for _ in 0..RANDOM_GENERATION_BATCH {
             if test_is_trivial
                 || valid_test_cases >= max_test_cases
-                || !within_invalid_budget(invalid_test_cases, overrun_test_cases, valid_test_cases, invalid_budget)
+                || !within_invalid_budget(
+                    invalid_test_cases,
+                    overrun_test_cases,
+                    valid_test_cases,
+                    invalid_budget,
+                )
                 || tree_root.is_exhausted
                 || !should_generate_more(
                     interesting.is_empty(),
