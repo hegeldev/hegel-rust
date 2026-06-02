@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.26 - 2026-06-02
+
+The native backend (`--features native`) no longer hangs when a `text()`/`binary()` generator has a very large `max_size`. The index-based shrink passes now skip string and bytes nodes entirely, deferring to the dedicated length-reduction and per-element passes that already handle them.
+
 ## 0.14.25 - 2026-06-02
 
 This patch fixes various cases in which the test would run for more test cases than intended when the test function rejects at a very high rate.
