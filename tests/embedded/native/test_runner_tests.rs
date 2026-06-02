@@ -64,6 +64,15 @@ fn flaky_diagnostic_mentions_flaky() {
     assert!(flaky_diagnostic().contains("Flaky test detected"));
 }
 
+#[test]
+fn invalid_thresholds_match_hypothesis() {
+    // Ported from Hypothesis's `_invalid_thresholds(r=0.01, c=0.99)`
+    // (`engine.py`), which evaluates to `INVALID_THRESHOLD_BASE = 458` and
+    // `INVALID_PER_VALID = 100`. Pin the port so an always-reject run gives up
+    // after `458 + 1 = 459` cases, matching the core engine.
+    assert_eq!(invalid_thresholds(0.01, 0.99), (458, 100));
+}
+
 // ── cached_run / span-mutation caching ──
 //
 // Span mutation proposes choice sequences whose paths are frequently
