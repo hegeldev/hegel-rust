@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.25 - 2026-06-02
+
+This patch fixes various cases in which the test would run for more test cases than intended when the test function rejects at a very high rate.
+
 ## 0.14.24 - 2026-06-01
 
 This patch bundles a batch of fixes and improvements, most of them to the native engine (`--features native`).
