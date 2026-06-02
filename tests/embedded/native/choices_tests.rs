@@ -909,3 +909,12 @@ fn node_sort_key_big_integer_orders_correctly() {
     // The owned NodeSortKey matches the borrowed comparison.
     assert!(big_small[0].sort_key() < big_large[0].sort_key());
 }
+
+#[test]
+fn enumerate_large_max_size_bytes_returns_none_without_blowup() {
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 0,
+        max_size: 1_000_000,
+    });
+    assert_eq!(kind.enumerate(256), None);
+}
