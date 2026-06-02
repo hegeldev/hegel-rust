@@ -42,13 +42,6 @@ pub struct RunResult {
     pub spans: Vec<Span>,
     pub origin: Option<String>,
     pub failure: Option<Failure>,
-    /// True when the [`Status::Invalid`] outcome was an *overrun* (the test
-    /// case ran out of data, e.g. a collection that couldn't make progress)
-    /// rather than a genuine `assume()`/filter rejection. Both count toward
-    /// the generation-phase invalid budget, but only genuine rejections count
-    /// toward the FilterTooMuch health check — matching Hypothesis, which
-    /// tracks `overrun_examples` separately from `invalid_examples`.
-    pub overrun: bool,
     /// `tc.target()` observations recorded during the test case, keyed by
     /// label. Empty for tests that don't call `tc.target()`.
     pub target_observations: HashMap<String, f64>,
@@ -173,14 +166,8 @@ fn run_main(
     let mut valid_test_cases: u64 = 0;
     let mut calls: u64 = 0;
     let mut test_is_trivial = false;
-    // `invalid_calls` is the cumulative invalid+overrun count that feeds the
-    // generation-phase invalid budget (Hypothesis `invalid + overrun`).
-    // `filtered_draws` is the subset that were genuine `assume()`/filter
-    // rejections (Hypothesis `invalid_examples`); only it feeds the
-    // FilterTooMuch health check, so an overrun-heavy test (e.g. collecting
-    // many unique values from a small pool) is not mistaken for over-filtering.
-    let mut invalid_calls: u64 = 0;
-    let mut filtered_draws: u64 = 0;
+    let mut invalid_examples: u64 = 0;
+    let mut overrun_examples: u64 = 0;
     // `(base, per_valid)` of the generation-phase invalid budget, computed once
     // per run (the formula uses floating-point `ln`/`ceil`, which can't run in
     // const context).
@@ -261,7 +248,7 @@ fn run_main(
     // the number of components increases.
     if settings.phases.contains(&Phase::Generate)
         && !test_is_trivial
-        && within_invalid_budget(invalid_calls, valid_test_cases, invalid_budget)
+        && within_invalid_budget(invalid_examples, overrun_examples, valid_test_cases, invalid_budget)
         && interesting.is_empty()
     {
         let run = ctx.run(NativeTestCase::for_simplest(BUFFER_SIZE));
@@ -276,14 +263,11 @@ fn run_main(
         if run.status >= Status::Valid {
             valid_test_cases += 1;
         }
-        // Count the pre-trial's rejection toward the invalid budget, matching
-        // Hypothesis (whose `simplest` pre-trial flows through `test_function`
-        // and so increments `invalid_examples` / `overrun_examples`).
         if run.status == Status::Invalid {
-            invalid_calls += 1;
-            if !run.overrun {
-                filtered_draws += 1;
-            }
+            invalid_examples += 1;
+        }
+        if run.status == Status::EarlyStop {
+            overrun_examples += 1;
         }
         if run.status == Status::Interesting {
             let origin = run.origin.clone().unwrap_or_default();
@@ -297,7 +281,7 @@ fn run_main(
     while settings.phases.contains(&Phase::Generate)
         && !test_is_trivial
         && valid_test_cases < max_examples
-        && within_invalid_budget(invalid_calls, valid_test_cases, invalid_budget)
+        && within_invalid_budget(invalid_examples, overrun_examples, valid_test_cases, invalid_budget)
         && !tree_root.is_exhausted
         && should_generate_more(
             interesting.is_empty(),
@@ -310,7 +294,7 @@ fn run_main(
         for _ in 0..RANDOM_GENERATION_BATCH {
             if test_is_trivial
                 || valid_test_cases >= max_examples
-                || !within_invalid_budget(invalid_calls, valid_test_cases, invalid_budget)
+                || !within_invalid_budget(invalid_examples, overrun_examples, valid_test_cases, invalid_budget)
                 || tree_root.is_exhausted
                 || !should_generate_more(
                     interesting.is_empty(),
@@ -352,7 +336,7 @@ fn run_main(
                 );
             }
 
-            if run.status != Status::Invalid {
+            if run.status >= Status::Valid {
                 total_test_time += elapsed;
             }
             if run.nodes.is_empty() && run.status >= Status::Invalid {
@@ -367,16 +351,9 @@ fn run_main(
                 }
             }
 
-            // Both counters are cumulative across the run, matching
-            // Hypothesis's `invalid_examples` / `overrun_examples`.
-            // `invalid_calls` (invalid+overrun) feeds the budget;
-            // `filtered_draws` (genuine rejections only) feeds the health check.
             if run.status == Status::Invalid {
-                invalid_calls += 1;
-                if !run.overrun {
-                    filtered_draws += 1;
-                }
-                if filtered_draws >= FILTER_TOO_MUCH_THRESHOLD
+                invalid_examples += 1;
+                if invalid_examples >= FILTER_TOO_MUCH_THRESHOLD
                     && valid_test_cases < HEALTH_CHECK_MAX_VALID
                     && !settings
                         .suppress_health_check
@@ -385,12 +362,15 @@ fn run_main(
                     return health_check_failure(format!(
                         "FailedHealthCheck: FilterTooMuch — it looks like this \
                          test is filtering out too many inputs. \
-                         {filtered_draws} inputs were filtered out by assume() \
+                         {invalid_examples} inputs were filtered out by assume() \
                          while only {valid_test_cases} valid inputs were \
                          generated. If this is expected, suppress the check with \
                          suppress_health_check = [HealthCheck::FilterTooMuch]."
                     ));
                 }
+            }
+            if run.status == Status::EarlyStop {
+                overrun_examples += 1;
             }
 
             if let Some(msg) = too_slow_check(
@@ -477,9 +457,7 @@ fn run_main(
 
     // Tree-exhaustion fallback: a small choice domain (e.g. integer in
     // [0, 10] = 11 children) can exhaust the tree well before
-    // FILTER_TOO_MUCH_THRESHOLD genuine rejections; re-fire the check here.
-    // Gated on `filtered_draws` (not `invalid_calls`) so a domain exhausted by
-    // overruns alone isn't reported as over-filtering.
+    // FILTER_TOO_MUCH_THRESHOLD rejections; re-fire the check here.
     if tree_root.is_exhausted
         && valid_test_cases == 0
         && interesting.is_empty()
@@ -487,12 +465,12 @@ fn run_main(
         && !settings
             .suppress_health_check
             .contains(&HealthCheck::FilterTooMuch)
-        && filtered_draws > 0
+        && invalid_examples > 0
     {
         return health_check_failure(format!(
             "FailedHealthCheck: FilterTooMuch — every reachable input was \
              filtered out by assume() before any valid input was generated. \
-             {filtered_draws} inputs were filtered out across the full search \
+             {invalid_examples} inputs were filtered out across the full search \
              space. If this is expected, suppress the check with \
              suppress_health_check = [HealthCheck::FilterTooMuch]."
         ));
@@ -751,8 +729,9 @@ fn health_check_failure(message: String) -> TestRunResult {
 
 /// Port of Hypothesis's `_invalid_thresholds` (`engine.py`): returns the
 /// `(base, per_valid)` terms of the generation-phase invalid budget, derived so
-/// that once `(invalid + overrun)` draws exceed `base + per_valid * valid` we
-/// are `c`-confident the true valid rate is below `r`.
+/// that once `(invalid_examples + overrun_examples)` exceeds
+/// `base + per_valid * valid_examples` we are `c`-confident the true valid
+/// rate is below `r`.
 ///
 /// ```text
 /// base    = ceil(log(1 - c) / log(1 - r)) - 1
@@ -766,13 +745,17 @@ fn invalid_thresholds(r: f64, c: f64) -> (u64, u64) {
 
 /// Hypothesis's invalid-rate stop condition for the generation phase
 /// (`engine.py`'s `should_generate_more`): the run keeps generating while
-/// `(invalid + overrun)` draws stay within `base + per_valid * valid`, with
-/// `budget = (base, per_valid)` from [`invalid_thresholds`]. The native backend
-/// folds overruns into [`Status::Invalid`], so `invalid_calls` already counts
-/// both. Returns `true` while there is still budget to draw more.
-fn within_invalid_budget(invalid_calls: u64, valid_test_cases: u64, budget: (u64, u64)) -> bool {
+/// `(invalid_examples + overrun_examples)` stays within
+/// `base + per_valid * valid_examples`, with `budget = (base, per_valid)`
+/// from [`invalid_thresholds`]. Returns `true` while there is still budget.
+fn within_invalid_budget(
+    invalid_examples: u64,
+    overrun_examples: u64,
+    valid_examples: u64,
+    budget: (u64, u64),
+) -> bool {
     let (base, per_valid) = budget;
-    invalid_calls <= base + per_valid * valid_test_cases
+    (invalid_examples + overrun_examples) <= base + per_valid * valid_examples
 }
 
 fn should_generate_more(
@@ -917,11 +900,11 @@ impl<'a> EngineCtx<'a> {
         let target_observations = NativeDataSource::take_target_observations(&handle);
         let tc_result = NativeDataSource::take_outcome(&handle);
 
-        let (status, failure, overrun) = match tc_result {
-            TestCaseResult::Valid => (Status::Valid, None, false),
-            TestCaseResult::Invalid => (Status::Invalid, None, false),
-            TestCaseResult::Overrun => (Status::Invalid, None, true),
-            TestCaseResult::Interesting(f) => (Status::Interesting, Some(f), false),
+        let (status, failure) = match tc_result {
+            TestCaseResult::Valid => (Status::Valid, None),
+            TestCaseResult::Invalid => (Status::Invalid, None),
+            TestCaseResult::Overrun => (Status::EarlyStop, None),
+            TestCaseResult::Interesting(f) => (Status::Interesting, Some(f)),
         };
         let origin = failure.as_ref().map(|f| f.origin.clone());
 
@@ -931,7 +914,6 @@ impl<'a> EngineCtx<'a> {
             spans,
             origin,
             failure,
-            overrun,
             target_observations,
         }
     }
@@ -1039,10 +1021,6 @@ impl<'a> EngineCtx<'a> {
                     spans: Vec::new(),
                     origin: None,
                     failure: None,
-                    // A simulated tree conclusion is only consumed by span
-                    // mutation, which never feeds the FilterTooMuch counter,
-                    // so the overrun distinction is irrelevant here.
-                    overrun: false,
                     target_observations: HashMap::new(),
                 };
                 return (result, false);
