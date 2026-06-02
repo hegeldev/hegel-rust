@@ -68,7 +68,7 @@ impl TargetingState {
 ///
 /// Mirrors the threshold logic in
 /// `internal/conjecture/engine.py::generate_new_examples`: a first pass
-/// after ~10% of the budget (capped at 50 valid examples), then another
+/// after ~10% of the budget (capped at 50 valid test cases), then another
 /// pass every ~50% of the original budget thereafter. Re-entry lets the
 /// climber explore from fresh starting points if later random draws raise
 /// the best-observed score for some label after the first pass settled
@@ -79,9 +79,9 @@ pub(crate) struct TargetingSchedule {
 }
 
 impl TargetingSchedule {
-    pub fn new(max_examples: u64) -> Self {
-        let small_example_cap = (max_examples / 10).min(50);
-        let step = (max_examples / 2)
+    pub fn new(max_test_cases: u64) -> Self {
+        let small_example_cap = (max_test_cases / 10).min(50);
+        let step = (max_test_cases / 2)
             .max(small_example_cap.saturating_add(1))
             .max(10);
         Self {
