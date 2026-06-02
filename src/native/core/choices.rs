@@ -887,12 +887,17 @@ impl ChoiceKind {
 
     /// Random value sampled from this kind's domain (with kind-appropriate bias).
     pub fn random_value(&self, rng: &mut crate::native::rng::EngineRng) -> ChoiceValue {
-        use rand::RngExt;
         match self {
             ChoiceKind::Integer(ic) => {
                 ChoiceValue::Integer(crate::native::core::state::biased_integer_sample(ic, rng))
             }
-            ChoiceKind::Boolean(_) => ChoiceValue::Boolean(rng.random::<bool>()),
+            // An unbiased boolean is `weighted_boolean_sample` at p = 0.5, which
+            // spends exactly one byte of entropy (a bare `rng.random::<bool>()`
+            // would pull a whole `u32`). One byte per boolean matters for the
+            // urandom backend, where every byte is fuzzer-controlled entropy.
+            ChoiceKind::Boolean(_) => ChoiceValue::Boolean(
+                crate::native::core::state::weighted_boolean_sample(0.5, rng),
+            ),
             ChoiceKind::Float(fc) => {
                 ChoiceValue::Float(crate::native::core::state::biased_float_sample(fc, rng))
             }

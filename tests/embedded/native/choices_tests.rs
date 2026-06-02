@@ -966,3 +966,32 @@ fn string_to_index_via_dispatch() {
     });
     assert_eq!(kind.to_index(&ChoiceValue::String(vec![])), bu(0));
 }
+
+// ── ChoiceKind::random_value boolean entropy ────────────────────────────────
+
+/// An unbiased boolean drawn via `random_value` must spend exactly one byte of
+/// entropy (it routes through `weighted_boolean_sample(0.5, …)`), not a whole
+/// `u32`. The urandom backend feeds every byte from the fuzzer, so a one-bit
+/// decision must cost one byte. Regression for a bare `rng.random::<bool>()`.
+#[test]
+fn random_value_boolean_consumes_exactly_one_byte() {
+    use crate::native::rng::EngineRng;
+    use rand::Rng;
+
+    let kind = ChoiceKind::Boolean(BooleanChoice);
+    let mut a = EngineRng::seeded(2024);
+    let mut b = EngineRng::seeded(2024);
+
+    let value = kind.random_value(&mut a);
+    let ChoiceValue::Boolean(got) = value else {
+        panic!("expected a boolean choice value");
+    };
+
+    // Consume one byte from `b`; it is the same byte `a` drew.
+    let mut byte = [0u8; 1];
+    b.fill_bytes(&mut byte);
+    // p = 0.5 → falsey = 128, so the boolean is `byte >= 128`.
+    assert_eq!(got, u32::from(byte[0]) >= 128);
+    // Exactly one byte was consumed: the two RNGs are now in lockstep.
+    assert_eq!(a.next_u64(), b.next_u64());
+}
