@@ -32,6 +32,14 @@ impl<'a> Shrinker<'a> {
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
             let kind = node.kind.clone();
+            if matches!(
+                *kind.as_ref(),
+                crate::native::core::ChoiceKind::Bytes(_)
+                    | crate::native::core::ChoiceKind::String(_)
+            ) {
+                i += 1;
+                continue;
+            }
             let current_idx = kind.to_index(&node.value);
 
             // Small index offsets (±1 through ±5), keeping only indices >= 0
