@@ -14,6 +14,7 @@ pub mod database;
 pub mod floats;
 pub mod intervalsets;
 pub mod re;
+pub mod rng;
 pub mod schema;
 pub mod shrinker;
 pub mod statistics;

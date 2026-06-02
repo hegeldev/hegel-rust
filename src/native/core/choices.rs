@@ -886,7 +886,7 @@ impl ChoiceKind {
     }
 
     /// Random value sampled from this kind's domain (with kind-appropriate bias).
-    pub fn random_value(&self, rng: &mut rand::rngs::SmallRng) -> ChoiceValue {
+    pub fn random_value(&self, rng: &mut crate::native::rng::EngineRng) -> ChoiceValue {
         use rand::RngExt;
         match self {
             ChoiceKind::Integer(ic) => {
