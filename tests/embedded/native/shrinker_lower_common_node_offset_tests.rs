@@ -180,3 +180,34 @@ fn lower_common_node_offset_skips_non_integer_nodes() {
     assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
     assert_eq!(int_value(&shrinker.current_nodes[3]), 0);
 }
+
+fn bytes_node(value: Vec<u8>) -> ChoiceNode {
+    ChoiceNode::new(
+        ChoiceKind::Bytes(crate::native::core::choices::BytesChoice {
+            min_size: 0,
+            max_size: 1_000_000,
+        }),
+        ChoiceValue::Bytes(value),
+        false,
+    )
+}
+
+#[test]
+fn index_passes_skip_sequence_nodes_without_blowup() {
+    let initial = vec![bytes_node(vec![7u8; 300]), int_node(5, 0)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.lower_and_bump();
+    shrinker.try_shortening_via_increment();
+    shrinker.mutate_and_shrink();
+    match &shrinker.current_nodes[0].value {
+        ChoiceValue::Bytes(v) => assert_eq!(v.len(), 300, "long value should be left untouched"),
+        other => panic!("expected bytes, got {other:?}"),
+    }
+}

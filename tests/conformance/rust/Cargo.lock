@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "hegeltest"
-version = "0.14.24"
+version = "0.14.26"
 dependencies = [
  "ciborium",
  "crc32fast",
@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "hegeltest-macros"
-version = "0.14.24"
+version = "0.14.26"
 dependencies = [
  "proc-macro2",
  "quote",

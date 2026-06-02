@@ -909,3 +909,60 @@ fn node_sort_key_big_integer_orders_correctly() {
     // The owned NodeSortKey matches the borrowed comparison.
     assert!(big_small[0].sort_key() < big_large[0].sort_key());
 }
+
+#[test]
+fn enumerate_large_max_size_bytes_returns_none_without_blowup() {
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 0,
+        max_size: 1_000_000,
+    });
+    assert_eq!(kind.enumerate(256), None);
+}
+
+// ── Bytes/String dispatch coverage ────────────────────────────────────
+//
+// The index-based shrink passes skip sequence kinds entirely, so the
+// Bytes/String arms of the ChoiceKind dispatch methods need direct tests.
+
+#[test]
+fn bytes_max_index_and_max_children() {
+    // lengths 0..=2 over 256 symbols: 1 + 256 + 65536 = 65793 values
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 0,
+        max_size: 2,
+    });
+    assert_eq!(kind.max_index(), bu(65792));
+    assert_eq!(kind.max_children(), bu(65793));
+}
+
+#[test]
+fn string_max_index_and_max_children() {
+    // alphabet {a,b,c}, lengths 0..=2: 1 + 3 + 9 = 13 values
+    let kind = ChoiceKind::String(StringChoice {
+        intervals: crate::native::intervalsets::IntervalSet::new(vec![(b'a' as u32, b'c' as u32)]),
+        min_size: 0,
+        max_size: 2,
+    });
+    assert_eq!(kind.max_index(), bu(12));
+    assert_eq!(kind.max_children(), bu(13));
+}
+
+#[test]
+fn bytes_to_index_via_dispatch() {
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 0,
+        max_size: 4,
+    });
+    assert_eq!(kind.to_index(&ChoiceValue::Bytes(vec![])), bu(0));
+    assert_eq!(kind.to_index(&ChoiceValue::Bytes(vec![0])), bu(1));
+}
+
+#[test]
+fn string_to_index_via_dispatch() {
+    let kind = ChoiceKind::String(StringChoice {
+        intervals: crate::native::intervalsets::IntervalSet::new(vec![(b'a' as u32, b'c' as u32)]),
+        min_size: 0,
+        max_size: 4,
+    });
+    assert_eq!(kind.to_index(&ChoiceValue::String(vec![])), bu(0));
+}
