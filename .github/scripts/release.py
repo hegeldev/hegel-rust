@@ -96,7 +96,7 @@ def check(base_ref: str) -> None:
         capture_output=True,
         cwd=ROOT,
     )
-    if process.returncode == 0:
+    if process.returncode == 0 and "RELEASE.md" not in changed_files:
         raise ValueError(
             f"RELEASE.md already exists on {base_ref}. It's possible the CI job "
             "responsible for cutting a new release is in progress, or has failed."
