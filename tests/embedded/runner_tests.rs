@@ -34,6 +34,39 @@ fn test_settings_report_multiple_failures_setter() {
 }
 
 #[test]
+fn test_settings_backend_default_unset() {
+    let s = Settings::new();
+    assert_eq!(s.backend, None);
+}
+
+#[test]
+fn test_settings_backend_setter() {
+    let s = Settings::new().backend(Backend::Urandom);
+    assert_eq!(s.backend, Some(Backend::Urandom));
+    let s = s.backend(Backend::Default);
+    assert_eq!(s.backend, Some(Backend::Default));
+}
+
+#[test]
+fn test_resolved_backend_explicit_wins_over_antithesis() {
+    // An explicit choice wins regardless of the Antithesis flag.
+    let s = Settings::new().backend(Backend::Default);
+    assert_eq!(s.resolved_backend(true), Backend::Default);
+    assert_eq!(s.resolved_backend(false), Backend::Default);
+
+    let s = Settings::new().backend(Backend::Urandom);
+    assert_eq!(s.resolved_backend(true), Backend::Urandom);
+    assert_eq!(s.resolved_backend(false), Backend::Urandom);
+}
+
+#[test]
+fn test_resolved_backend_auto_selects_urandom_under_antithesis() {
+    let s = Settings::new();
+    assert_eq!(s.resolved_backend(true), Backend::Urandom);
+    assert_eq!(s.resolved_backend(false), Backend::Default);
+}
+
+#[test]
 fn test_settings_has_phase() {
     let s = Settings::new().phases([Phase::Generate, Phase::Shrink]);
     assert!(s.has_phase(Phase::Generate));

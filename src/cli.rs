@@ -5,7 +5,7 @@
 //! `#[hegel::main(test_cases = 500)]` produces a binary whose `--test-cases`
 //! flag defaults to 500) and applies CLI overrides on top of it.
 
-use crate::runner::{HealthCheck, Mode, Settings, Verbosity};
+use crate::runner::{Backend, HealthCheck, Mode, Settings, Verbosity};
 
 /// Result of applying CLI overrides. The macro wrapper in `#[hegel::main]`
 /// dispatches on this to print messages and exit the process; keeping the
@@ -110,6 +110,11 @@ where
             "--single-test-case" => {
                 settings = settings.mode(Mode::SingleTestCase);
             }
+            "--backend" => {
+                let value = next_value(&args, &mut i, "--backend")?;
+                let backend = parse_backend(&value)?;
+                settings = settings.backend(backend);
+            }
             _ => {
                 return Err(CliError::Parse(format!("Unknown argument: {arg}")));
             }
@@ -134,6 +139,16 @@ fn parse_verbosity(s: &str) -> Result<Verbosity, CliError> {
         "debug" => Ok(Verbosity::Debug),
         other => Err(CliError::Parse(format!(
             "--verbosity expects one of quiet|normal|verbose|debug, got {other:?}"
+        ))),
+    }
+}
+
+fn parse_backend(s: &str) -> Result<Backend, CliError> {
+    match s {
+        "default" => Ok(Backend::Default),
+        "urandom" => Ok(Backend::Urandom),
+        other => Err(CliError::Parse(format!(
+            "--backend expects one of default|urandom, got {other:?}"
         ))),
     }
 }
@@ -193,6 +208,9 @@ fn usage() -> String {
     );
     s.push_str(
         "  --single-test-case                   Run one test case, no shrinking or replay\n",
+    );
+    s.push_str(
+        "  --backend <default|urandom>          Randomness source (urandom reads /dev/urandom)\n",
     );
     s.push_str("  -h, --help                           Show this help and exit\n");
     s

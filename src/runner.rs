@@ -76,6 +76,32 @@ pub enum Mode {
     SingleTestCase,
 }
 
+/// Selects the source of randomness the engine draws from.
+///
+/// Mirrors Hypothesis's `backend` setting (specifically `backend="hypothesis"`
+/// vs `backend="hypothesis-urandom"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backend {
+    /// The default: generate from a seeded pseudo-random generator. Runs are
+    /// reproducible from [`Settings::seed`] and shrinking/replay work as usual.
+    Default,
+    /// Read fresh entropy from `/dev/urandom` on every draw, instead of
+    /// expanding a single PRNG seed.
+    ///
+    /// This exists for running under [Antithesis](https://antithesis.com/),
+    /// whose fuzzer controls the bytes returned by `/dev/urandom`. Sourcing
+    /// every choice from the OS random device hands the fuzzer control over
+    /// the entire test case (rather than just the PRNG seed), so it can steer
+    /// and reproduce generation directly. When running inside Antithesis this
+    /// backend is selected automatically unless you set one explicitly.
+    ///
+    /// The generation algorithm is otherwise unchanged — only the random
+    /// source differs. On platforms without `/dev/urandom` (Windows) it falls
+    /// back to an OS-seeded PRNG. You almost certainly don't want this backend
+    /// unless you are running under Antithesis.
+    Urandom,
+}
+
 /// Controls how much output Hegel produces during test runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verbosity {
@@ -107,6 +133,10 @@ pub struct Settings {
     pub(crate) suppress_health_check: Vec<HealthCheck>,
     pub(crate) phases: Vec<Phase>,
     pub(crate) report_multiple_failures: bool,
+    /// The randomness backend, or `None` to let it be chosen automatically
+    /// (urandom under Antithesis, the default PRNG otherwise). An explicit
+    /// [`Settings::backend`] always wins over the automatic choice.
+    pub(crate) backend: Option<Backend>,
 }
 
 impl Settings {
@@ -133,6 +163,7 @@ impl Settings {
                 Phase::Shrink,
             ],
             report_multiple_failures: true,
+            backend: None,
         }
     }
 
@@ -140,6 +171,35 @@ impl Settings {
     pub fn mode(mut self, mode: Mode) -> Self {
         self.mode = mode;
         self
+    }
+
+    /// Select the randomness backend.
+    ///
+    /// By default the backend is chosen automatically: [`Backend::Urandom`]
+    /// when running inside Antithesis, and [`Backend::Default`] otherwise.
+    /// Calling this pins the choice, overriding the automatic detection.
+    pub fn backend(mut self, backend: Backend) -> Self {
+        self.backend = Some(backend);
+        self
+    }
+
+    /// Resolve the effective backend, given whether the process is running
+    /// inside Antithesis.
+    ///
+    /// An explicit [`Settings::backend`] always wins; otherwise urandom is
+    /// used under Antithesis and the default PRNG backend elsewhere.
+    ///
+    /// Only the native engine acts on the backend selection; the server
+    /// backend forwards generation to hegel-core, which makes its own urandom
+    /// choice server-side. Hence this is unused (but still compiled and
+    /// tested) when the `native` feature is off.
+    #[cfg_attr(not(feature = "native"), allow(dead_code))]
+    pub(crate) fn resolved_backend(&self, in_antithesis: bool) -> Backend {
+        match self.backend {
+            Some(backend) => backend,
+            None if in_antithesis => Backend::Urandom,
+            None => Backend::Default,
+        }
     }
 
     /// Set the number of test cases to run (default: 100).

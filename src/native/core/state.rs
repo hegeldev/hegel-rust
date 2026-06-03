@@ -4,8 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::{LazyLock, Mutex};
 
-use rand::RngExt;
-use rand::rngs::SmallRng;
+use rand::{Rng, RngExt};
+
+use crate::native::rng::EngineRng;
 
 use super::choices::{
     BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceTemplate, ChoiceTemplateKind,
@@ -111,7 +112,7 @@ static GLOBAL_CONSTANTS_INTEGERS: LazyLock<Vec<i128>> = LazyLock::new(|| {
 /// Drawing length uniformly from `[min_size, max_size]` produces huge
 /// values when `max_size` is large; instead, the size follows a geometric
 /// variate with stop probability derived from [`length_p_continue`].
-fn many_draw_length(rng: &mut SmallRng, min_size: usize, max_size: usize) -> usize {
+fn many_draw_length(rng: &mut EngineRng, min_size: usize, max_size: usize) -> usize {
     if min_size == max_size {
         return min_size;
     }
@@ -154,7 +155,7 @@ static INTEGERS_DISTRIBUTION: LazyLock<
 /// requested range is too narrow for inverse-CDF sampling to be stable.
 /// Callers must ensure `min_value < max_value`; the `min == max` early
 /// return is handled at the [`biased_integer_sample`] call site.
-fn integer_sample_from_distribution(min_value: i128, max_value: i128, rng: &mut SmallRng) -> i128 {
+fn integer_sample_from_distribution(min_value: i128, max_value: i128, rng: &mut EngineRng) -> i128 {
     let dist = &*INTEGERS_DISTRIBUTION;
     // i128 endpoints can lose precision crossing into f64, but the final
     // `clamp` mops up any out-of-range round-off so the contract holds.
@@ -264,7 +265,7 @@ static SORTED_NASTY_POOL: LazyLock<Vec<i128>> = LazyLock::new(|| {
 /// distribution — and re-widens the result into the choice's concrete type.
 /// Otherwise (a `BigInt` choice, or a `u128` range past `i128::MAX`) it falls
 /// back to [`biguint_sample_in_range`].
-pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut SmallRng) -> BigInt {
+pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut EngineRng) -> BigInt {
     match (ic.min_value.to_i128(), ic.max_value.to_i128()) {
         (Some(min_i), Some(max_i)) => BigInt::from(biased_i128_sample(min_i, max_i, rng)),
         _ => biguint_sample_in_range(&ic.min_value, &ic.max_value, rng),
@@ -273,7 +274,7 @@ pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut SmallRng) -> B
 
 /// The original i128 nasty-pool + distribution sampler, returning a value in
 /// `[min_value, max_value]`.
-fn biased_i128_sample(min_value: i128, max_value: i128, rng: &mut SmallRng) -> i128 {
+fn biased_i128_sample(min_value: i128, max_value: i128, rng: &mut EngineRng) -> i128 {
     if min_value == max_value {
         return min_value;
     }
@@ -309,7 +310,7 @@ fn biased_i128_sample(min_value: i128, max_value: i128, rng: &mut SmallRng) -> i
 /// to the in-range nasty count it returns one of `{min, max, 0, ±1, ±2^k}`;
 /// otherwise it draws a roughly-uniform value in `[min, max]` via rejection
 /// sampling over the span's bit length.
-fn biguint_sample_in_range(min: &BigInt, max: &BigInt, rng: &mut SmallRng) -> BigInt {
+fn biguint_sample_in_range(min: &BigInt, max: &BigInt, rng: &mut EngineRng) -> BigInt {
     if min == max {
         return min.clone();
     }
@@ -353,7 +354,7 @@ fn biguint_sample_in_range(min: &BigInt, max: &BigInt, rng: &mut SmallRng) -> Bi
 /// 2^(bits-1)`), so this terminates quickly. Callers (only
 /// [`biguint_sample_in_range`], past its `min == max` early return) always pass
 /// a strictly positive span, so `bits >= 1`.
-fn sample_biguint_at_most(span: &BigUint, rng: &mut SmallRng) -> BigUint {
+fn sample_biguint_at_most(span: &BigUint, rng: &mut EngineRng) -> BigUint {
     let bits = span.bits();
     if bits == 0 {
         unreachable!("sample_biguint_at_most requires a positive span");
@@ -380,7 +381,7 @@ fn sample_biguint_at_most(span: &BigUint, rng: &mut SmallRng) -> BigUint {
 /// `BOUNDARY_PROBABILITY × |nasty|`, falling back to a uniform-ish lex draw
 /// otherwise. Shared with the data-tree walk so novel-prefix exploration
 /// hits the same boundary distribution as fresh draws.
-pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut SmallRng) -> f64 {
+pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 {
     let bounded = fc.min_value.is_finite() && fc.max_value.is_finite();
     let half_bounded = !bounded && (fc.min_value.is_finite() || fc.max_value.is_finite());
 
@@ -463,7 +464,7 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut SmallRng) -> f64 {
 /// probability proportional to `BOUNDARY_PROBABILITY × |nasty|`, falling
 /// back to a length drawn from [`many_draw_length`] with uniformly random
 /// byte values.
-pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut SmallRng) -> Vec<u8> {
+pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<u8> {
     let want_zero = bc.min_size == 0 && bc.max_size > 0;
     let want_ff = bc.min_size <= 1 && bc.max_size >= 1;
     // At most 3 candidates: simplest(), [0x00], [0xff]. Compute the count
@@ -487,6 +488,29 @@ pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut SmallRng) -> Vec<u
     }
     let len = many_draw_length(rng, bc.min_size, bc.max_size);
     (0..len).map(|_| rng.random::<u8>()).collect()
+}
+
+/// Sample a boolean that is `true` with probability `p`, spending exactly one
+/// byte of entropy regardless of `p`.
+///
+/// Port of Hypothesis's `BytestringProvider.draw_boolean`: draw a single byte
+/// `n ∈ [0, 256)` and return `n >= falsey`, where
+/// `falsey = max(1, floor(256 * (1 - p)))`. The `floor` keeps `falsey <= 255`
+/// (so at least `n == 255` stays truthy for tiny `p`), and the `max(1, …)`
+/// keeps at least `n == 0` falsey for `p` near one. A probability needing more
+/// than 8 bits is approximated, but only slightly.
+///
+/// Callers must pass `0.0 < p < 1.0`; the `p <= 0` / `p >= 1` cases are forced
+/// without consuming entropy by [`NativeTestCase::weighted`].
+///
+/// Using a single byte (rather than a full `f64`, which would burn 8 bytes per
+/// boolean) matters for the urandom backend, where every byte is
+/// fuzzer-controlled entropy and a one-bit decision should cost one byte.
+pub(crate) fn weighted_boolean_sample(p: f64, rng: &mut EngineRng) -> bool {
+    let falsey = (256.0 * (1.0 - p)).floor().max(1.0) as u32;
+    let mut byte = [0u8; 1];
+    rng.fill_bytes(&mut byte);
+    u32::from(byte[0]) >= falsey
 }
 
 /// Interesting string constants: logic keywords, numeric edge cases,
@@ -592,7 +616,7 @@ static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
 /// from the full alphabet (~1.1M codepoints) almost never produces the
 /// `XXY`-shape strings that property tests of, for example, run-length
 /// encoding need to find.
-pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut SmallRng) -> Vec<u32> {
+pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Vec<u32> {
     let want_empty = sc.min_size == 0 && sc.max_size > 0;
     let want_one = sc.min_size <= 1 && sc.max_size >= 1;
     let want_two = sc.min_size <= 2 && sc.max_size >= 2;
@@ -649,7 +673,7 @@ pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut SmallRng) -> Vec
     }
 
     let alpha = sc.intervals.len();
-    let pick_position = |rng: &mut SmallRng| -> usize {
+    let pick_position = |rng: &mut EngineRng| -> usize {
         if alpha > 256 {
             if rng.random::<f64>() < 0.2 {
                 rng.random_range(256..alpha)
@@ -930,7 +954,7 @@ pub trait DataObserver: Send {
 pub struct NativeTestCase {
     prefix: Vec<ChoiceValue>,
     prefix_nodes: Option<Vec<ChoiceNode>>,
-    rng: Option<SmallRng>,
+    rng: Option<EngineRng>,
     max_size: usize,
     pub nodes: Vec<ChoiceNode>,
     pub status: Option<Status>,
@@ -982,7 +1006,7 @@ pub struct NativeTestCase {
 }
 
 impl NativeTestCase {
-    pub fn new_random(rng: SmallRng) -> Self {
+    pub fn new_random(rng: EngineRng) -> Self {
         Self::for_choices_and_template(&[], None, None, BUFFER_SIZE, None).with_random(rng)
     }
 
@@ -1050,14 +1074,14 @@ impl NativeTestCase {
     /// `max_size` choices.
     ///
     /// Used by `mutate_and_shrink`.
-    pub fn for_probe(prefix: &[ChoiceValue], rng: SmallRng, max_size: usize) -> Self {
+    pub fn for_probe(prefix: &[ChoiceValue], rng: EngineRng, max_size: usize) -> Self {
         Self::for_choices_and_template(prefix, None, None, max_size, None).with_random(rng)
     }
 
     /// Attach an RNG for post-prefix random draws.  Internal builder used by
     /// `new_random` and `for_probe` to share the [`Self::for_choices_and_template`]
     /// constructor without duplicating the struct literal.
-    fn with_random(mut self, rng: SmallRng) -> Self {
+    fn with_random(mut self, rng: EngineRng) -> Self {
         self.rng = Some(rng);
         self
     }
@@ -1353,7 +1377,7 @@ impl NativeTestCase {
                 || ChoiceValue::Boolean(kind.simplest()),
                 || ChoiceValue::Boolean(kind.unit()),
                 |v| matches!(v, ChoiceValue::Boolean(_)),
-                |rng| ChoiceValue::Boolean(rng.random::<f64>() <= p),
+                |rng| ChoiceValue::Boolean(weighted_boolean_sample(p, rng)),
             )?
         };
 
@@ -1397,7 +1421,7 @@ impl NativeTestCase {
         simplest: impl FnOnce() -> ChoiceValue,
         unit: impl FnOnce() -> ChoiceValue,
         validate: impl FnOnce(&ChoiceValue) -> bool,
-        random: impl FnOnce(&mut SmallRng) -> ChoiceValue,
+        random: impl FnOnce(&mut EngineRng) -> ChoiceValue,
     ) -> Result<(ChoiceValue, bool), EngineError> {
         self.pre_choice()?;
 

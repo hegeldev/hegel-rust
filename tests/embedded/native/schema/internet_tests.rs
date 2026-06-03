@@ -4,15 +4,13 @@
 // same interpreters via the user-facing API; these tests exercise the
 // private helpers (TLD list, draw_dns_label, url_encode_path) directly.
 
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
-
 use super::*;
 use crate::cbor_utils::cbor_map;
 use crate::native::core::NativeTestCase;
+use crate::native::rng::EngineRng;
 
 fn fresh_ntc(seed: u64) -> NativeTestCase {
-    NativeTestCase::new_random(SmallRng::seed_from_u64(seed))
+    NativeTestCase::new_random(EngineRng::seeded(seed))
 }
 
 fn decode_string(v: ciborium::Value) -> String {
