@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.27 - 2026-06-03
+
+The native backend (`--features native`) now rejects regex `\u`/`\U` escapes for surrogate codepoints (e.g. `\uD800`) with a clear error instead of panicking, since a Rust `String` cannot contain a surrogate.
+
 ## 0.14.26 - 2026-06-02
 
 The native backend (`--features native`) no longer hangs when a `text()`/`binary()` generator has a very large `max_size`. The index-based shrink passes now skip string and bytes nodes entirely, deferring to the dedicated length-reduction and per-element passes that already handle them.
