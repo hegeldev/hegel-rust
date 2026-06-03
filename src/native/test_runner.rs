@@ -15,8 +15,6 @@
 use std::collections::{HashMap, hash_map::Entry};
 
 use rand::RngExt;
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
 
 use crate::backend::{DataSource, Failure, TestCaseResult, TestRunResult, TestRunner};
 use crate::native::core::{
@@ -26,8 +24,9 @@ use crate::native::data_source::NativeDataSource;
 use crate::native::database::{
     DirectoryTestCaseDatabase, TestCaseDatabase, deserialize_choices, serialize_choices,
 };
+use crate::native::rng::EngineRng;
 use crate::native::shrinker::{ShrinkRun, Shrinker};
-use crate::settings::{Database, HealthCheck, Mode, Phase, Settings, Verbosity};
+use crate::settings::{Backend, Database, HealthCheck, Mode, Phase, Settings, Verbosity};
 
 /// One run's worth of results: status, the realised choice nodes and
 /// spans, and (for `Status::Interesting`) the captured failure carrying
@@ -50,9 +49,21 @@ pub struct RunResult {
 const RANDOM_GENERATION_BATCH: u64 = 10;
 const SPAN_MUTATION_ATTEMPTS: usize = 5;
 
-/// Maximum number of consecutive filtered (assume()-failed) test cases before
-/// FilterTooMuch is reported.
-const FILTER_TOO_MUCH_THRESHOLD: u64 = 200;
+/// Maximum number of *total* filtered (assume()-failed) test cases — counted
+/// while fewer than [`HEALTH_CHECK_MAX_VALID`] valid test cases have been seen —
+/// before FilterTooMuch is reported. Mirrors Hypothesis's `max_invalid_draws`
+/// (`engine.py`).
+const FILTER_TOO_MUCH_THRESHOLD: u64 = 50;
+
+/// Target valid rate `r` below which the generation phase gives up, and the
+/// confidence `c` with which we want to conclude the true valid rate is below
+/// it before doing so. Hypothesis uses `r = 0.01`, `c = 0.99` to feed
+/// `_invalid_thresholds`; see
+/// <https://github.com/HypothesisWorks/hypothesis/issues/4623> for the
+/// derivation. With these, [`invalid_thresholds`] yields `(458, 100)`, so an
+/// always-reject test gives up after 459 cases.
+const INVALID_TARGET_RATE: f64 = 0.01;
+const INVALID_TARGET_CONFIDENCE: f64 = 0.99;
 
 /// Cumulative wall-clock threshold across the generation phase before
 /// TooSlow fires.
@@ -63,7 +74,7 @@ const FILTER_TOO_MUCH_THRESHOLD: u64 = 200;
 const TOO_SLOW_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Health checks (TooSlow / FilterTooMuch) are evaluated only while the run
-/// has fewer than this many valid examples on record.
+/// has fewer than this many valid test cases on record.
 const HEALTH_CHECK_MAX_VALID: u64 = 10;
 
 /// Native backend's [`TestRunner`] implementation.
@@ -94,7 +105,7 @@ fn run_single(
     // the same draws on every invocation. Without this, a `seed(Some(42))`
     // is silently ignored and each call produces fresh OS-random draws.
     let mut rng = create_rng(settings, None);
-    let ntc = NativeTestCase::new_random(SmallRng::from_rng(&mut rng));
+    let ntc = NativeTestCase::new_random(rng.spawn());
     let (data_source, handle) = NativeDataSource::new(ntc);
     run_case(Box::new(data_source), true);
     match NativeDataSource::take_outcome(&handle) {
@@ -120,7 +131,7 @@ fn run_main(
     too_slow_threshold: std::time::Duration,
 ) -> TestRunResult {
     let mut rng = create_rng(settings, database_key);
-    let max_examples = settings.test_cases;
+    let max_test_cases = settings.test_cases;
     let verbosity = settings.verbosity;
 
     // `Database::Unset` is the non-CI default (set by `Settings::new` in
@@ -149,12 +160,17 @@ fn run_main(
     // several distinct bugs surface each one.
     let mut interesting: HashMap<String, Vec<ChoiceNode>> = HashMap::new();
     let mut targeting = crate::native::targeting::TargetingState::new();
-    let mut target_schedule = crate::native::targeting::TargetingSchedule::new(max_examples);
+    let mut target_schedule = crate::native::targeting::TargetingSchedule::new(max_test_cases);
     let target_enabled = settings.phases.contains(&Phase::Target);
     let mut valid_test_cases: u64 = 0;
     let mut calls: u64 = 0;
     let mut test_is_trivial = false;
-    let mut invalid_calls: u64 = 0;
+    let mut invalid_test_cases: u64 = 0;
+    let mut overrun_test_cases: u64 = 0;
+    // `(base, per_valid)` of the generation-phase invalid budget, computed once
+    // per run (the formula uses floating-point `ln`/`ceil`, which can't run in
+    // const context).
+    let invalid_budget = invalid_thresholds(INVALID_TARGET_RATE, INVALID_TARGET_CONFIDENCE);
     let mut total_test_time = std::time::Duration::ZERO;
     let mut replay_aligned = false;
 
@@ -214,7 +230,7 @@ fn run_main(
 
     // --- Generation phase ---
     //
-    // Pre-bug we run until either the `max_examples` budget or the choice
+    // Pre-bug we run until either the `max_test_cases` budget or the choice
     // tree is exhausted; post-bug we keep running for a bounded extra
     // window so that a test with multiple distinct failure origins
     // surfaces all of them, not just the first one to fire.
@@ -231,7 +247,12 @@ fn run_main(
     // the number of components increases.
     if settings.phases.contains(&Phase::Generate)
         && !test_is_trivial
-        && calls < max_examples * 10
+        && within_invalid_budget(
+            invalid_test_cases,
+            overrun_test_cases,
+            valid_test_cases,
+            invalid_budget,
+        )
         && interesting.is_empty()
     {
         let run = ctx.run(NativeTestCase::for_simplest(BUFFER_SIZE));
@@ -246,6 +267,12 @@ fn run_main(
         if run.status >= Status::Valid {
             valid_test_cases += 1;
         }
+        if run.status == Status::Invalid {
+            invalid_test_cases += 1;
+        }
+        if run.status == Status::EarlyStop {
+            overrun_test_cases += 1;
+        }
         if run.status == Status::Interesting {
             let origin = run.origin.clone().unwrap_or_default();
             first_bug_at = Some(calls);
@@ -257,8 +284,13 @@ fn run_main(
 
     while settings.phases.contains(&Phase::Generate)
         && !test_is_trivial
-        && valid_test_cases < max_examples
-        && calls < max_examples * 10
+        && valid_test_cases < max_test_cases
+        && within_invalid_budget(
+            invalid_test_cases,
+            overrun_test_cases,
+            valid_test_cases,
+            invalid_budget,
+        )
         && !tree_root.is_exhausted
         && should_generate_more(
             interesting.is_empty(),
@@ -270,8 +302,13 @@ fn run_main(
     {
         for _ in 0..RANDOM_GENERATION_BATCH {
             if test_is_trivial
-                || valid_test_cases >= max_examples
-                || calls >= max_examples * 10
+                || valid_test_cases >= max_test_cases
+                || !within_invalid_budget(
+                    invalid_test_cases,
+                    overrun_test_cases,
+                    valid_test_cases,
+                    invalid_budget,
+                )
                 || tree_root.is_exhausted
                 || !should_generate_more(
                     interesting.is_empty(),
@@ -284,7 +321,7 @@ fn run_main(
                 break;
             }
 
-            let batch_rng = SmallRng::from_rng(&mut rng);
+            let batch_rng = rng.spawn();
             let prefix = crate::native::data_tree::generate_novel_prefix(&tree_root, &mut rng);
             let ntc = if prefix.is_empty() {
                 NativeTestCase::new_random(batch_rng)
@@ -313,7 +350,7 @@ fn run_main(
                 );
             }
 
-            if run.status != Status::Invalid {
+            if run.status >= Status::Valid {
                 total_test_time += elapsed;
             }
             if run.nodes.is_empty() && run.status >= Status::Invalid {
@@ -329,9 +366,9 @@ fn run_main(
             }
 
             if run.status == Status::Invalid {
-                invalid_calls += 1;
-                if invalid_calls >= FILTER_TOO_MUCH_THRESHOLD
-                    && valid_test_cases == 0
+                invalid_test_cases += 1;
+                if invalid_test_cases >= FILTER_TOO_MUCH_THRESHOLD
+                    && valid_test_cases < HEALTH_CHECK_MAX_VALID
                     && !settings
                         .suppress_health_check
                         .contains(&HealthCheck::FilterTooMuch)
@@ -339,14 +376,15 @@ fn run_main(
                     return health_check_failure(format!(
                         "FailedHealthCheck: FilterTooMuch — it looks like this \
                          test is filtering out too many inputs. \
-                         {invalid_calls} inputs were filtered out by assume() \
-                         before any valid input was generated. \
-                         If this is expected, suppress the check with \
+                         {invalid_test_cases} inputs were filtered out by assume() \
+                         while only {valid_test_cases} valid inputs were \
+                         generated. If this is expected, suppress the check with \
                          suppress_health_check = [HealthCheck::FilterTooMuch]."
                     ));
                 }
-            } else {
-                invalid_calls = 0;
+            }
+            if run.status == Status::EarlyStop {
+                overrun_test_cases += 1;
             }
 
             if let Some(msg) = too_slow_check(
@@ -361,9 +399,9 @@ fn run_main(
             }
 
             // Fire `optimise_targets` periodically once enough valid
-            // examples have accumulated. Counts share the generation
+            // test cases have accumulated. Counts share the generation
             // budget — targeting trials count toward `valid_test_cases`
-            // and `calls`, so `max_examples` remains a hard cap across
+            // and `calls`, so `max_test_cases` remains a hard cap across
             // both. Skipped once a bug has been found (matching
             // `optimise_targets`'s own short-circuit).
             if target_enabled
@@ -387,8 +425,8 @@ fn run_main(
                     interesting: &mut interesting,
                     calls: &mut calls,
                     valid_test_cases: &mut valid_test_cases,
-                    max_valid: max_examples,
-                    max_calls: max_examples * 10,
+                    max_valid: max_test_cases,
+                    max_calls: max_test_cases * 10,
                     rng: &mut rng,
                     on_run: &mut on_run,
                 };
@@ -416,7 +454,7 @@ fn run_main(
                     &mut ctx,
                     &mut tree_root,
                     &mut valid_test_cases,
-                    max_examples,
+                    max_test_cases,
                 );
                 calls += mutation_attempts as u64;
                 if let Some((mut_nodes, origin)) = mutation_result {
@@ -433,7 +471,7 @@ fn run_main(
 
     // Tree-exhaustion fallback: a small choice domain (e.g. integer in
     // [0, 10] = 11 children) can exhaust the tree well before
-    // FILTER_TOO_MUCH_THRESHOLD invalid calls; re-fire the check here.
+    // FILTER_TOO_MUCH_THRESHOLD rejections; re-fire the check here.
     if tree_root.is_exhausted
         && valid_test_cases == 0
         && interesting.is_empty()
@@ -441,12 +479,12 @@ fn run_main(
         && !settings
             .suppress_health_check
             .contains(&HealthCheck::FilterTooMuch)
-        && invalid_calls > 0
+        && invalid_test_cases > 0
     {
         return health_check_failure(format!(
             "FailedHealthCheck: FilterTooMuch — every reachable input was \
              filtered out by assume() before any valid input was generated. \
-             {invalid_calls} inputs were filtered out across the full search \
+             {invalid_test_cases} inputs were filtered out across the full search \
              space. If this is expected, suppress the check with \
              suppress_health_check = [HealthCheck::FilterTooMuch]."
         ));
@@ -644,7 +682,7 @@ const POST_BUG_EXTRA_CALLS: u64 = 1000;
 
 /// Returns the `FailedHealthCheck: TooSlow` message when input generation
 /// has consumed more than `threshold` of wall-clock time without producing
-/// `HEALTH_CHECK_MAX_VALID` valid examples, unless the user has explicitly
+/// `HEALTH_CHECK_MAX_VALID` valid test cases, unless the user has explicitly
 /// suppressed the check; otherwise returns `None`.
 ///
 /// Returning the message (rather than panicking) lets the caller fold it
@@ -701,6 +739,37 @@ fn health_check_failure(message: String) -> TestRunResult {
             origin: "FailedHealthCheck".to_string(),
         }],
     }
+}
+
+/// Port of Hypothesis's `_invalid_thresholds` (`engine.py`): returns the
+/// `(base, per_valid)` terms of the generation-phase invalid budget, derived so
+/// that once `(invalid_test_cases + overrun_test_cases)` exceeds
+/// `base + per_valid * valid_test_cases` we are `c`-confident the true valid
+/// rate is below `r`.
+///
+/// ```text
+/// base    = ceil(log(1 - c) / log(1 - r)) - 1
+/// per_valid = ceil(1 / r)
+/// ```
+fn invalid_thresholds(r: f64, c: f64) -> (u64, u64) {
+    let base = ((1.0 - c).ln() / (1.0 - r).ln()).ceil() - 1.0;
+    let per_valid = (1.0 / r).ceil();
+    (base as u64, per_valid as u64)
+}
+
+/// Hypothesis's invalid-rate stop condition for the generation phase
+/// (`engine.py`'s `should_generate_more`): the run keeps generating while
+/// `(invalid_test_cases + overrun_test_cases)` stays within
+/// `base + per_valid * valid_test_cases`, with `budget = (base, per_valid)`
+/// from [`invalid_thresholds`]. Returns `true` while there is still budget.
+fn within_invalid_budget(
+    invalid_test_cases: u64,
+    overrun_test_cases: u64,
+    valid_test_cases: u64,
+    budget: (u64, u64),
+) -> bool {
+    let (base, per_valid) = budget;
+    (invalid_test_cases + overrun_test_cases) <= base + per_valid * valid_test_cases
 }
 
 fn should_generate_more(
@@ -848,7 +917,7 @@ impl<'a> EngineCtx<'a> {
         let (status, failure) = match tc_result {
             TestCaseResult::Valid => (Status::Valid, None),
             TestCaseResult::Invalid => (Status::Invalid, None),
-            TestCaseResult::Overrun => (Status::Invalid, None),
+            TestCaseResult::Overrun => (Status::EarlyStop, None),
             TestCaseResult::Interesting(f) => (Status::Interesting, Some(f)),
         };
         let origin = failure.as_ref().map(|f| f.origin.clone());
@@ -899,7 +968,7 @@ impl<'a> EngineCtx<'a> {
         max_size: usize,
         target_origin: &str,
     ) -> (bool, Vec<ChoiceNode>, Spans) {
-        let rng = SmallRng::seed_from_u64(seed);
+        let rng = EngineRng::seeded(seed);
         let ntc = NativeTestCase::for_probe(prefix, rng, max_size);
         let run = self.execute(ntc, false);
         let matches =
@@ -991,13 +1060,13 @@ impl<'a> EngineCtx<'a> {
 /// `cached_test_function`.
 ///
 /// A span mutation is itself a generated test case, so each probe that
-/// *actually executes* and is valid consumes the same `max_examples` budget
+/// *actually executes* and is valid consumes the same `max_test_cases` budget
 /// as a freshly generated example: it bumps `*valid_test_cases`, and the
 /// probe loop stops as soon as that budget is full. (In Hypothesis the
 /// mutation executions go through `cached_test_function` → `test_function`,
-/// which increments `valid_examples` exactly as a fresh draw does; cache/tree
+/// which increments `valid_test_cases` exactly as a fresh draw does; cache/tree
 /// hits bypass it and so cost nothing.) Without this the native backend ran
-/// `max_examples` fresh cases *plus* up to five mutations each, executing the
+/// `max_test_cases` fresh cases *plus* up to five mutations each, executing the
 /// test several times more often than Hypothesis.
 ///
 /// Returns the mutated counterexample (if one was found) plus the number of
@@ -1006,11 +1075,11 @@ impl<'a> EngineCtx<'a> {
 fn try_span_mutation(
     nodes: &[ChoiceNode],
     spans: &[Span],
-    rng: &mut SmallRng,
+    rng: &mut EngineRng,
     ctx: &mut EngineCtx<'_>,
     tree_root: &mut crate::native::data_tree::DataTreeNode,
     valid_test_cases: &mut u64,
-    max_examples: u64,
+    max_test_cases: u64,
 ) -> (Option<(Vec<ChoiceNode>, String)>, usize) {
     // Fast, non-DoS-resistant hashers: these maps are keyed by our own span
     // labels / extents (never adversarial) and are rebuilt for every recorded
@@ -1043,7 +1112,7 @@ fn try_span_mutation(
     for _ in 0..SPAN_MUTATION_ATTEMPTS {
         // A mutation probe is a generated example: once the example budget is
         // full there is no room for another, so stop proposing.
-        if *valid_test_cases >= max_examples {
+        if *valid_test_cases >= max_test_cases {
             break;
         }
         let group = &multi[rng.random_range(0..multi.len())];
@@ -1103,15 +1172,20 @@ fn try_span_mutation(
     (None, attempts)
 }
 
-fn create_rng(settings: &Settings, database_key: Option<&str>) -> SmallRng {
+fn create_rng(settings: &Settings, database_key: Option<&str>) -> EngineRng {
+    // The urandom backend reads fresh OS entropy on every draw, so the seed /
+    // derandomize knobs (which only control a PRNG seed) don't apply to it.
+    if settings.resolved_backend(crate::antithesis::is_running_in_antithesis()) == Backend::Urandom
+    {
+        return EngineRng::urandom();
+    }
     if let Some(seed) = settings.seed {
-        SmallRng::seed_from_u64(seed)
+        EngineRng::seeded(seed)
     } else if settings.derandomize {
         let key = database_key.unwrap_or("unnamed-test");
-        let hash = hash_string(key);
-        SmallRng::seed_from_u64(hash)
+        EngineRng::seeded(hash_string(key))
     } else {
-        SmallRng::from_rng(&mut rand::rng())
+        EngineRng::from_os()
     }
 }
 

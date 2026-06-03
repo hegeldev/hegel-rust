@@ -64,6 +64,15 @@ fn flaky_diagnostic_mentions_flaky() {
     assert!(flaky_diagnostic().contains("Flaky test detected"));
 }
 
+#[test]
+fn invalid_thresholds_match_hypothesis() {
+    // Ported from Hypothesis's `_invalid_thresholds(r=0.01, c=0.99)`
+    // (`engine.py`), which evaluates to `INVALID_THRESHOLD_BASE = 458` and
+    // `INVALID_PER_VALID = 100`. Pin the port so an always-reject run gives up
+    // after `458 + 1 = 459` cases, matching the core engine.
+    assert_eq!(invalid_thresholds(0.01, 0.99), (458, 100));
+}
+
 // ── cached_run / span-mutation caching ──
 //
 // Span mutation proposes choice sequences whose paths are frequently
@@ -179,9 +188,6 @@ fn cached_run_reexecutes_known_interesting_path_to_recover_payload() {
 
 #[test]
 fn span_mutation_does_not_re_execute_identical_proposals() {
-    use rand::SeedableRng;
-    use rand::rngs::SmallRng;
-
     with_counting_ctx(
         |tc| {
             tc.draw(crate::generators::booleans());
@@ -208,7 +214,7 @@ fn span_mutation_does_not_re_execute_identical_proposals() {
             let spans = vec![span(0, 4), span(1, 3)];
 
             let mut tree = DataTreeNode::default();
-            let mut rng = SmallRng::seed_from_u64(0);
+            let mut rng = EngineRng::seeded(0);
             let mut valid = 0u64;
             let (result, attempts) =
                 try_span_mutation(&nodes, &spans, &mut rng, ctx, &mut tree, &mut valid, 100);
@@ -224,9 +230,6 @@ fn span_mutation_does_not_re_execute_identical_proposals() {
 
 #[test]
 fn span_mutation_returns_interesting_proposal() {
-    use rand::SeedableRng;
-    use rand::rngs::SmallRng;
-
     with_counting_ctx(
         // Panics on a `false` draw, so the all-`false` mutated proposal is
         // Interesting.
@@ -256,7 +259,7 @@ fn span_mutation_returns_interesting_proposal() {
             let spans = vec![span(0, 4), span(1, 3)];
 
             let mut tree = DataTreeNode::default();
-            let mut rng = SmallRng::seed_from_u64(0);
+            let mut rng = EngineRng::seeded(0);
             let mut valid = 0u64;
             let (result, attempts) =
                 try_span_mutation(&nodes, &spans, &mut rng, ctx, &mut tree, &mut valid, 100);
@@ -273,9 +276,6 @@ fn span_mutation_returns_interesting_proposal() {
 
 #[test]
 fn span_mutation_stops_when_example_budget_is_full() {
-    use rand::SeedableRng;
-    use rand::rngs::SmallRng;
-
     with_counting_ctx(
         |tc| {
             tc.draw(crate::generators::booleans());
@@ -298,7 +298,7 @@ fn span_mutation_stops_when_example_budget_is_full() {
             let spans = vec![span(0, 4), span(1, 3)];
 
             let mut tree = DataTreeNode::default();
-            let mut rng = SmallRng::seed_from_u64(0);
+            let mut rng = EngineRng::seeded(0);
             // Budget already full: no probe should run.
             let mut valid = 100u64;
             let (result, attempts) =
@@ -309,6 +309,65 @@ fn span_mutation_stops_when_example_budget_is_full() {
             assert_eq!(count.get(), 0);
             assert_eq!(valid, 100);
         },
+    );
+}
+
+#[test]
+fn create_rng_default_backend_is_prng() {
+    let settings = Settings::new().seed(Some(123));
+    assert!(matches!(create_rng(&settings, None), EngineRng::Prng(_)));
+}
+
+#[cfg(unix)]
+#[test]
+fn create_rng_urandom_backend_reads_urandom() {
+    let settings = Settings::new().backend(crate::settings::Backend::Urandom);
+    assert!(matches!(create_rng(&settings, None), EngineRng::Urandom(_)));
+}
+
+#[test]
+fn run_main_with_urandom_backend_generates_and_passes() {
+    // End-to-end: the urandom backend drives the full engine (every draw
+    // reads /dev/urandom) for a passing test. Exercises the urandom fill
+    // path through the biased samplers.
+    crate::run_lifecycle::init_panic_hook();
+    let mut test_fn = |tc: crate::TestCase| {
+        let _: i32 = tc.draw(crate::generators::integers());
+    };
+    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
+        let _ = run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+    };
+    let settings = Settings::new()
+        .test_cases(20)
+        .database(None)
+        .backend(crate::settings::Backend::Urandom);
+    let result = run_main(&settings, None, &mut run_case, Duration::from_secs(30));
+    assert!(result.passed);
+}
+
+#[test]
+fn run_main_with_urandom_backend_finds_counterexample() {
+    // A test that always panics must still surface a failure under the
+    // urandom backend, going through generation, shrinking (deterministic
+    // concrete-choice replay), and final replay.
+    crate::run_lifecycle::init_panic_hook();
+    let mut test_fn = |tc: crate::TestCase| {
+        let _: i32 = tc.draw(crate::generators::integers());
+        panic!("always fails");
+    };
+    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
+        let _ = run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+    };
+    let settings = Settings::new()
+        .test_cases(20)
+        .database(None)
+        .backend(crate::settings::Backend::Urandom);
+    let result = run_main(&settings, None, &mut run_case, Duration::from_secs(30));
+    assert!(!result.passed);
+    assert!(
+        result.failures[0].panic_message.contains("always fails"),
+        "{:?}",
+        result.failures
     );
 }
 

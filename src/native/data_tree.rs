@@ -12,11 +12,11 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
-use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 
 use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Status};
+use crate::native::rng::EngineRng;
 
 /// Hashable choice-value key. `f64` is keyed by its bit pattern so `-0.0`
 /// stays distinct from `0.0` and individual NaN payloads are tracked
@@ -190,7 +190,7 @@ const ENUMERATION_CAP: u64 = 1024;
 fn pick_non_exhausted_value(
     kind: &ChoiceKind,
     children: &FxHashMap<ChoiceValueKey, Box<DataTreeNode>>,
-    rng: &mut SmallRng,
+    rng: &mut EngineRng,
 ) -> Option<ChoiceValue> {
     for _ in 0..10 {
         let value = kind.random_value(rng);
@@ -225,7 +225,7 @@ fn pick_non_exhausted_value(
 /// first call, when the tree is empty.
 pub(crate) fn generate_novel_prefix(
     tree_root: &DataTreeNode,
-    rng: &mut SmallRng,
+    rng: &mut EngineRng,
 ) -> Vec<ChoiceValue> {
     if tree_root.is_exhausted {
         return Vec::new();

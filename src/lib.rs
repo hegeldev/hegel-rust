@@ -267,23 +267,24 @@ pub mod __bench {
     pub use crate::native::bignum::BigInt;
     pub use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, StringChoice};
     pub use crate::native::intervalsets::IntervalSet;
+    pub use crate::native::rng::EngineRng;
 
     pub fn biased_integer_sample(
         ic: &IntegerChoice,
-        rng: &mut rand::rngs::SmallRng,
+        rng: &mut EngineRng,
     ) -> crate::native::bignum::BigInt {
         crate::native::core::state::biased_integer_sample(ic, rng)
     }
 
-    pub fn biased_string_sample(sc: &StringChoice, rng: &mut rand::rngs::SmallRng) -> Vec<u32> {
+    pub fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Vec<u32> {
         crate::native::core::state::biased_string_sample(sc, rng)
     }
 
-    pub fn biased_bytes_sample(bc: &BytesChoice, rng: &mut rand::rngs::SmallRng) -> Vec<u8> {
+    pub fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<u8> {
         crate::native::core::state::biased_bytes_sample(bc, rng)
     }
 
-    pub fn biased_float_sample(fc: &FloatChoice, rng: &mut rand::rngs::SmallRng) -> f64 {
+    pub fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 {
         crate::native::core::state::biased_float_sample(fc, rng)
     }
 }
@@ -475,4 +476,4 @@ pub use server::process::__test_kill_server;
 #[cfg(not(feature = "native"))]
 #[doc(hidden)]
 pub use server::process::format_log_excerpt;
-pub use settings::{HealthCheck, Mode, Phase, Settings, Verbosity};
+pub use settings::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};

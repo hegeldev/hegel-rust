@@ -2,6 +2,7 @@ use super::*;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{BytesChoice, FloatChoice};
+use crate::native::rng::EngineRng;
 
 fn integer_node(value: i128, min_value: i128, max_value: i128) -> ChoiceNode {
     ChoiceNode::new(
@@ -276,9 +277,6 @@ fn step_choice_rejects_mismatched_value_and_kind() {
 // finds optima, doesn't exceed budget, etc.) but they sample randomly
 // against the RNG and don't reliably exercise every defensive branch.
 
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
-
 use crate::TestCase;
 use crate::generators::{self as gs};
 use crate::native::test_runner::EngineCtx;
@@ -302,7 +300,7 @@ where
     let mut interesting = StdHashMap::new();
     let mut calls = 0u64;
     let mut valid = 0u64;
-    let mut rng = SmallRng::seed_from_u64(0xc0ffee);
+    let mut rng = EngineRng::seeded(0xc0ffee);
     let mut on_run = |_: &RunResult| {};
     let mut opt_ctx = OptimiseCtx {
         engine: &mut ctx,

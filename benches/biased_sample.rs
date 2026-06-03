@@ -11,12 +11,10 @@
 //! so even small per-call wins compound across a full property-test run.
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
 
 use hegel::__bench::{
-    BytesChoice, FloatChoice, IntegerChoice, IntervalSet, StringChoice, biased_bytes_sample,
-    biased_float_sample, biased_integer_sample, biased_string_sample,
+    BytesChoice, EngineRng, FloatChoice, IntegerChoice, IntervalSet, StringChoice,
+    biased_bytes_sample, biased_float_sample, biased_integer_sample, biased_string_sample,
 };
 
 type BigInt = hegel::__bench::BigInt;
@@ -63,7 +61,7 @@ fn bench_biased_integer_sample(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1));
     for (name, ic) in integer_cases() {
         group.bench_with_input(BenchmarkId::from_parameter(name), &ic, |b, ic| {
-            let mut rng = SmallRng::seed_from_u64(0xC0FFEE);
+            let mut rng = EngineRng::seeded(0xC0FFEE);
             b.iter(|| black_box(biased_integer_sample(black_box(ic), &mut rng)));
         });
     }
@@ -92,11 +90,11 @@ fn bench_biased_string_sample(c: &mut Criterion) {
     let ascii = ascii_string_choice();
     let unicode = unicode_string_choice();
     group.bench_function("ascii_0_100", |b| {
-        let mut rng = SmallRng::seed_from_u64(0xC0FFEE);
+        let mut rng = EngineRng::seeded(0xC0FFEE);
         b.iter(|| black_box(biased_string_sample(black_box(&ascii), &mut rng)));
     });
     group.bench_function("unicode_0_100", |b| {
-        let mut rng = SmallRng::seed_from_u64(0xC0FFEE);
+        let mut rng = EngineRng::seeded(0xC0FFEE);
         b.iter(|| black_box(biased_string_sample(black_box(&unicode), &mut rng)));
     });
     group.finish();
@@ -110,7 +108,7 @@ fn bench_biased_bytes_sample(c: &mut Criterion) {
         max_size: 100,
     };
     group.bench_function("0_100", |b| {
-        let mut rng = SmallRng::seed_from_u64(0xC0FFEE);
+        let mut rng = EngineRng::seeded(0xC0FFEE);
         b.iter(|| black_box(biased_bytes_sample(black_box(&bc), &mut rng)));
     });
     group.finish();
@@ -132,11 +130,11 @@ fn bench_biased_float_sample(c: &mut Criterion) {
         allow_infinity: false,
     };
     group.bench_function("unbounded", |b| {
-        let mut rng = SmallRng::seed_from_u64(0xC0FFEE);
+        let mut rng = EngineRng::seeded(0xC0FFEE);
         b.iter(|| black_box(biased_float_sample(black_box(&unbounded), &mut rng)));
     });
     group.bench_function("bounded_pm1", |b| {
-        let mut rng = SmallRng::seed_from_u64(0xC0FFEE);
+        let mut rng = EngineRng::seeded(0xC0FFEE);
         b.iter(|| black_box(biased_float_sample(black_box(&bounded), &mut rng)));
     });
     group.finish();

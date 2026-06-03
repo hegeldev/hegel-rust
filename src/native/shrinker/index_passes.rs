@@ -10,6 +10,10 @@ use crate::native::core::{ChoiceKind, ChoiceValue};
 
 use super::Shrinker;
 
+fn is_sequence(kind: &std::sync::Arc<ChoiceKind>) -> bool {
+    matches!(**kind, ChoiceKind::Bytes(_) | ChoiceKind::String(_))
+}
+
 impl<'a> Shrinker<'a> {
     /// For each indexed node not at simplest, try decrementing it (lowering
     /// the index) and bumping a later node (raising its index).
@@ -25,6 +29,10 @@ impl<'a> Shrinker<'a> {
                 let i = idx;
                 let node_i = self.current_nodes[i].clone();
                 let kind_i = node_i.kind.clone();
+                if is_sequence(&kind_i) {
+                    idx += 1;
+                    continue;
+                }
                 let current_idx = kind_i.to_index(&node_i.value);
                 if current_idx.is_zero() {
                     idx += 1;
@@ -82,7 +90,7 @@ impl<'a> Shrinker<'a> {
                     // bumped value doesn't fit the *current* kind at j
                     // (which may have shifted under punning between
                     // iterations).
-                    if j < self.current_nodes.len() {
+                    if j < self.current_nodes.len() && !is_sequence(&self.current_nodes[j].kind) {
                         let kind_j = self.current_nodes[j].kind.clone();
                         let target_idx = kind_j.to_index(&self.current_nodes[j].value);
                         let mut bumped_any_relative = false;
@@ -130,6 +138,10 @@ impl<'a> Shrinker<'a> {
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
             let kind = node.kind.clone();
+            if is_sequence(&kind) {
+                i += 1;
+                continue;
+            }
             let current_idx = kind.to_index(&node.value);
 
             let mut candidates: Vec<ChoiceValue> = Vec::new();

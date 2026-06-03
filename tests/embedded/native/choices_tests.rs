@@ -909,3 +909,89 @@ fn node_sort_key_big_integer_orders_correctly() {
     // The owned NodeSortKey matches the borrowed comparison.
     assert!(big_small[0].sort_key() < big_large[0].sort_key());
 }
+
+#[test]
+fn enumerate_large_max_size_bytes_returns_none_without_blowup() {
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 0,
+        max_size: 1_000_000,
+    });
+    assert_eq!(kind.enumerate(256), None);
+}
+
+// ── Bytes/String dispatch coverage ────────────────────────────────────
+//
+// The index-based shrink passes skip sequence kinds entirely, so the
+// Bytes/String arms of the ChoiceKind dispatch methods need direct tests.
+
+#[test]
+fn bytes_max_index_and_max_children() {
+    // lengths 0..=2 over 256 symbols: 1 + 256 + 65536 = 65793 values
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 0,
+        max_size: 2,
+    });
+    assert_eq!(kind.max_index(), bu(65792));
+    assert_eq!(kind.max_children(), bu(65793));
+}
+
+#[test]
+fn string_max_index_and_max_children() {
+    // alphabet {a,b,c}, lengths 0..=2: 1 + 3 + 9 = 13 values
+    let kind = ChoiceKind::String(StringChoice {
+        intervals: crate::native::intervalsets::IntervalSet::new(vec![(b'a' as u32, b'c' as u32)]),
+        min_size: 0,
+        max_size: 2,
+    });
+    assert_eq!(kind.max_index(), bu(12));
+    assert_eq!(kind.max_children(), bu(13));
+}
+
+#[test]
+fn bytes_to_index_via_dispatch() {
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 0,
+        max_size: 4,
+    });
+    assert_eq!(kind.to_index(&ChoiceValue::Bytes(vec![])), bu(0));
+    assert_eq!(kind.to_index(&ChoiceValue::Bytes(vec![0])), bu(1));
+}
+
+#[test]
+fn string_to_index_via_dispatch() {
+    let kind = ChoiceKind::String(StringChoice {
+        intervals: crate::native::intervalsets::IntervalSet::new(vec![(b'a' as u32, b'c' as u32)]),
+        min_size: 0,
+        max_size: 4,
+    });
+    assert_eq!(kind.to_index(&ChoiceValue::String(vec![])), bu(0));
+}
+
+// ── ChoiceKind::random_value boolean entropy ────────────────────────────────
+
+/// An unbiased boolean drawn via `random_value` must spend exactly one byte of
+/// entropy (it routes through `weighted_boolean_sample(0.5, …)`), not a whole
+/// `u32`. The urandom backend feeds every byte from the fuzzer, so a one-bit
+/// decision must cost one byte. Regression for a bare `rng.random::<bool>()`.
+#[test]
+fn random_value_boolean_consumes_exactly_one_byte() {
+    use crate::native::rng::EngineRng;
+    use rand::Rng;
+
+    let kind = ChoiceKind::Boolean(BooleanChoice);
+    let mut a = EngineRng::seeded(2024);
+    let mut b = EngineRng::seeded(2024);
+
+    let value = kind.random_value(&mut a);
+    let ChoiceValue::Boolean(got) = value else {
+        panic!("expected a boolean choice value");
+    };
+
+    // Consume one byte from `b`; it is the same byte `a` drew.
+    let mut byte = [0u8; 1];
+    b.fill_bytes(&mut byte);
+    // p = 0.5 → falsey = 128, so the boolean is `byte >= 128`.
+    assert_eq!(got, u32::from(byte[0]) >= 128);
+    // Exactly one byte was consumed: the two RNGs are now in lockstep.
+    assert_eq!(a.next_u64(), b.next_u64());
+}

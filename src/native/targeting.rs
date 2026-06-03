@@ -13,12 +13,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
-
 use crate::native::core::{
     BUFFER_SIZE, ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Status,
 };
+use crate::native::rng::EngineRng;
 use crate::native::shrinker::find_integer;
 use crate::native::test_runner::{EngineCtx, RunResult};
 
@@ -68,7 +66,7 @@ impl TargetingState {
 ///
 /// Mirrors the threshold logic in
 /// `internal/conjecture/engine.py::generate_new_examples`: a first pass
-/// after ~10% of the budget (capped at 50 valid examples), then another
+/// after ~10% of the budget (capped at 50 valid test cases), then another
 /// pass every ~50% of the original budget thereafter. Re-entry lets the
 /// climber explore from fresh starting points if later random draws raise
 /// the best-observed score for some label after the first pass settled
@@ -79,9 +77,9 @@ pub(crate) struct TargetingSchedule {
 }
 
 impl TargetingSchedule {
-    pub fn new(max_examples: u64) -> Self {
-        let small_example_cap = (max_examples / 10).min(50);
-        let step = (max_examples / 2)
+    pub fn new(max_test_cases: u64) -> Self {
+        let small_example_cap = (max_test_cases / 10).min(50);
+        let step = (max_test_cases / 2)
             .max(small_example_cap.saturating_add(1))
             .max(10);
         Self {
@@ -110,7 +108,7 @@ pub(crate) struct OptimiseCtx<'a, 'b, 'c> {
     pub valid_test_cases: &'a mut u64,
     pub max_valid: u64,
     pub max_calls: u64,
-    pub rng: &'a mut SmallRng,
+    pub rng: &'a mut EngineRng,
     pub on_run: &'a mut (dyn FnMut(&RunResult) + 'c),
 }
 
@@ -139,7 +137,7 @@ fn run_trial(
     if ctx.budget_exhausted() {
         return None;
     }
-    let ntc = NativeTestCase::for_probe(choices, SmallRng::from_rng(ctx.rng), BUFFER_SIZE);
+    let ntc = NativeTestCase::for_probe(choices, ctx.rng.spawn(), BUFFER_SIZE);
     let run = ctx.engine.run(ntc);
     *ctx.calls += 1;
     (ctx.on_run)(&run);

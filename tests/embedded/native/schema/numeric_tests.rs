@@ -5,11 +5,10 @@
 use super::*;
 use crate::cbor_utils::cbor_map;
 use crate::native::core::NativeTestCase;
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
+use crate::native::rng::EngineRng;
 
 fn fresh_ntc() -> NativeTestCase {
-    NativeTestCase::new_random(SmallRng::seed_from_u64(0))
+    NativeTestCase::new_random(EngineRng::seeded(0))
 }
 
 #[test]
