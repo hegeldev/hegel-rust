@@ -6,8 +6,7 @@ use super::*;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Status};
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
+use crate::native::rng::EngineRng;
 
 fn int_kind(min: i128, max: i128) -> ChoiceKind {
     ChoiceKind::Integer(IntegerChoice {
@@ -57,7 +56,7 @@ fn record_tree_kill_depths_marks_inner_nodes_exhausted() {
     );
     // After kill at depth 1 the corresponding subtree is exhausted.
     // generate_novel_prefix should now avoid the killed branch.
-    let mut rng = SmallRng::seed_from_u64(0);
+    let mut rng = EngineRng::seeded(0);
     for _ in 0..50 {
         let prefix = generate_novel_prefix(&root, &mut rng);
         // either an empty prefix (no novel positions available) or the
@@ -91,7 +90,7 @@ fn generate_novel_prefix_returns_empty_for_exhausted_root() {
     let mut root = DataTreeNode::default();
     record_tree(&mut root, &[], Status::Valid, &[0]);
     assert!(root.is_exhausted);
-    let mut rng = SmallRng::seed_from_u64(0);
+    let mut rng = EngineRng::seeded(0);
     assert!(generate_novel_prefix(&root, &mut rng).is_empty());
 }
 
@@ -105,7 +104,7 @@ fn generate_novel_prefix_terminates_when_subtree_exhausted() {
     record_tree(&mut root, &[bool_node(false)], Status::Invalid, &[]);
     record_tree(&mut root, &[bool_node(true)], Status::Invalid, &[]);
 
-    let mut rng = SmallRng::seed_from_u64(0);
+    let mut rng = EngineRng::seeded(0);
     let prefix = generate_novel_prefix(&root, &mut rng);
     // Tree is now exhausted; novel prefix is empty (root.is_exhausted is true).
     assert!(prefix.is_empty());

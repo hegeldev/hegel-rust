@@ -2197,3 +2197,15 @@ fn moderately_nested_groups_parse() {
     let pat = format!("{}a{}", "(?:".repeat(20), ")".repeat(20));
     parse_pattern(&pat, 0).unwrap();
 }
+
+#[test]
+fn err_surrogate_u_escape() {
+    // Python's `re` treats `\uD800` as a (surrogate) literal, but a Rust
+    // `String` cannot hold a surrogate, so we reject it rather than panic when
+    // building the character set. Covers both the in-class and out-of-class
+    // `\u` arms (the valid-codepoint branch is covered by the `é` tests).
+    for pat in [r"\uD800", r"\uDFFF", r"[\uD800]", r"[^\uD800]"] {
+        let err = parse_err(pat);
+        assert!(err.msg.contains("surrogate"), "{}: {}", pat, err.msg);
+    }
+}

@@ -15,8 +15,6 @@
 use std::collections::{HashMap, hash_map::Entry};
 
 use rand::RngExt;
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
 
 use crate::backend::{DataSource, Failure, TestCaseResult, TestRunResult, TestRunner};
 use crate::native::core::{
@@ -26,8 +24,9 @@ use crate::native::data_source::NativeDataSource;
 use crate::native::database::{
     DirectoryTestCaseDatabase, TestCaseDatabase, deserialize_choices, serialize_choices,
 };
+use crate::native::rng::EngineRng;
 use crate::native::shrinker::{ShrinkRun, Shrinker};
-use crate::runner::{Database, HealthCheck, Mode, Phase, Settings, Verbosity};
+use crate::runner::{Backend, Database, HealthCheck, Mode, Phase, Settings, Verbosity};
 
 /// One run's worth of results: status, the realised choice nodes and
 /// spans, and (for `Status::Interesting`) the captured failure carrying
@@ -113,7 +112,7 @@ fn run_single(
     // the same draws on every invocation. Without this, a `seed(Some(42))`
     // is silently ignored and each call produces fresh OS-random draws.
     let mut rng = create_rng(settings, None);
-    let ntc = NativeTestCase::new_random(SmallRng::from_rng(&mut rng));
+    let ntc = NativeTestCase::new_random(rng.spawn());
     let (data_source, handle) = NativeDataSource::new(ntc);
     run_case(Box::new(data_source), true);
     match NativeDataSource::take_outcome(&handle) {
@@ -378,7 +377,7 @@ fn run_main(
                 break;
             }
 
-            let batch_rng = SmallRng::from_rng(&mut rng);
+            let batch_rng = rng.spawn();
             let prefix = crate::native::data_tree::generate_novel_prefix(&tree_root, &mut rng);
             let ntc = if prefix.is_empty() {
                 NativeTestCase::new_random(batch_rng)
@@ -1027,7 +1026,7 @@ impl<'a> EngineCtx<'a> {
         max_size: usize,
         target_origin: &str,
     ) -> (bool, Vec<ChoiceNode>, Spans) {
-        let rng = SmallRng::seed_from_u64(seed);
+        let rng = EngineRng::seeded(seed);
         let ntc = NativeTestCase::for_probe(prefix, rng, max_size);
         let run = self.execute(ntc, false);
         let matches =
@@ -1134,7 +1133,7 @@ impl<'a> EngineCtx<'a> {
 fn try_span_mutation(
     nodes: &[ChoiceNode],
     spans: &[Span],
-    rng: &mut SmallRng,
+    rng: &mut EngineRng,
     ctx: &mut EngineCtx<'_>,
     tree_root: &mut crate::native::data_tree::DataTreeNode,
     valid_test_cases: &mut u64,
@@ -1231,15 +1230,20 @@ fn try_span_mutation(
     (None, attempts)
 }
 
-fn create_rng(settings: &Settings, database_key: Option<&str>) -> SmallRng {
+fn create_rng(settings: &Settings, database_key: Option<&str>) -> EngineRng {
+    // The urandom backend reads fresh OS entropy on every draw, so the seed /
+    // derandomize knobs (which only control a PRNG seed) don't apply to it.
+    if settings.resolved_backend(crate::antithesis::is_running_in_antithesis()) == Backend::Urandom
+    {
+        return EngineRng::urandom();
+    }
     if let Some(seed) = settings.seed {
-        SmallRng::seed_from_u64(seed)
+        EngineRng::seeded(seed)
     } else if settings.derandomize {
         let key = database_key.unwrap_or("unnamed-test");
-        let hash = hash_string(key);
-        SmallRng::seed_from_u64(hash)
+        EngineRng::seeded(hash_string(key))
     } else {
-        SmallRng::from_rng(&mut rand::rng())
+        EngineRng::from_os()
     }
 }
 

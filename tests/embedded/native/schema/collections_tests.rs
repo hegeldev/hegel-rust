@@ -2,15 +2,13 @@
 // interpret_* function with representative schemas. Tests drive the
 // NativeTestCase with a deterministic RNG.
 
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
-
 use super::*;
 use crate::cbor_utils::cbor_map;
 use crate::native::core::NativeTestCase;
+use crate::native::rng::EngineRng;
 
 fn fresh_ntc() -> NativeTestCase {
-    NativeTestCase::new_random(SmallRng::seed_from_u64(7))
+    NativeTestCase::new_random(EngineRng::seeded(7))
 }
 
 // ── interpret_tuple ─────────────────────────────────────────────────────────

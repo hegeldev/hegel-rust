@@ -1,16 +1,14 @@
 // Embedded tests for src/native/data_source.rs — exercise each method on
 // the DataSource trait implementation and the StopTest-to-abort conversion.
 
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
-
 use super::*;
 use crate::backend::{DataSource, DataSourceError};
 use crate::cbor_utils::{cbor_map, map_get};
 use crate::native::core::NativeTestCase;
+use crate::native::rng::EngineRng;
 
 fn random_source() -> (NativeDataSource, NativeTestCaseHandle) {
-    let ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(7));
+    let ntc = NativeTestCase::new_random(EngineRng::seeded(7));
     NativeDataSource::new(ntc)
 }
 

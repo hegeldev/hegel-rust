@@ -1,15 +1,13 @@
 // Embedded tests for src/native/schema/mod.rs — covers the interpret_schema
 // dispatch, many_reject's invalid path, and the CBOR helper functions.
 
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
-
 use super::*;
 use crate::cbor_utils::cbor_map;
 use crate::native::core::NativeTestCase;
+use crate::native::rng::EngineRng;
 
 fn fresh_ntc() -> NativeTestCase {
-    NativeTestCase::new_random(SmallRng::seed_from_u64(1))
+    NativeTestCase::new_random(EngineRng::seeded(1))
 }
 
 #[test]
@@ -287,7 +285,7 @@ fn interpret_integer_draws_real_bigint_beyond_u128() {
     let neg_u128_max = -&u128_max;
     let mut saw_beyond_u128 = false;
     for seed in 0..200u64 {
-        let mut ntc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
         let value = interpret_schema(&mut ntc, &schema).ok().unwrap();
         let decoded = cbor_to_bigint(&value).unwrap();
         assert!(decoded >= min && decoded <= max, "out of range: {decoded}");

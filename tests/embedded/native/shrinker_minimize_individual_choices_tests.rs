@@ -343,3 +343,28 @@ fn minimize_individual_choices_no_op_on_already_simplest_node() {
 // nonzero, while truncating the tail), chained with the lower-and-bump
 // / span-delete fallback that our native equivalent doesn't replicate
 // one-to-one. Left for follow-up.
+
+#[test]
+fn try_replace_with_deletion_continues_past_sizes_reaching_into_idx() {
+    // When `idx` sits at the end of a short sequence, every candidate
+    // deletion size makes `start = attempt.len() - size <= idx`, so each
+    // iteration hits the `continue` guard and no deletion is attempted —
+    // the method returns false. Pins coverage of that guard directly,
+    // rather than depending on a seeded integration trajectory to wander
+    // through it.
+    let initial = vec![int_node(1), int_node(2), int_node(3)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            // Always uninteresting, and report a realised length (1) shorter
+            // than the `expected_len` passed below so the deletion loop runs.
+            ShrinkRun::Full(_) => (false, vec![int_node(9)], Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    // idx = 2 (last index), len = 3: for every size in 1..=k the start index
+    // is `3 - size <= 2 == idx`, so the loop `continue`s each time.
+    let deleted = shrinker.try_replace_with_deletion(2, ChoiceValue::Integer(BigInt::from(0)), 5);
+    assert!(!deleted);
+}

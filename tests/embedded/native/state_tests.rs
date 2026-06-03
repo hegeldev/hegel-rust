@@ -1,6 +1,5 @@
 use super::*;
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
+use crate::native::rng::EngineRng;
 
 // ── Spans::get_mut ────────────────────────────────────────────────────────
 
@@ -426,7 +425,7 @@ fn data_observer_conclude_test_default_is_no_op() {
 
 #[test]
 fn weighted_with_p_zero_returns_false_without_consulting_rng() {
-    let mut tc = NativeTestCase::new_random(SmallRng::seed_from_u64(0));
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
     // RNG is present but `p == 0.0` is supposed to short-circuit it.
     let v = tc.weighted(0.0, None).ok().unwrap();
     assert!(!v);
@@ -435,7 +434,7 @@ fn weighted_with_p_zero_returns_false_without_consulting_rng() {
 
 #[test]
 fn weighted_with_p_one_returns_true_without_consulting_rng() {
-    let mut tc = NativeTestCase::new_random(SmallRng::seed_from_u64(0));
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
     let v = tc.weighted(1.0, None).ok().unwrap();
     assert!(v);
     assert!(tc.nodes.last().unwrap().was_forced);
@@ -653,12 +652,10 @@ fn stop_span_extends_parent_label_stack() {
 
 #[test]
 fn draw_float_unbounded_with_nan_can_produce_nan() {
-    use rand::SeedableRng;
-    use rand::rngs::SmallRng;
     // Fully unbounded with allow_nan=true exercises the random-generation
     // branch including the NaN-emission arm.
     for seed in 0..200u64 {
-        let mut tc = NativeTestCase::new_random(SmallRng::seed_from_u64(seed));
+        let mut tc = NativeTestCase::new_random(EngineRng::seeded(seed));
         let v = tc
             .draw_float(f64::NEG_INFINITY, f64::INFINITY, true, true)
             .ok()
@@ -672,9 +669,7 @@ fn draw_float_unbounded_with_nan_can_produce_nan() {
 
 #[test]
 fn draw_float_half_bounded_below_explores_finite_range() {
-    use rand::SeedableRng;
-    use rand::rngs::SmallRng;
-    let mut tc = NativeTestCase::new_random(SmallRng::seed_from_u64(0));
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
     let v = tc
         .draw_float(1.0, f64::INFINITY, false, false)
         .ok()
@@ -926,7 +921,7 @@ fn template_count_decrements_on_each_draw() {
 
 #[test]
 fn biased_integer_sample_stays_in_range_for_small_bounds() {
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = EngineRng::seeded(1);
     for _ in 0..1000 {
         let v = biased_i128_sample(0, 100, &mut rng);
         assert!((0..=100).contains(&v), "out of range: {v}");
@@ -935,7 +930,7 @@ fn biased_integer_sample_stays_in_range_for_small_bounds() {
 
 #[test]
 fn biased_integer_sample_stays_in_range_for_wide_bounds() {
-    let mut rng = SmallRng::seed_from_u64(2);
+    let mut rng = EngineRng::seeded(2);
     for _ in 0..2000 {
         let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
         assert!(
@@ -947,7 +942,7 @@ fn biased_integer_sample_stays_in_range_for_wide_bounds() {
 
 #[test]
 fn biased_integer_sample_stays_in_range_for_full_i128() {
-    let mut rng = SmallRng::seed_from_u64(3);
+    let mut rng = EngineRng::seeded(3);
     for _ in 0..1000 {
         // Range is the whole i128 domain, so any returned value is in range;
         // the assertion is implicit (no panic / overflow).
@@ -957,7 +952,7 @@ fn biased_integer_sample_stays_in_range_for_full_i128() {
 
 #[test]
 fn biased_integer_sample_collapses_when_min_equals_max() {
-    let mut rng = SmallRng::seed_from_u64(4);
+    let mut rng = EngineRng::seeded(4);
     for _ in 0..100 {
         assert_eq!(biased_i128_sample(42, 42, &mut rng), 42);
     }
@@ -967,7 +962,7 @@ fn biased_integer_sample_collapses_when_min_equals_max() {
 fn biased_integer_sample_produces_diverse_magnitudes_unbounded() {
     // The piecewise distribution should produce values across many orders of
     // magnitude when the range is wide.
-    let mut rng = SmallRng::seed_from_u64(5);
+    let mut rng = EngineRng::seeded(5);
     let mut magnitudes: HashSet<i32> = HashSet::new();
     for _ in 0..2000 {
         let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
@@ -988,7 +983,7 @@ fn biased_integer_sample_produces_diverse_magnitudes_unbounded() {
 
 #[test]
 fn biased_integer_sample_concentrates_around_zero_when_unbounded() {
-    let mut rng = SmallRng::seed_from_u64(6);
+    let mut rng = EngineRng::seeded(6);
     let mut in_inner = 0;
     let total = 2000;
     for _ in 0..total {
@@ -1006,7 +1001,7 @@ fn biased_integer_sample_concentrates_around_zero_when_unbounded() {
 
 #[test]
 fn biased_integer_sample_log_skewed_bounded_range_favours_smaller_magnitudes() {
-    let mut rng = SmallRng::seed_from_u64(11);
+    let mut rng = EngineRng::seeded(11);
     let mut samples: Vec<i128> = (0..2000)
         .map(|_| biased_i128_sample(10_000, 10_000_000, &mut rng))
         .collect();
@@ -1020,7 +1015,7 @@ fn biased_integer_sample_log_skewed_bounded_range_favours_smaller_magnitudes() {
 
 #[test]
 fn biased_integer_sample_narrow_range_uses_uniform_fallback() {
-    let mut rng = SmallRng::seed_from_u64(7);
+    let mut rng = EngineRng::seeded(7);
     let mut seen_zero = false;
     let mut seen_one = false;
     for _ in 0..200 {
@@ -1049,7 +1044,7 @@ fn biased_integer_sample_erased_small_width_stays_in_range() {
         max_value: BigInt::from(200u8),
         shrink_towards: BigInt::from(0u8),
     };
-    let mut rng = SmallRng::seed_from_u64(21);
+    let mut rng = EngineRng::seeded(21);
     for _ in 0..500 {
         let v = biased_integer_sample(&kind, &mut rng);
         assert!(kind.validate(&v), "out of range: {v:?}");
@@ -1067,7 +1062,7 @@ fn biased_integer_sample_erased_bigint_beyond_i128_stays_in_range() {
         max_value: max,
         shrink_towards: BigInt::from(0),
     };
-    let mut rng = SmallRng::seed_from_u64(22);
+    let mut rng = EngineRng::seeded(22);
     for _ in 0..500 {
         let v = biased_integer_sample(&kind, &mut rng);
         assert!(kind.validate(&v), "out of range: {v:?}");
@@ -1081,7 +1076,7 @@ fn integer_sample_from_distribution_uniform_fallback_for_indistinguishable_bound
     // which is below the 1e-13 threshold and forces the uniform fallback
     // (the only path that produces a value in [min, max] when the
     // distribution-based path can't distinguish the endpoints).
-    let mut rng = SmallRng::seed_from_u64(13);
+    let mut rng = EngineRng::seeded(13);
     let min = i128::MAX - 1000;
     let max = i128::MAX;
     let mut all_endpoints = true;
@@ -1111,8 +1106,44 @@ fn biased_integer_sample_erased_bigint_single_value() {
         max_value: fixed.clone(),
         shrink_towards: BigInt::from(0),
     };
-    let mut rng = SmallRng::seed_from_u64(23);
+    let mut rng = EngineRng::seeded(23);
     for _ in 0..20 {
         assert_eq!(biased_integer_sample(&kind, &mut rng), fixed.clone());
     }
+}
+
+/// The weighted-boolean draw must spend exactly one byte of entropy
+/// (Hypothesis's `BytestringProvider` approach), not a full `f64`. The urandom
+/// backend feeds every byte from the fuzzer, so a one-bit decision must cost
+/// one byte. Regression for an earlier `rng.random::<f64>() <= p` that burned
+/// eight bytes per boolean.
+#[test]
+fn weighted_boolean_sample_consumes_exactly_one_byte() {
+    use rand::Rng;
+    let mut a = EngineRng::seeded(12345);
+    let mut b = EngineRng::seeded(12345);
+    let result = weighted_boolean_sample(0.5, &mut a);
+    let mut byte = [0u8; 1];
+    b.fill_bytes(&mut byte);
+    // The decision compares the single drawn byte against the falsey threshold.
+    let falsey = (256.0_f64 * (1.0 - 0.5)).floor().max(1.0) as u32; // 128
+    assert_eq!(result, u32::from(byte[0]) >= falsey);
+    // Exactly one byte was consumed: the two RNGs are now in lockstep, which
+    // would not hold had the draw read a u32 (4 bytes) or an f64 (8 bytes).
+    assert_eq!(a.next_u64(), b.next_u64());
+}
+
+/// `p` still controls the probability of `true` under the byte-based draw.
+#[test]
+fn weighted_boolean_sample_respects_probability() {
+    let mut rng = EngineRng::seeded(99);
+    let n = 5000usize;
+    let high = (0..n)
+        .filter(|_| weighted_boolean_sample(0.9, &mut rng))
+        .count();
+    let low = (0..n)
+        .filter(|_| weighted_boolean_sample(0.1, &mut rng))
+        .count();
+    assert!(high > n * 3 / 4, "p=0.9 produced only {high}/{n} trues");
+    assert!(low < n / 4, "p=0.1 produced {low}/{n} trues");
 }

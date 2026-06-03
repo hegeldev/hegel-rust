@@ -1,5 +1,5 @@
 use super::*;
-use crate::runner::{Database, Mode, Settings, Verbosity};
+use crate::runner::{Backend, Database, Mode, Settings, Verbosity};
 
 fn s(strs: &[&str]) -> Vec<String> {
     std::iter::once("prog")
@@ -242,6 +242,42 @@ fn test_single_test_case_flag() {
 fn test_single_test_case_default_is_test_run() {
     let parsed = apply(&[]);
     assert_eq!(parsed.mode, Mode::TestRun);
+}
+
+#[test]
+fn test_backend_urandom_flag() {
+    let parsed = apply(&["--backend", "urandom"]);
+    assert_eq!(parsed.backend, Some(Backend::Urandom));
+}
+
+#[test]
+fn test_backend_default_flag() {
+    let parsed = apply(&["--backend", "default"]);
+    assert_eq!(parsed.backend, Some(Backend::Default));
+}
+
+#[test]
+fn test_backend_default_is_unset() {
+    let parsed = apply(&[]);
+    assert_eq!(parsed.backend, None);
+}
+
+#[test]
+fn test_invalid_backend_error() {
+    let err = try_apply_cli_args(Settings::new(), s(&["--backend", "wat"])).unwrap_err();
+    match err {
+        CliError::Parse(msg) => assert!(msg.contains("default|urandom")),
+        other => panic!("expected parse error, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_backend_missing_value_error() {
+    let err = try_apply_cli_args(Settings::new(), s(&["--backend"])).unwrap_err();
+    match err {
+        CliError::Parse(msg) => assert!(msg.contains("requires a value")),
+        other => panic!("expected parse error, got {other:?}"),
+    }
 }
 
 #[test]
