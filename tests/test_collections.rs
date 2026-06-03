@@ -678,7 +678,7 @@ mod sampled_from {
         .settings(
             Settings::new()
                 .database(None)
-                .suppress_health_check([HealthCheck::TooSlow]),
+                .suppress_health_check([HealthCheck::TooSlow, HealthCheck::FilterTooMuch]),
         )
         .run();
     }
