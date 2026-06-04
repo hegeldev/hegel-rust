@@ -152,7 +152,7 @@ pub(crate) fn many_reject(
     if state.rejections > std::cmp::max(3, 2 * state.count) {
         if state.count < state.min_size {
             ntc.status = Some(Status::Invalid);
-            return Err(EngineError::StopTest);
+            return Err(EngineError::InvalidTestCase);
         } else {
             state.force_stop = true;
         }

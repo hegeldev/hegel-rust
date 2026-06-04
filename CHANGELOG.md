@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.15.1 - 2026-06-04
+
+The native backend (`--features native`) now implements the `TestCasesTooLarge` and `LargeInitialTestCase` health checks. The former fires when generated inputs routinely overrun the choice buffer; the latter when even the smallest natural input is very large. Both are suppressible via `suppress_health_check`.
+
 ## 0.15.0 - 2026-06-03
 
 The native engine (`--features native`) gains a urandom backend, selectable with `Settings::backend(Backend::Urandom)`, the `#[hegel::test(backend = Backend::Urandom)]` attribute, or the `--backend urandom` CLI flag.

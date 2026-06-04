@@ -28,10 +28,6 @@ impl __IsTestCase for TestCase {}
 pub fn __assert_is_test_case<T: __IsTestCase>() {}
 
 pub(crate) const ASSUME_FAIL_STRING: &str = "__HEGEL_ASSUME_FAIL";
-
-/// The sentinel string used to identify overflow/StopTest panics.
-/// Distinct from ASSUME_FAIL_STRING so callers can tell user-initiated
-/// assumption failures apart from backend-initiated data exhaustion.
 pub(crate) const STOP_TEST_STRING: &str = "__HEGEL_STOP_TEST";
 
 /// The sentinel string used by `TestCase::repeat` to signal that its loop
