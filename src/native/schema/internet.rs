@@ -77,7 +77,7 @@ fn encode_string(s: String) -> Value {
 
 fn mark_invalid(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
     ntc.status = Some(Status::Invalid);
-    Err(EngineError::StopTest)
+    Err(EngineError::InvalidTestCase)
 }
 
 /// `domain` schema → an RFC 1035 fully-qualified domain name.
