@@ -366,8 +366,8 @@ fn is_reproduce_failure_attr(attr: &syn::Attribute) -> bool {
     segments.len() == 2 && segments[0].ident == "hegel" && segments[1].ident == "reproduce_failure"
 }
 
-/// Extract the `#[hegel::reproduce_failure(blob)]` attribute, removing it
-/// in-place, and return the blob expression.
+/// Extract the `#[hegel::reproduce_failure(blob)]` attributes, removing them
+/// in-place, and return the **first** blob expression.
 ///
 /// The argument is any expression that evaluates to something convertible to a
 /// `String` via `.to_string()` — a string literal, a `const`/`static` `&str`,
@@ -375,10 +375,10 @@ fn is_reproduce_failure_attr(attr: &syn::Attribute) -> bool {
 /// `#[hegel::test]`-family attributes, which take expressions rather than only
 /// literals).
 ///
-/// At most one is allowed — a test reproduces a single failing example.
-/// Returns `Ok(None)` when the attribute is absent, or `Err` with a compile
-/// error when it appears more than once or its argument isn't a single
-/// expression.
+/// Stacking is allowed, but only the first attribute replays — the rest are
+/// bookkeeping for additional failures, to be deleted one by one as they are
+/// fixed. Returns `Ok(None)` when the attribute is absent, or
+/// `Err` with a compile error when an argument isn't a single expression.
 pub fn extract_reproduce_failure(
     attrs: &mut Vec<syn::Attribute>,
 ) -> Result<Option<Expr>, TokenStream> {
@@ -389,13 +389,6 @@ pub fn extract_reproduce_failure(
             return true;
         }
         if blob.is_some() {
-            error = Some(
-                syn::Error::new_spanned(
-                    attr,
-                    "#[hegel::reproduce_failure(...)] may appear at most once.",
-                )
-                .to_compile_error(),
-            );
             return false;
         }
         match attr.parse_args::<Expr>() {

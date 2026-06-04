@@ -266,11 +266,13 @@ fn drive_multiple_failures_prints_each_reproducer_and_panics() {
     );
 }
 
-// `drive` short-circuits a run that lacks `Phase::Generate` — except when a
-// reproduce blob is set, which must replay regardless of the phase selection.
+// `drive` runs the runner unconditionally — phase selection (skipping a
+// run that lacks `Phase::Generate`) is the caller's concern: `Hegel::run`
+// performs that check before calling `drive`, so phase-agnostic callers
+// like the blob-replay path are not gated here.
 
 #[test]
-fn drive_runs_reproduce_even_without_generate_phase() {
+fn drive_runs_the_runner_regardless_of_phases() {
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -291,9 +293,7 @@ fn drive_runs_reproduce_even_without_generate_phase() {
     }
 
     let ran = Rc::new(Cell::new(false));
-    let settings = crate::runner::Settings::new()
-        .reproduce_failure(Some("some-blob".to_string()))
-        .phases([]); // no Phase::Generate
+    let settings = crate::runner::Settings::new().phases([]); // no Phase::Generate
     drive(
         RecordingRunner(ran.clone()),
         |_tc: TestCase| {},
@@ -303,6 +303,6 @@ fn drive_runs_reproduce_even_without_generate_phase() {
     );
     assert!(
         ran.get(),
-        "reproduce_failure must run the runner regardless of phases"
+        "drive must run the runner regardless of the phase selection"
     );
 }

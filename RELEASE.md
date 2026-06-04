@@ -18,11 +18,12 @@ fn my_test(tc: hegel::TestCase) {
 }
 ```
 
-The same example can be replayed programmatically with the new
-`Settings::reproduce_failure` setting, and the blob is exposed over the C
-ABI via `hegel_failure_reproduce_blob` (read it off a failure) and
-`hegel_settings_reproduce_failure` (replay it). A blob that decodes but no longer
-reproduces a failure is reported as a failing run.
+The attribute can be stacked to keep track of several failures; only the
+first one replays — delete them one by one as you fix the failures. A blob
+that decodes but no longer reproduces a failure is reported as a failing run.
+
+Over the C ABI, `hegel_failure_reproduce_blob` reads the blob off a failure
+and `hegel_test_case_from_blob` replays it.
 
 We only guarantee the compatibility of the failure blob within a specific Hegel
 version.

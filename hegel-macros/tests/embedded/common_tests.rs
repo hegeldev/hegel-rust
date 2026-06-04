@@ -131,12 +131,27 @@ fn extract_reproduce_failure_returns_none_when_absent() {
 }
 
 #[test]
-fn extract_reproduce_failure_rejects_more_than_one() {
+fn extract_reproduce_failure_consumes_stacked_attrs_and_returns_the_first() {
     let mut attrs: Vec<syn::Attribute> = vec![
         syn::parse_quote!(#[hegel::reproduce_failure("a")]),
         syn::parse_quote!(#[hegel::reproduce_failure("b")]),
     ];
-    assert!(extract_reproduce_failure(&mut attrs).is_err());
+    let blob = extract_reproduce_failure(&mut attrs).unwrap();
+    assert_eq!(rendered(blob), r#""a""#, "the first blob wins");
+    assert!(attrs.is_empty(), "every stacked attribute is consumed");
+}
+
+#[test]
+fn extract_reproduce_failure_ignores_malformed_later_attrs() {
+    // A later attribute is bookkeeping: it is consumed without even being
+    // parsed, so a malformed argument there cannot fail the expansion.
+    let mut attrs: Vec<syn::Attribute> = vec![
+        syn::parse_quote!(#[hegel::reproduce_failure("a")]),
+        syn::parse_quote!(#[hegel::reproduce_failure()]),
+    ];
+    let blob = extract_reproduce_failure(&mut attrs).unwrap();
+    assert_eq!(rendered(blob), r#""a""#);
+    assert!(attrs.is_empty());
 }
 
 #[test]

@@ -403,6 +403,17 @@ pub use hegel_macros::explicit_test_case;
 /// fn my_test(tc: hegel::TestCase) { /* ... */ }
 /// ```
 ///
+/// The attribute may be stacked to keep track of several failures, but only
+/// the **first** one replays — the rest are bookkeeping. Delete them one by
+/// one as the failures are fixed:
+///
+/// ```ignore
+/// #[hegel::test]
+/// #[hegel::reproduce_failure("AAEC…")] // replayed
+/// #[hegel::reproduce_failure("AAED…")] // kept for later
+/// fn my_test(tc: hegel::TestCase) { /* ... */ }
+/// ```
+///
 /// The blob encodes Hegel's internal choice sequence, so it is only
 /// guaranteed to reproduce a failure within a specific version of Hegel.
 /// A blob that can't be decoded (corrupt or from an incompatible version),

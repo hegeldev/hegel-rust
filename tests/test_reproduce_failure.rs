@@ -143,4 +143,27 @@ fn my_test(tc: hegel::TestCase) {{
         .test_file("repro.rs", &reproducing)
         .expect_failure("x was")
         .cargo_test(&["--test", "repro"]);
+
+    // Stacked attributes are accepted as bookkeeping, but only the first
+    // replays: the second blob here is undecodable, so were it replayed
+    // (or even parsed) the run would die with a decode error instead of
+    // the property failure.
+    let stacked = format!(
+        r#"
+#[hegel::test]
+#[hegel::reproduce_failure("{blob}")]
+#[hegel::reproduce_failure("!!! stale bookkeeping blob !!!")]
+fn my_test(tc: hegel::TestCase) {{
+    use hegel::generators as gs;
+    let x: i32 = tc.draw(gs::integers());
+    assert!(x < 5, "x was {{x}}");
+}}
+"#
+    );
+    TempRustProject::new()
+        .feature("native")
+        .main_file("fn main() {}")
+        .test_file("repro.rs", &stacked)
+        .expect_failure("x was")
+        .cargo_test(&["--test", "repro"]);
 }

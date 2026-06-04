@@ -312,7 +312,7 @@ fn run_native_callback_can_generate_via_data_source() {
 }
 
 /// A test body that marks any integer `>= 1_000_000` interesting. Used by
-/// the reproduce-blob tests to provoke (and later replay) a failure.
+/// the blob tests to provoke (and later replay) a failure.
 fn mark_large_interesting(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
     use crate::backend::Failure;
     let schema = cbor_map! {
@@ -353,101 +353,38 @@ fn discover_reproduce_blob() -> String {
 }
 
 #[test]
-fn run_native_reproduce_blob_replays_the_counterexample() {
+fn data_source_for_blob_replays_the_counterexample() {
     let blob = discover_reproduce_blob();
 
-    // Replaying the blob runs exactly the encoded example and re-surfaces
-    // the failure, carrying the same blob back.
-    let settings = quiet_settings(200).reproduce_failure(Some(blob.clone()));
-    let calls = AtomicUsize::new(0);
-    let result = run_native(&settings, None, |ds, _is_final| {
-        calls.fetch_add(1, Ordering::SeqCst);
-        mark_large_interesting(&*ds);
-    });
-
-    assert!(!result.passed);
-    assert_eq!(result.failures.len(), 1);
-    assert_eq!(
-        result.failures[0].reproduce_blob.as_deref(),
-        Some(blob.as_str())
-    );
-    // Reproduce mode bypasses generation: it replays once (plus the final
-    // replay), far fewer than the 200-case budget.
+    // The data source replays exactly the encoded example: drawing with the
+    // same schema yields the (shrunk) counterexample again.
+    let ds = data_source_for_blob(&quiet_settings(1), &blob).unwrap();
+    let schema = cbor_map! {
+        "type" => "integer",
+        "min_value" => 0_i64,
+        "max_value" => 2_000_000_i64,
+    };
+    let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema) else {
+        panic!("expected an integer draw");
+    };
+    let n: i128 = i.into();
     assert!(
-        calls.load(Ordering::SeqCst) == 1,
-        "reproduce mode should not generate"
+        n >= 1_000_000,
+        "replayed value {n} should still violate the property"
     );
+    ds.mark_complete(&TestCaseResult::Valid);
 }
 
 #[test]
-fn run_native_reproduce_blob_rejects_an_undecodable_blob() {
-    // An undecodable blob is invalid input — it panics rather than producing
-    // a `TestRunResult` failure.
-    let result = std::panic::catch_unwind(|| {
-        let settings = quiet_settings(50).reproduce_failure(Some("not-a-valid-blob".to_string()));
-        run_native(&settings, None, |ds, _is_final| {
-            ds.mark_complete(&TestCaseResult::Valid);
-        });
-    });
-    let payload = result.unwrap_err();
-    let msg = payload
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| payload.downcast_ref::<&str>().copied())
-        .unwrap_or("");
-    assert!(
-        msg.contains("could not be decoded"),
-        "unexpected panic message: {msg}"
-    );
+fn data_source_for_blob_logs_at_debug_verbosity() {
+    // Same construction as above, with `Verbosity::Debug` exercising the
+    // choice-count log line.
+    let blob = discover_reproduce_blob();
+    let settings = quiet_settings(1).verbosity(crate::runner::Verbosity::Debug);
+    assert!(data_source_for_blob(&settings, &blob).is_some());
 }
 
 #[test]
-fn run_native_reproduce_blob_that_no_longer_fails_is_reported() {
-    let blob = discover_reproduce_blob();
-
-    // A "fixed" test body that never reports interesting: replaying a stale
-    // blob must surface that rather than silently passing.
-    let settings = quiet_settings(50).reproduce_failure(Some(blob));
-    let result = run_native(&settings, None, |ds, _is_final| {
-        let schema = cbor_map! {
-            "type" => "integer",
-            "min_value" => 0_i64,
-            "max_value" => 2_000_000_i64,
-        };
-        let _ = ds.generate(&schema);
-        ds.mark_complete(&TestCaseResult::Valid);
-    });
-    assert!(!result.passed);
-    assert!(
-        result.failures[0]
-            .diagnostic
-            .contains("no longer reproduces"),
-        "unexpected diagnostic: {}",
-        result.failures[0].diagnostic
-    );
-    // Reported as its own failure, not framed as a health-check failure.
-    assert_eq!(result.failures[0].origin, "reproduce_failure");
-}
-
-#[test]
-fn run_native_reproduce_blob_takes_precedence_over_single_test_case_mode() {
-    use crate::runner::Mode;
-
-    // A blob replay must work regardless of `mode`: `SingleTestCase` routes
-    // through a different entry point than the generative loop, but a set
-    // `reproduce_failure` takes precedence and still replays the example.
-    let blob = discover_reproduce_blob();
-    let settings = quiet_settings(200)
-        .mode(Mode::SingleTestCase)
-        .reproduce_failure(Some(blob.clone()));
-    let result = run_native(&settings, None, |ds, _is_final| {
-        mark_large_interesting(&*ds)
-    });
-
-    assert!(!result.passed);
-    assert_eq!(result.failures.len(), 1);
-    assert_eq!(
-        result.failures[0].reproduce_blob.as_deref(),
-        Some(blob.as_str())
-    );
+fn data_source_for_blob_rejects_an_undecodable_blob() {
+    assert!(data_source_for_blob(&quiet_settings(1), "not-a-valid-blob").is_none());
 }

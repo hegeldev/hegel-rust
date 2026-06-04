@@ -110,16 +110,14 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let test_name = func.sig.ident.to_string();
     let settings_expr = test_args.to_settings_expr();
-    // Append `.reproduce_failure(Some((<expr>).to_string()))` so the run
-    // replays only the encoded example. The blob expression flows straight
-    // from the attribute into generated code (`.to_string()` accepts a string
-    // literal, a `const`/`static` `&str`, or a `String`); decoding happens at
-    // runtime.
-    let settings_expr = match &reproduce_blob {
-        Some(blob) => {
-            quote! { (#settings_expr).reproduce_failure(Some((#blob).to_string())) }
-        }
-        None => settings_expr,
+    // Chain `.reproduce_failure((<expr>).to_string())` onto the `Hegel`
+    // builder so the run replays only the encoded example. The blob
+    // expression flows straight from the attribute into generated code
+    // (`.to_string()` accepts a string literal, a `const`/`static` `&str`,
+    // or a `String`); decoding happens at runtime.
+    let reproduce_call = match &reproduce_blob {
+        Some(blob) => quote! { .reproduce_failure((#blob).to_string()) },
+        None => quote! {},
     };
     let explicit_blocks = build_explicit_blocks(&explicit_cases, param_pat, &body);
 
@@ -132,6 +130,7 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
 
             hegel::Hegel::new(|#param_pat: #param_ty| #body)
             .settings(__hegel_settings)
+            #reproduce_call
             .__database_key(format!("{}::{}", module_path!(), #test_name))
             .test_location(hegel::TestLocation {
                 function: #test_name.to_string(),

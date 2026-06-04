@@ -133,7 +133,6 @@ pub struct Settings {
     pub(crate) suppress_health_check: Vec<HealthCheck>,
     pub(crate) phases: Vec<Phase>,
     pub(crate) report_multiple_failures: bool,
-    pub(crate) reproduce_failure: Option<String>,
     pub(crate) print_blob: bool,
     /// The randomness backend, or `None` to let it be chosen automatically
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
@@ -165,7 +164,6 @@ impl Settings {
                 Phase::Shrink,
             ],
             report_multiple_failures: true,
-            reproduce_failure: None,
             print_blob: false,
             backend: None,
         }
@@ -253,22 +251,6 @@ impl Settings {
     /// ```
     pub fn phases(mut self, phases: impl IntoIterator<Item = Phase>) -> Self {
         self.phases = phases.into_iter().collect();
-        self
-    }
-
-    /// Replay a single failing example from a base64 failure blob instead of
-    /// generating fresh test cases, or `None` (the default) to run normally.
-    ///
-    /// A failure blob encodes the choice sequence of a counterexample.
-    /// Enable [`print_blob`](Self::print_blob) to have a native failure print one.
-    /// When set, the native engine decodes it and runs exactly that one
-    /// example — bypassing generation and shrinking — so you can reproduce a
-    /// CI failure locally and deterministically. This is the programmatic
-    /// equivalent of the `#[hegel::reproduce_failure("…")]` attribute.
-    ///
-    /// Honoured only by the native backend; the server backend ignores it.
-    pub fn reproduce_failure(mut self, blob: Option<String>) -> Self {
-        self.reproduce_failure = blob;
         self
     }
 
@@ -378,6 +360,11 @@ pub struct Hegel<F> {
     database_key: Option<String>,
     test_location: Option<TestLocation>,
     settings: Settings,
+    /// Only the native engine can replay a failure blob; on the server
+    /// backend the field is written but never read (the blob is ignored),
+    /// hence the dead-code allowance.
+    #[cfg_attr(not(feature = "native"), allow(dead_code))]
+    reproduce_failure: Option<String>,
 }
 
 impl<F> Hegel<F>
@@ -391,6 +378,7 @@ where
             database_key: None,
             settings: Settings::new(),
             test_location: None,
+            reproduce_failure: None,
         }
     }
 
@@ -412,10 +400,51 @@ where
         self
     }
 
+    /// Replay a single failing example from a base64 failure blob instead of
+    /// generating fresh test cases.
+    ///
+    /// A failure blob encodes the choice sequence of a counterexample.
+    /// Enable [`print_blob`](Settings::print_blob) to have a native failure
+    /// print one. When set, [`run`](Self::run) decodes it and runs exactly
+    /// that one example — bypassing generation and shrinking — so you can
+    /// reproduce a CI failure locally and deterministically.
+    ///
+    /// First-wins: if a blob is already set, further calls are ignored.
+    /// Stacked `#[hegel::reproduce_failure]` attributes lower to repeated
+    /// calls here, so only the first attribute replays; the rest are
+    /// bookkeeping to be deleted one by one as the failures are fixed.
+    ///
+    /// Honoured only by the native backend; the server backend ignores it.
+    pub fn reproduce_failure(mut self, blob: impl Into<String>) -> Self {
+        if self.reproduce_failure.is_none() {
+            self.reproduce_failure = Some(blob.into());
+        }
+        self
+    }
+
     /// Run the property-based tests.
     ///
     /// Panics if any test case fails.
     pub fn run(self) {
+        // A blob replay is a single deterministic case — no generation,
+        // targeting, or shrinking — so it is phase-agnostic and takes
+        // precedence over the normal runner.
+        #[cfg(feature = "native")]
+        if let Some(blob) = self.reproduce_failure {
+            crate::run_lifecycle::drive(
+                crate::native::test_runner::ReproduceRunner { blob },
+                self.test_fn,
+                &self.settings,
+                self.database_key.as_deref(),
+                self.test_location.as_ref(),
+            );
+            return;
+        }
+
+        if !self.settings.phases.contains(&Phase::Generate) {
+            return;
+        }
+
         #[cfg(feature = "native")]
         let runner = crate::native::test_runner::NativeTestRunner;
         #[cfg(not(feature = "native"))]

@@ -4,7 +4,7 @@
 // A blob encodes the *choice sequence* of a (usually minimal) failing test
 // case so it can be replayed deterministically — pasted into a
 // `#[hegel::reproduce_failure("…")]` attribute, fed to
-// `Settings::reproduce_failure`, or handed across the C ABI.
+// `Hegel::reproduce_failure`, or handed across the C ABI.
 //
 // # Format
 //

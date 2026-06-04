@@ -35,7 +35,7 @@ use std::thread::{self, JoinHandle};
 
 use ciborium::Value;
 use hegel::backend::{DataSource, DataSourceError, Failure, TestCaseResult, TestRunResult};
-use hegel::embed::run_native;
+use hegel::embed::{data_source_for_blob, run_native};
 use hegel::{HealthCheck, Mode, Phase, Settings, Verbosity};
 
 // ─── Error codes ────────────────────────────────────────────────────────────
@@ -305,12 +305,15 @@ enum WorkerMessage {
 }
 
 /// One in-flight test case handed to the caller by
-/// `hegel_next_test_case`. The caller drives it with the per-test-case
-/// primitives (`hegel_generate`, `hegel_start_span` /
-/// `hegel_stop_span`, `hegel_target`, the collection primitives) and
-/// concludes it with `hegel_mark_complete`. The handle becomes invalid
-/// once marked complete; calling `hegel_next_test_case` again returns
-/// the next test case (or NULL when the run is finished).
+/// `hegel_next_test_case` (borrowed from the run) or constructed
+/// standalone by `hegel_test_case_from_blob` (owned by the caller). The
+/// caller drives it with the per-test-case primitives (`hegel_generate`,
+/// `hegel_start_span` / `hegel_stop_span`, `hegel_target`, the collection
+/// primitives) and concludes it with `hegel_mark_complete`. A run-owned
+/// handle becomes invalid once marked complete; calling
+/// `hegel_next_test_case` again returns the next test case (or NULL when
+/// the run is finished). A standalone handle must be released with
+/// `hegel_test_case_free`.
 pub struct HegelTestCase {
     ds: Box<dyn DataSource + Send + Sync>,
     is_final: bool,
@@ -319,7 +322,12 @@ pub struct HegelTestCase {
     /// from `hegel_generate`. Re-allocated per call; the previous draw's
     /// bytes are invalidated on the next `hegel_generate`.
     last_value: Vec<u8>,
-    ack: mpsc::Sender<()>,
+    /// `Some` for a test case pumped out of a run's worker thread (the
+    /// worker blocks on this ack until `hegel_mark_complete`); `None` for
+    /// a standalone test case from `hegel_test_case_from_blob`. Doubles as
+    /// the ownership marker: `None` means the caller owns the allocation
+    /// and must free it with `hegel_test_case_free`.
+    ack: Option<mpsc::Sender<()>>,
 }
 
 /// In-flight property-test run.
@@ -562,36 +570,6 @@ pub unsafe extern "C" fn hegel_settings_database_key(s: *mut HegelSettings, key:
     }
 }
 
-/// Replay a single failing example from a base64 failure blob instead of
-/// generating fresh test cases.
-///
-/// A failure blob — obtained from `hegel_failure_reproduce_blob` on a prior
-/// run — encodes a counterexample's choice sequence. When set, the engine
-/// decodes it and runs exactly that one example, bypassing generation and
-/// shrinking. A blob that cannot be decoded, or that no longer reproduces a
-/// failure, surfaces as a failing run with an explanatory diagnostic rather
-/// than a pass.
-///
-/// - `blob = NULL` → clear it (the default; run normally).
-/// - Otherwise → replay the example encoded by `blob`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_reproduce_failure(
-    s: *mut HegelSettings,
-    blob: *const c_char,
-) {
-    let Some(inner) = (unsafe { settings_mut(s) }) else {
-        return;
-    };
-    if blob.is_null() {
-        *inner = inner.clone().reproduce_failure(None);
-        return;
-    }
-    match unsafe { CStr::from_ptr(blob) }.to_str() {
-        Ok(b) => *inner = inner.clone().reproduce_failure(Some(b.to_string())),
-        Err(_) => set_last_error("hegel_settings_reproduce_failure: blob is not valid UTF-8"),
-    }
-}
-
 /// Enable a specific set of phases via a `HEGEL_PHASE_*` bitmask.
 /// Phases not listed in the bitmask are disabled. The default is
 /// `HEGEL_PHASE_ALL`. Setting this to 0 produces a run that does
@@ -811,7 +789,7 @@ pub unsafe extern "C" fn hegel_next_test_case(run: *mut HegelRun) -> *mut HegelT
                 is_final,
                 completed: false,
                 last_value: Vec::new(),
-                ack,
+                ack: Some(ack),
             });
             let ptr = (&*tc) as *const HegelTestCase as *mut HegelTestCase;
             run.current_tc = Some(tc);
@@ -877,7 +855,9 @@ pub unsafe extern "C" fn hegel_run_free(run: *mut HegelRun) {
     if let Some(mut tc) = run.current_tc.take() {
         if !tc.completed {
             tc.ds.mark_complete(&TestCaseResult::Valid);
-            let _ = tc.ack.send(());
+            if let Some(ack) = &tc.ack {
+                let _ = ack.send(());
+            }
             tc.completed = true;
         }
     }
@@ -896,6 +876,86 @@ pub unsafe extern "C" fn hegel_run_free(run: *mut HegelRun) {
     if let Some(handle) = run.worker.take() {
         let _ = handle.join();
     }
+}
+
+// ─── Standalone test cases (failure-blob replay) ────────────────────────────
+
+/// Build a standalone test case that replays the example encoded in a
+/// base64 failure blob (obtained from `hegel_failure_reproduce_blob` on a
+/// prior run).
+///
+/// There is no run handle and no engine worker: the caller drives the
+/// returned test case with the usual per-test-case primitives
+/// (`hegel_generate`, spans, …), concludes it with `hegel_mark_complete`,
+/// and decides for itself whether the blob reproduced the failure (the
+/// property failed again) or is stale (it passed). Replay several blobs by
+/// calling this once per blob. A blob whose choices no longer match the
+/// caller's generators surfaces as `HEGEL_E_STOP_TEST` from the draw that
+/// overruns. `hegel_test_case_is_final_replay` reports true: the replayed
+/// example *is* the counterexample.
+///
+/// Returns NULL with a diagnostic in `hegel_last_error_message` if `s` or
+/// `blob` is NULL, or if `blob` is not a valid failure blob (corrupt, or
+/// from an incompatible Hegel version). The returned handle is owned by
+/// the **caller** — unlike test cases from `hegel_next_test_case`, it must
+/// be released with `hegel_test_case_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_test_case_from_blob(
+    s: *const HegelSettings,
+    blob: *const c_char,
+) -> *mut HegelTestCase {
+    clear_last_error();
+    let Some(handle) = (unsafe { s.as_ref() }) else {
+        set_last_error("hegel_test_case_from_blob: settings pointer is null");
+        return ptr::null_mut();
+    };
+    if blob.is_null() {
+        set_last_error("hegel_test_case_from_blob: blob pointer is null");
+        return ptr::null_mut();
+    }
+    let Ok(blob) = (unsafe { CStr::from_ptr(blob) }).to_str() else {
+        set_last_error("hegel_test_case_from_blob: blob is not valid UTF-8");
+        return ptr::null_mut();
+    };
+    let Some(ds) = data_source_for_blob(&handle.inner, blob) else {
+        set_last_error(
+            "hegel_test_case_from_blob: the supplied failure blob could not be decoded. \
+             It may be corrupt or from an incompatible Hegel version.",
+        );
+        return ptr::null_mut();
+    };
+    Box::into_raw(Box::new(HegelTestCase {
+        ds,
+        is_final: true,
+        completed: false,
+        last_value: Vec::new(),
+        ack: None,
+    }))
+}
+
+/// Free a standalone test case previously returned by
+/// `hegel_test_case_from_blob`. Safe to call with NULL (no-op), and safe
+/// whether or not the test case was marked complete.
+///
+/// Must NOT be called on a test case obtained from
+/// `hegel_next_test_case` — those are borrowed from the parent
+/// `hegel_run_t` and are released by `hegel_run_free`. Passing one here is
+/// detected (while the run is still alive) and refused, with a diagnostic
+/// in `hegel_last_error_message`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_test_case_free(tc: *mut HegelTestCase) {
+    clear_last_error();
+    if tc.is_null() {
+        return;
+    }
+    if unsafe { (*tc).ack.is_some() } {
+        set_last_error(
+            "hegel_test_case_free: this test case is owned by its hegel_run_t \
+             (it came from hegel_next_test_case); it is freed by hegel_run_free",
+        );
+        return;
+    }
+    drop(unsafe { Box::from_raw(tc) });
 }
 
 // ─── Per-test-case primitives ───────────────────────────────────────────────
@@ -1320,7 +1380,9 @@ pub unsafe extern "C" fn hegel_mark_complete(
     };
 
     tc.ds.mark_complete(&outcome);
-    let _ = tc.ack.send(());
+    if let Some(ack) = &tc.ack {
+        let _ = ack.send(());
+    }
     tc.completed = true;
     HEGEL_OK
 }
@@ -1415,7 +1477,7 @@ pub unsafe extern "C" fn hegel_failure_origin(f: *const HegelFailure) -> *const 
 
 /// The failure's reproduce blob — a base64 string encoding the minimal
 /// counterexample's choice sequence, suitable for deterministic replay via
-/// `hegel_settings_reproduce_failure`. Returns NULL if `f` is NULL or the
+/// `hegel_test_case_from_blob`. Returns NULL if `f` is NULL or the
 /// engine produced no blob for this failure. The pointer is borrowed from the
 /// parent `hegel_run_result_t` and stays valid until `hegel_run_free`.
 #[unsafe(no_mangle)]

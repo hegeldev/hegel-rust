@@ -116,7 +116,7 @@ pub struct Failure {
     /// A base64 "failure blob" encoding the minimal counterexample's choice sequence.
     /// `Some` only on the native backend's final replay, where the shrunk choices
     /// are available; `None` everywhere else. Paste into `#[hegel::reproduce_failure("…")]`
-    /// or feed to [`crate::Settings::reproduce_failure`] to replay it.
+    /// or feed to [`crate::Hegel::reproduce_failure`] to replay it.
     pub reproduce_blob: Option<String>,
 }
 

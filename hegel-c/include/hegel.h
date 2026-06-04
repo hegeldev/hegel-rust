@@ -300,12 +300,15 @@ typedef struct hegel_settings_t hegel_settings_t;
 
 /*
  One in-flight test case handed to the caller by
- `hegel_next_test_case`. The caller drives it with the per-test-case
- primitives (`hegel_generate`, `hegel_start_span` /
- `hegel_stop_span`, `hegel_target`, the collection primitives) and
- concludes it with `hegel_mark_complete`. The handle becomes invalid
- once marked complete; calling `hegel_next_test_case` again returns
- the next test case (or NULL when the run is finished).
+ `hegel_next_test_case` (borrowed from the run) or constructed
+ standalone by `hegel_test_case_from_blob` (owned by the caller). The
+ caller drives it with the per-test-case primitives (`hegel_generate`,
+ `hegel_start_span` / `hegel_stop_span`, `hegel_target`, the collection
+ primitives) and concludes it with `hegel_mark_complete`. A run-owned
+ handle becomes invalid once marked complete; calling
+ `hegel_next_test_case` again returns the next test case (or NULL when
+ the run is finished). A standalone handle must be released with
+ `hegel_test_case_free`.
  */
 typedef struct hegel_test_case_t hegel_test_case_t;
 
@@ -391,22 +394,6 @@ void hegel_settings_database(hegel_settings_t *s, const char *database);
 void hegel_settings_database_key(hegel_settings_t *s, const char *key);
 
 /*
- Replay a single failing example from a base64 failure blob instead of
- generating fresh test cases.
-
- A failure blob — obtained from `hegel_failure_reproduce_blob` on a prior
- run — encodes a counterexample's choice sequence. When set, the engine
- decodes it and runs exactly that one example, bypassing generation and
- shrinking. A blob that cannot be decoded, or that no longer reproduces a
- failure, surfaces as a failing run with an explanatory diagnostic rather
- than a pass.
-
- - `blob = NULL` → clear it (the default; run normally).
- - Otherwise → replay the example encoded by `blob`.
- */
-void hegel_settings_reproduce_failure(hegel_settings_t *s, const char *blob);
-
-/*
  Enable a specific set of phases via a `HEGEL_PHASE_*` bitmask.
  Phases not listed in the bitmask are disabled. The default is
  `HEGEL_PHASE_ALL`. Setting this to 0 produces a run that does
@@ -472,6 +459,40 @@ const hegel_run_result_t *hegel_run_result(hegel_run_t *run);
  destroyed.
  */
 void hegel_run_free(hegel_run_t *run);
+
+/*
+ Build a standalone test case that replays the example encoded in a
+ base64 failure blob (obtained from `hegel_failure_reproduce_blob` on a
+ prior run).
+
+ There is no run handle and no engine worker: the caller drives the
+ returned test case with the usual per-test-case primitives
+ (`hegel_generate`, spans, …), concludes it with `hegel_mark_complete`,
+ and decides for itself whether the blob reproduced the failure (the
+ property failed again) or is stale (it passed). Replay several blobs by
+ calling this once per blob.`hegel_test_case_is_final_replay` reports true: 
+ the replayed example *is* the counterexample.
+
+ Returns NULL with a diagnostic in `hegel_last_error_message` if `s` or
+ `blob` is NULL, or if `blob` is not a valid failure blob (corrupt, or
+ from an incompatible Hegel version). The returned handle is owned by
+ the **caller** — unlike test cases from `hegel_next_test_case`, it must
+ be released with `hegel_test_case_free`.
+ */
+hegel_test_case_t *hegel_test_case_from_blob(const hegel_settings_t *s, const char *blob);
+
+/*
+ Free a standalone test case previously returned by
+ `hegel_test_case_from_blob`. Safe to call with NULL (no-op), and safe
+ whether or not the test case was marked complete.
+
+ Must NOT be called on a test case obtained from
+ `hegel_next_test_case` — those are borrowed from the parent
+ `hegel_run_t` and are released by `hegel_run_free`. Passing one here is
+ detected (while the run is still alive) and refused, with a diagnostic
+ in `hegel_last_error_message`.
+ */
+void hegel_test_case_free(hegel_test_case_t *tc);
 
 /*
  Draw a value from the test case's data source, using the
@@ -674,7 +695,7 @@ const char *hegel_failure_origin(const hegel_failure_t *f);
 /*
  The failure's reproduce blob — a base64 string encoding the minimal
  counterexample's choice sequence, suitable for deterministic replay via
- `hegel_settings_reproduce_failure`. Returns NULL if `f` is NULL or the
+ `hegel_test_case_from_blob`. Returns NULL if `f` is NULL or the
  engine produced no blob for this failure. The pointer is borrowed from the
  parent `hegel_run_result_t` and stays valid until `hegel_run_free`.
  */

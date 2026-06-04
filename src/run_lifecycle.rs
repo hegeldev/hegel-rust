@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::antithesis::TestLocation;
 use crate::backend::{DataSource, Failure, TestCaseResult, TestRunner};
 use crate::control::{currently_in_test_context, with_test_context};
-use crate::runner::{Mode, Phase, Settings};
+use crate::runner::{Mode, Settings};
 use crate::test_case::{
     ASSUME_FAIL_STRING, INVALID_ARGUMENT_PREFIX, LOOP_DONE_STRING, STOP_TEST_STRING, TestCase,
 };
@@ -355,10 +355,6 @@ pub(crate) fn drive<R, F>(
     F: FnMut(TestCase),
 {
     init_panic_hook();
-    if settings.reproduce_failure.is_none() && !settings.phases.contains(&Phase::Generate) {
-        return;
-    }
-
     let mut test_fn = test_fn;
     let got_interesting = AtomicBool::new(false);
     let mode = settings.mode;

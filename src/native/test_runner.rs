@@ -93,17 +93,32 @@ impl TestRunner for NativeTestRunner {
         database_key: Option<&str>,
         run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
     ) -> TestRunResult {
-        // A blob replay is a single deterministic case — no generation,
-        // targeting, or shrinking — so it takes precedence over `mode`:
-        // honour it whether the caller asked for `TestRun` or
-        // `SingleTestCase`.
-        if let Some(blob) = &settings.reproduce_failure {
-            return run_reproduce(blob, run_case);
-        }
         if settings.mode == Mode::SingleTestCase {
             return run_single(settings, run_case);
         }
         run_main(settings, database_key, run_case, TOO_SLOW_THRESHOLD)
+    }
+}
+
+/// [`TestRunner`] that replays a single failing example encoded as a base64
+/// failure blob, instead of generating fresh test cases.
+///
+/// Selected by [`Hegel::reproduce_failure`](crate::Hegel::reproduce_failure)
+/// in place of [`NativeTestRunner`]. A blob replay is one deterministic
+/// case — no generation, targeting, or shrinking — so it ignores `mode`,
+/// `phases`, and the test-case budget entirely.
+pub(crate) struct ReproduceRunner {
+    pub(crate) blob: String,
+}
+
+impl TestRunner for ReproduceRunner {
+    fn run(
+        &self,
+        _settings: &Settings,
+        _database_key: Option<&str>,
+        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+    ) -> TestRunResult {
+        run_reproduce(&self.blob, run_case)
     }
 }
 
@@ -133,8 +148,8 @@ fn run_single(
     }
 }
 
-/// Replay a single failing example encoded as a base64 failure blob (used by
-/// [`Settings::reproduce_failure`](crate::Settings::reproduce_failure)).
+/// Replay a single failing example encoded as a base64 failure blob (the
+/// engine half of [`ReproduceRunner`]).
 ///
 /// Decodes the blob to a choice sequence and runs exactly that one sequence.
 ///
