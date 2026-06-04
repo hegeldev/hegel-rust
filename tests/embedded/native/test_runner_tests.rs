@@ -424,7 +424,6 @@ fn too_large_check_quiet_when_enough_valid_cases() {
 
 #[test]
 fn large_initial_check_reports_on_overrun() {
-    // An overrun surfaces as Status::Invalid plus `overran = true`.
     let msg = large_initial_check(true, Status::Invalid, 0, false);
     assert!(msg.unwrap().contains("LargeInitialTestCase"));
 }
@@ -472,7 +471,6 @@ fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
         |ctx, _count| {
             let run = ctx.run(NativeTestCase::for_simplest(1));
             assert_eq!(run.status, Status::EarlyStop);
-            assert!(run.overran);
 
             // The overrun path is therefore not concluded in the tree: a later
             // walk of the same prefix must re-execute (returns `None`) rather

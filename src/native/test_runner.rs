@@ -44,12 +44,6 @@ pub struct RunResult {
     /// `tc.target()` observations recorded during the test case, keyed by
     /// label. Empty for tests that don't call `tc.target()`.
     pub target_observations: HashMap<String, f64>,
-    /// Whether the test case genuinely overran the choice buffer (drew more
-    /// data than the budget allows), i.e. ended in `Status::EarlyStop`. Distinct
-    /// from an invalid test case (`Status::Invalid` — a failed `assume()`, or a
-    /// unique collection out of distinct values); the `TestCasesTooLarge` /
-    /// `LargeInitialTestCase` health checks only count a true overrun.
-    pub overran: bool,
     /// Whether the test case's `Status::Invalid` was reclassified from an
     /// engine-level `StopTest` (e.g. unique-collection exhaustion or over-deep
     /// spans) rather than a user-level `assume()` failure.  These count toward
@@ -308,7 +302,7 @@ fn run_main(
         // overruns or already uses more than half the buffer, shrinking will
         // be ineffective.
         if let Some(msg) = large_initial_check(
-            run.overran,
+            run.status == Status::EarlyStop,
             run.status,
             run.nodes.len(),
             settings
@@ -426,7 +420,7 @@ fn run_main(
                     }
                 }
             }
-            if run.overran {
+            if run.status == Status::EarlyStop {
                 overrun_test_cases += 1;
             }
             if let Some(msg) = too_large_check(
@@ -1055,7 +1049,6 @@ impl<'a> EngineCtx<'a> {
             },
             TestCaseResult::Interesting(f) => (Status::Interesting, Some(f)),
         };
-        let overran = status == Status::EarlyStop;
         let engine_invalid = was_overrun && status == Status::Invalid;
         let origin = failure.as_ref().map(|f| f.origin.clone());
 
@@ -1066,7 +1059,6 @@ impl<'a> EngineCtx<'a> {
             origin,
             failure,
             target_observations,
-            overran,
             engine_invalid,
         }
     }
@@ -1175,7 +1167,6 @@ impl<'a> EngineCtx<'a> {
                     origin: None,
                     failure: None,
                     target_observations: HashMap::new(),
-                    overran: false,
                     engine_invalid: false,
                 };
                 return (result, false);
