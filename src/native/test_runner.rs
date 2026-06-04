@@ -44,12 +44,6 @@ pub struct RunResult {
     /// `tc.target()` observations recorded during the test case, keyed by
     /// label. Empty for tests that don't call `tc.target()`.
     pub target_observations: HashMap<String, f64>,
-    /// Whether the test case's `Status::Invalid` was reclassified from an
-    /// engine-level `StopTest` (e.g. unique-collection exhaustion or over-deep
-    /// spans) rather than a user-level `assume()` failure.  These count toward
-    /// the generation-phase invalid budget but must *not* trigger
-    /// `FilterTooMuch`, which is reserved for excessive `assume()` rejections.
-    pub engine_invalid: bool,
 }
 
 const RANDOM_GENERATION_BATCH: u64 = 10;
@@ -179,7 +173,6 @@ fn run_main(
     let mut test_is_trivial = false;
     let mut invalid_test_cases: u64 = 0;
     let mut overrun_test_cases: u64 = 0;
-    let mut engine_invalid_test_cases: u64 = 0;
     // `(base, per_valid)` of the generation-phase invalid budget, computed once
     // per run (the formula uses floating-point `ln`/`ceil`, which can't run in
     // const context).
@@ -262,7 +255,6 @@ fn run_main(
         && !test_is_trivial
         && within_invalid_budget(
             invalid_test_cases,
-            engine_invalid_test_cases,
             overrun_test_cases,
             valid_test_cases,
             invalid_budget,
@@ -282,11 +274,7 @@ fn run_main(
             valid_test_cases += 1;
         }
         if run.status == Status::Invalid {
-            if run.engine_invalid {
-                engine_invalid_test_cases += 1;
-            } else {
-                invalid_test_cases += 1;
-            }
+            invalid_test_cases += 1;
         }
         if run.status == Status::EarlyStop {
             overrun_test_cases += 1;
@@ -318,7 +306,6 @@ fn run_main(
         && valid_test_cases < max_test_cases
         && within_invalid_budget(
             invalid_test_cases,
-            engine_invalid_test_cases,
             overrun_test_cases,
             valid_test_cases,
             invalid_budget,
@@ -337,7 +324,6 @@ fn run_main(
                 || valid_test_cases >= max_test_cases
                 || !within_invalid_budget(
                     invalid_test_cases,
-                    engine_invalid_test_cases,
                     overrun_test_cases,
                     valid_test_cases,
                     invalid_budget,
@@ -399,25 +385,21 @@ fn run_main(
             }
 
             if run.status == Status::Invalid {
-                if run.engine_invalid {
-                    engine_invalid_test_cases += 1;
-                } else {
-                    invalid_test_cases += 1;
-                    if invalid_test_cases >= FILTER_TOO_MUCH_THRESHOLD
-                        && valid_test_cases < HEALTH_CHECK_MAX_VALID
-                        && !settings
-                            .suppress_health_check
-                            .contains(&HealthCheck::FilterTooMuch)
-                    {
-                        return health_check_failure(format!(
-                            "FailedHealthCheck: FilterTooMuch — it looks like this \
-                             test is filtering out too many inputs. \
-                             {invalid_test_cases} inputs were filtered out by assume() \
-                             while only {valid_test_cases} valid inputs were \
-                             generated. If this is expected, suppress the check with \
-                             suppress_health_check = [HealthCheck::FilterTooMuch]."
-                        ));
-                    }
+                invalid_test_cases += 1;
+                if invalid_test_cases >= FILTER_TOO_MUCH_THRESHOLD
+                    && valid_test_cases < HEALTH_CHECK_MAX_VALID
+                    && !settings
+                        .suppress_health_check
+                        .contains(&HealthCheck::FilterTooMuch)
+                {
+                    return health_check_failure(format!(
+                        "FailedHealthCheck: FilterTooMuch — it looks like this \
+                         test is filtering out too many inputs. \
+                         {invalid_test_cases} inputs were filtered out by assume() \
+                         while only {valid_test_cases} valid inputs were \
+                         generated. If this is expected, suppress the check with \
+                         suppress_health_check = [HealthCheck::FilterTooMuch]."
+                    ));
                 }
             }
             if run.status == Status::EarlyStop {
@@ -864,20 +846,17 @@ fn invalid_thresholds(r: f64, c: f64) -> (u64, u64) {
 
 /// Hypothesis's invalid-rate stop condition for the generation phase
 /// (`engine.py`'s `should_generate_more`): the run keeps generating while
-/// `(invalid_test_cases + engine_invalid_test_cases + overrun_test_cases)`
-/// stays within `base + per_valid * valid_test_cases`, with
-/// `budget = (base, per_valid)` from [`invalid_thresholds`]. Returns `true`
-/// while there is still budget.
+/// `(invalid_test_cases + overrun_test_cases)` stays within
+/// `base + per_valid * valid_test_cases`, with `budget = (base, per_valid)`
+/// from [`invalid_thresholds`]. Returns `true` while there is still budget.
 fn within_invalid_budget(
     invalid_test_cases: u64,
-    engine_invalid_test_cases: u64,
     overrun_test_cases: u64,
     valid_test_cases: u64,
     budget: (u64, u64),
 ) -> bool {
     let (base, per_valid) = budget;
-    (invalid_test_cases + engine_invalid_test_cases + overrun_test_cases)
-        <= base + per_valid * valid_test_cases
+    (invalid_test_cases + overrun_test_cases) <= base + per_valid * valid_test_cases
 }
 
 fn should_generate_more(
@@ -1022,34 +1001,12 @@ impl<'a> EngineCtx<'a> {
         let target_observations = NativeDataSource::take_target_observations(&handle);
         let tc_result = NativeDataSource::take_outcome(&handle);
 
-        // The runner only sees the lossy `TestCaseResult::Overrun` for *any*
-        // engine `StopTest` (a draw can't report more than "the backend
-        // stopped"), but the engine itself recorded *why* it stopped: a genuine
-        // choice-budget overrun leaves `Status::EarlyStop`, whereas a test case
-        // it rejected as invalid (a unique collection out of distinct values, an
-        // over-deep span) leaves `Status::Invalid`. Recover that distinction
-        // here, at the outcome boundary, rather than upstream where `StopTest`
-        // is mapped — because `EngineError::StopTest` doubles as the collection
-        // layer's "stop drawing" control-flow signal, so reclassifying it there
-        // would break generation, not merely relabel the outcome.
-        //
-        // The overrun case must become `EarlyStop`, not `Invalid`: `record_tree`
-        // only records a conclusion for `status >= Invalid`, so an overrun
-        // mislabelled `Invalid` would be pinned into the data tree as a
-        // permanent dead-end — yet "ran out of data here" is not a stable
-        // outcome (other data continues the path), so it must go unrecorded.
-        let internal_status = NativeDataSource::take_status(&handle);
-        let was_overrun = matches!(tc_result, TestCaseResult::Overrun);
         let (status, failure) = match tc_result {
             TestCaseResult::Valid => (Status::Valid, None),
             TestCaseResult::Invalid => (Status::Invalid, None),
-            TestCaseResult::Overrun => match internal_status {
-                Some(Status::EarlyStop) => (Status::EarlyStop, None),
-                _ => (Status::Invalid, None),
-            },
+            TestCaseResult::Overrun => (Status::EarlyStop, None),
             TestCaseResult::Interesting(f) => (Status::Interesting, Some(f)),
         };
-        let engine_invalid = was_overrun && status == Status::Invalid;
         let origin = failure.as_ref().map(|f| f.origin.clone());
 
         RunResult {
@@ -1059,7 +1016,6 @@ impl<'a> EngineCtx<'a> {
             origin,
             failure,
             target_observations,
-            engine_invalid,
         }
     }
 
@@ -1167,7 +1123,6 @@ impl<'a> EngineCtx<'a> {
                     origin: None,
                     failure: None,
                     target_observations: HashMap::new(),
-                    engine_invalid: false,
                 };
                 return (result, false);
             }

@@ -1254,8 +1254,11 @@ pub enum Status {
 /// uncaught panic that crosses the FFI boundary and aborts the host process.
 #[derive(Debug)]
 pub enum EngineError {
-    /// The test case ran out of data and should stop executing.
-    StopTest,
+    /// The test case ran out of data (choice buffer exhausted).
+    Overrun,
+    /// The engine rejected this test case as invalid (over-deep span,
+    /// exhausted unique collection, regex pattern mismatch, etc.).
+    InvalidTestCase,
     /// A caller-supplied schema was semantically invalid (unknown type,
     /// empty character set, unparseable regex, etc.). The string is a
     /// human-readable diagnostic.
@@ -1265,7 +1268,8 @@ pub enum EngineError {
 impl std::fmt::Display for EngineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EngineError::StopTest => write!(f, "test case should stop executing (StopTest)"),
+            EngineError::Overrun => write!(f, "choice buffer exhausted (Overrun)"),
+            EngineError::InvalidTestCase => write!(f, "engine rejected test case (Invalid)"),
             EngineError::InvalidArgument(msg) => write!(f, "{msg}"),
         }
     }

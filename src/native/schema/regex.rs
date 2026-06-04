@@ -714,7 +714,7 @@ fn emit_from_chars(
 
 fn mark_invalid(ntc: &mut NativeTestCase) -> Result<(), EngineError> {
     ntc.status = Some(Status::Invalid);
-    Err(EngineError::StopTest)
+    Err(EngineError::InvalidTestCase)
 }
 
 fn codepoint_to_char(cp: u32) -> char {

@@ -456,12 +456,10 @@ fn large_initial_check_quiet_for_interesting() {
 
 #[test]
 fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
-    // Regression: the engine raises `StopTest` (-> `TestCaseResult::Overrun`)
-    // for a genuine choice-budget overrun, which the runner must report as
-    // `Status::EarlyStop` — not `Status::Invalid`. `record_tree` only records a
-    // conclusion for `status >= Invalid`, so mislabelling an overrun `Invalid`
-    // would pin the path into the data tree as a permanent dead-end even though
-    // "ran out of data here" is not a stable outcome.
+    // A genuine choice-budget overrun must be `Status::EarlyStop`, not
+    // `Status::Invalid`. `record_tree` only records a conclusion for
+    // `status >= Invalid`, so mislabelling an overrun would pin the path into
+    // the data tree as a permanent dead-end.
     with_counting_ctx(
         |tc| {
             // Two draws against a one-choice budget: the second overruns.
