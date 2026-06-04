@@ -470,8 +470,10 @@ void hegel_run_free(hegel_run_t *run);
  (`hegel_generate`, spans, …), concludes it with `hegel_mark_complete`,
  and decides for itself whether the blob reproduced the failure (the
  property failed again) or is stale (it passed). Replay several blobs by
- calling this once per blob.`hegel_test_case_is_final_replay` reports true: 
- the replayed example *is* the counterexample.
+ calling this once per blob. A blob whose choices no longer match the
+ caller's generators surfaces as `HEGEL_E_STOP_TEST` from the draw that
+ overruns. `hegel_test_case_is_final_replay` reports true: the replayed
+ example *is* the counterexample.
 
  Returns NULL with a diagnostic in `hegel_last_error_message` if `s` or
  `blob` is NULL, or if `blob` is not a valid failure blob (corrupt, or
