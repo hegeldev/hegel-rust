@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.15.2 - 2026-06-05
+
+This patch adds **failure blobs** to the native backend. A failure blob is a 
+base64 string encoding the counterexample. With the new `print_blob` setting 
+enabled, a failing `#[hegel::test]` prints it as a copy-pasteable attribute:
+
+```text
+To reproduce this failure, add the attribute below #[hegel::test]:
+    #[hegel::reproduce_failure("AAEC…")]
+```
+
+```rust
+#[hegel::test]
+#[hegel::reproduce_failure("AAEC…")]
+fn my_test(tc: hegel::TestCase) {
+    let x: i32 = tc.draw(hegel::generators::integers());
+    assert!(x < 100);
+}
+```
+
+The attribute can be stacked to keep track of several failures; only the
+first one replays — delete them one by one as you fix the failures. A blob
+that decodes but no longer reproduces a failure is reported as a failing run.
+
+Over the C ABI, `hegel_failure_reproduction_blob` reads the blob off a failure
+and `hegel_test_case_from_blob` replays it.
+
+We only guarantee the compatibility of the failure blob within a specific Hegel
+version.
+
 ## 0.15.1 - 2026-06-04
 
 The native backend (`--features native`) now implements the `TestCasesTooLarge` and `LargeInitialTestCase` health checks. The former fires when generated inputs routinely overrun the choice buffer; the latter when even the smallest natural input is very large. Both are suppressible via `suppress_health_check`.
