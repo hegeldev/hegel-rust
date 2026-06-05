@@ -22,7 +22,7 @@ The attribute can be stacked to keep track of several failures; only the
 first one replays — delete them one by one as you fix the failures. A blob
 that decodes but no longer reproduces a failure is reported as a failing run.
 
-Over the C ABI, `hegel_failure_reproduce_blob` reads the blob off a failure
+Over the C ABI, `hegel_failure_reproduction_blob` reads the blob off a failure
 and `hegel_test_case_from_blob` replays it.
 
 We only guarantee the compatibility of the failure blob within a specific Hegel

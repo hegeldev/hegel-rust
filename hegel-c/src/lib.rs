@@ -371,7 +371,7 @@ pub struct HegelFailure {
     origin: CString,
     /// Base64 failure blob encoding the minimal counterexample's choice
     /// sequence, or `None` when the engine produced no blob (e.g. a
-    /// health-check failure). Read via `hegel_failure_reproduce_blob`.
+    /// health-check failure). Read via `hegel_failure_reproduction_blob`.
     reproduce_blob: Option<CString>,
 }
 
@@ -881,7 +881,7 @@ pub unsafe extern "C" fn hegel_run_free(run: *mut HegelRun) {
 // ─── Standalone test cases (failure-blob replay) ────────────────────────────
 
 /// Build a standalone test case that replays the example encoded in a
-/// base64 failure blob (obtained from `hegel_failure_reproduce_blob` on a
+/// base64 failure blob (obtained from `hegel_failure_reproduction_blob` on a
 /// prior run).
 ///
 /// There is no run handle and no engine worker: the caller drives the
@@ -1481,7 +1481,7 @@ pub unsafe extern "C" fn hegel_failure_origin(f: *const HegelFailure) -> *const 
 /// engine produced no blob for this failure. The pointer is borrowed from the
 /// parent `hegel_run_result_t` and stays valid until `hegel_run_free`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_failure_reproduce_blob(f: *const HegelFailure) -> *const c_char {
+pub unsafe extern "C" fn hegel_failure_reproduction_blob(f: *const HegelFailure) -> *const c_char {
     match unsafe { f.as_ref() } {
         Some(f) => match &f.reproduce_blob {
             Some(blob) => blob.as_ptr(),

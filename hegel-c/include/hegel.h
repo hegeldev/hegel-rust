@@ -462,7 +462,7 @@ void hegel_run_free(hegel_run_t *run);
 
 /*
  Build a standalone test case that replays the example encoded in a
- base64 failure blob (obtained from `hegel_failure_reproduce_blob` on a
+ base64 failure blob (obtained from `hegel_failure_reproduction_blob` on a
  prior run).
 
  There is no run handle and no engine worker: the caller drives the
@@ -701,7 +701,7 @@ const char *hegel_failure_origin(const hegel_failure_t *f);
  engine produced no blob for this failure. The pointer is borrowed from the
  parent `hegel_run_result_t` and stays valid until `hegel_run_free`.
  */
-const char *hegel_failure_reproduce_blob(const hegel_failure_t *f);
+const char *hegel_failure_reproduction_blob(const hegel_failure_t *f);
 
 /*
  Most recent error message from libhegel on the calling thread, or

@@ -149,7 +149,7 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             run_result_failure: lib.get(b"hegel_run_result_failure\0").unwrap(),
             failure_origin: lib.get(b"hegel_failure_origin\0").unwrap(),
             failure_panic_message: lib.get(b"hegel_failure_panic_message\0").unwrap(),
-            failure_reproduce_blob: lib.get(b"hegel_failure_reproduce_blob\0").unwrap(),
+            failure_reproduce_blob: lib.get(b"hegel_failure_reproduction_blob\0").unwrap(),
             test_case_from_blob: lib.get(b"hegel_test_case_from_blob\0").unwrap(),
             test_case_free: lib.get(b"hegel_test_case_free\0").unwrap(),
             test_case_is_final_replay: lib.get(b"hegel_test_case_is_final_replay\0").unwrap(),
