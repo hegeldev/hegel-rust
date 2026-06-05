@@ -156,6 +156,7 @@ pub struct Settings {
     pub(crate) suppress_health_check: Vec<HealthCheck>,
     pub(crate) phases: Vec<Phase>,
     pub(crate) report_multiple_failures: bool,
+    pub(crate) print_blob: bool,
     /// The randomness backend, or `None` to let it be chosen automatically
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
@@ -186,6 +187,7 @@ impl Settings {
                 Phase::Shrink,
             ],
             report_multiple_failures: true,
+            print_blob: false,
             backend: None,
         }
     }
@@ -292,6 +294,16 @@ impl Settings {
     /// ```
     pub fn phases(mut self, phases: impl IntoIterator<Item = Phase>) -> Self {
         self.phases = phases.into_iter().collect();
+        self
+    }
+
+    /// Print a copy-pasteable `#[hegel::reproduce_failure("…")]` line for the
+    /// counterexample when a test fails. Defaults to `false`.
+    ///
+    /// The reproduce blob is always *attached* to the failure. This setting only controls whether it is printed to
+    /// the failure output. Has effect only on the native backend.
+    pub fn print_blob(mut self, print_blob: bool) -> Self {
+        self.print_blob = print_blob;
         self
     }
 

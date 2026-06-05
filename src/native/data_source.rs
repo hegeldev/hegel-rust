@@ -13,7 +13,7 @@ use ciborium::Value;
 
 use crate::backend::{DataSource, DataSourceError, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
-use crate::native::core::{ChoiceNode, EngineError, ManyState, NativeTestCase, Span};
+use crate::native::core::{ChoiceNode, EngineError, ManyState, NativeTestCase, Span, Status};
 use crate::native::schema;
 use crate::test_case::invalid_argument;
 
@@ -129,22 +129,28 @@ impl NativeDataSource {
         f: impl FnOnce(&mut NativeTestCase) -> Result<R, EngineError>,
     ) -> Result<R, DataSourceError> {
         if self.aborted.load(Ordering::Relaxed) {
-            return Err(DataSourceError::StopTest);
+            return Err(self.aborted_error());
         }
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         f(&mut inner.ntc).map_err(|e| match e {
-            EngineError::StopTest => {
-                // Budget exhausted: latch the abort flag so subsequent draws
-                // short-circuit without touching `ntc`.
+            EngineError::Overrun => {
                 self.aborted.store(true, Ordering::Relaxed);
                 DataSourceError::StopTest
             }
-            // A semantically-invalid schema is not budget exhaustion — do not
-            // latch `aborted`; carry the diagnostic through so the main
-            // library can panic with it and libhegel can return it as an
-            // error code.
+            EngineError::InvalidTestCase => {
+                self.aborted.store(true, Ordering::Relaxed);
+                DataSourceError::Assume
+            }
             EngineError::InvalidArgument(msg) => DataSourceError::InvalidArgument(msg),
         })
+    }
+
+    fn aborted_error(&self) -> DataSourceError {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        match inner.ntc.status {
+            Some(Status::Invalid) => DataSourceError::Assume,
+            _ => DataSourceError::StopTest,
+        }
     }
 }
 
@@ -220,8 +226,8 @@ impl DataSource for NativeDataSource {
             let pool_idx = pool_id as usize;
             let active = ntc.variable_pools[pool_idx].active();
             if active.is_empty() {
-                // No variables available: mark the test case invalid.
-                return Err(EngineError::StopTest);
+                ntc.status = Some(Status::Invalid);
+                return Err(EngineError::InvalidTestCase);
             }
             // The variable ids drawn out of `active` are `i64`.
             let n = active.len();

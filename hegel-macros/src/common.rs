@@ -361,6 +361,58 @@ pub fn extract_explicit_test_cases(
     Ok(cases)
 }
 
+fn is_reproduce_failure_attr(attr: &syn::Attribute) -> bool {
+    let segments: Vec<_> = attr.path().segments.iter().collect();
+    segments.len() == 2 && segments[0].ident == "hegel" && segments[1].ident == "reproduce_failure"
+}
+
+/// Extract the `#[hegel::reproduce_failure(blob)]` attributes, removing them
+/// in-place, and return the **first** blob expression.
+///
+/// The argument is any expression that evaluates to something convertible to a
+/// `String` via `.to_string()` — a string literal, a `const`/`static` `&str`,
+/// a `String` variable, a function call, etc. (mirroring the other
+/// `#[hegel::test]`-family attributes, which take expressions rather than only
+/// literals).
+///
+/// Stacking is allowed, but only the first attribute replays — the rest are
+/// bookkeeping for additional failures, to be deleted one by one as they are
+/// fixed. Returns `Ok(None)` when the attribute is absent, or
+/// `Err` with a compile error when an argument isn't a single expression.
+pub fn extract_reproduce_failure(
+    attrs: &mut Vec<syn::Attribute>,
+) -> Result<Option<Expr>, TokenStream> {
+    let mut blob: Option<Expr> = None;
+    let mut error = None;
+    attrs.retain(|attr| {
+        if !is_reproduce_failure_attr(attr) {
+            return true;
+        }
+        if blob.is_some() {
+            return false;
+        }
+        match attr.parse_args::<Expr>() {
+            Ok(expr) => blob = Some(expr),
+            Err(_) => {
+                error = Some(
+                    syn::Error::new_spanned(
+                        attr,
+                        "#[hegel::reproduce_failure(...)] takes a single base64 blob \
+                         expression (a string literal, const, or variable).\n\
+                         Usage: #[hegel::reproduce_failure(\"<blob>\")]",
+                    )
+                    .to_compile_error(),
+                );
+            }
+        }
+        false
+    });
+    if let Some(err) = error {
+        return Err(err);
+    }
+    Ok(blob)
+}
+
 /// Generate a sequence of explicit test case blocks. Each block constructs an
 /// `ExplicitTestCase` populated with `with_value` calls and then runs the body
 /// via `ExplicitTestCase::run`.

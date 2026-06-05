@@ -861,8 +861,9 @@ fn choice_kind_unit_dispatches_to_each_sub_kind() {
 // ── EngineError Display ──────────────────────────────────────────────────────
 
 #[test]
-fn engine_error_display_covers_both_variants() {
-    assert!(EngineError::StopTest.to_string().contains("StopTest"));
+fn engine_error_display_covers_all_variants() {
+    assert!(EngineError::Overrun.to_string().contains("Overrun"));
+    assert!(EngineError::InvalidTestCase.to_string().contains("Invalid"));
     assert_eq!(
         EngineError::InvalidArgument("nope".to_string()).to_string(),
         "nope"

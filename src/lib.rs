@@ -370,6 +370,58 @@ pub use hegel_macros::DefaultGenerator;
 pub use hegel_macros::composite;
 pub use hegel_macros::explicit_test_case;
 
+/// Replay a single failing example from a base64 *failure blob*.
+///
+/// When a test fails on the native backend and the
+/// [`print_blob`](Settings::print_blob) setting is enabled, Hegel prints a
+/// reproducer line of the form:
+///
+/// ```text
+/// To reproduce this failure, add the attribute below #[hegel::test]:
+///     #[hegel::reproduce_failure("AAEC…")]
+/// ```
+///
+/// Paste that attribute **below** `#[hegel::test]` and the next run will
+/// decode the blob's choice sequence and run *only* that example.
+///
+/// ```ignore
+/// #[hegel::test]
+/// #[hegel::reproduce_failure("AAEC…")]
+/// fn my_test(tc: hegel::TestCase) {
+///     let x: i32 = tc.draw(hegel::generators::integers());
+///     assert!(x < 100);
+/// }
+/// ```
+///
+/// The argument is any expression that resolves to a base64 blob — a string
+/// literal, or a `const`/`static`/variable holding one:
+///
+/// ```ignore
+/// const REGRESSION: &str = "AAEC…";
+///
+/// #[hegel::test]
+/// #[hegel::reproduce_failure(REGRESSION)]
+/// fn my_test(tc: hegel::TestCase) { /* ... */ }
+/// ```
+///
+/// The attribute may be stacked to keep track of several failures, but only
+/// the **first** one replays — the rest are bookkeeping. Delete them one by
+/// one as the failures are fixed:
+///
+/// ```ignore
+/// #[hegel::test]
+/// #[hegel::reproduce_failure("AAEC…")] // replayed
+/// #[hegel::reproduce_failure("AAED…")] // kept for later
+/// fn my_test(tc: hegel::TestCase) { /* ... */ }
+/// ```
+///
+/// The blob encodes Hegel's internal choice sequence, so it is only
+/// guaranteed to reproduce a failure within a specific version of Hegel.
+/// A blob that can't be decoded (corrupt or from an incompatible version),
+/// or that no longer reproduces a failure, surfaces as a failing run with
+/// an explanatory message.
+pub use hegel_macros::reproduce_failure;
+
 #[doc(hidden)]
 pub use hegel_macros::rewrite_draws;
 

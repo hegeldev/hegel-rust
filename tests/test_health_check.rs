@@ -178,3 +178,67 @@ mod health_checks {
         );
     }
 }
+
+// Size-based health checks (TestCasesTooLarge / LargeInitialTestCase) are
+// native-engine features, so these run only under `--features native`.
+#[cfg(feature = "native")]
+mod size_checks {
+    use super::common::utils::expect_panic;
+    use hegel::generators as gs;
+    use hegel::{HealthCheck, Hegel, Settings};
+
+    // A generator whose elements alone overrun the choice buffer.
+    fn oversized(tc: hegel::TestCase) {
+        tc.draw(gs::vecs(gs::booleans()).min_size(20_000));
+    }
+
+    /// The smallest natural example already overruns the buffer, so
+    /// LargeInitialTestCase fires.
+    #[test]
+    fn large_initial_test_case_fires() {
+        expect_panic(
+            || {
+                Hegel::new(oversized)
+                    .settings(Settings::new().test_cases(100).database(None))
+                    .run();
+            },
+            "LargeInitialTestCase",
+        );
+    }
+
+    /// With LargeInitialTestCase suppressed, the generation loop keeps
+    /// overrunning, so TestCasesTooLarge fires instead.
+    #[test]
+    fn test_cases_too_large_fires() {
+        expect_panic(
+            || {
+                Hegel::new(oversized)
+                    .settings(
+                        Settings::new()
+                            .test_cases(100)
+                            .database(None)
+                            .suppress_health_check([HealthCheck::LargeInitialTestCase]),
+                    )
+                    .run();
+            },
+            "TestCasesTooLarge",
+        );
+    }
+
+    /// Both suppressed: the run completes (no health-check panic) — it just
+    /// keeps overrunning until the generation budget is spent.
+    #[test]
+    fn both_suppressed_does_not_fire() {
+        Hegel::new(oversized)
+            .settings(
+                Settings::new()
+                    .test_cases(5)
+                    .database(None)
+                    .suppress_health_check([
+                        HealthCheck::LargeInitialTestCase,
+                        HealthCheck::TestCasesTooLarge,
+                    ]),
+            )
+            .run();
+    }
+}

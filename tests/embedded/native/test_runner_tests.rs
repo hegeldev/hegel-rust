@@ -393,3 +393,213 @@ fn run_main_reports_too_slow_at_call_site() {
         result.failures
     );
 }
+
+// ── TestCasesTooLarge (too_large_check) ──
+
+#[test]
+fn too_large_check_reports_when_over_threshold_and_unsuppressed() {
+    let msg = too_large_check(
+        /* valid */ 0, /* overrun */ 20, /* suppressed */ false,
+    );
+    assert!(msg.is_some());
+    assert!(msg.unwrap().contains("TestCasesTooLarge"));
+}
+
+#[test]
+fn too_large_check_quiet_when_suppressed() {
+    assert!(too_large_check(0, 20, true).is_none());
+}
+
+#[test]
+fn too_large_check_quiet_when_under_threshold() {
+    assert!(too_large_check(0, 19, false).is_none());
+}
+
+#[test]
+fn too_large_check_quiet_when_enough_valid_cases() {
+    assert!(too_large_check(10, 100, false).is_none());
+}
+
+// ── LargeInitialTestCase (large_initial_check) ──
+
+#[test]
+fn large_initial_check_reports_on_overrun() {
+    let msg = large_initial_check(true, Status::Invalid, 0, false);
+    assert!(msg.unwrap().contains("LargeInitialTestCase"));
+}
+
+#[test]
+fn large_initial_check_reports_on_large_valid_example() {
+    // node_count * 2 > BUFFER_SIZE.
+    let msg = large_initial_check(false, Status::Valid, BUFFER_SIZE, false);
+    assert!(msg.unwrap().contains("LargeInitialTestCase"));
+}
+
+#[test]
+fn large_initial_check_quiet_for_small_valid_example() {
+    assert!(large_initial_check(false, Status::Valid, 1, false).is_none());
+}
+
+#[test]
+fn large_initial_check_quiet_when_suppressed() {
+    assert!(large_initial_check(true, Status::Invalid, 0, true).is_none());
+}
+
+#[test]
+fn large_initial_check_quiet_for_interesting() {
+    // A bug found at the simplest example is reported as a failure, not a
+    // health-check failure.
+    assert!(large_initial_check(false, Status::Interesting, BUFFER_SIZE, false).is_none());
+}
+
+// ── overrun vs invalid distinction ──
+
+#[test]
+fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
+    // A genuine choice-budget overrun must be `Status::EarlyStop`, not
+    // `Status::Invalid`. `record_tree` only records a conclusion for
+    // `status >= Invalid`, so mislabelling an overrun would pin the path into
+    // the data tree as a permanent dead-end.
+    with_counting_ctx(
+        |tc| {
+            // Two draws against a one-choice budget: the second overruns.
+            tc.draw(crate::generators::booleans());
+            tc.draw(crate::generators::booleans());
+        },
+        |ctx, _count| {
+            let run = ctx.run(NativeTestCase::for_simplest(1));
+            assert_eq!(run.status, Status::EarlyStop);
+
+            // The overrun path is therefore not concluded in the tree: a later
+            // walk of the same prefix must re-execute (returns `None`) rather
+            // than serve a cached dead-end.
+            let mut tree = DataTreeNode::default();
+            record_tree(&mut tree, &run.nodes, run.status, &[]);
+            let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
+            assert_eq!(crate::native::data_tree::simulate(&tree, &choices), None);
+        },
+    );
+}
+
+// ── ReproduceRunner (failure-blob replay) ──
+
+/// A `run_case` body that marks any integer `>= 1_000_000` interesting.
+/// Used to provoke (and later replay) a failure.
+fn mark_large_interesting(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
+    let schema = crate::cbor_utils::cbor_map! {
+        "type" => "integer",
+        "min_value" => 0_i64,
+        "max_value" => 2_000_000_i64,
+    };
+    match ds.generate(&schema) {
+        Ok(ciborium::Value::Integer(i)) => {
+            let n: i128 = i.into();
+            if n >= 1_000_000 {
+                ds.mark_complete(&TestCaseResult::Interesting(Failure {
+                    panic_message: "n >= 1_000_000".to_string(),
+                    diagnostic: "n >= 1_000_000\n".to_string(),
+                    origin: "n >= 1_000_000".to_string(),
+                    reproduce_blob: None,
+                }));
+            } else {
+                ds.mark_complete(&TestCaseResult::Valid);
+            }
+        }
+        _ => ds.mark_complete(&TestCaseResult::Overrun),
+    }
+}
+
+/// Run the failing property once and return the reproduce blob the engine
+/// attached to the (shrunk) counterexample.
+fn discover_reproduce_blob() -> String {
+    let settings = Settings::new().test_cases(200).seed(Some(7)).database(None);
+    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, _is_final: bool| {
+        mark_large_interesting(&*ds);
+    };
+    let result = run_main(&settings, None, &mut run_case, Duration::from_secs(30));
+    assert!(!result.passed, "property should have failed");
+    result.failures[0]
+        .reproduce_blob
+        .clone()
+        .expect("native failure should carry a reproduce blob")
+}
+
+#[test]
+fn reproduce_runner_replays_the_counterexample() {
+    let blob = discover_reproduce_blob();
+
+    // Replaying the blob runs exactly the encoded example and re-surfaces
+    // the failure, carrying the same blob back.
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, _is_final: bool| {
+        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        mark_large_interesting(&*ds);
+    };
+    let runner = ReproduceRunner { blob: blob.clone() };
+    let result = runner.run(&Settings::new(), None, &mut run_case);
+
+    assert!(!result.passed);
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(
+        result.failures[0].reproduce_blob.as_deref(),
+        Some(blob.as_str())
+    );
+    // A replay bypasses generation entirely: exactly one test case runs.
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "a blob replay should not generate"
+    );
+}
+
+#[test]
+fn reproduce_runner_panics_on_an_undecodable_blob() {
+    // An undecodable blob is invalid input — it panics rather than producing
+    // a `TestRunResult` failure.
+    let result = std::panic::catch_unwind(|| {
+        let runner = ReproduceRunner {
+            blob: "not-a-valid-blob".to_string(),
+        };
+        runner.run(&Settings::new(), None, &mut |ds, _is_final| {
+            ds.mark_complete(&TestCaseResult::Valid);
+        });
+    });
+    let payload = result.unwrap_err();
+    let msg = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(
+        msg.contains("could not be decoded"),
+        "unexpected panic message: {msg}"
+    );
+}
+
+#[test]
+fn reproduce_runner_reports_a_blob_that_no_longer_fails() {
+    let blob = discover_reproduce_blob();
+
+    // A "fixed" test body that never reports interesting: replaying a stale
+    // blob must surface that rather than silently passing.
+    let runner = ReproduceRunner { blob };
+    let result = runner.run(&Settings::new(), None, &mut |ds, _is_final| {
+        let schema = crate::cbor_utils::cbor_map! {
+            "type" => "integer",
+            "min_value" => 0_i64,
+            "max_value" => 2_000_000_i64,
+        };
+        let _ = ds.generate(&schema);
+        ds.mark_complete(&TestCaseResult::Valid);
+    });
+    assert!(!result.passed);
+    assert!(
+        result.failures[0]
+            .diagnostic
+            .contains("no longer reproduces"),
+        "unexpected diagnostic: {}",
+        result.failures[0].diagnostic
+    );
+    // Reported as its own failure, not framed as a health-check failure.
+    assert_eq!(result.failures[0].origin, "reproduce_failure");
+}

@@ -56,6 +56,7 @@ fn run_native_replays_persisted_failure_on_second_run() {
                         panic_message: "n >= 1_000_000".to_string(),
                         diagnostic: "n >= 1_000_000\n".to_string(),
                         origin: "n >= 1_000_000".to_string(),
+                        reproduce_blob: None,
                     }));
                 } else {
                     ds.mark_complete(&TestCaseResult::Valid);
@@ -94,6 +95,7 @@ fn run_native_replays_persisted_failure_on_second_run() {
                     panic_message: "n >= 1_000_000".to_string(),
                     diagnostic: "n >= 1_000_000\n".to_string(),
                     origin: "n >= 1_000_000".to_string(),
+                    reproduce_blob: None,
                 }));
                 return;
             }
@@ -149,6 +151,7 @@ fn run_native_shrinks_predicate_boundary_seed_sweep() {
                         panic_message: "n >= 1_000_000".to_string(),
                         diagnostic: "n >= 1_000_000\n".to_string(),
                         origin: "n >= 1_000_000".to_string(),
+                        reproduce_blob: None,
                     }));
                     return;
                 }
@@ -196,6 +199,7 @@ fn run_native_shrinks_predicate_boundary_to_exact_value() {
                     panic_message: "n >= 1_000_000".to_string(),
                     diagnostic: "n >= 1_000_000\n".to_string(),
                     origin: "n >= 1_000_000".to_string(),
+                    reproduce_blob: None,
                 }));
                 return;
             }
@@ -252,6 +256,7 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
                     panic_message: "n >= 1_000_000".to_string(),
                     diagnostic: "n >= 1_000_000\n".to_string(),
                     origin: "n >= 1_000_000".to_string(),
+                    reproduce_blob: None,
                 }));
                 return;
             }
@@ -278,6 +283,7 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
                     panic_message: "n >= 1_000_000".to_string(),
                     diagnostic: "n >= 1_000_000\n".to_string(),
                     origin: "n >= 1_000_000".to_string(),
+                    reproduce_blob: None,
                 }));
                 return;
             }
@@ -303,4 +309,82 @@ fn run_native_callback_can_generate_via_data_source() {
         ds.mark_complete(&TestCaseResult::Valid);
     });
     assert!(result.passed);
+}
+
+/// A test body that marks any integer `>= 1_000_000` interesting. Used by
+/// the blob tests to provoke (and later replay) a failure.
+fn mark_large_interesting(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
+    use crate::backend::Failure;
+    let schema = cbor_map! {
+        "type" => "integer",
+        "min_value" => 0_i64,
+        "max_value" => 2_000_000_i64,
+    };
+    match ds.generate(&schema) {
+        Ok(ciborium::Value::Integer(i)) => {
+            let n: i128 = i.into();
+            if n >= 1_000_000 {
+                ds.mark_complete(&TestCaseResult::Interesting(Failure {
+                    panic_message: "n >= 1_000_000".to_string(),
+                    diagnostic: "n >= 1_000_000\n".to_string(),
+                    origin: "n >= 1_000_000".to_string(),
+                    reproduce_blob: None,
+                }));
+            } else {
+                ds.mark_complete(&TestCaseResult::Valid);
+            }
+        }
+        _ => ds.mark_complete(&TestCaseResult::Overrun),
+    }
+}
+
+/// Run the failing property once and return the reproduce blob the engine
+/// attached to the (shrunk) counterexample.
+fn discover_reproduce_blob() -> String {
+    let settings = quiet_settings(200).seed(Some(7));
+    let result = run_native(&settings, None, |ds, _is_final| {
+        mark_large_interesting(&*ds)
+    });
+    assert!(!result.passed, "property should have failed");
+    result.failures[0]
+        .reproduce_blob
+        .clone()
+        .expect("native failure should carry a reproduce blob")
+}
+
+#[test]
+fn data_source_for_blob_replays_the_counterexample() {
+    let blob = discover_reproduce_blob();
+
+    // The data source replays exactly the encoded example: drawing with the
+    // same schema yields the (shrunk) counterexample again.
+    let ds = data_source_for_blob(&quiet_settings(1), &blob).unwrap();
+    let schema = cbor_map! {
+        "type" => "integer",
+        "min_value" => 0_i64,
+        "max_value" => 2_000_000_i64,
+    };
+    let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema) else {
+        panic!("expected an integer draw");
+    };
+    let n: i128 = i.into();
+    assert!(
+        n >= 1_000_000,
+        "replayed value {n} should still violate the property"
+    );
+    ds.mark_complete(&TestCaseResult::Valid);
+}
+
+#[test]
+fn data_source_for_blob_logs_at_debug_verbosity() {
+    // Same construction as above, with `Verbosity::Debug` exercising the
+    // choice-count log line.
+    let blob = discover_reproduce_blob();
+    let settings = quiet_settings(1).verbosity(crate::settings::Verbosity::Debug);
+    assert!(data_source_for_blob(&settings, &blob).is_some());
+}
+
+#[test]
+fn data_source_for_blob_rejects_an_undecodable_blob() {
+    assert!(data_source_for_blob(&quiet_settings(1), "not-a-valid-blob").is_none());
 }

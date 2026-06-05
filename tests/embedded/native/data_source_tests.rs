@@ -98,14 +98,14 @@ fn new_pool_pool_add_and_pool_generate_non_consuming() {
 }
 
 #[test]
-fn pool_generate_on_empty_pool_returns_stop_test() {
+fn pool_generate_on_empty_pool_returns_assume() {
     // No `pool_add` calls — the pool has no active variables, so
-    // `pool_generate` immediately reports `StopTest`.
+    // `pool_generate` rejects the test case as invalid.
     let (ds, _handle) = random_source();
     let pool = ds.new_pool().unwrap();
     assert!(matches!(
         ds.pool_generate(pool, false),
-        Err(DataSourceError::StopTest)
+        Err(DataSourceError::Assume)
     ));
 }
 

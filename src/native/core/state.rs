@@ -1398,15 +1398,15 @@ impl NativeTestCase {
         Ok(v)
     }
     fn pre_choice(&mut self) -> Result<(), EngineError> {
-        // A test case can become frozen mid-execution when `start_span`
-        // exceeds `MAX_DEPTH` and sets `status = Some(Status::Invalid)`.
-        // Subsequent draws must propagate `EngineError` so the test halts.
-        if self.status.is_some() {
-            return Err(EngineError::StopTest);
+        if let Some(status) = self.status {
+            return Err(match status {
+                Status::Invalid => EngineError::InvalidTestCase,
+                _ => EngineError::Overrun,
+            });
         }
         if self.nodes.len() >= self.max_size {
             self.status = Some(Status::EarlyStop);
-            return Err(EngineError::StopTest);
+            return Err(EngineError::Overrun);
         }
         Ok(())
     }
@@ -1452,7 +1452,7 @@ impl NativeTestCase {
         if let Some(template) = self.trailing_template.as_mut() {
             if matches!(template.count, Some(0)) {
                 self.status = Some(Status::EarlyStop);
-                return Err(EngineError::StopTest);
+                return Err(EngineError::Overrun);
             }
             let value = match template.kind {
                 ChoiceTemplateKind::Simplest => simplest(),

@@ -310,3 +310,150 @@ fn drive_reraises_hegel_internal_panic_as_internal_error() {
     assert!(msg.contains("test_case.rs"), "{msg}");
     assert!(msg.contains("simulated internal failure"), "{msg}");
 }
+
+// ── run_lifecycle: reproducer_line ───────────────────────────────────────
+//
+// `reproducer_line` decides the copy-pasteable
+// `#[hegel::reproduce_failure("…")]` line printed after a failure's
+// diagnostic. It is `Some` only when `print_blob` is enabled *and* the
+// failure carries a blob; `None` (suppressed / no blob) prints nothing. The formatting embeds the blob verbatim.
+
+fn failure_with_blob(blob: Option<&str>) -> crate::backend::Failure {
+    crate::backend::Failure {
+        panic_message: "boom".to_string(),
+        diagnostic: "boom\n".to_string(),
+        origin: "Panic at x".to_string(),
+        reproduce_blob: blob.map(str::to_string),
+    }
+}
+
+#[test]
+fn reproducer_line_none_when_print_blob_disabled() {
+    let settings = crate::settings::Settings::new();
+    assert!(!settings.print_blob);
+    assert!(reproducer_line(&settings, &failure_with_blob(Some("AAEC"))).is_none());
+}
+
+#[test]
+fn reproducer_line_none_when_no_blob_attached() {
+    // The health-check / server-backend case: print_blob on, but no blob.
+    let settings = crate::settings::Settings::new().print_blob(true);
+    assert!(reproducer_line(&settings, &failure_with_blob(None)).is_none());
+}
+
+#[test]
+fn reproducer_line_emits_attribute_when_enabled_and_present() {
+    let settings = crate::settings::Settings::new().print_blob(true);
+    let line = reproducer_line(&settings, &failure_with_blob(Some("AAEC"))).unwrap();
+    assert!(
+        line.contains("#[hegel::reproduce_failure(\"AAEC\")]"),
+        "expected the reproducer attribute, got: {line}"
+    );
+}
+
+// ── run_lifecycle: drive prints reproducer lines on failure ──────────────
+//
+// A stub runner returns a pre-built failing `TestRunResult` (without touching
+// the `run_case` callback), so `drive`'s single- and multi-failure output
+// paths can be exercised — including the per-failure reproducer line — and
+// the distinct panic messages asserted.
+
+struct StubRunner {
+    failures: Vec<crate::backend::Failure>,
+}
+
+impl crate::backend::TestRunner for StubRunner {
+    fn run(
+        &self,
+        _settings: &crate::settings::Settings,
+        _database_key: Option<&str>,
+        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+    ) -> crate::backend::TestRunResult {
+        crate::backend::TestRunResult {
+            passed: false,
+            failures: self.failures.clone(),
+        }
+    }
+}
+
+fn drive_panic_message(failures: Vec<crate::backend::Failure>) -> String {
+    let settings = crate::settings::Settings::new().print_blob(true);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drive(
+            StubRunner { failures },
+            |_tc: TestCase| {},
+            &settings,
+            None,
+            None,
+        );
+    }));
+    let payload = result.expect_err("drive should panic on a failing run");
+    payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("")
+        .to_string()
+}
+
+#[test]
+fn drive_single_failure_prints_reproducer_and_panics() {
+    let msg = drive_panic_message(vec![failure_with_blob(Some("AAEC"))]);
+    assert!(
+        msg.contains("Property test failed: boom"),
+        "unexpected panic message: {msg}"
+    );
+}
+
+#[test]
+fn drive_multiple_failures_prints_each_reproducer_and_panics() {
+    let msg = drive_panic_message(vec![
+        failure_with_blob(Some("AAEC")),
+        failure_with_blob(Some("BBBB")),
+    ]);
+    assert!(
+        msg.contains("2 distinct failures"),
+        "unexpected panic message: {msg}"
+    );
+}
+
+// `drive` runs the runner unconditionally — phase selection (skipping a
+// run that lacks `Phase::Generate`) is the caller's concern: `Hegel::run`
+// performs that check before calling `drive`, so phase-agnostic callers
+// like the blob-replay path are not gated here.
+
+#[test]
+fn drive_runs_the_runner_regardless_of_phases() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct RecordingRunner(Rc<Cell<bool>>);
+    impl crate::backend::TestRunner for RecordingRunner {
+        fn run(
+            &self,
+            _settings: &crate::settings::Settings,
+            _database_key: Option<&str>,
+            _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+        ) -> crate::backend::TestRunResult {
+            self.0.set(true);
+            crate::backend::TestRunResult {
+                passed: true,
+                failures: vec![],
+            }
+        }
+    }
+
+    let ran = Rc::new(Cell::new(false));
+    let settings = crate::settings::Settings::new().phases([]); // no Phase::Generate
+    drive(
+        RecordingRunner(ran.clone()),
+        |_tc: TestCase| {},
+        &settings,
+        None,
+        None,
+    );
+    assert!(
+        ran.get(),
+        "drive must run the runner regardless of the phase selection"
+    );
+}

@@ -152,8 +152,11 @@ where
     pub fn run(self) {
         // These checks are about "can we generate at all", not speed, and
         // instrumented coverage binaries routinely trip the TooSlow check.
+        // FilterTooMuch is suppressed because generators that use filtering
+        // (e.g. regex with lookaheads) legitimately reject many inputs; what
+        // matters here is that valid examples *can* be produced.
         self.inner
-            .run_with_health_checks_suppressed(&[HealthCheck::TooSlow]);
+            .run_with_health_checks_suppressed(&[HealthCheck::TooSlow, HealthCheck::FilterTooMuch]);
     }
 }
 
