@@ -1,8 +1,5 @@
-#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]
-
 mod common;
 
-use hegel::TestCase;
 use hegel::generators::{self as gs, Generator};
 
 #[test]
@@ -203,21 +200,6 @@ fn test_sampled_from_empty() {
 #[should_panic(expected = "one_of requires at least one generator")]
 fn test_one_of_empty() {
     let _g = gs::one_of(Vec::<hegel::generators::BoxedGenerator<'_, i32>>::new());
-}
-
-// --- server-side error handling ---
-
-// Server-specific: the `InvalidArgument` string in the panic message comes
-// from the Python Hypothesis server, not the cross-backend engine. The
-// native backend surfaces the surrogate-range mistake through a different
-// code path (todo!() on unsupported character draws).
-#[cfg(not(feature = "native"))]
-#[hegel::test]
-#[should_panic(expected = "InvalidArgument")]
-fn test_server_invalid_argument_is_reported(tc: TestCase) {
-    // The surrogate codepoint range (0xD800..=0xDFFF) has no valid characters.
-    // The client doesn't catch this, but the server returns InvalidArgument.
-    let _: char = tc.draw(gs::characters().min_codepoint(0xD800).max_codepoint(0xD800));
 }
 
 mod validation {

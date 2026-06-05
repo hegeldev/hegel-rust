@@ -95,29 +95,18 @@ fn panic_payload_message(err: Box<dyn std::any::Any + Send>) -> String {
         .unwrap_or_default()
 }
 
-/// A `ServerError` whose message names the server's `InvalidArgument` exception
-/// is a usage error: it carries the diagnostic but no internal marker (the
-/// helper is called outside a test context here).
+/// An `InvalidArgument` error is raised as a usage error: it carries the
+/// diagnostic but no internal marker (the helper is called outside a test
+/// context here).
 #[test]
-fn server_invalid_argument_error_is_raised_as_a_usage_error() {
+fn invalid_argument_error_is_raised_as_a_usage_error() {
     let err = std::panic::catch_unwind(|| {
-        panic_on_data_source_error(DataSourceError::ServerError(
-            "InvalidArgument: bad generator configuration".to_string(),
+        panic_on_data_source_error(DataSourceError::InvalidArgument(
+            "bad generator configuration".to_string(),
         ))
     })
     .unwrap_err();
     let msg = panic_payload_message(err);
-    assert!(msg.contains("InvalidArgument"), "{msg}");
+    assert!(msg.contains("bad generator configuration"), "{msg}");
     assert!(!msg.contains("__HEGEL"), "marker leaked: {msg}");
-}
-
-/// A genuine server error panics with its message unchanged (it is reported as
-/// a failure, not a usage error).
-#[test]
-fn generic_server_error_panics_with_its_message() {
-    let err = std::panic::catch_unwind(|| {
-        panic_on_data_source_error(DataSourceError::ServerError("kaboom".to_string()))
-    })
-    .unwrap_err();
-    assert_eq!(panic_payload_message(err), "kaboom");
 }

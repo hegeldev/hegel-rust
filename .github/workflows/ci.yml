@@ -66,41 +66,10 @@ jobs:
 
       - uses: ./.github/actions/install-tools
         with:
-          tools: just uv
+          tools: just
 
       - name: Run tests
         run: just check-tests
-
-  test-native:
-    # In-process Rust engine variant of `test`.  The native backend
-    # itself needs neither `uv` nor the hegel-core python server, but
-    # a handful of integration tests still build a `TempRustProject`
-    # subprocess that runs with default (server) features, so `uv`
-    # has to be on PATH the same way it is for `test`.
-    name: test-native (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        rust: ["1.86", stable]
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Install Rust
-        run: rustup toolchain install ${{ matrix.rust }} --profile minimal && rustup default ${{ matrix.rust }}
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-
-      - uses: ./.github/actions/install-tools
-        with:
-          tools: just uv
-
-      - name: Run tests
-        run: just check-tests-native
 
   test-all-features:
     name: test-all-features (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
@@ -111,10 +80,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # "All features" here means everything additive — `native` is
-          # excluded because it swaps the backend rather than extends
-          # it; it has its own `test-native` matrix.  Windows drops
-          # `antithesis` on top of that because the upstream SDK is
+          # Windows drops `antithesis` because the upstream SDK is
           # Linux-only and emits a `compile_error!` otherwise.
           - os: windows-latest
             rust: "1.86"
@@ -139,7 +105,7 @@ jobs:
 
       - uses: ./.github/actions/install-tools
         with:
-          tools: just uv
+          tools: just
 
       - name: Run tests
         run: just ${{ matrix.recipe }}
@@ -186,43 +152,6 @@ jobs:
       - name: Run C bindings under panic=abort
         run: just c-test-abort
 
-  test-min-protocol:
-    name: test-min-protocol
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-
-      - uses: ./.github/actions/install-tools
-        with:
-          tools: just uv
-
-      - id: min-version
-        run: |
-          MIN_PROTOCOL=$(grep -rE 'SUPPORTED_PROTOCOL_VERSIONS.*"[0-9.]+"' src/ | grep -oE '"[0-9.]+"' | head -1 | tr -d '"')
-
-          VERSIONS_JSON=$(curl -sf https://hegel.dev/api/versions.json)
-
-          MIN_CORE=$(echo "$VERSIONS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['$MIN_PROTOCOL'])")
-
-          echo "Minimum supported protocol version: $MIN_PROTOCOL"
-          echo "Minimum hegel-core version: $MIN_CORE"
-          echo "min_core=$MIN_CORE" >> "$GITHUB_OUTPUT"
-
-      - name: Run tests with minimum protocol version
-        env:
-          MIN_CORE: ${{ steps.min-version.outputs.min_core }}
-        run: |
-          uv tool install "hegel-core==$MIN_CORE"
-          HEGEL_SERVER_COMMAND=$(which hegel) RUST_BACKTRACE=1 cargo test -- --skip single_test_case
-
   docs:
     name: docs
     runs-on: ubuntu-latest
@@ -261,7 +190,7 @@ jobs:
       - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
       - uses: ./.github/actions/install-tools
         with:
-          tools: just uv
+          tools: just
 
       - name: Generate lockfile
         run: cargo generate-lockfile -Z minimal-versions
@@ -324,7 +253,7 @@ jobs:
 
       - uses: ./.github/actions/install-tools
         with:
-          tools: just uv
+          tools: just
 
       - name: Run coverage
         run: just check-coverage
@@ -383,23 +312,6 @@ jobs:
       - name: Run conformance tests
         run: just check-conformance
 
-  whole-repo:
-    name: whole-repo
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - uses: ./.github/actions/install-tools
-        with:
-          tools: just uv
-
-      - name: Run whole-repo tests
-        run: just check-tests-whole-repo
-
   nix:
     name: nix
     runs-on: ubuntu-latest
@@ -420,7 +332,7 @@ jobs:
   release:
     name: release
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust'
-    needs: [lint, test, test-native, test-all-features, test-minimal-versions, docs, coverage, conformance, nix, whole-repo]
+    needs: [lint, test, test-all-features, test-minimal-versions, docs, coverage, conformance, nix]
     runs-on: ubuntu-latest
     permissions:
       contents: write

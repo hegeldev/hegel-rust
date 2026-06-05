@@ -15,8 +15,6 @@ pub enum DataSourceError {
     /// The backend rejected the current draw (e.g. a generated float could
     /// not be represented at the requested width).
     Assume,
-    /// The backend returned an error (e.g. invalid arguments, internal error).
-    ServerError(String),
     /// A caller-supplied argument (typically a schema) was semantically
     /// invalid. The main library converts this to a panic at the API surface;
     /// libhegel maps it to `HEGEL_E_INVALID_ARG` with the message exposed via
@@ -31,7 +29,6 @@ impl std::fmt::Display for DataSourceError {
                 write!(f, "Backend ran out of data for this test case (StopTest)")
             }
             DataSourceError::Assume => write!(f, "Backend rejected the current draw (Assume)"),
-            DataSourceError::ServerError(msg) => write!(f, "{}", msg),
             DataSourceError::InvalidArgument(msg) => write!(f, "{}", msg),
         }
     }
@@ -40,7 +37,7 @@ impl std::error::Error for DataSourceError {}
 
 /// Data source for test case generation.
 ///
-/// Abstracts all communication with a data source (e.g. the hegel-core server)
+/// Abstracts all communication with a data source (the native engine)
 /// behind typed methods. Each fallible method returns `Result<T, DataSourceError>`
 /// for operations that can be cut short by data exhaustion or assumption rejection.
 ///
@@ -90,9 +87,9 @@ pub trait DataSource: Send + Sync {
     ///
     /// Called exactly once per test case, after the test body has finished
     /// (or panicked) and the lifecycle has translated the panic payload into
-    /// a [`TestCaseResult`].  Backends are expected to do whatever bookkeeping
-    /// their engine needs here — forward the outcome to a remote server,
-    /// stash it on a handle for the local engine to consume, etc.
+    /// a [`TestCaseResult`].  The implementation does whatever bookkeeping
+    /// its engine needs here — e.g. stashing the outcome on a handle for the
+    /// engine to consume.
     fn mark_complete(&self, result: &TestCaseResult);
 }
 

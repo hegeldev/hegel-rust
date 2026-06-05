@@ -26,8 +26,8 @@
 // The `native:` key prefix ensures that even if a user accidentally
 // points `database` at a directory containing another store, our hashes
 // are disjoint and the two stores can't overwrite each other's entries.
-// It also leaves room for a future `core:`-prefixed store (the eventual
-// full hegel-core backend) to live at the same `db_root`.
+// It also leaves room for a differently-prefixed store to coexist at the
+// same `db_root`.
 
 use std::path::PathBuf;
 

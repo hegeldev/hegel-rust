@@ -70,7 +70,6 @@ mod health_checks {
     /// `INVALID_THRESHOLD_BASE + INVALID_PER_VALID * valid` is exceeded — for a
     /// run that never produces a valid example that is `458 + 0`, so the run
     /// gives up after exactly 459 cases. This pins the ported behaviour.
-    #[cfg(feature = "native")]
     #[test]
     fn always_reject_with_suppression_stops_at_invalid_budget() {
         let count = Arc::new(AtomicUsize::new(0));
@@ -104,7 +103,6 @@ mod health_checks {
     /// whereas Hypothesis trips at 50 *total* invalid draws while fewer than 10
     /// valid examples have been seen. With an always-rejecting test the check
     /// must now fire on the 50th invalid draw.
-    #[cfg(feature = "native")]
     #[test]
     fn always_reject_trips_filter_too_much_at_fifty() {
         let count = Arc::new(AtomicUsize::new(0));
@@ -148,7 +146,6 @@ mod health_checks {
     /// acceptance rate produces a handful of valid examples long before 50
     /// invalid draws pile up, so the check must still trip — under the old
     /// behaviour this run completed vacuously instead.
-    #[cfg(feature = "native")]
     #[test]
     fn low_acceptance_rate_trips_filter_too_much_despite_some_valid() {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -181,7 +178,6 @@ mod health_checks {
 
 // Size-based health checks (TestCasesTooLarge / LargeInitialTestCase) are
 // native-engine features, so these run only under `--features native`.
-#[cfg(feature = "native")]
 mod size_checks {
     use super::common::utils::expect_panic;
     use hegel::generators as gs;

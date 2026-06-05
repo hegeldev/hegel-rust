@@ -4,12 +4,8 @@ set ignore-comments := true
 check-tests:
     RUST_BACKTRACE=1 cargo test
 
-# `cargo test --all-features` would enable `native`, which swaps the
-# entire backend rather than adding capabilities to the server one.
-# The "all features" matrix only wants the additive ones — the native
-# backend gets its own coverage in `check-tests-native`.
 check-tests-all-features:
-    RUST_BACKTRACE=1 cargo test --features rand,antithesis,chrono,jiff,serde_json,serde_json_raw_value
+    RUST_BACKTRACE=1 cargo test --all-features
 
 # Same as `check-tests-all-features` but drops `antithesis`, which
 # emits a `compile_error!` on Windows because the upstream SDK is
@@ -17,18 +13,13 @@ check-tests-all-features:
 check-tests-all-features-windows:
     RUST_BACKTRACE=1 cargo test --features rand,chrono,jiff,serde_json,serde_json_raw_value
 
-check-tests-native:
-    RUST_BACKTRACE=1 cargo test --features native
-
 check-tests-minimal-versions:
     # This is an annoyingly specific check and feels like it overly couples CI concerns and check
     # concerns. I don't have a better proposal right now.
 
     # --locked tells cargo not to update the lockfile. this makes sure we use the lockfile we just generated
     # and don't regenerate it for non-minimal versions.
-    # Feature list matches `check-tests-all-features`: --all-features would enable `native`,
-    # which swaps the backend rather than adding capabilities.
-    HEGEL_RUNNING_TESTS_WITH_RUST_NIGHTLY=1 RUST_BACKTRACE=1 cargo test --locked --features rand,antithesis,chrono,jiff,serde_json,serde_json_raw_value
+    HEGEL_RUNNING_TESTS_WITH_RUST_NIGHTLY=1 RUST_BACKTRACE=1 cargo test --locked --all-features
 
 format:
     cargo fmt
@@ -61,9 +52,6 @@ check-nocov-style:
 
 check-test-modules:
     scripts/check-test-modules.py
-
-check-tests-whole-repo:
-    uv run --with pytest pytest tests/whole_repo/
 
 check-lint: check-format check-clippy check-nocov-style check-test-modules
 

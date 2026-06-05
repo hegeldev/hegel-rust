@@ -1,4 +1,3 @@
-#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]
 // clippy is rightfully complaining about a < n < b when that range is actually
 // guaranteed by the types. Nevertheless I want these tests here as a foundational
 // guardrail and for my sanity.

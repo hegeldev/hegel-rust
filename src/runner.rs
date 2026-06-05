@@ -190,12 +190,6 @@ impl Settings {
     ///
     /// An explicit [`Settings::backend`] always wins; otherwise urandom is
     /// used under Antithesis and the default PRNG backend elsewhere.
-    ///
-    /// Only the native engine acts on the backend selection; the server
-    /// backend forwards generation to hegel-core, which makes its own urandom
-    /// choice server-side. Hence this is unused (but still compiled and
-    /// tested) when the `native` feature is off.
-    #[cfg_attr(not(feature = "native"), allow(dead_code))]
     pub(crate) fn resolved_backend(&self, in_antithesis: bool) -> Backend {
         match self.backend {
             Some(backend) => backend,
@@ -429,7 +423,6 @@ where
         // A blob replay is a single deterministic case — no generation,
         // targeting, or shrinking — so it is phase-agnostic and takes
         // precedence over the normal runner.
-        #[cfg(feature = "native")]
         if let Some(blob) = self.reproduce_failure {
             crate::run_lifecycle::drive(
                 crate::native::test_runner::ReproduceRunner { blob },
@@ -445,10 +438,7 @@ where
             return;
         }
 
-        #[cfg(feature = "native")]
         let runner = crate::native::test_runner::NativeTestRunner;
-        #[cfg(not(feature = "native"))]
-        let runner = crate::server::session::ServerTestRunner;
 
         crate::run_lifecycle::drive(
             runner,

@@ -152,7 +152,7 @@ fn test_regex_with_alphabet() {
 #[test]
 fn test_dates_format() {
     assert_all_examples(gs::dates(), |s: &String| {
-        // Must match YYYY-MM-DD. Accept any year (server generates pre-1970 dates).
+        // Must match YYYY-MM-DD. Accept any year (pre-1970 dates are generated too).
         let parts: Vec<&str> = s.split('-').collect();
         if parts.len() != 3 || parts[0].len() != 4 {
             return false;
@@ -168,7 +168,7 @@ fn test_dates_format() {
 #[test]
 fn test_times_format() {
     assert_all_examples(gs::times(), |s: &String| {
-        // HH:MM:SS with optional fractional seconds (server may produce microseconds).
+        // HH:MM:SS with optional fractional seconds (microseconds may be produced).
         let parts: Vec<&str> = s.splitn(3, ':').collect();
         if parts.len() != 3 {
             return false;
@@ -276,7 +276,7 @@ fn test_uuids_have_canonical_form() {
 fn test_domains_format() {
     assert_all_examples(gs::domains(), |s: &String| {
         // At least two dot-separated labels, each non-empty with valid hostname chars.
-        // Server generates mixed case (e.g. "A.COM"), so accept uppercase too.
+        // Mixed case is generated (e.g. "A.COM"), so accept uppercase too.
         let parts: Vec<&str> = s.split('.').collect();
         parts.len() >= 2
             && parts
@@ -305,7 +305,7 @@ fn test_can_generate_specified_version() {
 fn test_emails_format() {
     assert_all_examples(gs::emails(), |s: &String| {
         // Must contain exactly one '@' with non-empty user and domain containing a dot.
-        // Server generates mixed case and digits, so only check structure.
+        // Mixed case and digits are generated, so only check structure.
         let parts: Vec<&str> = s.splitn(2, '@').collect();
         if parts.len() != 2 {
             return false;
@@ -645,16 +645,6 @@ mod simple_strings {
     #[test]
     fn test_can_restrict_to_ascii_only() {
         assert_all_examples(gs::text().max_codepoint(127), |s: &String| s.is_ascii());
-    }
-
-    // Under native this generates strings of up to 1M codepoints per case;
-    // server-side the schema is sent over once and Hypothesis caps the actual
-    // draw, so the test runs in seconds. Re-ungate once the engine has a
-    // budget for runaway-size generation.
-    #[cfg(not(feature = "native"))]
-    #[test]
-    fn test_can_set_max_size_large() {
-        assert_all_examples(gs::text().max_size(1_000_000), |_: &String| true);
     }
 }
 
@@ -1526,13 +1516,10 @@ mod regex_tests {
         );
     }
 
-    // The next three tests target the "mark_invalid" rejection paths in
+    // The next tests target the "mark_invalid" rejection paths in
     // `interpret_regex`: the engine should still be able to find examples
-    // even when most draws are unsatisfiable. They're native-only because
-    // the server backend rejects these patterns up front
-    // (`IncompatibleWithAlphabet`, `FAILURE not implemented`).
+    // even when most draws are unsatisfiable.
 
-    #[cfg(feature = "native")]
     #[test]
     fn literal_outside_alphabet_is_rejected_but_retried() {
         // The literal 'a' is outside the alphabet's [b-z] range, so every
@@ -1547,7 +1534,6 @@ mod regex_tests {
         );
     }
 
-    #[cfg(feature = "native")]
     #[test]
     fn ignorecase_literal_swapcase_outside_alphabet() {
         // IGNORECASE + restricted alphabet that allows only uppercase: half
@@ -1570,7 +1556,6 @@ mod regex_tests {
         check_can_generate_examples(gs::from_regex(r".*\A"));
     }
 
-    #[cfg(feature = "native")]
     #[test]
     fn explicit_failure_pattern() {
         // `(?!)?` — the inner negative-lookahead-with-empty-body parses
@@ -1579,7 +1564,6 @@ mod regex_tests {
         check_can_generate_examples(gs::from_regex(r"(?!)?"));
     }
 
-    #[cfg(feature = "native")]
     #[test]
     fn ascii_flag_positive_set_with_nonascii_literal() {
         // `(?a)[]?` — non-ASCII literal in a positive class with
@@ -1588,7 +1572,6 @@ mod regex_tests {
         check_can_generate_examples(gs::from_regex("(?a)[\u{0080}]?"));
     }
 
-    #[cfg(feature = "native")]
     #[test]
     fn positive_set_outside_alphabet() {
         // `[a-z]?` with an alphabet that excludes a-z forces the
@@ -1603,7 +1586,6 @@ mod regex_tests {
         );
     }
 
-    #[cfg(feature = "native")]
     #[test]
     fn ascii_flag_negated_set_with_nonascii_alphabet() {
         // `(?a)[^a]?` with a non-ASCII alphabet — every non-ASCII char
@@ -1615,7 +1597,6 @@ mod regex_tests {
         );
     }
 
-    #[cfg(feature = "native")]
     #[test]
     fn padded_pattern_with_empty_alphabet_intervals() {
         // `categories=[]` with no `include_characters` makes
