@@ -14,7 +14,7 @@
 //! Only available with the `native` feature.
 
 use crate::backend::{DataSource, TestRunResult, TestRunner};
-use crate::runner::Settings;
+use crate::runner::{Settings, Verbosity};
 
 /// Drive the native test runner against a callback that receives the raw
 /// data source for each test case.
@@ -42,6 +42,35 @@ pub fn run_native(
 ) -> TestRunResult {
     let runner = crate::native::test_runner::NativeTestRunner;
     runner.run(settings, database_key, &mut run_case)
+}
+
+/// Build a raw [`DataSource`] that replays the choice sequence encoded in a
+/// base64 failure blob, or `None` if the blob cannot be decoded (corrupt or
+/// from an incompatible Hegel version).
+///
+/// The replay is a single deterministic test case: the embedding caller
+/// drives the returned data source directly (generate, spans, targets) and
+/// concludes it with [`DataSource::mark_complete`], deciding for itself
+/// whether the blob reproduced its failure (the property failed) or is stale
+/// (it passed). A blob whose choices no longer match the caller's generators
+/// surfaces as a stop-test error from the draw that overruns.
+///
+/// `settings` accompany the replay — currently only
+/// [`Verbosity::Debug`](crate::Verbosity::Debug) is consulted, logging the
+/// decoded choice count — but they intentionally travel with the blob so
+/// future settings reach the replay path without a signature break.
+#[doc(hidden)]
+pub fn data_source_for_blob(
+    settings: &Settings,
+    blob: &str,
+) -> Option<Box<dyn DataSource + Send + Sync>> {
+    let choices = crate::native::blob::decode_failure(blob)?;
+    if settings.verbosity == Verbosity::Debug {
+        eprintln!("replaying failure blob: choices = {}", choices.len());
+    }
+    let ntc = crate::native::core::NativeTestCase::for_choices(&choices, None, None);
+    let (data_source, _handle) = crate::native::data_source::NativeDataSource::new(ntc);
+    Some(Box::new(data_source))
 }
 
 #[cfg(test)]

@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::antithesis::TestLocation;
 use crate::backend::{DataSource, Failure, TestCaseResult, TestRunner};
 use crate::control::{currently_in_test_context, with_test_context};
-use crate::runner::{Mode, Phase, Settings};
+use crate::runner::{Mode, Settings};
 use crate::test_case::{
     ASSUME_FAIL_STRING, INVALID_ARGUMENT_PREFIX, LOOP_DONE_STRING, STOP_TEST_STRING, TestCase,
 };
@@ -241,6 +241,10 @@ pub(crate) fn run_test_case(
                     panic_message: msg,
                     diagnostic,
                     origin: format!("Panic at {}", location),
+                    // The native engine attaches the reproduce blob on its
+                    // final replay, once the shrunk choice sequence is known;
+                    // the server backend leaves it `None`.
+                    reproduce_blob: None,
                 })
             }
         }
@@ -256,10 +260,7 @@ pub(crate) fn run_test_case(
 }
 
 /// Print a per-test-case line describing why this test case stopped, and
-/// — for genuine panics on non-final test cases — the full panic
-/// diagnostic. Final-replay panics are already covered by the run-level
-/// summary in [`drive`]; printing them here too would just duplicate the
-/// block.
+/// — for genuine panics on non-final test cases — the full panic diagnostic.
 fn emit_verbose_test_case_outcome(result: &TestCaseResult, is_final: bool) {
     match result {
         TestCaseResult::Invalid => {
@@ -315,6 +316,28 @@ fn render_diagnostic(
     out
 }
 
+/// The copy-pasteable reproduce failure text to append after a failure's diagnostic,
+/// or `None` when nothing should be printed.
+///
+/// `Some` only when [`Settings::print_blob`](crate::Settings::print_blob) is
+/// enabled *and* the failure carries a reproduce blob. A genuine property
+/// failure on the native backend always has a blob; `None` is reached for
+/// health-check failures (`FilterTooMuch` / `TooSlow` / flaky — no
+/// counterexample to encode) and for the backend (no blob at all), in
+/// which case there is simply nothing to print.
+/// todo: indicate a way to signal a backend failure so we unconditionally print
+/// failure blobs when that happens.
+fn reproducer_line(settings: &Settings, failure: &crate::backend::Failure) -> Option<String> {
+    if !settings.print_blob {
+        return None;
+    }
+    let blob = failure.reproduce_blob.as_ref()?;
+    Some(format!(
+        "\nTo reproduce this failure, add the attribute below \
+         #[hegel::test]:\n    #[hegel::reproduce_failure(\"{blob}\")]"
+    ))
+}
+
 /// Drive a [`TestRunner`] to completion against the user's test function.
 ///
 /// Installs the cross-backend panic hook, hands the runner a `run_case`
@@ -332,10 +355,6 @@ pub(crate) fn drive<R, F>(
     F: FnMut(TestCase),
 {
     init_panic_hook();
-    if !settings.phases.contains(&Phase::Generate) {
-        return;
-    }
-
     let mut test_fn = test_fn;
     let got_interesting = AtomicBool::new(false);
     let mode = settings.mode;
@@ -382,17 +401,27 @@ pub(crate) fn drive<R, F>(
             if !quiet {
                 eprint!("{}", failure.diagnostic);
             }
+            if let Some(line) = reproducer_line(settings, failure) {
+                eprintln!("{line}");
+            }
             panic!("Property test failed: {}", failure.panic_message);
         }
         // Multi-failure path: emit a header, print each replay's
         // diagnostic block in order, then panic with the count so callers
         // see the headline figure rather than just one of the messages.
+        // Each distinct bug carries its own blob, so a reproducer line is
+        // printed per failure (when `print_blob` is set).
         failures => {
             let n = failures.len();
             if !quiet {
                 eprintln!("Hegel found {} failing test cases:", n);
-                for failure in failures {
+            }
+            for failure in failures {
+                if !quiet {
                     eprint!("{}", failure.diagnostic);
+                }
+                if let Some(line) = reproducer_line(settings, failure) {
+                    eprintln!("{line}");
                 }
             }
             panic!("Property-based test failed with {} distinct failures.", n);

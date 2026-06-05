@@ -89,6 +89,10 @@ type FnRunResultFailureCount = unsafe extern "C" fn(*const u8) -> usize;
 type FnRunResultFailure = unsafe extern "C" fn(*const u8, usize) -> *const u8;
 type FnFailureOrigin = unsafe extern "C" fn(*const u8) -> *const c_char;
 type FnFailurePanicMessage = unsafe extern "C" fn(*const u8) -> *const c_char;
+type FnFailureReproduceBlob = unsafe extern "C" fn(*const u8) -> *const c_char;
+type FnTestCaseFromBlob = unsafe extern "C" fn(*const u8, *const c_char) -> *mut u8;
+type FnTestCaseFree = unsafe extern "C" fn(*mut u8);
+type FnTestCaseIsFinalReplay = unsafe extern "C" fn(*const u8) -> bool;
 type FnLastErrorMessage = unsafe extern "C" fn() -> *const c_char;
 
 // Bundle of the symbols we use, so the test bodies stay readable.
@@ -114,6 +118,10 @@ struct Api<'a> {
     run_result_failure: Symbol<'a, FnRunResultFailure>,
     failure_origin: Symbol<'a, FnFailureOrigin>,
     failure_panic_message: Symbol<'a, FnFailurePanicMessage>,
+    failure_reproduce_blob: Symbol<'a, FnFailureReproduceBlob>,
+    test_case_from_blob: Symbol<'a, FnTestCaseFromBlob>,
+    test_case_free: Symbol<'a, FnTestCaseFree>,
+    test_case_is_final_replay: Symbol<'a, FnTestCaseIsFinalReplay>,
     last_error_message: Symbol<'a, FnLastErrorMessage>,
 }
 
@@ -141,6 +149,10 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             run_result_failure: lib.get(b"hegel_run_result_failure\0").unwrap(),
             failure_origin: lib.get(b"hegel_failure_origin\0").unwrap(),
             failure_panic_message: lib.get(b"hegel_failure_panic_message\0").unwrap(),
+            failure_reproduce_blob: lib.get(b"hegel_failure_reproduction_blob\0").unwrap(),
+            test_case_from_blob: lib.get(b"hegel_test_case_from_blob\0").unwrap(),
+            test_case_free: lib.get(b"hegel_test_case_free\0").unwrap(),
+            test_case_is_final_replay: lib.get(b"hegel_test_case_is_final_replay\0").unwrap(),
             last_error_message: lib.get(b"hegel_last_error_message\0").unwrap(),
         }
     }
@@ -393,6 +405,207 @@ fn libhegel_reports_shrunk_failure() {
     }
 }
 
+/// Drive the `n < 5` failing property to completion. Shared by the
+/// blob tests below, which read the reproduce blob off the run result.
+unsafe fn drive_failing_property(a: &Api, run: *mut u8) {
+    let schema = integer_schema(0, 100);
+    let origin = CString::new("n >= 5 failed").unwrap();
+    loop {
+        let tc = unsafe { (a.next_test_case)(run) };
+        if tc.is_null() {
+            break;
+        }
+        let mut val_ptr: *const u8 = ptr::null();
+        let mut val_len: usize = 0;
+        let rc = unsafe {
+            (a.generate)(
+                tc,
+                schema.as_ptr(),
+                schema.len(),
+                &mut val_ptr,
+                &mut val_len,
+            )
+        };
+        if rc == -1 {
+            unsafe { (a.mark_complete)(tc, CStatus::Overrun, ptr::null()) };
+            continue;
+        }
+        assert_eq!(rc, 0, "unexpected generate rc={}", rc);
+        let v = decode(unsafe { std::slice::from_raw_parts(val_ptr, val_len) });
+        let Value::Integer(i) = v else {
+            panic!("expected int")
+        };
+        let n: i128 = i.into();
+        if n < 5 {
+            unsafe { (a.mark_complete)(tc, CStatus::Valid, ptr::null()) };
+        } else {
+            unsafe { (a.mark_complete)(tc, CStatus::Interesting, origin.as_ptr()) };
+        }
+    }
+}
+
+/// Run the `n < 5` failing property once and return the reproduce blob of
+/// its first failure. Shared by the blob-replay tests below.
+unsafe fn discover_failure_blob(a: &Api) -> CString {
+    unsafe {
+        let s = (a.settings_new)();
+        (a.settings_test_cases)(s, 200);
+        let empty = CString::new("").unwrap();
+        (a.settings_database)(s, empty.as_ptr());
+        (a.settings_derandomize)(s, true);
+        (a.settings_seed)(s, 0xc0ffee, true);
+
+        let run = (a.run_start)(s);
+        drive_failing_property(a, run);
+
+        let result = (a.run_result)(run);
+        assert!(!(a.run_result_passed)(result), "expected a failing run");
+        let f = (a.run_result_failure)(result, 0);
+        assert!(!f.is_null());
+        let blob_ptr = (a.failure_reproduce_blob)(f);
+        assert!(
+            !blob_ptr.is_null(),
+            "expected a reproduce blob on the failure"
+        );
+        // Copy out of the run-owned buffer before freeing the run.
+        let blob = CStr::from_ptr(blob_ptr).to_owned();
+        (a.run_free)(run);
+        (a.settings_free)(s);
+        blob
+    }
+}
+
+/// Replay `blob` as one standalone test case and return the single drawn
+/// integer of the `n < 5` property, marking the case Interesting/Valid as
+/// the property dictates and freeing the handle.
+unsafe fn replay_blob_once(a: &Api, s: *const u8, blob: &CStr) -> i128 {
+    unsafe {
+        let tc = (a.test_case_from_blob)(s, blob.as_ptr());
+        assert!(
+            !tc.is_null(),
+            "hegel_test_case_from_blob failed: {}",
+            CStr::from_ptr((a.last_error_message)()).to_string_lossy()
+        );
+        assert!(
+            (a.test_case_is_final_replay)(tc),
+            "a blob replay is the counterexample, so is_final_replay must be true"
+        );
+
+        let schema = integer_schema(0, 100);
+        let mut val_ptr: *const u8 = ptr::null();
+        let mut val_len: usize = 0;
+        let rc = (a.generate)(
+            tc,
+            schema.as_ptr(),
+            schema.len(),
+            &mut val_ptr,
+            &mut val_len,
+        );
+        assert_eq!(rc, 0, "unexpected generate rc={}", rc);
+        let Value::Integer(i) = decode(std::slice::from_raw_parts(val_ptr, val_len)) else {
+            panic!("expected int")
+        };
+        let n: i128 = i.into();
+        // The caller plays the property's role: it alone decides whether
+        // the replayed example still fails.
+        if n < 5 {
+            (a.mark_complete)(tc, CStatus::Valid, ptr::null());
+        } else {
+            let origin = CString::new("n >= 5 failed").unwrap();
+            (a.mark_complete)(tc, CStatus::Interesting, origin.as_ptr());
+        }
+        (a.test_case_free)(tc);
+        n
+    }
+}
+
+#[test]
+fn libhegel_blob_test_case_replays_the_counterexample() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    unsafe {
+        let blob = discover_failure_blob(&a);
+
+        // Replay the blob as standalone test cases — no run handle, no
+        // worker. Replaying twice exercises the multiple-reproduce_failures
+        // usage: one call per blob, each its own test case.
+        let s = (a.settings_new)();
+        let first = replay_blob_once(&a, s, &blob);
+        assert!(
+            first >= 5,
+            "replayed value {first} should still violate the n < 5 property"
+        );
+        let second = replay_blob_once(&a, s, &blob);
+        assert_eq!(first, second, "blob replay must be deterministic");
+        (a.settings_free)(s);
+    }
+}
+
+#[test]
+fn libhegel_test_case_from_blob_rejects_bad_input() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    unsafe {
+        let s = (a.settings_new)();
+
+        // An undecodable blob: NULL with a diagnostic.
+        let garbage = CString::new("!!! not a blob !!!").unwrap();
+        let tc = (a.test_case_from_blob)(s, garbage.as_ptr());
+        assert!(tc.is_null());
+        let err = CStr::from_ptr((a.last_error_message)()).to_string_lossy();
+        assert!(
+            err.contains("could not be decoded"),
+            "unexpected error: {err}"
+        );
+
+        // NULL blob and NULL settings: NULL with a diagnostic.
+        let tc = (a.test_case_from_blob)(s, ptr::null());
+        assert!(tc.is_null());
+        assert!(!CStr::from_ptr((a.last_error_message)()).is_empty());
+        let blob = CString::new("AAEC").unwrap();
+        let tc = (a.test_case_from_blob)(ptr::null(), blob.as_ptr());
+        assert!(tc.is_null());
+        assert!(!CStr::from_ptr((a.last_error_message)()).is_empty());
+
+        (a.settings_free)(s);
+    }
+}
+
+#[test]
+fn libhegel_test_case_free_refuses_run_owned_test_cases() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    unsafe {
+        // Freeing NULL is a no-op.
+        (a.test_case_free)(ptr::null_mut());
+
+        let s = (a.settings_new)();
+        (a.settings_test_cases)(s, 1);
+        let empty = CString::new("").unwrap();
+        (a.settings_database)(s, empty.as_ptr());
+        let run = (a.run_start)(s);
+
+        // A test case pumped from a run is owned by the run: freeing it
+        // must be refused, leaving the handle usable.
+        let tc = (a.next_test_case)(run);
+        assert!(!tc.is_null());
+        (a.test_case_free)(tc);
+        let err = CStr::from_ptr((a.last_error_message)()).to_string_lossy();
+        assert!(
+            err.contains("owned by its hegel_run_t"),
+            "unexpected error: {err}"
+        );
+        // Still usable after the refused free.
+        assert_eq!((a.mark_complete)(tc, CStatus::Valid, ptr::null()), 0);
+
+        (a.run_free)(run);
+        (a.settings_free)(s);
+    }
+}
+
 #[test]
 fn libhegel_pool_primitives_draw_added_variables() {
     let lib = unsafe { load() };
@@ -464,7 +677,7 @@ fn libhegel_pool_primitives_draw_added_variables() {
             if consumed == 3 {
                 let mut v: i64 = -1;
                 let rc = (a.pool_generate)(tc, pool_id, true, &mut v);
-                assert_eq!(rc, -1, "expected STOP_TEST on empty pool, got rc={}", rc);
+                assert_eq!(rc, -2, "expected STOP_TEST on empty pool, got rc={}", rc);
                 saw_empty_stop = true;
             }
 

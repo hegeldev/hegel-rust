@@ -4,7 +4,7 @@ use syn::{Attribute, FnArg, ItemFn};
 
 use crate::common::{
     SettingsAttrArgs, build_explicit_blocks, extract_explicit_test_cases, extract_ident_from_pat,
-    rewrite_draws_in_block,
+    extract_reproduce_failure, rewrite_draws_in_block,
 };
 
 // Vendored from tokio 1fc450aefba4b05cdff9b7825ca5e39cccb3780e (thanks!)
@@ -95,6 +95,11 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(err) => return err,
     };
 
+    let reproduce_blob = match extract_reproduce_failure(&mut func.attrs) {
+        Ok(blob) => blob,
+        Err(err) => return err,
+    };
+
     let body = {
         let mut body = (*func.block).clone();
         if let Some(test_case_name) = extract_ident_from_pat(param_pat) {
@@ -105,6 +110,15 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let test_name = func.sig.ident.to_string();
     let settings_expr = test_args.to_settings_expr();
+    // Chain `.reproduce_failure((<expr>).to_string())` onto the `Hegel`
+    // builder so the run replays only the encoded example. The blob
+    // expression flows straight from the attribute into generated code
+    // (`.to_string()` accepts a string literal, a `const`/`static` `&str`,
+    // or a `String`); decoding happens at runtime.
+    let reproduce_call = match &reproduce_blob {
+        Some(blob) => quote! { .reproduce_failure((#blob).to_string()) },
+        None => quote! {},
+    };
     let explicit_blocks = build_explicit_blocks(&explicit_cases, param_pat, &body);
 
     let new_body: TokenStream = quote! {
@@ -116,6 +130,7 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
 
             hegel::Hegel::new(|#param_pat: #param_ty| #body)
             .settings(__hegel_settings)
+            #reproduce_call
             .__database_key(format!("{}::{}", module_path!(), #test_name))
             .test_location(hegel::TestLocation {
                 function: #test_name.to_string(),

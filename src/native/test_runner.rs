@@ -100,6 +100,28 @@ impl TestRunner for NativeTestRunner {
     }
 }
 
+/// [`TestRunner`] that replays a single failing example encoded as a base64
+/// failure blob, instead of generating fresh test cases.
+///
+/// Selected by [`Hegel::reproduce_failure`](crate::Hegel::reproduce_failure)
+/// in place of [`NativeTestRunner`]. A blob replay is one deterministic
+/// case — no generation, targeting, or shrinking — so it ignores `mode`,
+/// `phases`, and the test-case budget entirely.
+pub(crate) struct ReproduceRunner {
+    pub(crate) blob: String,
+}
+
+impl TestRunner for ReproduceRunner {
+    fn run(
+        &self,
+        _settings: &Settings,
+        _database_key: Option<&str>,
+        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+    ) -> TestRunResult {
+        run_reproduce(&self.blob, run_case)
+    }
+}
+
 /// Run a single test case (used by `Mode::SingleTestCase`).
 fn run_single(
     settings: &Settings,
@@ -123,6 +145,55 @@ fn run_single(
             passed: true,
             failures: Vec::new(),
         },
+    }
+}
+
+/// Replay a single failing example encoded as a base64 failure blob (the
+/// engine half of [`ReproduceRunner`]).
+///
+/// Decodes the blob to a choice sequence and runs exactly that one sequence.
+///
+/// Two failure outcomes are distinguished:
+/// - an **undecodable** blob is invalid *input*, so it panics outright (over
+///   FFI, libhegel's worker catches the panic and surfaces it as a failure);
+/// - a blob that **decodes but no longer reproduces** the failure is reported
+///   as its own [`TestRunResult`] failure (origin `"reproduce_failure"`).
+fn run_reproduce(
+    blob: &str,
+    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+) -> TestRunResult {
+    let Some(choices) = crate::native::blob::decode_failure(blob) else {
+        panic!(
+            "reproduce_failure: the supplied failure blob could not be decoded. \
+             It may be corrupt or from an incompatible Hegel version."
+        );
+    };
+    let mut ctx = EngineCtx::new(run_case);
+    let ntc = NativeTestCase::for_choices(&choices, None, None);
+    let run = ctx.run_final(ntc);
+    match (run.status, run.failure) {
+        (Status::Interesting, Some(mut failure)) => {
+            failure.reproduce_blob = Some(blob.to_string());
+            TestRunResult {
+                passed: false,
+                failures: vec![failure],
+            }
+        }
+        // Decoded and replayed, but the test no longer fails on it.
+        _ => {
+            let message = "reproduce_failure: the supplied failure blob no longer \
+                           reproduces a failure. The failure may have been fixed, or \
+                           the blob is stale.";
+            TestRunResult {
+                passed: false,
+                failures: vec![Failure {
+                    panic_message: message.to_string(),
+                    diagnostic: format!("{message}\n"),
+                    origin: String::from("reproduce_failure"),
+                    reproduce_blob: None,
+                }],
+            }
+        }
     }
 }
 
@@ -674,7 +745,8 @@ fn run_main(
         let run = ctx.run_final(ntc);
 
         match (run.status, run.failure) {
-            (Status::Interesting, Some(failure)) => {
+            (Status::Interesting, Some(mut failure)) => {
+                failure.reproduce_blob = Some(crate::native::blob::encode_failure(&choices));
                 failures.push(failure);
             }
             // Defensive branch — fires only when the final replay of a
@@ -824,6 +896,7 @@ fn health_check_failure(message: String) -> TestRunResult {
             panic_message: message.clone(),
             diagnostic: format!("{message}\n"),
             origin: "FailedHealthCheck".to_string(),
+            reproduce_blob: None,
         }],
     }
 }
