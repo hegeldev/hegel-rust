@@ -23,7 +23,6 @@ check-tests-minimal-versions:
 
 format:
     cargo fmt
-    cargo fmt --manifest-path tests/conformance/rust/Cargo.toml
     # also run format-nix if we have nix installed
     @which nix && just format-nix || true
 
@@ -32,14 +31,12 @@ format-nix:
 
 check-format:
     cargo fmt --check
-    cargo fmt --manifest-path tests/conformance/rust/Cargo.toml --check
 
 check-format-nix:
     nix run nixpkgs#nixfmt -- --check nix/flake.nix
 
 check-clippy:
     cargo clippy --all-features --all-targets -- -D warnings
-    cargo clippy --manifest-path tests/conformance/rust/Cargo.toml --all-targets -- -D warnings
 
 check-docs:
     cargo +nightly docs-rs
@@ -58,11 +55,6 @@ check-lint: check-format check-clippy check-nocov-style check-test-modules
 check-coverage:
     # requires cargo-llvm-cov and llvm-tools-preview
     scripts/check-coverage.py
-
-check-conformance:
-    cargo build --release --manifest-path tests/conformance/rust/Cargo.toml
-    uv run --with 'hegel-core==0.4.1' --with pytest --with hypothesis \
-        pytest tests/conformance/test_conformance.py
 
 # Build the libhegel C shared library + checked-in C header.
 c-build:

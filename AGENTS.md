@@ -14,7 +14,6 @@ just test                           # run tests
 just lint                           # run clipy
 just format                         # format
 just docs                           # build and open docs
-just check-conformance              # run python conformance tests
 just check-coverage                 # check coverage (requires cargo-llvm-cov + llvm-tools-preview)
 cargo test test_name                # run a single test
 ```
@@ -97,7 +96,3 @@ For enums, it also creates `<Enum><Variant>Generator` for each data variant. Imp
 This project enforces 100% line coverage for new code. You may not add `// nocov` annotations without explicit human permission. See the `coverage` skill for full details on the coverage philosophy, ratchet mechanism, and how to make code testable.
 
 **CRITICAL: You MUST NOT increase the numbers in `.github/coverage-ratchet.json` without first asking for and then receiving explicit human permission to do so.**
-
-### Conformance Tests
-
-Located in `tests/conformance/`. Rust test binaries in `tests/conformance/rust/src/bin/` are invoked by a Python test runner (`tests/conformance/test_conformance.py`) that validates generators produce values matching their declared constraints.

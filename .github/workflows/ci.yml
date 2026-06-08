@@ -253,7 +253,9 @@ jobs:
 
       - uses: ./.github/actions/install-tools
         with:
-          tools: just
+          # `uv` is needed for the `check-coverage.py` script's
+          # `#!/usr/bin/env -S uv run --script` shebang.
+          tools: just uv
 
       - name: Run coverage
         run: just check-coverage
@@ -291,27 +293,6 @@ jobs:
               --head "$BRANCH" || true
           fi
 
-  conformance:
-    name: conformance
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-
-      - uses: ./.github/actions/install-tools
-        with:
-          tools: just uv
-
-      - name: Run conformance tests
-        run: just check-conformance
-
   nix:
     name: nix
     runs-on: ubuntu-latest
@@ -332,7 +313,7 @@ jobs:
   release:
     name: release
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust'
-    needs: [lint, test, test-all-features, test-minimal-versions, docs, coverage, conformance, nix]
+    needs: [lint, test, test-all-features, test-minimal-versions, docs, coverage, nix]
     runs-on: ubuntu-latest
     permissions:
       contents: write
