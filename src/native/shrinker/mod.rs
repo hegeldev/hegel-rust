@@ -89,9 +89,9 @@ pub struct Shrinker<'a> {
     /// secondary key.
     pub downgraded: Vec<Vec<ChoiceValue>>,
     /// Cap on `improvements`. Once `improvements >= max_improvements`,
-    /// `consider` and `probe` short-circuit so the runner doesn't get
-    /// stuck chasing diminishing returns. Defaults to [`MAX_SHRINKS`];
-    /// tests can lower it for controlled-budget assertions.
+    /// `consider` and `probe` return [`ShrinkStop`] to end the shrink, so the
+    /// runner doesn't get stuck chasing diminishing returns. Defaults to
+    /// [`MAX_SHRINKS`]; tests can lower it for controlled-budget assertions.
     pub max_improvements: usize,
     /// Total number of times the test closure has been invoked through
     /// `consider` or `probe`.  Used together with `calls_at_last_shrink`
@@ -206,11 +206,13 @@ impl<'a> Shrinker<'a> {
         if self.timed_out {
             return true;
         }
-        if let Some(deadline) = self.deadline
-            && Instant::now() >= deadline
-        {
-            self.timed_out = true;
-            return true;
+        // Spelled out as nested `if let` rather than an `if let … &&` chain,
+        // which isn't stable on the 1.86 MSRV.
+        if let Some(deadline) = self.deadline {
+            if Instant::now() >= deadline {
+                self.timed_out = true;
+                return true;
+            }
         }
         false
     }
@@ -256,8 +258,12 @@ impl<'a> Shrinker<'a> {
                 return Ok(false);
             }
         }
+        // The improvement cap is a *global* stop, not a per-candidate reject:
+        // once `MAX_SHRINKS` strict shrinks have been accepted, no further
+        // shrinking can help, so stop the whole shrink (like the deadline)
+        // instead of returning "not interesting" for every remaining candidate.
         if self.improvements >= self.max_improvements {
-            return Ok(false);
+            return Err(ShrinkStop);
         }
         // Only enforce the stall guard once we've found at least one
         // improvement.  Without warmup, predicates that need many calls
@@ -328,8 +334,9 @@ impl<'a> Shrinker<'a> {
         seed: u64,
         max_size: usize,
     ) -> ShrinkResult<()> {
+        // Global stop once the improvement cap is reached (see `consider`).
         if self.improvements >= self.max_improvements {
-            return Ok(());
+            return Err(ShrinkStop);
         }
         if self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall {
             return Ok(());

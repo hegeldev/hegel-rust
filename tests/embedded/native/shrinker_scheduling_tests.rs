@@ -471,6 +471,29 @@ fn shrink_completes_normally_with_a_future_deadline() {
 }
 
 #[test]
+fn consider_and_probe_stop_when_improvement_cap_reached() {
+    // The `MAX_SHRINKS` improvement cap is a global stop: once reached,
+    // `consider`/`probe` return `ShrinkStop` (like the deadline) rather than a
+    // per-candidate "not interesting".
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(5)],
+        Spans::new(),
+    );
+    shrinker.max_improvements = 0;
+    assert!(shrinker.consider(&[int_node(0)]).is_err());
+    assert!(
+        shrinker
+            .probe(&[ChoiceValue::Integer(BigInt::from(0))], 0, 8)
+            .is_err()
+    );
+    assert_eq!(shrinker.calls, 0, "the cap stops before any execution");
+}
+
+#[test]
 fn past_deadline_latches_and_short_circuits_consider_and_probe() {
     use std::time::{Duration, Instant};
     let mut shrinker = Shrinker::with_probe(
