@@ -72,7 +72,7 @@ fn consider_replaces_current_spans_on_improvement() {
     // A smaller candidate triggers `accept_improvement`, which swaps in the
     // closure-provided spans.
     let smaller = vec![int_node(0), int_node(0)];
-    assert!(shrinker.consider(&smaller));
+    assert!(shrinker.consider(&smaller).unwrap());
     assert_eq!(shrinker.current_spans.len(), 1);
     assert_eq!(shrinker.current_spans.get(0).unwrap().label, "updated");
 }
@@ -100,7 +100,7 @@ fn consider_leaves_current_spans_alone_when_candidate_not_smaller() {
     );
 
     // Same as current_nodes → fast-path returns true without calling test_fn.
-    assert!(shrinker.consider(&initial));
+    assert!(shrinker.consider(&initial).unwrap());
     assert_eq!(shrinker.current_spans.get(0).unwrap().label, "kept");
 
     // Non-improving (same sort_key, different values would have to be
@@ -108,7 +108,7 @@ fn consider_leaves_current_spans_alone_when_candidate_not_smaller() {
     // We instead pass a strictly larger candidate to verify the not-smaller
     // path leaves spans untouched.
     let larger = vec![int_node(7)];
-    shrinker.consider(&larger);
+    shrinker.consider(&larger).unwrap();
     assert_eq!(shrinker.current_spans.get(0).unwrap().label, "kept");
 }
 
@@ -128,12 +128,16 @@ fn changed_nodes_accumulates_diff_against_checkpoint() {
     assert!(shrinker.changed_nodes().is_empty());
 
     // Shrink node 0 → set should contain {0}.
-    shrinker.consider(&[int_node(0), int_node(10), int_node(10)]);
+    shrinker
+        .consider(&[int_node(0), int_node(10), int_node(10)])
+        .unwrap();
     assert_eq!(shrinker.changed_nodes().len(), 1);
     assert!(shrinker.changed_nodes().contains(&0));
 
     // Shrink node 2 → set should contain {0, 2}.
-    shrinker.consider(&[int_node(0), int_node(10), int_node(0)]);
+    shrinker
+        .consider(&[int_node(0), int_node(10), int_node(0)])
+        .unwrap();
     let changed = shrinker.changed_nodes();
     assert!(changed.contains(&0));
     assert!(changed.contains(&2));
@@ -155,11 +159,13 @@ fn changed_nodes_clears_on_shape_change() {
         Spans::new(),
     );
 
-    shrinker.consider(&[int_node(0), int_node(5), int_node(5)]);
+    shrinker
+        .consider(&[int_node(0), int_node(5), int_node(5)])
+        .unwrap();
     assert!(!shrinker.changed_nodes().is_empty());
 
     // A two-element candidate is strictly smaller and changes the shape.
-    shrinker.consider(&[int_node(0), int_node(0)]);
+    shrinker.consider(&[int_node(0), int_node(0)]).unwrap();
     assert!(shrinker.changed_nodes().is_empty());
 }
 
@@ -182,7 +188,7 @@ fn changed_nodes_clears_on_kind_change_in_place() {
         initial,
         Spans::new(),
     );
-    shrinker.consider(&[int_node(0), int_node(0)]);
+    shrinker.consider(&[int_node(0), int_node(0)]).unwrap();
     // Kind change → set cleared.
     assert!(shrinker.changed_nodes().is_empty());
 }
@@ -220,7 +226,7 @@ fn forced_nodes_survive_every_shrinker_pass() {
         ),
         ShrinkPass::new("shrink_duplicates", Box::new(|sh| sh.shrink_duplicates())),
     ];
-    shrinker.fixate_shrink_passes(&mut passes);
+    shrinker.fixate_shrink_passes(&mut passes).unwrap();
     let value = match &shrinker.current_nodes[snapshot_forced_idx].value {
         ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
         _ => unreachable!(),
@@ -248,13 +254,13 @@ fn consider_cache_evicts_when_over_capacity() {
     for v in 1..=4100i128 {
         // Each candidate has a distinct value → distinct sort_key →
         // distinct cache key.
-        shrinker.consider(&[int_node(v)]);
+        shrinker.consider(&[int_node(v)]).unwrap();
     }
     // No panic, no growth past the bound (we only assert the rough
     // upper bound — exact size depends on hashing).
     // The behaviour we care about is that `consider` keeps working
     // even after the bound is reached.
-    assert!(!shrinker.consider(&[int_node(99999)]));
+    assert!(!shrinker.consider(&[int_node(99999)]).unwrap());
 }
 
 #[test]
@@ -281,9 +287,9 @@ fn consider_cache_short_circuits_repeated_candidate() {
         Spans::new(),
     );
     let candidate = vec![int_node(7)];
-    shrinker.consider(&candidate);
-    shrinker.consider(&candidate);
-    shrinker.consider(&candidate);
+    shrinker.consider(&candidate).unwrap();
+    shrinker.consider(&candidate).unwrap();
+    shrinker.consider(&candidate).unwrap();
     assert_eq!(count.get(), 1);
 }
 
@@ -298,7 +304,7 @@ fn clear_change_tracking_rebaselines_and_empties_set() {
         initial,
         Spans::new(),
     );
-    shrinker.consider(&[int_node(0), int_node(10)]);
+    shrinker.consider(&[int_node(0), int_node(10)]).unwrap();
     assert!(shrinker.changed_nodes().contains(&0));
 
     shrinker.clear_change_tracking();
@@ -306,7 +312,7 @@ fn clear_change_tracking_rebaselines_and_empties_set() {
 
     // After clearing, the new baseline is the post-shrink state, so the
     // next diff is against `[0, 10]` rather than the original `[10, 10]`.
-    shrinker.consider(&[int_node(0), int_node(0)]);
+    shrinker.consider(&[int_node(0), int_node(0)]).unwrap();
     let changed = shrinker.changed_nodes();
     assert!(changed.contains(&1));
     assert!(!changed.contains(&0));

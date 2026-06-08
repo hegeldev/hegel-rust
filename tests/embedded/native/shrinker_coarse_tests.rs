@@ -50,7 +50,7 @@ fn initial_coarse_reduction_no_op_when_shape_stable() {
         initial,
         Spans::new(),
     );
-    shrinker.initial_coarse_reduction();
+    shrinker.initial_coarse_reduction().unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 5);
 }
 
@@ -80,7 +80,7 @@ fn initial_coarse_reduction_lowers_when_shape_depends_on_value() {
         initial,
         Spans::new(),
     );
-    shrinker.initial_coarse_reduction();
+    shrinker.initial_coarse_reduction().unwrap();
     // The shape-aware coarse pass should drop the integer.
     assert!(int_value(&shrinker.current_nodes[0]) < 3);
 }
@@ -97,7 +97,7 @@ fn initial_coarse_reduction_skips_large_values() {
         initial,
         Spans::new(),
     );
-    shrinker.initial_coarse_reduction();
+    shrinker.initial_coarse_reduction().unwrap();
     // Unchanged.
     assert_eq!(int_value(&shrinker.current_nodes[0]), 50);
 }
@@ -119,7 +119,7 @@ fn initial_coarse_reduction_skips_non_zero_min_value() {
         initial,
         Spans::new(),
     );
-    shrinker.initial_coarse_reduction();
+    shrinker.initial_coarse_reduction().unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 3);
 }
 
@@ -136,7 +136,7 @@ fn initial_coarse_reduction_skips_forced_node() {
         initial,
         Spans::new(),
     );
-    shrinker.initial_coarse_reduction();
+    shrinker.initial_coarse_reduction().unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 5);
 }
 
@@ -159,7 +159,7 @@ fn initial_coarse_reduction_keeps_same_shape_one_of() {
         initial,
         Spans::new(),
     );
-    shrinker.initial_coarse_reduction();
+    shrinker.initial_coarse_reduction().unwrap();
     // Sequence should remain (1, 0); coarse phase doesn't lower the
     // selector when there's no shape change to exploit.
     assert_eq!(shrinker.current_nodes.len(), 2);
@@ -226,7 +226,7 @@ fn initial_coarse_reduction_accepts_probe_when_direct_replace_fails() {
         initial,
         Spans::new(),
     );
-    shrinker.initial_coarse_reduction();
+    shrinker.initial_coarse_reduction().unwrap();
     assert!(probe_calls.get() > 0, "probe branch was never reached");
     assert_eq!(shrinker.current_nodes.len(), 2);
 }

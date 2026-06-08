@@ -35,7 +35,7 @@ fn lower_duplicated_characters_lowers_shared_codepoint_in_pair() {
         initial,
         Spans::new(),
     );
-    shrinker.lower_duplicated_characters();
+    shrinker.lower_duplicated_characters().unwrap();
     // The 'b' shared codepoint should be lowered to the smallest in the
     // shrink order ('a').
     if let ChoiceValue::String(s0) = &shrinker.current_nodes[0].value {
@@ -69,7 +69,7 @@ fn lower_duplicated_characters_skips_non_string_neighbour() {
         initial,
         Spans::new(),
     );
-    shrinker.lower_duplicated_characters();
+    shrinker.lower_duplicated_characters().unwrap();
     // No second string to pair with → no change.
     if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
         assert_eq!(s, &vec![b'b' as u32]);
@@ -88,7 +88,7 @@ fn normalize_unicode_chars_replaces_accented_letter_with_base() {
         initial,
         Spans::new(),
     );
-    shrinker.normalize_unicode_chars();
+    shrinker.normalize_unicode_chars().unwrap();
     if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
         // Either lowered to 'A' (NFD) or 'a' (case map) — both fine.
         assert!(s == &vec![b'A' as u32] || s == &vec![b'a' as u32]);
@@ -113,7 +113,7 @@ fn normalize_unicode_chars_skips_when_no_simpler_chars() {
         initial,
         Spans::new(),
     );
-    shrinker.normalize_unicode_chars();
+    shrinker.normalize_unicode_chars().unwrap();
     if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
         assert_eq!(s, &vec![b'A' as u32]);
     } else {
@@ -147,7 +147,7 @@ fn normalize_unicode_chars_handles_string_truncated_by_closure() {
         initial,
         Spans::new(),
     );
-    shrinker.normalize_unicode_chars();
+    shrinker.normalize_unicode_chars().unwrap();
     // No panic on the second iteration; current_nodes converged on a
     // length-1 string.
     if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
@@ -173,7 +173,7 @@ fn normalize_unicode_chars_does_nothing_on_non_string() {
         initial,
         Spans::new(),
     );
-    shrinker.normalize_unicode_chars();
+    shrinker.normalize_unicode_chars().unwrap();
     match shrinker.current_nodes[0].value {
         ChoiceValue::Boolean(b) => assert!(b),
         _ => unreachable!(),
@@ -194,7 +194,7 @@ fn normalize_unicode_chars_respects_intervals() {
         initial,
         Spans::new(),
     );
-    shrinker.normalize_unicode_chars();
+    shrinker.normalize_unicode_chars().unwrap();
     if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
         // The 'A' base (0x41) sits outside the allowed range; 'À' (0xC0)
         // remains unchanged.

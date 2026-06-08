@@ -10,14 +10,14 @@
 use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceKind, ChoiceValue};
 
-use super::{ShrinkRun, Shrinker};
+use super::{ShrinkResult, ShrinkRun, Shrinker};
 
 impl<'a> Shrinker<'a> {
     /// Coarse pre-shrink reductions that need their own phase because
     /// they can re-randomise (and thus enlarge) the test case.  Called
     /// from `test_runner.rs` once, before the main `shrink()` loop.
-    pub(crate) fn initial_coarse_reduction(&mut self) {
-        self.reduce_each_alternative();
+    pub(crate) fn initial_coarse_reduction(&mut self) -> ShrinkResult<()> {
+        self.reduce_each_alternative()
     }
 
     /// Walk small non-negative integer nodes and try to lower them as
@@ -30,7 +30,7 @@ impl<'a> Shrinker<'a> {
     /// 2. Otherwise, try `try_lower_node_as_alternative(i, v)` for
     ///    each smaller candidate `v < node.value`, stopping at the
     ///    first success.
-    fn reduce_each_alternative(&mut self) {
+    fn reduce_each_alternative(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
@@ -54,7 +54,7 @@ impl<'a> Shrinker<'a> {
                 .expect("0 fits a min==0 integer choice");
             let mut zeroed = self.current_nodes.clone();
             zeroed[i] = zeroed[i].with_value(ChoiceValue::Integer(zero_val));
-            let (_, zero_actual, _) = (self.test_fn)(ShrinkRun::Full(&zeroed));
+            let (_, zero_actual, _) = self.run_test_fn(ShrinkRun::Full(&zeroed))?;
             let shape_changed = zero_actual.len() != self.current_nodes.len()
                 || (i + 1..self.current_nodes.len()).any(|j| {
                     j >= zero_actual.len()
@@ -64,7 +64,7 @@ impl<'a> Shrinker<'a> {
             if shape_changed {
                 let mut v = BigInt::from(0);
                 while v < current_val {
-                    if self.try_lower_node_as_alternative(i, &v) {
+                    if self.try_lower_node_as_alternative(i, &v)? {
                         break;
                     }
                     v += 1;
@@ -72,17 +72,18 @@ impl<'a> Shrinker<'a> {
             }
             i += 1;
         }
+        Ok(())
     }
 
     /// Lower the integer at `i` to `v`, retrying the suffix as random
     /// continuations to repair any shape changes the lower caused.
-    fn try_lower_node_as_alternative(&mut self, i: usize, v: &BigInt) -> bool {
+    fn try_lower_node_as_alternative(&mut self, i: usize, v: &BigInt) -> ShrinkResult<bool> {
         // Callers iterate `i < self.current_nodes.len()`, so this is a
         // documented precondition.
         debug_assert!(i < self.current_nodes.len());
         // First try the bare lowering.
-        if self.replace_int(i, v) {
-            return true;
+        if self.replace_int(i, v)? {
+            return Ok(true);
         }
         // Couldn't lower directly; re-randomise the suffix via `probe`.
         // Use the lowered prefix as the probe's prefix and let the engine pick
@@ -96,12 +97,12 @@ impl<'a> Shrinker<'a> {
         let max_size = self.current_nodes.len() + 16;
         let epoch = self.improvements;
         for seed in 0..3u64 {
-            self.probe(&prefix, seed, max_size);
+            self.probe(&prefix, seed, max_size)?;
             if self.improvements > epoch {
-                return true;
+                return Ok(true);
             }
         }
-        false
+        Ok(false)
     }
 }
 

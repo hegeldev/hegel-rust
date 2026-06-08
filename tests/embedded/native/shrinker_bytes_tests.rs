@@ -28,7 +28,7 @@ fn shrink_bytes_collapses_accepting_run_to_simplest() {
     // surrounding loop structure.
     let initial = vec![bytes_node(vec![3, 1, 4, 1], 1, 10)];
     let mut shrinker = accepting_shrinker(initial);
-    shrinker.shrink_bytes();
+    shrinker.shrink_bytes().unwrap();
     let v = match &shrinker.current_nodes[0].value {
         ChoiceValue::Bytes(v) => v.clone(),
         _ => unreachable!(),
@@ -63,7 +63,7 @@ fn shrink_bytes_linear_scan_breaks_when_replace_shortens_below_sz() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_bytes();
+    shrinker.shrink_bytes().unwrap();
     match &shrinker.current_nodes[0].value {
         ChoiceValue::Bytes(v) => assert_eq!(v, &vec![7u8]),
         _ => unreachable!(),
@@ -100,7 +100,7 @@ fn redistribute_bytes_pair_partial_move_triggers_bin_search() {
         initial,
         Spans::new(),
     );
-    shrinker.redistribute_bytes_pairs();
+    shrinker.redistribute_bytes_pairs().unwrap();
     match &shrinker.current_nodes[1].value {
         ChoiceValue::Bytes(b) => assert!(b.len() <= 3, "t exceeded 3 bytes: {b:?}"),
         _ => unreachable!(),
@@ -117,7 +117,7 @@ fn redistribute_bytes_pair_moves_entire_value_when_accepted() {
         bytes_node(vec![4, 5], 0, 10),
     ];
     let mut shrinker = accepting_shrinker(initial);
-    shrinker.redistribute_bytes_pairs();
+    shrinker.redistribute_bytes_pairs().unwrap();
     let (a, b) = match (
         &shrinker.current_nodes[0].value,
         &shrinker.current_nodes[1].value,

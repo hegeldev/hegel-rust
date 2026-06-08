@@ -39,7 +39,7 @@ fn redistribute_string_pair_moves_entire_value_when_accepted() {
         string_node(vec![b'd' as u32, b'e' as u32], 0, 0x10FFFF),
     ];
     let mut shrinker = accepting_shrinker(initial);
-    shrinker.redistribute_string_pairs();
+    shrinker.redistribute_string_pairs().unwrap();
     let (a, b) = match (
         &shrinker.current_nodes[0].value,
         &shrinker.current_nodes[1].value,
@@ -84,7 +84,7 @@ fn redistribute_string_pair_partial_move_triggers_bin_search() {
         initial,
         Spans::new(),
     );
-    shrinker.redistribute_string_pairs();
+    shrinker.redistribute_string_pairs().unwrap();
     match &shrinker.current_nodes[1].value {
         ChoiceValue::String(s) => assert!(s.len() <= 3, "t exceeded 3 cps: {s:?}"),
         _ => unreachable!(),
@@ -101,7 +101,7 @@ fn shrink_strings_collapses_accepting_run_toward_simplest() {
         b'z' as u32,
     )];
     let mut shrinker = accepting_shrinker(initial);
-    shrinker.shrink_strings();
+    shrinker.shrink_strings().unwrap();
     let v = match &shrinker.current_nodes[0].value {
         ChoiceValue::String(v) => v.clone(),
         _ => unreachable!(),
@@ -141,7 +141,7 @@ fn shrink_strings_duplicate_pass_bin_search_skips_after_val_eliminated() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_strings();
+    shrinker.shrink_strings().unwrap();
     match &shrinker.current_nodes[0].value {
         ChoiceValue::String(s) => assert_eq!(s, &vec![100u32, 100u32]),
         _ => unreachable!(),
@@ -171,7 +171,7 @@ fn shrink_strings_semantic_candidate_falls_back_to_nfd_base_in_range() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_strings();
+    shrinker.shrink_strings().unwrap();
     match &shrinker.current_nodes[0].value {
         ChoiceValue::String(s) => {
             assert_eq!(s.len(), 1);
