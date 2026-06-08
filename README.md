@@ -16,10 +16,6 @@
 
 To install: `cargo add --dev hegeltest`.
 
-Hegel runs entirely in-process as a pure Rust implementation of the Hegel
-engine — there is no Python dependency and nothing extra to install.
-See https://hegel.dev/reference/installation for details.
-
 ## Quickstart
 
 Here's a quick example of how to write a Hegel test:
