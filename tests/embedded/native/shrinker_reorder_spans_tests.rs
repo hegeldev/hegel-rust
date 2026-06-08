@@ -45,7 +45,7 @@ fn reorder_spans_sorts_same_label_siblings() {
         initial,
         spans,
     );
-    shrinker.reorder_spans();
+    shrinker.reorder_spans().unwrap();
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
@@ -55,6 +55,30 @@ fn reorder_spans_sorts_same_label_siblings() {
         })
         .collect();
     assert_eq!(values, vec![1, 3]);
+}
+
+#[test]
+fn reorder_spans_stops_when_deadline_passed() {
+    // With same-label siblings to reorder and an already-expired deadline,
+    // the first `consider` inside `shrink_ordering` errors out and the stop
+    // propagates back through `reorder_spans`.
+    use std::time::{Duration, Instant};
+    let initial = vec![int_node(3), int_node(1)];
+    let mut spans = Spans::new();
+    spans.push(sib(0, 1, "item", None));
+    spans.push(sib(1, 2, "item", None));
+
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        spans,
+    );
+    shrinker.deadline = Some(Instant::now() - Duration::from_secs(1));
+    assert!(shrinker.reorder_spans().is_err());
+    assert!(shrinker.timed_out);
 }
 
 #[test]
@@ -73,7 +97,7 @@ fn reorder_spans_skips_singleton_groups() {
         initial,
         spans,
     );
-    shrinker.reorder_spans();
+    shrinker.reorder_spans().unwrap();
     // Order unchanged.
     let values: Vec<_> = shrinker
         .current_nodes
@@ -112,7 +136,7 @@ fn reorder_spans_handles_multi_node_siblings() {
         initial,
         spans,
     );
-    shrinker.reorder_spans();
+    shrinker.reorder_spans().unwrap();
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
@@ -141,7 +165,7 @@ fn reorder_spans_safe_with_stale_endpoints() {
         initial,
         spans,
     );
-    shrinker.reorder_spans();
+    shrinker.reorder_spans().unwrap();
     // No panic; nothing changed.
     assert_eq!(shrinker.current_nodes.len(), 2);
 }

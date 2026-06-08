@@ -74,14 +74,14 @@ fn assert_integer_at(shrinker: &Shrinker<'_>, idx: usize, expected: i128) {
 #[test]
 fn swap_integer_sign_skips_forced_node() {
     let mut shrinker = accepting_shrinker(vec![int_node(-10, true), int_node(-20, false)]);
-    shrinker.swap_integer_sign();
+    shrinker.swap_integer_sign().unwrap();
     assert_integer_at(&shrinker, 0, -10);
 }
 
 #[test]
 fn binary_search_integer_towards_zero_skips_forced_node() {
     let mut shrinker = accepting_shrinker(vec![int_node(1000, true), int_node(500, false)]);
-    shrinker.binary_search_integer_towards_zero();
+    shrinker.binary_search_integer_towards_zero().unwrap();
     assert_integer_at(&shrinker, 0, 1000);
 }
 
@@ -92,14 +92,14 @@ fn shrink_duplicates_skips_forced_member_of_group() {
         int_node(7, false),
         int_node(7, false),
     ]);
-    shrinker.shrink_duplicates();
+    shrinker.shrink_duplicates().unwrap();
     assert_integer_at(&shrinker, 0, 7);
 }
 
 #[test]
 fn redistribute_integers_skips_forced_node() {
     let mut shrinker = accepting_shrinker(vec![int_node(50, true), int_node(50, false)]);
-    shrinker.redistribute_integers();
+    shrinker.redistribute_integers().unwrap();
     assert_integer_at(&shrinker, 0, 50);
 }
 
@@ -109,7 +109,7 @@ fn shrink_bytes_skips_forced_node() {
         bytes_node(vec![9, 9, 9], true),
         bytes_node(vec![1, 2, 3], false),
     ]);
-    shrinker.shrink_bytes();
+    shrinker.shrink_bytes().unwrap();
     match &shrinker.current_nodes[0].value {
         ChoiceValue::Bytes(b) => assert_eq!(b, &vec![9, 9, 9]),
         _ => unreachable!(),
@@ -119,7 +119,7 @@ fn shrink_bytes_skips_forced_node() {
 #[test]
 fn shrink_floats_skips_forced_node() {
     let mut shrinker = accepting_shrinker(vec![float_node(123.5, true), float_node(7.5, false)]);
-    shrinker.shrink_floats();
+    shrinker.shrink_floats().unwrap();
     match shrinker.current_nodes[0].value {
         ChoiceValue::Float(v) => assert_eq!(v, 123.5),
         _ => unreachable!(),
@@ -133,14 +133,14 @@ fn try_shortening_via_increment_skips_forced_node() {
         int_node(3, false),
         int_node(2, false),
     ]);
-    shrinker.try_shortening_via_increment();
+    shrinker.try_shortening_via_increment().unwrap();
     assert_integer_at(&shrinker, 0, 5);
 }
 
 #[test]
 fn mutate_and_shrink_skips_forced_node() {
     let mut shrinker = accepting_shrinker(vec![int_node(99, true), bool_node(true, false)]);
-    shrinker.mutate_and_shrink();
+    shrinker.mutate_and_shrink().unwrap();
     assert_integer_at(&shrinker, 0, 99);
 }
 
@@ -178,7 +178,7 @@ fn redistribute_numeric_pairs_skips_forced_integer() {
         ],
         Spans::new(),
     );
-    shrinker.redistribute_numeric_pairs();
+    shrinker.redistribute_numeric_pairs().unwrap();
     assert_integer_at(&shrinker, 0, 15);
     assert_integer_at(&shrinker, 1, 10);
 }
@@ -207,7 +207,7 @@ fn normalize_unicode_chars_skips_forced_node() {
         false,
     );
     let mut shrinker = accepting_shrinker(vec![forced_str, other]);
-    shrinker.normalize_unicode_chars();
+    shrinker.normalize_unicode_chars().unwrap();
     match &shrinker.current_nodes[0].value {
         ChoiceValue::String(s) => assert_eq!(s, &vec![0xE9]),
         _ => unreachable!(),

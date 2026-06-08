@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use crate::native::bignum::{BigInt, BigUint, Zero};
 use crate::native::core::{ChoiceKind, ChoiceValue};
 
-use super::Shrinker;
+use super::{ShrinkResult, Shrinker};
 
 fn is_sequence(kind: &std::sync::Arc<ChoiceKind>) -> bool {
     matches!(**kind, ChoiceKind::Bytes(_) | ChoiceKind::String(_))
@@ -21,7 +21,7 @@ impl<'a> Shrinker<'a> {
     /// Value punning (via `with_value` + `for_choices` with `prefix_nodes`)
     /// handles the case where decrementing changes the kind at position
     /// `j` (e.g. a `one_of` branch switch).
-    pub(super) fn lower_and_bump(&mut self) {
+    pub(super) fn lower_and_bump(&mut self) -> ShrinkResult<()> {
         let max_gap = std::cmp::min(self.current_nodes.len(), 4);
         for gap in 1..max_gap {
             let mut idx = 0;
@@ -76,14 +76,14 @@ impl<'a> Shrinker<'a> {
                     // to smaller interesting results).
                     let mut attempt = self.current_nodes.clone();
                     attempt[i] = attempt[i].with_value(new_val.clone());
-                    self.consider(&attempt);
+                    self.consider(&attempt)?;
 
                     let mut zeroed = attempt.clone();
                     for node in &mut zeroed[i + 1..] {
                         let s = node.kind.simplest();
                         *node = node.with_value(s);
                     }
-                    self.consider(&zeroed);
+                    self.consider(&zeroed)?;
 
                     // Try bumping node `j` at relative and absolute index
                     // offsets — replace-with-validate skips when the
@@ -97,7 +97,7 @@ impl<'a> Shrinker<'a> {
                         for bump in [1u32, 2, 4] {
                             let candidate_idx = &target_idx + BigUint::from(bump);
                             if let Some(bumped) = kind_j.from_index(candidate_idx) {
-                                if try_bump_ij(self, i, new_val, j, &bumped) {
+                                if try_bump_ij(self, i, new_val, j, &bumped)? {
                                     bumped_any_relative = true;
                                     break;
                                 }
@@ -112,10 +112,10 @@ impl<'a> Shrinker<'a> {
                                 }
                                 let p_minus_one = &p - BigUint::from(1u32);
                                 if let Some(v) = kind_j.from_index(p_minus_one) {
-                                    try_bump_ij(self, i, new_val, j, &v);
+                                    try_bump_ij(self, i, new_val, j, &v)?;
                                 }
                                 if let Some(v) = kind_j.from_index(p.clone()) {
-                                    try_bump_ij(self, i, new_val, j, &v);
+                                    try_bump_ij(self, i, new_val, j, &v)?;
                                 }
                                 p *= BigUint::from(2u32);
                             }
@@ -125,6 +125,7 @@ impl<'a> Shrinker<'a> {
                 idx += 1;
             }
         }
+        Ok(())
     }
 
     /// For each indexed node, try *incrementing* its index to see if the test
@@ -133,7 +134,7 @@ impl<'a> Shrinker<'a> {
     /// A value shrinker can only make values simpler; sometimes making a
     /// value *less* simple (e.g. `false → true`) causes an earlier exit,
     /// producing a shorter and thus overall simpler choice sequence.
-    pub(super) fn try_shortening_via_increment(&mut self) {
+    pub(super) fn try_shortening_via_increment(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
@@ -195,10 +196,11 @@ impl<'a> Shrinker<'a> {
                     let s = node.kind.simplest();
                     *node = node.with_value(s);
                 }
-                self.consider(&zeroed);
+                self.consider(&zeroed)?;
             }
             i += 1;
         }
+        Ok(())
     }
 }
 
@@ -211,7 +213,7 @@ pub(super) fn try_bump_ij(
     new_val: &ChoiceValue,
     j: usize,
     bump_val: &ChoiceValue,
-) -> bool {
+) -> ShrinkResult<bool> {
     // `replace` checks `j < len` (via its `i >= attempt.len()`
     // short-circuit) and `kind.validate(bump_val)` itself, so the
     // pre-checks here would be redundant.  Let `replace` reject

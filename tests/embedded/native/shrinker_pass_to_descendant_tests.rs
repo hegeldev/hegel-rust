@@ -55,7 +55,7 @@ fn pass_to_descendant_replaces_outer_with_inner_same_label() {
         initial,
         spans,
     );
-    shrinker.pass_to_descendant();
+    shrinker.pass_to_descendant().unwrap();
 
     let values: Vec<_> = shrinker
         .current_nodes
@@ -85,7 +85,7 @@ fn pass_to_descendant_skips_different_labels() {
         initial,
         spans,
     );
-    shrinker.pass_to_descendant();
+    shrinker.pass_to_descendant().unwrap();
     // Nothing changed.
     assert_eq!(shrinker.current_nodes.len(), 3);
 }
@@ -108,7 +108,7 @@ fn pass_to_descendant_skips_equal_length_descendant() {
         initial,
         spans,
     );
-    shrinker.pass_to_descendant();
+    shrinker.pass_to_descendant().unwrap();
     assert_eq!(shrinker.current_nodes.len(), 2);
 }
 
@@ -139,7 +139,7 @@ fn pass_to_descendant_handles_multiple_descendants() {
         initial,
         spans,
     );
-    shrinker.pass_to_descendant();
+    shrinker.pass_to_descendant().unwrap();
     // The innermost span (length 1) gives prefix [] + [3] + suffix [] when
     // replacing the outermost; that's accepted (len 1 ≤ 2).
     assert!(shrinker.current_nodes.len() <= 2);
@@ -163,6 +163,6 @@ fn pass_to_descendant_safe_when_indices_outrange_after_shrink() {
         initial,
         spans,
     );
-    shrinker.pass_to_descendant();
+    shrinker.pass_to_descendant().unwrap();
     assert_eq!(shrinker.current_nodes.len(), 2);
 }

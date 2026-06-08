@@ -38,7 +38,7 @@ fn delete_chunks_handles_empty_initial_sequence() {
     // `i >= current_nodes.len()` (0 >= 0) is true on entry, hitting
     // the previously-nocov break.
     let mut shrinker = accepting_shrinker(vec![]);
-    shrinker.delete_chunks();
+    shrinker.delete_chunks().unwrap();
     assert!(shrinker.current_nodes.is_empty());
 }
 
@@ -48,7 +48,9 @@ fn try_replace_with_deletion_returns_true_on_early_success() {
     // simplest value succeeds straight through the early-success
     // path that the nocov masked.
     let mut shrinker = accepting_shrinker(vec![int_node(42), int_node(7)]);
-    let ok = shrinker.try_replace_with_deletion(0, ChoiceValue::Integer(BigInt::from(0)), 2);
+    let ok = shrinker
+        .try_replace_with_deletion(0, ChoiceValue::Integer(BigInt::from(0)), 2)
+        .unwrap();
     assert!(ok);
     match &shrinker.current_nodes[0].value {
         ChoiceValue::Integer(v) => assert_eq!(i128::try_from(v.clone()).unwrap(), 0),
@@ -86,7 +88,7 @@ fn sort_values_break_when_concurrent_shrink_drops_valid_indices() {
         vec![int_node(40), int_node(30), int_node(20), int_node(10)],
         Spans::new(),
     );
-    shrinker.sort_values();
+    shrinker.sort_values().unwrap();
     assert_eq!(shrinker.current_nodes.len(), 1);
 }
 
@@ -109,7 +111,7 @@ fn redistribute_integers_pair_idx_overshoots_after_concurrent_truncation() {
         vec![int_node(10), int_node(20), int_node(30), int_node(40)],
         Spans::new(),
     );
-    shrinker.redistribute_integers();
+    shrinker.redistribute_integers().unwrap();
     assert_eq!(shrinker.current_nodes.len(), 1);
 }
 
@@ -129,7 +131,7 @@ fn lower_integers_together_break_when_indices_outrun_current_nodes() {
         vec![int_node(10), int_node(20), int_node(30)],
         Spans::new(),
     );
-    shrinker.lower_integers_together();
+    shrinker.lower_integers_together().unwrap();
     assert!(shrinker.current_nodes.len() <= 3);
 }
 
@@ -157,7 +159,7 @@ fn lower_integers_together_skips_kind_punning() {
         vec![int_node(5), int_node(10)],
         Spans::new(),
     );
-    shrinker.lower_integers_together();
+    shrinker.lower_integers_together().unwrap();
 }
 
 #[test]
@@ -182,7 +184,7 @@ fn shrink_duplicates_skips_groups_whose_members_diverged() {
         vec![int_node(7), int_node(7), int_node(7)],
         Spans::new(),
     );
-    shrinker.shrink_duplicates();
+    shrinker.shrink_duplicates().unwrap();
 }
 
 #[test]
@@ -199,7 +201,7 @@ fn try_shortening_via_increment_break_on_concurrent_shrink() {
         vec![int_node(5), int_node(10), int_node(15)],
         Spans::new(),
     );
-    shrinker.try_shortening_via_increment();
+    shrinker.try_shortening_via_increment().unwrap();
     assert!(shrinker.current_nodes.is_empty());
 }
 
@@ -212,5 +214,5 @@ fn replace_short_circuits_on_index_past_end_of_attempt() {
     let mut values = HashMap::new();
     values.insert(0, ChoiceValue::Integer(BigInt::from(0)));
     values.insert(10, ChoiceValue::Integer(BigInt::from(0)));
-    assert!(!shrinker.replace(&values));
+    assert!(!shrinker.replace(&values).unwrap());
 }

@@ -667,8 +667,10 @@ fn run_main(
                 shrinker.deadline = Some(shrink_deadline);
                 // Pre-shrink coarse reduction — runs once before the
                 // main shrink loop to rerandomise small one_of-style
-                // branch selectors.
-                shrinker.initial_coarse_reduction();
+                // branch selectors. A `ShrinkStop` here just means the
+                // deadline passed; `shrink()` below is a no-op in that case
+                // and `timed_out` is already latched.
+                let _ = shrinker.initial_coarse_reduction();
                 if verbosity == Verbosity::Debug {
                     shrinker.set_debug(|msg| eprintln!("{msg}"));
                 }

@@ -55,7 +55,7 @@ fn try_trivial_spans_zeroes_non_forced_children() {
         initial,
         spans,
     );
-    shrinker.try_trivial_spans();
+    shrinker.try_trivial_spans().unwrap();
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
@@ -89,7 +89,7 @@ fn try_trivial_spans_preserves_forced_children() {
         initial,
         spans,
     );
-    shrinker.try_trivial_spans();
+    shrinker.try_trivial_spans().unwrap();
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
@@ -125,7 +125,7 @@ fn try_trivial_spans_skips_already_trivial_span() {
         initial,
         spans,
     );
-    shrinker.try_trivial_spans();
+    shrinker.try_trivial_spans().unwrap();
     // No test invocations: the span was trivial up front.
     assert_eq!(calls.get(), 0);
 }
@@ -146,7 +146,7 @@ fn try_trivial_spans_handles_oversized_span_end() {
         initial,
         spans,
     );
-    shrinker.try_trivial_spans();
+    shrinker.try_trivial_spans().unwrap();
     // No change — the oversized span was skipped.
     assert_eq!(shrinker.current_nodes.len(), 1);
     match &shrinker.current_nodes[0].value {
@@ -194,7 +194,7 @@ fn try_trivial_spans_retries_with_realised_span_content() {
         initial,
         spans,
     );
-    shrinker.try_trivial_spans();
+    shrinker.try_trivial_spans().unwrap();
     assert_eq!(call_count.get(), 2);
     // Retry succeeded — the spliced sequence is now the current target.
     assert_eq!(shrinker.current_nodes.len(), 2);

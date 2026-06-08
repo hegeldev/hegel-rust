@@ -59,7 +59,7 @@ fn redistribute_pair_below_shrink_target_uses_raise_left_direction() {
         initial,
         Spans::new(),
     );
-    shrinker.redistribute_numeric_pairs();
+    shrinker.redistribute_numeric_pairs().unwrap();
     let (a, b) = match (
         &shrinker.current_nodes[0].value,
         &shrinker.current_nodes[1].value,
@@ -82,7 +82,7 @@ fn redistribute_pair_bails_when_int_candidate_leaves_validate_range() {
         initial,
         Spans::new(),
     );
-    shrinker.redistribute_numeric_pairs();
+    shrinker.redistribute_numeric_pairs().unwrap();
     // Engine stayed within validate bounds despite the accepting test_fn.
     match (
         &shrinker.current_nodes[0].value,
@@ -133,7 +133,7 @@ fn shrink_floats_canonicalizes_nan_to_finite_when_predicate_admits() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_floats();
+    shrinker.shrink_floats().unwrap();
     // After canonicalization the node holds `f64::MAX` (first accepted
     // candidate in the iteration order) rather than the original NaN.
     match shrinker.current_nodes[0].value {
@@ -195,7 +195,7 @@ fn shrink_floats_negative_large_magnitude_uses_is_neg_branch() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_floats();
+    shrinker.shrink_floats().unwrap();
     match shrinker.current_nodes[0].value {
         ChoiceValue::Float(v) => assert!(v < -1.0 && v.is_finite()),
         _ => unreachable!(),
@@ -232,7 +232,7 @@ fn shrink_floats_negative_shrink_by_multiples_reaches_predicate_boundary() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_floats();
+    shrinker.shrink_floats().unwrap();
     match shrinker.current_nodes[0].value {
         ChoiceValue::Float(v) => assert_eq!(v, -3.0),
         _ => unreachable!(),

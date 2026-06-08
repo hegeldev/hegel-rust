@@ -50,7 +50,7 @@ fn replace_rejects_index_past_end_of_current_nodes() {
     );
     let mut values = HashMap::new();
     values.insert(99, ChoiceValue::Integer(BigInt::from(0)));
-    assert!(!shrinker.replace(&values));
+    assert!(!shrinker.replace(&values).unwrap());
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn replace_rejects_value_that_fails_kind_validate() {
     );
     let mut values = HashMap::new();
     values.insert(0, ChoiceValue::Integer(BigInt::from(42)));
-    assert!(!shrinker.replace(&values));
+    assert!(!shrinker.replace(&values).unwrap());
 }
 
 #[test]
@@ -116,13 +116,13 @@ fn consider_cache_short_circuits_repeat_lookups() {
 
     // First wave: each unique value runs the closure.
     for v in 1..=200_i128 {
-        shrinker.consider(&[int_node(v)]);
+        shrinker.consider(&[int_node(v)]).unwrap();
     }
     assert_eq!(seen.borrow().len(), 200);
 
     // Second wave: every lookup hits the cache.
     for v in 1..=200_i128 {
-        shrinker.consider(&[int_node(v)]);
+        shrinker.consider(&[int_node(v)]).unwrap();
     }
     assert_eq!(seen.borrow().len(), 200, "cache short-circuit failed");
 }
@@ -154,8 +154,8 @@ fn consider_cache_distinguishes_kind_punned_candidates() {
         Spans::new(),
     );
     shrinker.max_stall = usize::MAX;
-    shrinker.consider(&[bool_node(false)]);
-    shrinker.consider(&[int_node(0)]);
+    shrinker.consider(&[bool_node(false)]).unwrap();
+    shrinker.consider(&[int_node(0)]).unwrap();
     // Both should reach the closure: distinct kinds = distinct cache keys.
     assert_eq!(seen.borrow().as_slice(), &["bool", "int"]);
 }

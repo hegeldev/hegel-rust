@@ -5,7 +5,7 @@
 //! nodes.
 
 use super::ordering::shrink_ordering;
-use super::{ShrinkRun, Shrinker};
+use super::{ShrinkResult, ShrinkRun, Shrinker};
 use crate::native::core::sort_key;
 
 impl<'a> Shrinker<'a> {
@@ -19,7 +19,7 @@ impl<'a> Shrinker<'a> {
     /// (b) the deletion attempts succeeded.  Returns `false` when the
     /// shrinker has discarded data that can't be removed (a follow-up
     /// pass shouldn't try this work again on the same target).
-    pub(crate) fn remove_discarded(&mut self) -> bool {
+    pub(crate) fn remove_discarded(&mut self) -> ShrinkResult<bool> {
         loop {
             // Gather the outermost discarded spans in source order.  A span
             // nested inside an already-collected discarded region is skipped
@@ -36,7 +36,7 @@ impl<'a> Shrinker<'a> {
                 }
             }
             if discarded.is_empty() {
-                return true;
+                return Ok(true);
             }
 
             let mut attempt = self.current_nodes.clone();
@@ -44,8 +44,8 @@ impl<'a> Shrinker<'a> {
                 attempt.drain(u..v);
             }
 
-            if !self.consider(&attempt) {
-                return false;
+            if !self.consider(&attempt)? {
+                return Ok(false);
             }
             // If `consider` accepted but the actual run produced no new
             // discards, the next loop iteration will find an empty
@@ -62,7 +62,7 @@ impl<'a> Shrinker<'a> {
     /// structures whose simplest form is shape-dependent (e.g. an
     /// inner span that becomes shorter under simplest values) still
     /// converge.
-    pub(crate) fn try_trivial_spans(&mut self) {
+    pub(crate) fn try_trivial_spans(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_spans.len() {
             // Capture the shrink epoch before any mutation so we can
@@ -98,7 +98,7 @@ impl<'a> Shrinker<'a> {
             // improvement — we retry with the realised span content
             // below.
             let (is_interesting, actual_nodes, actual_spans) =
-                (self.test_fn)(ShrinkRun::Full(&attempt));
+                self.run_test_fn(ShrinkRun::Full(&attempt))?;
             if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
                 self.accept_improvement(actual_nodes, actual_spans);
                 i += 1;
@@ -118,12 +118,13 @@ impl<'a> Shrinker<'a> {
                         let mut spliced = self.current_nodes[..span.start].to_vec();
                         spliced.extend_from_slice(&actual_nodes[new_span.start..new_span.end]);
                         spliced.extend_from_slice(&self.current_nodes[span.end..]);
-                        self.consider(&spliced);
+                        self.consider(&spliced)?;
                     }
                 }
             }
             i += 1;
         }
+        Ok(())
     }
 
     /// Replace each span with one of its same-label descendants.
@@ -136,7 +137,7 @@ impl<'a> Shrinker<'a> {
     /// the descendant is strictly contained in the ancestor and is
     /// strictly shorter, we splice the descendant's nodes in place of the
     /// ancestor's and ask the predicate whether that's still interesting.
-    pub(crate) fn pass_to_descendant(&mut self) {
+    pub(crate) fn pass_to_descendant(&mut self) -> ShrinkResult<()> {
         // Snapshot (start, end, label) tuples up front. Each consider()
         // may rebuild current_spans, which would invalidate live indices
         // — re-reading from the snapshot after every consider would mean
@@ -193,10 +194,11 @@ impl<'a> Shrinker<'a> {
                     let mut attempt = self.current_nodes[..a_start].to_vec();
                     attempt.extend_from_slice(&self.current_nodes[d_start..d_end]);
                     attempt.extend_from_slice(&self.current_nodes[a_end..]);
-                    self.consider(&attempt);
+                    self.consider(&attempt)?;
                 }
             }
         }
+        Ok(())
     }
 
     /// Reorder same-label sibling spans into a more-sorted permutation.
@@ -211,7 +213,7 @@ impl<'a> Shrinker<'a> {
     /// position. This is the pass that ensures `test_not_equal(x, y)`
     /// collapses to a canonical `(x="", y="0")` rather than the
     /// symmetric alternative.
-    pub(crate) fn reorder_spans(&mut self) {
+    pub(crate) fn reorder_spans(&mut self) -> ShrinkResult<()> {
         let parents: Vec<Option<usize>> = {
             // Build the set of parent indices that have direct children
             // (including the implicit root, parent == None).
@@ -281,7 +283,7 @@ impl<'a> Shrinker<'a> {
                 shrink_ordering::<crate::native::core::NodesSortKey<'_>, _, _>(
                     n,
                     |i| cached_keys[i],
-                    |permutation| {
+                    |permutation| -> ShrinkResult<bool> {
                         // Build the candidate by interleaving the
                         // permuted slices with the unchanged regions
                         // between sibling endpoints.  shrink_ordering
@@ -305,9 +307,10 @@ impl<'a> Shrinker<'a> {
                         }
                         self.consider(&attempt)
                     },
-                );
+                )?;
             }
         }
+        Ok(())
     }
 }
 

@@ -32,7 +32,7 @@ fn fixate_shrink_passes_runs_passes_to_fixed_point() {
         "zero_choices",
         Box::new(|sh| sh.zero_choices()),
     )];
-    shrinker.fixate_shrink_passes(&mut passes);
+    shrinker.fixate_shrink_passes(&mut passes).unwrap();
     // Accepting predicate → integers driven to 0.
     let values: Vec<_> = shrinker
         .current_nodes
@@ -68,7 +68,7 @@ fn fixate_shrink_passes_records_deletion_stat_when_pass_shortens() {
         "delete_chunks",
         Box::new(|sh| sh.delete_chunks()),
     )];
-    shrinker.fixate_shrink_passes(&mut passes);
+    shrinker.fixate_shrink_passes(&mut passes).unwrap();
     assert!(shrinker.current_nodes.is_empty());
     let stats = shrinker.pass_stats(&passes);
     let (_, _, _, deletions) = stats[0];
@@ -103,13 +103,13 @@ fn consider_short_circuits_when_stalled() {
         Spans::new(),
     );
     // Seed one improvement so the stall guard's warmup is satisfied.
-    shrinker.consider(&[int_node(3)]);
+    shrinker.consider(&[int_node(3)]).unwrap();
     let baseline = counter.get();
     shrinker.max_stall = 10;
     // Reset calls_at_last_shrink so we measure the post-baseline budget.
     shrinker.calls_at_last_shrink = shrinker.calls;
     for v in 10..60 {
-        shrinker.consider(&[int_node(v)]);
+        shrinker.consider(&[int_node(v)]).unwrap();
     }
     // Post-baseline closure calls capped at max_stall.
     assert!(
@@ -143,16 +143,16 @@ fn max_stall_grows_after_shrink() {
     // hundreds of calls.
     shrinker.max_stall = 5;
     // Seed an improvement first to anchor calls_at_last_shrink.
-    let accepted_first = shrinker.consider(&[int_node(9)]);
+    let accepted_first = shrinker.consider(&[int_node(9)]).unwrap();
     assert!(accepted_first);
     let stall_after_first = shrinker.max_stall;
     // Burn 3 uninteresting calls (still within stall budget).
     for v in 11..14 {
-        shrinker.consider(&[int_node(v)]);
+        shrinker.consider(&[int_node(v)]).unwrap();
     }
     // Another improvement.  span = calls - calls_at_last_shrink ≈ 3;
     // grown = 6 > 5, so max_stall should grow.
-    shrinker.consider(&[int_node(5)]);
+    shrinker.consider(&[int_node(5)]).unwrap();
     assert!(
         shrinker.max_stall > stall_after_first,
         "max_stall failed to grow: {} -> {}",
@@ -223,7 +223,7 @@ fn fixate_passes_does_full_run_even_when_stalled() {
     let mut passes: Vec<ShrinkPass> = (1..=5)
         .map(|i| ShrinkPass::new("node_program", Box::new(move |sh| sh.node_program(i))))
         .collect();
-    shrinker.fixate_shrink_passes(&mut passes);
+    shrinker.fixate_shrink_passes(&mut passes).unwrap();
     // Every pass got at least one call — fixate didn't bail out
     // before running the full pass list.
     for sp in &passes {
@@ -245,13 +245,13 @@ fn fixate_shrink_passes_reorders_useful_passes_to_the_front() {
         Spans::new(),
     );
     let mut passes = vec![
-        ShrinkPass::new("useless", Box::new(|_| ())),
+        ShrinkPass::new("useless", Box::new(|_| Ok(()))),
         ShrinkPass::new(
             "useful",
             Box::new(|sh| sh.binary_search_integer_towards_zero()),
         ),
     ];
-    shrinker.fixate_shrink_passes(&mut passes);
+    shrinker.fixate_shrink_passes(&mut passes).unwrap();
     // After fixate the useful pass should sit at index 0 (key 0 < 1).
     assert_eq!(passes[0].name, "useful");
     assert_eq!(passes[1].name, "useless");
@@ -280,7 +280,7 @@ fn fixate_emits_debug_per_pass_step_when_debug_set() {
         "binary_search_integer_towards_zero",
         Box::new(|sh| sh.binary_search_integer_towards_zero()),
     )];
-    shrinker.fixate_shrink_passes(&mut passes);
+    shrinker.fixate_shrink_passes(&mut passes).unwrap();
     let messages = log.borrow();
     assert!(
         messages
@@ -309,7 +309,7 @@ fn fixate_emits_no_debug_when_no_callback_set() {
         "zero_choices",
         Box::new(|sh| sh.zero_choices()),
     )];
-    shrinker.fixate_shrink_passes(&mut passes);
+    shrinker.fixate_shrink_passes(&mut passes).unwrap();
     let v = match &shrinker.current_nodes[0].value {
         ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
         _ => unreachable!(),
@@ -483,11 +483,16 @@ fn past_deadline_latches_and_short_circuits_consider_and_probe() {
     );
     shrinker.deadline = Some(Instant::now() - Duration::from_secs(1));
     // First `consider` observes the expired deadline, latches `timed_out`, and
-    // rejects without invoking the closure.
-    assert!(!shrinker.consider(&[int_node(0)]));
+    // stops (returns `ShrinkStop`) without invoking the closure.
+    assert!(shrinker.consider(&[int_node(0)]).is_err());
     assert!(shrinker.timed_out);
-    // A second `consider` and a `probe` hit the already-latched fast path.
-    assert!(!shrinker.consider(&[int_node(0)]));
-    shrinker.probe(&[ChoiceValue::Integer(BigInt::from(0))], 0, 8);
+    // A second `consider` and a `probe` hit the already-latched fast path,
+    // which also stops.
+    assert!(shrinker.consider(&[int_node(0)]).is_err());
+    assert!(
+        shrinker
+            .probe(&[ChoiceValue::Integer(BigInt::from(0))], 0, 8)
+            .is_err()
+    );
     assert_eq!(shrinker.calls, 0, "nothing should have been executed");
 }

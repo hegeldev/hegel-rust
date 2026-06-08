@@ -30,7 +30,7 @@ fn node_program_one_deletes_single_node_at_a_time() {
         initial,
         Spans::new(),
     );
-    shrinker.node_program(1);
+    shrinker.node_program(1).unwrap();
     // All nodes deletable → result is empty.
     assert!(shrinker.current_nodes.is_empty());
 }
@@ -55,7 +55,7 @@ fn node_program_two_deletes_pairs_adaptively() {
         initial,
         Spans::new(),
     );
-    shrinker.node_program(2);
+    shrinker.node_program(2).unwrap();
     assert!(shrinker.current_nodes.is_empty());
 }
 
@@ -84,7 +84,7 @@ fn node_program_respects_predicate_rejecting_partial_deletes() {
             initial.clone(),
             Spans::new(),
         );
-        shrinker.node_program(1);
+        shrinker.node_program(1).unwrap();
         assert_eq!(shrinker.current_nodes.len(), 6);
     }
 
@@ -98,7 +98,7 @@ fn node_program_respects_predicate_rejecting_partial_deletes() {
             initial,
             Spans::new(),
         );
-        shrinker.node_program(2);
+        shrinker.node_program(2).unwrap();
         assert_eq!(shrinker.current_nodes.len(), 0);
     }
 }
@@ -114,7 +114,7 @@ fn node_program_no_op_on_empty_or_too_long() {
         Vec::new(),
         Spans::new(),
     );
-    shrinker.node_program(3);
+    shrinker.node_program(3).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 0);
 
     // n == 0 should also be a no-op.
@@ -127,7 +127,7 @@ fn node_program_no_op_on_empty_or_too_long() {
         initial,
         Spans::new(),
     );
-    shrinker.node_program(0);
+    shrinker.node_program(0).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 1);
 }
 
@@ -184,7 +184,7 @@ fn node_program_deletes_short_ranges() {
         Spans::new(),
     );
     for k in 1..=4 {
-        shrinker.node_program(k);
+        shrinker.node_program(k).unwrap();
     }
     // The minimum is the single 4-block: 5 nodes total ([4, 4, 4, 4, 4]).
     // The shrinker may converge faster or slower than that, but the
@@ -245,7 +245,7 @@ fn node_program_adaptively_deletes_long_false_run() {
         initial,
         Spans::new(),
     );
-    shrinker.node_program(1);
+    shrinker.node_program(1).unwrap();
     // The shrink target collapses to a single [true].
     assert_eq!(shrinker.current_nodes.len(), 1);
 }

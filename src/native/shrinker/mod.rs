@@ -60,6 +60,20 @@ pub type TestFn<'a> = dyn FnMut(ShrinkRun) -> (bool, Vec<ChoiceNode>, Spans) + '
 /// end-of-shrink profiling report).  Wired only at `Verbosity::Debug`.
 pub type DebugFn<'a> = dyn FnMut(&str) + 'a;
 
+/// Sentinel signalling that the wall-clock shrink deadline has passed.
+///
+/// Every shrinker execution method ([`Shrinker::run_test_fn`] and the
+/// `consider` / `probe` / `replace` built on it) returns this — instead of
+/// running the test function — once the deadline is exceeded, and passes
+/// propagate it with `?`. Shrinking therefore unwinds promptly, even
+/// mid-pass, keeping the best example found so far. This is the Rust analogue
+/// of Hypothesis's `RunIsComplete` unwind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ShrinkStop;
+
+/// Result of a shrinker operation that the deadline may cut short.
+pub(crate) type ShrinkResult<T = ()> = Result<T, ShrinkStop>;
+
 pub struct Shrinker<'a> {
     test_fn: Box<TestFn<'a>>,
     pub current_nodes: Vec<ChoiceNode>,
@@ -223,9 +237,9 @@ impl<'a> Shrinker<'a> {
     /// exits early (actual is shorter than candidate) or when value
     /// punning replaces values that no longer fit the kind at that
     /// position after a one_of branch switch.
-    pub fn consider(&mut self, nodes: &[ChoiceNode]) -> bool {
+    pub fn consider(&mut self, nodes: &[ChoiceNode]) -> ShrinkResult<bool> {
         if sort_key(nodes) == sort_key(&self.current_nodes) {
-            return true;
+            return Ok(true);
         }
         // Forced-node guard: a candidate may not differ from the
         // current shrink target at any index marked `was_forced`.
@@ -239,16 +253,11 @@ impl<'a> Shrinker<'a> {
             .take(nodes.len().min(self.current_nodes.len()))
         {
             if self.current_nodes[i].was_forced && candidate.value != self.current_nodes[i].value {
-                return false;
+                return Ok(false);
             }
         }
         if self.improvements >= self.max_improvements {
-            return false;
-        }
-        // Wall-clock guard: once the shrink deadline has passed, stop
-        // considering new candidates and keep the best example so far.
-        if self.past_deadline() {
-            return false;
+            return Ok(false);
         }
         // Only enforce the stall guard once we've found at least one
         // improvement.  Without warmup, predicates that need many calls
@@ -258,7 +267,7 @@ impl<'a> Shrinker<'a> {
         if self.improvements > 0
             && self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall
         {
-            return false;
+            return Ok(false);
         }
         // Negative-result cache: if we already asked the closure about a
         // candidate with this sort_key and it was uninteresting,
@@ -274,47 +283,68 @@ impl<'a> Shrinker<'a> {
             .map(|node| (kind_tag(&node.kind), node.sort_key()))
             .collect();
         if self.consider_cache.contains(&cache_key) {
-            return false;
+            return Ok(false);
         }
 
+        // The wall-clock guard lives in `run_test_fn`: it errors out before
+        // touching the test function once the deadline has passed.
+        let (is_interesting, actual_nodes, actual_spans) =
+            self.run_test_fn(ShrinkRun::Full(nodes))?;
         self.calls += 1;
-        let (is_interesting, actual_nodes, actual_spans) = (self.test_fn)(ShrinkRun::Full(nodes));
-        // Bounded cache with FIFO eviction: drop the oldest entry once
-        // we exceed 4096.  Insertion-order is recorded explicitly in
-        // `consider_cache_order` — `HashSet::iter` makes no order
-        // guarantee, so the previous version was effectively random.
         if !is_interesting {
             self.consider_cache.insert(cache_key);
         }
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
             self.accept_improvement(actual_nodes, actual_spans);
         }
-        is_interesting
+        Ok(is_interesting)
+    }
+
+    /// Run the test function for `run`, or return [`ShrinkStop`] immediately —
+    /// without touching the test function — once the wall-clock deadline has
+    /// passed (latching `timed_out`).
+    ///
+    /// This is the single execution choke point: `consider`, `probe`,
+    /// `replace`, and the inspection re-runs in individual passes all funnel
+    /// through it, so a passed deadline stops every further test-body run and
+    /// the `?` operator unwinds the current pass.
+    pub(super) fn run_test_fn(
+        &mut self,
+        run: ShrinkRun,
+    ) -> ShrinkResult<(bool, Vec<ChoiceNode>, Spans)> {
+        if self.past_deadline() {
+            return Err(ShrinkStop);
+        }
+        Ok((self.test_fn)(run))
     }
 
     /// Run a probe: replay `prefix` then continue with random draws from a
     /// deterministic RNG seeded by `seed`, capped at `max_size` choices. If
     /// the resulting run is interesting and shortlex-smaller than
     /// `current_nodes`, update `current_nodes`.
-    pub(super) fn probe(&mut self, prefix: &[ChoiceValue], seed: u64, max_size: usize) {
+    pub(super) fn probe(
+        &mut self,
+        prefix: &[ChoiceValue],
+        seed: u64,
+        max_size: usize,
+    ) -> ShrinkResult<()> {
         if self.improvements >= self.max_improvements {
-            return;
-        }
-        if self.past_deadline() {
-            return;
+            return Ok(());
         }
         if self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall {
-            return;
+            return Ok(());
         }
-        self.calls += 1;
-        let (is_interesting, actual_nodes, actual_spans) = (self.test_fn)(ShrinkRun::Probe {
+        // The wall-clock guard lives in `run_test_fn`.
+        let (is_interesting, actual_nodes, actual_spans) = self.run_test_fn(ShrinkRun::Probe {
             prefix,
             seed,
             max_size,
-        });
+        })?;
+        self.calls += 1;
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
             self.accept_improvement(actual_nodes, actual_spans);
         }
+        Ok(())
     }
 
     /// Common bookkeeping when a candidate becomes the new shrink target:
@@ -392,18 +422,18 @@ impl<'a> Shrinker<'a> {
     /// as a failed replacement (rather than panicking later in `sort_key`)
     /// matches the semantic invariant: a value that doesn't fit the node's
     /// schema can't be assigned to it.
-    pub fn replace(&mut self, values: &HashMap<usize, ChoiceValue>) -> bool {
+    pub fn replace(&mut self, values: &HashMap<usize, ChoiceValue>) -> ShrinkResult<bool> {
         let mut attempt: Vec<ChoiceNode> = self.current_nodes.clone();
         for (&i, v) in values {
             if i >= attempt.len() {
-                return false;
+                return Ok(false);
             }
             if attempt[i].was_forced {
                 // Forced choices stay put.
-                return false;
+                return Ok(false);
             }
             if !attempt[i].kind.validate(v) {
-                return false;
+                return Ok(false);
             }
             // Integer values must be expressed in the target node's width — a
             // pass may move a value between integer nodes of different widths
@@ -496,9 +526,7 @@ impl<'a> Shrinker<'a> {
             // can't see, run ahead of them.
             ShrinkPass::new(
                 "remove_discarded",
-                Box::new(|sh| {
-                    sh.remove_discarded();
-                }),
+                Box::new(|sh| sh.remove_discarded().map(|_| ())),
             ),
             ShrinkPass::new("try_trivial_spans", Box::new(|sh| sh.try_trivial_spans())),
             ShrinkPass::new("pass_to_descendant", Box::new(|sh| sh.pass_to_descendant())),
@@ -572,7 +600,10 @@ impl<'a> Shrinker<'a> {
         ];
         let initial_size = self.current_nodes.len();
         let initial_calls = self.calls;
-        self.fixate_shrink_passes(&mut passes);
+        // A `ShrinkStop` just means the wall-clock budget ran out; the best
+        // example so far is already in `current_nodes` and `timed_out` is
+        // latched, so there is nothing more to do here.
+        let _ = self.fixate_shrink_passes(&mut passes);
         self.emit_profile_report(&passes, initial_size, initial_calls);
     }
 }
@@ -581,9 +612,18 @@ impl<'a> Shrinker<'a> {
 ///
 /// Assumes f(hi) is true (not checked). Returns lo if f(lo) is true,
 /// otherwise finds a locally minimal true value.
-pub(super) fn bin_search_down(lo: i128, hi: i128, f: &mut impl FnMut(i128) -> bool) -> i128 {
-    if f(lo) {
-        return lo;
+///
+/// The probe returns `Result<bool, E>` so a shrink pass can abort the search
+/// by returning `Err` (a [`ShrinkStop`]); the error is propagated with `?` on
+/// the same line as the probe, so no extra branch is introduced. The plain
+/// `bool` [`bin_search_down`] below is the infallible form used by targeting.
+pub(super) fn bin_search_down_r<E>(
+    lo: i128,
+    hi: i128,
+    f: &mut impl FnMut(i128) -> Result<bool, E>,
+) -> Result<i128, E> {
+    if f(lo)? {
+        return Ok(lo);
     }
     let mut lo = lo;
     let mut hi = hi;
@@ -594,38 +634,38 @@ pub(super) fn bin_search_down(lo: i128, hi: i128, f: &mut impl FnMut(i128) -> bo
     // `i128::MAX`), so bail with `hi`.
     while lo.checked_add(1).is_some_and(|n| n < hi) {
         let mid = lo + (hi - lo) / 2;
-        if f(mid) {
+        if f(mid)? {
             hi = mid;
         } else {
             lo = mid;
         }
     }
-    hi
+    Ok(hi)
 }
 
 /// [`BigInt`] counterpart of [`bin_search_down`], used by the integer shrink
 /// passes which now carry values as arbitrary-precision integers. Same
 /// contract: assumes `f(hi)` is true, returns the smallest locally-true value
 /// in `[lo, hi]`.
-pub(super) fn bin_search_down_big(
+pub(super) fn bin_search_down_big_r<E>(
     lo: BigInt,
     hi: BigInt,
-    f: &mut impl FnMut(&BigInt) -> bool,
-) -> BigInt {
-    if f(&lo) {
-        return lo;
+    f: &mut impl FnMut(&BigInt) -> Result<bool, E>,
+) -> Result<BigInt, E> {
+    if f(&lo)? {
+        return Ok(lo);
     }
     let mut lo = lo;
     let mut hi = hi;
     while &lo + 1 < hi {
         let mid = &lo + (&hi - &lo) / 2;
-        if f(&mid) {
+        if f(&mid)? {
             hi = mid;
         } else {
             lo = mid;
         }
     }
-    hi
+    Ok(hi)
 }
 
 /// Finds a (hopefully large) integer `n >= 0` such that `f(n)` is true and
@@ -639,30 +679,38 @@ pub(super) fn bin_search_down_big(
 /// the binary-search midpoint: a predicate that accepts an unbounded range
 /// (e.g. a `lower_integers_together` pass over full-range `i128` nodes)
 /// would otherwise walk `hi` off the end of `usize`.
-pub(crate) fn find_integer(mut f: impl FnMut(usize) -> bool) -> usize {
+pub(crate) fn find_integer_r<E>(mut f: impl FnMut(usize) -> Result<bool, E>) -> Result<usize, E> {
     for i in 1..5 {
-        if !f(i) {
-            return i - 1;
+        if !f(i)? {
+            return Ok(i - 1);
         }
     }
     let mut lo = 4;
     let mut hi = 5;
-    while f(hi) {
+    while f(hi)? {
         lo = hi;
         let Some(next) = hi.checked_mul(2) else {
-            return lo;
+            return Ok(lo);
         };
         hi = next;
     }
     while lo + 1 < hi {
         let mid = lo + (hi - lo) / 2;
-        if f(mid) {
+        if f(mid)? {
             lo = mid;
         } else {
             hi = mid;
         }
     }
-    lo
+    Ok(lo)
+}
+
+/// Infallible `bool` form of [`find_integer_r`], used by the targeting
+/// hill-climber.
+pub(crate) fn find_integer(mut f: impl FnMut(usize) -> bool) -> usize {
+    match find_integer_r(|x| Ok::<bool, std::convert::Infallible>(f(x))) {
+        Ok(v) => v,
+    }
 }
 
 #[cfg(test)]

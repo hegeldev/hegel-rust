@@ -79,7 +79,7 @@ fn accepting_shrinker(initial: Vec<ChoiceNode>) -> Shrinker<'static> {
 #[test]
 fn shrink_duplicates_collapses_paired_booleans_to_false() {
     let mut shrinker = accepting_shrinker(vec![bool_node(true), bool_node(true)]);
-    shrinker.shrink_duplicates();
+    shrinker.shrink_duplicates().unwrap();
     for n in &shrinker.current_nodes {
         match n.value {
             ChoiceValue::Boolean(b) => assert!(!b),
@@ -91,7 +91,7 @@ fn shrink_duplicates_collapses_paired_booleans_to_false() {
 #[test]
 fn shrink_duplicates_collapses_paired_floats_to_zero() {
     let mut shrinker = accepting_shrinker(vec![float_node(3.5), float_node(3.5)]);
-    shrinker.shrink_duplicates();
+    shrinker.shrink_duplicates().unwrap();
     for n in &shrinker.current_nodes {
         match n.value {
             ChoiceValue::Float(v) => assert_eq!(v, 0.0),
@@ -104,7 +104,7 @@ fn shrink_duplicates_collapses_paired_floats_to_zero() {
 fn shrink_duplicates_collapses_paired_bytes_to_empty() {
     let mut shrinker =
         accepting_shrinker(vec![bytes_node(vec![1, 2, 3]), bytes_node(vec![1, 2, 3])]);
-    shrinker.shrink_duplicates();
+    shrinker.shrink_duplicates().unwrap();
     for n in &shrinker.current_nodes {
         match &n.value {
             ChoiceValue::Bytes(b) => assert!(b.is_empty()),
@@ -119,7 +119,7 @@ fn shrink_duplicates_collapses_paired_strings_to_empty() {
         string_node(vec![b'a' as u32, b'b' as u32]),
         string_node(vec![b'a' as u32, b'b' as u32]),
     ]);
-    shrinker.shrink_duplicates();
+    shrinker.shrink_duplicates().unwrap();
     for n in &shrinker.current_nodes {
         match &n.value {
             ChoiceValue::String(s) => assert!(s.is_empty()),
@@ -135,7 +135,7 @@ fn shrink_duplicates_leaves_solo_nodes_alone() {
     // could fire, but each group has only one member.
     let mut shrinker =
         accepting_shrinker(vec![bool_node(true), float_node(3.0), bytes_node(vec![5])]);
-    shrinker.shrink_duplicates();
+    shrinker.shrink_duplicates().unwrap();
     match shrinker.current_nodes[0].value {
         ChoiceValue::Boolean(b) => assert!(b),
         _ => unreachable!(),
@@ -155,7 +155,7 @@ fn shrink_duplicates_keeps_distinct_values_separate() {
     // Three booleans, only two of them duplicates.  The duplicates
     // should be lowered together; the third value should be left alone.
     let mut shrinker = accepting_shrinker(vec![bool_node(true), bool_node(false), bool_node(true)]);
-    shrinker.shrink_duplicates();
+    shrinker.shrink_duplicates().unwrap();
     // After shrink: the two trues went to false, the original false
     // stayed.  Result: [false, false, false].
     for n in &shrinker.current_nodes {
@@ -204,7 +204,7 @@ fn shrink_duplicates_positive_descent_is_log_log() {
         .map(|_| integer_node(1_000_000_000_000_000, 0, i128::MAX))
         .collect();
     let mut shrinker = group_accepts_uniform_at_least(initial, 100);
-    shrinker.shrink_duplicates();
+    shrinker.shrink_duplicates().unwrap();
 
     for n in &shrinker.current_nodes {
         match &n.value {
@@ -247,7 +247,7 @@ fn shrink_duplicates_negative_descent_is_log_log() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_duplicates();
+    shrinker.shrink_duplicates().unwrap();
 
     for n in &shrinker.current_nodes {
         match &n.value {
@@ -288,7 +288,7 @@ fn shrink_duplicates_skips_group_invalidated_by_concurrent_shrink() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_duplicates();
+    shrinker.shrink_duplicates().unwrap();
 }
 
 /// Cover the `current_valid.len() < 2` return inside the
@@ -324,7 +324,7 @@ fn shrink_duplicates_group_replace_short_circuits_when_truncated() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_duplicates();
+    shrinker.shrink_duplicates().unwrap();
 }
 
 /// Cover the outer-loop `valid.len() < 2 continue` inside
@@ -374,6 +374,6 @@ fn shrink_duplicates_outer_skips_group_truncated_by_prior_group() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_duplicates();
+    shrinker.shrink_duplicates().unwrap();
     assert_eq!(shrinker.current_nodes.len(), 1);
 }

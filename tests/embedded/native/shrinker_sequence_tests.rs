@@ -51,7 +51,7 @@ fn sort_values_takes_the_full_sort_when_accepted() {
         initial,
         Spans::new(),
     );
-    shrinker.sort_values_integers();
+    shrinker.sort_values_integers().unwrap();
     assert_eq!(int_values(&shrinker), vec![1, 3, 5]);
 }
 
@@ -67,7 +67,7 @@ fn sort_values_sorts_booleans() {
         initial,
         Spans::new(),
     );
-    shrinker.sort_values_booleans();
+    shrinker.sort_values_booleans().unwrap();
     let bools: Vec<bool> = shrinker
         .current_nodes
         .iter()
