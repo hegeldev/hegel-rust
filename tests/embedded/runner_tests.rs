@@ -189,9 +189,6 @@ fn hegel_run_skips_when_generate_phase_disabled() {
         .run();
 }
 
-// The replay dispatch is native-only: on the server backend the blob is
-// ignored, so these tests exercise the `native` build alone.
-#[cfg(feature = "native")]
 mod reproduce {
     use super::*;
 

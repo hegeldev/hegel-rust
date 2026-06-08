@@ -354,10 +354,6 @@ pub struct Hegel<F> {
     database_key: Option<String>,
     test_location: Option<TestLocation>,
     settings: Settings,
-    /// Only the native engine can replay a failure blob; on the server
-    /// backend the field is written but never read (the blob is ignored),
-    /// hence the dead-code allowance.
-    #[cfg_attr(not(feature = "native"), allow(dead_code))]
     reproduce_failure: Option<String>,
 }
 
@@ -407,8 +403,6 @@ where
     /// Stacked `#[hegel::reproduce_failure]` attributes lower to repeated
     /// calls here, so only the first attribute replays; the rest are
     /// bookkeeping to be deleted one by one as the failures are fixed.
-    ///
-    /// Honoured only by the native backend; the server backend ignores it.
     pub fn reproduce_failure(mut self, blob: impl Into<String>) -> Self {
         if self.reproduce_failure.is_none() {
             self.reproduce_failure = Some(blob.into());

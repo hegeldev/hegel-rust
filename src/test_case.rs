@@ -709,11 +709,9 @@ impl TestCase {
 
     /// Send `mark_complete` on this test case's data source.
     ///
-    /// Both backends use this to communicate the outcome — the full
-    /// [`TestCaseResult`], including any captured [`Failure`] — to whatever
-    /// owns the per-test-case bookkeeping (Hypothesis on the server backend;
-    /// the native engine, via a per-test-case outcome handle, on the native
-    /// backend).
+    /// Communicates the outcome — the full [`TestCaseResult`], including any
+    /// captured [`Failure`] — to the engine, which reads it back through a
+    /// per-test-case outcome handle on the data source.
     pub(crate) fn mark_complete(&self, result: &crate::backend::TestCaseResult) {
         self.with_data_source(|ds| ds.mark_complete(result));
     }

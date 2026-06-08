@@ -239,9 +239,8 @@ pub(crate) fn run_test_case(
                     panic_message: msg,
                     diagnostic,
                     origin: format!("Panic at {}", location),
-                    // The native engine attaches the reproduce blob on its
-                    // final replay, once the shrunk choice sequence is known;
-                    // the server backend leaves it `None`.
+                    // The engine attaches the reproduce blob on its final
+                    // replay, once the shrunk choice sequence is known.
                     reproduce_blob: None,
                 })
             }
