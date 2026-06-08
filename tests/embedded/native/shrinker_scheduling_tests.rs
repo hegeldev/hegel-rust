@@ -396,3 +396,98 @@ fn shrink_profile_reports_singular_call_unit() {
         combined
     );
 }
+
+#[test]
+fn shrink_stops_immediately_when_deadline_already_passed() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::time::{Duration, Instant};
+    // A predicate that accepts everything and would otherwise drive the
+    // 50-node sequence down to zeros; with an already-expired deadline the
+    // scheduler must bail before running a single pass.
+    let calls = Rc::new(Cell::new(0usize));
+    let calls_clone = calls.clone();
+    let initial = vec![int_node(5); 50];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run| match run {
+            ShrinkRun::Full(nodes) => {
+                calls_clone.set(calls_clone.get() + 1);
+                (true, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.deadline = Some(Instant::now() - Duration::from_secs(1));
+    shrinker.shrink();
+    assert!(shrinker.timed_out, "expected the shrink to time out");
+    assert_eq!(
+        shrinker.calls, 0,
+        "no candidate should have been considered"
+    );
+    assert_eq!(calls.get(), 0, "the test fn must not have been invoked");
+    assert_eq!(
+        shrinker.current_nodes.len(),
+        50,
+        "the example must be left unshrunk when the deadline has passed"
+    );
+}
+
+#[test]
+fn shrink_completes_normally_with_a_future_deadline() {
+    use std::time::{Duration, Instant};
+    let initial = vec![int_node(10), int_node(20)];
+    let mut shrinker = Shrinker::with_probe(
+        // A realistic predicate: a draw is required, so an over-short sequence
+        // is "uninteresting" — mirroring the real engine, where replaying too
+        // few choices makes the body overrun rather than re-fail. The minimal
+        // interesting sequence is therefore a single zero node, not empty.
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => (!nodes.is_empty(), nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    // A deadline far in the future never trips, so shrinking proceeds to the
+    // fixed point exactly as it would with no deadline set.
+    shrinker.deadline = Some(Instant::now() + Duration::from_secs(300));
+    shrinker.shrink();
+    assert!(!shrinker.timed_out);
+    let values: Vec<_> = shrinker
+        .current_nodes
+        .iter()
+        .map(|n| match &n.value {
+            ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
+            _ => unreachable!(),
+        })
+        .collect();
+    assert_eq!(
+        values,
+        vec![0],
+        "should shrink to the minimal non-empty sequence"
+    );
+}
+
+#[test]
+fn past_deadline_latches_and_short_circuits_consider_and_probe() {
+    use std::time::{Duration, Instant};
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(5)],
+        Spans::new(),
+    );
+    shrinker.deadline = Some(Instant::now() - Duration::from_secs(1));
+    // First `consider` observes the expired deadline, latches `timed_out`, and
+    // rejects without invoking the closure.
+    assert!(!shrinker.consider(&[int_node(0)]));
+    assert!(shrinker.timed_out);
+    // A second `consider` and a `probe` hit the already-latched fast path.
+    assert!(!shrinker.consider(&[int_node(0)]));
+    shrinker.probe(&[ChoiceValue::Integer(BigInt::from(0))], 0, 8);
+    assert_eq!(shrinker.calls, 0, "nothing should have been executed");
+}

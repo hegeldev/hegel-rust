@@ -81,6 +81,11 @@ impl<'a> Shrinker<'a> {
         let mut any_ran = true;
         let mut shuffle_state: u64 = 0x9E3779B97F4A7C15;
         while any_ran {
+            // Stop the whole schedule once the wall-clock shrink budget is
+            // spent, keeping the best example found so far.
+            if self.past_deadline() {
+                break;
+            }
             any_ran = false;
             // Try the cleanup pass once at the start of each loop.
             let mut can_discard = self.remove_discarded();

@@ -27,3 +27,10 @@ pub const BOUNDARY_PROBABILITY: f64 = 0.01;
 /// short-circuit so the runner doesn't get stuck chasing diminishing
 /// returns on pathological inputs.
 pub const MAX_SHRINKS: usize = 500;
+
+/// Wall-clock ceiling on the whole shrinking phase. Once shrinking has run
+/// for this long it stops and reports the smallest counterexample found so
+/// far, rather than blocking the run indefinitely on a test whose body is
+/// slow to execute (where the per-step `MAX_SHRINKS` / stall caps don't bound
+/// total time). Mirrors Hypothesis's `MAX_SHRINKING_SECONDS` safety valve.
+pub const MAX_SHRINKING_SECONDS: u64 = 300;

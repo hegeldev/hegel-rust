@@ -26,6 +26,7 @@ mod strings;
 pub use scheduling::ShrinkPass;
 
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use crate::native::bignum::BigInt;
 use crate::native::core::{
@@ -129,6 +130,16 @@ pub struct Shrinker<'a> {
     /// end-of-shrink "Shrink pass profiling" report. Wired by the test
     /// runner at `Verbosity::Debug`; unused otherwise.
     pub(super) debug: Option<Box<DebugFn<'a>>>,
+    /// Wall-clock deadline after which `consider` / `probe` short-circuit and
+    /// the pass scheduler bails, leaving `current_nodes` at the best example
+    /// found so far. `None` (the default) disables the bound; the runner sets
+    /// it to `now + MAX_SHRINKING_SECONDS` before driving a shrink. Mirrors
+    /// Hypothesis's `finish_shrinking_deadline` (engine.py). Tests set a past
+    /// instant to exercise the timeout path without waiting.
+    pub deadline: Option<Instant>,
+    /// Latched once `deadline` is first observed to have passed. The runner
+    /// reads it after `shrink()` to emit the slow-shrink warning.
+    pub timed_out: bool,
 }
 
 /// One-byte tag identifying a `ChoiceKind` variant — used by
@@ -169,7 +180,25 @@ impl<'a> Shrinker<'a> {
             all_changed_nodes: HashSet::new(),
             consider_cache: HashSet::new(),
             debug: None,
+            deadline: None,
+            timed_out: false,
         }
+    }
+
+    /// Returns `true` once the wall-clock [`Shrinker::deadline`] has passed,
+    /// latching [`Shrinker::timed_out`]. A cheap no-op when no deadline is set
+    /// (the common case in unit tests that drive passes directly).
+    pub(super) fn past_deadline(&mut self) -> bool {
+        if self.timed_out {
+            return true;
+        }
+        if let Some(deadline) = self.deadline
+            && Instant::now() >= deadline
+        {
+            self.timed_out = true;
+            return true;
+        }
+        false
     }
 
     /// Install a debug callback.  Each emitted message corresponds to
@@ -214,6 +243,11 @@ impl<'a> Shrinker<'a> {
             }
         }
         if self.improvements >= self.max_improvements {
+            return false;
+        }
+        // Wall-clock guard: once the shrink deadline has passed, stop
+        // considering new candidates and keep the best example so far.
+        if self.past_deadline() {
             return false;
         }
         // Only enforce the stall guard once we've found at least one
@@ -264,6 +298,9 @@ impl<'a> Shrinker<'a> {
     /// `current_nodes`, update `current_nodes`.
     pub(super) fn probe(&mut self, prefix: &[ChoiceValue], seed: u64, max_size: usize) {
         if self.improvements >= self.max_improvements {
+            return;
+        }
+        if self.past_deadline() {
             return;
         }
         if self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall {
