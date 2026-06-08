@@ -14,9 +14,10 @@ fn shrink_ordering_short_circuits_to_full_sort() {
         |i| keys[i],
         |perm| {
             accepted_perms.push(perm.to_vec());
-            true
+            Ok(true)
         },
-    );
+    )
+    .unwrap();
     // Exactly one accept: a fully sorted permutation (1, 1, 3, 4, 5).
     assert_eq!(accepted_perms.len(), 1);
     let sorted_keys: Vec<u32> = accepted_perms[0].iter().map(|&i| keys[i]).collect();
@@ -41,12 +42,13 @@ fn shrink_ordering_falls_back_to_region_sort_when_full_sort_rejected() {
             // improvement.
             let mapped: Vec<u32> = perm.iter().map(|&i| keys[i]).collect();
             if mapped == vec![1u32, 1, 2, 3] {
-                return false;
+                return Ok(false);
             }
             accepted.push(perm.to_vec());
-            true
+            Ok(true)
         },
-    );
+    )
+    .unwrap();
     // Some accept happened in the fallback phases.
     assert!(!accepted.is_empty());
 }
@@ -60,9 +62,10 @@ fn shrink_ordering_returns_early_on_trivial_input() {
         |_| 0u32,
         |_| {
             count += 1;
-            true
+            Ok(true)
         },
-    );
+    )
+    .unwrap();
     assert_eq!(count, 0);
     let mut count2 = 0;
     shrink_ordering(
@@ -70,9 +73,10 @@ fn shrink_ordering_returns_early_on_trivial_input() {
         |_| 0u32,
         |_| {
             count2 += 1;
-            true
+            Ok(true)
         },
-    );
+    )
+    .unwrap();
     assert_eq!(count2, 0);
 }
 
@@ -81,6 +85,6 @@ fn shrink_ordering_handles_predicate_that_never_accepts() {
     // No improvement: the algorithm tries a few permutations and gives
     // up without panicking.
     let keys = [5u32, 3, 1];
-    shrink_ordering(keys.len(), |i| keys[i], |_| false);
+    shrink_ordering(keys.len(), |i| keys[i], |_| Ok(false)).unwrap();
     // No assertion — just verify it terminates.
 }

@@ -16,10 +16,10 @@ use std::collections::HashMap;
 use crate::native::core::{ChoiceKind, ChoiceValue, StringChoice};
 use crate::unicodedata;
 
-use super::{Shrinker, bin_search_down};
+use super::{ShrinkResult, Shrinker, bin_search_down_r};
 
 impl<'a> Shrinker<'a> {
-    pub(super) fn shrink_strings(&mut self) {
+    pub(super) fn shrink_strings(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let (kind, current) = match (
@@ -36,7 +36,7 @@ impl<'a> Shrinker<'a> {
             // Try simplest.
             let simplest = kind.simplest();
             if simplest != current {
-                self.replace(&HashMap::from([(i, ChoiceValue::String(simplest))]));
+                self.replace(&HashMap::from([(i, ChoiceValue::String(simplest))]))?;
             }
 
             // Shorten via linear scan up from min_size. For strings the
@@ -47,7 +47,7 @@ impl<'a> Shrinker<'a> {
             if cur_len > kind.min_size {
                 for target_len in kind.min_size..cur_len {
                     let cand: Vec<u32> = self.current_string(i)[..target_len].to_vec();
-                    if self.replace(&HashMap::from([(i, ChoiceValue::String(cand))])) {
+                    if self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))? {
                         break;
                     }
                 }
@@ -63,7 +63,7 @@ impl<'a> Shrinker<'a> {
                 }
                 let mut cand = cur.clone();
                 cand.remove(j);
-                self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]));
+                self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))?;
             }
 
             // Shrink duplicated codepoints simultaneously.
@@ -97,7 +97,7 @@ impl<'a> Shrinker<'a> {
                     continue;
                 }
 
-                let try_replace_all = |sh: &mut Shrinker<'_>, cand_cp: u32| -> bool {
+                let try_replace_all = |sh: &mut Shrinker<'_>, cand_cp: u32| -> ShrinkResult<bool> {
                     let mut new_str = sh.current_string(i);
                     let mut changed = false;
                     for c in new_str.iter_mut() {
@@ -107,7 +107,7 @@ impl<'a> Shrinker<'a> {
                         }
                     }
                     if !changed {
-                        return false;
+                        return Ok(false);
                     }
                     sh.replace(&HashMap::from([(i, ChoiceValue::String(new_str))]))
                 };
@@ -115,7 +115,7 @@ impl<'a> Shrinker<'a> {
                 for cand_cp in semantic_candidates(val, &kind) {
                     // `semantic_candidates` only returns codepoints with
                     // strictly smaller shrink-key than `val`.
-                    try_replace_all(self, cand_cp);
+                    try_replace_all(self, cand_cp)?;
                     if !self.current_string(i).contains(&val) {
                         break;
                     }
@@ -124,7 +124,7 @@ impl<'a> Shrinker<'a> {
                 if self.current_string(i).contains(&val) {
                     let cur_key = kind.codepoint_key(val);
                     if cur_key > 0 {
-                        bin_search_down(0, cur_key as i128, &mut |k| {
+                        bin_search_down_r(0, cur_key as i128, &mut |k| {
                             // `key_to_codepoint(k)` is `Some` for every
                             // `k < alpha_size`, and our upper bound `cur_key`
                             // is itself a valid position in the alphabet.
@@ -132,7 +132,7 @@ impl<'a> Shrinker<'a> {
                                 .key_to_codepoint(k as u32)
                                 .expect("bin_search probe stays within alpha_size");
                             try_replace_all(self, cp)
-                        });
+                        })?;
                     }
                 }
             }
@@ -170,19 +170,19 @@ impl<'a> Shrinker<'a> {
                     }
                     let mut cand = self.current_string(i);
                     cand[j] = cand_cp;
-                    self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]));
+                    self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))?;
                 }
 
                 let cur_key = kind.codepoint_key(self.current_string(i)[j]);
                 if cur_key > 0 {
-                    bin_search_down(0, cur_key as i128, &mut |k| {
+                    bin_search_down_r(0, cur_key as i128, &mut |k| {
                         let cp = kind
                             .key_to_codepoint(k as u32)
                             .expect("bin_search probe stays within alpha_size");
                         let mut cand = self.current_string(i);
                         cand[j] = cp;
                         self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))
-                    });
+                    })?;
                 }
             }
 
@@ -204,7 +204,7 @@ impl<'a> Shrinker<'a> {
                     }
                     let mut swapped = cur.clone();
                     swapped.swap(j - 1, j);
-                    if self.replace(&HashMap::from([(i, ChoiceValue::String(swapped))])) {
+                    if self.replace(&HashMap::from([(i, ChoiceValue::String(swapped))]))? {
                         j -= 1;
                     } else {
                         break;
@@ -215,6 +215,7 @@ impl<'a> Shrinker<'a> {
 
             i += 1;
         }
+        Ok(())
     }
 
     fn current_string(&self, i: usize) -> Vec<u32> {
@@ -230,7 +231,7 @@ impl<'a> Shrinker<'a> {
     /// useful for tests with a total-length constraint across two strings,
     /// where the minimal counterexample has the first string as short as
     /// possible.
-    pub(super) fn redistribute_string_pairs(&mut self) {
+    pub(super) fn redistribute_string_pairs(&mut self) -> ShrinkResult<()> {
         for gap in 1..3usize {
             let mut idx = 0;
             loop {
@@ -240,10 +241,11 @@ impl<'a> Shrinker<'a> {
                 }
                 let i = indices[idx];
                 let j = indices[idx + gap];
-                self.redistribute_string_pair(i, j);
+                self.redistribute_string_pair(i, j)?;
                 idx += 1;
             }
         }
+        Ok(())
     }
 
     fn string_indices(&self) -> Vec<usize> {
@@ -257,7 +259,7 @@ impl<'a> Shrinker<'a> {
             .collect()
     }
 
-    fn redistribute_string_pair(&mut self, i: usize, j: usize) {
+    fn redistribute_string_pair(&mut self, i: usize, j: usize) -> ShrinkResult<()> {
         let s = self.current_string(i);
         let t = self.current_string(j);
         let kind_j = match self.current_nodes[j].kind.as_ref() {
@@ -266,13 +268,13 @@ impl<'a> Shrinker<'a> {
         };
 
         if s.is_empty() {
-            return;
+            return Ok(());
         }
 
         // Try moving everything from s to t.
         let combined: Vec<u32> = s.iter().copied().chain(t.iter().copied()).collect();
-        if self.try_redistribute(i, j, Vec::new(), combined, &kind_j) {
-            return;
+        if self.try_redistribute(i, j, Vec::new(), combined, &kind_j)? {
+            return Ok(());
         }
 
         // Try moving the last codepoint of s to the start of t.
@@ -280,19 +282,20 @@ impl<'a> Shrinker<'a> {
         let mut t_prepended = Vec::with_capacity(t.len() + 1);
         t_prepended.push(*last);
         t_prepended.extend_from_slice(&t);
-        if !self.try_redistribute(i, j, s_init.to_vec(), t_prepended, &kind_j) {
-            return;
+        if !self.try_redistribute(i, j, s_init.to_vec(), t_prepended, &kind_j)? {
+            return Ok(());
         }
 
         // Binary search for the longest suffix of s that can be moved.
         let s_len = s.len();
-        bin_search_down(1, s_len as i128, &mut |n| {
+        bin_search_down_r(1, s_len as i128, &mut |n| {
             let n = n as usize;
             let new_s = s[..s_len - n].to_vec();
             let mut new_t = s[s_len - n..].to_vec();
             new_t.extend_from_slice(&t);
             self.try_redistribute(i, j, new_s, new_t, &kind_j)
-        });
+        })?;
+        Ok(())
     }
 
     fn try_redistribute(
@@ -302,9 +305,9 @@ impl<'a> Shrinker<'a> {
         new_s: Vec<u32>,
         new_t: Vec<u32>,
         kind_j: &StringChoice,
-    ) -> bool {
+    ) -> ShrinkResult<bool> {
         if !kind_j.validate(&new_t) {
-            return false;
+            return Ok(false);
         }
         self.replace(&HashMap::from([
             (i, ChoiceValue::String(new_s)),
@@ -319,7 +322,7 @@ impl<'a> Shrinker<'a> {
     /// character but the actual character value is free — we want to
     /// drive both occurrences toward the alphabet's smallest member at
     /// once.
-    pub(crate) fn lower_duplicated_characters(&mut self) {
+    pub(crate) fn lower_duplicated_characters(&mut self) -> ShrinkResult<()> {
         let len = self.current_nodes.len();
         for i in 0..len {
             for j in (i + 1)..(i + 1 + 4).min(len) {
@@ -347,7 +350,7 @@ impl<'a> Shrinker<'a> {
                     if original_key == 0 {
                         continue;
                     }
-                    super::bin_search_down(0, original_key as i128, &mut |new_key| {
+                    bin_search_down_r(0, original_key as i128, &mut |new_key| {
                         // `key_to_codepoint(new_key)` is `Some` for
                         // every key in `0..alpha_size`, and our search
                         // upper bound is `original_key` which is itself
@@ -373,10 +376,11 @@ impl<'a> Shrinker<'a> {
                             (i, ChoiceValue::String(new_i)),
                             (j, ChoiceValue::String(new_j)),
                         ]))
-                    });
+                    })?;
                 }
             }
         }
+        Ok(())
     }
 
     /// Walk every string node and try replacing each codepoint with one
@@ -385,7 +389,7 @@ impl<'a> Shrinker<'a> {
     /// Complements `shrink_strings`' per-position search by trying the
     /// semantically obvious replacements that lex-index bisection can
     /// skip over.
-    pub(crate) fn normalize_unicode_chars(&mut self) {
+    pub(crate) fn normalize_unicode_chars(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let (kind, value) = match (
@@ -420,13 +424,14 @@ impl<'a> Shrinker<'a> {
                     // single-char replacements at fixed-length —
                     // therefore the candidate is always valid.
                     debug_assert!(kind.validate(&new_value));
-                    if self.replace(&HashMap::from([(i, ChoiceValue::String(new_value))])) {
+                    if self.replace(&HashMap::from([(i, ChoiceValue::String(new_value))]))? {
                         break;
                     }
                 }
             }
             i += 1;
         }
+        Ok(())
     }
 }
 

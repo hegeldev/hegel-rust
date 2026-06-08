@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use crate::native::bignum::{BigInt, Sign, Signed, ToPrimitive};
 use crate::native::core::{ChoiceKind, ChoiceValue};
 
-use super::{Shrinker, bin_search_down_big, find_integer};
+use super::{ShrinkResult, Shrinker, bin_search_down_big_r, find_integer_r};
 
 impl<'a> Shrinker<'a> {
     /// Current integer value at node `i` as a [`BigInt`].
@@ -42,7 +42,7 @@ impl<'a> Shrinker<'a> {
     /// [`Shrinker::replace`], which range-checks it and coerces it to the
     /// node's width (rejecting out-of-range candidates), so this stays correct
     /// for any node width.
-    pub(super) fn replace_int(&mut self, i: usize, candidate: &BigInt) -> bool {
+    pub(super) fn replace_int(&mut self, i: usize, candidate: &BigInt) -> ShrinkResult<bool> {
         self.replace(&HashMap::from([(
             i,
             ChoiceValue::Integer(candidate.clone()),
@@ -51,7 +51,13 @@ impl<'a> Shrinker<'a> {
 
     /// Attempt to replace two integer nodes simultaneously; `replace`
     /// range-checks and width-coerces each candidate.
-    pub(super) fn replace_two(&mut self, i: usize, vi: &BigInt, j: usize, vj: &BigInt) -> bool {
+    pub(super) fn replace_two(
+        &mut self,
+        i: usize,
+        vi: &BigInt,
+        j: usize,
+        vj: &BigInt,
+    ) -> ShrinkResult<bool> {
         self.replace(&HashMap::from([
             (i, ChoiceValue::Integer(vi.clone())),
             (j, ChoiceValue::Integer(vj.clone())),
@@ -59,7 +65,7 @@ impl<'a> Shrinker<'a> {
     }
 
     /// Replace blocks of choices with their simplest values.
-    pub(super) fn zero_choices(&mut self) {
+    pub(super) fn zero_choices(&mut self) -> ShrinkResult<()> {
         let mut k = self.current_nodes.len();
         while k > 0 {
             let mut i = 0;
@@ -71,16 +77,17 @@ impl<'a> Shrinker<'a> {
                     let replacements: HashMap<usize, ChoiceValue> = (i..i + k)
                         .map(|j| (j, self.current_nodes[j].kind.simplest()))
                         .collect();
-                    self.replace(&replacements);
+                    self.replace(&replacements)?;
                     i += k;
                 }
             }
             k /= 2;
         }
+        Ok(())
     }
 
     /// For integer choices: try simplest, then flip negative to positive.
-    pub(super) fn swap_integer_sign(&mut self) {
+    pub(super) fn swap_integer_sign(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             if let (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) = (
@@ -90,20 +97,21 @@ impl<'a> Shrinker<'a> {
                 let v = v.clone();
                 let simplest = ic.simplest();
                 if v != ic.simplest() {
-                    self.replace(&HashMap::from([(i, ChoiceValue::Integer(simplest))]));
+                    self.replace(&HashMap::from([(i, ChoiceValue::Integer(simplest))]))?;
                 }
                 // Re-read in case the replace changed things.
                 if i < self.current_nodes.len() {
                     if let ChoiceValue::Integer(v) = &self.current_nodes[i].value {
                         let v = v.clone();
                         if v.sign() == Sign::Minus {
-                            self.replace_int(i, &(-&v));
+                            self.replace_int(i, &(-&v))?;
                         }
                     }
                 }
             }
             i += 1;
         }
+        Ok(())
     }
 
     /// Binary search integer values toward zero.
@@ -111,7 +119,7 @@ impl<'a> Shrinker<'a> {
     /// Includes a linear scan of small values after binary search to
     /// handle non-monotonic functions (e.g. sampled_from or test functions
     /// that panic on boundary values).
-    pub(super) fn binary_search_integer_towards_zero(&mut self) {
+    pub(super) fn binary_search_integer_towards_zero(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let ic = match self.current_nodes[i].kind.as_ref() {
@@ -132,10 +140,10 @@ impl<'a> Shrinker<'a> {
                 let dist = &v - &lo;
                 if dist.sign() == Sign::Plus {
                     let max_shift = dist.bits() as usize + 1;
-                    find_integer(|k| {
+                    find_integer_r(|k| {
                         let candidate = &lo + (&dist >> k.min(max_shift));
                         self.replace_int(i, &candidate)
-                    });
+                    })?;
                 }
                 // Linear scan small values for non-monotonic functions.
                 let scan_count: i64 = if range_size <= BigInt::from(128) {
@@ -147,7 +155,7 @@ impl<'a> Shrinker<'a> {
                 let scan_hi = (&lo + BigInt::from(scan_count)).min(cur_v);
                 let mut c = lo.clone();
                 while c < scan_hi {
-                    self.replace_int(i, &c);
+                    self.replace_int(i, &c)?;
                     c += 1;
                 }
                 // shrink_by_multiples(2) / (1): with a non-monotonic predicate
@@ -157,17 +165,17 @@ impl<'a> Shrinker<'a> {
                 // to `(m, m-1)` at the cost of one extra probe.
                 let base = self.int_value_bigint(i);
                 if base > lo {
-                    find_integer(|n| {
+                    find_integer_r(|n| {
                         let attempt = &base - BigInt::from(2u64 * n as u64);
                         if attempt < lo {
-                            return false;
+                            return Ok(false);
                         }
                         self.replace_int(i, &attempt)
-                    });
+                    })?;
                 }
                 let base = self.int_value_bigint(i);
                 if base > lo {
-                    find_integer(|n| {
+                    find_integer_r(|n| {
                         let attempt = &base - BigInt::from(n as u64);
                         if attempt < lo {
                             // Unreachable: a step-1 probe reaches `attempt < lo`
@@ -179,7 +187,7 @@ impl<'a> Shrinker<'a> {
                             unreachable!("step-1 descent cannot cross below `lo`");
                         }
                         self.replace_int(i, &attempt)
-                    });
+                    })?;
                 }
                 // Also try negative values with smaller absolute value (simpler).
                 if ic.min_value.clone().sign() == Sign::Minus {
@@ -189,15 +197,15 @@ impl<'a> Shrinker<'a> {
                         if upper >= BigInt::from(1) {
                             // Seed at -upper, then shift-right-descend the
                             // absolute value toward 1 via find_integer.
-                            self.replace_int(i, &(-&upper));
+                            self.replace_int(i, &(-&upper))?;
                             let dist = &upper - BigInt::from(1);
                             if dist.sign() == Sign::Plus {
                                 let max_shift = dist.bits() as usize + 1;
-                                find_integer(|k| {
+                                find_integer_r(|k| {
                                     let candidate_abs =
                                         BigInt::from(1) + (&dist >> k.min(max_shift));
                                     self.replace_int(i, &(-&candidate_abs))
-                                });
+                                })?;
                             }
                         }
                     }
@@ -210,10 +218,10 @@ impl<'a> Shrinker<'a> {
                 let dist = ((-&v) - &lo).max(BigInt::from(0));
                 if dist.sign() == Sign::Plus {
                     let max_shift = dist.bits() as usize + 1;
-                    find_integer(|k| {
+                    find_integer_r(|k| {
                         let candidate_abs = &lo + (&dist >> k.min(max_shift));
                         self.replace_int(i, &(-&candidate_abs))
-                    });
+                    })?;
                 }
                 // Linear scan small negative values for non-monotonic functions.
                 let neg_scan: i64 = if range_size <= BigInt::from(128) {
@@ -223,7 +231,7 @@ impl<'a> Shrinker<'a> {
                 };
                 let mut c: i64 = 1;
                 while c < neg_scan {
-                    self.replace_int(i, &BigInt::from(-c));
+                    self.replace_int(i, &BigInt::from(-c))?;
                     c += 1;
                 }
                 // shrink_by_multiples for the negative branch: probe
@@ -231,17 +239,17 @@ impl<'a> Shrinker<'a> {
                 let base = self.int_value_bigint(i);
                 let neg_hi = -&lo;
                 if base < neg_hi {
-                    find_integer(|n| {
+                    find_integer_r(|n| {
                         let attempt = &base + BigInt::from(2u64 * n as u64);
                         if attempt > neg_hi {
-                            return false;
+                            return Ok(false);
                         }
                         self.replace_int(i, &attempt)
-                    });
+                    })?;
                 }
                 let base = self.int_value_bigint(i);
                 if base < neg_hi {
-                    find_integer(|n| {
+                    find_integer_r(|n| {
                         let attempt = &base + BigInt::from(n as u64);
                         if attempt > neg_hi {
                             // Unreachable for the same reason as the positive
@@ -251,7 +259,7 @@ impl<'a> Shrinker<'a> {
                             unreachable!("step-1 descent cannot cross past `neg_hi`");
                         }
                         self.replace_int(i, &attempt)
-                    });
+                    })?;
                 }
                 // Also try positive values with smaller absolute value (simpler).
                 if ic.max_value.clone().sign() == Sign::Plus {
@@ -261,15 +269,15 @@ impl<'a> Shrinker<'a> {
                         if upper >= BigInt::from(1) {
                             // Seed at +upper, then shift-right-descend toward
                             // lo_pos via find_integer.
-                            self.replace_int(i, &upper);
+                            self.replace_int(i, &upper)?;
                             let lo_pos = ic.simplest().max(BigInt::from(0));
                             let dist = &upper - &lo_pos;
                             if dist.sign() == Sign::Plus {
                                 let max_shift = dist.bits() as usize + 1;
-                                find_integer(|k| {
+                                find_integer_r(|k| {
                                     let candidate = &lo_pos + (&dist >> k.min(max_shift));
                                     self.replace_int(i, &candidate)
-                                });
+                                })?;
                             }
                             // Linear scan positive values.
                             let scan_count: i64 = if range_size <= BigInt::from(128) {
@@ -281,7 +289,7 @@ impl<'a> Shrinker<'a> {
                                 (&lo_pos + BigInt::from(scan_count)).min(&upper + BigInt::from(1));
                             let mut c = lo_pos.clone();
                             while c < scan_hi {
-                                self.replace_int(i, &c);
+                                self.replace_int(i, &c)?;
                                 c += 1;
                             }
                         }
@@ -290,6 +298,7 @@ impl<'a> Shrinker<'a> {
             }
             i += 1;
         }
+        Ok(())
     }
 
     /// Try redistributing value between pairs of integer choices.
@@ -298,7 +307,7 @@ impl<'a> Shrinker<'a> {
     /// value from i to j (or vice versa) while keeping the total sum
     /// constant. Useful for sum-type constraints where the minimal
     /// counterexample has one small and one large value.
-    pub(super) fn redistribute_integers(&mut self) {
+    pub(super) fn redistribute_integers(&mut self) -> ShrinkResult<()> {
         let int_indices: Vec<usize> = self
             .current_nodes
             .iter()
@@ -356,17 +365,17 @@ impl<'a> Shrinker<'a> {
 
                 if prev_i != simplest_i {
                     if prev_i.sign() == Sign::Plus {
-                        bin_search_down_big(BigInt::from(0), prev_i.clone(), &mut |v| {
+                        bin_search_down_big_r(BigInt::from(0), prev_i.clone(), &mut |v| {
                             let new_j = &prev_j + (&prev_i - v);
                             self.replace_two(i, v, j, &new_j)
-                        });
+                        })?;
                     } else if prev_i.sign() == Sign::Minus {
-                        bin_search_down_big(BigInt::from(0), -&prev_i, &mut |a| {
+                        bin_search_down_big_r(BigInt::from(0), -&prev_i, &mut |a| {
                             // delta = prev_i + a = -(|prev_i| - a)
                             let new_i = -a;
                             let new_j = &prev_j + (&prev_i + a);
                             self.replace_two(i, &new_i, j, &new_j)
-                        });
+                        })?;
                     }
                 }
 
@@ -376,6 +385,7 @@ impl<'a> Shrinker<'a> {
                 pair_idx -= 1;
             }
         }
+        Ok(())
     }
 
     /// Lower pairs of nearby integer choices by the same amount
@@ -386,7 +396,7 @@ impl<'a> Shrinker<'a> {
     /// shrinker falls into a zig-zag trap. By probing `(v_i - k, v_j - k)` for
     /// geometrically growing `k` via `find_integer`, this pass reaches the
     /// minimum in `O(log k)` probes.
-    pub(super) fn lower_integers_together(&mut self) {
+    pub(super) fn lower_integers_together(&mut self) -> ShrinkResult<()> {
         let int_indices: Vec<usize> = self
             .current_nodes
             .iter()
@@ -440,33 +450,34 @@ impl<'a> Shrinker<'a> {
                 // `v_i - st_i` (the i-th's distance to st).
                 if v_i > st_i {
                     let max_k = &v_i - &st_i;
-                    find_integer(|n| {
+                    find_integer_r(|n| {
                         let k = BigInt::from(n as u64);
                         if k > max_k {
-                            return false;
+                            return Ok(false);
                         }
                         let new_i = &v_i - &k;
                         let new_j = &v_j - &k;
                         self.replace_two(i, &new_i, j, &new_j)
-                    });
+                    })?;
                 }
 
                 // Raise direction: run when v_i < st_i. Largest useful k:
                 // `st_i - v_i`.
                 if v_i < st_i {
                     let max_k = &st_i - &v_i;
-                    find_integer(|n| {
+                    find_integer_r(|n| {
                         let k = BigInt::from(n as u64);
                         if k > max_k {
-                            return false;
+                            return Ok(false);
                         }
                         let new_i = &v_i + &k;
                         let new_j = &v_j + &k;
                         self.replace_two(i, &new_i, j, &new_j)
-                    });
+                    })?;
                 }
             }
         }
+        Ok(())
     }
 
     /// Try shrinking duplicate integer values simultaneously.
@@ -479,7 +490,7 @@ impl<'a> Shrinker<'a> {
     /// All five choice kinds participate: every group tries the
     /// kind-simplest replacement, and integer groups additionally drive
     /// a binary search across all members at once.
-    pub(super) fn shrink_duplicates(&mut self) {
+    pub(super) fn shrink_duplicates(&mut self) -> ShrinkResult<()> {
         // Group nodes by (kind discriminant, value).  The discriminant
         // gate keeps an Integer and a Bytes that happen to coexist with
         // the same numeric payload apart.
@@ -528,7 +539,7 @@ impl<'a> Shrinker<'a> {
             if simplest != *group_value {
                 let replacements: HashMap<usize, ChoiceValue> =
                     valid.iter().map(|&i| (i, simplest.clone())).collect();
-                self.replace(&replacements);
+                self.replace(&replacements)?;
             }
         }
         // The remainder of this function is the legacy integer-only
@@ -580,7 +591,7 @@ impl<'a> Shrinker<'a> {
                     .iter()
                     .map(|&i| (i, ChoiceValue::Integer(simplest.clone())))
                     .collect();
-                self.replace(&replacements);
+                self.replace(&replacements)?;
             }
 
             // Re-read current value after possible replacement.
@@ -591,14 +602,14 @@ impl<'a> Shrinker<'a> {
             // boundary. Each probe re-reads the current value of `valid[0]`
             // so the descent starts from the live shrink target.
             let valid_capture = valid.clone();
-            let group_replace = |sh: &mut Shrinker<'_>, candidate: &BigInt| -> bool {
+            let group_replace = |sh: &mut Shrinker<'_>, candidate: &BigInt| -> ShrinkResult<bool> {
                 let current_valid: Vec<usize> = valid_capture
                     .iter()
                     .copied()
                     .filter(|&i| i < sh.current_nodes.len())
                     .collect();
                 if current_valid.len() < 2 {
-                    return false;
+                    return Ok(false);
                 }
                 let replacements: HashMap<usize, ChoiceValue> = current_valid
                     .iter()
@@ -617,48 +628,49 @@ impl<'a> Shrinker<'a> {
                 let dist = &cur_value - &lo;
                 if dist.sign() == Sign::Plus {
                     let max_shift = dist.bits() as usize + 1;
-                    find_integer(|k| {
+                    find_integer_r(|k| {
                         let candidate = &lo + (&dist >> k.min(max_shift));
                         group_replace(self, &candidate)
-                    });
+                    })?;
                 }
                 if live_base(self) > lo {
-                    find_integer(|n| {
+                    find_integer_r(|n| {
                         let attempt = live_base(self) - BigInt::from(2u64 * n as u64);
                         group_replace(self, &attempt)
-                    });
+                    })?;
                 }
                 if live_base(self) > lo {
-                    find_integer(|n| {
+                    find_integer_r(|n| {
                         let attempt = live_base(self) - BigInt::from(n as u64);
                         group_replace(self, &attempt)
-                    });
+                    })?;
                 }
             } else if cur_value.sign() == Sign::Minus {
                 let lo = (-ic.simplest()).max(BigInt::from(0));
                 let dist = ((-&cur_value) - &lo).max(BigInt::from(0));
                 if dist.sign() == Sign::Plus {
                     let max_shift = dist.bits() as usize + 1;
-                    find_integer(|k| {
+                    find_integer_r(|k| {
                         let candidate_abs = &lo + (&dist >> k.min(max_shift));
                         group_replace(self, &(-&candidate_abs))
-                    });
+                    })?;
                 }
                 let neg_hi = -&lo;
                 if live_base(self) < neg_hi {
-                    find_integer(|n| {
+                    find_integer_r(|n| {
                         let attempt = live_base(self) + BigInt::from(2u64 * n as u64);
                         group_replace(self, &attempt)
-                    });
+                    })?;
                 }
                 if live_base(self) < neg_hi {
-                    find_integer(|n| {
+                    find_integer_r(|n| {
                         let attempt = live_base(self) + BigInt::from(n as u64);
                         group_replace(self, &attempt)
-                    });
+                    })?;
                 }
             }
         }
+        Ok(())
     }
 
     /// Break the zig-zag trap by lowering a common offset across every
@@ -673,13 +685,13 @@ impl<'a> Shrinker<'a> {
     ///
     /// Always called after a successful pass that may have changed
     /// integer values; clears the change-tracking set on exit.
-    pub(crate) fn lower_common_node_offset(&mut self) {
+    pub(crate) fn lower_common_node_offset(&mut self) -> ShrinkResult<()> {
         let mut changed: Vec<usize> = self.changed_nodes().iter().copied().collect();
         // `changed_nodes` is a `HashSet`; sort for a deterministic, run-to-run
         // stable iteration order.
         changed.sort_unstable();
         if changed.len() <= 1 {
-            return;
+            return Ok(());
         }
         let mut indices: Vec<usize> = Vec::new();
         let mut ic_targets: Vec<BigInt> = Vec::new();
@@ -706,7 +718,7 @@ impl<'a> Shrinker<'a> {
             ic_targets.push(target);
         }
         if indices.len() <= 1 {
-            return;
+            return Ok(());
         }
         let offset = distances
             .iter()
@@ -741,10 +753,10 @@ impl<'a> Shrinker<'a> {
 
         // Try lowering by an additional `n` units in both directions.
         for sign_multiplier in [1i128, -1] {
-            find_integer(|n| {
+            find_integer_r(|n| {
                 let n_big = BigInt::from(n as u64);
                 if n_big > offset {
-                    return false;
+                    return Ok(false);
                 }
                 let new_offset = &offset - &n_big;
                 let mut replacements: HashMap<usize, ChoiceValue> = HashMap::new();
@@ -759,9 +771,10 @@ impl<'a> Shrinker<'a> {
                     replacements.insert(indices[k], ChoiceValue::Integer(new_value));
                 }
                 self.replace(&replacements)
-            });
+            })?;
         }
         self.clear_change_tracking();
+        Ok(())
     }
 }
 

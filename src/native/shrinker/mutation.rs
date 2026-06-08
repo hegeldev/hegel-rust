@@ -12,7 +12,7 @@
 use crate::native::bignum::BigUint;
 use crate::native::core::ChoiceValue;
 
-use super::Shrinker;
+use super::{ShrinkResult, Shrinker};
 
 /// Number of random continuations to try per mutation.
 const RANDOM_ATTEMPTS: u64 = 3;
@@ -24,9 +24,9 @@ impl<'a> Shrinker<'a> {
     /// Try random mutations of a few positions to escape local optima.
     ///
     /// Port of Hypothesis's `shrinking/mutation.py::mutate_and_shrink`.
-    pub(super) fn mutate_and_shrink(&mut self) {
+    pub(super) fn mutate_and_shrink(&mut self) -> ShrinkResult<()> {
         if self.current_nodes.len() > MAX_MUTATE_NODES {
-            return;
+            return Ok(());
         }
         let mut i = 0;
         while i < self.current_nodes.len() {
@@ -69,10 +69,10 @@ impl<'a> Shrinker<'a> {
 
                 // Probe with a fixed seed (matches Hypothesis's `Random(0)`),
                 // then RANDOM_ATTEMPTS random continuations.
-                self.probe(&prefix, 0, max_size);
+                self.probe(&prefix, 0, max_size)?;
                 for attempt in 0..RANDOM_ATTEMPTS {
                     let seed = (i as u64).wrapping_mul(1000).wrapping_add(attempt);
-                    self.probe(&prefix, seed, max_size);
+                    self.probe(&prefix, seed, max_size)?;
                 }
 
                 // Also try setting each of the next few positions to the
@@ -103,12 +103,13 @@ impl<'a> Shrinker<'a> {
                             .wrapping_mul(1000)
                             .wrapping_add((j_offset as u64).wrapping_mul(100))
                             .wrapping_add(attempt);
-                        self.probe(&two_prefix, seed, max_size);
+                        self.probe(&two_prefix, seed, max_size)?;
                     }
                 }
             }
             i += 1;
         }
+        Ok(())
     }
 }
 

@@ -10,7 +10,11 @@
 //! finer-grained step is a future refinement; the scheduling skeleton
 //! here stays the same either way.
 
-use super::Shrinker;
+use super::{ShrinkResult, Shrinker};
+
+/// A boxed shrink-pass step. Returns [`ShrinkStop`](super::ShrinkStop) once the
+/// shrink deadline has passed so the scheduler unwinds promptly.
+pub type ShrinkPassFn<'a> = Box<dyn FnMut(&mut Shrinker<'a>) -> ShrinkResult<()> + 'a>;
 
 /// SplitMix64 step — used as a deterministic, dependency-free RNG to
 /// scramble pass ordering when `fixate_shrink_passes` falls into the
@@ -35,7 +39,7 @@ pub struct ShrinkPass<'a> {
     /// `Shrinker::shrink`'s end-of-run profile report.
     pub name: &'static str,
     /// The callable to run.
-    pub run: Box<dyn FnMut(&mut Shrinker<'a>) + 'a>,
+    pub run: ShrinkPassFn<'a>,
     /// Total times this pass has been stepped.
     pub calls: usize,
     /// Times the pass step strictly improved the shrink target.
@@ -46,7 +50,7 @@ pub struct ShrinkPass<'a> {
 
 impl<'a> ShrinkPass<'a> {
     /// Construct a named pass from a closure.
-    pub fn new(name: &'static str, run: Box<dyn FnMut(&mut Shrinker<'a>) + 'a>) -> Self {
+    pub fn new(name: &'static str, run: ShrinkPassFn<'a>) -> Self {
         ShrinkPass {
             name,
             run,
@@ -76,21 +80,21 @@ impl<'a> Shrinker<'a> {
     ///
     /// Returns when no pass made any progress over a full outer
     /// iteration. Called by [`Shrinker::shrink`].
-    pub fn fixate_shrink_passes(&mut self, passes: &mut [ShrinkPass<'a>]) {
+    pub fn fixate_shrink_passes(&mut self, passes: &mut [ShrinkPass<'a>]) -> ShrinkResult<()> {
         const MAX_FAILURES: usize = 20;
         let mut any_ran = true;
         let mut shuffle_state: u64 = 0x9E3779B97F4A7C15;
         while any_ran {
             any_ran = false;
             // Try the cleanup pass once at the start of each loop.
-            let mut can_discard = self.remove_discarded();
+            let mut can_discard = self.remove_discarded()?;
             let calls_at_loop_start = self.calls;
             let mut max_calls_per_failing_step: usize = 1;
             let mut reorder_keys: Vec<i32> = vec![0; passes.len()];
             let mut shuffle_requested = false;
             for idx in 0..passes.len() {
                 if can_discard {
-                    can_discard = self.remove_discarded();
+                    can_discard = self.remove_discarded()?;
                 }
                 let before_nodes_len = self.current_nodes.len();
                 let epoch_before_pass = self.improvements;
@@ -127,7 +131,7 @@ impl<'a> Shrinker<'a> {
                     passes[idx].calls += 1;
                     let epoch_before_iter = self.improvements;
                     let initial_calls = self.calls;
-                    (passes[idx].run)(self);
+                    (passes[idx].run)(self)?;
                     if self.improvements > epoch_before_iter {
                         passes[idx].shrinks += 1;
                         if self.current_nodes.len() < before_nodes_len {
@@ -180,13 +184,14 @@ impl<'a> Shrinker<'a> {
                 new_order[dest] = Some(std::mem::replace(
                     &mut passes[src],
                     // Temporarily fill with a noop placeholder.
-                    ShrinkPass::new("__placeholder__", Box::new(|_| {})),
+                    ShrinkPass::new("__placeholder__", Box::new(|_| Ok(()))),
                 ));
             }
             for (dest, slot) in new_order.into_iter().enumerate() {
                 passes[dest] = slot.expect("permutation fills every slot");
             }
         }
+        Ok(())
     }
 
     /// Read-only access to per-pass stats; used by `shrink`'s profile

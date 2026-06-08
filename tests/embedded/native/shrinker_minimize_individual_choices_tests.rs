@@ -43,7 +43,7 @@ fn minimize_individual_choices_drives_int_to_simplest_when_predicate_admits() {
         initial,
         Spans::new(),
     );
-    shrinker.minimize_individual_choices();
+    shrinker.minimize_individual_choices().unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 0);
 }
 
@@ -58,7 +58,7 @@ fn minimize_individual_choices_skips_forced_nodes() {
         initial,
         Spans::new(),
     );
-    shrinker.minimize_individual_choices();
+    shrinker.minimize_individual_choices().unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 7);
 }
 
@@ -108,7 +108,7 @@ fn minimize_individual_choices_invokes_span_delete_fallback() {
         initial,
         Spans::new(),
     );
-    shrinker.minimize_individual_choices();
+    shrinker.minimize_individual_choices().unwrap();
     // After convergence the integer is at its minimum admissible value
     // (1) and the trailing region is the matching size (1 item).
     assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
@@ -171,7 +171,7 @@ fn minimize_individual_choices_truncates_misaligned_string() {
         initial,
         Spans::new(),
     );
-    shrinker.minimize_individual_choices();
+    shrinker.minimize_individual_choices().unwrap();
     // The misalignment retry should leave the integer lower than the
     // original 3 and the string truncated to match.
     assert!(int_value(&shrinker.current_nodes[0]) < 3);
@@ -219,7 +219,7 @@ fn minimize_individual_choices_size_dep_single_node_delete_succeeds() {
         initial,
         Spans::new(),
     );
-    shrinker.minimize_individual_choices();
+    shrinker.minimize_individual_choices().unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
     assert_eq!(shrinker.current_nodes.len(), 1);
 }
@@ -265,7 +265,7 @@ fn minimize_individual_choices_size_dep_span_delete_succeeds() {
         initial,
         Spans::new(),
     );
-    shrinker.minimize_individual_choices();
+    shrinker.minimize_individual_choices().unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
     assert_eq!(shrinker.current_nodes.len(), 1);
 }
@@ -312,7 +312,7 @@ fn minimize_individual_choices_truncates_misaligned_bytes() {
         initial,
         Spans::new(),
     );
-    shrinker.minimize_individual_choices();
+    shrinker.minimize_individual_choices().unwrap();
     assert!(int_value(&shrinker.current_nodes[0]) < 3);
     match &shrinker.current_nodes[1].value {
         ChoiceValue::Bytes(b) => {
@@ -333,7 +333,7 @@ fn minimize_individual_choices_no_op_on_already_simplest_node() {
         initial,
         Spans::new(),
     );
-    shrinker.minimize_individual_choices();
+    shrinker.minimize_individual_choices().unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 0);
 }
 
@@ -365,6 +365,8 @@ fn try_replace_with_deletion_continues_past_sizes_reaching_into_idx() {
     );
     // idx = 2 (last index), len = 3: for every size in 1..=k the start index
     // is `3 - size <= 2 == idx`, so the loop `continue`s each time.
-    let deleted = shrinker.try_replace_with_deletion(2, ChoiceValue::Integer(BigInt::from(0)), 5);
+    let deleted = shrinker
+        .try_replace_with_deletion(2, ChoiceValue::Integer(BigInt::from(0)), 5)
+        .unwrap();
     assert!(!deleted);
 }

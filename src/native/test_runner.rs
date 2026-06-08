@@ -18,7 +18,8 @@ use rand::RngExt;
 
 use crate::backend::{DataSource, Failure, TestCaseResult, TestRunResult, TestRunner};
 use crate::native::core::{
-    BUFFER_SIZE, ChoiceNode, ChoiceValue, NativeTestCase, Span, Spans, Status, sort_key,
+    BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, Spans,
+    Status, sort_key,
 };
 use crate::native::data_source::NativeDataSource;
 use crate::native::database::{
@@ -96,7 +97,13 @@ impl TestRunner for NativeTestRunner {
         if settings.mode == Mode::SingleTestCase {
             return run_single(settings, run_case);
         }
-        run_main(settings, database_key, run_case, TOO_SLOW_THRESHOLD)
+        run_main(
+            settings,
+            database_key,
+            run_case,
+            TOO_SLOW_THRESHOLD,
+            std::time::Duration::from_secs(MAX_SHRINKING_SECONDS),
+        )
     }
 }
 
@@ -206,6 +213,10 @@ fn run_main(
     // Injected (rather than read from the `TOO_SLOW_THRESHOLD` constant) so a
     // test can trip the TooSlow check deterministically without a 30s sleep.
     too_slow_threshold: std::time::Duration,
+    // Wall-clock budget for the whole shrinking phase. Injected (rather than
+    // read from `MAX_SHRINKING_SECONDS`) so a test can trip the slow-shrink
+    // cutoff deterministically with a zero budget instead of a 5-minute wait.
+    shrink_budget: std::time::Duration,
 ) -> TestRunResult {
     let mut rng = create_rng(settings, database_key);
     let max_test_cases = settings.test_cases;
@@ -604,6 +615,10 @@ fn run_main(
         // order is randomised per process, and each origin's shrink shares the
         // run-level call budget.
         origins.sort();
+        // One wall-clock deadline shared across every origin's shrink, matching
+        // Hypothesis's single `finish_shrinking_deadline` for the whole phase.
+        let shrink_deadline = std::time::Instant::now() + shrink_budget;
+        let mut shrink_timed_out = false;
         for origin in origins {
             let initial = interesting.get(&origin).cloned().unwrap_or_default();
 
@@ -649,17 +664,28 @@ fn run_main(
                     verify.nodes,
                     initial_spans,
                 );
+                shrinker.deadline = Some(shrink_deadline);
                 // Pre-shrink coarse reduction — runs once before the
                 // main shrink loop to rerandomise small one_of-style
-                // branch selectors.
-                shrinker.initial_coarse_reduction();
+                // branch selectors. A `ShrinkStop` here just means the
+                // deadline passed; `shrink()` below is a no-op in that case
+                // and `timed_out` is already latched.
+                let _ = shrinker.initial_coarse_reduction();
                 if verbosity == Verbosity::Debug {
                     shrinker.set_debug(|msg| eprintln!("{msg}"));
                 }
                 shrinker.shrink();
+                shrink_timed_out |= shrinker.timed_out;
                 shrinker.current_nodes
             };
             interesting.insert(origin, shrunk);
+        }
+
+        // The shrink phase ran past its wall-clock budget and bailed with the
+        // best example so far. Warn unless output is suppressed, mirroring
+        // Hypothesis's slow-shrink notice.
+        if shrink_timed_out && verbosity != Verbosity::Quiet {
+            eprintln!("{}", slow_shrink_warning());
         }
 
         if verbosity == Verbosity::Debug {
@@ -879,6 +905,20 @@ pub(crate) fn flaky_diagnostic() -> String {
      This usually means your test depends on external state such as \
      global variables, system time, or external random number generators."
         .to_string()
+}
+
+/// Warning emitted when shrinking exhausts its wall-clock budget
+/// ([`MAX_SHRINKING_SECONDS`]) and stops early. Unlike a health-check
+/// failure this is not a failure: the smallest counterexample found so far is
+/// still reported. Returned as a string (rather than printed inline) so it can
+/// be asserted directly in tests. Mirrors Hypothesis's slow-shrink notice.
+pub(crate) fn slow_shrink_warning() -> String {
+    format!(
+        "WARNING: Shrinking has been running for more than {MAX_SHRINKING_SECONDS} seconds \
+         and is making very slow progress, so it has been stopped. The smallest failing \
+         example found so far will be reported. Re-running the test will resume shrinking \
+         from there, and may take this long again before stopping."
+    )
 }
 
 /// Build a failing [`TestRunResult`] from a health-check diagnostic.

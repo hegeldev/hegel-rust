@@ -341,7 +341,13 @@ fn run_main_with_urandom_backend_generates_and_passes() {
         .test_cases(20)
         .database(None)
         .backend(crate::runner::Backend::Urandom);
-    let result = run_main(&settings, None, &mut run_case, Duration::from_secs(30));
+    let result = run_main(
+        &settings,
+        None,
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
     assert!(result.passed);
 }
 
@@ -362,10 +368,58 @@ fn run_main_with_urandom_backend_finds_counterexample() {
         .test_cases(20)
         .database(None)
         .backend(crate::runner::Backend::Urandom);
-    let result = run_main(&settings, None, &mut run_case, Duration::from_secs(30));
+    let result = run_main(
+        &settings,
+        None,
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
     assert!(!result.passed);
     assert!(
         result.failures[0].panic_message.contains("always fails"),
+        "{:?}",
+        result.failures
+    );
+}
+
+#[test]
+fn slow_shrink_warning_mentions_shrinking() {
+    let w = slow_shrink_warning();
+    assert!(w.contains("Shrinking"), "{w}");
+    assert!(w.contains("stopped"), "{w}");
+}
+
+#[test]
+fn run_main_stops_shrinking_when_budget_is_exhausted() {
+    // Drive `run_main` with a zero shrink budget so the wall-clock cutoff
+    // fires deterministically instead of after five minutes. The run must
+    // still surface the failure (with the best, un-shrunk example) rather
+    // than hang, and the slow-shrink warning path is exercised.
+    crate::run_lifecycle::init_panic_hook();
+    let mut test_fn = |tc: crate::TestCase| {
+        // A non-trivial counterexample so there is real shrinking work that
+        // the zero budget cuts short.
+        let v: Vec<i32> = tc.draw(crate::generators::vecs(crate::generators::integers()));
+        assert!(v.is_empty(), "non-empty vec");
+    };
+    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
+        run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+    };
+    let settings = Settings::new()
+        .test_cases(200)
+        .database(None)
+        .derandomize(true);
+    let result = run_main(
+        &settings,
+        None,
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::ZERO,
+    );
+    assert!(!result.passed, "the failure must still be reported");
+    assert!(
+        result.failures[0].panic_message.contains("non-empty vec"),
         "{:?}",
         result.failures
     );
@@ -385,7 +439,13 @@ fn run_main_reports_too_slow_at_call_site() {
         run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
     };
     let settings = Settings::new().test_cases(100).database(None);
-    let result = run_main(&settings, None, &mut run_case, Duration::ZERO);
+    let result = run_main(
+        &settings,
+        None,
+        &mut run_case,
+        Duration::ZERO,
+        Duration::from_secs(300),
+    );
     assert!(!result.passed);
     assert!(
         result.failures[0].panic_message.contains("TooSlow"),
@@ -516,7 +576,13 @@ fn discover_reproduce_blob() -> String {
     let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, _is_final: bool| {
         mark_large_interesting(&*ds);
     };
-    let result = run_main(&settings, None, &mut run_case, Duration::from_secs(30));
+    let result = run_main(
+        &settings,
+        None,
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
     assert!(!result.passed, "property should have failed");
     result.failures[0]
         .reproduce_blob

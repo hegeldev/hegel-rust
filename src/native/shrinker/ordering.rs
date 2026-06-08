@@ -18,7 +18,7 @@
 //! the new shrink target (and is now reflected in `current`), `false`
 //! otherwise.
 
-use super::find_integer;
+use super::{ShrinkResult, find_integer_r};
 
 /// Run the ordering shrinker over a permutation of `[0..n)`.
 ///
@@ -33,14 +33,14 @@ use super::find_integer;
 /// returns `true`, the caller has presumably updated whatever underlying
 /// state corresponds to that permutation; the function refreshes its
 /// `current` from the new ordering.
-pub(super) fn shrink_ordering<T, K, F>(n: usize, mut keys: K, mut accept: F)
+pub(super) fn shrink_ordering<T, K, F>(n: usize, mut keys: K, mut accept: F) -> ShrinkResult<()>
 where
     T: Ord,
     K: FnMut(usize) -> T,
-    F: FnMut(&[usize]) -> bool,
+    F: FnMut(&[usize]) -> ShrinkResult<bool>,
 {
     if n <= 1 {
-        return;
+        return Ok(());
     }
     let mut current: Vec<usize> = (0..n).collect();
 
@@ -51,11 +51,11 @@ where
         p.sort_by_key(|&i| keys(i));
         p
     };
-    if sorted_candidate != current && accept(&sorted_candidate) {
+    if sorted_candidate != current && accept(&sorted_candidate)? {
         // A full sort is the global optimum under shortlex key
         // ordering, so there's nothing more to do.  No need to update
         // `current` because we return.
-        return;
+        return Ok(());
     }
 
     // sort_regions: walk from i=0, finding the largest k where sorting
@@ -66,9 +66,9 @@ where
         let prefix: Vec<usize> = snapshot[..i].to_vec();
         let len = snapshot.len();
         let mut best: Vec<usize> = Vec::new();
-        let k = find_integer(|k| {
+        let k = find_integer_r(|k| {
             if i + k > len {
-                return false;
+                return Ok(false);
             }
             let mut region: Vec<usize> = snapshot[i..i + k].to_vec();
             region.sort_by_key(|&j| keys(j));
@@ -78,15 +78,15 @@ where
             if attempt == snapshot {
                 // No actual reordering; treat as a no-op success so the
                 // exponential probe keeps growing.
-                return true;
+                return Ok(true);
             }
-            if accept(&attempt) {
+            if accept(&attempt)? {
                 best = attempt;
-                true
+                Ok(true)
             } else {
-                false
+                Ok(false)
             }
-        });
+        })?;
         if !best.is_empty() {
             current = best;
         }
@@ -98,7 +98,7 @@ where
     // (centre excluded) is no longer accepted.
     let len = current.len();
     if len < 3 {
-        return;
+        return Ok(());
     }
     for i in 1..len - 1 {
         // Skip already-locally-sorted positions
@@ -111,9 +111,9 @@ where
         let mut right = i + 1;
         let snapshot_r = current.clone();
         let i_fixed = i;
-        let k_r = find_integer(|k| {
+        let k_r = find_integer_r(|k| {
             if right + k > snapshot_r.len() {
-                return false;
+                return Ok(false);
             }
             try_sort_around(
                 &snapshot_r,
@@ -123,14 +123,14 @@ where
                 &mut keys,
                 &mut accept,
             )
-        });
+        })?;
         right += k_r;
         // Expand left.  The return value is discarded because `left`
         // is re-initialised at the start of the next iteration.
         let snapshot_l = current.clone();
-        find_integer(|k| {
+        find_integer_r(|k| {
             if k > left {
-                return false;
+                return Ok(false);
             }
             try_sort_around(
                 &snapshot_l,
@@ -140,8 +140,9 @@ where
                 &mut keys,
                 &mut accept,
             )
-        });
+        })?;
     }
+    Ok(())
 }
 
 fn try_sort_around<T, K, F>(
@@ -151,11 +152,11 @@ fn try_sort_around<T, K, F>(
     centre: usize,
     keys: &mut K,
     accept: &mut F,
-) -> bool
+) -> ShrinkResult<bool>
 where
     T: Ord,
     K: FnMut(usize) -> T,
-    F: FnMut(&[usize]) -> bool,
+    F: FnMut(&[usize]) -> ShrinkResult<bool>,
 {
     // `a <= centre < b` allows the boundary case `a == centre`
     // (sort only the right side, with `split = 0`). Callers guarantee
@@ -171,7 +172,7 @@ where
     attempt.extend_from_slice(&sides[split..]);
     attempt.extend_from_slice(&snapshot[b..]);
     if attempt == snapshot {
-        return true;
+        return Ok(true);
     }
     accept(&attempt)
 }

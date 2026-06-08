@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::native::core::{ChoiceKind, ChoiceValue};
 
-use super::Shrinker;
+use super::{ShrinkResult, Shrinker};
 
 impl<'a> Shrinker<'a> {
     /// Try sorting groups of same-type choices by sort key.
@@ -17,22 +17,22 @@ impl<'a> Shrinker<'a> {
     /// matters when earlier swaps cause structural changes (e.g. value
     /// punning on collection-bearing kinds) that would make the full
     /// sort's replace unreachable.
-    pub(super) fn sort_values(&mut self) {
+    pub(super) fn sort_values(&mut self) -> ShrinkResult<()> {
         // Sort integer choices by absolute value.
-        self.sort_values_integers();
+        self.sort_values_integers()?;
         // Sort boolean choices: false (0) before true (1).
-        self.sort_values_booleans();
+        self.sort_values_booleans()
     }
 
-    pub(super) fn sort_values_integers(&mut self) {
-        self.try_sort_group(|k| matches!(k, ChoiceKind::Integer(_)));
+    pub(super) fn sort_values_integers(&mut self) -> ShrinkResult<()> {
+        self.try_sort_group(|k| matches!(k, ChoiceKind::Integer(_)))
     }
 
-    pub(super) fn sort_values_booleans(&mut self) {
-        self.try_sort_group(|k| matches!(k, ChoiceKind::Boolean(_)));
+    pub(super) fn sort_values_booleans(&mut self) -> ShrinkResult<()> {
+        self.try_sort_group(|k| matches!(k, ChoiceKind::Boolean(_)))
     }
 
-    fn try_sort_group<F>(&mut self, matches_kind: F)
+    fn try_sort_group<F>(&mut self, matches_kind: F) -> ShrinkResult<()>
     where
         F: Fn(&ChoiceKind) -> bool,
     {
@@ -50,7 +50,7 @@ impl<'a> Shrinker<'a> {
             .collect();
 
         if indices.len() < 2 {
-            return;
+            return Ok(());
         }
 
         let values: Vec<ChoiceValue> = indices
@@ -75,8 +75,8 @@ impl<'a> Shrinker<'a> {
                 .zip(sorted_values.iter())
                 .map(|(&i, v)| (i, v.clone()))
                 .collect();
-            if self.replace(&replacements) {
-                return;
+            if self.replace(&replacements)? {
+                return Ok(());
             }
         }
 
@@ -108,13 +108,14 @@ impl<'a> Shrinker<'a> {
                 let mut swap = HashMap::new();
                 swap.insert(idx_prev, v_j);
                 swap.insert(idx_j, v_prev);
-                if self.replace(&swap) {
+                if self.replace(&swap)? {
                     j -= 1;
                     continue;
                 }
                 break;
             }
         }
+        Ok(())
     }
 
     /// For each block size 2..=8, tries swapping adjacent blocks of the
@@ -122,7 +123,7 @@ impl<'a> Shrinker<'a> {
     /// cases like list entries where each entry spans multiple choices
     /// (e.g. [continue, value]) and the sorting pass can't swap
     /// individual values without breaking structure.
-    pub(super) fn swap_adjacent_blocks(&mut self) {
+    pub(super) fn swap_adjacent_blocks(&mut self) -> ShrinkResult<()> {
         for block_size in 2usize..=8 {
             let mut i = 0;
             while i + 2 * block_size <= self.current_nodes.len() {
@@ -159,10 +160,11 @@ impl<'a> Shrinker<'a> {
                     swap.insert(i + k, block_b[k].clone());
                     swap.insert(j + k, block_a[k].clone());
                 }
-                self.replace(&swap);
+                self.replace(&swap)?;
                 i += 1;
             }
         }
+        Ok(())
     }
 }
 

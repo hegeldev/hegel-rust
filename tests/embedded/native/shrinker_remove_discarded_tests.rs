@@ -57,7 +57,7 @@ fn remove_discarded_returns_true_when_no_discards() {
     let mut spans = Spans::new();
     spans.push(span(0, 2, false));
     let mut shrinker = Shrinker::with_probe(accepting_test_fn(Spans::new()), initial, spans);
-    assert!(shrinker.remove_discarded());
+    assert!(shrinker.remove_discarded().unwrap());
     assert_eq!(shrinker.current_nodes.len(), 2);
 }
 
@@ -69,7 +69,7 @@ fn remove_discarded_skips_zero_length_discarded_span() {
     let mut spans = Spans::new();
     spans.push(span(0, 0, true)); // zero-length discarded
     let mut shrinker = Shrinker::with_probe(accepting_test_fn(Spans::new()), initial, spans);
-    assert!(shrinker.remove_discarded());
+    assert!(shrinker.remove_discarded().unwrap());
     assert_eq!(shrinker.current_nodes.len(), 1);
 }
 
@@ -84,7 +84,7 @@ fn remove_discarded_deletes_a_single_discarded_region() {
     spans.push(span(1, 3, true));
 
     let mut shrinker = Shrinker::with_probe(accepting_test_fn(Spans::new()), initial, spans);
-    assert!(shrinker.remove_discarded());
+    assert!(shrinker.remove_discarded().unwrap());
     // Closure now returns no discards, so the next loop iteration finds
     // an empty list and exits.
     assert_eq!(shrinker.current_nodes.len(), 2);
@@ -119,7 +119,7 @@ fn remove_discarded_deletes_non_overlapping_regions_in_reverse() {
     spans.push(span(5, 7, true));
 
     let mut shrinker = Shrinker::with_probe(accepting_test_fn(Spans::new()), initial, spans);
-    assert!(shrinker.remove_discarded());
+    assert!(shrinker.remove_discarded().unwrap());
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
@@ -151,7 +151,7 @@ fn remove_discarded_skips_nested_discarded_spans() {
     spans.push(span(2, 3, true));
 
     let mut shrinker = Shrinker::with_probe(accepting_test_fn(Spans::new()), initial, spans);
-    assert!(shrinker.remove_discarded());
+    assert!(shrinker.remove_discarded().unwrap());
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
@@ -182,7 +182,7 @@ fn remove_discarded_returns_false_when_consider_rejects() {
         initial,
         spans,
     );
-    assert!(!shrinker.remove_discarded());
+    assert!(!shrinker.remove_discarded().unwrap());
     // The original sequence is preserved.
     assert_eq!(shrinker.current_nodes.len(), 2);
 }
@@ -221,7 +221,7 @@ fn remove_discarded_iterates_when_new_target_still_has_discards() {
         initial,
         spans,
     );
-    assert!(shrinker.remove_discarded());
+    assert!(shrinker.remove_discarded().unwrap());
     // First call removed [2..4); second iteration found [0..2) still
     // marked discarded and removed it too — leaving nothing.
     assert_eq!(shrinker.current_nodes.len(), 0);
