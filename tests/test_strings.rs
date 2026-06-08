@@ -646,6 +646,14 @@ mod simple_strings {
     fn test_can_restrict_to_ascii_only() {
         assert_all_examples(gs::text().max_codepoint(127), |s: &String| s.is_ascii());
     }
+
+    // A very large `max_size` must not blow up generation: the engine draws
+    // collection lengths from a geometric variate (not uniformly over the
+    // range), so typical strings stay short and the run finishes quickly.
+    #[test]
+    fn test_can_set_max_size_large() {
+        assert_all_examples(gs::text().max_size(1_000_000), |_: &String| true);
+    }
 }
 
 mod simple_characters {

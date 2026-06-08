@@ -202,6 +202,16 @@ fn test_one_of_empty() {
     let _g = gs::one_of(Vec::<hegel::generators::BoxedGenerator<'_, i32>>::new());
 }
 
+// The surrogate codepoint range (0xD800..=0xDFFF) contains no scalar values, so
+// a `characters()` generator pinned to it has an empty alphabet. The Rust
+// builder doesn't pre-validate this; the engine rejects it as an
+// `InvalidArgument` usage error while interpreting the schema.
+#[hegel::test]
+#[should_panic(expected = "InvalidArgument")]
+fn test_surrogate_only_character_range_is_invalid_argument(tc: hegel::TestCase) {
+    let _: char = tc.draw(gs::characters().min_codepoint(0xD800).max_codepoint(0xD800));
+}
+
 mod validation {
     use super::common::utils::{check_can_generate_examples, expect_panic};
     use hegel::generators::{self as gs, Generator};
