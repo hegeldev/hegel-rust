@@ -110,6 +110,18 @@ __bench = []
 [profile.dev]
 debug = "line-tables-only"
 
+# The native engine (in this crate) and its deps are compute- and
+# allocation-heavy; running them unoptimized makes the property-test suites
+# dominate CI wall-clock, and the penalty is far worse on Windows (~14x the
+# Linux runtime). Optimize the library and dependencies while leaving the
+# thin integration-test crates unoptimized, so the hot code runs fast without
+# inflating compile time across the ~40 test binaries.
+[profile.dev.package.hegeltest]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 2
+
 [package.metadata.docs.rs]
 all-features = true
 # -D warnings means "deny warnings", which actually means "turn warnings into errors". Have
