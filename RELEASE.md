@@ -30,3 +30,10 @@ let consumed = tc.draw(accounts.values());
 ```
 
 The `is_empty()`, `len()`, and `add()` methods are unchanged.
+
+The `Generator<T>` trait no longer requires `Self: Send + Sync`. Drawing a value
+is single-threaded, so the bound was never needed to produce values; it is now
+required only where a generator is actually shared across threads — by `boxed()`
+and by `deferred()`'s `set()`, which already carry it. This lets generators that
+borrow non-`Sync` data (such as the new `Pool` reference and value generators)
+implement the trait directly. Existing generators are unaffected.

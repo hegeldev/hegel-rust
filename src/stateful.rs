@@ -65,7 +65,7 @@ use crate::control::{AssumeFailed, StopTest, raise_control};
 use crate::generators::{Generator, integers};
 use crate::runner::Mode;
 use crate::test_case::raise_for_rc;
-use parking_lot::Mutex;
+use std::cell::RefCell;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -157,7 +157,7 @@ impl<T> Pool<T> {
     pub fn values(&mut self) -> Values<'_, T> {
         Values {
             pool_id: self.pool_id,
-            values: Mutex::new(&mut self.values),
+            values: RefCell::new(&mut self.values),
         }
     }
 }
@@ -171,7 +171,7 @@ pub struct References<'a, T> {
     values: &'a HashMap<i64, T>,
 }
 
-impl<'a, T: Sync> Generator<&'a T> for References<'a, T> {
+impl<'a, T> Generator<&'a T> for References<'a, T> {
     fn do_draw(&self, tc: &TestCase) -> &'a T {
         tc.assume(!self.values.is_empty());
         let variable_id = pool_generate(tc, self.pool_id, false);
@@ -182,20 +182,19 @@ impl<'a, T: Sync> Generator<&'a T> for References<'a, T> {
 /// A generator that consumes values from a [`Pool`], removing each value it
 /// yields.
 ///
-/// Returned by [`Pool::values`]. Borrows the pool mutably; the inner [`Mutex`]
-/// is what lets it remove a value during a draw (which only has shared access
-/// to the generator) while keeping the generator `Send + Sync`.
+/// Returned by [`Pool::values`]. Borrows the pool mutably; the inner
+/// [`RefCell`] is what lets it remove a value during a draw, which only has
+/// shared access to the generator.
 pub struct Values<'a, T> {
     pool_id: i64,
-    values: Mutex<&'a mut HashMap<i64, T>>,
+    values: RefCell<&'a mut HashMap<i64, T>>,
 }
 
-impl<T: Send> Generator<T> for Values<'_, T> {
+impl<T> Generator<T> for Values<'_, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
-        let mut values = self.values.lock();
-        tc.assume(!values.is_empty());
+        tc.assume(!self.values.borrow().is_empty());
         let variable_id = pool_generate(tc, self.pool_id, true);
-        values.remove(&variable_id).unwrap()
+        self.values.borrow_mut().remove(&variable_id).unwrap()
     }
 }
 
