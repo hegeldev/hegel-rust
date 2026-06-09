@@ -95,6 +95,21 @@ serde_json_raw_value = ["serde_json", "serde_json/raw_value"]
 # public API; depend on at your peril.
 __bench = []
 
+# Trim debuginfo on dev/test builds. The default dev profile emits full
+# DWARF/PDB debuginfo, which dominates link time — especially on Windows,
+# where `link.exe` is slow and the fat `.pdb` it produces is the bottleneck.
+# `line-tables-only` keeps file/line info for panic backtraces (which tests
+# rely on) while dropping the heavy variable/type debuginfo. `test` inherits
+# this from `dev`.
+#
+# NOTE: this only affects the *main* build (the hegeltest lib + the test
+# binaries themselves). The integration tests that spawn `cargo` subprocesses
+# build standalone temp crates with their own profile — those are sped up
+# separately via the `CARGO_PROFILE_*_DEBUG` env vars set in
+# `tests/common/project.rs`.
+[profile.dev]
+debug = "line-tables-only"
+
 [package.metadata.docs.rs]
 all-features = true
 # -D warnings means "deny warnings", which actually means "turn warnings into errors". Have
