@@ -55,7 +55,7 @@ fn test_2(tc: hegel::TestCase) {{
     let project = TempRustProject::new()
         .test_file("integration.rs", &test_code)
         .env("VALUES_DIR", values_path.to_str().unwrap())
-        // "FAILED" appears in cargo test output for server backends.
+        // "FAILED" appears in the cargo test output of the failing inner test.
         .expect_failure("FAILED");
 
     // run test_1. Database now has a failing entry for test_1

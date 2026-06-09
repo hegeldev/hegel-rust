@@ -518,7 +518,7 @@ mod testdecorators {
     #[test]
     fn test_empty_text() {
         // text("") in Python generates only empty strings; max_size(0) is the Rust equivalent
-        // since an empty alphabet causes a server InvalidArgument error.
+        // since an empty alphabet causes an InvalidArgument error.
         assert_all_examples(gs::text().max_size(0), |x: &String| x.is_empty());
     }
 

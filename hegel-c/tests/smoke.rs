@@ -623,7 +623,7 @@ fn libhegel_pool_primitives_draw_added_variables() {
         assert!(!run.is_null());
 
         let mut saw_pool_draw = false;
-        let mut saw_empty_stop = false;
+        let mut saw_empty_reject = false;
         loop {
             let tc = (a.next_test_case)(run);
             if tc.is_null() {
@@ -662,7 +662,10 @@ fn libhegel_pool_primitives_draw_added_variables() {
             saw_pool_draw = true;
 
             // Consume every variable, then confirm the now-empty pool
-            // reports STOP_TEST on the next draw.
+            // rejects the next draw as an invalid test case
+            // (HEGEL_E_ASSUME = -2): a variable drawn from an exhausted pool
+            // can't satisfy the test, so the engine marks the case invalid
+            // rather than out-of-data.
             let mut consumed = 0;
             for _ in 0..3 {
                 let mut v: i64 = -1;
@@ -677,8 +680,12 @@ fn libhegel_pool_primitives_draw_added_variables() {
             if consumed == 3 {
                 let mut v: i64 = -1;
                 let rc = (a.pool_generate)(tc, pool_id, true, &mut v);
-                assert_eq!(rc, -2, "expected STOP_TEST on empty pool, got rc={}", rc);
-                saw_empty_stop = true;
+                assert_eq!(
+                    rc, -2,
+                    "expected HEGEL_E_ASSUME on empty pool, got rc={}",
+                    rc
+                );
+                saw_empty_reject = true;
             }
 
             (a.mark_complete)(tc, CStatus::Valid, ptr::null());
@@ -686,7 +693,7 @@ fn libhegel_pool_primitives_draw_added_variables() {
 
         assert!(saw_pool_draw, "expected at least one successful pool draw");
         assert!(
-            saw_empty_stop,
+            saw_empty_reject,
             "expected to drain a pool to empty at least once"
         );
 

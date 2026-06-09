@@ -87,8 +87,8 @@ fn float_range_with_no_values_is_a_clean_usage_error() {
 
 #[test]
 fn text_with_inverted_codepoint_range_is_a_clean_usage_error() {
-    // The Rust builder does not pre-validate this; the backend (native engine
-    // or server) rejects it as InvalidArgument while interpreting the schema.
+    // The Rust builder does not pre-validate this; the native engine rejects
+    // it as InvalidArgument while interpreting the schema.
     let msg = capture_run_panic(|tc| {
         let _: String = tc.draw(gs::text().min_codepoint(200).max_codepoint(100));
     });
