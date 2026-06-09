@@ -1,6 +1,8 @@
 //! Embedded tests for `src/run_lifecycle.rs`.
 
 use super::*;
+use crate::backend::DataSourceError;
+use ciborium::Value;
 
 // `panic_message` downcasts the panic payload to `&str` or `String`; for
 // any other type it falls through to the `"Unknown panic"` branch.  Real
@@ -263,6 +265,155 @@ fn drive_multiple_failures_prints_each_reproducer_and_panics() {
     assert!(
         msg.contains("2 distinct failures"),
         "unexpected panic message: {msg}"
+    );
+}
+
+// ── run_lifecycle: backtrace capture is gated to where it is shown ───────
+//
+// The panic hook captures a backtrace for every panic raised in a test
+// context, but the only backtraces that are ever shown belong to failures
+// whose diagnostic is emitted — the final replay (`is_final`) or, in
+// verbose mode, every interesting case. Capturing (and, under
+// `RUST_BACKTRACE`, symbolizing) one for each discarded shrink probe is the
+// dominant cost of failing-heavy property runs. These tests pin the gating:
+// they are meaningful when the process has backtraces enabled (e.g. CI runs
+// with `RUST_BACKTRACE=1`) and harmless otherwise.
+
+/// A no-op `DataSource` for driving `run_test_case` with a body that panics
+/// before it draws. Only `mark_complete` is reached.
+struct BtStubDataSource;
+
+impl crate::backend::DataSource for BtStubDataSource {
+    fn generate(&self, _schema: &Value) -> Result<Value, DataSourceError> {
+        unimplemented!()
+    }
+    fn start_span(&self, _label: u64) -> Result<(), DataSourceError> {
+        unimplemented!()
+    }
+    fn stop_span(&self, _discard: bool) -> Result<(), DataSourceError> {
+        unimplemented!()
+    }
+    fn new_collection(&self, _min: u64, _max: Option<u64>) -> Result<i64, DataSourceError> {
+        unimplemented!()
+    }
+    fn collection_more(&self, _id: i64) -> Result<bool, DataSourceError> {
+        unimplemented!()
+    }
+    fn collection_reject(&self, _id: i64, _why: Option<&str>) -> Result<(), DataSourceError> {
+        unimplemented!()
+    }
+    fn new_pool(&self) -> Result<i64, DataSourceError> {
+        unimplemented!()
+    }
+    fn pool_add(&self, _pool_id: i64) -> Result<i64, DataSourceError> {
+        unimplemented!()
+    }
+    fn pool_generate(&self, _pool_id: i64, _consume: bool) -> Result<i64, DataSourceError> {
+        unimplemented!()
+    }
+    fn target_observation(&self, _score: f64, _label: &str) {
+        unimplemented!()
+    }
+    fn mark_complete(&self, _result: &TestCaseResult) {}
+}
+
+fn run_case_capturing(
+    is_final: bool,
+    verbosity: crate::runner::Verbosity,
+    body: &mut dyn FnMut(TestCase),
+) -> TestCaseResult {
+    init_panic_hook();
+    run_test_case(
+        Box::new(BtStubDataSource),
+        body,
+        is_final,
+        crate::runner::Mode::TestRun,
+        verbosity,
+    )
+}
+
+fn interesting_diagnostic(result: &TestCaseResult) -> String {
+    match result {
+        TestCaseResult::Interesting(failure) => failure.diagnostic.clone(),
+        other => panic!("expected an Interesting result, got {other:?}"),
+    }
+}
+
+fn backtraces_enabled() -> bool {
+    matches!(
+        Backtrace::capture().status(),
+        std::backtrace::BacktraceStatus::Captured
+    )
+}
+
+#[test]
+fn discarded_failures_skip_backtrace_capture() {
+    // Non-final, non-verbose: `should_emit` is false, so the diagnostic is
+    // thrown away — no backtrace should be captured, even with backtraces
+    // enabled. This is the shrinker hot path.
+    let result = run_case_capturing(false, crate::runner::Verbosity::Normal, &mut |_tc| {
+        panic!("{}", "boom")
+    });
+    let diagnostic = interesting_diagnostic(&result);
+    assert!(
+        !diagnostic.contains("stack backtrace"),
+        "a discarded (non-final) failure must not capture a backtrace; got:\n{diagnostic}"
+    );
+}
+
+#[test]
+fn shown_failures_capture_backtrace_when_enabled() {
+    // Final replay: `should_emit` is true, so the diagnostic is shown and
+    // should carry a backtrace exactly when the process has them enabled.
+    let result = run_case_capturing(true, crate::runner::Verbosity::Normal, &mut |_tc| {
+        panic!("{}", "boom")
+    });
+    let diagnostic = interesting_diagnostic(&result);
+    assert_eq!(
+        diagnostic.contains("stack backtrace"),
+        backtraces_enabled(),
+        "a shown (final) failure should carry a backtrace exactly when enabled; got:\n{diagnostic}"
+    );
+}
+
+#[test]
+fn verbose_mode_captures_backtrace_for_non_final_failures() {
+    // Verbose mode emits every interesting case's diagnostic live, so
+    // `should_emit` is true even when not final — the backtrace must be
+    // captured (when enabled) so the live output matches a real failure.
+    let result = run_case_capturing(false, crate::runner::Verbosity::Verbose, &mut |_tc| {
+        panic!("{}", "boom")
+    });
+    let diagnostic = interesting_diagnostic(&result);
+    assert_eq!(
+        diagnostic.contains("stack backtrace"),
+        backtraces_enabled(),
+        "verbose mode should capture a backtrace for non-final failures; got:\n{diagnostic}"
+    );
+}
+
+#[test]
+fn control_flow_panics_never_capture_a_backtrace() {
+    use std::backtrace::BacktraceStatus;
+    // An assume-style control panic is classified as `Invalid` and its
+    // captured info is discarded — so it must never pay to capture a
+    // backtrace, even on the final replay where `should_emit` is true.
+    init_panic_hook();
+    let result = run_test_case(
+        Box::new(BtStubDataSource),
+        &mut |_tc| std::panic::panic_any(crate::test_case::ASSUME_FAIL_STRING),
+        true,
+        crate::runner::Mode::TestRun,
+        crate::runner::Verbosity::Normal,
+    );
+    assert!(matches!(result, TestCaseResult::Invalid));
+    // The hook recorded the control panic but the `Invalid` branch left the
+    // info unconsumed; confirm no backtrace was captured for it.
+    let (_, _, _, backtrace) = take_panic_info().expect("hook recorded the control panic");
+    assert_eq!(
+        backtrace.status(),
+        BacktraceStatus::Disabled,
+        "control-flow panics must not capture a backtrace"
     );
 }
 

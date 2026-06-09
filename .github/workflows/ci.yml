@@ -68,6 +68,15 @@ jobs:
         with:
           tools: just
 
+      # Windows Defender real-time scanning of every .obj/.exe/.pdb cargo
+      # writes (and of each test binary on execution) is a large tax on the
+      # subprocess-heavy integration tests. Excluding the workspace from
+      # real-time scanning removes it. No-op on non-Windows runners.
+      - name: Exclude workspace from Windows Defender
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+
       - name: Run tests
         run: just check-tests
 
@@ -107,6 +116,13 @@ jobs:
         with:
           tools: just
 
+      # See the note in the `test` job: exclude the workspace from Windows
+      # Defender real-time scanning to drop the AV tax on subprocess builds.
+      - name: Exclude workspace from Windows Defender
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+
       - name: Run tests
         run: just ${{ matrix.recipe }}
 
@@ -140,6 +156,13 @@ jobs:
       - uses: ./.github/actions/install-tools
         with:
           tools: just
+
+      # See the note in the `test` job: exclude the workspace from Windows
+      # Defender real-time scanning to drop the AV tax on subprocess builds.
+      - name: Exclude workspace from Windows Defender
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
 
       - name: Run C bindings test recipe
         run: just c-test
