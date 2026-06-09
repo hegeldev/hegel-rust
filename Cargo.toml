@@ -95,32 +95,30 @@ serde_json_raw_value = ["serde_json", "serde_json/raw_value"]
 # public API; depend on at your peril.
 __bench = []
 
-# Trim debuginfo on dev/test builds. The default dev profile emits full
-# DWARF/PDB debuginfo, which dominates link time — especially on Windows,
-# where `link.exe` is slow and the fat `.pdb` it produces is the bottleneck.
-# `line-tables-only` keeps file/line info for panic backtraces (which tests
-# rely on) while dropping the heavy variable/type debuginfo. `test` inherits
-# this from `dev`.
+# Tune the dev/test profile for CI speed.
 #
-# NOTE: this only affects the *main* build (the hegeltest lib + the test
-# binaries themselves). The integration tests that spawn `cargo` subprocesses
-# build standalone temp crates with their own profile — those are sped up
-# separately via the `CARGO_PROFILE_*_DEBUG` env vars set in
+# `opt-level = 1`: the native engine is compute-heavy, and running it
+# unoptimized makes the property-test suites dominate CI wall-clock — far
+# worse on Windows. opt-level 1 recovers most of the speed at modest compile
+# cost. Kept as a *whole-profile* setting (not per-package) specifically so
+# the coverage build can override it back to 0 via `CARGO_PROFILE_DEV_OPT_LEVEL`:
+# `cargo llvm-cov` needs unoptimized code for accurate line attribution
+# (optimization inlines small functions and drops their coverage regions).
+# See the `check-coverage` recipe in the justfile.
+#
+# `debug = "line-tables-only"`: the default dev profile emits full DWARF/PDB
+# debuginfo, which dominates link time — especially on Windows, where
+# `link.exe` is slow and the fat `.pdb` is the bottleneck. line-tables-only
+# keeps file/line info for panic backtraces (which tests rely on) while
+# dropping the heavy variable/type debuginfo.
+#
+# Both settings affect only the *main* build. Integration tests that spawn
+# `cargo` subprocesses build standalone temp crates with their own profile;
+# those are tuned separately via the `CARGO_PROFILE_*` env vars in
 # `tests/common/project.rs`.
 [profile.dev]
+opt-level = 1
 debug = "line-tables-only"
-
-# The native engine (in this crate) and its deps are compute- and
-# allocation-heavy; running them unoptimized makes the property-test suites
-# dominate CI wall-clock, and the penalty is far worse on Windows (~14x the
-# Linux runtime). Optimize the library and dependencies while leaving the
-# thin integration-test crates unoptimized, so the hot code runs fast without
-# inflating compile time across the ~40 test binaries.
-[profile.dev.package.hegeltest]
-opt-level = 2
-
-[profile.dev.package."*"]
-opt-level = 2
 
 [package.metadata.docs.rs]
 all-features = true

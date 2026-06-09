@@ -54,7 +54,10 @@ check-lint: check-format check-clippy check-nocov-style check-test-modules
 
 check-coverage:
     # requires cargo-llvm-cov and llvm-tools-preview
-    scripts/check-coverage.py
+    # Force opt-level 0 (overriding `[profile.dev] opt-level` in Cargo.toml):
+    # cargo-llvm-cov needs unoptimized code for accurate line attribution, as
+    # optimization inlines small functions and drops their coverage regions.
+    CARGO_PROFILE_DEV_OPT_LEVEL=0 scripts/check-coverage.py
 
 # Build the libhegel C shared library + checked-in C header.
 c-build:
