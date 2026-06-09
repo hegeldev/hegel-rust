@@ -1,6 +1,6 @@
 [package]
 name = "hegeltest-c"
-version = "0.17.0"
+version = "0.17.1"
 edition = "2024"
 rust-version = "1.86"
 license = "MIT"
@@ -14,7 +14,7 @@ name = "hegel"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-hegeltest = { version = "=0.17.0", path = "..", default-features = false }
+hegeltest = { version = "=0.17.1", path = "..", default-features = false }
 ciborium = "0.2.2"
 
 [build-dependencies]

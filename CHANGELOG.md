@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.17.1 - 2026-06-09
+
+This patch improves the performance of shrinking a failing test when running with `RUST_BACKTRACE` set. Hegel would previously
+capture the stack backtrace for every panic raised while running your test body even when that backtrace was never shown. This could be a significant performance hit, especially on Windows. Hegel now captures only backtraces it needs to print. This should be a significant performance improvement in some workloads, and otherwise have no user-visible effect.
+
 ## 0.17.0 - 2026-06-09
 
 Hegel now runs entirely in-process. The native Rust engine is the only backend: the Python `hegel-core` server, the Unix-socket protocol, and the automatic `uv` install are gone, so Hegel no longer has any Python dependency and there is nothing extra to install.
