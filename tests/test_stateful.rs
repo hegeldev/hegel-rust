@@ -3,7 +3,7 @@ mod common;
 use common::project::TempRustProject;
 use hegel::TestCase;
 use hegel::generators as gs;
-use hegel::stateful::{Variables, variables};
+use hegel::stateful::{Pool, pool};
 
 #[test]
 fn test_state_machine_failure() {
@@ -63,15 +63,15 @@ fn main() {}
 
 // Consuming an element from a set should mean subsequent draws never yield the element.
 struct TestConsumeMachine {
-    numbers: Variables<i32>,
+    numbers: Pool<i32>,
     consumed: i32,
 }
 
 #[hegel::state_machine]
 impl TestConsumeMachine {
     #[rule]
-    fn draw(&mut self, _tc: TestCase) {
-        let x = self.numbers.draw();
+    fn draw(&mut self, tc: TestCase) {
+        let x = tc.draw(self.numbers.references());
         assert!(*x != self.consumed);
     }
 }
@@ -81,11 +81,11 @@ fn test_consume(tc: TestCase) {
     let ints = gs::integers::<i32>;
     let elements = tc.draw(gs::vecs(ints()).unique(true));
     tc.assume(!elements.is_empty());
-    let mut bundle = variables(&tc);
+    let mut bundle = pool(&tc);
     for element in elements.clone() {
         bundle.add(element);
     }
-    let consumed = bundle.consume();
+    let consumed = tc.draw(bundle.values());
     let m = TestConsumeMachine {
         numbers: bundle,
         consumed,
@@ -140,20 +140,21 @@ fn test_state_machine_with_type_parameter(tc: TestCase) {
 // Drawing an element from a bundle should always yield an element that was previously added.
 struct TestDrawDomainMachine {
     domain: Vec<i32>,
-    variables: Variables<i32>,
+    pool: Pool<i32>,
 }
 
 #[hegel::state_machine]
 impl TestDrawDomainMachine {
     #[rule]
-    fn draw(&mut self, _tc: TestCase) {
-        let x = self.variables.draw();
+    fn draw(&mut self, tc: TestCase) {
+        let x = tc.draw(self.pool.references());
         assert!(self.domain.contains(x));
     }
 
     #[invariant]
     fn len_matches_domain(&mut self, _tc: TestCase) {
-        assert_eq!(self.variables.len(), self.domain.len());
+        assert!(!self.pool.is_empty());
+        assert_eq!(self.pool.len(), self.domain.len());
     }
 }
 
@@ -162,13 +163,13 @@ fn test_draw_domain(tc: TestCase) {
     let ints = gs::integers::<i32>;
     let elements = tc.draw(gs::vecs(ints()));
     tc.assume(!elements.is_empty());
-    let mut bundle = variables(&tc);
+    let mut bundle = pool(&tc);
     for element in elements.clone() {
         bundle.add(element);
     }
     let m = TestDrawDomainMachine {
         domain: elements,
-        variables: bundle,
+        pool: bundle,
     };
     hegel::stateful::run(m, tc);
 }
@@ -178,7 +179,7 @@ mod stateful {
     use super::common::utils::expect_panic;
     use hegel::TestCase;
     use hegel::generators as gs;
-    use hegel::stateful::{Rule, StateMachine, Variables, variables};
+    use hegel::stateful::{Pool, Rule, StateMachine, pool};
     use hegel::{Hegel, Settings, Verbosity};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::{Arc, Mutex};
@@ -276,19 +277,20 @@ mod stateful {
         );
     }
 
+    #[derive(Debug)]
     struct DepthCharge {
         depth: i64,
     }
 
     struct DepthMachine {
-        charges: Variables<DepthCharge>,
+        charges: Pool<DepthCharge>,
     }
 
     #[hegel::state_machine]
     impl DepthMachine {
         #[rule]
-        fn charge(&mut self, _tc: TestCase) {
-            let depth = self.charges.draw().depth;
+        fn charge(&mut self, tc: TestCase) {
+            let depth = tc.draw(self.charges.references()).depth;
             self.charges.add(DepthCharge { depth: depth + 1 });
         }
 
@@ -298,8 +300,8 @@ mod stateful {
         }
 
         #[rule]
-        fn is_not_too_deep(&mut self, _tc: TestCase) {
-            let check = self.charges.draw();
+        fn is_not_too_deep(&mut self, tc: TestCase) {
+            let check = tc.draw(self.charges.references());
             assert!(check.depth < 3, "depth {} is not less than 3", check.depth);
         }
     }
@@ -468,7 +470,7 @@ mod stateful {
         expect_panic(
             || {
                 Hegel::new(|tc: TestCase| {
-                    let charges = variables(&tc);
+                    let charges = pool(&tc);
                     hegel::stateful::run(DepthMachine { charges }, tc);
                 })
                 .settings(Settings::new().database(None).test_cases(1000))

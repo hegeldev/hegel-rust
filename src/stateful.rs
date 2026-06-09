@@ -62,9 +62,10 @@
 
 use crate::TestCase;
 use crate::control::{AssumeFailed, StopTest, raise_control};
-use crate::generators::integers;
+use crate::generators::{Generator, integers};
 use crate::runner::Mode;
 use crate::test_case::raise_for_rc;
+use parking_lot::Mutex;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -86,29 +87,40 @@ impl<M> Rule<M> {
 }
 
 /// A pool of previously generated values.
-pub struct Variables<T> {
+///
+/// Create one with [`pool()`] and populate it with [`add`](Pool::add). To draw
+/// from the pool, use the generators it hands out rather than reading from it
+/// directly:
+///
+/// - [`references`](Pool::references) returns a generator over `&T` — drawing
+///   from it yields a reference to a value in the pool without removing it.
+/// - [`values`](Pool::values) returns a generator over `T` — drawing from it
+///   removes a value from the pool and yields it by value.
+///
+/// Both generators are used through [`tc.draw`](TestCase::draw), so the chosen
+/// value is recorded in the failing-test replay and the choice shrinks like any
+/// other draw.
+pub struct Pool<T> {
     pool_id: i64,
     tc: TestCase,
     values: HashMap<i64, T>,
 }
 
-impl<T> Variables<T> {
-    fn pool_generate(&self, consume: bool) -> i64 {
-        match self
-            .tc
-            .with_ctc(|ctc| ctc.pool_generate(self.pool_id, consume))
-        {
-            Ok(id) => id,
-            Err(_) => raise_control(StopTest),
-        }
+/// Ask the engine for a variable id from `pool_id`, consuming it if `consume`.
+fn pool_generate(tc: &TestCase, pool_id: i64, consume: bool) -> i64 {
+    match tc.with_ctc(|ctc| ctc.pool_generate(pool_id, consume)) {
+        Ok(id) => id,
+        Err(_) => raise_control(StopTest),
     }
+}
 
-    /// Returns true if no variables are in the pool.
+impl<T> Pool<T> {
+    /// Returns true if no values are in the pool.
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
 
-    /// Number of variables currently in the pool.
+    /// Number of values currently in the pool.
     pub fn len(&self) -> usize {
         self.values.len()
     }
@@ -125,32 +137,75 @@ impl<T> Variables<T> {
         self.values.insert(variable_id, v);
     }
 
-    /// Draw a reference to a value from the pool (without removing it).
+    /// A generator over references to values in the pool.
     ///
-    /// Calls `assume(false)` if the pool is empty.
-    pub fn draw(&self) -> &T {
-        self.tc.assume(!self.is_empty());
-        let variable_id = self.pool_generate(false);
-        self.values.get(&variable_id).unwrap()
+    /// Drawing from it yields a `&T` borrowing a value in the pool, without
+    /// removing it. Drawing rejects the current test case (as if by
+    /// `assume(false)`) when the pool is empty.
+    pub fn references(&self) -> References<'_, T> {
+        References {
+            pool_id: self.pool_id,
+            values: &self.values,
+        }
     }
 
-    /// Remove and return a value from the pool.
+    /// A generator that consumes values from the pool.
     ///
-    /// Calls `assume(false)` if the pool is empty.
-    pub fn consume(&mut self) -> T {
-        self.tc.assume(!self.is_empty());
-        let variable_id = self.pool_generate(true);
-        self.values.remove(&variable_id).unwrap()
+    /// Drawing from it removes a value from the pool and yields it by value.
+    /// Once consumed, that value is never drawn again. Drawing rejects the
+    /// current test case (as if by `assume(false)`) when the pool is empty.
+    pub fn values(&mut self) -> Values<'_, T> {
+        Values {
+            pool_id: self.pool_id,
+            values: Mutex::new(&mut self.values),
+        }
     }
 }
 
-/// Create a new variable pool for stateful tests.
-pub fn variables<T>(tc: &TestCase) -> Variables<T> {
+/// A generator over references to the values in a [`Pool`].
+///
+/// Returned by [`Pool::references`]. Borrows the pool, so the references it
+/// produces stay valid for as long as the generator is alive.
+pub struct References<'a, T> {
+    pool_id: i64,
+    values: &'a HashMap<i64, T>,
+}
+
+impl<'a, T: Sync> Generator<&'a T> for References<'a, T> {
+    fn do_draw(&self, tc: &TestCase) -> &'a T {
+        tc.assume(!self.values.is_empty());
+        let variable_id = pool_generate(tc, self.pool_id, false);
+        self.values.get(&variable_id).unwrap()
+    }
+}
+
+/// A generator that consumes values from a [`Pool`], removing each value it
+/// yields.
+///
+/// Returned by [`Pool::values`]. Borrows the pool mutably; the inner [`Mutex`]
+/// is what lets it remove a value during a draw (which only has shared access
+/// to the generator) while keeping the generator `Send + Sync`.
+pub struct Values<'a, T> {
+    pool_id: i64,
+    values: Mutex<&'a mut HashMap<i64, T>>,
+}
+
+impl<T: Send> Generator<T> for Values<'_, T> {
+    fn do_draw(&self, tc: &TestCase) -> T {
+        let mut values = self.values.lock();
+        tc.assume(!values.is_empty());
+        let variable_id = pool_generate(tc, self.pool_id, true);
+        values.remove(&variable_id).unwrap()
+    }
+}
+
+/// Create a new value pool for stateful tests.
+pub fn pool<T>(tc: &TestCase) -> Pool<T> {
     let pool_id = match tc.with_ctc(|ctc| ctc.new_pool()) {
         Ok(id) => id,
         Err(_) => raise_control(StopTest), // nocov
     };
-    Variables {
+    Pool {
         pool_id,
         tc: tc.clone(),
         values: HashMap::new(),
