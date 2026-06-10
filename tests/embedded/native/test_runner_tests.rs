@@ -745,6 +745,51 @@ fn reuse_consults_secondary_corpus_when_primary_fails_to_reproduce() {
 }
 
 #[test]
+fn reuse_randomly_samples_secondary_corpus_when_it_overflows_the_shortfall() {
+    use crate::native::bignum::BigInt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    // One primary entry that no longer reproduces, plus a secondary corpus
+    // larger than the shortfall (desired_size 2 - 1 primary = 1).  That
+    // drives the partial Fisher-Yates sampling path: more historical
+    // entries exist than the reuse phase wants, so only a random subset is
+    // replayed.  Every secondary entry reproduces the bug, so the run must
+    // fail no matter which one the sample happens to keep.
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
+    );
+    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    for n in [4242, 4243, 4244, 4245] {
+        db.save(
+            &secondary_key,
+            &serialize_choices(&[ChoiceValue::Integer(BigInt::from(n))]),
+        );
+    }
+
+    let result = std::panic::catch_unwind(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            let n: i64 = tc.draw(crate::generators::integers::<i64>());
+            assert!(n < 4242, "secondary bug");
+        })
+        .settings(
+            crate::Settings::new()
+                .database(Some(path.clone()))
+                .phases([crate::Phase::Reuse])
+                .test_cases(2)
+                .verbosity(crate::Verbosity::Quiet),
+        )
+        .__database_key("k".to_string())
+        .run();
+    });
+    assert!(
+        result.is_err(),
+        "a sampled secondary entry must still reproduce the bug"
+    );
+}
+
+#[test]
 fn shrink_phase_drains_stale_secondary_corpus_entries() {
     use crate::native::bignum::BigInt;
     let dir = tempfile::TempDir::new().unwrap();
