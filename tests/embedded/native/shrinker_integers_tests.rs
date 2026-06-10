@@ -123,3 +123,26 @@ fn redistribute_integers_moves_values_toward_shrink_towards() {
     assert_eq!(int_value(&shrinker.current_nodes[0]), 100);
     assert_eq!(int_value(&shrinker.current_nodes[1]), 100);
 }
+
+#[test]
+fn lower_and_bump_accepts_relative_bump() {
+    // (5, 0) -> (4, 1): lowering node 0 by one index while bumping node 1 by
+    // a small relative offset is exactly the linked-pair move lower_and_bump
+    // exists for.
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                let a = int_value(&nodes[0]);
+                let b = int_value(&nodes[1]);
+                let interesting = (a, b) == (5, 0) || (a, b) == (4, 1);
+                (interesting, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node_st(5, 0, 10, 0), int_node_st(0, 0, 10, 0)],
+        Spans::new(),
+    );
+    shrinker.lower_and_bump().unwrap();
+    assert_eq!(int_value(&shrinker.current_nodes[0]), 4);
+    assert_eq!(int_value(&shrinker.current_nodes[1]), 1);
+}

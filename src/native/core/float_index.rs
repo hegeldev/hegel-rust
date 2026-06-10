@@ -152,12 +152,16 @@ pub fn simplest_in_range(lo: f64, hi: f64) -> f64 {
         // low bits over whatever low range that leaves.
         let low_mask = (1u64 << n_frac) - 1;
         let h = m_min >> n_frac;
+        // `m_min` and `m_max` always share their kept high bits here: the
+        // kept-bit boundaries within a binade sit on integer values (the
+        // binade [2^e, 2^(e+1)) splits into 2^e width-1 parts), so a range
+        // crossing one contains an integer and was handled by the
+        // simple-integer probe; ranges spanning whole binades without a
+        // simple integer only occur at or above 2^56, where the exponent is
+        // >= 52 and the no-fractional-bits arm above applies.
+        debug_assert_eq!(m_max >> n_frac, h);
         let l_lo = m_min & low_mask;
-        let l_hi = if (m_max >> n_frac) == h {
-            m_max & low_mask
-        } else {
-            low_mask
-        };
+        let l_hi = m_max & low_mask;
         (h << n_frac) | min_reversed_in_range(l_lo, l_hi, n_frac)
     };
     f64::from_bits((e << 52) | m_best)

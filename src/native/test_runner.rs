@@ -456,7 +456,7 @@ fn run_main(
             last_bug_at,
             shrink_enabled,
             report_multiple,
-            first_bug_time,
+            first_bug_time.map(|t| t.elapsed()),
         )
     {
         for _ in 0..RANDOM_GENERATION_BATCH {
@@ -476,7 +476,7 @@ fn run_main(
                     last_bug_at,
                     shrink_enabled,
                     report_multiple,
-                    first_bug_time,
+                    first_bug_time.map(|t| t.elapsed()),
                 )
             {
                 break;
@@ -1114,7 +1114,7 @@ fn should_generate_more(
     last_bug_at: Option<u64>,
     shrink_enabled: bool,
     report_multiple: bool,
-    first_bug_time: Option<std::time::Instant>,
+    first_bug_elapsed: Option<std::time::Duration>,
 ) -> bool {
     if no_bug_yet {
         return true;
@@ -1133,7 +1133,7 @@ fn should_generate_more(
     // For slow tests the call-count window can take far too long; stop
     // probing for additional origins 10 seconds after the first bug
     // (engine.py's first_bug_found_time cutoff).
-    if first_bug_time.is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(10)) {
+    if first_bug_elapsed.is_some_and(|d| d > std::time::Duration::from_secs(10)) {
         return false;
     }
     let Some(first) = first_bug_at else {

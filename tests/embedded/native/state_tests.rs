@@ -1244,3 +1244,35 @@ fn weighted_boolean_sample_respects_probability() {
     assert!(high > n * 3 / 4, "p=0.9 produced only {high}/{n} trues");
     assert!(low < n / 4, "p=0.1 produced {low}/{n} trues");
 }
+
+#[test]
+fn float_clamp_reroutes_excluded_magnitude_band() {
+    // A remapped draw landing in (0, smallest_nonzero_magnitude) defaults to
+    // the smallest allowed magnitude (make_float_clamper's re-route).
+    let fc = FloatChoice {
+        min_value: -1e-307,
+        max_value: 1e-307,
+        allow_nan: false,
+        allow_infinity: false,
+        smallest_nonzero_magnitude: f64::MIN_POSITIVE,
+    };
+    // Mantissa fraction ~0.5 lands the remap just below zero, inside the
+    // excluded band.
+    let raw = f64::from_bits(((1u64 << 52) - 1) / 2);
+    let clamped = float_clamp(&fc, raw);
+    assert_eq!(clamped, f64::MIN_POSITIVE);
+
+    // When the smallest allowed magnitude exceeds max_value, only its
+    // negation is in range.
+    let fc_neg = FloatChoice {
+        min_value: -1e-307,
+        max_value: -1e-308,
+        allow_nan: false,
+        allow_infinity: false,
+        smallest_nonzero_magnitude: f64::MIN_POSITIVE,
+    };
+    // Mantissa fraction ~0.9: remap lands at ~-1.9e-308, inside the band.
+    let raw_neg = f64::from_bits((((1u64 << 52) - 1) / 10) * 9);
+    let clamped_neg = float_clamp(&fc_neg, raw_neg);
+    assert_eq!(clamped_neg, -f64::MIN_POSITIVE);
+}

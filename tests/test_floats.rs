@@ -509,6 +509,22 @@ mod float_nastiness {
     }
 
     #[test]
+    fn test_allow_subnormal_true_with_excluding_max_is_invalid() {
+        // The mirror of the min_value check: a maximum at or below the
+        // smallest negative normal leaves no subnormals either.
+        expect_panic(
+            || {
+                Hegel::new(|tc| {
+                    let _: f64 = tc.draw(gs::floats::<f64>().max_value(-1.0).allow_subnormal(true));
+                })
+                .settings(Settings::new().test_cases(1).database(None))
+                .run();
+            },
+            "InvalidArgument",
+        );
+    }
+
+    #[test]
     fn test_subnormal_only_range_with_allow_subnormal_false_is_invalid() {
         // [5e-324, 1e-310] contains only subnormals; excluding them leaves
         // nothing to generate.

@@ -299,3 +299,55 @@ fn simulate_puns_out_of_range_prefix_to_unit() {
         None
     );
 }
+
+#[test]
+fn generate_novel_prefix_replays_forced_values_of_every_kind() {
+    // Forced positions of every choice kind must round-trip through the
+    // tree's value keys into the novel prefix (integers, floats, bytes and
+    // strings, not just booleans).
+    use crate::native::core::choices::{BytesChoice, FloatChoice, StringChoice};
+    use crate::native::intervalsets::IntervalSet;
+    let forced = |kind: ChoiceKind, value: ChoiceValue| ChoiceNode::new(kind, value, true);
+    let nodes = vec![
+        forced(int_kind(0, 100), ChoiceValue::Integer(BigInt::from(42))),
+        forced(
+            ChoiceKind::Float(FloatChoice {
+                min_value: 0.0,
+                max_value: 10.0,
+                allow_nan: false,
+                allow_infinity: false,
+                smallest_nonzero_magnitude: 5e-324,
+            }),
+            ChoiceValue::Float(2.5),
+        ),
+        forced(
+            ChoiceKind::Bytes(BytesChoice {
+                min_size: 0,
+                max_size: 4,
+            }),
+            ChoiceValue::Bytes(vec![7, 8]),
+        ),
+        forced(
+            ChoiceKind::String(StringChoice {
+                intervals: IntervalSet::new(vec![(b'a' as u32, b'z' as u32)]),
+                min_size: 0,
+                max_size: 4,
+            }),
+            ChoiceValue::String(vec![b'h' as u32, b'i' as u32]),
+        ),
+        bool_node(false),
+    ];
+    let mut root = DataTreeNode::default();
+    record_tree(&mut root, &nodes, Status::Valid, &[]);
+    let mut rng = EngineRng::seeded(0);
+    for _ in 0..20 {
+        let prefix = generate_novel_prefix(&root, &mut rng);
+        assert_eq!(prefix[0], ChoiceValue::Integer(BigInt::from(42)));
+        assert_eq!(prefix[1], ChoiceValue::Float(2.5));
+        assert_eq!(prefix[2], ChoiceValue::Bytes(vec![7, 8]));
+        assert_eq!(
+            prefix[3],
+            ChoiceValue::String(vec![b'h' as u32, b'i' as u32])
+        );
+    }
+}
