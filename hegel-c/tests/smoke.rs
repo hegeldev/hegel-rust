@@ -84,6 +84,7 @@ type FnMarkComplete = unsafe extern "C" fn(*mut u8, CStatus, *const c_char) -> c
 type FnNewPool = unsafe extern "C" fn(*mut u8, *mut i64) -> c_int;
 type FnPoolAdd = unsafe extern "C" fn(*mut u8, i64, *mut i64) -> c_int;
 type FnPoolGenerate = unsafe extern "C" fn(*mut u8, i64, bool, *mut i64) -> c_int;
+type FnPrimitiveBoolean = unsafe extern "C" fn(*mut u8, f64, bool, bool, *mut bool) -> c_int;
 type FnRunResultPassed = unsafe extern "C" fn(*const u8) -> bool;
 type FnRunResultFailureCount = unsafe extern "C" fn(*const u8) -> usize;
 type FnRunResultFailure = unsafe extern "C" fn(*const u8, usize) -> *const u8;
@@ -113,6 +114,7 @@ struct Api<'a> {
     new_pool: Symbol<'a, FnNewPool>,
     pool_add: Symbol<'a, FnPoolAdd>,
     pool_generate: Symbol<'a, FnPoolGenerate>,
+    primitive_boolean: Symbol<'a, FnPrimitiveBoolean>,
     run_result_passed: Symbol<'a, FnRunResultPassed>,
     run_result_failure_count: Symbol<'a, FnRunResultFailureCount>,
     run_result_failure: Symbol<'a, FnRunResultFailure>,
@@ -144,6 +146,7 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             new_pool: lib.get(b"hegel_new_pool\0").unwrap(),
             pool_add: lib.get(b"hegel_pool_add\0").unwrap(),
             pool_generate: lib.get(b"hegel_pool_generate\0").unwrap(),
+            primitive_boolean: lib.get(b"hegel_primitive_boolean\0").unwrap(),
             run_result_passed: lib.get(b"hegel_run_result_passed\0").unwrap(),
             run_result_failure_count: lib.get(b"hegel_run_result_failure_count\0").unwrap(),
             run_result_failure: lib.get(b"hegel_run_result_failure\0").unwrap(),
@@ -696,6 +699,149 @@ fn libhegel_pool_primitives_draw_added_variables() {
             saw_empty_reject,
             "expected to drain a pool to empty at least once"
         );
+
+        let result = (a.run_result)(run);
+        assert!(!result.is_null());
+        assert!((a.run_result_passed)(result), "expected passing run");
+
+        (a.run_free)(run);
+        (a.settings_free)(s);
+    }
+}
+
+#[test]
+fn libhegel_primitive_boolean_draws_and_forces() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    unsafe {
+        let s = (a.settings_new)();
+        (a.settings_test_cases)(s, 50);
+        let empty = CString::new("").unwrap();
+        (a.settings_database)(s, empty.as_ptr());
+        (a.settings_derandomize)(s, true);
+        (a.settings_seed)(s, 11, true);
+
+        let run = (a.run_start)(s);
+        assert!(!run.is_null());
+
+        let mut saw_true = false;
+        let mut saw_false = false;
+        loop {
+            let tc = (a.next_test_case)(run);
+            if tc.is_null() {
+                let err = CStr::from_ptr((a.last_error_message)()).to_string_lossy();
+                assert_eq!(err, "", "next_test_case returned NULL with error: {}", err);
+                break;
+            }
+
+            // Forced draws are deterministic regardless of p.
+            let mut v = false;
+            let rc = (a.primitive_boolean)(tc, 0.5, true, true, &mut v);
+            assert_eq!(rc, 0, "forced-true draw failed: rc={}", rc);
+            assert!(v);
+            let rc = (a.primitive_boolean)(tc, 0.5, false, true, &mut v);
+            assert_eq!(rc, 0, "forced-false draw failed: rc={}", rc);
+            assert!(!v);
+
+            // Boundary probabilities auto-force without consuming entropy.
+            let rc = (a.primitive_boolean)(tc, 0.0, false, false, &mut v);
+            assert_eq!(rc, 0, "p=0 draw failed: rc={}", rc);
+            assert!(!v);
+            let rc = (a.primitive_boolean)(tc, 1.0, false, false, &mut v);
+            assert_eq!(rc, 0, "p=1 draw failed: rc={}", rc);
+            assert!(v);
+
+            // An unforced fair draw; both outcomes must show up across the
+            // run. The draw can report STOP_TEST if the engine's choice
+            // budget is exhausted mid-shrink, so treat that the same way the
+            // other primitives do.
+            let rc = (a.primitive_boolean)(tc, 0.5, false, false, &mut v);
+            if rc == -1 {
+                (a.mark_complete)(tc, CStatus::Overrun, ptr::null());
+                continue;
+            }
+            assert_eq!(rc, 0, "unforced draw failed: rc={}", rc);
+            if v {
+                saw_true = true;
+            } else {
+                saw_false = true;
+            }
+
+            (a.mark_complete)(tc, CStatus::Valid, ptr::null());
+        }
+
+        assert!(saw_true, "expected an unforced draw to come up true");
+        assert!(saw_false, "expected an unforced draw to come up false");
+
+        let result = (a.run_result)(run);
+        assert!(!result.is_null());
+        assert!((a.run_result_passed)(result), "expected passing run");
+
+        (a.run_free)(run);
+        (a.settings_free)(s);
+    }
+}
+
+#[test]
+fn libhegel_primitive_boolean_rejects_invalid_arguments() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    unsafe {
+        let s = (a.settings_new)();
+        (a.settings_test_cases)(s, 1);
+        let empty = CString::new("").unwrap();
+        (a.settings_database)(s, empty.as_ptr());
+
+        let run = (a.run_start)(s);
+        assert!(!run.is_null());
+
+        let mut saw_test_case = false;
+        loop {
+            let tc = (a.next_test_case)(run);
+            if tc.is_null() {
+                break;
+            }
+            saw_test_case = true;
+
+            // NULL test-case handle is reported as HEGEL_E_INVALID_HANDLE.
+            let mut v = false;
+            let rc = (a.primitive_boolean)(ptr::null_mut(), 0.5, false, false, &mut v);
+            assert_eq!(rc, -4, "expected HEGEL_E_INVALID_HANDLE, got rc={}", rc);
+
+            // Each rejected argument returns HEGEL_E_INVALID_ARG with a
+            // diagnostic in last_error_message.
+            let invalid: [(f64, bool, bool); 5] = [
+                (f64::NAN, false, false), // p must not be NaN
+                (-0.5, false, false),     // p below range
+                (1.5, false, false),      // p above range
+                (0.0, true, true),        // cannot force true when p = 0
+                (1.0, false, true),       // cannot force false when p = 1
+            ];
+            for (p, forced, has_forced) in invalid {
+                let rc = (a.primitive_boolean)(tc, p, forced, has_forced, &mut v);
+                assert_eq!(
+                    rc, -5,
+                    "expected HEGEL_E_INVALID_ARG for p={}, forced={}, has_forced={}",
+                    p, forced, has_forced
+                );
+                let err = CStr::from_ptr((a.last_error_message)()).to_string_lossy();
+                assert!(!err.is_empty(), "expected a diagnostic message");
+            }
+
+            // NULL out pointer.
+            let rc = (a.primitive_boolean)(tc, 0.5, false, false, ptr::null_mut());
+            assert_eq!(rc, -5, "expected HEGEL_E_INVALID_ARG for null out");
+
+            // Argument errors do not poison the test case: a valid draw
+            // afterwards still succeeds.
+            let rc = (a.primitive_boolean)(tc, 0.5, false, false, &mut v);
+            assert_eq!(rc, 0, "valid draw after rejections failed: rc={}", rc);
+
+            (a.mark_complete)(tc, CStatus::Valid, ptr::null());
+        }
+        assert!(saw_test_case, "expected the run to produce a test case");
 
         let result = (a.run_result)(run);
         assert!(!result.is_null());

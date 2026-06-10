@@ -34,6 +34,9 @@ impl DataSource for StubDataSource {
     ) -> Result<(), DataSourceError> {
         unimplemented!()
     }
+    fn primitive_boolean(&self, _p: f64, _forced: Option<bool>) -> Result<bool, DataSourceError> {
+        unimplemented!()
+    }
     fn new_pool(&self) -> Result<i64, DataSourceError> {
         unimplemented!()
     }

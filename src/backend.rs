@@ -67,6 +67,13 @@ pub trait DataSource: Send + Sync {
         why: Option<&str>,
     ) -> Result<(), DataSourceError>;
 
+    /// Draw a boolean that is `true` with probability `p`.
+    ///
+    /// If `forced` is `Some`, the choice is still recorded (so replay and
+    /// shrinking stay aligned) but the value is forced and no entropy is
+    /// consumed.
+    fn primitive_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError>;
+
     /// Create a new variable pool. Returns an opaque pool id.
     fn new_pool(&self) -> Result<i64, DataSourceError>;
 
