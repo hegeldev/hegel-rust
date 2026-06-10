@@ -440,20 +440,16 @@ impl<'a> Shrinker<'a> {
     }
 }
 
-/// "Obvious smaller" replacement codepoints to try for a character with
-/// codepoint `cp` in a [`StringChoice`] with the given alphabet, in
-/// shrink-key order. Walks the first 62 alphabet positions (digits + ASCII
-/// letters when present) and then the NFD base of `cp` (e.g. `'À' → 'A'`)
-/// if it's a non-ASCII codepoint with a canonical decomposition that lands
-/// in-alphabet.
-///
 /// Cross-string codepoint candidates from natural text transformations.
 ///
-/// For codepoint `cp` under alphabet `intervals`, returns the
-/// candidates produced by:
+/// For codepoint `cp` under alphabet `intervals`, returns the candidates
+/// produced by (matching Hypothesis's `_natural_simpler_chars`):
 ///
-/// * NFD decomposition (collapsing accented forms onto their base).
-/// * `to_lowercase` and `to_uppercase` case mappings.
+/// * NFD and NFKD decomposition — every character of the fully-decomposed
+///   form, so `'À'` offers `'A'` and `'①'` offers `'1'`.
+/// * `to_lowercase`, `to_uppercase`, and full case folding — every
+///   character of the mapped form, so `'ß'` offers `'s'` via casefold
+///   even though the folded form `"ss"` is two characters.
 ///
 /// Candidates are filtered to those that (a) lie inside `intervals`
 /// and (b) have a strictly smaller shrink-order key than the original,
@@ -471,9 +467,8 @@ fn natural_simpler_chars(cp: u32, kind: &StringChoice) -> Vec<u32> {
             candidates.insert(sub as u32);
         }
     }
-    if let Some(base) = unicodedata::nfd_base(cp) {
-        candidates.insert(base);
-    }
+    candidates.extend(unicodedata::casefold_chars(cp));
+    candidates.extend(unicodedata::decomposition_chars(cp));
     candidates.remove(&cp);
     let mut filtered: Vec<(u32, u32)> = candidates
         .into_iter()

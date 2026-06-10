@@ -206,6 +206,51 @@ fn normalize_unicode_chars_respects_intervals() {
     }
 }
 
+/// ß (U+00DF) case-folds to "ss", so 's' is a natural-simpler candidate —
+/// reachable only via casefold, since to_lowercase('ß') = 'ß' and
+/// to_uppercase('ß') = "SS" whose 'S' lies outside this lowercase-plus
+/// alphabet. This is Hypothesis's own motivating example for including
+/// casefold alongside the case mappings.
+#[test]
+fn normalize_unicode_chars_casefolds_sharp_s_to_s() {
+    let initial = vec![string_node_with(b'a' as u32, 0xFF, vec![0x00DF])];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.normalize_unicode_chars().unwrap();
+    if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
+        assert_eq!(s, &vec![b's' as u32]);
+    } else {
+        unreachable!();
+    }
+}
+
+/// ① (U+2460) has a *compatibility* decomposition to '1' — NFKD-only, no
+/// canonical decomposition and no case mappings. The pass must reach '1'.
+#[test]
+fn normalize_unicode_chars_uses_nfkd_decomposition() {
+    let initial = vec![string_node_with(0x20, 0x2460, vec![0x2460])];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.normalize_unicode_chars().unwrap();
+    if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
+        assert_eq!(s, &vec![b'1' as u32]);
+    } else {
+        unreachable!();
+    }
+}
+
 #[test]
 fn lower_duplicated_characters_handles_mismatched_alphabets() {
     // The two string nodes share 'b', but their alphabets differ: lowering

@@ -154,6 +154,56 @@ fn nfd_base_returns_none_for_non_decomposable() {
 }
 
 #[test]
+fn decomposition_chars_covers_canonical_forms() {
+    // NFD('À') = 'A' + combining grave: both characters of the normalized
+    // form are candidates, matching Python's
+    // `candidates.update(unicodedata.normalize(form, c))`.
+    assert_eq!(decomposition_chars(0x00C0), &[0x41, 0x300]);
+    // Recursive: Ǻ (U+01FA) fully decomposes to A + ring + acute.
+    assert_eq!(decomposition_chars(0x01FA), &[0x41, 0x301, 0x30A]);
+}
+
+#[test]
+fn decomposition_chars_covers_compatibility_forms() {
+    // Roman numeral Ⅰ (U+2160) has only a *compatibility* decomposition,
+    // so it is reachable via NFKD but not NFD.
+    assert_eq!(decomposition_chars(0x2160), &['I' as u32]);
+    // Circled digit one ① → '1'.
+    assert_eq!(decomposition_chars(0x2460), &['1' as u32]);
+    // Ligature ﬁ (U+FB01) → "fi".
+    assert_eq!(decomposition_chars(0xFB01), &['f' as u32, 'i' as u32]);
+}
+
+#[test]
+fn decomposition_chars_covers_hangul_syllables() {
+    // Hangul syllables decompose algorithmically (not via UnicodeData.txt
+    // decomposition fields): 가 (U+AC00) = ᄀ (U+1100) + ᅡ (U+1161).
+    assert_eq!(decomposition_chars(0xAC00), &[0x1100, 0x1161]);
+    // 각 (U+AC01) adds the trailing consonant ᆨ (U+11A8).
+    assert_eq!(decomposition_chars(0xAC01), &[0x1100, 0x1161, 0x11A8]);
+}
+
+#[test]
+fn decomposition_chars_empty_for_non_decomposable() {
+    assert!(decomposition_chars('A' as u32).is_empty());
+    assert!(decomposition_chars(0x1F600).is_empty()); // 😀
+}
+
+#[test]
+fn casefold_chars_full_folding() {
+    // ß case-folds to "ss" — this is the canonical example of full folding
+    // reaching a character ('s') that to_lowercase/to_uppercase cannot.
+    assert_eq!(casefold_chars(0x00DF), &['s' as u32, 's' as u32]);
+    // Simple foldings are present too.
+    assert_eq!(casefold_chars('A' as u32), &['a' as u32]);
+    // Already-folded characters map to nothing.
+    assert!(casefold_chars('a' as u32).is_empty());
+    assert!(casefold_chars('0' as u32).is_empty());
+    // ΐ (U+0390) full-folds to ι + diaeresis + acute (3 chars).
+    assert_eq!(casefold_chars(0x0390), &[0x3B9, 0x308, 0x301]);
+}
+
+#[test]
 fn category_from_code_round_trips_every_variant() {
     // Every code emitted by `as_str` parses back to the same variant.
     let all = [

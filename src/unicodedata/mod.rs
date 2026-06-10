@@ -1,8 +1,10 @@
-//! Port of Python's `unicodedata` module for General Category queries.
+//! Port of Python's `unicodedata` module for General Category queries,
+//! decomposition, and case folding.
 //!
-//! Backed by two text data files generated from
-//! `src/unicodedata/UnicodeData.txt` (vendored Unicode 15.1.0 UCD, matching
-//! Python 3.13's `unicodedata.unidata_version`). The files are embedded with
+//! Backed by four text data files generated from
+//! `src/unicodedata/UnicodeData.txt` and `src/unicodedata/CaseFolding.txt`
+//! (vendored Unicode 15.1.0 UCD, matching Python 3.13's
+//! `unicodedata.unidata_version`). The files are embedded with
 //! `include_str!` and parsed once on first lookup into a `OnceLock`-backed
 //! `Vec`, keeping `cargo build` from having to parse ~6000 tuple literals
 //! per compile.
@@ -12,9 +14,13 @@
 //!   as `Cn` (Unassigned), matching Python.
 //! - `nfd_bases.txt`: recursive NFD base for each canonically-decomposable
 //!   codepoint.
+//! - `decomp_chars.txt`: the character set of each codepoint's full
+//!   recursive NFD/NFKD decompositions.
+//! - `casefold.txt`: full case foldings (the mapping behind Python's
+//!   `str.casefold`).
 //!
-//! To refresh the vendored data, replace `src/unicodedata/UnicodeData.txt`
-//! and run `python scripts/generate_unicodedata_tables.py`.
+//! To refresh the vendored data, replace the vendored UCD files and run
+//! `python scripts/generate_unicodedata_tables.py`.
 
 use std::sync::OnceLock;
 
@@ -133,9 +139,12 @@ impl Category {
     }
 }
 
-/// Embedded raw data; parsed lazily into [`ranges`] / [`nfd_bases`].
+/// Embedded raw data; parsed lazily into [`ranges`] / [`nfd_bases`] /
+/// [`decomp_chars_table`] / [`casefold_table`].
 const CATEGORIES_DATA: &str = include_str!("categories.txt");
 const NFD_BASES_DATA: &str = include_str!("nfd_bases.txt");
+const DECOMP_CHARS_DATA: &str = include_str!("decomp_chars.txt");
+const CASEFOLD_DATA: &str = include_str!("casefold.txt");
 
 /// Run-length-encoded General Category table covering all codepoints
 /// in `0..=0x10FFFF`. Entries are non-overlapping, contiguous, and sorted
@@ -239,6 +248,64 @@ pub fn nfd_base(cp: u32) -> Option<u32> {
         .binary_search_by_key(&cp, |&(c, _)| c)
         .ok()
         .map(|idx| table[idx].1)
+}
+
+/// Parse a `<hex_cp> <hex_c1> <hex_c2> ...` table into a sorted lookup
+/// vector. Shared by [`decomp_chars_table`] and [`casefold_table`].
+fn parse_char_list_table(data: &str, file: &str) -> Vec<(u32, Vec<u32>)> {
+    data.lines()
+        .map(|line| {
+            let mut fields = line.split(' ').map(|f| {
+                u32::from_str_radix(f, 16).unwrap_or_else(|_| panic!("bad hex in {file}: {f:?}"))
+            });
+            let cp = fields
+                .next()
+                .unwrap_or_else(|| panic!("empty line in {file}"));
+            let chars: Vec<u32> = fields.collect();
+            assert!(!chars.is_empty(), "no mapping chars in {file} for {cp:#x}");
+            (cp, chars)
+        })
+        .collect()
+}
+
+fn decomp_chars_table() -> &'static [(u32, Vec<u32>)] {
+    static TABLE: OnceLock<Vec<(u32, Vec<u32>)>> = OnceLock::new();
+    TABLE.get_or_init(|| parse_char_list_table(DECOMP_CHARS_DATA, "decomp_chars.txt"))
+}
+
+fn casefold_table() -> &'static [(u32, Vec<u32>)] {
+    static TABLE: OnceLock<Vec<(u32, Vec<u32>)>> = OnceLock::new();
+    TABLE.get_or_init(|| parse_char_list_table(CASEFOLD_DATA, "casefold.txt"))
+}
+
+/// The sorted, deduplicated union of the characters appearing in `cp`'s
+/// full recursive NFD and NFKD decompositions (excluding `cp` itself), or
+/// an empty slice if `cp` does not decompose.
+///
+/// This is the character set Python's
+/// `unicodedata.normalize("NFD"/"NFKD", c)` produces for a single
+/// character: e.g. `À` → `{A, combining grave}`, `①` → `{1}` (NFKD), and
+/// Hangul syllables decompose to their Jamo.
+pub fn decomposition_chars(cp: u32) -> &'static [u32] {
+    let table = decomp_chars_table();
+    match table.binary_search_by_key(&cp, |&(c, _)| c) {
+        Ok(idx) => &table[idx].1,
+        Err(_) => &[],
+    }
+}
+
+/// The full case folding of `cp` (CaseFolding.txt statuses C and F — the
+/// mapping applied by Python's `str.casefold`), or an empty slice if the
+/// folding is the identity.
+///
+/// Unlike `char::to_lowercase`, full folding can reach new characters:
+/// `ß` folds to `"ss"` even though `'ß'.to_lowercase()` is `'ß'`.
+pub fn casefold_chars(cp: u32) -> &'static [u32] {
+    let table = casefold_table();
+    match table.binary_search_by_key(&cp, |&(c, _)| c) {
+        Ok(idx) => &table[idx].1,
+        Err(_) => &[],
+    }
 }
 
 #[cfg(test)]
