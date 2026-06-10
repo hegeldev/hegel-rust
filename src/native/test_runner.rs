@@ -650,6 +650,14 @@ impl<'a> Engine<'a> {
                 if pending.is_empty() {
                     break;
                 }
+                // The shrink budget is global across origins (Hypothesis's
+                // engine-level `self.shrinks >= MAX_SHRINKS` exit): once
+                // exhausted, remaining origins go unshrunk — they are still
+                // re-run and reported by the final replay below.
+                let remaining_shrinks = self.max_shrinks.saturating_sub(self.shrinks);
+                if remaining_shrinks == 0 {
+                    break;
+                }
                 pending.sort();
                 let origin = pending.remove(0);
                 let initial = self.interesting.get(&origin).cloned().unwrap_or_default();
@@ -668,7 +676,7 @@ impl<'a> Engine<'a> {
 
                 let target_origin = origin.clone();
                 let initial_spans = Spans::from(verify.spans.clone());
-                let shrunk = {
+                let (shrunk, accepted) = {
                     let this: &mut Engine<'_> = &mut *self;
                     let mut shrinker = Shrinker::with_probe(
                         Box::new(|req: ShrinkRun| {
@@ -705,6 +713,8 @@ impl<'a> Engine<'a> {
                         initial_spans,
                     );
                     shrinker.deadline = Some(shrink_deadline);
+                    // What's left of the run-global improvement budget.
+                    shrinker.max_improvements = remaining_shrinks;
                     // Pre-shrink coarse reduction — runs once before the
                     // main shrink loop to rerandomise small one_of-style
                     // branch selectors. A `ShrinkStop` here just means the
@@ -716,8 +726,9 @@ impl<'a> Engine<'a> {
                     }
                     shrinker.shrink();
                     shrink_timed_out |= shrinker.timed_out;
-                    shrinker.current_nodes
+                    (shrinker.current_nodes, shrinker.improvements)
                 };
+                self.shrinks += accepted;
                 self.interesting.insert(origin.clone(), shrunk);
                 shrunk_origins.insert(origin);
             }
@@ -1190,6 +1201,14 @@ pub(crate) struct Engine<'a> {
     pub(crate) first_bug_at: Option<u64>,
     pub(crate) last_bug_at: Option<u64>,
     pub(crate) first_bug_time: Option<std::time::Instant>,
+    /// Total shrinker improvements accepted this run, across every origin.
+    /// Hypothesis's `ConjectureRunner.shrinks`.
+    pub(crate) shrinks: usize,
+    /// Run-wide cap on `shrinks` — Hypothesis's engine-level `MAX_SHRINKS`:
+    /// once this many shrinks have been accepted in total the shrink phase
+    /// ends, rather than each origin getting its own budget. Lowered by
+    /// tests to make the cap observable.
+    pub(crate) max_shrinks: usize,
 }
 
 impl<'a> Engine<'a> {
@@ -1228,6 +1247,8 @@ impl<'a> Engine<'a> {
             first_bug_at: None,
             last_bug_at: None,
             first_bug_time: None,
+            shrinks: 0,
+            max_shrinks: crate::native::core::MAX_SHRINKS,
         }
     }
 

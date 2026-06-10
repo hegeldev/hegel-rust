@@ -21,3 +21,6 @@ Hypothesis more closely:
   differed). Shape-probing passes now share that cache and call
   accounting instead of invoking the test function directly, removing
   some duplicate test executions during shrinking.
+- The 500-shrink cap is now global across all failure origins in a run
+  (matching Hypothesis's engine-level `MAX_SHRINKS`) rather than each
+  origin getting its own 500-shrink budget.

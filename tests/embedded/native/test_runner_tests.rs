@@ -378,6 +378,66 @@ fn run_main_with_urandom_backend_finds_counterexample() {
 }
 
 #[test]
+fn shrink_improvement_budget_is_global_across_origins() {
+    // Hypothesis's MAX_SHRINKS is an *engine-level* counter: once 500
+    // shrinks have been accepted across all origins, the whole run exits
+    // (`exit_with(ExitReason.max_shrinks)`). A per-origin budget would let
+    // a test with many origins do 500 shrinks each. Drive a two-origin
+    // failure with the budget lowered to 1 and check the total accepted
+    // improvements respect it, while both origins are still reported.
+    crate::run_lifecycle::init_panic_hook();
+    let run = |max_shrinks: Option<usize>| {
+        let mut test_fn = |tc: crate::TestCase| {
+            // Failing region is x >= 1000, so the minimal example (exactly
+            // 1000) is reached by shrinking rather than found by generation.
+            let x: i32 = tc.draw(crate::generators::integers());
+            let b: bool = tc.draw(crate::generators::booleans());
+            if b {
+                assert!(x < 1000, "origin one");
+            } else {
+                assert!(x < 1000, "origin two");
+            }
+        };
+        let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>,
+                            is_final: bool| {
+            run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+        };
+        let settings = Settings::new()
+            .test_cases(50)
+            .database(None)
+            .seed(Some(0xbead));
+        let mut ctx = Engine::new(&settings, None, &mut run_case);
+        if let Some(m) = max_shrinks {
+            ctx.max_shrinks = m;
+        }
+        let result = ctx.run(Duration::from_secs(30), Duration::from_secs(300));
+        (result, ctx.shrinks)
+    };
+
+    // Control: with the default budget this scenario accepts more than one
+    // improvement in total (guards the capped assertion against vacuity).
+    let (control_result, control_shrinks) = run(None);
+    assert!(!control_result.passed);
+    assert!(
+        control_shrinks > 1,
+        "scenario must produce multiple improvements, got {control_shrinks}"
+    );
+
+    let (result, shrinks) = run(Some(1));
+    assert!(!result.passed);
+    assert!(
+        shrinks <= 1,
+        "global budget of 1 must cap total accepted shrinks, got {shrinks}"
+    );
+    assert_eq!(
+        result.failures.len(),
+        2,
+        "both origins must still be reported: {:?}",
+        result.failures
+    );
+}
+
+#[test]
 fn slow_shrink_warning_mentions_shrinking() {
     let w = slow_shrink_warning();
     assert!(w.contains("Shrinking"), "{w}");
