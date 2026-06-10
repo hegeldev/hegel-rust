@@ -226,7 +226,7 @@ mod stateful {
     impl GenuineFailureMachine {
         #[rule]
         fn always_fails(&mut self, _tc: TestCase) {
-            assert!(false, "boom");
+            panic!("boom");
         }
     }
 
