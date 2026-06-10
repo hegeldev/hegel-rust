@@ -21,6 +21,92 @@ fn low_bits(v: &BigInt, keep: usize) -> BigInt {
     v - &BigInt::from((v >> keep).magnitude() << keep)
 }
 
+/// Shrink a non-negative integer with an arbitrary accept probe —
+/// Hypothesis's `shrinking/integer.py::Integer.shrink`.
+///
+/// `probe(c)` runs the test with candidate `c` and reports whether it was
+/// accepted as the new value. Like Python's `consider`, a candidate equal
+/// to the current value is vacuously successful and candidates larger
+/// than the current value are rejected, both without running the probe.
+///
+/// Guaranteed probes: `0`, `1`, `current - 1`, `current - 2`. Beyond
+/// that: `mask_high_bits` (keep only the low bits — predicates like
+/// `x & 0xff == 0x77` stall without it), the squeeze-into-one-byte
+/// probes, the `shift_right` descent, and multiple-subtraction.
+///
+/// Returns the final value.
+pub(super) fn shrink_integer(
+    initial: u128,
+    probe: &mut dyn FnMut(u128) -> ShrinkResult<bool>,
+) -> ShrinkResult<u128> {
+    let mut current = initial;
+    let mut try_c = |current: &mut u128, c: u128| -> ShrinkResult<bool> {
+        if c == *current {
+            return Ok(true);
+        }
+        if c > *current {
+            return Ok(false);
+        }
+        if probe(c)? {
+            *current = c;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    };
+
+    // short_circuit: 0 and 1 always tried; success ends the shrink.
+    for c in [0u128, 1] {
+        if try_c(&mut current, c)? {
+            return Ok(current);
+        }
+    }
+    // mask_high_bits: keep only the low `bits - k` bits.
+    let base = current;
+    let n_bits = 128 - base.leading_zeros();
+    find_integer_r(|k| {
+        if k as u32 >= n_bits {
+            return Ok(false);
+        }
+        let mask = (1u128 << (n_bits - k as u32)) - 1;
+        try_c(&mut current, base & mask)
+    })?;
+    // Squeeze into a single byte: the top byte, then the bottom byte.
+    let size = 128 - current.leading_zeros();
+    if size > 8 {
+        let top = current >> (size - 8);
+        try_c(&mut current, top)?;
+        let bottom = current & 0xFF;
+        try_c(&mut current, bottom)?;
+    }
+    if current == 2 {
+        return Ok(current);
+    }
+
+    // run_step: shift_right, then multiples of 2 and 1.
+    let base = current;
+    let max_shift = 128 - base.leading_zeros();
+    find_integer_r(|k| {
+        if k as u32 > max_shift {
+            return Ok(false);
+        }
+        try_c(&mut current, base >> k.min(127))
+    })?;
+    for step in [2u128, 1] {
+        let base = current;
+        find_integer_r(|n| {
+            let Some(sub) = (n as u128).checked_mul(step) else {
+                return Ok(false);
+            };
+            if sub > base {
+                return Ok(false);
+            }
+            try_c(&mut current, base - sub)
+        })?;
+    }
+    Ok(current)
+}
+
 impl<'a> Shrinker<'a> {
     /// Current integer value at node `i` as a [`BigInt`].
     pub(super) fn int_value_bigint(&self, i: usize) -> BigInt {

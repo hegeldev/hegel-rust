@@ -12,6 +12,7 @@ use crate::native::core::{
     ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, float_to_index, index_to_float, sort_key,
 };
 
+use super::integers::shrink_integer;
 use super::{ShrinkResult, ShrinkRun, Shrinker, bin_search_down_r, find_integer_r};
 
 /// Largest `f64` for which `n + 1.0 != n` holds — i.e., `2^53`. Above
@@ -19,6 +20,34 @@ use super::{ShrinkResult, ShrinkRun, Shrinker, bin_search_down_r, find_integer_r
 /// representable as `f64`, so any "redistribute" that bumps a float by
 /// 1 silently reads as a shrink without actually changing the value.
 const MAX_PRECISE_INTEGER: f64 = (1u64 << 53) as f64;
+
+/// Position on the integer grid of `2^53` — see [`float_to_position`].
+const BOUNDARY_POSITION: u128 = 1u128 << 53;
+
+/// Map a non-negative finite float to a linear integer position such that
+/// adjacent representable floats correspond to adjacent integers —
+/// Hypothesis's `_float_to_position`.
+///
+/// For `f <= 2^53` the position is just `f as integer`. Above the
+/// boundary, where the gap between adjacent floats exceeds 1, the
+/// position extends by the float's index in the bit-pattern sequence past
+/// `2^53`, so decrementing the position by 1 is exactly `next_down(f)`.
+fn float_to_position(f: f64) -> u128 {
+    debug_assert!(f.is_finite() && f >= 0.0);
+    if f <= MAX_PRECISE_INTEGER {
+        return f as u128;
+    }
+    BOUNDARY_POSITION + u128::from(f.to_bits() - MAX_PRECISE_INTEGER.to_bits())
+}
+
+/// Inverse of [`float_to_position`] on the integer-valued range. Always
+/// returns an integer-valued, non-negative float.
+fn position_to_float(n: u128) -> f64 {
+    if n <= BOUNDARY_POSITION {
+        return n as f64;
+    }
+    f64::from_bits(MAX_PRECISE_INTEGER.to_bits() + (n - BOUNDARY_POSITION) as u64)
+}
 
 /// Decompose a positive finite float into `(m, n)` with `value == m / n`.
 ///
@@ -61,13 +90,21 @@ impl<'a> Shrinker<'a> {
     ///    f64 ≪ f64::MAX) and the lex-index bisection never lands on MAX's
     ///    all-ones mantissa.
     /// 3. If sign-negative, try negating (positive is simpler).
-    /// 4. Binary search on absolute-value lex index from 0 toward current value.
-    ///    Searching from 0 ensures we can find "nice" integer floats (like 2.0)
-    ///    even when they have smaller lex indices than the boundary values.
-    /// 5. Integer-ratio reduction: decompose v = k + r/n and shrink k toward
-    ///    zero while holding the fractional remainder r/n fixed. Catches
-    ///    shrinks like 2.5 → 1.5 under predicates that constrain the
-    ///    fractional part.
+    /// 4. The `Float.run_step` moves from Hypothesis's shrinking/floats.py:
+    ///    a. For |v| > 2^53, delegate to `Integer.shrink` through the
+    ///    float-grid bijection (adjacent positions = adjacent floats).
+    ///    b. Precision-dropping, least-precise first: round `v * 2^p` to
+    ///    floor / ceil and divide back, for p from 0 to 9; then, if the
+    ///    value is (or can become) integer-valued, delegate to
+    ///    `Integer.shrink` for the mask/shift/multiples move set.
+    ///    c. Binary search on absolute-value lex index from 0 toward the
+    ///    current value (a hegel extra: it can find "nice" integer
+    ///    floats like 2.0 even when they have smaller lex indices than
+    ///    the boundary values).
+    /// 5. Integer-ratio reduction (skipped when 4b delegated): decompose
+    ///    v = k + r/n and `Integer.shrink` k toward zero while holding the
+    ///    fractional remainder r/n fixed. Catches shrinks like 2.5 → 1.5
+    ///    under predicates that constrain the fractional part.
     pub(super) fn shrink_floats(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
@@ -109,10 +146,10 @@ impl<'a> Shrinker<'a> {
                 // (`0x7ff8_0000_0000_0000`, smallest mantissa in lex
                 // order). The non-NaN candidates go through
                 // `replace`/`consider` unchanged; the canonical-NaN
-                // fallback has to bypass `consider`'s sort-key shortcut,
-                // since all NaN bit patterns share
-                // `sort_index = (u64::MAX, false)` and `consider` would
-                // otherwise return true without rewriting `current_nodes[i]`.
+                // fallback has to bypass `consider`, which only commits
+                // strictly sort-key-smaller candidates — all NaN bit
+                // patterns share `sort_index = (u64::MAX, false)`, so this
+                // lateral move would never be accepted through it.
                 if v.is_nan() {
                     let mut stepped = false;
                     for cand in [f64::MAX, f64::INFINITY] {
@@ -164,44 +201,20 @@ impl<'a> Shrinker<'a> {
                 // (finite non-NaN) value in place.
                 let v = self.float_at(i);
 
-                // Step 4a: integer-magnitude reduction.
-                //
-                // * For |v| >= 2^53 (the integer-only float range),
-                //   reduce the magnitude via `find_integer`-based
-                //   shift_right and shrink_by_multiples — O(log log
-                //   range) accepts vs the O(log range) of a full
-                //   `bin_search_down`.
-                // * For 0 < |v| < 2^53, try precision-dropping: round
-                //   `v * 2^p` to floor / ceil and divide back, for p
-                //   from 10 down to 0. This is what lets values like
-                //   999.5 collapse to 1000.0 when the predicate
-                //   admits the rounded form — neither shift_right
-                //   (starts at floor(v)) nor the lex-index bisection
-                //   (midpoints land on out-of-range magnitudes when
-                //   fc has a tight max) finds it on its own.
+                // Step 4a: integer-grid reduction for |v| > 2^53, ported
+                // from Hypothesis's `Float.run_step`: above
+                // MAX_PRECISE_INTEGER all floats are integers but the gap
+                // between adjacent floats exceeds 1, so integer-space
+                // steps of `n - 1` round straight back to `n`. Delegate
+                // to `Integer.shrink` through the float-grid bijection,
+                // where decrementing a position by 1 is exactly
+                // `next_down`.
                 let v_abs = v.abs();
-                let is_neg = v.is_sign_negative();
-                if v_abs.is_finite() && v_abs > 0.0 && v_abs >= MAX_PRECISE_INTEGER {
-                    // base = |v| truncated into i128 (saturates for
-                    // values > i128::MAX, which is fine — the saturated
-                    // base still shifts to small magnitudes through k
-                    // big enough to overshoot).
-                    let base: i128 = if v_abs >= (i128::MAX as f64) {
-                        i128::MAX
-                    } else {
-                        v_abs as i128
-                    };
-                    let i_capture = i;
+                let mut is_neg = v.is_sign_negative();
+                if v_abs.is_finite() && v_abs > MAX_PRECISE_INTEGER {
                     let fc_capture = fc.clone();
-                    // shift_right: find the largest k where base >> k
-                    // still satisfies fc.validate and the predicate.
-                    find_integer_r(|k| {
-                        if k >= 127 {
-                            // i128 shifts >= 127 produce 0 (or are UB).
-                            return Ok(false);
-                        }
-                        let shifted = base >> k;
-                        let candidate_mag = shifted as f64;
+                    shrink_integer(float_to_position(v_abs), &mut |n| {
+                        let candidate_mag = position_to_float(n);
                         let candidate = if is_neg {
                             -candidate_mag
                         } else {
@@ -210,64 +223,30 @@ impl<'a> Shrinker<'a> {
                         if !fc_capture.validate(candidate) {
                             return Ok(false);
                         }
-                        self.replace(&HashMap::from([(i_capture, ChoiceValue::Float(candidate))]))
+                        self.replace(&HashMap::from([(i, ChoiceValue::Float(candidate))]))
                     })?;
-                    // shrink_by_multiples(2) and (1) — peel off the
-                    // last few integer steps after the shift descent
-                    // overshot.
-                    //
-                    // `lo` is the lower bound on `attempt`, computed so
-                    // the candidate stays inside `fc`'s bounds: for the
-                    // positive branch, `candidate = attempt` must be
-                    // `>= fc.min_value`; for `is_neg=true` (so
-                    // `fc.max_value <= 0`, otherwise Step 3 would have
-                    // negated `v` to positive), `candidate = -attempt`
-                    // must be `<= fc.max_value`, i.e.
-                    // `attempt >= |fc.max_value|`.
-                    let cur = self.float_at(i);
-                    if cur.is_finite() {
-                        let base_after = cur.abs() as i128;
-                        let lo: i128 = if is_neg {
-                            (-fc.max_value).max(0.0).ceil() as i128
-                        } else {
-                            fc.min_value.max(0.0).ceil() as i128
-                        };
-                        for step in [2i128, 1] {
-                            let i_capture = i;
-                            find_integer_r(|n| {
-                                let attempt = base_after - step * (n as i128);
-                                if attempt < lo {
-                                    return Ok(false);
-                                }
-                                let candidate_mag = attempt as f64;
-                                let candidate = if is_neg {
-                                    -candidate_mag
-                                } else {
-                                    candidate_mag
-                                };
-                                // `replace` checks `kind.validate`; the
-                                // pre-check here is redundant.
-                                self.replace(&HashMap::from([(
-                                    i_capture,
-                                    ChoiceValue::Float(candidate),
-                                )]))
-                            })?;
-                        }
-                    }
-                } else if v_abs.is_finite() && v_abs > 0.0 {
-                    // Precision-dropping for sub-MAX_PRECISE_INTEGER
-                    // values. The `2_f64.powi(p)` ladder runs `p` from
-                    // 10 down to 0; the explicit `int(current)` probe
-                    // at the end covers values whose integer floor /
-                    // ceil satisfy the predicate.
-                    let cur_abs = self.float_at(i).abs();
-                    for p in (0..=10).rev() {
+                    is_neg = self.float_at(i).is_sign_negative();
+                }
+
+                // Step 4b: precision-dropping for values now at or below
+                // MAX_PRECISE_INTEGER, least-precise (integer) first —
+                // Python's `for p in range(10)`. This is what lets values
+                // like 999.5 collapse to 1000.0 when the predicate admits
+                // the rounded form. The current value is re-read each
+                // iteration (it may change mid-loop).
+                //
+                // `delegated_integer` records whether the value became
+                // integer-valued and was handed to `Integer.shrink`; the
+                // integer-ratio step below is skipped in that case
+                // (Python's run_step returns after the delegation).
+                let mut delegated_integer = false;
+                let cur_abs = self.float_at(i).abs();
+                if cur_abs.is_finite() && cur_abs > 0.0 && cur_abs <= MAX_PRECISE_INTEGER {
+                    for p in 0..10 {
                         let scale = (2_f64).powi(p);
-                        let scaled = cur_abs * scale;
-                        // floor and ceil.  Either may give a valid
-                        // shrink; we try both.
-                        for rounded in [scaled.floor(), scaled.ceil()] {
-                            let candidate_mag = rounded / scale;
+                        for round in [f64::floor, f64::ceil] {
+                            let cur_abs = self.float_at(i).abs();
+                            let candidate_mag = round(cur_abs * scale) / scale;
                             // Skip values that wouldn't actually shrink
                             // (or that aren't finite — `fc.validate`
                             // would reject those anyway, but the
@@ -288,9 +267,39 @@ impl<'a> Shrinker<'a> {
                             }
                         }
                     }
+
+                    // `int(current)` probe + full Integer.shrink
+                    // delegation for integer-valued floats — this is the
+                    // move set (mask_high_bits, byte squeeze, shift_right,
+                    // multiples) that lexicographic bisection lacks.
+                    let cur_abs = self.float_at(i).abs();
+                    let trunc = cur_abs.trunc();
+                    let trunc_accepted = cur_abs == trunc || {
+                        let candidate = if is_neg { -trunc } else { trunc };
+                        fc.validate(candidate)
+                            && float_to_index(trunc) < float_to_index(cur_abs)
+                            && self.replace(&HashMap::from([(i, ChoiceValue::Float(candidate))]))?
+                    };
+                    if trunc_accepted {
+                        delegated_integer = true;
+                        let base = self.float_at(i).abs();
+                        let fc_capture = fc.clone();
+                        shrink_integer(base as u128, &mut |k| {
+                            let candidate_mag = k as f64;
+                            let candidate = if is_neg {
+                                -candidate_mag
+                            } else {
+                                candidate_mag
+                            };
+                            if !fc_capture.validate(candidate) {
+                                return Ok(false);
+                            }
+                            self.replace(&HashMap::from([(i, ChoiceValue::Float(candidate))]))
+                        })?;
+                    }
                 }
 
-                // Step 4b: Binary search on absolute-value lex index toward 0.
+                // Step 4c: Binary search on absolute-value lex index toward 0.
                 // Integer replacement above only produces finite non-NaN values.
                 let v = self.float_at(i);
                 let v_abs = v.abs();
@@ -330,15 +339,21 @@ impl<'a> Shrinker<'a> {
                 // float_to_index(0.5) > float_to_index(2.5)) does not
                 // short-circuit `bin_search_down` at k=0 and skip lex-smaller
                 // values at larger k (1.5 at k=1).
+                // Skipped when the value already collapsed to an integer
+                // and was handed to `Integer.shrink` above — Python's
+                // run_step returns after that delegation, and the ratio
+                // decomposition of an integer is just the same integer.
                 let v = self.float_at(i);
-                if v.is_finite() && v != 0.0 {
+                if !delegated_integer && v.is_finite() && v != 0.0 {
                     let is_neg = v.is_sign_negative();
                     if let Some((m, n)) = as_integer_ratio(v.abs()) {
                         let k_init = m / n;
                         let r = m % n;
                         if k_init > 0 {
-                            bin_search_down_r(0, k_init as i128, &mut |k| {
-                                let num_sum = (k as u128) * n + r;
+                            // The full Integer.shrink move set, like
+                            // Python's `call_shrinker(Integer, i, ...)`.
+                            shrink_integer(k_init, &mut |k| {
+                                let num_sum = k * n + r;
                                 let candidate_abs = (num_sum as f64) / (n as f64);
                                 let candidate = if is_neg {
                                     -candidate_abs
@@ -348,9 +363,7 @@ impl<'a> Shrinker<'a> {
                                 if !fc.validate(candidate) {
                                     return Ok(false);
                                 }
-                                let epoch = self.improvements;
-                                self.replace(&HashMap::from([(i, ChoiceValue::Float(candidate))]))?;
-                                Ok(self.improvements > epoch)
+                                self.replace(&HashMap::from([(i, ChoiceValue::Float(candidate))]))
                             })?;
                         }
                     }

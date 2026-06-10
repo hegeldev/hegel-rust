@@ -240,3 +240,132 @@ fn shrink_floats_negative_shrink_by_multiples_reaches_predicate_boundary() {
         _ => unreachable!(),
     }
 }
+
+// ── Float.run_step ports: Integer delegation, grid bijection, ladder order ──
+
+/// Integer-valued floats delegate to the full Integer.shrink move set —
+/// `mask_high_bits` in particular. The predicate keeps the low byte fixed
+/// at 0x77, which neither the lex-index bisection nor a plain binary
+/// search can maintain; masking the high bits of 0x30077 reaches 0x77
+/// directly, exactly as in Hypothesis's `Float.run_step` delegation.
+#[test]
+fn shrink_floats_delegates_integer_valued_to_integer_shrink() {
+    let start = 0x30077 as f64;
+    let initial = vec![float_node(start, 0.0, 1e9)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            crate::native::shrinker::ShrinkRun::Full(nodes) => {
+                let ok = matches!(
+                    nodes.first().map(|n| &n.value),
+                    Some(&ChoiceValue::Float(f))
+                        if f.fract() == 0.0 && f >= 0.0 && (f as u64) & 0xFF == 0x77
+                );
+                (ok, nodes.to_vec(), Spans::new())
+            }
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.shrink_floats().unwrap();
+    assert_eq!(
+        shrinker.current_nodes[0].value,
+        ChoiceValue::Float(0x77 as f64),
+        "mask_high_bits should reach 119.0 from 196727.0"
+    );
+}
+
+/// The precision-drop ladder runs least-precise-first (Python's
+/// `for p in range(10)`), so the very first candidate that actually
+/// executes for 2.75 is `floor(2.75) == 2.0` — not the most-precise
+/// roundings, which a reversed ladder would try first.
+#[test]
+fn shrink_floats_precision_ladder_tries_least_precise_first() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let executed: Rc<RefCell<Vec<f64>>> = Rc::new(RefCell::new(Vec::new()));
+    let executed_clone = executed.clone();
+    let initial = vec![float_node(2.75, 0.5, 100.0)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run| match run {
+            crate::native::shrinker::ShrinkRun::Full(nodes) => {
+                if let Some(&ChoiceValue::Float(f)) = nodes.first().map(|n| &n.value) {
+                    executed_clone.borrow_mut().push(f);
+                }
+                // Only the starting value is interesting: every candidate
+                // is executed and rejected, exposing the probe order.
+                let ok = matches!(
+                    nodes.first().map(|n| &n.value),
+                    Some(&ChoiceValue::Float(f)) if f == 2.75
+                );
+                (ok, nodes.to_vec(), Spans::new())
+            }
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.shrink_floats().unwrap();
+    // The first executed candidate is the fixed `simplest()` prelude
+    // (1.0 for this range); the ladder follows. Its first probe must be
+    // the least-precise rounding floor(2.75) = 2.0, and in particular it
+    // must come before the more-precise p = 1 rounding 2.5.
+    let executed = executed.borrow();
+    assert_eq!(
+        executed.get(1),
+        Some(&2.0),
+        "least-precise rounding (p = 0) must lead the ladder: {executed:?}"
+    );
+    let pos_2 = executed.iter().position(|&f| f == 2.0).unwrap();
+    let pos_2_5 = executed.iter().position(|&f| f == 2.5).unwrap();
+    assert!(
+        pos_2 < pos_2_5,
+        "p = 0 must be probed before p = 1: {executed:?}"
+    );
+}
+
+// ── float-grid bijection ─────────────────────────────────────────────────
+
+#[test]
+fn float_position_bijection_round_trips() {
+    for f in [
+        0.0,
+        1.0,
+        MAX_PRECISE_INTEGER,
+        MAX_PRECISE_INTEGER + 2.0,
+        1.5 * (1u64 << 60) as f64,
+        f64::MAX,
+    ] {
+        assert_eq!(
+            position_to_float(float_to_position(f)),
+            f,
+            "round trip failed for {f}"
+        );
+    }
+}
+
+#[test]
+fn float_position_adjacent_positions_are_adjacent_floats() {
+    // Above MAX_PRECISE_INTEGER, decrementing the position by one steps to
+    // the previous representable float (Python's `_float_to_position`
+    // contract), not to an unrepresentable integer that rounds back.
+    for f in [
+        MAX_PRECISE_INTEGER + 2.0,
+        (1u64 << 60) as f64,
+        1.5 * (1u64 << 60) as f64,
+        f64::MAX,
+    ] {
+        let pos = float_to_position(f);
+        let down = position_to_float(pos - 1);
+        assert_eq!(down, next_down_f64_for_test(f), "position step for {f}");
+    }
+    // At and below the boundary, positions are just the integer values.
+    assert_eq!(float_to_position(MAX_PRECISE_INTEGER), 1u128 << 53);
+    assert_eq!(float_to_position(5.7), 5);
+}
+
+/// std `next_down` equivalent for the assertion above (positive finite
+/// inputs only).
+fn next_down_f64_for_test(f: f64) -> f64 {
+    f64::from_bits(f.to_bits() - 1)
+}

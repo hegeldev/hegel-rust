@@ -34,3 +34,9 @@ Hypothesis more closely:
   repair probe, the probe's realised branch span is spliced in front of
   the original suffix, so branch lowering succeeds for test cases whose
   post-branch draws must keep their old values.
+- Float shrinking ports the remaining `Float.run_step` moves from
+  Hypothesis: integer-valued floats now delegate to the full integer
+  move set (so e.g. a float constrained by its low byte can still
+  collapse via high-bit masking), floats above 2^53 shrink on the
+  float grid where stepping a position by one is exactly `next_down`,
+  and the precision-dropping ladder runs least-precise-first.
