@@ -271,13 +271,13 @@ fn test_vec_no_partial_eq_compiles_without_unique() {
 #[hegel::test]
 fn test_vec_non_basic_generator_with_max_size(tc: TestCase) {
     // filter() removes as_basic(), forcing the non-basic Collection path.
-    // max_size exercises the map_insert("max_size") branch in ServerDataSource::new_collection.
+    // max_size exercises the max_size branch of the engine's new_collection.
     let vec: Vec<i32> = tc.draw(gs::vecs(gs::integers::<i32>().filter(|_| true)).max_size(5));
     assert!(vec.len() <= 5);
 }
 
 // Regression test: vecs(sampled_from).unique(true) must check value-level uniqueness.
-// Before the fix, as_basic() sent "unique":true to the server, which enforced index-level
+// Before the fix, as_basic() set "unique":true in the schema, which enforced index-level
 // uniqueness (distinct sampled_from indices), not value-level uniqueness. For a pool of
 // 100 copies of the same value, distinct indices still map to the same value, producing
 // duplicates. The fix makes as_basic() return None when unique_by is set, routing through

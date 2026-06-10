@@ -431,41 +431,26 @@ def _merge_lcov(inputs: list[Path], output: Path) -> None:
 def run_coverage() -> Path:
     """Run coverage analysis and generate LCOV report.
 
-    The `native` feature swaps the python server backend for an
-    in-process Rust one, which doesn't yet implement the schemas
-    `gs::dates` / `gs::times` / `gs::text` / `gs::binary` etc. use.
-    The jiff, serde_json, rand and several top-level tests are
-    therefore gated to the server backend, so a single
-    `--all-features` coverage pass either fails (todo!()) or leaves
-    big swaths of `src/extras/*` and `src/native/*` uncovered.
-
-    Run two coverage passes with disjoint feature sets and
-    union-merge the resulting LCOV files: the first pass covers the
-    server backend, the jiff / chrono / serde_json bindings, and the
-    text / float / etc. surface area; the second covers
-    `src/native/`.  A line is treated as covered if it's covered in
-    either.
+    A single pass with every additive feature enabled covers the whole
+    library: the native engine, the jiff / chrono / serde_json bindings,
+    the rand extras, and the text / float / etc. surface area.  The raw
+    cargo output is routed through `_merge_lcov` (with a single input) so
+    the on-disk LCOV format matches what the downstream parser expects.
     """
     print("Running coverage analysis...")
     lcov_path = Path("lcov.info")
-    server_lcov = Path("lcov-server.info")
-    native_lcov = Path("lcov-native.info")
+    raw_lcov = Path("lcov-all.info")
 
     _run_lcov_phase(
         features="rand,antithesis,chrono,jiff,serde_json,serde_json_raw_value",
-        output=server_lcov,
-        label="server backend, no native",
-    )
-    _run_lcov_phase(
-        features="rand,native",
-        output=native_lcov,
-        label="native backend",
+        output=raw_lcov,
+        label="all features",
     )
 
-    print("  Merging LCOV outputs...")
-    _merge_lcov([server_lcov, native_lcov], lcov_path)
+    print("  Normalising LCOV output...")
+    _merge_lcov([raw_lcov], lcov_path)
     if not lcov_path.exists():
-        print("ERROR: merged lcov.info was not generated", file=sys.stderr)
+        print("ERROR: lcov.info was not generated", file=sys.stderr)
         sys.exit(1)
     return lcov_path
 

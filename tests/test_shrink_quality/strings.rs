@@ -147,9 +147,8 @@ fn test_shrink_decomposes_compatibility_form_to_ascii() {
 
 // 'fi' (U+FB01) NFKD-decomposes to "fi"; the shrinker should land on
 // a single ASCII letter (either "F" or "f") when the predicate accepts
-// any 'f'-like character. The Linux server backend lands on the strict
-// `"F"` minimum, but the Windows server backend deterministically stops
-// at "f" — the test validates the meaningful contract (single ASCII
+// any 'f'-like character. The exact case the shrinker settles on can
+// vary, so the test validates the meaningful contract (single ASCII
 // letter, satisfies the predicate) without pinning the case.
 #[test]
 fn test_shrink_ligature_to_base_character() {

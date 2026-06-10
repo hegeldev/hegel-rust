@@ -3,7 +3,7 @@ members = [".", "hegel-macros", "hegel-c"]
 
 [package]
 name = "hegeltest"
-version = "0.16.0"
+version = "0.17.1"
 edition = "2024"
 # if you bump this, also bump ci.yml and hegel-macros/Cargo.toml
 rust-version = "1.86"
@@ -41,17 +41,17 @@ tempfile = "3.0"
 ciborium = "0.2.2"
 crc32fast = "1.4"
 parking_lot = "0.12"
-hegeltest-macros = { version = "=0.16.0", path = "hegel-macros" }
-# optional feature dependencies
-rand = { version = "0.10", optional = true }
-serde_json = { version = "1.0.61", optional = true }
-dashu-int = { version = "0.4.1", default-features = false, features = ["std"], optional = true }
-miniz_oxide = { version = "0.8", optional = true }
+hegeltest-macros = { version = "=0.17.1", path = "hegel-macros" }
+rand = { version = "0.10" }
+dashu-int = { version = "0.4.1", default-features = false, features = ["std"] }
+miniz_oxide = { version = "0.8" }
 # Fast, non-DoS-resistant hasher for the native engine's internal maps
 # (data tree + span-mutation bookkeeping; keys are our own choice values /
 # span labels, never adversarial). Replaces the default SipHash, which
 # profiling showed prominently on the generation hot path.
-rustc-hash = { version = "2", optional = true }
+rustc-hash = { version = "2" }
+# optional feature dependencies
+serde_json = { version = "1.0.61", optional = true }
 # opting out of the clock, now, and wasmbind features.
 # 0.4.41 is the minimum version that has WeekdaySet.
 chrono = { version = "0.4.41", default-features = false, features = ["std"], optional = true }
@@ -81,9 +81,11 @@ required-features = ["__bench"]
 
 [features]
 default = []
-rand = ["dep:rand"]
+# Gates `extras::rand::randoms()`, which generates `rand::RngCore` impls. The
+# `rand` crate itself is always a dependency (the native engine uses it), so
+# this feature only toggles the extra public generator surface.
+rand = []
 antithesis = ["dep:serde_json"]
-native = ["dep:rand", "dep:dashu-int", "dep:miniz_oxide", "dep:rustc-hash"]
 chrono = ["dep:chrono"]
 jiff = ["dep:jiff"]
 serde_json = ["dep:serde_json"]
@@ -91,7 +93,32 @@ serde_json = ["dep:serde_json"]
 serde_json_raw_value = ["serde_json", "serde_json/raw_value"]
 # Internal: re-exports private items needed by `benches/`. Not part of the
 # public API; depend on at your peril.
-__bench = ["native"]
+__bench = []
+
+# Tune the dev/test profile for CI speed.
+#
+# `opt-level = 1`: the native engine is compute-heavy, and running it
+# unoptimized makes the property-test suites dominate CI wall-clock — far
+# worse on Windows. opt-level 1 recovers most of the speed at modest compile
+# cost. Kept as a *whole-profile* setting (not per-package) specifically so
+# the coverage build can override it back to 0 via `CARGO_PROFILE_DEV_OPT_LEVEL`:
+# `cargo llvm-cov` needs unoptimized code for accurate line attribution
+# (optimization inlines small functions and drops their coverage regions).
+# See the `check-coverage` recipe in the justfile.
+#
+# `debug = "line-tables-only"`: the default dev profile emits full DWARF/PDB
+# debuginfo, which dominates link time — especially on Windows, where
+# `link.exe` is slow and the fat `.pdb` is the bottleneck. line-tables-only
+# keeps file/line info for panic backtraces (which tests rely on) while
+# dropping the heavy variable/type debuginfo.
+#
+# Both settings affect only the *main* build. Integration tests that spawn
+# `cargo` subprocesses build standalone temp crates with their own profile;
+# those are tuned separately via the `CARGO_PROFILE_*` env vars in
+# `tests/common/project.rs`.
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
 
 [package.metadata.docs.rs]
 all-features = true

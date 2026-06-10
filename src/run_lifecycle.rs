@@ -5,17 +5,16 @@
 //! `drive` function that takes a [`TestRunner`] implementation, hands it a
 //! `run_case` callback, and surfaces the run-level result.
 //!
-//! Both the server-protocol backend (`crate::server::session::ServerTestRunner`)
-//! and the native engine backend (`crate::native::test_runner::NativeTestRunner`)
-//! plug into this lifecycle. Each backend is free to do whatever it likes
+//! The native engine backend (`crate::native::test_runner::NativeTestRunner`)
+//! plugs into this lifecycle. The runner is free to do whatever it likes
 //! inside its `TestRunner::run` to decide which test cases to run; the
-//! lifecycle owns everything that's identical across backends — installing
-//! the panic hook, wrapping each test body with `catch_unwind` plus
-//! `mark_complete`, the antithesis integration, and the final
-//! `panic!("Property test failed: ...")` re-raise.
+//! lifecycle owns everything that surrounds it — installing the panic hook,
+//! wrapping each test body with `catch_unwind` plus `mark_complete`, the
+//! antithesis integration, and the final `panic!("Property test failed: ...")`
+//! re-raise.
 
 use std::backtrace::{Backtrace, BacktraceStatus};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,19 +36,46 @@ thread_local! {
     /// [`take_panic_info`] right after `catch_unwind` returns.
     static LAST_PANIC_INFO: RefCell<Option<(String, String, String, Backtrace)>> =
         const { RefCell::new(None) };
+
+    /// Whether the panic hook should pay to capture a backtrace for the next
+    /// panic on this thread. Set by [`run_test_case`] to `should_emit`
+    /// (`is_final || verbose`) — i.e. only when the resulting diagnostic will
+    /// actually be shown. Capturing (and, under `RUST_BACKTRACE`, symbolizing)
+    /// a backtrace for every discarded shrink probe is the dominant cost of
+    /// failing-heavy property runs, and is far worse on Windows.
+    static CAPTURE_BACKTRACE: Cell<bool> = const { Cell::new(false) };
 }
 
 fn take_panic_info() -> Option<(String, String, String, Backtrace)> {
     LAST_PANIC_INFO.with(|info| info.borrow_mut().take())
 }
 
+/// Control-flow panics (a failed `assume`, `stop_test`, loop-done, or an
+/// invalid-argument usage error) are caught and classified by
+/// [`run_test_case`] without ever rendering a backtrace, so the hook must not
+/// pay to capture one for them — they are common on the generation hot path.
+fn is_control_panic(payload: &(dyn std::any::Any + Send)) -> bool {
+    let msg = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
+    msg.is_some_and(|m| {
+        m == ASSUME_FAIL_STRING
+            || m == STOP_TEST_STRING
+            || m == LOOP_DONE_STRING
+            || m.starts_with(INVALID_ARGUMENT_PREFIX)
+    })
+}
+
 /// Install the cross-backend panic hook on first call.
 ///
-/// Idempotent across all backends: the hook captures location + backtrace
-/// for any panic raised inside a test context (so [`run_test_case`] can read
-/// the location after `catch_unwind`), and forwards everything else to the
-/// previous hook unchanged. Without the suppression, every shrinker probe
-/// would print a `thread 'main' panicked` line to stderr and the user-visible
+/// Idempotent across all backends: the hook captures the location for any
+/// panic raised inside a test context (so [`run_test_case`] can read it after
+/// `catch_unwind`), and forwards everything else to the previous hook
+/// unchanged. A backtrace is captured only when [`CAPTURE_BACKTRACE`] is set
+/// and the panic is a genuine failure (not a control-flow panic) — see
+/// [`is_control_panic`]. Without the suppression, every shrinker probe would
+/// print a `thread 'main' panicked` line to stderr and the user-visible
 /// output would be unreadable.
 pub(crate) fn init_panic_hook() {
     PANIC_HOOK_INIT.call_once(|| {
@@ -70,7 +96,13 @@ pub(crate) fn init_panic_hook() {
                 .location()
                 .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
                 .unwrap_or_else(|| "<unknown>".to_string());
-            let backtrace = Backtrace::capture();
+            // Only capture (and symbolize) a backtrace when the diagnostic
+            // will actually be shown and the panic is a genuine failure.
+            let backtrace = if CAPTURE_BACKTRACE.get() && !is_control_panic(info.payload()) {
+                Backtrace::capture()
+            } else {
+                Backtrace::disabled()
+            };
 
             LAST_PANIC_INFO
                 .with(|l| *l.borrow_mut() = Some((thread_name, thread_id, location, backtrace)));
@@ -194,13 +226,12 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// any panic and translating it to a [`TestCaseResult`].
 ///
 /// Reports the outcome back through the [`DataSource`] interface via
-/// [`TestCase::mark_complete`]: that is the single cross-backend channel
-/// for per-test-case results.  Both backends consume it the same way (the
-/// server forwards it to Hypothesis; the native engine reads it back off
-/// the data-source handle); neither backend looks at the return value of
-/// this function for the outcome.  On the `Interesting` path the panic
-/// site is captured as a `file:line:col` string and stored on the
-/// [`Failure`] so per-origin shrinking can key on it.
+/// [`TestCase::mark_complete`]: that is the channel for per-test-case
+/// results.  The native engine reads it back off the data-source handle;
+/// nothing looks at the return value of this function for the outcome.
+/// On the `Interesting` path the panic site is captured as a
+/// `file:line:col` string and stored on the [`Failure`] so per-origin
+/// shrinking can key on it.
 pub(crate) fn run_test_case(
     data_source: Box<dyn DataSource + Send + Sync>,
     test_fn: &mut dyn FnMut(TestCase),
@@ -212,6 +243,12 @@ pub(crate) fn run_test_case(
         verbosity,
         crate::runner::Verbosity::Verbose | crate::runner::Verbosity::Debug
     );
+    // `should_emit` mirrors `TestCase`'s own gate: the diagnostic is only
+    // shown for the final replay or, in verbose mode, every interesting case.
+    // Tell the panic hook to capture a backtrace only when it will be shown.
+    let should_emit = is_final || verbose;
+    CAPTURE_BACKTRACE.with(|c| c.set(should_emit));
+
     let tc = TestCase::new(data_source, is_final, mode, verbose);
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
 
@@ -241,9 +278,8 @@ pub(crate) fn run_test_case(
                     panic_message: msg,
                     diagnostic,
                     origin: format!("Panic at {}", location),
-                    // The native engine attaches the reproduce blob on its
-                    // final replay, once the shrunk choice sequence is known;
-                    // the server backend leaves it `None`.
+                    // The engine attaches the reproduce blob on its final
+                    // replay, once the shrunk choice sequence is known.
                     reproduce_blob: None,
                 })
             }

@@ -1,10 +1,9 @@
-//! The `print_blob` setting controls whether a failing native run prints a
+//! The `print_blob` setting controls whether a failing run prints a
 //! copy-pasteable `#[hegel::reproduce_failure("…")]` reproducer line.
 //!
 //! These run a failing `#[hegel::test]` in a subprocess (so its stderr can be
 //! captured) and assert the reproducer line is present when `print_blob` is
-//! set and absent otherwise. Only meaningful on the native backend, which is
-//! the one that attaches a blob.
+//! set and absent otherwise.
 
 mod common;
 
@@ -26,7 +25,6 @@ fn my_test(tc: hegel::TestCase) {
     // `expect_failure` asserts the run failed *and* the output matches — so a
     // match on the reproducer marker proves the line was printed.
     TempRustProject::new()
-        .feature("native")
         .main_file("fn main() {}")
         .test_file("repro.rs", code)
         .expect_failure(REPRODUCER_MARKER)
@@ -46,7 +44,6 @@ fn my_test(tc: hegel::TestCase) {
     // The run still fails (matches "x was"), but with `print_blob` unset the
     // reproducer line must NOT appear.
     let out = TempRustProject::new()
-        .feature("native")
         .main_file("fn main() {}")
         .test_file("repro.rs", code)
         .invoke()
