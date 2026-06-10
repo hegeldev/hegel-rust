@@ -18,7 +18,7 @@ use crate::native::core::{
 };
 use crate::native::rng::EngineRng;
 use crate::native::shrinker::find_integer;
-use crate::native::test_runner::{EngineCtx, RunResult};
+use crate::native::test_runner::{EngineCtx, RunRecorder, RunResult};
 
 /// Per-label best score and the choice sequence that produced it.
 pub(crate) struct TargetingState {
@@ -100,27 +100,26 @@ impl TargetingSchedule {
     }
 }
 
-/// Mutable state threaded through the hill-climber.
+/// Mutable state threaded through the hill-climber: the engine to execute
+/// trials on, the run recorder every trial is booked through (which also
+/// owns the [`TargetingState`] the climber reads), and the budget caps.
 pub(crate) struct OptimiseCtx<'a, 'b, 'c> {
     pub engine: &'a mut EngineCtx<'b>,
-    pub interesting: &'a mut HashMap<String, Vec<ChoiceNode>>,
-    pub calls: &'a mut u64,
-    pub valid_test_cases: &'a mut u64,
+    pub recorder: &'a mut RunRecorder<'c>,
     pub max_valid: u64,
     pub max_calls: u64,
     pub rng: &'a mut EngineRng,
-    pub on_run: &'a mut (dyn FnMut(&RunResult) + 'c),
 }
 
 impl OptimiseCtx<'_, '_, '_> {
     fn budget_exhausted(&self) -> bool {
-        !self.interesting.is_empty()
-            || *self.valid_test_cases >= self.max_valid
-            || *self.calls >= self.max_calls
+        !self.recorder.interesting.is_empty()
+            || self.recorder.valid_test_cases >= self.max_valid
+            || self.recorder.calls >= self.max_calls
     }
 }
 
-/// Run a single trial and update bookkeeping. Returns the run result if it
+/// Run a single trial and record it. Returns the run result if it
 /// completed, or `None` if the budget was exhausted before this call.
 ///
 /// Uses [`NativeTestCase::for_probe`] rather than `for_choices` so that
@@ -129,57 +128,46 @@ impl OptimiseCtx<'_, '_, '_> {
 /// extra values from a fresh RNG instead of overrunning the prefix.
 /// Mirrors Hypothesis's `cached_test_function(choices, extend="full")`
 /// in `optimiser.py::attempt_replace`.
-fn run_trial(
-    targeting: &mut TargetingState,
-    ctx: &mut OptimiseCtx<'_, '_, '_>,
-    choices: &[ChoiceValue],
-) -> Option<RunResult> {
+fn run_trial(ctx: &mut OptimiseCtx<'_, '_, '_>, choices: &[ChoiceValue]) -> Option<RunResult> {
     if ctx.budget_exhausted() {
         return None;
     }
     let ntc = NativeTestCase::for_probe(choices, ctx.rng.spawn(), BUFFER_SIZE);
+    let tc_start = std::time::Instant::now();
     let run = ctx.engine.run(ntc);
-    *ctx.calls += 1;
-    (ctx.on_run)(&run);
-    if run.status >= Status::Valid {
-        let actual_choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
-        targeting.record(&actual_choices, &run.target_observations);
-    }
-    // Only exactly-valid runs count toward the budget; Hypothesis never
-    // counts INTERESTING results as valid examples.
-    if run.status == Status::Valid {
-        *ctx.valid_test_cases += 1;
-    }
-    if run.status == Status::Interesting {
-        // `budget_exhausted` already short-circuited on `!interesting.is_empty()`
-        // above, so the map entry for this origin must be vacant — there's
-        // no prior result here whose sort_key we'd need to beat.
-        let origin = run.origin.clone().unwrap_or_default();
-        ctx.interesting.insert(origin, run.nodes.clone());
-    }
+    // A non-determinism mismatch here is dropped: it's a generator property,
+    // so the next generation-loop `record_run` re-detects it and returns a
+    // clean failure.
+    let _ = ctx.recorder.record_run(&run, tc_start.elapsed(), true);
     Some(run)
 }
 
 /// Hill-climb every target until no further improvements are found or the
 /// budget is exhausted. Mirrors `engine.py::optimise_targets`.
-pub(crate) fn optimise_targets(targeting: &mut TargetingState, ctx: &mut OptimiseCtx<'_, '_, '_>) {
-    let mut targets: Vec<String> = targeting.best_observed_targets.keys().cloned().collect();
+pub(crate) fn optimise_targets(ctx: &mut OptimiseCtx<'_, '_, '_>) {
+    let mut targets: Vec<String> = ctx
+        .recorder
+        .targeting
+        .best_observed_targets
+        .keys()
+        .cloned()
+        .collect();
     // Iterate in a deterministic order: each hill-climb consumes the shared
     // call budget, so `HashMap`'s per-process-randomised key order would make a
     // seeded multi-target run non-reproducible.
     targets.sort();
     let mut max_improvements: usize = 10;
     loop {
-        let prev_calls = *ctx.calls;
+        let prev_calls = ctx.recorder.calls;
         let mut any_improvements = false;
         for target in &targets {
-            let imps = hill_climb(targeting, ctx, target, max_improvements);
+            let imps = hill_climb(ctx, target, max_improvements);
             if imps > 0 {
                 any_improvements = true;
             }
         }
         max_improvements = max_improvements.saturating_mul(2);
-        if !any_improvements || prev_calls == *ctx.calls {
+        if !any_improvements || prev_calls == ctx.recorder.calls {
             return;
         }
     }
@@ -188,21 +176,18 @@ pub(crate) fn optimise_targets(targeting: &mut TargetingState, ctx: &mut Optimis
 /// Walk the integer choices in `best_choices_for_target[target]` from the
 /// end backwards, hill-climbing each one in both directions. Mirrors
 /// `Optimiser._optimise_target`.
-fn hill_climb(
-    targeting: &mut TargetingState,
-    ctx: &mut OptimiseCtx<'_, '_, '_>,
-    target: &str,
-    max_improvements: usize,
-) -> usize {
+fn hill_climb(ctx: &mut OptimiseCtx<'_, '_, '_>, target: &str, max_improvements: usize) -> usize {
     // `record` keeps `best_choices_for_target` in sync with
     // `best_observed_targets`, so any label our caller iterates from
     // `best_observed_targets` must have a matching choice sequence here.
-    let start_choices = targeting
+    let start_choices = ctx
+        .recorder
+        .targeting
         .best_choices_for_target
         .get(target)
         .cloned()
         .expect("best_choices_for_target out of sync with best_observed_targets");
-    let trial = match run_trial(targeting, ctx, &start_choices) {
+    let trial = match run_trial(ctx, &start_choices) {
         Some(t) => t,
         None => return 0,
     };
@@ -251,7 +236,6 @@ fn hill_climb(
             // outer `while improvements <= max_improvements` loop.
             find_integer(|k| {
                 try_replace(
-                    targeting,
                     ctx,
                     target,
                     &mut current_choices,
@@ -269,7 +253,6 @@ fn hill_climb(
             if idx < current_nodes.len() && current_nodes.len() == len_before {
                 find_integer(|k| {
                     try_replace(
-                        targeting,
                         ctx,
                         target,
                         &mut current_choices,
@@ -296,7 +279,6 @@ fn hill_climb(
 /// forever). Returns `true` iff the trial was committed.
 #[allow(clippy::too_many_arguments)]
 fn try_replace(
-    targeting: &mut TargetingState,
     ctx: &mut OptimiseCtx<'_, '_, '_>,
     target: &str,
     current_choices: &mut Vec<ChoiceValue>,
@@ -317,7 +299,7 @@ fn try_replace(
     };
     let mut trial_choices = current_choices.clone();
     trial_choices[idx] = new_val;
-    let trial = match run_trial(targeting, ctx, &trial_choices) {
+    let trial = match run_trial(ctx, &trial_choices) {
         Some(t) => t,
         None => return false,
     };

@@ -295,25 +295,20 @@ where
     };
     let mut ctx = EngineCtx::new(&mut run_case);
 
-    let mut targeting = TargetingState::new();
-    targeting.record(&start, &StdHashMap::from([("".to_string(), start_score)]));
+    let mut recorder = crate::native::test_runner::RunRecorder::for_tests();
+    recorder
+        .targeting
+        .record(&start, &StdHashMap::from([("".to_string(), start_score)]));
 
-    let mut interesting = StdHashMap::new();
-    let mut calls = 0u64;
-    let mut valid = 0u64;
     let mut rng = EngineRng::seeded(0xc0ffee);
-    let mut on_run = |_: &RunResult| {};
     let mut opt_ctx = OptimiseCtx {
         engine: &mut ctx,
-        interesting: &mut interesting,
-        calls: &mut calls,
-        valid_test_cases: &mut valid,
+        recorder: &mut recorder,
         max_valid: 10_000,
         max_calls: 100_000,
         rng: &mut rng,
-        on_run: &mut on_run,
     };
-    optimise_targets(&mut targeting, &mut opt_ctx);
+    optimise_targets(&mut opt_ctx);
 }
 
 /// Drives `hill_climb`'s resize-restart branch and the already-examined

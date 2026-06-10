@@ -233,32 +233,19 @@ fn run_main(
         Database::Disabled => None,
     };
 
-    let mut persister = Persister::new(db.as_deref(), database_key);
-
     let mut ctx = EngineCtx::new(run_case);
 
-    // Local data tree used by the generation phase to drive `for_probe`
-    // toward unexplored prefixes.
-    let mut tree_root = crate::native::data_tree::DataTreeNode::default();
+    // All run-level bookkeeping — counters, the choice tree, the per-origin
+    // interesting map and its incremental persistence, targeting
+    // observations — flows through this single recorder.
+    let mut recorder = RunRecorder::new(db.as_deref(), database_key);
 
-    // Per-origin tracking: each distinct panic site (file:line:col captured
-    // by [`crate::run_lifecycle::run_test_case`]) gets its own shrunk
-    // counterexample. This is what makes a single test that fails with
-    // several distinct bugs surface each one.
-    let mut interesting: HashMap<String, Vec<ChoiceNode>> = HashMap::new();
-    let mut targeting = crate::native::targeting::TargetingState::new();
     let mut target_schedule = crate::native::targeting::TargetingSchedule::new(max_test_cases);
     let target_enabled = settings.phases.contains(&Phase::Target);
-    let mut valid_test_cases: u64 = 0;
-    let mut calls: u64 = 0;
-    let mut test_is_trivial = false;
-    let mut invalid_test_cases: u64 = 0;
-    let mut overrun_test_cases: u64 = 0;
     // `(base, per_valid)` of the generation-phase invalid budget, computed once
     // per run (the formula uses floating-point `ln`/`ceil`, which can't run in
     // const context).
     let invalid_budget = invalid_thresholds(INVALID_TARGET_RATE, INVALID_TARGET_CONFIDENCE);
-    let mut total_test_time = std::time::Duration::ZERO;
     let mut replay_aligned = false;
     let report_multiple = settings.report_multiple_failures;
 
@@ -324,9 +311,17 @@ fn run_main(
                 // continue with fresh random draws rather than treating the
                 // entry as stale.
                 let ntc = NativeTestCase::for_probe(&stored_choices, rng.spawn(), BUFFER_SIZE);
+                let tc_start = std::time::Instant::now();
                 let run = ctx.run(ntc);
+                // `record_run` re-saves the realised choice sequence (the
+                // stored raw bytes may not match `serialize_choices` of the
+                // realised nodes if the replay realised a shorter prefix);
+                // stale raw bytes still in primary are reconciled to
+                // `secondary` by the end-of-run save.
+                if let Some(msg) = recorder.record_run(&run, tc_start.elapsed(), true) {
+                    return health_check_failure(msg);
+                }
                 if run.status == Status::Interesting {
-                    let origin = run.origin.unwrap_or_default();
                     if i < primary_count {
                         found_interesting_in_primary = true;
                         if run.nodes.len() != stored_choices.len() {
@@ -337,15 +332,6 @@ fn run_main(
                         // example.
                         replay_aligned = false;
                     }
-                    // Re-save the realised choice sequence: the stored
-                    // raw bytes may not match `serialize_choices(run.nodes)`
-                    // if the replay realised a shorter prefix, and we
-                    // want the persister's "last saved primary" entry to
-                    // be byte-accurate for later downgrades.  Any stale
-                    // raw bytes still in primary are reconciled to
-                    // `secondary` by the end-of-run save.
-                    persister.record(&origin, &run.nodes);
-                    update_interesting(&mut interesting, origin, run.nodes);
                     if !report_multiple {
                         // Single-failure reporting: one reproduced bug is
                         // all we need.
@@ -359,7 +345,7 @@ fn run_main(
                     db_ref.delete(&secondary_key, &raw);
                 }
             }
-            if interesting.is_empty() {
+            if recorder.interesting.is_empty() {
                 // No replay survived — fall back to the pre-replay
                 // alignment state so the shrink phase decides based on
                 // generation results instead.
@@ -374,10 +360,12 @@ fn run_main(
     // tree is exhausted; post-bug we keep running for a bounded extra
     // window so that a test with multiple distinct failure origins
     // surfaces all of them, not just the first one to fire.
-    let mut first_bug_at: Option<u64> = None;
-    let mut last_bug_at: Option<u64> = None;
-    let mut first_bug_time: Option<std::time::Instant> = None;
     let shrink_enabled = settings.phases.contains(&Phase::Shrink);
+    // Hypothesis skips generation entirely when the database replay already
+    // reproduced a failure: "we'd rather report that they're still failing
+    // ASAP than take the time to look for new ones"
+    // (engine.py::generate_new_examples).
+    let found_in_reuse = !recorder.interesting.is_empty();
 
     // All-simplest pre-trial: a deterministic "draw every choice at its
     // shrink target" probe before random generation starts. Gives
@@ -387,42 +375,17 @@ fn run_main(
     // random sampling — the joint event grows vanishingly unlikely as
     // the number of components increases.
     if settings.phases.contains(&Phase::Generate)
-        && !test_is_trivial
-        && within_invalid_budget(
-            invalid_test_cases,
-            overrun_test_cases,
-            valid_test_cases,
-            invalid_budget,
-        )
-        && interesting.is_empty()
+        && !recorder.test_is_trivial
+        && recorder.within_invalid_budget(invalid_budget)
+        && !found_in_reuse
     {
+        let tc_start = std::time::Instant::now();
         let run = ctx.run(NativeTestCase::for_simplest(BUFFER_SIZE));
-        // This trivial-probe is one of the first recordings, so it can't yet
-        // mismatch; a non-deterministic generator is caught by the main
-        // generation loop's `record_tree` below.
-        let _ = crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[]);
-        calls += 1;
-        if run.nodes.is_empty() && run.status >= Status::Invalid {
-            test_is_trivial = true;
-        }
-        // Only exactly-valid runs count toward the budget; Hypothesis never
-        // counts INTERESTING results as valid examples.
-        if run.status == Status::Valid {
-            valid_test_cases += 1;
-        }
-        if run.status == Status::Invalid {
-            invalid_test_cases += 1;
-        }
-        if run.status == Status::EarlyStop {
-            overrun_test_cases += 1;
-        }
-        if run.status == Status::Interesting {
-            let origin = run.origin.clone().unwrap_or_default();
-            first_bug_at = Some(calls);
-            last_bug_at = Some(calls);
-            first_bug_time = Some(std::time::Instant::now());
-            persister.record(&origin, &run.nodes);
-            update_interesting(&mut interesting, origin, run.nodes.clone());
+        // The reuse phase may already have fed the tree, so even this first
+        // generation probe can contradict it under a non-deterministic
+        // generator.
+        if let Some(msg) = recorder.record_run(&run, tc_start.elapsed(), true) {
+            return health_check_failure(msg);
         }
         // The simplest example is Hypothesis's "zero" example: if even it
         // overruns or already uses more than half the buffer, shrinking will
@@ -440,50 +403,42 @@ fn run_main(
     }
 
     while settings.phases.contains(&Phase::Generate)
-        && !test_is_trivial
-        && valid_test_cases < max_test_cases
-        && within_invalid_budget(
-            invalid_test_cases,
-            overrun_test_cases,
-            valid_test_cases,
-            invalid_budget,
-        )
-        && !tree_root.is_exhausted
+        && !found_in_reuse
+        && !recorder.test_is_trivial
+        && recorder.valid_test_cases < max_test_cases
+        && recorder.within_invalid_budget(invalid_budget)
+        && !recorder.tree_root.is_exhausted
         && should_generate_more(
-            interesting.is_empty(),
-            calls,
-            first_bug_at,
-            last_bug_at,
+            recorder.interesting.is_empty(),
+            recorder.calls,
+            recorder.first_bug_at,
+            recorder.last_bug_at,
             shrink_enabled,
             report_multiple,
-            first_bug_time.map(|t| t.elapsed()),
+            recorder.first_bug_time.map(|t| t.elapsed()),
         )
     {
         for _ in 0..RANDOM_GENERATION_BATCH {
-            if test_is_trivial
-                || valid_test_cases >= max_test_cases
-                || !within_invalid_budget(
-                    invalid_test_cases,
-                    overrun_test_cases,
-                    valid_test_cases,
-                    invalid_budget,
-                )
-                || tree_root.is_exhausted
+            if recorder.test_is_trivial
+                || recorder.valid_test_cases >= max_test_cases
+                || !recorder.within_invalid_budget(invalid_budget)
+                || recorder.tree_root.is_exhausted
                 || !should_generate_more(
-                    interesting.is_empty(),
-                    calls,
-                    first_bug_at,
-                    last_bug_at,
+                    recorder.interesting.is_empty(),
+                    recorder.calls,
+                    recorder.first_bug_at,
+                    recorder.last_bug_at,
                     shrink_enabled,
                     report_multiple,
-                    first_bug_time.map(|t| t.elapsed()),
+                    recorder.first_bug_time.map(|t| t.elapsed()),
                 )
             {
                 break;
             }
 
             let batch_rng = rng.spawn();
-            let prefix = crate::native::data_tree::generate_novel_prefix(&tree_root, &mut rng);
+            let prefix =
+                crate::native::data_tree::generate_novel_prefix(&recorder.tree_root, &mut rng);
             let ntc = if prefix.is_empty() {
                 NativeTestCase::new_random(batch_rng)
             } else {
@@ -495,48 +450,28 @@ fn run_main(
 
             let tc_start = std::time::Instant::now();
             let run = ctx.run(ntc);
-            if let Some(msg) =
-                crate::native::data_tree::record_tree(&mut tree_root, &run.nodes, run.status, &[])
-            {
+            if let Some(msg) = recorder.record_run(&run, tc_start.elapsed(), true) {
                 return health_check_failure(msg);
             }
-            let elapsed = tc_start.elapsed();
-            calls += 1;
 
             if verbosity == Verbosity::Debug {
                 eprintln!(
-                    "test case #{calls}: status = {:?}, choices = {}",
+                    "test case #{}: status = {:?}, choices = {}",
+                    recorder.calls,
                     run.status,
                     run.nodes.len()
                 );
             }
 
-            // Test time accrues for every status (Hypothesis records draw
-            // times regardless of outcome), so a slow generator that is
-            // mostly assume()-rejected still trips TooSlow.
-            total_test_time += elapsed;
-            if run.nodes.is_empty() && run.status >= Status::Invalid {
-                test_is_trivial = true;
-            }
-            if run.status >= Status::Valid && !run.target_observations.is_empty() {
-                let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
-                targeting.record(&choices, &run.target_observations);
-            }
-            // Only exactly-valid runs count toward the budget; Hypothesis
-            // never counts INTERESTING results as valid examples.
-            if run.status == Status::Valid {
-                valid_test_cases += 1;
-            }
-
-            if run.status == Status::Invalid {
-                invalid_test_cases += 1;
-                // "Once we've actually found a bug, there's no point in
-                // trying to run health checks - they'll just mask the
-                // actually important information." (engine.py,
-                // record_for_health_check.)
-                if interesting.is_empty()
-                    && invalid_test_cases >= FILTER_TOO_MUCH_THRESHOLD
-                    && valid_test_cases < HEALTH_CHECK_MAX_VALID
+            // "Once we've actually found a bug, there's no point in trying
+            // to run health checks - they'll just mask the actually
+            // important information." (engine.py, record_for_health_check.)
+            // `recorder.interesting` already includes the current run, so
+            // the iteration that discovers the first bug is exempt too.
+            if recorder.interesting.is_empty() {
+                if run.status == Status::Invalid
+                    && recorder.invalid_test_cases >= FILTER_TOO_MUCH_THRESHOLD
+                    && recorder.valid_test_cases < HEALTH_CHECK_MAX_VALID
                     && !settings
                         .suppress_health_check
                         .contains(&HealthCheck::FilterTooMuch)
@@ -544,22 +479,16 @@ fn run_main(
                     return health_check_failure(format!(
                         "FailedHealthCheck: FilterTooMuch — it looks like this \
                          test is filtering out too many inputs. \
-                         {invalid_test_cases} inputs were filtered out by assume() \
-                         while only {valid_test_cases} valid inputs were \
+                         {} inputs were filtered out by assume() \
+                         while only {} valid inputs were \
                          generated. If this is expected, suppress the check with \
-                         suppress_health_check = [HealthCheck::FilterTooMuch]."
+                         suppress_health_check = [HealthCheck::FilterTooMuch].",
+                        recorder.invalid_test_cases, recorder.valid_test_cases
                     ));
                 }
-            }
-            if run.status == Status::EarlyStop {
-                overrun_test_cases += 1;
-            }
-            // Same once-a-bug-is-found exemption; `run.status` covers the
-            // iteration that discovers the first bug (recorded below).
-            if interesting.is_empty() && run.status != Status::Interesting {
                 if let Some(msg) = too_large_check(
-                    valid_test_cases,
-                    overrun_test_cases,
+                    recorder.valid_test_cases,
+                    recorder.overrun_test_cases,
                     settings
                         .suppress_health_check
                         .contains(&HealthCheck::TestCasesTooLarge),
@@ -568,8 +497,8 @@ fn run_main(
                 }
 
                 if let Some(msg) = too_slow_check(
-                    valid_test_cases,
-                    total_test_time,
+                    recorder.valid_test_cases,
+                    recorder.total_test_time,
                     too_slow_threshold,
                     settings
                         .suppress_health_check
@@ -586,67 +515,38 @@ fn run_main(
             // both. Skipped once a bug has been found (matching
             // `optimise_targets`'s own short-circuit).
             if target_enabled
-                && interesting.is_empty()
-                && !targeting.is_empty()
-                && target_schedule.should_fire(valid_test_cases)
+                && recorder.interesting.is_empty()
+                && !recorder.targeting.is_empty()
+                && target_schedule.should_fire(recorder.valid_test_cases)
             {
-                let mut on_run = |run: &RunResult| {
-                    // A non-determinism mismatch here is dropped: it's a
-                    // generator property, so the next main-loop `record_tree`
-                    // (above) re-detects it and returns a clean failure.
-                    let _ = crate::native::data_tree::record_tree(
-                        &mut tree_root,
-                        &run.nodes,
-                        run.status,
-                        &[],
-                    );
-                };
                 let mut opt_ctx = crate::native::targeting::OptimiseCtx {
                     engine: &mut ctx,
-                    interesting: &mut interesting,
-                    calls: &mut calls,
-                    valid_test_cases: &mut valid_test_cases,
+                    recorder: &mut recorder,
                     max_valid: max_test_cases,
                     max_calls: max_test_cases * 10,
                     rng: &mut rng,
-                    on_run: &mut on_run,
                 };
-                crate::native::targeting::optimise_targets(&mut targeting, &mut opt_ctx);
+                crate::native::targeting::optimise_targets(&mut opt_ctx);
             }
 
-            if run.status == Status::Interesting {
-                let origin = run.origin.clone().unwrap_or_default();
-                if first_bug_at.is_none() {
-                    first_bug_at = Some(calls);
-                    first_bug_time = Some(std::time::Instant::now());
-                }
-                last_bug_at = Some(calls);
-                persister.record(&origin, &run.nodes);
-                update_interesting(&mut interesting, origin, run.nodes.clone());
-            } else if run.status == Status::Valid {
-                // Bump `calls` by the *actual* number of probes
-                // `try_span_mutation` ran, not the maximum: when no labels
-                // have ≥2 occurrences (or when the first probe fires
-                // Interesting) the closure short-circuits below
-                // `SPAN_MUTATION_ATTEMPTS`.
-                let (mutation_result, mutation_attempts) = try_span_mutation(
+            // Span mutation runs only once the health-check warm-up is over,
+            // as in Hypothesis (generate_mutations_from is gated on
+            // `health_check_state is None`): mutated probes routinely
+            // overrun, and with every probe now recorded like any other run,
+            // counting those overruns against TestCasesTooLarge during
+            // warm-up would punish the test for the mutator's appetite.
+            if run.status == Status::Valid
+                && (recorder.valid_test_cases >= HEALTH_CHECK_MAX_VALID
+                    || !recorder.interesting.is_empty())
+            {
+                try_span_mutation(
                     &run.nodes,
                     &run.spans,
                     &mut rng,
                     &mut ctx,
-                    &mut tree_root,
-                    &mut valid_test_cases,
+                    &mut recorder,
                     max_test_cases,
                 );
-                calls += mutation_attempts as u64;
-                if let Some((mut_nodes, origin)) = mutation_result {
-                    if first_bug_at.is_none() {
-                        first_bug_at = Some(calls);
-                    }
-                    last_bug_at = Some(calls);
-                    persister.record(&origin, &mut_nodes);
-                    update_interesting(&mut interesting, origin, mut_nodes);
-                }
             }
         }
     }
@@ -654,31 +554,35 @@ fn run_main(
     // Tree-exhaustion fallback: a small choice domain (e.g. integer in
     // [0, 10] = 11 children) can exhaust the tree well before
     // FILTER_TOO_MUCH_THRESHOLD rejections; re-fire the check here.
-    if tree_root.is_exhausted
-        && valid_test_cases == 0
-        && interesting.is_empty()
-        && !test_is_trivial
+    if recorder.tree_root.is_exhausted
+        && recorder.valid_test_cases == 0
+        && recorder.interesting.is_empty()
+        && !recorder.test_is_trivial
         && !settings
             .suppress_health_check
             .contains(&HealthCheck::FilterTooMuch)
-        && invalid_test_cases > 0
+        && recorder.invalid_test_cases > 0
     {
         return health_check_failure(format!(
             "FailedHealthCheck: FilterTooMuch — every reachable input was \
              filtered out by assume() before any valid input was generated. \
-             {invalid_test_cases} inputs were filtered out across the full search \
+             {} inputs were filtered out across the full search \
              space. If this is expected, suppress the check with \
-             suppress_health_check = [HealthCheck::FilterTooMuch]."
+             suppress_health_check = [HealthCheck::FilterTooMuch].",
+            recorder.invalid_test_cases
         ));
     }
 
     // --- Shrinking phase ---
-    if !interesting.is_empty() && !replay_aligned && settings.phases.contains(&Phase::Shrink) {
+    if !recorder.interesting.is_empty()
+        && !replay_aligned
+        && settings.phases.contains(&Phase::Shrink)
+    {
         if verbosity == Verbosity::Debug {
-            let total: usize = interesting.values().map(|n| n.len()).sum();
+            let total: usize = recorder.interesting.values().map(|n| n.len()).sum();
             eprintln!(
                 "Shrinking: {} origin(s), initial total length = {}",
-                interesting.len(),
+                recorder.interesting.len(),
                 total
             );
         }
@@ -692,7 +596,8 @@ fn run_main(
             let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
             let mut entries = db_ref.fetch(&secondary_key);
             entries.sort_by(|a, b| shortlex(a, b));
-            let primary_max: Option<Vec<u8>> = interesting
+            let primary_max: Option<Vec<u8>> = recorder
+                .interesting
                 .values()
                 .map(|nodes| {
                     let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
@@ -708,12 +613,14 @@ fn run_main(
                 }
                 if let Some(stored_choices) = deserialize_choices(&raw) {
                     let ntc = NativeTestCase::for_choices(&stored_choices, None, None);
+                    let tc_start = std::time::Instant::now();
                     let run = ctx.run(ntc);
-                    if run.status == Status::Interesting {
-                        let origin = run.origin.unwrap_or_default();
-                        persister.record(&origin, &run.nodes);
-                        update_interesting(&mut interesting, origin, run.nodes);
-                    }
+                    // A tree mismatch here is dropped: a generator that is
+                    // non-deterministic during earlier phases was already
+                    // caught by their `record_run` calls, and one that only
+                    // diverges now will fail the per-origin re-verify below
+                    // as flaky.
+                    let _ = recorder.record_run(&run, tc_start.elapsed(), true);
                 }
                 // Unconditionally removed: now primary, or worse than the
                 // primary example of its origin.
@@ -735,10 +642,11 @@ fn run_main(
             std::collections::HashSet::new();
         loop {
             for (stray_origin, stray_nodes) in ctx.take_stray_interesting() {
-                persister.record(&stray_origin, &stray_nodes);
-                update_interesting(&mut interesting, stray_origin, stray_nodes);
+                recorder.persister.record(&stray_origin, &stray_nodes);
+                update_interesting(&mut recorder.interesting, stray_origin, stray_nodes);
             }
-            let mut pending: Vec<String> = interesting
+            let mut pending: Vec<String> = recorder
+                .interesting
                 .keys()
                 .filter(|o| !shrunk_origins.contains(o.as_str()))
                 .cloned()
@@ -748,13 +656,23 @@ fn run_main(
             }
             pending.sort();
             let origin = pending.remove(0);
-            let initial = interesting.get(&origin).cloned().unwrap_or_default();
+            let initial = recorder
+                .interesting
+                .get(&origin)
+                .cloned()
+                .unwrap_or_default();
 
             // Re-validate that this origin's example still fails. If not,
             // the test is flaky.
             let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value.clone()).collect();
             let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
+            let tc_start = std::time::Instant::now();
             let verify = ctx.run(verify_ntc);
+            // A tree mismatch here is dropped for the same reason as in the
+            // secondary-corpus drain above: the flaky-replay check on the
+            // next line is the authoritative non-determinism report for
+            // this phase.
+            let _ = recorder.record_run(&verify, tc_start.elapsed(), true);
             if verify.status != Status::Interesting {
                 return health_check_failure(flaky_diagnostic());
             }
@@ -762,7 +680,8 @@ fn run_main(
             let target_origin = origin.clone();
             let initial_spans = Spans::from(verify.spans.clone());
             let shrunk = {
-                let persister_ref = &mut persister;
+                let persister_ref = &mut recorder.persister;
+                let calls_ref = &mut recorder.calls;
                 let mut shrinker = Shrinker::with_probe(
                     Box::new(|req: ShrinkRun| {
                         if verbosity == Verbosity::Verbose {
@@ -778,7 +697,7 @@ fn run_main(
                                 max_size,
                             } => ctx.run_probe_with_origin(prefix, seed, max_size, &target_origin),
                         };
-                        calls += 1;
+                        *calls_ref += 1;
                         // If this probe matched the target origin, persist it
                         // immediately. The persister's sort-key check ensures
                         // only strict improvements actually touch the disk,
@@ -806,7 +725,7 @@ fn run_main(
                 shrink_timed_out |= shrinker.timed_out;
                 shrinker.current_nodes
             };
-            interesting.insert(origin.clone(), shrunk);
+            recorder.interesting.insert(origin.clone(), shrunk);
             shrunk_origins.insert(origin);
         }
 
@@ -818,14 +737,14 @@ fn run_main(
         }
 
         if verbosity == Verbosity::Debug {
-            let total: usize = interesting.values().map(|n| n.len()).sum();
+            let total: usize = recorder.interesting.values().map(|n| n.len()).sum();
             eprintln!(
                 "Shrinking complete: {} origin(s), final total length = {}",
-                interesting.len(),
+                recorder.interesting.len(),
                 total
             );
         }
-    } else if interesting.is_empty() && verbosity == Verbosity::Debug {
+    } else if recorder.interesting.is_empty() && verbosity == Verbosity::Debug {
         // No bug found — nothing to shrink; left for symmetry with the
         // `Test done.` line below.
     } else if replay_aligned && verbosity == Verbosity::Debug {
@@ -843,7 +762,8 @@ fn run_main(
     if let (Some(db_ref), Some(key)) = (&db, database_key) {
         let key_bytes = key.as_bytes();
         let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
-        let new_entries: std::collections::HashSet<Vec<u8>> = interesting
+        let new_entries: std::collections::HashSet<Vec<u8>> = recorder
+            .interesting
             .values()
             .map(|nodes| {
                 let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
@@ -862,7 +782,10 @@ fn run_main(
     }
 
     if verbosity == Verbosity::Debug {
-        eprintln!("Test done. interesting_test_cases={}", interesting.len());
+        eprintln!(
+            "Test done. interesting_test_cases={}",
+            recorder.interesting.len()
+        );
     }
 
     // --- Final replay ---
@@ -876,7 +799,10 @@ fn run_main(
     // holding the simplest example. Each replay's `Failure` is appended to
     // the returned `TestRunResult::failures`, which `drive` then turns into
     // either the single-failure or multi-failure outer panic.
-    let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> = interesting.into_iter().collect();
+    let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> =
+        std::mem::take(&mut recorder.interesting)
+            .into_iter()
+            .collect();
     // Descending sort_key order. `sort_by` instead of `sort_by_key` because
     // `NodesSortKey` borrows from the origin's nodes and the key would
     // otherwise outlive its borrow.
@@ -1223,10 +1149,134 @@ impl<'a> Persister<'a> {
     }
 }
 
+/// The per-run bookkeeping Hypothesis centralises in
+/// `ConjectureRunner.test_function`. Every executed test case — whichever
+/// phase ran it (database reuse, the all-simplest pre-trial, generation,
+/// span mutation, targeting, the secondary-corpus drain) — is recorded here
+/// exactly once via [`Self::record_run`], so the counters, the per-origin
+/// interesting map, the database, the choice tree, and the targeting
+/// observations cannot drift between call sites.
+///
+/// Shrink-phase probes are the one deliberate exception: they are
+/// origin-filtered, exempt from health checks, and skip tree recording (see
+/// [`EngineCtx::cached_run`] for the rationale), so they go through
+/// `run_shrink_with_origin` instead and surface bugs with new origins via
+/// `EngineCtx::note_stray`.
+pub(crate) struct RunRecorder<'a> {
+    persister: Persister<'a>,
+    pub(crate) tree_root: crate::native::data_tree::DataTreeNode,
+    /// Per-origin tracking: each distinct panic site (file:line:col captured
+    /// by [`crate::run_lifecycle::run_test_case`]) gets its own shrunk
+    /// counterexample. This is what makes a single test that fails with
+    /// several distinct bugs surface each one.
+    pub(crate) interesting: HashMap<String, Vec<ChoiceNode>>,
+    pub(crate) targeting: crate::native::targeting::TargetingState,
+    pub(crate) calls: u64,
+    pub(crate) valid_test_cases: u64,
+    pub(crate) invalid_test_cases: u64,
+    pub(crate) overrun_test_cases: u64,
+    pub(crate) total_test_time: std::time::Duration,
+    pub(crate) test_is_trivial: bool,
+    pub(crate) first_bug_at: Option<u64>,
+    pub(crate) last_bug_at: Option<u64>,
+    pub(crate) first_bug_time: Option<std::time::Instant>,
+}
+
+impl<'a> RunRecorder<'a> {
+    fn new(db: Option<&'a dyn TestCaseDatabase>, database_key: Option<&'a str>) -> Self {
+        RunRecorder {
+            persister: Persister::new(db, database_key),
+            tree_root: crate::native::data_tree::DataTreeNode::default(),
+            interesting: HashMap::new(),
+            targeting: crate::native::targeting::TargetingState::new(),
+            calls: 0,
+            valid_test_cases: 0,
+            invalid_test_cases: 0,
+            overrun_test_cases: 0,
+            total_test_time: std::time::Duration::ZERO,
+            test_is_trivial: false,
+            first_bug_at: None,
+            last_bug_at: None,
+            first_bug_time: None,
+        }
+    }
+
+    /// A recorder with no database, for driving engine components directly
+    /// in tests.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        Self::new(None, None)
+    }
+
+    /// Record one executed test case: counters, test time, triviality, the
+    /// targeting observations, the per-origin interesting map (with its
+    /// incremental database save), the bug-window markers, and — unless
+    /// `feed_tree` is false — the choice tree.
+    ///
+    /// `feed_tree: false` is for span-mutation probes, whose paths are
+    /// deliberately kept out of the tree so the seeded novel-prefix walk's
+    /// RNG trajectory stays independent of mutation (see
+    /// [`EngineCtx::cached_run`]).
+    ///
+    /// Returns the choice-tree non-determinism diagnostic, if recording the
+    /// run's path contradicted an earlier run.
+    pub(crate) fn record_run(
+        &mut self,
+        run: &RunResult,
+        elapsed: std::time::Duration,
+        feed_tree: bool,
+    ) -> Option<String> {
+        let mismatch = if feed_tree {
+            crate::native::data_tree::record_tree(&mut self.tree_root, &run.nodes, run.status, &[])
+        } else {
+            None
+        };
+        self.calls += 1;
+        // Test time accrues for every status (Hypothesis records draw times
+        // regardless of outcome), so a slow generator that is mostly
+        // assume()-rejected still trips TooSlow.
+        self.total_test_time += elapsed;
+        if run.nodes.is_empty() && run.status >= Status::Invalid {
+            self.test_is_trivial = true;
+        }
+        if run.status >= Status::Valid && !run.target_observations.is_empty() {
+            let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
+            self.targeting.record(&choices, &run.target_observations);
+        }
+        match run.status {
+            // Only exactly-valid runs count toward the budget; Hypothesis
+            // never counts INTERESTING results as valid examples.
+            Status::Valid => self.valid_test_cases += 1,
+            Status::Invalid => self.invalid_test_cases += 1,
+            Status::EarlyStop => self.overrun_test_cases += 1,
+            Status::Interesting => {
+                if self.first_bug_at.is_none() {
+                    self.first_bug_at = Some(self.calls);
+                    self.first_bug_time = Some(std::time::Instant::now());
+                }
+                self.last_bug_at = Some(self.calls);
+                let origin = run.origin.clone().unwrap_or_default();
+                self.persister.record(&origin, &run.nodes);
+                update_interesting(&mut self.interesting, origin, run.nodes.clone());
+            }
+        }
+        mismatch
+    }
+
+    /// Whether the generation-phase invalid/overrun budget still has room.
+    fn within_invalid_budget(&self, budget: (u64, u64)) -> bool {
+        within_invalid_budget(
+            self.invalid_test_cases,
+            self.overrun_test_cases,
+            self.valid_test_cases,
+            budget,
+        )
+    }
+}
+
 /// Wraps the cross-backend `run_case` callback together with the
-/// non-determinism trie and the shrink-result cache, exposing the
-/// `NativeRunner` surface the surrounding shrinker, span-mutation, and
-/// targeting code expect.
+/// shrink-result cache, exposing the surface the surrounding shrinker,
+/// span-mutation, and targeting code expect.
 ///
 /// `Settings::mode` does not need to be stored here: it is captured in
 /// the `run_case` closure built by `run_lifecycle::drive` (which calls
@@ -1428,37 +1478,27 @@ impl<'a> EngineCtx<'a> {
 /// Try span mutation: find two spans with the same label and either duplicate
 /// the parent's prefix (when one contains the other, e.g. recursive tree
 /// structures) or replace both with identical choices from one donor.
+/// Anything interesting it finds lands in the recorder's `interesting` map;
+/// the probe loop stops at the first such find.
 ///
-/// Returns the mutated shrunk nodes plus the panic origin if the attempt
-/// produced an interesting result.
-/// Makes up to [`SPAN_MUTATION_ATTEMPTS`] span-mutation probes through
+/// Makes up to [`SPAN_MUTATION_ATTEMPTS`] probes through
 /// [`EngineCtx::cached_run`], so a proposed sequence whose path is already
-/// covered by the `tree_root` (or sits in the data cache) costs no test-body
+/// covered by the choice tree (or sits in the data cache) costs no test-body
 /// execution — matching Hypothesis, which routes mutations through
-/// `cached_test_function`.
-///
-/// A span mutation is itself a generated test case, so each probe that
-/// *actually executes* and is valid consumes the same `max_test_cases` budget
-/// as a freshly generated example: it bumps `*valid_test_cases`, and the
-/// probe loop stops as soon as that budget is full. (In Hypothesis the
-/// mutation executions go through `cached_test_function` → `test_function`,
-/// which increments `valid_test_cases` exactly as a fresh draw does; cache/tree
-/// hits bypass it and so cost nothing.) Without this the native backend ran
-/// `max_test_cases` fresh cases *plus* up to five mutations each, executing the
-/// test several times more often than Hypothesis.
-///
-/// Returns the mutated counterexample (if one was found) plus the number of
-/// probes that actually executed the test body, which the caller adds to its
-/// `calls` counter.
+/// `cached_test_function`. Each probe that *does* execute is recorded
+/// through [`RunRecorder::record_run`] (with `feed_tree: false` — see
+/// [`EngineCtx::cached_run`] for why mutation paths stay out of the tree),
+/// so it counts toward the same budgets as a freshly generated example;
+/// cached or simulated probes were recorded when first executed and are not
+/// re-recorded, exactly as Hypothesis's cache hits cost nothing.
 fn try_span_mutation(
     nodes: &[ChoiceNode],
     spans: &[Span],
     rng: &mut EngineRng,
     ctx: &mut EngineCtx<'_>,
-    tree_root: &mut crate::native::data_tree::DataTreeNode,
-    valid_test_cases: &mut u64,
+    recorder: &mut RunRecorder<'_>,
     max_test_cases: u64,
-) -> (Option<(Vec<ChoiceNode>, String)>, usize) {
+) {
     // Fast, non-DoS-resistant hashers: these maps are keyed by our own span
     // labels / extents (never adversarial) and are rebuilt for every recorded
     // result, so the default SipHash showed up prominently in generation
@@ -1481,16 +1521,15 @@ fn try_span_mutation(
         })
         .collect();
     if multi.is_empty() {
-        return (None, 0);
+        return;
     }
 
     let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
 
-    let mut attempts: usize = 0;
     for _ in 0..SPAN_MUTATION_ATTEMPTS {
         // A mutation probe is a generated example: once the example budget is
         // full there is no room for another, so stop proposing.
-        if *valid_test_cases >= max_test_cases {
+        if recorder.valid_test_cases >= max_test_cases {
             break;
         }
         let group = &multi[rng.random_range(0..multi.len())];
@@ -1533,21 +1572,15 @@ fn try_span_mutation(
             out
         };
 
-        let (run, executed) = ctx.cached_run(&attempt, tree_root);
+        let tc_start = std::time::Instant::now();
+        let (run, executed) = ctx.cached_run(&attempt, &mut recorder.tree_root);
         if executed {
-            attempts += 1;
-            // A valid mutation execution is a valid example and consumes the
-            // budget, exactly like a freshly generated one.
-            if run.status == Status::Valid {
-                *valid_test_cases += 1;
-            }
+            recorder.record_run(&run, tc_start.elapsed(), false);
         }
         if run.status == Status::Interesting {
-            let origin = run.origin.unwrap_or_default();
-            return (Some((run.nodes, origin)), attempts);
+            return;
         }
     }
-    (None, attempts)
 }
 
 fn create_rng(settings: &Settings, database_key: Option<&str>) -> EngineRng {
