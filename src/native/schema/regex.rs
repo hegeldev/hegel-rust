@@ -248,8 +248,7 @@ fn generate_op(
         OpCode::Literal(cp) => {
             let c = codepoint_to_char(*cp);
             if state.flags & SRE_FLAG_IGNORECASE != 0 {
-                let sw = char_swapcase(c);
-                if sw != c {
+                if let Some(sw) = char_swapcase(c) {
                     let which = ntc
                         .draw_integer(BigInt::from(0), BigInt::from(1))?
                         .to_i128()
@@ -273,13 +272,7 @@ fn generate_op(
                 emit_from_chars(ntc, &chars, out)?;
             } else {
                 let c = codepoint_to_char(*cp);
-                let mut blacklist: Vec<char> = vec![c];
-                if state.flags & SRE_FLAG_IGNORECASE != 0 {
-                    let sw = char_swapcase(c);
-                    if sw != c && !blacklist.contains(&sw) {
-                        blacklist.push(sw);
-                    }
-                }
+                let blacklist = swapcase_blacklist(c, state.flags);
                 let chars = gather_chars(alphabet, |c| !blacklist.contains(&c));
                 emit_from_chars(ntc, &chars, out)?;
             }
@@ -477,13 +470,7 @@ fn cached_default_not_literal(cp: u32, flags: u32) -> Arc<[char]> {
         }
     }
     let c = codepoint_to_char(cp);
-    let mut blacklist: Vec<char> = vec![c];
-    if flags & SRE_FLAG_IGNORECASE != 0 {
-        let sw = char_swapcase(c);
-        if sw != c {
-            blacklist.push(sw);
-        }
-    }
+    let blacklist = swapcase_blacklist(c, flags);
     let computed: Arc<[char]> = gather_chars(&None, |c| !blacklist.contains(&c)).into();
     cache
         .lock()
@@ -578,9 +565,10 @@ fn add_with_swapcase(v: &mut Vec<char>, c: char, flags: u32) {
         v.push(c);
     }
     if flags & SRE_FLAG_IGNORECASE != 0 {
-        let sw = char_swapcase(c);
-        if sw != c && !v.contains(&sw) {
-            v.push(sw);
+        if let Some(sw) = char_swapcase(c) {
+            if !v.contains(&sw) {
+                v.push(sw);
+            }
         }
     }
 }
@@ -726,14 +714,49 @@ fn codepoint_to_char(cp: u32) -> char {
 /// strategy the straightforward case-flipping-or-identity behaviour is
 /// sufficient, matching what `re.IGNORECASE` does on single-character
 /// matches.
-fn char_swapcase(c: char) -> char {
-    if c.is_lowercase() {
-        c.to_uppercase().next().unwrap_or(c)
-    } else if c.is_uppercase() {
-        c.to_lowercase().next().unwrap_or(c)
-    } else {
-        c
+///
+/// Returns `None` when there is no usable swap: the character is uncased,
+/// maps to itself, or its case mapping is more than one codepoint (e.g.
+/// `'ß'.to_uppercase()` is `"SS"`, which `re.IGNORECASE` does *not* treat
+/// as equal to `'ß'` — Hypothesis guards this with an explicit `re.match`
+/// check before offering the swapped form).
+fn char_swapcase(c: char) -> Option<char> {
+    match swapcase_chars(c).as_slice() {
+        [sw] if *sw != c => Some(*sw),
+        _ => None,
     }
+}
+
+/// All codepoints of `c`'s swapped-case form (possibly several, e.g.
+/// `'İ'.to_lowercase()` is `"i\u{307}"`); empty for uncased characters.
+fn swapcase_chars(c: char) -> Vec<char> {
+    if c.is_lowercase() {
+        c.to_uppercase().collect()
+    } else if c.is_uppercase() {
+        c.to_lowercase().collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// The set of characters `re.IGNORECASE` may treat as equal to `c`: chain
+/// `swapcase` to a fixpoint, expanding multi-character results, so e.g.
+/// `(?i)[^İ]` excludes {İ, i, U+0307, I}. Port of Hypothesis's fix for
+/// issue #2657 ("patterns such as r\"[^\\u0130]+\" where \"i\\u0307\"
+/// matches").
+fn swapcase_blacklist(c: char, flags: u32) -> Vec<char> {
+    let mut blacklist = vec![c];
+    if flags & SRE_FLAG_IGNORECASE == 0 {
+        return blacklist;
+    }
+    let mut stack = swapcase_chars(c);
+    while let Some(ch) = stack.pop() {
+        if !blacklist.contains(&ch) {
+            blacklist.push(ch);
+            stack.extend(swapcase_chars(ch));
+        }
+    }
+    blacklist
 }
 
 // -- SRE-style matcher -------------------------------------------------------
@@ -971,7 +994,7 @@ fn chars_eq(a: char, b: char, flags: u32) -> bool {
         return true;
     }
     if flags & SRE_FLAG_IGNORECASE != 0 {
-        char_swapcase(a) == b || a == char_swapcase(b)
+        char_swapcase(a) == Some(b) || char_swapcase(b) == Some(a)
     } else {
         false
     }
@@ -994,9 +1017,10 @@ fn char_matches_set(items: &[SetItem], c: char, flags: u32) -> bool {
                 if cp >= *lo && cp <= *hi {
                     contained = true;
                 } else if flags & SRE_FLAG_IGNORECASE != 0 {
-                    let sw = char_swapcase(c) as u32;
-                    if sw >= *lo && sw <= *hi {
-                        contained = true;
+                    if let Some(sw) = char_swapcase(c) {
+                        if (sw as u32) >= *lo && (sw as u32) <= *hi {
+                            contained = true;
+                        }
                     }
                 }
             }

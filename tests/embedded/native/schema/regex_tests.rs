@@ -757,3 +757,75 @@ fn interpret_regex_unparseable_pattern_is_invalid_argument() {
     assert!(matches!(err, EngineError::InvalidArgument(_)));
     assert!(err.to_string().contains("invalid regex pattern"));
 }
+
+// ----- IGNORECASE swapcase safety -----
+
+fn ignorecase_state() -> GenState {
+    GenState {
+        groups: HashMap::new(),
+        flags: SRE_FLAG_IGNORECASE,
+        pending_lookaheads: Vec::new(),
+        in_cache: HashMap::new(),
+    }
+}
+
+#[test]
+fn generate_op_ignorecase_eszett_never_emits_truncated_uppercase() {
+    // 'ß'.to_uppercase() is "SS"; truncating it to 'S' generated strings the
+    // pattern does not match (re.match(r"(?i)ß", "S") is None — Hypothesis
+    // guards this with an explicit re.match check). With no usable
+    // single-char swap the literal must always emit 'ß'.
+    use crate::native::rng::EngineRng;
+    for seed in 0..50 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut state = ignorecase_state();
+        let mut out = String::new();
+        generate_op(&mut ntc, &lit('ß'), &mut state, &None, &mut out).unwrap();
+        assert_eq!(out, "ß", "seed {seed} emitted a non-matching case variant");
+    }
+}
+
+#[test]
+fn generate_op_ignorecase_plain_letter_emits_both_cases() {
+    use crate::native::rng::EngineRng;
+    let mut seen = std::collections::HashSet::new();
+    for seed in 0..50 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut state = ignorecase_state();
+        let mut out = String::new();
+        generate_op(&mut ntc, &lit('a'), &mut state, &None, &mut out).unwrap();
+        seen.insert(out);
+    }
+    assert!(seen.contains("a") && seen.contains("A"), "saw {seen:?}");
+}
+
+#[test]
+fn generate_op_ignorecase_not_literal_blacklists_swapcase_fixpoint() {
+    // `(?i)[^İ]`: CPython's matcher treats 'i', U+0307 (combining dot), and
+    // 'I' as case-equal to İ (re.fullmatch(r"[^İ]", "I", re.I) is None), so
+    // none of them may be generated. The fixpoint expansion is Hypothesis's
+    // fix for issue #2657. Restricting the alphabet to the case-chain plus
+    // 'x' forces every draw to land on 'x'.
+    use crate::native::rng::EngineRng;
+    let alphabet = Some(IntervalSet::new(vec![
+        ('I' as u32, 'I' as u32),
+        ('i' as u32, 'i' as u32),
+        ('x' as u32, 'x' as u32),
+        (0x130, 0x130),
+        (0x307, 0x307),
+    ]));
+    for seed in 0..100 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut state = ignorecase_state();
+        let mut out = String::new();
+        generate_op(
+            &mut ntc,
+            &OpCode::NotLiteral('İ' as u32),
+            &mut state,
+            &alphabet,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(out, "x", "seed {seed} emitted a case-equal char");
+    }
+}
