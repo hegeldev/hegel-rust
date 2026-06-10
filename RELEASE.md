@@ -1,4 +1,4 @@
-RELEASE_TYPE: minor
+RELEASE_TYPE: patch
 
 This release fixes a large number of bugs found by auditing the native engine against the Hypothesis implementation it is ported from, and adds one new float feature. Generated distributions change noticeably, and a few previously-silent invalid argument combinations now raise errors, so test suites may see different examples after upgrading.
 
