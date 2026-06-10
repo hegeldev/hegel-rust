@@ -167,23 +167,3 @@ fn integer_floats_are_lex_simpler_than_fractions() {
     assert!(float_to_index(1.0) < float_to_index(2.0));
     assert!(float_to_index(1_000_000.0) < float_to_index(0.5));
 }
-
-// ── lex_to_float ────────────────────────────────────────────────────────────
-
-#[test]
-fn lex_to_float_top_bit_set_clears_sign() {
-    // bits >> 63 != 0: XOR with (1 << 63) clears the top bit.
-    // 1<<63 → 0 → +0.0
-    assert_eq!(lex_to_float(1u64 << 63).to_bits(), 0);
-}
-
-#[test]
-fn lex_to_float_top_bit_clear_inverts_all_bits() {
-    // bits >> 63 == 0: XOR with u64::MAX flips every bit.
-    // 0 → u64::MAX → NaN (all-ones is a NaN bit pattern).
-    assert!(lex_to_float(0).is_nan());
-    // (u64::MAX >> 1) has top bit clear → flips to 1 << 63 → -0.0
-    let v = lex_to_float(u64::MAX >> 1);
-    assert_eq!(v, 0.0);
-    assert!(v.is_sign_negative());
-}

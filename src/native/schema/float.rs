@@ -38,10 +38,18 @@ pub(super) fn interpret_float(
         .and_then(as_bool)
         .unwrap_or(false);
 
-    // Adjust bounds by one ULP for exclusive boundaries.
+    // Adjust bounds by one ULP for exclusive boundaries. This deliberately
+    // applies to non-finite bounds too: `min_value=-inf, exclude_min=true` is
+    // the Hypothesis idiom for "everything except -inf", and steps the bound
+    // to `-MAX` (std's `next_up(-inf)`; `next_up(+inf)` is a fixed point, and
+    // the generator rejects that combination as empty). Note the signed-zero
+    // semantics also follow Hypothesis's `floats()`: excluding a `±0.0` bound
+    // excludes *both* zeros (Hypothesis steps `next_up_normal` a second time
+    // when the first step lands on the other zero; std's `next_up` skips it
+    // in one step).
     // For f32 schemas (width=32), use f32-precision next_up/next_down so that
     // the adjusted bound is representable as f32 (preventing round-to-boundary bugs).
-    let min_value = if exclude_min && min_value.is_finite() {
+    let min_value = if exclude_min {
         if width == 32 {
             (min_value as f32).next_up() as f64
         } else {
@@ -50,7 +58,7 @@ pub(super) fn interpret_float(
     } else {
         min_value
     };
-    let max_value = if exclude_max && max_value.is_finite() {
+    let max_value = if exclude_max {
         if width == 32 {
             (max_value as f32).next_down() as f64
         } else {

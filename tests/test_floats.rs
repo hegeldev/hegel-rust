@@ -737,6 +737,58 @@ mod float_nastiness {
     }
 
     #[test]
+    fn test_exclude_only_neg_infinite_endpoint() {
+        // `min_value=-inf, exclude_min=true` with no max bound is the
+        // Hypothesis idiom for "any float except -inf": +inf stays allowed
+        // (allow_infinity defaults to true with one unbounded end) but -inf
+        // must never be generated.
+        assert_all_examples(
+            gs::floats::<f64>()
+                .min_value(f64::NEG_INFINITY)
+                .exclude_min(true),
+            |x: &f64| *x != f64::NEG_INFINITY,
+        );
+    }
+
+    #[test]
+    fn test_exclude_only_pos_infinite_endpoint() {
+        assert_all_examples(
+            gs::floats::<f64>()
+                .max_value(f64::INFINITY)
+                .exclude_max(true),
+            |x: &f64| *x != f64::INFINITY,
+        );
+    }
+
+    #[test]
+    fn test_exclude_min_without_min_value_is_invalid() {
+        expect_panic(
+            || {
+                Hegel::new(|tc| {
+                    let _: f64 = tc.draw(gs::floats::<f64>().exclude_min(true));
+                })
+                .settings(Settings::new().test_cases(1).database(None))
+                .run();
+            },
+            "InvalidArgument",
+        );
+    }
+
+    #[test]
+    fn test_exclude_max_without_max_value_is_invalid() {
+        expect_panic(
+            || {
+                Hegel::new(|tc| {
+                    let _: f64 = tc.draw(gs::floats::<f64>().exclude_max(true));
+                })
+                .settings(Settings::new().test_cases(1).database(None))
+                .run();
+            },
+            "InvalidArgument",
+        );
+    }
+
+    #[test]
     fn test_exclude_entire_interval() {
         for bound in [1.0_f64, -1.0_f64, 1e10_f64, -1e-10_f64] {
             for (lo, hi) in [(true, false), (false, true), (true, true)] {

@@ -220,6 +220,14 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
             }
         }
 
+        // Mirror Hypothesis: an exclusive bound needs a bound to exclude.
+        if self.exclude_min && !has_min {
+            invalid_argument!("InvalidArgument: Cannot have exclude_min=true without min_value");
+        }
+        if self.exclude_max && !has_max {
+            invalid_argument!("InvalidArgument: Cannot have exclude_max=true without max_value");
+        }
+
         // exclude_min=true with min_value=+inf (or exclude_max=true with
         // max_value=-inf) demands the next representable value beyond an
         // unbounded endpoint, which doesn't exist.

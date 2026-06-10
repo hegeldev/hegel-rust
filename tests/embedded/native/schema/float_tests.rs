@@ -56,6 +56,47 @@ fn interpret_float_non_numeric_bound_is_invalid_argument() {
     assert!(err.to_string().contains("CBOR float or integer"));
 }
 
+// `min_value=-inf, exclude_min=true` is the documented Hypothesis idiom for
+// "any float except -inf": `next_up(-inf)` is `-f64::MAX`. The interpreter
+// used to skip the adjustment for non-finite bounds, silently keeping -inf
+// generable.
+
+#[test]
+fn interpret_float_exclude_min_excludes_negative_infinity() {
+    use crate::cbor_utils::cbor_map;
+    use crate::native::core::NativeTestCase;
+    let schema = cbor_map! {
+        "type" => "float",
+        "min_value" => f64::NEG_INFINITY,
+        "exclude_min" => true,
+        "allow_nan" => false
+    };
+    for seed in 0..200 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let v = interpret_float(&mut ntc, &schema).unwrap();
+        let f = v.as_float().unwrap();
+        assert_ne!(f, f64::NEG_INFINITY, "drew -inf despite exclude_min");
+    }
+}
+
+#[test]
+fn interpret_float_exclude_max_excludes_positive_infinity() {
+    use crate::cbor_utils::cbor_map;
+    use crate::native::core::NativeTestCase;
+    let schema = cbor_map! {
+        "type" => "float",
+        "max_value" => f64::INFINITY,
+        "exclude_max" => true,
+        "allow_nan" => false
+    };
+    for seed in 0..200 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let v = interpret_float(&mut ntc, &schema).unwrap();
+        let f = v.as_float().unwrap();
+        assert_ne!(f, f64::INFINITY, "drew +inf despite exclude_max");
+    }
+}
+
 #[test]
 fn interpret_float_accepts_width_32_and_64() {
     use crate::cbor_utils::cbor_map;

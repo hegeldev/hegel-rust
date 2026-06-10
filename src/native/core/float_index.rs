@@ -101,19 +101,6 @@ pub fn index_to_float(i: u64) -> f64 {
     f64::from_bits((biased_exp << 52) | mantissa)
 }
 
-/// Convert a lexicographically ordered u64 to a float covering the full
-/// float space. Used for random float generation: feeding uniformly random
-/// `u64` bit patterns through this gives a distribution that covers the
-/// whole representable space.
-pub fn lex_to_float(bits: u64) -> f64 {
-    let bits = if bits >> 63 != 0 {
-        bits ^ (1u64 << 63)
-    } else {
-        bits ^ u64::MAX
-    };
-    f64::from_bits(bits)
-}
-
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/float_index_tests.rs"]
 mod tests;
