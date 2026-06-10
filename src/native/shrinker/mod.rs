@@ -356,19 +356,21 @@ impl<'a> Shrinker<'a> {
     /// Run a probe: replay `prefix` then continue with random draws from a
     /// deterministic RNG seeded by `seed`, capped at `max_size` choices. If
     /// the resulting run is interesting and shortlex-smaller than
-    /// `current_nodes`, update `current_nodes`.
+    /// `current_nodes`, update `current_nodes`. Returns the realised run
+    /// (or `None` when the stall guard skipped execution) so callers like
+    /// `try_lower_node_as_alternative` can splice its span contents.
     pub(super) fn probe(
         &mut self,
         prefix: &[ChoiceValue],
         seed: u64,
         max_size: usize,
-    ) -> ShrinkResult<()> {
+    ) -> ShrinkResult<Option<CachedRun>> {
         // Global stop once the improvement cap is reached (see `consider`).
         if self.improvements >= self.max_improvements {
             return Err(ShrinkStop);
         }
         if self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall {
-            return Ok(());
+            return Ok(None);
         }
         // The wall-clock guard lives in `run_test_fn`.
         let (is_interesting, actual_nodes, actual_spans) = self.run_test_fn(ShrinkRun::Probe {
@@ -377,10 +379,13 @@ impl<'a> Shrinker<'a> {
             max_size,
         })?;
         self.calls += 1;
-        if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
-            self.accept_improvement(actual_nodes, actual_spans);
-        }
-        Ok(())
+        let run = CachedRun {
+            interesting: is_interesting,
+            nodes: actual_nodes,
+            spans: actual_spans,
+        };
+        self.incorporate_run(&run);
+        Ok(Some(run))
     }
 
     /// Common bookkeeping when a candidate becomes the new shrink target:

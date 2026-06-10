@@ -235,3 +235,112 @@ fn initial_coarse_reduction_accepts_probe_when_direct_replace_fails() {
     assert!(probe_calls.get() > 0, "probe branch was never reached");
     assert_eq!(shrinker.current_nodes.len(), 2);
 }
+
+/// Drives the span-splice repair in `try_lower_node_as_alternative`
+/// (Hypothesis's `try_lower_node_as_alternative` inner `for j in spans`
+/// loop): the bare lowering and all three random probes lose the
+/// score-gating sentinel, but splicing the probe's realised branch span
+/// in front of the *preserved* original suffix repairs the test case.
+#[test]
+fn try_lower_node_as_alternative_splices_spans_to_repair_suffix() {
+    use crate::native::core::Span;
+    use crate::native::core::choices::BooleanChoice;
+
+    fn bool_node(value: bool) -> ChoiceNode {
+        ChoiceNode::new(
+            ChoiceKind::Boolean(BooleanChoice),
+            ChoiceValue::Boolean(value),
+            false,
+        )
+    }
+    fn sentinel_node(value: i128) -> ChoiceNode {
+        ChoiceNode::new(
+            ChoiceKind::Integer(IntegerChoice {
+                min_value: BigInt::from(0),
+                max_value: BigInt::from(1_000_000),
+                shrink_towards: BigInt::from(0),
+            }),
+            ChoiceValue::Integer(BigInt::from(value)),
+            false,
+        )
+    }
+    fn branch_span(end: usize) -> Vec<Span> {
+        vec![Span {
+            start: 0,
+            end,
+            label: "one_of".to_string(),
+            depth: 0,
+            parent: None,
+            discarded: false,
+        }]
+    }
+
+    // Simulated test body: selector (0 => one bool, 1 => two bools), then
+    // a sentinel that must be exactly 42 for the case to be interesting.
+    // The realised spans always record the branch span over selector +
+    // bools, mirroring a one_of generator's span.
+    let realize = |selector: i128, bools: Vec<bool>, sentinel: i128| {
+        let mut nodes = vec![small_int_node(selector)];
+        nodes.extend(bools.iter().map(|&b| bool_node(b)));
+        nodes.push(sentinel_node(sentinel));
+        let spans = Spans::from(branch_span(nodes.len() - 1));
+        let interesting = sentinel == 42;
+        (interesting, nodes, spans)
+    };
+    let run_body = move |run: ShrinkRun<'_>| -> (bool, Vec<ChoiceNode>, Spans) {
+        match run {
+            ShrinkRun::Full(nodes) => {
+                let selector = match &nodes[0].value {
+                    ChoiceValue::Integer(v) => i128::try_from(v).unwrap().min(1),
+                    _ => 0,
+                };
+                let n_bools = if selector == 1 { 2 } else { 1 };
+                let mut bools = Vec::new();
+                for k in 0..n_bools {
+                    bools.push(matches!(
+                        nodes.get(1 + k).map(|n| &n.value),
+                        Some(ChoiceValue::Boolean(true))
+                    ));
+                }
+                let sentinel = match nodes.get(1 + n_bools).map(|n| &n.value) {
+                    Some(ChoiceValue::Integer(v)) => i128::try_from(v).unwrap(),
+                    // Misaligned replay: the sentinel draw redraws as 0.
+                    _ => 0,
+                };
+                realize(selector, bools, sentinel)
+            }
+            ShrinkRun::Probe { prefix, seed, .. } => {
+                // Replay the prefix, then "draw randomly": the sentinel
+                // never lands on 42, so no probe is interesting.
+                let selector = match prefix.first() {
+                    Some(ChoiceValue::Integer(v)) => i128::try_from(v).unwrap().min(1),
+                    _ => 0,
+                };
+                let n_bools = if selector == 1 { 2 } else { 1 };
+                realize(selector, vec![seed % 2 == 0; n_bools], 7 + seed as i128)
+            }
+        }
+    };
+
+    // Start: selector=1, two bools, sentinel=42.
+    let initial = vec![
+        small_int_node(1),
+        bool_node(true),
+        bool_node(true),
+        sentinel_node(42),
+    ];
+    let initial_spans = Spans::from(branch_span(3));
+    let mut shrinker = Shrinker::with_probe(Box::new(run_body), initial, initial_spans);
+    shrinker.initial_coarse_reduction().unwrap();
+
+    // The bare lowering [0, t, t, 42] realises a *shorter* shape whose
+    // sentinel is redrawn (≠ 42), and every random probe also misses 42 —
+    // only the span splice (probe's branch span + original [42] suffix)
+    // can lower the selector.
+    assert_eq!(
+        shrinker.current_nodes[0].value,
+        ChoiceValue::Integer(BigInt::from(0)),
+        "selector should be lowered via the span-splice repair: {:?}",
+        shrinker.current_nodes
+    );
+}

@@ -29,3 +29,8 @@ Hypothesis more closely:
   case, the realised span content is spliced in front of the preserved
   old suffix, so score-gating draws after a resized collection no longer
   stop the hill climber.
+- The pre-shrink one_of-branch lowering now ports the span-splice repair
+  from Hypothesis's `try_lower_node_as_alternative`: after each random
+  repair probe, the probe's realised branch span is spliced in front of
+  the original suffix, so branch lowering succeeds for test cases whose
+  post-branch draws must keep their old values.

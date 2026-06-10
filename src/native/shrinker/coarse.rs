@@ -85,7 +85,12 @@ impl<'a> Shrinker<'a> {
     }
 
     /// Lower the integer at `i` to `v`, retrying the suffix as random
-    /// continuations to repair any shape changes the lower caused.
+    /// continuations to repair any shape changes the lower caused. Each
+    /// probe is additionally span-spliced (Hypothesis's
+    /// `try_lower_node_as_alternative` inner `for j in spans` loop): for
+    /// every span starting at `i`, the probe's realised span content is
+    /// spliced in front of the *original* suffix, repairing test cases
+    /// whose post-branch draws must keep their old values.
     fn try_lower_node_as_alternative(&mut self, i: usize, v: &BigInt) -> ShrinkResult<bool> {
         // Callers iterate `i < self.current_nodes.len()`, so this is a
         // documented precondition.
@@ -105,10 +110,49 @@ impl<'a> Shrinker<'a> {
         prefix.push(ChoiceValue::Integer(v.clone()));
         let max_size = self.current_nodes.len() + 16;
         let epoch = self.improvements;
+        let initial_nodes = self.current_nodes.clone();
+        // Indices of spans starting at `i`, snapshot from the pre-probe
+        // target — positionally matched against each probe's realised
+        // spans, exactly as Hypothesis matches `initial.spans[j]` with
+        // `random_attempt.spans[j]`.
+        let span_idxs: Vec<usize> = self
+            .current_spans
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.start == i)
+            .map(|(j, _)| j)
+            .collect();
+        let initial_span_ends: Vec<Option<usize>> = span_idxs
+            .iter()
+            .map(|&j| self.current_spans.get(j).map(|s| s.end))
+            .collect();
         for seed in 0..3u64 {
-            self.probe(&prefix, seed, max_size)?;
+            let Some(attempt) = self.probe(&prefix, seed, max_size)? else {
+                continue;
+            };
             if self.improvements > epoch {
                 return Ok(true);
+            }
+            for (&j, &initial_end) in span_idxs.iter().zip(&initial_span_ends) {
+                let Some(initial_end) = initial_end else {
+                    continue;
+                };
+                let Some(attempt_span) = attempt.spans.get(j) else {
+                    continue;
+                };
+                if attempt_span.start > attempt_span.end
+                    || attempt_span.end > attempt.nodes.len()
+                    || initial_end > initial_nodes.len()
+                {
+                    continue;
+                }
+                let mut candidate = initial_nodes[..i].to_vec();
+                candidate.extend_from_slice(&attempt.nodes[attempt_span.start..attempt_span.end]);
+                candidate.extend_from_slice(&initial_nodes[initial_end..]);
+                self.consider(&candidate)?;
+                if self.improvements > epoch {
+                    return Ok(true);
+                }
             }
         }
         Ok(false)
