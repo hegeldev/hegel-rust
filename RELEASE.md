@@ -45,3 +45,14 @@ Hypothesis more closely:
   node shrink, as in Hypothesis, instead of waiting for its own
   scheduled pass — which the shrink budget could exhaust first — and it
   uses the full integer move set so complete collapse is always probed.
+- `from_regex` with an `alphabet` now reports an `InvalidArgument` error
+  at build time when the pattern cannot produce any string from the
+  alphabet (a literal, charset, or every branch alternative outside it),
+  matching Hypothesis's `IncompatibleWithAlphabet`; previously such
+  patterns rejected every generated example. Branch alternatives that
+  are incompatible with the alphabet are excluded from generation
+  instead of being drawn and rejected.
+- Generated regex matches are now filtered through a full match of the
+  pattern, like Hypothesis's `.filter(regex.search)`, so mid-pattern
+  anchors and the `\b` / `\B` word-boundary assertions are enforced
+  instead of silently ignored.

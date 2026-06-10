@@ -1529,10 +1529,11 @@ mod regex_tests {
     // even when most draws are unsatisfiable.
 
     #[test]
-    fn literal_outside_alphabet_is_rejected_but_retried() {
-        // The literal 'a' is outside the alphabet's [b-z] range, so every
-        // attempt to emit it is rejected. With `a?` the optional makes
-        // empty strings valid, so generation still finds examples.
+    #[should_panic(expected = "not in the specified alphabet")]
+    fn literal_outside_alphabet_is_incompatible() {
+        // The literal 'a' is outside the alphabet's [b-z] range. Hypothesis
+        // raises IncompatibleWithAlphabet at build time — even for `a?`,
+        // where the empty string would technically satisfy the pattern.
         check_can_generate_examples(
             gs::from_regex(r"a?").alphabet(
                 gs::characters()
@@ -1581,10 +1582,11 @@ mod regex_tests {
     }
 
     #[test]
-    fn positive_set_outside_alphabet() {
-        // `[a-z]?` with an alphabet that excludes a-z forces the
-        // alphabet-allow filter in `build_in_set` to drop the positive
-        // literals. Optional `?` keeps empty draws valid.
+    #[should_panic(expected = "no characters in the specified alphabet")]
+    fn positive_set_outside_alphabet_is_incompatible() {
+        // `[a-z]?` with an alphabet that excludes all of a-z: the whole
+        // range is incompatible, which Hypothesis reports as
+        // IncompatibleWithAlphabet at build time.
         check_can_generate_examples(
             gs::from_regex(r"[a-z]?").alphabet(
                 gs::characters()
@@ -1606,11 +1608,12 @@ mod regex_tests {
     }
 
     #[test]
+    #[should_panic(expected = "not in the specified alphabet")]
     fn padded_pattern_with_empty_alphabet_intervals() {
         // `categories=[]` with no `include_characters` makes
-        // `build_intervals` short-circuit to an empty IntervalSet. The
-        // optional `a?` still lets `draw_prefix` invoke `draw_any_char`
-        // against that empty alphabet, exercising the `mark_invalid` path.
+        // `build_intervals` short-circuit to an empty IntervalSet; no
+        // literal can be in it, so the pattern is incompatible with the
+        // alphabet at build time.
         check_can_generate_examples(
             gs::from_regex(r"a?").alphabet(gs::characters().categories(&[])),
         );

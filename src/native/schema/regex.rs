@@ -48,6 +48,13 @@ pub(super) fn interpret_regex(
         EngineError::InvalidArgument(format!("invalid regex pattern {pattern:?}: {e}"))
     })?;
 
+    // Hypothesis raises IncompatibleWithAlphabet (an InvalidArgument) at
+    // strategy-build time when the pattern cannot produce any string from
+    // the alphabet; without this, generation would reject every draw.
+    if let Some(ref alpha) = alphabet {
+        check_alphabet_compat(&parsed.pattern.data, alpha)?;
+    }
+
     let mut state = GenState {
         groups: HashMap::new(),
         flags: parsed.flags,
@@ -75,11 +82,11 @@ pub(super) fn interpret_regex(
     }
 
     // Validate any deferred negative-lookahead assertions against the final
-    // output. This mirrors Python's `.filter(regex.search)` for `(?!...)`
-    // bodies — we only check the assertion position, but that's enough to
-    // reject the impossible/violating cases the test suite cares about.
+    // output. The final whole-pattern filter below would also catch these,
+    // but checking the recorded assertion position first is cheaper and
+    // rejects with a clearer cause.
+    let final_chars: Vec<char> = result.chars().collect();
     if !state.pending_lookaheads.is_empty() {
-        let final_chars: Vec<char> = result.chars().collect();
         for pending in &state.pending_lookaheads {
             if match_seq(
                 &pending.pattern.data,
@@ -93,6 +100,35 @@ pub(super) fn interpret_regex(
                 mark_invalid(ntc)?;
             }
         }
+    }
+
+    // Final whole-pattern filter — Python's `.filter(regex.fullmatch)` /
+    // `.filter(regex.search)`. This is what enforces mid-pattern anchors
+    // and the `\b` / `\B` boundary assertions, which generation cannot
+    // always satisfy by construction (e.g. a random pad ending with a word
+    // character right before a `\b`).
+    let matched = if fullmatch {
+        match_seq(
+            &parsed.pattern.data,
+            0,
+            &final_chars,
+            parsed.flags,
+            &state.groups,
+        ) == Some(final_chars.len())
+    } else {
+        (0..=final_chars.len()).any(|start| {
+            match_seq(
+                &parsed.pattern.data,
+                start,
+                &final_chars,
+                parsed.flags,
+                &state.groups,
+            )
+            .is_some()
+        })
+    };
+    if !matched {
+        mark_invalid(ntc)?;
     }
 
     Ok(encode(result))
@@ -246,23 +282,22 @@ fn generate_op(
 ) -> Result<(), EngineError> {
     match op {
         OpCode::Literal(cp) => {
+            // `check_alphabet_compat` already guarantees the base literal
+            // is in the alphabet; the case-swapped variant is only offered
+            // when it is too (Hypothesis's `(?i)` literal branch makes the
+            // same `chars_not_in_alphabet(c.swapcase())` check).
             let c = codepoint_to_char(*cp);
             if state.flags & SRE_FLAG_IGNORECASE != 0 {
                 if let Some(sw) = char_swapcase(c) {
-                    let which = ntc
-                        .draw_integer(BigInt::from(0), BigInt::from(1))?
-                        .to_i128()
-                        .unwrap();
-                    let pick = if which == 0 { c } else { sw };
-                    if !alphabet_allows(alphabet, pick) {
-                        mark_invalid(ntc)?;
+                    if alphabet_allows(alphabet, sw) {
+                        let which = ntc
+                            .draw_integer(BigInt::from(0), BigInt::from(1))?
+                            .to_i128()
+                            .unwrap();
+                        out.push(if which == 0 { c } else { sw });
+                        return Ok(());
                     }
-                    out.push(pick);
-                    return Ok(());
                 }
-            }
-            if !alphabet_allows(alphabet, c) {
-                mark_invalid(ntc)?;
             }
             out.push(c);
         }
@@ -325,11 +360,27 @@ fn generate_op(
             }
         }
         OpCode::Branch(items) => {
+            // Alternatives incompatible with the alphabet are excluded up
+            // front (Hypothesis builds `st.one_of` from the compatible
+            // branches only) instead of being drawn and rejected.
+            let compatible: Vec<&SubPattern> = match alphabet {
+                Some(alpha) => items
+                    .iter()
+                    .filter(|br| check_alphabet_compat(&br.data, alpha).is_ok())
+                    .collect(),
+                None => items.iter().collect(),
+            };
+            // `check_alphabet_compat` at interpret time guarantees at least
+            // one compatible branch; an empty list is only reachable when
+            // `generate_op` is driven directly without the pre-check.
+            if compatible.is_empty() {
+                mark_invalid(ntc)?;
+            }
             let idx = ntc
-                .draw_integer(BigInt::from(0), BigInt::from(items.len() as i64 - 1))?
+                .draw_integer(BigInt::from(0), BigInt::from(compatible.len() as i64 - 1))?
                 .to_i128()
                 .unwrap() as usize;
-            generate_subpattern(ntc, &items[idx], state, alphabet, out)?;
+            generate_subpattern(ntc, compatible[idx], state, alphabet, out)?;
         }
         OpCode::Subpattern {
             group,
@@ -636,6 +687,88 @@ fn alphabet_allows(alphabet: &Option<IntervalSet>, c: char) -> bool {
     }
 }
 
+/// Static alphabet-compatibility check for a parsed pattern, mirroring
+/// Hypothesis's `IncompatibleWithAlphabet` raise sites (regex.py): a
+/// literal outside the alphabet, an explicit charset literal member
+/// outside the alphabet, a charset range with *every* member outside the
+/// alphabet, or a branch with no compatible alternative. Negative
+/// lookarounds are skipped (Hypothesis builds `st.just("")` for them
+/// without recursing).
+fn check_alphabet_compat(ops: &[OpCode], alphabet: &IntervalSet) -> Result<(), EngineError> {
+    let literal_err = |cp: u32| {
+        EngineError::InvalidArgument(format!(
+            "Literal {:?} is not in the specified alphabet",
+            codepoint_to_char(cp)
+        ))
+    };
+    for op in ops {
+        match op {
+            OpCode::Literal(cp) => {
+                if !alphabet.contains(*cp) {
+                    return Err(literal_err(*cp));
+                }
+            }
+            OpCode::In(items) => {
+                for item in items.iter() {
+                    match item {
+                        SetItem::Literal(cp) => {
+                            if !alphabet.contains(*cp) {
+                                return Err(literal_err(*cp));
+                            }
+                        }
+                        SetItem::Range(lo, hi) => {
+                            let range = IntervalSet::new(vec![(*lo, *hi)]);
+                            if range.intersection(alphabet).is_empty() {
+                                return Err(EngineError::InvalidArgument(format!(
+                                    "Charset '[{}-{}]' contains no characters \
+                                     in the specified alphabet",
+                                    codepoint_to_char(*lo),
+                                    codepoint_to_char(*hi)
+                                )));
+                            }
+                        }
+                        SetItem::Negate | SetItem::Category(_) => {}
+                    }
+                }
+            }
+            OpCode::Branch(items) => {
+                let mut errors: Vec<String> = Vec::new();
+                let mut any_ok = false;
+                for br in items {
+                    match check_alphabet_compat(&br.data, alphabet) {
+                        Ok(()) => any_ok = true,
+                        Err(e) => errors.push(e.to_string()),
+                    }
+                }
+                if !any_ok && !errors.is_empty() {
+                    return Err(EngineError::InvalidArgument(errors.join("\n")));
+                }
+            }
+            OpCode::MaxRepeat { item, .. }
+            | OpCode::MinRepeat { item, .. }
+            | OpCode::PossessiveRepeat { item, .. } => {
+                check_alphabet_compat(&item.data, alphabet)?;
+            }
+            OpCode::Subpattern { p, .. } | OpCode::AtomicGroup(p) | OpCode::Assert { p, .. } => {
+                check_alphabet_compat(&p.data, alphabet)?;
+            }
+            OpCode::GroupRefExists { yes, no, .. } => {
+                check_alphabet_compat(&yes.data, alphabet)?;
+                if let Some(no) = no {
+                    check_alphabet_compat(&no.data, alphabet)?;
+                }
+            }
+            OpCode::NotLiteral(_)
+            | OpCode::Any
+            | OpCode::At(_)
+            | OpCode::AssertNot { .. }
+            | OpCode::GroupRef(_)
+            | OpCode::Failure => {}
+        }
+    }
+    Ok(())
+}
+
 /// Pick an arbitrary character from the alphabet. Used for prefix/suffix
 /// padding — must never fail if the alphabet is non-empty.
 fn draw_any_char(
@@ -876,15 +1009,15 @@ fn match_seq(
             combined.extend_from_slice(rest);
             match_seq(&combined, pos, chars, flags, groups)
         }
-        OpCode::Assert { p, .. } => {
-            if match_seq(&p.data, pos, chars, flags, groups).is_some() {
+        OpCode::Assert { direction, p } => {
+            if lookaround_holds(*direction, p, pos, chars, flags, groups) {
                 match_seq(rest, pos, chars, flags, groups)
             } else {
                 None
             }
         }
-        OpCode::AssertNot { p, .. } => {
-            if match_seq(&p.data, pos, chars, flags, groups).is_none() {
+        OpCode::AssertNot { direction, p } => {
+            if !lookaround_holds(*direction, p, pos, chars, flags, groups) {
                 match_seq(rest, pos, chars, flags, groups)
             } else {
                 None
@@ -988,6 +1121,25 @@ fn match_seq(
         }
     }
 }
+
+/// Whether a lookaround assertion body holds at `pos`. Lookahead
+/// (`direction >= 0`) requires the body to match starting at `pos`;
+/// lookbehind requires the body to match *ending* at `pos`.
+fn lookaround_holds(
+    direction: i32,
+    p: &SubPattern,
+    pos: usize,
+    chars: &[char],
+    flags: u32,
+    groups: &HashMap<u32, String>,
+) -> bool {
+    if direction >= 0 {
+        match_seq(&p.data, pos, chars, flags, groups).is_some()
+    } else {
+        (0..=pos).any(|start| match_seq(&p.data, start, chars, flags, groups) == Some(pos))
+    }
+}
+
 fn chars_eq(a: char, b: char, flags: u32) -> bool {
     if a == b {
         return true;

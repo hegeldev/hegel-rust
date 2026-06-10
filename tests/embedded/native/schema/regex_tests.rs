@@ -9,8 +9,6 @@
 //! generator's draw distribution.
 
 use super::*;
-use crate::native::bignum::BigInt;
-use crate::native::core::ChoiceValue;
 use crate::native::re::constants::{
     AtCode, ChCode, SRE_FLAG_DOTALL, SRE_FLAG_IGNORECASE, SRE_FLAG_MULTILINE,
 };
@@ -716,23 +714,41 @@ fn build_in_set_negated_ascii_only_excludes_nonascii() {
 // ----- generate_op: IGNORECASE literal rejected by the alphabet -----
 
 #[test]
-fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
-    // `(?i)a`: the literal 'a' swapcases to 'A', so `generate_op` draws
-    // `which` to choose between the two cases. With an alphabet that only
-    // allows 'A', forcing `which = 0` picks the lowercase 'a', which the
-    // alphabet rejects, so the test case is marked invalid.
-    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
-    let mut state = GenState {
-        groups: HashMap::new(),
-        flags: SRE_FLAG_IGNORECASE,
-        pending_lookaheads: Vec::new(),
-        in_cache: HashMap::new(),
-    };
-    let alphabet = Some(IntervalSet::new(vec![('A' as u32, 'A' as u32)]));
-    let mut out = String::new();
-    let result = generate_op(&mut ntc, &lit('a'), &mut state, &alphabet, &mut out);
-    assert!(result.is_err());
-    assert_eq!(ntc.status, Some(Status::Invalid));
+fn interpret_regex_ignorecase_literal_outside_alphabet_is_invalid_argument() {
+    // `(?i)a` with an alphabet of just 'A': Hypothesis checks the *base*
+    // literal against the alphabet before considering the case swap, so
+    // this is IncompatibleWithAlphabet at build time, not a per-draw
+    // rejection.
+    use crate::native::rng::EngineRng;
+    let schema = regex_with_alphabet_schema("(?i)a", "A");
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let err = interpret_regex(&mut ntc, &schema).unwrap_err();
+    assert!(
+        matches!(err, EngineError::InvalidArgument(_)),
+        "expected InvalidArgument, got {err:?}"
+    );
+}
+
+#[test]
+fn generate_op_ignorecase_skips_swap_outside_alphabet() {
+    // `(?i)b` with an alphabet of just 'b': the swapped 'B' is not in the
+    // alphabet, so the literal must always emit 'b' without drawing a
+    // case choice (Hypothesis only offers the swap when it is in the
+    // alphabet).
+    use crate::native::rng::EngineRng;
+    for seed in 0..20 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut state = GenState {
+            groups: HashMap::new(),
+            flags: SRE_FLAG_IGNORECASE,
+            pending_lookaheads: Vec::new(),
+            in_cache: HashMap::new(),
+        };
+        let alphabet = Some(IntervalSet::new(vec![('b' as u32, 'b' as u32)]));
+        let mut out = String::new();
+        generate_op(&mut ntc, &lit('b'), &mut state, &alphabet, &mut out).unwrap();
+        assert_eq!(out, "b", "seed {seed}");
+    }
 }
 
 // ----- interpret_regex: caller-reachable InvalidArgument paths -----
@@ -851,4 +867,160 @@ fn interpret_regex_handles_huge_character_class_ranges() {
         panic!("expected byte payload")
     };
     assert!(!bytes.is_empty());
+}
+
+// ----- alphabet compatibility (Hypothesis's IncompatibleWithAlphabet) -----
+
+fn regex_with_alphabet_schema(pattern: &str, alphabet_chars: &str) -> Value {
+    use crate::cbor_utils::{cbor_array, cbor_map};
+    cbor_map! {
+        "type" => "regex",
+        "pattern" => pattern,
+        "alphabet" => cbor_map! {
+            "categories" => cbor_array![],
+            "include_characters" => alphabet_chars
+        }
+    }
+}
+
+#[test]
+fn interpret_regex_incompatible_literal_is_invalid_argument() {
+    // Hypothesis raises IncompatibleWithAlphabet (an InvalidArgument) at
+    // strategy-build time for a literal outside the alphabet; rejection
+    // sampling would simply reject forever.
+    use crate::native::rng::EngineRng;
+    let schema = regex_with_alphabet_schema("abc", "ac");
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let err = interpret_regex(&mut ntc, &schema).unwrap_err();
+    assert!(
+        matches!(err, EngineError::InvalidArgument(_)),
+        "expected InvalidArgument, got {err:?}"
+    );
+    assert!(
+        err.to_string().contains("alphabet"),
+        "message should mention the alphabet: {err}"
+    );
+}
+
+#[test]
+fn interpret_regex_incompatible_charset_literal_is_invalid_argument() {
+    use crate::native::rng::EngineRng;
+    let schema = regex_with_alphabet_schema("[ab]", "b");
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let err = interpret_regex(&mut ntc, &schema).unwrap_err();
+    assert!(
+        matches!(err, EngineError::InvalidArgument(_)),
+        "expected InvalidArgument, got {err:?}"
+    );
+}
+
+#[test]
+fn interpret_regex_fully_incompatible_range_is_invalid_argument() {
+    use crate::native::rng::EngineRng;
+    let schema = regex_with_alphabet_schema("[a-c]", "z");
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let err = interpret_regex(&mut ntc, &schema).unwrap_err();
+    assert!(
+        matches!(err, EngineError::InvalidArgument(_)),
+        "expected InvalidArgument, got {err:?}"
+    );
+}
+
+#[test]
+fn interpret_regex_partially_compatible_range_generates() {
+    // A range with at least one in-alphabet member is fine (Hypothesis only
+    // raises when *every* member is excluded).
+    use crate::native::rng::EngineRng;
+    let schema = regex_with_alphabet_schema("[a-c]+", "b");
+    for seed in 0..20 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let v = interpret_regex(&mut ntc, &schema).unwrap();
+        let Value::Tag(91, inner) = v else {
+            panic!("expected tag-91 string")
+        };
+        let Value::Bytes(bytes) = *inner else {
+            panic!("expected bytes")
+        };
+        let s = String::from_utf8(bytes).unwrap();
+        assert!(
+            s.contains('b') && s.chars().all(|c| c == 'b'),
+            "seed {seed}: got {s:?}"
+        );
+    }
+}
+
+#[test]
+fn interpret_regex_branch_excludes_incompatible_alternatives() {
+    // `a|b` with alphabet {b}: Hypothesis drops the incompatible branch and
+    // generates from the rest — no rejection sampling, every draw succeeds.
+    use crate::native::rng::EngineRng;
+    // Multi-character alternatives: single-char ones collapse to a
+    // charset during parsing (as in CPython's sre_parse), which has its
+    // own member-level rules.
+    let schema = regex_with_alphabet_schema("aa|bb", "b");
+    for seed in 0..30 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let v = interpret_regex(&mut ntc, &schema)
+            .unwrap_or_else(|e| panic!("seed {seed}: draw rejected: {e:?}"));
+        let Value::Tag(91, inner) = v else {
+            panic!("expected tag-91 string")
+        };
+        let Value::Bytes(bytes) = *inner else {
+            panic!("expected bytes")
+        };
+        let s = String::from_utf8(bytes).unwrap();
+        assert!(
+            s.contains("bb") && s.chars().all(|c| c == 'b'),
+            "seed {seed}: {s:?}"
+        );
+    }
+}
+
+#[test]
+fn interpret_regex_branch_with_no_compatible_alternative_is_invalid_argument() {
+    use crate::native::rng::EngineRng;
+    let schema = regex_with_alphabet_schema("aa|cc", "b");
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let err = interpret_regex(&mut ntc, &schema).unwrap_err();
+    assert!(
+        matches!(err, EngineError::InvalidArgument(_)),
+        "expected InvalidArgument, got {err:?}"
+    );
+}
+
+// ----- final search filter (mid-pattern anchors and \b / \B) -----
+
+#[test]
+fn interpret_regex_word_boundary_filter_rejects_violating_pads() {
+    // `\bfoo` without fullmatch: the random prefix pad may end with a word
+    // character, in which case the boundary does not hold and Python's
+    // `.filter(regex.search)` rejects the draw. Every *successful* draw
+    // must therefore contain a position where `\bfoo` actually matches.
+    use crate::cbor_utils::cbor_map;
+    use crate::native::rng::EngineRng;
+    let schema = cbor_map! { "type" => "regex", "pattern" => "\\bfoo" };
+    let mut ok = 0;
+    for seed in 0..200 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let Ok(v) = interpret_regex(&mut ntc, &schema) else {
+            continue;
+        };
+        ok += 1;
+        let Value::Tag(91, inner) = v else {
+            panic!("expected tag-91 string")
+        };
+        let Value::Bytes(bytes) = *inner else {
+            panic!("expected bytes")
+        };
+        let s = String::from_utf8(bytes).unwrap();
+        let cs: Vec<char> = s.chars().collect();
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        let matches_somewhere = (0..cs.len())
+            .any(|i| cs[i..].starts_with(&['f', 'o', 'o']) && (i == 0 || !is_word(cs[i - 1])));
+        assert!(
+            matches_somewhere,
+            "seed {seed}: {s:?} does not contain a \\bfoo match"
+        );
+    }
+    assert!(ok > 50, "too few successful draws: {ok}");
 }
