@@ -145,8 +145,9 @@ fn draw_domain(ntc: &mut NativeTestCase, max_length: usize) -> Result<String, En
     // always has at least one subdomain (so it always parses as
     // `<sub>.<tld>` — two dot-separated parts). The cap at 126 is from
     // Hypothesis: with 1-char labels at minimum, 126 * 2 = 252 chars plus
-    // 3 for the TLD = 255, fitting the RFC 1035 §2.3.4 limit.
-    let mut state = ManyState::new(1, Some(126));
+    // 3 for the TLD = 255, fitting the RFC 1035 §2.3.4 limit. The
+    // average_size=3 matches `DomainNameStrategy.do_draw`'s `cu.many` call.
+    let mut state = ManyState::with_average(1, Some(126), 3.0);
     loop {
         if !many_more(ntc, &mut state)? {
             break;
@@ -172,6 +173,13 @@ fn draw_domain(ntc: &mut NativeTestCase, max_length: usize) -> Result<String, En
 /// alphanumeric, middle is alphanumeric or hyphen, with the RFC 5890
 /// reservation `label[2:4] != "--"` honoured inline.
 ///
+/// Mirrors Hypothesis's `st.from_regex(label_regex, fullmatch=True)` on
+/// `[a-zA-Z]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?`: the `?` quantifier is a
+/// 0-or-1 repetition draw and the `{0,61}` centre is a variable-length
+/// repetition draw, so label lengths skew heavily short (the optional
+/// tail appears under half the time and the centre averages ~5 chars)
+/// rather than being uniform over `1..=max_len`.
+///
 /// Hypothesis enforces the RFC 5890 reservation as a filter-retry on the
 /// regex strategy. Index 3 is the only middle position that can complete a
 /// `--` window at indices `[2:4]`: the last position is always
@@ -179,15 +187,16 @@ fn draw_domain(ntc: &mut NativeTestCase, max_length: usize) -> Result<String, En
 /// constraint by coercing index 3 to alphanumeric whenever index 2 was
 /// drawn as a hyphen, producing the same alphabet without a retry loop.
 fn draw_dns_label(ntc: &mut NativeTestCase, max_len: usize) -> Result<String, EngineError> {
-    let len = ntc
-        .draw_integer(BigInt::from(1), BigInt::from(max_len as i64))?
-        .to_i128()
-        .unwrap() as usize;
-    let mut s = String::with_capacity(len);
+    let mut s = String::new();
     s.push(draw_ascii_letter(ntc)?);
-    if len > 1 {
-        for i in 1..(len - 1) {
-            let avoid_dash = i == 3 && s.as_bytes()[2] == b'-';
+    if max_len == 1 {
+        return Ok(s);
+    }
+    let mut opt = ManyState::new(0, Some(1));
+    if many_more(ntc, &mut opt)? {
+        let mut centre = ManyState::new(0, Some(max_len - 2));
+        while many_more(ntc, &mut centre)? {
+            let avoid_dash = s.len() == 3 && s.as_bytes()[2] == b'-';
             s.push(if avoid_dash {
                 draw_ascii_alnum(ntc)?
             } else {

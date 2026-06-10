@@ -33,10 +33,18 @@ pub struct ManyState {
 
 impl ManyState {
     pub fn new(min_size: usize, max_size: Option<usize>) -> Self {
+        let average = default_average_size(min_size, max_size.map_or(f64::INFINITY, |n| n as f64));
+        ManyState::with_average(min_size, max_size, average)
+    }
+
+    /// Like [`ManyState::new`] but with an explicit target average size,
+    /// for callers that pass `average_size` to Hypothesis's `cu.many`
+    /// directly instead of going through `st.lists`' derived default.
+    pub fn with_average(min_size: usize, max_size: Option<usize>, average: f64) -> Self {
         ManyState {
             min_size,
             max_size: max_size.map_or(f64::INFINITY, |n| n as f64),
-            p_continue: length_p_continue(min_size, max_size),
+            p_continue: length_p_continue_for_average(min_size, max_size, average),
             count: 0,
             rejections: 0,
             force_stop: false,
@@ -44,13 +52,25 @@ impl ManyState {
     }
 }
 
+/// The `average_size` `st.lists` derives when none is given:
+/// `min(max(min_size * 2, min_size + 5), 0.5 * (min_size + max_size))`.
+fn default_average_size(min_size: usize, max_f: f64) -> f64 {
+    let min_f = min_size as f64;
+    f64::min(f64::max(min_f * 2.0, min_f + 5.0), 0.5 * (min_f + max_f))
+}
+
 /// Probability of extending a length draw beyond its current size. Length
 /// clusters around an `average_size` derived from
 /// `min(max(min_size * 2, min_size + 5), 0.5 * (min_size + max_size))`.
 pub(crate) fn length_p_continue(min_size: usize, max_size: Option<usize>) -> f64 {
     let max_f = max_size.map_or(f64::INFINITY, |n| n as f64);
+    length_p_continue_for_average(min_size, max_size, default_average_size(min_size, max_f))
+}
+
+/// [`length_p_continue`] with an explicit target average.
+fn length_p_continue_for_average(min_size: usize, max_size: Option<usize>, average: f64) -> f64 {
+    let max_f = max_size.map_or(f64::INFINITY, |n| n as f64);
     let min_f = min_size as f64;
-    let average = f64::min(f64::max(min_f * 2.0, min_f + 5.0), 0.5 * (min_f + max_f));
     let desired_extra = average - min_f;
     let max_extra = max_f - min_f;
 

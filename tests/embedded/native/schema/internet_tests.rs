@@ -77,6 +77,45 @@ fn interpret_domain_default_max_length() {
 }
 
 #[test]
+fn interpret_domain_label_lengths_skew_short() {
+    // Hypothesis builds labels from
+    // `st.from_regex(r"[a-zA-Z]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?")`, whose
+    // repetition draws make short labels far likelier than long ones (the
+    // optional tail appears ~1/3 of the time and its centre averages ~5
+    // chars), and prepends labels with `cu.many(..., average_size=3)`.
+    // A uniform 1..=63 length draw would put the mean label length near 32
+    // and the mean subdomain count near 6.
+    let mut label_lengths: Vec<usize> = Vec::new();
+    let mut subdomain_counts: Vec<usize> = Vec::new();
+    for seed in 0..300 {
+        let mut ntc = fresh_ntc(seed);
+        let s = decode_string(
+            interpret_domain(&mut ntc, &domain_schema(255))
+                .ok()
+                .unwrap(),
+        );
+        let parts: Vec<&str> = s.split('.').collect();
+        // Last part is the TLD; everything before it is a generated label.
+        subdomain_counts.push(parts.len() - 1);
+        label_lengths.extend(parts[..parts.len() - 1].iter().map(|p| p.len()));
+    }
+    let mean_len = label_lengths.iter().sum::<usize>() as f64 / label_lengths.len() as f64;
+    assert!(
+        mean_len < 10.0,
+        "mean label length {mean_len:.1} — labels should skew short like \
+         Hypothesis's regex draw, not uniform over 1..=63"
+    );
+    let mean_count = subdomain_counts.iter().sum::<usize>() as f64 / subdomain_counts.len() as f64;
+    assert!(
+        mean_count < 4.5,
+        "mean subdomain count {mean_count:.1} — Hypothesis uses average_size=3"
+    );
+    // Sanity: the distribution still produces both 1-char and longer labels.
+    assert!(label_lengths.contains(&1));
+    assert!(label_lengths.iter().any(|&l| l > 3));
+}
+
+#[test]
 fn interpret_domain_respects_max_length_4() {
     // The smallest configurable max_length. Most draws give the dotted form
     // (e.g. "x.aa"); some draw a too-long label first and break before
