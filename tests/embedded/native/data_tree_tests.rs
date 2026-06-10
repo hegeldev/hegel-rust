@@ -32,6 +32,53 @@ fn bool_node(value: bool) -> ChoiceNode {
     )
 }
 
+fn forced_bool_node(value: bool) -> ChoiceNode {
+    ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(value),
+        true,
+    )
+}
+
+#[test]
+fn record_tree_forced_position_counts_as_complete_for_exhaustion() {
+    // A forced draw has exactly one possible child — the forced value — so a
+    // concluded run behind a forced position exhausts the whole path
+    // (datatree.py counts forced indices as complete in check_exhausted).
+    // Comparing against the kind's full domain (2 for booleans) would keep
+    // any tree containing a forced draw — e.g. every collection's forced
+    // continuation booleans at the min/max-size boundaries — from ever
+    // exhausting.
+    let mut root = DataTreeNode::default();
+    record_tree(&mut root, &[forced_bool_node(true)], Status::Valid, &[]);
+    assert!(root.is_exhausted);
+}
+
+#[test]
+fn generate_novel_prefix_replays_forced_values_and_descends() {
+    // Position 0 is a forced boolean (true); position 1 is unforced with only
+    // `false` explored (concluded, hence exhausted). The walk must emit the
+    // forced value — the replay ignores that slot, so any other value
+    // realises into already-explored territory — and continue to the truly
+    // novel position below it.
+    let mut root = DataTreeNode::default();
+    record_tree(
+        &mut root,
+        &[forced_bool_node(true), bool_node(false)],
+        Status::Valid,
+        &[],
+    );
+    let mut rng = EngineRng::seeded(0);
+    for _ in 0..50 {
+        let prefix = generate_novel_prefix(&root, &mut rng);
+        assert_eq!(
+            prefix,
+            vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)],
+            "prefix must pass through the forced value to the novel position"
+        );
+    }
+}
+
 #[test]
 fn record_tree_reports_kind_mismatch() {
     // First record an integer node at position 0; recording a boolean node at
