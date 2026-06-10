@@ -461,6 +461,16 @@ mod float_nastiness {
     use hegel::{Hegel, Settings};
 
     #[test]
+    fn test_fraction_only_range_shrinks_to_simplest_fraction() {
+        // Regression: shrinking any failure in a fraction-only range used to
+        // panic with a BigUint underflow ("UBig result must not be negative")
+        // because FloatChoice::simplest() was not the true rank minimum of
+        // the range, and to_index subtracts its rank.
+        let v = minimal(gs::floats::<f64>().min_value(0.1).max_value(0.9), |_| true);
+        assert_eq!(v, 0.5);
+    }
+
+    #[test]
     fn test_floats_are_in_range_large() {
         let lower = 9.9792015476736e291_f64;
         let upper = 1.7976931348623157e308_f64;
