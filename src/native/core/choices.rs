@@ -424,6 +424,12 @@ pub struct FloatChoice {
     pub max_value: f64,
     pub allow_nan: bool,
     pub allow_infinity: bool,
+    /// Smallest positive magnitude the choice may produce: values `v` with
+    /// `0 < |v| < smallest_nonzero_magnitude` are invalid. Port of
+    /// Hypothesis's float constraint of the same name (`allow_subnormal =
+    /// false` sets it to the width's smallest *normal*). The default,
+    /// `5e-324` (the smallest subnormal), imposes no restriction.
+    pub smallest_nonzero_magnitude: f64,
 }
 
 /// Bit-exact equality so a `FloatChoice` recorded with `-0.0` doesn't compare
@@ -434,6 +440,8 @@ impl PartialEq for FloatChoice {
             && self.max_value.to_bits() == other.max_value.to_bits()
             && self.allow_nan == other.allow_nan
             && self.allow_infinity == other.allow_infinity
+            && self.smallest_nonzero_magnitude.to_bits()
+                == other.smallest_nonzero_magnitude.to_bits()
     }
 }
 
@@ -441,69 +449,46 @@ impl Eq for FloatChoice {}
 
 impl FloatChoice {
     /// The simplest (lowest-sort-key) valid float for this choice.
+    ///
+    /// Exact: [`to_index`](Self::to_index) subtracts this value's global
+    /// rank, so anything less than the true minimum makes that subtraction
+    /// underflow (and panic) for the simpler in-range values.
     pub fn simplest(&self) -> f64 {
-        use super::float_index::{float_to_index, index_to_float};
+        use super::float_index::{float_to_index, simplest_in_range};
 
+        // The two zeros hold the lowest global ranks (0 and 1).
         if self.validate(0.0) {
             return 0.0;
         }
-
-        let mut best: Option<f64> = None;
-        let mut best_key: (u64, bool) = (u64::MAX, true);
-
-        // Update best if v is valid and has a smaller sort key.
-        macro_rules! try_candidate {
-            ($v:expr) => {{
-                let v: f64 = $v;
-                if !v.is_nan() && self.validate(v) {
-                    let is_neg = v.is_sign_negative();
-                    let mag = if is_neg { -v } else { v };
-                    let key = (float_to_index(mag), is_neg);
-                    if key < best_key {
-                        best = Some(v);
-                        best_key = key;
-                    }
-                }
-            }};
+        if self.validate(-0.0) {
+            return -0.0;
         }
 
-        // Check boundaries first.
-        if self.min_value.is_finite() {
-            try_candidate!(self.min_value);
-        }
-        if self.max_value.is_finite() {
-            try_candidate!(self.max_value);
-        }
-
-        // Smallest valid non-negative integer in range.
-        if self.max_value >= 0.0 {
-            let lo_int = self.min_value.max(0.0).ceil() as i64;
-            try_candidate!(lo_int as f64);
-        }
-        // Largest valid non-positive integer in range.
-        if self.min_value <= 0.0 {
-            let hi_int = self.max_value.min(0.0).floor() as i64;
-            try_candidate!(hi_int as f64);
-        }
-
-        // Simple non-integer fractions at each exponent level.
-        for exp_enc in 0u64..64 {
-            let base_idx = (1u64 << 63) | (exp_enc << 52);
-            if (base_idx, false) >= best_key {
-                break;
-            }
-            for mantissa_enc in 0u64..8 {
-                let idx = base_idx | mantissa_enc;
-                if (idx, false) >= best_key {
-                    break;
-                }
-                let v = index_to_float(idx);
-                try_candidate!(v);
-                try_candidate!(-v);
+        // Find each sign's minimum-lex magnitude with the exact search, then
+        // compare the two by the (magnitude index, is_negative) sort key.
+        // Magnitudes start at `smallest_nonzero_magnitude` — the band below
+        // it is invalid.
+        let mut best: Option<((u64, bool), f64)> = None;
+        if self.max_value > 0.0 {
+            let lo = self.min_value.max(self.smallest_nonzero_magnitude);
+            let hi = self.max_value.min(f64::MAX);
+            if lo <= hi {
+                let v = simplest_in_range(lo, hi);
+                best = Some(((float_to_index(v), false), v));
             }
         }
-
-        if let Some(v) = best {
+        if self.min_value < 0.0 {
+            let lo = (-self.max_value).max(self.smallest_nonzero_magnitude);
+            let hi = (-self.min_value).min(f64::MAX);
+            if lo <= hi {
+                let v = simplest_in_range(lo, hi);
+                let key = (float_to_index(v), true);
+                if best.is_none_or(|(best_key, _)| key < best_key) {
+                    best = Some((key, -v));
+                }
+            }
+        }
+        if let Some((_, v)) = best {
             return v;
         }
         if self.allow_infinity && self.validate(f64::INFINITY) {
@@ -554,6 +539,9 @@ impl FloatChoice {
             }
             return true;
         }
+        if v != 0.0 && v.abs() < self.smallest_nonzero_magnitude {
+            return false;
+        }
         sign_aware_lte(self.min_value, v) && sign_aware_lte(v, self.max_value)
     }
 
@@ -573,7 +561,10 @@ impl FloatChoice {
     /// (both signs) followed by `+inf`, `-inf`, then all NaN payloads.
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         use crate::native::bignum::BigUint;
-        // 2^52 NaN payloads (one bit forced to 1) × 2 signs = 2^53 NaN slots.
+        // NaN payloads 1..2^52 ranked by payload XOR 2^51 over 2 signs; the
+        // largest occupied slot is offset 2 + 2^53 past the finite ranks
+        // (the XOR leaves two dead slots where payload 0 would sit, which
+        // `from_index` reports as None).
         max_finite_global_rank() + BigUint::from(2u32) + BigUint::from(1u64 << 53)
     }
 
@@ -609,9 +600,12 @@ fn float_global_rank(v: f64) -> crate::native::bignum::BigUint {
     use crate::native::bignum::BigUint;
 
     if v.is_nan() {
-        // NaN payload (one bit always forced to 1, see `from_index` below).
+        // Rank NaNs by payload XOR 2^51 so the canonical quiet NaN (payload
+        // 2^51) ranks first; the XOR is self-inverse, so
+        // `float_from_global_rank` recovers every payload — quiet or
+        // signaling — bit-exactly.
         let bits = v.to_bits();
-        let nan_offset = bits & ((1u64 << 52) - 1);
+        let nan_offset = (bits & ((1u64 << 52) - 1)) ^ (1u64 << 51);
         let sign = bits >> 63;
         return max_finite_global_rank()
             + BigUint::from(3u32)
@@ -652,8 +646,14 @@ fn float_from_global_rank(rank: crate::native::bignum::BigUint) -> Option<f64> {
             .try_into()
             .expect("mod 2 fits in u64");
         let mantissa_base: u64 = (nan_rel / BigUint::from(2u32)).try_into().ok()?;
-        // Force bit 51 to 1 so the mantissa is non-zero.
-        let mantissa = mantissa_base | (1u64 << 51);
+        if mantissa_base >> 52 != 0 {
+            // Past the last NaN payload slot — out of range, not a value.
+            return None;
+        }
+        // Undo the XOR applied by `float_global_rank` (self-inverse). The
+        // slot where this yields payload 0 decodes to an infinity bit
+        // pattern, which the `is_nan` check below rejects.
+        let mantissa = mantissa_base ^ (1u64 << 51);
         let bits = (sign << 63) | (0x7FFu64 << 52) | mantissa;
         let v = f64::from_bits(bits);
         return if v.is_nan() { Some(v) } else { None };
@@ -663,6 +663,13 @@ fn float_from_global_rank(rank: crate::native::bignum::BigUint) -> Option<f64> {
         .expect("mod 2 fits in u64");
     let mag_big = rank / BigUint::from(2u32);
     let mag_idx: u64 = (&mag_big).try_into().ok()?;
+    if mag_idx >> 63 == 0 && mag_idx >> 56 != 0 {
+        // Non-canonical tag-0 index: `float_to_index` only produces simple
+        // integers below 2^56, but `index_to_float` masks bits 56..62 away,
+        // so decoding here would alias a small integer and break the
+        // to_index/from_index inverse.
+        return None;
+    }
     let mag = index_to_float(mag_idx);
     Some(if is_neg_u == 1 { -mag } else { mag })
 }

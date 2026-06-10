@@ -142,6 +142,7 @@ pub struct FloatGenerator<T> {
     exclude_max: bool,
     allow_nan: Option<bool>,
     allow_infinity: Option<bool>,
+    allow_subnormal: Option<bool>,
 }
 
 impl<T> FloatGenerator<T> {
@@ -178,6 +179,16 @@ impl<T> FloatGenerator<T> {
     /// Whether infinite values are allowed. Cannot be used with both bounds set.
     pub fn allow_infinity(mut self, allow: bool) -> Self {
         self.allow_infinity = Some(allow);
+        self
+    }
+
+    /// Whether subnormal ("denormalised") values are allowed. Defaults to
+    /// allowing them whenever the bounds admit any; set to `false` when the
+    /// code under test may run with flush-to-zero floating point (e.g.
+    /// compiled with `-ffast-math`), where subnormal inputs silently become
+    /// zero.
+    pub fn allow_subnormal(mut self, allow: bool) -> Self {
+        self.allow_subnormal = Some(allow);
         self
     }
 }
@@ -220,6 +231,14 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
             }
         }
 
+        // Mirror Hypothesis: an exclusive bound needs a bound to exclude.
+        if self.exclude_min && !has_min {
+            invalid_argument!("InvalidArgument: Cannot have exclude_min=true without min_value");
+        }
+        if self.exclude_max && !has_max {
+            invalid_argument!("InvalidArgument: Cannot have exclude_max=true without max_value");
+        }
+
         // exclude_min=true with min_value=+inf (or exclude_max=true with
         // max_value=-inf) demands the next representable value beyond an
         // unbounded endpoint, which doesn't exist.
@@ -246,6 +265,50 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
             invalid_argument!("Cannot have allow_infinity=true with both min_value and max_value");
         }
 
+        // Subnormal handling, mirroring Hypothesis's `floats()`: when unset,
+        // subnormals are allowed exactly when the bounds admit any; an
+        // explicit `true` that the bounds contradict is an error; `false`
+        // raises the draw's magnitude floor to the width's smallest normal.
+        let smallest_normal = if width == 32 {
+            f32::MIN_POSITIVE as f64
+        } else {
+            f64::MIN_POSITIVE
+        };
+        let min_f = self.min.map(|v| v.to_f64());
+        let max_f = self.max.map(|v| v.to_f64());
+        let allow_subnormal = self.allow_subnormal.unwrap_or(match (min_f, max_f) {
+            (Some(lo), Some(hi)) if lo == hi => -smallest_normal < lo && lo < smallest_normal,
+            (Some(lo), Some(hi)) => lo < smallest_normal && hi > -smallest_normal,
+            (Some(lo), None) => lo < smallest_normal,
+            (None, Some(hi)) => hi > -smallest_normal,
+            (None, None) => true,
+        });
+        if allow_subnormal {
+            if min_f.is_some_and(|lo| lo >= smallest_normal) {
+                invalid_argument!(
+                    "InvalidArgument: allow_subnormal=true, but min_value excludes \
+                     all values below the smallest positive normal {smallest_normal}"
+                );
+            }
+            if max_f.is_some_and(|hi| hi <= -smallest_normal) {
+                invalid_argument!(
+                    "InvalidArgument: allow_subnormal=true, but max_value excludes \
+                     all values above the smallest negative normal -{smallest_normal}"
+                );
+            }
+        } else if let (Some(lo), Some(hi)) = (min_f, max_f) {
+            // With subnormals excluded the valid set is
+            // {0} ∪ (-∞, -smallest_normal] ∪ [smallest_normal, ∞) ∩ [lo, hi];
+            // reject ranges that miss it entirely.
+            let contains_zero = lo <= 0.0 && hi >= 0.0;
+            if !contains_zero && hi < smallest_normal && lo > -smallest_normal {
+                invalid_argument!(
+                    "InvalidArgument: allow_subnormal=false leaves no {width}-bit \
+                     floating-point values in [{lo}, {hi}]"
+                );
+            }
+        }
+
         let mut schema = cbor_map! {
             "type" => "float",
             "exclude_min" => self.exclude_min,
@@ -260,6 +323,16 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
         }
         if let Some(ref max) = self.max {
             map_insert(&mut schema, "max_value", cbor_serialize(max));
+        }
+        // The engine's default (the width's smallest subnormal) means "no
+        // restriction", so the field is only sent when subnormals are
+        // excluded — keeping schemas from older builds byte-identical.
+        if !allow_subnormal {
+            map_insert(
+                &mut schema,
+                "smallest_nonzero_magnitude",
+                Value::Float(smallest_normal),
+            );
         }
 
         // When generating finite values without explicit bounds, add type
@@ -315,6 +388,7 @@ pub fn floats<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send +
         exclude_max: false,
         allow_nan: None,
         allow_infinity: None,
+        allow_subnormal: None,
     }
 }
 

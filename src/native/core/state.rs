@@ -12,9 +12,10 @@ use super::choices::{
     BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceTemplate, ChoiceTemplateKind,
     ChoiceValue, EngineError, FloatChoice, IntegerChoice, InterestingOrigin, Status, StringChoice,
 };
-use super::float_index::lex_to_float;
+use super::float_index::index_to_float;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
 use crate::native::bignum::{BigInt, BigUint, ToPrimitive, Zero};
+use crate::native::floats::{next_down, next_up};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::statistics::{
     Distribution, LogStudentTDistribution, PiecewiseDistribution, UniformDistribution,
@@ -290,7 +291,11 @@ fn biased_i128_sample(min_value: i128, max_value: i128, rng: &mut EngineRng) -> 
     let need_min = static_slice.first() != Some(&min_value);
     let need_max = static_slice.last() != Some(&max_value);
     let count = static_slice.len() + (need_min as usize) + (need_max as usize);
-    let threshold = count as f64 * BOUNDARY_PROBABILITY;
+    // Cap at 0.5 so the distribution branch always keeps meaningful
+    // probability — a wide range (e.g. all of `i64`) has hundreds of in-range
+    // pool entries, and the uncapped `count * BOUNDARY_PROBABILITY` exceeds 1,
+    // turning `integer_sample_from_distribution` into dead code.
+    let threshold = (count as f64 * BOUNDARY_PROBABILITY).min(0.5);
     if rng.random::<f64>() < threshold {
         let idx = rng.random_range(0..count);
         if need_min && idx == 0 {
@@ -382,12 +387,17 @@ fn sample_biguint_at_most(span: &BigUint, rng: &mut EngineRng) -> BigUint {
 /// otherwise. Shared with the data-tree walk so novel-prefix exploration
 /// hits the same boundary distribution as fresh draws.
 pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 {
-    let bounded = fc.min_value.is_finite() && fc.max_value.is_finite();
-    let half_bounded = !bounded && (fc.min_value.is_finite() || fc.max_value.is_finite());
-
+    // A quiet NaN with the lowest mantissa bit set — Hypothesis's
+    // SIGNALING_NAN (the signaling/quiet distinction is the cleared bit 51;
+    // the set bit 0 keeps the mantissa nonzero so it stays a NaN).
+    const SIGNALING_NAN: f64 = f64::from_bits(0x7FF0_0000_0000_0001);
     let candidates = [
         fc.min_value,
         fc.max_value,
+        next_up(fc.min_value),
+        fc.min_value + 1.0,
+        fc.max_value - 1.0,
+        next_down(fc.max_value),
         0.0,
         -0.0_f64,
         1.0,
@@ -395,17 +405,24 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 
         f64::INFINITY,
         f64::NEG_INFINITY,
         f64::NAN,
+        -f64::NAN,
+        SIGNALING_NAN,
+        -SIGNALING_NAN,
         f64::MIN_POSITIVE,
+        fc.smallest_nonzero_magnitude,
+        -fc.smallest_nonzero_magnitude,
         f64::MAX,
         -f64::MAX,
     ];
     let valid_count = candidates.iter().filter(|&&v| fc.validate(v)).count();
-    let nasty_threshold = valid_count as f64 * BOUNDARY_PROBABILITY;
+    // Capped like the integer/string pools, though with ~21 candidates the
+    // uncapped value never exceeds ~0.2 today.
+    let nasty_threshold = (valid_count as f64 * BOUNDARY_PROBABILITY).min(0.5);
 
     if rng.random::<f64>() < nasty_threshold {
         let idx = rng.random_range(0..valid_count);
         // Walk the fixed-size array again to find the idx-th in-range entry.
-        // 12 elements, no allocation; cheaper than the legacy Vec<f64>.
+        // 21 elements, no allocation; cheaper than the legacy Vec<f64>.
         let mut skip = idx;
         for &v in candidates.iter() {
             if fc.validate(v) {
@@ -417,46 +434,59 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 
         }
         unreachable!("valid_count agrees with the second validate pass");
     }
-    let f = if bounded {
-        let r: f64 = rng.random();
-        let v = fc.min_value + r * (fc.max_value - fc.min_value);
-        v.max(fc.min_value).min(fc.max_value)
-    } else if half_bounded {
-        let use_inf = fc.allow_infinity && rng.random::<f64>() < 0.05;
-        if use_inf {
-            if fc.max_value == f64::INFINITY {
-                f64::INFINITY
-            } else {
-                f64::NEG_INFINITY
-            }
-        } else {
-            loop {
-                let bits: u64 = rng.random();
-                let mag = lex_to_float(bits).abs();
-                if mag.is_finite() {
-                    break if fc.min_value.is_finite() {
-                        fc.min_value + mag
-                    } else {
-                        fc.max_value - mag
-                    };
-                }
-            }
-        }
-    } else if fc.allow_nan && rng.random::<f64>() < 0.01 {
-        let exponent: u64 = 0x7FF << 52;
-        let sign: u64 = (rng.random::<u64>() >> 63) << 63;
-        let mantissa: u64 = (rng.random::<u64>() & ((1u64 << 52) - 1)).max(1);
-        f64::from_bits(sign | exponent | mantissa)
+    // Hypothesis-style raw draw (`HypothesisProvider._draw_float`): decode a
+    // uniformly random 64-bit pattern through the lex ordering — half the
+    // mass lands on non-negative integers below 2^56, the rest spreads over
+    // the fractional space (biased toward simple fractions) — then attach a
+    // uniformly random sign. Out-of-range results are remapped into the
+    // constraint by `float_clamp`; in-range results (including NaN when
+    // allowed) pass through untouched, preserving the simple-value bias
+    // inside bounded ranges.
+    let mag = index_to_float(rng.random::<u64>());
+    let raw = if rng.random::<u64>() & 1 == 1 {
+        -mag
     } else {
-        loop {
-            let bits: u64 = rng.random();
-            let v = lex_to_float(bits);
-            if !v.is_nan() {
-                break v;
-            }
-        }
+        mag
+    };
+    // `validate` covers Python's separate allowed-NaN passthrough: NaN
+    // validates exactly when `allow_nan` is set.
+    let f = if fc.validate(raw) {
+        raw
+    } else {
+        float_clamp(fc, raw)
     };
     if fc.validate(f) { f } else { fc.simplest() }
+}
+
+/// Port of Hypothesis's `make_float_clamper`: remap an out-of-range draw
+/// into `[min_value, max_value]`, using its mantissa bits as a fraction of
+/// the range so that distinct raw draws keep producing distinct in-range
+/// values, and re-routing around the `smallest_nonzero_magnitude` band.
+fn float_clamp(fc: &FloatChoice, raw: f64) -> f64 {
+    // An infinite bound with `allow_infinity=false` (a Hegel-only combination
+    // that the schema layer avoids, but `FloatChoice` can express) would make
+    // the arithmetic below produce the very infinity it must exclude, so work
+    // with the finite effective bounds in that case.
+    let (min_value, max_value) = if fc.allow_infinity {
+        (fc.min_value, fc.max_value)
+    } else {
+        (fc.min_value.max(-f64::MAX), fc.max_value.min(f64::MAX))
+    };
+    const MANTISSA_MASK: u64 = (1u64 << 52) - 1;
+    let range_size = (max_value - min_value).min(f64::MAX);
+    let mant = raw.abs().to_bits() & MANTISSA_MASK;
+    let mut f = min_value + range_size * (mant as f64 / MANTISSA_MASK as f64);
+    // Remapped into the excluded near-zero band: default to the smallest
+    // allowed magnitude, negated when only the negative side admits it
+    // (mirrors `make_float_clamper`).
+    if f != 0.0 && f.abs() < fc.smallest_nonzero_magnitude {
+        f = fc.smallest_nonzero_magnitude;
+        if fc.smallest_nonzero_magnitude > max_value {
+            f = -f;
+        }
+    }
+    // Re-enforce the bounds in case of floating-point rounding error.
+    f.max(min_value).min(max_value)
 }
 
 /// Boundary-biased sample for bytes. Draws the simplest (`min_size` zeros),
@@ -631,7 +661,11 @@ pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Ve
     let global_pool = &*GLOBAL_CONSTANTS_STRINGS;
     let valid_global_count = global_pool.iter().filter(|cps| sc.validate(cps)).count();
     let count = small_count + valid_global_count;
-    let threshold = count as f64 * BOUNDARY_PROBABILITY;
+    // Cap at 0.5 so the alphabet-driven sampler always keeps meaningful
+    // probability: for a permissive alphabet every global constant validates
+    // and the uncapped `count * BOUNDARY_PROBABILITY` reaches ~0.6, skewing
+    // most draws to the constant pool.
+    let threshold = (count as f64 * BOUNDARY_PROBABILITY).min(0.5);
     if rng.random::<f64>() < threshold {
         let idx = rng.random_range(0..count);
         if idx < small_count {
@@ -1236,19 +1270,23 @@ impl NativeTestCase {
 
     /// Draw a floating-point value in `[min_value, max_value]`. NaN is drawn
     /// only when `allow_nan` is set; ±∞ only when `allow_infinity` is set and
-    /// the relevant endpoint is unbounded.
+    /// the relevant endpoint is unbounded. Magnitudes below
+    /// `smallest_nonzero_magnitude` (other than zero itself) are never drawn;
+    /// pass `5e-324` for no restriction.
     pub fn draw_float(
         &mut self,
         min_value: f64,
         max_value: f64,
         allow_nan: bool,
         allow_infinity: bool,
+        smallest_nonzero_magnitude: f64,
     ) -> Result<f64, EngineError> {
         let kind = FloatChoice {
             min_value,
             max_value,
             allow_nan,
             allow_infinity,
+            smallest_nonzero_magnitude,
         };
 
         let (value, was_forced) = self.resolve_choice(

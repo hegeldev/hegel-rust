@@ -669,3 +669,225 @@ fn reproduce_runner_reports_a_blob_that_no_longer_fails() {
     // Reported as its own failure, not framed as a health-check failure.
     assert_eq!(result.failures[0].origin, "reproduce_failure");
 }
+
+// ── database reuse semantics ──
+
+#[test]
+fn reuse_replay_extends_past_stored_prefix() {
+    // Hypothesis replays stored entries with extend="full": when the test now
+    // draws more choices than the stored prefix holds, the replay continues
+    // with fresh random draws instead of overrunning. The stored `[true]` is
+    // one boolean short of what the test reads; it must still reproduce.
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+
+    let result = std::panic::catch_unwind(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            let a = tc.draw(crate::generators::booleans());
+            let _b = tc.draw(crate::generators::booleans());
+            assert!(!a, "replayed bug");
+        })
+        .settings(
+            crate::Settings::new()
+                .database(Some(path.clone()))
+                .phases([crate::Phase::Reuse])
+                .verbosity(crate::Verbosity::Quiet),
+        )
+        .__database_key("k".to_string())
+        .run();
+    });
+    assert!(
+        result.is_err(),
+        "stored prefix one draw short must still reproduce via random extension"
+    );
+}
+
+#[test]
+fn reuse_consults_secondary_corpus_when_primary_fails_to_reproduce() {
+    use crate::native::bignum::BigInt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    // The primary entry no longer fails; the still-failing example only
+    // exists in the secondary (historical) corpus, which the reuse phase
+    // samples when the primary corpus comes up short.
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
+    );
+    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    db.save(
+        &secondary_key,
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]),
+    );
+
+    let result = std::panic::catch_unwind(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            let n: i64 = tc.draw(crate::generators::integers::<i64>());
+            assert_ne!(n, 4242, "secondary bug");
+        })
+        .settings(
+            crate::Settings::new()
+                .database(Some(path.clone()))
+                .phases([crate::Phase::Reuse])
+                .test_cases(10)
+                .verbosity(crate::Verbosity::Quiet),
+        )
+        .__database_key("k".to_string())
+        .run();
+    });
+    assert!(
+        result.is_err(),
+        "the secondary corpus entry must be replayed when primary finds nothing"
+    );
+}
+
+#[test]
+fn reuse_randomly_samples_secondary_corpus_when_it_overflows_the_shortfall() {
+    use crate::native::bignum::BigInt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    // One primary entry that no longer reproduces, plus a secondary corpus
+    // larger than the shortfall (desired_size 2 - 1 primary = 1).  That
+    // drives the partial Fisher-Yates sampling path: more historical
+    // entries exist than the reuse phase wants, so only a random subset is
+    // replayed.  Every secondary entry reproduces the bug, so the run must
+    // fail no matter which one the sample happens to keep.
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
+    );
+    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    for n in [4242, 4243, 4244, 4245] {
+        db.save(
+            &secondary_key,
+            &serialize_choices(&[ChoiceValue::Integer(BigInt::from(n))]),
+        );
+    }
+
+    let result = std::panic::catch_unwind(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            let n: i64 = tc.draw(crate::generators::integers::<i64>());
+            assert!(n < 4242, "secondary bug");
+        })
+        .settings(
+            crate::Settings::new()
+                .database(Some(path.clone()))
+                .phases([crate::Phase::Reuse])
+                .test_cases(2)
+                .verbosity(crate::Verbosity::Quiet),
+        )
+        .__database_key("k".to_string())
+        .run();
+    });
+    assert!(
+        result.is_err(),
+        "a sampled secondary entry must still reproduce the bug"
+    );
+}
+
+#[test]
+fn shrink_phase_drains_stale_secondary_corpus_entries() {
+    use crate::native::bignum::BigInt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let stale = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]);
+    db.save(&secondary_key, &stale);
+
+    // A failing run replays small secondary entries as shrink jump-starts
+    // and deletes them either way (Hypothesis's clear_secondary_key) — the
+    // secondary corpus must not grow without bound across runs.
+    let result = std::panic::catch_unwind(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            let n: i64 = tc.draw(crate::generators::integers::<i64>());
+            assert!(n < 1000, "big bug");
+        })
+        .settings(
+            crate::Settings::new()
+                .database(Some(path.clone()))
+                .test_cases(200)
+                .verbosity(crate::Verbosity::Quiet),
+        )
+        .__database_key("k".to_string())
+        .run();
+    });
+    assert!(result.is_err(), "the run should find the n >= 1000 bug");
+    assert!(
+        !db.fetch(&secondary_key).contains(&stale),
+        "the stale secondary entry must be drained"
+    );
+}
+
+#[test]
+fn should_generate_more_stops_ten_seconds_after_first_bug() {
+    // Within the call-count window but past the 10-second wall-clock cutoff
+    // (engine.py's first_bug_found_time): stop hunting for more origins.
+    assert!(should_generate_more(
+        false,
+        20,
+        Some(15),
+        Some(15),
+        true,
+        true,
+        Some(std::time::Duration::from_secs(9)),
+    ));
+    assert!(!should_generate_more(
+        false,
+        20,
+        Some(15),
+        Some(15),
+        true,
+        true,
+        Some(std::time::Duration::from_secs(11)),
+    ));
+}
+
+#[test]
+fn reuse_stops_after_first_reproduced_bug_without_multiple_reporting() {
+    use crate::native::bignum::BigInt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    // Two stored entries that both still reproduce.
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(1111))]),
+    );
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(2222))]),
+    );
+
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    CALLS.store(0, Ordering::SeqCst);
+    let result = std::panic::catch_unwind(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            CALLS.fetch_add(1, Ordering::SeqCst);
+            let n: i64 = tc.draw(crate::generators::integers::<i64>());
+            assert!(n < 1000, "stored bug");
+        })
+        .settings(
+            crate::Settings::new()
+                .database(Some(path.clone()))
+                .phases([crate::Phase::Reuse])
+                .report_multiple_failures(false)
+                .verbosity(crate::Verbosity::Quiet),
+        )
+        .__database_key("k".to_string())
+        .run();
+    });
+    assert!(result.is_err(), "the stored bug should be reported");
+    // One reuse replay (the first entry reproduces, so the loop breaks)
+    // plus the final is_final replay of the counterexample.
+    assert!(
+        CALLS.load(Ordering::SeqCst) <= 2,
+        "expected reuse to stop after the first reproduced bug, ran {} cases",
+        CALLS.load(Ordering::SeqCst)
+    );
+}

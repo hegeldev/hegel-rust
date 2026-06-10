@@ -558,7 +558,7 @@ fn draw_float_notifies_observer() {
         captured: captured.clone(),
     });
     let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
-    let v = tc.draw_float(0.0, 10.0, false, false).ok().unwrap();
+    let v = tc.draw_float(0.0, 10.0, false, false, 5e-324).ok().unwrap();
     assert_eq!(v, 2.5);
     let recorded = captured.lock().unwrap().take();
     assert_eq!(recorded, Some((2.5_f64.to_bits(), false)));
@@ -657,7 +657,7 @@ fn draw_float_unbounded_with_nan_can_produce_nan() {
     for seed in 0..200u64 {
         let mut tc = NativeTestCase::new_random(EngineRng::seeded(seed));
         let v = tc
-            .draw_float(f64::NEG_INFINITY, f64::INFINITY, true, true)
+            .draw_float(f64::NEG_INFINITY, f64::INFINITY, true, true, 5e-324)
             .ok()
             .unwrap();
         if v.is_nan() {
@@ -671,7 +671,7 @@ fn draw_float_unbounded_with_nan_can_produce_nan() {
 fn draw_float_half_bounded_below_explores_finite_range() {
     let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
     let v = tc
-        .draw_float(1.0, f64::INFINITY, false, false)
+        .draw_float(1.0, f64::INFINITY, false, false, 5e-324)
         .ok()
         .unwrap();
     assert!(v >= 1.0 && !v.is_nan());
@@ -722,7 +722,10 @@ fn for_simplest_propagates_across_many_draws() {
 #[test]
 fn for_simplest_draws_float_at_zero() {
     let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
-    let v = tc.draw_float(-10.0, 10.0, false, false).ok().unwrap();
+    let v = tc
+        .draw_float(-10.0, 10.0, false, false, 5e-324)
+        .ok()
+        .unwrap();
     assert_eq!(v, 0.0);
     assert!(v.is_sign_positive(), "expected +0.0, got -0.0");
 }
@@ -1000,6 +1003,29 @@ fn biased_integer_sample_concentrates_around_zero_when_unbounded() {
 }
 
 #[test]
+fn biased_integer_sample_wide_range_still_draws_from_distribution() {
+    // The full i64 range has hundreds of in-range nasty-pool entries; the
+    // pool probability must be capped so that the piecewise distribution
+    // still runs (uncapped, `count * BOUNDARY_PROBABILITY` exceeded 1 and
+    // every draw came from the pool).
+    let mut rng = EngineRng::seeded(8);
+    let pool = &*SORTED_NASTY_POOL;
+    let total = 2000;
+    let mut outside_pool = 0;
+    for _ in 0..total {
+        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
+        if pool.binary_search(&v).is_err() {
+            outside_pool += 1;
+        }
+    }
+    let fraction = outside_pool as f64 / total as f64;
+    assert!(
+        fraction > 0.25,
+        "only {fraction} of draws came from the distribution; nasty pool not capped?"
+    );
+}
+
+#[test]
 fn biased_integer_sample_log_skewed_bounded_range_favours_smaller_magnitudes() {
     let mut rng = EngineRng::seeded(11);
     let mut samples: Vec<i128> = (0..2000)
@@ -1010,6 +1036,77 @@ fn biased_integer_sample_log_skewed_bounded_range_favours_smaller_magnitudes() {
     assert!(
         median < 1_000_000,
         "median {median} is too high; expected log-skewed distribution"
+    );
+}
+
+#[test]
+fn biased_string_sample_caps_constant_pool_probability() {
+    // With a permissive full-Unicode alphabet every global string constant
+    // validates, so an uncapped per-candidate threshold would send ~60% of
+    // draws to the constant pool instead of the alphabet-driven sampler.
+    let sc = StringChoice {
+        intervals: crate::native::intervalsets::IntervalSet::new(vec![
+            (0, 0xD7FF),
+            (0xE000, 0x10FFFF),
+        ]),
+        min_size: 0,
+        max_size: 100,
+    };
+    let mut rng = EngineRng::seeded(9);
+    let pool = &*GLOBAL_CONSTANTS_STRINGS;
+    let total = 2000;
+    let mut from_pool = 0;
+    for _ in 0..total {
+        let v = biased_string_sample(&sc, &mut rng);
+        if pool.contains(&v) {
+            from_pool += 1;
+        }
+    }
+    let fraction = from_pool as f64 / total as f64;
+    assert!(
+        fraction < 0.56,
+        "{fraction} of draws came from the constant pool; threshold not capped?"
+    );
+}
+
+#[test]
+fn biased_float_sample_full_finite_range_does_not_collapse_to_max() {
+    // `gs::floats().allow_nan(false).allow_infinity(false)` produces exactly
+    // this choice. The legacy uniform draw computed `min + r * (max - min)`,
+    // where the range width overflows to +inf, collapsing ~90% of draws to
+    // exactly `f64::MAX`.
+    let fc = FloatChoice {
+        min_value: -f64::MAX,
+        max_value: f64::MAX,
+        allow_nan: false,
+        allow_infinity: false,
+        smallest_nonzero_magnitude: 5e-324,
+    };
+    let mut rng = EngineRng::seeded(10);
+    let total = 2000;
+    let mut at_max = 0;
+    let mut integral = 0;
+    for _ in 0..total {
+        let v = biased_float_sample(&fc, &mut rng);
+        assert!(v.is_finite(), "drew non-finite {v}");
+        if v.abs() == f64::MAX {
+            at_max += 1;
+        }
+        if v == v.trunc() {
+            integral += 1;
+        }
+    }
+    let max_fraction = at_max as f64 / total as f64;
+    assert!(
+        max_fraction < 0.2,
+        "{max_fraction} of draws were ±f64::MAX; range-width overflow regressed?"
+    );
+    // The Hypothesis-style lex draw puts about half its mass on integers
+    // below 2^56; require a healthy share of simple integer-valued floats.
+    let integral_fraction = integral as f64 / total as f64;
+    assert!(
+        integral_fraction > 0.2,
+        "only {integral_fraction} of draws were integer-valued; lex bias missing?"
     );
 }
 
@@ -1146,4 +1243,36 @@ fn weighted_boolean_sample_respects_probability() {
         .count();
     assert!(high > n * 3 / 4, "p=0.9 produced only {high}/{n} trues");
     assert!(low < n / 4, "p=0.1 produced {low}/{n} trues");
+}
+
+#[test]
+fn float_clamp_reroutes_excluded_magnitude_band() {
+    // A remapped draw landing in (0, smallest_nonzero_magnitude) defaults to
+    // the smallest allowed magnitude (make_float_clamper's re-route).
+    let fc = FloatChoice {
+        min_value: -1e-307,
+        max_value: 1e-307,
+        allow_nan: false,
+        allow_infinity: false,
+        smallest_nonzero_magnitude: f64::MIN_POSITIVE,
+    };
+    // Mantissa fraction ~0.5 lands the remap just below zero, inside the
+    // excluded band.
+    let raw = f64::from_bits(((1u64 << 52) - 1) / 2);
+    let clamped = float_clamp(&fc, raw);
+    assert_eq!(clamped, f64::MIN_POSITIVE);
+
+    // When the smallest allowed magnitude exceeds max_value, only its
+    // negation is in range.
+    let fc_neg = FloatChoice {
+        min_value: -1e-307,
+        max_value: -1e-308,
+        allow_nan: false,
+        allow_infinity: false,
+        smallest_nonzero_magnitude: f64::MIN_POSITIVE,
+    };
+    // Mantissa fraction ~0.9: remap lands at ~-1.9e-308, inside the band.
+    let raw_neg = f64::from_bits((((1u64 << 52) - 1) / 10) * 9);
+    let clamped_neg = float_clamp(&fc_neg, raw_neg);
+    assert_eq!(clamped_neg, -f64::MIN_POSITIVE);
 }

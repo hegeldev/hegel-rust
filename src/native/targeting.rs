@@ -142,9 +142,13 @@ fn run_trial(
     *ctx.calls += 1;
     (ctx.on_run)(&run);
     if run.status >= Status::Valid {
-        *ctx.valid_test_cases += 1;
         let actual_choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
         targeting.record(&actual_choices, &run.target_observations);
+    }
+    // Only exactly-valid runs count toward the budget; Hypothesis never
+    // counts INTERESTING results as valid examples.
+    if run.status == Status::Valid {
+        *ctx.valid_test_cases += 1;
     }
     if run.status == Status::Interesting {
         // `budget_exhausted` already short-circuited on `!interesting.is_empty()`

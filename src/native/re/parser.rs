@@ -872,8 +872,17 @@ fn parse(
                     } else {
                         Either::Literal(that.chars().next().unwrap() as u32)
                     };
-                    let (lo, hi) = match (&code1, &code2) {
-                        (Either::Literal(l), Either::Literal(h)) => (*l, *h),
+                    // CPython's `_class_escape` resolves \xNN / \uNNNN /
+                    // octal / identity escapes to LITERAL codes, which are
+                    // valid range endpoints (`[\x00-\x1f]`); only category
+                    // escapes (\d, \w, ...) cannot anchor a range.
+                    let endpoint = |code: &Either| match code {
+                        Either::Literal(cp) => Some(*cp),
+                        Either::Class(ClassEscapeResult::Literal(cp)) => Some(*cp),
+                        Either::Class(ClassEscapeResult::Category(_)) => None,
+                    };
+                    let (lo, hi) = match (endpoint(&code1), endpoint(&code2)) {
+                        (Some(l), Some(h)) => (l, h),
                         _ => {
                             return Err(source.error(
                                 &format!("bad character range {}-{}", cur, that),

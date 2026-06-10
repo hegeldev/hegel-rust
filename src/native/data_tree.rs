@@ -42,6 +42,20 @@ impl From<&ChoiceValue> for ChoiceValueKey {
     }
 }
 
+impl ChoiceValueKey {
+    /// Inverse of the `From<&ChoiceValue>` conversion; the key holds the
+    /// full value, so this is lossless.
+    fn to_value(&self) -> ChoiceValue {
+        match self {
+            ChoiceValueKey::Integer(n) => ChoiceValue::Integer(n.clone()),
+            ChoiceValueKey::Boolean(b) => ChoiceValue::Boolean(*b),
+            ChoiceValueKey::Float(bits) => ChoiceValue::Float(f64::from_bits(*bits)),
+            ChoiceValueKey::Bytes(b) => ChoiceValue::Bytes(b.clone()),
+            ChoiceValueKey::String(s) => ChoiceValue::String(s.clone()),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct DataTreeNode {
     kind: Option<Arc<ChoiceKind>>,
@@ -74,7 +88,14 @@ impl Drop for DataTreeNode {
 
 impl DataTreeNode {
     /// Recompute `is_exhausted` based on current state. Mirrors
-    /// Hypothesis's `TreeNode.check_exhausted`.
+    /// Hypothesis's `TreeNode.check_exhausted`, including its key structural
+    /// property: only the *cached* flags of direct children are consulted,
+    /// never a recursive descent. [`record_tree`] calls this bottom-up along
+    /// the recorded path, so on-path children are already up to date, and
+    /// off-path children carry accurate flags from the runs that recorded
+    /// them (exhaustion is monotone and only changes along recorded paths).
+    /// A recursive descent here both overflows the stack on deep trees and
+    /// re-scans whole subtrees on every ascent step.
     fn check_exhausted(&mut self) -> bool {
         if self.is_exhausted {
             return true;
@@ -84,19 +105,27 @@ impl DataTreeNode {
             return true;
         }
         if let Some(ref kind) = self.kind {
-            // Exhausted iff every possible child value has its own node. We only
-            // need `max_children <= explored`, and `explored` is a small count,
-            // so the saturating form avoids building the huge cardinality
-            // `BigUint` (and its `pow`) that `max_children()` would for sequence
-            // kinds: `max_children_saturating(explored + 1) <= explored` is
-            // exactly `max_children <= explored`.
+            // Exhausted iff every possible child value has its own node. A
+            // forced position has exactly one possible child — the forced
+            // value — regardless of the kind's full domain (datatree.py
+            // counts forced indices as complete in `check_exhausted`);
+            // comparing against the full domain would keep any path through
+            // a forced draw from ever exhausting. For unforced positions we
+            // only need `max_children <= explored`, and `explored` is a small
+            // count, so the saturating form avoids building the huge
+            // cardinality `BigUint` (and its `pow`) that `max_children()`
+            // would for sequence kinds:
+            // `max_children_saturating(explored + 1) <= explored` is exactly
+            // `max_children <= explored`.
             let explored = self.children.len() as u128;
-            if kind.max_children_saturating(explored + 1) <= explored {
-                let all_exhausted = self.children.values_mut().all(|c| c.check_exhausted());
-                if all_exhausted {
-                    self.is_exhausted = true;
-                    return true;
-                }
+            let complete = if self.forced {
+                explored >= 1
+            } else {
+                kind.max_children_saturating(explored + 1) <= explored
+            };
+            if complete && self.children.values().all(|c| c.is_exhausted) {
+                self.is_exhausted = true;
+                return true;
             }
         }
         false
@@ -233,6 +262,27 @@ pub(crate) fn generate_novel_prefix(
     let mut prefix = Vec::new();
     let mut current = tree_root;
     while let Some(ref kind) = current.kind {
+        if current.forced {
+            // A forced position always realises the recorded value: the
+            // replay ignores the prefix slot (though one must be present for
+            // the cursor to advance), so emitting anything else would
+            // truncate the walk here and "novelly" land on an
+            // already-explored path. Mirror datatree.py, which appends the
+            // forced value and keeps descending.
+            let (key, child) = current
+                .children
+                .iter()
+                .next()
+                .expect("a forced node records its single child in the same run");
+            prefix.push(key.to_value());
+            // `check_exhausted` treats a forced position as having exactly
+            // one possible child, so an exhausted child would have marked
+            // `current` exhausted — and the walk never enters exhausted
+            // nodes.
+            debug_assert!(!child.is_exhausted);
+            current = child;
+            continue;
+        }
         let Some(value) = pick_non_exhausted_value(kind.as_ref(), &current.children, rng) else {
             break;
         };
