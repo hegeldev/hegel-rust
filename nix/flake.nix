@@ -38,7 +38,10 @@
           pname = "libhegel";
           inherit version cargoDeps;
           src = ../.;
-          cargoBuildFlags = [ "-p" "hegeltest-c" ];
+          cargoBuildFlags = [
+            "-p"
+            "hegeltest-c"
+          ];
           doCheck = false;
           # buildRustPackage's default install only handles binaries; we need
           # the cdylib. The artifact may land in target/<triple>/release/ or
