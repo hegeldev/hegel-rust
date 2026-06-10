@@ -13,6 +13,7 @@ use super::choices::{
     ChoiceValue, EngineError, FloatChoice, IntegerChoice, InterestingOrigin, Status, StringChoice,
 };
 use super::float_index::index_to_float;
+use super::state_machine::NativeStateMachine;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
 use crate::native::bignum::{BigInt, BigUint, ToPrimitive, Zero};
 use crate::native::floats::{next_down, next_up};
@@ -1000,6 +1001,7 @@ pub struct NativeTestCase {
     pub collections: HashMap<i64, ManyState>,
     next_collection_id: i64,
     pub variable_pools: Vec<NativeVariables>,
+    pub state_machines: Vec<NativeStateMachine>,
     pub spans: Spans,
     /// Indices into `spans` for currently-open spans, in nesting order.
     /// Each entry was pushed by `start_span` and is awaiting a matching
@@ -1068,6 +1070,7 @@ impl NativeTestCase {
             collections: HashMap::new(),
             next_collection_id: 0,
             variable_pools: Vec::new(),
+            state_machines: Vec::new(),
             spans: Spans::new(),
             span_stack: Vec::new(),
             has_discards: false,
@@ -1266,6 +1269,45 @@ impl NativeTestCase {
         Ok(T::try_from(v)
             .ok()
             .expect("validated value fits the requested width"))
+    }
+
+    /// Record a forced integer draw in `[min_value, max_value]`.
+    ///
+    /// Mirrors `weighted(_, forced: Some(_))`: consumes a choice position
+    /// without consulting the prefix or RNG, recording the node as forced so
+    /// the shrinker and data tree leave it alone.
+    pub fn draw_integer_forced<T: Into<BigInt>>(
+        &mut self,
+        min_value: T,
+        max_value: T,
+        forced: T,
+    ) -> Result<(), EngineError> {
+        let kind = IntegerChoice {
+            min_value: min_value.into(),
+            max_value: max_value.into(),
+            shrink_towards: BigInt::zero(),
+        };
+        let v: BigInt = forced.into();
+        assert!(
+            kind.min_value <= v && v <= kind.max_value,
+            "forced value {v:?} outside [{:?}, {:?}]",
+            kind.min_value,
+            kind.max_value
+        );
+
+        self.pre_choice()?;
+
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_integer(&v, true);
+        }
+
+        self.nodes.push(ChoiceNode::new(
+            ChoiceKind::Integer(kind),
+            ChoiceValue::Integer(v),
+            true,
+        ));
+
+        Ok(())
     }
 
     /// Draw a floating-point value in `[min_value, max_value]`. NaN is drawn

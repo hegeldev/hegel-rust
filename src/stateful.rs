@@ -63,7 +63,7 @@
 use crate::TestCase;
 use crate::generators::integers;
 use crate::runner::Mode;
-use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING};
+use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING, panic_on_data_source_error};
 use std::cmp::min;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -196,11 +196,14 @@ fn check_invariants(m: &mut impl StateMachine, tc: &TestCase) {
 /// Execute a stateful test by repeatedly applying random rules and checking invariants.
 pub fn run(mut m: impl StateMachine, tc: TestCase) {
     let rules = m.rules();
-    if rules.is_empty() {
-        panic!("Cannot run a machine with no rules."); // nocov
-    }
-
-    let rule_index = integers::<usize>().min_value(0).max_value(rules.len() - 1);
+    let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
+    let invariants = m.invariants();
+    let invariant_names: Vec<&str> = invariants.iter().map(|r| r.name.as_str()).collect();
+    let machine_id =
+        match tc.with_data_source(|ds| ds.new_state_machine(&rule_names, &invariant_names)) {
+            Ok(id) => id,
+            Err(e) => panic_on_data_source_error(e),
+        };
 
     tc.note("Initial invariant check.");
     check_invariants(&mut m, &tc);
@@ -225,7 +228,11 @@ pub fn run(mut m: impl StateMachine, tc: TestCase) {
             || (steps_run_successfully == 0 && steps_attempted < 1000))
     {
         step += 1;
-        let rule = &rules[tc.draw_silent(&rule_index)];
+        let rule_index = match tc.with_data_source(|ds| ds.state_machine_next_rule(machine_id)) {
+            Ok(i) => i as usize,
+            Err(e) => panic_on_data_source_error(e),
+        };
+        let rule = &rules[rule_index];
         tc.note(&format!("Step {}: {}", step, rule.name));
 
         // We only need this because AssertUnwindSafe expects a closure.

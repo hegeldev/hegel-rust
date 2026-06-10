@@ -302,6 +302,16 @@ impl crate::backend::DataSource for BtStubDataSource {
     fn collection_reject(&self, _id: i64, _why: Option<&str>) -> Result<(), DataSourceError> {
         unimplemented!()
     }
+    fn new_state_machine(
+        &self,
+        _rule_names: &[&str],
+        _invariant_names: &[&str],
+    ) -> Result<i64, DataSourceError> {
+        unimplemented!()
+    }
+    fn state_machine_next_rule(&self, _state_machine_id: i64) -> Result<u64, DataSourceError> {
+        unimplemented!()
+    }
     fn new_pool(&self) -> Result<i64, DataSourceError> {
         unimplemented!()
     }

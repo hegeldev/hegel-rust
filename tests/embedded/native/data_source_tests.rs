@@ -110,6 +110,51 @@ fn pool_generate_on_empty_pool_returns_assume() {
 }
 
 #[test]
+fn new_state_machine_returns_sequential_ids() {
+    let (ds, _handle) = random_source();
+    assert_eq!(
+        ds.new_state_machine(&["push", "pop"], &["sorted"]).unwrap(),
+        0
+    );
+    assert_eq!(ds.new_state_machine(&["clear"], &[]).unwrap(), 1);
+}
+
+#[test]
+fn new_state_machine_with_no_rules_is_invalid_argument_without_aborting() {
+    let (ds, _handle) = random_source();
+    let err = ds.new_state_machine(&[], &[]).unwrap_err();
+    assert!(matches!(err, DataSourceError::InvalidArgument(_)));
+    assert!(err.to_string().contains("no rules"));
+    // A usage error is not data exhaustion: the test case is not latched
+    // as aborted, so a valid registration still succeeds.
+    assert!(!ds.test_aborted());
+    assert_eq!(ds.new_state_machine(&["push"], &[]).unwrap(), 0);
+}
+
+#[test]
+fn state_machine_next_rule_returns_in_range_indices() {
+    let (ds, _handle) = random_source();
+    let id = ds.new_state_machine(&["a", "b", "c"], &[]).unwrap();
+    for _ in 0..20 {
+        assert!(ds.state_machine_next_rule(id).unwrap() < 3);
+    }
+}
+
+#[test]
+fn state_machine_next_rule_on_exhausted_source_stops_test() {
+    let (ds, _handle) = exhausted_source();
+    // Registration makes no draws, so it succeeds even with no data.
+    let id = ds.new_state_machine(&["a", "b"], &[]).unwrap();
+    assert!(matches!(
+        ds.state_machine_next_rule(id),
+        Err(DataSourceError::StopTest)
+    ));
+    // Subsequent state-machine calls short-circuit on the latched abort.
+    assert!(ds.state_machine_next_rule(id).is_err());
+    assert!(ds.new_state_machine(&["a"], &[]).is_err());
+}
+
+#[test]
 fn generate_invalid_schema_maps_to_invalid_argument_without_aborting() {
     let (ds, _handle) = random_source();
     let schema = cbor_map! { "type" => "no-such-type" };
