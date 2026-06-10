@@ -155,3 +155,25 @@ fn test_report_multiple_failures_false_collapses_to_single_failure_panic() {
         "expected single-failure outer panic (one branch should win), got: {msg:?}"
     );
 }
+
+/// A second bug lurking just below the first bug's shrink boundary: from the
+/// full `u64` range, generation essentially never produces 998 or 999, so
+/// the "shadow bug" is only ever reached by the shrinker probing values just
+/// below the primary boundary. Hypothesis records origins discovered while
+/// shrinking and shrinks them too; the runner must report both.
+#[hegel::test(
+    derandomize = true,
+    test_cases = 300u64,
+    verbosity = hegel::Verbosity::Quiet,
+    database = None
+)]
+#[should_panic(expected = "Property-based test failed with 2 distinct failures.")]
+fn test_bug_discovered_during_shrink_is_reported(tc: TestCase) {
+    let x: u64 = tc.draw(gs::integers::<u64>());
+    if x >= 1000 {
+        panic!("primary bug: {}", x);
+    }
+    if x >= 998 {
+        panic!("shadow bug: {}", x);
+    }
+}

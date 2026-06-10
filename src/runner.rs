@@ -428,10 +428,10 @@ where
             return;
         }
 
-        if !self.settings.phases.contains(&Phase::Generate) {
-            return;
-        }
-
+        // No early-out when `Phase::Generate` is absent: the phases are
+        // independent, so e.g. `phases = [Phase::Reuse]` must still replay
+        // stored counterexamples (the engine itself skips whatever phases
+        // are disabled).
         let runner = crate::native::test_runner::NativeTestRunner;
 
         crate::run_lifecycle::drive(

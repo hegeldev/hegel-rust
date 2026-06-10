@@ -669,3 +669,111 @@ fn reproduce_runner_reports_a_blob_that_no_longer_fails() {
     // Reported as its own failure, not framed as a health-check failure.
     assert_eq!(result.failures[0].origin, "reproduce_failure");
 }
+
+// ── database reuse semantics ──
+
+#[test]
+fn reuse_replay_extends_past_stored_prefix() {
+    // Hypothesis replays stored entries with extend="full": when the test now
+    // draws more choices than the stored prefix holds, the replay continues
+    // with fresh random draws instead of overrunning. The stored `[true]` is
+    // one boolean short of what the test reads; it must still reproduce.
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+
+    let result = std::panic::catch_unwind(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            let a = tc.draw(crate::generators::booleans());
+            let _b = tc.draw(crate::generators::booleans());
+            assert!(!a, "replayed bug");
+        })
+        .settings(
+            crate::Settings::new()
+                .database(Some(path.clone()))
+                .phases([crate::Phase::Reuse])
+                .verbosity(crate::Verbosity::Quiet),
+        )
+        .__database_key("k".to_string())
+        .run();
+    });
+    assert!(
+        result.is_err(),
+        "stored prefix one draw short must still reproduce via random extension"
+    );
+}
+
+#[test]
+fn reuse_consults_secondary_corpus_when_primary_fails_to_reproduce() {
+    use crate::native::bignum::BigInt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    // The primary entry no longer fails; the still-failing example only
+    // exists in the secondary (historical) corpus, which the reuse phase
+    // samples when the primary corpus comes up short.
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
+    );
+    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    db.save(
+        &secondary_key,
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]),
+    );
+
+    let result = std::panic::catch_unwind(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            let n: i64 = tc.draw(crate::generators::integers::<i64>());
+            assert_ne!(n, 4242, "secondary bug");
+        })
+        .settings(
+            crate::Settings::new()
+                .database(Some(path.clone()))
+                .phases([crate::Phase::Reuse])
+                .test_cases(10)
+                .verbosity(crate::Verbosity::Quiet),
+        )
+        .__database_key("k".to_string())
+        .run();
+    });
+    assert!(
+        result.is_err(),
+        "the secondary corpus entry must be replayed when primary finds nothing"
+    );
+}
+
+#[test]
+fn shrink_phase_drains_stale_secondary_corpus_entries() {
+    use crate::native::bignum::BigInt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let stale = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]);
+    db.save(&secondary_key, &stale);
+
+    // A failing run replays small secondary entries as shrink jump-starts
+    // and deletes them either way (Hypothesis's clear_secondary_key) — the
+    // secondary corpus must not grow without bound across runs.
+    let result = std::panic::catch_unwind(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            let n: i64 = tc.draw(crate::generators::integers::<i64>());
+            assert!(n < 1000, "big bug");
+        })
+        .settings(
+            crate::Settings::new()
+                .database(Some(path.clone()))
+                .test_cases(200)
+                .verbosity(crate::Verbosity::Quiet),
+        )
+        .__database_key("k".to_string())
+        .run();
+    });
+    assert!(result.is_err(), "the run should find the n >= 1000 bug");
+    assert!(
+        !db.fetch(&secondary_key).contains(&stale),
+        "the stale secondary entry must be drained"
+    );
+}

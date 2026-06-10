@@ -260,6 +260,7 @@ fn run_main(
     let invalid_budget = invalid_thresholds(INVALID_TARGET_RATE, INVALID_TARGET_CONFIDENCE);
     let mut total_test_time = std::time::Duration::ZERO;
     let mut replay_aligned = false;
+    let report_multiple = settings.report_multiple_failures;
 
     // --- Database replay phase ---
     //
@@ -276,19 +277,64 @@ fn run_main(
     if settings.phases.contains(&Phase::Reuse) {
         if let (Some(db_ref), Some(key)) = (&db, database_key) {
             let key_bytes = key.as_bytes();
+            let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
             let mut values = db_ref.fetch(key_bytes);
-            values.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+            values.sort_by(|a, b| shortlex(a, b));
             replay_aligned = !values.is_empty();
-            for raw in values {
+            let primary_count = values.len();
+            // When the primary corpus is small, top it up with a sample of
+            // the secondary (historical near-miss) corpus, mirroring
+            // engine.py's reuse_existing_examples: a stale primary entry
+            // can stop reproducing while an older secondary one still does.
+            let desired_factor = if settings.phases.contains(&Phase::Generate) {
+                0.1
+            } else {
+                1.0
+            };
+            let desired_size = (((max_test_cases as f64) * desired_factor).ceil() as usize).max(2);
+            if values.len() < desired_size {
+                let mut extra = db_ref.fetch(&secondary_key);
+                let shortfall = desired_size - values.len();
+                if extra.len() > shortfall {
+                    // Random sample without replacement: partial
+                    // Fisher-Yates over the first `shortfall` slots.
+                    for i in 0..shortfall {
+                        let j = rng.random_range(i..extra.len());
+                        extra.swap(i, j);
+                    }
+                    extra.truncate(shortfall);
+                }
+                extra.sort_by(|a, b| shortlex(a, b));
+                values.extend(extra);
+            }
+            let mut found_interesting_in_primary = false;
+            for (i, raw) in values.into_iter().enumerate() {
+                // Fast path: if a primary entry reproduced, skip the
+                // secondary portion entirely.
+                if i >= primary_count && found_interesting_in_primary {
+                    break;
+                }
                 let Some(stored_choices) = deserialize_choices(&raw) else {
                     db_ref.delete(key_bytes, &raw);
+                    db_ref.delete(&secondary_key, &raw);
                     continue;
                 };
-                let ntc = NativeTestCase::for_choices(&stored_choices, None, None);
+                // Replay with extension (Hypothesis's extend="full"): if the
+                // test now draws more choices than the stored prefix holds,
+                // continue with fresh random draws rather than treating the
+                // entry as stale.
+                let ntc = NativeTestCase::for_probe(&stored_choices, rng.spawn(), BUFFER_SIZE);
                 let run = ctx.run(ntc);
                 if run.status == Status::Interesting {
                     let origin = run.origin.unwrap_or_default();
-                    if run.nodes.len() != stored_choices.len() {
+                    if i < primary_count {
+                        found_interesting_in_primary = true;
+                        if run.nodes.len() != stored_choices.len() {
+                            replay_aligned = false;
+                        }
+                    } else {
+                        // A secondary entry is by construction not a shrunk
+                        // example.
                         replay_aligned = false;
                     }
                     // Re-save the realised choice sequence: the stored
@@ -300,10 +346,17 @@ fn run_main(
                     // `secondary` by the end-of-run save.
                     persister.record(&origin, &run.nodes);
                     update_interesting(&mut interesting, origin, run.nodes);
+                    if !report_multiple {
+                        // Single-failure reporting: one reproduced bug is
+                        // all we need.
+                        break;
+                    }
                 } else {
                     // Non-interesting (or invalid) replay: the stored
-                    // value no longer reproduces the bug, drop it.
+                    // value no longer reproduces the bug, drop it from
+                    // both corpora.
                     db_ref.delete(key_bytes, &raw);
+                    db_ref.delete(&secondary_key, &raw);
                 }
             }
             if interesting.is_empty() {
@@ -323,6 +376,7 @@ fn run_main(
     // surfaces all of them, not just the first one to fire.
     let mut first_bug_at: Option<u64> = None;
     let mut last_bug_at: Option<u64> = None;
+    let mut first_bug_time: Option<std::time::Instant> = None;
     let shrink_enabled = settings.phases.contains(&Phase::Shrink);
 
     // All-simplest pre-trial: a deterministic "draw every choice at its
@@ -351,7 +405,9 @@ fn run_main(
         if run.nodes.is_empty() && run.status >= Status::Invalid {
             test_is_trivial = true;
         }
-        if run.status >= Status::Valid {
+        // Only exactly-valid runs count toward the budget; Hypothesis never
+        // counts INTERESTING results as valid examples.
+        if run.status == Status::Valid {
             valid_test_cases += 1;
         }
         if run.status == Status::Invalid {
@@ -364,6 +420,7 @@ fn run_main(
             let origin = run.origin.clone().unwrap_or_default();
             first_bug_at = Some(calls);
             last_bug_at = Some(calls);
+            first_bug_time = Some(std::time::Instant::now());
             persister.record(&origin, &run.nodes);
             update_interesting(&mut interesting, origin, run.nodes.clone());
         }
@@ -398,6 +455,8 @@ fn run_main(
             first_bug_at,
             last_bug_at,
             shrink_enabled,
+            report_multiple,
+            first_bug_time,
         )
     {
         for _ in 0..RANDOM_GENERATION_BATCH {
@@ -416,6 +475,8 @@ fn run_main(
                     first_bug_at,
                     last_bug_at,
                     shrink_enabled,
+                    report_multiple,
+                    first_bug_time,
                 )
             {
                 break;
@@ -450,24 +511,31 @@ fn run_main(
                 );
             }
 
-            if run.status >= Status::Valid {
-                total_test_time += elapsed;
-            }
+            // Test time accrues for every status (Hypothesis records draw
+            // times regardless of outcome), so a slow generator that is
+            // mostly assume()-rejected still trips TooSlow.
+            total_test_time += elapsed;
             if run.nodes.is_empty() && run.status >= Status::Invalid {
                 test_is_trivial = true;
             }
-            if run.status >= Status::Valid {
+            if run.status >= Status::Valid && !run.target_observations.is_empty() {
+                let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
+                targeting.record(&choices, &run.target_observations);
+            }
+            // Only exactly-valid runs count toward the budget; Hypothesis
+            // never counts INTERESTING results as valid examples.
+            if run.status == Status::Valid {
                 valid_test_cases += 1;
-                if !run.target_observations.is_empty() {
-                    let choices: Vec<ChoiceValue> =
-                        run.nodes.iter().map(|n| n.value.clone()).collect();
-                    targeting.record(&choices, &run.target_observations);
-                }
             }
 
             if run.status == Status::Invalid {
                 invalid_test_cases += 1;
-                if invalid_test_cases >= FILTER_TOO_MUCH_THRESHOLD
+                // "Once we've actually found a bug, there's no point in
+                // trying to run health checks - they'll just mask the
+                // actually important information." (engine.py,
+                // record_for_health_check.)
+                if interesting.is_empty()
+                    && invalid_test_cases >= FILTER_TOO_MUCH_THRESHOLD
                     && valid_test_cases < HEALTH_CHECK_MAX_VALID
                     && !settings
                         .suppress_health_check
@@ -486,25 +554,29 @@ fn run_main(
             if run.status == Status::EarlyStop {
                 overrun_test_cases += 1;
             }
-            if let Some(msg) = too_large_check(
-                valid_test_cases,
-                overrun_test_cases,
-                settings
-                    .suppress_health_check
-                    .contains(&HealthCheck::TestCasesTooLarge),
-            ) {
-                return health_check_failure(msg);
-            }
+            // Same once-a-bug-is-found exemption; `run.status` covers the
+            // iteration that discovers the first bug (recorded below).
+            if interesting.is_empty() && run.status != Status::Interesting {
+                if let Some(msg) = too_large_check(
+                    valid_test_cases,
+                    overrun_test_cases,
+                    settings
+                        .suppress_health_check
+                        .contains(&HealthCheck::TestCasesTooLarge),
+                ) {
+                    return health_check_failure(msg);
+                }
 
-            if let Some(msg) = too_slow_check(
-                valid_test_cases,
-                total_test_time,
-                too_slow_threshold,
-                settings
-                    .suppress_health_check
-                    .contains(&HealthCheck::TooSlow),
-            ) {
-                return health_check_failure(msg);
+                if let Some(msg) = too_slow_check(
+                    valid_test_cases,
+                    total_test_time,
+                    too_slow_threshold,
+                    settings
+                        .suppress_health_check
+                        .contains(&HealthCheck::TooSlow),
+                ) {
+                    return health_check_failure(msg);
+                }
             }
 
             // Fire `optimise_targets` periodically once enough valid
@@ -546,6 +618,7 @@ fn run_main(
                 let origin = run.origin.clone().unwrap_or_default();
                 if first_bug_at.is_none() {
                     first_bug_at = Some(calls);
+                    first_bug_time = Some(std::time::Instant::now());
                 }
                 last_bug_at = Some(calls);
                 persister.record(&origin, &run.nodes);
@@ -609,16 +682,72 @@ fn run_main(
                 total
             );
         }
-        let mut origins: Vec<String> = interesting.keys().cloned().collect();
-        // Deterministic shrink order: `interesting` is a `HashMap`, whose key
-        // order is randomised per process, and each origin's shrink shares the
-        // run-level call budget.
-        origins.sort();
+        // Try stored secondary-corpus entries smaller than the current
+        // examples as shrink jump-starts, then drop them — each is either
+        // promoted to primary by the persister or worse than what we already
+        // hold. Port of engine.py's clear_secondary_key; this is also what
+        // keeps the secondary corpus from growing without bound across runs.
+        if let (Some(db_ref), Some(key)) = (&db, database_key) {
+            let key_bytes = key.as_bytes();
+            let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
+            let mut entries = db_ref.fetch(&secondary_key);
+            entries.sort_by(|a, b| shortlex(a, b));
+            let primary_max: Option<Vec<u8>> = interesting
+                .values()
+                .map(|nodes| {
+                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                    serialize_choices(&choices)
+                })
+                .max_by(|a, b| shortlex(a, b));
+            for raw in entries {
+                if primary_max
+                    .as_ref()
+                    .is_some_and(|m| shortlex(&raw, m) == std::cmp::Ordering::Greater)
+                {
+                    break;
+                }
+                if let Some(stored_choices) = deserialize_choices(&raw) {
+                    let ntc = NativeTestCase::for_choices(&stored_choices, None, None);
+                    let run = ctx.run(ntc);
+                    if run.status == Status::Interesting {
+                        let origin = run.origin.unwrap_or_default();
+                        persister.record(&origin, &run.nodes);
+                        update_interesting(&mut interesting, origin, run.nodes);
+                    }
+                }
+                // Unconditionally removed: now primary, or worse than the
+                // primary example of its origin.
+                db_ref.delete(&secondary_key, &raw);
+            }
+        }
+
         // One wall-clock deadline shared across every origin's shrink, matching
         // Hypothesis's single `finish_shrinking_deadline` for the whole phase.
         let shrink_deadline = std::time::Instant::now() + shrink_budget;
         let mut shrink_timed_out = false;
-        for origin in origins {
+        // Worklist rather than a fixed snapshot: shrink probes can stumble
+        // onto bugs with *new* origins (collected via `note_stray`), and
+        // those must be shrunk and reported too, exactly as Hypothesis's
+        // `while len(self.shrunk_examples) < len(self.interesting_examples)`
+        // loop does. Origins are processed in sorted order for determinism
+        // (`interesting` is a HashMap with randomised iteration order).
+        let mut shrunk_origins: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        loop {
+            for (stray_origin, stray_nodes) in ctx.take_stray_interesting() {
+                persister.record(&stray_origin, &stray_nodes);
+                update_interesting(&mut interesting, stray_origin, stray_nodes);
+            }
+            let mut pending: Vec<String> = interesting
+                .keys()
+                .filter(|o| !shrunk_origins.contains(o.as_str()))
+                .cloned()
+                .collect();
+            if pending.is_empty() {
+                break;
+            }
+            pending.sort();
+            let origin = pending.remove(0);
             let initial = interesting.get(&origin).cloned().unwrap_or_default();
 
             // Re-validate that this origin's example still fails. If not,
@@ -677,7 +806,8 @@ fn run_main(
                 shrink_timed_out |= shrinker.timed_out;
                 shrinker.current_nodes
             };
-            interesting.insert(origin, shrunk);
+            interesting.insert(origin.clone(), shrunk);
+            shrunk_origins.insert(origin);
         }
 
         // The shrink phase ran past its wall-clock budget and bailed with the
@@ -971,12 +1101,20 @@ fn within_invalid_budget(
     (invalid_test_cases + overrun_test_cases) <= base + per_valid * valid_test_cases
 }
 
+/// Shortlex ordering over serialized choice sequences: by length first, then
+/// lexicographically. Mirrors Hypothesis's `shortlex` database ordering.
+fn shortlex(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+    a.len().cmp(&b.len()).then_with(|| a.cmp(b))
+}
+
 fn should_generate_more(
     no_bug_yet: bool,
     calls: u64,
     first_bug_at: Option<u64>,
     last_bug_at: Option<u64>,
     shrink_enabled: bool,
+    report_multiple: bool,
+    first_bug_time: Option<std::time::Instant>,
 ) -> bool {
     if no_bug_yet {
         return true;
@@ -987,7 +1125,15 @@ fn should_generate_more(
     // origins add nothing — stop generation immediately. This is what
     // `tests/test_phases.rs::test_disabling_shrink_limits_interesting_calls`
     // asserts (body called at most twice: initial discovery + final replay).
-    if !shrink_enabled {
+    // The same goes for single-failure reporting: extra origins would be
+    // discarded, so don't spend calls hunting them.
+    if !shrink_enabled || !report_multiple {
+        return false;
+    }
+    // For slow tests the call-count window can take far too long; stop
+    // probing for additional origins 10 seconds after the first bug
+    // (engine.py's first_bug_found_time cutoff).
+    if first_bug_time.is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(10)) {
         return false;
     }
     let Some(first) = first_bug_at else {
@@ -1089,6 +1235,12 @@ impl<'a> Persister<'a> {
 pub(crate) struct EngineCtx<'a> {
     run_case: &'a mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
     cache: HashMap<Vec<ChoiceValue>, RunResult>,
+    /// Interesting results whose origin differed from the origin a shrink
+    /// probe was filtering for. Hypothesis records every interesting result
+    /// globally ("We may find one or more examples with a new
+    /// interesting_origin during the shrink process"); the shrink loop
+    /// drains this between origins and shrinks the new ones too.
+    stray_interesting: Vec<(String, Vec<ChoiceNode>)>,
 }
 
 impl<'a> EngineCtx<'a> {
@@ -1098,7 +1250,29 @@ impl<'a> EngineCtx<'a> {
         EngineCtx {
             run_case,
             cache: HashMap::new(),
+            stray_interesting: Vec::new(),
         }
+    }
+
+    fn note_stray(
+        &mut self,
+        status: Status,
+        origin: Option<&str>,
+        nodes: &[ChoiceNode],
+        target_origin: &str,
+    ) {
+        if status != Status::Interesting {
+            return;
+        }
+        if let Some(o) = origin {
+            if o != target_origin {
+                self.stray_interesting.push((o.to_string(), nodes.to_vec()));
+            }
+        }
+    }
+
+    fn take_stray_interesting(&mut self) -> Vec<(String, Vec<ChoiceNode>)> {
+        std::mem::take(&mut self.stray_interesting)
     }
 
     /// Execute one test case via `run_case`, recording the trie and
@@ -1144,17 +1318,21 @@ impl<'a> EngineCtx<'a> {
         if let Some(cached) = self.cache.get(&key) {
             let matches = cached.status == Status::Interesting
                 && cached.origin.as_deref() == Some(target_origin);
-            return (
-                matches,
+            let (status, origin, nodes, spans) = (
+                cached.status,
+                cached.origin.clone(),
                 cached.nodes.clone(),
                 Spans::from(cached.spans.clone()),
             );
+            self.note_stray(status, origin.as_deref(), &nodes, target_origin);
+            return (matches, nodes, spans);
         }
 
         let ntc = NativeTestCase::for_choices(&key, Some(candidate_nodes), None);
         let run = self.execute(ntc, false);
         let matches =
             run.status == Status::Interesting && run.origin.as_deref() == Some(target_origin);
+        self.note_stray(run.status, run.origin.as_deref(), &run.nodes, target_origin);
         let spans = Spans::from(run.spans.clone());
         self.cache.insert(key, run.clone());
         (matches, run.nodes, spans)
@@ -1172,6 +1350,7 @@ impl<'a> EngineCtx<'a> {
         let run = self.execute(ntc, false);
         let matches =
             run.status == Status::Interesting && run.origin.as_deref() == Some(target_origin);
+        self.note_stray(run.status, run.origin.as_deref(), &run.nodes, target_origin);
         let key: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
         let spans = Spans::from(run.spans.clone());
         self.cache.insert(key, run.clone());
