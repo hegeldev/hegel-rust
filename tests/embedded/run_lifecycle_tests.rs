@@ -417,6 +417,69 @@ fn control_flow_panics_never_capture_a_backtrace() {
     );
 }
 
+// ── run_lifecycle: final-replay output is attached to the diagnostic ─────
+//
+// On the final replay the test body's draw/note lines are captured and
+// prepended to the failure's diagnostic, so `drive` prints each failure's
+// counterexample and stack trace as one self-contained block. Anywhere
+// else (non-final cases) the lines keep their live route and the
+// diagnostic stays bare.
+
+#[test]
+fn final_replay_output_is_attached_to_the_diagnostic() {
+    let result = run_case_capturing(true, crate::runner::Verbosity::Normal, &mut |tc| {
+        tc.note("the noted line");
+        panic!("{}", "boom");
+    });
+    let diagnostic = interesting_diagnostic(&result);
+    assert!(
+        diagnostic.starts_with("the noted line\nthread "),
+        "expected the replay output to lead the diagnostic, got:\n{diagnostic}"
+    );
+}
+
+#[test]
+fn non_final_failure_diagnostic_does_not_include_replay_output() {
+    // Verbose mode emits notes live for every test case; they must not be
+    // duplicated into the (also live-printed) non-final diagnostic.
+    let result = run_case_capturing(false, crate::runner::Verbosity::Verbose, &mut |tc| {
+        tc.note("the noted line");
+        panic!("{}", "boom");
+    });
+    let diagnostic = interesting_diagnostic(&result);
+    assert!(
+        !diagnostic.contains("the noted line"),
+        "non-final diagnostics must not embed replay output, got:\n{diagnostic}"
+    );
+}
+
+#[test]
+fn final_replay_output_still_reaches_an_installed_sink() {
+    use std::sync::{Arc, Mutex};
+
+    // Snapshot tests capture the final replay's draw/note lines through
+    // `with_output_override`; the capture-into-diagnostic tee must keep
+    // forwarding to that sink.
+    let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let writer = lines.clone();
+    let sink: crate::test_case::OutputSink =
+        Arc::new(move |s: &str| writer.lock().unwrap().push(s.to_string()));
+
+    let result = crate::test_case::with_output_override(sink, || {
+        run_case_capturing(true, crate::runner::Verbosity::Normal, &mut |tc| {
+            tc.note("teed line");
+            panic!("{}", "boom");
+        })
+    });
+
+    let diagnostic = interesting_diagnostic(&result);
+    assert!(
+        diagnostic.starts_with("teed line\n"),
+        "expected the captured line in the diagnostic, got:\n{diagnostic}"
+    );
+    assert_eq!(lines.lock().unwrap().as_slice(), ["teed line"]);
+}
+
 // `drive` runs the runner unconditionally — phase selection (skipping a
 // run that lacks `Phase::Generate`) is the caller's concern: `Hegel::run`
 // performs that check before calling `drive`, so phase-agnostic callers

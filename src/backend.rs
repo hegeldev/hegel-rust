@@ -101,7 +101,9 @@ pub struct Failure {
     pub panic_message: String,
     /// Pre-rendered multi-line diagnostic — `thread '...' panicked at file:line:`
     /// followed by the panic message and (when captured) the stack backtrace.
-    /// Same format that was previously printed inline by the runner on final replay.
+    /// On the final replay the test body's draw/note output is prepended, so
+    /// the block is self-contained: the counterexample's values sit directly
+    /// above the stack trace they produced.
     pub diagnostic: String,
     /// Opaque per-bug origin tag — currently `"Panic at file:line:col"` from
     /// the captured panic site (with `<unknown>` for the location when

@@ -16,8 +16,10 @@
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::cell::{Cell, RefCell};
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
-use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Once};
+
+use parking_lot::Mutex;
 
 use crate::antithesis::TestLocation;
 use crate::backend::{DataSource, Failure, TestCaseResult, TestRunner};
@@ -249,8 +251,43 @@ pub(crate) fn run_test_case(
     let should_emit = is_final || verbose;
     CAPTURE_BACKTRACE.with(|c| c.set(should_emit));
 
-    let tc = TestCase::new(data_source, is_final, mode, verbose);
-    let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
+    // On the final replay, capture the test body's draw/note output instead
+    // of letting it print live: it gets prepended to the failure's
+    // diagnostic, so `drive` can print each failure's counterexample and
+    // stack trace as one self-contained block. Without this, a multi-failure
+    // run prints every replay's draws back-to-back, then every diagnostic,
+    // with no way to tell which values belong to which trace. A sink
+    // installed via `with_output_override` still receives each line as it is
+    // emitted.
+    let final_output: Option<Arc<Mutex<String>>> = if is_final {
+        Some(Arc::new(Mutex::new(String::new())))
+    } else {
+        None
+    };
+
+    let mut run_body = |data_source: Box<dyn DataSource + Send + Sync>| {
+        let tc = TestCase::new(data_source, is_final, mode, verbose);
+        let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
+        (tc, result)
+    };
+
+    let (tc, result) = match &final_output {
+        Some(buffer) => {
+            let buffer = Arc::clone(buffer);
+            let forward = crate::test_case::current_output_sink();
+            let tee: crate::test_case::OutputSink = Arc::new(move |line: &str| {
+                let mut buffer = buffer.lock();
+                buffer.push_str(line);
+                buffer.push('\n');
+                drop(buffer);
+                if let Some(sink) = &forward {
+                    sink(line);
+                }
+            });
+            crate::test_case::with_output_override(tee, || run_body(data_source))
+        }
+        None => run_body(data_source),
+    };
 
     let tc_result = match &result {
         Ok(()) => TestCaseResult::Valid,
@@ -272,8 +309,11 @@ pub(crate) fn run_test_case(
                 let (thread_name, thread_id, location, backtrace) =
                     take_panic_info().unwrap_or_else(unknown_panic_info);
 
-                let diagnostic =
+                let mut diagnostic =
                     render_diagnostic(&thread_name, &thread_id, &location, &msg, &backtrace);
+                if let Some(buffer) = &final_output {
+                    diagnostic = format!("{}{}", buffer.lock(), diagnostic);
+                }
                 TestCaseResult::Interesting(Failure {
                     panic_message: msg,
                     diagnostic,
@@ -442,25 +482,31 @@ pub(crate) fn drive<R, F>(
             }
             panic!("Property test failed: {}", failure.panic_message);
         }
-        // Multi-failure path: emit a header, print each replay's
-        // diagnostic block in order, then panic with the count so callers
-        // see the headline figure rather than just one of the messages.
+        // Multi-failure path: lead with the failure count, then print each
+        // replay's block (its draws followed by its diagnostic), and panic
+        // with the same count message. The headline has to be eprinted here
+        // to come first — the closing `panic!`'s message is only rendered by
+        // the panic hook once the panic is raised, i.e. after the report.
         // Each distinct bug carries its own blob, so a reproducer line is
         // printed per failure (when `print_blob` is set).
         failures => {
-            let n = failures.len();
+            let headline = format!(
+                "Property-based test failed with {} distinct failures.",
+                failures.len()
+            );
             if !quiet {
-                eprintln!("Hegel found {} failing test cases:", n);
+                eprintln!("{headline}");
             }
             for failure in failures {
                 if !quiet {
+                    eprintln!();
                     eprint!("{}", failure.diagnostic);
                 }
                 if let Some(line) = reproducer_line(settings, failure) {
                     eprintln!("{line}");
                 }
             }
-            panic!("Property-based test failed with {} distinct failures.", n);
+            panic!("{headline}");
         }
     }
 }
