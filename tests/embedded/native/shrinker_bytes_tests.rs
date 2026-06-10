@@ -209,11 +209,16 @@ fn shrink_bytes_handles_node_punned_by_closure() {
     let punned = int_node.clone();
     let mut shrinker = Shrinker::with_probe(
         Box::new(move |run| match run {
-            crate::native::shrinker::ShrinkRun::Full(_) => {
-                // Accept every candidate but realise an Integer node — a
-                // scalar sorts below any sequence, so it is accepted and
+            crate::native::shrinker::ShrinkRun::Full(nodes) => {
+                // Reject the all-simplest short circuit (empty) so the pass
+                // keeps going, then realise an Integer node — a scalar
+                // sorts below any sequence, so it is accepted and
                 // subsequent reads see a non-Bytes node.
-                (true, vec![punned.clone()], Spans::new())
+                let ok = matches!(
+                    nodes.first().map(|n| &n.value),
+                    Some(ChoiceValue::Bytes(v)) if !v.is_empty()
+                );
+                (ok, vec![punned.clone()], Spans::new())
             }
             crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),

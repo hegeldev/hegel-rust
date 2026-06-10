@@ -241,11 +241,11 @@ impl<'a> Shrinker<'a> {
                 // mismatch, sortkey-larger) cannot fire for it either.
                 unreachable!("a strictly-lowered candidate always executes");
             };
-            if improved {
-                // The lower-by-one itself landed; nothing left to repair.
-                i += 1;
-                continue;
-            }
+            // Phase 1's binary search always probes `current - 1` before
+            // settling, so a strictly-lowered-by-one candidate can never be
+            // a fresh improvement here (Hypothesis asserts the same:
+            // `assert attempt is not self.shrink_target`).
+            debug_assert!(!improved);
             let (actual_nodes, actual_spans) = (run.nodes, run.spans);
 
             // Misalignment-truncation retry. Even when the sequence

@@ -1066,8 +1066,19 @@ fn interpret_regex_empty_pattern_with_empty_alphabet_rejects_pads() {
 fn interpret_regex_dot_with_empty_alphabet_rejects() {
     // `.` passes the compatibility pre-check (no literal requirements),
     // but expands to an empty character pool under an empty alphabet.
+    // fullmatch skips the pads so the rejection comes from the character
+    // emitter itself.
+    use crate::cbor_utils::{cbor_array, cbor_map};
     use crate::native::rng::EngineRng;
-    let schema = regex_with_alphabet_schema(".", "");
+    let schema = cbor_map! {
+        "type" => "regex",
+        "pattern" => ".",
+        "fullmatch" => true,
+        "alphabet" => cbor_map! {
+            "categories" => cbor_array![],
+            "include_characters" => ""
+        }
+    };
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
     let err = interpret_regex(&mut ntc, &schema).unwrap_err();
     assert!(matches!(err, EngineError::InvalidTestCase));

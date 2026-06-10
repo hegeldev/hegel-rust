@@ -482,10 +482,15 @@ fn statistics_report_includes_target_scores() {
 fn try_replace_realignment_guards_and_budget() {
     use crate::native::core::Span;
     let mut test_fn = |tc: TestCase| {
+        // A vec body records a span the realignment can pair with; raising
+        // `n` past 5 grows the realised node count.
         let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(10));
-        if n >= 6 {
-            let _: bool = tc.draw(gs::booleans());
-        }
+        let extra = usize::from(n >= 6);
+        let _: Vec<bool> = tc.draw(
+            gs::vecs(gs::booleans())
+                .min_size(1 + extra)
+                .max_size(1 + extra),
+        );
     };
     let mut run_case = move |ds: Box<dyn crate::backend::DataSource + Send + Sync>,
                              is_final: bool| {
@@ -501,6 +506,13 @@ fn try_replace_realignment_guards_and_budget() {
         max_valid: 10_000,
         max_calls,
     };
+    let bool_choice_node = |v: bool| {
+        ChoiceNode::new(
+            ChoiceKind::Boolean(BooleanChoice),
+            ChoiceValue::Boolean(v),
+            false,
+        )
+    };
     let span = |start: usize, end: usize| Span {
         start,
         end,
@@ -509,12 +521,17 @@ fn try_replace_realignment_guards_and_budget() {
         parent: None,
         discarded: false,
     };
-    let mut current_choices = vec![ChoiceValue::Integer(BigInt::from(5))];
-    let mut current_nodes = vec![integer_node(5, 0, 10)];
+    // n = 5 followed by a fixed-size-1 vec ([continue?] is forced for
+    // min == max, so the vec contributes its element draw).
+    let mut current_choices = vec![
+        ChoiceValue::Integer(BigInt::from(5)),
+        ChoiceValue::Boolean(false),
+    ];
+    let mut current_nodes = vec![integer_node(5, 0, 10), bool_choice_node(false)];
     // Crafted spans: one ending before idx (skipped), one overshooting the
-    // choice list (skipped), one valid (realigned), one starting past idx
-    // (ends the walk).
-    let mut current_spans = vec![span(0, 0), span(0, 9), span(0, 1), span(1, 1)];
+    // choice list (skipped), one valid (realigned — and the trial it runs
+    // exhausts the budget), one starting past idx (ends the walk).
+    let mut current_spans = vec![span(0, 0), span(0, 9), span(0, 2), span(1, 1)];
     let mut current_score = f64::NEG_INFINITY;
     let mut improvements = 0usize;
     let committed = optimiser.try_replace(

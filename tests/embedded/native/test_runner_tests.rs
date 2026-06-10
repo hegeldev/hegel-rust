@@ -1070,7 +1070,12 @@ fn statistics_report_covers_phases_and_stop_reason() {
     let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
         run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
     };
-    let settings = Settings::new().test_cases(20).database(None).seed(Some(7));
+    // `statistics(true)` also exercises the end-of-run report printing.
+    let settings = Settings::new()
+        .test_cases(20)
+        .database(None)
+        .seed(Some(7))
+        .statistics(true);
     let mut ctx = Engine::new(&settings, None, &mut run_case);
     let result = ctx.run(Duration::from_secs(30), Duration::from_secs(300));
     assert!(result.passed);
@@ -1103,6 +1108,8 @@ fn statistics_report_covers_shrinks_and_failures() {
     crate::run_lifecycle::init_panic_hook();
     let mut test_fn = |tc: crate::TestCase| {
         let n: i32 = tc.draw(crate::generators::integers());
+        // A single unlabelled target exercises the one-score report line.
+        tc.target(n.unsigned_abs().min(64) as f64);
         assert!(n < 1000, "too big");
     };
     let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
@@ -1124,6 +1131,10 @@ fn statistics_report_covers_shrinks_and_failures() {
     assert!(
         report.contains("shrinks of which"),
         "missing shrink summary: {report}"
+    );
+    assert!(
+        report.contains("Highest target score:"),
+        "missing single-target score line: {report}"
     );
     assert!(
         report.contains("Stopped because nothing left to do"),

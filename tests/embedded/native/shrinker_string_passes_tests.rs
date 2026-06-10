@@ -334,7 +334,15 @@ fn shrink_strings_handles_node_punned_by_closure() {
     );
     let mut shrinker = Shrinker::with_probe(
         Box::new(move |run| match run {
-            ShrinkRun::Full(_) => (true, vec![punned.clone()], Spans::new()),
+            ShrinkRun::Full(nodes) => {
+                // Reject the all-simplest short circuit (empty) so the pass
+                // keeps going before the pun is realised.
+                let ok = matches!(
+                    nodes.first().map(|n| &n.value),
+                    Some(ChoiceValue::String(s)) if !s.is_empty()
+                );
+                (ok, vec![punned.clone()], Spans::new())
+            }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         vec![string_node_with(
@@ -378,31 +386,57 @@ fn shrink_strings_stops_at_improvement_cap() {
     assert!(shrinker.shrink_strings().is_err());
 }
 
-/// The duplicated-codepoint semantic loop: a semantic candidate that
-/// clears every instance of the duplicate breaks out early, and a
-/// realised run that removed the duplicate before the replacement runs
-/// reports "nothing changed".
+/// The duplicated-codepoint semantic loop: the Integer key moves cannot
+/// land on the NFD base when the alphabet places it at an unreachable
+/// key, so only the semantic candidate collapses the duplicates; a
+/// realised run that rewrites the *other* duplicate value mid-loop makes
+/// its replacement a no-op.
 #[test]
 fn shrink_strings_duplicate_semantic_loop_edges() {
-    // 'À' duplicated; alphabet includes its NFD base 'A'. The semantic
-    // candidate replaces every 'À' with 'A' in one step.
-    let initial = vec![string_node_with(
-        b'A' as u32,
-        0xFF,
-        vec![0xC0, 0xC0, b'z' as u32],
-    )];
+    // Alphabet with digits first: 'A' sits at key 10, which none of the
+    // Integer moves from key(À)/key(Â) produce, so the semantic NFD
+    // candidates are the only route down.
+    let kind = StringChoice {
+        intervals: IntervalSet::new(vec![(b'0' as u32, b'9' as u32), (b'A' as u32, 0xFF)]),
+        min_size: 0,
+        max_size: 8,
+    };
+    let node = |v: Vec<u32>| {
+        ChoiceNode::new(
+            ChoiceKind::String(kind.clone()),
+            ChoiceValue::String(v),
+            false,
+        )
+    };
+    let a_up = b'A' as u32;
+    let initial = vec![node(vec![0xC0, 0xC0, 0xC2, 0xC2])];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(move |run| match run {
             ShrinkRun::Full(nodes) => {
-                // Interesting only while both duplicate positions agree
-                // and the length stays 3 — so deletion and single-position
-                // changes fail, and only the all-instances replacement
-                // (or no-op candidates) are accepted.
                 let ok = matches!(
                     nodes.first().map(|n| &n.value),
-                    Some(ChoiceValue::String(s)) if s.len() == 3 && s[0] == s[1]
+                    Some(ChoiceValue::String(s))
+                        if s.len() == 4
+                            && s[0] == s[1]
+                            && s[2] == s[3]
+                            && s.iter().all(|&c| c == 0xC0 || c == 0xC2 || c == a_up)
                 );
-                (ok, nodes.to_vec(), Spans::new())
+                // Once the first pair collapses to 'A', the realised run
+                // rewrites the second pair too — so the loop's later
+                // replacement attempt for 'Â' finds nothing to change.
+                let mut actual = nodes.to_vec();
+                if ok {
+                    if let Some(n) = actual.first_mut() {
+                        if let ChoiceValue::String(s) = &mut n.value {
+                            if s[0] == a_up {
+                                for c in s.iter_mut() {
+                                    *c = a_up;
+                                }
+                            }
+                        }
+                    }
+                }
+                (ok, actual, Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -411,8 +445,11 @@ fn shrink_strings_duplicate_semantic_loop_edges() {
     );
     shrinker.shrink_strings().unwrap();
     if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
-        assert_eq!(s[0], s[1], "duplicates stay linked: {s:?}");
-        assert_eq!(s[0], b'A' as u32, "collapsed to the NFD base: {s:?}");
+        assert_eq!(
+            s,
+            &vec![a_up; 4],
+            "collapsed via the semantic candidates: {s:?}"
+        );
     } else {
         unreachable!();
     }
