@@ -261,6 +261,12 @@ pub const HEGEL_LABEL_SAMPLED_FROM: u64 = 14;
 /// Outer span around the variant discriminator of a sum-type draw.
 pub const HEGEL_LABEL_ENUM_VARIANT: u64 = 15;
 
+/// Span around one swarm-testing feature-flag draw. Emitted internally
+/// by the engine's state-machine rule selection
+/// (`hegel_state_machine_next_rule`); callers normally never open this
+/// span themselves.
+pub const HEGEL_LABEL_FEATURE_FLAG: u64 = 16;
+
 // ─── Thread-local error message ─────────────────────────────────────────────
 
 thread_local! {
@@ -1277,6 +1283,144 @@ pub unsafe extern "C" fn hegel_pool_generate(
     match tc.ds.pool_generate(pool_id, consume) {
         Ok(id) => {
             unsafe { *out_variable_id = id };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(e),
+    }
+}
+
+/// Convert a C array of `len` NUL-terminated strings into owned Rust
+/// strings, setting `hegel_last_error_message` and returning the error
+/// code on a null array (with `len > 0`), a null entry, or a non-UTF-8
+/// entry.
+unsafe fn names_from_c_array(
+    func: &str,
+    what: &str,
+    names: *const *const c_char,
+    len: usize,
+) -> Result<Vec<String>, c_int> {
+    if names.is_null() && len > 0 {
+        set_last_error(&format!("{func}: {what} pointer is null"));
+        return Err(HEGEL_E_INVALID_ARG);
+    }
+    let ptrs: &[*const c_char] = if len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(names, len) }
+    };
+    let mut out = Vec::with_capacity(len);
+    for (i, &p) in ptrs.iter().enumerate() {
+        if p.is_null() {
+            set_last_error(&format!("{func}: {what}[{i}] is null"));
+            return Err(HEGEL_E_INVALID_ARG);
+        }
+        match unsafe { CStr::from_ptr(p) }.to_str() {
+            Ok(s) => out.push(s.to_string()),
+            Err(_) => {
+                set_last_error(&format!("{func}: {what}[{i}] is not valid UTF-8"));
+                return Err(HEGEL_E_INVALID_ARG);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Register a *state machine* for engine-owned stateful (rule-based)
+/// testing: `num_rules` rules and `num_invariants` invariants, each
+/// identified by a NUL-terminated UTF-8 name. The engine owns rule
+/// selection — including swarm testing, where each test case enables a
+/// random subset of rules (at least one) and selection draws only from
+/// that subset. The caller drives execution: it asks
+/// `hegel_state_machine_next_rule` which rule to run at each step and
+/// applies it.
+///
+/// On success writes the new machine's id into `*out_state_machine_id`
+/// and returns `HEGEL_OK`. The id is opaque; pass it to subsequent
+/// `hegel_state_machine_next_rule` calls on the *same* test case.
+/// Returns `HEGEL_E_INVALID_ARG` if `num_rules` is zero, or on null /
+/// non-UTF-8 names.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_new_state_machine(
+    tc: *mut HegelTestCase,
+    rule_names: *const *const c_char,
+    num_rules: usize,
+    invariant_names: *const *const c_char,
+    num_invariants: usize,
+    out_state_machine_id: *mut i64,
+) -> c_int {
+    clear_last_error();
+    let tc = match unsafe { tc_mut(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_state_machine_id.is_null() {
+        set_last_error("hegel_new_state_machine: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let rules = match unsafe {
+        names_from_c_array(
+            "hegel_new_state_machine",
+            "rule_names",
+            rule_names,
+            num_rules,
+        )
+    } {
+        Ok(v) => v,
+        Err(rc) => return rc,
+    };
+    let invariants = match unsafe {
+        names_from_c_array(
+            "hegel_new_state_machine",
+            "invariant_names",
+            invariant_names,
+            num_invariants,
+        )
+    } {
+        Ok(v) => v,
+        Err(rc) => return rc,
+    };
+    let rule_refs: Vec<&str> = rules.iter().map(|s| s.as_str()).collect();
+    let invariant_refs: Vec<&str> = invariants.iter().map(|s| s.as_str()).collect();
+    match tc.ds.new_state_machine(&rule_refs, &invariant_refs) {
+        Ok(id) => {
+            unsafe { *out_state_machine_id = id };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(e),
+    }
+}
+
+/// Draw the index of the next rule to run, in `[0, num_rules)`, letting
+/// the engine choose (and shrink) the rule sequence. Swarm testing is
+/// applied per test case: a random subset of rules is enabled on the
+/// first call and selection is restricted to that subset for the rest
+/// of the test case, with restrictions that shrink away in minimal
+/// counterexamples.
+///
+/// On success writes the chosen rule index into `*out_rule_index` and
+/// returns `HEGEL_OK`. `state_machine_id` must be an id returned by
+/// `hegel_new_state_machine` on this test case. Returns
+/// `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
+/// (the caller should abort the body and call `hegel_mark_complete`
+/// with `HEGEL_STATUS_OVERRUN`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_state_machine_next_rule(
+    tc: *mut HegelTestCase,
+    state_machine_id: i64,
+    out_rule_index: *mut u64,
+) -> c_int {
+    clear_last_error();
+    let tc = match unsafe { tc_mut(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_rule_index.is_null() {
+        set_last_error("hegel_state_machine_next_rule: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.ds.state_machine_next_rule(state_machine_id) {
+        Ok(index) => {
+            unsafe { *out_rule_index = index };
             HEGEL_OK
         }
         Err(e) => translate_ds_error(e),
