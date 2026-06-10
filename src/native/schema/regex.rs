@@ -561,14 +561,13 @@ fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<IntervalSet>) -
     }
 }
 fn add_with_swapcase(v: &mut Vec<char>, c: char, flags: u32) {
-    if !v.contains(&c) {
-        v.push(c);
-    }
+    // Duplicates are fine: both consumers deduplicate with a `HashSet`, and
+    // a linear `contains` scan here would make large class ranges (up to
+    // ~1.1M codepoints) quadratic — an effective hang.
+    v.push(c);
     if flags & SRE_FLAG_IGNORECASE != 0 {
         if let Some(sw) = char_swapcase(c) {
-            if !v.contains(&sw) {
-                v.push(sw);
-            }
+            v.push(sw);
         }
     }
 }

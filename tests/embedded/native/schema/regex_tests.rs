@@ -829,3 +829,26 @@ fn generate_op_ignorecase_not_literal_blacklists_swapcase_fixpoint() {
         assert_eq!(out, "x", "seed {seed} emitted a case-equal char");
     }
 }
+
+#[test]
+fn interpret_regex_handles_huge_character_class_ranges() {
+    // `[\x20-\U0010FFFF]` expands to ~1.1M codepoints; per-insert linear
+    // dedup made this O(n²) (an effective hang). Consumers deduplicate with
+    // a HashSet, so expansion must stay linear.
+    use crate::cbor_utils::cbor_map;
+    use crate::native::rng::EngineRng;
+    let schema = cbor_map! {
+        "type" => "regex",
+        "pattern" => "[\\x20-\\U0010FFFF]"
+    };
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let v = interpret_regex(&mut ntc, &schema).unwrap();
+    // Strings come back as tag-91 UTF-8 bytes; one matching char suffices.
+    let Value::Tag(91, inner) = v else {
+        panic!("expected tag-91 string, got {v:?}")
+    };
+    let Value::Bytes(bytes) = *inner else {
+        panic!("expected byte payload")
+    };
+    assert!(!bytes.is_empty());
+}
