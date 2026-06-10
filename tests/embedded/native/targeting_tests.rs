@@ -2,7 +2,6 @@ use super::*;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{BytesChoice, FloatChoice};
-use crate::native::rng::EngineRng;
 
 fn integer_node(value: i128, min_value: i128, max_value: i128) -> ChoiceNode {
     ChoiceNode::new(
@@ -272,7 +271,7 @@ fn step_choice_rejects_mismatched_value_and_kind() {
 // ── hill_climb integration paths (resize-restart, lateral-grow, etc.) ──
 //
 // These tests drive `optimise_targets` directly with a controlled
-// `EngineCtx` so each interior branch of `hill_climb` and `try_replace`
+// `Engine` so each interior branch of `hill_climb` and `try_replace`
 // gets a deterministic path through it. The end-to-end integration
 // tests in `tests/test_targeting.rs` cover the *behaviour* (targeting
 // finds optima, doesn't exceed budget, etc.) but they sample randomly
@@ -280,7 +279,7 @@ fn step_choice_rejects_mismatched_value_and_kind() {
 
 use crate::TestCase;
 use crate::generators::{self as gs};
-use crate::native::test_runner::EngineCtx;
+use crate::native::test_runner::Engine;
 use crate::run_lifecycle::run_test_case;
 use crate::runner::{Mode, Verbosity};
 use std::collections::HashMap as StdHashMap;
@@ -293,22 +292,18 @@ where
                              is_final: bool| {
         run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
     };
-    let mut ctx = EngineCtx::new(&mut run_case);
-
-    let mut recorder = crate::native::test_runner::RunRecorder::for_tests();
-    recorder
+    let settings = crate::Settings::new().database(None).seed(Some(0xc0ffee));
+    let mut engine = Engine::new(&settings, None, &mut run_case);
+    engine
         .targeting
         .record(&start, &StdHashMap::from([("".to_string(), start_score)]));
 
-    let mut rng = EngineRng::seeded(0xc0ffee);
-    let mut opt_ctx = OptimiseCtx {
-        engine: &mut ctx,
-        recorder: &mut recorder,
+    let mut optimiser = Optimiser {
+        engine: &mut engine,
         max_valid: 10_000,
         max_calls: 100_000,
-        rng: &mut rng,
     };
-    optimise_targets(&mut opt_ctx);
+    optimiser.optimise_targets();
 }
 
 /// Drives `hill_climb`'s resize-restart branch and the already-examined

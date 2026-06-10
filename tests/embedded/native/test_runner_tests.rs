@@ -89,12 +89,12 @@ use crate::native::core::choices::BooleanChoice;
 use crate::native::data_tree::{DataTreeNode, record_tree};
 use crate::run_lifecycle::run_test_case;
 
-/// Build an [`EngineCtx`] whose `run_case` runs `test_fn` and counts how many
+/// Build an [`Engine`] whose `run_case` runs `test_fn` and counts how many
 /// times the test body actually executed, then hand both to `body`.
 fn with_counting_ctx<T, B>(mut test_fn: T, body: B)
 where
     T: FnMut(crate::TestCase),
-    B: FnOnce(&mut EngineCtx<'_>, &Rc<Cell<usize>>),
+    B: FnOnce(&mut Engine<'_>, &Rc<Cell<usize>>),
 {
     crate::run_lifecycle::init_panic_hook();
     let exec_count = Rc::new(Cell::new(0usize));
@@ -103,7 +103,8 @@ where
         counter.set(counter.get() + 1);
         run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
     };
-    let mut ctx = EngineCtx::new(&mut run_case);
+    let settings = Settings::new().database(None);
+    let mut ctx = Engine::new(&settings, None, &mut run_case);
     body(&mut ctx, &exec_count);
 }
 
@@ -125,13 +126,10 @@ fn cached_run_skips_execution_when_tree_knows_the_path() {
             // The tree already records a one-boolean run that concluded
             // Valid; replaying that path (plus an unread trailing choice,
             // as a duplicated span would produce) must not run the body.
-            let mut tree = DataTreeNode::default();
-            record_tree(&mut tree, &[bool_node(false)], Status::Valid, &[]);
+            record_tree(&mut ctx.tree_root, &[bool_node(false)], Status::Valid, &[]);
 
-            let (run, executed) = ctx.cached_run(
-                &[ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)],
-                &mut tree,
-            );
+            let (run, executed) =
+                ctx.cached_run(&[ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)]);
             assert_eq!(run.status, Status::Valid);
             assert!(!executed);
             assert_eq!(count.get(), 0);
@@ -146,15 +144,14 @@ fn cached_run_executes_novel_then_serves_repeat_from_cache() {
             tc.draw(crate::generators::booleans());
         },
         |ctx, count| {
-            let mut tree = DataTreeNode::default();
             let choices = [ChoiceValue::Boolean(true)];
 
-            let (first, executed_first) = ctx.cached_run(&choices, &mut tree);
+            let (first, executed_first) = ctx.cached_run(&choices);
             assert!(executed_first);
             assert_eq!(count.get(), 1);
 
             // A second identical replay is served without re-running.
-            let (second, executed_second) = ctx.cached_run(&choices, &mut tree);
+            let (second, executed_second) = ctx.cached_run(&choices);
             assert!(!executed_second);
             assert_eq!(count.get(), 1);
             assert_eq!(first.status, second.status);
@@ -174,10 +171,14 @@ fn cached_run_reexecutes_known_interesting_path_to_recover_payload() {
             }
         },
         |ctx, count| {
-            let mut tree = DataTreeNode::default();
-            record_tree(&mut tree, &[bool_node(true)], Status::Interesting, &[]);
+            record_tree(
+                &mut ctx.tree_root,
+                &[bool_node(true)],
+                Status::Interesting,
+                &[],
+            );
 
-            let (run, executed) = ctx.cached_run(&[ChoiceValue::Boolean(true)], &mut tree);
+            let (run, executed) = ctx.cached_run(&[ChoiceValue::Boolean(true)]);
             assert_eq!(run.status, Status::Interesting);
             assert!(executed);
             assert_eq!(count.get(), 1);
@@ -213,16 +214,14 @@ fn span_mutation_does_not_re_execute_identical_proposals() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            let mut rng = EngineRng::seeded(0);
-            let mut recorder = RunRecorder::for_tests();
-            try_span_mutation(&nodes, &spans, &mut rng, ctx, &mut recorder, 100);
+            ctx.try_span_mutation(&nodes, &spans);
 
             assert_eq!(count.get(), 1);
             // The single executed probe was recorded: one call, one valid
             // example consumed from the budget, nothing interesting.
-            assert_eq!(recorder.calls, 1);
-            assert_eq!(recorder.valid_test_cases, 1);
-            assert!(recorder.interesting.is_empty());
+            assert_eq!(ctx.calls, 1);
+            assert_eq!(ctx.valid_test_cases, 1);
+            assert!(ctx.interesting.is_empty());
         },
     );
 }
@@ -257,15 +256,13 @@ fn span_mutation_returns_interesting_proposal() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            let mut rng = EngineRng::seeded(0);
-            let mut recorder = RunRecorder::for_tests();
-            try_span_mutation(&nodes, &spans, &mut rng, ctx, &mut recorder, 100);
+            ctx.try_span_mutation(&nodes, &spans);
 
             assert_eq!(count.get(), 1);
-            assert_eq!(recorder.calls, 1);
+            assert_eq!(ctx.calls, 1);
             // An Interesting probe is not a valid example; budget untouched.
-            assert_eq!(recorder.valid_test_cases, 0);
-            let origin = recorder
+            assert_eq!(ctx.valid_test_cases, 0);
+            let origin = ctx
                 .interesting
                 .keys()
                 .next()
@@ -298,15 +295,13 @@ fn span_mutation_stops_when_example_budget_is_full() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            let mut rng = EngineRng::seeded(0);
             // Budget already full: no probe should run.
-            let mut recorder = RunRecorder::for_tests();
-            recorder.valid_test_cases = 100;
-            try_span_mutation(&nodes, &spans, &mut rng, ctx, &mut recorder, 100);
+            ctx.valid_test_cases = 100;
+            ctx.try_span_mutation(&nodes, &spans);
 
             assert_eq!(count.get(), 0);
-            assert_eq!(recorder.calls, 0);
-            assert_eq!(recorder.valid_test_cases, 100);
+            assert_eq!(ctx.calls, 0);
+            assert_eq!(ctx.valid_test_cases, 100);
         },
     );
 }
@@ -526,7 +521,7 @@ fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
             tc.draw(crate::generators::booleans());
         },
         |ctx, _count| {
-            let run = ctx.run(NativeTestCase::for_simplest(1));
+            let (run, _mismatch) = ctx.test_function(NativeTestCase::for_simplest(1));
             assert_eq!(run.status, Status::EarlyStop);
 
             // The overrun path is therefore not concluded in the tree: a later
