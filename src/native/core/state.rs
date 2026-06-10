@@ -458,11 +458,10 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 
     if fc.validate(f) { f } else { fc.simplest() }
 }
 
-/// Port of Hypothesis's `make_float_clamper` (minus
-/// `smallest_nonzero_magnitude`, which Hegel does not model): remap an
-/// out-of-range draw into `[min_value, max_value]`, using its mantissa bits
-/// as a fraction of the range so that distinct raw draws keep producing
-/// distinct in-range values.
+/// Port of Hypothesis's `make_float_clamper`: remap an out-of-range draw
+/// into `[min_value, max_value]`, using its mantissa bits as a fraction of
+/// the range so that distinct raw draws keep producing distinct in-range
+/// values, and re-routing around the `smallest_nonzero_magnitude` band.
 fn float_clamp(fc: &FloatChoice, raw: f64) -> f64 {
     // An infinite bound with `allow_infinity=false` (a Hegel-only combination
     // that the schema layer avoids, but `FloatChoice` can express) would make
