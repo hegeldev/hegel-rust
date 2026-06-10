@@ -101,17 +101,89 @@ pub fn index_to_float(i: u64) -> f64 {
     f64::from_bits((biased_exp << 52) | mantissa)
 }
 
-/// Convert a lexicographically ordered u64 to a float covering the full
-/// float space. Used for random float generation: feeding uniformly random
-/// `u64` bit patterns through this gives a distribution that covers the
-/// whole representable space.
-pub fn lex_to_float(bits: u64) -> f64 {
-    let bits = if bits >> 63 != 0 {
-        bits ^ (1u64 << 63)
+/// The float in `[lo, hi]` with the smallest lex index. Requires
+/// `0 < lo <= hi`, both finite.
+///
+/// Exact counterpart of probing every float in the range through
+/// [`float_to_index`]: simple integers (tag 0) rank below every fraction, so
+/// the smallest integer wins when the range contains one; otherwise the
+/// winner has the closest-to-1 exponent present in the range and, within
+/// that binade, the mantissa whose [`update_mantissa`] encoding is minimal.
+pub fn simplest_in_range(lo: f64, hi: f64) -> f64 {
+    debug_assert!(lo > 0.0 && lo <= hi && hi.is_finite());
+    const MANTISSA_MASK: u64 = (1u64 << 52) - 1;
+    // Smallest "simple" integer in the range, if any: tag-0 indices sit
+    // below every fractional index and equal the integer's value, so the
+    // smallest integer in range is the overall winner.
+    let c = lo.ceil();
+    if c <= hi && c < (1u64 << 56) as f64 {
+        return c;
+    }
+    let lo_bits = lo.to_bits();
+    let hi_bits = hi.to_bits();
+    let e_lo = lo_bits >> 52;
+    let e_hi = hi_bits >> 52;
+    let m_lo = lo_bits & MANTISSA_MASK;
+    let m_hi = hi_bits & MANTISSA_MASK;
+    // Pick the exponent with the smallest encoding among those intersecting
+    // the range. Encodings ascend with distance from biased 1023, and a
+    // range straddling 1.0 contains the integer 1 (handled above), so the
+    // candidates lie entirely on one side: at or above 1.0 the smallest
+    // exponent wins, below 1.0 the largest.
+    let (e, m_min, m_max) = if e_lo >= 1023 {
+        (e_lo, m_lo, if e_hi == e_lo { m_hi } else { MANTISSA_MASK })
     } else {
-        bits ^ u64::MAX
+        debug_assert!(e_hi < 1023);
+        (e_hi, if e_lo == e_hi { m_lo } else { 0 }, m_hi)
     };
-    f64::from_bits(bits)
+    // Minimise `update_mantissa(e - 1023, m)` over `[m_min, m_max]`.
+    let unbiased = e as i64 - 1023;
+    let m_best = if unbiased >= 52 {
+        // No fractional bits: the encoding is the identity.
+        m_min
+    } else {
+        let n_frac = if unbiased <= 0 {
+            52
+        } else {
+            (52 - unbiased) as u32
+        };
+        // The kept high bits are also the encoding's high bits, so fix them
+        // to the lowest attainable value before minimising the reversed
+        // low bits over whatever low range that leaves.
+        let low_mask = (1u64 << n_frac) - 1;
+        let h = m_min >> n_frac;
+        // `m_min` and `m_max` always share their kept high bits here: the
+        // kept-bit boundaries within a binade sit on integer values (the
+        // binade [2^e, 2^(e+1)) splits into 2^e width-1 parts), so a range
+        // crossing one contains an integer and was handled by the
+        // simple-integer probe; ranges spanning whole binades without a
+        // simple integer only occur at or above 2^56, where the exponent is
+        // >= 52 and the no-fractional-bits arm above applies.
+        debug_assert_eq!(m_max >> n_frac, h);
+        let l_lo = m_min & low_mask;
+        let l_hi = m_max & low_mask;
+        (h << n_frac) | min_reversed_in_range(l_lo, l_hi, n_frac)
+    };
+    f64::from_bits((e << 52) | m_best)
+}
+
+/// The `l` in `[lo, hi]` minimising `reverse_bits_n(l, n)`. The reversed
+/// value's most significant bit is `l`'s least significant bit, so an even
+/// `l` always beats every odd one; recurse on the halved range of even
+/// candidates until none remains (then `lo == hi`, which is forced).
+fn min_reversed_in_range(lo: u64, hi: u64, n: u32) -> u64 {
+    if n == 0 {
+        debug_assert_eq!((lo, hi), (0, 0));
+        return 0;
+    }
+    let k_lo = lo.div_ceil(2);
+    let k_hi = hi / 2;
+    if k_lo <= k_hi {
+        min_reversed_in_range(k_lo, k_hi, n - 1) * 2
+    } else {
+        debug_assert_eq!(lo, hi);
+        lo
+    }
 }
 
 #[cfg(test)]

@@ -122,12 +122,14 @@ fn bench_biased_float_sample(c: &mut Criterion) {
         max_value: f64::INFINITY,
         allow_nan: true,
         allow_infinity: true,
+        smallest_nonzero_magnitude: 5e-324,
     };
     let bounded = FloatChoice {
         min_value: -1.0,
         max_value: 1.0,
         allow_nan: false,
         allow_infinity: false,
+        smallest_nonzero_magnitude: 5e-324,
     };
     group.bench_function("unbounded", |b| {
         let mut rng = EngineRng::seeded(0xC0FFEE);

@@ -383,6 +383,7 @@ fn fc(min: f64, max: f64, allow_nan: bool, allow_infinity: bool) -> FloatChoice 
         max_value: max,
         allow_nan,
         allow_infinity,
+        smallest_nonzero_magnitude: 5e-324,
     }
 }
 
@@ -430,6 +431,7 @@ fn float_choice_simplest_falls_back_to_nan_when_only_nan_allowed() {
         max_value: f64::NEG_INFINITY,
         allow_nan: true,
         allow_infinity: false,
+        smallest_nonzero_magnitude: 5e-324,
     };
     assert!(fc.simplest().is_nan());
 }
@@ -442,6 +444,7 @@ fn float_choice_simplest_panics_when_nothing_valid() {
         max_value: f64::NEG_INFINITY,
         allow_nan: false,
         allow_infinity: false,
+        smallest_nonzero_magnitude: 5e-324,
     };
     let _ = fc.simplest();
 }
@@ -454,6 +457,7 @@ fn float_choice_unit_falls_through_to_simplest_on_nan_start() {
         max_value: f64::NEG_INFINITY,
         allow_nan: true,
         allow_infinity: false,
+        smallest_nonzero_magnitude: 5e-324,
     };
     assert!(fc.unit().is_nan());
 }
@@ -482,6 +486,7 @@ fn float_choice_to_from_index_round_trip_for_infinity_and_nan() {
         max_value: f64::INFINITY,
         allow_nan: true,
         allow_infinity: true,
+        smallest_nonzero_magnitude: 5e-324,
     };
     for v in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
         let idx = fc.to_index(v);
@@ -492,6 +497,164 @@ fn float_choice_to_from_index_round_trip_for_infinity_and_nan() {
             assert_eq!(back, v);
         }
     }
+}
+
+#[test]
+fn float_choice_simplest_finds_simple_fraction_below_one() {
+    // [0.1, 0.9] contains no integer; the float with the smallest lex index
+    // in the range is 0.5. The legacy candidate probing never examined
+    // magnitudes below 1.0, returned the 0.1 endpoint, and `to_index` then
+    // underflowed (and panicked) for any simpler in-range value.
+    assert_eq!(fc(0.1, 0.9, false, false).simplest(), 0.5);
+    assert_eq!(fc(-0.9, -0.1, false, false).simplest(), -0.5);
+}
+
+#[test]
+fn float_choice_simplest_is_exact_for_deep_fractions() {
+    // [1.10, 1.11]: the minimum-lex float is 1.109375 (= 1 + 7/64), beyond
+    // the eight mantissa encodings the legacy probe examined per exponent.
+    assert_eq!(fc(1.10, 1.11, false, false).simplest(), 1.109375);
+    assert_eq!(fc(0.3, 0.4, false, false).simplest(), 0.375);
+}
+
+#[test]
+fn float_choice_to_index_does_not_underflow_for_fraction_only_ranges() {
+    // Regression: rank(0.5) < rank(0.1), so with simplest() == 0.1 the
+    // subtraction in to_index produced a negative BigUint and the engine
+    // panicked mid-shrink for a plain `floats().min_value(0.1).max_value(0.9)`
+    // failing test.
+    let choice = fc(0.1, 0.9, false, false);
+    for v in [0.1, 0.5, 0.9, 0.25, 0.125, 0.7] {
+        let idx = choice.to_index(v);
+        assert_eq!(choice.from_index(idx), Some(v));
+    }
+}
+
+#[test]
+fn float_choice_simplest_dominates_sampled_probes() {
+    // simplest() must be valid and rank no higher than any other in-range
+    // value; probe endpoints plus a spread of interior values.
+    let ranges = [
+        (0.1, 0.9),
+        (1.4, 1.6),
+        (1.10, 1.11),
+        (2.5, 2.7),
+        (1e-10, 1e-5),
+        (1e300, 1.7e308),
+        (65672.5, 65673.0),
+        (-0.9, -0.1),
+        (-1e-5, -1e-10),
+        (-3.7, 9.2),
+        (0.1, 1e10),
+        (5e-324, 4e-324),
+    ];
+    for (lo, hi) in ranges {
+        let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
+        let choice = fc(lo, hi, false, false);
+        let s = choice.simplest();
+        assert!(choice.validate(s), "simplest {s} invalid for [{lo}, {hi}]");
+        let key_s = choice.sort_key(s);
+        for i in 0..=1000 {
+            let probe = lo + (hi - lo) * (i as f64 / 1000.0);
+            if !choice.validate(probe) {
+                continue;
+            }
+            assert!(
+                key_s <= choice.sort_key(probe),
+                "simplest {s} ranks above {probe} for [{lo}, {hi}]"
+            );
+        }
+    }
+}
+
+#[test]
+fn float_choice_validate_respects_smallest_nonzero_magnitude() {
+    let c = FloatChoice {
+        min_value: -1.0,
+        max_value: 1.0,
+        allow_nan: false,
+        allow_infinity: false,
+        smallest_nonzero_magnitude: f64::MIN_POSITIVE,
+    };
+    assert!(c.validate(0.0));
+    assert!(c.validate(-0.0));
+    assert!(c.validate(f64::MIN_POSITIVE));
+    assert!(c.validate(-f64::MIN_POSITIVE));
+    assert!(!c.validate(5e-324), "subnormal must be excluded");
+    assert!(!c.validate(-1e-310), "subnormal must be excluded");
+}
+
+#[test]
+fn float_choice_simplest_respects_smallest_nonzero_magnitude() {
+    // Zero is out of range, and the magnitudes below MIN_POSITIVE are
+    // excluded, so the search must start at the smallest allowed magnitude.
+    let c = FloatChoice {
+        min_value: 5e-324,
+        max_value: 1.0,
+        allow_nan: false,
+        allow_infinity: false,
+        smallest_nonzero_magnitude: f64::MIN_POSITIVE,
+    };
+    assert_eq!(c.simplest(), 1.0);
+    let c2 = FloatChoice {
+        min_value: 5e-324,
+        max_value: 1e-300,
+        allow_nan: false,
+        allow_infinity: false,
+        smallest_nonzero_magnitude: f64::MIN_POSITIVE,
+    };
+    let s = c2.simplest();
+    assert!(
+        c2.validate(s),
+        "simplest {s} must respect the magnitude floor"
+    );
+}
+
+#[test]
+fn float_choice_nan_payloads_round_trip_through_index() {
+    // Every NaN bit pattern (quiet or signaling, both signs) must round-trip
+    // bit-exactly through to_index/from_index. The legacy encoding forced
+    // mantissa bit 51 on decode, mangling signaling payloads.
+    let choice = fc(f64::NEG_INFINITY, f64::INFINITY, true, true);
+    for bits in [
+        0x7FF8_0000_0000_0000_u64, // canonical quiet NaN
+        0x7FF0_0000_0000_0001,     // signaling NaN, payload 1
+        0xFFF8_0000_0000_0000,     // negative quiet NaN
+        0xFFF0_0000_0000_0001,     // negative signaling NaN
+        0x7FFF_FFFF_FFFF_FFFF,     // all payload bits set
+    ] {
+        let v = f64::from_bits(bits);
+        let idx = choice.to_index(v);
+        let back = choice.from_index(idx).unwrap();
+        assert_eq!(back.to_bits(), bits, "NaN payload mangled");
+    }
+}
+
+#[test]
+fn float_choice_from_index_rejects_past_max_index() {
+    // from_index must return None beyond max_index instead of aliasing
+    // further NaN values.
+    let choice = fc(f64::NEG_INFINITY, f64::INFINITY, true, true);
+    assert!(choice.from_index(choice.max_index()).is_some());
+    for extra in [1u32, 2, 50] {
+        assert_eq!(
+            choice.from_index(choice.max_index() + BigUint::from(extra)),
+            None,
+            "index past max_index must be rejected"
+        );
+    }
+}
+
+#[test]
+fn float_choice_from_index_rejects_non_canonical_tag0_ranks() {
+    // Magnitude indices in [2^56, 2^63) are non-canonical: the tag-0 decoder
+    // ignores bits 56..62, so these ranks would silently alias small
+    // integers (breaking the to_index/from_index inverse) instead of being
+    // rejected.
+    let choice = fc(f64::NEG_INFINITY, f64::INFINITY, true, true);
+    // simplest is 0.0 (rank 0), so the index equals the global rank;
+    // rank 2^57 has magnitude index 2^56.
+    assert_eq!(choice.from_index(BigUint::from(1u128 << 57)), None);
 }
 
 // ── BytesChoice ────────────────────────────────────────────────────────

@@ -116,6 +116,43 @@ fn char_class_range() {
 }
 
 #[test]
+fn char_class_range_with_escaped_endpoints() {
+    // CPython's `_class_escape` returns LITERAL codes for \xNN / \uNNNN /
+    // octal / identity escapes, and those are valid range endpoints:
+    // `re._parser.parse(r"[\x41-Z]")` → `[(IN, [(RANGE, (65, 90))])]`.
+    assert_eq!(
+        parsed(r"[\x41-Z]").data,
+        vec![OpCode::In(vec![SetItem::Range(0x41, 0x5A)])]
+    );
+    assert_eq!(
+        parsed(r"[\x00-\x1f]").data,
+        vec![OpCode::In(vec![SetItem::Range(0x00, 0x1F)])]
+    );
+    assert_eq!(
+        parsed(r"[\101-\172]").data,
+        vec![OpCode::In(vec![SetItem::Range(0o101, 0o172)])]
+    );
+    assert_eq!(
+        parsed(r"[\--/]").data,
+        vec![OpCode::In(vec![SetItem::Range(b'-' as u32, b'/' as u32)])]
+    );
+    assert_eq!(
+        parsed(r"[a-￿]").data,
+        vec![OpCode::In(vec![SetItem::Range(97, 0xFFFF)])]
+    );
+}
+
+#[test]
+fn char_class_range_category_endpoint_is_an_error() {
+    // A category escape (\d, \w, ...) is not a literal and cannot anchor a
+    // range — CPython: "bad character range".
+    let err = parse_err(r"[\d-z]");
+    assert!(err.msg.contains("bad character range"), "{}", err.msg);
+    let err = parse_err(r"[a-\d]");
+    assert!(err.msg.contains("bad character range"), "{}", err.msg);
+}
+
+#[test]
 fn char_class_negate() {
     assert_eq!(
         parsed("[^abc]").data,

@@ -461,6 +461,101 @@ mod float_nastiness {
     use hegel::{Hegel, Settings};
 
     #[test]
+    fn test_allow_subnormal_false_excludes_subnormals_f64() {
+        assert_all_examples(
+            gs::floats::<f64>()
+                .allow_nan(false)
+                .allow_infinity(false)
+                .allow_subnormal(false),
+            |x: &f64| *x == 0.0 || x.abs() >= f64::MIN_POSITIVE,
+        );
+    }
+
+    #[test]
+    fn test_allow_subnormal_false_excludes_subnormals_f32() {
+        assert_all_examples(
+            gs::floats::<f32>()
+                .allow_nan(false)
+                .allow_infinity(false)
+                .allow_subnormal(false),
+            |x: &f32| *x == 0.0 || x.abs() >= f32::MIN_POSITIVE,
+        );
+    }
+
+    #[test]
+    fn test_can_find_subnormals_by_default() {
+        crate::common::utils::FindAny::new(
+            gs::floats::<f64>().allow_nan(false).allow_infinity(false),
+            |x: &f64| x.is_subnormal(),
+        )
+        .seed(0)
+        .run();
+    }
+
+    #[test]
+    fn test_allow_subnormal_true_with_excluding_bounds_is_invalid() {
+        // Mirrors Hypothesis: allow_subnormal=True is contradictory when the
+        // bounds exclude every subnormal value.
+        expect_panic(
+            || {
+                Hegel::new(|tc| {
+                    let _: f64 = tc.draw(gs::floats::<f64>().min_value(1.0).allow_subnormal(true));
+                })
+                .settings(Settings::new().test_cases(1).database(None))
+                .run();
+            },
+            "InvalidArgument",
+        );
+    }
+
+    #[test]
+    fn test_allow_subnormal_true_with_excluding_max_is_invalid() {
+        // The mirror of the min_value check: a maximum at or below the
+        // smallest negative normal leaves no subnormals either.
+        expect_panic(
+            || {
+                Hegel::new(|tc| {
+                    let _: f64 = tc.draw(gs::floats::<f64>().max_value(-1.0).allow_subnormal(true));
+                })
+                .settings(Settings::new().test_cases(1).database(None))
+                .run();
+            },
+            "InvalidArgument",
+        );
+    }
+
+    #[test]
+    fn test_subnormal_only_range_with_allow_subnormal_false_is_invalid() {
+        // [5e-324, 1e-310] contains only subnormals; excluding them leaves
+        // nothing to generate.
+        expect_panic(
+            || {
+                Hegel::new(|tc| {
+                    let _: f64 = tc.draw(
+                        gs::floats::<f64>()
+                            .min_value(5e-324)
+                            .max_value(1e-310)
+                            .allow_subnormal(false),
+                    );
+                })
+                .settings(Settings::new().test_cases(1).database(None))
+                .run();
+            },
+            "InvalidArgument",
+        );
+    }
+
+    #[test]
+    fn test_fraction_only_range_shrinks_to_simplest_fraction() {
+        // Regression: shrinking any failure in a fraction-only range used to
+        // panic with a BigUint underflow ("UBig result must not be negative")
+        // because FloatChoice::simplest() was not the true rank minimum of
+        // the range, and to_index subtracts its rank.
+        let v = minimal(gs::floats::<f64>().min_value(0.1).max_value(0.9), |_| true);
+        assert_eq!(v, 0.5);
+    }
+
+    #[test]
     fn test_floats_are_in_range_large() {
         let lower = 9.9792015476736e291_f64;
         let upper = 1.7976931348623157e308_f64;
@@ -728,6 +823,58 @@ mod float_nastiness {
                             .max_value(f64::NEG_INFINITY)
                             .exclude_max(true),
                     );
+                })
+                .settings(Settings::new().test_cases(1).database(None))
+                .run();
+            },
+            "InvalidArgument",
+        );
+    }
+
+    #[test]
+    fn test_exclude_only_neg_infinite_endpoint() {
+        // `min_value=-inf, exclude_min=true` with no max bound is the
+        // Hypothesis idiom for "any float except -inf": +inf stays allowed
+        // (allow_infinity defaults to true with one unbounded end) but -inf
+        // must never be generated.
+        assert_all_examples(
+            gs::floats::<f64>()
+                .min_value(f64::NEG_INFINITY)
+                .exclude_min(true),
+            |x: &f64| *x != f64::NEG_INFINITY,
+        );
+    }
+
+    #[test]
+    fn test_exclude_only_pos_infinite_endpoint() {
+        assert_all_examples(
+            gs::floats::<f64>()
+                .max_value(f64::INFINITY)
+                .exclude_max(true),
+            |x: &f64| *x != f64::INFINITY,
+        );
+    }
+
+    #[test]
+    fn test_exclude_min_without_min_value_is_invalid() {
+        expect_panic(
+            || {
+                Hegel::new(|tc| {
+                    let _: f64 = tc.draw(gs::floats::<f64>().exclude_min(true));
+                })
+                .settings(Settings::new().test_cases(1).database(None))
+                .run();
+            },
+            "InvalidArgument",
+        );
+    }
+
+    #[test]
+    fn test_exclude_max_without_max_value_is_invalid() {
+        expect_panic(
+            || {
+                Hegel::new(|tc| {
+                    let _: f64 = tc.draw(gs::floats::<f64>().exclude_max(true));
                 })
                 .settings(Settings::new().test_cases(1).database(None))
                 .run();

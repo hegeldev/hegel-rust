@@ -41,6 +41,27 @@ fn test_suppress_all(tc: TestCase) {
     std::thread::sleep(std::time::Duration::from_millis(10));
 }
 
+/// Once a bug has been found, health checks must stop firing: the post-bug
+/// probing window keeps generating (here, a recurring bug among nothing but
+/// `assume(false)` rejections, so invalid cases pile up far faster than
+/// valid ones), and converting the already-found failure into FilterTooMuch
+/// would mask the real bug. Mirrors Hypothesis's `record_for_health_check`,
+/// which disables health checks at the first INTERESTING result.
+#[hegel::test(
+    derandomize = true,
+    test_cases = 300u64,
+    database = None,
+    verbosity = hegel::Verbosity::Quiet
+)]
+#[should_panic(expected = "the real bug")]
+fn test_health_checks_do_not_mask_a_found_bug(tc: TestCase) {
+    let x: u64 = tc.draw(gs::integers::<u64>());
+    if x % 2 == 1 {
+        panic!("the real bug");
+    }
+    tc.assume(false);
+}
+
 mod health_checks {
     use hegel::generators as gs;
     use hegel::{HealthCheck, Hegel, Settings, TestCase};

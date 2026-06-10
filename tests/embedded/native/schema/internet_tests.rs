@@ -329,3 +329,17 @@ fn url_encode_path_encodes_high_latin1() {
     let s: String = ['\u{00FF}', '\u{0080}'].iter().collect();
     assert_eq!(url_encode_path(&s), "%FF%80");
 }
+
+#[test]
+fn interpret_domain_rejects_tiny_max_length_as_invalid_argument() {
+    // The schema interpreter is a protocol surface (other clients can send
+    // malformed schemas); `max_length` too small for any TLD must surface
+    // as InvalidArgument like every other malformed-schema path here, not
+    // abort the process via an assert.
+    use crate::cbor_utils::cbor_map;
+    use crate::native::rng::EngineRng;
+    let schema = cbor_map! { "type" => "domain", "max_length" => 3 };
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let err = interpret_domain(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+}

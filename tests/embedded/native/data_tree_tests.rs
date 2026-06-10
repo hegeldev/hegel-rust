@@ -32,6 +32,75 @@ fn bool_node(value: bool) -> ChoiceNode {
     )
 }
 
+fn forced_bool_node(value: bool) -> ChoiceNode {
+    ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(value),
+        true,
+    )
+}
+
+#[test]
+fn record_tree_forced_position_counts_as_complete_for_exhaustion() {
+    // A forced draw has exactly one possible child — the forced value — so a
+    // concluded run behind a forced position exhausts the whole path
+    // (datatree.py counts forced indices as complete in check_exhausted).
+    // Comparing against the kind's full domain (2 for booleans) would keep
+    // any tree containing a forced draw — e.g. every collection's forced
+    // continuation booleans at the min/max-size boundaries — from ever
+    // exhausting.
+    let mut root = DataTreeNode::default();
+    record_tree(&mut root, &[forced_bool_node(true)], Status::Valid, &[]);
+    assert!(root.is_exhausted);
+}
+
+#[test]
+fn generate_novel_prefix_replays_forced_values_and_descends() {
+    // Position 0 is a forced boolean (true); position 1 is unforced with only
+    // `false` explored (concluded, hence exhausted). The walk must emit the
+    // forced value — the replay ignores that slot, so any other value
+    // realises into already-explored territory — and continue to the truly
+    // novel position below it.
+    let mut root = DataTreeNode::default();
+    record_tree(
+        &mut root,
+        &[forced_bool_node(true), bool_node(false)],
+        Status::Valid,
+        &[],
+    );
+    let mut rng = EngineRng::seeded(0);
+    for _ in 0..50 {
+        let prefix = generate_novel_prefix(&root, &mut rng);
+        assert_eq!(
+            prefix,
+            vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)],
+            "prefix must pass through the forced value to the novel position"
+        );
+    }
+}
+
+#[test]
+fn record_tree_exhaustion_check_handles_deep_paths_without_recursion() {
+    // A deep chain of forced choices is "complete" at every level, so the
+    // exhaustion check considers the whole path; doing so with a recursive
+    // descent per node overflows the stack on paths thousands deep
+    // (observed as a SIGABRT under coverage instrumentation, whose stack
+    // frames are larger). Run in a deliberately small stack to pin the
+    // non-recursive implementation, which — like datatree.py — only
+    // consults the cached flags of direct children.
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let mut root = DataTreeNode::default();
+            let nodes: Vec<ChoiceNode> = (0..20_000).map(|_| forced_bool_node(true)).collect();
+            record_tree(&mut root, &nodes, Status::Valid, &[]);
+            assert!(root.is_exhausted);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 #[test]
 fn record_tree_reports_kind_mismatch() {
     // First record an integer node at position 0; recording a boolean node at
@@ -229,4 +298,56 @@ fn simulate_puns_out_of_range_prefix_to_unit() {
         simulate(&root, &[ChoiceValue::Integer(BigInt::from(7))]),
         None
     );
+}
+
+#[test]
+fn generate_novel_prefix_replays_forced_values_of_every_kind() {
+    // Forced positions of every choice kind must round-trip through the
+    // tree's value keys into the novel prefix (integers, floats, bytes and
+    // strings, not just booleans).
+    use crate::native::core::choices::{BytesChoice, FloatChoice, StringChoice};
+    use crate::native::intervalsets::IntervalSet;
+    let forced = |kind: ChoiceKind, value: ChoiceValue| ChoiceNode::new(kind, value, true);
+    let nodes = vec![
+        forced(int_kind(0, 100), ChoiceValue::Integer(BigInt::from(42))),
+        forced(
+            ChoiceKind::Float(FloatChoice {
+                min_value: 0.0,
+                max_value: 10.0,
+                allow_nan: false,
+                allow_infinity: false,
+                smallest_nonzero_magnitude: 5e-324,
+            }),
+            ChoiceValue::Float(2.5),
+        ),
+        forced(
+            ChoiceKind::Bytes(BytesChoice {
+                min_size: 0,
+                max_size: 4,
+            }),
+            ChoiceValue::Bytes(vec![7, 8]),
+        ),
+        forced(
+            ChoiceKind::String(StringChoice {
+                intervals: IntervalSet::new(vec![(b'a' as u32, b'z' as u32)]),
+                min_size: 0,
+                max_size: 4,
+            }),
+            ChoiceValue::String(vec![b'h' as u32, b'i' as u32]),
+        ),
+        bool_node(false),
+    ];
+    let mut root = DataTreeNode::default();
+    record_tree(&mut root, &nodes, Status::Valid, &[]);
+    let mut rng = EngineRng::seeded(0);
+    for _ in 0..20 {
+        let prefix = generate_novel_prefix(&root, &mut rng);
+        assert_eq!(prefix[0], ChoiceValue::Integer(BigInt::from(42)));
+        assert_eq!(prefix[1], ChoiceValue::Float(2.5));
+        assert_eq!(prefix[2], ChoiceValue::Bytes(vec![7, 8]));
+        assert_eq!(
+            prefix[3],
+            ChoiceValue::String(vec![b'h' as u32, b'i' as u32])
+        );
+    }
 }
