@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.4 - 2026-06-10
+
+This patch restructures the native engine into a single `Engine` object mirroring Hypothesis's `ConjectureRunner`: one owner for the executor, the RNG, the example database, the choice tree, the per-origin failing examples, and all run-level counters, with every executed test case recorded through one `test_function` path. Previously each phase (generation, database reuse, targeting, span mutation) kept its own copy of the counter updates, which had already let the same accounting bug appear in two places.
+
+Three small behavioural unifications come with it, all matching Hypothesis: database-reuse replays and targeting trials now count toward the same budgets as generated examples (and feed the choice tree, so generation starts informed by what replays explored — and a generator that is non-deterministic across replays is now reported); span mutation only runs once the health-check warm-up is over; and generation is skipped entirely when a database replay already reproduced a failure, so known failures are reported as fast as possible.
+
 ## 0.17.3 - 2026-06-10
 
 This release fixes a large number of bugs found by auditing the native engine against the Hypothesis implementation it is ported from, and adds one new float feature. Generated distributions change noticeably, and a few previously-silent invalid argument combinations now raise errors, so test suites may see different examples after upgrading.
