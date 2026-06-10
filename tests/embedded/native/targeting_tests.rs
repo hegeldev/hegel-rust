@@ -546,4 +546,27 @@ fn try_replace_realignment_guards_and_budget() {
     );
     assert!(!committed, "budget exhaustion must back out of realignment");
     assert_eq!(improvements, 0);
+
+    // Second probe with a generous budget and more crafted spans than any
+    // trial realises: the positional lookup runs dry and those spans are
+    // skipped. The single-choice current state keeps every realigned
+    // trial sortkey-larger, so nothing commits.
+    optimiser.max_calls = u64::MAX;
+    let mut current_choices = vec![ChoiceValue::Integer(BigInt::from(5))];
+    let mut current_nodes = vec![integer_node(5, 0, 10)];
+    let mut current_spans: Vec<Span> = (0..10).map(|_| span(0, 1)).collect();
+    let mut current_score = f64::NEG_INFINITY;
+    let mut improvements = 0usize;
+    let committed = optimiser.try_replace(
+        "",
+        &mut current_choices,
+        &mut current_nodes,
+        &mut current_spans,
+        &mut current_score,
+        &mut improvements,
+        0,
+        1,
+    );
+    assert!(!committed);
+    assert_eq!(improvements, 0);
 }

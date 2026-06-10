@@ -409,7 +409,11 @@ fn shrink_strings_duplicate_semantic_loop_edges() {
         )
     };
     let a_up = b'A' as u32;
-    let initial = vec![node(vec![0xC0, 0xC0, 0xC2, 0xC2])];
+    let o_low = b'o' as u32;
+    // ò (0xF2) is 50 key positions from À — outside every Integer move
+    // from key(À) — so neither duplicate pair can reach the other and
+    // only the semantic candidates make progress.
+    let initial = vec![node(vec![0xC0, 0xC0, 0xF2, 0xF2])];
     let mut shrinker = Shrinker::with_probe(
         Box::new(move |run| match run {
             ShrinkRun::Full(nodes) => {
@@ -419,7 +423,7 @@ fn shrink_strings_duplicate_semantic_loop_edges() {
                         if s.len() == 4
                             && s[0] == s[1]
                             && s[2] == s[3]
-                            && s.iter().all(|&c| c == 0xC0 || c == 0xC2 || c == a_up)
+                            && s.iter().all(|&c| c == 0xC0 || c == 0xF2 || c == a_up || c == o_low)
                 );
                 // Once the first pair collapses to 'A', the realised run
                 // rewrites the second pair too — so the loop's later
