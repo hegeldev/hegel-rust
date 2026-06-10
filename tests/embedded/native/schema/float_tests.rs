@@ -98,6 +98,44 @@ fn interpret_float_exclude_max_excludes_positive_infinity() {
 }
 
 #[test]
+fn interpret_float_respects_smallest_nonzero_magnitude() {
+    use crate::cbor_utils::cbor_map;
+    use crate::native::core::NativeTestCase;
+    let schema = cbor_map! {
+        "type" => "float",
+        "min_value" => -1.0,
+        "max_value" => 1.0,
+        "allow_nan" => false,
+        "allow_infinity" => false,
+        "smallest_nonzero_magnitude" => f64::MIN_POSITIVE
+    };
+    for seed in 0..200 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let v = interpret_float(&mut ntc, &schema).unwrap();
+        let f = v.as_float().unwrap();
+        assert!(
+            f == 0.0 || f.abs() >= f64::MIN_POSITIVE,
+            "drew {f}, inside the excluded magnitude band"
+        );
+    }
+}
+
+#[test]
+fn interpret_float_rejects_non_positive_smallest_nonzero_magnitude() {
+    use crate::cbor_utils::cbor_map;
+    use crate::native::core::NativeTestCase;
+    for bad in [0.0, -1.0, f64::NAN] {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+        let schema = cbor_map! {
+            "type" => "float",
+            "smallest_nonzero_magnitude" => bad
+        };
+        let err = interpret_float(&mut ntc, &schema).unwrap_err();
+        assert!(matches!(err, EngineError::InvalidArgument(_)));
+    }
+}
+
+#[test]
 fn interpret_float_accepts_width_32_and_64() {
     use crate::cbor_utils::cbor_map;
     use crate::native::core::NativeTestCase;

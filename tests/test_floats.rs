@@ -461,6 +461,75 @@ mod float_nastiness {
     use hegel::{Hegel, Settings};
 
     #[test]
+    fn test_allow_subnormal_false_excludes_subnormals_f64() {
+        assert_all_examples(
+            gs::floats::<f64>()
+                .allow_nan(false)
+                .allow_infinity(false)
+                .allow_subnormal(false),
+            |x: &f64| *x == 0.0 || x.abs() >= f64::MIN_POSITIVE,
+        );
+    }
+
+    #[test]
+    fn test_allow_subnormal_false_excludes_subnormals_f32() {
+        assert_all_examples(
+            gs::floats::<f32>()
+                .allow_nan(false)
+                .allow_infinity(false)
+                .allow_subnormal(false),
+            |x: &f32| *x == 0.0 || x.abs() >= f32::MIN_POSITIVE,
+        );
+    }
+
+    #[test]
+    fn test_can_find_subnormals_by_default() {
+        crate::common::utils::FindAny::new(
+            gs::floats::<f64>().allow_nan(false).allow_infinity(false),
+            |x: &f64| x.is_subnormal(),
+        )
+        .seed(0)
+        .run();
+    }
+
+    #[test]
+    fn test_allow_subnormal_true_with_excluding_bounds_is_invalid() {
+        // Mirrors Hypothesis: allow_subnormal=True is contradictory when the
+        // bounds exclude every subnormal value.
+        expect_panic(
+            || {
+                Hegel::new(|tc| {
+                    let _: f64 = tc.draw(gs::floats::<f64>().min_value(1.0).allow_subnormal(true));
+                })
+                .settings(Settings::new().test_cases(1).database(None))
+                .run();
+            },
+            "InvalidArgument",
+        );
+    }
+
+    #[test]
+    fn test_subnormal_only_range_with_allow_subnormal_false_is_invalid() {
+        // [5e-324, 1e-310] contains only subnormals; excluding them leaves
+        // nothing to generate.
+        expect_panic(
+            || {
+                Hegel::new(|tc| {
+                    let _: f64 = tc.draw(
+                        gs::floats::<f64>()
+                            .min_value(5e-324)
+                            .max_value(1e-310)
+                            .allow_subnormal(false),
+                    );
+                })
+                .settings(Settings::new().test_cases(1).database(None))
+                .run();
+            },
+            "InvalidArgument",
+        );
+    }
+
+    #[test]
     fn test_fraction_only_range_shrinks_to_simplest_fraction() {
         // Regression: shrinking any failure in a fraction-only range used to
         // panic with a BigUint underflow ("UBig result must not be negative")

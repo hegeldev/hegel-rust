@@ -409,18 +409,20 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 
         SIGNALING_NAN,
         -SIGNALING_NAN,
         f64::MIN_POSITIVE,
+        fc.smallest_nonzero_magnitude,
+        -fc.smallest_nonzero_magnitude,
         f64::MAX,
         -f64::MAX,
     ];
     let valid_count = candidates.iter().filter(|&&v| fc.validate(v)).count();
-    // Capped like the integer/string pools, though with ~19 candidates the
-    // uncapped value never exceeds 0.19 today.
+    // Capped like the integer/string pools, though with ~21 candidates the
+    // uncapped value never exceeds ~0.2 today.
     let nasty_threshold = (valid_count as f64 * BOUNDARY_PROBABILITY).min(0.5);
 
     if rng.random::<f64>() < nasty_threshold {
         let idx = rng.random_range(0..valid_count);
         // Walk the fixed-size array again to find the idx-th in-range entry.
-        // 19 elements, no allocation; cheaper than the legacy Vec<f64>.
+        // 21 elements, no allocation; cheaper than the legacy Vec<f64>.
         let mut skip = idx;
         for &v in candidates.iter() {
             if fc.validate(v) {
@@ -474,7 +476,16 @@ fn float_clamp(fc: &FloatChoice, raw: f64) -> f64 {
     const MANTISSA_MASK: u64 = (1u64 << 52) - 1;
     let range_size = (max_value - min_value).min(f64::MAX);
     let mant = raw.abs().to_bits() & MANTISSA_MASK;
-    let f = min_value + range_size * (mant as f64 / MANTISSA_MASK as f64);
+    let mut f = min_value + range_size * (mant as f64 / MANTISSA_MASK as f64);
+    // Remapped into the excluded near-zero band: default to the smallest
+    // allowed magnitude, negated when only the negative side admits it
+    // (mirrors `make_float_clamper`).
+    if f != 0.0 && f.abs() < fc.smallest_nonzero_magnitude {
+        f = fc.smallest_nonzero_magnitude;
+        if fc.smallest_nonzero_magnitude > max_value {
+            f = -f;
+        }
+    }
     // Re-enforce the bounds in case of floating-point rounding error.
     f.max(min_value).min(max_value)
 }
@@ -1260,19 +1271,23 @@ impl NativeTestCase {
 
     /// Draw a floating-point value in `[min_value, max_value]`. NaN is drawn
     /// only when `allow_nan` is set; ±∞ only when `allow_infinity` is set and
-    /// the relevant endpoint is unbounded.
+    /// the relevant endpoint is unbounded. Magnitudes below
+    /// `smallest_nonzero_magnitude` (other than zero itself) are never drawn;
+    /// pass `5e-324` for no restriction.
     pub fn draw_float(
         &mut self,
         min_value: f64,
         max_value: f64,
         allow_nan: bool,
         allow_infinity: bool,
+        smallest_nonzero_magnitude: f64,
     ) -> Result<f64, EngineError> {
         let kind = FloatChoice {
             min_value,
             max_value,
             allow_nan,
             allow_infinity,
+            smallest_nonzero_magnitude,
         };
 
         let (value, was_forced) = self.resolve_choice(

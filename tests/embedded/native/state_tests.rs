@@ -558,7 +558,7 @@ fn draw_float_notifies_observer() {
         captured: captured.clone(),
     });
     let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
-    let v = tc.draw_float(0.0, 10.0, false, false).ok().unwrap();
+    let v = tc.draw_float(0.0, 10.0, false, false, 5e-324).ok().unwrap();
     assert_eq!(v, 2.5);
     let recorded = captured.lock().unwrap().take();
     assert_eq!(recorded, Some((2.5_f64.to_bits(), false)));
@@ -657,7 +657,7 @@ fn draw_float_unbounded_with_nan_can_produce_nan() {
     for seed in 0..200u64 {
         let mut tc = NativeTestCase::new_random(EngineRng::seeded(seed));
         let v = tc
-            .draw_float(f64::NEG_INFINITY, f64::INFINITY, true, true)
+            .draw_float(f64::NEG_INFINITY, f64::INFINITY, true, true, 5e-324)
             .ok()
             .unwrap();
         if v.is_nan() {
@@ -671,7 +671,7 @@ fn draw_float_unbounded_with_nan_can_produce_nan() {
 fn draw_float_half_bounded_below_explores_finite_range() {
     let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
     let v = tc
-        .draw_float(1.0, f64::INFINITY, false, false)
+        .draw_float(1.0, f64::INFINITY, false, false, 5e-324)
         .ok()
         .unwrap();
     assert!(v >= 1.0 && !v.is_nan());
@@ -722,7 +722,10 @@ fn for_simplest_propagates_across_many_draws() {
 #[test]
 fn for_simplest_draws_float_at_zero() {
     let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
-    let v = tc.draw_float(-10.0, 10.0, false, false).ok().unwrap();
+    let v = tc
+        .draw_float(-10.0, 10.0, false, false, 5e-324)
+        .ok()
+        .unwrap();
     assert_eq!(v, 0.0);
     assert!(v.is_sign_positive(), "expected +0.0, got -0.0");
 }
@@ -1077,6 +1080,7 @@ fn biased_float_sample_full_finite_range_does_not_collapse_to_max() {
         max_value: f64::MAX,
         allow_nan: false,
         allow_infinity: false,
+        smallest_nonzero_magnitude: 5e-324,
     };
     let mut rng = EngineRng::seeded(10);
     let total = 2000;

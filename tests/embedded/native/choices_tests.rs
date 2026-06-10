@@ -383,6 +383,7 @@ fn fc(min: f64, max: f64, allow_nan: bool, allow_infinity: bool) -> FloatChoice 
         max_value: max,
         allow_nan,
         allow_infinity,
+        smallest_nonzero_magnitude: 5e-324,
     }
 }
 
@@ -430,6 +431,7 @@ fn float_choice_simplest_falls_back_to_nan_when_only_nan_allowed() {
         max_value: f64::NEG_INFINITY,
         allow_nan: true,
         allow_infinity: false,
+        smallest_nonzero_magnitude: 5e-324,
     };
     assert!(fc.simplest().is_nan());
 }
@@ -442,6 +444,7 @@ fn float_choice_simplest_panics_when_nothing_valid() {
         max_value: f64::NEG_INFINITY,
         allow_nan: false,
         allow_infinity: false,
+        smallest_nonzero_magnitude: 5e-324,
     };
     let _ = fc.simplest();
 }
@@ -454,6 +457,7 @@ fn float_choice_unit_falls_through_to_simplest_on_nan_start() {
         max_value: f64::NEG_INFINITY,
         allow_nan: true,
         allow_infinity: false,
+        smallest_nonzero_magnitude: 5e-324,
     };
     assert!(fc.unit().is_nan());
 }
@@ -482,6 +486,7 @@ fn float_choice_to_from_index_round_trip_for_infinity_and_nan() {
         max_value: f64::INFINITY,
         allow_nan: true,
         allow_infinity: true,
+        smallest_nonzero_magnitude: 5e-324,
     };
     for v in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
         let idx = fc.to_index(v);
@@ -560,6 +565,49 @@ fn float_choice_simplest_dominates_sampled_probes() {
             );
         }
     }
+}
+
+#[test]
+fn float_choice_validate_respects_smallest_nonzero_magnitude() {
+    let c = FloatChoice {
+        min_value: -1.0,
+        max_value: 1.0,
+        allow_nan: false,
+        allow_infinity: false,
+        smallest_nonzero_magnitude: f64::MIN_POSITIVE,
+    };
+    assert!(c.validate(0.0));
+    assert!(c.validate(-0.0));
+    assert!(c.validate(f64::MIN_POSITIVE));
+    assert!(c.validate(-f64::MIN_POSITIVE));
+    assert!(!c.validate(5e-324), "subnormal must be excluded");
+    assert!(!c.validate(-1e-310), "subnormal must be excluded");
+}
+
+#[test]
+fn float_choice_simplest_respects_smallest_nonzero_magnitude() {
+    // Zero is out of range, and the magnitudes below MIN_POSITIVE are
+    // excluded, so the search must start at the smallest allowed magnitude.
+    let c = FloatChoice {
+        min_value: 5e-324,
+        max_value: 1.0,
+        allow_nan: false,
+        allow_infinity: false,
+        smallest_nonzero_magnitude: f64::MIN_POSITIVE,
+    };
+    assert_eq!(c.simplest(), 1.0);
+    let c2 = FloatChoice {
+        min_value: 5e-324,
+        max_value: 1e-300,
+        allow_nan: false,
+        allow_infinity: false,
+        smallest_nonzero_magnitude: f64::MIN_POSITIVE,
+    };
+    let s = c2.simplest();
+    assert!(
+        c2.validate(s),
+        "simplest {s} must respect the magnitude floor"
+    );
 }
 
 #[test]

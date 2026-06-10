@@ -26,6 +26,7 @@ fn float_node(value: f64, was_forced: bool) -> ChoiceNode {
             max_value: f64::INFINITY,
             allow_nan: false,
             allow_infinity: false,
+            smallest_nonzero_magnitude: 5e-324,
         }),
         ChoiceValue::Float(value),
         was_forced,

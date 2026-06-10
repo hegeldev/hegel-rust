@@ -424,6 +424,12 @@ pub struct FloatChoice {
     pub max_value: f64,
     pub allow_nan: bool,
     pub allow_infinity: bool,
+    /// Smallest positive magnitude the choice may produce: values `v` with
+    /// `0 < |v| < smallest_nonzero_magnitude` are invalid. Port of
+    /// Hypothesis's float constraint of the same name (`allow_subnormal =
+    /// false` sets it to the width's smallest *normal*). The default,
+    /// `5e-324` (the smallest subnormal), imposes no restriction.
+    pub smallest_nonzero_magnitude: f64,
 }
 
 /// Bit-exact equality so a `FloatChoice` recorded with `-0.0` doesn't compare
@@ -434,6 +440,8 @@ impl PartialEq for FloatChoice {
             && self.max_value.to_bits() == other.max_value.to_bits()
             && self.allow_nan == other.allow_nan
             && self.allow_infinity == other.allow_infinity
+            && self.smallest_nonzero_magnitude.to_bits()
+                == other.smallest_nonzero_magnitude.to_bits()
     }
 }
 
@@ -458,14 +466,11 @@ impl FloatChoice {
 
         // Find each sign's minimum-lex magnitude with the exact search, then
         // compare the two by the (magnitude index, is_negative) sort key.
-        const TINIEST: f64 = f64::from_bits(1);
+        // Magnitudes start at `smallest_nonzero_magnitude` — the band below
+        // it is invalid.
         let mut best: Option<((u64, bool), f64)> = None;
         if self.max_value > 0.0 {
-            let lo = if self.min_value > 0.0 {
-                self.min_value
-            } else {
-                TINIEST
-            };
+            let lo = self.min_value.max(self.smallest_nonzero_magnitude);
             let hi = self.max_value.min(f64::MAX);
             if lo <= hi {
                 let v = simplest_in_range(lo, hi);
@@ -473,11 +478,7 @@ impl FloatChoice {
             }
         }
         if self.min_value < 0.0 {
-            let lo = if self.max_value < 0.0 {
-                -self.max_value
-            } else {
-                TINIEST
-            };
+            let lo = (-self.max_value).max(self.smallest_nonzero_magnitude);
             let hi = (-self.min_value).min(f64::MAX);
             if lo <= hi {
                 let v = simplest_in_range(lo, hi);
@@ -537,6 +538,9 @@ impl FloatChoice {
                 return false;
             }
             return true;
+        }
+        if v != 0.0 && v.abs() < self.smallest_nonzero_magnitude {
+            return false;
         }
         sign_aware_lte(self.min_value, v) && sign_aware_lte(v, self.max_value)
     }

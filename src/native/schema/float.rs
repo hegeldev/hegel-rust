@@ -37,6 +37,28 @@ pub(super) fn interpret_float(
     let exclude_max = map_get(schema, "exclude_max")
         .and_then(as_bool)
         .unwrap_or(false);
+    // Smallest magnitude (other than zero) the draw may produce —
+    // Hypothesis's `smallest_nonzero_magnitude` constraint, which
+    // `allow_subnormal=false` sets to the width's smallest normal. Defaults
+    // to the width's smallest subnormal, i.e. no restriction, so schemas
+    // without the field keep their old behaviour.
+    let default_snm = if width == 32 {
+        f32::from_bits(1) as f64
+    } else {
+        f64::from_bits(1)
+    };
+    let smallest_nonzero_magnitude = map_get(schema, "smallest_nonzero_magnitude")
+        .map(cbor_to_f64)
+        .transpose()?
+        .unwrap_or(default_snm);
+    // The `>` comparison (not `<= 0.0`) also rejects NaN.
+    let snm_valid = smallest_nonzero_magnitude.is_finite() && smallest_nonzero_magnitude > 0.0;
+    if !snm_valid {
+        return Err(EngineError::InvalidArgument(format!(
+            "smallest_nonzero_magnitude must be a positive finite float, \
+             got {smallest_nonzero_magnitude}"
+        )));
+    }
 
     // Adjust bounds by one ULP for exclusive boundaries. This deliberately
     // applies to non-finite bounds too: `min_value=-inf, exclude_min=true` is
@@ -84,7 +106,13 @@ pub(super) fn interpret_float(
         (min_value, max_value)
     };
 
-    let v = ntc.draw_float(min_value, max_value, allow_nan, allow_infinity)?;
+    let v = ntc.draw_float(
+        min_value,
+        max_value,
+        allow_nan,
+        allow_infinity,
+        smallest_nonzero_magnitude,
+    )?;
     // Round the drawn f64 to f32 precision when the user asked for f32.
     // This matches what the client's deserializer will do and keeps
     // shrinking / replay stable (the same bit pattern round-trips).
