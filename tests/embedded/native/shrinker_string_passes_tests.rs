@@ -279,3 +279,45 @@ fn lower_duplicated_characters_handles_mismatched_alphabets() {
         assert!(k1.validate(s1), "node 1 left with out-of-alphabet value");
     }
 }
+
+/// The gap-preserving reorder from Hypothesis's Ordering shrinker
+/// (`sort_regions_with_gaps`): the middle character is pinned by the
+/// predicate and adjacent swaps would move it, so only sorting the
+/// elements *around* the fixed middle reaches the minimal permutation.
+#[test]
+fn shrink_strings_sorts_around_fixed_middle() {
+    let initial = vec![string_node_with(
+        b'a' as u32,
+        b'z' as u32,
+        vec![b'b' as u32, b'z' as u32, b'a' as u32],
+    )];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                let ok = matches!(
+                    nodes.first().map(|n| &n.value),
+                    Some(ChoiceValue::String(s))
+                        if s.len() == 3 && s[1] == 'z' as u32 && {
+                            let mut rest = vec![s[0], s[2]];
+                            rest.sort_unstable();
+                            rest == vec![b'a' as u32, b'b' as u32]
+                        }
+                );
+                (ok, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.shrink_strings().unwrap();
+    if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
+        assert_eq!(
+            s,
+            &vec![b'a' as u32, b'z' as u32, b'b' as u32],
+            "expected the gap-sort to produce \"azb\""
+        );
+    } else {
+        unreachable!();
+    }
+}

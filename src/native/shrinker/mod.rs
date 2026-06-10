@@ -12,6 +12,7 @@
 
 mod bytes;
 mod coarse;
+mod collection;
 mod deletion;
 mod floats;
 mod index_passes;

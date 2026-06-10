@@ -37,40 +37,6 @@ fn shrink_bytes_collapses_accepting_run_to_simplest() {
 }
 
 #[test]
-fn shrink_bytes_linear_scan_breaks_when_replace_shortens_below_sz() {
-    // The linear-scan fallback's `sz > cur.len()` guard only fires when a
-    // mid-loop `replace` shortens the current value below the next index.
-    //
-    // Setup: an 8-byte value whose only accepted shape is the singleton
-    // `[7]`. `simplest` (an empty vec) is rejected; `bin_search_down`
-    // probes mid points of `min_size..cur_len = 0..8` — `f(0)`, `f(4)`,
-    // `f(6)`, `f(7)` — and never tries `sz == 1`, so the linear scan still
-    // sees the full 8-byte value. Scan iteration `sz == 1` then accepts
-    // and replaces `cur` with `[7]`, and `sz == 2` immediately hits the
-    // break (`2 > cur.len() == 1`).
-    let initial = vec![bytes_node(vec![7, 0, 0, 0, 0, 0, 0, 0], 0, 16)];
-    let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
-            crate::native::shrinker::ShrinkRun::Full(nodes) => {
-                let is_singleton_seven = matches!(
-                    nodes.first().map(|n| &n.value),
-                    Some(ChoiceValue::Bytes(b)) if b.as_slice() == [7]
-                );
-                (is_singleton_seven, nodes.to_vec(), Spans::new())
-            }
-            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
-        }),
-        initial,
-        Spans::new(),
-    );
-    shrinker.shrink_bytes().unwrap();
-    match &shrinker.current_nodes[0].value {
-        ChoiceValue::Bytes(v) => assert_eq!(v, &vec![7u8]),
-        _ => unreachable!(),
-    }
-}
-
-#[test]
 fn redistribute_bytes_pair_partial_move_triggers_bin_search() {
     // Reach the binary-search arm of `redistribute_bytes_pairs` that scans
     // for the longest suffix of `s` movable into `t`. The full-move step
@@ -127,4 +93,100 @@ fn redistribute_bytes_pair_moves_entire_value_when_accepted() {
     };
     assert!(a.is_empty(), "first node not emptied: {a:?}");
     assert_eq!(b, vec![1, 2, 3, 4, 5]);
+}
+
+// ----- Collection.shrink ports (Hypothesis shrinking/collection.py) -----
+
+fn bytes_value(sh: &Shrinker<'_>, i: usize) -> Vec<u8> {
+    match &sh.current_nodes[i].value {
+        ChoiceValue::Bytes(v) => v.clone(),
+        _ => unreachable!(),
+    }
+}
+
+/// The all-simplest-at-current-length probe plus joint duplicate
+/// minimization: with "all three bytes equal" as the predicate, changing
+/// any single byte breaks it, so only a simultaneous move reaches zero.
+#[test]
+fn shrink_bytes_collapses_linked_equal_bytes_together() {
+    let initial = vec![bytes_node(vec![7, 7, 7], 0, 10)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            crate::native::shrinker::ShrinkRun::Full(nodes) => {
+                let ok = matches!(
+                    nodes.first().map(|n| &n.value),
+                    Some(ChoiceValue::Bytes(v))
+                        if v.len() == 3 && v.iter().all(|&b| b == v[0])
+                );
+                (ok, nodes.to_vec(), Spans::new())
+            }
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.shrink_bytes().unwrap();
+    assert_eq!(bytes_value(&shrinker, 0), vec![0, 0, 0]);
+}
+
+/// Per-element minimization must use the full Integer move set: the low
+/// nibble of the byte is constrained (`b & 0x0F == 0x0E`), which the old
+/// monotone binary search converges on only by luck of its midpoints
+/// (settling at 142 from 254), while `mask_high_bits` walks straight down
+/// to the minimal value 14.
+#[test]
+fn shrink_bytes_per_element_uses_integer_moves() {
+    let initial = vec![bytes_node(vec![254], 1, 4)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            crate::native::shrinker::ShrinkRun::Full(nodes) => {
+                let ok = matches!(
+                    nodes.first().map(|n| &n.value),
+                    Some(ChoiceValue::Bytes(v)) if v.len() == 1 && v[0] & 0x0F == 0x0E
+                );
+                (ok, nodes.to_vec(), Spans::new())
+            }
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.shrink_bytes().unwrap();
+    assert_eq!(bytes_value(&shrinker, 0), vec![14]);
+}
+
+/// Deletion is adaptive (find_integer-chunked, back to front): a run of 64
+/// deletable bytes ahead of the byte that matters costs O(log n) calls,
+/// not O(n) for the failed prefix-truncations plus O(n) single deletions.
+#[test]
+fn shrink_bytes_deletion_is_adaptive() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let calls = Rc::new(Cell::new(0usize));
+    let calls_clone = calls.clone();
+    let mut value: Vec<u8> = vec![9; 64];
+    value.push(255);
+    let initial = vec![bytes_node(value, 0, 100)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run| match run {
+            crate::native::shrinker::ShrinkRun::Full(nodes) => {
+                calls_clone.set(calls_clone.get() + 1);
+                let ok = matches!(
+                    nodes.first().map(|n| &n.value),
+                    Some(ChoiceValue::Bytes(v)) if v.contains(&255)
+                );
+                (ok, nodes.to_vec(), Spans::new())
+            }
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.shrink_bytes().unwrap();
+    assert_eq!(bytes_value(&shrinker, 0), vec![255]);
+    assert!(
+        calls.get() < 60,
+        "deletion should be adaptive; took {} calls",
+        calls.get()
+    );
 }

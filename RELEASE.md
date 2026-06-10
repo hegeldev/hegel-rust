@@ -56,3 +56,10 @@ Hypothesis more closely:
   pattern, like Hypothesis's `.filter(regex.search)`, so mid-pattern
   anchors and the `\b` / `\B` word-boundary assertions are enforced
   instead of silently ignored.
+- String and bytes values now shrink with the full move set of
+  Hypothesis's `Collection` shrinker: an all-simplest probe at the
+  current length (collapsing values whose elements are linked in one
+  call), adaptive chunked deletion (O(log n) calls for a deletable run
+  instead of O(n)), full-sort and gap-preserving reordering, joint
+  minimization of duplicated elements, and per-element shrinking with
+  the integer move set rather than a plain binary search.

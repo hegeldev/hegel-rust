@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use crate::native::core::{ChoiceKind, ChoiceValue, StringChoice};
 use crate::unicodedata;
 
+use super::collection::CollectionAccess;
 use super::{ShrinkResult, Shrinker, bin_search_down_r};
 
 impl<'a> Shrinker<'a> {
@@ -29,49 +30,47 @@ impl<'a> Shrinker<'a> {
         while i < self.current_nodes.len() {
             self.lower_offset_if_shrunk(offset_epoch)?;
             offset_epoch = self.improvements;
-            let (kind, current) = match (
-                self.current_nodes[i].kind.as_ref(),
-                self.current_nodes[i].value.clone(),
-            ) {
-                (ChoiceKind::String(sc), ChoiceValue::String(s)) => (sc.clone(), s),
+            let kind = match self.current_nodes[i].kind.as_ref() {
+                ChoiceKind::String(sc) => sc.clone(),
                 _ => {
                     i += 1;
                     continue;
                 }
             };
 
-            // Try simplest.
-            let simplest = kind.simplest();
-            if simplest != current {
-                self.replace(&HashMap::from([(i, ChoiceValue::String(simplest))]))?;
-            }
-
-            // Shorten via linear scan up from min_size. For strings the
-            // per-codepoint key is not monotonic under prefix-taking (the suffix
-            // we drop may have been the only "interesting" part), so a linear
-            // scan is simpler and small.
-            let cur_len = self.current_string(i).len();
-            if cur_len > kind.min_size {
-                for target_len in kind.min_size..cur_len {
-                    let cand: Vec<u32> = self.current_string(i)[..target_len].to_vec();
-                    if self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))? {
-                        break;
-                    }
+            // Hypothesis's `String.shrink` is `Collection.shrink` over
+            // alphabet shrink-order keys: the all-simplest probes, adaptive
+            // back-to-front deletion, reordering, joint duplicate
+            // minimization, and per-element Integer moves all live there.
+            let node_idx = i;
+            let kind_for_read = kind.clone();
+            let read = move |sh: &Shrinker<'_>| -> Option<Vec<u64>> {
+                match sh.current_nodes.get(node_idx).map(|n| &n.value) {
+                    Some(ChoiceValue::String(s)) => Some(
+                        s.iter()
+                            .map(|&cp| u64::from(kind_for_read.codepoint_key(cp)))
+                            .collect(),
+                    ),
+                    _ => None,
                 }
-            }
-
-            // Delete individual codepoints, right-to-left.
-            let mut j = self.current_string(i).len();
-            while j > 0 {
-                j -= 1;
-                let cur = self.current_string(i);
-                if cur.len() <= kind.min_size {
-                    continue;
+            };
+            let kind_for_write = kind.clone();
+            let write = move |keys: &[u64]| -> Option<ChoiceValue> {
+                let mut out = Vec::with_capacity(keys.len());
+                for &k in keys {
+                    let k = u32::try_from(k).ok()?;
+                    out.push(kind_for_write.key_to_codepoint(k)?);
                 }
-                let mut cand = cur.clone();
-                cand.remove(j);
-                self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))?;
-            }
+                Some(ChoiceValue::String(out))
+            };
+            self.shrink_collection(
+                node_idx,
+                kind.min_size,
+                &CollectionAccess {
+                    read: &read,
+                    write: &write,
+                },
+            )?;
 
             // Shrink duplicated codepoints simultaneously.
             //
@@ -127,41 +126,14 @@ impl<'a> Shrinker<'a> {
                         break;
                     }
                 }
-
-                if self.current_string(i).contains(&val) {
-                    let cur_key = kind.codepoint_key(val);
-                    if cur_key > 0 {
-                        bin_search_down_r(0, cur_key as i128, &mut |k| {
-                            // `key_to_codepoint(k)` is `Some` for every
-                            // `k < alpha_size`, and our upper bound `cur_key`
-                            // is itself a valid position in the alphabet.
-                            let cp = kind
-                                .key_to_codepoint(k as u32)
-                                .expect("bin_search probe stays within alpha_size");
-                            try_replace_all(self, cp)
-                        })?;
-                    }
-                }
             }
 
-            // Reduce each codepoint via a small set of semantic
-            // candidates (digits, ASCII letters, NFD base) followed by
-            // `bin_search_down` over the remaining key range.
-            //
-            // Why not a linear scan over all keys < current_key? The default
-            // `gs::text()` alphabet has ~1.1M valid codepoints, so a worst-
-            // case scan from a high-codepoint character is prohibitive.
-            //
-            // Why not just `bin_search_down`? It's not robust to non-monotone
-            // predicates: midpoint probes can miss valid simpler characters
-            // sitting between failing midpoints (e.g. 'A' at key 17 when
-            // shrinking from 'À' at a higher key — bin_search probes
-            // midpoints and might miss the basin). Same trap as the
-            // per-element Integer shrinker.
-            //
-            // The hybrid: try a fixed list of "obvious smaller candidates"
-            // first to cover the common ASCII / Latin-with-diacritic basins,
-            // then `bin_search_down` for the long tail.
+            // Hegel extra on top of Collection.shrink: per-position
+            // semantic candidates (digits, ASCII letters, NFD base). The
+            // Integer moves search the key space numerically; these jump
+            // straight into the common ASCII / Latin-with-diacritic basins
+            // that a numeric descent over a ~1.1M-codepoint alphabet can
+            // miss under non-monotone predicates.
             let mut j = self.current_string(i).len();
             while j > 0 {
                 j -= 1;
@@ -179,45 +151,6 @@ impl<'a> Shrinker<'a> {
                     cand[j] = cand_cp;
                     self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))?;
                 }
-
-                let cur_key = kind.codepoint_key(self.current_string(i)[j]);
-                if cur_key > 0 {
-                    bin_search_down_r(0, cur_key as i128, &mut |k| {
-                        let cp = kind
-                            .key_to_codepoint(k as u32)
-                            .expect("bin_search probe stays within alpha_size");
-                        let mut cand = self.current_string(i);
-                        cand[j] = cp;
-                        self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))
-                    })?;
-                }
-            }
-
-            // Insertion-sort pass — swap adjacent out-of-order
-            // codepoints (under the alphabet's shrink ordering).
-            let mut pos = 1;
-            loop {
-                let cur_len = self.current_string(i).len();
-                if pos >= cur_len {
-                    break;
-                }
-                let mut j = pos;
-                while j > 0 {
-                    let cur = self.current_string(i);
-                    let prev_key = kind.codepoint_key(cur[j - 1]);
-                    let cur_key = kind.codepoint_key(cur[j]);
-                    if prev_key <= cur_key {
-                        break;
-                    }
-                    let mut swapped = cur.clone();
-                    swapped.swap(j - 1, j);
-                    if self.replace(&HashMap::from([(i, ChoiceValue::String(swapped))]))? {
-                        j -= 1;
-                    } else {
-                        break;
-                    }
-                }
-                pos += 1;
             }
 
             i += 1;

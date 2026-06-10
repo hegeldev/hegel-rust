@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use crate::native::core::{BytesChoice, ChoiceKind, ChoiceValue};
 
+use super::collection::CollectionAccess;
 use super::{ShrinkResult, Shrinker, bin_search_down_r};
 
 impl<'a> Shrinker<'a> {
@@ -20,98 +21,38 @@ impl<'a> Shrinker<'a> {
         while i < self.current_nodes.len() {
             self.lower_offset_if_shrunk(offset_epoch)?;
             offset_epoch = self.improvements;
-            let (min_size, current) = match (
-                self.current_nodes[i].kind.as_ref(),
-                self.current_nodes[i].value.clone(),
-            ) {
-                (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => (bc.min_size, v),
+            let min_size = match self.current_nodes[i].kind.as_ref() {
+                ChoiceKind::Bytes(bc) => bc.min_size,
                 _ => {
                     i += 1;
                     continue;
                 }
             };
 
-            // Try the simplest (min_size zeros) first.
-            let simplest = vec![0u8; min_size];
-            if simplest != current {
-                self.replace(&HashMap::from([(i, ChoiceValue::Bytes(simplest))]))?;
-            }
-
-            // Shorten via binary search.
-            let cur_len = self.current_byte_value(i).len();
-            if cur_len > min_size {
-                let captured = self.current_byte_value(i);
-                bin_search_down_r(min_size as i128, cur_len as i128, &mut |sz| {
-                    let sz = sz as usize;
-                    let cand = captured[..sz].to_vec();
-                    self.replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))
-                })?;
-            }
-
-            // Linear scan small lengths (non-monotonic fallback).
-            let cur_len = self.current_byte_value(i).len();
-            let scan_end = (min_size + 8).min(cur_len);
-            for sz in min_size..scan_end {
-                let cur = self.current_byte_value(i);
-                if sz > cur.len() {
-                    break;
+            // Hypothesis's `Bytes.shrink` is `Collection.shrink` with byte
+            // values as their own order keys.
+            let node_idx = i;
+            let read = move |sh: &Shrinker<'_>| -> Option<Vec<u64>> {
+                match sh.current_nodes.get(node_idx).map(|n| &n.value) {
+                    Some(ChoiceValue::Bytes(v)) => Some(v.iter().map(|&b| u64::from(b)).collect()),
+                    _ => None,
                 }
-                let cand = cur[..sz].to_vec();
-                self.replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))?;
-            }
-
-            // Delete individual elements, from right to left.
-            let mut j = self.current_byte_value(i).len();
-            while j > 0 {
-                j -= 1;
-                let cur = self.current_byte_value(i);
-                if cur.len() <= min_size {
-                    continue;
+            };
+            let write = |keys: &[u64]| -> Option<ChoiceValue> {
+                let mut out = Vec::with_capacity(keys.len());
+                for &k in keys {
+                    out.push(u8::try_from(k).ok()?);
                 }
-                let mut cand = cur.clone();
-                cand.remove(j);
-                self.replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))?;
-            }
-
-            // Reduce each byte toward 0, from right to left.
-            let mut j = self.current_byte_value(i).len();
-            while j > 0 {
-                j -= 1;
-                let cur = self.current_byte_value(i);
-                if cur[j] == 0 {
-                    continue;
-                }
-                let hi = cur[j] as i128;
-                bin_search_down_r(0, hi, &mut |e| {
-                    let mut cand = self.current_byte_value(i);
-                    cand[j] = e as u8;
-                    self.replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))
-                })?;
-            }
-
-            // Insertion-sort pass: swap adjacent out-of-order bytes.
-            let mut pos = 1;
-            loop {
-                let cur_len = self.current_byte_value(i).len();
-                if pos >= cur_len {
-                    break;
-                }
-                let mut j = pos;
-                while j > 0 {
-                    let cur = self.current_byte_value(i);
-                    if cur[j - 1] <= cur[j] {
-                        break;
-                    }
-                    let mut swapped = cur.clone();
-                    swapped.swap(j - 1, j);
-                    if self.replace(&HashMap::from([(i, ChoiceValue::Bytes(swapped))]))? {
-                        j -= 1;
-                    } else {
-                        break;
-                    }
-                }
-                pos += 1;
-            }
+                Some(ChoiceValue::Bytes(out))
+            };
+            self.shrink_collection(
+                node_idx,
+                min_size,
+                &CollectionAccess {
+                    read: &read,
+                    write: &write,
+                },
+            )?;
 
             i += 1;
         }
