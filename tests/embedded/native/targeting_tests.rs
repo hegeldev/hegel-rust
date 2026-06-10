@@ -284,7 +284,7 @@ use crate::run_lifecycle::run_test_case;
 use crate::runner::{Mode, Verbosity};
 use std::collections::HashMap as StdHashMap;
 
-fn run_optimise<F>(start: Vec<ChoiceValue>, start_score: f64, mut test_fn: F)
+fn run_optimise<F>(start: Vec<ChoiceValue>, start_score: f64, mut test_fn: F) -> Option<f64>
 where
     F: FnMut(TestCase),
 {
@@ -304,6 +304,7 @@ where
         max_calls: 100_000,
     };
     optimiser.optimise_targets();
+    engine.targeting.best_score("")
 }
 
 /// Drives `hill_climb`'s resize-restart branch and the already-examined
@@ -403,4 +404,39 @@ fn run_trial_records_interesting_result_into_ctx() {
         assert_ne!(n, 7);
         tc.target(-((n - 7).saturating_abs() as f64));
     });
+}
+
+/// Drives `try_replace`'s span-realignment fallback (the inner
+/// `for j, ex in enumerate(...)` retry in optimiser.py's
+/// `attempt_replace`): extending the vec consumes the old suffix, so the
+/// direct attempt redraws the score-gating sentinel randomly and loses
+/// the score. Splicing the attempt's realised vec-span content in front
+/// of the *preserved* old suffix keeps `sentinel == 7`, repairing the
+/// score so the climb can make progress.
+#[test]
+fn try_replace_realigns_spans_to_repair_suffix() {
+    // vec![false, false] via the many protocol — [continue, elem,
+    // continue, elem, stop] — then the sentinel integer.
+    let start = vec![
+        ChoiceValue::Boolean(true),
+        ChoiceValue::Boolean(false),
+        ChoiceValue::Boolean(true),
+        ChoiceValue::Boolean(false),
+        ChoiceValue::Boolean(false),
+        ChoiceValue::Integer(BigInt::from(7)),
+    ];
+    // max_size caps the score at 5, so the climb terminates instead of
+    // growing the vec until the budget runs out.
+    let best = run_optimise(start, 2.0, |tc| {
+        let v: Vec<bool> = tc.draw(gs::vecs(gs::booleans()).max_size(5));
+        let sentinel: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(1_000_000));
+        if sentinel == 7 {
+            tc.target(v.len() as f64);
+        }
+    });
+    assert!(
+        best.unwrap_or(f64::NEG_INFINITY) > 2.0,
+        "span realignment should let the climber grow the vec past the \
+         starting score of 2.0, got {best:?}"
+    );
 }

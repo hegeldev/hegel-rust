@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::native::core::{
-    BUFFER_SIZE, ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Status,
+    BUFFER_SIZE, ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Span, Status,
 };
 use crate::native::shrinker::find_integer;
 use crate::native::test_runner::{Engine, RunResult};
@@ -191,6 +191,7 @@ impl Optimiser<'_, '_> {
         }
         let mut current_choices: Vec<ChoiceValue> =
             trial.nodes.iter().map(|n| n.value.clone()).collect();
+        let mut current_spans = trial.spans;
         let mut current_nodes = trial.nodes;
         let mut current_score = *trial
             .target_observations
@@ -234,6 +235,7 @@ impl Optimiser<'_, '_> {
                         target,
                         &mut current_choices,
                         &mut current_nodes,
+                        &mut current_spans,
                         &mut current_score,
                         &mut improvements,
                         idx,
@@ -250,6 +252,7 @@ impl Optimiser<'_, '_> {
                             target,
                             &mut current_choices,
                             &mut current_nodes,
+                            &mut current_spans,
                             &mut current_score,
                             &mut improvements,
                             idx,
@@ -263,19 +266,21 @@ impl Optimiser<'_, '_> {
         improvements
     }
 
-    /// Replace `current_choices[idx]` by stepping it `delta` units. Score
-    /// acceptance mirrors `optimiser.py::consider_new_data` (lines 65-82): a
-    /// strict score improvement commits the new state and bumps `improvements`;
-    /// a tie commits iff the new node count doesn't grow but does *not* count
-    /// as an improvement (lateral moves are the principal mechanism for
-    /// escaping local maxima, but they shouldn't keep the climber spinning
-    /// forever). Returns `true` iff the trial was committed.
+    /// Replace `current_choices[idx]` by stepping it `delta` units —
+    /// `optimiser.py::attempt_replace`. The direct replacement is tried up
+    /// to three times; whenever an attempt changes the realised node count
+    /// without scoring, the spans containing `idx` whose choice counts
+    /// changed are realigned: the attempt's realised span content is
+    /// spliced in front of the *old* suffix, repairing score-gating
+    /// choices that the resize would otherwise consume or redraw.
+    /// Returns `true` iff a trial was committed.
     #[allow(clippy::too_many_arguments)]
     fn try_replace(
         &mut self,
         target: &str,
         current_choices: &mut Vec<ChoiceValue>,
         current_nodes: &mut Vec<ChoiceNode>,
+        current_spans: &mut Vec<Span>,
         current_score: &mut f64,
         improvements: &mut usize,
         idx: usize,
@@ -290,12 +295,97 @@ impl Optimiser<'_, '_> {
             Some(v) => v,
             None => return false,
         };
-        let mut trial_choices = current_choices.clone();
-        trial_choices[idx] = new_val;
-        let trial = match self.run_trial(&trial_choices) {
-            Some(t) => t,
-            None => return false,
-        };
+        for _ in 0..3 {
+            let mut trial_choices = current_choices.clone();
+            trial_choices[idx] = new_val.clone();
+            let snapshot_choices = trial_choices.clone();
+            let trial = match self.run_trial(&trial_choices) {
+                Some(t) => t,
+                None => return false,
+            };
+            let trial_len = trial.nodes.len();
+            let trial_values: Vec<ChoiceValue> =
+                trial.nodes.iter().map(|n| n.value.clone()).collect();
+            let trial_spans = trial.spans.clone();
+            if self.consider_new_data(
+                target,
+                trial,
+                current_choices,
+                current_nodes,
+                current_spans,
+                current_score,
+                improvements,
+            ) {
+                return true;
+            }
+            // An overrun can't be repaired by realignment; a same-length
+            // attempt didn't resize anything, so there is nothing to
+            // realign either.
+            if trial_len == current_nodes.len() {
+                return false;
+            }
+            // Span realignment: for each span containing `idx` whose
+            // choice count changed, splice the attempt's realised span
+            // content in front of the preserved old suffix.
+            for j in 0..current_spans.len() {
+                let (ex_start, ex_end) = (current_spans[j].start, current_spans[j].end);
+                if ex_start > idx {
+                    break;
+                }
+                if ex_end <= idx || ex_end > current_choices.len() {
+                    continue;
+                }
+                let Some(ex_attempt) = trial_spans.get(j) else {
+                    continue;
+                };
+                let (at_start, at_end) = (ex_attempt.start, ex_attempt.end);
+                if at_start > at_end || at_end > trial_values.len() {
+                    continue;
+                }
+                if ex_end - ex_start == at_end - at_start {
+                    continue;
+                }
+                let mut candidate = snapshot_choices[..idx].to_vec();
+                candidate.extend_from_slice(&trial_values[at_start..at_end]);
+                candidate.extend_from_slice(&current_choices[ex_end..]);
+                let realigned = match self.run_trial(&candidate) {
+                    Some(t) => t,
+                    None => return false,
+                };
+                if self.consider_new_data(
+                    target,
+                    realigned,
+                    current_choices,
+                    current_nodes,
+                    current_spans,
+                    current_score,
+                    improvements,
+                ) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Score acceptance for a hill-climb trial, mirroring
+    /// `optimiser.py::consider_new_data` (lines 62-82): a strict score
+    /// improvement commits the new state and bumps `improvements`; a tie
+    /// commits iff the new node count doesn't grow but does *not* count as
+    /// an improvement (lateral moves are the principal mechanism for
+    /// escaping local maxima, but they shouldn't keep the climber spinning
+    /// forever). Returns `true` iff the trial was committed.
+    #[allow(clippy::too_many_arguments)]
+    fn consider_new_data(
+        &mut self,
+        target: &str,
+        trial: RunResult,
+        current_choices: &mut Vec<ChoiceValue>,
+        current_nodes: &mut Vec<ChoiceNode>,
+        current_spans: &mut Vec<Span>,
+        current_score: &mut f64,
+        improvements: &mut usize,
+    ) -> bool {
         if trial.status < Status::Valid {
             return false;
         }
@@ -313,6 +403,7 @@ impl Optimiser<'_, '_> {
         *current_score = new_score;
         *current_choices = trial.nodes.iter().map(|n| n.value.clone()).collect();
         *current_nodes = trial.nodes;
+        *current_spans = trial.spans;
         if strict {
             *improvements += 1;
         }

@@ -24,3 +24,8 @@ Hypothesis more closely:
 - The 500-shrink cap is now global across all failure origins in a run
   (matching Hypothesis's engine-level `MAX_SHRINKS`) rather than each
   origin getting its own 500-shrink budget.
+- Targeted search (`tc.target()`) now ports the span-realignment retry
+  from Hypothesis's optimiser: when perturbing a choice resizes the test
+  case, the realised span content is spliced in front of the preserved
+  old suffix, so score-gating draws after a resized collection no longer
+  stop the hill climber.
