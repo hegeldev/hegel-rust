@@ -1159,3 +1159,60 @@ fn random_value_boolean_consumes_exactly_one_byte() {
     // Exactly one byte was consumed: the two RNGs are now in lockstep.
     assert_eq!(a.next_u64(), b.next_u64());
 }
+
+#[test]
+fn owned_node_sort_key_covers_every_kind() {
+    // The owned `ChoiceNode::sort_key` (used by `sort_values` and the
+    // per-kind `sort_key` helpers it calls) must order Float, Bytes, and
+    // String nodes the same way the borrowed comparison does.
+    let float_node = |v: f64| {
+        ChoiceNode::new(
+            ChoiceKind::Float(FloatChoice {
+                min_value: f64::NEG_INFINITY,
+                max_value: f64::INFINITY,
+                allow_nan: true,
+                allow_infinity: true,
+                smallest_nonzero_magnitude: 5e-324,
+            }),
+            ChoiceValue::Float(v),
+            false,
+        )
+    };
+    assert!(float_node(1.0).sort_key() < float_node(2.5).sort_key());
+
+    let bytes_node = |v: Vec<u8>| {
+        ChoiceNode::new(
+            ChoiceKind::Bytes(BytesChoice {
+                min_size: 0,
+                max_size: 8,
+            }),
+            ChoiceValue::Bytes(v),
+            false,
+        )
+    };
+    // Shortlex: shorter first, then per-element.
+    assert!(bytes_node(vec![9]).sort_key() < bytes_node(vec![1, 2]).sort_key());
+    assert!(bytes_node(vec![1, 2]).sort_key() < bytes_node(vec![1, 3]).sort_key());
+    // The underlying BytesChoice::sort_key is (len, bytes).
+    let bc = BytesChoice {
+        min_size: 0,
+        max_size: 8,
+    };
+    assert_eq!(bc.sort_key(&[1, 2]), (2, vec![1, 2]));
+
+    let sc = StringChoice {
+        intervals: IntervalSet::new(vec![(b'a' as u32, b'z' as u32)]),
+        min_size: 0,
+        max_size: 8,
+    };
+    let string_node = |v: Vec<u32>| {
+        ChoiceNode::new(
+            ChoiceKind::String(sc.clone()),
+            ChoiceValue::String(v),
+            false,
+        )
+    };
+    assert!(string_node(vec![b'a' as u32]).sort_key() < string_node(vec![b'b' as u32]).sort_key());
+    // StringChoice::sort_key maps codepoints to alphabet shrink-order keys.
+    assert_eq!(sc.sort_key(&[b'a' as u32, b'c' as u32]), (2, vec![0, 2]));
+}

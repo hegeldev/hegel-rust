@@ -382,3 +382,48 @@ fn interpret_domain_rejects_tiny_max_length_as_invalid_argument() {
     let err = interpret_domain(&mut ntc, &schema).unwrap_err();
     assert!(matches!(err, EngineError::InvalidArgument(_)));
 }
+
+#[test]
+fn draw_dns_label_max_len_one_returns_single_letter() {
+    // The single-character early return; `interpret_domain` always passes
+    // 63, so this parameter path is only reachable directly.
+    let mut ntc = fresh_ntc(0);
+    let label = draw_dns_label(&mut ntc, 1).unwrap();
+    assert_eq!(label.len(), 1);
+    assert!(label.chars().all(|c| c.is_ascii_alphabetic()));
+}
+
+#[test]
+fn interpret_email_rejects_addresses_over_254_chars() {
+    use crate::native::bignum::BigInt;
+    use crate::native::core::ChoiceValue;
+    // Hand-craft the choice sequence for a 64-char local part plus a
+    // domain of three 63-char labels (3 * 64 + 3 = 195 chars), making the
+    // address 64 + 1 + 195 = 260 > 254 — the RFC 5321 length filter must
+    // mark the case invalid.
+    let mut choices: Vec<ChoiceValue> = Vec::new();
+    choices.push(ChoiceValue::String(vec![b'a' as u32; 64])); // local part
+    choices.push(ChoiceValue::Integer(BigInt::from(0))); // TLD index → COM
+    for _ in 0..3 {
+        choices.push(ChoiceValue::Boolean(false)); // recase: keep case
+    }
+    for _ in 0..3 {
+        choices.push(ChoiceValue::Boolean(true)); // many: another label
+        choices.push(ChoiceValue::Integer(BigInt::from(0))); // first letter
+        choices.push(ChoiceValue::Boolean(true)); // optional tail present
+        for _ in 0..61 {
+            choices.push(ChoiceValue::Boolean(true)); // centre: continue
+            choices.push(ChoiceValue::Integer(BigInt::from(0))); // centre char
+        }
+        choices.push(ChoiceValue::Boolean(false)); // centre: stop
+        choices.push(ChoiceValue::Integer(BigInt::from(0))); // final alnum
+    }
+    choices.push(ChoiceValue::Boolean(false)); // many: stop labels
+    let mut ntc = NativeTestCase::for_choices(&choices, None, None);
+    let err = interpret_email(&mut ntc).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::native::core::EngineError::InvalidTestCase
+    ));
+    assert_eq!(ntc.status, Some(crate::native::core::Status::Invalid));
+}

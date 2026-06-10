@@ -340,18 +340,18 @@ impl Optimiser<'_, '_> {
                 if ex_end <= idx || ex_end > current_choices.len() {
                     continue;
                 }
-                let Some(ex_attempt) = trial_spans.get(j) else {
+                // Positional span match, like Hypothesis pairing
+                // `self.current_data.spans[j]` with `attempt.spans[j]`;
+                // the attempt may have realised fewer spans (or a
+                // malformed one beyond its choice count) — skip those.
+                let Some(replacement) = trial_spans
+                    .get(j)
+                    .and_then(|sp| trial_values.get(sp.start..sp.end))
+                else {
                     continue;
                 };
-                let (at_start, at_end) = (ex_attempt.start, ex_attempt.end);
-                if at_start > at_end || at_end > trial_values.len() {
-                    continue;
-                }
-                if ex_end - ex_start == at_end - at_start {
-                    continue;
-                }
                 let mut candidate = snapshot_choices[..idx].to_vec();
-                candidate.extend_from_slice(&trial_values[at_start..at_end]);
+                candidate.extend_from_slice(replacement);
                 candidate.extend_from_slice(&current_choices[ex_end..]);
                 let realigned = match self.run_trial(&candidate) {
                     Some(t) => t,

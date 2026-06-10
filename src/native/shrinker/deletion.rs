@@ -234,15 +234,18 @@ impl<'a> Shrinker<'a> {
             // (Hypothesis's minimize_individual_choices does the same with
             // its `cached_test_function(lowered)` size-dependency probe).
             let (improved, run) = self.cached_test_function(&lowered)?;
+            let Some(run) = run else {
+                // Improved without a realised run only happens through the
+                // equal-to-target pre-check, which a strictly-lowered
+                // candidate cannot hit; the rejecting pre-checks (forced
+                // mismatch, sortkey-larger) cannot fire for it either.
+                unreachable!("a strictly-lowered candidate always executes");
+            };
             if improved {
                 // The lower-by-one itself landed; nothing left to repair.
                 i += 1;
                 continue;
             }
-            let Some(run) = run else {
-                i += 1;
-                continue;
-            };
             let (actual_nodes, actual_spans) = (run.nodes, run.spans);
 
             // Misalignment-truncation retry. Even when the sequence

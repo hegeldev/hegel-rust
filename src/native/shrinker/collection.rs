@@ -222,3 +222,7 @@ impl<'a> Shrinker<'a> {
         probe(self, node_idx, access, &cand)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_collection_tests.rs"]
+mod tests;

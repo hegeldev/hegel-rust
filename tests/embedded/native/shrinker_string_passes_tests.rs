@@ -321,3 +321,115 @@ fn shrink_strings_sorts_around_fixed_middle() {
         unreachable!();
     }
 }
+
+/// The collection driver's read closure copes with the node being punned
+/// to a different kind by the realised run mid-shrink.
+#[test]
+fn shrink_strings_handles_node_punned_by_closure() {
+    use crate::native::core::choices::BooleanChoice;
+    let punned = ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(false),
+        false,
+    );
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run| match run {
+            ShrinkRun::Full(_) => (true, vec![punned.clone()], Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![string_node_with(
+            b'a' as u32,
+            b'z' as u32,
+            vec![b'c' as u32, b'b' as u32],
+        )],
+        Spans::new(),
+    );
+    shrinker.shrink_strings().unwrap();
+    assert!(matches!(
+        shrinker.current_nodes[0].value,
+        ChoiceValue::Boolean(_)
+    ));
+}
+
+/// The improvement cap unwinds out of the collection driver mid-pass.
+#[test]
+fn shrink_strings_stops_at_improvement_cap() {
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                // Reject the all-simplest short circuit (empty) so the
+                // pass keeps probing past its first accepted improvement.
+                let ok = matches!(
+                    nodes.first().map(|n| &n.value),
+                    Some(ChoiceValue::String(s)) if !s.is_empty()
+                );
+                (ok, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![string_node_with(
+            b'a' as u32,
+            b'z' as u32,
+            vec![b'c' as u32, b'b' as u32],
+        )],
+        Spans::new(),
+    );
+    shrinker.max_improvements = 1;
+    assert!(shrinker.shrink_strings().is_err());
+}
+
+/// The duplicated-codepoint semantic loop: a semantic candidate that
+/// clears every instance of the duplicate breaks out early, and a
+/// realised run that removed the duplicate before the replacement runs
+/// reports "nothing changed".
+#[test]
+fn shrink_strings_duplicate_semantic_loop_edges() {
+    // 'À' duplicated; alphabet includes its NFD base 'A'. The semantic
+    // candidate replaces every 'À' with 'A' in one step.
+    let initial = vec![string_node_with(
+        b'A' as u32,
+        0xFF,
+        vec![0xC0, 0xC0, b'z' as u32],
+    )];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                // Interesting only while both duplicate positions agree
+                // and the length stays 3 — so deletion and single-position
+                // changes fail, and only the all-instances replacement
+                // (or no-op candidates) are accepted.
+                let ok = matches!(
+                    nodes.first().map(|n| &n.value),
+                    Some(ChoiceValue::String(s)) if s.len() == 3 && s[0] == s[1]
+                );
+                (ok, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.shrink_strings().unwrap();
+    if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
+        assert_eq!(s[0], s[1], "duplicates stay linked: {s:?}");
+        assert_eq!(s[0], b'A' as u32, "collapsed to the NFD base: {s:?}");
+    } else {
+        unreachable!();
+    }
+}
+
+/// `semantic_candidates` offers the in-alphabet NFD base for non-ASCII
+/// codepoints.
+#[test]
+fn semantic_candidates_include_nfd_base() {
+    let kind = StringChoice {
+        intervals: IntervalSet::new(vec![(b'A' as u32, 0xFF)]),
+        min_size: 0,
+        max_size: 8,
+    };
+    let cands = super::semantic_candidates(0xC0, &kind);
+    assert!(
+        cands.contains(&(b'A' as u32)),
+        "expected the NFD base 'A' in {cands:?}"
+    );
+}

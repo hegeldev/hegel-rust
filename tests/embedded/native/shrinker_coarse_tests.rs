@@ -311,13 +311,21 @@ fn try_lower_node_as_alternative_splices_spans_to_repair_suffix() {
             }
             ShrinkRun::Probe { prefix, seed, .. } => {
                 // Replay the prefix, then "draw randomly": the sentinel
-                // never lands on 42, so no probe is interesting.
+                // never lands on 42, so no probe is interesting. Seed 0
+                // simulates a probe whose realised run recorded no spans,
+                // so the splice has nothing to align against and skips it.
                 let selector = match prefix.first() {
                     Some(ChoiceValue::Integer(v)) => i128::try_from(v).unwrap().min(1),
                     _ => 0,
                 };
                 let n_bools = if selector == 1 { 2 } else { 1 };
-                realize(selector, vec![seed % 2 == 0; n_bools], 7 + seed as i128)
+                let (ok, nodes, spans) =
+                    realize(selector, vec![seed % 2 == 0; n_bools], 7 + seed as i128);
+                if seed == 0 {
+                    (ok, nodes, Spans::new())
+                } else {
+                    (ok, nodes, spans)
+                }
             }
         }
     };

@@ -327,3 +327,30 @@ fn consider_cache_distinguishes_kind_punned_candidates() {
     // Both should reach the closure: distinct kinds = distinct cache keys.
     assert_eq!(seen.borrow().as_slice(), &["bool", "int"]);
 }
+
+/// `try_replace_with_deletion` backs off when the replacement value is
+/// rejected by `cached_test_function`'s pre-checks (a sortkey-larger
+/// candidate never executes).
+#[test]
+fn try_replace_with_deletion_rejects_larger_value_without_running() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let count = Rc::new(Cell::new(0usize));
+    let count_clone = count.clone();
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run| match run {
+            ShrinkRun::Full(nodes) => {
+                count_clone.set(count_clone.get() + 1);
+                (false, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(5), int_node(7)],
+        Spans::new(),
+    );
+    let improved = shrinker
+        .try_replace_with_deletion(0, ChoiceValue::Integer(BigInt::from(9)), 2)
+        .unwrap();
+    assert!(!improved);
+    assert_eq!(count.get(), 0, "larger replacement must never execute");
+}

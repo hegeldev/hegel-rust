@@ -448,6 +448,7 @@ fn statistics_report_includes_target_scores() {
     let mut test_fn = |tc: TestCase| {
         let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(100));
         tc.target_labelled(n as f64, "n");
+        tc.target_labelled(-(n as f64), "neg");
     };
     let mut run_case = move |ds: Box<dyn crate::backend::DataSource + Send + Sync>,
                              is_final: bool| {
@@ -465,7 +466,67 @@ fn statistics_report_includes_target_scores() {
     assert!(result.passed);
     let report = engine.format_statistics();
     assert!(
-        report.contains("Highest target score:") && report.contains("label=\"n\""),
-        "missing target score line: {report}"
+        report.contains("Highest target scores:")
+            && report.contains("label=\"n\"")
+            && report.contains("label=\"neg\""),
+        "missing target score lines: {report}"
     );
+}
+
+/// Drives `try_replace`'s realignment guards directly with crafted spans:
+/// spans ending before the perturbed index (or beyond the choice list)
+/// are skipped, spans starting past it end the walk, a span the trial
+/// didn't realise is skipped — and a budget exhausted between the direct
+/// attempt and the realigned trial backs out.
+#[test]
+fn try_replace_realignment_guards_and_budget() {
+    use crate::native::core::Span;
+    let mut test_fn = |tc: TestCase| {
+        let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(10));
+        if n >= 6 {
+            let _: bool = tc.draw(gs::booleans());
+        }
+    };
+    let mut run_case = move |ds: Box<dyn crate::backend::DataSource + Send + Sync>,
+                             is_final: bool| {
+        run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+    };
+    let settings = crate::Settings::new().database(None).seed(Some(5));
+    let mut engine = Engine::new(&settings, None, &mut run_case);
+    // Allow exactly one more engine call: the direct attempt consumes it,
+    // so the realigned trial hits the exhausted budget.
+    let max_calls = engine.calls + 1;
+    let mut optimiser = Optimiser {
+        engine: &mut engine,
+        max_valid: 10_000,
+        max_calls,
+    };
+    let span = |start: usize, end: usize| Span {
+        start,
+        end,
+        label: "L".to_string(),
+        depth: 0,
+        parent: None,
+        discarded: false,
+    };
+    let mut current_choices = vec![ChoiceValue::Integer(BigInt::from(5))];
+    let mut current_nodes = vec![integer_node(5, 0, 10)];
+    // Crafted spans: one ending before idx (skipped), one overshooting the
+    // choice list (skipped), one valid (realigned), one starting past idx
+    // (ends the walk).
+    let mut current_spans = vec![span(0, 0), span(0, 9), span(0, 1), span(1, 1)];
+    let mut current_score = f64::NEG_INFINITY;
+    let mut improvements = 0usize;
+    let committed = optimiser.try_replace(
+        "",
+        &mut current_choices,
+        &mut current_nodes,
+        &mut current_spans,
+        &mut current_score,
+        &mut improvements,
+        0,
+        1,
+    );
+    assert!(!committed, "budget exhaustion must back out of realignment");
+    assert_eq!(improvements, 0);
 }

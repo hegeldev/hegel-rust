@@ -190,3 +190,62 @@ fn shrink_bytes_deletion_is_adaptive() {
         calls.get()
     );
 }
+
+/// The collection driver's read closure copes with the node being punned
+/// to a different kind by the realised run mid-shrink.
+#[test]
+fn shrink_bytes_handles_node_punned_by_closure() {
+    use crate::native::bignum::BigInt;
+    use crate::native::core::choices::IntegerChoice;
+    let int_node = ChoiceNode::new(
+        ChoiceKind::Integer(IntegerChoice {
+            min_value: BigInt::from(0),
+            max_value: BigInt::from(10),
+            shrink_towards: BigInt::from(0),
+        }),
+        ChoiceValue::Integer(BigInt::from(1)),
+        false,
+    );
+    let punned = int_node.clone();
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run| match run {
+            crate::native::shrinker::ShrinkRun::Full(_) => {
+                // Accept every candidate but realise an Integer node — a
+                // scalar sorts below any sequence, so it is accepted and
+                // subsequent reads see a non-Bytes node.
+                (true, vec![punned.clone()], Spans::new())
+            }
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![bytes_node(vec![3, 1], 0, 8)],
+        Spans::new(),
+    );
+    shrinker.shrink_bytes().unwrap();
+    assert!(matches!(
+        shrinker.current_nodes[0].value,
+        ChoiceValue::Integer(_)
+    ));
+}
+
+/// The improvement cap unwinds out of the collection driver mid-pass.
+#[test]
+fn shrink_bytes_stops_at_improvement_cap() {
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            crate::native::shrinker::ShrinkRun::Full(nodes) => {
+                // Reject the all-simplest short circuit (empty) so the
+                // pass keeps probing past its first accepted improvement.
+                let ok = matches!(
+                    nodes.first().map(|n| &n.value),
+                    Some(ChoiceValue::Bytes(v)) if !v.is_empty()
+                );
+                (ok, nodes.to_vec(), Spans::new())
+            }
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![bytes_node(vec![3, 1, 4], 0, 8)],
+        Spans::new(),
+    );
+    shrinker.max_improvements = 1;
+    assert!(shrinker.shrink_bytes().is_err());
+}

@@ -44,9 +44,10 @@ pub(super) fn shrink_integer(
         if c == *current {
             return Ok(true);
         }
-        if c > *current {
-            return Ok(false);
-        }
+        // Every internal move (mask, squeeze, shift, subtraction) produces a
+        // candidate no larger than the value it was derived from, so unlike
+        // Python's `consider` no left_is_better gate is needed here.
+        debug_assert!(c < *current);
         if probe(c)? {
             *current = c;
             Ok(true)
@@ -95,9 +96,8 @@ pub(super) fn shrink_integer(
     for step in [2u128, 1] {
         let base = current;
         find_integer_r(|n| {
-            let Some(sub) = (n as u128).checked_mul(step) else {
-                return Ok(false);
-            };
+            // `n: usize` times `step <= 2` cannot overflow u128.
+            let sub = (n as u128) * step;
             if sub > base {
                 return Ok(false);
             }

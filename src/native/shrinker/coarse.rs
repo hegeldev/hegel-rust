@@ -115,37 +115,32 @@ impl<'a> Shrinker<'a> {
         // target — positionally matched against each probe's realised
         // spans, exactly as Hypothesis matches `initial.spans[j]` with
         // `random_attempt.spans[j]`.
-        let span_idxs: Vec<usize> = self
+        let spliceable: Vec<(usize, usize)> = self
             .current_spans
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.start == i)
-            .map(|(j, _)| j)
-            .collect();
-        let initial_span_ends: Vec<Option<usize>> = span_idxs
-            .iter()
-            .map(|&j| self.current_spans.get(j).map(|s| s.end))
+            .filter(|(_, s)| s.start == i && s.end <= initial_nodes.len())
+            .map(|(j, s)| (j, s.end))
             .collect();
         for seed in 0..3u64 {
             let attempt = self.probe(&prefix, seed, max_size)?;
             if self.improvements > epoch {
                 return Ok(true);
             }
-            for (&j, &initial_end) in span_idxs.iter().zip(&initial_span_ends) {
-                let Some(initial_end) = initial_end else {
+            for &(j, initial_end) in &spliceable {
+                // Positional span match, like Hypothesis pairing
+                // `initial.spans[j]` with `random_attempt.spans[j]`; the
+                // probe may have realised fewer spans (or a malformed one
+                // beyond its node count) — skip those.
+                let Some(content) = attempt
+                    .spans
+                    .get(j)
+                    .and_then(|sp| attempt.nodes.get(sp.start..sp.end))
+                else {
                     continue;
                 };
-                let Some(attempt_span) = attempt.spans.get(j) else {
-                    continue;
-                };
-                if attempt_span.start > attempt_span.end
-                    || attempt_span.end > attempt.nodes.len()
-                    || initial_end > initial_nodes.len()
-                {
-                    continue;
-                }
                 let mut candidate = initial_nodes[..i].to_vec();
-                candidate.extend_from_slice(&attempt.nodes[attempt_span.start..attempt_span.end]);
+                candidate.extend_from_slice(content);
                 candidate.extend_from_slice(&initial_nodes[initial_end..]);
                 self.consider(&candidate)?;
                 if self.improvements > epoch {

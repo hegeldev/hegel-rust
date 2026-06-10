@@ -283,3 +283,50 @@ fn linked_integers_collapse_within_the_minimize_pass() {
         "the linked pair must collapse to (500, 500) within the improvement budget"
     );
 }
+
+/// Distances beyond u128 can't go through the Integer move set; the pass
+/// skips such pairs and leaves them to the per-node passes.
+#[test]
+fn lower_common_node_offset_skips_offsets_beyond_u128() {
+    let huge = BigInt::from(BigInt::from(2).magnitude().pow(200));
+    let huge_node = |v: &BigInt| {
+        ChoiceNode::new(
+            ChoiceKind::Integer(IntegerChoice {
+                min_value: -(&huge) * BigInt::from(2),
+                max_value: (&huge) * BigInt::from(2),
+                shrink_towards: BigInt::from(0),
+            }),
+            ChoiceValue::Integer(v.clone()),
+            false,
+        )
+    };
+    let v1 = &huge + BigInt::from(1);
+    let v2 = &huge + BigInt::from(2);
+    let initial = vec![huge_node(&v1), huge_node(&v2)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    // Mark both nodes changed so the pass engages.
+    shrinker
+        .consider(&[huge_node(&(&v1 - BigInt::from(1))), huge_node(&v2)])
+        .unwrap();
+    shrinker
+        .consider(&[
+            huge_node(&(&v1 - BigInt::from(1))),
+            huge_node(&(&v2 - BigInt::from(1))),
+        ])
+        .unwrap();
+    assert_eq!(shrinker.changed_nodes().len(), 2);
+    shrinker.lower_common_node_offset().unwrap();
+    // The offset (≈ 2^200) exceeds u128, so the pass backs off without
+    // touching the values further.
+    match &shrinker.current_nodes[0].value {
+        ChoiceValue::Integer(v) => assert_eq!(*v, &v1 - BigInt::from(1)),
+        _ => unreachable!(),
+    }
+}

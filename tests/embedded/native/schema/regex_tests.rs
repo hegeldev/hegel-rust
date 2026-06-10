@@ -1024,3 +1024,84 @@ fn interpret_regex_word_boundary_filter_rejects_violating_pads() {
     }
     assert!(ok > 50, "too few successful draws: {ok}");
 }
+
+#[test]
+fn generate_op_branch_with_no_compatible_alternative_marks_invalid() {
+    // Reachable only when `generate_op` is driven without the
+    // interpret-time pre-check: every alternative is alphabet-incompatible
+    // so there is nothing to draw.
+    use crate::native::rng::EngineRng;
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let mut state = GenState {
+        groups: HashMap::new(),
+        flags: 0,
+        pending_lookaheads: Vec::new(),
+        in_cache: HashMap::new(),
+    };
+    let alphabet = Some(IntervalSet::new(vec![(b'z' as u32, b'z' as u32)]));
+    let branch = OpCode::Branch(vec![
+        sub(vec![lit('a'), lit('a')]),
+        sub(vec![lit('b'), lit('b')]),
+    ]);
+    let mut out = String::new();
+    let result = generate_op(&mut ntc, &branch, &mut state, &alphabet, &mut out);
+    assert!(result.is_err());
+    assert_eq!(ntc.status, Some(Status::Invalid));
+}
+
+#[test]
+fn interpret_regex_empty_pattern_with_empty_alphabet_rejects_pads() {
+    // `categories=[]` with no includes is an empty alphabet; the empty
+    // pattern has nothing to check at build time, but the non-fullmatch
+    // pad draw has no characters to pick from and marks the case invalid.
+    use crate::native::rng::EngineRng;
+    let schema = regex_with_alphabet_schema("", "");
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let err = interpret_regex(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidTestCase));
+    assert_eq!(ntc.status, Some(Status::Invalid));
+}
+
+#[test]
+fn interpret_regex_dot_with_empty_alphabet_rejects() {
+    // `.` passes the compatibility pre-check (no literal requirements),
+    // but expands to an empty character pool under an empty alphabet.
+    use crate::native::rng::EngineRng;
+    let schema = regex_with_alphabet_schema(".", "");
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let err = interpret_regex(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidTestCase));
+    assert_eq!(ntc.status, Some(Status::Invalid));
+}
+
+#[test]
+fn check_alphabet_compat_walks_conditional_groups() {
+    // `(a)?(?(1)b|c)`: the GROUPREF_EXISTS arm recurses into both the yes
+    // and no patterns; an out-of-alphabet literal inside the no-pattern is
+    // reported at build time.
+    use crate::native::rng::EngineRng;
+    let ok_schema = regex_with_alphabet_schema("(a)?(?(1)b|c)", "abc");
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    assert!(interpret_regex(&mut ntc, &ok_schema).is_ok());
+
+    let bad_schema = regex_with_alphabet_schema("(a)?(?(1)b|c)", "ab");
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let err = interpret_regex(&mut ntc, &bad_schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+}
+
+#[test]
+fn interpret_regex_violated_lookbehind_marks_invalid() {
+    // `a(?<!a)`: the generator emits 'a', then the negative lookbehind
+    // finds its body matching as a suffix of the output so far and marks
+    // the case invalid — there is no satisfying draw at all.
+    use crate::native::rng::EngineRng;
+    let schema = {
+        use crate::cbor_utils::cbor_map;
+        cbor_map! { "type" => "regex", "pattern" => "a(?<!a)", "fullmatch" => true }
+    };
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let err = interpret_regex(&mut ntc, &schema).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidTestCase));
+    assert_eq!(ntc.status, Some(Status::Invalid));
+}

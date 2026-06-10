@@ -72,6 +72,14 @@ impl<'a> Shrinker<'a> {
                 },
             )?;
 
+            // A realised run may have punned the node to a different kind
+            // while the collection driver was accepting candidates; the
+            // remaining string-specific sections require a live String.
+            if !matches!(self.current_nodes[i].value, ChoiceValue::String(_)) {
+                i += 1;
+                continue;
+            }
+
             // Shrink duplicated codepoints simultaneously.
             //
             // When two or more positions hold the same codepoint and the

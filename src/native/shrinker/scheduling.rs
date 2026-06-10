@@ -16,17 +16,6 @@ use super::{ShrinkResult, Shrinker};
 /// shrink deadline has passed so the scheduler unwinds promptly.
 pub type ShrinkPassFn<'a> = Box<dyn FnMut(&mut Shrinker<'a>) -> ShrinkResult<()> + 'a>;
 
-/// SplitMix64 step — used as a deterministic, dependency-free RNG to
-/// scramble pass ordering when `fixate_shrink_passes` falls into the
-/// random-fallback branch.  Reproducible across runs.
-fn next_rand(mut x: u64) -> u64 {
-    x = x.wrapping_add(0x9E3779B97F4A7C15);
-    let mut z = x;
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
-    z ^ (z >> 31)
-}
-
 /// One scheduled shrink pass with per-pass statistics.
 ///
 /// The `run` callback is invoked by [`Shrinker::fixate_shrink_passes`]
@@ -72,16 +61,16 @@ impl<'a> ShrinkPass<'a> {
 impl<'a> Shrinker<'a> {
     /// Run the supplied list of passes to a fixed point.
     ///
-    /// * Each outer iteration steps every pass up to `MAX_FAILURES = 20`
-    ///   times in a row without progress.
-    /// * Inside each per-pass loop, `Shrinker::max_stall` is grown to
+    /// * Each pass keeps running while it strictly improves the shrink
+    ///   target, and is otherwise exhausted until the target changes —
+    ///   the analogue of Hypothesis's per-pass choice trees, which only
+    ///   reset on a new shrink target.
+    /// * Before each pass run, `Shrinker::max_stall` is grown to
     ///   `max(max_stall, 2 * max_calls_per_failing_step + (calls -
     ///   calls_at_loop_start))` so a long shrink search where each step
-    ///   is expensive doesn't get cut off by the stall guard.
-    /// * Passes that fail `MAX_FAILURES/2` times in a row trigger a
-    ///   stable-by-key, otherwise random shuffle of the remaining
-    ///   passes for this outer iteration so we don't get stuck running
-    ///   them in the same useless order.
+    ///   is expensive doesn't get cut off by the stall guard, and the
+    ///   stall guard itself is enforced (ending the whole shrink, like
+    ///   Hypothesis's `StopShrinking`).
     /// * Between outer iterations, passes are re-sorted by reorder key:
     ///   passes that deleted nodes (-1) come first, then passes that
     ///   changed shape (0), then useless passes (1).
@@ -89,9 +78,7 @@ impl<'a> Shrinker<'a> {
     /// Returns when no pass made any progress over a full outer
     /// iteration. Called by [`Shrinker::shrink`].
     pub fn fixate_shrink_passes(&mut self, passes: &mut [ShrinkPass<'a>]) -> ShrinkResult<()> {
-        const MAX_FAILURES: usize = 20;
         let mut any_ran = true;
-        let mut shuffle_state: u64 = 0x9E3779B97F4A7C15;
         while any_ran {
             any_ran = false;
             // Try the cleanup pass once at the start of each loop.
@@ -99,30 +86,27 @@ impl<'a> Shrinker<'a> {
             let calls_at_loop_start = self.calls;
             let mut max_calls_per_failing_step: usize = 1;
             let mut reorder_keys: Vec<i32> = vec![0; passes.len()];
-            let mut shuffle_requested = false;
             for idx in 0..passes.len() {
                 if can_discard {
                     can_discard = self.remove_discarded()?;
                 }
                 let before_nodes_len = self.current_nodes.len();
                 let epoch_before_pass = self.improvements;
-                let mut failures: usize = 0;
 
                 // Each pass is deterministic — running it again with the
                 // shrink target unchanged would simply repeat the same
-                // work. We keep calling the pass while it strictly
-                // improves and stop as soon as it produces no change.
-                // MAX_FAILURES is retained as an upper bound for safety.
+                // work, so the pass keeps running only while it strictly
+                // improves and is otherwise exhausted until the target
+                // changes (Hypothesis's per-pass choice tree resetting on
+                // a new shrink target).
                 //
                 // `improvements` increments only when `accept_improvement`
                 // commits a strictly-smaller candidate, so its delta
                 // across a pass invocation is exactly "did the pass shrink
                 // anything?" — no per-iteration `sort_key` snapshot needed.
-                while failures < MAX_FAILURES {
+                loop {
                     // Exhaustion: the pass already ran against this exact
-                    // shrink target (`improvements` uniquely identifies it),
-                    // and every pass is deterministic, so there is nothing
-                    // new for it to try until the target changes.
+                    // shrink target (`improvements` uniquely identifies it).
                     if passes[idx].last_run_epoch == Some(self.improvements) {
                         break;
                     }
@@ -145,9 +129,6 @@ impl<'a> Shrinker<'a> {
                     if self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall {
                         return Err(super::ShrinkStop);
                     }
-                    if failures >= MAX_FAILURES / 2 {
-                        shuffle_requested = true;
-                    }
 
                     if self.debug.is_some() {
                         let name = passes[idx].name;
@@ -164,15 +145,9 @@ impl<'a> Shrinker<'a> {
                             passes[idx].deletions += 1;
                         }
                         any_ran = true;
-                        failures = 0;
-                    } else if initial_calls != self.calls {
+                    } else {
                         max_calls_per_failing_step = max_calls_per_failing_step
                             .max(self.calls.saturating_sub(initial_calls));
-                        failures += 1;
-                    } else {
-                        // Pass made no calls and no change: nothing more
-                        // to try; treat as exhausted for this iteration.
-                        break;
                     }
                 }
 
@@ -187,23 +162,15 @@ impl<'a> Shrinker<'a> {
 
             // Stable-sort passes by their reorder key — passes that
             // deleted (key -1) float to the front.
-            let mut indexed: Vec<(i32, usize, usize)> = reorder_keys
+            let mut indexed: Vec<(i32, usize)> = reorder_keys
                 .iter()
                 .enumerate()
-                .map(|(i, &k)| {
-                    let tiebreaker = if shuffle_requested {
-                        shuffle_state = next_rand(shuffle_state);
-                        shuffle_state as usize
-                    } else {
-                        i
-                    };
-                    (k, tiebreaker, i)
-                })
+                .map(|(i, &k)| (k, i))
                 .collect();
             indexed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
             // Apply the permutation in place.  Each pass moves once; we
             // use a temporary swap so the borrow checker stays happy.
-            let permutation: Vec<usize> = indexed.iter().map(|t| t.2).collect();
+            let permutation: Vec<usize> = indexed.iter().map(|t| t.1).collect();
             let mut new_order: Vec<Option<ShrinkPass<'a>>> =
                 (0..passes.len()).map(|_| None).collect();
             for (dest, &src) in permutation.iter().enumerate() {
