@@ -21,7 +21,14 @@ use super::{ShrinkResult, Shrinker, bin_search_down_r};
 impl<'a> Shrinker<'a> {
     pub(super) fn shrink_strings(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
+        // Fires the common-offset lowering for the *previous* node's
+        // accepted shrinks at the top of each iteration (and once more
+        // after the loop) — Hypothesis runs it after every successful
+        // try_shrinking_nodes.
+        let mut offset_epoch = self.improvements;
         while i < self.current_nodes.len() {
+            self.lower_offset_if_shrunk(offset_epoch)?;
+            offset_epoch = self.improvements;
             let (kind, current) = match (
                 self.current_nodes[i].kind.as_ref(),
                 self.current_nodes[i].value.clone(),
@@ -215,6 +222,7 @@ impl<'a> Shrinker<'a> {
 
             i += 1;
         }
+        self.lower_offset_if_shrunk(offset_epoch)?;
         Ok(())
     }
 

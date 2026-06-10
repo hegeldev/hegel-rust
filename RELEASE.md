@@ -40,3 +40,8 @@ Hypothesis more closely:
   collapse via high-bit masking), floats above 2^53 shrink on the
   float grid where stepping a position by one is exactly `next_down`,
   and the precision-dropping ladder runs least-precise-first.
+- The zig-zag escape (lowering a common offset across linked integers)
+  now fires inside the value-minimization passes after each successful
+  node shrink, as in Hypothesis, instead of waiting for its own
+  scheduled pass — which the shrink budget could exhaust first — and it
+  uses the full integer move set so complete collapse is always probed.

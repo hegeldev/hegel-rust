@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::native::bignum::{BigInt, Sign, Signed};
+use crate::native::bignum::{BigInt, Sign, Signed, ToPrimitive};
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceValue};
 
@@ -220,6 +220,7 @@ impl<'a> Shrinker<'a> {
     pub(super) fn binary_search_integer_towards_zero(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
+            let epoch_at_node = self.improvements;
             let ic = match self.current_nodes[i].kind.as_ref() {
                 ChoiceKind::Integer(ic) => ic.clone(),
                 _ => {
@@ -282,7 +283,21 @@ impl<'a> Shrinker<'a> {
                     break;
                 }
             }
+            self.lower_offset_if_shrunk(epoch_at_node)?;
             i += 1;
+        }
+        Ok(())
+    }
+
+    /// Fire [`Shrinker::lower_common_node_offset`] when `improvements`
+    /// advanced past `epoch`. Hypothesis runs the offset lowering at the
+    /// end of every successful `try_shrinking_nodes`; the per-node grain
+    /// in the value-minimization passes is the closest equivalent. It
+    /// no-ops unless at least two non-trivial integer nodes changed since
+    /// the last `clear_change_tracking`.
+    pub(super) fn lower_offset_if_shrunk(&mut self, epoch: usize) -> ShrinkResult<()> {
+        if self.improvements > epoch {
+            self.lower_common_node_offset()?;
         }
         Ok(())
     }
@@ -508,6 +523,10 @@ impl<'a> Shrinker<'a> {
     /// kind-simplest replacement, and integer groups additionally drive
     /// a binary search across all members at once.
     pub(super) fn shrink_duplicates(&mut self) -> ShrinkResult<()> {
+        // Lower the common node offset for any accepted group shrinks at
+        // the end of the pass — Hypothesis's minimize_duplicated_choices
+        // goes through try_shrinking_nodes, which fires it per success.
+        let offset_epoch = self.improvements;
         // Group nodes by (kind discriminant, value).  The discriminant
         // gate keeps an Integer and a Bytes that happen to coexist with
         // the same numeric payload apart.
@@ -687,6 +706,7 @@ impl<'a> Shrinker<'a> {
                 }
             }
         }
+        self.lower_offset_if_shrunk(offset_epoch)?;
         Ok(())
     }
 
@@ -698,10 +718,12 @@ impl<'a> Shrinker<'a> {
     /// step each toward `shrink_towards` by one before the predicate
     /// flips. This pass observes that *all* changed integer nodes shrank by
     /// some non-zero common offset, and tries to lower that offset directly
-    /// using a `find_integer` exponential probe.
+    /// with the full `Integer.shrink` move set.
     ///
-    /// Always called after a successful pass that may have changed
-    /// integer values; clears the change-tracking set on exit.
+    /// Fired (via [`Shrinker::lower_offset_if_shrunk`]) after successful
+    /// node shrinks inside the value-minimization passes, exactly as
+    /// Hypothesis runs it at the end of every successful
+    /// `try_shrinking_nodes`; clears the change-tracking set on exit.
     pub(crate) fn lower_common_node_offset(&mut self) -> ShrinkResult<()> {
         let mut changed: Vec<usize> = self.changed_nodes().iter().copied().collect();
         // `changed_nodes` is a `HashSet`; sort for a deterministic, run-to-run
@@ -768,14 +790,19 @@ impl<'a> Shrinker<'a> {
             })
             .collect();
 
-        // Try lowering by an additional `n` units in both directions.
+        // Shrink the offset itself with the full `Integer.shrink` move set
+        // (Hypothesis: `Integer.shrink(offset, lambda n: consider(n, sign))`),
+        // in both directions. The probe receives the *candidate offset*, so
+        // zero — the full collapse — is always among the guaranteed probes.
+        // Offsets beyond u128 can't go through `shrink_integer`; such
+        // distances don't occur for any practical integer constraint, and
+        // skipping just leaves the nodes to the per-node passes.
+        let Some(offset_u128) = offset.to_u128() else {
+            return Ok(());
+        };
         for sign_multiplier in [1i128, -1] {
-            find_integer_r(|n| {
-                let n_big = BigInt::from(n as u64);
-                if n_big > offset {
-                    return Ok(false);
-                }
-                let new_offset = &offset - &n_big;
+            shrink_integer(offset_u128, &mut |new_off| {
+                let new_offset = BigInt::from(new_off);
                 let mut replacements: HashMap<usize, ChoiceValue> = HashMap::new();
                 for k in 0..indices.len() {
                     let new_distance = &new_offset + &residual[k];

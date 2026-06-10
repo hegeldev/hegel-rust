@@ -165,7 +165,14 @@ impl<'a> Shrinker<'a> {
     /// the unified driver only adds value for integers.
     pub(crate) fn minimize_individual_choices(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
+        // Fires the common-offset lowering for the *previous* node's
+        // accepted shrinks at the top of each iteration (and once more
+        // after the loop) — Hypothesis runs it after every successful
+        // try_shrinking_nodes.
+        let mut offset_epoch = self.improvements;
         while i < self.current_nodes.len() {
+            self.lower_offset_if_shrunk(offset_epoch)?;
+            offset_epoch = self.improvements;
             let node = self.current_nodes[i].clone();
             if node.was_forced {
                 i += 1;
@@ -308,6 +315,7 @@ impl<'a> Shrinker<'a> {
             }
             i += 1;
         }
+        self.lower_offset_if_shrunk(offset_epoch)?;
         Ok(())
     }
 

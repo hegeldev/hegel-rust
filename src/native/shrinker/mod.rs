@@ -592,10 +592,6 @@ impl<'a> Shrinker<'a> {
                 Box::new(|sh| sh.minimize_individual_choices()),
             ),
             ShrinkPass::new(
-                "lower_common_node_offset",
-                Box::new(|sh| sh.lower_common_node_offset()),
-            ),
-            ShrinkPass::new(
                 "redistribute_integers",
                 Box::new(|sh| sh.redistribute_integers()),
             ),

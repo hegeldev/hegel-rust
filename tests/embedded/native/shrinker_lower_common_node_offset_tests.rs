@@ -221,3 +221,65 @@ fn index_passes_skip_sequence_nodes_without_blowup() {
         other => panic!("expected bytes, got {other:?}"),
     }
 }
+
+/// Offset lowering must fire *during* the value-minimization passes
+/// (Hypothesis runs it after every successful `try_shrinking_nodes`),
+/// not only as a separately scheduled pass: with `|m - n| <= 1` and
+/// m ~ n ~ 100_000, individual minimization can only zig-zag down by
+/// ~2 per accepted shrink, so the run-global 500-improvement budget is
+/// exhausted long before zero if the pass scheduler never gets a turn.
+/// The linked nodes sit five positions apart, outside
+/// `lower_integers_together`'s 3-node pairing window, so the common
+/// offset is the only mechanism that can collapse them.
+#[test]
+fn linked_integers_collapse_within_the_minimize_pass() {
+    use crate::native::core::choices::BooleanChoice;
+    let bool_node = || {
+        ChoiceNode::new(
+            ChoiceKind::Boolean(BooleanChoice),
+            ChoiceValue::Boolean(false),
+            false,
+        )
+    };
+    // Distinct values so `shrink_duplicates` can't pair them either.
+    let initial = vec![
+        int_node(100_000, 0),
+        bool_node(),
+        bool_node(),
+        bool_node(),
+        bool_node(),
+        int_node(100_001, 0),
+    ];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                let ok = nodes.len() >= 6
+                    && matches!(
+                        (&nodes[0].value, &nodes[5].value),
+                        (ChoiceValue::Integer(m), ChoiceValue::Integer(n))
+                            if {
+                                let m = i128::try_from(m).unwrap();
+                                let n = i128::try_from(n).unwrap();
+                                // Floor at 500 so the all-zero candidate
+                                // (zero_choices solves symmetric cases in
+                                // one shot) is not interesting.
+                                m.abs_diff(n) <= 1 && m >= 500 && n >= 500
+                            }
+                    );
+                (ok, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.shrink();
+    assert_eq!(
+        (
+            int_value(&shrinker.current_nodes[0]),
+            int_value(&shrinker.current_nodes[5])
+        ),
+        (500, 500),
+        "the linked pair must collapse to (500, 500) within the improvement budget"
+    );
+}
