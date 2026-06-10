@@ -115,15 +115,20 @@ impl<'a> Shrinker<'a> {
             return Ok(true);
         }
 
-        // The replace couldn't narrow the result directly. Re-run the test to
-        // see how many nodes it consumed — if fewer than expected, the trailing
-        // choices may be deletable. replace() asserted idx < current_nodes.len()
-        // and, since it returned false, did not mutate current_nodes, so idx is
-        // still in range here.
+        // The replace couldn't narrow the result directly. Re-inspect the
+        // realised run to see how many nodes it consumed — if fewer than
+        // expected, the trailing choices may be deletable. replace() just
+        // executed this exact candidate, so this is a result-cache hit, not
+        // a re-execution. replace() asserted idx < current_nodes.len()
+        // and, since it returned false, did not mutate current_nodes, so idx
+        // is still in range here.
         let mut attempt = self.current_nodes.clone();
         attempt[idx] = attempt[idx].with_value(value);
 
-        let (_, actual_nodes, _) = self.run_test_fn(super::ShrinkRun::Full(&attempt))?;
+        let Some(run) = self.cached_test_function(&attempt)?.1 else {
+            return Ok(false);
+        };
+        let actual_nodes = run.nodes;
         if actual_nodes.len() >= expected_len {
             return Ok(false);
         }
@@ -217,8 +222,21 @@ impl<'a> Shrinker<'a> {
             let mut lowered = self.current_nodes.clone();
             lowered[i] = lowered[i].with_value(towards_value);
 
-            let (_, actual_nodes, actual_spans) =
-                self.run_test_fn(super::ShrinkRun::Full(&lowered))?;
+            // Routed through `cached_test_function` so the probe shares the
+            // result cache and call accounting with every other candidate
+            // (Hypothesis's minimize_individual_choices does the same with
+            // its `cached_test_function(lowered)` size-dependency probe).
+            let (improved, run) = self.cached_test_function(&lowered)?;
+            if improved {
+                // The lower-by-one itself landed; nothing left to repair.
+                i += 1;
+                continue;
+            }
+            let Some(run) = run else {
+                i += 1;
+                continue;
+            };
+            let (actual_nodes, actual_spans) = (run.nodes, run.spans);
 
             // Misalignment-truncation retry. Even when the sequence
             // length didn't change, the realised draw of a string/bytes

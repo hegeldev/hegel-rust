@@ -10,7 +10,7 @@
 use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceKind, ChoiceValue};
 
-use super::{ShrinkResult, ShrinkRun, Shrinker};
+use super::{ShrinkResult, Shrinker};
 
 impl<'a> Shrinker<'a> {
     /// Coarse pre-shrink reductions that need their own phase because
@@ -48,13 +48,22 @@ impl<'a> Shrinker<'a> {
                 i += 1;
                 continue;
             }
-            // Probe: does zeroing the node change the shape?
+            // Probe: does zeroing the node change the shape? Routed through
+            // `cached_test_function` for accounting and caching — and, like
+            // Hypothesis's reduce_each_alternative zero_attempt, the probe
+            // is incorporated: if zeroing happens to be an improvement it
+            // is simply accepted and there is nothing left to repair.
             let zero_val = ic
                 .value_from_bigint(&BigInt::from(0))
                 .expect("0 fits a min==0 integer choice");
             let mut zeroed = self.current_nodes.clone();
             zeroed[i] = zeroed[i].with_value(ChoiceValue::Integer(zero_val));
-            let (_, zero_actual, _) = self.run_test_fn(ShrinkRun::Full(&zeroed))?;
+            let (improved, run) = self.cached_test_function(&zeroed)?;
+            let Some(run) = (if improved { None } else { run }) else {
+                i += 1;
+                continue;
+            };
+            let zero_actual = run.nodes;
             let shape_changed = zero_actual.len() != self.current_nodes.len()
                 || (i + 1..self.current_nodes.len()).any(|j| {
                     j >= zero_actual.len()

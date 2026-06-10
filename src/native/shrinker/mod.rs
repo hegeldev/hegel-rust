@@ -29,9 +29,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use crate::native::bignum::BigInt;
-use crate::native::core::{
-    ChoiceKind, ChoiceNode, ChoiceValue, MAX_SHRINKS, NodeSortKey, Spans, sort_key,
-};
+use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, MAX_SHRINKS, Spans, sort_key};
 
 /// Request passed to the shrinker's test function.
 ///
@@ -121,15 +119,19 @@ pub struct Shrinker<'a> {
     /// checkpoint. `lower_common_node_offset` reads this to find correlated
     /// integer nodes that keep shrinking together.
     all_changed_nodes: HashSet<usize>,
-    /// Negative-result cache of candidate sort_keys. When two passes
-    /// propose the same candidate (or one with the same sort_key shape),
-    /// the cached negative result lets `consider` short-circuit without
-    /// re-running the closure.
+    /// Result cache of executed candidates, keyed on the candidate's
+    /// choice values — the analogue of Hypothesis's engine-level
+    /// `cached_test_function` cache, which is keyed on the choice
+    /// sequence. When two passes propose the same candidate the cached
+    /// realised run is replayed without re-running the closure, and a
+    /// cached positive is re-evaluated against the *live* shrink target
+    /// (a result that didn't improve last time can't improve later —
+    /// `sort_key` only ever decreases — but re-evaluating is free and
+    /// keeps the logic uniform).
     ///
-    /// Positive (interesting) results are *not* cached because
-    /// `accept_improvement`'s `sort_key(actual) < sort_key(current)`
-    /// check is relative to the live shrink target — a positive that
-    /// didn't improve last time might improve now.
+    /// Keying on values (not sort-key shape) matters: two candidates
+    /// under different constraints can share per-node sort keys while
+    /// holding different values, and the executor replays *values*.
     ///
     /// Unbounded. Test cases produce a few hundred to a few thousand
     /// distinct candidates; an unbounded cache caps memory at a few MB
@@ -138,7 +140,7 @@ pub struct Shrinker<'a> {
     /// converged on neighbouring minima (cache eviction interacts with
     /// the order in which redistribute candidates are revisited), so
     /// eviction is simply dropped.
-    consider_cache: HashSet<Vec<(u8, NodeSortKey)>>,
+    result_cache: HashMap<Vec<ChoiceValue>, CachedRun>,
     /// Optional debug callback. When set, the shrinker emits
     /// per-pass-step "Trying shrink pass: <name>" lines and an
     /// end-of-shrink "Shrink pass profiling" report. Wired by the test
@@ -156,19 +158,14 @@ pub struct Shrinker<'a> {
     pub timed_out: bool,
 }
 
-/// One-byte tag identifying a `ChoiceKind` variant — used by
-/// `consider_cache` to keep entries for kind-punned candidates
-/// separate.  Must agree across `Shrinker::consider` calls; only the
-/// shrinker reads it.
-fn kind_tag(kind: &crate::native::core::ChoiceKind) -> u8 {
-    use crate::native::core::ChoiceKind::*;
-    match kind {
-        Boolean(_) => 0,
-        Integer(_) => 1,
-        Float(_) => 2,
-        Bytes(_) => 3,
-        String(_) => 4,
-    }
+/// The realised outcome of one executed candidate, stored in
+/// [`Shrinker::result_cache`] and returned by
+/// [`Shrinker::cached_test_function`].
+#[derive(Clone)]
+pub(super) struct CachedRun {
+    pub(super) interesting: bool,
+    pub(super) nodes: Vec<ChoiceNode>,
+    pub(super) spans: Spans,
 }
 
 impl<'a> Shrinker<'a> {
@@ -192,7 +189,7 @@ impl<'a> Shrinker<'a> {
             calls_at_last_shrink: 0,
             max_stall: MAX_SHRINKS,
             all_changed_nodes: HashSet::new(),
-            consider_cache: HashSet::new(),
+            result_cache: HashMap::new(),
             debug: None,
             deadline: None,
             timed_out: false,
@@ -231,31 +228,61 @@ impl<'a> Shrinker<'a> {
         }
     }
 
-    /// Try a candidate choice sequence. If interesting and smaller than
-    /// the current best, update current_nodes. Returns whether interesting.
-    ///
-    /// The stored nodes are the actual sequence produced by the test
-    /// function, not the candidate passed in. This matters when the test
-    /// exits early (actual is shorter than candidate) or when value
-    /// punning replaces values that no longer fit the kind at that
-    /// position after a one_of branch switch.
+    /// Try a candidate choice sequence. Returns whether the shrink target
+    /// *improved* — Hypothesis's `consider_new_nodes`. A candidate that is
+    /// interesting but not strictly smaller reports `false`, so passes
+    /// never act on phantom successes.
     pub fn consider(&mut self, nodes: &[ChoiceNode]) -> ShrinkResult<bool> {
-        if sort_key(nodes) == sort_key(&self.current_nodes) {
-            return Ok(true);
+        Ok(self.cached_test_function(nodes)?.0)
+    }
+
+    /// Run a candidate through the standard bookkeeping and return both
+    /// whether the shrink target improved and the realised run —
+    /// Hypothesis's `Shrinker.cached_test_function`.
+    ///
+    /// The result is `None` when a pre-check resolved the candidate
+    /// without consulting the cache or the test function:
+    ///
+    /// * a candidate equal to the current target (after truncation to the
+    ///   target's length) is vacuously successful — `(true, None)`;
+    /// * a candidate whose sort key exceeds the target's cannot improve —
+    ///   `(false, None)`;
+    /// * a candidate that disagrees with the target at a forced index is
+    ///   not permitted — `(false, None)`.
+    ///
+    /// Otherwise the realised run is returned, served from
+    /// [`Shrinker::result_cache`] when the candidate's values were
+    /// executed before. The stored nodes are the actual sequence produced
+    /// by the test function, not the candidate passed in: the test may
+    /// exit early (actual shorter than candidate) or pun values that no
+    /// longer fit the kind at a position after a one_of branch switch.
+    pub(super) fn cached_test_function(
+        &mut self,
+        nodes: &[ChoiceNode],
+    ) -> ShrinkResult<(bool, Option<CachedRun>)> {
+        // Truncate to the current target's length, like Hypothesis —
+        // anything the test could consume beyond it is unreachable.
+        let nodes = &nodes[..nodes.len().min(self.current_nodes.len())];
+        if nodes.len() == self.current_nodes.len()
+            && nodes
+                .iter()
+                .zip(&self.current_nodes)
+                .all(|(a, b)| a.kind == b.kind && a.value == b.value)
+        {
+            return Ok((true, None));
+        }
+        if sort_key(&self.current_nodes) < sort_key(nodes) {
+            return Ok((false, None));
         }
         // Forced-node guard: a candidate may not differ from the
         // current shrink target at any index marked `was_forced`.
         // Forced choices stay put through shrinking. `replace` enforces
-        // this on its own single-position path; consider covers callers
+        // this on its own single-position path; this covers callers
         // that build candidate sequences directly
         // (try_shortening_via_increment, delete_chunks, span passes, …).
-        for (i, candidate) in nodes
-            .iter()
-            .enumerate()
-            .take(nodes.len().min(self.current_nodes.len()))
-        {
+        for (i, candidate) in nodes.iter().enumerate() {
             if self.current_nodes[i].was_forced && candidate.value != self.current_nodes[i].value {
-                return Ok(false);
+                return Ok((false, None));
             }
         }
         // The improvement cap is a *global* stop, not a per-candidate reject:
@@ -273,23 +300,13 @@ impl<'a> Shrinker<'a> {
         if self.improvements > 0
             && self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall
         {
-            return Ok(false);
+            return Ok((false, None));
         }
-        // Negative-result cache: if we already asked the closure about a
-        // candidate with this sort_key and it was uninteresting,
-        // short-circuit. See the field docstring for why positive results
-        // aren't cached.
-        // Cache key bundles the kind discriminant with the per-node
-        // sort key: `Scalar(0, false)` is produced both by
-        // `Boolean(false)` and `Integer(0)`, and a cache shared on
-        // sort_key alone would falsely short-circuit kind-punned
-        // candidates that the test_fn would in fact accept.
-        let cache_key: Vec<(u8, NodeSortKey)> = nodes
-            .iter()
-            .map(|node| (kind_tag(&node.kind), node.sort_key()))
-            .collect();
-        if self.consider_cache.contains(&cache_key) {
-            return Ok(false);
+        let cache_key: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+        if let Some(cached) = self.result_cache.get(&cache_key) {
+            let cached = cached.clone();
+            let improved = self.incorporate_run(&cached);
+            return Ok((improved, Some(cached)));
         }
 
         // The wall-clock guard lives in `run_test_fn`: it errors out before
@@ -297,13 +314,25 @@ impl<'a> Shrinker<'a> {
         let (is_interesting, actual_nodes, actual_spans) =
             self.run_test_fn(ShrinkRun::Full(nodes))?;
         self.calls += 1;
-        if !is_interesting {
-            self.consider_cache.insert(cache_key);
+        let run = CachedRun {
+            interesting: is_interesting,
+            nodes: actual_nodes,
+            spans: actual_spans,
+        };
+        self.result_cache.insert(cache_key, run.clone());
+        let improved = self.incorporate_run(&run);
+        Ok((improved, Some(run)))
+    }
+
+    /// Accept `run` as the new shrink target iff it is interesting and
+    /// strictly smaller. Returns whether it was accepted.
+    fn incorporate_run(&mut self, run: &CachedRun) -> bool {
+        if run.interesting && sort_key(&run.nodes) < sort_key(&self.current_nodes) {
+            self.accept_improvement(run.nodes.clone(), run.spans.clone());
+            true
+        } else {
+            false
         }
-        if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
-            self.accept_improvement(actual_nodes, actual_spans);
-        }
-        Ok(is_interesting)
     }
 
     /// Run the test function for `run`, or return [`ShrinkStop`] immediately —

@@ -121,10 +121,9 @@ fn consider_short_circuits_when_stalled() {
 
 #[test]
 fn max_stall_grows_after_shrink() {
-    // A test_fn that's interesting for v < 10 but uninteresting
-    // otherwise.  Each successful shrink should grow max_stall by
-    // 2 * (calls - calls_at_last_shrink) so the shrinker doesn't
-    // run out of budget on long descents.
+    // A test_fn that's interesting only for v ∈ {9, 5}.  Each successful
+    // shrink should grow max_stall by 2 * (calls - calls_at_last_shrink)
+    // so the shrinker doesn't run out of budget on long descents.
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
@@ -132,7 +131,7 @@ fn max_stall_grows_after_shrink() {
                     ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
                     _ => unreachable!(),
                 };
-                (v < 10, nodes.to_vec(), Spans::new())
+                (v == 9 || v == 5, nodes.to_vec(), Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -146,12 +145,13 @@ fn max_stall_grows_after_shrink() {
     let accepted_first = shrinker.consider(&[int_node(9)]).unwrap();
     assert!(accepted_first);
     let stall_after_first = shrinker.max_stall;
-    // Burn 3 uninteresting calls (still within stall budget).
-    for v in 11..14 {
+    // Burn 3 uninteresting calls (smaller than the current target so
+    // they actually execute; still within stall budget).
+    for v in 6..9 {
         shrinker.consider(&[int_node(v)]).unwrap();
     }
-    // Another improvement.  span = calls - calls_at_last_shrink ≈ 3;
-    // grown = 6 > 5, so max_stall should grow.
+    // Another improvement.  span = calls - calls_at_last_shrink ≈ 4;
+    // grown = 8 > 5, so max_stall should grow.
     shrinker.consider(&[int_node(5)]).unwrap();
     assert!(
         shrinker.max_stall > stall_after_first,

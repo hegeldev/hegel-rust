@@ -11,3 +11,13 @@ Hypothesis more closely:
   regex-based labels do (skewing heavily towards short labels) instead of
   uniformly over 1..=63, and averages 3 subdomains per domain instead
   of 6. Typical generated domains are much shorter as a result.
+- The shrinker's candidate bookkeeping now matches Hypothesis's
+  `cached_test_function`: trying a candidate reports whether the shrink
+  target actually *improved* (previously "was interesting", which let
+  some passes act on phantom successes), candidates larger than the
+  current target are rejected without running the test, and the result
+  cache is keyed on the candidate's choice values (the old sort-key-shape
+  keying could falsely deduplicate distinct candidates whose constraints
+  differed). Shape-probing passes now share that cache and call
+  accounting instead of invoking the test function directly, removing
+  some duplicate test executions during shrinking.

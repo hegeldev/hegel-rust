@@ -38,9 +38,10 @@ fn int_value(node: &ChoiceNode) -> i128 {
 
 #[test]
 fn initial_coarse_reduction_no_op_when_shape_stable() {
-    // Predicate accepts everything, returns same shape → coarse phase
-    // detects no shape change and defers to the main loop, leaving the
-    // value untouched.
+    // Predicate accepts everything, returns same shape → the zero probe
+    // itself is incorporated (it is interesting and smaller, exactly as
+    // in Hypothesis's reduce_each_alternative), and the expensive
+    // alternative-walk is skipped: one call total.
     let initial = vec![small_int_node(5)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
@@ -51,7 +52,11 @@ fn initial_coarse_reduction_no_op_when_shape_stable() {
         Spans::new(),
     );
     shrinker.initial_coarse_reduction().unwrap();
-    assert_eq!(int_value(&shrinker.current_nodes[0]), 5);
+    assert_eq!(int_value(&shrinker.current_nodes[0]), 0);
+    assert_eq!(
+        shrinker.calls, 1,
+        "shape-stable node must cost exactly the zero probe"
+    );
 }
 
 #[test]

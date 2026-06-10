@@ -5,7 +5,7 @@
 //! nodes.
 
 use super::ordering::shrink_ordering;
-use super::{ShrinkResult, ShrinkRun, Shrinker};
+use super::{ShrinkResult, Shrinker};
 use crate::native::core::sort_key;
 
 impl<'a> Shrinker<'a> {
@@ -93,14 +93,12 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            // Manually invoke the closure so we keep hold of the actual
-            // realised nodes and spans even when the attempt isn't an
-            // improvement — we retry with the realised span content
-            // below.
-            let (is_interesting, actual_nodes, actual_spans) =
-                self.run_test_fn(ShrinkRun::Full(&attempt))?;
-            if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
-                self.accept_improvement(actual_nodes, actual_spans);
+            // Go through `cached_test_function` (not bare `consider`) so
+            // we keep hold of the actual realised nodes and spans even
+            // when the attempt isn't an improvement — we retry with the
+            // realised span content below.
+            let (improved, run) = self.cached_test_function(&attempt)?;
+            if improved {
                 i += 1;
                 continue;
             }
@@ -113,12 +111,14 @@ impl<'a> Shrinker<'a> {
             // `if let` chains stabilised after MSRV 1.86, so this is
             // spelled out as nested conditions instead.
             if self.improvements == epoch_before {
-                if let Some(new_span) = actual_spans.get(i) {
-                    if new_span.start <= new_span.end && new_span.end <= actual_nodes.len() {
-                        let mut spliced = self.current_nodes[..span.start].to_vec();
-                        spliced.extend_from_slice(&actual_nodes[new_span.start..new_span.end]);
-                        spliced.extend_from_slice(&self.current_nodes[span.end..]);
-                        self.consider(&spliced)?;
+                if let Some(run) = run {
+                    if let Some(new_span) = run.spans.get(i) {
+                        if new_span.start <= new_span.end && new_span.end <= run.nodes.len() {
+                            let mut spliced = self.current_nodes[..span.start].to_vec();
+                            spliced.extend_from_slice(&run.nodes[new_span.start..new_span.end]);
+                            spliced.extend_from_slice(&self.current_nodes[span.end..]);
+                            self.consider(&spliced)?;
+                        }
                     }
                 }
             }
