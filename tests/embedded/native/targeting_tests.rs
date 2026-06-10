@@ -440,3 +440,32 @@ fn try_replace_realigns_spans_to_repair_suffix() {
          starting score of 2.0, got {best:?}"
     );
 }
+
+/// `tc.target()` scores appear in the statistics report, mirroring
+/// Hypothesis's "Highest target score" lines.
+#[test]
+fn statistics_report_includes_target_scores() {
+    let mut test_fn = |tc: TestCase| {
+        let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(100));
+        tc.target_labelled(n as f64, "n");
+    };
+    let mut run_case = move |ds: Box<dyn crate::backend::DataSource + Send + Sync>,
+                             is_final: bool| {
+        run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+    };
+    let settings = crate::Settings::new()
+        .test_cases(150)
+        .database(None)
+        .seed(Some(11));
+    let mut engine = Engine::new(&settings, None, &mut run_case);
+    let result = engine.run(
+        std::time::Duration::from_secs(30),
+        std::time::Duration::from_secs(300),
+    );
+    assert!(result.passed);
+    let report = engine.format_statistics();
+    assert!(
+        report.contains("Highest target score:") && report.contains("label=\"n\""),
+        "missing target score line: {report}"
+    );
+}

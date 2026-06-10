@@ -1041,3 +1041,92 @@ fn reuse_detects_nondeterministic_generator_across_replays() {
         .unwrap_or_default();
     assert!(msg.contains("non-deterministic"), "got: {msg}");
 }
+
+// ── user-facing statistics ──
+
+#[test]
+fn format_ms_buckets() {
+    use std::time::Duration;
+    // Mirrors Hypothesis's statistics.format_ms.
+    assert_eq!(format_ms(&[]), "NaN ms");
+    assert_eq!(format_ms(&[Duration::from_micros(100)]), "< 1ms");
+    assert_eq!(format_ms(&[Duration::from_millis(3)]), "~ 3ms");
+    assert_eq!(
+        format_ms(&[
+            Duration::from_millis(1),
+            Duration::from_millis(2),
+            Duration::from_millis(9),
+        ]),
+        "~ 1-9 ms"
+    );
+}
+
+#[test]
+fn statistics_report_covers_phases_and_stop_reason() {
+    crate::run_lifecycle::init_panic_hook();
+    let mut test_fn = |tc: crate::TestCase| {
+        let _: i32 = tc.draw(crate::generators::integers());
+    };
+    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
+        run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+    };
+    let settings = Settings::new().test_cases(20).database(None).seed(Some(7));
+    let mut ctx = Engine::new(&settings, None, &mut run_case);
+    let result = ctx.run(Duration::from_secs(30), Duration::from_secs(300));
+    assert!(result.passed);
+    let report = ctx.format_statistics();
+    assert!(
+        report.contains("- during generate phase ("),
+        "missing generate phase: {report}"
+    );
+    assert!(
+        report.contains("Typical runtimes:"),
+        "missing runtimes: {report}"
+    );
+    assert!(
+        report.contains("20 passing examples"),
+        "missing pass count: {report}"
+    );
+    assert!(
+        report.contains("Stopped because settings.test_cases=20"),
+        "missing stop reason: {report}"
+    );
+    // No reuse phase ran (no database), so it must not be reported.
+    assert!(
+        !report.contains("during reuse phase"),
+        "empty phases must be skipped: {report}"
+    );
+}
+
+#[test]
+fn statistics_report_covers_shrinks_and_failures() {
+    crate::run_lifecycle::init_panic_hook();
+    let mut test_fn = |tc: crate::TestCase| {
+        let n: i32 = tc.draw(crate::generators::integers());
+        assert!(n < 1000, "too big");
+    };
+    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
+        run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+    };
+    let settings = Settings::new().test_cases(50).database(None).seed(Some(3));
+    let mut ctx = Engine::new(&settings, None, &mut run_case);
+    let result = ctx.run(Duration::from_secs(30), Duration::from_secs(300));
+    assert!(!result.passed);
+    let report = ctx.format_statistics();
+    assert!(
+        report.contains("failing examples"),
+        "missing failing counts: {report}"
+    );
+    assert!(
+        report.contains("- during shrink phase ("),
+        "missing shrink phase: {report}"
+    );
+    assert!(
+        report.contains("shrinks of which"),
+        "missing shrink summary: {report}"
+    );
+    assert!(
+        report.contains("Stopped because nothing left to do"),
+        "missing stop reason: {report}"
+    );
+}

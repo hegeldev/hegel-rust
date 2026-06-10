@@ -138,6 +138,9 @@ pub struct Settings {
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
     pub(crate) backend: Option<Backend>,
+    /// Print a per-phase statistics report after the run, like
+    /// Hypothesis's `--hypothesis-show-statistics`.
+    pub(crate) statistics: bool,
 }
 
 impl Settings {
@@ -166,6 +169,7 @@ impl Settings {
             report_multiple_failures: true,
             print_blob: false,
             backend: None,
+            statistics: false,
         }
     }
 
@@ -196,6 +200,14 @@ impl Settings {
             None if in_antithesis => Backend::Urandom,
             None => Backend::Default,
         }
+    }
+
+    /// Print a per-phase statistics report (test-case counts, typical
+    /// runtimes, target scores, and why the run stopped) to stderr after
+    /// the run — the analogue of Hypothesis's `--hypothesis-show-statistics`.
+    pub fn statistics(mut self, statistics: bool) -> Self {
+        self.statistics = statistics;
+        self
     }
 
     /// Set the number of test cases to run (default: 100).

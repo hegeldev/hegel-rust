@@ -290,3 +290,10 @@ fn test_apply_cli_args_parse_error() {
         other => panic!("expected ParseError, got {other:?}"),
     }
 }
+
+#[test]
+fn test_statistics_flag() {
+    let settings = apply(&["--statistics"]);
+    assert!(settings.statistics);
+    assert!(!Settings::new().statistics);
+}

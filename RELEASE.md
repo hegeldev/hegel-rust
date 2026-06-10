@@ -1,6 +1,12 @@
 RELEASE_TYPE: patch
 
-This patch improves several internals of the native engine to match
+This patch adds run statistics: `Settings::statistics(true)` (or
+`--statistics` on a `#[hegel::main]` binary) prints a per-phase report
+after the run — test-case counts and typical runtimes for the reuse,
+generate, target, and shrink phases, the best `tc.target()` scores, and
+why the run stopped — like Hypothesis's `--hypothesis-show-statistics`.
+
+It also improves several internals of the native engine to match
 Hypothesis more closely:
 
 - The unicode-normalization shrink pass now also tries NFKD

@@ -226,7 +226,7 @@ impl<'a> Engine<'a> {
     /// The engine driver — Hypothesis's `ConjectureRunner._run`: database
     /// replay, generation (with targeting and span mutation), shrinking,
     /// the end-of-run database reconciliation, and the final replay.
-    fn run(
+    pub(crate) fn run(
         &mut self,
         too_slow_threshold: std::time::Duration,
         shrink_budget: std::time::Duration,
@@ -370,6 +370,7 @@ impl<'a> Engine<'a> {
         // ASAP than take the time to look for new ones"
         // (engine.py::generate_new_examples).
         let found_in_reuse = !self.interesting.is_empty();
+        self.set_phase(PHASE_GENERATE);
 
         // All-simplest pre-trial: a deterministic "draw every choice at its
         // shrink target" probe before random generation starts. Gives
@@ -521,12 +522,14 @@ impl<'a> Engine<'a> {
                     && !self.targeting.is_empty()
                     && target_schedule.should_fire(self.valid_test_cases)
                 {
+                    self.set_phase(PHASE_TARGET);
                     let mut optimiser = crate::native::targeting::Optimiser {
                         engine: &mut *self,
                         max_valid: max_test_cases,
                         max_calls: max_test_cases * 10,
                     };
                     optimiser.optimise_targets();
+                    self.set_phase(PHASE_GENERATE);
                 }
 
                 // Span mutation runs only once the health-check warm-up is over,
@@ -567,10 +570,12 @@ impl<'a> Engine<'a> {
         }
 
         // --- Shrinking phase ---
+        let mut shrink_timed_out = false;
         if !self.interesting.is_empty()
             && !replay_aligned
             && settings.phases.contains(&Phase::Shrink)
         {
+            self.set_phase(PHASE_SHRINK);
             if verbosity == Verbosity::Debug {
                 let total: usize = self.interesting.values().map(|n| n.len()).sum();
                 eprintln!(
@@ -627,7 +632,6 @@ impl<'a> Engine<'a> {
             // One wall-clock deadline shared across every origin's shrink, matching
             // Hypothesis's single `finish_shrinking_deadline` for the whole phase.
             let shrink_deadline = std::time::Instant::now() + shrink_budget;
-            let mut shrink_timed_out = false;
             // Worklist rather than a fixed snapshot: shrink probes can stumble
             // onto bugs with *new* origins (collected via `note_stray`), and
             // those must be shrunk and reported too, exactly as Hypothesis's
@@ -683,6 +687,7 @@ impl<'a> Engine<'a> {
                             if verbosity == Verbosity::Verbose {
                                 eprintln!("Running test case");
                             }
+                            let tc_start = std::time::Instant::now();
                             let result = match req {
                                 ShrinkRun::Full(nodes) => {
                                     this.run_shrink_with_origin(nodes, &target_origin)
@@ -699,6 +704,9 @@ impl<'a> Engine<'a> {
                                 ),
                             };
                             this.calls += 1;
+                            let phase = &mut this.phase_stats[PHASE_SHRINK];
+                            phase.calls += 1;
+                            phase.case_times.push(tc_start.elapsed());
                             // If this probe matched the target origin, persist it
                             // immediately. The persister's sort-key check ensures
                             // only strict improvements actually touch the disk,
@@ -754,6 +762,26 @@ impl<'a> Engine<'a> {
         } else if replay_aligned && verbosity == Verbosity::Debug {
             eprintln!("Skipping shrink: reused aligned database replay");
         }
+
+        // Why the run ended — Hypothesis's ExitReason strings, with
+        // `settings.test_cases` standing in for `settings.max_examples`.
+        self.set_phase(self.current_phase);
+        self.stop_reason = Some(if self.shrinks >= self.max_shrinks {
+            format!("shrunk example {} times", self.max_shrinks)
+        } else if shrink_timed_out {
+            "shrinking was very slow".to_string()
+        } else if !self.interesting.is_empty() {
+            "nothing left to do".to_string()
+        } else if self.valid_test_cases >= max_test_cases {
+            format!("settings.test_cases={max_test_cases}")
+        } else if !self.within_invalid_budget(invalid_budget) {
+            format!(
+                "settings.test_cases={max_test_cases}, \
+                 but < 1% of examples satisfied assumptions"
+            )
+        } else {
+            "nothing left to do".to_string()
+        });
 
         // --- Save to database ---
         //
@@ -843,10 +871,87 @@ impl<'a> Engine<'a> {
             }
         }
 
+        if settings.statistics && verbosity != Verbosity::Quiet {
+            eprintln!("Hegel statistics:\n{}", self.format_statistics());
+        }
+
         TestRunResult {
             passed: failures.is_empty(),
             failures,
         }
+    }
+
+    /// Render the per-phase statistics report — the analogue of
+    /// Hypothesis's `describe_statistics`. Printed to stderr at the end of
+    /// a run when [`crate::Settings::statistics`] is set.
+    pub(crate) fn format_statistics(&self) -> String {
+        let mut lines: Vec<String> = Vec::new();
+        for (name, phase) in PHASE_NAMES.iter().zip(&self.phase_stats) {
+            if phase.calls == 0 {
+                continue;
+            }
+            lines.push(format!(
+                "  - during {name} phase ({:.2} seconds):",
+                phase.duration.as_secs_f64()
+            ));
+            lines.push(format!(
+                "    - Typical runtimes: {}",
+                format_ms(&phase.case_times)
+            ));
+            lines.push(format!(
+                "    - {} passing examples, {} failing examples, {} invalid examples",
+                phase.valid,
+                phase.interesting,
+                phase.invalid + phase.overrun
+            ));
+            if *name == "shrink" {
+                lines.push(format!(
+                    "    - Tried {} shrinks of which {} were successful",
+                    phase.calls, self.shrinks
+                ));
+            }
+        }
+        let targets = self.targeting.best_targets();
+        if targets.len() == 1 {
+            let (label, score) = targets.iter().next().unwrap();
+            lines.push(format!(
+                "  - Highest target score: {score}  (label={label:?})"
+            ));
+        } else if !targets.is_empty() {
+            lines.push("  - Highest target scores:".to_string());
+            let mut sorted: Vec<(&String, &f64)> = targets.iter().collect();
+            sorted.sort_by(|a, b| a.1.total_cmp(b.1).then(a.0.cmp(b.0)));
+            for (label, score) in sorted {
+                lines.push(format!("    {score:>16}  (label={label:?})"));
+            }
+        }
+        lines.push(format!(
+            "  - Stopped because {}",
+            self.stop_reason.as_deref().unwrap_or("nothing left to do")
+        ));
+        lines.join("\n")
+    }
+}
+
+/// Format a collection of test-case durations as an approximate
+/// milliseconds range — Hypothesis's `statistics.format_ms`: the 5th to
+/// 95th percentile, collapsing to `~ Xms` when they agree and `< 1ms`
+/// when even the upper end rounds to zero.
+fn format_ms(times: &[std::time::Duration]) -> String {
+    if times.is_empty() {
+        return "NaN ms".to_string();
+    }
+    let mut ordered: Vec<u128> = times.iter().map(|d| d.as_millis()).collect();
+    ordered.sort_unstable();
+    let n = ordered.len() - 1;
+    let lower = ordered[(n as f64 * 0.05).floor() as usize];
+    let upper = ordered[(n as f64 * 0.95).ceil() as usize];
+    if upper == 0 {
+        "< 1ms".to_string()
+    } else if lower == upper {
+        format!("~ {lower}ms")
+    } else {
+        format!("~ {lower}-{upper} ms")
     }
 }
 
@@ -1209,6 +1314,36 @@ pub(crate) struct Engine<'a> {
     /// ends, rather than each origin getting its own budget. Lowered by
     /// tests to make the cap observable.
     pub(crate) max_shrinks: usize,
+    /// Per-phase counters for the user-facing statistics report
+    /// ([`Engine::format_statistics`]); indexed by the `PHASE_*` constants.
+    phase_stats: [PhaseStats; 4],
+    /// Which `phase_stats` slot executed test cases are attributed to.
+    current_phase: usize,
+    /// When the current phase started, for the per-phase wall durations.
+    phase_started: std::time::Instant,
+    /// Why the run ended — Hypothesis's `ExitReason`, as its described
+    /// string. `None` until the run reaches its end-of-run accounting.
+    stop_reason: Option<String>,
+}
+
+/// `phase_stats` slot indices.
+const PHASE_REUSE: usize = 0;
+const PHASE_GENERATE: usize = 1;
+const PHASE_TARGET: usize = 2;
+const PHASE_SHRINK: usize = 3;
+const PHASE_NAMES: [&str; 4] = ["reuse", "generate", "target", "shrink"];
+
+/// Counters for one phase of the run, mirroring the per-phase data in
+/// Hypothesis's `ConjectureRunner.statistics`.
+#[derive(Default)]
+struct PhaseStats {
+    calls: u64,
+    valid: u64,
+    invalid: u64,
+    overrun: u64,
+    interesting: u64,
+    case_times: Vec<std::time::Duration>,
+    duration: std::time::Duration,
 }
 
 impl<'a> Engine<'a> {
@@ -1249,7 +1384,20 @@ impl<'a> Engine<'a> {
             first_bug_time: None,
             shrinks: 0,
             max_shrinks: crate::native::core::MAX_SHRINKS,
+            phase_stats: Default::default(),
+            current_phase: PHASE_REUSE,
+            phase_started: std::time::Instant::now(),
+            stop_reason: None,
         }
+    }
+
+    /// Switch statistics attribution to `phase`, closing out the wall
+    /// duration of the phase that was running.
+    fn set_phase(&mut self, phase: usize) {
+        let now = std::time::Instant::now();
+        self.phase_stats[self.current_phase].duration += now - self.phase_started;
+        self.phase_started = now;
+        self.current_phase = phase;
     }
 
     fn db(&self) -> Option<&dyn TestCaseDatabase> {
@@ -1295,6 +1443,15 @@ impl<'a> Engine<'a> {
             None
         };
         self.calls += 1;
+        let phase = &mut self.phase_stats[self.current_phase];
+        phase.calls += 1;
+        phase.case_times.push(elapsed);
+        match run.status {
+            Status::Valid => phase.valid += 1,
+            Status::Invalid => phase.invalid += 1,
+            Status::EarlyStop => phase.overrun += 1,
+            Status::Interesting => phase.interesting += 1,
+        }
         // Test time accrues for every status (Hypothesis records draw times
         // regardless of outcome), so a slow generator that is mostly
         // assume()-rejected still trips TooSlow.

@@ -59,6 +59,11 @@ impl TargetingState {
     pub(crate) fn best_score(&self, label: &str) -> Option<f64> {
         self.best_observed_targets.get(label).copied()
     }
+
+    /// Best observed score per label, for the statistics report.
+    pub(crate) fn best_targets(&self) -> &HashMap<String, f64> {
+        &self.best_observed_targets
+    }
 }
 
 /// Schedule for firing `optimise_targets` during the generation loop.

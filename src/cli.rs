@@ -110,6 +110,9 @@ where
             "--single-test-case" => {
                 settings = settings.mode(Mode::SingleTestCase);
             }
+            "--statistics" => {
+                settings = settings.statistics(true);
+            }
             "--backend" => {
                 let value = next_value(&args, &mut i, "--backend")?;
                 let backend = parse_backend(&value)?;
@@ -209,6 +212,7 @@ fn usage() -> String {
     s.push_str(
         "  --single-test-case                   Run one test case, no shrinking or replay\n",
     );
+    s.push_str("  --statistics                         Print a statistics report after the run\n");
     s.push_str(
         "  --backend <default|urandom>          Randomness source (urandom reads /dev/urandom)\n",
     );
