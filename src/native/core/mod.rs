@@ -28,6 +28,12 @@ pub const BOUNDARY_PROBABILITY: f64 = 0.01;
 /// returns on pathological inputs.
 pub const MAX_SHRINKS: usize = 500;
 
+/// Stall budget for the shrinker — Hypothesis's `max_stall`: once this many
+/// test-function calls have been made since the last accepted shrink, the
+/// whole shrink ends. Grows during a run (on every accepted shrink and with
+/// fixate's per-iteration padding), so this is only the starting value.
+pub const MAX_STALL: usize = 200;
+
 /// Wall-clock ceiling on the whole shrinking phase. Once shrinking has run
 /// for this long it stops and reports the smallest counterexample found so
 /// far, rather than blocking the run indefinitely on a test whose body is

@@ -46,6 +46,13 @@ pub struct ShrinkPass<'a> {
     pub shrinks: usize,
     /// Times the pass step reduced the sequence length.
     pub deletions: usize,
+    /// The `improvements` epoch the pass last ran at. Every pass is
+    /// deterministic given the shrink target, so re-running it against an
+    /// unchanged target is pure waste (consider-level candidates are
+    /// absorbed by the result cache, but probe executions are not). This
+    /// is the analogue of Hypothesis's per-pass ChoiceTree being
+    /// exhausted: the tree only resets when the shrink target changes.
+    last_run_epoch: Option<usize>,
 }
 
 impl<'a> ShrinkPass<'a> {
@@ -57,6 +64,7 @@ impl<'a> ShrinkPass<'a> {
             calls: 0,
             shrinks: 0,
             deletions: 0,
+            last_run_epoch: None,
         }
     }
 }
@@ -111,6 +119,13 @@ impl<'a> Shrinker<'a> {
                 // across a pass invocation is exactly "did the pass shrink
                 // anything?" — no per-iteration `sort_key` snapshot needed.
                 while failures < MAX_FAILURES {
+                    // Exhaustion: the pass already ran against this exact
+                    // shrink target (`improvements` uniquely identifies it),
+                    // and every pass is deterministic, so there is nothing
+                    // new for it to try until the target changes.
+                    if passes[idx].last_run_epoch == Some(self.improvements) {
+                        break;
+                    }
                     // Grow max_stall to leave breathing room for the
                     // remainder of this outer iteration.
                     let span = self.calls.saturating_sub(calls_at_loop_start);
@@ -119,6 +134,16 @@ impl<'a> Shrinker<'a> {
                         .saturating_add(span);
                     if target > self.max_stall {
                         self.max_stall = target;
+                    }
+                    // The stall guard — Hypothesis's `check_calls` raising
+                    // `StopShrinking`: once `max_stall` calls have passed
+                    // without an accepted shrink, the whole shrink ends.
+                    // Checked at pass-step boundaries (Hypothesis checks
+                    // per call, but its steps are chooser-sized; checking
+                    // mid-pass here would cut whole passes short that
+                    // Python's intra-iteration padding lets finish).
+                    if self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall {
+                        return Err(super::ShrinkStop);
                     }
                     if failures >= MAX_FAILURES / 2 {
                         shuffle_requested = true;
@@ -129,6 +154,7 @@ impl<'a> Shrinker<'a> {
                         self.debug_msg(&format!("Trying shrink pass: {name}"));
                     }
                     passes[idx].calls += 1;
+                    passes[idx].last_run_epoch = Some(self.improvements);
                     let epoch_before_iter = self.improvements;
                     let initial_calls = self.calls;
                     (passes[idx].run)(self)?;

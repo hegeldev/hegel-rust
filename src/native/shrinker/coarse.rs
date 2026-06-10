@@ -127,9 +127,7 @@ impl<'a> Shrinker<'a> {
             .map(|&j| self.current_spans.get(j).map(|s| s.end))
             .collect();
         for seed in 0..3u64 {
-            let Some(attempt) = self.probe(&prefix, seed, max_size)? else {
-                continue;
-            };
+            let attempt = self.probe(&prefix, seed, max_size)?;
             if self.improvements > epoch {
                 return Ok(true);
             }

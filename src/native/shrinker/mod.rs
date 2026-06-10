@@ -30,7 +30,9 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use crate::native::bignum::BigInt;
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, MAX_SHRINKS, Spans, sort_key};
+use crate::native::core::{
+    ChoiceKind, ChoiceNode, ChoiceValue, MAX_SHRINKS, MAX_STALL, Spans, sort_key,
+};
 
 /// Request passed to the shrinker's test function.
 ///
@@ -99,17 +101,15 @@ pub struct Shrinker<'a> {
     /// Value of `calls` at the moment of the most recent
     /// `accept_improvement`.  See `max_stall`.
     pub calls_at_last_shrink: usize,
-    /// Once `calls - calls_at_last_shrink >= max_stall`, further
-    /// `consider` / `probe` invocations short-circuit. Grows on every
+    /// Once `calls - calls_at_last_shrink >= max_stall`, the pass
+    /// scheduler ends the whole shrink (Hypothesis's `StopShrinking`).
+    /// Checked at pass-step boundaries in `fixate_shrink_passes`, which
+    /// also pads it with intra-iteration breathing room; grows on every
     /// successful shrink by
     /// `max(max_stall, (calls - calls_at_last_shrink) * 2)` so a long
     /// shrink search where each step is expensive doesn't get cut off
-    /// prematurely.
-    ///
-    /// Default is [`MAX_SHRINKS`] = 500. `calls` is shrinker-local and
-    /// starts at zero, so a tighter threshold lands mid-pass for
-    /// predicates that need many cold calls between the first few
-    /// shrinks and stalls on a sub-minimal target.
+    /// prematurely. Starts at [`MAX_STALL`] = 200, active from the first
+    /// call, as in Hypothesis.
     pub max_stall: usize,
     /// Snapshot of `current_nodes` at the last call to
     /// [`Shrinker::clear_change_tracking`] (or construction).  Each `consider`
@@ -188,7 +188,7 @@ impl<'a> Shrinker<'a> {
             max_improvements: MAX_SHRINKS,
             calls: 0,
             calls_at_last_shrink: 0,
-            max_stall: MAX_SHRINKS,
+            max_stall: MAX_STALL,
             all_changed_nodes: HashSet::new(),
             result_cache: HashMap::new(),
             debug: None,
@@ -293,16 +293,6 @@ impl<'a> Shrinker<'a> {
         if self.improvements >= self.max_improvements {
             return Err(ShrinkStop);
         }
-        // Only enforce the stall guard once we've found at least one
-        // improvement.  Without warmup, predicates that need many calls
-        // to find the first shrink — e.g. searching a large
-        // redistribute space — trip the guard before making any
-        // progress and stall on a sub-minimal target.
-        if self.improvements > 0
-            && self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall
-        {
-            return Ok((false, None));
-        }
         let cache_key: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
         if let Some(cached) = self.result_cache.get(&cache_key) {
             let cached = cached.clone();
@@ -358,20 +348,17 @@ impl<'a> Shrinker<'a> {
     /// deterministic RNG seeded by `seed`, capped at `max_size` choices. If
     /// the resulting run is interesting and shortlex-smaller than
     /// `current_nodes`, update `current_nodes`. Returns the realised run
-    /// (or `None` when the stall guard skipped execution) so callers like
-    /// `try_lower_node_as_alternative` can splice its span contents.
+    /// so callers like `try_lower_node_as_alternative` can splice its
+    /// span contents.
     pub(super) fn probe(
         &mut self,
         prefix: &[ChoiceValue],
         seed: u64,
         max_size: usize,
-    ) -> ShrinkResult<Option<CachedRun>> {
+    ) -> ShrinkResult<CachedRun> {
         // Global stop once the improvement cap is reached (see `consider`).
         if self.improvements >= self.max_improvements {
             return Err(ShrinkStop);
-        }
-        if self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall {
-            return Ok(None);
         }
         // The wall-clock guard lives in `run_test_fn`.
         let (is_interesting, actual_nodes, actual_spans) = self.run_test_fn(ShrinkRun::Probe {
@@ -386,7 +373,7 @@ impl<'a> Shrinker<'a> {
             spans: actual_spans,
         };
         self.incorporate_run(&run);
-        Ok(Some(run))
+        Ok(run)
     }
 
     /// Common bookkeeping when a candidate becomes the new shrink target:

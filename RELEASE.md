@@ -63,3 +63,11 @@ Hypothesis more closely:
   instead of O(n)), full-sort and gap-preserving reordering, joint
   minimization of duplicated elements, and per-element shrinking with
   the integer move set rather than a plain binary search.
+- Shrink passes are no longer re-run against an unchanged shrink target
+  (each pass is deterministic, so a re-run is pure waste — probe-based
+  passes were re-executing every probe up to 20 times), mirroring how
+  Hypothesis's per-pass choice trees exhaust and only reset when the
+  target changes. The shrinker's stall guard now matches Hypothesis as
+  well: a 200-call budget active from the first call that ends the
+  whole shrink when exhausted, rather than a 500-call budget that only
+  armed after the first successful shrink.

@@ -76,14 +76,26 @@ fn fixate_shrink_passes_records_deletion_stat_when_pass_shortens() {
 }
 
 #[test]
-fn consider_short_circuits_when_stalled() {
-    // Set max_stall low; feed an uninteresting candidate over and over.
-    // After max_stall closure calls without a shrink, consider() should
-    // return false immediately without invoking the closure again.
-    //
-    // The stall guard only fires after at least one improvement has
-    // been recorded (warmup: see the field doc for `max_stall`), so
-    // seed an interesting smaller candidate first.
+fn stall_guard_defaults_to_200_and_is_active_from_the_first_call() {
+    // Hypothesis's `max_stall = 200` from construction, with no warm-up
+    // exemption.
+    let shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(5)],
+        Spans::new(),
+    );
+    assert_eq!(shrinker.max_stall, 200);
+    assert_eq!(shrinker.calls_at_last_shrink, 0);
+}
+
+#[test]
+fn fixate_stops_the_whole_shrink_when_stalled() {
+    // The stall guard ends the entire shrink (Hypothesis's StopShrinking)
+    // at a pass-step boundary: with the call counter already far past the
+    // last accepted shrink, fixate must bail before running any pass.
     use std::cell::Cell;
     use std::rc::Rc;
     let counter = Rc::new(Cell::new(0_usize));
@@ -92,31 +104,22 @@ fn consider_short_circuits_when_stalled() {
         Box::new(move |run| match run {
             ShrinkRun::Full(nodes) => {
                 counter_clone.set(counter_clone.get() + 1);
-                // Anything < 5 is interesting and strictly smaller.
-                let interesting = matches!(&nodes[0].value,
-                    ChoiceValue::Integer(v) if i128::try_from(v).unwrap() < 5);
-                (interesting, nodes.to_vec(), Spans::new())
+                (false, nodes.to_vec(), Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         vec![int_node(5)],
         Spans::new(),
     );
-    // Seed one improvement so the stall guard's warmup is satisfied.
-    shrinker.consider(&[int_node(3)]).unwrap();
-    let baseline = counter.get();
-    shrinker.max_stall = 10;
-    // Reset calls_at_last_shrink so we measure the post-baseline budget.
-    shrinker.calls_at_last_shrink = shrinker.calls;
-    for v in 10..60 {
-        shrinker.consider(&[int_node(v)]).unwrap();
-    }
-    // Post-baseline closure calls capped at max_stall.
-    assert!(
-        counter.get() - baseline <= 10,
-        "test_fn invoked {} times post-baseline, expected <= 10",
-        counter.get() - baseline
-    );
+    shrinker.calls = 1000;
+    shrinker.calls_at_last_shrink = 0;
+    let mut passes = vec![ShrinkPass::new(
+        "zero_choices",
+        Box::new(|sh| sh.zero_choices()),
+    )];
+    let result = shrinker.fixate_shrink_passes(&mut passes);
+    assert!(result.is_err(), "stalled fixate must end the whole shrink");
+    assert_eq!(counter.get(), 0, "no pass may run once stalled");
 }
 
 #[test]
@@ -518,4 +521,46 @@ fn past_deadline_latches_and_short_circuits_consider_and_probe() {
             .is_err()
     );
     assert_eq!(shrinker.calls, 0, "nothing should have been executed");
+}
+
+/// Each pass runs at most once per shrink target (Hypothesis's per-pass
+/// ChoiceTree is exhausted by a deterministic pass's single step and only
+/// resets when the target changes). Probe-based passes execute the test
+/// for every probe — without the exhaustion rule, fixate re-ran them up
+/// to MAX_FAILURES times against an unchanged target, multiplying the
+/// probe executions by 20 for nothing.
+#[test]
+fn fixate_runs_each_pass_once_per_target() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let probe_count = Rc::new(Cell::new(0usize));
+    let probe_clone = probe_count.clone();
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run| match run {
+            ShrinkRun::Full(nodes) => {
+                // Only the exact starting value is interesting: nothing
+                // can improve, so the target never changes.
+                let ok = matches!(&nodes.first().map(|n| &n.value),
+                    Some(ChoiceValue::Integer(v)) if i128::try_from(v).unwrap() == 5);
+                (ok && nodes.len() == 1, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => {
+                probe_clone.set(probe_clone.get() + 1);
+                (false, Vec::new(), Spans::new())
+            }
+        }),
+        vec![int_node(5)],
+        Spans::new(),
+    );
+    shrinker.shrink();
+    // A single mutate_and_shrink run over one integer node makes ~40
+    // probes (up to 10 index-offset candidates, 1 fixed-seed + 3 random
+    // continuations each); without per-target exhaustion the fixate loop
+    // re-ran the pass MAX_FAILURES times for ~800.
+    assert!(
+        probe_count.get() <= 45,
+        "probe-based passes must not be re-run against an unchanged \
+         target; saw {} probe executions",
+        probe_count.get()
+    );
 }
