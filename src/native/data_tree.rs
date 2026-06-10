@@ -88,7 +88,14 @@ impl Drop for DataTreeNode {
 
 impl DataTreeNode {
     /// Recompute `is_exhausted` based on current state. Mirrors
-    /// Hypothesis's `TreeNode.check_exhausted`.
+    /// Hypothesis's `TreeNode.check_exhausted`, including its key structural
+    /// property: only the *cached* flags of direct children are consulted,
+    /// never a recursive descent. [`record_tree`] calls this bottom-up along
+    /// the recorded path, so on-path children are already up to date, and
+    /// off-path children carry accurate flags from the runs that recorded
+    /// them (exhaustion is monotone and only changes along recorded paths).
+    /// A recursive descent here both overflows the stack on deep trees and
+    /// re-scans whole subtrees on every ascent step.
     fn check_exhausted(&mut self) -> bool {
         if self.is_exhausted {
             return true;
@@ -116,12 +123,9 @@ impl DataTreeNode {
             } else {
                 kind.max_children_saturating(explored + 1) <= explored
             };
-            if complete {
-                let all_exhausted = self.children.values_mut().all(|c| c.check_exhausted());
-                if all_exhausted {
-                    self.is_exhausted = true;
-                    return true;
-                }
+            if complete && self.children.values().all(|c| c.is_exhausted) {
+                self.is_exhausted = true;
+                return true;
             }
         }
         false

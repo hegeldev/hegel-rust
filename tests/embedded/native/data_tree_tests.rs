@@ -80,6 +80,28 @@ fn generate_novel_prefix_replays_forced_values_and_descends() {
 }
 
 #[test]
+fn record_tree_exhaustion_check_handles_deep_paths_without_recursion() {
+    // A deep chain of forced choices is "complete" at every level, so the
+    // exhaustion check considers the whole path; doing so with a recursive
+    // descent per node overflows the stack on paths thousands deep
+    // (observed as a SIGABRT under coverage instrumentation, whose stack
+    // frames are larger). Run in a deliberately small stack to pin the
+    // non-recursive implementation, which — like datatree.py — only
+    // consults the cached flags of direct children.
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let mut root = DataTreeNode::default();
+            let nodes: Vec<ChoiceNode> = (0..20_000).map(|_| forced_bool_node(true)).collect();
+            record_tree(&mut root, &nodes, Status::Valid, &[]);
+            assert!(root.is_exhausted);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn record_tree_reports_kind_mismatch() {
     // First record an integer node at position 0; recording a boolean node at
     // the same position reports the non-determinism (rather than panicking, so
