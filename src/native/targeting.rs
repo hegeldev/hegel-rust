@@ -16,9 +16,8 @@ use std::collections::{HashMap, HashSet};
 use crate::native::core::{
     BUFFER_SIZE, ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Status,
 };
-use crate::native::rng::EngineRng;
 use crate::native::shrinker::find_integer;
-use crate::native::test_runner::{EngineCtx, RunResult};
+use crate::native::test_runner::{Engine, RunResult};
 
 /// Per-label best score and the choice sequence that produced it.
 pub(crate) struct TargetingState {
@@ -100,248 +99,225 @@ impl TargetingSchedule {
     }
 }
 
-/// Mutable state threaded through the hill-climber.
-pub(crate) struct OptimiseCtx<'a, 'b, 'c> {
-    pub engine: &'a mut EngineCtx<'b>,
-    pub interesting: &'a mut HashMap<String, Vec<ChoiceNode>>,
-    pub calls: &'a mut u64,
-    pub valid_test_cases: &'a mut u64,
+/// The hill-climbing optimiser — Hypothesis's `Optimiser` class: a mutable
+/// borrow of the engine (which owns the [`TargetingState`] the climber
+/// reads, and through which every trial is executed and recorded) plus the
+/// budget caps for this firing.
+pub(crate) struct Optimiser<'a, 'b> {
+    pub engine: &'a mut Engine<'b>,
     pub max_valid: u64,
     pub max_calls: u64,
-    pub rng: &'a mut EngineRng,
-    pub on_run: &'a mut (dyn FnMut(&RunResult) + 'c),
 }
 
-impl OptimiseCtx<'_, '_, '_> {
+impl Optimiser<'_, '_> {
     fn budget_exhausted(&self) -> bool {
-        !self.interesting.is_empty()
-            || *self.valid_test_cases >= self.max_valid
-            || *self.calls >= self.max_calls
+        !self.engine.interesting.is_empty()
+            || self.engine.valid_test_cases >= self.max_valid
+            || self.engine.calls >= self.max_calls
     }
-}
 
-/// Run a single trial and update bookkeeping. Returns the run result if it
-/// completed, or `None` if the budget was exhausted before this call.
-///
-/// Uses [`NativeTestCase::for_probe`] rather than `for_choices` so that
-/// perturbations which grow the realised choice sequence (e.g. raising
-/// an integer that controls a downstream loop count) can still draw the
-/// extra values from a fresh RNG instead of overrunning the prefix.
-/// Mirrors Hypothesis's `cached_test_function(choices, extend="full")`
-/// in `optimiser.py::attempt_replace`.
-fn run_trial(
-    targeting: &mut TargetingState,
-    ctx: &mut OptimiseCtx<'_, '_, '_>,
-    choices: &[ChoiceValue],
-) -> Option<RunResult> {
-    if ctx.budget_exhausted() {
-        return None;
+    /// Run a single trial through the engine. Returns the run result if it
+    /// completed, or `None` if the budget was exhausted before this call.
+    ///
+    /// Uses [`NativeTestCase::for_probe`] rather than `for_choices` so that
+    /// perturbations which grow the realised choice sequence (e.g. raising
+    /// an integer that controls a downstream loop count) can still draw the
+    /// extra values from a fresh RNG instead of overrunning the prefix.
+    /// Mirrors Hypothesis's `cached_test_function(choices, extend="full")`
+    /// in `optimiser.py::attempt_replace`.
+    fn run_trial(&mut self, choices: &[ChoiceValue]) -> Option<RunResult> {
+        if self.budget_exhausted() {
+            return None;
+        }
+        let ntc = NativeTestCase::for_probe(choices, self.engine.rng_spawn(), BUFFER_SIZE);
+        // A non-determinism mismatch here is dropped: it's a generator
+        // property, so the next generation-loop recording re-detects it and
+        // returns a clean failure.
+        let (run, _mismatch) = self.engine.test_function(ntc);
+        Some(run)
     }
-    let ntc = NativeTestCase::for_probe(choices, ctx.rng.spawn(), BUFFER_SIZE);
-    let run = ctx.engine.run(ntc);
-    *ctx.calls += 1;
-    (ctx.on_run)(&run);
-    if run.status >= Status::Valid {
-        let actual_choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
-        targeting.record(&actual_choices, &run.target_observations);
-    }
-    // Only exactly-valid runs count toward the budget; Hypothesis never
-    // counts INTERESTING results as valid examples.
-    if run.status == Status::Valid {
-        *ctx.valid_test_cases += 1;
-    }
-    if run.status == Status::Interesting {
-        // `budget_exhausted` already short-circuited on `!interesting.is_empty()`
-        // above, so the map entry for this origin must be vacant — there's
-        // no prior result here whose sort_key we'd need to beat.
-        let origin = run.origin.clone().unwrap_or_default();
-        ctx.interesting.insert(origin, run.nodes.clone());
-    }
-    Some(run)
-}
 
-/// Hill-climb every target until no further improvements are found or the
-/// budget is exhausted. Mirrors `engine.py::optimise_targets`.
-pub(crate) fn optimise_targets(targeting: &mut TargetingState, ctx: &mut OptimiseCtx<'_, '_, '_>) {
-    let mut targets: Vec<String> = targeting.best_observed_targets.keys().cloned().collect();
-    // Iterate in a deterministic order: each hill-climb consumes the shared
-    // call budget, so `HashMap`'s per-process-randomised key order would make a
-    // seeded multi-target run non-reproducible.
-    targets.sort();
-    let mut max_improvements: usize = 10;
-    loop {
-        let prev_calls = *ctx.calls;
-        let mut any_improvements = false;
-        for target in &targets {
-            let imps = hill_climb(targeting, ctx, target, max_improvements);
-            if imps > 0 {
-                any_improvements = true;
+    /// Hill-climb every target until no further improvements are found or
+    /// the budget is exhausted. Mirrors `engine.py::optimise_targets`.
+    pub(crate) fn optimise_targets(&mut self) {
+        let mut targets: Vec<String> = self
+            .engine
+            .targeting
+            .best_observed_targets
+            .keys()
+            .cloned()
+            .collect();
+        // Iterate in a deterministic order: each hill-climb consumes the
+        // shared call budget, so `HashMap`'s per-process-randomised key
+        // order would make a seeded multi-target run non-reproducible.
+        targets.sort();
+        let mut max_improvements: usize = 10;
+        loop {
+            let prev_calls = self.engine.calls;
+            let mut any_improvements = false;
+            for target in &targets {
+                let imps = self.hill_climb(target, max_improvements);
+                if imps > 0 {
+                    any_improvements = true;
+                }
+            }
+            max_improvements = max_improvements.saturating_mul(2);
+            if !any_improvements || prev_calls == self.engine.calls {
+                return;
             }
         }
-        max_improvements = max_improvements.saturating_mul(2);
-        if !any_improvements || prev_calls == *ctx.calls {
-            return;
-        }
     }
-}
 
-/// Walk the integer choices in `best_choices_for_target[target]` from the
-/// end backwards, hill-climbing each one in both directions. Mirrors
-/// `Optimiser._optimise_target`.
-fn hill_climb(
-    targeting: &mut TargetingState,
-    ctx: &mut OptimiseCtx<'_, '_, '_>,
-    target: &str,
-    max_improvements: usize,
-) -> usize {
-    // `record` keeps `best_choices_for_target` in sync with
-    // `best_observed_targets`, so any label our caller iterates from
-    // `best_observed_targets` must have a matching choice sequence here.
-    let start_choices = targeting
-        .best_choices_for_target
-        .get(target)
-        .cloned()
-        .expect("best_choices_for_target out of sync with best_observed_targets");
-    let trial = match run_trial(targeting, ctx, &start_choices) {
-        Some(t) => t,
-        None => return 0,
-    };
-    if trial.status < Status::Valid {
-        return 0;
-    }
-    let mut current_choices: Vec<ChoiceValue> =
-        trial.nodes.iter().map(|n| n.value.clone()).collect();
-    let mut current_nodes = trial.nodes;
-    let mut current_score = *trial
-        .target_observations
-        .get(target)
-        .unwrap_or(&f64::NEG_INFINITY);
-    let mut improvements: usize = 0;
+    /// Walk the integer choices in `best_choices_for_target[target]` from
+    /// the end backwards, hill-climbing each one in both directions.
+    /// Mirrors `Optimiser._optimise_target`.
+    fn hill_climb(&mut self, target: &str, max_improvements: usize) -> usize {
+        // `record` keeps `best_choices_for_target` in sync with
+        // `best_observed_targets`, so any label our caller iterates from
+        // `best_observed_targets` must have a matching choice sequence here.
+        let start_choices = self
+            .engine
+            .targeting
+            .best_choices_for_target
+            .get(target)
+            .cloned()
+            .expect("best_choices_for_target out of sync with best_observed_targets");
+        let trial = match self.run_trial(&start_choices) {
+            Some(t) => t,
+            None => return 0,
+        };
+        if trial.status < Status::Valid {
+            return 0;
+        }
+        let mut current_choices: Vec<ChoiceValue> =
+            trial.nodes.iter().map(|n| n.value.clone()).collect();
+        let mut current_nodes = trial.nodes;
+        let mut current_score = *trial
+            .target_observations
+            .get(target)
+            .unwrap_or(&f64::NEG_INFINITY);
+        let mut improvements: usize = 0;
 
-    let mut nodes_examined: HashSet<usize> = HashSet::new();
-    let mut i: isize = current_nodes.len() as isize - 1;
-    let mut prev_len = current_nodes.len();
-    while i >= 0 && improvements <= max_improvements {
-        // When `find_integer` lengthens or shortens `current_nodes`, `i`
-        // no longer indexes the same logical position. Reset to the new
-        // tail and start afresh — but keep `nodes_examined` populated so
-        // indices we already optimised in the pre-resize pass don't get
-        // redone. Mirrors `optimiser.py:95-97`.
-        if current_nodes.len() != prev_len {
-            i = current_nodes.len() as isize - 1;
-            prev_len = current_nodes.len();
-            continue;
-        }
-        let idx = i as usize;
-        if !nodes_examined.insert(idx) {
-            i -= 1;
-            continue;
-        }
-        let node = &current_nodes[idx];
-        if !node.was_forced && is_climbable(&node.value, node.kind.as_ref()) {
-            let len_before = current_nodes.len();
-            // Hill-climb in the +1 direction. `find_integer` itself is the
-            // general `junkdrawer.find_integer` from `shrinker/mod.rs`: it
-            // probes deltas 1, 2, 3, 4, then 5, 10, 20, … with binary
-            // bisection in between, calling the closure once per probe.
-            // The closure threads through all the per-climb state; its
-            // return value (the largest accepted delta) is discarded —
-            // commit happens as a side effect inside `try_replace`, and
-            // the `improvements` counter it bumps is what drives the
-            // outer `while improvements <= max_improvements` loop.
-            find_integer(|k| {
-                try_replace(
-                    targeting,
-                    ctx,
-                    target,
-                    &mut current_choices,
-                    &mut current_nodes,
-                    &mut current_score,
-                    &mut improvements,
-                    idx,
-                    k as i128,
-                )
-            });
-            // If the +1 direction grew `current_nodes`, idx no longer points
-            // at the same logical position; trying -1 there almost always
-            // shrinks the sequence back below the new score, so skip.
-            // Mirrors the same guard in Hypothesis's `Optimiser.hill_climb`.
-            if idx < current_nodes.len() && current_nodes.len() == len_before {
+        let mut nodes_examined: HashSet<usize> = HashSet::new();
+        let mut i: isize = current_nodes.len() as isize - 1;
+        let mut prev_len = current_nodes.len();
+        while i >= 0 && improvements <= max_improvements {
+            // When `find_integer` lengthens or shortens `current_nodes`, `i`
+            // no longer indexes the same logical position. Reset to the new
+            // tail and start afresh — but keep `nodes_examined` populated so
+            // indices we already optimised in the pre-resize pass don't get
+            // redone. Mirrors `optimiser.py:95-97`.
+            if current_nodes.len() != prev_len {
+                i = current_nodes.len() as isize - 1;
+                prev_len = current_nodes.len();
+                continue;
+            }
+            let idx = i as usize;
+            if !nodes_examined.insert(idx) {
+                i -= 1;
+                continue;
+            }
+            let node = &current_nodes[idx];
+            if !node.was_forced && is_climbable(&node.value, node.kind.as_ref()) {
+                let len_before = current_nodes.len();
+                // Hill-climb in the +1 direction. `find_integer` itself is the
+                // general `junkdrawer.find_integer` from `shrinker/mod.rs`: it
+                // probes deltas 1, 2, 3, 4, then 5, 10, 20, … with binary
+                // bisection in between, calling the closure once per probe.
+                // The closure threads through all the per-climb state; its
+                // return value (the largest accepted delta) is discarded —
+                // commit happens as a side effect inside `try_replace`, and
+                // the `improvements` counter it bumps is what drives the
+                // outer `while improvements <= max_improvements` loop.
                 find_integer(|k| {
-                    try_replace(
-                        targeting,
-                        ctx,
+                    self.try_replace(
                         target,
                         &mut current_choices,
                         &mut current_nodes,
                         &mut current_score,
                         &mut improvements,
                         idx,
-                        -(k as i128),
+                        k as i128,
                     )
                 });
+                // If the +1 direction grew `current_nodes`, idx no longer points
+                // at the same logical position; trying -1 there almost always
+                // shrinks the sequence back below the new score, so skip.
+                // Mirrors the same guard in Hypothesis's `Optimiser.hill_climb`.
+                if idx < current_nodes.len() && current_nodes.len() == len_before {
+                    find_integer(|k| {
+                        self.try_replace(
+                            target,
+                            &mut current_choices,
+                            &mut current_nodes,
+                            &mut current_score,
+                            &mut improvements,
+                            idx,
+                            -(k as i128),
+                        )
+                    });
+                }
             }
+            i -= 1;
         }
-        i -= 1;
+        improvements
     }
-    improvements
-}
 
-/// Replace `current_choices[idx]` by stepping it `delta` units. Score
-/// acceptance mirrors `optimiser.py::consider_new_data` (lines 65-82): a
-/// strict score improvement commits the new state and bumps `improvements`;
-/// a tie commits iff the new node count doesn't grow but does *not* count
-/// as an improvement (lateral moves are the principal mechanism for
-/// escaping local maxima, but they shouldn't keep the climber spinning
-/// forever). Returns `true` iff the trial was committed.
-#[allow(clippy::too_many_arguments)]
-fn try_replace(
-    targeting: &mut TargetingState,
-    ctx: &mut OptimiseCtx<'_, '_, '_>,
-    target: &str,
-    current_choices: &mut Vec<ChoiceValue>,
-    current_nodes: &mut Vec<ChoiceNode>,
-    current_score: &mut f64,
-    improvements: &mut usize,
-    idx: usize,
-    delta: i128,
-) -> bool {
-    // Cap the perturbation magnitude to avoid driving an unbounded score
-    // up forever. Mirrors `optimiser.py::attempt_replace` line 122.
-    if delta.saturating_abs() > (1 << 20) {
-        return false;
+    /// Replace `current_choices[idx]` by stepping it `delta` units. Score
+    /// acceptance mirrors `optimiser.py::consider_new_data` (lines 65-82): a
+    /// strict score improvement commits the new state and bumps `improvements`;
+    /// a tie commits iff the new node count doesn't grow but does *not* count
+    /// as an improvement (lateral moves are the principal mechanism for
+    /// escaping local maxima, but they shouldn't keep the climber spinning
+    /// forever). Returns `true` iff the trial was committed.
+    #[allow(clippy::too_many_arguments)]
+    fn try_replace(
+        &mut self,
+        target: &str,
+        current_choices: &mut Vec<ChoiceValue>,
+        current_nodes: &mut Vec<ChoiceNode>,
+        current_score: &mut f64,
+        improvements: &mut usize,
+        idx: usize,
+        delta: i128,
+    ) -> bool {
+        // Cap the perturbation magnitude to avoid driving an unbounded score
+        // up forever. Mirrors `optimiser.py::attempt_replace` line 122.
+        if delta.saturating_abs() > (1 << 20) {
+            return false;
+        }
+        let new_val = match step_choice(&current_nodes[idx], delta) {
+            Some(v) => v,
+            None => return false,
+        };
+        let mut trial_choices = current_choices.clone();
+        trial_choices[idx] = new_val;
+        let trial = match self.run_trial(&trial_choices) {
+            Some(t) => t,
+            None => return false,
+        };
+        if trial.status < Status::Valid {
+            return false;
+        }
+        let new_score = *trial
+            .target_observations
+            .get(target)
+            .unwrap_or(&f64::NEG_INFINITY);
+        if new_score < *current_score {
+            return false;
+        }
+        let strict = new_score > *current_score;
+        if !strict && trial.nodes.len() > current_nodes.len() {
+            return false;
+        }
+        *current_score = new_score;
+        *current_choices = trial.nodes.iter().map(|n| n.value.clone()).collect();
+        *current_nodes = trial.nodes;
+        if strict {
+            *improvements += 1;
+        }
+        true
     }
-    let new_val = match step_choice(&current_nodes[idx], delta) {
-        Some(v) => v,
-        None => return false,
-    };
-    let mut trial_choices = current_choices.clone();
-    trial_choices[idx] = new_val;
-    let trial = match run_trial(targeting, ctx, &trial_choices) {
-        Some(t) => t,
-        None => return false,
-    };
-    if trial.status < Status::Valid {
-        return false;
-    }
-    let new_score = *trial
-        .target_observations
-        .get(target)
-        .unwrap_or(&f64::NEG_INFINITY);
-    if new_score < *current_score {
-        return false;
-    }
-    let strict = new_score > *current_score;
-    if !strict && trial.nodes.len() > current_nodes.len() {
-        return false;
-    }
-    *current_score = new_score;
-    *current_choices = trial.nodes.iter().map(|n| n.value.clone()).collect();
-    *current_nodes = trial.nodes;
-    if strict {
-        *improvements += 1;
-    }
-    true
 }
 
 /// Returns `true` iff `(value, kind)` is a node kind the hill-climber can
