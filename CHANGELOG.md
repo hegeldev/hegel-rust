@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.17.5 - 2026-06-10
+
+This patch exposes libhegel in flake.nix.
+
 ## 0.17.4 - 2026-06-10
 
 This patch restructures the native engine into a single `Engine` object mirroring Hypothesis's `ConjectureRunner`: one owner for the executor, the RNG, the example database, the choice tree, the per-origin failing examples, and all run-level counters, with every executed test case recorded through one `test_function` path. Previously each phase (generation, database reuse, targeting, span mutation) kept its own copy of the counter updates, which had already let the same accounting bug appear in two places.
