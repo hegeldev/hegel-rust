@@ -6,6 +6,10 @@
 //! mechanical.
 
 pub const MAXREPEAT: u32 = u32::MAX;
+/// Deliberately far below CPython's `MAXGROUPS` (2^30 - 1): every capture
+/// group costs the generator per-draw bookkeeping, so the cap bounds memory
+/// for pathological patterns. Real-world patterns with >500 groups are
+/// effectively nonexistent.
 pub const MAXGROUPS: u32 = 500;
 
 /// Maximum group/alternation nesting depth. CPython relies on the interpreter

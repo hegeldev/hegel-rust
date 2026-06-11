@@ -356,9 +356,7 @@ impl<'a> Shrinker<'a> {
                         // upper bound is `original_key` which is itself
                         // a valid alphabet position.  Likewise the
                         // resulting `new_cp` differs from `ch` (whose
-                        // key was `original_key > new_key`) and the
-                        // validate calls succeed since both strings
-                        // stay within the alphabet.
+                        // key was `original_key > new_key`).
                         let new_cp = kind_i
                             .key_to_codepoint(new_key as u32)
                             .expect("key < original_key < alpha_size");
@@ -371,7 +369,14 @@ impl<'a> Shrinker<'a> {
                             .iter()
                             .map(|&c| if c == ch { new_cp } else { c })
                             .collect();
-                        debug_assert!(kind_i.validate(&new_i) && kind_j.validate(&new_j));
+                        // The two nodes can have different alphabets: the
+                        // lowered codepoint comes from node i's alphabet and
+                        // may not exist in node j's. Hypothesis's equivalent
+                        // attempt is silently rejected by choice_permitted;
+                        // do the same.
+                        if !kind_i.validate(&new_i) || !kind_j.validate(&new_j) {
+                            return Ok(false);
+                        }
                         self.replace(&HashMap::from([
                             (i, ChoiceValue::String(new_i)),
                             (j, ChoiceValue::String(new_j)),

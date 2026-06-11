@@ -318,6 +318,17 @@ hegeltest = {{ path = "{path}"{features} }}
             .current_dir(&self.project.project_path)
             .env("CARGO_TARGET_DIR", shared_target_dir());
 
+        // Trim debuginfo on the spawned subprocess builds. These standalone
+        // temp crates don't inherit the main workspace's `[profile.dev]`, so
+        // the override has to be passed explicitly. Full debuginfo dominates
+        // link time — most acutely on Windows, where `link.exe` is slow and
+        // writing the fat `.pdb` is the bottleneck. `line-tables-only` keeps
+        // panic-backtrace line numbers while dropping the heavy debuginfo.
+        // `cargo run` uses the dev profile and `cargo test` the test profile
+        // (which inherits dev's `debug`), so set both for robustness.
+        cmd.env("CARGO_PROFILE_DEV_DEBUG", "line-tables-only")
+            .env("CARGO_PROFILE_TEST_DEBUG", "line-tables-only");
+
         if use_coverage {
             // cargo-llvm-cov's RUSTC_WRAPPER only instruments crates listed in
             // __CARGO_LLVM_COV_RUSTC_WRAPPER_CRATE_NAMES. Append this temp

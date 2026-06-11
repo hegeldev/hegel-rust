@@ -205,3 +205,32 @@ fn normalize_unicode_chars_respects_intervals() {
         );
     }
 }
+
+#[test]
+fn lower_duplicated_characters_handles_mismatched_alphabets() {
+    // The two string nodes share 'b', but their alphabets differ: lowering
+    // 'b' in the first node's [a-z] alphabet proposes 'a', which the second
+    // node's [b-z] alphabet does not contain. The attempt must be rejected
+    // gracefully (Hypothesis's choice_permitted silently rejects it), not
+    // trip a debug assertion.
+    let initial = vec![
+        string_node_with(b'a' as u32, b'z' as u32, vec![b'b' as u32]),
+        string_node_with(b'b' as u32, b'z' as u32, vec![b'b' as u32]),
+    ];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.lower_duplicated_characters().unwrap();
+    // The second node must still hold a value its own alphabet permits.
+    if let (ChoiceKind::String(k1), ChoiceValue::String(s1)) = (
+        shrinker.current_nodes[1].kind.as_ref(),
+        &shrinker.current_nodes[1].value,
+    ) {
+        assert!(k1.validate(s1), "node 1 left with out-of-alphabet value");
+    }
+}

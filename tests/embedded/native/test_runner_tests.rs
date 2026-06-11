@@ -89,12 +89,12 @@ use crate::native::core::choices::BooleanChoice;
 use crate::native::data_tree::{DataTreeNode, record_tree};
 use crate::run_lifecycle::run_test_case;
 
-/// Build an [`EngineCtx`] whose `run_case` runs `test_fn` and counts how many
+/// Build an [`Engine`] whose `run_case` runs `test_fn` and counts how many
 /// times the test body actually executed, then hand both to `body`.
 fn with_counting_ctx<T, B>(mut test_fn: T, body: B)
 where
     T: FnMut(crate::TestCase),
-    B: FnOnce(&mut EngineCtx<'_>, &Rc<Cell<usize>>),
+    B: FnOnce(&mut Engine<'_>, &Rc<Cell<usize>>),
 {
     crate::run_lifecycle::init_panic_hook();
     let exec_count = Rc::new(Cell::new(0usize));
@@ -103,7 +103,8 @@ where
         counter.set(counter.get() + 1);
         let _ = run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
     };
-    let mut ctx = EngineCtx::new(&mut run_case);
+    let settings = Settings::new().database(None);
+    let mut ctx = Engine::new(&settings, None, &mut run_case);
     body(&mut ctx, &exec_count);
 }
 
@@ -125,13 +126,10 @@ fn cached_run_skips_execution_when_tree_knows_the_path() {
             // The tree already records a one-boolean run that concluded
             // Valid; replaying that path (plus an unread trailing choice,
             // as a duplicated span would produce) must not run the body.
-            let mut tree = DataTreeNode::default();
-            record_tree(&mut tree, &[bool_node(false)], Status::Valid, &[]);
+            record_tree(&mut ctx.tree_root, &[bool_node(false)], Status::Valid, &[]);
 
-            let (run, executed) = ctx.cached_run(
-                &[ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)],
-                &mut tree,
-            );
+            let (run, executed) =
+                ctx.cached_run(&[ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)]);
             assert_eq!(run.status, Status::Valid);
             assert!(!executed);
             assert_eq!(count.get(), 0);
@@ -146,15 +144,14 @@ fn cached_run_executes_novel_then_serves_repeat_from_cache() {
             tc.draw(crate::generators::booleans());
         },
         |ctx, count| {
-            let mut tree = DataTreeNode::default();
             let choices = [ChoiceValue::Boolean(true)];
 
-            let (first, executed_first) = ctx.cached_run(&choices, &mut tree);
+            let (first, executed_first) = ctx.cached_run(&choices);
             assert!(executed_first);
             assert_eq!(count.get(), 1);
 
             // A second identical replay is served without re-running.
-            let (second, executed_second) = ctx.cached_run(&choices, &mut tree);
+            let (second, executed_second) = ctx.cached_run(&choices);
             assert!(!executed_second);
             assert_eq!(count.get(), 1);
             assert_eq!(first.status, second.status);
@@ -174,10 +171,14 @@ fn cached_run_reexecutes_known_interesting_path_to_recover_payload() {
             }
         },
         |ctx, count| {
-            let mut tree = DataTreeNode::default();
-            record_tree(&mut tree, &[bool_node(true)], Status::Interesting, &[]);
+            record_tree(
+                &mut ctx.tree_root,
+                &[bool_node(true)],
+                Status::Interesting,
+                &[],
+            );
 
-            let (run, executed) = ctx.cached_run(&[ChoiceValue::Boolean(true)], &mut tree);
+            let (run, executed) = ctx.cached_run(&[ChoiceValue::Boolean(true)]);
             assert_eq!(run.status, Status::Interesting);
             assert!(executed);
             assert_eq!(count.get(), 1);
@@ -213,17 +214,14 @@ fn span_mutation_does_not_re_execute_identical_proposals() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            let mut tree = DataTreeNode::default();
-            let mut rng = EngineRng::seeded(0);
-            let mut valid = 0u64;
-            let (result, attempts) =
-                try_span_mutation(&nodes, &spans, &mut rng, ctx, &mut tree, &mut valid, 100);
+            ctx.try_span_mutation(&nodes, &spans);
 
-            assert!(result.is_none());
-            assert_eq!(attempts, 1);
             assert_eq!(count.get(), 1);
-            // The single valid execution consumed one unit of the budget.
-            assert_eq!(valid, 1);
+            // The single executed probe was recorded: one call, one valid
+            // example consumed from the budget, nothing interesting.
+            assert_eq!(ctx.calls, 1);
+            assert_eq!(ctx.valid_test_cases, 1);
+            assert!(ctx.interesting.is_empty());
         },
     );
 }
@@ -258,18 +256,18 @@ fn span_mutation_returns_interesting_proposal() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            let mut tree = DataTreeNode::default();
-            let mut rng = EngineRng::seeded(0);
-            let mut valid = 0u64;
-            let (result, attempts) =
-                try_span_mutation(&nodes, &spans, &mut rng, ctx, &mut tree, &mut valid, 100);
+            ctx.try_span_mutation(&nodes, &spans);
 
-            let (_nodes, origin) = result.expect("the first proposal should be Interesting");
-            assert!(origin.contains("Panic"));
-            assert_eq!(attempts, 1);
             assert_eq!(count.get(), 1);
+            assert_eq!(ctx.calls, 1);
             // An Interesting probe is not a valid example; budget untouched.
-            assert_eq!(valid, 0);
+            assert_eq!(ctx.valid_test_cases, 0);
+            let origin = ctx
+                .interesting
+                .keys()
+                .next()
+                .expect("the first proposal should be Interesting");
+            assert!(origin.contains("Panic"));
         },
     );
 }
@@ -297,17 +295,13 @@ fn span_mutation_stops_when_example_budget_is_full() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            let mut tree = DataTreeNode::default();
-            let mut rng = EngineRng::seeded(0);
             // Budget already full: no probe should run.
-            let mut valid = 100u64;
-            let (result, attempts) =
-                try_span_mutation(&nodes, &spans, &mut rng, ctx, &mut tree, &mut valid, 100);
+            ctx.valid_test_cases = 100;
+            ctx.try_span_mutation(&nodes, &spans);
 
-            assert!(result.is_none());
-            assert_eq!(attempts, 0);
             assert_eq!(count.get(), 0);
-            assert_eq!(valid, 100);
+            assert_eq!(ctx.calls, 0);
+            assert_eq!(ctx.valid_test_cases, 100);
         },
     );
 }
@@ -527,7 +521,7 @@ fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
             tc.draw(crate::generators::booleans());
         },
         |ctx, _count| {
-            let run = ctx.run(NativeTestCase::for_simplest(1));
+            let (run, _mismatch) = ctx.test_function(NativeTestCase::for_simplest(1));
             assert_eq!(run.status, Status::EarlyStop);
 
             // The overrun path is therefore not concluded in the tree: a later
@@ -668,4 +662,322 @@ fn reproduce_runner_reports_a_blob_that_no_longer_fails() {
     );
     // Reported as its own failure, not framed as a health-check failure.
     assert_eq!(result.failures[0].origin, "reproduce_failure");
+}
+
+// ── database reuse semantics ──
+
+#[test]
+fn reuse_replay_extends_past_stored_prefix() {
+    // Hypothesis replays stored entries with extend="full": when the test now
+    // draws more choices than the stored prefix holds, the replay continues
+    // with fresh random draws instead of overrunning. The stored `[true]` is
+    // one boolean short of what the test reads; it must still reproduce.
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+
+    let result = std::panic::catch_unwind(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            let a = tc.draw(crate::generators::booleans());
+            let _b = tc.draw(crate::generators::booleans());
+            assert!(!a, "replayed bug");
+        })
+        .settings(
+            crate::Settings::new()
+                .database(Some(path.clone()))
+                .phases([crate::Phase::Reuse])
+                .verbosity(crate::Verbosity::Quiet),
+        )
+        .__database_key("k".to_string())
+        .run();
+    });
+    assert!(
+        result.is_err(),
+        "stored prefix one draw short must still reproduce via random extension"
+    );
+}
+
+#[test]
+fn reuse_consults_secondary_corpus_when_primary_fails_to_reproduce() {
+    use crate::native::bignum::BigInt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    // The primary entry no longer fails; the still-failing example only
+    // exists in the secondary (historical) corpus, which the reuse phase
+    // samples when the primary corpus comes up short.
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
+    );
+    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    db.save(
+        &secondary_key,
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]),
+    );
+
+    let result = std::panic::catch_unwind(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            let n: i64 = tc.draw(crate::generators::integers::<i64>());
+            assert_ne!(n, 4242, "secondary bug");
+        })
+        .settings(
+            crate::Settings::new()
+                .database(Some(path.clone()))
+                .phases([crate::Phase::Reuse])
+                .test_cases(10)
+                .verbosity(crate::Verbosity::Quiet),
+        )
+        .__database_key("k".to_string())
+        .run();
+    });
+    assert!(
+        result.is_err(),
+        "the secondary corpus entry must be replayed when primary finds nothing"
+    );
+}
+
+#[test]
+fn reuse_randomly_samples_secondary_corpus_when_it_overflows_the_shortfall() {
+    use crate::native::bignum::BigInt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    // One primary entry that no longer reproduces, plus a secondary corpus
+    // larger than the shortfall (desired_size 2 - 1 primary = 1).  That
+    // drives the partial Fisher-Yates sampling path: more historical
+    // entries exist than the reuse phase wants, so only a random subset is
+    // replayed.  Every secondary entry reproduces the bug, so the run must
+    // fail no matter which one the sample happens to keep.
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
+    );
+    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    for n in [4242, 4243, 4244, 4245] {
+        db.save(
+            &secondary_key,
+            &serialize_choices(&[ChoiceValue::Integer(BigInt::from(n))]),
+        );
+    }
+
+    let result = std::panic::catch_unwind(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            let n: i64 = tc.draw(crate::generators::integers::<i64>());
+            assert!(n < 4242, "secondary bug");
+        })
+        .settings(
+            crate::Settings::new()
+                .database(Some(path.clone()))
+                .phases([crate::Phase::Reuse])
+                .test_cases(2)
+                .verbosity(crate::Verbosity::Quiet),
+        )
+        .__database_key("k".to_string())
+        .run();
+    });
+    assert!(
+        result.is_err(),
+        "a sampled secondary entry must still reproduce the bug"
+    );
+}
+
+#[test]
+fn shrink_phase_drains_stale_secondary_corpus_entries() {
+    use crate::native::bignum::BigInt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let stale = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]);
+    db.save(&secondary_key, &stale);
+
+    // A failing run replays small secondary entries as shrink jump-starts
+    // and deletes them either way (Hypothesis's clear_secondary_key) — the
+    // secondary corpus must not grow without bound across runs.
+    let result = std::panic::catch_unwind(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            let n: i64 = tc.draw(crate::generators::integers::<i64>());
+            assert!(n < 1000, "big bug");
+        })
+        .settings(
+            crate::Settings::new()
+                .database(Some(path.clone()))
+                .test_cases(200)
+                .verbosity(crate::Verbosity::Quiet),
+        )
+        .__database_key("k".to_string())
+        .run();
+    });
+    assert!(result.is_err(), "the run should find the n >= 1000 bug");
+    assert!(
+        !db.fetch(&secondary_key).contains(&stale),
+        "the stale secondary entry must be drained"
+    );
+}
+
+#[test]
+fn should_generate_more_stops_ten_seconds_after_first_bug() {
+    // Within the call-count window but past the 10-second wall-clock cutoff
+    // (engine.py's first_bug_found_time): stop hunting for more origins.
+    assert!(should_generate_more(
+        false,
+        20,
+        Some(15),
+        Some(15),
+        true,
+        true,
+        Some(std::time::Duration::from_secs(9)),
+    ));
+    assert!(!should_generate_more(
+        false,
+        20,
+        Some(15),
+        Some(15),
+        true,
+        true,
+        Some(std::time::Duration::from_secs(11)),
+    ));
+}
+
+#[test]
+fn reuse_stops_after_first_reproduced_bug_without_multiple_reporting() {
+    use crate::native::bignum::BigInt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    // Two stored entries that both still reproduce.
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(1111))]),
+    );
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(2222))]),
+    );
+
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    CALLS.store(0, Ordering::SeqCst);
+    let result = std::panic::catch_unwind(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            CALLS.fetch_add(1, Ordering::SeqCst);
+            let n: i64 = tc.draw(crate::generators::integers::<i64>());
+            assert!(n < 1000, "stored bug");
+        })
+        .settings(
+            crate::Settings::new()
+                .database(Some(path.clone()))
+                .phases([crate::Phase::Reuse])
+                .report_multiple_failures(false)
+                .verbosity(crate::Verbosity::Quiet),
+        )
+        .__database_key("k".to_string())
+        .run();
+    });
+    assert!(result.is_err(), "the stored bug should be reported");
+    // One reuse replay (the first entry reproduces, so the loop breaks)
+    // plus the final is_final replay of the counterexample.
+    assert!(
+        CALLS.load(Ordering::SeqCst) <= 2,
+        "expected reuse to stop after the first reproduced bug, ran {} cases",
+        CALLS.load(Ordering::SeqCst)
+    );
+}
+
+#[test]
+fn reuse_found_bug_skips_generation_entirely() {
+    use crate::native::bignum::BigInt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]),
+    );
+
+    // Hypothesis skips generation when the database replay already
+    // reproduced a failure ("we'd rather report that they're still failing
+    // ASAP than take the time to look for new ones"). With reuse replays
+    // now recorded like any other run, the bug-window heuristic alone would
+    // let generation probe for several extra calls; the explicit skip must
+    // keep the body-call count at exactly reuse + final replay.
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    CALLS.store(0, Ordering::SeqCst);
+    let result = std::panic::catch_unwind(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            CALLS.fetch_add(1, Ordering::SeqCst);
+            let n: i64 = tc.draw(crate::generators::integers::<i64>());
+            assert_ne!(n, 4242, "stored bug");
+        })
+        .settings(
+            crate::Settings::new()
+                .database(Some(path.clone()))
+                .test_cases(200)
+                .verbosity(crate::Verbosity::Quiet),
+        )
+        .__database_key("k".to_string())
+        .run();
+    });
+    assert!(result.is_err(), "the stored bug should be reported");
+    assert_eq!(
+        CALLS.load(Ordering::SeqCst),
+        2,
+        "expected exactly one reuse replay and one final replay"
+    );
+}
+
+#[test]
+fn should_generate_more_stops_without_bug_markers() {
+    // Defensive arm: a non-empty interesting map with no bug-window markers
+    // cannot arise from run_main any more (every interesting run passes
+    // through record_run, which sets them), but the standalone function
+    // must still answer sensibly.
+    assert!(!should_generate_more(
+        false, 5, None, None, true, true, None
+    ));
+}
+
+#[test]
+fn reuse_detects_nondeterministic_generator_across_replays() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    // Two stored entries, so the reuse phase replays twice.
+    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(false)]));
+
+    // The generator alternates the drawn kind per invocation: with reuse
+    // replays now recorded into the choice tree, the second replay
+    // contradicts the first and must surface the non-determinism
+    // diagnostic instead of silently mispredicting.
+    static FLIP: AtomicUsize = AtomicUsize::new(0);
+    FLIP.store(0, Ordering::SeqCst);
+    let result = std::panic::catch_unwind(|| {
+        crate::Hegel::new(|tc: crate::TestCase| {
+            if FLIP.fetch_add(1, Ordering::SeqCst) % 2 == 0 {
+                tc.draw(crate::generators::booleans());
+            } else {
+                let _: i64 = tc.draw(crate::generators::integers::<i64>());
+            }
+        })
+        .settings(
+            crate::Settings::new()
+                .database(Some(path.clone()))
+                .phases([crate::Phase::Reuse])
+                .verbosity(crate::Verbosity::Quiet),
+        )
+        .__database_key("k".to_string())
+        .run();
+    });
+    let err = result.expect_err("non-determinism must be reported");
+    let msg = err
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default();
+    assert!(msg.contains("non-deterministic"), "got: {msg}");
 }

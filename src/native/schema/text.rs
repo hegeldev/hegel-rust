@@ -70,7 +70,7 @@ pub(super) fn build_intervals(schema: &Value) -> Result<IntervalSet, EngineError
 
 fn build_intervals_uncached(schema: &Value) -> Result<IntervalSet, EngineError> {
     let codec = map_get(schema, "codec").and_then(as_text);
-    let (mut cp_min, mut cp_max): (u32, u32) = match codec {
+    let (codec_min, codec_max): (u32, u32) = match codec {
         Some("ascii") => (0, 127),
         Some("latin-1") | Some("iso-8859-1") => (0, 255),
         Some("utf-8") | None => (0, 0x10FFFF),
@@ -80,6 +80,7 @@ fn build_intervals_uncached(schema: &Value) -> Result<IntervalSet, EngineError> 
             )));
         }
     };
+    let (mut cp_min, mut cp_max) = (codec_min, codec_max);
 
     if let Some(min_cp) = map_get(schema, "min_codepoint").and_then(as_u64) {
         cp_min = cp_min.max(min_cp as u32);
@@ -110,6 +111,28 @@ fn build_intervals_uncached(schema: &Value) -> Result<IntervalSet, EngineError> 
         }
     }
 
+    // `include_characters` deliberately bypass the min/max codepoint bounds,
+    // but not the codec: Hypothesis raises InvalidArgument for include
+    // characters the codec cannot encode.
+    if codec.is_some() {
+        if let Some(ref incl) = include_chars {
+            let bad: Vec<char> = incl
+                .iter()
+                .filter(|c| {
+                    let cp = **c as u32;
+                    cp < codec_min || cp > codec_max
+                })
+                .copied()
+                .collect();
+            if !bad.is_empty() {
+                let codec_name = codec.unwrap_or_default();
+                return Err(EngineError::InvalidArgument(format!(
+                    "include_characters {bad:?} cannot be encoded by codec {codec_name:?}"
+                )));
+            }
+        }
+    }
+
     if let (Some(incl), Some(excl)) = (include_chars.as_ref(), exclude_chars.as_ref()) {
         let overlap: Vec<char> = incl.iter().filter(|c| excl.contains(c)).copied().collect();
         if !overlap.is_empty() {
@@ -137,8 +160,8 @@ fn build_intervals_uncached(schema: &Value) -> Result<IntervalSet, EngineError> 
     let mut intervals = if let Some(ref cats) = categories {
         if cats.is_empty() {
             // categories=[] + include_characters: alphabet is whatever
-            // include_characters provides (filtered by the codec range and
-            // by exclude_characters), with no codec-driven base.
+            // include_characters provides (validated against the codec
+            // above, minus exclude_characters), with no codec-driven base.
             IntervalSet::new(Vec::new())
         } else {
             // categories=[...]: intersect base with the union of these
@@ -228,10 +251,10 @@ fn chars_to_intervals(chars: &[char]) -> IntervalSet {
     IntervalSet::new(ranges)
 }
 
-/// Union of the given category abbreviations as an [`IntervalSet`] over
-/// `0..=0xFFFF` (the BMP — matches Hypothesis's category-filter limit for
-/// performance; astral-plane codepoints stay in their natural-range slot
-/// when they aren't category-filtered).
+/// Union of the given category abbreviations as an [`IntervalSet`] over the
+/// whole codespace `0..=0x10FFFF`, matching Hypothesis's charmap (which is
+/// built over `range(sys.maxunicode + 1)`). Cached per category: the scan
+/// runs once per process per category name.
 fn categories_union(cats: &[String]) -> IntervalSet {
     static CACHE: OnceLock<Mutex<HashMap<String, Arc<IntervalSet>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -258,13 +281,14 @@ fn categories_union(cats: &[String]) -> IntervalSet {
     union.unwrap_or_else(|| IntervalSet::new(Vec::new()))
 }
 
-/// Build the `IntervalSet` of BMP codepoints whose `unicodedata.category`
-/// matches `cat` (or whose category starts with `cat` when `cat` is a
-/// single-letter major class).
+/// Build the `IntervalSet` of codepoints (over the full codespace,
+/// surrogates excepted) whose `unicodedata.category` matches `cat` (or
+/// whose category starts with `cat` when `cat` is a single-letter major
+/// class).
 fn category_intervalset(cat: &str) -> IntervalSet {
     let mut ranges: Vec<(u32, u32)> = Vec::new();
     let mut run_start: Option<u32> = None;
-    for cp in 0u32..=0xFFFF {
+    for cp in 0u32..=0x10FFFF {
         if (0xD800..=0xDFFF).contains(&cp) {
             if let Some(start) = run_start.take() {
                 ranges.push((start, cp - 1));
@@ -280,7 +304,7 @@ fn category_intervalset(cat: &str) -> IntervalSet {
         }
     }
     if let Some(start) = run_start {
-        ranges.push((start, 0xFFFF));
+        ranges.push((start, 0x10FFFF));
     }
     IntervalSet::new(ranges)
 }

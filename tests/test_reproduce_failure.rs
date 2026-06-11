@@ -41,8 +41,7 @@ fn main() {}
 }
 
 // ============================================================
-// Runtime tests (native backend, where the engine attaches and
-// replays blobs).
+// Runtime tests: the engine attaches and replays blobs.
 // ============================================================
 
 /// A correct-usage attribute compiles (exercising the `#[hegel::test]`
@@ -60,7 +59,6 @@ fn my_test(tc: hegel::TestCase) {
 }
 "#;
     TempRustProject::new()
-        .feature("native")
         .main_file("fn main() {}")
         .test_file("repro.rs", code)
         .expect_failure("could not be decoded")
@@ -84,7 +82,6 @@ fn my_test(tc: hegel::TestCase) {
 }
 "#;
     TempRustProject::new()
-        .feature("native")
         .main_file("fn main() {}")
         .test_file("repro.rs", code)
         .expect_failure("could not be decoded")
@@ -108,7 +105,6 @@ fn my_test(tc: hegel::TestCase) {
 }
 "#;
     let project = TempRustProject::new()
-        .feature("native")
         .main_file("fn main() {}")
         .test_file("repro.rs", failing);
     let out = project
@@ -138,7 +134,6 @@ fn my_test(tc: hegel::TestCase) {{
 "#
     );
     TempRustProject::new()
-        .feature("native")
         .main_file("fn main() {}")
         .test_file("repro.rs", &reproducing)
         .expect_failure("x was")
@@ -161,7 +156,6 @@ fn my_test(tc: hegel::TestCase) {{
 "#
     );
     TempRustProject::new()
-        .feature("native")
         .main_file("fn main() {}")
         .test_file("repro.rs", &stacked)
         .expect_failure("x was")

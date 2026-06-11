@@ -117,12 +117,15 @@ fn draw_domain(ntc: &mut NativeTestCase, max_length: usize) -> Result<String, En
         .filter(|tld| tld.len() + 2 <= max_length)
         .collect();
     // `DomainGenerator::build_schema` rejects `max_length < 4` upstream and
-    // the shortest TLD in the IANA list is 2 chars, so `eligible` is never
-    // empty for valid schemas.
-    assert!(
-        !eligible.is_empty(),
-        "domain max_length={max_length} leaves no eligible TLDs"
-    );
+    // the shortest TLD in the IANA list is 2 chars, so `eligible` is only
+    // empty for a malformed schema from another client — surface that as
+    // InvalidArgument like every other malformed-schema path here
+    // (Hypothesis's provisional.domains() raises InvalidArgument too).
+    if eligible.is_empty() {
+        return Err(EngineError::InvalidArgument(format!(
+            "domain max_length={max_length} leaves no eligible TLDs"
+        )));
+    }
     let idx = ntc
         .draw_integer(BigInt::from(0), BigInt::from(eligible.len() as i64 - 1))?
         .to_i128()

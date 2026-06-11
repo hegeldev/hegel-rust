@@ -1,5 +1,5 @@
 use crate::antithesis::TestLocation;
-use crate::settings::{Phase, Settings};
+use crate::settings::Settings;
 use crate::test_case::TestCase;
 
 // ─── Hegel test builder ─────────────────────────────────────────────────────
@@ -20,10 +20,6 @@ pub struct Hegel<F> {
     database_key: Option<String>,
     test_location: Option<TestLocation>,
     settings: Settings,
-    /// Only the native engine can replay a failure blob; on the server
-    /// backend the field is written but never read (the blob is ignored),
-    /// hence the dead-code allowance.
-    #[cfg_attr(not(feature = "native"), allow(dead_code))]
     reproduce_failure: Option<String>,
 }
 
@@ -73,8 +69,6 @@ where
     /// Stacked `#[hegel::reproduce_failure]` attributes lower to repeated
     /// calls here, so only the first attribute replays; the rest are
     /// bookkeeping to be deleted one by one as the failures are fixed.
-    ///
-    /// Honoured only by the native backend; the server backend ignores it.
     pub fn reproduce_failure(mut self, blob: impl Into<String>) -> Self {
         if self.reproduce_failure.is_none() {
             self.reproduce_failure = Some(blob.into());
@@ -89,7 +83,6 @@ where
         // A blob replay is a single deterministic case — no generation,
         // targeting, or shrinking — so it is phase-agnostic and takes
         // precedence over the normal runner.
-        #[cfg(feature = "native")]
         if let Some(blob) = self.reproduce_failure {
             crate::run_lifecycle::drive(
                 crate::native::test_runner::ReproduceRunner { blob },
@@ -101,14 +94,11 @@ where
             return;
         }
 
-        if !self.settings.phases.contains(&Phase::Generate) {
-            return;
-        }
-
-        #[cfg(feature = "native")]
+        // No early-out when `Phase::Generate` is absent: the phases are
+        // independent, so e.g. `phases = [Phase::Reuse]` must still replay
+        // stored counterexamples (the engine itself skips whatever phases
+        // are disabled).
         let runner = crate::native::test_runner::NativeTestRunner;
-        #[cfg(not(feature = "native"))]
-        let runner = crate::server::session::ServerTestRunner;
 
         crate::run_lifecycle::drive(
             runner,

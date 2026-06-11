@@ -80,10 +80,7 @@ fn test_empty_bytes_with_wide_dependent_range() {
             .settings(Settings::new().test_cases(5000).database(None))
             .run();
         },
-        // On native, binary schemas aren't implemented yet, so the
-        // todo!() panics get surfaced as hegel internal errors rather
-        // than property failures. Either outcome is acceptable here.
-        "Property test failed|hegel internal error",
+        "Property test failed",
     );
 }
 
@@ -106,7 +103,6 @@ fn test_empty_bytes_with_dependent_condition() {
             .settings(Settings::new().test_cases(5000).database(None))
             .run();
         },
-        // See note on test_empty_bytes_with_wide_dependent_range.
-        "Property test failed|hegel internal error",
+        "Property test failed",
     );
 }

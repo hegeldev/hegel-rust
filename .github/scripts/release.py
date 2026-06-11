@@ -8,6 +8,18 @@ from pathlib import Path
 SOURCE_DIRS = ["src/", "hegel-macros/"]
 ROOT = Path(__file__).resolve().parent.parent.parent
 
+# Files the release commit reads, rewrites, and stages. These are validated by
+# `check` on every PR so removing one (as the conformance-test removal did with
+# tests/conformance/rust) fails fast instead of breaking the actual release —
+# which only ever runs the `release` subcommand on a push to main.
+RELEASE_PATHS = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "hegel-macros/Cargo.toml",
+    "hegel-c/Cargo.toml",
+    "CHANGELOG.md",
+]
+
 
 def git(*args: str, cwd: Path | None = None) -> None:
     subprocess.run(["git", *args], check=True, cwd=cwd)
@@ -79,6 +91,13 @@ def add_changelog(path: Path, *, version: str, content: str) -> None:
 
 
 def check(base_ref: str) -> None:
+    missing = [rel for rel in RELEASE_PATHS if not (ROOT / rel).exists()]
+    if missing:
+        raise ValueError(
+            "release.py would fail: these paths it stages no longer exist: "
+            + ", ".join(missing)
+        )
+
     output = subprocess.check_output(
         ["git", "diff", "--name-only", f"origin/{base_ref}...HEAD"],
         text=True,
@@ -138,13 +157,8 @@ def release() -> None:
     set_dep_version(ROOT / "Cargo.toml", "hegeltest-macros", new_version)
     set_dep_version(ROOT / "hegel-c" / "Cargo.toml", "hegeltest", new_version)
 
-    # regenerate lockfiles after version bump
+    # regenerate the lockfile after version bump
     subprocess.run(["cargo", "update", "--workspace"], check=True, cwd=ROOT)
-    subprocess.run(
-        ["cargo", "update", "--workspace"],
-        check=True,
-        cwd=(ROOT / "tests" / "conformance" / "rust"),
-    )
 
     add_changelog(ROOT / "CHANGELOG.md", version=new_version, content=content)
 
@@ -159,16 +173,7 @@ def release() -> None:
         f"{bot_user_id}+{app_slug}[bot]@users.noreply.github.com",
         cwd=ROOT,
     )
-    git(
-        "add",
-        "Cargo.toml",
-        "Cargo.lock",
-        "hegel-macros/Cargo.toml",
-        "hegel-c/Cargo.toml",
-        "tests/conformance/rust/Cargo.lock",
-        "CHANGELOG.md",
-        cwd=ROOT,
-    )
+    git("add", *RELEASE_PATHS, cwd=ROOT)
     git("rm", "RELEASE.md", cwd=ROOT)
     git(
         "commit",

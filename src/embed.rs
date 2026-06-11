@@ -10,8 +10,6 @@
 //! alternative test harnesses, replay tooling — need a thinner entry point
 //! that hands them each test case's raw [`crate::backend::DataSource`] and
 //! lets them drive it directly. That's what [`run_native`] is for.
-//!
-//! Only available with the `native` feature.
 
 use crate::backend::{DataSource, TestRunResult, TestRunner};
 use crate::settings::{Settings, Verbosity};

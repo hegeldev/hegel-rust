@@ -127,7 +127,7 @@ pub(crate) fn is_in_ci() -> bool {
 
     CI_VARS.iter().any(|(key, value)| match value {
         None => std::env::var_os(key).is_some(),
-        Some(expected) => std::env::var(key).ok().as_deref() == Some(expected), // nocov
+        Some(expected) => std::env::var(key).ok().as_deref() == Some(expected),
     })
 }
 
@@ -213,12 +213,6 @@ impl Settings {
     ///
     /// An explicit [`Settings::backend`] always wins; otherwise urandom is
     /// used under Antithesis and the default PRNG backend elsewhere.
-    ///
-    /// Only the native engine acts on the backend selection; the server
-    /// backend forwards generation to hegel-core, which makes its own urandom
-    /// choice server-side. Hence this is unused (but still compiled and
-    /// tested) when the `native` feature is off.
-    #[cfg_attr(not(feature = "native"), allow(dead_code))]
     pub(crate) fn resolved_backend(&self, in_antithesis: bool) -> Backend {
         match self.backend {
             Some(backend) => backend,
@@ -282,15 +276,17 @@ impl Settings {
         self
     }
 
-    /// Set which phases of the test lifecycle to run.
+    /// Set which test lifecycle phases to run.
     ///
-    /// By default all phases are enabled. Pass a subset to disable specific
-    /// phases — for example, omitting [`Phase::Shrink`] skips shrinking:
+    /// Defaults to all phases: `[Phase::Explicit, Phase::Reuse, Phase::Generate, Phase::Target, Phase::Shrink]`.
+    ///
+    /// Example — skip shrinking (useful when you only need a witness, not a
+    /// minimal counterexample):
     ///
     /// ```no_run
     /// use hegel::{Phase, Settings};
     ///
-    /// let settings = Settings::new().phases([Phase::Reuse, Phase::Generate]);
+    /// let s = Settings::new().phases([Phase::Reuse, Phase::Generate]);
     /// ```
     pub fn phases(mut self, phases: impl IntoIterator<Item = Phase>) -> Self {
         self.phases = phases.into_iter().collect();

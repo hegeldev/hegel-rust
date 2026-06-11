@@ -244,8 +244,11 @@ pub fn run(mut m: impl StateMachine, tc: TestCase) {
                 if msg == STOP_TEST_STRING {
                     // Backend ran out of data — this test case is done.
                     break;
-                } else if msg != ASSUME_FAIL_STRING {
+                } else if msg == ASSUME_FAIL_STRING {
+                    // Rule was skipped by assume(false); try a different rule.
                     tc.note("Rule stopped early due to violated assumption.");
+                } else {
+                    // Genuine rule failure: propagate it.
                     resume_unwind(e);
                 }
             }

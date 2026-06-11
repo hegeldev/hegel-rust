@@ -95,19 +95,6 @@ fn panic_on_data_source_error(e: DataSourceError) -> ! {
     match e {
         DataSourceError::StopTest => panic!("{}", STOP_TEST_STRING),
         DataSourceError::Assume => panic!("{}", ASSUME_FAIL_STRING), // nocov
-        // The server backend has no dedicated invalid-argument variant on the
-        // wire: it reports a misconfigured generator as a `ServerError` whose
-        // message names Hypothesis's `InvalidArgument` exception. Surface those
-        // as usage errors (a clean abort), exactly like the native backend's
-        // `InvalidArgument` below; a genuine server error still panics with its
-        // message and is reported as a failure.
-        DataSourceError::ServerError(msg) => {
-            if msg.contains("InvalidArgument") {
-                invalid_argument!("{}", msg)
-            } else {
-                panic!("{}", msg)
-            }
-        }
         // A caller-supplied argument (typically a generator's schema) was
         // semantically invalid: e.g. a range with no representable values, or
         // a `sampled_from` over an empty set. This is a usage error, not a
@@ -722,11 +709,9 @@ impl TestCase {
 
     /// Send `mark_complete` on this test case's data source.
     ///
-    /// Both backends use this to communicate the outcome — the full
-    /// [`TestCaseResult`], including any captured [`Failure`] — to whatever
-    /// owns the per-test-case bookkeeping (Hypothesis on the server backend;
-    /// the native engine, via a per-test-case outcome handle, on the native
-    /// backend).
+    /// Communicates the outcome — the full [`TestCaseResult`], including any
+    /// captured [`Failure`] — to the engine, which reads it back through a
+    /// per-test-case outcome handle on the data source.
     pub(crate) fn mark_complete(&self, result: &crate::backend::TestCaseResult) {
         self.with_data_source(|ds| ds.mark_complete(result));
     }

@@ -103,7 +103,6 @@ fn test_is_in_ci_some_expected_variant() {
 // `run_main` match in `src/native/test_runner.rs`) is otherwise
 // dead from a coverage perspective.  This test temporarily clears
 // the CI env vars and runs the engine through that arm.
-#[cfg(feature = "native")]
 #[test]
 fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
     use crate::Hegel;
@@ -191,9 +190,6 @@ fn hegel_run_skips_when_generate_phase_disabled() {
         .run();
 }
 
-// The replay dispatch is native-only: on the server backend the blob is
-// ignored, so these tests exercise the `native` build alone.
-#[cfg(feature = "native")]
 mod reproduce {
     use super::*;
     use crate::{Hegel, TestCase};

@@ -10,10 +10,16 @@
 
 use std::collections::HashMap;
 
-use crate::native::bignum::{BigInt, Sign, Signed, ToPrimitive};
+use crate::native::bignum::{BigInt, Sign, Signed};
+use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceValue};
 
 use super::{ShrinkResult, Shrinker, bin_search_down_big_r, find_integer_r};
+
+/// The low `keep` bits of the non-negative `v`, i.e. `v mod 2^keep`.
+fn low_bits(v: &BigInt, keep: usize) -> BigInt {
+    v - &BigInt::from((v >> keep).magnitude() << keep)
+}
 
 impl<'a> Shrinker<'a> {
     /// Current integer value at node `i` as a [`BigInt`].
@@ -114,11 +120,17 @@ impl<'a> Shrinker<'a> {
         Ok(())
     }
 
-    /// Binary search integer values toward zero.
+    /// Shrink each integer node's distance from its clamped
+    /// `shrink_towards`, probing both sides of the target.
     ///
-    /// Includes a linear scan of small values after binary search to
-    /// handle non-monotonic functions (e.g. sampled_from or test functions
-    /// that panic on boundary values).
+    /// Port of Hypothesis's `minimize_individual_nodes` integer handling,
+    /// which runs `Integer.shrink(abs(shrink_towards - value))` against both
+    /// `shrink_towards + n` and `shrink_towards - n`, with the `Integer`
+    /// moves from `shrinking/integer.py`: guaranteed probes of distance 0,
+    /// 1, `d - 1` and `d - 2`, plus `mask_high_bits` (drop the top bits of
+    /// the distance — predicates like `x & 0xff == 0x77` stall without it),
+    /// the squeeze-into-one-byte probes, the shift-right descent, and
+    /// multiple-subtraction, iterated to a fixpoint.
     pub(super) fn binary_search_integer_towards_zero(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
@@ -129,176 +141,94 @@ impl<'a> Shrinker<'a> {
                     continue;
                 }
             };
-            let v = self.int_value_bigint(i);
-            let range_size = ic.max_value.clone() - ic.min_value.clone() + BigInt::from(1);
-            if v.sign() == Sign::Plus {
-                let lo = ic.simplest().max(BigInt::from(0));
-                // shift_right adaptive descent. Probes `lo + (v - lo) >> k`
-                // for k = 1, 2, 4, 8, ... via `find_integer`, which is
-                // O(log log distance) rather than the O(log distance) of a
-                // full `bin_search_down`.
-                let dist = &v - &lo;
-                if dist.sign() == Sign::Plus {
-                    let max_shift = dist.bits() as usize + 1;
-                    find_integer_r(|k| {
-                        let candidate = &lo + (&dist >> k.min(max_shift));
-                        self.replace_int(i, &candidate)
-                    })?;
+            let target = ic.clamped_shrink_towards();
+
+            // short_circuit: distances 0 and 1 are always tried.
+            self.try_at_distance(i, &ic, &target, &BigInt::from(0))?;
+            self.try_at_distance(i, &ic, &target, &BigInt::from(1))?;
+
+            // mask_high_bits: keep only the low `bits - k` bits of the
+            // distance.
+            let base = self.distance_from(i, &target);
+            let n_bits = base.bits();
+            find_integer_r(|k| {
+                if k as u64 >= n_bits {
+                    return Ok(false);
                 }
-                // Linear scan small values for non-monotonic functions.
-                let scan_count: i64 = if range_size <= BigInt::from(128) {
-                    range_size.to_i64().unwrap().min(32)
-                } else {
-                    8
-                };
-                let cur_v = self.int_value_bigint(i);
-                let scan_hi = (&lo + BigInt::from(scan_count)).min(cur_v);
-                let mut c = lo.clone();
-                while c < scan_hi {
-                    self.replace_int(i, &c)?;
-                    c += 1;
+                let keep = (n_bits - k as u64) as usize;
+                let masked = low_bits(&base, keep);
+                self.try_at_distance(i, &ic, &target, &masked)
+            })?;
+
+            // Squeeze the distance into a single byte: its top byte, then
+            // its bottom byte.
+            let base = self.distance_from(i, &target);
+            if base.bits() > 8 {
+                let top = &base >> (base.bits() as usize - 8);
+                self.try_at_distance(i, &ic, &target, &top)?;
+                let bottom = low_bits(&base, 8);
+                self.try_at_distance(i, &ic, &target, &bottom)?;
+            }
+
+            // run_step to a fixpoint: shift_right, then multiples of 2 and 1
+            // (the latter two guarantee `d - 2` and `d - 1` are probed).
+            loop {
+                let before = self.distance_from(i, &target);
+                if before == BigInt::from(0) {
+                    break;
                 }
-                // shrink_by_multiples(2) / (1): with a non-monotonic predicate
-                // (e.g. `|m - n| == 1`), pure descent converges to the current
-                // value without ever probing `cur - 2`. Hitting `cur - 2` is
-                // what lets the shrinker flip a linked pair from `(m, m+1)` down
-                // to `(m, m-1)` at the cost of one extra probe.
-                let base = self.int_value_bigint(i);
-                if base > lo {
+                let max_shift = before.bits() as usize + 1;
+                find_integer_r(|k| {
+                    let candidate = &before >> k.min(max_shift);
+                    self.try_at_distance(i, &ic, &target, &candidate)
+                })?;
+                for step in [2u64, 1] {
+                    let base = self.distance_from(i, &target);
                     find_integer_r(|n| {
-                        let attempt = &base - BigInt::from(2u64 * n as u64);
-                        if attempt < lo {
+                        let sub = BigInt::from(step) * BigInt::from(n as u64);
+                        if sub > base {
                             return Ok(false);
                         }
-                        self.replace_int(i, &attempt)
+                        self.try_at_distance(i, &ic, &target, &(&base - &sub))
                     })?;
                 }
-                let base = self.int_value_bigint(i);
-                if base > lo {
-                    find_integer_r(|n| {
-                        let attempt = &base - BigInt::from(n as u64);
-                        if attempt < lo {
-                            // Unreachable: a step-1 probe reaches `attempt < lo`
-                            // only after `replace(lo)` succeeds, but a successful
-                            // `replace(lo)` means `lo` is interesting, in which
-                            // case the linear scan above already landed on `lo`
-                            // and `base > lo` is false. (The step-2 probe can hit
-                            // its guard because it skips over `lo`.)
-                            unreachable!("step-1 descent cannot cross below `lo`");
-                        }
-                        self.replace_int(i, &attempt)
-                    })?;
-                }
-                // Also try negative values with smaller absolute value (simpler).
-                if ic.min_value.clone().sign() == Sign::Minus {
-                    let cur_v = self.int_value_bigint(i);
-                    if cur_v.sign() == Sign::Plus {
-                        let upper = (&cur_v - BigInt::from(1)).min(-ic.min_value.clone());
-                        if upper >= BigInt::from(1) {
-                            // Seed at -upper, then shift-right-descend the
-                            // absolute value toward 1 via find_integer.
-                            self.replace_int(i, &(-&upper))?;
-                            let dist = &upper - BigInt::from(1);
-                            if dist.sign() == Sign::Plus {
-                                let max_shift = dist.bits() as usize + 1;
-                                find_integer_r(|k| {
-                                    let candidate_abs =
-                                        BigInt::from(1) + (&dist >> k.min(max_shift));
-                                    self.replace_int(i, &(-&candidate_abs))
-                                })?;
-                            }
-                        }
-                    }
-                }
-            } else if v.sign() == Sign::Minus {
-                // Mirror of the positive branch. `lo` is the absolute value of
-                // the simplest (clamped to 0) and we shrink toward `lo` from
-                // `-v` before flipping the sign back.
-                let lo = (-ic.simplest()).max(BigInt::from(0));
-                let dist = ((-&v) - &lo).max(BigInt::from(0));
-                if dist.sign() == Sign::Plus {
-                    let max_shift = dist.bits() as usize + 1;
-                    find_integer_r(|k| {
-                        let candidate_abs = &lo + (&dist >> k.min(max_shift));
-                        self.replace_int(i, &(-&candidate_abs))
-                    })?;
-                }
-                // Linear scan small negative values for non-monotonic functions.
-                let neg_scan: i64 = if range_size <= BigInt::from(128) {
-                    (-&v).min(BigInt::from(32)).to_i64().unwrap()
-                } else {
-                    8
-                };
-                let mut c: i64 = 1;
-                while c < neg_scan {
-                    self.replace_int(i, &BigInt::from(-c))?;
-                    c += 1;
-                }
-                // shrink_by_multiples for the negative branch: probe
-                // `cur + 2*n` / `cur + n` (moving toward zero).
-                let base = self.int_value_bigint(i);
-                let neg_hi = -&lo;
-                if base < neg_hi {
-                    find_integer_r(|n| {
-                        let attempt = &base + BigInt::from(2u64 * n as u64);
-                        if attempt > neg_hi {
-                            return Ok(false);
-                        }
-                        self.replace_int(i, &attempt)
-                    })?;
-                }
-                let base = self.int_value_bigint(i);
-                if base < neg_hi {
-                    find_integer_r(|n| {
-                        let attempt = &base + BigInt::from(n as u64);
-                        if attempt > neg_hi {
-                            // Unreachable for the same reason as the positive
-                            // step-1 descent: it cannot cross past `neg_hi`
-                            // without first landing on it, which the linear scan
-                            // would already have done.
-                            unreachable!("step-1 descent cannot cross past `neg_hi`");
-                        }
-                        self.replace_int(i, &attempt)
-                    })?;
-                }
-                // Also try positive values with smaller absolute value (simpler).
-                if ic.max_value.clone().sign() == Sign::Plus {
-                    let cur_v = self.int_value_bigint(i);
-                    if cur_v.sign() == Sign::Minus {
-                        let upper = ((-&cur_v) - BigInt::from(1)).min(ic.max_value.clone());
-                        if upper >= BigInt::from(1) {
-                            // Seed at +upper, then shift-right-descend toward
-                            // lo_pos via find_integer.
-                            self.replace_int(i, &upper)?;
-                            let lo_pos = ic.simplest().max(BigInt::from(0));
-                            let dist = &upper - &lo_pos;
-                            if dist.sign() == Sign::Plus {
-                                let max_shift = dist.bits() as usize + 1;
-                                find_integer_r(|k| {
-                                    let candidate = &lo_pos + (&dist >> k.min(max_shift));
-                                    self.replace_int(i, &candidate)
-                                })?;
-                            }
-                            // Linear scan positive values.
-                            let scan_count: i64 = if range_size <= BigInt::from(128) {
-                                range_size.to_i64().unwrap().min(32)
-                            } else {
-                                8
-                            };
-                            let scan_hi =
-                                (&lo_pos + BigInt::from(scan_count)).min(&upper + BigInt::from(1));
-                            let mut c = lo_pos.clone();
-                            while c < scan_hi {
-                                self.replace_int(i, &c)?;
-                                c += 1;
-                            }
-                        }
-                    }
+                if self.distance_from(i, &target) == before {
+                    break;
                 }
             }
             i += 1;
         }
         Ok(())
+    }
+
+    /// `|value(i) - target|` as a non-negative `BigInt`.
+    fn distance_from(&self, i: usize, target: &BigInt) -> BigInt {
+        let v = self.int_value_bigint(i);
+        BigInt::from((&v - target).magnitude())
+    }
+
+    /// Probe node `i` at `target + d`, then — when that is rejected — at
+    /// `target - d`. The sort key orders equal distances above-first, so the
+    /// above side is always offered first.
+    fn try_at_distance(
+        &mut self,
+        i: usize,
+        ic: &IntegerChoice,
+        target: &BigInt,
+        d: &BigInt,
+    ) -> ShrinkResult<bool> {
+        let above = target + d;
+        let mut accepted = false;
+        if ic.validate(&above) {
+            accepted = self.replace_int(i, &above)?;
+        }
+        if !accepted && d.sign() == Sign::Plus {
+            let below = target - d;
+            if ic.validate(&below) {
+                accepted = self.replace_int(i, &below)?;
+            }
+        }
+        Ok(accepted)
     }
 
     /// Try redistributing value between pairs of integer choices.
@@ -356,27 +286,28 @@ impl<'a> Shrinker<'a> {
 
                 let prev_i = self.int_value_bigint(i);
                 let prev_j = self.int_value_bigint(j);
-                let simplest_i = match self.current_nodes[i].kind.as_ref() {
-                    ChoiceKind::Integer(ic) => ic.simplest(),
+                let target_i = match self.current_nodes[i].kind.as_ref() {
+                    ChoiceKind::Integer(ic) => ic.clamped_shrink_towards(),
                     _ => unreachable!(
                         "kind/value invariant violated: outer match guaranteed this variant"
                     ),
                 };
 
-                if prev_i != simplest_i {
-                    if prev_i.sign() == Sign::Plus {
-                        bin_search_down_big_r(BigInt::from(0), prev_i.clone(), &mut |v| {
-                            let new_j = &prev_j + (&prev_i - v);
-                            self.replace_two(i, v, j, &new_j)
-                        })?;
-                    } else if prev_i.sign() == Sign::Minus {
-                        bin_search_down_big_r(BigInt::from(0), -&prev_i, &mut |a| {
-                            // delta = prev_i + a = -(|prev_i| - a)
-                            let new_i = -a;
-                            let new_j = &prev_j + (&prev_i + a);
-                            self.replace_two(i, &new_i, j, &new_j)
-                        })?;
-                    }
+                // Shrink i's distance from its shrink target (staying on its
+                // current side, like Hypothesis's `k > abs(m - shrink_towards)`
+                // cap), moving the difference onto j so the sum is preserved.
+                let prev_dist = BigInt::from((&prev_i - &target_i).magnitude());
+                if prev_dist.sign() == Sign::Plus {
+                    let on_low_side = prev_i < target_i;
+                    bin_search_down_big_r(BigInt::from(0), prev_dist.clone(), &mut |d| {
+                        let new_i = if on_low_side {
+                            &target_i - d
+                        } else {
+                            &target_i + d
+                        };
+                        let new_j = &prev_j + (&prev_i - &new_i);
+                        self.replace_two(i, &new_i, j, &new_j)
+                    })?;
                 }
 
                 if pair_idx == 0 {
@@ -785,3 +716,7 @@ mod lower_common_node_offset_tests;
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_minimize_duplicated_choices_tests.rs"]
 mod minimize_duplicated_choices_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_integers_tests.rs"]
+mod integers_tests;

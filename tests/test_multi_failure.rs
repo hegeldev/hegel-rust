@@ -1,13 +1,13 @@
 //! In-process tests for the runner's multi-failure reporting path.
 //!
-//! The runner has three failure-reporting branches (`src/server/runner.rs`):
+//! The runner has three failure-reporting branches (`src/run_lifecycle.rs`):
 //!   - empty (`Property test failed: unknown`)
 //!   - single failure (legacy `Property test failed: <msg>`)
 //!   - multi-failure (new `Property-based test failed with N distinct failures.`)
 //!
 //! The single-failure branch is exercised by the rest of the test suite via
 //! `expect_panic` / `Minimal::run`.  The multi-failure branch needs a test
-//! that *deterministically* drives Hypothesis to surface multiple distinct
+//! that *deterministically* drives the engine to surface multiple distinct
 //! origins — relying on a happens-to-find-two test would leave the branch
 //! uncovered on CI, which it did before this test was added.
 
@@ -40,7 +40,7 @@ fn test_macro_report_multiple_failures_true_surfaces_both(tc: TestCase) {
     }
 }
 
-/// `#[hegel::test(report_multiple_failures = false, ...)]` asks the server
+/// `#[hegel::test(report_multiple_failures = false, ...)]` asks the engine
 /// to collapse multi-bug runs to a single failure, so the same body falls
 /// into the single-failure re-raise path. The `expected` substring is
 /// chosen specifically so a multi-failure panic (which starts with
@@ -117,9 +117,8 @@ fn test_multi_failure_panic_quiet_suppresses_stderr() {
     let _ = run_two_origin_failure(Verbosity::Quiet);
 }
 
-/// `report_multiple_failures(false)` makes the server (Hypothesis with
-/// `report_multiple_bugs=False`) surface only the first origin, so the
-/// runner sees a single Failure and falls into the legacy single-failure
+/// `report_multiple_failures(false)` makes the engine surface only the first
+/// origin, so the runner sees a single Failure and falls into the legacy single-failure
 /// re-raise path (`Property test failed: <msg>`) rather than the
 /// multi-failure `"... with N distinct failures."` path.
 #[test]
@@ -155,4 +154,26 @@ fn test_report_multiple_failures_false_collapses_to_single_failure_panic() {
         msg.starts_with("Property test failed: ") && !msg.contains("distinct failures"),
         "expected single-failure outer panic (one branch should win), got: {msg:?}"
     );
+}
+
+/// A second bug lurking just below the first bug's shrink boundary: from the
+/// full `u64` range, generation essentially never produces 998 or 999, so
+/// the "shadow bug" is only ever reached by the shrinker probing values just
+/// below the primary boundary. Hypothesis records origins discovered while
+/// shrinking and shrinks them too; the runner must report both.
+#[hegel::test(
+    derandomize = true,
+    test_cases = 300u64,
+    verbosity = hegel::Verbosity::Quiet,
+    database = None
+)]
+#[should_panic(expected = "Property-based test failed with 2 distinct failures.")]
+fn test_bug_discovered_during_shrink_is_reported(tc: TestCase) {
+    let x: u64 = tc.draw(gs::integers::<u64>());
+    if x >= 1000 {
+        panic!("primary bug: {}", x);
+    }
+    if x >= 998 {
+        panic!("shadow bug: {}", x);
+    }
 }

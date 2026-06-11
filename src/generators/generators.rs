@@ -31,7 +31,7 @@ impl<'a, T: 'a> BasicGenerator<'a, T> {
         (self.parse)(raw)
     }
 
-    /// Generate a value by sending the schema to the server and parsing the response.
+    /// Generate a value by handing the schema to the engine and parsing the result.
     pub fn do_draw(&self, tc: &TestCase) -> T {
         self.parse_raw(super::generate_raw(tc, self.schema()))
     }
@@ -50,7 +50,7 @@ impl<'a, T: 'a> BasicGenerator<'a, T> {
 /// The core trait for all generators.
 ///
 /// Generators produce values of type `T` and optionally provide a
-/// [`BasicGenerator`] for server-based generation via `as_basic()`.
+/// [`BasicGenerator`] for single-request schema-based generation via `as_basic()`.
 ///
 /// Implementors override one or both of [`as_basic`](Self::as_basic) and
 /// [`do_draw`](Self::do_draw):

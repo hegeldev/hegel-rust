@@ -249,3 +249,76 @@ fn build_intervals_treats_non_array_categories_field_as_absent() {
     // 128 ASCII codepoints (no category filter applied).
     assert_eq!(iv.len(), 128);
 }
+
+#[test]
+fn build_intervals_categories_cover_astral_planes() {
+    // Hypothesis's charmap spans the whole codespace (0..=0x10FFFF), not
+    // just the BMP: `categories=["So"]` must include emoji (U+1F600 is So)
+    // and `categories=["Lo"]` must include CJK Extension B (U+20000 is Lo).
+    let s = cbor_map! {
+        "type" => "string",
+        "categories" => cbor_array![ciborium::Value::Text("So".into())],
+    };
+    let iv = build_intervals(&s).unwrap();
+    assert!(iv.contains(0x1F600), "emoji U+1F600 (So) missing");
+
+    let s = cbor_map! {
+        "type" => "string",
+        "categories" => cbor_array![ciborium::Value::Text("Lo".into())],
+    };
+    let iv = build_intervals(&s).unwrap();
+    assert!(iv.contains(0x20000), "CJK Ext B U+20000 (Lo) missing");
+}
+
+#[test]
+fn build_intervals_exclude_categories_excludes_astral_members() {
+    // `exclude_categories=["Co"]` must remove the astral private-use planes
+    // (15-16), not just the BMP private-use area: a user excluding a
+    // category must never be handed an astral member of it.
+    let s = cbor_map! {
+        "type" => "string",
+        "exclude_categories" => cbor_array![ciborium::Value::Text("Co".into())],
+    };
+    let iv = build_intervals(&s).unwrap();
+    assert!(!iv.contains(0xE000), "BMP private-use must be excluded");
+    assert!(
+        !iv.contains(0xF0000),
+        "plane-15 private-use must be excluded"
+    );
+    assert!(
+        !iv.contains(0x10FFFD),
+        "plane-16 private-use must be excluded"
+    );
+    assert!(iv.contains(b'a' as u32));
+}
+
+#[test]
+fn build_intervals_rejects_include_characters_outside_codec() {
+    // Hypothesis raises InvalidArgument for include characters the codec
+    // cannot encode; silently generating them would violate the codec
+    // constraint.
+    let s = cbor_map! {
+        "type" => "string",
+        "codec" => "ascii",
+        "include_characters" => "é"
+    };
+    let err = build_intervals(&s).unwrap_err();
+    assert!(matches!(err, EngineError::InvalidArgument(_)));
+    assert!(err.to_string().contains("cannot be encoded"), "{err}");
+
+    let s = cbor_map! {
+        "type" => "string",
+        "codec" => "latin-1",
+        "include_characters" => "☃"
+    };
+    assert!(build_intervals(&s).is_err());
+
+    // In-range include characters stay fine.
+    let s = cbor_map! {
+        "type" => "string",
+        "codec" => "ascii",
+        "include_characters" => "az"
+    };
+    let iv = build_intervals(&s).unwrap();
+    assert!(iv.contains(b'a' as u32) && iv.contains(b'z' as u32));
+}

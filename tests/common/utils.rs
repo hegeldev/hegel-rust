@@ -251,7 +251,7 @@ where
 
         if let Err(e) = hegel_result {
             // If found is None, this panic is not from HEGEL_FOUND — re-propagate
-            // the real error (e.g. server crash) instead of swallowing it.
+            // the real error instead of swallowing it.
             if found.lock().unwrap().is_none() {
                 std::panic::resume_unwind(e);
             }

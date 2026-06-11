@@ -84,10 +84,7 @@ fn test_can_find_string_with_duplicate_characters() {
             .settings(Settings::new().test_cases(200).database(None))
             .run();
         },
-        // On native, text schemas aren't implemented yet, so the
-        // todo!() panics get surfaced as hegel internal errors rather
-        // than property failures. Either outcome is acceptable here.
-        "Property test failed|hegel internal error",
+        "Property test failed",
     );
 }
 
@@ -102,8 +99,7 @@ fn test_can_find_non_ascii_text() {
             .settings(Settings::new().test_cases(200).database(None))
             .run();
         },
-        // See note on test_can_find_string_with_duplicate_characters.
-        "Property test failed|hegel internal error",
+        "Property test failed",
     );
 }
 

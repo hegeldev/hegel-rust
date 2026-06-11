@@ -1,5 +1,3 @@
-#![cfg_attr(feature = "native", allow(unused_imports, dead_code))]
-
 mod common;
 
 use std::sync::OnceLock;
@@ -53,7 +51,6 @@ fn verbose_verbosity_failing_run_exercises_trying_example_eprintln() {
     assert!(result.is_err(), "expected the property to fail");
 }
 
-#[cfg(feature = "native")]
 #[test]
 fn tree_exhausted_filter_too_much_fires_on_tiny_filtered_domain() {
     // `tc.assume(false)` over a boolean draw exhausts the choice tree
@@ -84,7 +81,6 @@ fn tree_exhausted_filter_too_much_fires_on_tiny_filtered_domain() {
     );
 }
 
-#[cfg(feature = "native")]
 #[test]
 fn db_replay_drops_corrupted_stored_entry() {
     // Pre-populate the database with garbage bytes at the key
@@ -122,7 +118,6 @@ fn db_replay_drops_corrupted_stored_entry() {
     assert!(!key_dir.join(fnv_hex(garbage)).exists());
 }
 
-#[cfg(feature = "native")]
 #[test]
 fn debug_verbosity_replay_aligned_emits_skipping_shrink_message() {
     // First run: save a counterexample to the database.  Second run:
@@ -162,7 +157,6 @@ fn debug_verbosity_replay_aligned_emits_skipping_shrink_message() {
     assert!(second.is_err(), "second run should also fail");
 }
 
-#[cfg(feature = "native")]
 fn fnv_hex(s: &[u8]) -> String {
     // Inline copy of `src/native/database.rs::fnv_hex`; the symbol there
     // isn't re-exported.
@@ -356,9 +350,28 @@ mod verbosity {
     use hegel::generators as gs;
     use hegel::{Hegel, Settings, Verbosity};
 
-    // VERBOSE_PASSING_CODE/VERBOSE_FAILING_CODE and their project helpers are
-    // removed on test-port — only used by the three Verbose-mode tests we
-    // dropped above.
+    const VERBOSE_FAILING_CODE: &str = r#"
+use hegel::{Hegel, Settings, Verbosity};
+use hegel::generators as gs;
+
+fn main() {
+    Hegel::new(|tc| {
+        let x: bool = tc.draw(gs::booleans());
+        assert!(x, "x should be true");
+    })
+    .settings(Settings::new().verbosity(Verbosity::Verbose).database(None))
+    .run();
+}
+"#;
+
+    fn verbose_failing_project() -> &'static TempRustProject {
+        static PROJECT: OnceLock<TempRustProject> = OnceLock::new();
+        PROJECT.get_or_init(|| {
+            TempRustProject::new()
+                .main_file(VERBOSE_FAILING_CODE)
+                .expect_failure("")
+        })
+    }
 
     const QUIET_FAILING_CODE: &str = r#"
 use hegel::{Hegel, Settings, Verbosity};
@@ -390,11 +403,6 @@ fn main() {
         })
     }
 
-    // test_prints_intermediate_in_success dropped on test-port: client-side
-    // Verbosity::Verbose doesn't reach the Hypothesis server (which is launched
-    // with `--verbosity normal` from server::session::init), so the
-    // "Running test case" progress line never appears in stderr.
-
     #[test]
     fn test_does_not_log_in_quiet_mode() {
         let output = quiet_failing_project().cargo_run(&[]);
@@ -405,12 +413,15 @@ fn main() {
         );
     }
 
-    // test_includes_progress_in_verbose_mode dropped on test-port: same reason as
-    // test_prints_intermediate_in_success — client Verbose doesn't reach server.
-
-    // test_includes_intermediate_results_in_verbose_mode dropped on test-port:
-    // same reason — verbose output is suppressed by the server's `--verbosity
-    // normal` startup flag.
+    #[test]
+    fn test_includes_progress_in_verbose_mode() {
+        let output = verbose_failing_project().cargo_run(&[]);
+        assert!(
+            output.stderr.contains("Running test case"),
+            "Expected per-test-case progress output in verbose mode:\n{}",
+            output.stderr
+        );
+    }
 
     #[test]
     fn test_no_indexerror_in_quiet_mode() {
@@ -691,8 +702,8 @@ mod snapshots_shrinking {
         assert_eq!(xs, vec![1001]);
     }
 
-    // test_shrunk_string dropped on test-port: the server backend's per-element
-    // Integer shrinker gets stuck at 'À' (U+00C0) instead of reaching 'A' (see
+    // test_shrunk_string is omitted: the per-element Integer shrinker gets
+    // stuck at 'À' (U+00C0) instead of reaching 'A' (see
     // HypothesisWorks/hypothesis#4725), so this test fails as upstream describes.
 
     #[test]
