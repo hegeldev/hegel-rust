@@ -51,11 +51,11 @@ impl DataSource for StubDataSource {
     }
 }
 
-/// Build a `TestCase` whose draw output is emitted (`is_last_run = true`), so
+/// Build a `TestCase` whose draw output is emitted (`emit = true`), so
 /// the display-name bookkeeping in `record_named_draw` runs — the same path a
 /// failing test's final replay takes.
 fn emitting_test_case() -> TestCase {
-    TestCase::new(Box::new(StubDataSource), true, Mode::TestRun, false)
+    TestCase::new(Box::new(StubDataSource), true, Mode::TestRun)
 }
 
 #[test]

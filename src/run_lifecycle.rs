@@ -7,22 +7,21 @@
 //!
 //! The native engine backend (`crate::native::test_runner::NativeTestRunner`)
 //! plugs into this lifecycle. The runner is free to do whatever it likes
-//! inside its `TestRunner::run` to decide which test cases to run; the
+//! inside its `TestRunner::explore` to decide which test cases to run; the
 //! lifecycle owns everything that surrounds it — installing the panic hook,
 //! wrapping each test body with `catch_unwind` plus `mark_complete`, the
-//! antithesis integration, and the final `panic!("Property test failed: ...")`
-//! re-raise.
+//! antithesis integration, the final replay of each discovered
+//! counterexample (with its report printed around it), and the closing
+//! `panic!("Property test failed: ...")` re-raise.
 
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::cell::{Cell, RefCell};
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
+use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Once};
-
-use parking_lot::Mutex;
 
 use crate::antithesis::TestLocation;
-use crate::backend::{DataSource, Failure, TestCaseResult, TestRunner};
+use crate::backend::{DataSource, Exploration, Failure, TestCaseResult, TestRunner};
 use crate::control::{currently_in_test_context, with_test_context};
 use crate::runner::{Mode, Settings};
 use crate::test_case::{
@@ -41,10 +40,11 @@ thread_local! {
 
     /// Whether the panic hook should pay to capture a backtrace for the next
     /// panic on this thread. Set by [`run_test_case`] to `should_emit`
-    /// (`is_final || verbose`) — i.e. only when the resulting diagnostic will
-    /// actually be shown. Capturing (and, under `RUST_BACKTRACE`, symbolizing)
-    /// a backtrace for every discarded shrink probe is the dominant cost of
-    /// failing-heavy property runs, and is far worse on Windows.
+    /// (`(is_final && !quiet) || verbose`) — i.e. only when the resulting
+    /// diagnostic will actually be shown. Capturing (and, under
+    /// `RUST_BACKTRACE`, symbolizing) a backtrace for every discarded shrink
+    /// probe is the dominant cost of failing-heavy property runs, and is far
+    /// worse on Windows.
     static CAPTURE_BACKTRACE: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -245,49 +245,17 @@ pub(crate) fn run_test_case(
         verbosity,
         crate::runner::Verbosity::Verbose | crate::runner::Verbosity::Debug
     );
-    // `should_emit` mirrors `TestCase`'s own gate: the diagnostic is only
-    // shown for the final replay or, in verbose mode, every interesting case.
+    let quiet = verbosity == crate::runner::Verbosity::Quiet;
+    // Draw/note output (and the rendered diagnostic) is surfaced for the
+    // final replay — where it prints live, in order, ahead of the diagnostic
+    // `drive` prints right after the replay returns — or, in verbose mode,
+    // for every test case. Quiet suppresses even the final replay's output.
     // Tell the panic hook to capture a backtrace only when it will be shown.
-    let should_emit = is_final || verbose;
+    let should_emit = (is_final && !quiet) || verbose;
     CAPTURE_BACKTRACE.with(|c| c.set(should_emit));
 
-    // On the final replay, capture the test body's draw/note output instead
-    // of letting it print live: it gets prepended to the failure's
-    // diagnostic, so `drive` can print each failure's counterexample and
-    // stack trace as one self-contained block. Without this, a multi-failure
-    // run prints every replay's draws back-to-back, then every diagnostic,
-    // with no way to tell which values belong to which trace. A sink
-    // installed via `with_output_override` still receives each line as it is
-    // emitted.
-    let final_output: Option<Arc<Mutex<String>>> = if is_final {
-        Some(Arc::new(Mutex::new(String::new())))
-    } else {
-        None
-    };
-
-    let mut run_body = |data_source: Box<dyn DataSource + Send + Sync>| {
-        let tc = TestCase::new(data_source, is_final, mode, verbose);
-        let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
-        (tc, result)
-    };
-
-    let (tc, result) = match &final_output {
-        Some(buffer) => {
-            let buffer = Arc::clone(buffer);
-            let forward = crate::test_case::current_output_sink();
-            let tee: crate::test_case::OutputSink = Arc::new(move |line: &str| {
-                let mut buffer = buffer.lock();
-                buffer.push_str(line);
-                buffer.push('\n');
-                drop(buffer);
-                if let Some(sink) = &forward {
-                    sink(line);
-                }
-            });
-            crate::test_case::with_output_override(tee, || run_body(data_source))
-        }
-        None => run_body(data_source),
-    };
+    let tc = TestCase::new(data_source, should_emit, mode);
+    let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
 
     let tc_result = match &result {
         Ok(()) => TestCaseResult::Valid,
@@ -309,17 +277,14 @@ pub(crate) fn run_test_case(
                 let (thread_name, thread_id, location, backtrace) =
                     take_panic_info().unwrap_or_else(unknown_panic_info);
 
-                let mut diagnostic =
+                let diagnostic =
                     render_diagnostic(&thread_name, &thread_id, &location, &msg, &backtrace);
-                if let Some(buffer) = &final_output {
-                    diagnostic = format!("{}{}", buffer.lock(), diagnostic);
-                }
                 TestCaseResult::Interesting(Failure {
                     panic_message: msg,
                     diagnostic,
                     origin: format!("Panic at {}", location),
-                    // The engine attaches the reproduce blob on its final
-                    // replay, once the shrunk choice sequence is known.
+                    // On a final replay, `replay_final` attaches the
+                    // counterexample's reproduce blob to this failure.
                     reproduce_blob: None,
                 })
             }
@@ -417,9 +382,12 @@ fn reproducer_line(settings: &Settings, failure: &crate::backend::Failure) -> Op
 /// Drive a [`TestRunner`] to completion against the user's test function.
 ///
 /// Installs the cross-backend panic hook, hands the runner a `run_case`
-/// callback that wraps each test invocation in [`run_test_case`], handles
-/// the antithesis integration, and re-raises a final `panic!` if any test
-/// case failed.
+/// callback that wraps each test invocation in [`run_test_case`], and lets
+/// it explore (generate + shrink). On a failing run it then owns the
+/// report: the failure-count headline (when there are several bugs), the
+/// final replay of each counterexample, each failure's diagnostic and
+/// reproducer line as its replay completes, the antithesis integration, and
+/// the closing `panic!`.
 pub(crate) fn drive<R, F>(
     runner: R,
     test_fn: F,
@@ -435,14 +403,17 @@ pub(crate) fn drive<R, F>(
     let got_interesting = AtomicBool::new(false);
     let mode = settings.mode;
     let verbosity = settings.verbosity;
-    let result = runner.run(settings, database_key, &mut |backend, is_final| {
+    let mut run_case = |backend: Box<dyn DataSource + Send + Sync>, is_final: bool| {
         let tc_result = run_test_case(backend, &mut test_fn, is_final, mode, verbosity);
         if matches!(&tc_result, TestCaseResult::Interesting(_)) {
             got_interesting.store(true, Ordering::SeqCst);
         }
-    });
+    };
 
-    let test_failed = !result.passed || got_interesting.load(Ordering::SeqCst);
+    let exploration = runner.explore(settings, database_key, &mut run_case);
+
+    let test_failed =
+        !matches!(exploration, Exploration::Passed) || got_interesting.load(Ordering::SeqCst);
 
     crate::antithesis::require_antithesis_feature(
         crate::antithesis::is_running_in_antithesis(),
@@ -465,49 +436,74 @@ pub(crate) fn drive<R, F>(
 
     let quiet = verbosity == crate::runner::Verbosity::Quiet;
 
-    match result.failures.as_slice() {
-        // `test_failed` was set but no Failure surfaced — e.g. an aborted
-        // mid-draw test case or a backend that reported failure without
-        // attaching a Failure.  Preserve the legacy generic panic.
-        [] => panic!("Property test failed: unknown"),
-        // Single-failure path: keep the original output shape so test
-        // harnesses that pattern-match on `"Property test failed: <msg>"`
-        // (e.g. `Minimal::run` in `tests/common/utils.rs`) keep working.
-        [failure] => {
-            if !quiet {
-                eprint!("{}", failure.diagnostic);
-            }
-            if let Some(line) = reproducer_line(settings, failure) {
-                eprintln!("{line}");
-            }
+    let counterexamples = match exploration {
+        // `got_interesting` was set but the runner reported a clean pass —
+        // e.g. an aborted mid-draw test case.  Preserve the legacy generic
+        // panic.
+        Exploration::Passed => panic!("Property test failed: unknown"),
+        // A pre-rendered failure with no counterexample to replay (health
+        // check, `Mode::SingleTestCase`): report it directly.
+        Exploration::Failed(failure) => {
+            report_failure(&failure, settings, quiet);
             panic!("Property test failed: {}", failure.panic_message);
         }
-        // Multi-failure path: lead with the failure count, then print each
-        // replay's block (its draws followed by its diagnostic), and panic
-        // with the same count message. The headline has to be eprinted here
-        // to come first — the closing `panic!`'s message is only rendered by
-        // the panic hook once the panic is raised, i.e. after the report.
-        // Each distinct bug carries its own blob, so a reproducer line is
-        // printed per failure (when `print_blob` is set).
-        failures => {
-            let headline = format!(
-                "Property-based test failed with {} distinct failures.",
-                failures.len()
-            );
-            if !quiet {
-                eprintln!("{headline}");
-            }
-            for failure in failures {
-                if !quiet {
-                    eprintln!();
-                    eprint!("{}", failure.diagnostic);
-                }
-                if let Some(line) = reproducer_line(settings, failure) {
-                    eprintln!("{line}");
-                }
-            }
-            panic!("{headline}");
+        Exploration::Counterexamples(counterexamples) => counterexamples,
+    };
+
+    // Replay each counterexample with `is_final = true`, reporting as we go:
+    // the replay prints its draws live, and its diagnostic is printed the
+    // moment it returns, so each failure reads as one block. For a
+    // multi-failure run the count headline leads the report — it has to be
+    // eprinted here, before the replays, because the closing `panic!`'s
+    // message is only rendered by the panic hook once the panic is raised,
+    // i.e. after everything else.
+    let multiple = counterexamples.len() > 1;
+    if multiple && !quiet {
+        eprintln!(
+            "Property-based test failed with {} distinct failures.",
+            counterexamples.len()
+        );
+    }
+    let mut reported: Vec<Failure> = Vec::new();
+    for counterexample in counterexamples {
+        if multiple && !quiet {
+            eprintln!();
         }
+        let Some(failure) = runner.replay_final(counterexample, &mut run_case) else {
+            // The counterexample stopped failing between discovery and
+            // replay: report the runner's framing of that (flaky test /
+            // stale blob) as the run's single failure.
+            let vanished = runner.vanished_failure();
+            report_failure(&vanished, settings, quiet);
+            panic!("Property test failed: {}", vanished.panic_message);
+        };
+        report_failure(&failure, settings, quiet);
+        reported.push(failure);
+    }
+
+    match reported.as_slice() {
+        // Defensive: an empty counterexample list (no runner produces one
+        // today) falls through to the legacy generic panic.
+        [] => panic!("Property test failed: unknown"),
+        // Single-failure path: keep the original panic shape so test
+        // harnesses that pattern-match on `"Property test failed: <msg>"`
+        // (e.g. `Minimal::run` in `tests/common/utils.rs`) keep working.
+        [failure] => panic!("Property test failed: {}", failure.panic_message),
+        many => panic!(
+            "Property-based test failed with {} distinct failures.",
+            many.len()
+        ),
+    }
+}
+
+/// Print one failure's diagnostic block (unless quiet) and its reproducer
+/// line (when `print_blob` is set and the failure carries a blob).
+fn report_failure(failure: &Failure, settings: &Settings, quiet: bool) {
+    if !quiet {
+        eprint!("{}", failure.diagnostic);
+    }
+    if let Some(line) = reproducer_line(settings, failure) {
+        eprintln!("{line}");
     }
 }
 

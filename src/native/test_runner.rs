@@ -1,22 +1,25 @@
 //! Native [`TestRunner`] implementation.
 //!
-//! `NativeTestRunner` plugs into the same [`crate::run_lifecycle::drive`]
-//! pipeline via [`crate::run_lifecycle::drive`].  The trait
-//! method [`TestRunner::run`] is the engine driver: it owns the
-//! database replay, generation, shrinking, and final-replay phases,
-//! and uses the supplied `run_case` callback to actually execute each
-//! test body.
+//! `NativeTestRunner` plugs into the [`crate::run_lifecycle::drive`]
+//! pipeline.  The trait method [`TestRunner::explore`] is the engine
+//! driver: it owns the database replay, generation, and shrinking phases,
+//! using the supplied `run_case` callback to actually execute each test
+//! body, and returns the [`Exploration`] report — every distinct bug's
+//! shrunk counterexample.  The *final replays* of those counterexamples
+//! are not the engine's business: the caller (`drive`, or
+//! [`crate::embed::run_native`] for FFI) drives each one through
+//! [`TestRunner::replay_final`] so it can interleave its own reporting.
 //!
 //! Inside, [`Engine`] wraps the `run_case` callback together with
 //! a shrink-result cache, exposing `run` / `run_shrink_with_origin` /
-//! `run_probe_with_origin` / `run_final` so the surrounding shrinker
+//! `run_probe_with_origin` so the surrounding shrinker
 //! and span-mutation passes can drive replays.
 
 use std::collections::{HashMap, hash_map::Entry};
 
 use rand::RngExt;
 
-use crate::backend::{DataSource, Failure, TestCaseResult, TestRunResult, TestRunner};
+use crate::backend::{DataSource, Exploration, Failure, TestCaseResult, TestRunner};
 use crate::native::core::{
     BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, Spans,
     Status, sort_key,
@@ -30,18 +33,19 @@ use crate::native::shrinker::{ShrinkRun, Shrinker};
 use crate::runner::{Backend, Database, HealthCheck, Mode, Phase, Settings, Verbosity};
 
 /// One run's worth of results: status, the realised choice nodes and
-/// spans, and (for `Status::Interesting`) the captured failure carrying
-/// the rendered diagnostic and the opaque origin string identifying
-/// *where* the panic happened.  The origin is supplied by
+/// spans, and (for `Status::Interesting`) the opaque origin string
+/// identifying *where* the panic happened.  The origin is supplied by
 /// [`crate::run_lifecycle::run_test_case`] from the captured panic
 /// `file:line:col`; per-origin shrinking and database storage key on it.
+/// The failure's rendered diagnostic is deliberately *not* carried here:
+/// the engine never displays it — it is read off the data-source handle
+/// only where a final replay needs it ([`replay_counterexample`]).
 #[derive(Clone)]
 pub struct RunResult {
     pub status: Status,
     pub nodes: Vec<ChoiceNode>,
     pub spans: Vec<Span>,
     pub origin: Option<String>,
-    pub failure: Option<Failure>,
     /// `tc.target()` observations recorded during the test case, keyed by
     /// label. Empty for tests that don't call `tc.target()`.
     pub target_observations: HashMap<String, f64>,
@@ -84,16 +88,57 @@ const HEALTH_CHECK_MAX_VALID: u64 = 10;
 /// Hypothesis's `max_overrun_draws`.
 const MAX_OVERRUN_DRAWS: u64 = 20;
 
+/// A distinct bug's shrunk counterexample, as surfaced by exploration: the
+/// minimal choice sequence that reproduces it, plus the base64 reproduce
+/// blob encoding those choices. This is everything needed to replay the bug
+/// one final time — no live engine state is involved.
+#[derive(Debug)]
+pub struct ShrunkCounterexample {
+    /// The minimal choice sequence reproducing the bug.
+    choices: Vec<ChoiceValue>,
+    /// The realised choice nodes (with bounds metadata), when exploration
+    /// recorded them. `None` for a blob replay, which only has the values.
+    nodes: Option<Vec<ChoiceNode>>,
+    /// Base64 failure blob encoding `choices`, attached to the replayed
+    /// [`Failure`] so `print_blob` can offer a reproducer.
+    blob: String,
+}
+
+/// Replay a shrunk counterexample once with `is_final = true` and return the
+/// [`Failure`] the test body reported, with the reproduce blob attached —
+/// or `None` if the test no longer fails on it.
+pub(crate) fn replay_counterexample(
+    counterexample: ShrunkCounterexample,
+    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+) -> Option<Failure> {
+    let ntc = NativeTestCase::for_choices(
+        &counterexample.choices,
+        counterexample.nodes.as_deref(),
+        None,
+    );
+    let (data_source, handle) = NativeDataSource::new(ntc);
+    run_case(Box::new(data_source), true);
+    match NativeDataSource::take_outcome(&handle) {
+        TestCaseResult::Interesting(mut failure) => {
+            failure.reproduce_blob = Some(counterexample.blob);
+            Some(failure)
+        }
+        _ => None,
+    }
+}
+
 /// Native backend's [`TestRunner`] implementation.
 pub struct NativeTestRunner;
 
 impl TestRunner for NativeTestRunner {
-    fn run(
+    type Counterexample = ShrunkCounterexample;
+
+    fn explore(
         &self,
         settings: &Settings,
         database_key: Option<&str>,
         run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
-    ) -> TestRunResult {
+    ) -> Exploration<ShrunkCounterexample> {
         if settings.mode == Mode::SingleTestCase {
             return run_single(settings, run_case);
         }
@@ -105,6 +150,21 @@ impl TestRunner for NativeTestRunner {
             std::time::Duration::from_secs(MAX_SHRINKING_SECONDS),
         )
     }
+
+    fn replay_final(
+        &self,
+        counterexample: ShrunkCounterexample,
+        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+    ) -> Option<Failure> {
+        replay_counterexample(counterexample, run_case)
+    }
+
+    /// A counterexample that fails during exploration but not on its final
+    /// replay means the test body isn't deterministic: a flaky-test
+    /// health-check failure.
+    fn vanished_failure(&self) -> Failure {
+        health_check_failure(flaky_diagnostic())
+    }
 }
 
 /// [`TestRunner`] that replays a single failing example encoded as a base64
@@ -113,27 +173,72 @@ impl TestRunner for NativeTestRunner {
 /// Selected by [`Hegel::reproduce_failure`](crate::Hegel::reproduce_failure)
 /// in place of [`NativeTestRunner`]. A blob replay is one deterministic
 /// case — no generation, targeting, or shrinking — so it ignores `mode`,
-/// `phases`, and the test-case budget entirely.
+/// `phases`, and the test-case budget entirely: exploration just decodes
+/// the blob into a counterexample for the caller to replay.
+///
+/// An **undecodable** blob is invalid *input*, so [`explore`](TestRunner::explore)
+/// panics outright (over FFI, libhegel's worker catches the panic and
+/// surfaces it as a failure); a blob that decodes but **no longer
+/// reproduces** the failure surfaces through
+/// [`vanished_failure`](TestRunner::vanished_failure) (origin
+/// `"reproduce_failure"`).
 pub(crate) struct ReproduceRunner {
     pub(crate) blob: String,
 }
 
 impl TestRunner for ReproduceRunner {
-    fn run(
+    type Counterexample = ShrunkCounterexample;
+
+    fn explore(
         &self,
-        settings: &Settings,
+        _settings: &Settings,
         _database_key: Option<&str>,
+        _run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+    ) -> Exploration<ShrunkCounterexample> {
+        let Some(choices) = crate::native::blob::decode_failure(&self.blob) else {
+            panic!(
+                "reproduce_failure: the supplied failure blob could not be decoded. \
+                 It may be corrupt or from an incompatible Hegel version."
+            );
+        };
+        Exploration::Counterexamples(vec![ShrunkCounterexample {
+            choices,
+            nodes: None,
+            blob: self.blob.clone(),
+        }])
+    }
+
+    fn replay_final(
+        &self,
+        counterexample: ShrunkCounterexample,
         run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
-    ) -> TestRunResult {
-        run_reproduce(&self.blob, settings, run_case)
+    ) -> Option<Failure> {
+        replay_counterexample(counterexample, run_case)
+    }
+
+    /// The blob decoded and replayed, but the test no longer fails on it.
+    fn vanished_failure(&self) -> Failure {
+        let message = "reproduce_failure: the supplied failure blob no longer \
+                       reproduces a failure. The failure may have been fixed, or \
+                       the blob is stale.";
+        Failure {
+            panic_message: message.to_string(),
+            diagnostic: format!("{message}\n"),
+            origin: String::from("reproduce_failure"),
+            reproduce_blob: None,
+        }
     }
 }
 
 /// Run a single test case (used by `Mode::SingleTestCase`).
+///
+/// The one test case runs with `is_final = true` — it is its own final
+/// replay — so a failure comes back pre-rendered as [`Exploration::Failed`]
+/// with nothing left to replay.
 fn run_single(
     settings: &Settings,
     run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
-) -> TestRunResult {
+) -> Exploration<ShrunkCounterexample> {
     // Honour `settings.seed` / `settings.derandomize` here for the same
     // reason `run_main` does: callers (Antithesis runs especially) pass
     // a deterministic seed expecting `Mode::SingleTestCase` to replay
@@ -144,69 +249,13 @@ fn run_single(
     let (data_source, handle) = NativeDataSource::new(ntc);
     run_case(Box::new(data_source), true);
     match NativeDataSource::take_outcome(&handle) {
-        TestCaseResult::Interesting(failure) => TestRunResult {
-            passed: false,
-            failures: vec![failure],
-        },
-        _ => TestRunResult {
-            passed: true,
-            failures: Vec::new(),
-        },
+        TestCaseResult::Interesting(failure) => Exploration::Failed(failure),
+        _ => Exploration::Passed,
     }
 }
 
-/// Replay a single failing example encoded as a base64 failure blob (the
-/// engine half of [`ReproduceRunner`]).
-///
-/// Decodes the blob to a choice sequence and runs exactly that one sequence.
-///
-/// Two failure outcomes are distinguished:
-/// - an **undecodable** blob is invalid *input*, so it panics outright (over
-///   FFI, libhegel's worker catches the panic and surfaces it as a failure);
-/// - a blob that **decodes but no longer reproduces** the failure is reported
-///   as its own [`TestRunResult`] failure (origin `"reproduce_failure"`).
-fn run_reproduce(
-    blob: &str,
-    settings: &Settings,
-    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
-) -> TestRunResult {
-    let Some(choices) = crate::native::blob::decode_failure(blob) else {
-        panic!(
-            "reproduce_failure: the supplied failure blob could not be decoded. \
-             It may be corrupt or from an incompatible Hegel version."
-        );
-    };
-    let mut ctx = Engine::new(settings, None, run_case);
-    let ntc = NativeTestCase::for_choices(&choices, None, None);
-    let run = ctx.run_final(ntc);
-    match (run.status, run.failure) {
-        (Status::Interesting, Some(mut failure)) => {
-            failure.reproduce_blob = Some(blob.to_string());
-            TestRunResult {
-                passed: false,
-                failures: vec![failure],
-            }
-        }
-        // Decoded and replayed, but the test no longer fails on it.
-        _ => {
-            let message = "reproduce_failure: the supplied failure blob no longer \
-                           reproduces a failure. The failure may have been fixed, or \
-                           the blob is stale.";
-            TestRunResult {
-                passed: false,
-                failures: vec![Failure {
-                    panic_message: message.to_string(),
-                    diagnostic: format!("{message}\n"),
-                    origin: String::from("reproduce_failure"),
-                    reproduce_blob: None,
-                }],
-            }
-        }
-    }
-}
-
-/// The full multi-test-case engine: database replay, generation, shrinking,
-/// final replay.
+/// The full multi-test-case engine: database replay, generation, and
+/// shrinking, ending at the exploration report.
 fn run_main(
     settings: &Settings,
     database_key: Option<&str>,
@@ -218,19 +267,20 @@ fn run_main(
     // read from `MAX_SHRINKING_SECONDS`) so a test can trip the slow-shrink
     // cutoff deterministically with a zero budget instead of a 5-minute wait.
     shrink_budget: std::time::Duration,
-) -> TestRunResult {
+) -> Exploration<ShrunkCounterexample> {
     Engine::new(settings, database_key, run_case).run(too_slow_threshold, shrink_budget)
 }
 
 impl<'a> Engine<'a> {
     /// The engine driver — Hypothesis's `ConjectureRunner._run`: database
     /// replay, generation (with targeting and span mutation), shrinking,
-    /// the end-of-run database reconciliation, and the final replay.
+    /// and the end-of-run database reconciliation, finishing with the
+    /// exploration report of every distinct bug's shrunk counterexample.
     fn run(
         &mut self,
         too_slow_threshold: std::time::Duration,
         shrink_budget: std::time::Duration,
-    ) -> TestRunResult {
+    ) -> Exploration<ShrunkCounterexample> {
         let settings = self.settings;
         let database_key = self.database_key;
         let max_test_cases = settings.test_cases;
@@ -321,7 +371,7 @@ impl<'a> Engine<'a> {
                     // `secondary` by the end-of-run save.
                     let (run, mismatch) = self.test_function(ntc);
                     if let Some(msg) = mismatch {
-                        return health_check_failure(msg);
+                        return health_check_exploration(msg);
                     }
                     if run.status == Status::Interesting {
                         if i < primary_count {
@@ -388,7 +438,7 @@ impl<'a> Engine<'a> {
             // generator.
             let (run, mismatch) = self.test_function(NativeTestCase::for_simplest(BUFFER_SIZE));
             if let Some(msg) = mismatch {
-                return health_check_failure(msg);
+                return health_check_exploration(msg);
             }
             // The simplest example is Hypothesis's "zero" example: if even it
             // overruns or already uses more than half the buffer, shrinking will
@@ -401,7 +451,7 @@ impl<'a> Engine<'a> {
                     .suppress_health_check
                     .contains(&HealthCheck::LargeInitialTestCase),
             ) {
-                return health_check_failure(msg);
+                return health_check_exploration(msg);
             }
         }
 
@@ -453,7 +503,7 @@ impl<'a> Engine<'a> {
 
                 let (run, mismatch) = self.test_function(ntc);
                 if let Some(msg) = mismatch {
-                    return health_check_failure(msg);
+                    return health_check_exploration(msg);
                 }
 
                 if verbosity == Verbosity::Debug {
@@ -478,7 +528,7 @@ impl<'a> Engine<'a> {
                             .suppress_health_check
                             .contains(&HealthCheck::FilterTooMuch)
                     {
-                        return health_check_failure(format!(
+                        return health_check_exploration(format!(
                             "FailedHealthCheck: FilterTooMuch — it looks like this \
                          test is filtering out too many inputs. \
                          {} inputs were filtered out by assume() \
@@ -495,7 +545,7 @@ impl<'a> Engine<'a> {
                             .suppress_health_check
                             .contains(&HealthCheck::TestCasesTooLarge),
                     ) {
-                        return health_check_failure(msg);
+                        return health_check_exploration(msg);
                     }
 
                     if let Some(msg) = too_slow_check(
@@ -506,7 +556,7 @@ impl<'a> Engine<'a> {
                             .suppress_health_check
                             .contains(&HealthCheck::TooSlow),
                     ) {
-                        return health_check_failure(msg);
+                        return health_check_exploration(msg);
                     }
                 }
 
@@ -556,7 +606,7 @@ impl<'a> Engine<'a> {
                 .contains(&HealthCheck::FilterTooMuch)
             && self.invalid_test_cases > 0
         {
-            return health_check_failure(format!(
+            return health_check_exploration(format!(
                 "FailedHealthCheck: FilterTooMuch — every reachable input was \
              filtered out by assume() before any valid input was generated. \
              {} inputs were filtered out across the full search \
@@ -663,7 +713,7 @@ impl<'a> Engine<'a> {
                 // the authoritative non-determinism report for this phase.
                 let (verify, _) = self.test_function(verify_ntc);
                 if verify.status != Status::Interesting {
-                    return health_check_failure(flaky_diagnostic());
+                    return health_check_exploration(flaky_diagnostic());
                 }
 
                 let target_origin = origin.clone();
@@ -781,17 +831,16 @@ impl<'a> Engine<'a> {
             );
         }
 
-        // --- Final replay ---
+        // --- Report ---
         //
-        // Replay each origin's shrunk counterexample with `is_final = true` so
-        // every distinct bug fires its panic through the user's test body in
-        // its proper context (and side effects like `*shrunk.lock().unwrap() =
-        // Some(...)` get captured per origin). Replay in shortlex-descending
-        // order: the smallest counterexample is the one observed *last*, so a
-        // user-side `Mutex<Option<…>>` that overwrites on each panic ends up
-        // holding the simplest example. Each replay's `Failure` is appended to
-        // the returned `TestRunResult::failures`, which `drive` then turns into
-        // either the single-failure or multi-failure outer panic.
+        // Surface each origin's shrunk counterexample (choices + reproduce
+        // blob) in shortlex-descending order: the smallest counterexample is
+        // listed *last*, so when the caller replays them in order a user-side
+        // `Mutex<Option<…>>` that overwrites on each panic ends up holding
+        // the simplest example. The final replays themselves are the
+        // caller's job (`drive` / `run_native` via `replay_final`), so the
+        // caller can print its report — including the failure count — around
+        // them.
         let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> =
             std::mem::take(&mut self.interesting).into_iter().collect();
         // Descending sort_key order. `sort_by` instead of `sort_by_key` because
@@ -810,31 +859,23 @@ impl<'a> Engine<'a> {
             }
         }
 
-        let mut failures: Vec<crate::backend::Failure> = Vec::new();
-        for (_origin, nodes) in origins_sorted {
-            let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
-            let ntc = NativeTestCase::for_choices(&choices, Some(&nodes), None);
-            let run = self.run_final(ntc);
-
-            match (run.status, run.failure) {
-                (Status::Interesting, Some(mut failure)) => {
-                    failure.reproduce_blob = Some(crate::native::blob::encode_failure(&choices));
-                    failures.push(failure);
+        let counterexamples: Vec<ShrunkCounterexample> = origins_sorted
+            .into_iter()
+            .map(|(_origin, nodes)| {
+                let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                let blob = crate::native::blob::encode_failure(&choices);
+                ShrunkCounterexample {
+                    choices,
+                    nodes: Some(nodes),
+                    blob,
                 }
-                // Defensive branch — fires only when the final replay of a
-                // shrunk counterexample produces a non-Interesting status,
-                // which requires the test body to flip its outcome strictly
-                // between the last shrink call and the final replay.
-                // Deterministic reproduction needs precise call-count
-                // alignment that's brittle in CI; the message builder itself is
-                // tested directly via `flaky_diagnostic_mentions_flaky`.
-                _ => return health_check_failure(flaky_diagnostic()), // nocov
-            }
-        }
+            })
+            .collect();
 
-        TestRunResult {
-            passed: failures.is_empty(),
-            failures,
+        if counterexamples.is_empty() {
+            Exploration::Passed
+        } else {
+            Exploration::Counterexamples(counterexamples)
         }
     }
 }
@@ -968,7 +1009,7 @@ pub(crate) fn slow_shrink_warning() -> String {
     )
 }
 
-/// Build a failing [`TestRunResult`] from a health-check diagnostic.
+/// Build a health-check [`Failure`] from its diagnostic message.
 ///
 /// Health-check failures (FilterTooMuch / TooSlow / flaky) are reported as a
 /// normal failing run rather than via `panic!`, so that an in-process engine
@@ -976,16 +1017,19 @@ pub(crate) fn slow_shrink_warning() -> String {
 /// inspect instead of an uncaught panic that aborts the host process. The
 /// main library still turns this into a panic at its API surface, preserving
 /// its existing behaviour.
-fn health_check_failure(message: String) -> TestRunResult {
-    TestRunResult {
-        passed: false,
-        failures: vec![Failure {
-            panic_message: message.clone(),
-            diagnostic: format!("{message}\n"),
-            origin: "FailedHealthCheck".to_string(),
-            reproduce_blob: None,
-        }],
+fn health_check_failure(message: String) -> Failure {
+    Failure {
+        panic_message: message.clone(),
+        diagnostic: format!("{message}\n"),
+        origin: "FailedHealthCheck".to_string(),
+        reproduce_blob: None,
     }
+}
+
+/// [`health_check_failure`] wrapped as a failed [`Exploration`] — the form
+/// the engine's early-return sites need.
+fn health_check_exploration(message: String) -> Exploration<ShrunkCounterexample> {
+    Exploration::Failed(health_check_failure(message))
 }
 
 /// Port of Hypothesis's `_invalid_thresholds` (`engine.py`): returns the
@@ -1248,7 +1292,7 @@ impl<'a> Engine<'a> {
     /// path contradicted an earlier run.
     pub(crate) fn test_function(&mut self, ntc: NativeTestCase) -> (RunResult, Option<String>) {
         let tc_start = std::time::Instant::now();
-        let run = self.execute(ntc, false);
+        let run = self.execute(ntc);
         let mismatch = self.record_run(&run, tc_start.elapsed(), true);
         (run, mismatch)
     }
@@ -1340,28 +1384,30 @@ impl<'a> Engine<'a> {
     /// returning a [`RunResult`] populated from the outcome reported by the
     /// data source's `mark_complete` plus the [`NativeTestCase`]'s realized
     /// choice nodes.
-    fn execute(&mut self, ntc: NativeTestCase, is_final: bool) -> RunResult {
+    ///
+    /// Always a non-final execution: the engine only runs test cases to
+    /// explore (generation, shrink probes, replays). Final replays are
+    /// driven by the caller through [`replay_counterexample`].
+    fn execute(&mut self, ntc: NativeTestCase) -> RunResult {
         let (data_source, handle) = NativeDataSource::new(ntc);
-        (self.run_case)(Box::new(data_source), is_final);
+        (self.run_case)(Box::new(data_source), false);
         let nodes = NativeDataSource::take_nodes(&handle);
         let spans = NativeDataSource::take_spans(&handle);
         let target_observations = NativeDataSource::take_target_observations(&handle);
         let tc_result = NativeDataSource::take_outcome(&handle);
 
-        let (status, failure) = match tc_result {
+        let (status, origin) = match tc_result {
             TestCaseResult::Valid => (Status::Valid, None),
             TestCaseResult::Invalid => (Status::Invalid, None),
             TestCaseResult::Overrun => (Status::EarlyStop, None),
-            TestCaseResult::Interesting(f) => (Status::Interesting, Some(f)),
+            TestCaseResult::Interesting(f) => (Status::Interesting, Some(f.origin)),
         };
-        let origin = failure.as_ref().map(|f| f.origin.clone());
 
         RunResult {
             status,
             nodes,
             spans,
             origin,
-            failure,
             target_observations,
         }
     }
@@ -1390,7 +1436,7 @@ impl<'a> Engine<'a> {
         }
 
         let ntc = NativeTestCase::for_choices(&key, Some(candidate_nodes), None);
-        let run = self.execute(ntc, false);
+        let run = self.execute(ntc);
         let matches =
             run.status == Status::Interesting && run.origin.as_deref() == Some(target_origin);
         self.note_stray(run.status, run.origin.as_deref(), &run.nodes, target_origin);
@@ -1408,7 +1454,7 @@ impl<'a> Engine<'a> {
     ) -> (bool, Vec<ChoiceNode>, Spans) {
         let rng = EngineRng::seeded(seed);
         let ntc = NativeTestCase::for_probe(prefix, rng, max_size);
-        let run = self.execute(ntc, false);
+        let run = self.execute(ntc);
         let matches =
             run.status == Status::Interesting && run.origin.as_deref() == Some(target_origin);
         self.note_stray(run.status, run.origin.as_deref(), &run.nodes, target_origin);
@@ -1416,13 +1462,6 @@ impl<'a> Engine<'a> {
         let spans = Spans::from(run.spans.clone());
         self.cache.insert(key, run.clone());
         (matches, run.nodes, spans)
-    }
-
-    /// Replay the shrunk counterexample one last time with `is_final = true`,
-    /// so the panic hook prints location/backtrace/message and the surrounding
-    /// driver can re-raise.
-    fn run_final(&mut self, ntc: NativeTestCase) -> RunResult {
-        self.execute(ntc, true)
     }
 
     /// Hypothesis's `cached_test_function`, ported: replay `choices` only
@@ -1464,7 +1503,6 @@ impl<'a> Engine<'a> {
                     nodes: Vec::new(),
                     spans: Vec::new(),
                     origin: None,
-                    failure: None,
                     target_observations: HashMap::new(),
                 };
                 return (result, false);
@@ -1472,7 +1510,7 @@ impl<'a> Engine<'a> {
         }
         let ntc = NativeTestCase::for_choices(choices, None, None);
         let tc_start = std::time::Instant::now();
-        let run = self.execute(ntc, false);
+        let run = self.execute(ntc);
         // Mutation probes are recorded like any other executed run, except
         // that their paths deliberately stay out of the choice tree (see the
         // doc comment above).

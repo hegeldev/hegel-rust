@@ -101,9 +101,10 @@ pub struct Failure {
     pub panic_message: String,
     /// Pre-rendered multi-line diagnostic — `thread '...' panicked at file:line:`
     /// followed by the panic message and (when captured) the stack backtrace.
-    /// On the final replay the test body's draw/note output is prepended, so
-    /// the block is self-contained: the counterexample's values sit directly
-    /// above the stack trace they produced.
+    /// The counterexample's draw/note lines are *not* part of it: they print
+    /// live during the final replay, and the reporter prints this diagnostic
+    /// immediately after, which is what keeps each failure's values adjacent
+    /// to its stack trace.
     pub diagnostic: String,
     /// Opaque per-bug origin tag — currently `"Panic at file:line:col"` from
     /// the captured panic site (with `<unknown>` for the location when
@@ -132,7 +133,37 @@ pub enum TestCaseResult {
     Interesting(Failure),
 }
 
-/// Result of a full test run.
+/// The outcome of a [`TestRunner::explore`] pass: everything the engine
+/// knows once generation and shrinking are done, *before* any final replay.
+///
+/// This is the seam between the two halves of a failing run: exploration
+/// (which bugs exist, how many, what their minimal counterexamples are) and
+/// reporting (replaying each counterexample with `is_final = true` so its
+/// draws and panic are surfaced in order). The caller —
+/// [`crate::run_lifecycle::drive`] for the panic API,
+/// [`crate::embed::run_native`] for FFI — owns everything after this point,
+/// including printing the failure count *before* the first replay.
+#[derive(Debug)]
+pub enum Exploration<C> {
+    /// The run found no failures.
+    Passed,
+    /// The run failed with a pre-rendered failure that has no counterexample
+    /// to replay — a health-check failure, or `Mode::SingleTestCase` (whose
+    /// one test case already ran as its own final).
+    Failed(Failure),
+    /// The run discovered counterexamples, one per distinct bug, in report
+    /// order. Each still needs its final replay via
+    /// [`TestRunner::replay_final`].
+    Counterexamples(Vec<C>),
+}
+
+/// Result of a full test run: the aggregate, post-replay view.
+///
+/// This is the embedding (FFI) shape — [`crate::embed::run_native`] folds an
+/// [`Exploration`] plus its final replays into one of these so libhegel can
+/// inspect the run as a whole. The panic API does not use it:
+/// [`crate::run_lifecycle::drive`] reports each failure as its replay
+/// happens.
 #[derive(Debug)]
 pub struct TestRunResult {
     /// Whether all test cases passed.
@@ -144,29 +175,90 @@ pub struct TestRunResult {
     pub failures: Vec<Failure>,
 }
 
-/// Drives the test execution lifecycle.
+/// Drives test exploration and counterexample replay.
 ///
 /// Implementations control how test cases are generated, how data sources
-/// are created for each test case, and how shrinking/replay works.
+/// are created for each test case, and how shrinking works.
 /// This trait has no reference to any external process — it can be
 /// implemented purely in memory.
+///
+/// In both methods, `run_case` is called once per test case with:
+/// - A data source for generating test data
+/// - A bool indicating whether this is the final replay of a minimal failing
+///   example
+///
+/// The callback runs the test body to completion; the per-test-case outcome
+/// is delivered back through [`DataSource::mark_complete`] rather than as a
+/// return value, so every consumer reads it through the same interface (the
+/// engine via a per-test-case handle to a shared outcome cell on the data
+/// source).
 pub trait TestRunner {
-    /// Execute a test run.
-    ///
-    /// `run_case` is called for each test case with:
-    /// - A data source for generating test data
-    /// - A bool indicating whether this is the final replay of a minimal failing example
-    ///
-    /// The callback runs the test body to completion; the per-test-case
-    /// outcome is delivered to the backend through
-    /// [`DataSource::mark_complete`] rather than as a return value, so both
-    /// backends consume the result through the same interface.  Backends
-    /// arrange to read it back (e.g. via a per-test-case handle to a shared
-    /// outcome cell on the data source).
-    fn run(
+    /// A minimal counterexample discovered by [`explore`](Self::explore),
+    /// replayable via [`replay_final`](Self::replay_final).
+    type Counterexample;
+
+    /// Run the exploration half of a test run: database replay, generation,
+    /// and shrinking, stopping at the point where the run's outcome — and
+    /// every distinct bug's minimal counterexample — is known.
+    fn explore(
         &self,
         settings: &Settings,
         database_key: Option<&str>,
         run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
-    ) -> TestRunResult;
+    ) -> Exploration<Self::Counterexample>;
+
+    /// Replay one counterexample with `is_final = true` and return the
+    /// [`Failure`] the test body reported (with its reproduce blob
+    /// attached), or `None` if the test no longer fails on it.
+    fn replay_final(
+        &self,
+        counterexample: Self::Counterexample,
+        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+    ) -> Option<Failure>;
+
+    /// The run-level failure to report when [`replay_final`](Self::replay_final)
+    /// returns `None` — the counterexample stopped failing between discovery
+    /// and replay. The native engine frames this as a flaky-test health-check
+    /// failure; a blob replay frames it as a stale blob.
+    fn vanished_failure(&self) -> Failure;
+}
+
+/// Fold an [`Exploration`] plus its final replays into the aggregate
+/// [`TestRunResult`] shape. Counterexamples are replayed in order; if one no
+/// longer fails, the whole run is reported as the runner's
+/// [`vanished_failure`](TestRunner::vanished_failure), matching the abort
+/// semantics the engine had when it owned the replay loop.
+pub(crate) fn collect_failures<R: TestRunner>(
+    runner: &R,
+    exploration: Exploration<R::Counterexample>,
+    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+) -> TestRunResult {
+    match exploration {
+        Exploration::Passed => TestRunResult {
+            passed: true,
+            failures: Vec::new(),
+        },
+        Exploration::Failed(failure) => TestRunResult {
+            passed: false,
+            failures: vec![failure],
+        },
+        Exploration::Counterexamples(counterexamples) => {
+            let mut failures = Vec::new();
+            for counterexample in counterexamples {
+                match runner.replay_final(counterexample, run_case) {
+                    Some(failure) => failures.push(failure),
+                    None => {
+                        return TestRunResult {
+                            passed: false,
+                            failures: vec![runner.vanished_failure()],
+                        };
+                    }
+                }
+            }
+            TestRunResult {
+                passed: failures.is_empty(),
+                failures,
+            }
+        }
+    }
 }

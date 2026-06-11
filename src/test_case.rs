@@ -108,7 +108,8 @@ fn panic_on_data_source_error(e: DataSourceError) -> ! {
 pub(crate) struct TestCaseGlobalData {
     mode: Mode,
     /// Whether drawn-value records and notes are surfaced for this test case
-    /// (true on the final replay of a failure, or when verbose output is on).
+    /// (true on the final replay of a failure — unless quiet — or when
+    /// verbose output is on).
     /// When false `on_draw` is a no-op, so the draw-recording bookkeeping in
     /// [`TestCase::record_named_draw`] (display-name allocation + `Debug`
     /// rendering of the value) can be skipped entirely.
@@ -298,23 +299,24 @@ fn panic_message(payload: &Box<dyn Any + Send>) -> String {
 }
 
 impl TestCase {
+    /// `emit` is decided by the lifecycle (`run_lifecycle::run_test_case`):
+    /// true on a non-quiet final replay or in verbose mode, where drawn
+    /// values and notes should be surfaced.
     pub(crate) fn new(
         data_source: Box<dyn DataSource + Send + Sync>,
-        is_last_run: bool,
+        emit: bool,
         mode: Mode,
-        verbose: bool,
     ) -> Self {
         let override_sink = current_output_sink();
-        let should_emit = is_last_run || verbose;
         let on_draw: OutputSink = match override_sink {
-            Some(sink) if should_emit => sink,
-            _ if should_emit => Arc::new(|msg| eprintln!("{}", msg)),
+            Some(sink) if emit => sink,
+            _ if emit => Arc::new(|msg| eprintln!("{}", msg)),
             _ => Arc::new(|_| {}),
         };
         TestCase {
             global: Arc::new(TestCaseGlobalData {
                 mode,
-                emit: should_emit,
+                emit,
                 shared: Mutex::new(SharedState {
                     data_source,
                     draw_state: DrawState {

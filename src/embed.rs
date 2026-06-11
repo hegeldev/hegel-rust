@@ -11,7 +11,7 @@
 //! that hands them each test case's raw [`crate::backend::DataSource`] and
 //! lets them drive it directly. That's what [`run_native`] is for.
 
-use crate::backend::{DataSource, TestRunResult, TestRunner};
+use crate::backend::{DataSource, TestRunResult, TestRunner, collect_failures};
 use crate::runner::{Settings, Verbosity};
 
 /// Drive the native test runner against a callback that receives the raw
@@ -31,7 +31,10 @@ use crate::runner::{Settings, Verbosity};
 /// data source rather than from the callback's return value.
 ///
 /// Returns the aggregated [`TestRunResult`] describing whether the run
-/// passed and listing any distinct failures the engine surfaced.
+/// passed and listing any distinct failures the engine surfaced: the
+/// exploration (generation + shrinking) runs first, then each discovered
+/// counterexample is replayed once with `is_final = true` and its reported
+/// failure folded into the result.
 #[doc(hidden)]
 pub fn run_native(
     settings: &Settings,
@@ -39,7 +42,8 @@ pub fn run_native(
     mut run_case: impl FnMut(Box<dyn DataSource + Send + Sync>, bool),
 ) -> TestRunResult {
     let runner = crate::native::test_runner::NativeTestRunner;
-    runner.run(settings, database_key, &mut run_case)
+    let exploration = runner.explore(settings, database_key, &mut run_case);
+    collect_failures(&runner, exploration, &mut run_case)
 }
 
 /// Build a raw [`DataSource`] that replays the choice sequence encoded in a

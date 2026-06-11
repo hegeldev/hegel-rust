@@ -204,26 +204,38 @@ fn reproducer_line_emits_attribute_when_enabled_and_present() {
 
 // ── run_lifecycle: drive prints reproducer lines on failure ──────────────
 //
-// A stub runner returns a pre-built failing `TestRunResult` (without touching
-// the `run_case` callback), so `drive`'s single- and multi-failure output
-// paths can be exercised — including the per-failure reproducer line — and
-// the distinct panic messages asserted.
+// A stub runner whose exploration yields one pre-built `Failure` per
+// counterexample and whose `replay_final` hands it straight back, so
+// `drive`'s single- and multi-failure replay-and-report loop can be
+// exercised — including the per-failure reproducer line — and the distinct
+// panic messages asserted, without a live engine.
 
 struct StubRunner {
     failures: Vec<crate::backend::Failure>,
 }
 
 impl crate::backend::TestRunner for StubRunner {
-    fn run(
+    type Counterexample = crate::backend::Failure;
+
+    fn explore(
         &self,
         _settings: &crate::runner::Settings,
         _database_key: Option<&str>,
         _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
-    ) -> crate::backend::TestRunResult {
-        crate::backend::TestRunResult {
-            passed: false,
-            failures: self.failures.clone(),
-        }
+    ) -> crate::backend::Exploration<crate::backend::Failure> {
+        crate::backend::Exploration::Counterexamples(self.failures.clone())
+    }
+
+    fn replay_final(
+        &self,
+        counterexample: crate::backend::Failure,
+        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+    ) -> Option<crate::backend::Failure> {
+        Some(counterexample)
+    }
+
+    fn vanished_failure(&self) -> crate::backend::Failure {
+        unreachable!("StubRunner replays never vanish")
     }
 }
 
@@ -266,6 +278,118 @@ fn drive_multiple_failures_prints_each_reproducer_and_panics() {
         msg.contains("2 distinct failures"),
         "unexpected panic message: {msg}"
     );
+}
+
+// ── run_lifecycle: drive's defensive unknown panic ───────────────────────
+//
+// If a test case came back Interesting at some point but the runner's
+// exploration reports a clean pass (e.g. an aborted mid-draw test case),
+// `drive` must still fail the run — with the legacy generic message, since
+// there is no `Failure` to report.
+
+struct PassesDespiteInterestingRunner;
+
+impl crate::backend::TestRunner for PassesDespiteInterestingRunner {
+    type Counterexample = ();
+
+    fn explore(
+        &self,
+        _settings: &crate::runner::Settings,
+        _database_key: Option<&str>,
+        run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+    ) -> crate::backend::Exploration<()> {
+        // One interesting test case that the exploration then "forgets".
+        run_case(Box::new(BtStubDataSource), false);
+        crate::backend::Exploration::Passed
+    }
+
+    fn replay_final(
+        &self,
+        _counterexample: (),
+        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+    ) -> Option<crate::backend::Failure> {
+        unreachable!("a passing exploration has nothing to replay")
+    }
+
+    fn vanished_failure(&self) -> crate::backend::Failure {
+        unreachable!("a passing exploration has nothing to vanish")
+    }
+}
+
+#[test]
+fn drive_panics_with_unknown_when_interesting_but_exploration_passes() {
+    init_panic_hook();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drive(
+            PassesDespiteInterestingRunner,
+            |_tc: TestCase| panic!("{}", "boom"),
+            &crate::runner::Settings::new(),
+            None,
+            None,
+        );
+    }));
+    let payload = result.expect_err("drive should panic when a test case was interesting");
+    let msg = payload.downcast_ref::<&str>().copied().unwrap_or("");
+    assert_eq!(msg, "Property test failed: unknown");
+}
+
+// ── run_lifecycle: drive reports a counterexample that stops failing ─────
+//
+// When `replay_final` comes back empty — the bug fired during exploration
+// but not on its final replay — `drive` must report the runner's
+// `vanished_failure` framing instead of pretending the run passed. The
+// engine equivalents are a flaky-test health check (native) and a stale
+// blob (reproduce); the stub keeps the path deterministic.
+
+struct VanishingRunner;
+
+impl crate::backend::TestRunner for VanishingRunner {
+    type Counterexample = ();
+
+    fn explore(
+        &self,
+        _settings: &crate::runner::Settings,
+        _database_key: Option<&str>,
+        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+    ) -> crate::backend::Exploration<()> {
+        crate::backend::Exploration::Counterexamples(vec![()])
+    }
+
+    fn replay_final(
+        &self,
+        _counterexample: (),
+        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+    ) -> Option<crate::backend::Failure> {
+        None
+    }
+
+    fn vanished_failure(&self) -> crate::backend::Failure {
+        crate::backend::Failure {
+            panic_message: "the bug went away".to_string(),
+            diagnostic: "the bug went away\n".to_string(),
+            origin: "vanished".to_string(),
+            reproduce_blob: None,
+        }
+    }
+}
+
+#[test]
+fn drive_reports_the_vanished_failure_when_a_replay_stops_failing() {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drive(
+            VanishingRunner,
+            |_tc: TestCase| {},
+            &crate::runner::Settings::new(),
+            None,
+            None,
+        );
+    }));
+    let payload = result.expect_err("drive should panic on a vanished failure");
+    let msg = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .unwrap_or("");
+    assert_eq!(msg, "Property test failed: the bug went away");
 }
 
 // ── run_lifecycle: backtrace capture is gated to where it is shown ───────
@@ -417,24 +541,28 @@ fn control_flow_panics_never_capture_a_backtrace() {
     );
 }
 
-// ── run_lifecycle: final-replay output is attached to the diagnostic ─────
+// ── run_lifecycle: replay output prints live, diagnostics stay bare ──────
 //
-// On the final replay the test body's draw/note lines are captured and
-// prepended to the failure's diagnostic, so `drive` prints each failure's
-// counterexample and stack trace as one self-contained block. Anywhere
-// else (non-final cases) the lines keep their live route and the
-// diagnostic stays bare.
+// The final replay's draw/note lines are emitted live (through the
+// installed sink, when there is one) as the test body runs; the diagnostic
+// is just the rendered panic. Adjacency in the report comes from
+// sequencing — `drive` prints each failure's diagnostic the moment its
+// replay returns — not from capturing output into the diagnostic.
 
 #[test]
-fn final_replay_output_is_attached_to_the_diagnostic() {
+fn final_replay_diagnostic_does_not_embed_replay_output() {
     let result = run_case_capturing(true, crate::runner::Verbosity::Normal, &mut |tc| {
         tc.note("the noted line");
         panic!("{}", "boom");
     });
     let diagnostic = interesting_diagnostic(&result);
     assert!(
-        diagnostic.starts_with("the noted line\nthread "),
-        "expected the replay output to lead the diagnostic, got:\n{diagnostic}"
+        diagnostic.starts_with("thread "),
+        "expected a bare panic diagnostic, got:\n{diagnostic}"
+    );
+    assert!(
+        !diagnostic.contains("the noted line"),
+        "diagnostics must not embed replay output, got:\n{diagnostic}"
     );
 }
 
@@ -454,12 +582,12 @@ fn non_final_failure_diagnostic_does_not_include_replay_output() {
 }
 
 #[test]
-fn final_replay_output_still_reaches_an_installed_sink() {
+fn final_replay_output_reaches_an_installed_sink_live() {
     use std::sync::{Arc, Mutex};
 
     // Snapshot tests capture the final replay's draw/note lines through
-    // `with_output_override`; the capture-into-diagnostic tee must keep
-    // forwarding to that sink.
+    // `with_output_override`; they must keep flowing to that sink as the
+    // body runs.
     let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let writer = lines.clone();
     let sink: crate::test_case::OutputSink =
@@ -467,17 +595,42 @@ fn final_replay_output_still_reaches_an_installed_sink() {
 
     let result = crate::test_case::with_output_override(sink, || {
         run_case_capturing(true, crate::runner::Verbosity::Normal, &mut |tc| {
-            tc.note("teed line");
+            tc.note("the noted line");
             panic!("{}", "boom");
         })
     });
 
+    assert_eq!(lines.lock().unwrap().as_slice(), ["the noted line"]);
     let diagnostic = interesting_diagnostic(&result);
     assert!(
-        diagnostic.starts_with("teed line\n"),
-        "expected the captured line in the diagnostic, got:\n{diagnostic}"
+        !diagnostic.contains("the noted line"),
+        "the sink line must not also land in the diagnostic, got:\n{diagnostic}"
     );
-    assert_eq!(lines.lock().unwrap().as_slice(), ["teed line"]);
+}
+
+#[test]
+fn quiet_final_replay_emits_no_draw_or_note_output() {
+    use std::sync::{Arc, Mutex};
+
+    // `Verbosity::Quiet` suppresses even the final replay's draw/note
+    // lines — the sink stays empty.
+    let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let writer = lines.clone();
+    let sink: crate::test_case::OutputSink =
+        Arc::new(move |s: &str| writer.lock().unwrap().push(s.to_string()));
+
+    crate::test_case::with_output_override(sink, || {
+        run_case_capturing(true, crate::runner::Verbosity::Quiet, &mut |tc| {
+            tc.note("the noted line");
+            panic!("{}", "boom");
+        })
+    });
+
+    assert!(
+        lines.lock().unwrap().is_empty(),
+        "quiet mode must suppress final-replay output, got {:?}",
+        lines.lock().unwrap()
+    );
 }
 
 // `drive` runs the runner unconditionally — phase selection (skipping a
@@ -492,17 +645,28 @@ fn drive_runs_the_runner_regardless_of_phases() {
 
     struct RecordingRunner(Rc<Cell<bool>>);
     impl crate::backend::TestRunner for RecordingRunner {
-        fn run(
+        type Counterexample = ();
+
+        fn explore(
             &self,
             _settings: &crate::runner::Settings,
             _database_key: Option<&str>,
             _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
-        ) -> crate::backend::TestRunResult {
+        ) -> crate::backend::Exploration<()> {
             self.0.set(true);
-            crate::backend::TestRunResult {
-                passed: true,
-                failures: vec![],
-            }
+            crate::backend::Exploration::Passed
+        }
+
+        fn replay_final(
+            &self,
+            _counterexample: (),
+            _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+        ) -> Option<crate::backend::Failure> {
+            unreachable!("a passing exploration has nothing to replay")
+        }
+
+        fn vanished_failure(&self) -> crate::backend::Failure {
+            unreachable!("a passing exploration has nothing to vanish")
         }
     }
 
