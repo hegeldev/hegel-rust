@@ -637,7 +637,6 @@ fn mark_large_interesting(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
             if n >= 1_000_000 {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     panic_message: "n >= 1_000_000".to_string(),
-                    diagnostic: "n >= 1_000_000\n".to_string(),
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
                 }));

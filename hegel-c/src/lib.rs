@@ -386,11 +386,10 @@ pub struct HegelRunResult {
 
 /// One distinct failure surfaced by the run. The strings are owned by
 /// the parent `hegel_run_result_t`; reading them via
-/// `hegel_failure_panic_message`, `_diagnostic`, `_origin` returns
-/// `const char*` pointers that stay valid until `hegel_run_free`.
+/// `hegel_failure_panic_message` / `_origin` returns `const char*`
+/// pointers that stay valid until `hegel_run_free`.
 pub struct HegelFailure {
     panic_message: CString,
-    diagnostic: CString,
     origin: CString,
     /// Base64 failure blob encoding the minimal counterexample's choice
     /// sequence, or `None` when the engine produced no blob. Read via
@@ -402,7 +401,6 @@ impl From<Failure> for HegelFailure {
     fn from(f: Failure) -> Self {
         HegelFailure {
             panic_message: cstring_lossy(&f.panic_message),
-            diagnostic: cstring_lossy(&f.diagnostic),
             origin: cstring_lossy(&f.origin),
             // The base64 alphabet has no NUL, so this is an
             // invariant: error loudly if it's ever broken.
@@ -1402,7 +1400,6 @@ pub unsafe extern "C" fn hegel_mark_complete(
             };
             TestCaseResult::Interesting(Failure {
                 panic_message: origin_str.clone(),
-                diagnostic: format!("Failure reported by C caller: {}\n", origin_str),
                 origin: origin_str,
                 reproduce_blob: None,
             })
@@ -1494,17 +1491,6 @@ pub unsafe extern "C" fn hegel_run_result_failure(
 pub unsafe extern "C" fn hegel_failure_panic_message(f: *const HegelFailure) -> *const c_char {
     match unsafe { f.as_ref() } {
         Some(f) => f.panic_message.as_ptr(),
-        None => ptr::null(),
-    }
-}
-
-/// The failure's full diagnostic text (panic message + location +
-/// backtrace, depending on what the engine captured). Suitable for
-/// reproducing in test-runner output. Returns NULL if `f` is NULL.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_failure_diagnostic(f: *const HegelFailure) -> *const c_char {
-    match unsafe { f.as_ref() } {
-        Some(f) => f.diagnostic.as_ptr(),
         None => ptr::null(),
     }
 }

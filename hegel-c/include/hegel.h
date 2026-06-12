@@ -280,8 +280,8 @@ typedef enum {
 /*
  One distinct failure surfaced by the run. The strings are owned by
  the parent `hegel_run_result_t`; reading them via
- `hegel_failure_panic_message`, `_diagnostic`, `_origin` returns
- `const char*` pointers that stay valid until `hegel_run_free`.
+ `hegel_failure_panic_message` / `_origin` returns `const char*`
+ pointers that stay valid until `hegel_run_free`.
  */
 typedef struct hegel_failure_t hegel_failure_t;
 
@@ -711,13 +711,6 @@ const hegel_failure_t *hegel_run_result_failure(const hegel_run_result_t *r, siz
  Returns NULL if `f` is NULL.
  */
 const char *hegel_failure_panic_message(const hegel_failure_t *f);
-
-/*
- The failure's full diagnostic text (panic message + location +
- backtrace, depending on what the engine captured). Suitable for
- reproducing in test-runner output. Returns NULL if `f` is NULL.
- */
-const char *hegel_failure_diagnostic(const hegel_failure_t *f);
 
 /*
  The failure's origin string — the stable identifier that the

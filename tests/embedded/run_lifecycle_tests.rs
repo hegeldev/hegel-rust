@@ -172,7 +172,6 @@ fn format_backtrace_short_strips_through_filter() {
 fn failure_with_blob(blob: Option<&str>) -> crate::backend::Failure {
     crate::backend::Failure {
         panic_message: "boom".to_string(),
-        diagnostic: "boom\n".to_string(),
         origin: "Panic at x".to_string(),
         reproduce_blob: blob.map(str::to_string),
     }
@@ -187,7 +186,8 @@ fn reproducer_line_none_when_print_blob_disabled() {
 
 #[test]
 fn reproducer_line_none_when_no_blob_attached() {
-    // The health-check / server-backend case: print_blob on, but no blob.
+    // A blobless failure (e.g. `Mode::SingleTestCase`): print_blob on, but
+    // nothing to print.
     let settings = crate::runner::Settings::new().print_blob(true);
     assert!(reproducer_line(&settings, &failure_with_blob(None)).is_none());
 }
@@ -431,14 +431,13 @@ fn drive_panics_with_the_run_error_when_exploration_errors() {
 
 // ── run_lifecycle: backtrace capture is gated to where it is shown ───────
 //
-// The panic hook captures a backtrace for every panic raised in a test
-// context, but the only backtraces that are ever shown belong to failures
-// whose diagnostic is emitted — the final replay (`is_final`) or, in
-// verbose mode, every interesting case. Capturing (and, under
-// `RUST_BACKTRACE`, symbolizing) one for each discarded shrink probe is the
-// dominant cost of failing-heavy property runs. These tests pin the gating:
-// they are meaningful when the process has backtraces enabled (e.g. CI runs
-// with `RUST_BACKTRACE=1`) and harmless otherwise.
+// The only backtraces ever shown belong to failures whose diagnostic is
+// emitted — a non-quiet final replay or, in verbose mode, every interesting
+// case. Capturing (and, under `RUST_BACKTRACE`, symbolizing) one for each
+// discarded shrink probe is the dominant cost of failing-heavy property
+// runs. The gate has two halves, each pinned separately below:
+// `run_test_case` sets `CAPTURE_BACKTRACE` to `should_emit`, and the panic
+// hook captures a backtrace only when the flag is set.
 
 /// A no-op `DataSource` for driving `run_test_case` with a body that panics
 /// before it draws. Only `mark_complete` is reached.
@@ -493,13 +492,6 @@ fn run_case_capturing(
     )
 }
 
-fn interesting_diagnostic(result: &TestCaseResult) -> String {
-    match result {
-        TestCaseResult::Interesting(failure) => failure.diagnostic.clone(),
-        other => panic!("expected an Interesting result, got {other:?}"),
-    }
-}
-
 fn backtraces_enabled() -> bool {
     matches!(
         Backtrace::capture().status(),
@@ -507,49 +499,84 @@ fn backtraces_enabled() -> bool {
     )
 }
 
+/// The `CAPTURE_BACKTRACE` flag left behind by the last `run_test_case` on
+/// this thread — i.e. what the gate decided for that test case.
+fn capture_flag() -> bool {
+    CAPTURE_BACKTRACE.get()
+}
+
 #[test]
 fn discarded_failures_skip_backtrace_capture() {
-    // Non-final, non-verbose: `should_emit` is false, so the diagnostic is
-    // thrown away — no backtrace should be captured, even with backtraces
-    // enabled. This is the shrinker hot path.
-    let result = run_case_capturing(false, crate::runner::Verbosity::Normal, &mut |_tc| {
+    // Non-final, non-verbose: `should_emit` is false, the diagnostic will
+    // never be shown — the gate must tell the hook not to pay for a
+    // backtrace. This is the shrinker hot path.
+    run_case_capturing(false, crate::runner::Verbosity::Normal, &mut |_tc| {
         panic!("{}", "boom")
     });
-    let diagnostic = interesting_diagnostic(&result);
     assert!(
-        !diagnostic.contains("stack backtrace"),
-        "a discarded (non-final) failure must not capture a backtrace; got:\n{diagnostic}"
+        !capture_flag(),
+        "a discarded (non-final) failure must not pay for a backtrace"
     );
 }
 
 #[test]
-fn shown_failures_capture_backtrace_when_enabled() {
-    // Final replay: `should_emit` is true, so the diagnostic is shown and
-    // should carry a backtrace exactly when the process has them enabled.
-    let result = run_case_capturing(true, crate::runner::Verbosity::Normal, &mut |_tc| {
+fn shown_failures_enable_backtrace_capture() {
+    // Final replay: `should_emit` is true, the diagnostic is shown, so the
+    // gate must enable capture.
+    run_case_capturing(true, crate::runner::Verbosity::Normal, &mut |_tc| {
         panic!("{}", "boom")
     });
-    let diagnostic = interesting_diagnostic(&result);
-    assert_eq!(
-        diagnostic.contains("stack backtrace"),
-        backtraces_enabled(),
-        "a shown (final) failure should carry a backtrace exactly when enabled; got:\n{diagnostic}"
-    );
+    assert!(capture_flag());
 }
 
 #[test]
-fn verbose_mode_captures_backtrace_for_non_final_failures() {
+fn quiet_final_replay_skips_backtrace_capture() {
+    // Quiet suppresses the final replay's diagnostic, so there is nothing
+    // to capture a backtrace for.
+    run_case_capturing(true, crate::runner::Verbosity::Quiet, &mut |_tc| {
+        panic!("{}", "boom")
+    });
+    assert!(!capture_flag());
+}
+
+#[test]
+fn verbose_mode_enables_backtrace_capture_for_non_final_failures() {
     // Verbose mode emits every interesting case's diagnostic live, so
-    // `should_emit` is true even when not final — the backtrace must be
-    // captured (when enabled) so the live output matches a real failure.
-    let result = run_case_capturing(false, crate::runner::Verbosity::Verbose, &mut |_tc| {
+    // `should_emit` is true even when not final.
+    run_case_capturing(false, crate::runner::Verbosity::Verbose, &mut |_tc| {
         panic!("{}", "boom")
     });
-    let diagnostic = interesting_diagnostic(&result);
+    assert!(capture_flag());
+}
+
+#[test]
+fn hook_captures_backtrace_only_when_flagged() {
+    use std::backtrace::BacktraceStatus;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    init_panic_hook();
+    take_panic_info();
+
+    CAPTURE_BACKTRACE.set(false);
+    let _ = crate::control::with_test_context(|| {
+        catch_unwind(AssertUnwindSafe(|| panic!("{}", "unflagged")))
+    });
+    let (_, _, _, backtrace) = take_panic_info().unwrap();
     assert_eq!(
-        diagnostic.contains("stack backtrace"),
+        backtrace.status(),
+        BacktraceStatus::Disabled,
+        "the hook must not capture a backtrace when the flag is clear"
+    );
+
+    CAPTURE_BACKTRACE.set(true);
+    let _ = crate::control::with_test_context(|| {
+        catch_unwind(AssertUnwindSafe(|| panic!("{}", "flagged")))
+    });
+    let (_, _, _, backtrace) = take_panic_info().unwrap();
+    assert_eq!(
+        backtrace.status() == BacktraceStatus::Captured,
         backtraces_enabled(),
-        "verbose mode should capture a backtrace for non-final failures; got:\n{diagnostic}"
+        "the hook should capture a backtrace exactly when flagged and enabled"
     );
 }
 
@@ -574,59 +601,65 @@ fn control_flow_unwinds_never_reach_the_panic_hook() {
     );
 }
 
-// ── run_lifecycle: replay output prints live, diagnostics stay bare ──────
+// ── run_lifecycle: where diagnostics and replay output land ──────────────
 //
 // The final replay's draw/note lines are emitted live (through the
 // installed sink, when there is one) as the test body runs; the diagnostic
-// is just the rendered panic. Adjacency in the report comes from
-// sequencing — `drive` prints each failure's diagnostic the moment its
-// replay returns — not from capturing output into the diagnostic.
+// prints to stderr at the catch site, never into the sink — snapshot tests
+// capture draw/note lines without nondeterministic panic locations. In
+// verbose mode, a non-final case's diagnostic goes through the sink so
+// in-process tests can observe it.
 
 #[test]
-fn final_replay_diagnostic_does_not_embed_replay_output() {
-    let result = run_case_capturing(true, crate::runner::Verbosity::Normal, &mut |tc| {
-        tc.note("the noted line");
-        panic!("{}", "boom");
-    });
-    let diagnostic = interesting_diagnostic(&result);
-    assert!(
-        diagnostic.starts_with("thread "),
-        "expected a bare panic diagnostic, got:\n{diagnostic}"
-    );
-    assert!(
-        !diagnostic.contains("the noted line"),
-        "diagnostics must not embed replay output, got:\n{diagnostic}"
-    );
-}
-
-#[test]
-fn non_final_failure_diagnostic_does_not_include_replay_output() {
-    // Verbose mode emits notes live for every test case; they must not be
-    // duplicated into the (also live-printed) non-final diagnostic.
-    let result = run_case_capturing(false, crate::runner::Verbosity::Verbose, &mut |tc| {
-        tc.note("the noted line");
-        panic!("{}", "boom");
-    });
-    let diagnostic = interesting_diagnostic(&result);
-    assert!(
-        !diagnostic.contains("the noted line"),
-        "non-final diagnostics must not embed replay output, got:\n{diagnostic}"
-    );
-}
-
-#[test]
-fn final_replay_output_reaches_an_installed_sink_live() {
+fn verbose_non_final_diagnostic_flows_through_the_sink_without_duplicating_notes() {
     use std::sync::{Arc, Mutex};
 
-    // Snapshot tests capture the final replay's draw/note lines through
-    // `with_output_override`; they must keep flowing to that sink as the
-    // body runs.
     let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let writer = lines.clone();
     let sink: crate::test_case::OutputSink =
         Arc::new(move |s: &str| writer.lock().unwrap().push(s.to_string()));
 
-    let result = crate::test_case::with_output_override(sink, || {
+    crate::test_case::with_output_override(sink, || {
+        run_case_capturing(false, crate::runner::Verbosity::Verbose, &mut |tc| {
+            tc.note("the noted line");
+            panic!("{}", "boom");
+        })
+    });
+
+    let lines = lines.lock().unwrap();
+    assert_eq!(
+        lines.iter().filter(|l| *l == "the noted line").count(),
+        1,
+        "the live note must appear exactly once (not re-embedded in the \
+         diagnostic), got {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("panicked at")),
+        "the non-final diagnostic must flow through the sink in verbose \
+         mode, got {lines:?}"
+    );
+    assert_eq!(
+        lines.iter().any(|l| l.contains("stack backtrace")),
+        backtraces_enabled(),
+        "the verbose diagnostic should carry a backtrace exactly when \
+         enabled, got {lines:?}"
+    );
+}
+
+#[test]
+fn final_replay_sink_receives_output_but_not_the_diagnostic() {
+    use std::sync::{Arc, Mutex};
+
+    // Snapshot tests capture the final replay's draw/note lines through
+    // `with_output_override`; they must keep flowing to that sink as the
+    // body runs — and the diagnostic must stay out of the sink (it prints
+    // to stderr), or snapshots would gain nondeterministic panic locations.
+    let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let writer = lines.clone();
+    let sink: crate::test_case::OutputSink =
+        Arc::new(move |s: &str| writer.lock().unwrap().push(s.to_string()));
+
+    crate::test_case::with_output_override(sink, || {
         run_case_capturing(true, crate::runner::Verbosity::Normal, &mut |tc| {
             tc.note("the noted line");
             panic!("{}", "boom");
@@ -634,11 +667,6 @@ fn final_replay_output_reaches_an_installed_sink_live() {
     });
 
     assert_eq!(lines.lock().unwrap().as_slice(), ["the noted line"]);
-    let diagnostic = interesting_diagnostic(&result);
-    assert!(
-        !diagnostic.contains("the noted line"),
-        "the sink line must not also land in the diagnostic, got:\n{diagnostic}"
-    );
 }
 
 #[test]

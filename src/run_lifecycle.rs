@@ -212,11 +212,14 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 ///
 /// Reports the outcome back through the [`DataSource`] interface via
 /// [`TestCase::mark_complete`]: that is the channel for per-test-case
-/// results.  The native engine reads it back off the data-source handle;
-/// nothing looks at the return value of this function for the outcome.
+/// results.  The native engine reads it back off the data-source handle.
 /// On the `Interesting` path the panic site is captured as a
 /// `file:line:col` string and stored on the [`Failure`] so per-origin
-/// shrinking can key on it.
+/// shrinking can key on it, and the rendered diagnostic block (panic
+/// location, message, backtrace) is printed here, at the moment the panic
+/// is caught — to stderr on a non-quiet final replay (right after the live
+/// draw/note lines, which is what keeps each failure one block), or
+/// through the verbose output sink for a non-final case in verbose mode.
 pub(crate) fn run_test_case(
     data_source: Box<dyn DataSource + Send + Sync>,
     test_fn: &mut dyn FnMut(TestCase),
@@ -257,9 +260,21 @@ pub(crate) fn run_test_case(
 
             let diagnostic =
                 render_diagnostic(&thread_name, &thread_id, &location, &msg, &backtrace);
+            if is_final && !quiet {
+                // The final replay's draws printed live just above; printing
+                // the diagnostic immediately after keeps the failure one
+                // contiguous block on stderr. The reporter only adds the
+                // reproducer line.
+                eprint!("{diagnostic}");
+            } else if verbose {
+                // The sink interface takes whole lines; `diagnostic` ends
+                // with a newline, so drop the trailing empty piece.
+                for line in diagnostic.trim_end_matches('\n').split('\n') {
+                    crate::test_case::emit_verbose_line(line);
+                }
+            }
             TestCaseResult::Interesting(Failure {
                 panic_message: msg,
-                diagnostic,
                 origin: format!("Panic at {}", location),
                 // `replay_final` attaches the blob on a final replay.
                 reproduce_blob: None,
@@ -268,7 +283,7 @@ pub(crate) fn run_test_case(
     };
 
     if verbose {
-        emit_verbose_test_case_outcome(&tc_result, is_final);
+        emit_verbose_stop_reason(&tc_result);
     }
 
     tc.mark_complete(&tc_result);
@@ -276,9 +291,8 @@ pub(crate) fn run_test_case(
     tc_result
 }
 
-/// Print a per-test-case line describing why this test case stopped, and
-/// — for genuine panics on non-final test cases — the full panic diagnostic.
-fn emit_verbose_test_case_outcome(result: &TestCaseResult, is_final: bool) {
+/// Print a per-test-case line describing why this test case stopped.
+fn emit_verbose_stop_reason(result: &TestCaseResult) {
     match result {
         TestCaseResult::Invalid => {
             crate::test_case::emit_verbose_line("Test case stopped: failed assumption");
@@ -286,22 +300,13 @@ fn emit_verbose_test_case_outcome(result: &TestCaseResult, is_final: bool) {
         TestCaseResult::Overrun => {
             crate::test_case::emit_verbose_line("Test case stopped: out of data");
         }
-        TestCaseResult::Interesting(failure) if !is_final => {
-            // `diagnostic` already ends with a newline, so use `eprint!`-
-            // style emission (no extra newline). The sink interface only
-            // takes whole lines, so split on '\n' and drop the trailing
-            // empty piece if any.
-            for line in failure.diagnostic.trim_end_matches('\n').split('\n') {
-                crate::test_case::emit_verbose_line(line);
-            }
-        }
         TestCaseResult::Valid | TestCaseResult::Interesting(_) => {}
     }
 }
 
-/// Render the per-failure diagnostic block previously emitted inline.
-/// Mirrors the default Rust panic-handler output so each row in the
-/// multi-failure report looks like a stand-alone test failure.
+/// Render a failure's diagnostic block. Mirrors the default Rust
+/// panic-handler output so each failure in the report looks like a
+/// stand-alone test failure.
 fn render_diagnostic(
     thread_name: &str,
     thread_id: &str,
@@ -422,17 +427,20 @@ pub(crate) fn drive<R, F>(
         // panic.
         Ok(Exploration::Passed) => panic!("Property test failed: unknown"),
         // A failure with no counterexample to replay (`Mode::SingleTestCase`
-        // ran its one test case as its own final): report it directly.
+        // ran its one test case as its own final, printing its diagnostic
+        // at the catch site): report it directly.
         Ok(Exploration::Failed(failure)) => {
-            report_failure(&failure, settings, quiet);
+            if let Some(line) = reproducer_line(settings, &failure) {
+                eprintln!("{line}");
+            }
             panic!("Property test failed: {}", failure.panic_message);
         }
         Ok(Exploration::Counterexamples(counterexamples)) => counterexamples,
     };
 
-    // Replay each counterexample with `is_final = true`, reporting as we
-    // go: the replay prints its draws live and its diagnostic is printed
-    // the moment it returns, so each failure reads as one block. The count
+    // Replay each counterexample with `is_final = true`. Each replay prints
+    // its draws live and its diagnostic at the catch site, so each failure
+    // reads as one block; only the reproducer line is added here. The count
     // headline has to be eprinted before the replays — the closing
     // `panic!`'s message is only rendered by the panic hook, after
     // everything else.
@@ -455,7 +463,9 @@ pub(crate) fn drive<R, F>(
             Ok(failure) => failure,
             Err(error) => panic!("{error}"),
         };
-        report_failure(&failure, settings, quiet);
+        if let Some(line) = reproducer_line(settings, &failure) {
+            eprintln!("{line}");
+        }
         reported.push(failure);
     }
 
@@ -471,17 +481,6 @@ pub(crate) fn drive<R, F>(
             "Property-based test failed with {} distinct failures.",
             many.len()
         ),
-    }
-}
-
-/// Print one failure's diagnostic block (unless quiet) and its reproducer
-/// line (when `print_blob` is set and the failure carries a blob).
-fn report_failure(failure: &Failure, settings: &Settings, quiet: bool) {
-    if !quiet {
-        eprint!("{}", failure.diagnostic);
-    }
-    if let Some(line) = reproducer_line(settings, failure) {
-        eprintln!("{line}");
     }
 }
 

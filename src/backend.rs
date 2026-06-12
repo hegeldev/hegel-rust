@@ -94,16 +94,16 @@ pub trait DataSource: Send + Sync {
 }
 
 /// A single failing test case discovered by a [`TestRunner`].
+///
+/// This is data about the failure, not its presentation: the rendered
+/// diagnostic block (panic location, message, backtrace) is printed by the
+/// lifecycle at the moment the panic is caught and never travels with the
+/// failure.
 #[derive(Debug, Clone)]
 pub struct Failure {
     /// The raw panic message from the failing test (the string passed to `panic!`).
     /// Used as-is for the legacy single-failure outer panic message.
     pub panic_message: String,
-    /// Pre-rendered multi-line diagnostic — `thread '...' panicked at file:line:`
-    /// followed by the panic message and (when captured) the stack backtrace.
-    /// The counterexample's draw/note lines are not part of it; they print
-    /// live during the final replay.
-    pub diagnostic: String,
     /// Opaque per-bug origin tag — currently `"Panic at file:line:col"` from
     /// the captured panic site (with `<unknown>` for the location when
     /// `take_panic_info` returns nothing).  Passed through

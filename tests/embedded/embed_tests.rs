@@ -55,7 +55,6 @@ fn run_native_replays_persisted_failure_on_second_run() {
                     first_failures.lock().unwrap().push(n);
                     ds.mark_complete(&TestCaseResult::Interesting(Failure {
                         panic_message: "n >= 1_000_000".to_string(),
-                        diagnostic: "n >= 1_000_000\n".to_string(),
                         origin: "n >= 1_000_000".to_string(),
                         reproduce_blob: None,
                     }));
@@ -94,7 +93,6 @@ fn run_native_replays_persisted_failure_on_second_run() {
             if n >= 1_000_000 {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     panic_message: "n >= 1_000_000".to_string(),
-                    diagnostic: "n >= 1_000_000\n".to_string(),
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
                 }));
@@ -150,7 +148,6 @@ fn run_native_shrinks_predicate_boundary_seed_sweep() {
                     *last.lock().unwrap() = Some(n);
                     ds.mark_complete(&TestCaseResult::Interesting(Failure {
                         panic_message: "n >= 1_000_000".to_string(),
-                        diagnostic: "n >= 1_000_000\n".to_string(),
                         origin: "n >= 1_000_000".to_string(),
                         reproduce_blob: None,
                     }));
@@ -198,7 +195,6 @@ fn run_native_shrinks_predicate_boundary_to_exact_value() {
                 *last_failure.lock().unwrap() = Some(n);
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     panic_message: "n >= 1_000_000".to_string(),
-                    diagnostic: "n >= 1_000_000\n".to_string(),
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
                 }));
@@ -255,7 +251,6 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
                 *last.lock().unwrap() = Some(n);
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     panic_message: "n >= 1_000_000".to_string(),
-                    diagnostic: "n >= 1_000_000\n".to_string(),
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
                 }));
@@ -282,7 +277,6 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
             if predicate(n) {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     panic_message: "n >= 1_000_000".to_string(),
-                    diagnostic: "n >= 1_000_000\n".to_string(),
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
                 }));
@@ -327,7 +321,6 @@ fn mark_large_interesting(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
             if n >= 1_000_000 {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     panic_message: "n >= 1_000_000".to_string(),
-                    diagnostic: "n >= 1_000_000\n".to_string(),
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
                 }));
