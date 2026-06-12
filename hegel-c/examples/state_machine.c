@@ -89,7 +89,7 @@ int main(void) {
     }
 
     const hegel_run_result_t *result = hegel_run_result(run);
-    bool passed = hegel_run_result_passed(result);
+    bool passed = hegel_run_result_status(result) == HEGEL_RUN_STATUS_PASSED;
 
     /* Every rule should have been selected at least once across the run —
      * swarm testing restricts the mix per test case, not globally. */
