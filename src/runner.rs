@@ -434,6 +434,7 @@ where
             crate::run_lifecycle::drive_single(
                 self.test_fn,
                 &self.settings,
+                self.database_key.as_deref(),
                 self.test_location.as_ref(),
             );
             return;

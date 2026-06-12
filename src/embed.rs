@@ -47,7 +47,9 @@ pub fn run_native(
     // final from the start.
     if settings.mode == crate::runner::Mode::SingleTestCase {
         let failure =
-            crate::native::test_runner::run_single_case(settings, &mut |ds| run_case(ds, true));
+            crate::native::test_runner::run_single_case(settings, database_key, &mut |ds| {
+                run_case(ds, true)
+            });
         return Ok(TestRunResult {
             failures: failure.into_iter().collect(),
         });

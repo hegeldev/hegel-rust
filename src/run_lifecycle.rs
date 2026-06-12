@@ -22,7 +22,8 @@ use std::sync::Once;
 use crate::antithesis::TestLocation;
 use crate::backend::{DataSource, Exploration, Failure, TestCaseResult, TestRunner};
 use crate::control::{
-    AssumeFailed, InvalidArgument, LoopDone, StopTest, currently_in_test_context, with_test_context,
+    AssumeFailed, InternalError, InvalidArgument, LoopDone, StopTest, currently_in_test_context,
+    with_test_context,
 };
 use crate::runner::{Mode, Settings};
 use crate::test_case::TestCase;
@@ -72,6 +73,11 @@ pub(crate) fn init_panic_hook() {
 
             let thread = std::thread::current();
             let thread_name = thread.name().unwrap_or("<unnamed>").to_string();
+            // `ThreadId` only exposes its integer via the unstable
+            // `as_u64`, so scrape the `Debug` form ("ThreadId(N)"). That
+            // format is not guaranteed; if it changes, the diagnostic
+            // header degrades cosmetically and the report-layout tests'
+            // `(\d+)` patterns will flag it on the toolchain bump.
             let thread_id = format!("{:?}", thread.id())
                 .trim_start_matches("ThreadId(")
                 .trim_end_matches(')')
@@ -172,14 +178,16 @@ fn filter_short_backtrace(backtrace_str: &str) -> String {
     result.join("\n")
 }
 
-/// Placeholder thread/location/backtrace tuple for the (defensive) case
-/// where the cross-backend panic hook didn't capture info for a panic —
-/// e.g. if [`init_panic_hook`] wasn't called before the test ran, or
-/// if the panic originated outside the `with_test_context` window.
-/// `drive` always installs the hook before calling [`run_test_case`],
-/// so this fallback isn't reached from the production path; isolating
-/// it lets us cover the placeholder construction without a contrived
-/// hook-bypass setup.
+/// Placeholder thread/location/backtrace tuple used when the panic hook
+/// captured nothing for a caught panic. This *is* reached in production:
+/// a genuine panic on a spawned thread lands its capture in that thread's
+/// `LAST_PANIC_INFO`, and the `join().unwrap()` that propagates it uses
+/// `resume_unwind`, which skips the hook on the joining thread — so the
+/// lifecycle finds nothing here. One consequence is that every such
+/// failure shares the origin `"Panic at <unknown>"`, merging distinct
+/// threaded bugs into one counterexample; fixing that needs cross-thread
+/// capture, which is deferred until there is structured concurrency
+/// support to hang it on.
 pub(crate) fn unknown_panic_info() -> (String, String, String, Backtrace) {
     (
         "<unknown>".to_string(),
@@ -256,6 +264,13 @@ pub(crate) fn run_test_case(
             // `Interesting` and shrinking it.
             let e = match e.downcast::<InvalidArgument>() {
                 Ok(invalid) => std::panic::resume_unwind(Box::new(invalid.0)),
+                Err(e) => e,
+            };
+            // A violated internal invariant is a bug in Hegel: abort the
+            // run with the bug-report message rather than spending the
+            // shrink budget "minimizing" a framework bug.
+            let e = match e.downcast::<InternalError>() {
+                Ok(internal) => std::panic::resume_unwind(Box::new(internal.0)),
                 Err(e) => e,
             };
             let msg = panic_message(&e);
@@ -347,13 +362,10 @@ fn render_diagnostic(
 /// or `None` when nothing should be printed.
 ///
 /// `Some` only when [`Settings::print_blob`](crate::Settings::print_blob) is
-/// enabled *and* the failure carries a reproduce blob. A genuine property
-/// failure on the native backend always has a blob; `None` is reached for
-/// health-check failures (`FilterTooMuch` / `TooSlow` / flaky — no
-/// counterexample to encode) and for the backend (no blob at all), in
-/// which case there is simply nothing to print.
-/// todo: indicate a way to signal a backend failure so we unconditionally print
-/// failure blobs when that happens.
+/// enabled *and* the failure carries a reproduce blob. A replayed
+/// counterexample always has one; a blobless failure (e.g.
+/// `Mode::SingleTestCase`, whose one random case has no shrunk choice
+/// sequence to encode) prints nothing.
 fn reproducer_line(settings: &Settings, failure: &crate::backend::Failure) -> Option<String> {
     if !settings.print_blob {
         return None;
@@ -386,6 +398,7 @@ pub(crate) fn drive<R, F>(
     F: FnMut(TestCase),
 {
     init_panic_hook();
+    require_antithesis_feature();
     let mut test_fn = test_fn;
     let mode = settings.mode;
     let verbosity = settings.verbosity;
@@ -398,7 +411,7 @@ pub(crate) fn drive<R, F>(
     };
 
     let test_failed = !matches!(exploration, Ok(Exploration::Passed));
-    report_to_antithesis(test_failed, test_location);
+    emit_antithesis_assertion(test_failed, test_location);
 
     if !test_failed {
         return;
@@ -482,25 +495,31 @@ pub(crate) fn drive<R, F>(
 /// its diagnostic printed at the catch site. A single test case is not a
 /// property-test run — there is no exploration, shrinking, or replay — so
 /// it bypasses the [`TestRunner`] machinery entirely.
-pub(crate) fn drive_single<F>(test_fn: F, settings: &Settings, test_location: Option<&TestLocation>)
-where
+pub(crate) fn drive_single<F>(
+    test_fn: F,
+    settings: &Settings,
+    database_key: Option<&str>,
+    test_location: Option<&TestLocation>,
+) where
     F: FnMut(TestCase),
 {
     init_panic_hook();
+    require_antithesis_feature();
     let mut test_fn = test_fn;
     let last_payload: RefCell<Option<Box<dyn std::any::Any + Send>>> = RefCell::new(None);
-    let failure = crate::native::test_runner::run_single_case(settings, &mut |backend| {
-        let (_, payload) = run_test_case(
-            backend,
-            &mut test_fn,
-            true,
-            settings.mode,
-            settings.verbosity,
-        );
-        *last_payload.borrow_mut() = payload;
-    });
+    let failure =
+        crate::native::test_runner::run_single_case(settings, database_key, &mut |backend| {
+            let (_, payload) = run_test_case(
+                backend,
+                &mut test_fn,
+                true,
+                settings.mode,
+                settings.verbosity,
+            );
+            *last_payload.borrow_mut() = payload;
+        });
 
-    report_to_antithesis(failure.is_some(), test_location);
+    emit_antithesis_assertion(failure.is_some(), test_location);
 
     // No reproducer line: a single random test case has no shrunk choice
     // sequence to encode, so its failure never carries a blob. The run ends
@@ -515,14 +534,17 @@ where
     }
 }
 
-/// Report the run's verdict to Antithesis (when running under it), and
-/// fail fast if the integration is required but not compiled in.
-fn report_to_antithesis(test_failed: bool, test_location: Option<&TestLocation>) {
+/// Fail fast — before any test case runs — when running under Antithesis
+/// without the `antithesis` feature compiled in.
+fn require_antithesis_feature() {
     crate::antithesis::require_antithesis_feature(
         crate::antithesis::is_running_in_antithesis(),
         cfg!(feature = "antithesis"),
     );
+}
 
+/// Report the run's verdict to Antithesis (when running under it).
+fn emit_antithesis_assertion(test_failed: bool, test_location: Option<&TestLocation>) {
     #[cfg(feature = "antithesis")]
     // nocov start
     if crate::antithesis::is_running_in_antithesis() {

@@ -17,6 +17,7 @@ use crate::native::core::{ChoiceKind, ChoiceValue, StringChoice};
 use crate::unicodedata;
 
 use super::{ShrinkResult, Shrinker, bin_search_down_r};
+use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_ne};
 
 impl<'a> Shrinker<'a> {
     pub(super) fn shrink_strings(&mut self) -> ShrinkResult<()> {
@@ -360,7 +361,7 @@ impl<'a> Shrinker<'a> {
                         let new_cp = kind_i
                             .key_to_codepoint(new_key as u32)
                             .expect("key < original_key < alpha_size");
-                        debug_assert_ne!(new_cp, ch);
+                        hegel_internal_debug_assert_ne!(new_cp, ch);
                         let new_i: Vec<u32> = val_i
                             .iter()
                             .map(|&c| if c == ch { new_cp } else { c })
@@ -428,7 +429,7 @@ impl<'a> Shrinker<'a> {
                     // the alphabet check is the only validate gate for
                     // single-char replacements at fixed-length —
                     // therefore the candidate is always valid.
-                    debug_assert!(kind.validate(&new_value));
+                    hegel_internal_debug_assert!(kind.validate(&new_value));
                     if self.replace(&HashMap::from([(i, ChoiceValue::String(new_value))]))? {
                         break;
                     }

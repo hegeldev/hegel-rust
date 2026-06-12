@@ -50,7 +50,10 @@ check-nocov-style:
 check-test-modules:
     scripts/check-test-modules.py
 
-check-lint: check-format check-clippy check-nocov-style check-test-modules
+check-internal-asserts:
+    scripts/check-internal-asserts.py
+
+check-lint: check-format check-clippy check-nocov-style check-test-modules check-internal-asserts
 
 check-coverage:
     # requires cargo-llvm-cov and llvm-tools-preview

@@ -32,11 +32,138 @@ pub(crate) struct LoopDone;
 /// the carried message instead of shrinking it as a counterexample.
 pub(crate) struct InvalidArgument(pub(crate) String);
 
+/// A violated internal invariant: a bug in Hegel itself, detected inside a
+/// running test body. Aborts the run with a bug-report message — it must
+/// never be classified as a counterexample and shrunk. Raised by the
+/// [`hegel_internal_assert!`]-family macros.
+pub(crate) struct InternalError(pub(crate) String);
+
 /// Raise a control-flow unwind carrying `payload`. See the module note
 /// above for why this is `resume_unwind`, not `panic!`.
 pub(crate) fn raise_control<T: std::any::Any + Send>(payload: T) -> ! {
     std::panic::resume_unwind(Box::new(payload))
 }
+
+/// Raise an internal-error unwind (a bug in Hegel) carrying `message`,
+/// with the caller's location and bug-report framing attached. Outside a
+/// test context there is no lifecycle to catch a payload, so the message
+/// is panicked directly.
+#[track_caller]
+pub(crate) fn raise_internal_error(message: std::fmt::Arguments<'_>) -> ! {
+    let location = std::panic::Location::caller();
+    let full = format!(
+        "Internal error in hegel at {location}: {message}. This is a bug in hegel \
+         itself; please report it at https://github.com/hegeldev/hegel-rust/issues"
+    );
+    if currently_in_test_context() {
+        raise_control(InternalError(full));
+    } else {
+        panic!("{full}");
+    }
+}
+
+/// Assert an internal invariant of Hegel itself. Use in place of `assert!`
+/// everywhere under `src/` (enforced by `scripts/check-internal-asserts.py`):
+/// a plain `assert!` that fires inside a running test body unwinds like a
+/// test failure and gets shrunk as a counterexample, while a violated
+/// internal invariant must abort the run with a bug-report message.
+macro_rules! hegel_internal_assert {
+    // `if $cond {} else` rather than `if !$cond`: identical semantics
+    // (NaN-involving comparisons fail the assertion, as with `assert!`),
+    // without tripping clippy's negated-partial-ord lint at expansion
+    // sites that compare floats.
+    ($cond:expr $(,)?) => {
+        if $cond {
+        } else {
+            $crate::control::raise_internal_error(::std::format_args!(
+                "internal assertion failed: {}",
+                ::std::stringify!($cond)
+            ));
+        }
+    };
+    ($cond:expr, $($arg:tt)+) => {
+        if $cond {
+        } else {
+            $crate::control::raise_internal_error(::std::format_args!($($arg)+));
+        }
+    };
+}
+pub(crate) use hegel_internal_assert;
+
+/// [`hegel_internal_assert!`] for equality, with both values in the message.
+macro_rules! hegel_internal_assert_eq {
+    ($left:expr, $right:expr $(,)?) => {
+        match (&$left, &$right) {
+            (left, right) => $crate::control::hegel_internal_assert!(
+                left == right,
+                "internal assertion failed: {} == {} (left: {:?}, right: {:?})",
+                ::std::stringify!($left),
+                ::std::stringify!($right),
+                left,
+                right
+            ),
+        }
+    };
+}
+pub(crate) use hegel_internal_assert_eq;
+
+/// [`hegel_internal_assert!`] for inequality, with both values in the message.
+macro_rules! hegel_internal_assert_ne {
+    ($left:expr, $right:expr $(,)?) => {
+        match (&$left, &$right) {
+            (left, right) => $crate::control::hegel_internal_assert!(
+                left != right,
+                "internal assertion failed: {} != {} (both: {:?})",
+                ::std::stringify!($left),
+                ::std::stringify!($right),
+                left
+            ),
+        }
+    };
+}
+pub(crate) use hegel_internal_assert_ne;
+
+/// [`hegel_internal_assert!`] with `debug_assert!`'s cost model: compiled
+/// out unless `debug_assertions` are enabled. For engine hot paths.
+macro_rules! hegel_internal_debug_assert {
+    ($($arg:tt)+) => {
+        if ::std::cfg!(debug_assertions) {
+            $crate::control::hegel_internal_assert!($($arg)+);
+        }
+    };
+}
+pub(crate) use hegel_internal_debug_assert;
+
+/// [`hegel_internal_assert_eq!`] with `debug_assert!`'s cost model.
+macro_rules! hegel_internal_debug_assert_eq {
+    ($($arg:tt)+) => {
+        if ::std::cfg!(debug_assertions) {
+            $crate::control::hegel_internal_assert_eq!($($arg)+);
+        }
+    };
+}
+pub(crate) use hegel_internal_debug_assert_eq;
+
+/// [`hegel_internal_assert_ne!`] with `debug_assert!`'s cost model.
+macro_rules! hegel_internal_debug_assert_ne {
+    ($($arg:tt)+) => {
+        if ::std::cfg!(debug_assertions) {
+            $crate::control::hegel_internal_assert_ne!($($arg)+);
+        }
+    };
+}
+pub(crate) use hegel_internal_debug_assert_ne;
+
+/// Raise an internal error (a bug in Hegel) directly, formatting like
+/// [`format!`]. The non-assertion counterpart of
+/// [`hegel_internal_assert!`], for invariant violations detected by
+/// control flow rather than a boolean check.
+macro_rules! hegel_internal_error {
+    ($($arg:tt)+) => {
+        $crate::control::raise_internal_error(::std::format_args!($($arg)+))
+    };
+}
+pub(crate) use hegel_internal_error;
 
 thread_local! {
     static IN_TEST_CONTEXT: Cell<bool> = const { Cell::new(false) };
@@ -73,3 +200,7 @@ pub(crate) fn with_test_context<R>(f: impl FnOnce() -> R) -> R {
 pub fn currently_in_test_context() -> bool {
     IN_TEST_CONTEXT.get()
 }
+
+#[cfg(test)]
+#[path = "../tests/embedded/control_tests.rs"]
+mod tests;

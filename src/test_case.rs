@@ -1,5 +1,8 @@
 pub use crate::backend::{DataSource, DataSourceError};
-use crate::control::{AssumeFailed, InvalidArgument, LoopDone, StopTest, raise_control};
+use crate::control::{
+    AssumeFailed, InternalError, InvalidArgument, LoopDone, StopTest, hegel_internal_assert,
+    hegel_internal_error, raise_control,
+};
 use crate::generators::Generator;
 use crate::runner::Mode;
 use ciborium::Value;
@@ -547,7 +550,8 @@ impl TestCase {
                 // counterexample path below adds.
                 Err(e)
                     if e.downcast_ref::<StopTest>().is_some()
-                        || e.downcast_ref::<InvalidArgument>().is_some() =>
+                        || e.downcast_ref::<InvalidArgument>().is_some()
+                        || e.downcast_ref::<InternalError>().is_some() =>
                 {
                     resume_unwind(e);
                 }
@@ -588,11 +592,12 @@ impl TestCase {
 
             match draw_state.named_draw_repeatable.get(name) {
                 Some(&prev) if prev != repeatable => {
-                    panic!(
-                        "__draw_named: name {:?} used with inconsistent repeatable flag (was {}, now {}). \
-                        If you have not called __draw_named deliberately yourself, this is likely a bug in \
-                        hegel. Please file a bug report at https://github.com/hegeldev/hegel-rust/issues",
-                        name, prev, repeatable
+                    hegel_internal_error!(
+                        "__draw_named: name {:?} used with inconsistent repeatable flag \
+                         (was {}, now {})",
+                        name,
+                        prev,
+                        repeatable
                     );
                 }
                 Some(_) => {}
@@ -619,9 +624,8 @@ impl TestCase {
             };
 
             if !repeatable && current_count > 1 {
-                panic!(
-                    "__draw_named: name {:?} used more than once but repeatable is false. \
-                    This is almost certainly a bug in hegel - please report it at https://github.com/hegeldev/hegel-rust/issues",
+                hegel_internal_error!(
+                    "__draw_named: name {:?} used more than once but repeatable is false",
                     name
                 );
             }
@@ -689,7 +693,7 @@ impl TestCase {
         self.local.borrow_mut().span_depth += 1;
         if let Err(e) = self.with_data_source(|ds| ds.start_span(label)) {
             let mut local = self.local.borrow_mut();
-            assert!(local.span_depth > 0);
+            hegel_internal_assert!(local.span_depth > 0);
             local.span_depth -= 1;
             drop(local);
             panic_on_data_source_error(e);
@@ -700,7 +704,7 @@ impl TestCase {
     pub fn stop_span(&self, discard: bool) {
         {
             let mut local = self.local.borrow_mut();
-            assert!(local.span_depth > 0);
+            hegel_internal_assert!(local.span_depth > 0);
             local.span_depth -= 1;
         }
         if let Err(e) = self.with_data_source(|ds| ds.stop_span(discard)) {
@@ -730,7 +734,7 @@ pub fn generate_from_schema<T: serde::de::DeserializeOwned>(tc: &TestCase, schem
 pub fn deserialize_value<T: serde::de::DeserializeOwned>(raw: Value) -> T {
     let hv = value::HegelValue::from(raw.clone());
     value::from_hegel_value(hv).unwrap_or_else(|e| {
-        panic!("Failed to deserialize value: {}\nValue: {:?}", e, raw); // nocov
+        hegel_internal_error!("failed to deserialize value: {}\nValue: {:?}", e, raw); // nocov
     })
 }
 

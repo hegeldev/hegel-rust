@@ -98,3 +98,65 @@ fn my_test(tc: hegel::TestCase) {
         .expect_failure("antithesis")
         .cargo_test(&[]);
 }
+
+/// Running under Antithesis without the `antithesis` feature is a
+/// configuration error, and must fail *before* any test case runs — not
+/// after a full (potentially long) property run has completed.
+#[test]
+fn test_missing_antithesis_feature_fails_before_running_any_test_case() {
+    let output_dir = TempDir::new().unwrap();
+    let output_path = output_dir.path().to_str().unwrap().to_string();
+
+    let code = r#"
+use hegel::{Hegel, Settings};
+use hegel::generators as gs;
+
+fn main() {
+    Hegel::new(|tc| {
+        println!("BODY-RAN");
+        let _: bool = tc.draw(gs::booleans());
+    })
+    .settings(Settings::new().database(None))
+    .run();
+}
+"#;
+
+    // No `.feature("antithesis")`: the binary is built without the feature,
+    // while the env says we are inside Antithesis.
+    let output = TempRustProject::new()
+        .main_file(code)
+        .invoke()
+        .env("ANTITHESIS_OUTPUT_DIR", &output_path)
+        .expect_failure("requires the `antithesis` feature")
+        .cargo_run(&[]);
+    assert!(
+        !output.stdout.contains("BODY-RAN"),
+        "the configuration error must fire before any test case runs, got:\n{}",
+        output.stdout
+    );
+}
+
+/// `ANTITHESIS_OUTPUT_DIR` pointing at a nonexistent path is a launch
+/// configuration error, reported as a plain panic.
+#[test]
+fn test_nonexistent_antithesis_output_dir_panics() {
+    let code = r#"
+use hegel::{Hegel, Settings};
+use hegel::generators as gs;
+
+fn main() {
+    Hegel::new(|tc| {
+        let _: bool = tc.draw(gs::booleans());
+    })
+    .settings(Settings::new().database(None))
+    .run();
+}
+"#;
+
+    TempRustProject::new()
+        .main_file(code)
+        .invoke()
+        .env("ANTITHESIS_OUTPUT_DIR", "/nonexistent/antithesis-output")
+        .expect_failure("to exist when running inside of Antithesis")
+        .cargo_run(&[]);
+}

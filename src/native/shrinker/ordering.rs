@@ -19,6 +19,7 @@
 //! otherwise.
 
 use super::{ShrinkResult, find_integer_r};
+use crate::control::hegel_internal_debug_assert;
 
 /// Run the ordering shrinker over a permutation of `[0..n)`.
 ///
@@ -161,7 +162,7 @@ where
     // `a <= centre < b` allows the boundary case `a == centre`
     // (sort only the right side, with `split = 0`). Callers guarantee
     // these conditions; a debug_assert documents the invariant.
-    debug_assert!(a <= centre && centre < b && b <= snapshot.len());
+    hegel_internal_debug_assert!(a <= centre && centre < b && b <= snapshot.len());
     let split = centre - a;
     let mut sides: Vec<usize> = snapshot[a..centre].to_vec();
     sides.extend_from_slice(&snapshot[centre + 1..b]);

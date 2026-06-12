@@ -1,5 +1,6 @@
 use super::{BasicGenerator, BoxedGenerator, Collection, Generator, TestCase, labels};
 use crate::cbor_utils::{cbor_map, map_insert};
+use crate::control::{hegel_internal_assert, hegel_internal_assert_eq};
 use crate::test_case::invalid_argument;
 use ciborium::Value;
 use std::collections::{HashMap, HashSet};
@@ -179,7 +180,7 @@ where
                 }
             }
             // nocov start
-            assert!(set.len() >= self.min_size);
+            hegel_internal_assert!(set.len() >= self.min_size);
             tc.stop_span(false);
             set
             // nocov end
@@ -282,7 +283,7 @@ where
                 }
             }
             // nocov start
-            assert!(map.len() >= self.min_size);
+            hegel_internal_assert!(map.len() >= self.min_size);
             tc.stop_span(false);
             map
             // nocov end
@@ -557,7 +558,7 @@ impl<G: Generator<T> + Send + Sync, T, const N: usize> Generator<[T; N]>
                 Value::Array(arr) => arr,
                 _ => panic!("Expected array from tuple schema, got {:?}", raw), // nocov
             };
-            assert_eq!(arr.len(), N);
+            hegel_internal_assert_eq!(arr.len(), N);
             let mut iter = arr.into_iter();
             std::array::from_fn(|_| basic.parse_raw(iter.next().unwrap()))
         }))

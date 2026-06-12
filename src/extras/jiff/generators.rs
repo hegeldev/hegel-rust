@@ -7,6 +7,7 @@ use jiff::{SignedDuration, Span, Timestamp, Zoned};
 
 use crate::cbor_utils::{cbor_array, cbor_map};
 use crate::generators::{BasicGenerator, BoxedGenerator, Generator, deserialize_value};
+use crate::test_case::invalid_argument;
 
 /// Generator for [`jiff::civil::Date`] values. Created by [`dates()`].
 pub struct DateGenerator;
@@ -114,10 +115,9 @@ impl DateTimeGenerator {
 
 impl Generator<DateTime> for DateTimeGenerator {
     fn as_basic(&self) -> Option<BasicGenerator<'_, DateTime>> {
-        assert!(
-            self.min_value <= self.max_value,
-            "Cannot have max_value < min_value"
-        );
+        if self.min_value > self.max_value {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
         let schema = cbor_map! {
             "type" => "integer",
             "min_value" => datetime_to_nanos(self.min_value),
@@ -174,10 +174,9 @@ impl TimestampGenerator {
     }
 
     fn build_schema(&self) -> Value {
-        assert!(
-            self.min_value <= self.max_value,
-            "Cannot have max_value < min_value"
-        );
+        if self.min_value > self.max_value {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
         cbor_map! {
             "type" => "integer",
             "min_value" => self.min_value.as_nanosecond(),
@@ -242,14 +241,12 @@ impl SpanGenerator {
     }
 
     fn build_schema(&self) -> Value {
-        assert!(
-            self.min_nanos <= self.max_nanos,
-            "Cannot have max_nanoseconds < min_nanoseconds"
-        );
-        assert!(
-            self.min_nanos >= -SPAN_NANOS_LIMIT,
-            "min_nanoseconds must be >= -i64::MAX (the Span nanosecond limit)"
-        );
+        if self.min_nanos > self.max_nanos {
+            invalid_argument!("Cannot have max_nanoseconds < min_nanoseconds");
+        }
+        if self.min_nanos < -SPAN_NANOS_LIMIT {
+            invalid_argument!("min_nanoseconds must be >= -i64::MAX (the Span nanosecond limit)");
+        }
         cbor_map! {
             "type" => "integer",
             "min_value" => self.min_nanos,
@@ -316,10 +313,9 @@ impl SignedDurationGenerator {
     }
 
     fn build_schema(&self) -> Value {
-        assert!(
-            self.min_value <= self.max_value,
-            "Cannot have max_value < min_value"
-        );
+        if self.min_value > self.max_value {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
         cbor_map! {
             "type" => "integer",
             "min_value" => self.min_value.as_nanos(),
@@ -383,10 +379,9 @@ impl OffsetGenerator {
     }
 
     fn build_schema(&self) -> Value {
-        assert!(
-            self.min_value.seconds() <= self.max_value.seconds(),
-            "Cannot have max_value < min_value"
-        );
+        if self.min_value.seconds() > self.max_value.seconds() {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
         cbor_map! {
             "type" => "integer",
             "min_value" => self.min_value.seconds(),

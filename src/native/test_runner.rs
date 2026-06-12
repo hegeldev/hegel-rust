@@ -224,6 +224,7 @@ impl TestRunner for ReproduceRunner {
 /// its own report).
 pub(crate) fn run_single_case(
     settings: &Settings,
+    database_key: Option<&str>,
     run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
 ) -> Option<Failure> {
     // Honour `settings.seed` / `settings.derandomize` here for the same
@@ -231,7 +232,9 @@ pub(crate) fn run_single_case(
     // a deterministic seed expecting `Mode::SingleTestCase` to replay
     // the same draws on every invocation. Without this, a `seed(Some(42))`
     // is silently ignored and each call produces fresh OS-random draws.
-    let mut rng = create_rng(settings, None);
+    // The database key seeds derandomized runs, so different tests draw
+    // different streams.
+    let mut rng = create_rng(settings, database_key);
     let ntc = NativeTestCase::new_random(rng.spawn());
     let (data_source, handle) = NativeDataSource::new(ntc);
     run_case(Box::new(data_source));

@@ -373,6 +373,7 @@ fn run_single_case_returns_the_failure() {
             .database(None)
             .mode(Mode::SingleTestCase)
             .verbosity(Verbosity::Quiet),
+        None,
         &mut |ds| {
             run_test_case(
                 ds,
@@ -399,6 +400,7 @@ fn run_single_case_returns_none_for_a_passing_case() {
             .database(None)
             .mode(Mode::SingleTestCase)
             .verbosity(Verbosity::Quiet),
+        None,
         &mut |ds| {
             run_test_case(
                 ds,
@@ -1086,4 +1088,40 @@ fn reuse_detects_nondeterministic_generator_across_replays() {
         .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
         .unwrap_or_default();
     assert!(msg.contains("non-deterministic"), "got: {msg}");
+}
+
+#[test]
+fn run_single_case_derandomize_is_keyed_by_test_identity() {
+    // Two different tests (database keys) running derandomized in
+    // `Mode::SingleTestCase` must not draw identical streams; the same key
+    // must replay the same stream.
+    crate::run_lifecycle::init_panic_hook();
+    let settings = Settings::new()
+        .database(None)
+        .derandomize(true)
+        .mode(Mode::SingleTestCase)
+        .verbosity(Verbosity::Quiet);
+    let draw_with_key = |key: Option<&str>| {
+        let mut drawn: Vec<u64> = Vec::new();
+        let mut test_fn = |tc: crate::TestCase| {
+            for _ in 0..4 {
+                drawn.push(tc.draw(crate::generators::integers::<u64>()));
+            }
+        };
+        run_single_case(&settings, key, &mut |ds| {
+            run_test_case(
+                ds,
+                &mut test_fn,
+                true,
+                Mode::SingleTestCase,
+                Verbosity::Quiet,
+            );
+        });
+        drawn
+    };
+    let a1 = draw_with_key(Some("test-a"));
+    let a2 = draw_with_key(Some("test-a"));
+    let b = draw_with_key(Some("test-b"));
+    assert_eq!(a1, a2, "the same key must replay the same draws");
+    assert_ne!(a1, b, "different keys must not share a derandomized stream");
 }

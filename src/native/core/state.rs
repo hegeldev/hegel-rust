@@ -14,6 +14,7 @@ use super::choices::{
 };
 use super::float_index::index_to_float;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
+use crate::control::{hegel_internal_assert, hegel_internal_debug_assert};
 use crate::native::bignum::{BigInt, BigUint, ToPrimitive, Zero};
 use crate::native::floats::{next_down, next_up};
 use crate::native::intervalsets::IntervalSet;
@@ -124,7 +125,7 @@ fn many_draw_length(rng: &mut EngineRng, min_size: usize, max_size: usize) -> us
     // saturates to `usize::MAX` via the float cast; the final `.min` clamps.
     let u: f64 = rng.random();
     let extra = (u.ln() / p_continue.ln()).floor();
-    assert!(extra >= 0.0);
+    hegel_internal_assert!(extra >= 0.0);
     min_size.saturating_add(extra as usize).min(max_size)
 }
 
@@ -513,7 +514,7 @@ pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<
             }
             slot -= 1;
         }
-        debug_assert!(want_ff && slot == 0);
+        hegel_internal_debug_assert!(want_ff && slot == 0);
         return vec![0xffu8];
     }
     let len = many_draw_length(rng, bc.min_size, bc.max_size);
@@ -689,7 +690,7 @@ pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Ve
                 }
                 slot -= 1;
             }
-            debug_assert!(want_two && slot == 0);
+            hegel_internal_debug_assert!(want_two && slot == 0);
             return vec![simplest_cp, simplest_cp];
         }
         // Walk the global pool again to find the `(idx - small_count)`-th
@@ -1230,7 +1231,7 @@ impl NativeTestCase {
     ) -> Result<T, EngineError> {
         let min_value = min_value.into();
         let max_value = max_value.into();
-        assert!(
+        hegel_internal_assert!(
             min_value <= max_value,
             "Invalid range [{min_value:?}, {max_value:?}]"
         );
@@ -1316,7 +1317,7 @@ impl NativeTestCase {
 
     /// Draw a bytes value with length in `[min_size, max_size]`.
     pub fn draw_bytes(&mut self, min_size: usize, max_size: usize) -> Result<Vec<u8>, EngineError> {
-        assert!(
+        hegel_internal_assert!(
             min_size <= max_size,
             "min_size ({min_size}) must be <= max_size ({max_size})"
         );
@@ -1355,8 +1356,8 @@ impl NativeTestCase {
         min_size: usize,
         max_size: usize,
     ) -> Result<String, EngineError> {
-        assert!(min_size <= max_size);
-        assert!(
+        hegel_internal_assert!(min_size <= max_size);
+        hegel_internal_assert!(
             !intervals.is_empty() || max_size == 0,
             "draw_string with empty alphabet must have max_size == 0"
         );
