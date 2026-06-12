@@ -11,6 +11,7 @@ use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceKind, ChoiceValue};
 
 use super::{ShrinkResult, ShrinkRun, Shrinker};
+use crate::control::hegel_internal_debug_assert;
 
 impl<'a> Shrinker<'a> {
     /// Coarse pre-shrink reductions that need their own phase because
@@ -80,7 +81,7 @@ impl<'a> Shrinker<'a> {
     fn try_lower_node_as_alternative(&mut self, i: usize, v: &BigInt) -> ShrinkResult<bool> {
         // Callers iterate `i < self.current_nodes.len()`, so this is a
         // documented precondition.
-        debug_assert!(i < self.current_nodes.len());
+        hegel_internal_debug_assert!(i < self.current_nodes.len());
         // First try the bare lowering.
         if self.replace_int(i, v)? {
             return Ok(true);

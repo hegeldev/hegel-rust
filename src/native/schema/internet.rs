@@ -12,6 +12,7 @@ use crate::native::intervalsets::IntervalSet;
 use ciborium::Value;
 
 use super::many_more;
+use crate::control::hegel_internal_debug_assert;
 
 /// The IANA top-level-domain list, vendored from
 /// `http://data.iana.org/TLD/tlds-alpha-by-domain.txt`. Same file Hypothesis
@@ -368,7 +369,7 @@ fn url_encode_fragment(ntc: &mut NativeTestCase, s: &str) -> Result<String, Engi
 /// `fragment_byte_intervals`), so the cast to `u8` is always exact.
 fn push_percent_encoded(out: &mut String, c: char) {
     let cp = c as u32;
-    debug_assert!(
+    hegel_internal_debug_assert!(
         cp <= 0xFF,
         "push_percent_encoded called with codepoint > 0xFF: {cp:#x}"
     );

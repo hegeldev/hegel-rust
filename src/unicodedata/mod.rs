@@ -16,6 +16,7 @@
 //! To refresh the vendored data, replace `src/unicodedata/UnicodeData.txt`
 //! and run `python scripts/generate_unicodedata_tables.py`.
 
+use crate::control::hegel_internal_assert;
 use std::sync::OnceLock;
 
 /// Unicode General Category.
@@ -187,7 +188,7 @@ fn nfd_bases() -> &'static [(u32, u32)] {
 /// `0..=0x10FFFF`. Codepoints outside that range panic, mirroring Python's
 /// `chr(cp)` which rejects `cp > 0x10FFFF`.
 pub fn general_category(cp: u32) -> Category {
-    assert!(cp <= 0x10FFFF, "codepoint {:#x} out of range", cp);
+    hegel_internal_assert!(cp <= 0x10FFFF, "codepoint {:#x} out of range", cp);
     let table = ranges();
     // Binary search for the first range with `end >= cp`. The table is
     // contiguous and sorted by `end`, so this uniquely identifies the run.

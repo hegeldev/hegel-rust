@@ -1159,3 +1159,19 @@ fn random_value_boolean_consumes_exactly_one_byte() {
     // Exactly one byte was consumed: the two RNGs are now in lockstep.
     assert_eq!(a.next_u64(), b.next_u64());
 }
+
+#[test]
+fn string_choice_simplest_on_empty_alphabet_is_an_internal_error() {
+    // The schema layer must reject empty alphabets before a `StringChoice`
+    // is built; reaching here with one is a hegel bug, surfaced as an
+    // internal-error unwind rather than a shrinkable failure.
+    let sc = string_choice(vec![], 0, 1);
+    let payload =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sc.simplest_codepoint()))
+            .unwrap_err();
+    // Outside a test context the internal error panics directly with its
+    // message (inside one it would unwind as an `InternalError` payload).
+    let msg = payload.downcast_ref::<String>().unwrap();
+    assert!(msg.contains("empty alphabet"), "{msg}");
+    assert!(msg.contains("bug in hegel"), "{msg}");
+}

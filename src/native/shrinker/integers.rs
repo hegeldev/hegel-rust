@@ -15,6 +15,7 @@ use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceValue};
 
 use super::{ShrinkResult, Shrinker, bin_search_down_big_r, find_integer_r};
+use crate::control::hegel_internal_debug_assert;
 
 /// The low `keep` bits of the non-negative `v`, i.e. `v mod 2^keep`.
 fn low_bits(v: &BigInt, keep: usize) -> BigInt {
@@ -630,7 +631,7 @@ impl<'a> Shrinker<'a> {
         for &i in &changed {
             // `changed` came from `update_change_tracking`, which only
             // populates indices < current_nodes.len().
-            debug_assert!(i < self.current_nodes.len());
+            hegel_internal_debug_assert!(i < self.current_nodes.len());
             let (target, v) = match (
                 self.current_nodes[i].kind.as_ref(),
                 &self.current_nodes[i].value,
@@ -659,7 +660,7 @@ impl<'a> Shrinker<'a> {
         // `offset > 0`: every entry in `distances` came from a `v != target`
         // node (the loop above skips equal entries), so all are strictly
         // positive.
-        debug_assert!(offset.sign() == Sign::Plus);
+        hegel_internal_debug_assert!(offset.sign() == Sign::Plus);
         // residual[k] = distance[k] - offset; the "common offset" portion is
         // what we'll try to drive toward zero.
         let residual: Vec<BigInt> = distances.iter().map(|d| d - &offset).collect();

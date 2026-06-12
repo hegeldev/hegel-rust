@@ -11,7 +11,7 @@
 //! that hands them each test case's raw [`crate::backend::DataSource`] and
 //! lets them drive it directly. That's what [`run_native`] is for.
 
-use crate::backend::{DataSource, TestRunResult, TestRunner};
+use crate::backend::{DataSource, RunError, TestRunResult, TestRunner, collect_failures};
 use crate::runner::{Settings, Verbosity};
 
 /// Drive the native test runner against a callback that receives the raw
@@ -31,15 +31,36 @@ use crate::runner::{Settings, Verbosity};
 /// data source rather than from the callback's return value.
 ///
 /// Returns the aggregated [`TestRunResult`] describing whether the run
-/// passed and listing any distinct failures the engine surfaced.
+/// passed and listing any distinct failures the engine surfaced: the
+/// exploration (generation + shrinking) runs first, then each discovered
+/// counterexample is replayed once with `is_final = true` and its reported
+/// failure folded into the result. `Err` is a [`RunError`] — a failure of
+/// the run itself (health check, nondeterminism) rather than of any test
+/// case; the embedding reports it through its own error channel.
 #[doc(hidden)]
 pub fn run_native(
     settings: &Settings,
     database_key: Option<&str>,
     mut run_case: impl FnMut(Box<dyn DataSource + Send + Sync>, bool),
-) -> TestRunResult {
+) -> Result<TestRunResult, RunError> {
+    // A single test case bypasses the TestRunner machinery: its one case is
+    // final from the start.
+    if settings.mode == crate::runner::Mode::SingleTestCase {
+        let failure =
+            crate::native::test_runner::run_single_case(settings, database_key, &mut |ds| {
+                run_case(ds, true)
+            });
+        return Ok(TestRunResult {
+            failures: failure.into_iter().collect(),
+        });
+    }
+
     let runner = crate::native::test_runner::NativeTestRunner;
-    runner.run(settings, database_key, &mut run_case)
+    let exploration = {
+        let mut explore_case = |ds: Box<dyn DataSource + Send + Sync>| run_case(ds, false);
+        runner.explore(settings, database_key, &mut explore_case)?
+    };
+    collect_failures(&runner, exploration, &mut |ds| run_case(ds, true))
 }
 
 /// Build a raw [`DataSource`] that replays the choice sequence encoded in a

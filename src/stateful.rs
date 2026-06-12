@@ -61,9 +61,10 @@
 //! ```
 
 use crate::TestCase;
+use crate::control::{AssumeFailed, StopTest, raise_control};
 use crate::generators::integers;
 use crate::runner::Mode;
-use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING, panic_on_data_source_error};
+use crate::test_case::panic_on_data_source_error;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -98,9 +99,7 @@ impl<T> Variables<T> {
             .with_data_source(|ds| ds.pool_generate(self.pool_id, consume))
         {
             Ok(id) => id,
-            Err(_) => {
-                panic!("{}", STOP_TEST_STRING);
-            }
+            Err(_) => raise_control(StopTest),
         }
     }
 
@@ -118,9 +117,7 @@ impl<T> Variables<T> {
     pub fn add(&mut self, v: T) {
         let variable_id: i64 = match self.tc.with_data_source(|ds| ds.pool_add(self.pool_id)) {
             Ok(id) => id,
-            Err(_) => {
-                panic!("{}", STOP_TEST_STRING); // nocov
-            }
+            Err(_) => raise_control(StopTest), // nocov
         };
         if self.values.contains_key(&variable_id) {
             panic!("unexpected variable id in map"); // nocov
@@ -151,9 +148,7 @@ impl<T> Variables<T> {
 pub fn variables<T>(tc: &TestCase) -> Variables<T> {
     let pool_id = match tc.with_data_source(|ds| ds.new_pool()) {
         Ok(id) => id,
-        Err(_) => {
-            panic!("{}", STOP_TEST_STRING); // nocov
-        }
+        Err(_) => raise_control(StopTest), // nocov
     };
     Variables {
         pool_id,
@@ -172,17 +167,6 @@ pub trait StateMachine {
     fn rules(&self) -> Vec<Rule<Self>>;
     /// Invariants checked after each successful rule application.
     fn invariants(&self) -> Vec<Rule<Self>>;
-}
-
-// TODO: factor out (shared with runner.rs)
-fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(s) = payload.downcast_ref::<&str>() {
-        s.to_string() // nocov
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "Unknown panic".to_string() // nocov
-    }
 }
 
 fn check_invariants(m: &mut impl StateMachine, tc: &TestCase) {
@@ -246,19 +230,14 @@ pub fn run(mut m: impl StateMachine, tc: TestCase) {
                 steps_run_successfully += 1;
                 check_invariants(&mut m, &tc);
             }
-            Err(e) => {
-                let msg = panic_message(&e);
-                if msg == STOP_TEST_STRING {
-                    // Backend ran out of data — this test case is done.
-                    break;
-                } else if msg == ASSUME_FAIL_STRING {
-                    // Rule was skipped by assume(false); try a different rule.
-                    tc.note("Rule stopped early due to violated assumption.");
-                } else {
-                    // Genuine rule failure: propagate it.
-                    resume_unwind(e);
-                }
+            // Backend ran out of data — this test case is done.
+            Err(e) if e.downcast_ref::<StopTest>().is_some() => break,
+            // Rule was skipped by assume(false); try a different rule.
+            Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => {
+                tc.note("Rule stopped early due to violated assumption.");
             }
+            // Genuine rule failure: propagate it.
+            Err(e) => resume_unwind(e),
         };
     }
 }

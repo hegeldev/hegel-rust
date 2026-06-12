@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.18.0 - 2026-06-12
+
+This release improves how failing runs are reported, separates "the
+property failed" from "the run itself failed", and fixes a bug where
+`Verbosity::Quiet` would not always be respected when reporting the
+final error.
+
+A failing run now ends by re-raising the failing test's own panic —
+payload intact, so `#[should_panic(expected = ...)]` and `catch_unwind`
+consumers see exactly what the test raised — instead of a synthetic
+`Property test failed: <message>` panic, and the failure no longer prints
+a second time after the report. Runs that find several distinct bugs
+still fail with the `"... N distinct failures."` message.
+
 ## 0.17.4 - 2026-06-10
 
 This patch restructures the native engine into a single `Engine` object mirroring Hypothesis's `ConjectureRunner`: one owner for the executor, the RNG, the example database, the choice tree, the per-origin failing examples, and all run-level counters, with every executed test case recorded through one `test_function` path. Previously each phase (generation, database reuse, targeting, span mutation) kept its own copy of the counter updates, which had already let the same accounting bug appear in two places.

@@ -9,6 +9,8 @@
 
 /// Encode a biased exponent to a Hypothesis lex rank.
 /// Exponents closer to 1023 (values near 1.0) rank first.
+use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_eq};
+
 pub fn encode_exponent(biased_exp: u64) -> u64 {
     if biased_exp == 2047 {
         return 2047; // inf/NaN exponent: rank last
@@ -67,11 +69,11 @@ fn is_simple_float(v: f64) -> bool {
 /// Port of Hypothesis's `float_to_lex`. Integer floats 0, 1, 2, ... map to
 /// 0, 1, 2, ... Non-integer floats map to values with bit 63 set.
 pub fn float_to_index(v: f64) -> u64 {
-    debug_assert!(
+    hegel_internal_debug_assert!(
         !v.is_sign_negative(),
         "float_to_index called on negative: {v}"
     );
-    debug_assert!(!v.is_nan(), "float_to_index called on NaN");
+    hegel_internal_debug_assert!(!v.is_nan(), "float_to_index called on NaN");
     if is_simple_float(v) {
         return v as u64;
     }
@@ -110,7 +112,7 @@ pub fn index_to_float(i: u64) -> f64 {
 /// winner has the closest-to-1 exponent present in the range and, within
 /// that binade, the mantissa whose [`update_mantissa`] encoding is minimal.
 pub fn simplest_in_range(lo: f64, hi: f64) -> f64 {
-    debug_assert!(lo > 0.0 && lo <= hi && hi.is_finite());
+    hegel_internal_debug_assert!(lo > 0.0 && lo <= hi && hi.is_finite());
     const MANTISSA_MASK: u64 = (1u64 << 52) - 1;
     // Smallest "simple" integer in the range, if any: tag-0 indices sit
     // below every fractional index and equal the integer's value, so the
@@ -133,7 +135,7 @@ pub fn simplest_in_range(lo: f64, hi: f64) -> f64 {
     let (e, m_min, m_max) = if e_lo >= 1023 {
         (e_lo, m_lo, if e_hi == e_lo { m_hi } else { MANTISSA_MASK })
     } else {
-        debug_assert!(e_hi < 1023);
+        hegel_internal_debug_assert!(e_hi < 1023);
         (e_hi, if e_lo == e_hi { m_lo } else { 0 }, m_hi)
     };
     // Minimise `update_mantissa(e - 1023, m)` over `[m_min, m_max]`.
@@ -159,7 +161,7 @@ pub fn simplest_in_range(lo: f64, hi: f64) -> f64 {
         // simple-integer probe; ranges spanning whole binades without a
         // simple integer only occur at or above 2^56, where the exponent is
         // >= 52 and the no-fractional-bits arm above applies.
-        debug_assert_eq!(m_max >> n_frac, h);
+        hegel_internal_debug_assert_eq!(m_max >> n_frac, h);
         let l_lo = m_min & low_mask;
         let l_hi = m_max & low_mask;
         (h << n_frac) | min_reversed_in_range(l_lo, l_hi, n_frac)
@@ -173,7 +175,7 @@ pub fn simplest_in_range(lo: f64, hi: f64) -> f64 {
 /// candidates until none remains (then `lo == hi`, which is forced).
 fn min_reversed_in_range(lo: u64, hi: u64, n: u32) -> u64 {
     if n == 0 {
-        debug_assert_eq!((lo, hi), (0, 0));
+        hegel_internal_debug_assert_eq!((lo, hi), (0, 0));
         return 0;
     }
     let k_lo = lo.div_ceil(2);
@@ -181,7 +183,7 @@ fn min_reversed_in_range(lo: u64, hi: u64, n: u32) -> u64 {
     if k_lo <= k_hi {
         min_reversed_in_range(k_lo, k_hi, n - 1) * 2
     } else {
-        debug_assert_eq!(lo, hi);
+        hegel_internal_debug_assert_eq!(lo, hi);
         lo
     }
 }

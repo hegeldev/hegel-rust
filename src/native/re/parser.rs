@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 
 use super::constants::*;
+use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_eq};
 
 /// A single parsed operation. Each variant corresponds to an entry in
 /// CPython's `OPCODES` list, with the argument shape matching the
@@ -1270,7 +1271,7 @@ fn parse(
                 state.closegroup(g);
             }
             if atomic {
-                debug_assert!(group.is_none());
+                hegel_internal_debug_assert!(group.is_none());
                 subpattern.push(OpCode::AtomicGroup(p));
             } else {
                 subpattern.push(OpCode::Subpattern {
@@ -1430,7 +1431,7 @@ fn parse_flags(
             }
         }
     }
-    debug_assert_eq!(ch, ":");
+    hegel_internal_debug_assert_eq!(ch, ":");
     if add_flags & del_flags != 0 {
         return Err(source.error("bad inline flags: flag turned on and off", 1));
     }
@@ -1469,7 +1470,7 @@ pub fn parse_pattern(pattern: &str, flags: u32) -> ParseResult<ParsedPattern> {
     state.flags = fix_flags(state.flags)?;
 
     if source.next.is_some() {
-        debug_assert_eq!(source.next.as_deref(), Some(")"));
+        hegel_internal_debug_assert_eq!(source.next.as_deref(), Some(")"));
         return Err(source.error("unbalanced parenthesis", 0));
     }
 
