@@ -5,10 +5,9 @@
 //! driver: it owns the database replay, generation, and shrinking phases,
 //! using the supplied `run_case` callback to actually execute each test
 //! body, and returns the [`Exploration`] report — every distinct bug's
-//! shrunk counterexample.  The *final replays* of those counterexamples
-//! are not the engine's business: the caller (`drive`, or
-//! [`crate::embed::run_native`] for FFI) drives each one through
-//! [`TestRunner::replay_final`] so it can interleave its own reporting.
+//! shrunk counterexample.  The caller (`drive`, or
+//! [`crate::embed::run_native`] for FFI) then drives each counterexample's
+//! final replay through [`TestRunner::replay_final`].
 //!
 //! Inside, [`Engine`] wraps the `run_case` callback together with
 //! a shrink-result cache, exposing `run` / `run_shrink_with_origin` /
@@ -37,9 +36,6 @@ use crate::runner::{Backend, Database, HealthCheck, Mode, Phase, Settings, Verbo
 /// identifying *where* the panic happened.  The origin is supplied by
 /// [`crate::run_lifecycle::run_test_case`] from the captured panic
 /// `file:line:col`; per-origin shrinking and database storage key on it.
-/// The failure's rendered diagnostic is deliberately *not* carried here:
-/// the engine never displays it — it is read off the data-source handle
-/// only where a final replay needs it ([`replay_counterexample`]).
 #[derive(Clone)]
 pub struct RunResult {
     pub status: Status,
@@ -171,17 +167,15 @@ impl TestRunner for NativeTestRunner {
 /// failure blob, instead of generating fresh test cases.
 ///
 /// Selected by [`Hegel::reproduce_failure`](crate::Hegel::reproduce_failure)
-/// in place of [`NativeTestRunner`]. A blob replay is one deterministic
-/// case — no generation, targeting, or shrinking — so it ignores `mode`,
-/// `phases`, and the test-case budget entirely: exploration just decodes
-/// the blob into a counterexample for the caller to replay.
+/// in place of [`NativeTestRunner`]. Exploration just decodes the blob into
+/// one counterexample for the caller to replay; `mode`, `phases`, and the
+/// test-case budget are ignored.
 ///
 /// An **undecodable** blob is invalid *input*, so [`explore`](TestRunner::explore)
 /// panics outright (over FFI, libhegel's worker catches the panic and
 /// surfaces it as a failure); a blob that decodes but **no longer
 /// reproduces** the failure surfaces through
-/// [`vanished_failure`](TestRunner::vanished_failure) (origin
-/// `"reproduce_failure"`).
+/// [`vanished_failure`](TestRunner::vanished_failure).
 pub(crate) struct ReproduceRunner {
     pub(crate) blob: String,
 }
@@ -837,10 +831,7 @@ impl<'a> Engine<'a> {
         // blob) in shortlex-descending order: the smallest counterexample is
         // listed *last*, so when the caller replays them in order a user-side
         // `Mutex<Option<…>>` that overwrites on each panic ends up holding
-        // the simplest example. The final replays themselves are the
-        // caller's job (`drive` / `run_native` via `replay_final`), so the
-        // caller can print its report — including the failure count — around
-        // them.
+        // the simplest example.
         let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> =
             std::mem::take(&mut self.interesting).into_iter().collect();
         // Descending sort_key order. `sort_by` instead of `sort_by_key` because
@@ -1383,11 +1374,8 @@ impl<'a> Engine<'a> {
     /// Execute one test case via `run_case`, recording the trie and
     /// returning a [`RunResult`] populated from the outcome reported by the
     /// data source's `mark_complete` plus the [`NativeTestCase`]'s realized
-    /// choice nodes.
-    ///
-    /// Always a non-final execution: the engine only runs test cases to
-    /// explore (generation, shrink probes, replays). Final replays are
-    /// driven by the caller through [`replay_counterexample`].
+    /// choice nodes. Always a non-final execution; final replays go through
+    /// [`replay_counterexample`].
     fn execute(&mut self, ntc: NativeTestCase) -> RunResult {
         let (data_source, handle) = NativeDataSource::new(ntc);
         (self.run_case)(Box::new(data_source), false);

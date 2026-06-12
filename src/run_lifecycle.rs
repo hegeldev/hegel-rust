@@ -246,11 +246,9 @@ pub(crate) fn run_test_case(
         crate::runner::Verbosity::Verbose | crate::runner::Verbosity::Debug
     );
     let quiet = verbosity == crate::runner::Verbosity::Quiet;
-    // Draw/note output (and the rendered diagnostic) is surfaced for the
-    // final replay — where it prints live, in order, ahead of the diagnostic
-    // `drive` prints right after the replay returns — or, in verbose mode,
-    // for every test case. Quiet suppresses even the final replay's output.
-    // Tell the panic hook to capture a backtrace only when it will be shown.
+    // Surface draw/note output — and pay for a backtrace — only when the
+    // diagnostic will be shown: a non-quiet final replay, or every test
+    // case in verbose mode.
     let should_emit = (is_final && !quiet) || verbose;
     CAPTURE_BACKTRACE.with(|c| c.set(should_emit));
 
@@ -283,8 +281,7 @@ pub(crate) fn run_test_case(
                     panic_message: msg,
                     diagnostic,
                     origin: format!("Panic at {}", location),
-                    // On a final replay, `replay_final` attaches the
-                    // counterexample's reproduce blob to this failure.
+                    // `replay_final` attaches the blob on a final replay.
                     reproduce_blob: None,
                 })
             }
@@ -383,11 +380,9 @@ fn reproducer_line(settings: &Settings, failure: &crate::backend::Failure) -> Op
 ///
 /// Installs the cross-backend panic hook, hands the runner a `run_case`
 /// callback that wraps each test invocation in [`run_test_case`], and lets
-/// it explore (generate + shrink). On a failing run it then owns the
-/// report: the failure-count headline (when there are several bugs), the
-/// final replay of each counterexample, each failure's diagnostic and
-/// reproducer line as its replay completes, the antithesis integration, and
-/// the closing `panic!`.
+/// it explore (generate + shrink). On a failing run it then replays each
+/// counterexample, reporting each failure as its replay completes, and
+/// re-raises the closing `panic!`.
 pub(crate) fn drive<R, F>(
     runner: R,
     test_fn: F,
@@ -450,13 +445,12 @@ pub(crate) fn drive<R, F>(
         Exploration::Counterexamples(counterexamples) => counterexamples,
     };
 
-    // Replay each counterexample with `is_final = true`, reporting as we go:
-    // the replay prints its draws live, and its diagnostic is printed the
-    // moment it returns, so each failure reads as one block. For a
-    // multi-failure run the count headline leads the report — it has to be
-    // eprinted here, before the replays, because the closing `panic!`'s
-    // message is only rendered by the panic hook once the panic is raised,
-    // i.e. after everything else.
+    // Replay each counterexample with `is_final = true`, reporting as we
+    // go: the replay prints its draws live and its diagnostic is printed
+    // the moment it returns, so each failure reads as one block. The count
+    // headline has to be eprinted before the replays — the closing
+    // `panic!`'s message is only rendered by the panic hook, after
+    // everything else.
     let multiple = counterexamples.len() > 1;
     if multiple && !quiet {
         eprintln!(
@@ -472,7 +466,7 @@ pub(crate) fn drive<R, F>(
         let Some(failure) = runner.replay_final(counterexample, &mut run_case) else {
             // The counterexample stopped failing between discovery and
             // replay: report the runner's framing of that (flaky test /
-            // stale blob) as the run's single failure.
+            // stale blob) as the run's single failure and stop.
             let vanished = runner.vanished_failure();
             report_failure(&vanished, settings, quiet);
             panic!("Property test failed: {}", vanished.panic_message);
