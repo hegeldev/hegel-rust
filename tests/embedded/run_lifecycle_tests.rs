@@ -554,27 +554,23 @@ fn verbose_mode_captures_backtrace_for_non_final_failures() {
 }
 
 #[test]
-fn control_flow_panics_never_capture_a_backtrace() {
-    use std::backtrace::BacktraceStatus;
-    // An assume-style control panic is classified as `Invalid` and its
-    // captured info is discarded — so it must never pay to capture a
-    // backtrace, even on the final replay where `should_emit` is true.
+fn control_flow_unwinds_never_reach_the_panic_hook() {
+    // A rejected assumption unwinds via `resume_unwind`, which skips panic
+    // hooks entirely — so even on the final replay (where the hook would
+    // pay for a backtrace) the hook must record nothing at all.
     init_panic_hook();
+    take_panic_info();
     let result = run_test_case(
         Box::new(BtStubDataSource),
-        &mut |_tc| std::panic::panic_any(crate::test_case::ASSUME_FAIL_STRING),
+        &mut |_tc| crate::control::raise_control(crate::control::AssumeFailed),
         true,
         crate::runner::Mode::TestRun,
         crate::runner::Verbosity::Normal,
     );
     assert!(matches!(result, TestCaseResult::Invalid));
-    // The hook recorded the control panic but the `Invalid` branch left the
-    // info unconsumed; confirm no backtrace was captured for it.
-    let (_, _, _, backtrace) = take_panic_info().expect("hook recorded the control panic");
-    assert_eq!(
-        backtrace.status(),
-        BacktraceStatus::Disabled,
-        "control-flow panics must not capture a backtrace"
+    assert!(
+        take_panic_info().is_none(),
+        "a control-flow unwind must not touch the panic hook's state"
     );
 }
 

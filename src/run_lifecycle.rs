@@ -22,11 +22,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::antithesis::TestLocation;
 use crate::backend::{DataSource, Exploration, Failure, TestCaseResult, TestRunner};
-use crate::control::{currently_in_test_context, with_test_context};
-use crate::runner::{Mode, Settings};
-use crate::test_case::{
-    ASSUME_FAIL_STRING, INVALID_ARGUMENT_PREFIX, LOOP_DONE_STRING, STOP_TEST_STRING, TestCase,
+use crate::control::{
+    AssumeFailed, InvalidArgument, LoopDone, StopTest, currently_in_test_context, with_test_context,
 };
+use crate::runner::{Mode, Settings};
+use crate::test_case::TestCase;
 
 static PANIC_HOOK_INIT: Once = Once::new();
 
@@ -52,33 +52,16 @@ fn take_panic_info() -> Option<(String, String, String, Backtrace)> {
     LAST_PANIC_INFO.with(|info| info.borrow_mut().take())
 }
 
-/// Control-flow panics (a failed `assume`, `stop_test`, loop-done, or an
-/// invalid-argument usage error) are caught and classified by
-/// [`run_test_case`] without ever rendering a backtrace, so the hook must not
-/// pay to capture one for them — they are common on the generation hot path.
-fn is_control_panic(payload: &(dyn std::any::Any + Send)) -> bool {
-    let msg = payload
-        .downcast_ref::<&str>()
-        .copied()
-        .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
-    msg.is_some_and(|m| {
-        m == ASSUME_FAIL_STRING
-            || m == STOP_TEST_STRING
-            || m == LOOP_DONE_STRING
-            || m.starts_with(INVALID_ARGUMENT_PREFIX)
-    })
-}
-
 /// Install the cross-backend panic hook on first call.
 ///
 /// Idempotent across all backends: the hook captures the location for any
 /// panic raised inside a test context (so [`run_test_case`] can read it after
 /// `catch_unwind`), and forwards everything else to the previous hook
-/// unchanged. A backtrace is captured only when [`CAPTURE_BACKTRACE`] is set
-/// and the panic is a genuine failure (not a control-flow panic) — see
-/// [`is_control_panic`]. Without the suppression, every shrinker probe would
-/// print a `thread 'main' panicked` line to stderr and the user-visible
-/// output would be unreadable.
+/// unchanged. A backtrace is captured only when [`CAPTURE_BACKTRACE`] is
+/// set. Control-flow unwinds (a rejected assumption, out-of-data, ...)
+/// never reach any hook at all — they are raised via
+/// [`crate::control::raise_control`]'s `resume_unwind`, which skips hooks
+/// by construction.
 pub(crate) fn init_panic_hook() {
     PANIC_HOOK_INIT.call_once(|| {
         let prev_hook = panic::take_hook();
@@ -99,8 +82,8 @@ pub(crate) fn init_panic_hook() {
                 .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
                 .unwrap_or_else(|| "<unknown>".to_string());
             // Only capture (and symbolize) a backtrace when the diagnostic
-            // will actually be shown and the panic is a genuine failure.
-            let backtrace = if CAPTURE_BACKTRACE.get() && !is_control_panic(info.payload()) {
+            // will actually be shown.
+            let backtrace = if CAPTURE_BACKTRACE.get() {
                 Backtrace::capture()
             } else {
                 Backtrace::disabled()
@@ -257,34 +240,30 @@ pub(crate) fn run_test_case(
 
     let tc_result = match &result {
         Ok(()) => TestCaseResult::Valid,
+        Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => TestCaseResult::Invalid,
+        Err(e) if e.downcast_ref::<StopTest>().is_some() => TestCaseResult::Overrun,
+        Err(e) if e.downcast_ref::<LoopDone>().is_some() => TestCaseResult::Valid,
         Err(e) => {
-            let msg = panic_message(e);
-            if msg == ASSUME_FAIL_STRING {
-                TestCaseResult::Invalid
-            } else if msg == STOP_TEST_STRING {
-                TestCaseResult::Overrun
-            } else if msg == LOOP_DONE_STRING {
-                TestCaseResult::Valid
-            } else if let Some(stripped) = msg.strip_prefix(INVALID_ARGUMENT_PREFIX) {
+            if let Some(InvalidArgument(message)) = e.downcast_ref::<InvalidArgument>() {
                 // An invalid-argument (usage) error is a mistake in how the
                 // test is configured, not a discovered counterexample: abort
                 // the run with the message instead of recording it as
                 // `Interesting` and shrinking it.
-                std::panic::resume_unwind(Box::new(stripped.to_string()));
-            } else {
-                let (thread_name, thread_id, location, backtrace) =
-                    take_panic_info().unwrap_or_else(unknown_panic_info);
-
-                let diagnostic =
-                    render_diagnostic(&thread_name, &thread_id, &location, &msg, &backtrace);
-                TestCaseResult::Interesting(Failure {
-                    panic_message: msg,
-                    diagnostic,
-                    origin: format!("Panic at {}", location),
-                    // `replay_final` attaches the blob on a final replay.
-                    reproduce_blob: None,
-                })
+                std::panic::resume_unwind(Box::new(message.clone()));
             }
+            let msg = panic_message(e);
+            let (thread_name, thread_id, location, backtrace) =
+                take_panic_info().unwrap_or_else(unknown_panic_info);
+
+            let diagnostic =
+                render_diagnostic(&thread_name, &thread_id, &location, &msg, &backtrace);
+            TestCaseResult::Interesting(Failure {
+                panic_message: msg,
+                diagnostic,
+                origin: format!("Panic at {}", location),
+                // `replay_final` attaches the blob on a final replay.
+                reproduce_blob: None,
+            })
         }
     };
 
