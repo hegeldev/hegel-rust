@@ -386,3 +386,41 @@ fn data_source_for_blob_logs_at_debug_verbosity() {
 fn data_source_for_blob_rejects_an_undecodable_blob() {
     assert!(data_source_for_blob(&quiet_settings(1), "not-a-valid-blob").is_none());
 }
+
+#[test]
+fn run_native_single_test_case_reports_the_failure() {
+    // `Mode::SingleTestCase` over the embedding API: the one test case is
+    // final from the start and its failure comes back in the result.
+    use crate::backend::Failure;
+
+    let settings = quiet_settings(1).mode(crate::runner::Mode::SingleTestCase);
+    let finals = AtomicUsize::new(0);
+    let result = run_native(&settings, None, |ds, is_final| {
+        if is_final {
+            finals.fetch_add(1, Ordering::SeqCst);
+        }
+        ds.mark_complete(&TestCaseResult::Interesting(Failure {
+            panic_message: "single-case bug".to_string(),
+            origin: "single-case bug".to_string(),
+            reproduce_blob: None,
+        }));
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(result.failures[0].panic_message, "single-case bug");
+    assert_eq!(
+        finals.load(Ordering::SeqCst),
+        1,
+        "the single test case is its own final replay"
+    );
+}
+
+#[test]
+fn run_native_single_test_case_passes_cleanly() {
+    let settings = quiet_settings(1).mode(crate::runner::Mode::SingleTestCase);
+    let result = run_native(&settings, None, |ds, _is_final| {
+        ds.mark_complete(&TestCaseResult::Valid);
+    })
+    .unwrap();
+    assert!(result.failures.is_empty());
+}

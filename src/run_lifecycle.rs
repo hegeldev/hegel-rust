@@ -481,10 +481,9 @@ where
 
     report_to_antithesis(failure.is_some(), test_location);
 
+    // No reproducer line: a single random test case has no shrunk choice
+    // sequence to encode, so its failure never carries a blob.
     let Some(failure) = failure else { return };
-    if let Some(line) = reproducer_line(settings, &failure) {
-        eprintln!("{line}");
-    }
     panic!("Property test failed: {}", failure.panic_message);
 }
 
