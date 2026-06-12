@@ -18,7 +18,7 @@ use std::collections::{HashMap, hash_map::Entry};
 
 use rand::RngExt;
 
-use crate::backend::{DataSource, Exploration, Failure, TestCaseResult, TestRunner};
+use crate::backend::{DataSource, Exploration, Failure, RunError, TestCaseResult, TestRunner};
 use crate::native::core::{
     BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, Spans,
     Status, sort_key,
@@ -134,9 +134,9 @@ impl TestRunner for NativeTestRunner {
         settings: &Settings,
         database_key: Option<&str>,
         run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
-    ) -> Exploration<ShrunkCounterexample> {
+    ) -> Result<Exploration<ShrunkCounterexample>, RunError> {
         if settings.mode == Mode::SingleTestCase {
-            return run_single(settings, run_case);
+            return Ok(run_single(settings, run_case));
         }
         run_main(
             settings,
@@ -147,19 +147,15 @@ impl TestRunner for NativeTestRunner {
         )
     }
 
+    /// A counterexample that fails during exploration but not on its final
+    /// replay means the test body isn't deterministic — a flaky test.
     fn replay_final(
         &self,
         counterexample: ShrunkCounterexample,
         run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
-    ) -> Option<Failure> {
+    ) -> Result<Failure, RunError> {
         replay_counterexample(counterexample, run_case)
-    }
-
-    /// A counterexample that fails during exploration but not on its final
-    /// replay means the test body isn't deterministic: a flaky-test
-    /// health-check failure.
-    fn vanished_failure(&self) -> Failure {
-        health_check_failure(flaky_diagnostic())
+            .ok_or_else(|| RunError::Flaky(flaky_diagnostic()))
     }
 }
 
@@ -172,10 +168,9 @@ impl TestRunner for NativeTestRunner {
 /// test-case budget are ignored.
 ///
 /// An **undecodable** blob is invalid *input*, so [`explore`](TestRunner::explore)
-/// panics outright (over FFI, libhegel's worker catches the panic and
-/// surfaces it as a failure); a blob that decodes but **no longer
-/// reproduces** the failure surfaces through
-/// [`vanished_failure`](TestRunner::vanished_failure).
+/// panics outright; a blob that decodes but **no longer reproduces** the
+/// failure surfaces as [`RunError::StaleBlob`] from
+/// [`replay_final`](TestRunner::replay_final).
 pub(crate) struct ReproduceRunner {
     pub(crate) blob: String,
 }
@@ -188,39 +183,34 @@ impl TestRunner for ReproduceRunner {
         _settings: &Settings,
         _database_key: Option<&str>,
         _run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
-    ) -> Exploration<ShrunkCounterexample> {
+    ) -> Result<Exploration<ShrunkCounterexample>, RunError> {
         let Some(choices) = crate::native::blob::decode_failure(&self.blob) else {
             panic!(
                 "reproduce_failure: the supplied failure blob could not be decoded. \
                  It may be corrupt or from an incompatible Hegel version."
             );
         };
-        Exploration::Counterexamples(vec![ShrunkCounterexample {
+        Ok(Exploration::Counterexamples(vec![ShrunkCounterexample {
             choices,
             nodes: None,
             blob: self.blob.clone(),
-        }])
+        }]))
     }
 
+    /// The blob decoded but the test no longer fails on it: a stale blob.
     fn replay_final(
         &self,
         counterexample: ShrunkCounterexample,
         run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
-    ) -> Option<Failure> {
-        replay_counterexample(counterexample, run_case)
-    }
-
-    /// The blob decoded and replayed, but the test no longer fails on it.
-    fn vanished_failure(&self) -> Failure {
-        let message = "reproduce_failure: the supplied failure blob no longer \
-                       reproduces a failure. The failure may have been fixed, or \
-                       the blob is stale.";
-        Failure {
-            panic_message: message.to_string(),
-            diagnostic: format!("{message}\n"),
-            origin: String::from("reproduce_failure"),
-            reproduce_blob: None,
-        }
+    ) -> Result<Failure, RunError> {
+        replay_counterexample(counterexample, run_case).ok_or_else(|| {
+            RunError::StaleBlob(
+                "reproduce_failure: the supplied failure blob no longer \
+                 reproduces a failure. The failure may have been fixed, or \
+                 the blob is stale."
+                    .to_string(),
+            )
+        })
     }
 }
 
@@ -261,7 +251,7 @@ fn run_main(
     // read from `MAX_SHRINKING_SECONDS`) so a test can trip the slow-shrink
     // cutoff deterministically with a zero budget instead of a 5-minute wait.
     shrink_budget: std::time::Duration,
-) -> Exploration<ShrunkCounterexample> {
+) -> Result<Exploration<ShrunkCounterexample>, RunError> {
     Engine::new(settings, database_key, run_case).run(too_slow_threshold, shrink_budget)
 }
 
@@ -274,7 +264,7 @@ impl<'a> Engine<'a> {
         &mut self,
         too_slow_threshold: std::time::Duration,
         shrink_budget: std::time::Duration,
-    ) -> Exploration<ShrunkCounterexample> {
+    ) -> Result<Exploration<ShrunkCounterexample>, RunError> {
         let settings = self.settings;
         let database_key = self.database_key;
         let max_test_cases = settings.test_cases;
@@ -365,7 +355,7 @@ impl<'a> Engine<'a> {
                     // `secondary` by the end-of-run save.
                     let (run, mismatch) = self.test_function(ntc);
                     if let Some(msg) = mismatch {
-                        return health_check_exploration(msg);
+                        return Err(RunError::NonDeterministic(msg));
                     }
                     if run.status == Status::Interesting {
                         if i < primary_count {
@@ -432,7 +422,7 @@ impl<'a> Engine<'a> {
             // generator.
             let (run, mismatch) = self.test_function(NativeTestCase::for_simplest(BUFFER_SIZE));
             if let Some(msg) = mismatch {
-                return health_check_exploration(msg);
+                return Err(RunError::NonDeterministic(msg));
             }
             // The simplest example is Hypothesis's "zero" example: if even it
             // overruns or already uses more than half the buffer, shrinking will
@@ -445,7 +435,7 @@ impl<'a> Engine<'a> {
                     .suppress_health_check
                     .contains(&HealthCheck::LargeInitialTestCase),
             ) {
-                return health_check_exploration(msg);
+                return Err(RunError::HealthCheck(msg));
             }
         }
 
@@ -497,7 +487,7 @@ impl<'a> Engine<'a> {
 
                 let (run, mismatch) = self.test_function(ntc);
                 if let Some(msg) = mismatch {
-                    return health_check_exploration(msg);
+                    return Err(RunError::NonDeterministic(msg));
                 }
 
                 if verbosity == Verbosity::Debug {
@@ -522,7 +512,7 @@ impl<'a> Engine<'a> {
                             .suppress_health_check
                             .contains(&HealthCheck::FilterTooMuch)
                     {
-                        return health_check_exploration(format!(
+                        return Err(RunError::HealthCheck(format!(
                             "FailedHealthCheck: FilterTooMuch — it looks like this \
                          test is filtering out too many inputs. \
                          {} inputs were filtered out by assume() \
@@ -530,7 +520,7 @@ impl<'a> Engine<'a> {
                          generated. If this is expected, suppress the check with \
                          suppress_health_check = [HealthCheck::FilterTooMuch].",
                             self.invalid_test_cases, self.valid_test_cases
-                        ));
+                        )));
                     }
                     if let Some(msg) = too_large_check(
                         self.valid_test_cases,
@@ -539,7 +529,7 @@ impl<'a> Engine<'a> {
                             .suppress_health_check
                             .contains(&HealthCheck::TestCasesTooLarge),
                     ) {
-                        return health_check_exploration(msg);
+                        return Err(RunError::HealthCheck(msg));
                     }
 
                     if let Some(msg) = too_slow_check(
@@ -550,7 +540,7 @@ impl<'a> Engine<'a> {
                             .suppress_health_check
                             .contains(&HealthCheck::TooSlow),
                     ) {
-                        return health_check_exploration(msg);
+                        return Err(RunError::HealthCheck(msg));
                     }
                 }
 
@@ -600,14 +590,14 @@ impl<'a> Engine<'a> {
                 .contains(&HealthCheck::FilterTooMuch)
             && self.invalid_test_cases > 0
         {
-            return health_check_exploration(format!(
+            return Err(RunError::HealthCheck(format!(
                 "FailedHealthCheck: FilterTooMuch — every reachable input was \
              filtered out by assume() before any valid input was generated. \
              {} inputs were filtered out across the full search \
              space. If this is expected, suppress the check with \
              suppress_health_check = [HealthCheck::FilterTooMuch].",
                 self.invalid_test_cases
-            ));
+            )));
         }
 
         // --- Shrinking phase ---
@@ -707,7 +697,7 @@ impl<'a> Engine<'a> {
                 // the authoritative non-determinism report for this phase.
                 let (verify, _) = self.test_function(verify_ntc);
                 if verify.status != Status::Interesting {
-                    return health_check_exploration(flaky_diagnostic());
+                    return Err(RunError::Flaky(flaky_diagnostic()));
                 }
 
                 let target_origin = origin.clone();
@@ -864,9 +854,9 @@ impl<'a> Engine<'a> {
             .collect();
 
         if counterexamples.is_empty() {
-            Exploration::Passed
+            Ok(Exploration::Passed)
         } else {
-            Exploration::Counterexamples(counterexamples)
+            Ok(Exploration::Counterexamples(counterexamples))
         }
     }
 }
@@ -890,11 +880,10 @@ const POST_BUG_EXTRA_CALLS: u64 = 1000;
 /// `HEALTH_CHECK_MAX_VALID` valid test cases, unless the user has explicitly
 /// suppressed the check; otherwise returns `None`.
 ///
-/// Returning the message (rather than panicking) lets the caller fold it
-/// into a failing [`TestRunResult`] so no panic crosses the FFI boundary
-/// (see [`health_check_failure`]). Extracted from the runner's main loop so
-/// a unit test can exercise both branches without stalling the in-process
-/// harness for `TOO_SLOW_THRESHOLD` of real time.
+/// The caller wraps the message as [`RunError::HealthCheck`]. Extracted
+/// from the runner's main loop so a unit test can exercise both branches
+/// without stalling the in-process harness for `TOO_SLOW_THRESHOLD` of
+/// real time.
 pub(crate) fn too_slow_check(
     valid_test_cases: u64,
     total_test_time: std::time::Duration,
@@ -974,9 +963,9 @@ pub(crate) fn large_initial_check(
     }
 }
 
-/// Diagnostic for a flaky test — one whose outcome changed when re-run with
-/// the same generated data. Returned as a message (rather than panicked) so
-/// the caller can fold it into a failing [`TestRunResult`].
+/// Message for a flaky test — one whose outcome changed when re-run with
+/// the same generated data. Wrapped as [`RunError::Flaky`] at the sites
+/// that detect it.
 pub(crate) fn flaky_diagnostic() -> String {
     "Flaky test detected: Your test produced different outcomes \
      when run with the same generated data — it failed when it \
@@ -998,29 +987,6 @@ pub(crate) fn slow_shrink_warning() -> String {
          example found so far will be reported. Re-running the test will resume shrinking \
          from there, and may take this long again before stopping."
     )
-}
-
-/// Build a health-check [`Failure`] from its diagnostic message.
-///
-/// Health-check failures (FilterTooMuch / TooSlow / flaky) are reported as a
-/// normal failing run rather than via `panic!`, so that an in-process engine
-/// driven over FFI (libhegel) surfaces them as a result the caller can
-/// inspect instead of an uncaught panic that aborts the host process. The
-/// main library still turns this into a panic at its API surface, preserving
-/// its existing behaviour.
-fn health_check_failure(message: String) -> Failure {
-    Failure {
-        panic_message: message.clone(),
-        diagnostic: format!("{message}\n"),
-        origin: "FailedHealthCheck".to_string(),
-        reproduce_blob: None,
-    }
-}
-
-/// [`health_check_failure`] wrapped as a failed [`Exploration`] — the form
-/// the engine's early-return sites need.
-fn health_check_exploration(message: String) -> Exploration<ShrunkCounterexample> {
-    Exploration::Failed(health_check_failure(message))
 }
 
 /// Port of Hypothesis's `_invalid_thresholds` (`engine.py`): returns the

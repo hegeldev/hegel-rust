@@ -131,6 +131,40 @@ pub enum TestCaseResult {
     Interesting(Failure),
 }
 
+/// A failure of the run itself, as opposed to a failure of a test case:
+/// the run could not produce a trustworthy verdict on the property.
+///
+/// These are returned as `Err` from [`TestRunner::explore`] and
+/// [`TestRunner::replay_final`] and surface at the API boundary — the panic
+/// API panics with the message; libhegel reports it through its error
+/// channel. They never appear as [`Failure`]s: there is no counterexample,
+/// reproduce blob, or diagnostic block, just a message about the run.
+#[derive(Debug, Clone)]
+pub enum RunError {
+    /// A failed health check (FilterTooMuch, TooSlow, TestCasesTooLarge,
+    /// LargeInitialTestCase).
+    HealthCheck(String),
+    /// The test produced different outcomes when run on identical data.
+    Flaky(String),
+    /// Data generation diverged between runs of the same choice sequence.
+    NonDeterministic(String),
+    /// `reproduce_failure`: the blob decoded but no longer fails.
+    StaleBlob(String),
+}
+
+impl std::fmt::Display for RunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RunError::HealthCheck(msg)
+            | RunError::Flaky(msg)
+            | RunError::NonDeterministic(msg)
+            | RunError::StaleBlob(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl std::error::Error for RunError {}
+
 /// The outcome of a [`TestRunner::explore`] pass: the run's result once
 /// generation and shrinking are done, before any final replay.
 ///
@@ -141,9 +175,9 @@ pub enum TestCaseResult {
 pub enum Exploration<C> {
     /// The run found no failures.
     Passed,
-    /// The run failed with a pre-rendered failure that has no counterexample
-    /// to replay — a health-check failure, or `Mode::SingleTestCase` (whose
-    /// one test case is its own final replay).
+    /// The run failed with a failure that has no counterexample left to
+    /// replay — `Mode::SingleTestCase`, whose one test case is its own
+    /// final replay.
     Failed(Failure),
     /// The run discovered counterexamples, one per distinct bug, in report
     /// order. Each still needs its final replay via
@@ -185,65 +219,54 @@ pub trait TestRunner {
 
     /// Run the exploration half of a test run: database replay, generation,
     /// and shrinking, stopping at the point where the run's outcome — and
-    /// every distinct bug's minimal counterexample — is known.
+    /// every distinct bug's minimal counterexample — is known. `Err` means
+    /// the run itself failed (health check, nondeterminism) before reaching
+    /// a verdict.
     fn explore(
         &self,
         settings: &Settings,
         database_key: Option<&str>,
         run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
-    ) -> Exploration<Self::Counterexample>;
+    ) -> Result<Exploration<Self::Counterexample>, RunError>;
 
     /// Replay one counterexample with `is_final = true` and return the
     /// [`Failure`] the test body reported (with its reproduce blob
-    /// attached), or `None` if the test no longer fails on it.
+    /// attached). `Err` means the counterexample stopped failing between
+    /// discovery and replay — flaky for the native engine, a stale blob for
+    /// a blob replay.
     fn replay_final(
         &self,
         counterexample: Self::Counterexample,
         run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
-    ) -> Option<Failure>;
-
-    /// The run-level failure to report when [`replay_final`](Self::replay_final)
-    /// returns `None` — the counterexample stopped failing between discovery
-    /// and replay. The native engine frames this as a flaky-test health-check
-    /// failure; a blob replay frames it as a stale blob.
-    fn vanished_failure(&self) -> Failure;
+    ) -> Result<Failure, RunError>;
 }
 
 /// Fold an [`Exploration`] plus its final replays into the aggregate
-/// [`TestRunResult`] shape. Counterexamples are replayed in order; if one no
-/// longer fails, the whole run is reported as the runner's
-/// [`vanished_failure`](TestRunner::vanished_failure).
+/// [`TestRunResult`] shape. Counterexamples are replayed in order; a replay
+/// that no longer fails errors the whole run.
 pub(crate) fn collect_failures<R: TestRunner>(
     runner: &R,
     exploration: Exploration<R::Counterexample>,
     run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
-) -> TestRunResult {
+) -> Result<TestRunResult, RunError> {
     match exploration {
-        Exploration::Passed => TestRunResult {
+        Exploration::Passed => Ok(TestRunResult {
             passed: true,
             failures: Vec::new(),
-        },
-        Exploration::Failed(failure) => TestRunResult {
+        }),
+        Exploration::Failed(failure) => Ok(TestRunResult {
             passed: false,
             failures: vec![failure],
-        },
+        }),
         Exploration::Counterexamples(counterexamples) => {
             let mut failures = Vec::new();
             for counterexample in counterexamples {
-                match runner.replay_final(counterexample, run_case) {
-                    Some(failure) => failures.push(failure),
-                    None => {
-                        return TestRunResult {
-                            passed: false,
-                            failures: vec![runner.vanished_failure()],
-                        };
-                    }
-                }
+                failures.push(runner.replay_final(counterexample, run_case)?);
             }
-            TestRunResult {
+            Ok(TestRunResult {
                 passed: failures.is_empty(),
                 failures,
-            }
+            })
         }
     }
 }

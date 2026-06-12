@@ -17,6 +17,7 @@ fn run_native_invokes_callback_and_returns_passing_result() {
         calls.fetch_add(1, Ordering::SeqCst);
         ds.mark_complete(&TestCaseResult::Valid);
     });
+    let result = result.unwrap();
     assert!(result.passed);
     assert!(result.failures.is_empty());
     assert!(calls.load(Ordering::SeqCst) >= 1);
@@ -65,7 +66,7 @@ fn run_native_replays_persisted_failure_on_second_run() {
             _ => ds.mark_complete(&TestCaseResult::Overrun),
         }
     });
-    assert!(!result.passed, "first run must have failed");
+    assert!(!result.unwrap().passed, "first run must have failed");
     assert!(
         first_failures
             .lock()
@@ -263,7 +264,7 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
         }
         ds.mark_complete(&TestCaseResult::Valid);
     });
-    assert!(!result.passed);
+    assert!(!result.unwrap().passed);
     let shrunk = last
         .lock()
         .unwrap()
@@ -308,7 +309,7 @@ fn run_native_callback_can_generate_via_data_source() {
         assert!(matches!(value, ciborium::Value::Bool(_)));
         ds.mark_complete(&TestCaseResult::Valid);
     });
-    assert!(result.passed);
+    assert!(result.unwrap().passed);
 }
 
 /// A test body that marks any integer `>= 1_000_000` interesting. Used by
@@ -344,7 +345,8 @@ fn discover_reproduce_blob() -> String {
     let settings = quiet_settings(200).seed(Some(7));
     let result = run_native(&settings, None, |ds, _is_final| {
         mark_large_interesting(&*ds)
-    });
+    })
+    .unwrap();
     assert!(!result.passed, "property should have failed");
     result.failures[0]
         .reproduce_blob

@@ -222,20 +222,19 @@ impl crate::backend::TestRunner for StubRunner {
         _settings: &crate::runner::Settings,
         _database_key: Option<&str>,
         _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
-    ) -> crate::backend::Exploration<crate::backend::Failure> {
-        crate::backend::Exploration::Counterexamples(self.failures.clone())
+    ) -> Result<crate::backend::Exploration<crate::backend::Failure>, crate::backend::RunError>
+    {
+        Ok(crate::backend::Exploration::Counterexamples(
+            self.failures.clone(),
+        ))
     }
 
     fn replay_final(
         &self,
         counterexample: crate::backend::Failure,
         _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
-    ) -> Option<crate::backend::Failure> {
-        Some(counterexample)
-    }
-
-    fn vanished_failure(&self) -> crate::backend::Failure {
-        unreachable!("StubRunner replays never vanish")
+    ) -> Result<crate::backend::Failure, crate::backend::RunError> {
+        Ok(counterexample)
     }
 }
 
@@ -297,22 +296,18 @@ impl crate::backend::TestRunner for PassesDespiteInterestingRunner {
         _settings: &crate::runner::Settings,
         _database_key: Option<&str>,
         run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
-    ) -> crate::backend::Exploration<()> {
+    ) -> Result<crate::backend::Exploration<()>, crate::backend::RunError> {
         // One interesting test case that the exploration then "forgets".
         run_case(Box::new(BtStubDataSource), false);
-        crate::backend::Exploration::Passed
+        Ok(crate::backend::Exploration::Passed)
     }
 
     fn replay_final(
         &self,
         _counterexample: (),
         _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
-    ) -> Option<crate::backend::Failure> {
+    ) -> Result<crate::backend::Failure, crate::backend::RunError> {
         unreachable!("a passing exploration has nothing to replay")
-    }
-
-    fn vanished_failure(&self) -> crate::backend::Failure {
-        unreachable!("a passing exploration has nothing to vanish")
     }
 }
 
@@ -333,12 +328,12 @@ fn drive_panics_with_unknown_when_interesting_but_exploration_passes() {
     assert_eq!(msg, "Property test failed: unknown");
 }
 
-// ── run_lifecycle: drive reports a counterexample that stops failing ─────
+// ── run_lifecycle: drive surfaces a RunError from the final replay ───────
 //
-// When `replay_final` comes back empty — the bug fired during exploration
-// but not on its final replay — `drive` must report the runner's
-// `vanished_failure` framing instead of pretending the run passed. The
-// engine equivalents are a flaky-test health check (native) and a stale
+// When `replay_final` errors — the bug fired during exploration but not on
+// its final replay — `drive` must panic with the error's own message (no
+// `Property test failed:` framing: it's a failure of the run, not of a
+// test case). The engine equivalents are a flaky test (native) and a stale
 // blob (reproduce); the stub keeps the path deterministic.
 
 struct VanishingRunner;
@@ -351,30 +346,23 @@ impl crate::backend::TestRunner for VanishingRunner {
         _settings: &crate::runner::Settings,
         _database_key: Option<&str>,
         _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
-    ) -> crate::backend::Exploration<()> {
-        crate::backend::Exploration::Counterexamples(vec![()])
+    ) -> Result<crate::backend::Exploration<()>, crate::backend::RunError> {
+        Ok(crate::backend::Exploration::Counterexamples(vec![()]))
     }
 
     fn replay_final(
         &self,
         _counterexample: (),
         _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
-    ) -> Option<crate::backend::Failure> {
-        None
-    }
-
-    fn vanished_failure(&self) -> crate::backend::Failure {
-        crate::backend::Failure {
-            panic_message: "the bug went away".to_string(),
-            diagnostic: "the bug went away\n".to_string(),
-            origin: "vanished".to_string(),
-            reproduce_blob: None,
-        }
+    ) -> Result<crate::backend::Failure, crate::backend::RunError> {
+        Err(crate::backend::RunError::Flaky(
+            "the bug went away".to_string(),
+        ))
     }
 }
 
 #[test]
-fn drive_reports_the_vanished_failure_when_a_replay_stops_failing() {
+fn drive_panics_with_the_run_error_when_a_replay_stops_failing() {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         drive(
             VanishingRunner,
@@ -384,12 +372,61 @@ fn drive_reports_the_vanished_failure_when_a_replay_stops_failing() {
             None,
         );
     }));
-    let payload = result.expect_err("drive should panic on a vanished failure");
+    let payload = result.expect_err("drive should panic on a vanished counterexample");
     let msg = payload
         .downcast_ref::<String>()
         .map(String::as_str)
         .unwrap_or("");
-    assert_eq!(msg, "Property test failed: the bug went away");
+    assert_eq!(msg, "the bug went away");
+}
+
+// ── run_lifecycle: drive surfaces a RunError from exploration ────────────
+//
+// A run error during exploration (health check, nondeterminism) must panic
+// with the error's own message, before any replay or report machinery runs.
+
+struct ErroringRunner;
+
+impl crate::backend::TestRunner for ErroringRunner {
+    type Counterexample = ();
+
+    fn explore(
+        &self,
+        _settings: &crate::runner::Settings,
+        _database_key: Option<&str>,
+        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+    ) -> Result<crate::backend::Exploration<()>, crate::backend::RunError> {
+        Err(crate::backend::RunError::HealthCheck(
+            "FailedHealthCheck: the run went wrong".to_string(),
+        ))
+    }
+
+    fn replay_final(
+        &self,
+        _counterexample: (),
+        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+    ) -> Result<crate::backend::Failure, crate::backend::RunError> {
+        unreachable!("an erroring exploration has nothing to replay")
+    }
+}
+
+#[test]
+fn drive_panics_with_the_run_error_when_exploration_errors() {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drive(
+            ErroringRunner,
+            |_tc: TestCase| {},
+            &crate::runner::Settings::new(),
+            None,
+            None,
+        );
+    }));
+    let payload = result.expect_err("drive should panic on an exploration error");
+    let msg = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .unwrap_or("");
+    assert_eq!(msg, "FailedHealthCheck: the run went wrong");
 }
 
 // ── run_lifecycle: backtrace capture is gated to where it is shown ───────
@@ -652,21 +689,17 @@ fn drive_runs_the_runner_regardless_of_phases() {
             _settings: &crate::runner::Settings,
             _database_key: Option<&str>,
             _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
-        ) -> crate::backend::Exploration<()> {
+        ) -> Result<crate::backend::Exploration<()>, crate::backend::RunError> {
             self.0.set(true);
-            crate::backend::Exploration::Passed
+            Ok(crate::backend::Exploration::Passed)
         }
 
         fn replay_final(
             &self,
             _counterexample: (),
             _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
-        ) -> Option<crate::backend::Failure> {
+        ) -> Result<crate::backend::Failure, crate::backend::RunError> {
             unreachable!("a passing exploration has nothing to replay")
-        }
-
-        fn vanished_failure(&self) -> crate::backend::Failure {
-            unreachable!("a passing exploration has nothing to vanish")
         }
     }
 

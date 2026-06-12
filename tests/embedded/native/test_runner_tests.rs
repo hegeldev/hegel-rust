@@ -1,7 +1,6 @@
 //! Embedded tests for `src/native/test_runner.rs` helpers.  Cover the
-//! health-check diagnostics (TooSlow and the flaky-replay message) that the
-//! runner folds into a failing `TestRunResult` instead of panicking, so no
-//! panic crosses the FFI boundary into libhegel.
+//! health-check diagnostics (TooSlow and the flaky-replay message) the
+//! engine surfaces as `RunError`s.
 
 use super::*;
 use std::time::Duration;
@@ -65,17 +64,28 @@ fn flaky_diagnostic_mentions_flaky() {
 }
 
 #[test]
-fn native_vanished_failure_is_a_flaky_health_check() {
+fn native_vanished_replay_is_a_flaky_run_error() {
     // A counterexample that fails during exploration but not on its final
-    // replay is the engine's definition of a flaky test; the vanished
-    // failure must carry that framing.
-    let failure = NativeTestRunner.vanished_failure();
-    assert_eq!(failure.origin, "FailedHealthCheck");
-    assert!(
-        failure.panic_message.contains("Flaky test detected"),
-        "unexpected message: {}",
-        failure.panic_message
-    );
+    // replay is the engine's definition of a flaky test; `replay_final`
+    // must surface it as `RunError::Flaky`.
+    let counterexample = ShrunkCounterexample {
+        choices: Vec::new(),
+        nodes: None,
+        blob: String::new(),
+    };
+    // A test body that no longer fails: every replay completes Valid.
+    let result = NativeTestRunner.replay_final(counterexample, &mut |ds, _is_final| {
+        ds.mark_complete(&TestCaseResult::Valid);
+    });
+    match result {
+        Err(crate::backend::RunError::Flaky(msg)) => {
+            assert!(
+                msg.contains("Flaky test detected"),
+                "unexpected message: {msg}"
+            );
+        }
+        other => panic!("expected RunError::Flaky, got {other:?}"),
+    }
 }
 
 #[test]
@@ -333,15 +343,51 @@ fn create_rng_urandom_backend_reads_urandom() {
     assert!(matches!(create_rng(&settings, None), EngineRng::Urandom(_)));
 }
 
-/// Fold a `run_main` exploration plus its final replays into the aggregate
+/// Fold a `run_main` outcome plus its final replays into the aggregate
 /// [`crate::backend::TestRunResult`], the way `embed::run_native` does —
 /// convenient for tests that drive `run_main` directly to inject the
 /// TooSlow / shrink-budget thresholds.
 fn complete_native(
-    exploration: crate::backend::Exploration<ShrunkCounterexample>,
+    exploration: Result<
+        crate::backend::Exploration<ShrunkCounterexample>,
+        crate::backend::RunError,
+    >,
     run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
-) -> crate::backend::TestRunResult {
-    crate::backend::collect_failures(&NativeTestRunner, exploration, run_case)
+) -> Result<crate::backend::TestRunResult, crate::backend::RunError> {
+    crate::backend::collect_failures(&NativeTestRunner, exploration?, run_case)
+}
+
+#[test]
+fn collect_failures_folds_a_single_test_case_failure() {
+    // `Mode::SingleTestCase` runs its one test case as its own final, so
+    // exploration comes back as `Exploration::Failed` with nothing left to
+    // replay; `collect_failures` must fold it into a one-failure result.
+    crate::run_lifecycle::init_panic_hook();
+    let mut test_fn = |_tc: crate::TestCase| panic!("single-case bug");
+    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
+        run_test_case(
+            ds,
+            &mut test_fn,
+            is_final,
+            Mode::SingleTestCase,
+            Verbosity::Quiet,
+        );
+    };
+    let settings = Settings::new()
+        .database(None)
+        .mode(Mode::SingleTestCase)
+        .verbosity(Verbosity::Quiet);
+    let exploration = NativeTestRunner.explore(&settings, None, &mut run_case);
+    let result =
+        crate::backend::collect_failures(&NativeTestRunner, exploration.unwrap(), &mut run_case)
+            .unwrap();
+    assert!(!result.passed);
+    assert_eq!(result.failures.len(), 1);
+    assert!(
+        result.failures[0].panic_message.contains("single-case bug"),
+        "{:?}",
+        result.failures
+    );
 }
 
 #[test]
@@ -369,7 +415,8 @@ fn run_main_with_urandom_backend_generates_and_passes() {
             Duration::from_secs(300),
         ),
         &mut run_case,
-    );
+    )
+    .unwrap();
     assert!(result.passed);
 }
 
@@ -399,7 +446,8 @@ fn run_main_with_urandom_backend_finds_counterexample() {
             Duration::from_secs(300),
         ),
         &mut run_case,
-    );
+    )
+    .unwrap();
     assert!(!result.passed);
     assert!(
         result.failures[0].panic_message.contains("always fails"),
@@ -444,7 +492,8 @@ fn run_main_stops_shrinking_when_budget_is_exhausted() {
             Duration::ZERO,
         ),
         &mut run_case,
-    );
+    )
+    .unwrap();
     assert!(!result.passed, "the failure must still be reported");
     assert!(
         result.failures[0].panic_message.contains("non-empty vec"),
@@ -477,12 +526,12 @@ fn run_main_reports_too_slow_at_call_site() {
         ),
         &mut run_case,
     );
-    assert!(!result.passed);
-    assert!(
-        result.failures[0].panic_message.contains("TooSlow"),
-        "{:?}",
-        result.failures
-    );
+    match result {
+        Err(crate::backend::RunError::HealthCheck(msg)) => {
+            assert!(msg.contains("TooSlow"), "unexpected message: {msg}");
+        }
+        other => panic!("expected RunError::HealthCheck, got {other:?}"),
+    }
 }
 
 // ── TestCasesTooLarge (too_large_check) ──
@@ -616,7 +665,8 @@ fn discover_reproduce_blob() -> String {
             Duration::from_secs(300),
         ),
         &mut run_case,
-    );
+    )
+    .unwrap();
     assert!(!result.passed, "property should have failed");
     result.failures[0]
         .reproduce_blob
@@ -636,8 +686,10 @@ fn reproduce_runner_replays_the_counterexample() {
         mark_large_interesting(&*ds);
     };
     let runner = ReproduceRunner { blob: blob.clone() };
-    let exploration = runner.explore(&Settings::new(), None, &mut run_case);
-    let result = crate::backend::collect_failures(&runner, exploration, &mut run_case);
+    let exploration = runner
+        .explore(&Settings::new(), None, &mut run_case)
+        .unwrap();
+    let result = crate::backend::collect_failures(&runner, exploration, &mut run_case).unwrap();
 
     assert!(!result.passed);
     assert_eq!(result.failures.len(), 1);
@@ -661,7 +713,9 @@ fn reproduce_runner_panics_on_an_undecodable_blob() {
         let runner = ReproduceRunner {
             blob: "not-a-valid-blob".to_string(),
         };
-        runner.explore(&Settings::new(), None, &mut |ds, _is_final| {
+        // `explore` panics before producing a value; `let _` only quiets
+        // the must-use lint on the never-constructed Result.
+        let _ = runner.explore(&Settings::new(), None, &mut |ds, _is_final| {
             ds.mark_complete(&TestCaseResult::Valid);
         });
     });
@@ -682,7 +736,7 @@ fn reproduce_runner_reports_a_blob_that_no_longer_fails() {
     let blob = discover_reproduce_blob();
 
     // A "fixed" test body that never reports interesting: replaying a stale
-    // blob must surface that rather than silently passing.
+    // blob must surface `RunError::StaleBlob` rather than silently passing.
     let runner = ReproduceRunner { blob };
     let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, _is_final: bool| {
         let schema = crate::cbor_utils::cbor_map! {
@@ -693,18 +747,19 @@ fn reproduce_runner_reports_a_blob_that_no_longer_fails() {
         let _ = ds.generate(&schema);
         ds.mark_complete(&TestCaseResult::Valid);
     };
-    let exploration = runner.explore(&Settings::new(), None, &mut run_case);
+    let exploration = runner
+        .explore(&Settings::new(), None, &mut run_case)
+        .unwrap();
     let result = crate::backend::collect_failures(&runner, exploration, &mut run_case);
-    assert!(!result.passed);
-    assert!(
-        result.failures[0]
-            .diagnostic
-            .contains("no longer reproduces"),
-        "unexpected diagnostic: {}",
-        result.failures[0].diagnostic
-    );
-    // Reported as its own failure, not framed as a health-check failure.
-    assert_eq!(result.failures[0].origin, "reproduce_failure");
+    match result {
+        Err(crate::backend::RunError::StaleBlob(msg)) => {
+            assert!(
+                msg.contains("no longer reproduces"),
+                "unexpected message: {msg}"
+            );
+        }
+        other => panic!("expected RunError::StaleBlob, got {other:?}"),
+    }
 }
 
 // ── database reuse semantics ──

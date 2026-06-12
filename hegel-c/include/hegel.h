@@ -283,7 +283,10 @@ typedef struct hegel_run_t hegel_run_t;
  `hegel_run_result`. Read passing-vs-failing via
  `hegel_run_result_passed`, the number of distinct failures via
  `hegel_run_result_failure_count`, and each failure via
- `hegel_run_result_failure(r, i)`. The pointer is borrowed from the
+ `hegel_run_result_failure(r, i)`. A run that ended in a run-level
+ error (failed health check, nondeterministic test, engine panic)
+ rather than a test-failure verdict has no failures; its message is
+ read via `hegel_run_result_error`. The pointer is borrowed from the
  `hegel_run_t` and stays valid until `hegel_run_free` is called.
  */
 typedef struct hegel_run_result_t hegel_run_result_t;
@@ -652,11 +655,22 @@ int hegel_mark_complete(hegel_test_case_t *tc, hegel_status_t status, const char
 bool hegel_test_case_is_final_replay(const hegel_test_case_t *tc);
 
 /*
- True iff the property held across every generated test case.
- Equivalent to `hegel_run_result_failure_count(r) == 0` when `r` is
- non-NULL.
+ True iff the property held across every generated test case. False
+ when the run surfaced failures *or* ended in a run-level error (see
+ `hegel_run_result_error`).
  */
 bool hegel_run_result_passed(const hegel_run_result_t *r);
+
+/*
+ The run-level error message when the run ended in an error rather than
+ a verdict on the property — a failed health check (e.g. FilterTooMuch,
+ TooSlow), a nondeterministic test, or an engine panic — or NULL when it
+ completed normally. An errored run has `hegel_run_result_passed(r) ==
+ false` and `hegel_run_result_failure_count(r) == 0`: the error is a
+ failure of the run itself, not a counterexample to the property. The
+ pointer is valid until `hegel_run_free`.
+ */
+const char *hegel_run_result_error(const hegel_run_result_t *r);
 
 /*
  Number of *distinct* failures (by origin) the run surfaced. Each

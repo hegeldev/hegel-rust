@@ -217,6 +217,7 @@ mod reproduce {
                 Verbosity::Quiet,
             );
         });
+        let result = result.unwrap();
         assert!(!result.passed, "property should have failed");
         result.failures[0]
             .reproduce_blob

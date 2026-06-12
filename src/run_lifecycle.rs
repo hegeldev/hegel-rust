@@ -382,7 +382,9 @@ fn reproducer_line(settings: &Settings, failure: &crate::backend::Failure) -> Op
 /// callback that wraps each test invocation in [`run_test_case`], and lets
 /// it explore (generate + shrink). On a failing run it then replays each
 /// counterexample, reporting each failure as its replay completes, and
-/// re-raises the closing `panic!`.
+/// re-raises the closing `panic!`. A [`crate::backend::RunError`] — a
+/// failure of the run itself rather than of a test case — panics with the
+/// error's message, without the `Property test failed:` framing.
 pub(crate) fn drive<R, F>(
     runner: R,
     test_fn: F,
@@ -408,7 +410,7 @@ pub(crate) fn drive<R, F>(
     let exploration = runner.explore(settings, database_key, &mut run_case);
 
     let test_failed =
-        !matches!(exploration, Exploration::Passed) || got_interesting.load(Ordering::SeqCst);
+        !matches!(exploration, Ok(Exploration::Passed)) || got_interesting.load(Ordering::SeqCst);
 
     crate::antithesis::require_antithesis_feature(
         crate::antithesis::is_running_in_antithesis(),
@@ -432,17 +434,21 @@ pub(crate) fn drive<R, F>(
     let quiet = verbosity == crate::runner::Verbosity::Quiet;
 
     let counterexamples = match exploration {
+        // The run itself failed — health check, nondeterminism. Not a test
+        // failure, so it gets the error's own message, not the
+        // `Property test failed:` framing.
+        Err(error) => panic!("{error}"),
         // `got_interesting` was set but the runner reported a clean pass —
         // e.g. an aborted mid-draw test case.  Preserve the legacy generic
         // panic.
-        Exploration::Passed => panic!("Property test failed: unknown"),
-        // A pre-rendered failure with no counterexample to replay (health
-        // check, `Mode::SingleTestCase`): report it directly.
-        Exploration::Failed(failure) => {
+        Ok(Exploration::Passed) => panic!("Property test failed: unknown"),
+        // A failure with no counterexample to replay (`Mode::SingleTestCase`
+        // ran its one test case as its own final): report it directly.
+        Ok(Exploration::Failed(failure)) => {
             report_failure(&failure, settings, quiet);
             panic!("Property test failed: {}", failure.panic_message);
         }
-        Exploration::Counterexamples(counterexamples) => counterexamples,
+        Ok(Exploration::Counterexamples(counterexamples)) => counterexamples,
     };
 
     // Replay each counterexample with `is_final = true`, reporting as we
@@ -463,13 +469,12 @@ pub(crate) fn drive<R, F>(
         if multiple && !quiet {
             eprintln!();
         }
-        let Some(failure) = runner.replay_final(counterexample, &mut run_case) else {
-            // The counterexample stopped failing between discovery and
-            // replay: report the runner's framing of that (flaky test /
-            // stale blob) as the run's single failure and stop.
-            let vanished = runner.vanished_failure();
-            report_failure(&vanished, settings, quiet);
-            panic!("Property test failed: {}", vanished.panic_message);
+        // A counterexample that stopped failing between discovery and
+        // replay is a run error (flaky test / stale blob), which ends the
+        // run on the spot.
+        let failure = match runner.replay_final(counterexample, &mut run_case) {
+            Ok(failure) => failure,
+            Err(error) => panic!("{error}"),
         };
         report_failure(&failure, settings, quiet);
         reported.push(failure);
