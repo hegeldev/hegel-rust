@@ -1287,3 +1287,36 @@ fn float_clamp_reroutes_excluded_magnitude_band() {
     let clamped_neg = float_clamp(&fc_neg, raw_neg);
     assert_eq!(clamped_neg, -f64::MIN_POSITIVE);
 }
+
+#[test]
+fn draw_string_with_inverted_sizes_is_an_internal_error() {
+    // Generators validate sizes before reaching the engine; an inverted
+    // range here is a hegel bug, surfaced as an internal-error unwind.
+    let mut tc = NativeTestCase::for_choices(&[], None, None);
+    let intervals = crate::native::intervalsets::IntervalSet::new(vec![(0, 0xD7FF)]);
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tc.draw_string(intervals, 5, 4)
+    }))
+    .unwrap_err();
+    // Outside a test context the internal error panics directly with its
+    // message (inside one it would unwind as an `InternalError` payload).
+    let msg = payload.downcast_ref::<String>().unwrap();
+    assert!(msg.contains("min_size <= max_size"), "{msg}");
+    assert!(msg.contains("bug in hegel"), "{msg}");
+}
+
+#[test]
+fn draw_string_with_empty_alphabet_and_nonzero_max_is_an_internal_error() {
+    // An empty alphabet can only produce the empty string, so the schema
+    // layer caps max_size at 0 before reaching the engine; anything else
+    // here is a hegel bug.
+    let mut tc = NativeTestCase::for_choices(&[], None, None);
+    let intervals = crate::native::intervalsets::IntervalSet::new(vec![]);
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tc.draw_string(intervals, 0, 4)
+    }))
+    .unwrap_err();
+    let msg = payload.downcast_ref::<String>().unwrap();
+    assert!(msg.contains("empty alphabet"), "{msg}");
+    assert!(msg.contains("bug in hegel"), "{msg}");
+}

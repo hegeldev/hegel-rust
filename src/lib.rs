@@ -412,8 +412,8 @@ pub use hegel_macros::explicit_test_case;
 /// The blob encodes Hegel's internal choice sequence, so it is only
 /// guaranteed to reproduce a failure within a specific version of Hegel.
 /// A blob that can't be decoded (corrupt or from an incompatible version),
-/// or that no longer reproduces a failure, surfaces as a failing run with
-/// an explanatory message.
+/// or that no longer reproduces a failure, panics with an explanatory
+/// message.
 pub use hegel_macros::reproduce_failure;
 
 #[doc(hidden)]

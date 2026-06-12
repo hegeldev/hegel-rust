@@ -14,6 +14,7 @@ use rustc_hash::FxHashMap;
 
 use rand::seq::SliceRandom;
 
+use crate::control::hegel_internal_debug_assert;
 use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Status};
 use crate::native::rng::EngineRng;
@@ -279,7 +280,7 @@ pub(crate) fn generate_novel_prefix(
             // one possible child, so an exhausted child would have marked
             // `current` exhausted — and the walk never enters exhausted
             // nodes.
-            debug_assert!(!child.is_exhausted);
+            hegel_internal_debug_assert!(!child.is_exhausted);
             current = child;
             continue;
         }

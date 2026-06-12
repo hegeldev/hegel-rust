@@ -1,9 +1,12 @@
 pub use crate::backend::{DataSource, DataSourceError};
+use crate::control::{
+    AssumeFailed, InternalError, InvalidArgument, LoopDone, StopTest, hegel_internal_assert,
+    hegel_internal_error, raise_control,
+};
 use crate::generators::Generator;
 use crate::runner::Mode;
 use ciborium::Value;
 use parking_lot::Mutex;
-use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -27,51 +30,25 @@ pub trait __IsTestCase {}
 impl __IsTestCase for TestCase {}
 pub fn __assert_is_test_case<T: __IsTestCase>() {}
 
-pub(crate) const ASSUME_FAIL_STRING: &str = "__HEGEL_ASSUME_FAIL";
-pub(crate) const STOP_TEST_STRING: &str = "__HEGEL_STOP_TEST";
-
-/// The sentinel string used by `TestCase::repeat` to signal that its loop
-/// completed naturally (the collection said "stop" and no panic occurred
-/// inside the body). Because `repeat` returns `!`, it has no normal-return
-/// path; this panic is how it tells the runner "this test case finished
-/// successfully, record it as Valid".
-pub(crate) const LOOP_DONE_STRING: &str = "__HEGEL_LOOP_DONE";
-
-/// Panic-message prefix marking an **invalid-argument (usage) error**: the
-/// caller configured the test in a way the framework can't honour — a
-/// generator bound with `max < min`, a float range that contains no values,
-/// an empty `sampled_from`/`one_of`, a non-finite `tc.target()` score, and so
-/// on. These are mistakes in how the test is *written*, not properties that
-/// failed on some input.
-///
-/// When such an error is detected *inside* a running test body (while a draw
-/// builds or interprets a schema, or in `tc.target()`), the panic would
-/// otherwise be classified by `run_lifecycle::run_test_case` as a discovered
-/// counterexample and shrunk. This prefix lets the lifecycle recognise the
-/// panic and abort the run with the stripped message instead. The marker is
-/// only attached inside a test context (see [`raise_invalid_argument`]), so it
-/// never escapes to the user.
-pub(crate) const INVALID_ARGUMENT_PREFIX: &str = "__HEGEL_INVALID_ARGUMENT:";
-
-/// Panic with an invalid-argument (usage) error carrying `message`.
+/// Raise an invalid-argument (usage) error carrying `message`.
 ///
 /// The same usage error can be detected either while a test case is running
 /// (e.g. an inline `tc.draw(gs::sampled_from(&[]))`, or a bound check inside a
 /// schema build) or up front, before any run (constructing a generator and
 /// validating its arguments eagerly). To read cleanly in both cases:
 ///
-/// - **Inside a test context**, the message is panicked with
-///   [`INVALID_ARGUMENT_PREFIX`] prepended so the lifecycle re-raises it as a
-///   clean usage error rather than shrinking it as a counterexample.
-/// - **Outside any test run**, there is no lifecycle to strip a marker, so the
-///   message is panicked directly.
+/// - **Inside a test context**, the error unwinds as a typed
+///   [`InvalidArgument`] control payload so the lifecycle aborts the run
+///   with the message rather than shrinking it as a counterexample.
+/// - **Outside any test run**, there is no lifecycle to catch a payload, so
+///   the message is panicked directly.
 ///
-/// Either way the user sees only the bare message; the marker never escapes.
-/// Prefer the [`invalid_argument!`] macro, which formats its arguments.
+/// Either way the user sees only the bare message. Prefer the
+/// [`invalid_argument!`] macro, which formats its arguments.
 #[track_caller]
 pub(crate) fn raise_invalid_argument(message: std::fmt::Arguments<'_>) -> ! {
     if crate::control::currently_in_test_context() {
-        panic!("{INVALID_ARGUMENT_PREFIX}{message}");
+        raise_control(InvalidArgument(message.to_string()));
     } else {
         panic!("{message}");
     }
@@ -90,17 +67,18 @@ macro_rules! invalid_argument {
 }
 pub(crate) use invalid_argument;
 
-/// Panic with the appropriate sentinel for the given data source error.
+/// Raise the appropriate control-flow unwind for the given data source error.
 fn panic_on_data_source_error(e: DataSourceError) -> ! {
     match e {
-        DataSourceError::StopTest => panic!("{}", STOP_TEST_STRING),
-        DataSourceError::Assume => panic!("{}", ASSUME_FAIL_STRING), // nocov
+        DataSourceError::StopTest => raise_control(StopTest),
+        DataSourceError::Assume => raise_control(AssumeFailed), // nocov
         // A caller-supplied argument (typically a generator's schema) was
         // semantically invalid: e.g. a range with no representable values, or
         // a `sampled_from` over an empty set. This is a usage error, not a
-        // discovered counterexample, so raise it with the invalid-argument
-        // prefix and let the lifecycle abort the run cleanly. libhegel never
-        // reaches here — it maps the error to `HEGEL_E_INVALID_ARG` instead.
+        // discovered counterexample, so raise it as an invalid-argument
+        // control payload and let the lifecycle abort the run cleanly.
+        // libhegel never reaches here — it maps the error to
+        // `HEGEL_E_INVALID_ARG` instead.
         DataSourceError::InvalidArgument(msg) => invalid_argument!("{}", msg),
     }
 }
@@ -108,7 +86,8 @@ fn panic_on_data_source_error(e: DataSourceError) -> ! {
 pub(crate) struct TestCaseGlobalData {
     mode: Mode,
     /// Whether drawn-value records and notes are surfaced for this test case
-    /// (true on the final replay of a failure, or when verbose output is on).
+    /// (true on the final replay of a failure — unless quiet — or when
+    /// verbose output is on).
     /// When false `on_draw` is a no-op, so the draw-recording bookkeeping in
     /// [`TestCase::record_named_draw`] (display-name allocation + `Debug`
     /// rendering of the value) can be skipped entirely.
@@ -287,34 +266,25 @@ pub(crate) fn emit_verbose_line(msg: &str) {
     }
 }
 
-fn panic_message(payload: &Box<dyn Any + Send>) -> String {
-    if let Some(s) = payload.downcast_ref::<&str>() {
-        s.to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "Unknown panic".to_string() // nocov
-    }
-}
-
 impl TestCase {
+    /// `emit` is decided by the lifecycle (`run_lifecycle::run_test_case`):
+    /// true on a non-quiet final replay or in verbose mode, where drawn
+    /// values and notes should be surfaced.
     pub(crate) fn new(
         data_source: Box<dyn DataSource + Send + Sync>,
-        is_last_run: bool,
+        emit: bool,
         mode: Mode,
-        verbose: bool,
     ) -> Self {
         let override_sink = current_output_sink();
-        let should_emit = is_last_run || verbose;
         let on_draw: OutputSink = match override_sink {
-            Some(sink) if should_emit => sink,
-            _ if should_emit => Arc::new(|msg| eprintln!("{}", msg)),
+            Some(sink) if emit => sink,
+            _ if emit => Arc::new(|msg| eprintln!("{}", msg)),
             _ => Arc::new(|_| {}),
         };
         TestCase {
             global: Arc::new(TestCaseGlobalData {
                 mode,
-                emit: should_emit,
+                emit,
                 shared: Mutex::new(SharedState {
                     data_source,
                     draw_state: DrawState {
@@ -442,7 +412,7 @@ impl TestCase {
     /// }
     /// ```
     pub fn reject(&self) -> ! {
-        panic!("{}", ASSUME_FAIL_STRING);
+        raise_control(AssumeFailed);
     }
 
     /// Note a message which will be displayed with the reported failing test case.
@@ -571,26 +541,28 @@ impl TestCase {
 
             match result {
                 Ok(()) => {}
+                // A rejected assumption discards this iteration; the loop
+                // moves on to the next one.
+                Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => {}
+                // Out-of-data and usage errors are terminal for the whole
+                // test case: re-raise them directly so the lifecycle
+                // classifies them, without the marker draw the
+                // counterexample path below adds.
+                Err(e)
+                    if e.downcast_ref::<StopTest>().is_some()
+                        || e.downcast_ref::<InvalidArgument>().is_some()
+                        || e.downcast_ref::<InternalError>().is_some() =>
+                {
+                    resume_unwind(e);
+                }
                 Err(e) => {
-                    let msg = panic_message(&e);
-                    if msg == ASSUME_FAIL_STRING {
-                    } else if msg == STOP_TEST_STRING {
-                        resume_unwind(e);
-                    } else if msg.starts_with(INVALID_ARGUMENT_PREFIX) {
-                        // A usage error (bad generator argument, `tc.target()`
-                        // misuse) is terminal: re-raise it directly so the
-                        // lifecycle aborts the run, without the marker draw the
-                        // counterexample path below adds.
-                        resume_unwind(e);
-                    } else {
-                        self.draw_silent(booleans());
-                        resume_unwind(e);
-                    }
+                    self.draw_silent(booleans());
+                    resume_unwind(e);
                 }
             }
         }
 
-        panic!("{}", LOOP_DONE_STRING);
+        raise_control(LoopDone);
     }
 
     pub(crate) fn child(&self, extra_indent: usize) -> Self {
@@ -620,11 +592,12 @@ impl TestCase {
 
             match draw_state.named_draw_repeatable.get(name) {
                 Some(&prev) if prev != repeatable => {
-                    panic!(
-                        "__draw_named: name {:?} used with inconsistent repeatable flag (was {}, now {}). \
-                        If you have not called __draw_named deliberately yourself, this is likely a bug in \
-                        hegel. Please file a bug report at https://github.com/hegeldev/hegel-rust/issues",
-                        name, prev, repeatable
+                    hegel_internal_error!(
+                        "__draw_named: name {:?} used with inconsistent repeatable flag \
+                         (was {}, now {})",
+                        name,
+                        prev,
+                        repeatable
                     );
                 }
                 Some(_) => {}
@@ -651,9 +624,8 @@ impl TestCase {
             };
 
             if !repeatable && current_count > 1 {
-                panic!(
-                    "__draw_named: name {:?} used more than once but repeatable is false. \
-                    This is almost certainly a bug in hegel - please report it at https://github.com/hegeldev/hegel-rust/issues",
+                hegel_internal_error!(
+                    "__draw_named: name {:?} used more than once but repeatable is false",
                     name
                 );
             }
@@ -720,13 +692,11 @@ impl TestCase {
     pub fn start_span(&self, label: u64) {
         self.local.borrow_mut().span_depth += 1;
         if let Err(e) = self.with_data_source(|ds| ds.start_span(label)) {
-            // nocov start
             let mut local = self.local.borrow_mut();
-            assert!(local.span_depth > 0);
+            hegel_internal_assert!(local.span_depth > 0);
             local.span_depth -= 1;
             drop(local);
             panic_on_data_source_error(e);
-            // nocov end
         }
     }
 
@@ -734,10 +704,12 @@ impl TestCase {
     pub fn stop_span(&self, discard: bool) {
         {
             let mut local = self.local.borrow_mut();
-            assert!(local.span_depth > 0);
+            hegel_internal_assert!(local.span_depth > 0);
             local.span_depth -= 1;
         }
-        let _ = self.with_data_source(|ds| ds.stop_span(discard));
+        if let Err(e) = self.with_data_source(|ds| ds.stop_span(discard)) {
+            panic_on_data_source_error(e);
+        }
     }
 }
 
@@ -762,7 +734,7 @@ pub fn generate_from_schema<T: serde::de::DeserializeOwned>(tc: &TestCase, schem
 pub fn deserialize_value<T: serde::de::DeserializeOwned>(raw: Value) -> T {
     let hv = value::HegelValue::from(raw.clone());
     value::from_hegel_value(hv).unwrap_or_else(|e| {
-        panic!("Failed to deserialize value: {}\nValue: {:?}", e, raw); // nocov
+        hegel_internal_error!("failed to deserialize value: {}\nValue: {:?}", e, raw); // nocov
     })
 }
 

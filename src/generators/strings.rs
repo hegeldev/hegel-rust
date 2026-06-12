@@ -1,5 +1,6 @@
 use super::{BasicGenerator, Generator, TestCase};
 use crate::cbor_utils::{cbor_array, cbor_map, map_extend, map_insert};
+use crate::control::hegel_internal_assert;
 use crate::test_case::invalid_argument;
 use ciborium::Value;
 
@@ -290,7 +291,7 @@ fn parse_char(raw: Value) -> char {
     let c = chars
         .next()
         .expect("expected a single character, got empty string");
-    assert!(
+    hegel_internal_assert!(
         chars.next().is_none(),
         "expected a single character, got multiple"
     );

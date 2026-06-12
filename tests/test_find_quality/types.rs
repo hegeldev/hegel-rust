@@ -30,7 +30,7 @@ fn test_one_of_produces_different_types() {
             .settings(Settings::new().database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -48,7 +48,7 @@ fn test_list_is_not_always_sorted() {
             .settings(Settings::new().database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -68,7 +68,7 @@ fn test_float_is_not_always_an_endpoint() {
             .settings(Settings::new().database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -84,7 +84,7 @@ fn test_can_find_string_with_duplicate_characters() {
             .settings(Settings::new().test_cases(200).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -99,7 +99,7 @@ fn test_can_find_non_ascii_text() {
             .settings(Settings::new().test_cases(200).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -118,6 +118,6 @@ fn test_removing_element_from_non_unique_list() {
             .settings(Settings::new().database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }

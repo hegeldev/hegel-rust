@@ -14,6 +14,7 @@
 // implementations were authored against scipy as oracle on the Python side
 // and re-validated against the same oracle here.
 
+use crate::control::hegel_internal_assert;
 use std::f64::consts::PI;
 
 /// Student's t CDF for integer `df >= 1`, evaluated at `t`.
@@ -21,7 +22,7 @@ use std::f64::consts::PI;
 /// Closed-form finite sum from Abramowitz & Stegun 26.7.7-8. Port of
 /// `hypothesis.internal.statistics.stdtr`.
 pub fn stdtr(df: i32, t: f64) -> f64 {
-    assert!(df >= 1, "stdtr requires integer df >= 1, got {df}");
+    hegel_internal_assert!(df >= 1, "stdtr requires integer df >= 1, got {df}");
     if t == 0.0 {
         return 0.5;
     }
@@ -69,11 +70,11 @@ pub fn stdtr(df: i32, t: f64) -> f64 {
 ///
 /// Port of `hypothesis.internal.statistics.stdtrit`.
 pub fn stdtrit(df: i32, p: f64) -> f64 {
-    assert!(df >= 1, "stdtrit requires integer df >= 1, got {df}");
+    hegel_internal_assert!(df >= 1, "stdtrit requires integer df >= 1, got {df}");
     if p == 0.5 {
         return 0.0;
     }
-    assert!(p > 0.0 && p < 1.0, "stdtrit requires 0 < p < 1, got {p}");
+    hegel_internal_assert!(p > 0.0 && p < 1.0, "stdtrit requires 0 < p < 1, got {p}");
     if df == 1 {
         // Cauchy: F^{-1}(p) = -cot(pi p). Reflect via 1-p when p > 0.5
         // because sin(pi p) near pi suffers cancellation; sin(pi (1-p))
@@ -288,7 +289,7 @@ impl<I: Distribution, O: Distribution> PiecewiseDistribution<I, O> {
         let inner_inner_mass = inner_g_pos - inner_g_neg;
         let inner_pdf = inner.pdf(switchover);
         let outer_pdf = outer.pdf(switchover);
-        assert!(
+        hegel_internal_assert!(
             inner_pdf != 0.0,
             "inner.pdf(switchover={switchover}) == 0; cannot density-match"
         );

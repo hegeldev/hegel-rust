@@ -1,5 +1,6 @@
 use crate::cbor_utils::{cbor_array, cbor_map};
 use crate::generators::{BasicGenerator, DefaultGenerator, Generator, TestCase};
+use crate::test_case::invalid_argument;
 use chrono::{
     DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, NaiveWeek, TimeDelta,
     TimeZone, Timelike, Utc, Weekday, WeekdaySet,
@@ -111,7 +112,9 @@ impl FixedOffsetGenerator {
     fn build_schema(&self) -> Value {
         let min_secs = self.min_value.local_minus_utc();
         let max_secs = self.max_value.local_minus_utc();
-        assert!(min_secs <= max_secs, "Cannot have max_value < min_value");
+        if min_secs > max_secs {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
         cbor_map! {
             "type" => "integer",
             "min_value" => i64::from(min_secs),
@@ -187,10 +190,9 @@ impl TimeDeltaGenerator {
     }
 
     fn build_schema(&self) -> Value {
-        assert!(
-            self.min_value <= self.max_value,
-            "Cannot have max_value < min_value"
-        );
+        if self.min_value > self.max_value {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
         cbor_map! {
             "type" => "integer",
             "min_value" => timedelta_to_nanos(self.min_value),
@@ -256,10 +258,9 @@ impl NaiveDateGenerator {
     }
 
     fn build_schema(&self) -> Value {
-        assert!(
-            self.min_value <= self.max_value,
-            "Cannot have max_value < min_value"
-        );
+        if self.min_value > self.max_value {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
         cbor_map! {
             "type" => "integer",
             "min_value" => self.min_value.num_days_from_ce(),
@@ -322,7 +323,9 @@ impl NaiveTimeGenerator {
     fn build_schema(&self) -> Value {
         let min_nanos = time_to_total_nanos(self.min_value);
         let max_nanos = time_to_total_nanos(self.max_value);
-        assert!(min_nanos <= max_nanos, "Cannot have max_value < min_value");
+        if min_nanos > max_nanos {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
         cbor_map! {
             "type" => "integer",
             "min_value" => min_nanos,
@@ -384,10 +387,9 @@ impl NaiveDateTimeGenerator {
 
 impl Generator<NaiveDateTime> for NaiveDateTimeGenerator {
     fn as_basic(&self) -> Option<BasicGenerator<'_, NaiveDateTime>> {
-        assert!(
-            self.min_value <= self.max_value,
-            "Cannot have max_value < min_value"
-        );
+        if self.min_value > self.max_value {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
         let schema = cbor_map! {
             "type" => "integer",
             "min_value" => datetime_to_nanos(&self.min_value.and_utc()),
