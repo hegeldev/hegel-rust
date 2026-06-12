@@ -611,3 +611,32 @@ jobs:
             exit 1
           fi
           echo "All expected libhegel assets present on $tag."
+
+  # Notify hegel-go that a new libhegel release is live so it can bump its
+  # pinned version. Gated on `release-binaries-verify`, not just `release`:
+  # hegel-go's bump reads the per-asset SHA-256 digests off this release, so we
+  # only dispatch once every libhegel binary is confirmed uploaded.
+  notify-hegel-go:
+    name: notify hegel-go
+    if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.skipped != 'true'
+    needs: [release, release-binaries-verify]
+    runs-on: ubuntu-latest
+    # The cross-repo dispatch uses the app token below, not GITHUB_TOKEN.
+    permissions: {}
+    steps:
+      - name: Generate app token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        id: app-token
+        with:
+          app-id: ${{ vars.HEGEL_RELEASE_APP_ID }}
+          private-key: ${{ secrets.HEGEL_RELEASE_APP_PRIVATE_KEY }}
+          repositories: hegel-go
+
+      - name: Dispatch hegel-rust-release to hegel-go
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          gh api repos/hegeldev/hegel-go/dispatches \
+            -f event_type=hegel-rust-release \
+            -F "client_payload[version]=$VERSION"
