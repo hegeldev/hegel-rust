@@ -107,7 +107,7 @@ pub struct Failure {
     /// Opaque per-bug origin tag — currently `"Panic at file:line:col"` from
     /// the captured panic site (with `<unknown>` for the location when
     /// `take_panic_info` returns nothing).  Passed through
-    /// `DataSource::mark_complete` so Hypothesis can group test cases by
+    /// `DataSource::mark_complete` so the engine can group test cases by
     /// which bug they trigger and shrink each origin to its own minimal
     /// counterexample.
     pub origin: String,

@@ -44,10 +44,18 @@ thread_local! {
 
 #[doc(hidden)]
 pub(crate) fn with_test_context<R>(f: impl FnOnce() -> R) -> R {
+    // Restore (rather than clear) on a drop guard: the flag survives a
+    // panic unwinding out of `f`, and nested uses don't clear the outer
+    // context early.
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            IN_TEST_CONTEXT.set(self.0);
+        }
+    }
+    let _restore = Restore(IN_TEST_CONTEXT.get());
     IN_TEST_CONTEXT.set(true);
-    let result = f();
-    IN_TEST_CONTEXT.set(false);
-    result
+    f()
 }
 
 /// Returns `true` if we are currently inside a Hegel test context.

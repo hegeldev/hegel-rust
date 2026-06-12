@@ -110,3 +110,85 @@ fn invalid_argument_error_is_raised_as_a_usage_error() {
     assert!(msg.contains("bad generator configuration"), "{msg}");
     assert!(!msg.contains("__HEGEL"), "marker leaked: {msg}");
 }
+
+// ── span errors ──────────────────────────────────────────────────────────
+//
+// `start_span` and `stop_span` both raise data-source errors as
+// control-flow unwinds (here, `StopTest`), so a span call after the engine
+// has run out of data concludes the test case as `Overrun` instead of
+// silently corrupting the span structure. `start_span` also rolls back its
+// depth increment so the bookkeeping stays consistent.
+
+/// A `DataSource` whose span calls fail with `StopTest`.
+struct SpanErrorDataSource;
+
+impl DataSource for SpanErrorDataSource {
+    fn generate(&self, _schema: &Value) -> Result<Value, DataSourceError> {
+        unimplemented!()
+    }
+    fn start_span(&self, _label: u64) -> Result<(), DataSourceError> {
+        Err(DataSourceError::StopTest)
+    }
+    fn stop_span(&self, _discard: bool) -> Result<(), DataSourceError> {
+        Err(DataSourceError::StopTest)
+    }
+    fn new_collection(
+        &self,
+        _min_size: u64,
+        _max_size: Option<u64>,
+    ) -> Result<i64, DataSourceError> {
+        unimplemented!()
+    }
+    fn collection_more(&self, _collection_id: i64) -> Result<bool, DataSourceError> {
+        unimplemented!()
+    }
+    fn collection_reject(
+        &self,
+        _collection_id: i64,
+        _why: Option<&str>,
+    ) -> Result<(), DataSourceError> {
+        unimplemented!()
+    }
+    fn new_pool(&self) -> Result<i64, DataSourceError> {
+        unimplemented!()
+    }
+    fn pool_add(&self, _pool_id: i64) -> Result<i64, DataSourceError> {
+        unimplemented!()
+    }
+    fn pool_generate(&self, _pool_id: i64, _consume: bool) -> Result<i64, DataSourceError> {
+        unimplemented!()
+    }
+    fn target_observation(&self, _score: f64, _label: &str) {
+        unimplemented!()
+    }
+    fn mark_complete(&self, _result: &crate::backend::TestCaseResult) {
+        unimplemented!()
+    }
+}
+
+#[test]
+fn start_span_error_raises_stop_test() {
+    let tc = TestCase::new(Box::new(SpanErrorDataSource), false, Mode::TestRun);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tc.start_span(1)));
+    let payload = result.unwrap_err();
+    assert!(
+        payload.downcast_ref::<crate::control::StopTest>().is_some(),
+        "expected a StopTest control unwind"
+    );
+}
+
+#[test]
+fn stop_span_error_raises_stop_test() {
+    let tc = TestCase::new(Box::new(SpanErrorDataSource), false, Mode::TestRun);
+    // Open a span (rolled back by the failed start) so depth bookkeeping
+    // allows the close; then force the close itself to fail.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tc.local.borrow_mut().span_depth = 1;
+        tc.stop_span(false)
+    }));
+    let payload = result.unwrap_err();
+    assert!(
+        payload.downcast_ref::<crate::control::StopTest>().is_some(),
+        "expected a StopTest control unwind"
+    );
+}

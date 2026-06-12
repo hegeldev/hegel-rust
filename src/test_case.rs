@@ -688,13 +688,11 @@ impl TestCase {
     pub fn start_span(&self, label: u64) {
         self.local.borrow_mut().span_depth += 1;
         if let Err(e) = self.with_data_source(|ds| ds.start_span(label)) {
-            // nocov start
             let mut local = self.local.borrow_mut();
             assert!(local.span_depth > 0);
             local.span_depth -= 1;
             drop(local);
             panic_on_data_source_error(e);
-            // nocov end
         }
     }
 
@@ -705,7 +703,9 @@ impl TestCase {
             assert!(local.span_depth > 0);
             local.span_depth -= 1;
         }
-        let _ = self.with_data_source(|ds| ds.stop_span(discard));
+        if let Err(e) = self.with_data_source(|ds| ds.stop_span(discard)) {
+            panic_on_data_source_error(e);
+        }
     }
 }
 
