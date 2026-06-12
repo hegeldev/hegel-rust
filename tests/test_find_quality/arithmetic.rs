@@ -15,7 +15,7 @@ fn test_float_addition_is_not_associative() {
             .settings(Settings::new().test_cases(2000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -31,7 +31,7 @@ fn test_float_addition_does_not_cancel() {
             .settings(Settings::new().test_cases(2000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -47,7 +47,7 @@ fn test_string_addition_is_not_commutative() {
             .settings(Settings::new().database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -65,7 +65,7 @@ fn test_bytes_addition_is_not_commutative() {
             .settings(Settings::new().database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -81,7 +81,7 @@ fn test_integer_bound_can_be_exceeded() {
                 .settings(Settings::new().test_cases(10000).database(None))
                 .run();
             },
-            "Property test failed",
+            "assertion failed",
         );
     }
 }
@@ -97,7 +97,7 @@ fn test_int_is_not_always_negative() {
             .settings(Settings::new().database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 

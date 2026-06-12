@@ -6,6 +6,7 @@
 
 use super::ordering::shrink_ordering;
 use super::{ShrinkResult, ShrinkRun, Shrinker};
+use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_eq};
 use crate::native::core::sort_key;
 
 impl<'a> Shrinker<'a> {
@@ -190,7 +191,7 @@ impl<'a> Shrinker<'a> {
                     // Spans are tree-structured: any span starting inside
                     // an ancestor must also end inside it.  Guard for
                     // future deviations from that invariant.
-                    debug_assert!(d_start >= a_start && d_end <= a_end);
+                    hegel_internal_debug_assert!(d_start >= a_start && d_end <= a_end);
                     let mut attempt = self.current_nodes[..a_start].to_vec();
                     attempt.extend_from_slice(&self.current_nodes[d_start..d_end]);
                     attempt.extend_from_slice(&self.current_nodes[a_end..]);
@@ -258,7 +259,7 @@ impl<'a> Shrinker<'a> {
                 // order under the span recorder's invariants.  A
                 // debug_assert documents the precondition; we don't try
                 // to recover from a violation at runtime.
-                debug_assert!({
+                hegel_internal_debug_assert!({
                     let mut sorted_eps = endpoints.clone();
                     sorted_eps.sort();
                     sorted_eps.windows(2).all(|w| w[0].1 <= w[1].0)
@@ -289,7 +290,7 @@ impl<'a> Shrinker<'a> {
                         // between sibling endpoints.  shrink_ordering
                         // only ever calls accept with length-`n`
                         // permutations.
-                        debug_assert_eq!(permutation.len(), n);
+                        hegel_internal_debug_assert_eq!(permutation.len(), n);
                         let mut attempt: Vec<_> = Vec::with_capacity(snapshot_nodes.len());
                         attempt.extend_from_slice(&snapshot_nodes[..endpoints[0].0]);
                         for (k, &(_, target_end)) in endpoints.iter().enumerate() {

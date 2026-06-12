@@ -109,7 +109,7 @@ fn test_finds_a_local_maximum() {
             .settings(Settings::new().test_cases(200).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -128,7 +128,7 @@ fn test_can_target_a_score_upwards_to_interesting() {
             .settings(Settings::new().test_cases(1000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -167,7 +167,7 @@ fn test_targeting_when_most_do_not_benefit() {
             .settings(Settings::new().test_cases(1000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -199,7 +199,7 @@ fn test_can_target_a_score_downwards() {
             .settings(Settings::new().test_cases(1000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 

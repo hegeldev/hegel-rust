@@ -7,6 +7,7 @@ use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue};
 
 use super::{ShrinkResult, Shrinker, bin_search_down_big_r, find_integer_r};
+use crate::control::{hegel_internal_assert, hegel_internal_debug_assert};
 
 impl<'a> Shrinker<'a> {
     /// Try deleting chunks of choices from the sequence.
@@ -27,7 +28,7 @@ impl<'a> Shrinker<'a> {
                 let end = (i + k).min(self.current_nodes.len());
                 let mut attempt: Vec<_> = self.current_nodes[..i].to_vec();
                 attempt.extend_from_slice(&self.current_nodes[end..]);
-                assert!(attempt.len() < self.current_nodes.len());
+                hegel_internal_assert!(attempt.len() < self.current_nodes.len());
 
                 if !self.consider(&attempt)? && i > 0 {
                     // Try decrementing the preceding choice (helps with
@@ -203,7 +204,7 @@ impl<'a> Shrinker<'a> {
             // accepted candidates that shortened the sequence.  The
             // outer `while i < self.current_nodes.len()` guard means
             // `i` is still in range when we reach this point.
-            debug_assert!(i < self.current_nodes.len());
+            hegel_internal_debug_assert!(i < self.current_nodes.len());
             let original_len = self.current_nodes.len();
             // Lower-by-one in the direction of simplest.
             let towards = if current_val > simplest {
@@ -365,7 +366,7 @@ impl<'a> Shrinker<'a> {
         // `find_integer` starts probing at `n = 1`, so callers never
         // ask for zero-repeat applications.  A debug_assert documents
         // the precondition.
-        debug_assert!(repeats > 0);
+        hegel_internal_debug_assert!(repeats > 0);
         let total_delete = program_len.saturating_mul(repeats);
         if i + total_delete > original.len() {
             return Ok(false);

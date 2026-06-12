@@ -85,7 +85,7 @@ fn main(tc: TestCase) {
 "#;
     TempRustProject::new()
         .main_file(code)
-        .expect_failure("Property test failed")
+        .expect_failure("got nonneg")
         .cargo_run(&[]);
 }
 
