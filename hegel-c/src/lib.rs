@@ -137,6 +137,26 @@ pub enum hegel_mode_t {
     HEGEL_MODE_SINGLE_TEST_CASE = 1,
 }
 
+/// Aggregate outcome of a finished run, read via `hegel_run_result_status`.
+///
+/// - `HEGEL_RUN_STATUS_PASSED`: the property held across every generated
+///   test case.
+/// - `HEGEL_RUN_STATUS_FAILED`: the property failed; inspect each distinct
+///   counterexample via `hegel_run_result_failure_count` /
+///   `hegel_run_result_failure`.
+/// - `HEGEL_RUN_STATUS_ERROR`: the run itself failed — a failed health
+///   check, a nondeterministic test, an engine panic — and produced no
+///   verdict on the property. There are no failures to inspect; the
+///   message is read via `hegel_run_result_error`.
+#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum hegel_run_status_t {
+    HEGEL_RUN_STATUS_PASSED = 0,
+    HEGEL_RUN_STATUS_FAILED = 1,
+    HEGEL_RUN_STATUS_ERROR = 2,
+}
+
 /// Verbosity of engine-emitted output (logs, per-case traces). Set via
 /// `hegel_settings_verbosity`.
 ///
@@ -351,16 +371,14 @@ pub struct HegelRun {
 }
 
 /// Aggregated outcome of a finished run, returned by
-/// `hegel_run_result`. Read passing-vs-failing via
-/// `hegel_run_result_passed`, the number of distinct failures via
-/// `hegel_run_result_failure_count`, and each failure via
-/// `hegel_run_result_failure(r, i)`. A run that ended in a run-level
-/// error (failed health check, nondeterministic test, engine panic)
-/// rather than a test-failure verdict has no failures; its message is
-/// read via `hegel_run_result_error`. The pointer is borrowed from the
-/// `hegel_run_t` and stays valid until `hegel_run_free` is called.
+/// `hegel_run_result`. Read the passed / failed / errored status via
+/// `hegel_run_result_status`, the number of distinct failures via
+/// `hegel_run_result_failure_count`, each failure via
+/// `hegel_run_result_failure(r, i)`, and — for an errored run — the
+/// run-level error message via `hegel_run_result_error`. The pointer is
+/// borrowed from the `hegel_run_t` and stays valid until `hegel_run_free`
+/// is called.
 pub struct HegelRunResult {
-    passed: bool,
     failures: Vec<HegelFailure>,
     /// `Some` iff the run ended in a run-level error instead of a verdict.
     error: Option<CString>,
@@ -397,8 +415,10 @@ impl From<Failure> for HegelFailure {
 
 impl From<TestRunResult> for HegelRunResult {
     fn from(r: TestRunResult) -> Self {
+        // `collect_failures` guarantees `r.passed == r.failures.is_empty()`,
+        // so the status can be derived from the failure list alone.
+        debug_assert_eq!(r.passed, r.failures.is_empty());
         HegelRunResult {
-            passed: r.passed,
             failures: r.failures.into_iter().map(HegelFailure::from).collect(),
             error: None,
         }
@@ -406,13 +426,22 @@ impl From<TestRunResult> for HegelRunResult {
 }
 
 impl HegelRunResult {
-    /// A run that ended in a run-level error: not passed, no failures,
-    /// with the message exposed via `hegel_run_result_error`.
+    /// A run that ended in a run-level error: no failures, with the
+    /// message exposed via `hegel_run_result_error`.
     fn from_error(message: &str) -> Self {
         HegelRunResult {
-            passed: false,
             failures: Vec::new(),
             error: Some(cstring_lossy(message)),
+        }
+    }
+
+    fn status(&self) -> hegel_run_status_t {
+        if self.error.is_some() {
+            hegel_run_status_t::HEGEL_RUN_STATUS_ERROR
+        } else if self.failures.is_empty() {
+            hegel_run_status_t::HEGEL_RUN_STATUS_PASSED
+        } else {
+            hegel_run_status_t::HEGEL_RUN_STATUS_FAILED
         }
     }
 }
@@ -1402,24 +1431,25 @@ pub unsafe extern "C" fn hegel_test_case_is_final_replay(tc: *const HegelTestCas
 
 // ─── Result inspection ──────────────────────────────────────────────────────
 
-/// True iff the property held across every generated test case. False
-/// when the run surfaced failures *or* ended in a run-level error (see
-/// `hegel_run_result_error`).
+/// The run's aggregate status: passed, failed (the property has
+/// counterexamples — see `hegel_run_result_failure`), or errored (the run
+/// itself failed and produced no verdict — see `hegel_run_result_error`).
+/// A NULL `r` reports `HEGEL_RUN_STATUS_ERROR`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_run_result_passed(r: *const HegelRunResult) -> bool {
+pub unsafe extern "C" fn hegel_run_result_status(r: *const HegelRunResult) -> hegel_run_status_t {
     match unsafe { r.as_ref() } {
-        Some(r) => r.passed,
-        None => false,
+        Some(r) => r.status(),
+        None => hegel_run_status_t::HEGEL_RUN_STATUS_ERROR,
     }
 }
 
 /// The run-level error message when the run ended in an error rather than
 /// a verdict on the property — a failed health check (e.g. FilterTooMuch,
 /// TooSlow), a nondeterministic test, or an engine panic — or NULL when it
-/// completed normally. An errored run has `hegel_run_result_passed(r) ==
-/// false` and `hegel_run_result_failure_count(r) == 0`: the error is a
-/// failure of the run itself, not a counterexample to the property. The
-/// pointer is valid until `hegel_run_free`.
+/// completed normally. An errored run has `hegel_run_result_status(r) ==
+/// HEGEL_RUN_STATUS_ERROR` and no failures: the error is a failure of the
+/// run itself, not a counterexample to the property. The pointer is valid
+/// until `hegel_run_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_result_error(r: *const HegelRunResult) -> *const c_char {
     match unsafe { r.as_ref() } {

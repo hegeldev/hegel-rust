@@ -67,6 +67,16 @@ enum CStatus {
     Interesting = 3,
 }
 
+/// `hegel_run_status_t` from hegel.h.
+#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[allow(dead_code)]
+enum CRunStatus {
+    Passed = 0,
+    Failed = 1,
+    Error = 2,
+}
+
 type FnSettingsNew = unsafe extern "C" fn() -> *mut u8;
 type FnSettingsFree = unsafe extern "C" fn(*mut u8);
 type FnSettingsTestCases = unsafe extern "C" fn(*mut u8, u64);
@@ -84,7 +94,7 @@ type FnMarkComplete = unsafe extern "C" fn(*mut u8, CStatus, *const c_char) -> c
 type FnNewPool = unsafe extern "C" fn(*mut u8, *mut i64) -> c_int;
 type FnPoolAdd = unsafe extern "C" fn(*mut u8, i64, *mut i64) -> c_int;
 type FnPoolGenerate = unsafe extern "C" fn(*mut u8, i64, bool, *mut i64) -> c_int;
-type FnRunResultPassed = unsafe extern "C" fn(*const u8) -> bool;
+type FnRunResultStatus = unsafe extern "C" fn(*const u8) -> CRunStatus;
 type FnRunResultError = unsafe extern "C" fn(*const u8) -> *const c_char;
 type FnRunResultFailureCount = unsafe extern "C" fn(*const u8) -> usize;
 type FnRunResultFailure = unsafe extern "C" fn(*const u8, usize) -> *const u8;
@@ -114,7 +124,7 @@ struct Api<'a> {
     new_pool: Symbol<'a, FnNewPool>,
     pool_add: Symbol<'a, FnPoolAdd>,
     pool_generate: Symbol<'a, FnPoolGenerate>,
-    run_result_passed: Symbol<'a, FnRunResultPassed>,
+    run_result_status: Symbol<'a, FnRunResultStatus>,
     run_result_error: Symbol<'a, FnRunResultError>,
     run_result_failure_count: Symbol<'a, FnRunResultFailureCount>,
     run_result_failure: Symbol<'a, FnRunResultFailure>,
@@ -146,7 +156,7 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             new_pool: lib.get(b"hegel_new_pool\0").unwrap(),
             pool_add: lib.get(b"hegel_pool_add\0").unwrap(),
             pool_generate: lib.get(b"hegel_pool_generate\0").unwrap(),
-            run_result_passed: lib.get(b"hegel_run_result_passed\0").unwrap(),
+            run_result_status: lib.get(b"hegel_run_result_status\0").unwrap(),
             run_result_error: lib.get(b"hegel_run_result_error\0").unwrap(),
             run_result_failure_count: lib.get(b"hegel_run_result_failure_count\0").unwrap(),
             run_result_failure: lib.get(b"hegel_run_result_failure\0").unwrap(),
@@ -256,7 +266,11 @@ fn libhegel_runs_passing_property() {
 
         let result = (a.run_result)(run);
         assert!(!result.is_null(), "run_result null after drained loop");
-        assert!((a.run_result_passed)(result), "expected passing run");
+        assert_eq!(
+            (a.run_result_status)(result),
+            CRunStatus::Passed,
+            "expected passing run"
+        );
         assert_eq!((a.run_result_failure_count)(result), 0);
         assert!(
             (a.run_result_error)(result).is_null(),
@@ -390,8 +404,9 @@ fn libhegel_reports_shrunk_failure() {
 
         let result = (a.run_result)(run);
         assert!(!result.is_null());
-        assert!(
-            !(a.run_result_passed)(result),
+        assert_eq!(
+            (a.run_result_status)(result),
+            CRunStatus::Failed,
             "expected failing run (predicate n < 5 is false for many n in [0,100])"
         );
         let n_failures = (a.run_result_failure_count)(result);
@@ -473,7 +488,11 @@ unsafe fn discover_failure_blob(a: &Api) -> CString {
         drive_failing_property(a, run);
 
         let result = (a.run_result)(run);
-        assert!(!(a.run_result_passed)(result), "expected a failing run");
+        assert_eq!(
+            (a.run_result_status)(result),
+            CRunStatus::Failed,
+            "expected a failing run"
+        );
         let f = (a.run_result_failure)(result, 0);
         assert!(!f.is_null());
         let blob_ptr = (a.failure_reproduce_blob)(f);
@@ -713,7 +732,11 @@ fn libhegel_pool_primitives_draw_added_variables() {
 
         let result = (a.run_result)(run);
         assert!(!result.is_null());
-        assert!((a.run_result_passed)(result), "expected passing run");
+        assert_eq!(
+            (a.run_result_status)(result),
+            CRunStatus::Passed,
+            "expected passing run"
+        );
 
         (a.run_free)(run);
         (a.settings_free)(s);
@@ -967,11 +990,12 @@ fn health_check_surfaces_as_run_error() {
             CStr::from_ptr((a.last_error_message)()).to_string_lossy()
         );
 
-        // The run is not passed, lists no failures, and carries the
+        // The run errored, lists no failures, and carries the
         // FilterTooMuch text on the run-level error channel.
-        assert!(
-            !(a.run_result_passed)(result),
-            "expected a non-passing run after the health check fired"
+        assert_eq!(
+            (a.run_result_status)(result),
+            CRunStatus::Error,
+            "expected an errored run after the health check fired"
         );
         assert_eq!(
             (a.run_result_failure_count)(result),

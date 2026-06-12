@@ -259,6 +259,25 @@ typedef enum {
 } hegel_status_t;
 
 /*
+ Aggregate outcome of a finished run, read via `hegel_run_result_status`.
+
+ - `HEGEL_RUN_STATUS_PASSED`: the property held across every generated
+   test case.
+ - `HEGEL_RUN_STATUS_FAILED`: the property failed; inspect each distinct
+   counterexample via `hegel_run_result_failure_count` /
+   `hegel_run_result_failure`.
+ - `HEGEL_RUN_STATUS_ERROR`: the run itself failed — a failed health
+   check, a nondeterministic test, an engine panic — and produced no
+   verdict on the property. There are no failures to inspect; the
+   message is read via `hegel_run_result_error`.
+ */
+typedef enum {
+    HEGEL_RUN_STATUS_PASSED = 0,
+    HEGEL_RUN_STATUS_FAILED = 1,
+    HEGEL_RUN_STATUS_ERROR = 2,
+} hegel_run_status_t;
+
+/*
  One distinct failure surfaced by the run. The strings are owned by
  the parent `hegel_run_result_t`; reading them via
  `hegel_failure_panic_message`, `_diagnostic`, `_origin` returns
@@ -280,14 +299,13 @@ typedef struct hegel_run_t hegel_run_t;
 
 /*
  Aggregated outcome of a finished run, returned by
- `hegel_run_result`. Read passing-vs-failing via
- `hegel_run_result_passed`, the number of distinct failures via
- `hegel_run_result_failure_count`, and each failure via
- `hegel_run_result_failure(r, i)`. A run that ended in a run-level
- error (failed health check, nondeterministic test, engine panic)
- rather than a test-failure verdict has no failures; its message is
- read via `hegel_run_result_error`. The pointer is borrowed from the
- `hegel_run_t` and stays valid until `hegel_run_free` is called.
+ `hegel_run_result`. Read the passed / failed / errored status via
+ `hegel_run_result_status`, the number of distinct failures via
+ `hegel_run_result_failure_count`, each failure via
+ `hegel_run_result_failure(r, i)`, and — for an errored run — the
+ run-level error message via `hegel_run_result_error`. The pointer is
+ borrowed from the `hegel_run_t` and stays valid until `hegel_run_free`
+ is called.
  */
 typedef struct hegel_run_result_t hegel_run_result_t;
 
@@ -655,20 +673,21 @@ int hegel_mark_complete(hegel_test_case_t *tc, hegel_status_t status, const char
 bool hegel_test_case_is_final_replay(const hegel_test_case_t *tc);
 
 /*
- True iff the property held across every generated test case. False
- when the run surfaced failures *or* ended in a run-level error (see
- `hegel_run_result_error`).
+ The run's aggregate status: passed, failed (the property has
+ counterexamples — see `hegel_run_result_failure`), or errored (the run
+ itself failed and produced no verdict — see `hegel_run_result_error`).
+ A NULL `r` reports `HEGEL_RUN_STATUS_ERROR`.
  */
-bool hegel_run_result_passed(const hegel_run_result_t *r);
+hegel_run_status_t hegel_run_result_status(const hegel_run_result_t *r);
 
 /*
  The run-level error message when the run ended in an error rather than
  a verdict on the property — a failed health check (e.g. FilterTooMuch,
  TooSlow), a nondeterministic test, or an engine panic — or NULL when it
- completed normally. An errored run has `hegel_run_result_passed(r) ==
- false` and `hegel_run_result_failure_count(r) == 0`: the error is a
- failure of the run itself, not a counterexample to the property. The
- pointer is valid until `hegel_run_free`.
+ completed normally. An errored run has `hegel_run_result_status(r) ==
+ HEGEL_RUN_STATUS_ERROR` and no failures: the error is a failure of the
+ run itself, not a counterexample to the property. The pointer is valid
+ until `hegel_run_free`.
  */
 const char *hegel_run_result_error(const hegel_run_result_t *r);
 

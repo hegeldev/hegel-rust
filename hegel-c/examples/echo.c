@@ -113,16 +113,21 @@ int main(void) {
     }
 
     const hegel_run_result_t *result = hegel_run_result(run);
-    bool passed = hegel_run_result_passed(result);
+    hegel_run_status_t status = hegel_run_result_status(result);
+    const char *status_str = status == HEGEL_RUN_STATUS_PASSED   ? "PASSED"
+                             : status == HEGEL_RUN_STATUS_FAILED ? "FAILED"
+                                                                 : "ERROR";
     size_t nf = hegel_run_result_failure_count(result);
-    printf("ran %zu valid test cases, %s, %zu failures\n",
-           cases, passed ? "PASSED" : "FAILED", nf);
+    printf("ran %zu valid test cases, %s, %zu failures\n", cases, status_str, nf);
     for (size_t i = 0; i < nf; i++) {
         const hegel_failure_t *f = hegel_run_result_failure(result, i);
         printf("  failure %zu: origin=%s\n", i, hegel_failure_origin(f));
     }
+    if (status == HEGEL_RUN_STATUS_ERROR) {
+        fprintf(stderr, "run error: %s\n", hegel_run_result_error(result));
+    }
 
     hegel_run_free(run);
     hegel_settings_free(s);
-    return passed ? 0 : 1;
+    return status == HEGEL_RUN_STATUS_PASSED ? 0 : 1;
 }
