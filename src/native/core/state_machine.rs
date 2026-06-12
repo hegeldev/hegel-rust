@@ -10,8 +10,9 @@ use std::collections::HashSet;
 
 use super::choices::EngineError;
 use super::state::NativeTestCase;
+use crate::control::hegel_internal_assert;
 use crate::native::bignum::{BigInt, ToPrimitive};
-use crate::test_case::labels;
+use crate::test_case::{invalid_argument, labels};
 
 /// Draw a uniform index in `[0, n)`.
 fn draw_index(ntc: &mut NativeTestCase, n: usize) -> Result<usize, EngineError> {
@@ -88,7 +89,10 @@ pub struct NativeStateMachine {
 
 impl NativeStateMachine {
     pub fn new(rule_names: Vec<String>, invariant_names: Vec<String>) -> Self {
-        assert!(!rule_names.is_empty());
+        if rule_names.is_empty() {
+            invalid_argument!("Stateful testing: there must be at least one rule");
+        }
+
         NativeStateMachine {
             rule_names,
             invariant_names,
@@ -149,7 +153,7 @@ impl NativeStateMachine {
         }
         // Guaranteed by at_least_one_of: enumerating every rule decides them
         // all, and the last undecided candidate is forced enabled.
-        assert!(!allowed.is_empty());
+        hegel_internal_assert!(!allowed.is_empty());
         let k = draw_index(ntc, allowed.len())?;
         let i = allowed[k];
         ntc.draw_integer_forced(

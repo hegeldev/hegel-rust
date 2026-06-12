@@ -1289,7 +1289,7 @@ impl NativeTestCase {
             shrink_towards: BigInt::zero(),
         };
         let v: BigInt = forced.into();
-        assert!(
+        hegel_internal_assert!(
             kind.min_value <= v && v <= kind.max_value,
             "forced value {v:?} outside [{:?}, {:?}]",
             kind.min_value,
