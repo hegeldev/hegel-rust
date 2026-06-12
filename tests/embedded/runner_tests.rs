@@ -218,7 +218,7 @@ mod reproduce {
             );
         });
         let result = result.unwrap();
-        assert!(!result.passed, "property should have failed");
+        assert!(!result.failures.is_empty(), "property should have failed");
         result.failures[0]
             .reproduce_blob
             .clone()

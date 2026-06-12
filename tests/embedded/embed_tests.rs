@@ -18,7 +18,7 @@ fn run_native_invokes_callback_and_returns_passing_result() {
         ds.mark_complete(&TestCaseResult::Valid);
     });
     let result = result.unwrap();
-    assert!(result.passed);
+    assert!(result.failures.is_empty());
     assert!(result.failures.is_empty());
     assert!(calls.load(Ordering::SeqCst) >= 1);
 }
@@ -65,7 +65,10 @@ fn run_native_replays_persisted_failure_on_second_run() {
             _ => ds.mark_complete(&TestCaseResult::Overrun),
         }
     });
-    assert!(!result.unwrap().passed, "first run must have failed");
+    assert!(
+        !result.unwrap().failures.is_empty(),
+        "first run must have failed"
+    );
     assert!(
         first_failures
             .lock()
@@ -259,7 +262,7 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
         }
         ds.mark_complete(&TestCaseResult::Valid);
     });
-    assert!(!result.unwrap().passed);
+    assert!(!result.unwrap().failures.is_empty());
     let shrunk = last
         .lock()
         .unwrap()
@@ -303,7 +306,7 @@ fn run_native_callback_can_generate_via_data_source() {
         assert!(matches!(value, ciborium::Value::Bool(_)));
         ds.mark_complete(&TestCaseResult::Valid);
     });
-    assert!(result.unwrap().passed);
+    assert!(result.unwrap().failures.is_empty());
 }
 
 /// A test body that marks any integer `>= 1_000_000` interesting. Used by
@@ -340,7 +343,7 @@ fn discover_reproduce_blob() -> String {
         mark_large_interesting(&*ds)
     })
     .unwrap();
-    assert!(!result.passed, "property should have failed");
+    assert!(!result.failures.is_empty(), "property should have failed");
     result.failures[0]
         .reproduce_blob
         .clone()

@@ -18,7 +18,6 @@ use std::backtrace::{Backtrace, BacktraceStatus};
 use std::cell::{Cell, RefCell};
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
 use std::sync::Once;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::antithesis::TestLocation;
 use crate::backend::{DataSource, Exploration, Failure, TestCaseResult, TestRunner};
@@ -381,20 +380,15 @@ pub(crate) fn drive<R, F>(
 {
     init_panic_hook();
     let mut test_fn = test_fn;
-    let got_interesting = AtomicBool::new(false);
     let mode = settings.mode;
     let verbosity = settings.verbosity;
     let mut run_case = |backend: Box<dyn DataSource + Send + Sync>, is_final: bool| {
-        let tc_result = run_test_case(backend, &mut test_fn, is_final, mode, verbosity);
-        if matches!(&tc_result, TestCaseResult::Interesting(_)) {
-            got_interesting.store(true, Ordering::SeqCst);
-        }
+        run_test_case(backend, &mut test_fn, is_final, mode, verbosity);
     };
 
     let exploration = runner.explore(settings, database_key, &mut run_case);
 
-    let test_failed =
-        !matches!(exploration, Ok(Exploration::Passed)) || got_interesting.load(Ordering::SeqCst);
+    let test_failed = !matches!(exploration, Ok(Exploration::Passed));
 
     crate::antithesis::require_antithesis_feature(
         crate::antithesis::is_running_in_antithesis(),
@@ -422,10 +416,9 @@ pub(crate) fn drive<R, F>(
         // failure, so it gets the error's own message, not the
         // `Property test failed:` framing.
         Err(error) => panic!("{error}"),
-        // `got_interesting` was set but the runner reported a clean pass —
-        // e.g. an aborted mid-draw test case.  Preserve the legacy generic
-        // panic.
-        Ok(Exploration::Passed) => panic!("Property test failed: unknown"),
+        // `test_failed` is exactly `!Passed`, and a passing run returned
+        // above.
+        Ok(Exploration::Passed) => unreachable!(),
         // A failure with no counterexample to replay (`Mode::SingleTestCase`
         // ran its one test case as its own final, printing its diagnostic
         // at the catch site): report it directly.
@@ -451,7 +444,7 @@ pub(crate) fn drive<R, F>(
             counterexamples.len()
         );
     }
-    let mut reported: Vec<Failure> = Vec::new();
+    let mut reported: Vec<String> = Vec::new();
     for counterexample in counterexamples {
         if multiple && !quiet {
             eprintln!();
@@ -466,7 +459,7 @@ pub(crate) fn drive<R, F>(
         if let Some(line) = reproducer_line(settings, &failure) {
             eprintln!("{line}");
         }
-        reported.push(failure);
+        reported.push(failure.panic_message);
     }
 
     match reported.as_slice() {
@@ -476,7 +469,7 @@ pub(crate) fn drive<R, F>(
         // Single-failure path: keep the original panic shape so test
         // harnesses that pattern-match on `"Property test failed: <msg>"`
         // (e.g. `Minimal::run` in `tests/common/utils.rs`) keep working.
-        [failure] => panic!("Property test failed: {}", failure.panic_message),
+        [message] => panic!("Property test failed: {}", message),
         many => panic!(
             "Property-based test failed with {} distinct failures.",
             many.len()

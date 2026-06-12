@@ -281,49 +281,23 @@ fn drive_multiple_failures_prints_each_reproducer_and_panics() {
 
 // ── run_lifecycle: drive's defensive unknown panic ───────────────────────
 //
-// If a test case came back Interesting at some point but the runner's
-// exploration reports a clean pass (e.g. an aborted mid-draw test case),
-// `drive` must still fail the run — with the legacy generic message, since
-// there is no `Failure` to report.
-
-struct PassesDespiteInterestingRunner;
-
-impl crate::backend::TestRunner for PassesDespiteInterestingRunner {
-    type Counterexample = ();
-
-    fn explore(
-        &self,
-        _settings: &crate::runner::Settings,
-        _database_key: Option<&str>,
-        run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
-    ) -> Result<crate::backend::Exploration<()>, crate::backend::RunError> {
-        // One interesting test case that the exploration then "forgets".
-        run_case(Box::new(BtStubDataSource), false);
-        Ok(crate::backend::Exploration::Passed)
-    }
-
-    fn replay_final(
-        &self,
-        _counterexample: (),
-        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
-    ) -> Result<crate::backend::Failure, crate::backend::RunError> {
-        unreachable!("a passing exploration has nothing to replay")
-    }
-}
+// An exploration that reports counterexamples but lists none of them (no
+// real runner produces this) must still fail the run, with the legacy
+// generic message, rather than report a count of zero or pass.
 
 #[test]
-fn drive_panics_with_unknown_when_interesting_but_exploration_passes() {
+fn drive_panics_with_unknown_for_an_empty_counterexample_list() {
     init_panic_hook();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         drive(
-            PassesDespiteInterestingRunner,
-            |_tc: TestCase| panic!("{}", "boom"),
+            StubRunner { failures: vec![] },
+            |_tc: TestCase| {},
             &crate::runner::Settings::new(),
             None,
             None,
         );
     }));
-    let payload = result.expect_err("drive should panic when a test case was interesting");
+    let payload = result.expect_err("drive should panic on an empty counterexample list");
     let msg = payload.downcast_ref::<&str>().copied().unwrap_or("");
     assert_eq!(msg, "Property test failed: unknown");
 }

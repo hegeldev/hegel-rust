@@ -189,14 +189,12 @@ pub enum Exploration<C> {
 ///
 /// [`crate::embed::run_native`] folds an [`Exploration`] plus its final
 /// replays into one of these so libhegel can inspect the run as a whole.
+/// The run passed iff `failures` is empty.
 #[derive(Debug)]
 pub struct TestRunResult {
-    /// Whether all test cases passed.
-    pub passed: bool,
-    /// One entry per distinct failing example surfaced by the run.  Empty when
-    /// `passed` is `true`.  For the multi-bug case (Hypothesis emits one final
-    /// replay per `BaseExceptionGroup` origin), each origin contributes one
-    /// entry, ordered as the backend replayed them.
+    /// One entry per distinct failing example surfaced by the run, one per
+    /// distinct bug origin, ordered as the run replayed them. Empty for a
+    /// passing run.
     pub failures: Vec<Failure>,
 }
 
@@ -251,11 +249,9 @@ pub(crate) fn collect_failures<R: TestRunner>(
 ) -> Result<TestRunResult, RunError> {
     match exploration {
         Exploration::Passed => Ok(TestRunResult {
-            passed: true,
             failures: Vec::new(),
         }),
         Exploration::Failed(failure) => Ok(TestRunResult {
-            passed: false,
             failures: vec![failure],
         }),
         Exploration::Counterexamples(counterexamples) => {
@@ -263,10 +259,7 @@ pub(crate) fn collect_failures<R: TestRunner>(
             for counterexample in counterexamples {
                 failures.push(runner.replay_final(counterexample, run_case)?);
             }
-            Ok(TestRunResult {
-                passed: failures.is_empty(),
-                failures,
-            })
+            Ok(TestRunResult { failures })
         }
     }
 }

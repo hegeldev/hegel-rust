@@ -381,7 +381,6 @@ fn collect_failures_folds_a_single_test_case_failure() {
     let result =
         crate::backend::collect_failures(&NativeTestRunner, exploration.unwrap(), &mut run_case)
             .unwrap();
-    assert!(!result.passed);
     assert_eq!(result.failures.len(), 1);
     assert!(
         result.failures[0].panic_message.contains("single-case bug"),
@@ -417,7 +416,7 @@ fn run_main_with_urandom_backend_generates_and_passes() {
         &mut run_case,
     )
     .unwrap();
-    assert!(result.passed);
+    assert!(result.failures.is_empty());
 }
 
 #[test]
@@ -448,7 +447,6 @@ fn run_main_with_urandom_backend_finds_counterexample() {
         &mut run_case,
     )
     .unwrap();
-    assert!(!result.passed);
     assert!(
         result.failures[0].panic_message.contains("always fails"),
         "{:?}",
@@ -494,7 +492,10 @@ fn run_main_stops_shrinking_when_budget_is_exhausted() {
         &mut run_case,
     )
     .unwrap();
-    assert!(!result.passed, "the failure must still be reported");
+    assert!(
+        !result.failures.is_empty(),
+        "the failure must still be reported"
+    );
     assert!(
         result.failures[0].panic_message.contains("non-empty vec"),
         "{:?}",
@@ -666,7 +667,7 @@ fn discover_reproduce_blob() -> String {
         &mut run_case,
     )
     .unwrap();
-    assert!(!result.passed, "property should have failed");
+    assert!(!result.failures.is_empty(), "property should have failed");
     result.failures[0]
         .reproduce_blob
         .clone()
@@ -690,7 +691,6 @@ fn reproduce_runner_replays_the_counterexample() {
         .unwrap();
     let result = crate::backend::collect_failures(&runner, exploration, &mut run_case).unwrap();
 
-    assert!(!result.passed);
     assert_eq!(result.failures.len(), 1);
     assert_eq!(
         result.failures[0].reproduce_blob.as_deref(),

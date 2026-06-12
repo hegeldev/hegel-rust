@@ -413,9 +413,6 @@ impl From<Failure> for HegelFailure {
 
 impl From<TestRunResult> for HegelRunResult {
     fn from(r: TestRunResult) -> Self {
-        // `collect_failures` guarantees `r.passed == r.failures.is_empty()`,
-        // so the status can be derived from the failure list alone.
-        debug_assert_eq!(r.passed, r.failures.is_empty());
         HegelRunResult {
             failures: r.failures.into_iter().map(HegelFailure::from).collect(),
             error: None,
