@@ -4,6 +4,8 @@
 
 /// A sorted, disjoint set of `(start, end)` codepoint intervals. Inclusive on
 /// both endpoints. Acts like a sorted sequence of the covered integers.
+use crate::control::hegel_internal_assert;
+
 #[derive(Debug, Clone)]
 pub struct IntervalSet {
     pub intervals: Vec<(u32, u32)>,
@@ -21,7 +23,7 @@ impl IntervalSet {
         let mut offsets = Vec::with_capacity(intervals.len() + 1);
         offsets.push(0usize);
         for &(u, v) in &intervals {
-            assert!(u <= v, "invalid interval ({u}, {v})");
+            hegel_internal_assert!(u <= v, "invalid interval ({u}, {v})");
             let last = *offsets.last().unwrap();
             offsets.push(last + (v - u + 1) as usize);
         }

@@ -23,6 +23,7 @@ mod special;
 mod text;
 
 use crate::cbor_utils::map_get;
+use crate::control::hegel_internal_assert;
 use crate::native::bignum::{BigInt, Sign, ToPrimitive};
 use crate::native::core::state::MAX_DEPTH;
 use crate::native::core::{EngineError, ManyState, NativeTestCase, Span, Status};
@@ -146,7 +147,7 @@ pub(crate) fn many_reject(
     ntc: &mut NativeTestCase,
     state: &mut ManyState,
 ) -> Result<(), EngineError> {
-    assert!(state.count > 0);
+    hegel_internal_assert!(state.count > 0);
     state.count -= 1;
     state.rejections += 1;
     if state.rejections > std::cmp::max(3, 2 * state.count) {

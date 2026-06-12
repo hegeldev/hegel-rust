@@ -112,7 +112,7 @@ int main(void) {
     }
 
     const hegel_run_result_t *result = hegel_run_result(run);
-    bool passed = hegel_run_result_passed(result);
+    bool passed = hegel_run_result_status(result) == HEGEL_RUN_STATUS_PASSED;
 
     printf("ran %zu valid cases (max list size seen: %zu), %s\n",
            total, max_seen, passed ? "PASSED" : "FAILED");

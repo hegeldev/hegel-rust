@@ -244,7 +244,7 @@ fn test_explicit_assume_panics() {
             let etc = hegel::ExplicitTestCase::new();
             etc.assume(false);
         },
-        "__HEGEL_ASSUME_FAIL",
+        "Explicit test case: assumption violated",
     );
 }
 
@@ -255,7 +255,7 @@ fn test_explicit_reject_panics() {
             let etc = hegel::ExplicitTestCase::new();
             etc.reject();
         },
-        "__HEGEL_ASSUME_FAIL",
+        "Explicit test case: assumption violated",
     );
 }
 

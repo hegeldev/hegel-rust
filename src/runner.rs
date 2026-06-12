@@ -1,5 +1,5 @@
 use crate::antithesis::TestLocation;
-use crate::settings::Settings;
+use crate::settings::{Mode, Settings};
 use crate::test_case::TestCase;
 
 // ─── Hegel test builder ─────────────────────────────────────────────────────
@@ -86,6 +86,18 @@ where
         if let Some(blob) = self.reproduce_failure {
             crate::run_lifecycle::drive(
                 crate::native::test_runner::ReproduceRunner { blob },
+                self.test_fn,
+                &self.settings,
+                self.database_key.as_deref(),
+                self.test_location.as_ref(),
+            );
+            return;
+        }
+
+        // A single test case is not a property-test run (no exploration,
+        // shrinking, or replay) and bypasses the TestRunner machinery.
+        if self.settings.mode == Mode::SingleTestCase {
+            crate::run_lifecycle::drive_single(
                 self.test_fn,
                 &self.settings,
                 self.database_key.as_deref(),

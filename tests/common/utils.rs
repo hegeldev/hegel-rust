@@ -343,7 +343,7 @@ where
                 .downcast_ref::<&str>()
                 .copied()
                 .or_else(|| payload.downcast_ref::<String>().map(|s| s.as_str()));
-            let is_expected = msg.is_some_and(|s| s == "Property test failed: HEGEL_MINIMAL_FOUND");
+            let is_expected = msg.is_some_and(|s| s == "HEGEL_MINIMAL_FOUND");
             if !is_expected {
                 std::panic::resume_unwind(payload);
             }

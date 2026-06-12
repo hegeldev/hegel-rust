@@ -17,7 +17,8 @@ fn run_native_invokes_callback_and_returns_passing_result() {
         calls.fetch_add(1, Ordering::SeqCst);
         ds.mark_complete(&TestCaseResult::Valid);
     });
-    assert!(result.passed);
+    let result = result.unwrap();
+    assert!(result.failures.is_empty());
     assert!(result.failures.is_empty());
     assert!(calls.load(Ordering::SeqCst) >= 1);
 }
@@ -54,7 +55,6 @@ fn run_native_replays_persisted_failure_on_second_run() {
                     first_failures.lock().unwrap().push(n);
                     ds.mark_complete(&TestCaseResult::Interesting(Failure {
                         panic_message: "n >= 1_000_000".to_string(),
-                        diagnostic: "n >= 1_000_000\n".to_string(),
                         origin: "n >= 1_000_000".to_string(),
                         reproduce_blob: None,
                     }));
@@ -65,7 +65,10 @@ fn run_native_replays_persisted_failure_on_second_run() {
             _ => ds.mark_complete(&TestCaseResult::Overrun),
         }
     });
-    assert!(!result.passed, "first run must have failed");
+    assert!(
+        !result.unwrap().failures.is_empty(),
+        "first run must have failed"
+    );
     assert!(
         first_failures
             .lock()
@@ -93,7 +96,6 @@ fn run_native_replays_persisted_failure_on_second_run() {
             if n >= 1_000_000 {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     panic_message: "n >= 1_000_000".to_string(),
-                    diagnostic: "n >= 1_000_000\n".to_string(),
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
                 }));
@@ -149,7 +151,6 @@ fn run_native_shrinks_predicate_boundary_seed_sweep() {
                     *last.lock().unwrap() = Some(n);
                     ds.mark_complete(&TestCaseResult::Interesting(Failure {
                         panic_message: "n >= 1_000_000".to_string(),
-                        diagnostic: "n >= 1_000_000\n".to_string(),
                         origin: "n >= 1_000_000".to_string(),
                         reproduce_blob: None,
                     }));
@@ -197,7 +198,6 @@ fn run_native_shrinks_predicate_boundary_to_exact_value() {
                 *last_failure.lock().unwrap() = Some(n);
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     panic_message: "n >= 1_000_000".to_string(),
-                    diagnostic: "n >= 1_000_000\n".to_string(),
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
                 }));
@@ -254,7 +254,6 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
                 *last.lock().unwrap() = Some(n);
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     panic_message: "n >= 1_000_000".to_string(),
-                    diagnostic: "n >= 1_000_000\n".to_string(),
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
                 }));
@@ -263,7 +262,7 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
         }
         ds.mark_complete(&TestCaseResult::Valid);
     });
-    assert!(!result.passed);
+    assert!(!result.unwrap().failures.is_empty());
     let shrunk = last
         .lock()
         .unwrap()
@@ -281,7 +280,6 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
             if predicate(n) {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     panic_message: "n >= 1_000_000".to_string(),
-                    diagnostic: "n >= 1_000_000\n".to_string(),
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
                 }));
@@ -308,7 +306,7 @@ fn run_native_callback_can_generate_via_data_source() {
         assert!(matches!(value, ciborium::Value::Bool(_)));
         ds.mark_complete(&TestCaseResult::Valid);
     });
-    assert!(result.passed);
+    assert!(result.unwrap().failures.is_empty());
 }
 
 /// A test body that marks any integer `>= 1_000_000` interesting. Used by
@@ -326,7 +324,6 @@ fn mark_large_interesting(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
             if n >= 1_000_000 {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     panic_message: "n >= 1_000_000".to_string(),
-                    diagnostic: "n >= 1_000_000\n".to_string(),
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
                 }));
@@ -344,8 +341,9 @@ fn discover_reproduce_blob() -> String {
     let settings = quiet_settings(200).seed(Some(7));
     let result = run_native(&settings, None, |ds, _is_final| {
         mark_large_interesting(&*ds)
-    });
-    assert!(!result.passed, "property should have failed");
+    })
+    .unwrap();
+    assert!(!result.failures.is_empty(), "property should have failed");
     result.failures[0]
         .reproduce_blob
         .clone()
@@ -387,4 +385,42 @@ fn data_source_for_blob_logs_at_debug_verbosity() {
 #[test]
 fn data_source_for_blob_rejects_an_undecodable_blob() {
     assert!(data_source_for_blob(&quiet_settings(1), "not-a-valid-blob").is_none());
+}
+
+#[test]
+fn run_native_single_test_case_reports_the_failure() {
+    // `Mode::SingleTestCase` over the embedding API: the one test case is
+    // final from the start and its failure comes back in the result.
+    use crate::backend::Failure;
+
+    let settings = quiet_settings(1).mode(crate::settings::Mode::SingleTestCase);
+    let finals = AtomicUsize::new(0);
+    let result = run_native(&settings, None, |ds, is_final| {
+        if is_final {
+            finals.fetch_add(1, Ordering::SeqCst);
+        }
+        ds.mark_complete(&TestCaseResult::Interesting(Failure {
+            panic_message: "single-case bug".to_string(),
+            origin: "single-case bug".to_string(),
+            reproduce_blob: None,
+        }));
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(result.failures[0].panic_message, "single-case bug");
+    assert_eq!(
+        finals.load(Ordering::SeqCst),
+        1,
+        "the single test case is its own final replay"
+    );
+}
+
+#[test]
+fn run_native_single_test_case_passes_cleanly() {
+    let settings = quiet_settings(1).mode(crate::settings::Mode::SingleTestCase);
+    let result = run_native(&settings, None, |ds, _is_final| {
+        ds.mark_complete(&TestCaseResult::Valid);
+    })
+    .unwrap();
+    assert!(result.failures.is_empty());
 }

@@ -13,6 +13,7 @@ use crate::native::core::{
 };
 
 use super::{ShrinkResult, ShrinkRun, Shrinker, bin_search_down_r, find_integer_r};
+use crate::control::hegel_internal_debug_assert;
 
 /// Largest `f64` for which `n + 1.0 != n` holds — i.e., `2^53`. Above
 /// this magnitude consecutive integers stop being individually
@@ -27,7 +28,7 @@ const MAX_PRECISE_INTEGER: f64 = (1u64 << 53) as f64;
 /// (numerator > `2^127`) both overflow. Callers skip the integer-ratio
 /// shrink step for those.
 pub(super) fn as_integer_ratio(v: f64) -> Option<(u128, u128)> {
-    debug_assert!(v.is_finite() && v > 0.0);
+    hegel_internal_debug_assert!(v.is_finite() && v > 0.0);
     let bits = v.to_bits();
     let biased_exp = ((bits >> 52) & 0x7FF) as i32;
     let mantissa_bits = bits & ((1u64 << 52) - 1);

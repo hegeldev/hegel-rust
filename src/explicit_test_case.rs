@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 
 use crate::generators::Generator;
-use crate::test_case::ASSUME_FAIL_STRING;
 
 struct ExplicitValue {
     source_expr: String,
@@ -126,7 +125,11 @@ impl ExplicitTestCase {
     }
 
     pub fn reject(&self) -> ! {
-        panic!("{}", ASSUME_FAIL_STRING);
+        // There is no engine to reject to: an explicit test case runs its
+        // one example directly, so a violated assumption is a failure of
+        // that example, reported with a human-readable message rather than
+        // a control-flow unwind.
+        panic!("Explicit test case: assumption violated (tc.assume / tc.reject)");
     }
 
     pub fn target(&self, _score: f64) {

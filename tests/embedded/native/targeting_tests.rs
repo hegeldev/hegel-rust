@@ -288,9 +288,8 @@ fn run_optimise<F>(start: Vec<ChoiceValue>, start_score: f64, mut test_fn: F)
 where
     F: FnMut(TestCase),
 {
-    let mut run_case = move |ds: Box<dyn crate::backend::DataSource + Send + Sync>,
-                             is_final: bool| {
-        run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal).unwrap();
+    let mut run_case = move |ds: Box<dyn crate::backend::DataSource + Send + Sync>| {
+        run_test_case(ds, &mut test_fn, false, Mode::TestRun, Verbosity::Normal);
     };
     let settings = crate::Settings::new().database(None).seed(Some(0xc0ffee));
     let mut engine = Engine::new(&settings, None, &mut run_case);

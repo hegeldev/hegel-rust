@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::control::hegel_internal_assert;
 use crate::native::bignum::{BigInt, BigUint, Zero};
 use crate::native::floats::sign_aware_lte;
 use crate::native::intervalsets::IntervalSet;
@@ -288,7 +289,7 @@ impl StringChoice {
     /// Panics on an empty alphabet — callers must reject empty alphabets at
     /// the schema layer before constructing the `StringChoice`.
     pub(crate) fn simplest_codepoint(&self) -> u32 {
-        assert!(
+        hegel_internal_assert!(
             !self.intervals.is_empty(),
             "StringChoice::simplest_codepoint: empty alphabet"
         );
@@ -395,7 +396,7 @@ impl StringChoice {
     pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<Vec<u32>> {
         use crate::native::bignum::{BigUint, Zero};
         let alpha = BigUint::from(self.alpha_size());
-        assert!(!alpha.is_zero(), "StringChoice::from_index: empty alphabet");
+        hegel_internal_assert!(!alpha.is_zero(), "StringChoice::from_index: empty alphabet");
         let mut remaining = index;
         for length in self.min_size..=self.max_size {
             let bucket_size = alpha.pow(length as u32);
@@ -1013,7 +1014,7 @@ impl ChoiceTemplate {
     /// remaining-draws count. `Some(0)` is rejected at construction time.
     pub fn simplest(count: Option<usize>) -> Self {
         if let Some(n) = count {
-            assert!(n > 0, "ChoiceTemplate count must be positive (got 0)");
+            hegel_internal_assert!(n > 0, "ChoiceTemplate count must be positive (got 0)");
         }
         Self {
             kind: ChoiceTemplateKind::Simplest,

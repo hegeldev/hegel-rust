@@ -1,32 +1,33 @@
 //! Shared per-test-case execution lifecycle.
 //!
 //! Provides the panic hook, the `run_test_case` wrapper that catches a single
-//! test body's panic and converts it into a [`TestCaseResult`] (or an
-//! [`InternalError`] when the panic originates inside hegel's own source),
-//! and the `drive` function that takes a [`TestRunner`] implementation,
-//! hands it a `run_case` callback, and surfaces the run-level result.
+//! test body's panic and converts it into a [`TestCaseResult`] (or re-raises
+//! it immediately when the panic originates inside hegel's own source), and
+//! the `drive` function that takes a [`TestRunner`] implementation, hands it
+//! a `run_case` callback, and surfaces the run-level result.
 //!
 //! The native engine backend (`crate::native::test_runner::NativeTestRunner`)
 //! plugs into this lifecycle. The runner is free to do whatever it likes
-//! inside its `TestRunner::run` to decide which test cases to run; the
+//! inside its `TestRunner::explore` to decide which test cases to run; the
 //! lifecycle owns everything that surrounds it — installing the panic hook,
 //! wrapping each test body with `catch_unwind` plus `mark_complete`, the
-//! antithesis integration, and the final `panic!("Property test failed: ...")`
-//! re-raise.
+//! antithesis integration, the final replay of each discovered
+//! counterexample (with its report printed around it), and the closing
+//! re-raise of the failing test's own panic.
 
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::cell::{Cell, RefCell};
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
 use std::sync::Once;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::antithesis::TestLocation;
-use crate::backend::{DataSource, Failure, TestCaseResult, TestRunner};
-use crate::control::{currently_in_test_context, with_test_context};
-use crate::settings::{Mode, Settings, Verbosity};
-use crate::test_case::{
-    ASSUME_FAIL_STRING, INVALID_ARGUMENT_PREFIX, LOOP_DONE_STRING, STOP_TEST_STRING, TestCase,
+use crate::backend::{DataSource, Exploration, Failure, TestCaseResult, TestRunner};
+use crate::control::{
+    AssumeFailed, InternalError, InvalidArgument, LoopDone, StopTest, currently_in_test_context,
+    with_test_context,
 };
+use crate::settings::{Mode, Settings, Verbosity};
+use crate::test_case::TestCase;
 
 static PANIC_HOOK_INIT: Once = Once::new();
 
@@ -48,18 +49,6 @@ impl PanicInfo {
     }
 }
 
-/// A hegel-internal panic. When a panic captured during a test originates
-/// from hegel's own source files (rather than the user's test body), the
-/// lifecycle short-circuits the per-test-case flow and bubbles this up so
-/// the top-level driver can re-raise it as a hegel error rather than a
-/// user-test failure.
-#[doc(hidden)]
-#[derive(Debug)]
-pub struct InternalError {
-    pub panic_message: String,
-    pub panic_info: PanicInfo,
-}
-
 thread_local! {
     /// `PanicInfo` captured by the panic hook for the most recent panic
     /// raised inside a test context. The hook overwrites this on every
@@ -69,12 +58,13 @@ thread_local! {
 
     /// Whether the panic hook should pay to capture a backtrace for the next
     /// panic on this thread. Set by [`run_test_case`] to `should_emit`
-    /// (`is_final || verbose`) — i.e. only when the resulting diagnostic will
-    /// actually be shown. Capturing (and, under `RUST_BACKTRACE`, symbolizing)
-    /// a backtrace for every discarded shrink probe is the dominant cost of
-    /// failing-heavy property runs, and is far worse on Windows. Panics that
-    /// originate from hegel's own source bypass this gate: they are fatal
-    /// internal errors whose backtrace must survive to the re-raise.
+    /// (`(is_final && !quiet) || verbose`) — i.e. only when the resulting
+    /// diagnostic will actually be shown. Capturing (and, under
+    /// `RUST_BACKTRACE`, symbolizing) a backtrace for every discarded shrink
+    /// probe is the dominant cost of failing-heavy property runs, and is far
+    /// worse on Windows. Panics that originate from hegel's own source
+    /// bypass this gate: they are fatal internal errors whose backtrace
+    /// must survive to the re-raise.
     static CAPTURE_BACKTRACE: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -82,35 +72,18 @@ fn take_panic_info() -> Option<PanicInfo> {
     LAST_PANIC_INFO.with(|info| info.borrow_mut().take())
 }
 
-/// Control-flow panics (a failed `assume`, `stop_test`, loop-done, or an
-/// invalid-argument usage error) are caught and classified by
-/// [`run_test_case`] without ever rendering a backtrace, so the hook must not
-/// pay to capture one for them — they are common on the generation hot path.
-fn is_control_panic(payload: &(dyn std::any::Any + Send)) -> bool {
-    let msg = payload
-        .downcast_ref::<&str>()
-        .copied()
-        .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
-    msg.is_some_and(|m| {
-        m == ASSUME_FAIL_STRING
-            || m == STOP_TEST_STRING
-            || m == LOOP_DONE_STRING
-            || m.starts_with(INVALID_ARGUMENT_PREFIX)
-    })
-}
-
 /// Install the cross-backend panic hook on first call.
 ///
 /// Idempotent across all backends: the hook captures the location for any
 /// panic raised inside a test context (so [`run_test_case`] can read it after
 /// `catch_unwind`), and forwards everything else to the previous hook
-/// unchanged. A backtrace is captured only when the panic is a genuine
-/// failure (not a control-flow panic — see [`is_control_panic`]) and either
-/// [`CAPTURE_BACKTRACE`] is set or the panic originates from hegel's own
-/// source (a fatal internal error whose backtrace must survive to the
-/// re-raise — see [`is_hegel_file`]). Without the suppression, every
-/// shrinker probe would print a `thread 'main' panicked` line to stderr and
-/// the user-visible output would be unreadable.
+/// unchanged. A backtrace is captured only when [`CAPTURE_BACKTRACE`] is
+/// set or the panic originates from hegel's own source (a fatal internal
+/// error whose backtrace must survive to the re-raise — see
+/// [`is_hegel_file`]). Control-flow unwinds (a rejected assumption,
+/// out-of-data, ...) never reach any hook at all — they are raised via
+/// [`crate::control::raise_control`]'s `resume_unwind`, which skips hooks
+/// by construction.
 pub(crate) fn init_panic_hook() {
     PANIC_HOOK_INIT.call_once(|| {
         let prev_hook = panic::take_hook();
@@ -122,6 +95,11 @@ pub(crate) fn init_panic_hook() {
 
             let thread = std::thread::current();
             let thread_name = thread.name().unwrap_or("<unnamed>").to_string();
+            // `ThreadId` only exposes its integer via the unstable
+            // `as_u64`, so scrape the `Debug` form ("ThreadId(N)"). That
+            // format is not guaranteed; if it changes, the diagnostic
+            // header degrades cosmetically and the report-layout tests'
+            // `(\d+)` patterns will flag it on the toolchain bump.
             let thread_id = format!("{:?}", thread.id())
                 .trim_start_matches("ThreadId(")
                 .trim_end_matches(')')
@@ -133,12 +111,10 @@ pub(crate) fn init_panic_hook() {
             let line = loc.line();
             let column = loc.column();
             // Only capture (and symbolize) a backtrace when the diagnostic
-            // will actually be shown and the panic is a genuine failure.
-            // Hegel-internal panics always capture: they re-raise as fatal
-            // internal errors whose original backtrace must be preserved.
-            let backtrace = if !is_control_panic(info.payload())
-                && (CAPTURE_BACKTRACE.get() || is_hegel_file(&file))
-            {
+            // will actually be shown. Hegel-internal panics always capture:
+            // they re-raise as fatal internal errors whose original
+            // backtrace must be preserved.
+            let backtrace = if CAPTURE_BACKTRACE.get() || is_hegel_file(&file) {
                 Backtrace::capture()
             } else {
                 Backtrace::disabled()
@@ -236,13 +212,15 @@ fn filter_short_backtrace(backtrace_str: &str) -> String {
     result.join("\n")
 }
 
-/// Placeholder `PanicInfo` used when the cross-backend panic hook didn't
-/// capture info for a panic — e.g. if [`init_panic_hook`] wasn't called
-/// before the test ran, or if the panic originated outside the
-/// `with_test_context` window. `drive` always installs the hook before
-/// calling [`run_test_case`], so this fallback isn't reached from the
-/// production path; isolating it lets us cover the placeholder
-/// construction without a contrived hook-bypass setup.
+/// Placeholder `PanicInfo` used when the panic hook captured nothing for a
+/// caught panic. This *is* reached in production: a genuine panic on a
+/// spawned thread lands its capture in that thread's `LAST_PANIC_INFO`,
+/// and the `join().unwrap()` that propagates it uses `resume_unwind`,
+/// which skips the hook on the joining thread — so the lifecycle finds
+/// nothing here. One consequence is that every such failure shares the
+/// origin `"Panic at <unknown>"`, merging distinct threaded bugs into one
+/// counterexample; fixing that needs cross-thread capture, which is
+/// deferred until there is structured concurrency support to hang it on.
 pub(crate) fn unknown_panic_info() -> PanicInfo {
     PanicInfo {
         thread_name: "<unknown>".to_string(),
@@ -254,7 +232,8 @@ pub(crate) fn unknown_panic_info() -> PanicInfo {
     }
 }
 
-/// Extract a string message from a panic payload.
+/// Extract a string message from a panic payload. Pre-N1 this was duplicated
+/// in `src/native/runner.rs:11`; that copy now re-exports this one.
 ///
 /// `pub` so that the libhegel C bindings (`hegel-c`) can use it from their
 /// own `catch_unwind` wrapper around `run_native`. Not part of the
@@ -315,86 +294,115 @@ pub(crate) fn is_hegel_file(file_path: &str) -> bool {
 }
 
 /// Run the user's test body once for the supplied [`DataSource`], catching
-/// any panic and translating it to a [`TestCaseResult`] (or
-/// [`InternalError`] when the panic originates from hegel itself).
+/// any panic and translating it to a [`TestCaseResult`].
 ///
-/// On the user-panic path the panic site is captured as a `file:line:col`
-/// string and stored on the [`Failure`] so per-origin shrinking can key on
-/// it. On the hegel-internal panic path no [`TestCase::mark_complete`] is
-/// sent — the caller is expected to re-raise the error immediately.
+/// Reports the outcome back through the [`DataSource`] interface via
+/// [`TestCase::mark_complete`]: that is the channel for per-test-case
+/// results.  The native engine reads it back off the data-source handle.
+/// On the `Interesting` path the panic site is captured as a
+/// `file:line:col` string and stored on the [`Failure`] so per-origin
+/// shrinking can key on it, and the rendered diagnostic block (panic
+/// location, message, backtrace) is printed here, at the moment the panic
+/// is caught — to stderr on a non-quiet final replay (right after the live
+/// draw/note lines, which is what keeps each failure one block), or
+/// through the verbose output sink for a non-final case in verbose mode.
+///
+/// A panic whose location lies inside hegel's own source (see
+/// [`is_hegel_file`]) is a bug in hegel, not a property failure: it is
+/// re-raised immediately with its original location and backtrace — no
+/// shrinking, no `Property test failed` wrapping, and no
+/// [`TestCase::mark_complete`].
+///
+/// Also returns the caught panic payload for an `Interesting` result, so a
+/// final replay's caller can re-raise the test's *own* panic as the run's
+/// closing unwind instead of synthesizing one.
 pub(crate) fn run_test_case(
     data_source: Box<dyn DataSource + Send + Sync>,
     test_fn: &mut dyn FnMut(TestCase),
     is_final: bool,
     mode: Mode,
     verbosity: Verbosity,
-) -> Result<TestCaseResult, Box<InternalError>> {
+) -> (TestCaseResult, Option<Box<dyn std::any::Any + Send>>) {
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
-    // `should_emit` mirrors `TestCase`'s own gate: the diagnostic is only
-    // shown for the final replay or, in verbose mode, every interesting case.
-    // Tell the panic hook to capture a backtrace only when it will be shown.
-    let should_emit = is_final || verbose;
+    let quiet = verbosity == Verbosity::Quiet;
+    // Surface draw/note output — and pay for a backtrace — only when the
+    // diagnostic will be shown: a non-quiet final replay, or every test
+    // case in verbose mode.
+    let should_emit = (is_final && !quiet) || verbose;
     CAPTURE_BACKTRACE.with(|c| c.set(should_emit));
 
-    let tc = TestCase::new(data_source, is_final, mode, verbose);
+    let tc = TestCase::new(data_source, should_emit, mode);
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
 
-    let tc_result = match &result {
-        Ok(()) => TestCaseResult::Valid,
+    let (tc_result, payload) = match result {
+        Ok(()) => (TestCaseResult::Valid, None),
+        Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => (TestCaseResult::Invalid, None),
+        Err(e) if e.downcast_ref::<StopTest>().is_some() => (TestCaseResult::Overrun, None),
+        Err(e) if e.downcast_ref::<LoopDone>().is_some() => (TestCaseResult::Valid, None),
         Err(e) => {
-            let msg = panic_message(e);
-            if msg == ASSUME_FAIL_STRING {
-                TestCaseResult::Invalid
-            } else if msg == STOP_TEST_STRING {
-                TestCaseResult::Overrun
-            } else if msg == LOOP_DONE_STRING {
-                TestCaseResult::Valid
-            } else if let Some(stripped) = msg.strip_prefix(INVALID_ARGUMENT_PREFIX) {
-                // An invalid-argument (usage) error is a mistake in how the
-                // test is configured, not a discovered counterexample: abort
-                // the run with the message instead of recording it as
-                // `Interesting` and shrinking it.
-                std::panic::resume_unwind(Box::new(stripped.to_string()));
-            } else {
-                let panic_info = take_panic_info().unwrap_or_else(unknown_panic_info);
+            // An invalid-argument (usage) error is a mistake in how the
+            // test is configured, not a discovered counterexample: abort
+            // the run with the message instead of recording it as
+            // `Interesting` and shrinking it.
+            let e = match e.downcast::<InvalidArgument>() {
+                Ok(invalid) => std::panic::resume_unwind(Box::new(invalid.0)),
+                Err(e) => e,
+            };
+            // A violated internal invariant is a bug in Hegel: abort the
+            // run with the bug-report message rather than spending the
+            // shrink budget "minimizing" a framework bug.
+            let e = match e.downcast::<InternalError>() {
+                Ok(internal) => std::panic::resume_unwind(Box::new(internal.0)),
+                Err(e) => e,
+            };
+            let msg = panic_message(&e);
+            let panic_info = take_panic_info().unwrap_or_else(unknown_panic_info);
 
-                // Immediately propagate panics originating from inside
-                // hegel itself as internal errors rather than user test
-                // failures — they should never be shrunk or swallowed.
-                if is_hegel_file(&panic_info.file) {
-                    return Err(Box::new(InternalError {
-                        panic_message: msg,
-                        panic_info,
-                    }));
-                }
-
-                let location = panic_info.location();
-                let diagnostic = render_diagnostic(
-                    &panic_info.thread_name,
-                    &panic_info.thread_id,
-                    &location,
-                    &msg,
-                    &panic_info.backtrace,
-                );
-                TestCaseResult::Interesting(Failure {
-                    panic_message: msg,
-                    diagnostic,
-                    origin: format!("Panic at {}", location),
-                    // The engine attaches the reproduce blob on its final
-                    // replay, once the shrunk choice sequence is known.
-                    reproduce_blob: None,
-                })
+            // Immediately re-raise panics originating from inside hegel
+            // itself as internal errors rather than user test failures —
+            // they should never be shrunk or swallowed.
+            if is_hegel_file(&panic_info.file) {
+                panic!("{}", render_internal_error(&msg, &panic_info));
             }
+
+            let location = panic_info.location();
+            let diagnostic = render_diagnostic(
+                &panic_info.thread_name,
+                &panic_info.thread_id,
+                &location,
+                &msg,
+                &panic_info.backtrace,
+            );
+            if is_final && !quiet {
+                // The final replay's draws printed live just above; printing
+                // the diagnostic immediately after keeps the failure one
+                // contiguous block on stderr. The reporter only adds the
+                // reproducer line.
+                eprint!("{diagnostic}");
+            } else if verbose {
+                // The sink interface takes whole lines; `diagnostic` ends
+                // with a newline, so drop the trailing empty piece.
+                for line in diagnostic.trim_end_matches('\n').split('\n') {
+                    crate::test_case::emit_verbose_line(line);
+                }
+            }
+            let failure = TestCaseResult::Interesting(Failure {
+                panic_message: msg,
+                origin: format!("Panic at {}", location),
+                // `replay_final` attaches the blob on a final replay.
+                reproduce_blob: None,
+            });
+            (failure, Some(e))
         }
     };
 
     if verbose {
-        emit_verbose_test_case_outcome(&tc_result, is_final);
+        emit_verbose_stop_reason(&tc_result);
     }
 
     tc.mark_complete(&tc_result);
 
-    Ok(tc_result)
+    (tc_result, payload)
 }
 
 /// Append a captured backtrace (and an optional short-form note) to `out`.
@@ -422,9 +430,8 @@ fn append_captured_backtrace(
     // nocov end
 }
 
-/// Print a per-test-case line describing why this test case stopped, and
-/// — for genuine panics on non-final test cases — the full panic diagnostic.
-fn emit_verbose_test_case_outcome(result: &TestCaseResult, is_final: bool) {
+/// Print a per-test-case line describing why this test case stopped.
+fn emit_verbose_stop_reason(result: &TestCaseResult) {
     match result {
         TestCaseResult::Invalid => {
             crate::test_case::emit_verbose_line("Test case stopped: failed assumption");
@@ -432,22 +439,13 @@ fn emit_verbose_test_case_outcome(result: &TestCaseResult, is_final: bool) {
         TestCaseResult::Overrun => {
             crate::test_case::emit_verbose_line("Test case stopped: out of data");
         }
-        TestCaseResult::Interesting(failure) if !is_final => {
-            // `diagnostic` already ends with a newline, so use `eprint!`-
-            // style emission (no extra newline). The sink interface only
-            // takes whole lines, so split on '\n' and drop the trailing
-            // empty piece if any.
-            for line in failure.diagnostic.trim_end_matches('\n').split('\n') {
-                crate::test_case::emit_verbose_line(line);
-            }
-        }
         TestCaseResult::Valid | TestCaseResult::Interesting(_) => {}
     }
 }
 
-/// Render the per-failure diagnostic block previously emitted inline.
-/// Mirrors the default Rust panic-handler output so each row in the
-/// multi-failure report looks like a stand-alone test failure.
+/// Render a failure's diagnostic block. Mirrors the default Rust
+/// panic-handler output so each failure in the report looks like a
+/// stand-alone test failure.
 fn render_diagnostic(
     thread_name: &str,
     thread_id: &str,
@@ -466,17 +464,17 @@ fn render_diagnostic(
     out
 }
 
-/// Render an internal-error message + backtrace block for the
-/// `panic!` we emit when a hegel-internal panic short-circuits a test run.
-fn render_internal_error(err: &InternalError) -> String {
+/// Render an internal-error message + backtrace block for the `panic!` we
+/// emit when a hegel-internal panic short-circuits a test run.
+fn render_internal_error(panic_message: &str, panic_info: &PanicInfo) -> String {
     let mut msg = format!(
         "hegel internal error at {}:\n{}\n",
-        err.panic_info.location(),
-        err.panic_message,
+        panic_info.location(),
+        panic_message,
     );
     append_captured_backtrace(
         &mut msg,
-        &err.panic_info.backtrace,
+        &panic_info.backtrace,
         "\noriginal backtrace:\n",
         false,
     );
@@ -487,13 +485,10 @@ fn render_internal_error(err: &InternalError) -> String {
 /// or `None` when nothing should be printed.
 ///
 /// `Some` only when [`Settings::print_blob`](crate::Settings::print_blob) is
-/// enabled *and* the failure carries a reproduce blob. A genuine property
-/// failure on the native backend always has a blob; `None` is reached for
-/// health-check failures (`FilterTooMuch` / `TooSlow` / flaky — no
-/// counterexample to encode) and for the backend (no blob at all), in
-/// which case there is simply nothing to print.
-/// todo: indicate a way to signal a backend failure so we unconditionally print
-/// failure blobs when that happens.
+/// enabled *and* the failure carries a reproduce blob. A replayed
+/// counterexample always has one; a blobless failure (e.g.
+/// `Mode::SingleTestCase`, whose one random case has no shrunk choice
+/// sequence to encode) prints nothing.
 fn reproducer_line(settings: &Settings, failure: &crate::backend::Failure) -> Option<String> {
     if !settings.print_blob {
         return None;
@@ -508,9 +503,13 @@ fn reproducer_line(settings: &Settings, failure: &crate::backend::Failure) -> Op
 /// Drive a [`TestRunner`] to completion against the user's test function.
 ///
 /// Installs the cross-backend panic hook, hands the runner a `run_case`
-/// callback that wraps each test invocation in [`run_test_case`], handles
-/// the antithesis integration, and re-raises a final `panic!` if any test
-/// case failed.
+/// callback that wraps each test invocation in [`run_test_case`], and lets
+/// it explore (generate + shrink). On a failing run it then replays each
+/// counterexample, reporting each failure as its replay completes, and
+/// ends the run by re-raising the failing test's own panic (or, for
+/// several distinct bugs, a panic carrying the failure count). A
+/// [`crate::backend::RunError`] — a failure of the run itself rather than
+/// of a test case — panics with the error's message instead.
 pub(crate) fn drive<R, F>(
     runner: R,
     test_fn: F,
@@ -522,33 +521,153 @@ pub(crate) fn drive<R, F>(
     F: FnMut(TestCase),
 {
     init_panic_hook();
+    require_antithesis_feature();
     let mut test_fn = test_fn;
-    let got_interesting = AtomicBool::new(false);
     let mode = settings.mode;
     let verbosity = settings.verbosity;
-    let result = runner.run(settings, database_key, &mut |backend, is_final| {
-        match run_test_case(backend, &mut test_fn, is_final, mode, verbosity) {
-            Err(internal_err) => {
-                // Re-raise hegel-internal panics immediately as their own
-                // dedicated panic — no shrinking, no "Property test
-                // failed" wrapping.
-                panic!("{}", render_internal_error(&internal_err));
-            }
-            Ok(tc_result) => {
-                if matches!(&tc_result, TestCaseResult::Interesting(_)) {
-                    got_interesting.store(true, Ordering::SeqCst);
-                }
-            }
+
+    let exploration = {
+        let mut explore_case = |backend: Box<dyn DataSource + Send + Sync>| {
+            run_test_case(backend, &mut test_fn, false, mode, verbosity);
+        };
+        runner.explore(settings, database_key, &mut explore_case)
+    };
+
+    let test_failed = !matches!(exploration, Ok(Exploration::Passed));
+    emit_antithesis_assertion(test_failed, test_location);
+
+    if !test_failed {
+        return;
+    }
+
+    let quiet = verbosity == Verbosity::Quiet;
+
+    let counterexamples = match exploration {
+        // The run itself failed — health check, nondeterminism. Not a test
+        // failure, so it gets the error's own message, not the
+        // `Property test failed:` framing.
+        Err(error) => panic!("{error}"),
+        // `test_failed` is exactly `!Passed`, and a passing run returned
+        // above.
+        Ok(Exploration::Passed) => unreachable!(),
+        Ok(Exploration::Counterexamples(counterexamples)) => counterexamples,
+    };
+
+    // Replay each counterexample as a final test case. Each replay prints
+    // its draws live and its diagnostic at the catch site, so each failure
+    // reads as one block; only the reproducer line is added here. The count
+    // headline has to be eprinted before the replays — the closing
+    // `panic!`'s message is only rendered by the panic hook, after
+    // everything else.
+    let multiple = counterexamples.len() > 1;
+    if multiple && !quiet {
+        eprintln!(
+            "Property-based test failed with {} distinct failures.",
+            counterexamples.len()
+        );
+    }
+    let last_payload: RefCell<Option<Box<dyn std::any::Any + Send>>> = RefCell::new(None);
+    let mut final_case = |backend: Box<dyn DataSource + Send + Sync>| {
+        let (_, payload) = run_test_case(backend, &mut test_fn, true, mode, verbosity);
+        *last_payload.borrow_mut() = payload;
+    };
+    let mut reported: Vec<String> = Vec::new();
+    for counterexample in counterexamples {
+        if multiple && !quiet {
+            eprintln!();
         }
-    });
+        // A counterexample that stopped failing between discovery and
+        // replay is a run error (flaky test / stale blob), which ends the
+        // run on the spot.
+        let failure = match runner.replay_final(counterexample, &mut final_case) {
+            Ok(failure) => failure,
+            Err(error) => panic!("{error}"),
+        };
+        if let Some(line) = reproducer_line(settings, &failure) {
+            eprintln!("{line}");
+        }
+        reported.push(failure.panic_message);
+    }
 
-    let test_failed = !result.passed || got_interesting.load(Ordering::SeqCst);
+    // The report is complete; end the run by re-raising. `resume_unwind`
+    // skips the panic hook, so nothing prints twice — the unwind is purely
+    // the run's programmatic result.
+    match reported.as_slice() {
+        // Defensive: an empty counterexample list (no runner produces one
+        // today) falls through to the legacy generic panic.
+        [] => panic!("Property test failed: unknown"),
+        // Single-failure path: the run fails with the test's *own* panic,
+        // payload intact — `should_panic(expected = ...)` and `catch_unwind`
+        // consumers see exactly what the test raised. A runner whose final
+        // replay produced no payload (it didn't execute the test body) falls
+        // back to a synthetic panic carrying the recorded message.
+        [message] => match last_payload.borrow_mut().take() {
+            Some(payload) => std::panic::resume_unwind(payload),
+            None => panic!("Property test failed: {}", message),
+        },
+        // Multi-failure path: there is no single panic to re-raise, so the
+        // run fails with the count (already eprinted as the headline).
+        many => std::panic::resume_unwind(Box::new(format!(
+            "Property-based test failed with {} distinct failures.",
+            many.len()
+        ))),
+    }
+}
 
+/// Run `Mode::SingleTestCase`: one test case, final from the start, with
+/// its diagnostic printed at the catch site. A single test case is not a
+/// property-test run — there is no exploration, shrinking, or replay — so
+/// it bypasses the [`TestRunner`] machinery entirely.
+pub(crate) fn drive_single<F>(
+    test_fn: F,
+    settings: &Settings,
+    database_key: Option<&str>,
+    test_location: Option<&TestLocation>,
+) where
+    F: FnMut(TestCase),
+{
+    init_panic_hook();
+    require_antithesis_feature();
+    let mut test_fn = test_fn;
+    let last_payload: RefCell<Option<Box<dyn std::any::Any + Send>>> = RefCell::new(None);
+    let failure =
+        crate::native::test_runner::run_single_case(settings, database_key, &mut |backend| {
+            let (_, payload) = run_test_case(
+                backend,
+                &mut test_fn,
+                true,
+                settings.mode,
+                settings.verbosity,
+            );
+            *last_payload.borrow_mut() = payload;
+        });
+
+    emit_antithesis_assertion(failure.is_some(), test_location);
+
+    // No reproducer line: a single random test case has no shrunk choice
+    // sequence to encode, so its failure never carries a blob. The run ends
+    // by re-raising the test's own panic.
+    if failure.is_none() {
+        return;
+    }
+    match last_payload.borrow_mut().take() {
+        Some(payload) => std::panic::resume_unwind(payload),
+        // A single-case failure always comes from a panic this run caught.
+        None => unreachable!(),
+    }
+}
+
+/// Fail fast — before any test case runs — when running under Antithesis
+/// without the `antithesis` feature compiled in.
+fn require_antithesis_feature() {
     crate::antithesis::require_antithesis_feature(
         crate::antithesis::is_running_in_antithesis(),
         cfg!(feature = "antithesis"),
     );
+}
 
+/// Report the run's verdict to Antithesis (when running under it).
+fn emit_antithesis_assertion(test_failed: bool, test_location: Option<&TestLocation>) {
     #[cfg(feature = "antithesis")]
     // nocov start
     if crate::antithesis::is_running_in_antithesis() {
@@ -557,52 +676,7 @@ pub(crate) fn drive<R, F>(
         }
     }
     // nocov end
-    let _ = test_location;
-
-    if !test_failed {
-        return;
-    }
-
-    let quiet = settings.verbosity == Verbosity::Quiet;
-
-    match result.failures.as_slice() {
-        // `test_failed` was set but no Failure surfaced — e.g. an aborted
-        // mid-draw test case or a backend that reported failure without
-        // attaching a Failure.  Preserve the legacy generic panic.
-        [] => panic!("Property test failed: unknown"),
-        // Single-failure path: keep the original output shape so test
-        // harnesses that pattern-match on `"Property test failed: <msg>"`
-        // (e.g. `Minimal::run` in `tests/common/utils.rs`) keep working.
-        [failure] => {
-            if !quiet {
-                eprint!("{}", failure.diagnostic);
-            }
-            if let Some(line) = reproducer_line(settings, failure) {
-                eprintln!("{line}");
-            }
-            panic!("Property test failed: {}", failure.panic_message);
-        }
-        // Multi-failure path: emit a header, print each replay's
-        // diagnostic block in order, then panic with the count so callers
-        // see the headline figure rather than just one of the messages.
-        // Each distinct bug carries its own blob, so a reproducer line is
-        // printed per failure (when `print_blob` is set).
-        failures => {
-            let n = failures.len();
-            if !quiet {
-                eprintln!("Hegel found {} failing test cases:", n);
-            }
-            for failure in failures {
-                if !quiet {
-                    eprint!("{}", failure.diagnostic);
-                }
-                if let Some(line) = reproducer_line(settings, failure) {
-                    eprintln!("{line}");
-                }
-            }
-            panic!("Property-based test failed with {} distinct failures.", n);
-        }
-    }
+    let _ = (test_failed, test_location);
 }
 
 #[cfg(test)]

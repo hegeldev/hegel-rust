@@ -209,6 +209,17 @@ fn test_failing_test_output() {
     );
 }
 
+/// A backtrace frame that should symbolize as `name`, tolerating the
+/// `-C instrument-coverage` artifact where the symbolizer resolves a frame
+/// to its `__covrec_*` coverage-record symbol instead of the function name.
+/// Which frames lose their name is binary-layout luck, so any of the frames
+/// these tests assert on can be hit on a coverage build. The covrec
+/// alternative is anchored to the frame's `at <file>` line, so the
+/// assertion still proves the right frame is present.
+fn frame_named(name: &str, file: &str) -> String {
+    format!(r"(?:{name}|__covrec_[0-9A-Fa-f]+u?\n\s+at [^\n]*{file}:\d+:\d+\n)")
+}
+
 #[test]
 fn test_failing_test_output_with_backtrace() {
     let output = failing_project()
@@ -246,15 +257,20 @@ fn test_failing_test_output_with_backtrace() {
                 r".*",
                 r"core::panicking::panic_fmt\n", // panic_fmt (frame number varies)
                 r".*",
-                r"temp_hegel_test_\d+_\d+::main::{closure_name}\n", // user's closure
+                r"{user_closure}", // user's closure
                 r".*",
-                r"hegel::runner::", // hegel internals appear
+                r"{hegel_internals}", // hegel internals appear
                 r".*",
-                r"temp_hegel_test_\d+_\d+::main\n", // user's main (not closure)
+                r"{user_main}", // user's main (not closure)
                 r".*",
                 r"note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace\.",
             ),
-            closure_name = closure_name,
+            user_closure = frame_named(
+                &format!(r"temp_hegel_test_\d+_\d+::main::{closure_name}\n"),
+                r"src[/\\]main\.rs",
+            ),
+            hegel_internals = frame_named(r"hegel::runner::", r"src[/\\]runner\.rs"),
+            user_main = frame_named(r"temp_hegel_test_\d+_\d+::main\n", r"src[/\\]main\.rs"),
         ),
     );
 }
@@ -280,14 +296,19 @@ fn test_failing_test_output_with_full_backtrace() {
                 r"(?:Property test failed: )?intentional failure: -?\d+\n",
                 r"stack backtrace:\n",
                 r".*",
-                r"temp_hegel_test_\d+_\d+::main::{closure_name}", // user's closure
+                r"{user_closure}", // user's closure
                 r".*",
-                r"hegel::runner::", // hegel internals
+                r"{hegel_internals}", // hegel internals
                 r".*",
-                r"temp_hegel_test_\d+_\d+::main\n", // user's main
+                r"{user_main}", // user's main
                 r".*$",
             ),
-            closure_name = closure_name,
+            user_closure = frame_named(
+                &format!(r"temp_hegel_test_\d+_\d+::main::{closure_name}"),
+                r"src[/\\]main\.rs",
+            ),
+            hegel_internals = frame_named(r"hegel::runner::", r"src[/\\]runner\.rs"),
+            user_main = frame_named(r"temp_hegel_test_\d+_\d+::main\n", r"src[/\\]main\.rs"),
         ),
     );
     assert!(
