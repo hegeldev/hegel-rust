@@ -95,7 +95,6 @@ type FnNewPool = unsafe extern "C" fn(*mut u8, *mut i64) -> c_int;
 type FnPoolAdd = unsafe extern "C" fn(*mut u8, i64, *mut i64) -> c_int;
 type FnPoolGenerate = unsafe extern "C" fn(*mut u8, i64, bool, *mut i64) -> c_int;
 type FnPrimitiveBoolean = unsafe extern "C" fn(*mut u8, f64, bool, bool, *mut bool) -> c_int;
-type FnRunResultPassed = unsafe extern "C" fn(*const u8) -> bool;
 type FnRunResultStatus = unsafe extern "C" fn(*const u8) -> CRunStatus;
 type FnRunResultError = unsafe extern "C" fn(*const u8) -> *const c_char;
 type FnRunResultFailureCount = unsafe extern "C" fn(*const u8) -> usize;
@@ -127,7 +126,6 @@ struct Api<'a> {
     pool_add: Symbol<'a, FnPoolAdd>,
     pool_generate: Symbol<'a, FnPoolGenerate>,
     primitive_boolean: Symbol<'a, FnPrimitiveBoolean>,
-    run_result_passed: Symbol<'a, FnRunResultPassed>,
     run_result_status: Symbol<'a, FnRunResultStatus>,
     run_result_error: Symbol<'a, FnRunResultError>,
     run_result_failure_count: Symbol<'a, FnRunResultFailureCount>,
@@ -161,7 +159,6 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             pool_add: lib.get(b"hegel_pool_add\0").unwrap(),
             pool_generate: lib.get(b"hegel_pool_generate\0").unwrap(),
             primitive_boolean: lib.get(b"hegel_primitive_boolean\0").unwrap(),
-            run_result_passed: lib.get(b"hegel_run_result_passed\0").unwrap(),
             run_result_status: lib.get(b"hegel_run_result_status\0").unwrap(),
             run_result_error: lib.get(b"hegel_run_result_error\0").unwrap(),
             run_result_failure_count: lib.get(b"hegel_run_result_failure_count\0").unwrap(),
@@ -816,7 +813,11 @@ fn libhegel_primitive_boolean_draws_and_forces() {
 
         let result = (a.run_result)(run);
         assert!(!result.is_null());
-        assert!((a.run_result_passed)(result), "expected passing run");
+        assert_eq!(
+            (a.run_result_status)(result),
+            CRunStatus::Passed,
+            "expected a passed run"
+        );
 
         (a.run_free)(run);
         (a.settings_free)(s);
@@ -885,7 +886,11 @@ fn libhegel_primitive_boolean_rejects_invalid_arguments() {
 
         let result = (a.run_result)(run);
         assert!(!result.is_null());
-        assert!((a.run_result_passed)(result), "expected passing run");
+        assert_eq!(
+            (a.run_result_status)(result),
+            CRunStatus::Passed,
+            "expected a passed run"
+        );
 
         (a.run_free)(run);
         (a.settings_free)(s);
