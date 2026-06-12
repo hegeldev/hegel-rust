@@ -43,9 +43,22 @@ pub fn run_native(
     database_key: Option<&str>,
     mut run_case: impl FnMut(Box<dyn DataSource + Send + Sync>, bool),
 ) -> Result<TestRunResult, RunError> {
+    // A single test case bypasses the TestRunner machinery: its one case is
+    // final from the start.
+    if settings.mode == crate::runner::Mode::SingleTestCase {
+        let failure =
+            crate::native::test_runner::run_single_case(settings, &mut |ds| run_case(ds, true));
+        return Ok(TestRunResult {
+            failures: failure.into_iter().collect(),
+        });
+    }
+
     let runner = crate::native::test_runner::NativeTestRunner;
-    let exploration = runner.explore(settings, database_key, &mut run_case)?;
-    collect_failures(&runner, exploration, &mut run_case)
+    let exploration = {
+        let mut explore_case = |ds: Box<dyn DataSource + Send + Sync>| run_case(ds, false);
+        runner.explore(settings, database_key, &mut explore_case)?
+    };
+    collect_failures(&runner, exploration, &mut |ds| run_case(ds, true))
 }
 
 /// Build a raw [`DataSource`] that replays the choice sequence encoded in a

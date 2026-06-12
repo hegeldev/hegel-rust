@@ -221,7 +221,7 @@ impl crate::backend::TestRunner for StubRunner {
         &self,
         _settings: &crate::runner::Settings,
         _database_key: Option<&str>,
-        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>),
     ) -> Result<crate::backend::Exploration<crate::backend::Failure>, crate::backend::RunError>
     {
         Ok(crate::backend::Exploration::Counterexamples(
@@ -232,7 +232,7 @@ impl crate::backend::TestRunner for StubRunner {
     fn replay_final(
         &self,
         counterexample: crate::backend::Failure,
-        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>),
     ) -> Result<crate::backend::Failure, crate::backend::RunError> {
         Ok(counterexample)
     }
@@ -319,7 +319,7 @@ impl crate::backend::TestRunner for VanishingRunner {
         &self,
         _settings: &crate::runner::Settings,
         _database_key: Option<&str>,
-        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>),
     ) -> Result<crate::backend::Exploration<()>, crate::backend::RunError> {
         Ok(crate::backend::Exploration::Counterexamples(vec![()]))
     }
@@ -327,7 +327,7 @@ impl crate::backend::TestRunner for VanishingRunner {
     fn replay_final(
         &self,
         _counterexample: (),
-        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>),
     ) -> Result<crate::backend::Failure, crate::backend::RunError> {
         Err(crate::backend::RunError::Flaky(
             "the bug went away".to_string(),
@@ -368,7 +368,7 @@ impl crate::backend::TestRunner for ErroringRunner {
         &self,
         _settings: &crate::runner::Settings,
         _database_key: Option<&str>,
-        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>),
     ) -> Result<crate::backend::Exploration<()>, crate::backend::RunError> {
         Err(crate::backend::RunError::HealthCheck(
             "FailedHealthCheck: the run went wrong".to_string(),
@@ -378,7 +378,7 @@ impl crate::backend::TestRunner for ErroringRunner {
     fn replay_final(
         &self,
         _counterexample: (),
-        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+        _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>),
     ) -> Result<crate::backend::Failure, crate::backend::RunError> {
         unreachable!("an erroring exploration has nothing to replay")
     }
@@ -686,7 +686,7 @@ fn drive_runs_the_runner_regardless_of_phases() {
             &self,
             _settings: &crate::runner::Settings,
             _database_key: Option<&str>,
-            _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+            _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>),
         ) -> Result<crate::backend::Exploration<()>, crate::backend::RunError> {
             self.0.set(true);
             Ok(crate::backend::Exploration::Passed)
@@ -695,7 +695,7 @@ fn drive_runs_the_runner_regardless_of_phases() {
         fn replay_final(
             &self,
             _counterexample: (),
-            _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+            _run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>),
         ) -> Result<crate::backend::Failure, crate::backend::RunError> {
             unreachable!("a passing exploration has nothing to replay")
         }

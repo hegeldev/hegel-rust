@@ -7,7 +7,10 @@
 //! body, and returns the [`Exploration`] report — every distinct bug's
 //! shrunk counterexample.  The caller (`drive`, or
 //! [`crate::embed::run_native`] for FFI) then drives each counterexample's
-//! final replay through [`TestRunner::replay_final`].
+//! final replay through [`TestRunner::replay_final`]. Finality is
+//! structural: every test case `explore` runs is non-final, and every
+//! `replay_final` case is final, which the caller encodes in the callback
+//! it supplies to each.
 //!
 //! Inside, [`Engine`] wraps the `run_case` callback together with
 //! a shrink-result cache, exposing `run` / `run_shrink_with_origin` /
@@ -29,7 +32,7 @@ use crate::native::database::{
 };
 use crate::native::rng::EngineRng;
 use crate::native::shrinker::{ShrinkRun, Shrinker};
-use crate::runner::{Backend, Database, HealthCheck, Mode, Phase, Settings, Verbosity};
+use crate::runner::{Backend, Database, HealthCheck, Phase, Settings, Verbosity};
 
 /// One run's worth of results: status, the realised choice nodes and
 /// spans, and (for `Status::Interesting`) the opaque origin string
@@ -100,12 +103,13 @@ pub struct ShrunkCounterexample {
     blob: String,
 }
 
-/// Replay a shrunk counterexample once with `is_final = true` and return the
-/// [`Failure`] the test body reported, with the reproduce blob attached —
-/// or `None` if the test no longer fails on it.
+/// Replay a shrunk counterexample once and return the [`Failure`] the test
+/// body reported, with the reproduce blob attached — or `None` if the test
+/// no longer fails on it. `run_case` is the caller's *final* callback:
+/// every test case that reaches this function is a final replay.
 pub(crate) fn replay_counterexample(
     counterexample: ShrunkCounterexample,
-    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
 ) -> Option<Failure> {
     let ntc = NativeTestCase::for_choices(
         &counterexample.choices,
@@ -113,7 +117,7 @@ pub(crate) fn replay_counterexample(
         None,
     );
     let (data_source, handle) = NativeDataSource::new(ntc);
-    run_case(Box::new(data_source), true);
+    run_case(Box::new(data_source));
     match NativeDataSource::take_outcome(&handle) {
         TestCaseResult::Interesting(mut failure) => {
             failure.reproduce_blob = Some(counterexample.blob);
@@ -133,11 +137,8 @@ impl TestRunner for NativeTestRunner {
         &self,
         settings: &Settings,
         database_key: Option<&str>,
-        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
     ) -> Result<Exploration<ShrunkCounterexample>, RunError> {
-        if settings.mode == Mode::SingleTestCase {
-            return Ok(run_single(settings, run_case));
-        }
         run_main(
             settings,
             database_key,
@@ -152,7 +153,7 @@ impl TestRunner for NativeTestRunner {
     fn replay_final(
         &self,
         counterexample: ShrunkCounterexample,
-        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
     ) -> Result<Failure, RunError> {
         replay_counterexample(counterexample, run_case)
             .ok_or_else(|| RunError::Flaky(flaky_diagnostic()))
@@ -182,7 +183,7 @@ impl TestRunner for ReproduceRunner {
         &self,
         _settings: &Settings,
         _database_key: Option<&str>,
-        _run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+        _run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
     ) -> Result<Exploration<ShrunkCounterexample>, RunError> {
         let Some(choices) = crate::native::blob::decode_failure(&self.blob) else {
             panic!(
@@ -201,7 +202,7 @@ impl TestRunner for ReproduceRunner {
     fn replay_final(
         &self,
         counterexample: ShrunkCounterexample,
-        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
     ) -> Result<Failure, RunError> {
         replay_counterexample(counterexample, run_case).ok_or_else(|| {
             RunError::StaleBlob(
@@ -214,15 +215,17 @@ impl TestRunner for ReproduceRunner {
     }
 }
 
-/// Run a single test case (used by `Mode::SingleTestCase`).
+/// Run one test case (used by `Mode::SingleTestCase`) and return its
+/// failure, if any.
 ///
-/// The one test case runs with `is_final = true` — it is its own final
-/// replay — so a failure comes back pre-rendered as [`Exploration::Failed`]
-/// with nothing left to replay.
-fn run_single(
+/// A single test case is not a property-test run — there is no exploration,
+/// shrinking, or replay — so it bypasses the [`TestRunner`] machinery
+/// entirely; `run_case` is the caller's *final* callback (the one case is
+/// its own report).
+pub(crate) fn run_single_case(
     settings: &Settings,
-    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
-) -> Exploration<ShrunkCounterexample> {
+    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
+) -> Option<Failure> {
     // Honour `settings.seed` / `settings.derandomize` here for the same
     // reason `run_main` does: callers (Antithesis runs especially) pass
     // a deterministic seed expecting `Mode::SingleTestCase` to replay
@@ -231,10 +234,10 @@ fn run_single(
     let mut rng = create_rng(settings, None);
     let ntc = NativeTestCase::new_random(rng.spawn());
     let (data_source, handle) = NativeDataSource::new(ntc);
-    run_case(Box::new(data_source), true);
+    run_case(Box::new(data_source));
     match NativeDataSource::take_outcome(&handle) {
-        TestCaseResult::Interesting(failure) => Exploration::Failed(failure),
-        _ => Exploration::Passed,
+        TestCaseResult::Interesting(failure) => Some(failure),
+        _ => None,
     }
 }
 
@@ -243,7 +246,7 @@ fn run_single(
 fn run_main(
     settings: &Settings,
     database_key: Option<&str>,
-    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
     // Injected (rather than read from the `TOO_SLOW_THRESHOLD` constant) so a
     // test can trip the TooSlow check deterministically without a 30s sleep.
     too_slow_threshold: std::time::Duration,
@@ -1157,15 +1160,10 @@ impl<'a> Persister<'a> {
 /// [`Self::cached_run`] for the rationale), so they go through
 /// `run_shrink_with_origin` instead and surface bugs with new origins via
 /// [`Self::note_stray`].
-///
-/// `Settings::mode` does not need to be stored beyond `settings`: it is
-/// captured in the `run_case` closure built by `run_lifecycle::drive`
-/// (which calls `run_test_case(_, _, _, mode, _)` per invocation), so by
-/// the time `run_case` reaches us the mode is already plumbed.
 pub(crate) struct Engine<'a> {
     settings: &'a Settings,
     database_key: Option<&'a str>,
-    run_case: &'a mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+    run_case: &'a mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
     rng: EngineRng,
     persister: Persister<'a>,
     cache: HashMap<Vec<ChoiceValue>, RunResult>,
@@ -1197,7 +1195,7 @@ impl<'a> Engine<'a> {
     pub(crate) fn new(
         settings: &'a Settings,
         database_key: Option<&'a str>,
-        run_case: &'a mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+        run_case: &'a mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
     ) -> Self {
         // `Database::Unset` is the non-CI default (set by `Settings::new` in
         // `src/runner.rs`); it means "the user didn't pick, so use the
@@ -1344,7 +1342,7 @@ impl<'a> Engine<'a> {
     /// [`replay_counterexample`].
     fn execute(&mut self, ntc: NativeTestCase) -> RunResult {
         let (data_source, handle) = NativeDataSource::new(ntc);
-        (self.run_case)(Box::new(data_source), false);
+        (self.run_case)(Box::new(data_source));
         let nodes = NativeDataSource::take_nodes(&handle);
         let spans = NativeDataSource::take_spans(&handle);
         let target_observations = NativeDataSource::take_target_observations(&handle);

@@ -3,6 +3,8 @@
 //! engine surfaces as `RunError`s.
 
 use super::*;
+
+use crate::runner::Mode;
 use std::time::Duration;
 
 #[test]
@@ -74,7 +76,7 @@ fn native_vanished_replay_is_a_flaky_run_error() {
         blob: String::new(),
     };
     // A test body that no longer fails: every replay completes Valid.
-    let result = NativeTestRunner.replay_final(counterexample, &mut |ds, _is_final| {
+    let result = NativeTestRunner.replay_final(counterexample, &mut |ds| {
         ds.mark_complete(&TestCaseResult::Valid);
     });
     match result {
@@ -123,9 +125,9 @@ where
     crate::run_lifecycle::init_panic_hook();
     let exec_count = Rc::new(Cell::new(0usize));
     let counter = exec_count.clone();
-    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
+    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>| {
         counter.set(counter.get() + 1);
-        run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+        run_test_case(ds, &mut test_fn, false, Mode::TestRun, Verbosity::Normal);
     };
     let settings = Settings::new().database(None);
     let mut ctx = Engine::new(&settings, None, &mut run_case);
@@ -354,39 +356,60 @@ fn complete_native(
     >,
     run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
 ) -> Result<crate::backend::TestRunResult, crate::backend::RunError> {
-    crate::backend::collect_failures(&NativeTestRunner, exploration?, run_case)
+    crate::backend::collect_failures(&NativeTestRunner, exploration?, &mut |ds| {
+        run_case(ds, true)
+    })
 }
 
 #[test]
-fn collect_failures_folds_a_single_test_case_failure() {
-    // `Mode::SingleTestCase` runs its one test case as its own final, so
-    // exploration comes back as `Exploration::Failed` with nothing left to
-    // replay; `collect_failures` must fold it into a one-failure result.
+fn run_single_case_returns_the_failure() {
+    // `Mode::SingleTestCase` bypasses the TestRunner machinery: its one
+    // test case runs as its own final, and the failure (if any) comes back
+    // directly.
     crate::run_lifecycle::init_panic_hook();
     let mut test_fn = |_tc: crate::TestCase| panic!("single-case bug");
-    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
-        run_test_case(
-            ds,
-            &mut test_fn,
-            is_final,
-            Mode::SingleTestCase,
-            Verbosity::Quiet,
-        );
-    };
-    let settings = Settings::new()
-        .database(None)
-        .mode(Mode::SingleTestCase)
-        .verbosity(Verbosity::Quiet);
-    let exploration = NativeTestRunner.explore(&settings, None, &mut run_case);
-    let result =
-        crate::backend::collect_failures(&NativeTestRunner, exploration.unwrap(), &mut run_case)
-            .unwrap();
-    assert_eq!(result.failures.len(), 1);
+    let failure = run_single_case(
+        &Settings::new()
+            .database(None)
+            .mode(Mode::SingleTestCase)
+            .verbosity(Verbosity::Quiet),
+        &mut |ds| {
+            run_test_case(
+                ds,
+                &mut test_fn,
+                true,
+                Mode::SingleTestCase,
+                Verbosity::Quiet,
+            );
+        },
+    )
+    .unwrap();
     assert!(
-        result.failures[0].panic_message.contains("single-case bug"),
-        "{:?}",
-        result.failures
+        failure.panic_message.contains("single-case bug"),
+        "{failure:?}"
     );
+}
+
+#[test]
+fn run_single_case_returns_none_for_a_passing_case() {
+    crate::run_lifecycle::init_panic_hook();
+    let mut test_fn = |_tc: crate::TestCase| {};
+    let failure = run_single_case(
+        &Settings::new()
+            .database(None)
+            .mode(Mode::SingleTestCase)
+            .verbosity(Verbosity::Quiet),
+        &mut |ds| {
+            run_test_case(
+                ds,
+                &mut test_fn,
+                true,
+                Mode::SingleTestCase,
+                Verbosity::Quiet,
+            );
+        },
+    );
+    assert!(failure.is_none(), "{failure:?}");
 }
 
 #[test]
@@ -405,17 +428,14 @@ fn run_main_with_urandom_backend_generates_and_passes() {
         .test_cases(20)
         .database(None)
         .backend(crate::runner::Backend::Urandom);
-    let result = complete_native(
-        run_main(
-            &settings,
-            None,
-            &mut run_case,
-            Duration::from_secs(30),
-            Duration::from_secs(300),
-        ),
-        &mut run_case,
-    )
-    .unwrap();
+    let exploration = run_main(
+        &settings,
+        None,
+        &mut |ds| run_case(ds, false),
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
+    let result = complete_native(exploration, &mut run_case).unwrap();
     assert!(result.failures.is_empty());
 }
 
@@ -436,17 +456,14 @@ fn run_main_with_urandom_backend_finds_counterexample() {
         .test_cases(20)
         .database(None)
         .backend(crate::runner::Backend::Urandom);
-    let result = complete_native(
-        run_main(
-            &settings,
-            None,
-            &mut run_case,
-            Duration::from_secs(30),
-            Duration::from_secs(300),
-        ),
-        &mut run_case,
-    )
-    .unwrap();
+    let exploration = run_main(
+        &settings,
+        None,
+        &mut |ds| run_case(ds, false),
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
+    let result = complete_native(exploration, &mut run_case).unwrap();
     assert!(
         result.failures[0].panic_message.contains("always fails"),
         "{:?}",
@@ -481,17 +498,14 @@ fn run_main_stops_shrinking_when_budget_is_exhausted() {
         .test_cases(200)
         .database(None)
         .derandomize(true);
-    let result = complete_native(
-        run_main(
-            &settings,
-            None,
-            &mut run_case,
-            Duration::from_secs(30),
-            Duration::ZERO,
-        ),
-        &mut run_case,
-    )
-    .unwrap();
+    let exploration = run_main(
+        &settings,
+        None,
+        &mut |ds| run_case(ds, false),
+        Duration::from_secs(30),
+        Duration::ZERO,
+    );
+    let result = complete_native(exploration, &mut run_case).unwrap();
     assert!(
         !result.failures.is_empty(),
         "the failure must still be reported"
@@ -517,16 +531,14 @@ fn run_main_reports_too_slow_at_call_site() {
         run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
     };
     let settings = Settings::new().test_cases(100).database(None);
-    let result = complete_native(
-        run_main(
-            &settings,
-            None,
-            &mut run_case,
-            Duration::ZERO,
-            Duration::from_secs(300),
-        ),
-        &mut run_case,
+    let exploration = run_main(
+        &settings,
+        None,
+        &mut |ds| run_case(ds, false),
+        Duration::ZERO,
+        Duration::from_secs(300),
     );
+    let result = complete_native(exploration, &mut run_case);
     match result {
         Err(crate::backend::RunError::HealthCheck(msg)) => {
             assert!(msg.contains("TooSlow"), "unexpected message: {msg}");
@@ -656,17 +668,14 @@ fn discover_reproduce_blob() -> String {
     let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, _is_final: bool| {
         mark_large_interesting(&*ds);
     };
-    let result = complete_native(
-        run_main(
-            &settings,
-            None,
-            &mut run_case,
-            Duration::from_secs(30),
-            Duration::from_secs(300),
-        ),
-        &mut run_case,
-    )
-    .unwrap();
+    let exploration = run_main(
+        &settings,
+        None,
+        &mut |ds| run_case(ds, false),
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
+    let result = complete_native(exploration, &mut run_case).unwrap();
     assert!(!result.failures.is_empty(), "property should have failed");
     result.failures[0]
         .reproduce_blob
@@ -681,7 +690,7 @@ fn reproduce_runner_replays_the_counterexample() {
     // Replaying the blob runs exactly the encoded example and re-surfaces
     // the failure, carrying the same blob back.
     let calls = std::sync::atomic::AtomicUsize::new(0);
-    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, _is_final: bool| {
+    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>| {
         calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         mark_large_interesting(&*ds);
     };
@@ -714,7 +723,7 @@ fn reproduce_runner_panics_on_an_undecodable_blob() {
         };
         // `explore` panics before producing a value; `let _` only quiets
         // the must-use lint on the never-constructed Result.
-        let _ = runner.explore(&Settings::new(), None, &mut |ds, _is_final| {
+        let _ = runner.explore(&Settings::new(), None, &mut |ds| {
             ds.mark_complete(&TestCaseResult::Valid);
         });
     });
@@ -737,7 +746,7 @@ fn reproduce_runner_reports_a_blob_that_no_longer_fails() {
     // A "fixed" test body that never reports interesting: replaying a stale
     // blob must surface `RunError::StaleBlob` rather than silently passing.
     let runner = ReproduceRunner { blob };
-    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, _is_final: bool| {
+    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>| {
         let schema = crate::cbor_utils::cbor_map! {
             "type" => "integer",
             "min_value" => 0_i64,

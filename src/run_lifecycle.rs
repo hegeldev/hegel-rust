@@ -382,28 +382,16 @@ pub(crate) fn drive<R, F>(
     let mut test_fn = test_fn;
     let mode = settings.mode;
     let verbosity = settings.verbosity;
-    let mut run_case = |backend: Box<dyn DataSource + Send + Sync>, is_final: bool| {
-        run_test_case(backend, &mut test_fn, is_final, mode, verbosity);
+
+    let exploration = {
+        let mut explore_case = |backend: Box<dyn DataSource + Send + Sync>| {
+            run_test_case(backend, &mut test_fn, false, mode, verbosity);
+        };
+        runner.explore(settings, database_key, &mut explore_case)
     };
 
-    let exploration = runner.explore(settings, database_key, &mut run_case);
-
     let test_failed = !matches!(exploration, Ok(Exploration::Passed));
-
-    crate::antithesis::require_antithesis_feature(
-        crate::antithesis::is_running_in_antithesis(),
-        cfg!(feature = "antithesis"),
-    );
-
-    #[cfg(feature = "antithesis")]
-    // nocov start
-    if crate::antithesis::is_running_in_antithesis() {
-        if let Some(loc) = test_location {
-            crate::antithesis::emit_assertion(loc, !test_failed);
-        }
-    }
-    // nocov end
-    let _ = test_location;
+    report_to_antithesis(test_failed, test_location);
 
     if !test_failed {
         return;
@@ -419,19 +407,10 @@ pub(crate) fn drive<R, F>(
         // `test_failed` is exactly `!Passed`, and a passing run returned
         // above.
         Ok(Exploration::Passed) => unreachable!(),
-        // A failure with no counterexample to replay (`Mode::SingleTestCase`
-        // ran its one test case as its own final, printing its diagnostic
-        // at the catch site): report it directly.
-        Ok(Exploration::Failed(failure)) => {
-            if let Some(line) = reproducer_line(settings, &failure) {
-                eprintln!("{line}");
-            }
-            panic!("Property test failed: {}", failure.panic_message);
-        }
         Ok(Exploration::Counterexamples(counterexamples)) => counterexamples,
     };
 
-    // Replay each counterexample with `is_final = true`. Each replay prints
+    // Replay each counterexample as a final test case. Each replay prints
     // its draws live and its diagnostic at the catch site, so each failure
     // reads as one block; only the reproducer line is added here. The count
     // headline has to be eprinted before the replays — the closing
@@ -444,6 +423,9 @@ pub(crate) fn drive<R, F>(
             counterexamples.len()
         );
     }
+    let mut final_case = |backend: Box<dyn DataSource + Send + Sync>| {
+        run_test_case(backend, &mut test_fn, true, mode, verbosity);
+    };
     let mut reported: Vec<String> = Vec::new();
     for counterexample in counterexamples {
         if multiple && !quiet {
@@ -452,7 +434,7 @@ pub(crate) fn drive<R, F>(
         // A counterexample that stopped failing between discovery and
         // replay is a run error (flaky test / stale blob), which ends the
         // run on the spot.
-        let failure = match runner.replay_final(counterexample, &mut run_case) {
+        let failure = match runner.replay_final(counterexample, &mut final_case) {
             Ok(failure) => failure,
             Err(error) => panic!("{error}"),
         };
@@ -475,6 +457,54 @@ pub(crate) fn drive<R, F>(
             many.len()
         ),
     }
+}
+
+/// Run `Mode::SingleTestCase`: one test case, final from the start, with
+/// its diagnostic printed at the catch site. A single test case is not a
+/// property-test run — there is no exploration, shrinking, or replay — so
+/// it bypasses the [`TestRunner`] machinery entirely.
+pub(crate) fn drive_single<F>(test_fn: F, settings: &Settings, test_location: Option<&TestLocation>)
+where
+    F: FnMut(TestCase),
+{
+    init_panic_hook();
+    let mut test_fn = test_fn;
+    let failure = crate::native::test_runner::run_single_case(settings, &mut |backend| {
+        run_test_case(
+            backend,
+            &mut test_fn,
+            true,
+            settings.mode,
+            settings.verbosity,
+        );
+    });
+
+    report_to_antithesis(failure.is_some(), test_location);
+
+    let Some(failure) = failure else { return };
+    if let Some(line) = reproducer_line(settings, &failure) {
+        eprintln!("{line}");
+    }
+    panic!("Property test failed: {}", failure.panic_message);
+}
+
+/// Report the run's verdict to Antithesis (when running under it), and
+/// fail fast if the integration is required but not compiled in.
+fn report_to_antithesis(test_failed: bool, test_location: Option<&TestLocation>) {
+    crate::antithesis::require_antithesis_feature(
+        crate::antithesis::is_running_in_antithesis(),
+        cfg!(feature = "antithesis"),
+    );
+
+    #[cfg(feature = "antithesis")]
+    // nocov start
+    if crate::antithesis::is_running_in_antithesis() {
+        if let Some(loc) = test_location {
+            crate::antithesis::emit_assertion(loc, !test_failed);
+        }
+    }
+    // nocov end
+    let _ = (test_failed, test_location);
 }
 
 #[cfg(test)]

@@ -175,10 +175,6 @@ impl std::error::Error for RunError {}
 pub enum Exploration<C> {
     /// The run found no failures.
     Passed,
-    /// The run failed with a failure that has no counterexample left to
-    /// replay — `Mode::SingleTestCase`, whose one test case is its own
-    /// final replay.
-    Failed(Failure),
     /// The run discovered counterexamples, one per distinct bug, in report
     /// order. Each still needs its final replay via
     /// [`TestRunner::replay_final`].
@@ -206,10 +202,12 @@ pub struct TestRunResult {
 /// implemented purely in memory.
 ///
 /// In both methods, `run_case` is called once per test case with a data
-/// source for generating test data and a bool indicating whether this is
-/// the final replay of a minimal failing example. It runs the test body to
-/// completion; the outcome is delivered back through
-/// [`DataSource::mark_complete`], not as a return value.
+/// source for generating test data; it runs the test body to completion
+/// and the outcome is delivered back through [`DataSource::mark_complete`],
+/// not as a return value. Finality is structural: every test case
+/// [`explore`](Self::explore) runs is non-final, and
+/// [`replay_final`](Self::replay_final)'s one case is final — the caller
+/// encodes that in the callback it supplies to each method.
 pub trait TestRunner {
     /// A minimal counterexample discovered by [`explore`](Self::explore),
     /// replayable via [`replay_final`](Self::replay_final).
@@ -224,18 +222,17 @@ pub trait TestRunner {
         &self,
         settings: &Settings,
         database_key: Option<&str>,
-        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
     ) -> Result<Exploration<Self::Counterexample>, RunError>;
 
-    /// Replay one counterexample with `is_final = true` and return the
-    /// [`Failure`] the test body reported (with its reproduce blob
-    /// attached). `Err` means the counterexample stopped failing between
-    /// discovery and replay — flaky for the native engine, a stale blob for
-    /// a blob replay.
+    /// Replay one counterexample and return the [`Failure`] the test body
+    /// reported (with its reproduce blob attached). `Err` means the
+    /// counterexample stopped failing between discovery and replay — flaky
+    /// for the native engine, a stale blob for a blob replay.
     fn replay_final(
         &self,
         counterexample: Self::Counterexample,
-        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
     ) -> Result<Failure, RunError>;
 }
 
@@ -245,14 +242,11 @@ pub trait TestRunner {
 pub(crate) fn collect_failures<R: TestRunner>(
     runner: &R,
     exploration: Exploration<R::Counterexample>,
-    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>, bool),
+    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
 ) -> Result<TestRunResult, RunError> {
     match exploration {
         Exploration::Passed => Ok(TestRunResult {
             failures: Vec::new(),
-        }),
-        Exploration::Failed(failure) => Ok(TestRunResult {
-            failures: vec![failure],
         }),
         Exploration::Counterexamples(counterexamples) => {
             let mut failures = Vec::new();
