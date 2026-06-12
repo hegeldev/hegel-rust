@@ -86,7 +86,9 @@ fn test_database_persists_failing_examples() {
             .__database_key("test_database_persists".to_string())
             .run();
         },
-        "Property test failed",
+        // The property panics with an empty message; the run re-raises it
+        // verbatim.
+        "^$",
     );
 
     let entries: Vec<_> = std::fs::read_dir(db_path.path()).unwrap().collect();

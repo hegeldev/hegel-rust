@@ -17,7 +17,7 @@ fn test_inversion_is_imperfect() {
             .settings(Settings::new().test_cases(1000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -32,7 +32,7 @@ fn test_can_find_nan_in_list() {
             .settings(Settings::new().test_cases(1000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -57,7 +57,7 @@ fn test_can_find_non_integer_float() {
             .settings(Settings::new().test_cases(1000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -72,7 +72,7 @@ fn test_can_find_integer_float() {
             .settings(Settings::new().test_cases(1000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -87,7 +87,7 @@ fn test_can_find_float_outside_exact_int_range() {
             .settings(Settings::new().test_cases(1000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -104,7 +104,7 @@ fn test_can_find_float_that_does_not_round_trip_through_str() {
             .settings(Settings::new().test_cases(1000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -122,7 +122,7 @@ fn test_can_find_float_that_does_not_round_trip_through_repr() {
             .settings(Settings::new().test_cases(1000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 

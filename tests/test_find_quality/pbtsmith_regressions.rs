@@ -15,7 +15,7 @@ fn test_zero_from_wide_integer_range() {
             .settings(Settings::new().test_cases(1000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -37,7 +37,7 @@ fn test_duplicate_tuples_in_list() {
             .settings(Settings::new().test_cases(1000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -57,7 +57,7 @@ fn test_non_negative_float_is_not_always_positive() {
             .settings(Settings::new().test_cases(1000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -80,7 +80,7 @@ fn test_empty_bytes_with_wide_dependent_range() {
             .settings(Settings::new().test_cases(5000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }
 
@@ -103,6 +103,6 @@ fn test_empty_bytes_with_dependent_condition() {
             .settings(Settings::new().test_cases(5000).database(None))
             .run();
         },
-        "Property test failed",
+        "assertion failed",
     );
 }

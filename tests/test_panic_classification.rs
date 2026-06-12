@@ -14,9 +14,9 @@ use hegel::generators as gs;
 use hegel::{Hegel, Settings, TestCase, Verbosity};
 
 /// Run a property whose body always panics with `msg` and return the
-/// run-level panic message. The property must *fail* — a user panic, no
-/// matter what its text is, is a bug in the code under test, never control
-/// flow.
+/// panic message the run re-raises. The property must *fail* — a user
+/// panic, no matter what its text is, is a bug in the code under test,
+/// never control flow.
 fn run_property_panicking_with(msg: &'static str) -> String {
     let result = catch_unwind(AssertUnwindSafe(|| {
         Hegel::new(move |tc: TestCase| {
@@ -49,7 +49,7 @@ fn run_property_panicking_with(msg: &'static str) -> String {
 fn user_panic_matching_assume_sentinel_is_a_failure() {
     assert_eq!(
         run_property_panicking_with("__HEGEL_ASSUME_FAIL"),
-        "Property test failed: __HEGEL_ASSUME_FAIL"
+        "__HEGEL_ASSUME_FAIL"
     );
 }
 
@@ -57,7 +57,7 @@ fn user_panic_matching_assume_sentinel_is_a_failure() {
 fn user_panic_matching_stop_test_sentinel_is_a_failure() {
     assert_eq!(
         run_property_panicking_with("__HEGEL_STOP_TEST"),
-        "Property test failed: __HEGEL_STOP_TEST"
+        "__HEGEL_STOP_TEST"
     );
 }
 
@@ -65,7 +65,7 @@ fn user_panic_matching_stop_test_sentinel_is_a_failure() {
 fn user_panic_matching_loop_done_sentinel_is_a_failure() {
     assert_eq!(
         run_property_panicking_with("__HEGEL_LOOP_DONE"),
-        "Property test failed: __HEGEL_LOOP_DONE"
+        "__HEGEL_LOOP_DONE"
     );
 }
 
@@ -73,7 +73,7 @@ fn user_panic_matching_loop_done_sentinel_is_a_failure() {
 fn user_panic_matching_invalid_argument_prefix_is_a_failure() {
     assert_eq!(
         run_property_panicking_with("__HEGEL_INVALID_ARGUMENT: boom"),
-        "Property test failed: __HEGEL_INVALID_ARGUMENT: boom"
+        "__HEGEL_INVALID_ARGUMENT: boom"
     );
 }
 

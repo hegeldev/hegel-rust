@@ -12,7 +12,7 @@
 //! wrapping each test body with `catch_unwind` plus `mark_complete`, the
 //! antithesis integration, the final replay of each discovered
 //! counterexample (with its report printed around it), and the closing
-//! `panic!("Property test failed: ...")` re-raise.
+//! re-raise of the failing test's own panic.
 
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::cell::{Cell, RefCell};
@@ -219,13 +219,17 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// is caught — to stderr on a non-quiet final replay (right after the live
 /// draw/note lines, which is what keeps each failure one block), or
 /// through the verbose output sink for a non-final case in verbose mode.
+///
+/// Also returns the caught panic payload for an `Interesting` result, so a
+/// final replay's caller can re-raise the test's *own* panic as the run's
+/// closing unwind instead of synthesizing one.
 pub(crate) fn run_test_case(
     data_source: Box<dyn DataSource + Send + Sync>,
     test_fn: &mut dyn FnMut(TestCase),
     is_final: bool,
     mode: Mode,
     verbosity: crate::runner::Verbosity,
-) -> TestCaseResult {
+) -> (TestCaseResult, Option<Box<dyn std::any::Any + Send>>) {
     let verbose = matches!(
         verbosity,
         crate::runner::Verbosity::Verbose | crate::runner::Verbosity::Debug
@@ -240,20 +244,21 @@ pub(crate) fn run_test_case(
     let tc = TestCase::new(data_source, should_emit, mode);
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
 
-    let tc_result = match &result {
-        Ok(()) => TestCaseResult::Valid,
-        Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => TestCaseResult::Invalid,
-        Err(e) if e.downcast_ref::<StopTest>().is_some() => TestCaseResult::Overrun,
-        Err(e) if e.downcast_ref::<LoopDone>().is_some() => TestCaseResult::Valid,
+    let (tc_result, payload) = match result {
+        Ok(()) => (TestCaseResult::Valid, None),
+        Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => (TestCaseResult::Invalid, None),
+        Err(e) if e.downcast_ref::<StopTest>().is_some() => (TestCaseResult::Overrun, None),
+        Err(e) if e.downcast_ref::<LoopDone>().is_some() => (TestCaseResult::Valid, None),
         Err(e) => {
-            if let Some(InvalidArgument(message)) = e.downcast_ref::<InvalidArgument>() {
-                // An invalid-argument (usage) error is a mistake in how the
-                // test is configured, not a discovered counterexample: abort
-                // the run with the message instead of recording it as
-                // `Interesting` and shrinking it.
-                std::panic::resume_unwind(Box::new(message.clone()));
-            }
-            let msg = panic_message(e);
+            // An invalid-argument (usage) error is a mistake in how the
+            // test is configured, not a discovered counterexample: abort
+            // the run with the message instead of recording it as
+            // `Interesting` and shrinking it.
+            let e = match e.downcast::<InvalidArgument>() {
+                Ok(invalid) => std::panic::resume_unwind(Box::new(invalid.0)),
+                Err(e) => e,
+            };
+            let msg = panic_message(&e);
             let (thread_name, thread_id, location, backtrace) =
                 take_panic_info().unwrap_or_else(unknown_panic_info);
 
@@ -272,12 +277,13 @@ pub(crate) fn run_test_case(
                     crate::test_case::emit_verbose_line(line);
                 }
             }
-            TestCaseResult::Interesting(Failure {
+            let failure = TestCaseResult::Interesting(Failure {
                 panic_message: msg,
                 origin: format!("Panic at {}", location),
                 // `replay_final` attaches the blob on a final replay.
                 reproduce_blob: None,
-            })
+            });
+            (failure, Some(e))
         }
     };
 
@@ -287,7 +293,7 @@ pub(crate) fn run_test_case(
 
     tc.mark_complete(&tc_result);
 
-    tc_result
+    (tc_result, payload)
 }
 
 /// Print a per-test-case line describing why this test case stopped.
@@ -365,9 +371,10 @@ fn reproducer_line(settings: &Settings, failure: &crate::backend::Failure) -> Op
 /// callback that wraps each test invocation in [`run_test_case`], and lets
 /// it explore (generate + shrink). On a failing run it then replays each
 /// counterexample, reporting each failure as its replay completes, and
-/// re-raises the closing `panic!`. A [`crate::backend::RunError`] — a
-/// failure of the run itself rather than of a test case — panics with the
-/// error's message, without the `Property test failed:` framing.
+/// ends the run by re-raising the failing test's own panic (or, for
+/// several distinct bugs, a panic carrying the failure count). A
+/// [`crate::backend::RunError`] — a failure of the run itself rather than
+/// of a test case — panics with the error's message instead.
 pub(crate) fn drive<R, F>(
     runner: R,
     test_fn: F,
@@ -423,8 +430,10 @@ pub(crate) fn drive<R, F>(
             counterexamples.len()
         );
     }
+    let last_payload: RefCell<Option<Box<dyn std::any::Any + Send>>> = RefCell::new(None);
     let mut final_case = |backend: Box<dyn DataSource + Send + Sync>| {
-        run_test_case(backend, &mut test_fn, true, mode, verbosity);
+        let (_, payload) = run_test_case(backend, &mut test_fn, true, mode, verbosity);
+        *last_payload.borrow_mut() = payload;
     };
     let mut reported: Vec<String> = Vec::new();
     for counterexample in counterexamples {
@@ -444,18 +453,28 @@ pub(crate) fn drive<R, F>(
         reported.push(failure.panic_message);
     }
 
+    // The report is complete; end the run by re-raising. `resume_unwind`
+    // skips the panic hook, so nothing prints twice — the unwind is purely
+    // the run's programmatic result.
     match reported.as_slice() {
         // Defensive: an empty counterexample list (no runner produces one
         // today) falls through to the legacy generic panic.
         [] => panic!("Property test failed: unknown"),
-        // Single-failure path: keep the original panic shape so test
-        // harnesses that pattern-match on `"Property test failed: <msg>"`
-        // (e.g. `Minimal::run` in `tests/common/utils.rs`) keep working.
-        [message] => panic!("Property test failed: {}", message),
-        many => panic!(
+        // Single-failure path: the run fails with the test's *own* panic,
+        // payload intact — `should_panic(expected = ...)` and `catch_unwind`
+        // consumers see exactly what the test raised. A runner whose final
+        // replay produced no payload (it didn't execute the test body) falls
+        // back to a synthetic panic carrying the recorded message.
+        [message] => match last_payload.borrow_mut().take() {
+            Some(payload) => std::panic::resume_unwind(payload),
+            None => panic!("Property test failed: {}", message),
+        },
+        // Multi-failure path: there is no single panic to re-raise, so the
+        // run fails with the count (already eprinted as the headline).
+        many => std::panic::resume_unwind(Box::new(format!(
             "Property-based test failed with {} distinct failures.",
             many.len()
-        ),
+        ))),
     }
 }
 
@@ -469,22 +488,31 @@ where
 {
     init_panic_hook();
     let mut test_fn = test_fn;
+    let last_payload: RefCell<Option<Box<dyn std::any::Any + Send>>> = RefCell::new(None);
     let failure = crate::native::test_runner::run_single_case(settings, &mut |backend| {
-        run_test_case(
+        let (_, payload) = run_test_case(
             backend,
             &mut test_fn,
             true,
             settings.mode,
             settings.verbosity,
         );
+        *last_payload.borrow_mut() = payload;
     });
 
     report_to_antithesis(failure.is_some(), test_location);
 
     // No reproducer line: a single random test case has no shrunk choice
-    // sequence to encode, so its failure never carries a blob.
-    let Some(failure) = failure else { return };
-    panic!("Property test failed: {}", failure.panic_message);
+    // sequence to encode, so its failure never carries a blob. The run ends
+    // by re-raising the test's own panic.
+    if failure.is_none() {
+        return;
+    }
+    match last_payload.borrow_mut().take() {
+        Some(payload) => std::panic::resume_unwind(payload),
+        // A single-case failure always comes from a panic this run caught.
+        None => unreachable!(),
+    }
 }
 
 /// Report the run's verdict to Antithesis (when running under it), and

@@ -2,7 +2,7 @@
 //!
 //! The runner has three failure-reporting branches (`src/run_lifecycle.rs`):
 //!   - empty (`Property test failed: unknown`)
-//!   - single failure (legacy `Property test failed: <msg>`)
+//!   - single failure (the test's own panic, re-raised)
 //!   - multi-failure (new `Property-based test failed with N distinct failures.`)
 //!
 //! The single-failure branch is exercised by the rest of the test suite via
@@ -47,9 +47,9 @@ fn test_macro_report_multiple_failures_true_surfaces_both(tc: TestCase) {
 /// `#[hegel::test(report_multiple_failures = false, ...)]` asks the engine
 /// to collapse multi-bug runs to a single failure, so the same body falls
 /// into the single-failure re-raise path. The `expected` substring is
-/// chosen specifically so a multi-failure panic (which starts with
-/// `"Property-based test failed"` — note the hyphen, no colon) would not
-/// match and the test would fail.
+/// chosen specifically so a multi-failure panic (`"Property-based test
+/// failed with N distinct failures."`) would not match and the test would
+/// fail: only a single re-raised branch panic contains `"branch: "`.
 #[hegel::test(
     report_multiple_failures = false,
     derandomize = true,
@@ -57,7 +57,7 @@ fn test_macro_report_multiple_failures_true_surfaces_both(tc: TestCase) {
     verbosity = hegel::Verbosity::Quiet,
     database = None
 )]
-#[should_panic(expected = "Property test failed: ")]
+#[should_panic(expected = "branch: ")]
 fn test_macro_report_multiple_failures_false_collapses(tc: TestCase) {
     let x: i32 = tc.draw(gs::integers::<i32>().min_value(0).max_value(40));
     if x > 30 {
@@ -123,9 +123,9 @@ fn test_multi_failure_panic_quiet_suppresses_stderr() {
 }
 
 /// `report_multiple_failures(false)` makes the engine surface only the first
-/// origin, so the runner sees a single Failure and falls into the legacy single-failure
-/// re-raise path (`Property test failed: <msg>`) rather than the
-/// multi-failure `"... with N distinct failures."` path.
+/// origin, so the runner sees a single failure and re-raises that test
+/// panic itself rather than the multi-failure
+/// `"... with N distinct failures."` panic.
 #[test]
 fn test_report_multiple_failures_false_collapses_to_single_failure_panic() {
     let result = catch_unwind(AssertUnwindSafe(move || {
@@ -156,8 +156,8 @@ fn test_report_multiple_failures_false_collapses_to_single_failure_panic() {
         .or_else(|| payload.downcast_ref::<String>().cloned())
         .unwrap_or_default();
     assert!(
-        msg.starts_with("Property test failed: ") && !msg.contains("distinct failures"),
-        "expected single-failure outer panic (one branch should win), got: {msg:?}"
+        msg.contains("branch: ") && !msg.contains("distinct failures"),
+        "expected a single re-raised branch panic (one branch should win), got: {msg:?}"
     );
 }
 
@@ -226,7 +226,9 @@ fn test_multi_failure_report_groups_draws_with_their_diagnostics() {
             r"\n",
             r"let draw_1 = \d+;\n",
             r"thread '[^']+' \(\d+\) panicked at src[/\\]main\.rs:\d+:\d+:\n",
-            r"(?:big|small) branch: \d+\n",
+            // The report is the last thing on stderr: the closing unwind is
+            // a hook-silent re-raise, so nothing prints after the blocks.
+            r"(?:big|small) branch: \d+$",
         ),
     );
 }

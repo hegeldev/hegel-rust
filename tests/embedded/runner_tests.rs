@@ -247,10 +247,7 @@ mod reproduce {
                 .settings(Settings::new().phases([]).verbosity(Verbosity::Quiet))
                 .reproduce_failure(blob),
         );
-        assert!(
-            msg.contains("Property test failed"),
-            "unexpected panic message: {msg}"
-        );
+        assert!(msg.contains("boom: n ="), "unexpected panic message: {msg}");
     }
 
     #[test]
@@ -265,9 +262,6 @@ mod reproduce {
                 .reproduce_failure(blob)
                 .reproduce_failure("!!! not a blob !!!"),
         );
-        assert!(
-            msg.contains("Property test failed"),
-            "unexpected panic message: {msg}"
-        );
+        assert!(msg.contains("boom: n ="), "unexpected panic message: {msg}");
     }
 }

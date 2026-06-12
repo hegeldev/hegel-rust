@@ -457,13 +457,14 @@ fn run_case_capturing(
     body: &mut dyn FnMut(TestCase),
 ) -> TestCaseResult {
     init_panic_hook();
-    run_test_case(
+    let (result, _payload) = run_test_case(
         Box::new(BtStubDataSource),
         body,
         is_final,
         crate::runner::Mode::TestRun,
         verbosity,
-    )
+    );
+    result
 }
 
 fn backtraces_enabled() -> bool {
@@ -561,7 +562,7 @@ fn control_flow_unwinds_never_reach_the_panic_hook() {
     // pay for a backtrace) the hook must record nothing at all.
     init_panic_hook();
     take_panic_info();
-    let result = run_test_case(
+    let (result, payload) = run_test_case(
         Box::new(BtStubDataSource),
         &mut |_tc| crate::control::raise_control(crate::control::AssumeFailed),
         true,
@@ -569,6 +570,7 @@ fn control_flow_unwinds_never_reach_the_panic_hook() {
         crate::runner::Verbosity::Normal,
     );
     assert!(matches!(result, TestCaseResult::Invalid));
+    assert!(payload.is_none(), "control flow carries no failure payload");
     assert!(
         take_panic_info().is_none(),
         "a control-flow unwind must not touch the panic hook's state"
