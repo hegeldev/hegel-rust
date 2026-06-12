@@ -291,3 +291,10 @@ fn simplest_template_always_selects_rule_zero() {
         assert_eq!(sm.next_rule(&mut ntc).unwrap(), 0);
     }
 }
+
+// invalid argument
+#[test]
+#[should_panic(expected = "Stateful testing: there must be at least one rule")]
+fn no_rules_is_error() {
+    machine(0);
+}
