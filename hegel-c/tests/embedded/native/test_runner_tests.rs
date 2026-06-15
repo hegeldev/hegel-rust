@@ -1086,6 +1086,51 @@ fn reuse_detects_nondeterministic_generator_across_replays() {
 }
 
 #[test]
+fn nondeterministic_generator_contradicts_reuse_fed_tree_at_simplest_example() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    // A single stored entry: the reuse phase replays it once (no second replay
+    // to contradict, so the reuse-phase determinism check stays quiet) and
+    // feeds the choice tree. Generation then runs its simplest-example probe,
+    // whose draw the flipping generator makes contradict the reuse-fed tree —
+    // exercising the post-reuse `for_simplest` non-determinism check rather
+    // than the reuse-replay one.
+    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+
+    let flip = AtomicUsize::new(0);
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse, Phase::Generate])
+            .test_cases(10)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            let r = if flip.fetch_add(1, Ordering::SeqCst) % 2 == 0 {
+                rbool(ds).map(|_| ())
+            } else {
+                rint(ds, i64::MIN, i64::MAX).map(|_| ())
+            };
+            match r {
+                Ok(()) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+    );
+    match result {
+        Err(crate::backend::RunError::NonDeterministic(msg)) => {
+            assert!(
+                msg.to_lowercase().contains("non-deterministic"),
+                "got: {msg}"
+            );
+        }
+        other => panic!("expected RunError::NonDeterministic, got {other:?}"),
+    }
+}
+
+#[test]
 fn run_single_case_derandomize_is_keyed_by_test_identity() {
     // Two different tests (database keys) running derandomized in
     // `Mode::SingleTestCase` must not draw identical streams; the same key
