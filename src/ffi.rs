@@ -35,7 +35,11 @@ pub(crate) fn last_error_string() -> String {
     // until the next libhegel call on this thread; we copy before returning.
     let p = hegel_c::hegel_last_error_message();
     if p.is_null() {
-        return String::new();
+        // libhegel's thread-local error buffer is a CString whose pointer is
+        // never null; this guard exists for FFI soundness (CStr::from_ptr is UB
+        // on null), so the branch is unreachable in practice but must stay a
+        // guard rather than become a panic.
+        return String::new(); // nocov
     }
     unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
 }
@@ -132,7 +136,10 @@ impl RunHandle {
         // SAFETY: settings.as_ptr() is a live, non-null handle.
         let raw = unsafe { hegel_c::hegel_run_start(settings.as_ptr()) };
         if raw.is_null() {
-            return Err(last_error_string());
+            // settings is always a live handle, so hegel_run_start returns null
+            // only on OS worker-thread spawn failure: a real but unprovokable
+            // resource-exhaustion path.
+            return Err(last_error_string()); // nocov
         }
         Ok(RunHandle { raw })
     }

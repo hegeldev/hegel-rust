@@ -424,9 +424,11 @@ pub(crate) fn drive<F>(
     let c_settings = SettingsHandle::build(settings, database_key);
     let run = match RunHandle::start(&c_settings) {
         Ok(run) => run,
-        // The engine could not even start (e.g. a malformed setting). That is
-        // a run-level failure, surfaced with its own message.
-        Err(message) => panic!("{message}"),
+        // The engine could not even start. With a builder-produced settings
+        // handle this only happens on OS worker-thread spawn failure (see
+        // ffi::RunHandle::start), an unprovokable resource-exhaustion path;
+        // surfaced as the run's own panic message.
+        Err(message) => panic!("{message}"), // nocov
     };
 
     // Pull and run each scheduled case. Final replays (emitted after

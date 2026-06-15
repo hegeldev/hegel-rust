@@ -515,7 +515,12 @@ impl TestCase {
                  tc.target(_, label={label:?}); each label can be observed at \
                  most once per test case"
             ),
-            Err(Some(rc)) => raise_for_rc(rc),
+            // A non-OK rc can't occur here: `target_observation` is infallible
+            // and the frontend always passes a valid handle and UTF-8 label.
+            // Routed through `raise_for_rc` (rather than `unreachable!`) so that
+            // were a code ever returned it would still be classified, not
+            // mistaken for a shrinkable counterexample.
+            Err(Some(rc)) => raise_for_rc(rc), // nocov
         }
     }
 
@@ -736,12 +741,17 @@ impl TestCase {
                 Some(failure.origin.as_str()),
             ),
         };
+        // mark_complete runs once per case with a valid handle, status and
+        // UTF-8 origin, so it does not fail here. Surfaced as a structured
+        // internal error (not `unreachable!`) so a real invariant break aborts
+        // the run with a bug report rather than being shrunk as a counterexample.
         if let Err(rc) = self.with_ctc(|ctc| ctc.mark_complete(status, origin)) {
+            // nocov start
             hegel_internal_error!(
                 "hegel_mark_complete failed: rc={} {}",
                 rc,
                 crate::ffi::last_error_string()
-            );
+            ); // nocov end
         }
     }
 

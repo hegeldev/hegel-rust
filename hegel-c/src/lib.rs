@@ -780,7 +780,12 @@ fn install_worker_panic_hook() {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             if std::thread::current().name() == Some(WORKER_THREAD_NAME) {
+                // Reached only for a panic raised on the engine worker thread,
+                // i.e. the engine itself panicked (an internal invariant); not
+                // provocable without an engine bug.
+                // nocov start
                 return;
+                // nocov end
             }
             prev(info);
         }));
@@ -835,14 +840,17 @@ pub unsafe extern "C" fn hegel_run_start(settings: *const HegelSettings) -> *mut
                         ack: ack_tx,
                     };
                     if let Err(mpsc::SendError(returned)) = to_caller.send(msg) {
-                        // Caller dropped — recover the data source we just
-                        // tried to hand off and mark it complete so the
-                        // engine can make progress to its (now-irrelevant)
-                        // end.
+                        // Caller dropped the result channel in the window
+                        // between the worker producing a case and sending it —
+                        // a thread-shutdown race (abort is set first in the
+                        // normal path), so forcing it needs sleeps. Recover the
+                        // data source and mark it complete so the engine can
+                        // wind down to its (now-irrelevant) end.
+                        // nocov start
                         if let WorkerMessage::TestCase { ds, .. } = returned {
                             ds.mark_complete(&TestCaseResult::Valid);
-                        }
-                        return;
+                        } // nocov end
+                        return; // nocov
                     }
                     // Caller dropping the ack sender is treated the same as
                     // a successful ack — we're winding down regardless.
@@ -852,20 +860,28 @@ pub unsafe extern "C" fn hegel_run_start(settings: *const HegelSettings) -> *mut
             let result = match std::panic::catch_unwind(engine) {
                 Ok(Ok(r)) => Ok(r),
                 Ok(Err(run_error)) => Err(run_error.to_string()),
+                // Reached only when the engine worker thread panics (an
+                // internal invariant): not provocable without an engine bug,
+                // and across the C ABI the panic must surface as a run-level
+                // error string rather than unwind.
+                // nocov start
                 Err(payload) => Err(format!(
                     "Engine panic: {}",
                     crate::panic::panic_message(&payload)
-                )),
+                )), // nocov end
             };
             let _ = to_caller.send(WorkerMessage::Done(result));
         });
 
     let worker = match worker {
         Ok(h) => h,
+        // thread::spawn fails only on OS resource exhaustion, which can't be
+        // provoked in-process without destabilising the test runner.
+        // nocov start
         Err(e) => {
             set_last_error(&format!("hegel_run_start: failed to spawn worker: {}", e));
             return ptr::null_mut();
-        }
+        } // nocov end
     };
 
     Box::into_raw(Box::new(HegelRun {
@@ -938,10 +954,15 @@ pub unsafe extern "C" fn hegel_next_test_case(run: *mut HegelRun) -> *mut HegelT
         Err(_) => {
             // Worker dropped its sender without sending Done — should not
             // happen in normal use, but treat as a soft EOF rather than
-            // panicking. Caller distinguishes via last_error.
+            // panicking. Caller distinguishes via last_error. The worker always
+            // sends Done after its catch_unwind, so reaching here needs the
+            // worker thread to die without unwinding: not reproducible in safe
+            // Rust, and this extern "C" entry point must return null, not panic.
+            // nocov start
             run.drained = true;
             set_last_error("hegel_next_test_case: worker terminated without reporting a result");
             ptr::null_mut()
+            // nocov end
         }
     }
 }
@@ -1001,10 +1022,14 @@ pub unsafe extern "C" fn hegel_run_free(run: *mut HegelRun) {
     // After the abort flag, the worker's callback short-circuits without
     // sending, so this typically receives just the final Done message and
     // then the channel closes.
+    // Draining a case the worker buffered before it observed the abort flag is
+    // a thread-shutdown race; forcing the window deterministically needs sleeps.
     while let Ok(msg) = run.from_worker.recv() {
         if let WorkerMessage::TestCase { ds, ack, .. } = msg {
+            // nocov start
             ds.mark_complete(&TestCaseResult::Valid);
             let _ = ack.send(());
+            // nocov end
         }
     }
 
@@ -1173,12 +1198,17 @@ pub unsafe extern "C" fn hegel_generate(
     };
 
     tc.last_value.clear();
+    // Every value the engine produces re-serializes to CBOR (the writer is a
+    // Vec, which never errors), so this is effectively unreachable; but
+    // hegel_generate is extern "C", so it must return an error code here rather
+    // than panic across the C ABI.
     if let Err(e) = ciborium::ser::into_writer(&value, &mut tc.last_value) {
+        // nocov start
         set_last_error(&format!(
             "hegel_generate: failed to re-serialize value: {}",
             e
-        ));
-        return HEGEL_E_INTERNAL;
+        )); // nocov end
+        return HEGEL_E_INTERNAL; // nocov
     }
     unsafe {
         *out_value_cbor = tc.last_value.as_ptr();
