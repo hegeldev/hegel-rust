@@ -436,6 +436,9 @@ impl crate::backend::DataSource for BtStubDataSource {
     fn collection_reject(&self, _id: i64, _why: Option<&str>) -> Result<(), DataSourceError> {
         unimplemented!()
     }
+    fn primitive_boolean(&self, _p: f64, _forced: Option<bool>) -> Result<bool, DataSourceError> {
+        unimplemented!()
+    }
     fn new_pool(&self) -> Result<i64, DataSourceError> {
         unimplemented!()
     }

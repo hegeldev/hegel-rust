@@ -631,6 +631,31 @@ int hegel_pool_generate(hegel_test_case_t *tc,
                         int64_t *out_variable_id);
 
 /*
+ Draw a single boolean that is `true` with probability `p`. `p`
+ must be in `[0.0, 1.0]`; `p = 0.0` always yields `false` and
+ `p = 1.0` always yields `true` without consuming entropy.
+
+ When `has_forced` is `true` the result is forced to `forced`: the
+ engine still records the choice (so replay and shrinking stay
+ aligned) but consumes no entropy, and the shrinker will not flip it.
+ Forcing `true` with `p = 0.0` or `false` with `p = 1.0` is
+ contradictory and rejected.
+
+ On success writes the drawn value into `*out_value` and returns
+ `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice
+ budget is exhausted for this test case (the caller should abort the
+ body and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
+ Returns `HEGEL_E_INVALID_ARG` for a NULL `out_value`, a `p` outside
+ `[0.0, 1.0]` (including NaN), or a contradictory forced value; the
+ diagnostic is in `hegel_last_error_message`.
+ */
+int hegel_primitive_boolean(hegel_test_case_t *tc,
+                            double p,
+                            bool forced,
+                            bool has_forced,
+                            bool *out_value);
+
+/*
  Record a numeric observation under `label` for the engine's
  targeting phase to hill-climb toward. Higher values are "more
  interesting"; the engine biases later test cases toward inputs that

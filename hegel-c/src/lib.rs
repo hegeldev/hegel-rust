@@ -1312,6 +1312,49 @@ pub unsafe extern "C" fn hegel_pool_generate(
     }
 }
 
+/// Draw a single boolean that is `true` with probability `p`. `p`
+/// must be in `[0.0, 1.0]`; `p = 0.0` always yields `false` and
+/// `p = 1.0` always yields `true` without consuming entropy.
+///
+/// When `has_forced` is `true` the result is forced to `forced`: the
+/// engine still records the choice (so replay and shrinking stay
+/// aligned) but consumes no entropy, and the shrinker will not flip it.
+/// Forcing `true` with `p = 0.0` or `false` with `p = 1.0` is
+/// contradictory and rejected.
+///
+/// On success writes the drawn value into `*out_value` and returns
+/// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice
+/// budget is exhausted for this test case (the caller should abort the
+/// body and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
+/// Returns `HEGEL_E_INVALID_ARG` for a NULL `out_value`, a `p` outside
+/// `[0.0, 1.0]` (including NaN), or a contradictory forced value; the
+/// diagnostic is in `hegel_last_error_message`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_primitive_boolean(
+    tc: *mut HegelTestCase,
+    p: f64,
+    forced: bool,
+    has_forced: bool,
+    out_value: *mut bool,
+) -> c_int {
+    clear_last_error();
+    let tc = match unsafe { tc_mut(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_value.is_null() {
+        set_last_error("hegel_primitive_boolean: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.ds.primitive_boolean(p, has_forced.then_some(forced)) {
+        Ok(v) => {
+            unsafe { *out_value = v };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(e),
+    }
+}
+
 /// Record a numeric observation under `label` for the engine's
 /// targeting phase to hill-climb toward. Higher values are "more
 /// interesting"; the engine biases later test cases toward inputs that

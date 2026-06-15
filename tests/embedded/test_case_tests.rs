@@ -34,6 +34,9 @@ impl DataSource for StubDataSource {
     ) -> Result<(), DataSourceError> {
         unimplemented!()
     }
+    fn primitive_boolean(&self, _p: f64, _forced: Option<bool>) -> Result<bool, DataSourceError> {
+        unimplemented!()
+    }
     fn new_pool(&self) -> Result<i64, DataSourceError> {
         unimplemented!()
     }
@@ -124,6 +127,9 @@ struct SpanErrorDataSource;
 
 impl DataSource for SpanErrorDataSource {
     fn generate(&self, _schema: &Value) -> Result<Value, DataSourceError> {
+        unimplemented!()
+    }
+    fn primitive_boolean(&self, _p: f64, _forced: Option<bool>) -> Result<bool, DataSourceError> {
         unimplemented!()
     }
     fn start_span(&self, _label: u64) -> Result<(), DataSourceError> {
