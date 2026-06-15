@@ -23,6 +23,15 @@
 //   path; the loop is user-driven.
 
 #![allow(clippy::missing_safety_doc)]
+// TRANSIENT (inversion cleanup, see the "re-home gated engine tests + delete
+// hegeltest's dead engine" task): the engine was copied into this crate
+// verbatim and still carries frontend-oriented surface the C ABI doesn't
+// exercise — schema-builder helpers/macros in cbor_utils, the StopTest/
+// AssumeFailed/LoopDone control payloads and with_test_context, ReproduceRunner,
+// and display-only settings (print_blob/has_phase). These are trimmed or
+// re-homed once the frontend rewrite settles the final shape; until then,
+// silence the unused-code lints so clippy stays green.
+#![allow(dead_code, unused_imports, unused_macros)]
 
 use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char, c_int};
@@ -1075,13 +1084,10 @@ fn translate_ds_error(e: DataSourceError) -> c_int {
         DataSourceError::InvalidArgument(msg) => {
             set_last_error(&msg);
             HEGEL_E_INVALID_ARG
-        }
-        // `DataSourceError` is `#[non_exhaustive]`; treat any future variant as
-        // a backend error rather than failing to compile or panicking.
-        other => {
-            set_last_error(&other.to_string());
-            HEGEL_E_BACKEND
-        }
+        } // `DataSourceError` is `#[non_exhaustive]`, but it now lives in this
+          // crate, so an in-crate match is exhaustive without a wildcard. Adding
+          // a variant will fail to compile here, which is the right prompt to
+          // map it deliberately rather than silently funnel it to a backend error.
     }
 }
 

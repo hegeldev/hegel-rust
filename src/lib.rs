@@ -223,6 +223,7 @@ pub(crate) mod control;
 pub mod embed;
 pub mod explicit_test_case;
 pub mod extras;
+pub(crate) mod ffi;
 pub mod generators;
 pub(crate) mod native;
 #[doc(hidden)]
