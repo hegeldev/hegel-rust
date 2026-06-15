@@ -16,29 +16,6 @@ pub enum HealthCheck {
     LargeInitialTestCase,
 }
 
-impl HealthCheck {
-    /// Returns all health check variants.
-    ///
-    /// Useful for suppressing all health checks at once:
-    ///
-    /// ```ignore
-    /// use hegel::HealthCheck;
-    ///
-    /// #[hegel::test(suppress_health_check = HealthCheck::all())]
-    /// fn my_test(tc: hegel::TestCase) {
-    ///     // ...
-    /// }
-    /// ```
-    pub const fn all() -> [HealthCheck; 4] {
-        [
-            HealthCheck::FilterTooMuch,
-            HealthCheck::TooSlow,
-            HealthCheck::TestCasesTooLarge,
-            HealthCheck::LargeInitialTestCase,
-        ]
-    }
-}
-
 /// Controls which phases of the test lifecycle are executed.
 ///
 /// By default, all phases run. Use [`Settings::phases`] to restrict which
@@ -130,7 +107,6 @@ pub struct Settings {
     pub(crate) suppress_health_check: Vec<HealthCheck>,
     pub(crate) phases: Vec<Phase>,
     pub(crate) report_multiple_failures: bool,
-    pub(crate) print_blob: bool,
     /// The randomness backend, or `None` to let it be chosen automatically
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
@@ -161,7 +137,6 @@ impl Settings {
                 Phase::Shrink,
             ],
             report_multiple_failures: true,
-            print_blob: false,
             backend: None,
         }
     }
@@ -245,16 +220,6 @@ impl Settings {
         self
     }
 
-    /// Print a copy-pasteable `#[hegel::reproduce_failure("…")]` line for the
-    /// counterexample when a test fails. Defaults to `false`.
-    ///
-    /// The reproduce blob is always *attached* to the failure. This setting only controls whether it is printed to
-    /// the failure output. Has effect only on the native backend.
-    pub fn print_blob(mut self, print_blob: bool) -> Self {
-        self.print_blob = print_blob;
-        self
-    }
-
     /// Suppress one or more health checks so they do not cause test failure.
     ///
     /// Health checks detect common issues like excessive filtering or slow
@@ -275,11 +240,6 @@ impl Settings {
     pub fn suppress_health_check(mut self, checks: impl IntoIterator<Item = HealthCheck>) -> Self {
         self.suppress_health_check.extend(checks);
         self
-    }
-
-    /// Returns `true` if the given phase is enabled in these settings.
-    pub fn has_phase(&self, phase: Phase) -> bool {
-        self.phases.contains(&phase)
     }
 
     /// Control whether multi-bug runs report every distinct failing example
@@ -332,3 +292,7 @@ fn is_in_ci() -> bool {
         Some(expected) => std::env::var(key).ok().as_deref() == Some(expected),
     })
 }
+
+#[cfg(test)]
+#[path = "../tests/embedded/settings_tests.rs"]
+mod tests;
