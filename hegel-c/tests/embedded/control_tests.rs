@@ -32,6 +32,25 @@ fn raise_internal_error_unwinds_as_a_typed_payload_inside_a_test_context() {
 }
 
 #[test]
+fn raise_invalid_argument_panics_directly_outside_a_test_context() {
+    let payload =
+        catch_unwind(|| raise_invalid_argument(format_args!("bad arg: {}", 1))).unwrap_err();
+    let msg = panic_message(payload);
+    assert!(msg.contains("bad arg: 1"), "{msg}");
+}
+
+#[test]
+fn raise_invalid_argument_unwinds_as_a_typed_payload_inside_a_test_context() {
+    let payload = with_test_context(|| {
+        catch_unwind(|| raise_invalid_argument(format_args!("bad arg"))).unwrap_err()
+    });
+    let ia = payload
+        .downcast_ref::<InvalidArgument>()
+        .expect("expected an InvalidArgument control payload");
+    assert!(ia.0.contains("bad arg"), "{}", ia.0);
+}
+
+#[test]
 fn internal_assert_includes_the_condition_when_it_fails() {
     let value = 3;
     let payload = catch_unwind(|| hegel_internal_assert!(value == 4)).unwrap_err();

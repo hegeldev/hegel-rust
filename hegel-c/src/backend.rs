@@ -254,3 +254,7 @@ pub(crate) fn collect_failures<R: TestRunner>(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/embedded/backend_tests.rs"]
+mod tests;

@@ -12,3 +12,7 @@ pub(crate) fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
         "Unknown panic".to_string()
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/embedded/panic_tests.rs"]
+mod tests;

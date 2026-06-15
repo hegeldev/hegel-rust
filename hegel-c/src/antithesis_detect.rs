@@ -27,3 +27,7 @@ fn check_antithesis_output_dir(output_dir: &str) -> bool {
     }
     true
 }
+
+#[cfg(test)]
+#[path = "../tests/embedded/antithesis_detect_tests.rs"]
+mod tests;
