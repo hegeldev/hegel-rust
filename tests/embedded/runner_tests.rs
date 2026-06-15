@@ -163,6 +163,36 @@ fn test_settings_new_in_ci_disables_database() {
     assert!(settings.derandomize);
 }
 
+#[test]
+fn multiple_failures_with_print_blob_emit_per_failure_reproducer_lines() {
+    use crate::generators as gs;
+    // Two distinct panic sites → two distinct origins, so the run reports
+    // multiple failures. With print_blob enabled each per-failure block is
+    // followed by its reproducer line (the `eprintln!` in `drive`'s
+    // multi-failure path). The diagnostics go to this test's stderr.
+    let result = std::panic::catch_unwind(|| {
+        Hegel::new(|tc: TestCase| {
+            let n: i32 = tc.draw(gs::integers::<i32>().min_value(-100).max_value(100));
+            if n >= 50 {
+                panic!("high {n}");
+            }
+            if n <= -50 {
+                panic!("low {n}");
+            }
+        })
+        .settings(
+            Settings::new()
+                .database(None)
+                .seed(Some(1))
+                .print_blob(true)
+                .report_multiple_failures(true)
+                .verbosity(Verbosity::Normal),
+        )
+        .run()
+    });
+    assert!(result.is_err(), "the property should fail");
+}
+
 // ── Hegel::run dispatch (phase gating) ───────────────────────────────────
 
 #[test]
@@ -263,6 +293,20 @@ mod reproduce {
                 .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
                 .reproduce_failure(blob)
                 .reproduce_failure("!!! not a blob !!!"),
+        );
+        assert!(msg.contains("boom: n ="), "unexpected panic message: {msg}");
+    }
+
+    #[test]
+    fn hegel_reproduce_failure_emits_its_diagnostic_when_not_quiet() {
+        // A non-quiet blob replay renders and emits the counterexample's
+        // diagnostic block (the `eprint!` path in `drive_blob_replay`) before
+        // re-raising the failure.
+        let blob = discover_reproduce_blob();
+        let msg = run_panic_message(
+            Hegel::new(failing_property)
+                .settings(Settings::new().database(None).verbosity(Verbosity::Normal))
+                .reproduce_failure(blob),
         );
         assert!(msg.contains("boom: n ="), "unexpected panic message: {msg}");
     }
