@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.19.1 - 2026-06-15
+
+This patch adds swarm testing to stateful tests. Rule selection is owned by the engine and exposed to libhegel consumers as `hegel_new_state_machine` / `hegel_state_machine_next_rule`.
+
 ## 0.19.0 - 2026-06-15
 
 This release adds `primitive_boolean`, a weighted boolean draw with an optional forced value
