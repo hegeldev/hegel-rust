@@ -8,6 +8,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 
 use crate::cbor_utils::map_get;
+use crate::control::hegel_internal_assert;
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{EngineError, NativeTestCase};
 use ciborium::Value;
@@ -289,7 +290,7 @@ fn parse_v4_cidr(s: &str) -> V4Network {
     let prefix: u32 = prefix.parse().unwrap();
     // Every range we ship has prefix in 1..=32. /0 would shift by 32 and
     // overflow `u32`; reject it explicitly rather than silently masking it.
-    assert!(
+    hegel_internal_assert!(
         (1..=32).contains(&prefix),
         "IPv4 prefix must be in 1..=32, got /{prefix}"
     );
@@ -306,14 +307,14 @@ fn parse_v6_cidr(s: &str) -> V6Network {
     // Every range we ship has prefix in 7..=128, comfortably under
     // i128::MAX (≤ 2^121 host bits). /0 would shift by 128 and overflow
     // `u128`; reject it explicitly.
-    assert!(
+    hegel_internal_assert!(
         (1..=128).contains(&prefix),
         "IPv6 prefix must be in 1..=128, got /{prefix}"
     );
     let mask = u128::MAX << (128 - prefix);
     let base = u128::from(addr) & mask;
     let size_minus_1 = !mask;
-    assert!(
+    hegel_internal_assert!(
         size_minus_1 <= i128::MAX as u128,
         "IPv6 special range too wide to fit offset in i128: prefix /{prefix}"
     );

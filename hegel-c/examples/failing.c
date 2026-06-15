@@ -89,8 +89,9 @@ int main(void) {
     }
 
     const hegel_run_result_t *result = hegel_run_result(run);
-    if (hegel_run_result_passed(result)) {
-        fprintf(stderr, "FAIL: expected failing run but it passed\n");
+    if (hegel_run_result_status(result) != HEGEL_RUN_STATUS_FAILED) {
+        fprintf(stderr, "FAIL: expected a failing run, got status %d\n",
+                (int)hegel_run_result_status(result));
         hegel_run_free(run);
         hegel_settings_free(s);
         return 1;

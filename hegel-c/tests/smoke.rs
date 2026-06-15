@@ -67,6 +67,16 @@ enum CStatus {
     Interesting = 3,
 }
 
+/// `hegel_run_status_t` from hegel.h.
+#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[allow(dead_code)]
+enum CRunStatus {
+    Passed = 0,
+    Failed = 1,
+    Error = 2,
+}
+
 type FnSettingsNew = unsafe extern "C" fn() -> *mut u8;
 type FnSettingsFree = unsafe extern "C" fn(*mut u8);
 type FnSettingsTestCases = unsafe extern "C" fn(*mut u8, u64);
@@ -84,7 +94,8 @@ type FnMarkComplete = unsafe extern "C" fn(*mut u8, CStatus, *const c_char) -> c
 type FnNewPool = unsafe extern "C" fn(*mut u8, *mut i64) -> c_int;
 type FnPoolAdd = unsafe extern "C" fn(*mut u8, i64, *mut i64) -> c_int;
 type FnPoolGenerate = unsafe extern "C" fn(*mut u8, i64, bool, *mut i64) -> c_int;
-type FnRunResultPassed = unsafe extern "C" fn(*const u8) -> bool;
+type FnRunResultStatus = unsafe extern "C" fn(*const u8) -> CRunStatus;
+type FnRunResultError = unsafe extern "C" fn(*const u8) -> *const c_char;
 type FnRunResultFailureCount = unsafe extern "C" fn(*const u8) -> usize;
 type FnRunResultFailure = unsafe extern "C" fn(*const u8, usize) -> *const u8;
 type FnFailureOrigin = unsafe extern "C" fn(*const u8) -> *const c_char;
@@ -113,7 +124,8 @@ struct Api<'a> {
     new_pool: Symbol<'a, FnNewPool>,
     pool_add: Symbol<'a, FnPoolAdd>,
     pool_generate: Symbol<'a, FnPoolGenerate>,
-    run_result_passed: Symbol<'a, FnRunResultPassed>,
+    run_result_status: Symbol<'a, FnRunResultStatus>,
+    run_result_error: Symbol<'a, FnRunResultError>,
     run_result_failure_count: Symbol<'a, FnRunResultFailureCount>,
     run_result_failure: Symbol<'a, FnRunResultFailure>,
     failure_origin: Symbol<'a, FnFailureOrigin>,
@@ -144,7 +156,8 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             new_pool: lib.get(b"hegel_new_pool\0").unwrap(),
             pool_add: lib.get(b"hegel_pool_add\0").unwrap(),
             pool_generate: lib.get(b"hegel_pool_generate\0").unwrap(),
-            run_result_passed: lib.get(b"hegel_run_result_passed\0").unwrap(),
+            run_result_status: lib.get(b"hegel_run_result_status\0").unwrap(),
+            run_result_error: lib.get(b"hegel_run_result_error\0").unwrap(),
             run_result_failure_count: lib.get(b"hegel_run_result_failure_count\0").unwrap(),
             run_result_failure: lib.get(b"hegel_run_result_failure\0").unwrap(),
             failure_origin: lib.get(b"hegel_failure_origin\0").unwrap(),
@@ -253,8 +266,16 @@ fn libhegel_runs_passing_property() {
 
         let result = (a.run_result)(run);
         assert!(!result.is_null(), "run_result null after drained loop");
-        assert!((a.run_result_passed)(result), "expected passing run");
+        assert_eq!(
+            (a.run_result_status)(result),
+            CRunStatus::Passed,
+            "expected passing run"
+        );
         assert_eq!((a.run_result_failure_count)(result), 0);
+        assert!(
+            (a.run_result_error)(result).is_null(),
+            "a normal run carries no run-level error"
+        );
 
         (a.run_free)(run);
         (a.settings_free)(s);
@@ -383,14 +404,16 @@ fn libhegel_reports_shrunk_failure() {
 
         let result = (a.run_result)(run);
         assert!(!result.is_null());
-        assert!(
-            !(a.run_result_passed)(result),
+        assert_eq!(
+            (a.run_result_status)(result),
+            CRunStatus::Failed,
             "expected failing run (predicate n < 5 is false for many n in [0,100])"
         );
         let n_failures = (a.run_result_failure_count)(result);
         assert!(n_failures >= 1, "expected at least one failure");
 
-        // Inspect the first failure: origin should be the string we passed in.
+        // Inspect the first failure: origin and panic message should carry
+        // the string we passed in.
         let f = (a.run_result_failure)(result, 0);
         assert!(!f.is_null());
         let origin_back = CStr::from_ptr((a.failure_origin)(f)).to_string_lossy();
@@ -398,6 +421,12 @@ fn libhegel_reports_shrunk_failure() {
             origin_back.contains("n >= 5 failed"),
             "expected failure origin to contain 'n >= 5 failed', got: {}",
             origin_back
+        );
+        let message_back = CStr::from_ptr((a.failure_panic_message)(f)).to_string_lossy();
+        assert!(
+            message_back.contains("n >= 5 failed"),
+            "expected failure panic message to contain 'n >= 5 failed', got: {}",
+            message_back
         );
 
         (a.run_free)(run);
@@ -459,7 +488,11 @@ unsafe fn discover_failure_blob(a: &Api) -> CString {
         drive_failing_property(a, run);
 
         let result = (a.run_result)(run);
-        assert!(!(a.run_result_passed)(result), "expected a failing run");
+        assert_eq!(
+            (a.run_result_status)(result),
+            CRunStatus::Failed,
+            "expected a failing run"
+        );
         let f = (a.run_result_failure)(result, 0);
         assert!(!f.is_null());
         let blob_ptr = (a.failure_reproduce_blob)(f);
@@ -699,7 +732,11 @@ fn libhegel_pool_primitives_draw_added_variables() {
 
         let result = (a.run_result)(run);
         assert!(!result.is_null());
-        assert!((a.run_result_passed)(result), "expected passing run");
+        assert_eq!(
+            (a.run_result_status)(result),
+            CRunStatus::Passed,
+            "expected passing run"
+        );
 
         (a.run_free)(run);
         (a.settings_free)(s);
@@ -891,18 +928,13 @@ fn libhegel_replays_persisted_failure_with_same_database_key() {
 }
 
 #[test]
-fn engine_panic_surfaces_as_failure_not_worker_crash() {
-    // Reproduces hegel-go report #1: a property whose draws are all
-    // rejected via `assume` triggers `FilterTooMuch` inside `run_main`,
-    // which `panic!`s the worker thread. Before catch_unwind was added
-    // around `run_native`, the worker died and the C caller saw a generic
-    // "worker terminated" error. After the fix, the panic message is
-    // wrapped in a `HegelFailure` and returned via `hegel_run_result`.
-    //
-    // This also exercises libhegel's worker-thread panic hook: the engine
-    // panic must NOT print a `thread 'hegel-worker' panicked at <file>:<line>`
-    // line to the test process's stderr (it's caught and surfaced through the
-    // failure API instead).
+fn health_check_surfaces_as_run_error() {
+    // Reproduces hegel-go report #1's setup: a property whose draws are
+    // all rejected via `assume` trips `FilterTooMuch` inside `run_main`.
+    // A failed health check is a failure of the run, not a counterexample
+    // to the property, so it must surface through the run-level error
+    // channel (`hegel_run_result_error`) with no failures listed — not as
+    // a `HegelFailure`, and not as a dead worker.
     let lib = unsafe { load() };
     let a = unsafe { bind(&lib) };
 
@@ -918,7 +950,7 @@ fn engine_panic_surfaces_as_failure_not_worker_crash() {
         let schema = integer_schema(0, 1_000_000);
 
         // Reject everything we draw. The engine eventually trips
-        // FilterTooMuch and panics.
+        // FilterTooMuch and errors the run.
         loop {
             let tc = (a.next_test_case)(run);
             if tc.is_null() {
@@ -953,27 +985,32 @@ fn engine_panic_surfaces_as_failure_not_worker_crash() {
         let result = (a.run_result)(run);
         assert!(
             !result.is_null(),
-            "hegel_run_result returned NULL after engine panic; \
+            "hegel_run_result returned NULL after the health check fired; \
              last_error = {}",
             CStr::from_ptr((a.last_error_message)()).to_string_lossy()
         );
 
-        // The run must be marked failing, with the FilterTooMuch panic
-        // text reachable through the failure API.
-        assert!(
-            !(a.run_result_passed)(result),
-            "expected failing run after engine panic"
+        // The run errored, lists no failures, and carries the
+        // FilterTooMuch text on the run-level error channel.
+        assert_eq!(
+            (a.run_result_status)(result),
+            CRunStatus::Error,
+            "expected an errored run after the health check fired"
         );
-        assert!(
-            (a.run_result_failure_count)(result) >= 1,
-            "expected at least one failure for the engine panic"
+        assert_eq!(
+            (a.run_result_failure_count)(result),
+            0,
+            "a run-level error is not a failure of any test case"
         );
-        let f = (a.run_result_failure)(result, 0);
-        assert!(!f.is_null());
-        let msg = CStr::from_ptr((a.failure_panic_message)(f)).to_string_lossy();
+        let err_ptr = (a.run_result_error)(result);
         assert!(
-            msg.contains("FilterTooMuch") || msg.contains("FailedHealthCheck"),
-            "expected panic message to reference FilterTooMuch / FailedHealthCheck, got: {}",
+            !err_ptr.is_null(),
+            "expected hegel_run_result_error to carry the health-check message"
+        );
+        let msg = CStr::from_ptr(err_ptr).to_string_lossy();
+        assert!(
+            msg.contains("FilterTooMuch"),
+            "expected the run error to reference FilterTooMuch, got: {}",
             msg
         );
 

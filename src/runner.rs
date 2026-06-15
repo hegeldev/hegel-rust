@@ -428,6 +428,18 @@ where
             return;
         }
 
+        // A single test case is not a property-test run (no exploration,
+        // shrinking, or replay) and bypasses the TestRunner machinery.
+        if self.settings.mode == Mode::SingleTestCase {
+            crate::run_lifecycle::drive_single(
+                self.test_fn,
+                &self.settings,
+                self.database_key.as_deref(),
+                self.test_location.as_ref(),
+            );
+            return;
+        }
+
         // No early-out when `Phase::Generate` is absent: the phases are
         // independent, so e.g. `phases = [Phase::Reuse]` must still replay
         // stored counterexamples (the engine itself skips whatever phases
