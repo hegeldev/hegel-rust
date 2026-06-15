@@ -102,3 +102,14 @@ fn assume_code_unwinds_as_assume_failed() {
         "expected an AssumeFailed control unwind"
     );
 }
+
+#[test]
+fn unexpected_code_unwinds_as_an_internal_error() {
+    // Any libhegel return code the frontend doesn't model is a framework
+    // invariant violation, surfaced as an internal error (not a shrinkable
+    // failure). 4242 is a code the engine never returns.
+    let payload = std::panic::catch_unwind(|| raise_for_rc(4242)).unwrap_err();
+    let msg = panic_payload_message(payload);
+    assert!(msg.contains("unexpected code 4242"), "{msg}");
+    assert!(msg.contains("Internal error in hegel"), "{msg}");
+}

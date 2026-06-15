@@ -158,6 +158,11 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
     assert_eq!(result.failure_count(), 1);
     let failure = result.failure(0).unwrap();
     assert_eq!(failure.origin, origin);
+    // An out-of-range failure index yields None rather than faulting.
+    assert!(
+        result.failure(result.failure_count()).is_none(),
+        "failure index past the end must be None"
+    );
     let blob = failure
         .reproduce_blob
         .expect("a shrunk failure carries a blob");
