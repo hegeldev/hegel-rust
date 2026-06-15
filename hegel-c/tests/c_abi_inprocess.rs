@@ -351,6 +351,12 @@ fn live_test_case_argument_validation() {
             hegel_collection_more(tc, id, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
+        // The `why` string is decoded before the collection is consulted, so a
+        // non-UTF-8 reason is rejected regardless of collection state.
+        assert_eq!(
+            hegel_collection_reject(tc, id, bad_utf8.as_ptr()),
+            HEGEL_E_INVALID_ARG
+        );
         let mut more = false;
         if hegel_collection_more(tc, id, &mut more) == HEGEL_OK && more {
             hegel_generate(
@@ -362,11 +368,6 @@ fn live_test_case_argument_validation() {
             );
             // NULL why is the accepted "no reason given" branch.
             assert_eq!(hegel_collection_reject(tc, id, ptr::null()), HEGEL_OK);
-            // Non-UTF-8 why is rejected.
-            assert_eq!(
-                hegel_collection_reject(tc, id, bad_utf8.as_ptr()),
-                HEGEL_E_INVALID_ARG
-            );
         }
 
         // A real pool, to reach pool_add / pool_generate null out-param checks.

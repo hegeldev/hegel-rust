@@ -103,6 +103,52 @@ fn assume_code_unwinds_as_assume_failed() {
     );
 }
 
+/// Draw integers straight off `tc` until the engine's choice budget is
+/// exhausted, catching the resulting `StopTest` unwind so the underlying
+/// handle is left aborted (every subsequent primitive then reports STOP_TEST).
+fn drive_to_overrun(tc: &TestCase) {
+    use std::panic::AssertUnwindSafe;
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        for _ in 0..10_000_000 {
+            let _: i64 = tc.draw(crate::generators::integers::<i64>());
+        }
+    }));
+    assert!(
+        result.is_err(),
+        "drawing should eventually overrun the budget"
+    );
+}
+
+#[test]
+fn span_calls_after_overrun_unwind_as_stop_test() {
+    use std::panic::AssertUnwindSafe;
+    let (_run, tc) = emitting_test_case();
+
+    // Open a span up front (succeeds while the budget is intact), then
+    // exhaust the budget.
+    tc.start_span(crate::generators::labels::LIST);
+    drive_to_overrun(&tc);
+
+    // stop_span on the aborted case: it still rolls back the span-depth
+    // bookkeeping (asserting depth > 0 first), then unwinds as StopTest.
+    let payload = std::panic::catch_unwind(AssertUnwindSafe(|| tc.stop_span(false))).unwrap_err();
+    assert!(
+        payload.downcast_ref::<crate::control::StopTest>().is_some(),
+        "stop_span after overrun should unwind as StopTest"
+    );
+
+    // start_span on the aborted case: the depth bump is rolled back before the
+    // StopTest unwind, so the bookkeeping stays balanced.
+    let payload = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        tc.start_span(crate::generators::labels::LIST)
+    }))
+    .unwrap_err();
+    assert!(
+        payload.downcast_ref::<crate::control::StopTest>().is_some(),
+        "start_span after overrun should unwind as StopTest"
+    );
+}
+
 #[test]
 fn unexpected_code_unwinds_as_an_internal_error() {
     // Any libhegel return code the frontend doesn't model is a framework
