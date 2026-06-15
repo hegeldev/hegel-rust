@@ -12,10 +12,10 @@ use std::sync::{Arc, Mutex};
 use ciborium::Value;
 
 use crate::backend::{DataSource, DataSourceError, TestCaseResult};
+use crate::control::invalid_argument;
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{ChoiceNode, EngineError, ManyState, NativeTestCase, Span, Status};
 use crate::native::schema;
-use crate::control::invalid_argument;
 
 /// Per-test-case state shared between `NativeDataSource` and the engine
 /// that owns the handle.  The engine constructs both halves up-front,
