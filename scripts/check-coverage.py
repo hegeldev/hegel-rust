@@ -336,16 +336,16 @@ class CoverageData:
 def _run_lcov_phase(cargo_args: list[str], output: Path, label: str) -> None:
     """Run `cargo llvm-cov <cargo_args>`, emitting LCOV to `output`."""
     print(f"  Cleaning previous coverage data ({label})...")
-    result = subprocess.run(
-        ["cargo", "llvm-cov", "clean", "--workspace"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        if result.stderr:
-            print(result.stderr, file=sys.stderr)
-        print(f"ERROR: Failed to clean coverage data ({label})", file=sys.stderr)
-        sys.exit(1)
+    # Fully remove the coverage build tree, not just the profile data
+    # (`cargo llvm-cov clean`). The two passes need *different*
+    # instrumentation — the proc-macros' compile-time execution is only
+    # captured when hegel-macros is rebuilt as an instrumented build
+    # dependency, which won't happen if the second pass reuses the first
+    # pass's `--workspace` build. A fresh build per pass keeps each pass's
+    # coverage faithful. (Peak disk stays at one build tree, not two.)
+    import shutil
+
+    shutil.rmtree(Path("target/llvm-cov-target"), ignore_errors=True)
 
     print(f"  Running tests with coverage ({label})...")
     result = subprocess.run(
@@ -424,44 +424,40 @@ def _merge_lcov(inputs: list[Path], output: Path) -> None:
 def run_coverage() -> Path:
     """Run coverage analysis and generate LCOV report.
 
-    Two passes, union-merged, because no single `cargo llvm-cov` invocation
-    covers everything:
+    A single `--workspace` pass with every additive feature enabled. Running
+    the whole workspace (rather than hegeltest alone) covers the engine in
+    hegel-c/src — both through hegeltest driving it over the C ABI and through
+    hegel-c's own embedded/smoke tests — instead of excluding hegel-c as a mere
+    dependency, while still covering the hegeltest frontend.
 
-    1. `--workspace`, all features. Runs every crate's tests — hegeltest's
-       suite *and* hegel-c's embedded engine tests — and, crucially, reports
-       coverage for workspace members rather than excluding hegel-c as a mere
-       dependency. This is what covers the engine (hegel-c/src), both through
-       hegeltest driving it over the C ABI and through hegel-c's own unit
-       tests. A workspace pass does *not*, however, capture the proc-macros'
-       compile-time execution.
-    2. hegeltest alone (no `--workspace`), all features. Here hegel-macros is
-       an instrumented build-dependency, so the macro code that runs while the
-       test crates compile *is* captured — the proc-macro coverage the
-       workspace pass misses.
-
-    The union covers all three crates: engine from pass 1, macros from pass 2,
-    frontend from both. cargo-llvm-cov emits absolute paths, so the same file
-    keys identically across passes and the records merge.
+    hegel-macros is excluded from the report. It's a proc-macro crate whose
+    code runs at the *compile* time of the test crates, which `cargo llvm-cov`
+    does not measure as runtime coverage — a workspace pass only adds its lines
+    as uncovered noise. (It was never actually counted before this either: the
+    pre-move single-package pass emitted no hegel-macros records at all.) The
+    macros are exercised by the macro test suites regardless; they are simply
+    not line-coverage-measurable here.
     """
     print("Running coverage analysis...")
     lcov_path = Path("lcov.info")
-    workspace_lcov = Path("lcov-all.info")
-    macros_lcov = Path("lcov-macros.info")
+    raw_lcov = Path("lcov-all.info")
 
-    features = "rand,antithesis,chrono,jiff,serde_json,serde_json_raw_value"
     _run_lcov_phase(
-        cargo_args=["--workspace", "--features", features],
-        output=workspace_lcov,
+        cargo_args=[
+            "--workspace",
+            "--features",
+            "rand,antithesis,chrono,jiff,serde_json,serde_json_raw_value",
+            # proc-macro compile-time execution isn't runtime coverage; keep
+            # hegel-macros out of the report rather than count it as uncovered.
+            "--ignore-filename-regex",
+            "hegel-macros/",
+        ],
+        output=raw_lcov,
         label="workspace, all features",
     )
-    _run_lcov_phase(
-        cargo_args=["--features", features],
-        output=macros_lcov,
-        label="hegeltest only, for proc-macro coverage",
-    )
 
-    print("  Merging LCOV output...")
-    _merge_lcov([workspace_lcov, macros_lcov], lcov_path)
+    print("  Normalising LCOV output...")
+    _merge_lcov([raw_lcov], lcov_path)
     if not lcov_path.exists():
         print("ERROR: lcov.info was not generated", file=sys.stderr)
         sys.exit(1)
