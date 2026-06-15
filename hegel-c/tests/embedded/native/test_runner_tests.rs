@@ -1,11 +1,90 @@
-//! Embedded tests for `src/native/test_runner.rs` helpers.  Cover the
-//! health-check diagnostics (TooSlow and the flaky-replay message) the
-//! engine surfaces as `RunError`s.
+//! Embedded tests for `src/native/test_runner.rs`.
+//!
+//! These drive the engine directly — `run_main`, `run_single_case`, `Engine`,
+//! the health-check helpers, and the database reuse phase. Test bodies draw
+//! from the engine's own `DataSource` (the same interface the C ABI exposes)
+//! and report their outcome by returning a `TestCaseResult`, rather than going
+//! through the `hegeltest` frontend's `TestCase`/generators/`Hegel`, which live
+//! in the other crate. A `boolean` draw is one weighted-0.5 choice and an
+//! `integer` draw one `draw_integer` choice, so the realised choice sequences
+//! match the equivalent `gs::booleans()` / `gs::integers()` draws.
 
 use super::*;
 
-use crate::settings::Mode;
+use crate::backend::{DataSource, Failure, TestCaseResult};
+use crate::settings::{Mode, Phase};
+use ciborium::Value;
 use std::time::Duration;
+
+// ── raw DataSource draw helpers ─────────────────────────────────────────────
+
+fn bool_schema() -> Value {
+    Value::Map(vec![(
+        Value::Text("type".into()),
+        Value::Text("boolean".into()),
+    )])
+}
+
+fn int_schema(min: i64, max: i64) -> Value {
+    Value::Map(vec![
+        (Value::Text("type".into()), Value::Text("integer".into())),
+        (Value::Text("min_value".into()), Value::Integer(min.into())),
+        (Value::Text("max_value".into()), Value::Integer(max.into())),
+    ])
+}
+
+fn u64_schema() -> Value {
+    Value::Map(vec![
+        (Value::Text("type".into()), Value::Text("integer".into())),
+        (Value::Text("min_value".into()), Value::Integer(0u64.into())),
+        (
+            Value::Text("max_value".into()),
+            Value::Integer(u64::MAX.into()),
+        ),
+    ])
+}
+
+/// A drawn boolean, or `Err(())` if the case overran / was aborted.
+fn rbool(ds: &dyn DataSource) -> Result<bool, ()> {
+    match ds.generate(&bool_schema()) {
+        Ok(Value::Bool(b)) => Ok(b),
+        Ok(other) => panic!("expected boolean, got {other:?}"),
+        Err(_) => Err(()),
+    }
+}
+
+/// A drawn `i64` in `[min, max]`, or `Err(())` if the case overran.
+fn rint(ds: &dyn DataSource, min: i64, max: i64) -> Result<i64, ()> {
+    match ds.generate(&int_schema(min, max)) {
+        Ok(Value::Integer(i)) => Ok(i128::from(i) as i64),
+        Ok(other) => panic!("expected integer, got {other:?}"),
+        Err(_) => Err(()),
+    }
+}
+
+/// A drawn `u64` over the full range, or `Err(())` if the case overran.
+fn ru64(ds: &dyn DataSource) -> Result<u64, ()> {
+    match ds.generate(&u64_schema()) {
+        Ok(Value::Integer(i)) => Ok(i128::from(i) as u64),
+        Ok(other) => panic!("expected integer, got {other:?}"),
+        Err(_) => Err(()),
+    }
+}
+
+const I32_MIN: i64 = i32::MIN as i64;
+const I32_MAX: i64 = i32::MAX as i64;
+
+/// An INTERESTING result whose message and (stable, per-message) origin both
+/// mention "Panic", standing in for a panicking test body.
+fn boom(msg: &str) -> TestCaseResult {
+    TestCaseResult::Interesting(Failure {
+        panic_message: msg.to_string(),
+        origin: format!("Panic: {msg}"),
+        reproduce_blob: None,
+    })
+}
+
+// ── health-check helpers (pure) ─────────────────────────────────────────────
 
 #[test]
 fn too_slow_check_reports_when_under_threshold_and_unsuppressed() {
@@ -113,25 +192,25 @@ use std::rc::Rc;
 use crate::native::core::ChoiceKind;
 use crate::native::core::choices::BooleanChoice;
 use crate::native::data_tree::{DataTreeNode, record_tree};
-use crate::run_lifecycle::run_test_case;
 
-/// Build an [`Engine`] whose `run_case` runs `test_fn` and counts how many
-/// times the test body actually executed, then hand both to `body`.
-fn with_counting_ctx<T, B>(mut test_fn: T, body: B)
+/// Build an [`Engine`] whose `run_case` runs `body` (returning the test
+/// case's outcome) and counts how many times the body actually executed,
+/// then hand both to `after`.
+fn with_counting_ctx<T, B>(mut body: T, after: B)
 where
-    T: FnMut(crate::TestCase),
+    T: FnMut(&dyn DataSource) -> TestCaseResult,
     B: FnOnce(&mut Engine<'_>, &Rc<Cell<usize>>),
 {
-    crate::run_lifecycle::init_panic_hook();
     let exec_count = Rc::new(Cell::new(0usize));
     let counter = exec_count.clone();
-    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>| {
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
         counter.set(counter.get() + 1);
-        run_test_case(ds, &mut test_fn, false, Mode::TestRun, Verbosity::Normal);
+        let result = body(&*ds);
+        ds.mark_complete(&result);
     };
     let settings = Settings::new().database(None);
     let mut ctx = Engine::new(&settings, None, &mut run_case);
-    body(&mut ctx, &exec_count);
+    after(&mut ctx, &exec_count);
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
@@ -145,8 +224,9 @@ fn bool_node(value: bool) -> ChoiceNode {
 #[test]
 fn cached_run_skips_execution_when_tree_knows_the_path() {
     with_counting_ctx(
-        |tc| {
-            tc.draw(crate::generators::booleans());
+        |ds| match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
         },
         |ctx, count| {
             // The tree already records a one-boolean run that concluded
@@ -166,8 +246,9 @@ fn cached_run_skips_execution_when_tree_knows_the_path() {
 #[test]
 fn cached_run_executes_novel_then_serves_repeat_from_cache() {
     with_counting_ctx(
-        |tc| {
-            tc.draw(crate::generators::booleans());
+        |ds| match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
         },
         |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
@@ -191,10 +272,10 @@ fn cached_run_reexecutes_known_interesting_path_to_recover_payload() {
     // nodes/origin, so a cached_run on a tree-known Interesting path falls
     // through to a real execution to recover that payload.
     with_counting_ctx(
-        |tc| {
-            if tc.draw(crate::generators::booleans()) {
-                panic!("boom");
-            }
+        |ds| match rbool(ds) {
+            Ok(true) => boom("boom"),
+            Ok(false) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
         },
         |ctx, count| {
             record_tree(
@@ -216,8 +297,9 @@ fn cached_run_reexecutes_known_interesting_path_to_recover_payload() {
 #[test]
 fn span_mutation_does_not_re_execute_identical_proposals() {
     with_counting_ctx(
-        |tc| {
-            tc.draw(crate::generators::booleans());
+        |ds| match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
         },
         |ctx, count| {
             // Two spans of the same label, one nested in the other. Every
@@ -255,12 +337,12 @@ fn span_mutation_does_not_re_execute_identical_proposals() {
 #[test]
 fn span_mutation_returns_interesting_proposal() {
     with_counting_ctx(
-        // Panics on a `false` draw, so the all-`false` mutated proposal is
-        // Interesting.
-        |tc| {
-            if !tc.draw(crate::generators::booleans()) {
-                panic!("boom on false");
-            }
+        // INTERESTING on a `false` draw, so the all-`false` mutated proposal
+        // is Interesting.
+        |ds| match rbool(ds) {
+            Ok(false) => boom("boom on false"),
+            Ok(true) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
         },
         |ctx, count| {
             // Nested same-label spans → the deterministic proposal duplicates
@@ -301,8 +383,9 @@ fn span_mutation_returns_interesting_proposal() {
 #[test]
 fn span_mutation_stops_when_example_budget_is_full() {
     with_counting_ctx(
-        |tc| {
-            tc.draw(crate::generators::booleans());
+        |ds| match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
         },
         |ctx, count| {
             let nodes = vec![
@@ -366,8 +449,6 @@ fn run_single_case_returns_the_failure() {
     // `Mode::SingleTestCase` bypasses the TestRunner machinery: its one
     // test case runs as its own final, and the failure (if any) comes back
     // directly.
-    crate::run_lifecycle::init_panic_hook();
-    let mut test_fn = |_tc: crate::TestCase| panic!("single-case bug");
     let failure = run_single_case(
         &Settings::new()
             .database(None)
@@ -375,13 +456,7 @@ fn run_single_case_returns_the_failure() {
             .verbosity(Verbosity::Quiet),
         None,
         &mut |ds| {
-            run_test_case(
-                ds,
-                &mut test_fn,
-                true,
-                Mode::SingleTestCase,
-                Verbosity::Quiet,
-            );
+            ds.mark_complete(&boom("single-case bug"));
         },
     )
     .unwrap();
@@ -393,8 +468,6 @@ fn run_single_case_returns_the_failure() {
 
 #[test]
 fn run_single_case_returns_none_for_a_passing_case() {
-    crate::run_lifecycle::init_panic_hook();
-    let mut test_fn = |_tc: crate::TestCase| {};
     let failure = run_single_case(
         &Settings::new()
             .database(None)
@@ -402,13 +475,7 @@ fn run_single_case_returns_none_for_a_passing_case() {
             .verbosity(Verbosity::Quiet),
         None,
         &mut |ds| {
-            run_test_case(
-                ds,
-                &mut test_fn,
-                true,
-                Mode::SingleTestCase,
-                Verbosity::Quiet,
-            );
+            ds.mark_complete(&TestCaseResult::Valid);
         },
     );
     assert!(failure.is_none(), "{failure:?}");
@@ -419,12 +486,13 @@ fn run_main_with_urandom_backend_generates_and_passes() {
     // End-to-end: the urandom backend drives the full engine (every draw
     // reads /dev/urandom) for a passing test. Exercises the urandom fill
     // path through the biased samplers.
-    crate::run_lifecycle::init_panic_hook();
-    let mut test_fn = |tc: crate::TestCase| {
-        let _: i32 = tc.draw(crate::generators::integers());
+    let body = |ds: &dyn DataSource| match rint(ds, I32_MIN, I32_MAX) {
+        Ok(_) => TestCaseResult::Valid,
+        Err(()) => TestCaseResult::Overrun,
     };
-    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
-        run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>, _is_final: bool| {
+        let result = body(&*ds);
+        ds.mark_complete(&result);
     };
     let settings = Settings::new()
         .test_cases(20)
@@ -443,16 +511,16 @@ fn run_main_with_urandom_backend_generates_and_passes() {
 
 #[test]
 fn run_main_with_urandom_backend_finds_counterexample() {
-    // A test that always panics must still surface a failure under the
+    // A test that always fails must still surface a failure under the
     // urandom backend, going through generation, shrinking (deterministic
     // concrete-choice replay), and final replay.
-    crate::run_lifecycle::init_panic_hook();
-    let mut test_fn = |tc: crate::TestCase| {
-        let _: i32 = tc.draw(crate::generators::integers());
-        panic!("always fails");
+    let body = |ds: &dyn DataSource| match rint(ds, I32_MIN, I32_MAX) {
+        Ok(_) => boom("always fails"),
+        Err(()) => TestCaseResult::Overrun,
     };
-    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
-        run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>, _is_final: bool| {
+        let result = body(&*ds);
+        ds.mark_complete(&result);
     };
     let settings = Settings::new()
         .test_cases(20)
@@ -486,15 +554,35 @@ fn run_main_stops_shrinking_when_budget_is_exhausted() {
     // fires deterministically instead of after five minutes. The run must
     // still surface the failure (with the best, un-shrunk example) rather
     // than hang, and the slow-shrink warning path is exercised.
-    crate::run_lifecycle::init_panic_hook();
-    let mut test_fn = |tc: crate::TestCase| {
-        // A non-trivial counterexample so there is real shrinking work that
-        // the zero budget cuts short.
-        let v: Vec<i32> = tc.draw(crate::generators::vecs(crate::generators::integers()));
-        assert!(v.is_empty(), "non-empty vec");
+    //
+    // A collection of integers gives real shrinking work for the zero budget
+    // to cut short.
+    let body = |ds: &dyn DataSource| -> TestCaseResult {
+        let cid = match ds.new_collection(0, None) {
+            Ok(c) => c,
+            Err(_) => return TestCaseResult::Overrun,
+        };
+        let mut len = 0usize;
+        loop {
+            match ds.collection_more(cid) {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(_) => return TestCaseResult::Overrun,
+            }
+            if rint(ds, I32_MIN, I32_MAX).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            len += 1;
+        }
+        if len > 0 {
+            boom("non-empty vec")
+        } else {
+            TestCaseResult::Valid
+        }
     };
-    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
-        run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>, _is_final: bool| {
+        let result = body(&*ds);
+        ds.mark_complete(&result);
     };
     let settings = Settings::new()
         .test_cases(200)
@@ -525,12 +613,13 @@ fn run_main_reports_too_slow_at_call_site() {
     // 30s-gated) call-site early-return fires deterministically — instead of
     // relying on a test happening to exceed 30s of generation under coverage
     // instrumentation. The body draws a value so each case is non-trivial.
-    crate::run_lifecycle::init_panic_hook();
-    let mut test_fn = |tc: crate::TestCase| {
-        tc.draw(crate::generators::booleans());
+    let body = |ds: &dyn DataSource| match rbool(ds) {
+        Ok(_) => TestCaseResult::Valid,
+        Err(()) => TestCaseResult::Overrun,
     };
-    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, is_final: bool| {
-        run_test_case(ds, &mut test_fn, is_final, Mode::TestRun, Verbosity::Normal);
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>, _is_final: bool| {
+        let result = body(&*ds);
+        ds.mark_complete(&result);
     };
     let settings = Settings::new().test_cases(100).database(None);
     let exploration = run_main(
@@ -616,10 +705,15 @@ fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
     // `status >= Invalid`, so mislabelling an overrun would pin the path into
     // the data tree as a permanent dead-end.
     with_counting_ctx(
-        |tc| {
+        |ds| {
             // Two draws against a one-choice budget: the second overruns.
-            tc.draw(crate::generators::booleans());
-            tc.draw(crate::generators::booleans());
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            TestCaseResult::Valid
         },
         |ctx, _count| {
             let (run, _mismatch) = ctx.test_function(NativeTestCase::for_simplest(1));
@@ -636,143 +730,34 @@ fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
     );
 }
 
-// ── ReproduceRunner (failure-blob replay) ──
+// ── database reuse semantics ──
+//
+// These drive the reuse phase via `run_main` (with the database configured)
+// rather than the `Hegel` frontend, populating the on-disk corpus directly
+// with `serialize_choices` so a precise stored prefix can be pinned.
 
-/// A `run_case` body that marks any integer `>= 1_000_000` interesting.
-/// Used to provoke (and later replay) a failure.
-fn mark_large_interesting(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
-    let schema = crate::cbor_utils::cbor_map! {
-        "type" => "integer",
-        "min_value" => 0_i64,
-        "max_value" => 2_000_000_i64,
-    };
-    match ds.generate(&schema) {
-        Ok(ciborium::Value::Integer(i)) => {
-            let n: i128 = i.into();
-            if n >= 1_000_000 {
-                ds.mark_complete(&TestCaseResult::Interesting(Failure {
-                    panic_message: "n >= 1_000_000".to_string(),
-                    origin: "n >= 1_000_000".to_string(),
-                    reproduce_blob: None,
-                }));
-            } else {
-                ds.mark_complete(&TestCaseResult::Valid);
-            }
-        }
-        _ => ds.mark_complete(&TestCaseResult::Overrun),
-    }
-}
-
-/// Run the failing property once and return the reproduce blob the engine
-/// attached to the (shrunk) counterexample.
-fn discover_reproduce_blob() -> String {
-    let settings = Settings::new().test_cases(200).seed(Some(7)).database(None);
-    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>, _is_final: bool| {
-        mark_large_interesting(&*ds);
+/// A reuse-phase `run_main` over `path`/`key`, returning the aggregate result.
+fn reuse_run<F>(
+    settings: Settings,
+    key: &str,
+    mut body: F,
+) -> Result<crate::backend::TestRunResult, crate::backend::RunError>
+where
+    F: FnMut(&dyn DataSource) -> TestCaseResult,
+{
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>, _is_final: bool| {
+        let result = body(&*ds);
+        ds.mark_complete(&result);
     };
     let exploration = run_main(
         &settings,
-        None,
+        Some(key),
         &mut |ds| run_case(ds, false),
         Duration::from_secs(30),
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration, &mut run_case).unwrap();
-    assert!(!result.failures.is_empty(), "property should have failed");
-    result.failures[0]
-        .reproduce_blob
-        .clone()
-        .expect("native failure should carry a reproduce blob")
+    complete_native(exploration, &mut run_case)
 }
-
-#[test]
-fn reproduce_runner_replays_the_counterexample() {
-    let blob = discover_reproduce_blob();
-
-    // Replaying the blob runs exactly the encoded example and re-surfaces
-    // the failure, carrying the same blob back.
-    let calls = std::sync::atomic::AtomicUsize::new(0);
-    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>| {
-        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        mark_large_interesting(&*ds);
-    };
-    let runner = ReproduceRunner { blob: blob.clone() };
-    let exploration = runner
-        .explore(&Settings::new(), None, &mut run_case)
-        .unwrap();
-    let result = crate::backend::collect_failures(&runner, exploration, &mut run_case).unwrap();
-
-    assert_eq!(result.failures.len(), 1);
-    assert_eq!(
-        result.failures[0].reproduce_blob.as_deref(),
-        Some(blob.as_str())
-    );
-    // A replay bypasses generation entirely: exactly one test case runs.
-    assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "a blob replay should not generate"
-    );
-}
-
-#[test]
-fn reproduce_runner_panics_on_an_undecodable_blob() {
-    // An undecodable blob is invalid input — it panics rather than producing
-    // a `TestRunResult` failure.
-    let result = std::panic::catch_unwind(|| {
-        let runner = ReproduceRunner {
-            blob: "not-a-valid-blob".to_string(),
-        };
-        // `explore` panics before producing a value; `let _` only quiets
-        // the must-use lint on the never-constructed Result.
-        let _ = runner.explore(&Settings::new(), None, &mut |ds| {
-            ds.mark_complete(&TestCaseResult::Valid);
-        });
-    });
-    let payload = result.unwrap_err();
-    let msg = payload
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| payload.downcast_ref::<&str>().copied())
-        .unwrap_or("");
-    assert!(
-        msg.contains("could not be decoded"),
-        "unexpected panic message: {msg}"
-    );
-}
-
-#[test]
-fn reproduce_runner_reports_a_blob_that_no_longer_fails() {
-    let blob = discover_reproduce_blob();
-
-    // A "fixed" test body that never reports interesting: replaying a stale
-    // blob must surface `RunError::StaleBlob` rather than silently passing.
-    let runner = ReproduceRunner { blob };
-    let mut run_case = |ds: Box<dyn crate::backend::DataSource + Send + Sync>| {
-        let schema = crate::cbor_utils::cbor_map! {
-            "type" => "integer",
-            "min_value" => 0_i64,
-            "max_value" => 2_000_000_i64,
-        };
-        let _ = ds.generate(&schema);
-        ds.mark_complete(&TestCaseResult::Valid);
-    };
-    let exploration = runner
-        .explore(&Settings::new(), None, &mut run_case)
-        .unwrap();
-    let result = crate::backend::collect_failures(&runner, exploration, &mut run_case);
-    match result {
-        Err(crate::backend::RunError::StaleBlob(msg)) => {
-            assert!(
-                msg.contains("no longer reproduces"),
-                "unexpected message: {msg}"
-            );
-        }
-        other => panic!("expected RunError::StaleBlob, got {other:?}"),
-    }
-}
-
-// ── database reuse semantics ──
 
 #[test]
 fn reuse_replay_extends_past_stored_prefix() {
@@ -785,23 +770,30 @@ fn reuse_replay_extends_past_stored_prefix() {
     let db = DirectoryTestCaseDatabase::new(&path);
     db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
 
-    let result = std::panic::catch_unwind(|| {
-        crate::Hegel::new(|tc: crate::TestCase| {
-            let a = tc.draw(crate::generators::booleans());
-            let _b = tc.draw(crate::generators::booleans());
-            assert!(!a, "replayed bug");
-        })
-        .settings(
-            crate::Settings::new()
-                .database(Some(path.clone()))
-                .phases([crate::Phase::Reuse])
-                .verbosity(crate::Verbosity::Quiet),
-        )
-        .__database_key("k".to_string())
-        .run();
-    });
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            let a = match rbool(ds) {
+                Ok(v) => v,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            let _b = match rbool(ds) {
+                Ok(v) => v,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            if a {
+                boom("replayed bug")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+    );
     assert!(
-        result.is_err(),
+        result.map(|r| !r.failures.is_empty()).unwrap_or(false),
         "stored prefix one draw short must still reproduce via random extension"
     );
 }
@@ -825,23 +817,21 @@ fn reuse_consults_secondary_corpus_when_primary_fails_to_reproduce() {
         &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]),
     );
 
-    let result = std::panic::catch_unwind(|| {
-        crate::Hegel::new(|tc: crate::TestCase| {
-            let n: i64 = tc.draw(crate::generators::integers::<i64>());
-            assert_ne!(n, 4242, "secondary bug");
-        })
-        .settings(
-            crate::Settings::new()
-                .database(Some(path.clone()))
-                .phases([crate::Phase::Reuse])
-                .test_cases(10)
-                .verbosity(crate::Verbosity::Quiet),
-        )
-        .__database_key("k".to_string())
-        .run();
-    });
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse])
+            .test_cases(10)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rint(ds, i64::MIN, i64::MAX) {
+            Ok(4242) => boom("secondary bug"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+    );
     assert!(
-        result.is_err(),
+        result.map(|r| !r.failures.is_empty()).unwrap_or(false),
         "the secondary corpus entry must be replayed when primary finds nothing"
     );
 }
@@ -870,23 +860,21 @@ fn reuse_randomly_samples_secondary_corpus_when_it_overflows_the_shortfall() {
         );
     }
 
-    let result = std::panic::catch_unwind(|| {
-        crate::Hegel::new(|tc: crate::TestCase| {
-            let n: i64 = tc.draw(crate::generators::integers::<i64>());
-            assert!(n < 4242, "secondary bug");
-        })
-        .settings(
-            crate::Settings::new()
-                .database(Some(path.clone()))
-                .phases([crate::Phase::Reuse])
-                .test_cases(2)
-                .verbosity(crate::Verbosity::Quiet),
-        )
-        .__database_key("k".to_string())
-        .run();
-    });
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse])
+            .test_cases(2)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rint(ds, i64::MIN, i64::MAX) {
+            Ok(n) if n >= 4242 => boom("secondary bug"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+    );
     assert!(
-        result.is_err(),
+        result.map(|r| !r.failures.is_empty()).unwrap_or(false),
         "a sampled secondary entry must still reproduce the bug"
     );
 }
@@ -904,21 +892,22 @@ fn shrink_phase_drains_stale_secondary_corpus_entries() {
     // A failing run replays small secondary entries as shrink jump-starts
     // and deletes them either way (Hypothesis's clear_secondary_key) — the
     // secondary corpus must not grow without bound across runs.
-    let result = std::panic::catch_unwind(|| {
-        crate::Hegel::new(|tc: crate::TestCase| {
-            let n: i64 = tc.draw(crate::generators::integers::<i64>());
-            assert!(n < 1000, "big bug");
-        })
-        .settings(
-            crate::Settings::new()
-                .database(Some(path.clone()))
-                .test_cases(200)
-                .verbosity(crate::Verbosity::Quiet),
-        )
-        .__database_key("k".to_string())
-        .run();
-    });
-    assert!(result.is_err(), "the run should find the n >= 1000 bug");
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .test_cases(200)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rint(ds, i64::MIN, i64::MAX) {
+            Ok(n) if n >= 1000 => boom("big bug"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+    );
+    assert!(
+        result.map(|r| !r.failures.is_empty()).unwrap_or(false),
+        "the run should find the n >= 1000 bug"
+    );
     assert!(
         !db.fetch(&secondary_key).contains(&stale),
         "the stale secondary entry must be drained"
@@ -966,31 +955,33 @@ fn reuse_stops_after_first_reproduced_bug_without_multiple_reporting() {
         &serialize_choices(&[ChoiceValue::Integer(BigInt::from(2222))]),
     );
 
-    static CALLS: AtomicUsize = AtomicUsize::new(0);
-    CALLS.store(0, Ordering::SeqCst);
-    let result = std::panic::catch_unwind(|| {
-        crate::Hegel::new(|tc: crate::TestCase| {
-            CALLS.fetch_add(1, Ordering::SeqCst);
-            let n: i64 = tc.draw(crate::generators::integers::<i64>());
-            assert!(n < 1000, "stored bug");
-        })
-        .settings(
-            crate::Settings::new()
-                .database(Some(path.clone()))
-                .phases([crate::Phase::Reuse])
-                .report_multiple_failures(false)
-                .verbosity(crate::Verbosity::Quiet),
-        )
-        .__database_key("k".to_string())
-        .run();
-    });
-    assert!(result.is_err(), "the stored bug should be reported");
-    // One reuse replay (the first entry reproduces, so the loop breaks)
-    // plus the final is_final replay of the counterexample.
+    let calls = AtomicUsize::new(0);
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse])
+            .report_multiple_failures(false)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            match rint(ds, i64::MIN, i64::MAX) {
+                Ok(n) if n >= 1000 => boom("stored bug"),
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+    );
     assert!(
-        CALLS.load(Ordering::SeqCst) <= 2,
+        result.map(|r| !r.failures.is_empty()).unwrap_or(false),
+        "the stored bug should be reported"
+    );
+    // One reuse replay (the first entry reproduces, so the loop breaks)
+    // plus the final replay of the counterexample.
+    assert!(
+        calls.load(Ordering::SeqCst) <= 2,
         "expected reuse to stop after the first reproduced bug, ran {} cases",
-        CALLS.load(Ordering::SeqCst)
+        calls.load(Ordering::SeqCst)
     );
 }
 
@@ -1012,26 +1003,28 @@ fn reuse_found_bug_skips_generation_entirely() {
     // now recorded like any other run, the bug-window heuristic alone would
     // let generation probe for several extra calls; the explicit skip must
     // keep the body-call count at exactly reuse + final replay.
-    static CALLS: AtomicUsize = AtomicUsize::new(0);
-    CALLS.store(0, Ordering::SeqCst);
-    let result = std::panic::catch_unwind(|| {
-        crate::Hegel::new(|tc: crate::TestCase| {
-            CALLS.fetch_add(1, Ordering::SeqCst);
-            let n: i64 = tc.draw(crate::generators::integers::<i64>());
-            assert_ne!(n, 4242, "stored bug");
-        })
-        .settings(
-            crate::Settings::new()
-                .database(Some(path.clone()))
-                .test_cases(200)
-                .verbosity(crate::Verbosity::Quiet),
-        )
-        .__database_key("k".to_string())
-        .run();
-    });
-    assert!(result.is_err(), "the stored bug should be reported");
+    let calls = AtomicUsize::new(0);
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .test_cases(200)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            match rint(ds, i64::MIN, i64::MAX) {
+                Ok(4242) => boom("stored bug"),
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+    );
+    assert!(
+        result.map(|r| !r.failures.is_empty()).unwrap_or(false),
+        "the stored bug should be reported"
+    );
     assert_eq!(
-        CALLS.load(Ordering::SeqCst),
+        calls.load(Ordering::SeqCst),
         2,
         "expected exactly one reuse replay and one final replay"
     );
@@ -1060,34 +1053,36 @@ fn reuse_detects_nondeterministic_generator_across_replays() {
 
     // The generator alternates the drawn kind per invocation: with reuse
     // replays now recorded into the choice tree, the second replay
-    // contradicts the first and must surface the non-determinism
-    // diagnostic instead of silently mispredicting.
-    static FLIP: AtomicUsize = AtomicUsize::new(0);
-    FLIP.store(0, Ordering::SeqCst);
-    let result = std::panic::catch_unwind(|| {
-        crate::Hegel::new(|tc: crate::TestCase| {
-            if FLIP.fetch_add(1, Ordering::SeqCst) % 2 == 0 {
-                tc.draw(crate::generators::booleans());
+    // contradicts the first and must surface the non-determinism diagnostic
+    // instead of silently mispredicting.
+    let flip = AtomicUsize::new(0);
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            let r = if flip.fetch_add(1, Ordering::SeqCst) % 2 == 0 {
+                rbool(ds).map(|_| ())
             } else {
-                let _: i64 = tc.draw(crate::generators::integers::<i64>());
+                rint(ds, i64::MIN, i64::MAX).map(|_| ())
+            };
+            match r {
+                Ok(()) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
             }
-        })
-        .settings(
-            crate::Settings::new()
-                .database(Some(path.clone()))
-                .phases([crate::Phase::Reuse])
-                .verbosity(crate::Verbosity::Quiet),
-        )
-        .__database_key("k".to_string())
-        .run();
-    });
-    let err = result.expect_err("non-determinism must be reported");
-    let msg = err
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
-        .unwrap_or_default();
-    assert!(msg.contains("non-deterministic"), "got: {msg}");
+        },
+    );
+    match result {
+        Err(crate::backend::RunError::NonDeterministic(msg)) => {
+            assert!(
+                msg.to_lowercase().contains("non-deterministic"),
+                "got: {msg}"
+            );
+        }
+        other => panic!("expected RunError::NonDeterministic, got {other:?}"),
+    }
 }
 
 #[test]
@@ -1095,7 +1090,6 @@ fn run_single_case_derandomize_is_keyed_by_test_identity() {
     // Two different tests (database keys) running derandomized in
     // `Mode::SingleTestCase` must not draw identical streams; the same key
     // must replay the same stream.
-    crate::run_lifecycle::init_panic_hook();
     let settings = Settings::new()
         .database(None)
         .derandomize(true)
@@ -1103,20 +1097,17 @@ fn run_single_case_derandomize_is_keyed_by_test_identity() {
         .verbosity(Verbosity::Quiet);
     let draw_with_key = |key: Option<&str>| {
         let mut drawn: Vec<u64> = Vec::new();
-        let mut test_fn = |tc: crate::TestCase| {
-            for _ in 0..4 {
-                drawn.push(tc.draw(crate::generators::integers::<u64>()));
-            }
-        };
-        run_single_case(&settings, key, &mut |ds| {
-            run_test_case(
-                ds,
-                &mut test_fn,
-                true,
-                Mode::SingleTestCase,
-                Verbosity::Quiet,
-            );
-        });
+        {
+            let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+                for _ in 0..4 {
+                    if let Ok(n) = ru64(&*ds) {
+                        drawn.push(n);
+                    }
+                }
+                ds.mark_complete(&TestCaseResult::Valid);
+            };
+            run_single_case(&settings, key, &mut run_case);
+        }
         drawn
     };
     let a1 = draw_with_key(Some("test-a"));

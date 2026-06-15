@@ -1551,14 +1551,6 @@ fn hash_string(s: &str) -> u64 {
     hash
 }
 
-// Gated out in hegel-c: most tests in this module drive the engine through
-// the frontend-only `run_test_case` / `TestCase` / `crate::generators` /
-// `crate::Hegel` API, which lives in the `hegeltest` crate and is deliberately
-// not copied here. The file's engine-only tests (the health-check and
-// create_rng families) are too interleaved with the frontend-dependent ones
-// to split cleanly, so the whole module is gated. All of these tests still run
-// in hegeltest, whose sources are unchanged. See the hegel-c standalone-engine
-// refactor notes.
-#[cfg(all(test, any()))]
+#[cfg(test)]
 #[path = "../../tests/embedded/native/test_runner_tests.rs"]
 mod tests;

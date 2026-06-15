@@ -153,9 +153,9 @@ pub enum RunError {
 impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RunError::HealthCheck(msg)
-            | RunError::Flaky(msg)
-            | RunError::NonDeterministic(msg) => write!(f, "{}", msg),
+            RunError::HealthCheck(msg) | RunError::Flaky(msg) | RunError::NonDeterministic(msg) => {
+                write!(f, "{}", msg)
+            }
         }
     }
 }

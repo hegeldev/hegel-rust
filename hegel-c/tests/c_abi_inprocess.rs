@@ -9,18 +9,18 @@
 //! engine over this same ABI.
 
 use hegel_c::{
-    HegelRun, HegelTestCase, HEGEL_E_ALREADY_COMPLETE, HEGEL_E_INVALID_ARG,
-    HEGEL_E_INVALID_HANDLE, HEGEL_OK, hegel_backend_t, hegel_collection_more,
-    hegel_collection_reject, hegel_failure_origin, hegel_failure_panic_message,
-    hegel_failure_reproduction_blob, hegel_generate, hegel_mark_complete, hegel_mode_t,
-    hegel_new_collection, hegel_new_pool, hegel_next_test_case, hegel_pool_add, hegel_pool_generate,
-    hegel_run_free, hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
-    hegel_run_result_failure_count, hegel_run_result_status, hegel_run_start, hegel_run_status_t,
-    hegel_settings_backend, hegel_settings_database, hegel_settings_database_key,
-    hegel_settings_free, hegel_settings_mode, hegel_settings_new, hegel_settings_phases,
-    hegel_settings_report_multiple_failures, hegel_settings_suppress_health_check, hegel_start_span,
-    hegel_status_t, hegel_stop_span, hegel_target, hegel_test_case_free, hegel_test_case_from_blob,
-    hegel_test_case_is_final_replay, hegel_version,
+    HEGEL_E_ALREADY_COMPLETE, HEGEL_E_INVALID_ARG, HEGEL_E_INVALID_HANDLE, HEGEL_OK, HegelRun,
+    HegelTestCase, hegel_backend_t, hegel_collection_more, hegel_collection_reject,
+    hegel_failure_origin, hegel_failure_panic_message, hegel_failure_reproduction_blob,
+    hegel_generate, hegel_mark_complete, hegel_mode_t, hegel_new_collection, hegel_new_pool,
+    hegel_next_test_case, hegel_pool_add, hegel_pool_generate, hegel_run_free, hegel_run_result,
+    hegel_run_result_error, hegel_run_result_failure, hegel_run_result_failure_count,
+    hegel_run_result_status, hegel_run_start, hegel_run_status_t, hegel_settings_backend,
+    hegel_settings_database, hegel_settings_database_key, hegel_settings_free, hegel_settings_mode,
+    hegel_settings_new, hegel_settings_phases, hegel_settings_report_multiple_failures,
+    hegel_settings_suppress_health_check, hegel_start_span, hegel_status_t, hegel_stop_span,
+    hegel_target, hegel_test_case_free, hegel_test_case_from_blob, hegel_test_case_is_final_replay,
+    hegel_version,
 };
 use std::ffi::CString;
 use std::os::raw::c_char;
@@ -77,7 +77,13 @@ fn null_handles_are_rejected_without_crashing() {
         let mut out_len = 0usize;
         let schema = [0u8];
         assert_eq!(
-            hegel_generate(tc, schema.as_ptr(), schema.len(), &mut out_ptr, &mut out_len),
+            hegel_generate(
+                tc,
+                schema.as_ptr(),
+                schema.len(),
+                &mut out_ptr,
+                &mut out_len
+            ),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(hegel_start_span(tc, 1), HEGEL_E_INVALID_HANDLE);
@@ -177,7 +183,13 @@ fn explicit_backend_run_and_lifecycle_misuse() {
         let mut out_ptr: *const u8 = ptr::null();
         let mut out_len = 0usize;
         assert_eq!(
-            hegel_generate(tc, schema.as_ptr(), schema.len(), &mut out_ptr, &mut out_len),
+            hegel_generate(
+                tc,
+                schema.as_ptr(),
+                schema.len(),
+                &mut out_ptr,
+                &mut out_len
+            ),
             HEGEL_OK
         );
         assert_eq!(
@@ -300,14 +312,26 @@ fn live_test_case_argument_validation() {
         assert!(last_error().contains("schema pointer is null"));
         // generate: null out-parameter.
         assert_eq!(
-            hegel_generate(tc, schema.as_ptr(), schema.len(), ptr::null_mut(), &mut out_len),
+            hegel_generate(
+                tc,
+                schema.as_ptr(),
+                schema.len(),
+                ptr::null_mut(),
+                &mut out_len
+            ),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error().contains("out parameter is null"));
         // generate: well-formed pointer but truncated/garbage CBOR.
         let garbage = [0x82u8, 0x01]; // array(2) with only one element → decode error
         assert_eq!(
-            hegel_generate(tc, garbage.as_ptr(), garbage.len(), &mut out_ptr, &mut out_len),
+            hegel_generate(
+                tc,
+                garbage.as_ptr(),
+                garbage.len(),
+                &mut out_ptr,
+                &mut out_len
+            ),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error().contains("malformed CBOR"));
@@ -329,7 +353,13 @@ fn live_test_case_argument_validation() {
         );
         let mut more = false;
         if hegel_collection_more(tc, id, &mut more) == HEGEL_OK && more {
-            hegel_generate(tc, schema.as_ptr(), schema.len(), &mut out_ptr, &mut out_len);
+            hegel_generate(
+                tc,
+                schema.as_ptr(),
+                schema.len(),
+                &mut out_ptr,
+                &mut out_len,
+            );
             // NULL why is the accepted "no reason given" branch.
             assert_eq!(hegel_collection_reject(tc, id, ptr::null()), HEGEL_OK);
             // Non-UTF-8 why is rejected.
@@ -342,7 +372,10 @@ fn live_test_case_argument_validation() {
         // A real pool, to reach pool_add / pool_generate null out-param checks.
         let mut pool = 0i64;
         assert_eq!(hegel_new_pool(tc, &mut pool), HEGEL_OK);
-        assert_eq!(hegel_pool_add(tc, pool, ptr::null_mut()), HEGEL_E_INVALID_ARG);
+        assert_eq!(
+            hegel_pool_add(tc, pool, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
         assert_eq!(
             hegel_pool_generate(tc, pool, false, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
@@ -360,7 +393,11 @@ fn live_test_case_argument_validation() {
         // INTERESTING). This is rejected *before* the case is marked complete,
         // so the handle is still live afterwards.
         assert_eq!(
-            hegel_mark_complete(tc, hegel_status_t::HEGEL_STATUS_INTERESTING, bad_utf8.as_ptr()),
+            hegel_mark_complete(
+                tc,
+                hegel_status_t::HEGEL_STATUS_INTERESTING,
+                bad_utf8.as_ptr()
+            ),
             HEGEL_E_INVALID_ARG
         );
 
@@ -372,7 +409,13 @@ fn live_test_case_argument_validation() {
 
         // A completed case rejects further draws and a second completion.
         assert_eq!(
-            hegel_generate(tc, schema.as_ptr(), schema.len(), &mut out_ptr, &mut out_len),
+            hegel_generate(
+                tc,
+                schema.as_ptr(),
+                schema.len(),
+                &mut out_ptr,
+                &mut out_len
+            ),
             HEGEL_E_ALREADY_COMPLETE
         );
         assert_eq!(
@@ -440,7 +483,10 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
         assert!(hegel_run_result_status(result) == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
         assert!(hegel_run_result_error(result).is_null());
         let count = hegel_run_result_failure_count(result);
-        assert!(count >= 1, "the always-interesting property records a failure");
+        assert!(
+            count >= 1,
+            "the always-interesting property records a failure"
+        );
         // Out-of-range failure index returns NULL.
         assert!(hegel_run_result_failure(result, count).is_null());
         let f = hegel_run_result_failure(result, 0);
@@ -484,8 +530,13 @@ fn primitives_after_overrun_all_report_stop_test() {
         let mut out_len = 0usize;
         let mut overran = false;
         for _ in 0..1_000_000 {
-            if hegel_generate(tc, schema.as_ptr(), schema.len(), &mut out_ptr, &mut out_len)
-                == hegel_c::HEGEL_E_STOP_TEST
+            if hegel_generate(
+                tc,
+                schema.as_ptr(),
+                schema.len(),
+                &mut out_ptr,
+                &mut out_len,
+            ) == hegel_c::HEGEL_E_STOP_TEST
             {
                 overran = true;
                 break;
