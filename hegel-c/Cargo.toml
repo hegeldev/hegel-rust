@@ -9,9 +9,15 @@ repository = "https://github.com/hegeldev/hegel-rust"
 homepage = "http://hegel.dev"
 readme = "README.md"
 
+# The lib is named `hegel_c` (not `hegel`) so it can coexist in one
+# dependency graph with the `hegeltest` crate, whose lib is named `hegel`:
+# the upcoming inversion has `hegeltest` depend on this crate, and two
+# crates sharing a lib name cannot. This only changes the build-output stem
+# (`libhegel_c.{so,a}`); the C header (`hegel.h`), the exported `hegel_*`
+# symbols, and the released `libhegel-<os>-<arch>` assets are unaffected.
 [lib]
-name = "hegel"
-crate-type = ["cdylib", "staticlib"]
+name = "hegel_c"
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 hegeltest = { version = "=0.18.0", path = "..", default-features = false }

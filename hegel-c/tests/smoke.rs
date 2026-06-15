@@ -15,11 +15,11 @@ use libloading::{Library, Symbol};
 
 fn lib_path() -> PathBuf {
     let filename = if cfg!(target_os = "macos") {
-        "libhegel.dylib"
+        "libhegel_c.dylib"
     } else if cfg!(target_os = "windows") {
-        "hegel.dll"
+        "hegel_c.dll"
     } else {
-        "libhegel.so"
+        "libhegel_c.so"
     };
     // `HEGEL_C_LIB_DIR` lets the harness load a library built into a separate
     // target dir — e.g. the `panic = "abort"` build produced by

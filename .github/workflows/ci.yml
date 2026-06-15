@@ -530,9 +530,9 @@ jobs:
           set -euo pipefail
           asset="libhegel-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.ext }}"
           case "${{ matrix.goos }}" in
-            windows) built="target/${{ matrix.target }}/release/hegel.dll" ;;
-            darwin)  built="target/${{ matrix.target }}/release/libhegel.dylib" ;;
-            linux)   built="target/${{ matrix.target }}/release/libhegel.so" ;;
+            windows) built="target/${{ matrix.target }}/release/hegel_c.dll" ;;
+            darwin)  built="target/${{ matrix.target }}/release/libhegel_c.dylib" ;;
+            linux)   built="target/${{ matrix.target }}/release/libhegel_c.so" ;;
             *) echo "unknown goos: ${{ matrix.goos }}" >&2; exit 1 ;;
           esac
           if [ ! -f "$built" ]; then
