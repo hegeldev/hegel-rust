@@ -266,4 +266,34 @@ mod reproduce {
         );
         assert!(msg.contains("boom: n ="), "unexpected panic message: {msg}");
     }
+
+    #[test]
+    fn hegel_reproduce_failure_undecodable_blob_panics() {
+        // An undecodable blob is invalid input: the run panics with the decode
+        // diagnostic rather than running the property.
+        let msg = run_panic_message(
+            Hegel::new(failing_property)
+                .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
+                .reproduce_failure("!!! not a blob !!!"),
+        );
+        assert!(msg.contains("could not be decoded"), "got: {msg}");
+    }
+
+    #[test]
+    fn hegel_reproduce_failure_stale_blob_panics() {
+        // A blob that decodes but no longer fails (replayed against a body that
+        // doesn't panic) is reported as stale.
+        let blob = discover_reproduce_blob();
+        let msg = run_panic_message(
+            Hegel::new(|tc: TestCase| {
+                let _: i32 = tc.draw(crate::generators::integers::<i32>());
+            })
+            .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
+            .reproduce_failure(blob),
+        );
+        assert!(
+            msg.contains("no longer reproduces") || msg.to_lowercase().contains("stale"),
+            "got: {msg}"
+        );
+    }
 }

@@ -7,8 +7,17 @@
 //! but going through the Rust wrappers the rest of hegeltest will use.
 
 use super::*;
-use crate::runner::Settings;
+use crate::runner::{Backend, Settings};
 use ciborium::Value;
+
+#[test]
+fn ffi_settings_builds_with_each_explicit_backend() {
+    // Exercises `map_backend`'s explicit arms (the default tests leave the
+    // backend at AUTO). Building the settings handle is enough to hit them.
+    for backend in [Backend::Default, Backend::Urandom] {
+        let _sh = SettingsHandle::build(&test_settings(1).backend(backend), None);
+    }
+}
 
 fn int_schema(min: i64, max: i64) -> Vec<u8> {
     let v = Value::Map(vec![
