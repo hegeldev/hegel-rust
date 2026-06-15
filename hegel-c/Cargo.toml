@@ -11,7 +11,7 @@ readme = "README.md"
 
 [lib]
 name = "hegel"
-crate-type = ["cdylib", "staticlib", "rlib"]
+crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 hegeltest = { version = "=0.18.0", path = "..", default-features = false }

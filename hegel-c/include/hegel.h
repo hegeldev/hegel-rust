@@ -219,6 +219,26 @@ typedef enum {
 } hegel_mode_t;
 
 /*
+ Which source of randomness the engine draws from. Set via
+ `hegel_settings_backend`.
+
+ - `HEGEL_BACKEND_AUTO`: choose automatically (the default) —
+   `HEGEL_BACKEND_URANDOM` when running inside Antithesis, otherwise
+   `HEGEL_BACKEND_DEFAULT`.
+ - `HEGEL_BACKEND_DEFAULT`: expand a single seeded PRNG. Runs are
+   reproducible from the seed and shrinking / replay work as usual.
+ - `HEGEL_BACKEND_URANDOM`: read fresh entropy from `/dev/urandom` on
+   every draw (falling back to an OS-seeded PRNG on platforms without
+   it). Intended for running under Antithesis, whose fuzzer controls
+   `/dev/urandom`; you almost certainly don't want it otherwise.
+ */
+typedef enum {
+    HEGEL_BACKEND_AUTO = 0,
+    HEGEL_BACKEND_DEFAULT = 1,
+    HEGEL_BACKEND_URANDOM = 2,
+} hegel_backend_t;
+
+/*
  Verbosity of engine-emitted output (logs, per-case traces). Set via
  `hegel_settings_verbosity`.
 
@@ -356,6 +376,17 @@ void hegel_settings_free(hegel_settings_t *s);
  one test case. See `hegel_mode_t`.
  */
 void hegel_settings_mode(hegel_settings_t *s, hegel_mode_t mode);
+
+/*
+ Select the engine's randomness backend. See `hegel_backend_t`.
+
+ `HEGEL_BACKEND_AUTO` is the default and leaves the automatic choice in
+ place; `HEGEL_BACKEND_DEFAULT` / `HEGEL_BACKEND_URANDOM` pin an explicit
+ backend, overriding the automatic detection. Like the underlying setting,
+ pinning is one-way: there is no way to un-pin back to AUTO on a handle
+ once an explicit backend has been set.
+ */
+void hegel_settings_backend(hegel_settings_t *s, hegel_backend_t backend);
 
 /*
  Maximum number of valid test cases to run before declaring the

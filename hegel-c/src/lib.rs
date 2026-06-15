@@ -36,7 +36,7 @@ use std::thread::{self, JoinHandle};
 use ciborium::Value;
 use hegel::backend::{DataSource, DataSourceError, Failure, TestCaseResult, TestRunResult};
 use hegel::embed::{data_source_for_blob, run_native};
-use hegel::{HealthCheck, Mode, Phase, Settings, Verbosity};
+use hegel::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};
 
 // ─── Error codes ────────────────────────────────────────────────────────────
 //
@@ -135,6 +135,27 @@ pub enum hegel_status_t {
 pub enum hegel_mode_t {
     HEGEL_MODE_TEST_RUN = 0,
     HEGEL_MODE_SINGLE_TEST_CASE = 1,
+}
+
+/// Which source of randomness the engine draws from. Set via
+/// `hegel_settings_backend`.
+///
+/// - `HEGEL_BACKEND_AUTO`: choose automatically (the default) —
+///   `HEGEL_BACKEND_URANDOM` when running inside Antithesis, otherwise
+///   `HEGEL_BACKEND_DEFAULT`.
+/// - `HEGEL_BACKEND_DEFAULT`: expand a single seeded PRNG. Runs are
+///   reproducible from the seed and shrinking / replay work as usual.
+/// - `HEGEL_BACKEND_URANDOM`: read fresh entropy from `/dev/urandom` on
+///   every draw (falling back to an OS-seeded PRNG on platforms without
+///   it). Intended for running under Antithesis, whose fuzzer controls
+///   `/dev/urandom`; you almost certainly don't want it otherwise.
+#[repr(C)]
+#[derive(Copy, Clone)]
+#[allow(non_camel_case_types)]
+pub enum hegel_backend_t {
+    HEGEL_BACKEND_AUTO = 0,
+    HEGEL_BACKEND_DEFAULT = 1,
+    HEGEL_BACKEND_URANDOM = 2,
 }
 
 /// Aggregate outcome of a finished run, read via `hegel_run_result_status`.
@@ -490,6 +511,28 @@ pub unsafe extern "C" fn hegel_settings_mode(s: *mut HegelSettings, mode: hegel_
             hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE => Mode::SingleTestCase,
         };
         *inner = inner.clone().mode(m);
+    }
+}
+
+/// Select the engine's randomness backend. See `hegel_backend_t`.
+///
+/// `HEGEL_BACKEND_AUTO` is the default and leaves the automatic choice in
+/// place; `HEGEL_BACKEND_DEFAULT` / `HEGEL_BACKEND_URANDOM` pin an explicit
+/// backend, overriding the automatic detection. Like the underlying setting,
+/// pinning is one-way: there is no way to un-pin back to AUTO on a handle
+/// once an explicit backend has been set.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_backend(s: *mut HegelSettings, backend: hegel_backend_t) {
+    if let Some(inner) = unsafe { settings_mut(s) } {
+        match backend {
+            hegel_backend_t::HEGEL_BACKEND_AUTO => {}
+            hegel_backend_t::HEGEL_BACKEND_DEFAULT => {
+                *inner = inner.clone().backend(Backend::Default);
+            }
+            hegel_backend_t::HEGEL_BACKEND_URANDOM => {
+                *inner = inner.clone().backend(Backend::Urandom);
+            }
+        }
     }
 }
 

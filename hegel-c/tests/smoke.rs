@@ -77,6 +77,16 @@ enum CRunStatus {
     Error = 2,
 }
 
+/// `hegel_backend_t` from hegel.h.
+#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[allow(dead_code)]
+enum CBackend {
+    Auto = 0,
+    Default = 1,
+    Urandom = 2,
+}
+
 type FnSettingsNew = unsafe extern "C" fn() -> *mut u8;
 type FnSettingsFree = unsafe extern "C" fn(*mut u8);
 type FnSettingsTestCases = unsafe extern "C" fn(*mut u8, u64);
@@ -84,6 +94,7 @@ type FnSettingsDatabase = unsafe extern "C" fn(*mut u8, *const c_char);
 type FnSettingsDatabaseKey = unsafe extern "C" fn(*mut u8, *const c_char);
 type FnSettingsSeed = unsafe extern "C" fn(*mut u8, u64, bool);
 type FnSettingsDerandomize = unsafe extern "C" fn(*mut u8, bool);
+type FnSettingsBackend = unsafe extern "C" fn(*mut u8, CBackend);
 type FnRunStart = unsafe extern "C" fn(*const u8) -> *mut u8;
 type FnNextTestCase = unsafe extern "C" fn(*mut u8) -> *mut u8;
 type FnRunResult = unsafe extern "C" fn(*mut u8) -> *const u8;
@@ -115,6 +126,7 @@ struct Api<'a> {
     settings_database_key: Symbol<'a, FnSettingsDatabaseKey>,
     settings_seed: Symbol<'a, FnSettingsSeed>,
     settings_derandomize: Symbol<'a, FnSettingsDerandomize>,
+    settings_backend: Symbol<'a, FnSettingsBackend>,
     run_start: Symbol<'a, FnRunStart>,
     next_test_case: Symbol<'a, FnNextTestCase>,
     run_result: Symbol<'a, FnRunResult>,
@@ -147,6 +159,7 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             settings_database_key: lib.get(b"hegel_settings_database_key\0").unwrap(),
             settings_seed: lib.get(b"hegel_settings_seed\0").unwrap(),
             settings_derandomize: lib.get(b"hegel_settings_derandomize\0").unwrap(),
+            settings_backend: lib.get(b"hegel_settings_backend\0").unwrap(),
             run_start: lib.get(b"hegel_run_start\0").unwrap(),
             next_test_case: lib.get(b"hegel_next_test_case\0").unwrap(),
             run_result: lib.get(b"hegel_run_result\0").unwrap(),
@@ -276,6 +289,69 @@ fn libhegel_runs_passing_property() {
             (a.run_result_error)(result).is_null(),
             "a normal run carries no run-level error"
         );
+
+        (a.run_free)(run);
+        (a.settings_free)(s);
+    }
+}
+
+/// Pinning the urandom backend via `hegel_settings_backend` drives a run to
+/// completion through the urandom RNG path (rather than the default PRNG).
+/// A trivial always-valid property still passes; this just exercises the
+/// new setter end-to-end and confirms it wires through to a working run.
+#[test]
+fn libhegel_runs_with_urandom_backend() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    unsafe {
+        let s = (a.settings_new)();
+        assert!(!s.is_null());
+        (a.settings_test_cases)(s, 10);
+        let empty = CString::new("").unwrap();
+        (a.settings_database)(s, empty.as_ptr());
+        (a.settings_backend)(s, CBackend::Urandom);
+
+        let run = (a.run_start)(s);
+        assert!(!run.is_null());
+
+        let schema = integer_schema(0, 100);
+        let mut cases = 0usize;
+        loop {
+            let tc = (a.next_test_case)(run);
+            if tc.is_null() {
+                let err = CStr::from_ptr((a.last_error_message)()).to_string_lossy();
+                assert_eq!(err, "", "next_test_case returned NULL with error: {}", err);
+                break;
+            }
+            cases += 1;
+
+            let mut val_ptr: *const u8 = ptr::null();
+            let mut val_len: usize = 0;
+            let rc = (a.generate)(
+                tc,
+                schema.as_ptr(),
+                schema.len(),
+                &mut val_ptr,
+                &mut val_len,
+            );
+            assert_eq!(rc, 0, "generate failed: rc={}", rc);
+
+            let v = decode(std::slice::from_raw_parts(val_ptr, val_len));
+            let Value::Integer(i) = v else {
+                panic!("expected integer, got {:?}", v)
+            };
+            let n: i128 = i.into();
+            assert!((0..=100).contains(&n), "got out-of-range value {}", n);
+
+            assert_eq!((a.mark_complete)(tc, CStatus::Valid, ptr::null()), 0);
+        }
+        assert!(cases >= 1, "expected at least one test case to run");
+
+        let result = (a.run_result)(run);
+        assert!(!result.is_null());
+        assert_eq!((a.run_result_status)(result), CRunStatus::Passed);
+        assert_eq!((a.run_result_failure_count)(result), 0);
 
         (a.run_free)(run);
         (a.settings_free)(s);
