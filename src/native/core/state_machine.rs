@@ -104,7 +104,7 @@ impl NativeStateMachine {
     ///
     /// Up to three rejection-sampling tries, then a fallback that
     /// enumerates the enabled rules.
-    pub fn next_rule(&mut self, ntc: &mut NativeTestCase) -> Result<u64, EngineError> {
+    pub fn next_rule(&mut self, ntc: &mut NativeTestCase) -> Result<i64, EngineError> {
         let n = self.rule_names.len();
         if self.flags.is_none() {
             self.flags = Some(FeatureFlags::new(ntc, n)?);
@@ -118,7 +118,7 @@ impl NativeStateMachine {
             let i = draw_index(ntc, n)?;
             if !known_bad.contains(&i) {
                 if flags.is_enabled(ntc, i)? {
-                    return Ok(i as u64);
+                    return Ok(i as i64);
                 }
                 known_bad.insert(i);
             }
@@ -147,7 +147,7 @@ impl NativeStateMachine {
                         BigInt::from(n as i64 - 1),
                         BigInt::from(i as i64),
                     )?;
-                    return Ok(i as u64);
+                    return Ok(i as i64);
                 }
             }
         }
@@ -161,7 +161,7 @@ impl NativeStateMachine {
             BigInt::from(n as i64 - 1),
             BigInt::from(i as i64),
         )?;
-        Ok(i as u64)
+        Ok(i as i64)
     }
 }
 

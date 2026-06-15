@@ -230,7 +230,7 @@ impl DataSource for NativeDataSource {
         })
     }
 
-    fn state_machine_next_rule(&self, state_machine_id: i64) -> Result<u64, DataSourceError> {
+    fn state_machine_next_rule(&self, state_machine_id: i64) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
             let idx = state_machine_id as usize;
             // Move the machine out of `ntc` so `next_rule` can borrow `ntc`

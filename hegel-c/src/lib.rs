@@ -1436,7 +1436,7 @@ pub unsafe extern "C" fn hegel_new_state_machine(
 pub unsafe extern "C" fn hegel_state_machine_next_rule(
     tc: *mut HegelTestCase,
     state_machine_id: i64,
-    out_rule_index: *mut u64,
+    out_rule_index: *mut i64,
 ) -> c_int {
     clear_last_error();
     let tc = match unsafe { tc_mut(tc) } {

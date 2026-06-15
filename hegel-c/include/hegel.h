@@ -678,7 +678,7 @@ int hegel_new_state_machine(hegel_test_case_t *tc,
  */
 int hegel_state_machine_next_rule(hegel_test_case_t *tc,
                                   int64_t state_machine_id,
-                                  uint64_t *out_rule_index);
+                                  int64_t *out_rule_index);
 
 /*
  Record a numeric observation under `label` for the engine's

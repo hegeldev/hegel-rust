@@ -77,7 +77,7 @@ pub trait DataSource: Send + Sync {
     ) -> Result<i64, DataSourceError>;
 
     /// Draw the index of the next rule to run, in `[0, num_rules)`.
-    fn state_machine_next_rule(&self, state_machine_id: i64) -> Result<u64, DataSourceError>;
+    fn state_machine_next_rule(&self, state_machine_id: i64) -> Result<i64, DataSourceError>;
 
     /// Create a new variable pool. Returns an opaque pool id.
     fn new_pool(&self) -> Result<i64, DataSourceError>;

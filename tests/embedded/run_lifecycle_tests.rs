@@ -443,7 +443,7 @@ impl crate::backend::DataSource for BtStubDataSource {
     ) -> Result<i64, DataSourceError> {
         unimplemented!()
     }
-    fn state_machine_next_rule(&self, _state_machine_id: i64) -> Result<u64, DataSourceError> {
+    fn state_machine_next_rule(&self, _state_machine_id: i64) -> Result<i64, DataSourceError> {
         unimplemented!()
     }
     fn new_pool(&self) -> Result<i64, DataSourceError> {
