@@ -95,7 +95,7 @@ impl<T> Variables<T> {
     fn pool_generate(&self, consume: bool) -> i64 {
         match self
             .tc
-            .with_data_source(|ds| ds.pool_generate(self.pool_id, consume))
+            .with_ctc(|ctc| ctc.pool_generate(self.pool_id, consume))
         {
             Ok(id) => id,
             Err(_) => raise_control(StopTest),
@@ -114,7 +114,7 @@ impl<T> Variables<T> {
 
     /// Add a value to the pool.
     pub fn add(&mut self, v: T) {
-        let variable_id: i64 = match self.tc.with_data_source(|ds| ds.pool_add(self.pool_id)) {
+        let variable_id: i64 = match self.tc.with_ctc(|ctc| ctc.pool_add(self.pool_id)) {
             Ok(id) => id,
             Err(_) => raise_control(StopTest), // nocov
         };
@@ -145,7 +145,7 @@ impl<T> Variables<T> {
 
 /// Create a new variable pool for stateful tests.
 pub fn variables<T>(tc: &TestCase) -> Variables<T> {
-    let pool_id = match tc.with_data_source(|ds| ds.new_pool()) {
+    let pool_id = match tc.with_ctc(|ctc| ctc.new_pool()) {
         Ok(id) => id,
         Err(_) => raise_control(StopTest), // nocov
     };

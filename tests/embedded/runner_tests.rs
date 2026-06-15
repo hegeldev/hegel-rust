@@ -47,24 +47,9 @@ fn test_settings_backend_setter() {
     assert_eq!(s.backend, Some(Backend::Default));
 }
 
-#[test]
-fn test_resolved_backend_explicit_wins_over_antithesis() {
-    // An explicit choice wins regardless of the Antithesis flag.
-    let s = Settings::new().backend(Backend::Default);
-    assert_eq!(s.resolved_backend(true), Backend::Default);
-    assert_eq!(s.resolved_backend(false), Backend::Default);
-
-    let s = Settings::new().backend(Backend::Urandom);
-    assert_eq!(s.resolved_backend(true), Backend::Urandom);
-    assert_eq!(s.resolved_backend(false), Backend::Urandom);
-}
-
-#[test]
-fn test_resolved_backend_auto_selects_urandom_under_antithesis() {
-    let s = Settings::new();
-    assert_eq!(s.resolved_backend(true), Backend::Urandom);
-    assert_eq!(s.resolved_backend(false), Backend::Default);
-}
+// The backend's *resolution* (explicit choice vs. auto-urandom-under-
+// Antithesis) is now the engine's job inside hegel-c, reached through the
+// `hegel_settings_backend` C setter; the frontend only records the choice.
 
 #[test]
 fn test_settings_has_phase() {
@@ -178,90 +163,18 @@ fn test_settings_new_in_ci_disables_database() {
     assert!(settings.derandomize);
 }
 
-// ── Hegel::run dispatch (phase gating / failure-blob replay) ─────────────
+// ── Hegel::run dispatch (phase gating) ───────────────────────────────────
 
 #[test]
 fn hegel_run_skips_when_generate_phase_disabled() {
-    // Without Phase::Generate (and no replay blob) the run is skipped
-    // entirely: a body that always panics must never execute.
+    // Without Phase::Generate (and no replay blob) the engine generates
+    // nothing: a body that always panics must never execute, and the run
+    // passes (no panic).
     Hegel::new(|_tc: TestCase| panic!("must not run"))
         .settings(Settings::new().phases([]))
         .run();
 }
 
-mod reproduce {
-    use super::*;
-
-    /// Property used by the replay tests below: fails for any drawn i32 >= 1000.
-    fn failing_property(tc: TestCase) {
-        let n: i32 = tc.draw(crate::generators::integers::<i32>());
-        assert!(n < 1000, "boom: n = {n}");
-    }
-
-    /// Run the failing property once and return the reproduce blob the engine
-    /// attached to the (shrunk) counterexample.
-    fn discover_reproduce_blob() -> String {
-        crate::run_lifecycle::init_panic_hook();
-        let mut test_fn = failing_property;
-        let settings = Settings::new()
-            .test_cases(200)
-            .seed(Some(7))
-            .database(None)
-            .verbosity(Verbosity::Quiet);
-        let result = crate::embed::run_native(&settings, None, |ds, is_final| {
-            crate::run_lifecycle::run_test_case(
-                ds,
-                &mut test_fn,
-                is_final,
-                Mode::TestRun,
-                Verbosity::Quiet,
-            );
-        });
-        let result = result.unwrap();
-        assert!(!result.failures.is_empty(), "property should have failed");
-        result.failures[0]
-            .reproduce_blob
-            .clone()
-            .expect("native failure should carry a reproduce blob")
-    }
-
-    /// Drive `builder.run()` to its failure panic and return the panic message.
-    fn run_panic_message<F: FnMut(TestCase) + std::panic::UnwindSafe>(hegel: Hegel<F>) -> String {
-        let result = std::panic::catch_unwind(|| hegel.run());
-        let payload = result.expect_err("run should panic on a failing replay");
-        payload
-            .downcast_ref::<String>()
-            .map(String::as_str)
-            .or_else(|| payload.downcast_ref::<&str>().copied())
-            .unwrap_or("")
-            .to_string()
-    }
-
-    #[test]
-    fn hegel_reproduce_failure_replays_regardless_of_phases() {
-        // A blob replay is phase-agnostic: it runs (and surfaces the failure)
-        // even when Phase::Generate is disabled.
-        let blob = discover_reproduce_blob();
-        let msg = run_panic_message(
-            Hegel::new(failing_property)
-                .settings(Settings::new().phases([]).verbosity(Verbosity::Quiet))
-                .reproduce_failure(blob),
-        );
-        assert!(msg.contains("boom: n ="), "unexpected panic message: {msg}");
-    }
-
-    #[test]
-    fn hegel_reproduce_failure_first_blob_wins() {
-        // Only the first blob replays; later ones are source-level bookkeeping.
-        // Were the second (undecodable) blob replayed instead, the run would
-        // panic with a decode error rather than the property failure.
-        let blob = discover_reproduce_blob();
-        let msg = run_panic_message(
-            Hegel::new(failing_property)
-                .settings(Settings::new().verbosity(Verbosity::Quiet))
-                .reproduce_failure(blob)
-                .reproduce_failure("!!! not a blob !!!"),
-        );
-        assert!(msg.contains("boom: n ="), "unexpected panic message: {msg}");
-    }
-}
+// The `#[hegel::reproduce_failure]` replay path (decode a blob, replay it,
+// re-raise or report stale) is covered end-to-end through the public API in
+// tests/test_reproduce_failure.rs.

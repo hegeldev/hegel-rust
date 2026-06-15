@@ -1,14 +1,15 @@
-pub use crate::backend::{DataSource, DataSourceError};
 use crate::control::{
     AssumeFailed, InternalError, InvalidArgument, LoopDone, StopTest, hegel_internal_assert,
     hegel_internal_error, raise_control,
 };
+use crate::ffi::CTestCase;
 use crate::generators::Generator;
 use crate::runner::Mode;
 use ciborium::Value;
 use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::os::raw::c_int;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 
@@ -67,19 +68,28 @@ macro_rules! invalid_argument {
 }
 pub(crate) use invalid_argument;
 
-/// Raise the appropriate control-flow unwind for the given data source error.
-fn panic_on_data_source_error(e: DataSourceError) -> ! {
-    match e {
-        DataSourceError::StopTest => raise_control(StopTest),
-        DataSourceError::Assume => raise_control(AssumeFailed), // nocov
-        // A caller-supplied argument (typically a generator's schema) was
-        // semantically invalid: e.g. a range with no representable values, or
-        // a `sampled_from` over an empty set. This is a usage error, not a
-        // discovered counterexample, so raise it as an invalid-argument
-        // control payload and let the lifecycle abort the run cleanly.
-        // libhegel never reaches here — it maps the error to
-        // `HEGEL_E_INVALID_ARG` instead.
-        DataSourceError::InvalidArgument(msg) => invalid_argument!("{}", msg),
+/// Translate a non-`HEGEL_OK` libhegel return code into the matching
+/// control-flow unwind. Mirrors the previous `DataSourceError` mapping, but
+/// over the C ABI's `c_int` codes:
+///
+/// - `HEGEL_E_STOP_TEST` — the engine ran out of data for this case.
+/// - `HEGEL_E_ASSUME` — the engine rejected the draw (an assumption failed).
+/// - `HEGEL_E_INVALID_ARG` — a caller-supplied argument (typically a
+///   generator's schema) was semantically invalid; the diagnostic is in the
+///   thread-local last-error, read synchronously here.
+/// - anything else — an engine/framework invariant we don't expect on the hot
+///   path; treat it as an internal error rather than a shrinkable failure.
+#[track_caller]
+fn raise_for_rc(rc: c_int) -> ! {
+    match rc {
+        hegel_c::HEGEL_E_STOP_TEST => raise_control(StopTest),
+        hegel_c::HEGEL_E_ASSUME => raise_control(AssumeFailed), // nocov
+        hegel_c::HEGEL_E_INVALID_ARG => invalid_argument!("{}", crate::ffi::last_error_string()),
+        other => hegel_internal_error!(
+            "libhegel returned unexpected code {}: {}",
+            other,
+            crate::ffi::last_error_string()
+        ),
     }
 }
 
@@ -102,8 +112,14 @@ pub(crate) struct TestCaseGlobalData {
 }
 
 pub(crate) struct SharedState {
-    data_source: Box<dyn DataSource + Send + Sync>,
+    ctc: CTestCase,
     draw_state: DrawState,
+    /// Labels already passed to `tc.target`/`tc.target_labelled` this test
+    /// case. The engine enforces "each label at most once per case", but over
+    /// the C ABI that check would abort across `extern "C"` rather than unwind
+    /// cleanly, so the frontend detects the duplicate here and raises a clean
+    /// invalid-argument instead.
+    observed_targets: HashSet<String>,
 }
 
 pub(crate) struct DrawState {
@@ -270,11 +286,7 @@ impl TestCase {
     /// `emit` is decided by the lifecycle (`run_lifecycle::run_test_case`):
     /// true on a non-quiet final replay or in verbose mode, where drawn
     /// values and notes should be surfaced.
-    pub(crate) fn new(
-        data_source: Box<dyn DataSource + Send + Sync>,
-        emit: bool,
-        mode: Mode,
-    ) -> Self {
+    pub(crate) fn new(ctc: CTestCase, emit: bool, mode: Mode) -> Self {
         let override_sink = current_output_sink();
         let on_draw: OutputSink = match override_sink {
             Some(sink) if emit => sink,
@@ -286,12 +298,13 @@ impl TestCase {
                 mode,
                 emit,
                 shared: Mutex::new(SharedState {
-                    data_source,
+                    ctc,
                     draw_state: DrawState {
                         named_draw_counts: HashMap::new(),
                         named_draw_repeatable: HashMap::new(),
                         allocated_display_names: HashSet::new(),
                     },
+                    observed_targets: HashSet::new(),
                 }),
             }),
             local: RefCell::new(TestCaseLocalData {
@@ -476,7 +489,34 @@ impl TestCase {
     /// Has no effect during replays or if the test case has been aborted.
     pub fn target_labelled(&self, score: f64, label: impl Into<String>) {
         let label = label.into();
-        self.with_data_source(|ds| ds.target_observation(score, &label));
+        // These usage checks (finite score, each label observed at most once
+        // per case) used to live in the engine and unwind as invalid-argument.
+        // Over the C ABI the engine's unwind would abort across `extern "C"`,
+        // so validate here and raise cleanly before handing the score across.
+        if !score.is_finite() {
+            invalid_argument!(
+                "tc.target({score}, label={label:?}) requires a finite score; \
+                 got non-finite value"
+            );
+        }
+        // Track the label and forward the score under the shared lock, but
+        // raise any error *outside* it (raising while holding the mutex is
+        // avoidable here).
+        let outcome = self.with_shared(|shared| {
+            if !shared.observed_targets.insert(label.clone()) {
+                return Err(None);
+            }
+            shared.ctc.target(score, &label).map_err(Some)
+        });
+        match outcome {
+            Ok(()) => {}
+            Err(None) => invalid_argument!(
+                "tc.target({score}, label={label:?}) would overwrite previous \
+                 tc.target(_, label={label:?}); each label can be observed at \
+                 most once per test case"
+            ),
+            Err(Some(rc)) => raise_for_rc(rc),
+        }
     }
 
     /// Run `body` in a loop that should runs "logically infinitely" or until
@@ -675,28 +715,45 @@ impl TestCase {
     /// concurrent threads don't scramble backend traffic. The closure
     /// must not call back into any other `TestCase` method that would
     /// re-acquire the shared mutex.
-    pub(crate) fn with_data_source<R>(&self, f: impl FnOnce(&dyn DataSource) -> R) -> R {
-        self.with_shared(|shared| f(shared.data_source.as_ref()))
+    pub(crate) fn with_ctc<R>(&self, f: impl FnOnce(&CTestCase) -> R) -> R {
+        self.with_shared(|shared| f(&shared.ctc))
     }
 
-    /// Send `mark_complete` on this test case's data source.
+    /// Report the test case's outcome to the engine via `hegel_mark_complete`.
     ///
-    /// Communicates the outcome — the full [`TestCaseResult`], including any
-    /// captured [`Failure`] — to the engine, which reads it back through a
-    /// per-test-case outcome handle on the data source.
+    /// Only the status — and, for an interesting (failing) case, the bug
+    /// origin — crosses the C ABI; the panic message and reproduce blob are
+    /// recovered from the run result afterward, not pushed through here.
     pub(crate) fn mark_complete(&self, result: &crate::backend::TestCaseResult) {
-        self.with_data_source(|ds| ds.mark_complete(result));
+        use crate::backend::TestCaseResult as R;
+        use hegel_c::hegel_status_t as Status;
+        let (status, origin) = match result {
+            R::Valid => (Status::HEGEL_STATUS_VALID, None),
+            R::Invalid => (Status::HEGEL_STATUS_INVALID, None),
+            R::Overrun => (Status::HEGEL_STATUS_OVERRUN, None),
+            R::Interesting(failure) => (
+                Status::HEGEL_STATUS_INTERESTING,
+                Some(failure.origin.as_str()),
+            ),
+        };
+        if let Err(rc) = self.with_ctc(|ctc| ctc.mark_complete(status, origin)) {
+            hegel_internal_error!(
+                "hegel_mark_complete failed: rc={} {}",
+                rc,
+                crate::ffi::last_error_string()
+            );
+        }
     }
 
     #[doc(hidden)]
     pub fn start_span(&self, label: u64) {
         self.local.borrow_mut().span_depth += 1;
-        if let Err(e) = self.with_data_source(|ds| ds.start_span(label)) {
+        if let Err(rc) = self.with_ctc(|ctc| ctc.start_span(label)) {
             let mut local = self.local.borrow_mut();
             hegel_internal_assert!(local.span_depth > 0);
             local.span_depth -= 1;
             drop(local);
-            panic_on_data_source_error(e);
+            raise_for_rc(rc);
         }
     }
 
@@ -707,19 +764,31 @@ impl TestCase {
             hegel_internal_assert!(local.span_depth > 0);
             local.span_depth -= 1;
         }
-        if let Err(e) = self.with_data_source(|ds| ds.stop_span(discard)) {
-            panic_on_data_source_error(e);
+        if let Err(rc) = self.with_ctc(|ctc| ctc.stop_span(discard)) {
+            raise_for_rc(rc);
         }
     }
 }
 
-/// Send a schema to the backend and return the raw CBOR response.
+/// Send a schema to the engine and return the raw CBOR response.
+///
+/// The schema `Value` is serialized to CBOR bytes, handed to `hegel_generate`,
+/// and the borrowed result bytes are deserialized back into a `Value`. This
+/// extra serialize/parse per draw is the cost of going through the literal C
+/// ABI (the same bytes-level path every other language binding pays).
 #[doc(hidden)]
 pub fn generate_raw(tc: &TestCase, schema: &Value) -> Value {
-    match tc.with_data_source(|ds| ds.generate(schema)) {
-        Ok(v) => v,
-        Err(e) => panic_on_data_source_error(e),
-    }
+    let mut schema_bytes = Vec::new();
+    ciborium::ser::into_writer(schema, &mut schema_bytes).unwrap_or_else(|e| {
+        hegel_internal_error!("failed to serialize schema: {}", e) // nocov
+    });
+    let value_bytes = match tc.with_ctc(|ctc| ctc.generate(&schema_bytes)) {
+        Ok(bytes) => bytes,
+        Err(rc) => raise_for_rc(rc),
+    };
+    ciborium::de::from_reader(value_bytes.as_slice()).unwrap_or_else(|e| {
+        hegel_internal_error!("failed to deserialize value: {}", e) // nocov
+    })
 }
 
 #[doc(hidden)]
@@ -764,12 +833,12 @@ impl<'a> Collection<'a> {
 
     fn ensure_initialized(&mut self) -> i64 {
         if self.handle.is_none() {
-            let result = self.tc.with_data_source(|ds| {
-                ds.new_collection(self.min_size as u64, self.max_size.map(|m| m as u64))
+            let result = self.tc.with_ctc(|ctc| {
+                ctc.new_collection(self.min_size as u64, self.max_size.map(|m| m as u64))
             });
             let id = match result {
                 Ok(id) => id,
-                Err(e) => panic_on_data_source_error(e), // nocov
+                Err(rc) => raise_for_rc(rc), // nocov
             };
             self.handle = Some(id);
         }
@@ -782,11 +851,11 @@ impl<'a> Collection<'a> {
             return false; // nocov
         }
         let handle = self.ensure_initialized();
-        let result = match self.tc.with_data_source(|ds| ds.collection_more(handle)) {
+        let result = match self.tc.with_ctc(|ctc| ctc.collection_more(handle)) {
             Ok(b) => b,
-            Err(e) => {
+            Err(rc) => {
                 self.finished = true;
-                panic_on_data_source_error(e);
+                raise_for_rc(rc);
             }
         };
         if !result {
@@ -802,9 +871,7 @@ impl<'a> Collection<'a> {
             return;
         }
         let handle = self.ensure_initialized();
-        let _ = self
-            .tc
-            .with_data_source(|ds| ds.collection_reject(handle, why));
+        let _ = self.tc.with_ctc(|ctc| ctc.collection_reject(handle, why));
         // nocov end
     }
 }

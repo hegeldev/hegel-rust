@@ -60,40 +60,6 @@ fn internal_assert_eq_reports_both_values() {
     hegel_internal_assert_eq!(2 + 2, 4);
 }
 
-#[test]
-fn internal_assert_ne_reports_the_shared_value() {
-    let payload = catch_unwind(AssertUnwindSafe(|| {
-        hegel_internal_assert_ne!(2 + 2, 4);
-    }))
-    .unwrap_err();
-    let msg = panic_message(payload);
-    assert!(msg.contains("2 + 2 != 4"), "{msg}");
-    assert!(msg.contains("both: 4"), "{msg}");
-    hegel_internal_assert_ne!(2 + 2, 5);
-}
-
-#[test]
-fn internal_debug_asserts_follow_debug_assertions() {
-    let fired = catch_unwind(AssertUnwindSafe(|| {
-        hegel_internal_debug_assert!(false);
-    }))
-    .is_err();
-    assert_eq!(fired, cfg!(debug_assertions));
-
-    let fired = catch_unwind(AssertUnwindSafe(|| {
-        hegel_internal_debug_assert_eq!(1, 2);
-    }))
-    .is_err();
-    assert_eq!(fired, cfg!(debug_assertions));
-
-    let fired = catch_unwind(AssertUnwindSafe(|| {
-        hegel_internal_debug_assert_ne!(1, 1);
-    }))
-    .is_err();
-    assert_eq!(fired, cfg!(debug_assertions));
-
-    // The passing direction is free either way.
-    hegel_internal_debug_assert!(true);
-    hegel_internal_debug_assert_eq!(1, 1);
-    hegel_internal_debug_assert_ne!(1, 2);
-}
+// The `_ne` and `debug_*` assert macros were engine-only; they live with the
+// engine in hegel-c now. The frontend keeps only `hegel_internal_assert`,
+// `hegel_internal_assert_eq`, and `hegel_internal_error`.

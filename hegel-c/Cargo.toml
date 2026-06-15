@@ -30,6 +30,11 @@ crc32fast = "1.4"
 parking_lot = "0.12"
 tempfile = "3"
 
+[features]
+# Internal: exposes engine internals via `__bench` for hegeltest's benches/.
+# Not part of the public C API; depend on at your peril.
+__bench = []
+
 [build-dependencies]
 cbindgen = "0.29"
 

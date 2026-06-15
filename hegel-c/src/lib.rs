@@ -68,6 +68,35 @@ mod settings;
 /// cbindgen:ignore
 mod unicodedata;
 
+// Internal engine re-exports for hegeltest's `benches/`, which reaches them
+// through `hegel::__bench` (a re-export of this). Gated on the private
+// `__bench` feature so they stay out of normal builds.
+/// cbindgen:ignore
+#[cfg(feature = "__bench")]
+#[doc(hidden)]
+pub mod __bench {
+    pub use crate::native::bignum::BigInt;
+    pub use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, StringChoice};
+    pub use crate::native::intervalsets::IntervalSet;
+    pub use crate::native::rng::EngineRng;
+
+    pub fn biased_integer_sample(ic: &IntegerChoice, rng: &mut EngineRng) -> BigInt {
+        crate::native::core::state::biased_integer_sample(ic, rng)
+    }
+
+    pub fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Vec<u32> {
+        crate::native::core::state::biased_string_sample(sc, rng)
+    }
+
+    pub fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<u8> {
+        crate::native::core::state::biased_bytes_sample(bc, rng)
+    }
+
+    pub fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 {
+        crate::native::core::state::biased_float_sample(fc, rng)
+    }
+}
+
 use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult, TestRunResult};
 use crate::embed::{data_source_for_blob, run_native};
 use crate::settings::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};
