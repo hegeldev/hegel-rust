@@ -148,8 +148,6 @@ pub enum RunError {
     Flaky(String),
     /// Data generation diverged between runs of the same choice sequence.
     NonDeterministic(String),
-    /// `reproduce_failure`: the blob decoded but no longer fails.
-    StaleBlob(String),
 }
 
 impl std::fmt::Display for RunError {
@@ -157,8 +155,7 @@ impl std::fmt::Display for RunError {
         match self {
             RunError::HealthCheck(msg)
             | RunError::Flaky(msg)
-            | RunError::NonDeterministic(msg)
-            | RunError::StaleBlob(msg) => write!(f, "{}", msg),
+            | RunError::NonDeterministic(msg) => write!(f, "{}", msg),
         }
     }
 }
