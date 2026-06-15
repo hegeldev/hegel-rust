@@ -32,16 +32,21 @@ ASSERT_MACRO = re.compile(r"(?<![\w!])(?:debug_)?assert(?:_eq|_ne)?!\s*\(")
 
 
 def main() -> int:
+    # The engine lives in hegel-c/src now (and the frontend in src/); the
+    # internal-assert discipline applies to both so a panic can't escape a
+    # generator or cross the FFI boundary uncontrolled.
+    roots = [Path("src"), Path("hegel-c/src")]
     offences: list[str] = []
-    for path in sorted(Path("src").rglob("*.rs")):
-        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
-            if line.lstrip().startswith("//"):
-                continue
-            if ASSERT_MACRO.search(line):
-                offences.append(f"  {path}:{lineno}: {line.strip()}")
+    for root in roots:
+        for path in sorted(root.rglob("*.rs")):
+            for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+                if line.lstrip().startswith("//"):
+                    continue
+                if ASSERT_MACRO.search(line):
+                    offences.append(f"  {path}:{lineno}: {line.strip()}")
 
     if offences:
-        print("std assertion macros are not allowed in src/.")
+        print("std assertion macros are not allowed in src/ or hegel-c/src/.")
         print("Use hegel_internal_assert! (internal invariants) or")
         print("invalid_argument! (user-facing argument validation) instead:")
         print()

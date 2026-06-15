@@ -68,7 +68,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 RATCHET_FILE = Path(".github/coverage-ratchet.json")
-SOURCE_DIRS = [Path("src"), Path("hegel-macros/src")]
+SOURCE_DIRS = [Path("src"), Path("hegel-macros/src"), Path("hegel-c/src")]
 
 # ──────────────────────────────────────────────────────────────────────
 # nocov block cache
@@ -352,6 +352,11 @@ def _run_lcov_phase(features: str, output: Path, label: str) -> None:
         [
             "cargo",
             "llvm-cov",
+            # Measure (and run the tests of) the whole workspace: the engine
+            # now lives in the hegel-c crate, and both its own embedded tests
+            # and hegeltest's suite (which drives it through the C ABI) need to
+            # contribute coverage of hegel-c/src.
+            "--workspace",
             "--features",
             features,
             "--lcov",

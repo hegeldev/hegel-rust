@@ -419,33 +419,34 @@ jobs:
           echo "Timed out waiting for hegeltest-macros to appear on Crates.io"
           exit 1
 
-      - name: Publish hegeltest
+      - name: Publish hegeltest-c
         if: steps.check.outputs.skip != 'true'
-        run: cargo publish -p hegeltest
+        # The engine crate. hegeltest now depends on it, so it must be
+        # published (and indexed) before hegeltest. Its other role is to
+        # reserve the name; the useful artefact for non-Rust consumers is the
+        # `libhegel-<goos>-<goarch>.<ext>` cdylib uploaded by the
+        # `release-binaries` job, not this source crate.
+        run: cargo publish -p hegeltest-c
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
 
-      - name: Wait for hegeltest on crates.io index
+      - name: Wait for hegeltest-c on crates.io index
         if: steps.check.outputs.skip != 'true'
         run: |
-          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          echo "waiting for hegeltest $VERSION to appear on crates.io..."
+          VERSION=$(grep '^version' hegel-c/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "waiting for hegeltest-c $VERSION to appear on crates.io..."
           for i in $(seq 1 60); do
-            if cargo search hegeltest | grep -q "^hegeltest = \"$VERSION\""; then
+            if cargo search hegeltest-c | grep -q "\"$VERSION\""; then
               exit 0
             fi
             sleep 3
           done
-          echo "Timed out waiting for hegeltest to appear on Crates.io"
+          echo "Timed out waiting for hegeltest-c to appear on Crates.io"
           exit 1
 
-      - name: Publish hegeltest-c
+      - name: Publish hegeltest
         if: steps.check.outputs.skip != 'true'
-        # hegeltest-c is published primarily to reserve the name on
-        # crates.io. The useful artefact for non-Rust consumers is the
-        # `libhegel-<goos>-<goarch>.<ext>` cdylib uploaded by the
-        # `release-binaries` job, not this source-only crate.
-        run: cargo publish -p hegeltest-c
+        run: cargo publish -p hegeltest
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
 
