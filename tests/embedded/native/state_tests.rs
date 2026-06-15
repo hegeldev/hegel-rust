@@ -304,6 +304,67 @@ fn spans_index_i64_out_of_range_panics() {
 
 // ── NativeTestCase::draw_integer_forced ───────────────────────────────────
 
+#[test]
+fn draw_integer_forced_records_a_forced_node_without_consuming_the_prefix() {
+    // The prefix value at the forced node's position is never consulted:
+    // the recorded node carries the forced value, not the prefix's.
+    let prefix = vec![ChoiceValue::Integer(BigInt::from(9))];
+    let mut tc = NativeTestCase::for_choices_and_template(
+        &prefix,
+        None,
+        Some(ChoiceTemplate::simplest(None)),
+        4,
+        None,
+    );
+    tc.draw_integer_forced(BigInt::from(0), BigInt::from(10), BigInt::from(7))
+        .ok()
+        .unwrap();
+    assert_eq!(tc.nodes.len(), 1);
+    assert!(tc.nodes[0].was_forced);
+    assert_eq!(tc.nodes[0].value, ChoiceValue::Integer(BigInt::from(7)));
+    // The prefix is positional: the forced node occupied position 0, so the
+    // next unforced draw is past the prefix and resolves via the template
+    // (rather than replaying the unconsumed prefix value 9).
+    assert_eq!(tc.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
+}
+
+#[test]
+fn draw_integer_forced_notifies_observer() {
+    use std::sync::{Arc, Mutex};
+    struct ForcedIntObserver {
+        captured: Arc<Mutex<Option<(BigInt, bool)>>>,
+    }
+    impl DataObserver for ForcedIntObserver {
+        fn draw_integer(&mut self, value: &BigInt, was_forced: bool) {
+            *self.captured.lock().unwrap() = Some((value.clone(), was_forced));
+        }
+    }
+    let captured = Arc::new(Mutex::new(None));
+    let obs = Box::new(ForcedIntObserver {
+        captured: captured.clone(),
+    });
+    let mut tc = NativeTestCase::for_choices_and_template(&[], None, None, 4, Some(obs));
+    tc.draw_integer_forced(0i64, 5i64, 3i64).ok().unwrap();
+    let recorded = captured.lock().unwrap().take();
+    assert_eq!(recorded, Some((BigInt::from(3), true)));
+}
+
+#[test]
+fn draw_integer_forced_errors_on_an_exhausted_test_case() {
+    let mut tc = NativeTestCase::for_choices(&[], None, None);
+    assert!(matches!(
+        tc.draw_integer_forced(0i64, 5i64, 3i64),
+        Err(EngineError::Overrun)
+    ));
+}
+
+#[test]
+#[should_panic(expected = "outside")]
+fn draw_integer_forced_rejects_out_of_range_values() {
+    let mut tc = NativeTestCase::for_choices_and_template(&[], None, None, 4, None);
+    let _ = tc.draw_integer_forced(0i64, 5i64, 6i64);
+}
+
 // ── Spans::get (by non-negative usize index) ──────────────────────────────
 
 #[test]

@@ -34,6 +34,16 @@ impl DataSource for StubDataSource {
     ) -> Result<(), DataSourceError> {
         unimplemented!()
     }
+    fn new_state_machine(
+        &self,
+        _rule_names: &[&str],
+        _invariant_names: &[&str],
+    ) -> Result<i64, DataSourceError> {
+        unimplemented!()
+    }
+    fn state_machine_next_rule(&self, _state_machine_id: i64) -> Result<i64, DataSourceError> {
+        unimplemented!()
+    }
     fn primitive_boolean(&self, _p: f64, _forced: Option<bool>) -> Result<bool, DataSourceError> {
         unimplemented!()
     }
@@ -137,6 +147,16 @@ impl DataSource for SpanErrorDataSource {
     }
     fn stop_span(&self, _discard: bool) -> Result<(), DataSourceError> {
         Err(DataSourceError::StopTest)
+    }
+    fn state_machine_next_rule(&self, _state_machine_id: i64) -> Result<i64, DataSourceError> {
+        unimplemented!()
+    }
+    fn new_state_machine(
+        &self,
+        _rule_names: &[&str],
+        _invariant_names: &[&str],
+    ) -> Result<i64, DataSourceError> {
+        unimplemented!()
     }
     fn new_collection(
         &self,

@@ -107,6 +107,15 @@ type FnMarkComplete = unsafe extern "C" fn(*mut u8, CStatus, *const c_char) -> c
 type FnNewPool = unsafe extern "C" fn(*mut u8, *mut i64) -> c_int;
 type FnPoolAdd = unsafe extern "C" fn(*mut u8, i64, *mut i64) -> c_int;
 type FnPoolGenerate = unsafe extern "C" fn(*mut u8, i64, bool, *mut i64) -> c_int;
+type FnNewStateMachine = unsafe extern "C" fn(
+    *mut u8,
+    *const *const c_char,
+    usize,
+    *const *const c_char,
+    usize,
+    *mut i64,
+) -> c_int;
+type FnStateMachineNextRule = unsafe extern "C" fn(*mut u8, i64, *mut u64) -> c_int;
 type FnPrimitiveBoolean = unsafe extern "C" fn(*mut u8, f64, bool, bool, *mut bool) -> c_int;
 type FnRunResultStatus = unsafe extern "C" fn(*const u8) -> CRunStatus;
 type FnRunResultError = unsafe extern "C" fn(*const u8) -> *const c_char;
@@ -138,6 +147,8 @@ struct Api<'a> {
     new_pool: Symbol<'a, FnNewPool>,
     pool_add: Symbol<'a, FnPoolAdd>,
     pool_generate: Symbol<'a, FnPoolGenerate>,
+    new_state_machine: Symbol<'a, FnNewStateMachine>,
+    state_machine_next_rule: Symbol<'a, FnStateMachineNextRule>,
     primitive_boolean: Symbol<'a, FnPrimitiveBoolean>,
     run_result_status: Symbol<'a, FnRunResultStatus>,
     run_result_error: Symbol<'a, FnRunResultError>,
@@ -171,6 +182,8 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             new_pool: lib.get(b"hegel_new_pool\0").unwrap(),
             pool_add: lib.get(b"hegel_pool_add\0").unwrap(),
             pool_generate: lib.get(b"hegel_pool_generate\0").unwrap(),
+            new_state_machine: lib.get(b"hegel_new_state_machine\0").unwrap(),
+            state_machine_next_rule: lib.get(b"hegel_state_machine_next_rule\0").unwrap(),
             primitive_boolean: lib.get(b"hegel_primitive_boolean\0").unwrap(),
             run_result_status: lib.get(b"hegel_run_result_status\0").unwrap(),
             run_result_error: lib.get(b"hegel_run_result_error\0").unwrap(),
@@ -749,6 +762,127 @@ fn libhegel_pool_primitives_draw_added_variables() {
             (a.run_result_status)(result),
             CRunStatus::Passed,
             "expected passing run"
+        );
+
+        (a.run_free)(run);
+        (a.settings_free)(s);
+    }
+}
+
+#[test]
+fn libhegel_state_machine_selects_registered_rules_with_swarm() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    unsafe {
+        let s = (a.settings_new)();
+        (a.settings_test_cases)(s, 50);
+        let empty = CString::new("").unwrap();
+        (a.settings_database)(s, empty.as_ptr());
+        (a.settings_derandomize)(s, true);
+        (a.settings_seed)(s, 3, true);
+
+        let run = (a.run_start)(s);
+        assert!(!run.is_null());
+
+        let rule_names: Vec<CString> = ["push", "pop", "clear"]
+            .iter()
+            .map(|n| CString::new(*n).unwrap())
+            .collect();
+        let rule_ptrs: Vec<*const c_char> = rule_names.iter().map(|n| n.as_ptr()).collect();
+        let invariant_name = CString::new("sorted").unwrap();
+        let invariant_ptrs = [invariant_name.as_ptr()];
+
+        let mut saw_rule_draw = false;
+        let mut longest_single_rule_run = 0usize;
+        loop {
+            let tc = (a.next_test_case)(run);
+            if tc.is_null() {
+                let err = CStr::from_ptr((a.last_error_message)()).to_string_lossy();
+                assert_eq!(err, "", "next_test_case returned NULL with error: {}", err);
+                break;
+            }
+
+            // Registering with zero rules is a usage error, not a crash,
+            // and must leave the test case usable.
+            let mut machine_id: i64 = -1;
+            let rc = (a.new_state_machine)(
+                tc,
+                ptr::null(),
+                0,
+                invariant_ptrs.as_ptr(),
+                invariant_ptrs.len(),
+                &mut machine_id,
+            );
+            assert_eq!(
+                rc, HEGEL_E_INVALID_ARG,
+                "expected HEGEL_E_INVALID_ARG, got rc={}",
+                rc
+            );
+
+            let rc = (a.new_state_machine)(
+                tc,
+                rule_ptrs.as_ptr(),
+                rule_ptrs.len(),
+                invariant_ptrs.as_ptr(),
+                invariant_ptrs.len(),
+                &mut machine_id,
+            );
+            assert_eq!(rc, HEGEL_OK, "new_state_machine failed: rc={}", rc);
+            assert_eq!(machine_id, 0);
+
+            // Drive 25 steps, recording the engine's rule choices. The
+            // engine owns selection (including the per-test-case swarm
+            // subset); the caller would apply rules[index] at each step.
+            let mut overran = false;
+            let mut current_run = 0usize;
+            let mut previous: Option<u64> = None;
+            for _ in 0..25 {
+                let mut index: u64 = u64::MAX;
+                let rc = (a.state_machine_next_rule)(tc, machine_id, &mut index);
+                if rc == HEGEL_E_STOP_TEST {
+                    // HEGEL_E_STOP_TEST — engine exhausted during a shrink
+                    // probe.
+                    overran = true;
+                    break;
+                }
+                assert_eq!(rc, HEGEL_OK, "state_machine_next_rule failed: rc={}", rc);
+                assert!(index < 3, "rule index {} out of range", index);
+                saw_rule_draw = true;
+                current_run = if previous == Some(index) {
+                    current_run + 1
+                } else {
+                    1
+                };
+                previous = Some(index);
+                longest_single_rule_run = longest_single_rule_run.max(current_run);
+            }
+
+            if overran {
+                (a.mark_complete)(tc, CStatus::Overrun, ptr::null());
+            } else {
+                (a.mark_complete)(tc, CStatus::Valid, ptr::null());
+            }
+        }
+
+        assert!(saw_rule_draw, "expected at least one rule selection");
+        // Swarm testing: some test case leaves a single rule enabled, so
+        // every step picks that survivor. Under uniform selection a run of
+        // 15 identical choices among 3 rules is essentially impossible
+        // ((1/3)^14 per starting point); under swarm it shows up within a
+        // 50-case derandomized run.
+        assert!(
+            longest_single_rule_run >= 15,
+            "expected a long single-rule run under swarm selection, longest was {}",
+            longest_single_rule_run
+        );
+
+        let result = (a.run_result)(run);
+        assert!(!result.is_null());
+        assert_eq!(
+            (a.run_result_status)(result),
+            CRunStatus::Passed,
+            "expected to pass"
         );
 
         (a.run_free)(run);

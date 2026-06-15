@@ -67,8 +67,8 @@ macro_rules! invalid_argument {
 }
 pub(crate) use invalid_argument;
 
-/// Raise the appropriate control-flow unwind for the given data source error.
-fn panic_on_data_source_error(e: DataSourceError) -> ! {
+/// Panic with the appropriate sentinel for the given data source error.
+pub(crate) fn panic_on_data_source_error(e: DataSourceError) -> ! {
     match e {
         DataSourceError::StopTest => raise_control(StopTest),
         DataSourceError::Assume => raise_control(AssumeFailed), // nocov
@@ -826,6 +826,7 @@ pub mod labels {
     pub const MAPPED: u64 = 13;
     pub const SAMPLED_FROM: u64 = 14;
     pub const ENUM_VARIANT: u64 = 15;
+    pub const FEATURE_FLAG: u64 = 16;
 }
 
 #[cfg(test)]
