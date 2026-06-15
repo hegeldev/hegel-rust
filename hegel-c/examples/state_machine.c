@@ -26,7 +26,7 @@
 #include "hegel.h"
 
 static const char *RULES[] = { "increment", "decrement", "reset" };
-#define NUM_RULES (sizeof(RULES) / sizeof(RULES[0]))
+#define NUM_RULES (int64_t) (sizeof(RULES) / sizeof(RULES[0])) 
 static const char *INVARIANTS[] = { "non_negative" };
 #define NUM_INVARIANTS (sizeof(INVARIANTS) / sizeof(INVARIANTS[0]))
 
@@ -58,7 +58,7 @@ int main(void) {
         bool overran = false;
         bool bad = false;
         for (int step = 0; step < STEPS && !overran; step++) {
-            uint64_t rule;
+            int64_t rule;
             int rc = hegel_state_machine_next_rule(tc, machine, &rule);
             if (rc != HEGEL_OK) { overran = true; break; }
             if (rule >= NUM_RULES) { bad = true; break; }
