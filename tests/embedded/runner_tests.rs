@@ -175,6 +175,95 @@ fn hegel_run_skips_when_generate_phase_disabled() {
         .run();
 }
 
-// The `#[hegel::reproduce_failure]` replay path (decode a blob, replay it,
-// re-raise or report stale) is covered end-to-end through the public API in
-// tests/test_reproduce_failure.rs.
+// The `#[hegel::reproduce_failure]` replay path through the public API. The
+// end-to-end attribute wiring is also exercised in tests/test_reproduce_failure.rs,
+// but those run in subprocesses (so they don't contribute coverage); these
+// in-process tests cover `drive_blob_replay` and the `Hegel::run` reproduce
+// dispatch directly.
+mod reproduce {
+    use super::*;
+    use crate::ffi::{RunHandle, SettingsHandle};
+
+    /// Property used by the replay tests: fails for any drawn i32 >= 1000.
+    fn failing_property(tc: TestCase) {
+        let n: i32 = tc.draw(crate::generators::integers::<i32>());
+        assert!(n < 1000, "boom: n = {n}");
+    }
+
+    /// Drive the failing property through a real run (via the C ABI) and
+    /// return the reproduce blob the engine attached to the shrunk
+    /// counterexample.
+    fn discover_reproduce_blob() -> String {
+        crate::run_lifecycle::init_panic_hook();
+        let mut test_fn = failing_property;
+        let settings = Settings::new()
+            .test_cases(200)
+            .seed(Some(7))
+            .database(None)
+            .verbosity(Verbosity::Quiet);
+        let c_settings = SettingsHandle::build(&settings, None);
+        let run = RunHandle::start(&c_settings).expect("the engine starts");
+        while let Some(c_tc) = run.next_test_case() {
+            let is_final = c_tc.is_final_replay();
+            crate::run_lifecycle::run_test_case(
+                c_tc,
+                &mut test_fn,
+                is_final,
+                Mode::TestRun,
+                Verbosity::Quiet,
+            );
+        }
+        let result = run.result();
+        assert!(result.failure_count() > 0, "property should have failed");
+        result
+            .failure(0)
+            .expect("a failure")
+            .reproduce_blob
+            .expect("a shrunk failure carries a reproduce blob")
+    }
+
+    /// Drive `hegel.run()` to its failure panic and return the panic message.
+    fn run_panic_message<F: FnMut(TestCase) + std::panic::UnwindSafe>(hegel: Hegel<F>) -> String {
+        let result = std::panic::catch_unwind(|| hegel.run());
+        let payload = result.expect_err("run should panic on a failing replay");
+        payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("")
+            .to_string()
+    }
+
+    #[test]
+    fn hegel_reproduce_failure_replays_regardless_of_phases() {
+        // A blob replay is phase-agnostic: it runs (and surfaces the failure)
+        // even with Phase::Generate disabled.
+        let blob = discover_reproduce_blob();
+        let msg = run_panic_message(
+            Hegel::new(failing_property)
+                .settings(
+                    Settings::new()
+                        .phases([])
+                        .database(None)
+                        .verbosity(Verbosity::Quiet),
+                )
+                .reproduce_failure(blob),
+        );
+        assert!(msg.contains("boom: n ="), "unexpected panic message: {msg}");
+    }
+
+    #[test]
+    fn hegel_reproduce_failure_first_blob_wins() {
+        // Only the first blob replays; later ones are source-level bookkeeping.
+        // Were the second (undecodable) blob replayed instead, the run would
+        // panic with a decode error rather than the property failure.
+        let blob = discover_reproduce_blob();
+        let msg = run_panic_message(
+            Hegel::new(failing_property)
+                .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
+                .reproduce_failure(blob)
+                .reproduce_failure("!!! not a blob !!!"),
+        );
+        assert!(msg.contains("boom: n ="), "unexpected panic message: {msg}");
+    }
+}

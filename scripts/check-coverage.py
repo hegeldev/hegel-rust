@@ -333,8 +333,8 @@ class CoverageData:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def _run_lcov_phase(features: str, output: Path, label: str) -> None:
-    """Run cargo llvm-cov with `features`, emit LCOV to `output`."""
+def _run_lcov_phase(cargo_args: list[str], output: Path, label: str) -> None:
+    """Run `cargo llvm-cov <cargo_args>`, emitting LCOV to `output`."""
     print(f"  Cleaning previous coverage data ({label})...")
     result = subprocess.run(
         ["cargo", "llvm-cov", "clean", "--workspace"],
@@ -349,19 +349,7 @@ def _run_lcov_phase(features: str, output: Path, label: str) -> None:
 
     print(f"  Running tests with coverage ({label})...")
     result = subprocess.run(
-        [
-            "cargo",
-            "llvm-cov",
-            # Measure (and run the tests of) the whole workspace: the engine
-            # now lives in the hegel-c crate, and both its own embedded tests
-            # and hegeltest's suite (which drives it through the C ABI) need to
-            # contribute coverage of hegel-c/src.
-            "--workspace",
-            "--features",
-            features,
-            "--lcov",
-            f"--output-path={output}",
-        ],
+        ["cargo", "llvm-cov", *cargo_args, "--lcov", f"--output-path={output}"],
         capture_output=True,
         text=True,
     )
@@ -436,24 +424,44 @@ def _merge_lcov(inputs: list[Path], output: Path) -> None:
 def run_coverage() -> Path:
     """Run coverage analysis and generate LCOV report.
 
-    A single pass with every additive feature enabled covers the whole
-    library: the native engine, the jiff / chrono / serde_json bindings,
-    the rand extras, and the text / float / etc. surface area.  The raw
-    cargo output is routed through `_merge_lcov` (with a single input) so
-    the on-disk LCOV format matches what the downstream parser expects.
+    Two passes, union-merged, because no single `cargo llvm-cov` invocation
+    covers everything:
+
+    1. `--workspace`, all features. Runs every crate's tests — hegeltest's
+       suite *and* hegel-c's embedded engine tests — and, crucially, reports
+       coverage for workspace members rather than excluding hegel-c as a mere
+       dependency. This is what covers the engine (hegel-c/src), both through
+       hegeltest driving it over the C ABI and through hegel-c's own unit
+       tests. A workspace pass does *not*, however, capture the proc-macros'
+       compile-time execution.
+    2. hegeltest alone (no `--workspace`), all features. Here hegel-macros is
+       an instrumented build-dependency, so the macro code that runs while the
+       test crates compile *is* captured — the proc-macro coverage the
+       workspace pass misses.
+
+    The union covers all three crates: engine from pass 1, macros from pass 2,
+    frontend from both. cargo-llvm-cov emits absolute paths, so the same file
+    keys identically across passes and the records merge.
     """
     print("Running coverage analysis...")
     lcov_path = Path("lcov.info")
-    raw_lcov = Path("lcov-all.info")
+    workspace_lcov = Path("lcov-all.info")
+    macros_lcov = Path("lcov-macros.info")
 
+    features = "rand,antithesis,chrono,jiff,serde_json,serde_json_raw_value"
     _run_lcov_phase(
-        features="rand,antithesis,chrono,jiff,serde_json,serde_json_raw_value",
-        output=raw_lcov,
-        label="all features",
+        cargo_args=["--workspace", "--features", features],
+        output=workspace_lcov,
+        label="workspace, all features",
+    )
+    _run_lcov_phase(
+        cargo_args=["--features", features],
+        output=macros_lcov,
+        label="hegeltest only, for proc-macro coverage",
     )
 
-    print("  Normalising LCOV output...")
-    _merge_lcov([raw_lcov], lcov_path)
+    print("  Merging LCOV output...")
+    _merge_lcov([workspace_lcov, macros_lcov], lcov_path)
     if not lcov_path.exists():
         print("ERROR: lcov.info was not generated", file=sys.stderr)
         sys.exit(1)
