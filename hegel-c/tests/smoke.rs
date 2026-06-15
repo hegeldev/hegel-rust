@@ -11,6 +11,19 @@ use std::ptr;
 use ciborium::Value;
 use libloading::{Library, Symbol};
 
+// ─── Result codes (from hegel.h) ──────────────────────────────────────────────
+
+/// HEGEL_OK from hegel.h.
+const HEGEL_OK: c_int = 0;
+/// HEGEL_E_STOP_TEST from hegel.h.
+const HEGEL_E_STOP_TEST: c_int = -1;
+/// HEGEL_E_ASSUME from hegel.h.
+const HEGEL_E_ASSUME: c_int = -2;
+/// HEGEL_E_INVALID_HANDLE from hegel.h.
+const HEGEL_E_INVALID_HANDLE: c_int = -4;
+/// HEGEL_E_INVALID_ARG from hegel.h.
+const HEGEL_E_INVALID_ARG: c_int = -5;
+
 // ─── Library loading ────────────────────────────────────────────────────────
 
 fn lib_path() -> PathBuf {
@@ -250,7 +263,7 @@ fn libhegel_runs_passing_property() {
                 &mut val_ptr,
                 &mut val_len,
             );
-            assert_eq!(rc, 0, "generate failed: rc={}", rc);
+            assert_eq!(rc, HEGEL_OK, "generate failed: rc={}", rc);
 
             let val_bytes = std::slice::from_raw_parts(val_ptr, val_len);
             let v = decode(val_bytes);
@@ -263,7 +276,7 @@ fn libhegel_runs_passing_property() {
             }
 
             let mc = (a.mark_complete)(tc, CStatus::Valid, ptr::null());
-            assert_eq!(mc, 0);
+            assert_eq!(mc, HEGEL_OK);
         }
         assert!(cases >= 1, "expected at least one test case to run");
 
@@ -284,9 +297,6 @@ fn libhegel_runs_passing_property() {
         (a.settings_free)(s);
     }
 }
-
-/// HEGEL_E_INVALID_ARG from hegel.h.
-const HEGEL_E_INVALID_ARG: c_int = -5;
 
 #[test]
 fn invalid_schema_returns_error_not_abort() {
@@ -379,12 +389,12 @@ fn libhegel_reports_shrunk_failure() {
                 &mut val_ptr,
                 &mut val_len,
             );
-            if rc == -1 {
+            if rc == HEGEL_E_STOP_TEST {
                 // HEGEL_E_STOP_TEST — engine exhausted during a shrink probe.
                 (a.mark_complete)(tc, CStatus::Overrun, ptr::null());
                 continue;
             }
-            assert_eq!(rc, 0, "unexpected generate rc={}", rc);
+            assert_eq!(rc, HEGEL_OK, "unexpected generate rc={}", rc);
 
             let v = decode(std::slice::from_raw_parts(val_ptr, val_len));
             let Value::Integer(i) = v else {
@@ -458,11 +468,11 @@ unsafe fn drive_failing_property(a: &Api, run: *mut u8) {
                 &mut val_len,
             )
         };
-        if rc == -1 {
+        if rc == HEGEL_E_STOP_TEST {
             unsafe { (a.mark_complete)(tc, CStatus::Overrun, ptr::null()) };
             continue;
         }
-        assert_eq!(rc, 0, "unexpected generate rc={}", rc);
+        assert_eq!(rc, HEGEL_OK, "unexpected generate rc={}", rc);
         let v = decode(unsafe { std::slice::from_raw_parts(val_ptr, val_len) });
         let Value::Integer(i) = v else {
             panic!("expected int")
@@ -537,7 +547,7 @@ unsafe fn replay_blob_once(a: &Api, s: *const u8, blob: &CStr) -> i128 {
             &mut val_ptr,
             &mut val_len,
         );
-        assert_eq!(rc, 0, "unexpected generate rc={}", rc);
+        assert_eq!(rc, HEGEL_OK, "unexpected generate rc={}", rc);
         let Value::Integer(i) = decode(std::slice::from_raw_parts(val_ptr, val_len)) else {
             panic!("expected int")
         };
@@ -671,13 +681,13 @@ fn libhegel_pool_primitives_draw_added_variables() {
             // Build a pool and register three variables.
             let mut pool_id: i64 = -1;
             let rc = (a.new_pool)(tc, &mut pool_id);
-            assert_eq!(rc, 0, "new_pool failed: rc={}", rc);
+            assert_eq!(rc, HEGEL_OK, "new_pool failed: rc={}", rc);
 
             let mut added = Vec::new();
             for _ in 0..3 {
                 let mut var_id: i64 = -1;
                 let rc = (a.pool_add)(tc, pool_id, &mut var_id);
-                assert_eq!(rc, 0, "pool_add failed: rc={}", rc);
+                assert_eq!(rc, HEGEL_OK, "pool_add failed: rc={}", rc);
                 added.push(var_id);
             }
             // pool_add hands out a fresh, strictly increasing id each time.
@@ -689,11 +699,11 @@ fn libhegel_pool_primitives_draw_added_variables() {
             // that the same way the other primitives do.
             let mut drawn: i64 = -1;
             let rc = (a.pool_generate)(tc, pool_id, false, &mut drawn);
-            if rc == -1 {
+            if rc == HEGEL_E_STOP_TEST {
                 (a.mark_complete)(tc, CStatus::Overrun, ptr::null());
                 continue;
             }
-            assert_eq!(rc, 0, "pool_generate failed: rc={}", rc);
+            assert_eq!(rc, HEGEL_OK, "pool_generate failed: rc={}", rc);
             assert!(added.contains(&drawn), "drew unknown variable {}", drawn);
             saw_pool_draw = true;
 
@@ -706,10 +716,10 @@ fn libhegel_pool_primitives_draw_added_variables() {
             for _ in 0..3 {
                 let mut v: i64 = -1;
                 let rc = (a.pool_generate)(tc, pool_id, true, &mut v);
-                if rc == -1 {
+                if rc == HEGEL_E_STOP_TEST {
                     break;
                 }
-                assert_eq!(rc, 0, "consuming pool_generate failed: rc={}", rc);
+                assert_eq!(rc, HEGEL_OK, "consuming pool_generate failed: rc={}", rc);
                 assert!(added.contains(&v), "consumed unknown variable {}", v);
                 consumed += 1;
             }
@@ -717,7 +727,7 @@ fn libhegel_pool_primitives_draw_added_variables() {
                 let mut v: i64 = -1;
                 let rc = (a.pool_generate)(tc, pool_id, true, &mut v);
                 assert_eq!(
-                    rc, -2,
+                    rc, HEGEL_E_ASSUME,
                     "expected HEGEL_E_ASSUME on empty pool, got rc={}",
                     rc
                 );
@@ -775,18 +785,18 @@ fn libhegel_primitive_boolean_draws_and_forces() {
             // Forced draws are deterministic regardless of p.
             let mut v = false;
             let rc = (a.primitive_boolean)(tc, 0.5, true, true, &mut v);
-            assert_eq!(rc, 0, "forced-true draw failed: rc={}", rc);
+            assert_eq!(rc, HEGEL_OK, "forced-true draw failed: rc={}", rc);
             assert!(v);
             let rc = (a.primitive_boolean)(tc, 0.5, false, true, &mut v);
-            assert_eq!(rc, 0, "forced-false draw failed: rc={}", rc);
+            assert_eq!(rc, HEGEL_OK, "forced-false draw failed: rc={}", rc);
             assert!(!v);
 
             // Boundary probabilities auto-force without consuming entropy.
             let rc = (a.primitive_boolean)(tc, 0.0, false, false, &mut v);
-            assert_eq!(rc, 0, "p=0 draw failed: rc={}", rc);
+            assert_eq!(rc, HEGEL_OK, "p=0 draw failed: rc={}", rc);
             assert!(!v);
             let rc = (a.primitive_boolean)(tc, 1.0, false, false, &mut v);
-            assert_eq!(rc, 0, "p=1 draw failed: rc={}", rc);
+            assert_eq!(rc, HEGEL_OK, "p=1 draw failed: rc={}", rc);
             assert!(v);
 
             // An unforced fair draw; both outcomes must show up across the
@@ -794,11 +804,11 @@ fn libhegel_primitive_boolean_draws_and_forces() {
             // budget is exhausted mid-shrink, so treat that the same way the
             // other primitives do.
             let rc = (a.primitive_boolean)(tc, 0.5, false, false, &mut v);
-            if rc == -1 {
+            if rc == HEGEL_E_STOP_TEST {
                 (a.mark_complete)(tc, CStatus::Overrun, ptr::null());
                 continue;
             }
-            assert_eq!(rc, 0, "unforced draw failed: rc={}", rc);
+            assert_eq!(rc, HEGEL_OK, "unforced draw failed: rc={}", rc);
             if v {
                 saw_true = true;
             } else {
@@ -849,7 +859,11 @@ fn libhegel_primitive_boolean_rejects_invalid_arguments() {
             // NULL test-case handle is reported as HEGEL_E_INVALID_HANDLE.
             let mut v = false;
             let rc = (a.primitive_boolean)(ptr::null_mut(), 0.5, false, false, &mut v);
-            assert_eq!(rc, -4, "expected HEGEL_E_INVALID_HANDLE, got rc={}", rc);
+            assert_eq!(
+                rc, HEGEL_E_INVALID_HANDLE,
+                "expected HEGEL_E_INVALID_HANDLE, got rc={}",
+                rc
+            );
 
             // Each rejected argument returns HEGEL_E_INVALID_ARG with a
             // diagnostic in last_error_message.
@@ -863,7 +877,7 @@ fn libhegel_primitive_boolean_rejects_invalid_arguments() {
             for (p, forced, has_forced) in invalid {
                 let rc = (a.primitive_boolean)(tc, p, forced, has_forced, &mut v);
                 assert_eq!(
-                    rc, -5,
+                    rc, HEGEL_E_INVALID_ARG,
                     "expected HEGEL_E_INVALID_ARG for p={}, forced={}, has_forced={}",
                     p, forced, has_forced
                 );
@@ -873,12 +887,19 @@ fn libhegel_primitive_boolean_rejects_invalid_arguments() {
 
             // NULL out pointer.
             let rc = (a.primitive_boolean)(tc, 0.5, false, false, ptr::null_mut());
-            assert_eq!(rc, -5, "expected HEGEL_E_INVALID_ARG for null out");
+            assert_eq!(
+                rc, HEGEL_E_INVALID_ARG,
+                "expected HEGEL_E_INVALID_ARG for null out"
+            );
 
             // Argument errors do not poison the test case: a valid draw
             // afterwards still succeeds.
             let rc = (a.primitive_boolean)(tc, 0.5, false, false, &mut v);
-            assert_eq!(rc, 0, "valid draw after rejections failed: rc={}", rc);
+            assert_eq!(
+                rc, HEGEL_OK,
+                "valid draw after rejections failed: rc={}",
+                rc
+            );
 
             (a.mark_complete)(tc, CStatus::Valid, ptr::null());
         }
@@ -1001,11 +1022,11 @@ fn libhegel_replays_persisted_failure_with_same_database_key() {
                 &mut val_ptr,
                 &mut val_len,
             );
-            if rc == -1 {
+            if rc == HEGEL_E_STOP_TEST {
                 (a.mark_complete)(tc, CStatus::Overrun, ptr::null());
                 continue;
             }
-            assert_eq!(rc, 0);
+            assert_eq!(rc, HEGEL_OK);
             let v = decode(std::slice::from_raw_parts(val_ptr, val_len));
             let Value::Integer(i) = v else {
                 panic!("expected integer")
@@ -1049,11 +1070,11 @@ fn libhegel_replays_persisted_failure_with_same_database_key() {
                 &mut val_ptr,
                 &mut val_len,
             );
-            if rc == -1 {
+            if rc == HEGEL_E_STOP_TEST {
                 (a.mark_complete)(tc, CStatus::Overrun, ptr::null());
                 continue;
             }
-            assert_eq!(rc, 0);
+            assert_eq!(rc, HEGEL_OK);
             let v = decode(std::slice::from_raw_parts(val_ptr, val_len));
             let Value::Integer(i) = v else {
                 panic!("expected integer")
@@ -1120,7 +1141,7 @@ fn health_check_surfaces_as_run_error() {
                 &mut val_len,
             );
             let _ = (val_ptr, val_len);
-            if rc == -1 {
+            if rc == HEGEL_E_STOP_TEST {
                 (a.mark_complete)(tc, CStatus::Overrun, ptr::null());
             } else {
                 (a.mark_complete)(tc, CStatus::Invalid, ptr::null());
@@ -1295,11 +1316,11 @@ fn run_shrinker_sweep(
                     &mut val_ptr,
                     &mut val_len,
                 );
-                if rc == -1 {
+                if rc == HEGEL_E_STOP_TEST {
                     (a.mark_complete)(tc, CStatus::Overrun, ptr::null());
                     continue;
                 }
-                assert_eq!(rc, 0);
+                assert_eq!(rc, HEGEL_OK);
                 let v = decode(std::slice::from_raw_parts(val_ptr, val_len));
                 let Value::Integer(i) = v else {
                     panic!("expected integer")
