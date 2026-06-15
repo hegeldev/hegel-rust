@@ -398,11 +398,6 @@ pub(crate) fn step_choice(node: &ChoiceNode, delta: i128) -> Option<ChoiceValue>
     }
 }
 
-// Gated out in hegel-c: every test in this module drives the engine through
-// the frontend-only `run_test_case` / `TestCase` / `crate::generators` API,
-// which lives in the `hegeltest` crate and is deliberately not copied here.
-// These tests still run in hegeltest, whose sources are unchanged. See the
-// hegel-c standalone-engine refactor notes.
-#[cfg(all(test, any()))]
+#[cfg(test)]
 #[path = "../../tests/embedded/native/targeting_tests.rs"]
 mod tests;

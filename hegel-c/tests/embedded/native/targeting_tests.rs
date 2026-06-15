@@ -276,20 +276,68 @@ fn step_choice_rejects_mismatched_value_and_kind() {
 // tests in `tests/test_targeting.rs` cover the *behaviour* (targeting
 // finds optima, doesn't exceed budget, etc.) but they sample randomly
 // against the RNG and don't reliably exercise every defensive branch.
+//
+// Each test body draws directly from the engine's `DataSource` (the same
+// interface the C ABI exposes) rather than the `hegeltest` frontend's
+// `TestCase`/generators, which live in the other crate. A `boolean` draw is
+// one weighted-0.5 boolean choice and an `integer` draw is one
+// `draw_integer` choice, so the realised choice sequences are identical to
+// the equivalent `gs::booleans()` / `gs::integers().min_value().max_value()`
+// draws — the structure the hill-climber reasons about is the same.
 
-use crate::TestCase;
-use crate::generators::{self as gs};
+use crate::backend::{DataSource, Failure, TestCaseResult};
 use crate::native::test_runner::Engine;
-use crate::run_lifecycle::run_test_case;
-use crate::settings::{Mode, Verbosity};
+use ciborium::Value;
 use std::collections::HashMap as StdHashMap;
 
-fn run_optimise<F>(start: Vec<ChoiceValue>, start_score: f64, mut test_fn: F)
+fn bool_schema() -> Value {
+    Value::Map(vec![(
+        Value::Text("type".into()),
+        Value::Text("boolean".into()),
+    )])
+}
+
+fn int_schema(min: i64, max: i64) -> Value {
+    Value::Map(vec![
+        (Value::Text("type".into()), Value::Text("integer".into())),
+        (Value::Text("min_value".into()), Value::Integer(min.into())),
+        (Value::Text("max_value".into()), Value::Integer(max.into())),
+    ])
+}
+
+/// A drawn boolean, or `Err(())` if the case overran / was aborted.
+fn draw_bool(ds: &dyn DataSource) -> Result<bool, ()> {
+    match ds.generate(&bool_schema()) {
+        Ok(Value::Bool(b)) => Ok(b),
+        Ok(other) => panic!("expected boolean, got {other:?}"),
+        Err(_) => Err(()),
+    }
+}
+
+/// A drawn integer in `[min, max]`, or `Err(())` if the case overran.
+fn draw_int(ds: &dyn DataSource, min: i64, max: i64) -> Result<i64, ()> {
+    match ds.generate(&int_schema(min, max)) {
+        Ok(Value::Integer(i)) => Ok(i128::from(i) as i64),
+        Ok(other) => panic!("expected integer, got {other:?}"),
+        Err(_) => Err(()),
+    }
+}
+
+fn interesting() -> TestCaseResult {
+    TestCaseResult::Interesting(Failure {
+        panic_message: "boom".to_string(),
+        origin: "Panic at <targeting-test>".to_string(),
+        reproduce_blob: None,
+    })
+}
+
+fn run_optimise<F>(start: Vec<ChoiceValue>, start_score: f64, mut body: F)
 where
-    F: FnMut(TestCase),
+    F: FnMut(&dyn DataSource) -> TestCaseResult,
 {
-    let mut run_case = move |ds: Box<dyn crate::backend::DataSource + Send + Sync>| {
-        run_test_case(ds, &mut test_fn, false, Mode::TestRun, Verbosity::Normal);
+    let mut run_case = move |ds: Box<dyn DataSource + Send + Sync>| {
+        let result = body(&*ds);
+        ds.mark_complete(&result);
     };
     let settings = crate::Settings::new().database(None).seed(Some(0xc0ffee));
     let mut engine = Engine::new(&settings, None, &mut run_case);
@@ -324,82 +372,104 @@ fn hill_climb_resize_restart_and_already_examined_skip() {
         ChoiceValue::Boolean(false),
         ChoiceValue::Boolean(false),
     ];
-    run_optimise(start, 4.0, |tc| {
-        let _seed: bool = tc.draw(gs::booleans());
-        let m: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(20));
-        let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(20));
-        for _ in 0..n {
-            let _ = tc.draw(gs::booleans());
-        }
-        tc.target((m + n) as f64);
+    run_optimise(start, 4.0, |ds| {
+        let body = || -> Result<TestCaseResult, ()> {
+            draw_bool(ds)?; // seed
+            let m = draw_int(ds, 0, 20)?;
+            let n = draw_int(ds, 0, 20)?;
+            for _ in 0..n {
+                draw_bool(ds)?;
+            }
+            ds.target_observation((m + n) as f64, "");
+            Ok(TestCaseResult::Valid)
+        };
+        body().unwrap_or(TestCaseResult::Overrun)
     });
 }
 
 /// Drives `try_replace`'s `!strict && grew` rejection: a non-trailing
-/// boolean controls a downstream loop, and `tc.target(1.0)` returns a
-/// constant score so any flip is a lateral move. Flipping `false → true`
-/// adds three integer draws to the body, which `try_replace` rejects as
-/// a length-growing lateral move.
+/// boolean controls a downstream loop, and a constant target score makes
+/// any flip a lateral move. Flipping `false → true` adds three integer
+/// draws to the body, which `try_replace` rejects as a length-growing
+/// lateral move.
 #[test]
 fn hill_climb_rejects_lateral_grow() {
     let start = vec![ChoiceValue::Boolean(false), ChoiceValue::Boolean(false)];
-    run_optimise(start, 1.0, |tc| {
-        let _seed: bool = tc.draw(gs::booleans());
-        let big: bool = tc.draw(gs::booleans());
-        if big {
-            for _ in 0..3 {
-                let _ = tc.draw(gs::integers::<i64>().min_value(0).max_value(10));
+    run_optimise(start, 1.0, |ds| {
+        let body = || -> Result<TestCaseResult, ()> {
+            draw_bool(ds)?; // seed
+            let big = draw_bool(ds)?;
+            if big {
+                for _ in 0..3 {
+                    draw_int(ds, 0, 10)?;
+                }
             }
-        }
-        tc.target(1.0);
+            ds.target_observation(1.0, "");
+            Ok(TestCaseResult::Valid)
+        };
+        body().unwrap_or(TestCaseResult::Overrun)
     });
 }
 
 /// Drives `try_replace`'s `trial.status < Status::Valid` rejection: an
-/// `assume()` rules out a specific integer value, so any `find_integer`
+/// assumption rules out a specific integer value, so any `find_integer`
 /// probe that lands on it comes back with `Status::Invalid` and gets
 /// short-circuited.
 #[test]
 fn hill_climb_rejects_invalid_trial_status() {
     let start = vec![ChoiceValue::Integer(BigInt::from(6))];
-    run_optimise(start, -1.0, |tc| {
-        let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(20));
-        tc.assume(n != 7);
-        // Peak score at n=7, but n=7 is filtered; the climber walks
-        // toward 7, lands on 7 via `find_integer`'s linear probe, and
-        // hits the assume() — `trial.status == Invalid`, rejected.
-        tc.target(-((n - 7).saturating_abs() as f64));
+    run_optimise(start, -1.0, |ds| {
+        let n = match draw_int(ds, 0, 20) {
+            Ok(n) => n,
+            Err(()) => return TestCaseResult::Overrun,
+        };
+        // Peak score at n=7, but n=7 is filtered; the climber walks toward 7,
+        // lands on 7 via `find_integer`'s linear probe, and the assumption
+        // fails — `trial.status == Invalid`, rejected.
+        if n == 7 {
+            return TestCaseResult::Invalid;
+        }
+        ds.target_observation(-((n - 7).saturating_abs() as f64), "");
+        TestCaseResult::Valid
     });
 }
 
 /// Drives `hill_climb`'s `trial.status < Status::Valid` early-return when
-/// the *initial* replay of `start_choices` itself comes back non-Valid.
-/// For deterministic tests this is unreachable (a recorded Valid run
-/// replays Valid), but with a hand-constructed `TargetingState` whose
-/// "best" the test body rejects via `assume()` we can drive this branch
-/// explicitly.
+/// the *initial* replay of `start_choices` itself comes back non-Valid:
+/// the recorded "best" is `n = 7`, which the body rejects.
 #[test]
 fn hill_climb_returns_zero_when_initial_replay_invalid() {
     let start = vec![ChoiceValue::Integer(BigInt::from(7))];
-    run_optimise(start, 0.0, |tc| {
-        let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(20));
-        tc.assume(n != 7);
-        tc.target(n as f64);
+    run_optimise(start, 0.0, |ds| {
+        let n = match draw_int(ds, 0, 20) {
+            Ok(n) => n,
+            Err(()) => return TestCaseResult::Overrun,
+        };
+        if n == 7 {
+            return TestCaseResult::Invalid;
+        }
+        ds.target_observation(n as f64, "");
+        TestCaseResult::Valid
     });
 }
 
-/// Drives `run_trial`'s `Status::Interesting` branch — the bug-found
-/// path where targeting promotes a perturbation into the
-/// `interesting` map for the surrounding shrinker to pick up. Starting
-/// from `n = 6` (score `-1`), `find_integer` probes `n = 7` in the +1
-/// direction; the test body's `assert_ne!(n, 7)` panics there, so the
-/// trial comes back `Status::Interesting`.
+/// Drives `run_trial`'s `Status::Interesting` branch — the bug-found path
+/// where targeting promotes a perturbation into the `interesting` map for
+/// the surrounding shrinker to pick up. Starting from `n = 6` (score `-1`),
+/// `find_integer` probes `n = 7` in the +1 direction; the body reports
+/// INTERESTING there.
 #[test]
 fn run_trial_records_interesting_result_into_ctx() {
     let start = vec![ChoiceValue::Integer(BigInt::from(6))];
-    run_optimise(start, -1.0, |tc| {
-        let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(20));
-        assert_ne!(n, 7);
-        tc.target(-((n - 7).saturating_abs() as f64));
+    run_optimise(start, -1.0, |ds| {
+        let n = match draw_int(ds, 0, 20) {
+            Ok(n) => n,
+            Err(()) => return TestCaseResult::Overrun,
+        };
+        if n == 7 {
+            return interesting();
+        }
+        ds.target_observation(-((n - 7).saturating_abs() as f64), "");
+        TestCaseResult::Valid
     });
 }
