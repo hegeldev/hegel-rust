@@ -243,6 +243,27 @@ impl DataSource for NativeDataSource {
         })
     }
 
+    fn primitive_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError> {
+        self.with_ntc(|ntc| {
+            if !(0.0..=1.0).contains(&p) {
+                return Err(EngineError::InvalidArgument(format!(
+                    "primitive_boolean(p = {p}) requires a probability in [0.0, 1.0]"
+                )));
+            }
+            if forced == Some(true) && p == 0.0 {
+                return Err(EngineError::InvalidArgument(
+                    "primitive_boolean: cannot force true when p = 0.0".to_string(),
+                ));
+            }
+            if forced == Some(false) && p == 1.0 {
+                return Err(EngineError::InvalidArgument(
+                    "primitive_boolean: cannot force false when p = 1.0".to_string(),
+                ));
+            }
+            ntc.weighted(p, forced)
+        })
+    }
+
     fn new_pool(&self) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
             let pool_id = ntc.variable_pools.len() as i64;

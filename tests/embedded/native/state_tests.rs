@@ -501,6 +501,17 @@ fn weighted_with_p_one_returns_true_without_consulting_rng() {
     assert!(tc.nodes.last().unwrap().was_forced);
 }
 
+#[test]
+fn weighted_with_explicit_forced_records_forced_node() {
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let v = tc.weighted(0.5, Some(true)).ok().unwrap();
+    assert!(v);
+    assert!(tc.nodes.last().unwrap().was_forced);
+    let v = tc.weighted(0.5, Some(false)).ok().unwrap();
+    assert!(!v);
+    assert!(tc.nodes.last().unwrap().was_forced);
+}
+
 // ── NativeTestCase::weighted notifies the observer on draw ──────────────
 //
 // The observer hook in `weighted` fires after the boolean is recorded;

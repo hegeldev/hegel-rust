@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.19.0 - 2026-06-15
+
+This release adds `primitive_boolean`, a weighted boolean draw with an optional forced value
+and exposes it in the libhegel C ABI.
+
 ## 0.18.0 - 2026-06-12
 
 This release improves how failing runs are reported, separates "the
