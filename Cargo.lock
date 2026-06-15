@@ -418,8 +418,18 @@ version = "0.18.0"
 dependencies = [
  "cbindgen",
  "ciborium",
- "hegeltest",
+ "crc32fast",
+ "ctor",
+ "dashu-int",
+ "insta",
  "libloading",
+ "miniz_oxide",
+ "parking_lot",
+ "rand",
+ "regex",
+ "rustc-hash",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

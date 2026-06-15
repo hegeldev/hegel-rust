@@ -34,9 +34,34 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 use ciborium::Value;
-use hegel::backend::{DataSource, DataSourceError, Failure, TestCaseResult, TestRunResult};
-use hegel::embed::{data_source_for_blob, run_native};
-use hegel::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};
+
+// The engine modules are copied in-crate but expose no C-ABI surface — every
+// `hegel_*` / `HEGEL_*` symbol in the generated header is defined directly in
+// this file. Tell cbindgen not to scan them, so their `pub` engine constants
+// and types don't leak into hegel.h (they live in a separate crate's scope as
+// far as the public C API is concerned).
+/// cbindgen:ignore
+mod antithesis_detect;
+/// cbindgen:ignore
+mod backend;
+/// cbindgen:ignore
+mod cbor_utils;
+/// cbindgen:ignore
+mod control;
+/// cbindgen:ignore
+mod embed;
+/// cbindgen:ignore
+mod native;
+/// cbindgen:ignore
+mod panic;
+/// cbindgen:ignore
+mod settings;
+/// cbindgen:ignore
+mod unicodedata;
+
+use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult, TestRunResult};
+use crate::embed::{data_source_for_blob, run_native};
+use crate::settings::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};
 
 // ─── Error codes ────────────────────────────────────────────────────────────
 //
@@ -791,7 +816,7 @@ pub unsafe extern "C" fn hegel_run_start(settings: *const HegelSettings) -> *mut
                 Ok(Err(run_error)) => Err(run_error.to_string()),
                 Err(payload) => Err(format!(
                     "Engine panic: {}",
-                    hegel::run_lifecycle::panic_message(&payload)
+                    crate::panic::panic_message(&payload)
                 )),
             };
             let _ = to_caller.send(WorkerMessage::Done(result));
