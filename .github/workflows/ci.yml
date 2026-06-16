@@ -619,8 +619,8 @@ jobs:
   # read the per-asset SHA-256 digests off this release, so we only dispatch
   # once every libhegel binary is confirmed uploaded. `fail-fast: false` keeps a
   # dispatch failure for one repo from cancelling the others.
-  notify-downstream:
-    name: notify ${{ matrix.repo }}
+  bump-libhegel:
+    name: bump-libhegel
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.skipped != 'true'
     needs: [release, release-binaries-verify]
     runs-on: ubuntu-latest
