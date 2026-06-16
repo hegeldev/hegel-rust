@@ -39,30 +39,34 @@ static const uint8_t IPV4_TYPE_SCHEMA[] = {
 };
 
 int main(void) {
+    hegel_context_t *ctx = hegel_context_new();
+
     hegel_settings_t *s = hegel_settings_new();
     hegel_settings_test_cases(s, 1);
-    hegel_settings_database(s, "");
+    hegel_settings_database(ctx, s, "");
     hegel_settings_derandomize(s, true);
     hegel_settings_seed(s, 1, true);
 
-    hegel_run_t *run = hegel_run_start(s);
+    hegel_run_t *run = hegel_run_start(ctx, s);
     if (!run) {
-        fprintf(stderr, "hegel_run_start failed: %s\n", hegel_last_error_message());
+        fprintf(stderr, "hegel_run_start failed: %s\n", hegel_context_last_error(ctx));
         hegel_settings_free(s);
+        hegel_context_free(ctx);
         return 1;
     }
 
-    hegel_test_case_t *tc = hegel_next_test_case(run);
+    hegel_test_case_t *tc = hegel_next_test_case(ctx, run);
     if (!tc) {
         fprintf(stderr, "expected a test case\n");
         hegel_run_free(run);
         hegel_settings_free(s);
+        hegel_context_free(ctx);
         return 1;
     }
 
     const uint8_t *value;
     size_t value_len;
-    int rc = hegel_generate(tc, IPV4_TYPE_SCHEMA, sizeof(IPV4_TYPE_SCHEMA), &value, &value_len);
+    int rc = hegel_generate(ctx, tc, IPV4_TYPE_SCHEMA, sizeof(IPV4_TYPE_SCHEMA), &value, &value_len);
 
     int ok = 1;
     if (rc != HEGEL_E_INVALID_ARG) {
@@ -70,7 +74,7 @@ int main(void) {
                 HEGEL_E_INVALID_ARG, rc);
         ok = 0;
     }
-    const char *err = hegel_last_error_message();
+    const char *err = hegel_context_last_error(ctx);
     if (err[0] == '\0') {
         fprintf(stderr, "expected a diagnostic message for the invalid schema\n");
         ok = 0;
@@ -78,8 +82,9 @@ int main(void) {
         printf("invalid schema correctly rejected: rc=%d, message=\"%s\"\n", rc, err);
     }
 
-    hegel_mark_complete(tc, HEGEL_STATUS_INVALID, NULL);
+    hegel_mark_complete(ctx, tc, HEGEL_STATUS_INVALID, NULL);
     hegel_run_free(run);
     hegel_settings_free(s);
+    hegel_context_free(ctx);
     return ok ? 0 : 1;
 }

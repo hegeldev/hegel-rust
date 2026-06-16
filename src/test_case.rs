@@ -75,8 +75,8 @@ pub(crate) use invalid_argument;
 /// - `HEGEL_E_STOP_TEST` — the engine ran out of data for this case.
 /// - `HEGEL_E_ASSUME` — the engine rejected the draw (an assumption failed).
 /// - `HEGEL_E_INVALID_ARG` — a caller-supplied argument (typically a
-///   generator's schema) was semantically invalid; the diagnostic is in the
-///   thread-local last-error, read synchronously here.
+///   generator's schema) was semantically invalid; the diagnostic is read
+///   synchronously from this thread's libhegel error context.
 /// - anything else — an engine/framework invariant we don't expect on the hot
 ///   path; treat it as an internal error rather than a shrinkable failure.
 #[track_caller]

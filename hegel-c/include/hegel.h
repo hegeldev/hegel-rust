@@ -32,7 +32,7 @@
 
 /*
  The underlying engine reported an error. See
- `hegel_last_error_message()` for the diagnostic.
+ `hegel_context_last_error()` for the diagnostic.
  */
 #define HEGEL_E_BACKEND -3
 
@@ -45,7 +45,7 @@
 /*
  An argument other than a handle was invalid — NULL where a value was
  required, malformed CBOR, non-UTF-8 string, etc. See
- `hegel_last_error_message()` for specifics.
+ `hegel_context_last_error()` for specifics.
  */
 #define HEGEL_E_INVALID_ARG -5
 
@@ -64,7 +64,7 @@
 /*
  An internal invariant failed inside libhegel (e.g. CBOR
  re-serialisation). Should not happen in practice; please file a
- bug. See `hegel_last_error_message()` for the diagnostic.
+ bug. See `hegel_context_last_error()` for the diagnostic.
  */
 #define HEGEL_E_INTERNAL -8
 
@@ -306,6 +306,28 @@ typedef enum {
 } hegel_run_status_t;
 
 /*
+ Opaque error-reporting context.
+
+ libhegel records the diagnostic for a failed call on a context the caller
+ supplies, rather than in thread-local state. Thread-local error buffers
+ are ill-defined under runtimes (e.g. Go) that migrate a goroutine between
+ OS threads mid-call, so the message could be written on one thread and
+ read on another; an explicit context sidesteps that entirely.
+
+ Create one with `hegel_context_new`, pass it as the first argument to
+ every fallible `hegel_*` call, read the most recent message with
+ `hegel_context_last_error`, and free it with `hegel_context_free`. A
+ context is cheap; the expected usage is one per test (or per thread).
+
+ A single context must not be used concurrently from multiple threads —
+ each fallible call overwrites the stored message, so sharing one across
+ threads is a data race and unsupported. Passing `NULL` wherever a context
+ is accepted is allowed and simply opts out of error messages: the call
+ still returns its usual error code, there is just nothing to read back.
+ */
+typedef struct hegel_context_t hegel_context_t;
+
+/*
  One distinct failure surfaced by the run. The strings are owned by
  the parent `hegel_run_result_t`; reading them via
  `hegel_failure_panic_message` / `_origin` returns `const char*`
@@ -364,6 +386,29 @@ typedef struct hegel_test_case_t hegel_test_case_t;
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+/*
+ Allocate a new error-reporting context initialised with an empty message.
+ Never returns NULL. Must be paired with a `hegel_context_free` call.
+ */
+hegel_context_t *hegel_context_new(void);
+
+/*
+ Free a context previously returned by `hegel_context_new`. Safe to call
+ with NULL (no-op).
+ */
+void hegel_context_free(hegel_context_t *ctx);
+
+/*
+ Most recent error message recorded on `ctx`, or the empty string if the
+ most recent call taking this context succeeded. Returns NULL only when
+ `ctx` itself is NULL.
+
+ The returned pointer borrows `ctx`'s internal buffer and is invalidated by
+ the next libhegel call that takes the same `ctx` — copy the bytes before
+ making another such call.
+ */
+const char *hegel_context_last_error(const hegel_context_t *ctx);
 
 /*
  Allocate a new settings handle initialised with libhegel's defaults
@@ -445,13 +490,13 @@ void hegel_settings_report_multiple_failures(hegel_settings_t *s, bool yes);
  - Otherwise → use the directory at `database` as the database root.
    The directory is created lazily.
  */
-void hegel_settings_database(hegel_settings_t *s, const char *database);
+void hegel_settings_database(hegel_context_t *ctx, hegel_settings_t *s, const char *database);
 
 /*
  Set the database key used to scope stored / replayed examples for this run.
  `key = NULL` clears it (the default).
  */
-void hegel_settings_database_key(hegel_settings_t *s, const char *key);
+void hegel_settings_database_key(hegel_context_t *ctx, hegel_settings_t *s, const char *key);
 
 /*
  Enable a specific set of phases via a `HEGEL_PHASE_*` bitmask.
@@ -479,10 +524,10 @@ void hegel_settings_suppress_health_check(hegel_settings_t *s, uint32_t checks);
  settings it needs.
 
  Returns NULL on failure with a diagnostic in
- `hegel_last_error_message`. The returned handle must be freed with
+ `hegel_context_last_error`. The returned handle must be freed with
  `hegel_run_free`.
  */
-hegel_run_t *hegel_run_start(const hegel_settings_t *settings);
+hegel_run_t *hegel_run_start(hegel_context_t *ctx, const hegel_settings_t *settings);
 
 /*
  Block until the engine produces the next test case, returning a
@@ -490,24 +535,24 @@ hegel_run_t *hegel_run_start(const hegel_settings_t *settings);
 
  The caller must complete the previous test case (via
  `hegel_mark_complete`) before requesting the next one — otherwise
- this returns NULL and sets `hegel_last_error_message`.
+ this returns NULL and sets `hegel_context_last_error`.
 
  Returns NULL when the run is finished; call `hegel_run_result` to
- read the outcome. A NULL with `hegel_last_error_message` set means
+ read the outcome. A NULL with `hegel_context_last_error` set means
  something went wrong (engine crash, caller misuse) rather than
  normal completion.
  */
-hegel_test_case_t *hegel_next_test_case(hegel_run_t *run);
+hegel_test_case_t *hegel_next_test_case(hegel_context_t *ctx, hegel_run_t *run);
 
 /*
  Return the aggregated result of a finished run, borrowed from the
  parent `hegel_run_t`. Returns NULL with
- `hegel_last_error_message` set if the run hasn't finished yet
+ `hegel_context_last_error` set if the run hasn't finished yet
  (`hegel_next_test_case` has not yet returned NULL on this run).
 
  The pointer is valid until `hegel_run_free`.
  */
-const hegel_run_result_t *hegel_run_result(hegel_run_t *run);
+const hegel_run_result_t *hegel_run_result(hegel_context_t *ctx, hegel_run_t *run);
 
 /*
  Free a run handle and its result. Safe to call with NULL.
@@ -535,13 +580,15 @@ void hegel_run_free(hegel_run_t *run);
  overruns. `hegel_test_case_is_final_replay` reports true: the replayed
  example *is* the counterexample.
 
- Returns NULL with a diagnostic in `hegel_last_error_message` if `s` or
+ Returns NULL with a diagnostic in `hegel_context_last_error` if `s` or
  `blob` is NULL, or if `blob` is not a valid failure blob (corrupt, or
  from an incompatible Hegel version). The returned handle is owned by
  the **caller** — unlike test cases from `hegel_next_test_case`, it must
  be released with `hegel_test_case_free`.
  */
-hegel_test_case_t *hegel_test_case_from_blob(const hegel_settings_t *s, const char *blob);
+hegel_test_case_t *hegel_test_case_from_blob(hegel_context_t *ctx,
+                                             const hegel_settings_t *s,
+                                             const char *blob);
 
 /*
  Free a standalone test case previously returned by
@@ -552,9 +599,9 @@ hegel_test_case_t *hegel_test_case_from_blob(const hegel_settings_t *s, const ch
  `hegel_next_test_case` — those are borrowed from the parent
  `hegel_run_t` and are released by `hegel_run_free`. Passing one here is
  detected (while the run is still alive) and refused, with a diagnostic
- in `hegel_last_error_message`.
+ in `hegel_context_last_error`.
  */
-void hegel_test_case_free(hegel_test_case_t *tc);
+void hegel_test_case_free(hegel_context_t *ctx, hegel_test_case_t *tc);
 
 /*
  Draw a value from the test case's data source, using the
@@ -572,9 +619,10 @@ void hegel_test_case_free(hegel_test_case_t *tc);
  call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
  Returns `HEGEL_E_INVALID_ARG` on malformed schema, NULL outputs, or
  other argument errors; the diagnostic is in
- `hegel_last_error_message`.
+ `hegel_context_last_error`.
  */
-int hegel_generate(hegel_test_case_t *tc,
+int hegel_generate(hegel_context_t *ctx,
+                   hegel_test_case_t *tc,
                    const uint8_t *schema_cbor,
                    size_t schema_len,
                    const uint8_t **out_value_cbor,
@@ -586,14 +634,14 @@ int hegel_generate(hegel_test_case_t *tc,
  `hegel_stop_span(tc, false)` call when the structure is complete.
  `label` is one of the `HEGEL_LABEL_*` constants.
  */
-int hegel_start_span(hegel_test_case_t *tc, uint64_t label);
+int hegel_start_span(hegel_context_t *ctx, hegel_test_case_t *tc, uint64_t label);
 
 /*
  Close the most-recently opened span. Pass `discard = true` to mark
  the span as rejected (e.g. a `filter` predicate didn't hold and the
  engine should retry from before the span opened).
  */
-int hegel_stop_span(hegel_test_case_t *tc, bool discard);
+int hegel_stop_span(hegel_context_t *ctx, hegel_test_case_t *tc, bool discard);
 
 /*
  Start an engine-managed variable-length collection. The engine
@@ -605,7 +653,8 @@ int hegel_stop_span(hegel_test_case_t *tc, bool discard);
  and returns `HEGEL_OK`. The id is opaque; pass it to subsequent
  `hegel_collection_more` / `hegel_collection_reject` calls.
  */
-int hegel_new_collection(hegel_test_case_t *tc,
+int hegel_new_collection(hegel_context_t *ctx,
+                         hegel_test_case_t *tc,
                          uint64_t min_size,
                          uint64_t max_size,
                          int64_t *out_collection_id);
@@ -616,7 +665,10 @@ int hegel_new_collection(hegel_test_case_t *tc,
  `HEGEL_OK`. Call in a loop until `*out_more` is `false`, drawing
  the next element each time.
  */
-int hegel_collection_more(hegel_test_case_t *tc, int64_t collection_id, bool *out_more);
+int hegel_collection_more(hegel_context_t *ctx,
+                          hegel_test_case_t *tc,
+                          int64_t collection_id,
+                          bool *out_more);
 
 /*
  Tell the engine the last element it produced for this collection
@@ -624,7 +676,10 @@ int hegel_collection_more(hegel_test_case_t *tc, int64_t collection_id, bool *ou
  should try a different one. `why` is an optional human-readable
  rejection reason (NULL is allowed).
  */
-int hegel_collection_reject(hegel_test_case_t *tc, int64_t collection_id, const char *why);
+int hegel_collection_reject(hegel_context_t *ctx,
+                            hegel_test_case_t *tc,
+                            int64_t collection_id,
+                            const char *why);
 
 /*
  Create a new engine-managed *variable pool* for stateful testing.
@@ -639,7 +694,7 @@ int hegel_collection_reject(hegel_test_case_t *tc, int64_t collection_id, const 
  `HEGEL_OK`. The id is opaque; pass it to subsequent `hegel_pool_add`
  / `hegel_pool_generate` calls on the *same* test case.
  */
-int hegel_new_pool(hegel_test_case_t *tc, int64_t *out_pool_id);
+int hegel_new_pool(hegel_context_t *ctx, hegel_test_case_t *tc, int64_t *out_pool_id);
 
 /*
  Register a new variable in the pool. The engine assigns it a fresh
@@ -649,7 +704,10 @@ int hegel_new_pool(hegel_test_case_t *tc, int64_t *out_pool_id);
  returns `HEGEL_OK`. `pool_id` must be an id returned by
  `hegel_new_pool` on this test case.
  */
-int hegel_pool_add(hegel_test_case_t *tc, int64_t pool_id, int64_t *out_variable_id);
+int hegel_pool_add(hegel_context_t *ctx,
+                   hegel_test_case_t *tc,
+                   int64_t pool_id,
+                   int64_t *out_variable_id);
 
 /*
  Draw a variable id from the pool, letting the engine choose (and
@@ -664,7 +722,8 @@ int hegel_pool_add(hegel_test_case_t *tc, int64_t pool_id, int64_t *out_variable
  only draw when it knows it has added at least one variable) or treat
  it like any other budget-exhaustion outcome.
  */
-int hegel_pool_generate(hegel_test_case_t *tc,
+int hegel_pool_generate(hegel_context_t *ctx,
+                        hegel_test_case_t *tc,
                         int64_t pool_id,
                         bool consume,
                         int64_t *out_variable_id);
@@ -685,7 +744,8 @@ int hegel_pool_generate(hegel_test_case_t *tc,
  Returns `HEGEL_E_INVALID_ARG` if `num_rules` is zero, or on null /
  non-UTF-8 names.
  */
-int hegel_new_state_machine(hegel_test_case_t *tc,
+int hegel_new_state_machine(hegel_context_t *ctx,
+                            hegel_test_case_t *tc,
                             const char *const *rule_names,
                             size_t num_rules,
                             const char *const *invariant_names,
@@ -707,7 +767,8 @@ int hegel_new_state_machine(hegel_test_case_t *tc,
  (the caller should abort the body and call `hegel_mark_complete`
  with `HEGEL_STATUS_OVERRUN`).
  */
-int hegel_state_machine_next_rule(hegel_test_case_t *tc,
+int hegel_state_machine_next_rule(hegel_context_t *ctx,
+                                  hegel_test_case_t *tc,
                                   int64_t state_machine_id,
                                   int64_t *out_rule_index);
 
@@ -728,9 +789,10 @@ int hegel_state_machine_next_rule(hegel_test_case_t *tc,
  body and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
  Returns `HEGEL_E_INVALID_ARG` for a NULL `out_value`, a `p` outside
  `[0.0, 1.0]` (including NaN), or a contradictory forced value; the
- diagnostic is in `hegel_last_error_message`.
+ diagnostic is in `hegel_context_last_error`.
  */
-int hegel_primitive_boolean(hegel_test_case_t *tc,
+int hegel_primitive_boolean(hegel_context_t *ctx,
+                            hegel_test_case_t *tc,
                             double p,
                             bool forced,
                             bool has_forced,
@@ -745,11 +807,11 @@ int hegel_primitive_boolean(hegel_test_case_t *tc,
  and valid UTF-8.
 
  Returns `HEGEL_E_INVALID_ARG` (with a diagnostic in
- `hegel_last_error_message`) if `value` is not finite, or if `label`
+ `hegel_context_last_error`) if `value` is not finite, or if `label`
  has already been observed on this test case — each label may be
  recorded at most once per case.
  */
-int hegel_target(hegel_test_case_t *tc, double value, const char *label);
+int hegel_target(hegel_context_t *ctx, hegel_test_case_t *tc, double value, const char *label);
 
 /*
  Mark this test case complete with the given status.
@@ -773,7 +835,10 @@ int hegel_target(hegel_test_case_t *tc, double value, const char *label);
  assertion's message. hegel-rust's own panic-to-failure path does
  exactly this (see `src/run_lifecycle.rs`).
  */
-int hegel_mark_complete(hegel_test_case_t *tc, hegel_status_t status, const char *origin);
+int hegel_mark_complete(hegel_context_t *ctx,
+                        hegel_test_case_t *tc,
+                        hegel_status_t status,
+                        const char *origin);
 
 /*
  True iff this test case is the engine's *final replay* of a
@@ -839,16 +904,6 @@ const char *hegel_failure_origin(const hegel_failure_t *f);
  parent `hegel_run_result_t` and stays valid until `hegel_run_free`.
  */
 const char *hegel_failure_reproduction_blob(const hegel_failure_t *f);
-
-/*
- Most recent error message from libhegel on the calling thread, or
- the empty string if the most recent call succeeded.
-
- The returned pointer is a borrow into a thread-local buffer and is
- invalidated by the next libhegel call on this thread — copy the
- bytes before making another call.
- */
-const char *hegel_last_error_message(void);
 
 /*
  Libhegel's version, matching the parent `hegeltest` crate's

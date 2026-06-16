@@ -31,13 +31,15 @@ static const char *INVARIANTS[] = { "non_negative" };
 #define NUM_INVARIANTS (sizeof(INVARIANTS) / sizeof(INVARIANTS[0]))
 
 int main(void) {
+    hegel_context_t *ctx = hegel_context_new();
+
     hegel_settings_t *s = hegel_settings_new();
     hegel_settings_test_cases(s, 100);
-    hegel_settings_database(s, "");
+    hegel_settings_database(ctx, s, "");
     hegel_settings_derandomize(s, true);
     hegel_settings_seed(s, 0x5ca1ab1e, true);
 
-    hegel_run_t *run = hegel_run_start(s);
+    hegel_run_t *run = hegel_run_start(ctx, s);
 
     const int STEPS = 20;
     size_t total = 0;
@@ -45,12 +47,12 @@ int main(void) {
     bool ok = true;
 
     hegel_test_case_t *tc;
-    while ((tc = hegel_next_test_case(run)) != NULL) {
+    while ((tc = hegel_next_test_case(ctx, run)) != NULL) {
         int64_t machine;
-        if (hegel_new_state_machine(tc, RULES, NUM_RULES,
+        if (hegel_new_state_machine(ctx, tc, RULES, NUM_RULES,
                                     INVARIANTS, NUM_INVARIANTS,
                                     &machine) != HEGEL_OK) {
-            hegel_mark_complete(tc, HEGEL_STATUS_OVERRUN, NULL);
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             continue;
         }
 
@@ -59,7 +61,7 @@ int main(void) {
         bool bad = false;
         for (int step = 0; step < STEPS && !overran; step++) {
             int64_t rule;
-            int rc = hegel_state_machine_next_rule(tc, machine, &rule);
+            int rc = hegel_state_machine_next_rule(ctx, tc, machine, &rule);
             if (rc != HEGEL_OK) { overran = true; break; }
             if (rule >= NUM_RULES) { bad = true; break; }
             rule_counts[rule]++;
@@ -75,20 +77,20 @@ int main(void) {
         }
 
         if (bad) {
-            hegel_mark_complete(tc, HEGEL_STATUS_INTERESTING,
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_INTERESTING,
                                 "invariant violated");
             ok = false;
             continue;
         }
         if (overran) {
-            hegel_mark_complete(tc, HEGEL_STATUS_OVERRUN, NULL);
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             continue;
         }
         total++;
-        hegel_mark_complete(tc, HEGEL_STATUS_VALID, NULL);
+        hegel_mark_complete(ctx, tc, HEGEL_STATUS_VALID, NULL);
     }
 
-    const hegel_run_result_t *result = hegel_run_result(run);
+    const hegel_run_result_t *result = hegel_run_result(ctx, run);
     bool passed = hegel_run_result_status(result) == HEGEL_RUN_STATUS_PASSED;
 
     /* Every rule should have been selected at least once across the run —
@@ -106,5 +108,6 @@ int main(void) {
 
     hegel_run_free(run);
     hegel_settings_free(s);
+    hegel_context_free(ctx);
     return (passed && ok) ? 0 : 1;
 }

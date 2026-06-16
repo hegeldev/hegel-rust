@@ -67,32 +67,35 @@ static int64_t decode_small_integer(const uint8_t *bytes, size_t len) {
 }
 
 int main(void) {
+    hegel_context_t *ctx = hegel_context_new();
+
     hegel_settings_t *s = hegel_settings_new();
     hegel_settings_test_cases(s, 50);
-    hegel_settings_database(s, "");      /* disable database */
+    hegel_settings_database(ctx, s, "");      /* disable database */
     hegel_settings_derandomize(s, true); /* deterministic */
     hegel_settings_seed(s, 42, true);
 
-    hegel_run_t *run = hegel_run_start(s);
+    hegel_run_t *run = hegel_run_start(ctx, s);
     if (!run) {
-        fprintf(stderr, "hegel_run_start failed: %s\n", hegel_last_error_message());
+        fprintf(stderr, "hegel_run_start failed: %s\n", hegel_context_last_error(ctx));
         hegel_settings_free(s);
+        hegel_context_free(ctx);
         return 1;
     }
 
     size_t cases = 0;
     hegel_test_case_t *tc;
-    while ((tc = hegel_next_test_case(run)) != NULL) {
+    while ((tc = hegel_next_test_case(ctx, run)) != NULL) {
         const uint8_t *value;
         size_t value_len;
-        int rc = hegel_generate(tc, INTEGER_SCHEMA, sizeof(INTEGER_SCHEMA), &value, &value_len);
+        int rc = hegel_generate(ctx, tc, INTEGER_SCHEMA, sizeof(INTEGER_SCHEMA), &value, &value_len);
         if (rc == HEGEL_E_STOP_TEST) {
-            hegel_mark_complete(tc, HEGEL_STATUS_OVERRUN, NULL);
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             continue;
         }
         if (rc != HEGEL_OK) {
-            fprintf(stderr, "hegel_generate failed: rc=%d %s\n", rc, hegel_last_error_message());
-            hegel_mark_complete(tc, HEGEL_STATUS_VALID, NULL);
+            fprintf(stderr, "hegel_generate failed: rc=%d %s\n", rc, hegel_context_last_error(ctx));
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_VALID, NULL);
             continue;
         }
 
@@ -100,19 +103,19 @@ int main(void) {
         if (n < 0 || n > 100) {
             char origin[64];
             snprintf(origin, sizeof origin, "out-of-range value %lld", (long long)n);
-            hegel_mark_complete(tc, HEGEL_STATUS_INTERESTING, origin);
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_INTERESTING, origin);
         } else {
             cases++;
-            hegel_mark_complete(tc, HEGEL_STATUS_VALID, NULL);
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_VALID, NULL);
         }
     }
 
-    const char *err = hegel_last_error_message();
+    const char *err = hegel_context_last_error(ctx);
     if (err[0] != '\0') {
         fprintf(stderr, "loop exited with error: %s\n", err);
     }
 
-    const hegel_run_result_t *result = hegel_run_result(run);
+    const hegel_run_result_t *result = hegel_run_result(ctx, run);
     hegel_run_status_t status = hegel_run_result_status(result);
     const char *status_str = status == HEGEL_RUN_STATUS_PASSED   ? "PASSED"
                              : status == HEGEL_RUN_STATUS_FAILED ? "FAILED"
@@ -129,5 +132,6 @@ int main(void) {
 
     hegel_run_free(run);
     hegel_settings_free(s);
+    hegel_context_free(ctx);
     return status == HEGEL_RUN_STATUS_PASSED ? 0 : 1;
 }

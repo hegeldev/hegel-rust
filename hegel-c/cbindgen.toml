@@ -18,6 +18,7 @@ style = "type"
 usize_is_size_t = true
 
 [export.rename]
+"HegelContext" = "hegel_context_t"
 "HegelRun" = "hegel_run_t"
 "HegelSettings" = "hegel_settings_t"
 "HegelTestCase" = "hegel_test_case_t"
