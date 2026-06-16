@@ -1,14 +1,10 @@
 use ciborium::Value;
 
-/// Build a `ciborium::Value::Map`:
-///
-/// ```ignore
-/// let schema = cbor_map!{
-///     "type" => "integer",
-///     "min_value" => 0,
-///     "max_value" => 100
-/// };
-/// ```
+/// Build a `ciborium::Value::Map`, e.g.
+/// `cbor_map!{ "type" => "integer", "min_value" => 0 }`. Test-only: the engine
+/// interprets schemas, it never constructs them, so this helper exists purely
+/// to keep the schema-interpreter tests readable.
+#[cfg(test)]
 macro_rules! cbor_map {
     ($($key:expr => $value:expr),* $(,)?) => {
         ciborium::Value::Map(vec![
@@ -20,18 +16,18 @@ macro_rules! cbor_map {
     };
 }
 
-/// Build a `ciborium::Value::Array`:
-///
-/// ```ignore
-/// let elements = cbor_array![schema1, schema2];
-/// ```
+/// Build a `ciborium::Value::Array`, e.g. `cbor_array![schema1, schema2]`.
+/// Test-only, for the same reason as [`cbor_map!`].
+#[cfg(test)]
 macro_rules! cbor_array {
     ($($value:expr),* $(,)?) => {
         ciborium::Value::Array(vec![$($value),*])
     };
 }
 
+#[cfg(test)]
 pub(crate) use cbor_array;
+#[cfg(test)]
 pub(crate) use cbor_map;
 
 pub fn map_get<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
@@ -47,37 +43,6 @@ pub fn map_get<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
         }
     }
     None
-}
-
-pub fn map_insert(value: &mut Value, key: &str, val: impl Into<Value>) {
-    let Value::Map(entries) = value else {
-        panic!("expected Value::Map, got {value:?}"); // nocov
-    };
-    let val = val.into();
-    for (k, v) in entries.iter_mut() {
-        let Value::Text(s) = k else {
-            panic!("expected Value::Text, got {k:?}"); // nocov
-        };
-        if s == key {
-            *v = val;
-            return;
-        }
-    }
-    entries.push((Value::Text(String::from(key)), val));
-}
-
-// merge the keys of two maps. If both `target` and `source` contain the same key,
-// prefer `source`.
-pub fn map_extend(target: &mut Value, source: Value) {
-    let Value::Map(source_entries) = source else {
-        panic!("expected Value::Map, got {source:?}");
-    };
-    for (k, v) in source_entries {
-        let Value::Text(ref key) = k else {
-            panic!("expected Value::Text, got {k:?}");
-        };
-        map_insert(target, key, v);
-    }
 }
 
 pub fn as_text(value: &Value) -> Option<&str> {
@@ -99,15 +64,6 @@ pub fn as_bool(value: &Value) -> Option<bool> {
         Value::Bool(b) => Some(*b),
         _ => None,
     }
-}
-
-pub fn cbor_serialize<T: serde::Serialize>(value: &T) -> Value {
-    // Build the `Value` directly via ciborium's value serializer rather than
-    // round-tripping through an encoded byte buffer. Both produce the same
-    // `Value`, but this skips a `Vec<u8>` allocation plus the encode+decode
-    // work on every call — and this runs on the generation hot path (e.g.
-    // `build_schema` serialises each integer/float bound on every draw).
-    Value::serialized(value).expect("CBOR serialization failed")
 }
 
 #[cfg(test)]

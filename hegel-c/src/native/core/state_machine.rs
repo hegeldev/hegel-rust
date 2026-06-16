@@ -12,7 +12,6 @@ use super::choices::EngineError;
 use super::state::NativeTestCase;
 use crate::HEGEL_LABEL_FEATURE_FLAG;
 use crate::control::hegel_internal_assert;
-use crate::control::invalid_argument;
 use crate::native::bignum::{BigInt, ToPrimitive};
 
 /// Draw a uniform index in `[0, n)`.
@@ -90,9 +89,13 @@ pub struct NativeStateMachine {
 
 impl NativeStateMachine {
     pub fn new(rule_names: Vec<String>, invariant_names: Vec<String>) -> Self {
-        if rule_names.is_empty() {
-            invalid_argument!("Stateful testing: there must be at least one rule");
-        }
+        // The caller (`DataSource::new_state_machine`) rejects an empty rule
+        // set with `InvalidArgument` before constructing one, so reaching here
+        // empty is an engine invariant violation, not a caller error.
+        hegel_internal_assert!(
+            !rule_names.is_empty(),
+            "Stateful testing: there must be at least one rule"
+        );
 
         NativeStateMachine {
             rule_names,

@@ -114,12 +114,6 @@ pub(crate) struct TestCaseGlobalData {
 pub(crate) struct SharedState {
     ctc: CTestCase,
     draw_state: DrawState,
-    /// Labels already passed to `tc.target`/`tc.target_labelled` this test
-    /// case. The engine enforces "each label at most once per case", but over
-    /// the C ABI that check would abort across `extern "C"` rather than unwind
-    /// cleanly, so the frontend detects the duplicate here and raises a clean
-    /// invalid-argument instead.
-    observed_targets: HashSet<String>,
 }
 
 pub(crate) struct DrawState {
@@ -304,7 +298,6 @@ impl TestCase {
                         named_draw_repeatable: HashMap::new(),
                         allocated_display_names: HashSet::new(),
                     },
-                    observed_targets: HashSet::new(),
                 }),
             }),
             local: RefCell::new(TestCaseLocalData {
@@ -489,38 +482,13 @@ impl TestCase {
     /// Has no effect during replays or if the test case has been aborted.
     pub fn target_labelled(&self, score: f64, label: impl Into<String>) {
         let label = label.into();
-        // These usage checks (finite score, each label observed at most once
-        // per case) used to live in the engine and unwind as invalid-argument.
-        // Over the C ABI the engine's unwind would abort across `extern "C"`,
-        // so validate here and raise cleanly before handing the score across.
-        if !score.is_finite() {
-            invalid_argument!(
-                "tc.target({score}, label={label:?}) requires a finite score; \
-                 got non-finite value"
-            );
-        }
-        // Track the label and forward the score under the shared lock, but
-        // raise any error *outside* it (raising while holding the mutex is
-        // avoidable here).
-        let outcome = self.with_shared(|shared| {
-            if !shared.observed_targets.insert(label.clone()) {
-                return Err(None);
-            }
-            shared.ctc.target(score, &label).map_err(Some)
-        });
-        match outcome {
-            Ok(()) => {}
-            Err(None) => invalid_argument!(
-                "tc.target({score}, label={label:?}) would overwrite previous \
-                 tc.target(_, label={label:?}); each label can be observed at \
-                 most once per test case"
-            ),
-            // A non-OK rc can't occur here: `target_observation` is infallible
-            // and the frontend always passes a valid handle and UTF-8 label.
-            // Routed through `raise_for_rc` (rather than `unreachable!`) so that
-            // were a code ever returned it would still be classified, not
-            // mistaken for a shrinkable counterexample.
-            Err(Some(rc)) => raise_for_rc(rc), // nocov
+        // libhegel validates the observation (finite score, each label at most
+        // once per case) and returns HEGEL_E_INVALID_ARG with a diagnostic if
+        // it's misused; `raise_for_rc` turns that into a clean invalid-argument
+        // unwind, exactly like every other per-test-case primitive.
+        let outcome = self.with_shared(|shared| shared.ctc.target(score, &label));
+        if let Err(rc) = outcome {
+            raise_for_rc(rc);
         }
     }
 
@@ -751,7 +719,8 @@ impl TestCase {
                 "hegel_mark_complete failed: rc={} {}",
                 rc,
                 crate::ffi::last_error_string()
-            ); // nocov end
+            );
+            // nocov end
         }
     }
 

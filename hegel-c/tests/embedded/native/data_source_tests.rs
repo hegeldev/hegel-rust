@@ -237,6 +237,46 @@ fn generate_stoptest_sets_aborted_and_short_circuits() {
     assert!(ds.pool_generate(0, false).is_err());
 }
 
+// On a live (non-aborted) test case, an opaque handle id libhegel never
+// issued is a caller usage error, not a panic: it comes back as
+// `InvalidArgument` (→ `HEGEL_E_INVALID_ARG`) so the C ABI stays panic-free
+// and libhegel remains correct under `panic = "abort"`.
+#[test]
+fn unknown_handle_ids_map_to_invalid_argument_without_panicking() {
+    let (ds, _handle) = random_source();
+
+    // Collections are keyed in a map; an unissued id is simply absent.
+    let more = ds.collection_more(999).unwrap_err();
+    assert!(
+        matches!(&more, DataSourceError::InvalidArgument(m) if m.contains("unknown collection id")),
+        "{more:?}"
+    );
+    let reject = ds.collection_reject(999, None).unwrap_err();
+    assert!(
+        matches!(&reject, DataSourceError::InvalidArgument(m) if m.contains("unknown collection id")),
+        "{reject:?}"
+    );
+
+    // Pools / state machines index a `Vec`. Cover both arms of the bounds
+    // check: a negative id (fails the `usize` conversion) and an id past the
+    // end (fails the range check).
+    let pool_negative = ds.pool_add(-1).unwrap_err();
+    assert!(
+        matches!(&pool_negative, DataSourceError::InvalidArgument(m) if m.contains("unknown variable pool id")),
+        "{pool_negative:?}"
+    );
+    let pool_past_end = ds.pool_generate(0, false).unwrap_err();
+    assert!(
+        matches!(&pool_past_end, DataSourceError::InvalidArgument(m) if m.contains("unknown variable pool id")),
+        "{pool_past_end:?}"
+    );
+    let sm_past_end = ds.state_machine_next_rule(0).unwrap_err();
+    assert!(
+        matches!(&sm_past_end, DataSourceError::InvalidArgument(m) if m.contains("unknown state machine id")),
+        "{sm_past_end:?}"
+    );
+}
+
 #[test]
 fn generate_integer_round_trips() {
     let (ds, _handle) = random_source();
@@ -259,7 +299,7 @@ fn generate_integer_round_trips() {
 #[test]
 fn target_observation_records_finite_score() {
     let (ds, handle) = random_source();
-    ds.target_observation(1.5, "x");
+    ds.target_observation(1.5, "x").unwrap();
     let obs = NativeDataSource::take_target_observations(&handle);
     assert_eq!(obs.get("x"), Some(&1.5));
 }
@@ -267,31 +307,44 @@ fn target_observation_records_finite_score() {
 #[test]
 fn target_observation_take_drains() {
     let (ds, handle) = random_source();
-    ds.target_observation(1.0, "x");
+    ds.target_observation(1.0, "x").unwrap();
     let first = NativeDataSource::take_target_observations(&handle);
     assert_eq!(first.len(), 1);
     let second = NativeDataSource::take_target_observations(&handle);
     assert!(second.is_empty());
 }
 
+// A non-finite score / a repeated label are caller usage errors. libhegel
+// must surface them as `InvalidArgument` (→ `HEGEL_E_INVALID_ARG`), never a
+// panic — it has to stay correct under `panic = "abort"`.
+
 #[test]
-#[should_panic(expected = "requires a finite score")]
 fn target_observation_rejects_nan() {
     let (ds, _handle) = random_source();
-    ds.target_observation(f64::NAN, "x");
+    let err = ds.target_observation(f64::NAN, "x").unwrap_err();
+    assert!(
+        matches!(&err, DataSourceError::InvalidArgument(m) if m.contains("requires a finite score")),
+        "{err:?}"
+    );
 }
 
 #[test]
-#[should_panic(expected = "requires a finite score")]
 fn target_observation_rejects_infinity() {
     let (ds, _handle) = random_source();
-    ds.target_observation(f64::INFINITY, "x");
+    let err = ds.target_observation(f64::INFINITY, "x").unwrap_err();
+    assert!(
+        matches!(&err, DataSourceError::InvalidArgument(m) if m.contains("requires a finite score")),
+        "{err:?}"
+    );
 }
 
 #[test]
-#[should_panic(expected = "would overwrite previous")]
 fn target_observation_rejects_duplicate_label() {
     let (ds, _handle) = random_source();
-    ds.target_observation(1.0, "x");
-    ds.target_observation(2.0, "x");
+    ds.target_observation(1.0, "x").unwrap();
+    let err = ds.target_observation(2.0, "x").unwrap_err();
+    assert!(
+        matches!(&err, DataSourceError::InvalidArgument(m) if m.contains("would overwrite previous")),
+        "{err:?}"
+    );
 }

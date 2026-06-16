@@ -23,15 +23,6 @@
 //   path; the loop is user-driven.
 
 #![allow(clippy::missing_safety_doc)]
-// TRANSIENT (inversion cleanup, see the "re-home gated engine tests + delete
-// hegeltest's dead engine" task): the engine was copied into this crate
-// verbatim and still carries frontend-oriented surface the C ABI doesn't
-// exercise — schema-builder helpers/macros in cbor_utils, the StopTest/
-// AssumeFailed/LoopDone control payloads and with_test_context, ReproduceRunner,
-// and display-only settings (print_blob/has_phase). These are trimmed or
-// re-homed once the frontend rewrite settles the final shape; until then,
-// silence the unused-code lints so clippy stays green.
-#![allow(dead_code, unused_imports, unused_macros)]
 
 use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char, c_int};
@@ -1638,6 +1629,11 @@ pub unsafe extern "C" fn hegel_primitive_boolean(
 /// produced higher observations under the same label. Has no effect
 /// unless `HEGEL_PHASE_TARGET` is enabled. `label` must be non-NULL
 /// and valid UTF-8.
+///
+/// Returns `HEGEL_E_INVALID_ARG` (with a diagnostic in
+/// `hegel_last_error_message`) if `value` is not finite, or if `label`
+/// has already been observed on this test case — each label may be
+/// recorded at most once per case.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_target(
     tc: *mut HegelTestCase,
@@ -1660,8 +1656,10 @@ pub unsafe extern "C" fn hegel_target(
             return HEGEL_E_INVALID_ARG;
         }
     };
-    tc.ds.target_observation(value, label);
-    HEGEL_OK
+    match tc.ds.target_observation(value, label) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_ds_error(e),
+    }
 }
 
 /// Mark this test case complete with the given status.

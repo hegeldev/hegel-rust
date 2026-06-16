@@ -743,6 +743,11 @@ int hegel_primitive_boolean(hegel_test_case_t *tc,
  produced higher observations under the same label. Has no effect
  unless `HEGEL_PHASE_TARGET` is enabled. `label` must be non-NULL
  and valid UTF-8.
+
+ Returns `HEGEL_E_INVALID_ARG` (with a diagnostic in
+ `hegel_last_error_message`) if `value` is not finite, or if `label`
+ has already been observed on this test case — each label may be
+ recorded at most once per case.
  */
 int hegel_target(hegel_test_case_t *tc, double value, const char *label);
 

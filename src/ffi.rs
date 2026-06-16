@@ -14,13 +14,6 @@
 //! unwind). Keeping that split means the unsafe boundary stays small and the
 //! control-flow policy stays with the test lifecycle.
 
-// TRANSIENT: this module is validated by its embedded tests but not yet wired
-// into the lib's non-test code — the frontend rewrite (test_case / run_lifecycle
-// / runner / stateful) consumes every wrapper here in the immediately-following
-// commits, at which point this allow is removed and any genuinely-unused item
-// would surface.
-#![allow(dead_code)]
-
 use crate::runner::{Backend, Database, HealthCheck, Mode, Phase, Settings, Verbosity};
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
@@ -392,7 +385,6 @@ impl RunResult<'_> {
         Some(Failure {
             panic_message: cstr_opt(unsafe { hegel_c::hegel_failure_panic_message(f) })
                 .unwrap_or_default(),
-            origin: cstr_opt(unsafe { hegel_c::hegel_failure_origin(f) }).unwrap_or_default(),
             reproduce_blob: cstr_opt(unsafe { hegel_c::hegel_failure_reproduction_blob(f) }),
         })
     }
@@ -401,7 +393,6 @@ impl RunResult<'_> {
 /// A distinct failure read out of a finished run.
 pub(crate) struct Failure {
     pub(crate) panic_message: String,
-    pub(crate) origin: String,
     pub(crate) reproduce_blob: Option<String>,
 }
 

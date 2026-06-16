@@ -99,8 +99,9 @@ pub trait DataSource: Send + Sync {
     /// Record a targeting observation for the current test case.
     ///
     /// The score is used by the backend to guide generation toward
-    /// higher-scoring inputs. No-op if the test has been aborted.
-    fn target_observation(&self, score: f64, label: &str);
+    /// higher-scoring inputs. Errors with `InvalidArgument` if the score is
+    /// non-finite or the label has already been observed this test case.
+    fn target_observation(&self, score: f64, label: &str) -> Result<(), DataSourceError>;
 
     /// Signal that the test case is complete and report its outcome.
     ///

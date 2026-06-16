@@ -380,7 +380,7 @@ fn hill_climb_resize_restart_and_already_examined_skip() {
             for _ in 0..n {
                 draw_bool(ds)?;
             }
-            ds.target_observation((m + n) as f64, "");
+            ds.target_observation((m + n) as f64, "").unwrap();
             Ok(TestCaseResult::Valid)
         };
         body().unwrap_or(TestCaseResult::Overrun)
@@ -404,7 +404,7 @@ fn hill_climb_rejects_lateral_grow() {
                     draw_int(ds, 0, 10)?;
                 }
             }
-            ds.target_observation(1.0, "");
+            ds.target_observation(1.0, "").unwrap();
             Ok(TestCaseResult::Valid)
         };
         body().unwrap_or(TestCaseResult::Overrun)
@@ -429,7 +429,8 @@ fn hill_climb_rejects_invalid_trial_status() {
         if n == 7 {
             return TestCaseResult::Invalid;
         }
-        ds.target_observation(-((n - 7).saturating_abs() as f64), "");
+        ds.target_observation(-((n - 7).saturating_abs() as f64), "")
+            .unwrap();
         TestCaseResult::Valid
     });
 }
@@ -448,7 +449,7 @@ fn hill_climb_returns_zero_when_initial_replay_invalid() {
         if n == 7 {
             return TestCaseResult::Invalid;
         }
-        ds.target_observation(n as f64, "");
+        ds.target_observation(n as f64, "").unwrap();
         TestCaseResult::Valid
     });
 }
@@ -469,7 +470,8 @@ fn run_trial_records_interesting_result_into_ctx() {
         if n == 7 {
             return interesting();
         }
-        ds.target_observation(-((n - 7).saturating_abs() as f64), "");
+        ds.target_observation(-((n - 7).saturating_abs() as f64), "")
+            .unwrap();
         TestCaseResult::Valid
     });
 }

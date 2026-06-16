@@ -157,7 +157,6 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
     assert!(result.status() == hegel_c::hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
     assert_eq!(result.failure_count(), 1);
     let failure = result.failure(0).unwrap();
-    assert_eq!(failure.origin, origin);
     // An out-of-range failure index yields None rather than faulting.
     assert!(
         result.failure(result.failure_count()).is_none(),

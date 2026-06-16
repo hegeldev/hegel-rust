@@ -128,6 +128,8 @@ type FnNewStateMachine = unsafe extern "C" fn(
 ) -> c_int;
 type FnStateMachineNextRule = unsafe extern "C" fn(*mut u8, i64, *mut u64) -> c_int;
 type FnPrimitiveBoolean = unsafe extern "C" fn(*mut u8, f64, bool, bool, *mut bool) -> c_int;
+type FnTarget = unsafe extern "C" fn(*mut u8, f64, *const c_char) -> c_int;
+type FnCollectionMore = unsafe extern "C" fn(*mut u8, i64, *mut bool) -> c_int;
 type FnRunResultStatus = unsafe extern "C" fn(*const u8) -> CRunStatus;
 type FnRunResultError = unsafe extern "C" fn(*const u8) -> *const c_char;
 type FnRunResultFailureCount = unsafe extern "C" fn(*const u8) -> usize;
@@ -162,6 +164,8 @@ struct Api<'a> {
     new_state_machine: Symbol<'a, FnNewStateMachine>,
     state_machine_next_rule: Symbol<'a, FnStateMachineNextRule>,
     primitive_boolean: Symbol<'a, FnPrimitiveBoolean>,
+    target: Symbol<'a, FnTarget>,
+    collection_more: Symbol<'a, FnCollectionMore>,
     run_result_status: Symbol<'a, FnRunResultStatus>,
     run_result_error: Symbol<'a, FnRunResultError>,
     run_result_failure_count: Symbol<'a, FnRunResultFailureCount>,
@@ -198,6 +202,8 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             new_state_machine: lib.get(b"hegel_new_state_machine\0").unwrap(),
             state_machine_next_rule: lib.get(b"hegel_state_machine_next_rule\0").unwrap(),
             primitive_boolean: lib.get(b"hegel_primitive_boolean\0").unwrap(),
+            target: lib.get(b"hegel_target\0").unwrap(),
+            collection_more: lib.get(b"hegel_collection_more\0").unwrap(),
             run_result_status: lib.get(b"hegel_run_result_status\0").unwrap(),
             run_result_error: lib.get(b"hegel_run_result_error\0").unwrap(),
             run_result_failure_count: lib.get(b"hegel_run_result_failure_count\0").unwrap(),
@@ -439,6 +445,67 @@ fn invalid_schema_returns_error_not_abort() {
         }
 
         (a.mark_complete)(tc, CStatus::Invalid, ptr::null());
+        (a.run_free)(run);
+        (a.settings_free)(s);
+    }
+}
+
+#[test]
+fn caller_usage_errors_return_error_not_abort() {
+    // Every caller usage error on a live test case — a non-finite or repeated
+    // target score, an opaque handle id libhegel never issued — must return
+    // HEGEL_E_INVALID_ARG, never a panic across the `extern "C"` boundary.
+    // Under the `panic = "abort"` build (`just c-test-abort`) a panic on any
+    // of these paths would SIGABRT the process, so this test only passes if
+    // libhegel stays panic-free on them.
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    unsafe {
+        let s = (a.settings_new)();
+        (a.settings_test_cases)(s, 1);
+        let empty = CString::new("").unwrap();
+        (a.settings_database)(s, empty.as_ptr());
+        (a.settings_derandomize)(s, true);
+        (a.settings_seed)(s, 1, true);
+
+        let run = (a.run_start)(s);
+        assert!(!run.is_null());
+        let tc = (a.next_test_case)(run);
+        assert!(!tc.is_null(), "expected a test case");
+
+        let label = CString::new("x").unwrap();
+        let dup = CString::new("dup").unwrap();
+
+        // Non-finite score, and a label observed twice, are usage errors.
+        assert_eq!(
+            (a.target)(tc, f64::NAN, label.as_ptr()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(
+            !CStr::from_ptr((a.last_error_message)())
+                .to_bytes()
+                .is_empty()
+        );
+        assert_eq!((a.target)(tc, 1.0, dup.as_ptr()), HEGEL_OK);
+        assert_eq!((a.target)(tc, 2.0, dup.as_ptr()), HEGEL_E_INVALID_ARG);
+
+        // Opaque handle ids that were never issued: unknown collection (map
+        // lookup), unknown pool / state machine (Vec bounds check).
+        let mut more = false;
+        assert_eq!(
+            (a.collection_more)(tc, 9999, &mut more),
+            HEGEL_E_INVALID_ARG
+        );
+        let mut var_id = 0i64;
+        assert_eq!((a.pool_add)(tc, 9999, &mut var_id), HEGEL_E_INVALID_ARG);
+        let mut rule_idx = 0u64;
+        assert_eq!(
+            (a.state_machine_next_rule)(tc, 9999, &mut rule_idx),
+            HEGEL_E_INVALID_ARG
+        );
+
+        (a.mark_complete)(tc, CStatus::Valid, ptr::null());
         (a.run_free)(run);
         (a.settings_free)(s);
     }

@@ -391,6 +391,18 @@ fn live_test_case_argument_validation() {
             HEGEL_E_INVALID_ARG
         );
 
+        // target: a non-finite score and a repeated label are caller usage
+        // errors — HEGEL_E_INVALID_ARG with a diagnostic, never a panic across
+        // the C ABI (libhegel must stay correct under panic=abort).
+        assert_eq!(
+            hegel_target(tc, f64::NAN, c"x".as_ptr()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error().contains("finite score"));
+        assert_eq!(hegel_target(tc, 1.0, c"dup".as_ptr()), HEGEL_OK);
+        assert_eq!(hegel_target(tc, 2.0, c"dup".as_ptr()), HEGEL_E_INVALID_ARG);
+        assert!(last_error().contains("would overwrite previous"));
+
         // mark_complete with a non-UTF-8 origin (only consulted for
         // INTERESTING). This is rejected *before* the case is marked complete,
         // so the handle is still live afterwards.

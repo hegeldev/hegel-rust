@@ -10,44 +10,12 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 }
 
 #[test]
-fn raise_internal_error_panics_directly_outside_a_test_context() {
-    // Outside a run there is no lifecycle to catch a control payload, so
-    // the message (with location and bug-report framing) panics directly.
+fn raise_internal_error_panics_with_location_and_bug_report_framing() {
     let payload = catch_unwind(|| raise_internal_error(format_args!("boom: {}", 7))).unwrap_err();
     let msg = panic_message(payload);
     assert!(msg.contains("Internal error in hegel at "), "{msg}");
     assert!(msg.contains("boom: 7"), "{msg}");
     assert!(msg.contains("bug in hegel"), "{msg}");
-}
-
-#[test]
-fn raise_internal_error_unwinds_as_a_typed_payload_inside_a_test_context() {
-    let payload = with_test_context(|| {
-        catch_unwind(|| raise_internal_error(format_args!("inner"))).unwrap_err()
-    });
-    let internal = payload
-        .downcast_ref::<InternalError>()
-        .expect("expected an InternalError control payload");
-    assert!(internal.0.contains("inner"), "{}", internal.0);
-}
-
-#[test]
-fn raise_invalid_argument_panics_directly_outside_a_test_context() {
-    let payload =
-        catch_unwind(|| raise_invalid_argument(format_args!("bad arg: {}", 1))).unwrap_err();
-    let msg = panic_message(payload);
-    assert!(msg.contains("bad arg: 1"), "{msg}");
-}
-
-#[test]
-fn raise_invalid_argument_unwinds_as_a_typed_payload_inside_a_test_context() {
-    let payload = with_test_context(|| {
-        catch_unwind(|| raise_invalid_argument(format_args!("bad arg"))).unwrap_err()
-    });
-    let ia = payload
-        .downcast_ref::<InvalidArgument>()
-        .expect("expected an InvalidArgument control payload");
-    assert!(ia.0.contains("bad arg"), "{}", ia.0);
 }
 
 #[test]
