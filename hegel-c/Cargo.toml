@@ -35,8 +35,11 @@ tempfile = "3"
 # Not part of the public C API; depend on at your peril.
 __bench = []
 
+# 0.29.2 is the minimum that reproduces the checked-in `include/hegel.h`
+# byte-for-byte; earlier 0.29.x emit slightly different formatting, which the
+# build.rs drift check (correctly) rejects — surfacing under `-Z minimal-versions`.
 [build-dependencies]
-cbindgen = "0.29"
+cbindgen = "0.29.2"
 
 [dev-dependencies]
 libloading = "0.8"

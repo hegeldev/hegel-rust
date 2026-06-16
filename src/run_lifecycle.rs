@@ -2,17 +2,14 @@
 //!
 //! Provides the panic hook, the `run_test_case` wrapper that catches a single
 //! test body's panic and converts it into a [`TestCaseResult`], and the
-//! `drive` function that takes a [`TestRunner`] implementation, hands it a
-//! `run_case` callback, and surfaces the run-level result.
+//! `drive` function that starts a libhegel run, pulls each test case the
+//! engine schedules, and surfaces the run-level result.
 //!
-//! The native engine backend (`crate::native::test_runner::NativeTestRunner`)
-//! plugs into this lifecycle. The runner is free to do whatever it likes
-//! inside its `TestRunner::explore` to decide which test cases to run; the
-//! lifecycle owns everything that surrounds it — installing the panic hook,
-//! wrapping each test body with `catch_unwind` plus `mark_complete`, the
-//! antithesis integration, the final replay of each discovered
-//! counterexample (with its report printed around it), and the closing
-//! re-raise of the failing test's own panic.
+//! The engine lives behind libhegel's C ABI; `drive` owns everything around
+//! it — installing the panic hook, wrapping each test body with
+//! `catch_unwind` plus `mark_complete`, the antithesis integration, the final
+//! replay of each discovered counterexample (with its report printed around
+//! it), and the closing re-raise of the failing test's own panic.
 
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::cell::{Cell, RefCell};
@@ -215,12 +212,12 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
-/// Run the user's test body once for the supplied [`DataSource`], catching
-/// any panic and translating it to a [`TestCaseResult`].
+/// Run the user's test body once against the supplied libhegel test case,
+/// catching any panic and translating it to a [`TestCaseResult`].
 ///
-/// Reports the outcome back through the [`DataSource`] interface via
-/// [`TestCase::mark_complete`]: that is the channel for per-test-case
-/// results.  The native engine reads it back off the data-source handle.
+/// Reports the outcome back to the engine via [`TestCase::mark_complete`]
+/// (which calls `hegel_mark_complete`): that is the channel for per-test-case
+/// results, and the engine reads it back over the C ABI.
 /// On the `Interesting` path the panic site is captured as a
 /// `file:line:col` string and stored on the [`Failure`] so per-origin
 /// shrinking can key on it, and the rendered diagnostic block (panic

@@ -1,11 +1,11 @@
 //! Outcome types the per-test-case lifecycle works in.
 //!
-//! hegeltest drives the engine through libhegel's C ABI (see [`crate::ffi`]),
+//! hegeltest drives the engine through libhegel's C ABI (see `crate::ffi`),
 //! so the data-source / test-runner traits that used to live here now belong
 //! to the engine crate. What remains is the small currency the lifecycle
 //! itself speaks: the result of running one test case, and the failure it
-//! carries. [`crate::run_lifecycle::run_test_case`] builds these from a caught
-//! panic; [`crate::test_case::TestCase::mark_complete`] translates them into a
+//! carries. `crate::run_lifecycle::run_test_case` builds these from a caught
+//! panic; `crate::test_case::TestCase::mark_complete` translates them into a
 //! `hegel_mark_complete` status (plus, for a failure, its bug origin), and the
 //! richer failure data (panic message, reproduce blob) is read back out of the
 //! run result afterward.

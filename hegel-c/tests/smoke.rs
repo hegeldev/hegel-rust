@@ -46,9 +46,23 @@ fn lib_path() -> PathBuf {
         );
         return candidate;
     }
-    // The crate is part of a workspace, so the cdylib lands in
-    // ../target/{debug,release}/libhegel.<ext>. `cargo test` builds the debug
-    // profile by default; for --release tests we look there too.
+    // The cdylib is built into the same profile directory as this test
+    // binary, which lives at `<target>/<profile>/deps/<exe>`. Deriving the
+    // location from the running executable (rather than a hard-coded
+    // `<workspace>/target/<profile>`) finds it under whatever target dir is in
+    // use — including `cargo llvm-cov`'s `target/llvm-cov-target/` and the
+    // `panic = "abort"` build's separate tree.
+    if let Ok(exe) = std::env::current_exe() {
+        // <target>/<profile>/deps/<exe> -> <target>/<profile>/<filename>
+        if let Some(profile_dir) = exe.parent().and_then(|deps| deps.parent()) {
+            let candidate = profile_dir.join(filename);
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+    // Fall back to the workspace's default target dir, where a plain
+    // `cargo build -p hegeltest-c` places the cdylib.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let target_dir = manifest_dir.parent().unwrap().join("target");
     for profile in ["debug", "release"] {
@@ -58,8 +72,13 @@ fn lib_path() -> PathBuf {
         }
     }
     panic!(
-        "could not find {} under {}; run `cargo build -p hegeltest-c` first",
+        "could not find {} near {} or under {}; run `cargo build -p hegeltest-c` first",
         filename,
+        std::env::current_exe()
+            .ok()
+            .as_deref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<unknown exe>".to_string()),
         target_dir.display()
     );
 }
