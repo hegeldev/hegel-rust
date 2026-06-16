@@ -208,6 +208,62 @@ impl DataSource for NativeDataSource {
         })
     }
 
+    fn new_state_machine(
+        &self,
+        rule_names: &[&str],
+        invariant_names: &[&str],
+    ) -> Result<i64, DataSourceError> {
+        if rule_names.is_empty() {
+            return Err(DataSourceError::InvalidArgument(
+                "cannot run a state machine with no rules".to_string(),
+            ));
+        }
+        let rules = rule_names.iter().map(|s| s.to_string()).collect();
+        let invariants = invariant_names.iter().map(|s| s.to_string()).collect();
+        self.with_ntc(|ntc| {
+            let id = ntc.state_machines.len() as i64;
+            ntc.state_machines
+                .push(crate::native::core::NativeStateMachine::new(
+                    rules, invariants,
+                ));
+            Ok(id)
+        })
+    }
+
+    fn state_machine_next_rule(&self, state_machine_id: i64) -> Result<i64, DataSourceError> {
+        self.with_ntc(|ntc| {
+            let idx = state_machine_id as usize;
+            // Move the machine out of `ntc` so `next_rule` can borrow `ntc`
+            // mutably (same idea as the remove/insert dance in
+            // `collection_more`).
+            let mut machine = std::mem::take(&mut ntc.state_machines[idx]);
+            let result = machine.next_rule(ntc);
+            ntc.state_machines[idx] = machine;
+            result
+        })
+    }
+
+    fn primitive_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError> {
+        self.with_ntc(|ntc| {
+            if !(0.0..=1.0).contains(&p) {
+                return Err(EngineError::InvalidArgument(format!(
+                    "primitive_boolean(p = {p}) requires a probability in [0.0, 1.0]"
+                )));
+            }
+            if forced == Some(true) && p == 0.0 {
+                return Err(EngineError::InvalidArgument(
+                    "primitive_boolean: cannot force true when p = 0.0".to_string(),
+                ));
+            }
+            if forced == Some(false) && p == 1.0 {
+                return Err(EngineError::InvalidArgument(
+                    "primitive_boolean: cannot force false when p = 1.0".to_string(),
+                ));
+            }
+            ntc.weighted(p, forced)
+        })
+    }
+
     fn new_pool(&self) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
             let pool_id = ntc.variable_pools.len() as i64;

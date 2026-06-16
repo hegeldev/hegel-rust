@@ -13,14 +13,15 @@ use hegel_c::{
     HegelTestCase, hegel_backend_t, hegel_collection_more, hegel_collection_reject,
     hegel_failure_origin, hegel_failure_panic_message, hegel_failure_reproduction_blob,
     hegel_generate, hegel_mark_complete, hegel_mode_t, hegel_new_collection, hegel_new_pool,
-    hegel_next_test_case, hegel_pool_add, hegel_pool_generate, hegel_run_free, hegel_run_result,
-    hegel_run_result_error, hegel_run_result_failure, hegel_run_result_failure_count,
-    hegel_run_result_status, hegel_run_start, hegel_run_status_t, hegel_settings_backend,
-    hegel_settings_database, hegel_settings_database_key, hegel_settings_free, hegel_settings_mode,
-    hegel_settings_new, hegel_settings_phases, hegel_settings_report_multiple_failures,
-    hegel_settings_suppress_health_check, hegel_start_span, hegel_status_t, hegel_stop_span,
-    hegel_target, hegel_test_case_free, hegel_test_case_from_blob, hegel_test_case_is_final_replay,
-    hegel_version,
+    hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_generate,
+    hegel_primitive_boolean, hegel_run_free, hegel_run_result, hegel_run_result_error,
+    hegel_run_result_failure, hegel_run_result_failure_count, hegel_run_result_status,
+    hegel_run_start, hegel_run_status_t, hegel_settings_backend, hegel_settings_database,
+    hegel_settings_database_key, hegel_settings_free, hegel_settings_mode, hegel_settings_new,
+    hegel_settings_phases, hegel_settings_report_multiple_failures,
+    hegel_settings_suppress_health_check, hegel_start_span, hegel_state_machine_next_rule,
+    hegel_status_t, hegel_stop_span, hegel_target, hegel_test_case_free, hegel_test_case_from_blob,
+    hegel_test_case_is_final_replay, hegel_version,
 };
 use std::ffi::CString;
 use std::os::raw::c_char;
@@ -575,6 +576,122 @@ fn primitives_after_overrun_all_report_stop_test() {
             let mut p: *const u8 = ptr::null();
             let mut n = 0usize;
             hegel_generate(tc, schema.as_ptr(), schema.len(), &mut p, &mut n);
+            hegel_mark_complete(tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
+        }
+        hegel_run_free(run);
+        hegel_settings_free(s);
+    }
+}
+
+/// Exercise the state-machine and weighted-boolean C-ABI entry points
+/// (`hegel_new_state_machine`, `hegel_state_machine_next_rule`,
+/// `hegel_primitive_boolean`) in-process: the invalid-handle and
+/// argument-validation paths, plus the happy paths. hegeltest's frontend
+/// reaches booleans through schemas rather than `hegel_primitive_boolean`, and
+/// the smoke test that drives these over dlopen doesn't contribute coverage,
+/// so they are measured here.
+#[test]
+fn state_machine_and_primitive_boolean_paths() {
+    let bad_utf8: [c_char; 2] = [0xFFu8 as c_char, 0];
+    unsafe {
+        // Invalid (null) handle on all three entry points.
+        let null_tc: *mut HegelTestCase = ptr::null_mut();
+        let rule_a = CString::new("a").unwrap();
+        let rules: [*const c_char; 1] = [rule_a.as_ptr()];
+        let mut out_id = 0i64;
+        assert_eq!(
+            hegel_new_state_machine(null_tc, rules.as_ptr(), 1, ptr::null(), 0, &mut out_id),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_state_machine_next_rule(null_tc, 0, &mut out_id),
+            HEGEL_E_INVALID_HANDLE
+        );
+        let mut bv = false;
+        assert_eq!(
+            hegel_primitive_boolean(null_tc, 0.5, false, false, &mut bv),
+            HEGEL_E_INVALID_HANDLE
+        );
+
+        // A live test case for the argument-validation and happy paths.
+        let s = hegel_settings_new();
+        let empty = CString::new("").unwrap();
+        hegel_settings_database(s, empty.as_ptr());
+        hegel_c::hegel_settings_test_cases(s, 5);
+        let run = hegel_run_start(s);
+        let tc = hegel_next_test_case(run);
+        assert!(!tc.is_null());
+
+        // new_state_machine: null out parameter.
+        assert_eq!(
+            hegel_new_state_machine(tc, rules.as_ptr(), 1, ptr::null(), 0, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        // null rule-name array with a non-zero count.
+        assert_eq!(
+            hegel_new_state_machine(tc, ptr::null(), 1, ptr::null(), 0, &mut out_id),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error().contains("rule_names pointer is null"));
+        // a null entry in the rule-name array.
+        let null_entry: [*const c_char; 1] = [ptr::null()];
+        assert_eq!(
+            hegel_new_state_machine(tc, null_entry.as_ptr(), 1, ptr::null(), 0, &mut out_id),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error().contains("rule_names[0] is null"));
+        // a non-UTF-8 entry in the rule-name array.
+        let bad_entry: [*const c_char; 1] = [bad_utf8.as_ptr()];
+        assert_eq!(
+            hegel_new_state_machine(tc, bad_entry.as_ptr(), 1, ptr::null(), 0, &mut out_id),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error().contains("not valid UTF-8"));
+        // valid rules but a bad invariant array (drives the second name decode).
+        let bad_inv: [*const c_char; 1] = [ptr::null()];
+        assert_eq!(
+            hegel_new_state_machine(tc, rules.as_ptr(), 1, bad_inv.as_ptr(), 1, &mut out_id),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error().contains("invariant_names[0] is null"));
+
+        // A valid single-rule machine: registration, next_rule's null-out
+        // guard, then a real rule draw (always rule 0).
+        assert_eq!(
+            hegel_new_state_machine(tc, rules.as_ptr(), 1, ptr::null(), 0, &mut out_id),
+            HEGEL_OK
+        );
+        assert_eq!(
+            hegel_state_machine_next_rule(tc, out_id, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        let mut rule_idx = -1i64;
+        assert_eq!(
+            hegel_state_machine_next_rule(tc, out_id, &mut rule_idx),
+            HEGEL_OK
+        );
+        assert_eq!(rule_idx, 0, "a single-rule machine always selects rule 0");
+
+        // primitive_boolean: happy path, null out, and an out-of-range p.
+        assert_eq!(
+            hegel_primitive_boolean(tc, 0.5, false, false, &mut bv),
+            HEGEL_OK
+        );
+        assert_eq!(
+            hegel_primitive_boolean(tc, 0.5, false, false, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_primitive_boolean(tc, 2.0, false, false, &mut bv),
+            HEGEL_E_INVALID_ARG
+        );
+
+        hegel_mark_complete(tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
+        loop {
+            let tc = hegel_next_test_case(run);
+            if tc.is_null() {
+                break;
+            }
             hegel_mark_complete(tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
         }
         hegel_run_free(run);

@@ -558,4 +558,107 @@ fn main() {}
             .expect_failure("Flaky test detected")
             .cargo_test(&[]);
     }
+
+    struct NoRulesMachine;
+
+    impl StateMachine for NoRulesMachine {
+        fn rules(&self) -> Vec<Rule<Self>> {
+            vec![]
+        }
+        fn invariants(&self) -> Vec<Rule<Self>> {
+            vec![]
+        }
+    }
+
+    #[test]
+    fn test_machine_with_no_rules_is_a_usage_error() {
+        expect_panic(
+            || {
+                Hegel::new(|tc: TestCase| {
+                    hegel::stateful::run(NoRulesMachine, tc);
+                })
+                .settings(Settings::new().database(None))
+                .run();
+            },
+            "cannot run a state machine with no rules",
+        );
+    }
+
+    /// Records which rule ran at each step, one sequence per test case.
+    struct SwarmRecorderMachine {
+        runs: Arc<Mutex<Vec<Vec<usize>>>>,
+    }
+
+    impl SwarmRecorderMachine {
+        fn record(&self, index: usize) {
+            self.runs.lock().unwrap().last_mut().unwrap().push(index);
+        }
+    }
+
+    impl StateMachine for SwarmRecorderMachine {
+        fn rules(&self) -> Vec<Rule<Self>> {
+            vec![
+                Rule::new("rule_0", |m, _tc| m.record(0)),
+                Rule::new("rule_1", |m, _tc| m.record(1)),
+                Rule::new("rule_2", |m, _tc| m.record(2)),
+            ]
+        }
+        fn invariants(&self) -> Vec<Rule<Self>> {
+            vec![]
+        }
+    }
+
+    /// Length of the longest run of identical consecutive elements.
+    fn longest_run(sequence: &[usize]) -> usize {
+        let mut longest = 0;
+        let mut current = 0;
+        let mut previous = None;
+        for &value in sequence {
+            current = if previous == Some(value) {
+                current + 1
+            } else {
+                1
+            };
+            previous = Some(value);
+            longest = longest.max(current);
+        }
+        longest
+    }
+
+    /// Swarm testing disables a subset of rules per test case, so some test
+    /// cases run the same rule many times in a row. With three rules and
+    /// uniform selection, a run of 20 identical rules is vanishingly unlikely
+    /// ((1/3)^19 per starting point) — only the all-minimal test case (every
+    /// draw 0) produces one. With swarm testing long runs are common:
+    /// whenever the feature flags leave a single rule enabled, every step
+    /// picks that survivor. So we assert on the *number* of test cases with a
+    /// long run, not merely its existence.
+    #[test]
+    fn test_swarm_produces_long_runs_of_one_rule() {
+        let runs: Arc<Mutex<Vec<Vec<usize>>>> = Arc::new(Mutex::new(Vec::new()));
+        let runs_in_test = Arc::clone(&runs);
+        Hegel::new(move |tc: TestCase| {
+            runs_in_test.lock().unwrap().push(Vec::new());
+            let m = SwarmRecorderMachine {
+                runs: Arc::clone(&runs_in_test),
+            };
+            hegel::stateful::run(m, tc);
+        })
+        .settings(
+            Settings::new()
+                .test_cases(100)
+                .database(None)
+                .derandomize(true),
+        )
+        .run();
+
+        let runs = runs.lock().unwrap();
+        let long_run_count = runs.iter().filter(|s| longest_run(s) >= 20).count();
+        assert!(
+            long_run_count >= 10,
+            "expected at least 10 of {} test cases to have a run of >= 20 \
+             identical rules under swarm selection, got {long_run_count}",
+            runs.len()
+        );
+    }
 }

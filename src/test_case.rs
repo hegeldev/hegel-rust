@@ -80,7 +80,7 @@ pub(crate) use invalid_argument;
 /// - anything else — an engine/framework invariant we don't expect on the hot
 ///   path; treat it as an internal error rather than a shrinkable failure.
 #[track_caller]
-fn raise_for_rc(rc: c_int) -> ! {
+pub(crate) fn raise_for_rc(rc: c_int) -> ! {
     match rc {
         hegel_c::HEGEL_E_STOP_TEST => raise_control(StopTest),
         hegel_c::HEGEL_E_ASSUME => raise_control(AssumeFailed), // nocov
@@ -903,6 +903,7 @@ pub mod labels {
     pub const MAPPED: u64 = 13;
     pub const SAMPLED_FROM: u64 = 14;
     pub const ENUM_VARIANT: u64 = 15;
+    pub const FEATURE_FLAG: u64 = 16;
 }
 
 #[cfg(test)]

@@ -289,6 +289,40 @@ impl CTestCase {
         rc_to_value(rc, id)
     }
 
+    pub(crate) fn new_state_machine(
+        &self,
+        rule_names: &[&str],
+        invariant_names: &[&str],
+    ) -> Result<i64, c_int> {
+        // Keep the CStrings alive until the call returns; the pointer arrays
+        // borrow into them.
+        let rule_cstrings: Vec<CString> = rule_names.iter().map(|s| cstring_lossy(s)).collect();
+        let invariant_cstrings: Vec<CString> =
+            invariant_names.iter().map(|s| cstring_lossy(s)).collect();
+        let rule_ptrs: Vec<*const c_char> = rule_cstrings.iter().map(|c| c.as_ptr()).collect();
+        let invariant_ptrs: Vec<*const c_char> =
+            invariant_cstrings.iter().map(|c| c.as_ptr()).collect();
+        let mut id: i64 = 0;
+        let rc = unsafe {
+            hegel_c::hegel_new_state_machine(
+                self.raw,
+                rule_ptrs.as_ptr(),
+                rule_ptrs.len(),
+                invariant_ptrs.as_ptr(),
+                invariant_ptrs.len(),
+                &mut id,
+            )
+        };
+        rc_to_value(rc, id)
+    }
+
+    pub(crate) fn state_machine_next_rule(&self, state_machine_id: i64) -> Result<i64, c_int> {
+        let mut out: i64 = 0;
+        let rc =
+            unsafe { hegel_c::hegel_state_machine_next_rule(self.raw, state_machine_id, &mut out) };
+        rc_to_value(rc, out)
+    }
+
     pub(crate) fn target(&self, score: f64, label: &str) -> Result<(), c_int> {
         let c_label = cstring_lossy(label);
         rc_to_unit(unsafe { hegel_c::hegel_target(self.raw, score, c_label.as_ptr()) })

@@ -67,6 +67,25 @@ pub trait DataSource: Send + Sync {
         why: Option<&str>,
     ) -> Result<(), DataSourceError>;
 
+    /// Register a state machine with the given rule and invariant names for
+    /// engine-owned (swarm) rule selection. Returns an opaque state-machine
+    /// id. Errors with `InvalidArgument` if `rule_names` is empty.
+    fn new_state_machine(
+        &self,
+        rule_names: &[&str],
+        invariant_names: &[&str],
+    ) -> Result<i64, DataSourceError>;
+
+    /// Draw the index of the next rule to run, in `[0, num_rules)`.
+    fn state_machine_next_rule(&self, state_machine_id: i64) -> Result<i64, DataSourceError>;
+
+    /// Draw a boolean that is `true` with probability `p`.
+    ///
+    /// If `forced` is `Some`, the choice is still recorded (so replay and
+    /// shrinking stay aligned) but the value is forced and no entropy is
+    /// consumed.
+    fn primitive_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError>;
+
     /// Create a new variable pool. Returns an opaque pool id.
     fn new_pool(&self) -> Result<i64, DataSourceError>;
 

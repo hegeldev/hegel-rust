@@ -1,19 +1,22 @@
 // Core types for the native test engine.
 //
 // Split into submodules:
-//   choices     — choice types (ChoiceKind, ChoiceNode, ChoiceValue, etc.)
-//   float_index — float lex ordering (float_to_index, index_to_float)
-//   state       — NativeTestCase, ManyState, NativeVariables, Span
+//   choices       — choice types (ChoiceKind, ChoiceNode, ChoiceValue, etc.)
+//   float_index   — float lex ordering (float_to_index, index_to_float)
+//   state         — NativeTestCase, ManyState, NativeVariables, Span
+//   state_machine — NativeStateMachine (swarm rule selection)
 
 pub(crate) mod choices;
 pub(crate) mod float_index;
 pub(crate) mod state;
+pub(crate) mod state_machine;
 pub use choices::{
     BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, EngineError, FloatChoice, NodeSortKey,
     NodesSortKey, Status, StringChoice, sort_key,
 };
 pub use float_index::{float_to_index, index_to_float};
 pub use state::{ManyState, NativeTestCase, NativeVariables, Span, Spans};
+pub use state_machine::NativeStateMachine;
 
 /// Maximum number of choices a single test case can make.
 pub const BUFFER_SIZE: usize = 8 * 1024;

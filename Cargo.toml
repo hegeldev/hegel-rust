@@ -3,7 +3,7 @@ members = [".", "hegel-macros", "hegel-c"]
 
 [package]
 name = "hegeltest"
-version = "0.18.0"
+version = "0.19.1"
 edition = "2024"
 # if you bump this, also bump ci.yml and hegel-macros/Cargo.toml
 rust-version = "1.86"
@@ -41,12 +41,12 @@ tempfile = "3.0"
 ciborium = "0.2.2"
 crc32fast = "1.4"
 parking_lot = "0.12"
-hegeltest-macros = { version = "=0.18.0", path = "hegel-macros" }
+hegeltest-macros = { version = "=0.19.1", path = "hegel-macros" }
 # The native engine + C ABI ("libhegel"). hegeltest drives it through the
 # C ABI (the hegel_* extern "C" functions), exactly like other language
 # bindings. Its lib is named `hegel_c` (imported as `hegel_c`); the package
 # is `hegeltest-c`.
-hegeltest-c = { version = "=0.18.0", path = "hegel-c", default-features = false }
+hegeltest-c = { version = "=0.19.1", path = "hegel-c", default-features = false }
 rand = { version = "0.10" }
 dashu-int = { version = "0.4.1", default-features = false, features = ["std"] }
 miniz_oxide = { version = "0.8" }
