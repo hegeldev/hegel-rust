@@ -10,9 +10,9 @@ use std::collections::HashSet;
 
 use super::choices::EngineError;
 use super::state::NativeTestCase;
+use crate::HEGEL_LABEL_FEATURE_FLAG;
 use crate::control::hegel_internal_assert;
 use crate::native::bignum::{BigInt, ToPrimitive};
-use crate::test_case::{invalid_argument, labels};
 
 /// Draw a uniform index in `[0, n)`.
 fn draw_index(ntc: &mut NativeTestCase, n: usize) -> Result<usize, EngineError> {
@@ -54,7 +54,7 @@ impl FeatureFlags {
     }
 
     fn is_enabled(&mut self, ntc: &mut NativeTestCase, i: usize) -> Result<bool, EngineError> {
-        ntc.start_span(labels::FEATURE_FLAG);
+        ntc.start_span(HEGEL_LABEL_FEATURE_FLAG);
         let forced = if self.at_least_one_of.len() == 1 && self.at_least_one_of.contains(&i) {
             Some(false)
         } else {
@@ -89,9 +89,13 @@ pub struct NativeStateMachine {
 
 impl NativeStateMachine {
     pub fn new(rule_names: Vec<String>, invariant_names: Vec<String>) -> Self {
-        if rule_names.is_empty() {
-            invalid_argument!("Stateful testing: there must be at least one rule");
-        }
+        // The caller (`DataSource::new_state_machine`) rejects an empty rule
+        // set with `InvalidArgument` before constructing one, so reaching here
+        // empty is an engine invariant violation, not a caller error.
+        hegel_internal_assert!(
+            !rule_names.is_empty(),
+            "Stateful testing: there must be at least one rule"
+        );
 
         NativeStateMachine {
             rule_names,

@@ -34,9 +34,63 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 use ciborium::Value;
-use hegel::backend::{DataSource, DataSourceError, Failure, TestCaseResult, TestRunResult};
-use hegel::embed::{data_source_for_blob, run_native};
-use hegel::{HealthCheck, Mode, Phase, Settings, Verbosity};
+
+// The engine modules are copied in-crate but expose no C-ABI surface — every
+// `hegel_*` / `HEGEL_*` symbol in the generated header is defined directly in
+// this file. Tell cbindgen not to scan them, so their `pub` engine constants
+// and types don't leak into hegel.h (they live in a separate crate's scope as
+// far as the public C API is concerned).
+/// cbindgen:ignore
+mod antithesis_detect;
+/// cbindgen:ignore
+mod backend;
+/// cbindgen:ignore
+mod cbor_utils;
+/// cbindgen:ignore
+mod control;
+/// cbindgen:ignore
+mod embed;
+/// cbindgen:ignore
+mod native;
+/// cbindgen:ignore
+mod panic;
+/// cbindgen:ignore
+mod settings;
+/// cbindgen:ignore
+mod unicodedata;
+
+// Internal engine re-exports for hegeltest's `benches/`, which reaches them
+// through `hegel::__bench` (a re-export of this). Gated on the private
+// `__bench` feature so they stay out of normal builds.
+/// cbindgen:ignore
+#[cfg(feature = "__bench")]
+#[doc(hidden)]
+pub mod __bench {
+    pub use crate::native::bignum::BigInt;
+    pub use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, StringChoice};
+    pub use crate::native::intervalsets::IntervalSet;
+    pub use crate::native::rng::EngineRng;
+
+    pub fn biased_integer_sample(ic: &IntegerChoice, rng: &mut EngineRng) -> BigInt {
+        crate::native::core::state::biased_integer_sample(ic, rng)
+    }
+
+    pub fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Vec<u32> {
+        crate::native::core::state::biased_string_sample(sc, rng)
+    }
+
+    pub fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<u8> {
+        crate::native::core::state::biased_bytes_sample(bc, rng)
+    }
+
+    pub fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 {
+        crate::native::core::state::biased_float_sample(fc, rng)
+    }
+}
+
+use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult, TestRunResult};
+use crate::embed::{data_source_for_blob, run_native};
+use crate::settings::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};
 
 // ─── Error codes ────────────────────────────────────────────────────────────
 //
@@ -135,6 +189,27 @@ pub enum hegel_status_t {
 pub enum hegel_mode_t {
     HEGEL_MODE_TEST_RUN = 0,
     HEGEL_MODE_SINGLE_TEST_CASE = 1,
+}
+
+/// Which source of randomness the engine draws from. Set via
+/// `hegel_settings_backend`.
+///
+/// - `HEGEL_BACKEND_AUTO`: choose automatically (the default) —
+///   `HEGEL_BACKEND_URANDOM` when running inside Antithesis, otherwise
+///   `HEGEL_BACKEND_DEFAULT`.
+/// - `HEGEL_BACKEND_DEFAULT`: expand a single seeded PRNG. Runs are
+///   reproducible from the seed and shrinking / replay work as usual.
+/// - `HEGEL_BACKEND_URANDOM`: read fresh entropy from `/dev/urandom` on
+///   every draw (falling back to an OS-seeded PRNG on platforms without
+///   it). Intended for running under Antithesis, whose fuzzer controls
+///   `/dev/urandom`; you almost certainly don't want it otherwise.
+#[repr(C)]
+#[derive(Copy, Clone)]
+#[allow(non_camel_case_types)]
+pub enum hegel_backend_t {
+    HEGEL_BACKEND_AUTO = 0,
+    HEGEL_BACKEND_DEFAULT = 1,
+    HEGEL_BACKEND_URANDOM = 2,
 }
 
 /// Aggregate outcome of a finished run, read via `hegel_run_result_status`.
@@ -499,6 +574,28 @@ pub unsafe extern "C" fn hegel_settings_mode(s: *mut HegelSettings, mode: hegel_
     }
 }
 
+/// Select the engine's randomness backend. See `hegel_backend_t`.
+///
+/// `HEGEL_BACKEND_AUTO` is the default and leaves the automatic choice in
+/// place; `HEGEL_BACKEND_DEFAULT` / `HEGEL_BACKEND_URANDOM` pin an explicit
+/// backend, overriding the automatic detection. Like the underlying setting,
+/// pinning is one-way: there is no way to un-pin back to AUTO on a handle
+/// once an explicit backend has been set.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_backend(s: *mut HegelSettings, backend: hegel_backend_t) {
+    if let Some(inner) = unsafe { settings_mut(s) } {
+        match backend {
+            hegel_backend_t::HEGEL_BACKEND_AUTO => {}
+            hegel_backend_t::HEGEL_BACKEND_DEFAULT => {
+                *inner = inner.clone().backend(Backend::Default);
+            }
+            hegel_backend_t::HEGEL_BACKEND_URANDOM => {
+                *inner = inner.clone().backend(Backend::Urandom);
+            }
+        }
+    }
+}
+
 /// Maximum number of valid test cases to run before declaring the
 /// property held. The default is 100. Note that this counts *valid*
 /// cases — assumed-rejected ones don't count against the budget, but
@@ -680,7 +777,12 @@ fn install_worker_panic_hook() {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             if std::thread::current().name() == Some(WORKER_THREAD_NAME) {
+                // Reached only for a panic raised on the engine worker thread,
+                // i.e. the engine itself panicked (an internal invariant); not
+                // provocable without an engine bug.
+                // nocov start
                 return;
+                // nocov end
             }
             prev(info);
         }));
@@ -735,14 +837,17 @@ pub unsafe extern "C" fn hegel_run_start(settings: *const HegelSettings) -> *mut
                         ack: ack_tx,
                     };
                     if let Err(mpsc::SendError(returned)) = to_caller.send(msg) {
-                        // Caller dropped — recover the data source we just
-                        // tried to hand off and mark it complete so the
-                        // engine can make progress to its (now-irrelevant)
-                        // end.
+                        // Caller dropped the result channel in the window
+                        // between the worker producing a case and sending it —
+                        // a thread-shutdown race (abort is set first in the
+                        // normal path), so forcing it needs sleeps. Recover the
+                        // data source and mark it complete so the engine can
+                        // wind down to its (now-irrelevant) end.
+                        // nocov start
                         if let WorkerMessage::TestCase { ds, .. } = returned {
                             ds.mark_complete(&TestCaseResult::Valid);
-                        }
-                        return;
+                        } // nocov end
+                        return; // nocov
                     }
                     // Caller dropping the ack sender is treated the same as
                     // a successful ack — we're winding down regardless.
@@ -752,20 +857,28 @@ pub unsafe extern "C" fn hegel_run_start(settings: *const HegelSettings) -> *mut
             let result = match std::panic::catch_unwind(engine) {
                 Ok(Ok(r)) => Ok(r),
                 Ok(Err(run_error)) => Err(run_error.to_string()),
+                // Reached only when the engine worker thread panics (an
+                // internal invariant): not provocable without an engine bug,
+                // and across the C ABI the panic must surface as a run-level
+                // error string rather than unwind.
+                // nocov start
                 Err(payload) => Err(format!(
                     "Engine panic: {}",
-                    hegel::run_lifecycle::panic_message(&payload)
-                )),
+                    crate::panic::panic_message(&payload)
+                )), // nocov end
             };
             let _ = to_caller.send(WorkerMessage::Done(result));
         });
 
     let worker = match worker {
         Ok(h) => h,
+        // thread::spawn fails only on OS resource exhaustion, which can't be
+        // provoked in-process without destabilising the test runner.
+        // nocov start
         Err(e) => {
             set_last_error(&format!("hegel_run_start: failed to spawn worker: {}", e));
             return ptr::null_mut();
-        }
+        } // nocov end
     };
 
     Box::into_raw(Box::new(HegelRun {
@@ -838,10 +951,15 @@ pub unsafe extern "C" fn hegel_next_test_case(run: *mut HegelRun) -> *mut HegelT
         Err(_) => {
             // Worker dropped its sender without sending Done — should not
             // happen in normal use, but treat as a soft EOF rather than
-            // panicking. Caller distinguishes via last_error.
+            // panicking. Caller distinguishes via last_error. The worker always
+            // sends Done after its catch_unwind, so reaching here needs the
+            // worker thread to die without unwinding: not reproducible in safe
+            // Rust, and this extern "C" entry point must return null, not panic.
+            // nocov start
             run.drained = true;
             set_last_error("hegel_next_test_case: worker terminated without reporting a result");
             ptr::null_mut()
+            // nocov end
         }
     }
 }
@@ -901,10 +1019,14 @@ pub unsafe extern "C" fn hegel_run_free(run: *mut HegelRun) {
     // After the abort flag, the worker's callback short-circuits without
     // sending, so this typically receives just the final Done message and
     // then the channel closes.
+    // Draining a case the worker buffered before it observed the abort flag is
+    // a thread-shutdown race; forcing the window deterministically needs sleeps.
     while let Ok(msg) = run.from_worker.recv() {
         if let WorkerMessage::TestCase { ds, ack, .. } = msg {
+            // nocov start
             ds.mark_complete(&TestCaseResult::Valid);
             let _ = ack.send(());
+            // nocov end
         }
     }
 
@@ -1013,13 +1135,10 @@ fn translate_ds_error(e: DataSourceError) -> c_int {
         DataSourceError::InvalidArgument(msg) => {
             set_last_error(&msg);
             HEGEL_E_INVALID_ARG
-        }
-        // `DataSourceError` is `#[non_exhaustive]`; treat any future variant as
-        // a backend error rather than failing to compile or panicking.
-        other => {
-            set_last_error(&other.to_string());
-            HEGEL_E_BACKEND
-        }
+        } // `DataSourceError` is `#[non_exhaustive]`, but it now lives in this
+          // crate, so an in-crate match is exhaustive without a wildcard. Adding
+          // a variant will fail to compile here, which is the right prompt to
+          // map it deliberately rather than silently funnel it to a backend error.
     }
 }
 
@@ -1076,12 +1195,17 @@ pub unsafe extern "C" fn hegel_generate(
     };
 
     tc.last_value.clear();
+    // Every value the engine produces re-serializes to CBOR (the writer is a
+    // Vec, which never errors), so this is effectively unreachable; but
+    // hegel_generate is extern "C", so it must return an error code here rather
+    // than panic across the C ABI.
     if let Err(e) = ciborium::ser::into_writer(&value, &mut tc.last_value) {
+        // nocov start
         set_last_error(&format!(
             "hegel_generate: failed to re-serialize value: {}",
             e
-        ));
-        return HEGEL_E_INTERNAL;
+        )); // nocov end
+        return HEGEL_E_INTERNAL; // nocov
     }
     unsafe {
         *out_value_cbor = tc.last_value.as_ptr();
@@ -1505,6 +1629,11 @@ pub unsafe extern "C" fn hegel_primitive_boolean(
 /// produced higher observations under the same label. Has no effect
 /// unless `HEGEL_PHASE_TARGET` is enabled. `label` must be non-NULL
 /// and valid UTF-8.
+///
+/// Returns `HEGEL_E_INVALID_ARG` (with a diagnostic in
+/// `hegel_last_error_message`) if `value` is not finite, or if `label`
+/// has already been observed on this test case — each label may be
+/// recorded at most once per case.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_target(
     tc: *mut HegelTestCase,
@@ -1527,8 +1656,10 @@ pub unsafe extern "C" fn hegel_target(
             return HEGEL_E_INVALID_ARG;
         }
     };
-    tc.ds.target_observation(value, label);
-    HEGEL_OK
+    match tc.ds.target_observation(value, label) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_ds_error(e),
+    }
 }
 
 /// Mark this test case complete with the given status.

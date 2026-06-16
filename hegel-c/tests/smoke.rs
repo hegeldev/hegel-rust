@@ -28,11 +28,11 @@ const HEGEL_E_INVALID_ARG: c_int = -5;
 
 fn lib_path() -> PathBuf {
     let filename = if cfg!(target_os = "macos") {
-        "libhegel.dylib"
+        "libhegel_c.dylib"
     } else if cfg!(target_os = "windows") {
-        "hegel.dll"
+        "hegel_c.dll"
     } else {
-        "libhegel.so"
+        "libhegel_c.so"
     };
     // `HEGEL_C_LIB_DIR` lets the harness load a library built into a separate
     // target dir — e.g. the `panic = "abort"` build produced by
@@ -46,9 +46,23 @@ fn lib_path() -> PathBuf {
         );
         return candidate;
     }
-    // The crate is part of a workspace, so the cdylib lands in
-    // ../target/{debug,release}/libhegel.<ext>. `cargo test` builds the debug
-    // profile by default; for --release tests we look there too.
+    // The cdylib is built into the same profile directory as this test
+    // binary, which lives at `<target>/<profile>/deps/<exe>`. Deriving the
+    // location from the running executable (rather than a hard-coded
+    // `<workspace>/target/<profile>`) finds it under whatever target dir is in
+    // use — including `cargo llvm-cov`'s `target/llvm-cov-target/` and the
+    // `panic = "abort"` build's separate tree.
+    if let Ok(exe) = std::env::current_exe() {
+        // <target>/<profile>/deps/<exe> -> <target>/<profile>/<filename>
+        if let Some(profile_dir) = exe.parent().and_then(|deps| deps.parent()) {
+            let candidate = profile_dir.join(filename);
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+    // Fall back to the workspace's default target dir, where a plain
+    // `cargo build -p hegeltest-c` places the cdylib.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let target_dir = manifest_dir.parent().unwrap().join("target");
     for profile in ["debug", "release"] {
@@ -58,8 +72,13 @@ fn lib_path() -> PathBuf {
         }
     }
     panic!(
-        "could not find {} under {}; run `cargo build -p hegeltest-c` first",
+        "could not find {} near {} or under {}; run `cargo build -p hegeltest-c` first",
         filename,
+        std::env::current_exe()
+            .ok()
+            .as_deref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<unknown exe>".to_string()),
         target_dir.display()
     );
 }
@@ -90,6 +109,16 @@ enum CRunStatus {
     Error = 2,
 }
 
+/// `hegel_backend_t` from hegel.h.
+#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[allow(dead_code)]
+enum CBackend {
+    Auto = 0,
+    Default = 1,
+    Urandom = 2,
+}
+
 type FnSettingsNew = unsafe extern "C" fn() -> *mut u8;
 type FnSettingsFree = unsafe extern "C" fn(*mut u8);
 type FnSettingsTestCases = unsafe extern "C" fn(*mut u8, u64);
@@ -97,6 +126,7 @@ type FnSettingsDatabase = unsafe extern "C" fn(*mut u8, *const c_char);
 type FnSettingsDatabaseKey = unsafe extern "C" fn(*mut u8, *const c_char);
 type FnSettingsSeed = unsafe extern "C" fn(*mut u8, u64, bool);
 type FnSettingsDerandomize = unsafe extern "C" fn(*mut u8, bool);
+type FnSettingsBackend = unsafe extern "C" fn(*mut u8, CBackend);
 type FnRunStart = unsafe extern "C" fn(*const u8) -> *mut u8;
 type FnNextTestCase = unsafe extern "C" fn(*mut u8) -> *mut u8;
 type FnRunResult = unsafe extern "C" fn(*mut u8) -> *const u8;
@@ -117,6 +147,8 @@ type FnNewStateMachine = unsafe extern "C" fn(
 ) -> c_int;
 type FnStateMachineNextRule = unsafe extern "C" fn(*mut u8, i64, *mut u64) -> c_int;
 type FnPrimitiveBoolean = unsafe extern "C" fn(*mut u8, f64, bool, bool, *mut bool) -> c_int;
+type FnTarget = unsafe extern "C" fn(*mut u8, f64, *const c_char) -> c_int;
+type FnCollectionMore = unsafe extern "C" fn(*mut u8, i64, *mut bool) -> c_int;
 type FnRunResultStatus = unsafe extern "C" fn(*const u8) -> CRunStatus;
 type FnRunResultError = unsafe extern "C" fn(*const u8) -> *const c_char;
 type FnRunResultFailureCount = unsafe extern "C" fn(*const u8) -> usize;
@@ -138,6 +170,7 @@ struct Api<'a> {
     settings_database_key: Symbol<'a, FnSettingsDatabaseKey>,
     settings_seed: Symbol<'a, FnSettingsSeed>,
     settings_derandomize: Symbol<'a, FnSettingsDerandomize>,
+    settings_backend: Symbol<'a, FnSettingsBackend>,
     run_start: Symbol<'a, FnRunStart>,
     next_test_case: Symbol<'a, FnNextTestCase>,
     run_result: Symbol<'a, FnRunResult>,
@@ -150,6 +183,8 @@ struct Api<'a> {
     new_state_machine: Symbol<'a, FnNewStateMachine>,
     state_machine_next_rule: Symbol<'a, FnStateMachineNextRule>,
     primitive_boolean: Symbol<'a, FnPrimitiveBoolean>,
+    target: Symbol<'a, FnTarget>,
+    collection_more: Symbol<'a, FnCollectionMore>,
     run_result_status: Symbol<'a, FnRunResultStatus>,
     run_result_error: Symbol<'a, FnRunResultError>,
     run_result_failure_count: Symbol<'a, FnRunResultFailureCount>,
@@ -173,6 +208,7 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             settings_database_key: lib.get(b"hegel_settings_database_key\0").unwrap(),
             settings_seed: lib.get(b"hegel_settings_seed\0").unwrap(),
             settings_derandomize: lib.get(b"hegel_settings_derandomize\0").unwrap(),
+            settings_backend: lib.get(b"hegel_settings_backend\0").unwrap(),
             run_start: lib.get(b"hegel_run_start\0").unwrap(),
             next_test_case: lib.get(b"hegel_next_test_case\0").unwrap(),
             run_result: lib.get(b"hegel_run_result\0").unwrap(),
@@ -185,6 +221,8 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             new_state_machine: lib.get(b"hegel_new_state_machine\0").unwrap(),
             state_machine_next_rule: lib.get(b"hegel_state_machine_next_rule\0").unwrap(),
             primitive_boolean: lib.get(b"hegel_primitive_boolean\0").unwrap(),
+            target: lib.get(b"hegel_target\0").unwrap(),
+            collection_more: lib.get(b"hegel_collection_more\0").unwrap(),
             run_result_status: lib.get(b"hegel_run_result_status\0").unwrap(),
             run_result_error: lib.get(b"hegel_run_result_error\0").unwrap(),
             run_result_failure_count: lib.get(b"hegel_run_result_failure_count\0").unwrap(),
@@ -311,6 +349,69 @@ fn libhegel_runs_passing_property() {
     }
 }
 
+/// Pinning the urandom backend via `hegel_settings_backend` drives a run to
+/// completion through the urandom RNG path (rather than the default PRNG).
+/// A trivial always-valid property still passes; this just exercises the
+/// new setter end-to-end and confirms it wires through to a working run.
+#[test]
+fn libhegel_runs_with_urandom_backend() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    unsafe {
+        let s = (a.settings_new)();
+        assert!(!s.is_null());
+        (a.settings_test_cases)(s, 10);
+        let empty = CString::new("").unwrap();
+        (a.settings_database)(s, empty.as_ptr());
+        (a.settings_backend)(s, CBackend::Urandom);
+
+        let run = (a.run_start)(s);
+        assert!(!run.is_null());
+
+        let schema = integer_schema(0, 100);
+        let mut cases = 0usize;
+        loop {
+            let tc = (a.next_test_case)(run);
+            if tc.is_null() {
+                let err = CStr::from_ptr((a.last_error_message)()).to_string_lossy();
+                assert_eq!(err, "", "next_test_case returned NULL with error: {}", err);
+                break;
+            }
+            cases += 1;
+
+            let mut val_ptr: *const u8 = ptr::null();
+            let mut val_len: usize = 0;
+            let rc = (a.generate)(
+                tc,
+                schema.as_ptr(),
+                schema.len(),
+                &mut val_ptr,
+                &mut val_len,
+            );
+            assert_eq!(rc, 0, "generate failed: rc={}", rc);
+
+            let v = decode(std::slice::from_raw_parts(val_ptr, val_len));
+            let Value::Integer(i) = v else {
+                panic!("expected integer, got {:?}", v)
+            };
+            let n: i128 = i.into();
+            assert!((0..=100).contains(&n), "got out-of-range value {}", n);
+
+            assert_eq!((a.mark_complete)(tc, CStatus::Valid, ptr::null()), 0);
+        }
+        assert!(cases >= 1, "expected at least one test case to run");
+
+        let result = (a.run_result)(run);
+        assert!(!result.is_null());
+        assert_eq!((a.run_result_status)(result), CRunStatus::Passed);
+        assert_eq!((a.run_result_failure_count)(result), 0);
+
+        (a.run_free)(run);
+        (a.settings_free)(s);
+    }
+}
+
 #[test]
 fn invalid_schema_returns_error_not_abort() {
     // Reproduces the hegel-java report: a plausible-but-wrong schema type
@@ -363,6 +464,67 @@ fn invalid_schema_returns_error_not_abort() {
         }
 
         (a.mark_complete)(tc, CStatus::Invalid, ptr::null());
+        (a.run_free)(run);
+        (a.settings_free)(s);
+    }
+}
+
+#[test]
+fn caller_usage_errors_return_error_not_abort() {
+    // Every caller usage error on a live test case — a non-finite or repeated
+    // target score, an opaque handle id libhegel never issued — must return
+    // HEGEL_E_INVALID_ARG, never a panic across the `extern "C"` boundary.
+    // Under the `panic = "abort"` build (`just c-test-abort`) a panic on any
+    // of these paths would SIGABRT the process, so this test only passes if
+    // libhegel stays panic-free on them.
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    unsafe {
+        let s = (a.settings_new)();
+        (a.settings_test_cases)(s, 1);
+        let empty = CString::new("").unwrap();
+        (a.settings_database)(s, empty.as_ptr());
+        (a.settings_derandomize)(s, true);
+        (a.settings_seed)(s, 1, true);
+
+        let run = (a.run_start)(s);
+        assert!(!run.is_null());
+        let tc = (a.next_test_case)(run);
+        assert!(!tc.is_null(), "expected a test case");
+
+        let label = CString::new("x").unwrap();
+        let dup = CString::new("dup").unwrap();
+
+        // Non-finite score, and a label observed twice, are usage errors.
+        assert_eq!(
+            (a.target)(tc, f64::NAN, label.as_ptr()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(
+            !CStr::from_ptr((a.last_error_message)())
+                .to_bytes()
+                .is_empty()
+        );
+        assert_eq!((a.target)(tc, 1.0, dup.as_ptr()), HEGEL_OK);
+        assert_eq!((a.target)(tc, 2.0, dup.as_ptr()), HEGEL_E_INVALID_ARG);
+
+        // Opaque handle ids that were never issued: unknown collection (map
+        // lookup), unknown pool / state machine (Vec bounds check).
+        let mut more = false;
+        assert_eq!(
+            (a.collection_more)(tc, 9999, &mut more),
+            HEGEL_E_INVALID_ARG
+        );
+        let mut var_id = 0i64;
+        assert_eq!((a.pool_add)(tc, 9999, &mut var_id), HEGEL_E_INVALID_ARG);
+        let mut rule_idx = 0u64;
+        assert_eq!(
+            (a.state_machine_next_rule)(tc, 9999, &mut rule_idx),
+            HEGEL_E_INVALID_ARG
+        );
+
+        (a.mark_complete)(tc, CStatus::Valid, ptr::null());
         (a.run_free)(run);
         (a.settings_free)(s);
     }

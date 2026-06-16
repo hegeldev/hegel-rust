@@ -396,6 +396,7 @@ dependencies = [
  "criterion",
  "ctor",
  "dashu-int",
+ "hegeltest-c",
  "hegeltest-macros",
  "insta",
  "is-terminal",
@@ -418,8 +419,18 @@ version = "0.19.1"
 dependencies = [
  "cbindgen",
  "ciborium",
- "hegeltest",
+ "crc32fast",
+ "ctor",
+ "dashu-int",
+ "insta",
  "libloading",
+ "miniz_oxide",
+ "parking_lot",
+ "rand",
+ "regex",
+ "rustc-hash",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

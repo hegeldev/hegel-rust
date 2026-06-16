@@ -9,17 +9,42 @@ repository = "https://github.com/hegeldev/hegel-rust"
 homepage = "http://hegel.dev"
 readme = "README.md"
 
+# The lib is named `hegel_c` (not `hegel`) so it can coexist in one
+# dependency graph with the `hegeltest` crate, whose lib is named `hegel`:
+# the upcoming inversion has `hegeltest` depend on this crate, and two
+# crates sharing a lib name cannot. This only changes the build-output stem
+# (`libhegel_c.{so,a}`); the C header (`hegel.h`), the exported `hegel_*`
+# symbols, and the released `libhegel-<os>-<arch>` assets are unaffected.
 [lib]
-name = "hegel"
-crate-type = ["cdylib", "staticlib"]
+name = "hegel_c"
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-hegeltest = { version = "=0.19.1", path = "..", default-features = false }
 ciborium = "0.2.2"
+serde = { version = "1.0.103", features = ["derive"] }
+rand = { version = "0.10" }
+dashu-int = { version = "0.4.1", default-features = false, features = ["std"] }
+miniz_oxide = { version = "0.8" }
+rustc-hash = { version = "2" }
+crc32fast = "1.4"
+parking_lot = "0.12"
+tempfile = "3"
 
+[features]
+# Internal: exposes engine internals via `__bench` for hegeltest's benches/.
+# Not part of the public C API; depend on at your peril.
+__bench = []
+
+# 0.29.2 is the minimum that reproduces the checked-in `include/hegel.h`
+# byte-for-byte; earlier 0.29.x emit slightly different formatting, which the
+# build.rs drift check (correctly) rejects — surfacing under `-Z minimal-versions`.
 [build-dependencies]
-cbindgen = "0.29"
+cbindgen = "0.29.2"
 
 [dev-dependencies]
 libloading = "0.8"
 tempfile = "3"
+regex = "1.0"
+serde_json = "1.0.61"
+insta = "1.47.2"
+ctor = "0.2"

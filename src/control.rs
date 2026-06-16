@@ -107,53 +107,6 @@ macro_rules! hegel_internal_assert_eq {
 }
 pub(crate) use hegel_internal_assert_eq;
 
-/// [`hegel_internal_assert!`] for inequality, with both values in the message.
-macro_rules! hegel_internal_assert_ne {
-    ($left:expr, $right:expr $(,)?) => {
-        match (&$left, &$right) {
-            (left, right) => $crate::control::hegel_internal_assert!(
-                left != right,
-                "internal assertion failed: {} != {} (both: {:?})",
-                ::std::stringify!($left),
-                ::std::stringify!($right),
-                left
-            ),
-        }
-    };
-}
-pub(crate) use hegel_internal_assert_ne;
-
-/// [`hegel_internal_assert!`] with `debug_assert!`'s cost model: compiled
-/// out unless `debug_assertions` are enabled. For engine hot paths.
-macro_rules! hegel_internal_debug_assert {
-    ($($arg:tt)+) => {
-        if ::std::cfg!(debug_assertions) {
-            $crate::control::hegel_internal_assert!($($arg)+);
-        }
-    };
-}
-pub(crate) use hegel_internal_debug_assert;
-
-/// [`hegel_internal_assert_eq!`] with `debug_assert!`'s cost model.
-macro_rules! hegel_internal_debug_assert_eq {
-    ($($arg:tt)+) => {
-        if ::std::cfg!(debug_assertions) {
-            $crate::control::hegel_internal_assert_eq!($($arg)+);
-        }
-    };
-}
-pub(crate) use hegel_internal_debug_assert_eq;
-
-/// [`hegel_internal_assert_ne!`] with `debug_assert!`'s cost model.
-macro_rules! hegel_internal_debug_assert_ne {
-    ($($arg:tt)+) => {
-        if ::std::cfg!(debug_assertions) {
-            $crate::control::hegel_internal_assert_ne!($($arg)+);
-        }
-    };
-}
-pub(crate) use hegel_internal_debug_assert_ne;
-
 /// Raise an internal error (a bug in Hegel) directly, formatting like
 /// [`format!`]. The non-assertion counterpart of
 /// [`hegel_internal_assert!`], for invariant violations detected by

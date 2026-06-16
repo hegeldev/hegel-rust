@@ -42,6 +42,11 @@ ciborium = "0.2.2"
 crc32fast = "1.4"
 parking_lot = "0.12"
 hegeltest-macros = { version = "=0.19.1", path = "hegel-macros" }
+# The native engine + C ABI ("libhegel"). hegeltest drives it through the
+# C ABI (the hegel_* extern "C" functions), exactly like other language
+# bindings. Its lib is named `hegel_c` (imported as `hegel_c`); the package
+# is `hegeltest-c`.
+hegeltest-c = { version = "=0.19.1", path = "hegel-c", default-features = false }
 rand = { version = "0.10" }
 dashu-int = { version = "0.4.1", default-features = false, features = ["std"] }
 miniz_oxide = { version = "0.8" }
@@ -91,9 +96,9 @@ jiff = ["dep:jiff"]
 serde_json = ["dep:serde_json"]
 # Enables the serde_json/raw_value feature. Enables generators for serde_json::value::RawValue.
 serde_json_raw_value = ["serde_json", "serde_json/raw_value"]
-# Internal: re-exports private items needed by `benches/`. Not part of the
-# public API; depend on at your peril.
-__bench = []
+# Internal: re-exports engine internals needed by `benches/` (from hegel-c,
+# where the engine lives). Not part of the public API; depend on at your peril.
+__bench = ["hegeltest-c/__bench"]
 
 # Tune the dev/test profile for CI speed.
 #
