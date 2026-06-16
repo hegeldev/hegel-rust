@@ -1,5 +1,5 @@
 use crate::antithesis::TestLocation;
-use crate::settings::{Mode, Settings};
+use crate::settings::Settings;
 use crate::test_case::TestCase;
 
 // ─── Hegel test builder ─────────────────────────────────────────────────────
@@ -82,38 +82,24 @@ where
     pub fn run(self) {
         // A blob replay is a single deterministic case — no generation,
         // targeting, or shrinking — so it is phase-agnostic and takes
-        // precedence over the normal runner.
+        // precedence over the normal run.
         if let Some(blob) = self.reproduce_failure {
-            crate::run_lifecycle::drive(
-                crate::native::test_runner::ReproduceRunner { blob },
+            crate::run_lifecycle::drive_blob_replay(
                 self.test_fn,
                 &self.settings,
                 self.database_key.as_deref(),
+                &blob,
                 self.test_location.as_ref(),
             );
             return;
         }
 
-        // A single test case is not a property-test run (no exploration,
-        // shrinking, or replay) and bypasses the TestRunner machinery.
-        if self.settings.mode == Mode::SingleTestCase {
-            crate::run_lifecycle::drive_single(
-                self.test_fn,
-                &self.settings,
-                self.database_key.as_deref(),
-                self.test_location.as_ref(),
-            );
-            return;
-        }
-
-        // No early-out when `Phase::Generate` is absent: the phases are
-        // independent, so e.g. `phases = [Phase::Reuse]` must still replay
-        // stored counterexamples (the engine itself skips whatever phases
-        // are disabled).
-        let runner = crate::native::test_runner::NativeTestRunner;
-
+        // Everything else — including `Mode::SingleTestCase`, which the engine
+        // handles from the settings — drives the engine through the C ABI.
+        // There is no early-out when `Phase::Generate` is absent: the phases
+        // are independent (e.g. `phases = [Phase::Reuse]` must still replay
+        // stored counterexamples), and the engine skips whatever is disabled.
         crate::run_lifecycle::drive(
-            runner,
             self.test_fn,
             &self.settings,
             self.database_key.as_deref(),

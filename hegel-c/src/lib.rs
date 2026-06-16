@@ -34,9 +34,63 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 use ciborium::Value;
-use hegel::backend::{DataSource, DataSourceError, Failure, TestCaseResult, TestRunResult};
-use hegel::embed::{data_source_for_blob, run_native};
-use hegel::{HealthCheck, Mode, Phase, Settings, Verbosity};
+
+// The engine modules are copied in-crate but expose no C-ABI surface — every
+// `hegel_*` / `HEGEL_*` symbol in the generated header is defined directly in
+// this file. Tell cbindgen not to scan them, so their `pub` engine constants
+// and types don't leak into hegel.h (they live in a separate crate's scope as
+// far as the public C API is concerned).
+/// cbindgen:ignore
+mod antithesis_detect;
+/// cbindgen:ignore
+mod backend;
+/// cbindgen:ignore
+mod cbor_utils;
+/// cbindgen:ignore
+mod control;
+/// cbindgen:ignore
+mod embed;
+/// cbindgen:ignore
+mod native;
+/// cbindgen:ignore
+mod panic;
+/// cbindgen:ignore
+mod settings;
+/// cbindgen:ignore
+mod unicodedata;
+
+// Internal engine re-exports for hegeltest's `benches/`, which reaches them
+// through `hegel::__bench` (a re-export of this). Gated on the private
+// `__bench` feature so they stay out of normal builds.
+/// cbindgen:ignore
+#[cfg(feature = "__bench")]
+#[doc(hidden)]
+pub mod __bench {
+    pub use crate::native::bignum::BigInt;
+    pub use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, StringChoice};
+    pub use crate::native::intervalsets::IntervalSet;
+    pub use crate::native::rng::EngineRng;
+
+    pub fn biased_integer_sample(ic: &IntegerChoice, rng: &mut EngineRng) -> BigInt {
+        crate::native::core::state::biased_integer_sample(ic, rng)
+    }
+
+    pub fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Vec<u32> {
+        crate::native::core::state::biased_string_sample(sc, rng)
+    }
+
+    pub fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<u8> {
+        crate::native::core::state::biased_bytes_sample(bc, rng)
+    }
+
+    pub fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 {
+        crate::native::core::state::biased_float_sample(fc, rng)
+    }
+}
+
+use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult, TestRunResult};
+use crate::embed::{data_source_for_blob, run_native};
+use crate::settings::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};
 
 // ─── Error codes ────────────────────────────────────────────────────────────
 //
@@ -135,6 +189,27 @@ pub enum hegel_status_t {
 pub enum hegel_mode_t {
     HEGEL_MODE_TEST_RUN = 0,
     HEGEL_MODE_SINGLE_TEST_CASE = 1,
+}
+
+/// Which source of randomness the engine draws from. Set via
+/// `hegel_settings_backend`.
+///
+/// - `HEGEL_BACKEND_AUTO`: choose automatically (the default) —
+///   `HEGEL_BACKEND_URANDOM` when running inside Antithesis, otherwise
+///   `HEGEL_BACKEND_DEFAULT`.
+/// - `HEGEL_BACKEND_DEFAULT`: expand a single seeded PRNG. Runs are
+///   reproducible from the seed and shrinking / replay work as usual.
+/// - `HEGEL_BACKEND_URANDOM`: read fresh entropy from `/dev/urandom` on
+///   every draw (falling back to an OS-seeded PRNG on platforms without
+///   it). Intended for running under Antithesis, whose fuzzer controls
+///   `/dev/urandom`; you almost certainly don't want it otherwise.
+#[repr(C)]
+#[derive(Copy, Clone)]
+#[allow(non_camel_case_types)]
+pub enum hegel_backend_t {
+    HEGEL_BACKEND_AUTO = 0,
+    HEGEL_BACKEND_DEFAULT = 1,
+    HEGEL_BACKEND_URANDOM = 2,
 }
 
 /// Aggregate outcome of a finished run, read via `hegel_run_result_status`.
@@ -280,6 +355,12 @@ pub const HEGEL_LABEL_SAMPLED_FROM: u64 = 14;
 
 /// Outer span around the variant discriminator of a sum-type draw.
 pub const HEGEL_LABEL_ENUM_VARIANT: u64 = 15;
+
+/// Span around one swarm-testing feature-flag draw. Emitted internally
+/// by the engine's state-machine rule selection
+/// (`hegel_state_machine_next_rule`); callers normally never open this
+/// span themselves.
+pub const HEGEL_LABEL_FEATURE_FLAG: u64 = 16;
 
 // ─── Thread-local error message ─────────────────────────────────────────────
 
@@ -493,6 +574,28 @@ pub unsafe extern "C" fn hegel_settings_mode(s: *mut HegelSettings, mode: hegel_
     }
 }
 
+/// Select the engine's randomness backend. See `hegel_backend_t`.
+///
+/// `HEGEL_BACKEND_AUTO` is the default and leaves the automatic choice in
+/// place; `HEGEL_BACKEND_DEFAULT` / `HEGEL_BACKEND_URANDOM` pin an explicit
+/// backend, overriding the automatic detection. Like the underlying setting,
+/// pinning is one-way: there is no way to un-pin back to AUTO on a handle
+/// once an explicit backend has been set.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_backend(s: *mut HegelSettings, backend: hegel_backend_t) {
+    if let Some(inner) = unsafe { settings_mut(s) } {
+        match backend {
+            hegel_backend_t::HEGEL_BACKEND_AUTO => {}
+            hegel_backend_t::HEGEL_BACKEND_DEFAULT => {
+                *inner = inner.clone().backend(Backend::Default);
+            }
+            hegel_backend_t::HEGEL_BACKEND_URANDOM => {
+                *inner = inner.clone().backend(Backend::Urandom);
+            }
+        }
+    }
+}
+
 /// Maximum number of valid test cases to run before declaring the
 /// property held. The default is 100. Note that this counts *valid*
 /// cases — assumed-rejected ones don't count against the budget, but
@@ -674,7 +777,12 @@ fn install_worker_panic_hook() {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             if std::thread::current().name() == Some(WORKER_THREAD_NAME) {
+                // Reached only for a panic raised on the engine worker thread,
+                // i.e. the engine itself panicked (an internal invariant); not
+                // provocable without an engine bug.
+                // nocov start
                 return;
+                // nocov end
             }
             prev(info);
         }));
@@ -729,14 +837,17 @@ pub unsafe extern "C" fn hegel_run_start(settings: *const HegelSettings) -> *mut
                         ack: ack_tx,
                     };
                     if let Err(mpsc::SendError(returned)) = to_caller.send(msg) {
-                        // Caller dropped — recover the data source we just
-                        // tried to hand off and mark it complete so the
-                        // engine can make progress to its (now-irrelevant)
-                        // end.
+                        // Caller dropped the result channel in the window
+                        // between the worker producing a case and sending it —
+                        // a thread-shutdown race (abort is set first in the
+                        // normal path), so forcing it needs sleeps. Recover the
+                        // data source and mark it complete so the engine can
+                        // wind down to its (now-irrelevant) end.
+                        // nocov start
                         if let WorkerMessage::TestCase { ds, .. } = returned {
                             ds.mark_complete(&TestCaseResult::Valid);
-                        }
-                        return;
+                        } // nocov end
+                        return; // nocov
                     }
                     // Caller dropping the ack sender is treated the same as
                     // a successful ack — we're winding down regardless.
@@ -746,20 +857,28 @@ pub unsafe extern "C" fn hegel_run_start(settings: *const HegelSettings) -> *mut
             let result = match std::panic::catch_unwind(engine) {
                 Ok(Ok(r)) => Ok(r),
                 Ok(Err(run_error)) => Err(run_error.to_string()),
+                // Reached only when the engine worker thread panics (an
+                // internal invariant): not provocable without an engine bug,
+                // and across the C ABI the panic must surface as a run-level
+                // error string rather than unwind.
+                // nocov start
                 Err(payload) => Err(format!(
                     "Engine panic: {}",
-                    hegel::run_lifecycle::panic_message(&payload)
-                )),
+                    crate::panic::panic_message(&payload)
+                )), // nocov end
             };
             let _ = to_caller.send(WorkerMessage::Done(result));
         });
 
     let worker = match worker {
         Ok(h) => h,
+        // thread::spawn fails only on OS resource exhaustion, which can't be
+        // provoked in-process without destabilising the test runner.
+        // nocov start
         Err(e) => {
             set_last_error(&format!("hegel_run_start: failed to spawn worker: {}", e));
             return ptr::null_mut();
-        }
+        } // nocov end
     };
 
     Box::into_raw(Box::new(HegelRun {
@@ -832,10 +951,15 @@ pub unsafe extern "C" fn hegel_next_test_case(run: *mut HegelRun) -> *mut HegelT
         Err(_) => {
             // Worker dropped its sender without sending Done — should not
             // happen in normal use, but treat as a soft EOF rather than
-            // panicking. Caller distinguishes via last_error.
+            // panicking. Caller distinguishes via last_error. The worker always
+            // sends Done after its catch_unwind, so reaching here needs the
+            // worker thread to die without unwinding: not reproducible in safe
+            // Rust, and this extern "C" entry point must return null, not panic.
+            // nocov start
             run.drained = true;
             set_last_error("hegel_next_test_case: worker terminated without reporting a result");
             ptr::null_mut()
+            // nocov end
         }
     }
 }
@@ -895,10 +1019,14 @@ pub unsafe extern "C" fn hegel_run_free(run: *mut HegelRun) {
     // After the abort flag, the worker's callback short-circuits without
     // sending, so this typically receives just the final Done message and
     // then the channel closes.
+    // Draining a case the worker buffered before it observed the abort flag is
+    // a thread-shutdown race; forcing the window deterministically needs sleeps.
     while let Ok(msg) = run.from_worker.recv() {
         if let WorkerMessage::TestCase { ds, ack, .. } = msg {
+            // nocov start
             ds.mark_complete(&TestCaseResult::Valid);
             let _ = ack.send(());
+            // nocov end
         }
     }
 
@@ -1007,13 +1135,10 @@ fn translate_ds_error(e: DataSourceError) -> c_int {
         DataSourceError::InvalidArgument(msg) => {
             set_last_error(&msg);
             HEGEL_E_INVALID_ARG
-        }
-        // `DataSourceError` is `#[non_exhaustive]`; treat any future variant as
-        // a backend error rather than failing to compile or panicking.
-        other => {
-            set_last_error(&other.to_string());
-            HEGEL_E_BACKEND
-        }
+        } // `DataSourceError` is `#[non_exhaustive]`, but it now lives in this
+          // crate, so an in-crate match is exhaustive without a wildcard. Adding
+          // a variant will fail to compile here, which is the right prompt to
+          // map it deliberately rather than silently funnel it to a backend error.
     }
 }
 
@@ -1070,12 +1195,17 @@ pub unsafe extern "C" fn hegel_generate(
     };
 
     tc.last_value.clear();
+    // Every value the engine produces re-serializes to CBOR (the writer is a
+    // Vec, which never errors), so this is effectively unreachable; but
+    // hegel_generate is extern "C", so it must return an error code here rather
+    // than panic across the C ABI.
     if let Err(e) = ciborium::ser::into_writer(&value, &mut tc.last_value) {
+        // nocov start
         set_last_error(&format!(
             "hegel_generate: failed to re-serialize value: {}",
             e
-        ));
-        return HEGEL_E_INTERNAL;
+        )); // nocov end
+        return HEGEL_E_INTERNAL; // nocov
     }
     unsafe {
         *out_value_cbor = tc.last_value.as_ptr();
@@ -1312,12 +1442,198 @@ pub unsafe extern "C" fn hegel_pool_generate(
     }
 }
 
+/// Convert a C array of `len` NUL-terminated strings into owned Rust
+/// strings, setting `hegel_last_error_message` and returning the error
+/// code on a null array (with `len > 0`), a null entry, or a non-UTF-8
+/// entry.
+unsafe fn names_from_c_array(
+    func: &str,
+    what: &str,
+    names: *const *const c_char,
+    len: usize,
+) -> Result<Vec<String>, c_int> {
+    if names.is_null() && len > 0 {
+        set_last_error(&format!("{func}: {what} pointer is null"));
+        return Err(HEGEL_E_INVALID_ARG);
+    }
+    let ptrs: &[*const c_char] = if len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(names, len) }
+    };
+    let mut out = Vec::with_capacity(len);
+    for (i, &p) in ptrs.iter().enumerate() {
+        if p.is_null() {
+            set_last_error(&format!("{func}: {what}[{i}] is null"));
+            return Err(HEGEL_E_INVALID_ARG);
+        }
+        match unsafe { CStr::from_ptr(p) }.to_str() {
+            Ok(s) => out.push(s.to_string()),
+            Err(_) => {
+                set_last_error(&format!("{func}: {what}[{i}] is not valid UTF-8"));
+                return Err(HEGEL_E_INVALID_ARG);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Register a *state machine* for engine-owned stateful (rule-based)
+/// testing: `num_rules` rules and `num_invariants` invariants, each
+/// identified by a NUL-terminated UTF-8 name. The engine owns rule
+/// selection — including swarm testing, where each test case enables a
+/// random subset of rules (at least one) and selection draws only from
+/// that subset. The caller drives execution: it asks
+/// `hegel_state_machine_next_rule` which rule to run at each step and
+/// applies it.
+///
+/// On success writes the new machine's id into `*out_state_machine_id`
+/// and returns `HEGEL_OK`. The id is opaque; pass it to subsequent
+/// `hegel_state_machine_next_rule` calls on the *same* test case.
+/// Returns `HEGEL_E_INVALID_ARG` if `num_rules` is zero, or on null /
+/// non-UTF-8 names.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_new_state_machine(
+    tc: *mut HegelTestCase,
+    rule_names: *const *const c_char,
+    num_rules: usize,
+    invariant_names: *const *const c_char,
+    num_invariants: usize,
+    out_state_machine_id: *mut i64,
+) -> c_int {
+    clear_last_error();
+    let tc = match unsafe { tc_mut(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_state_machine_id.is_null() {
+        set_last_error("hegel_new_state_machine: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let rules = match unsafe {
+        names_from_c_array(
+            "hegel_new_state_machine",
+            "rule_names",
+            rule_names,
+            num_rules,
+        )
+    } {
+        Ok(v) => v,
+        Err(rc) => return rc,
+    };
+    let invariants = match unsafe {
+        names_from_c_array(
+            "hegel_new_state_machine",
+            "invariant_names",
+            invariant_names,
+            num_invariants,
+        )
+    } {
+        Ok(v) => v,
+        Err(rc) => return rc,
+    };
+    let rule_refs: Vec<&str> = rules.iter().map(|s| s.as_str()).collect();
+    let invariant_refs: Vec<&str> = invariants.iter().map(|s| s.as_str()).collect();
+    match tc.ds.new_state_machine(&rule_refs, &invariant_refs) {
+        Ok(id) => {
+            unsafe { *out_state_machine_id = id };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(e),
+    }
+}
+
+/// Draw the index of the next rule to run, in `[0, num_rules)`, letting
+/// the engine choose (and shrink) the rule sequence. Swarm testing is
+/// applied per test case: a random subset of rules is enabled on the
+/// first call and selection is restricted to that subset for the rest
+/// of the test case, with restrictions that shrink away in minimal
+/// counterexamples.
+///
+/// On success writes the chosen rule index into `*out_rule_index` and
+/// returns `HEGEL_OK`. `state_machine_id` must be an id returned by
+/// `hegel_new_state_machine` on this test case. Returns
+/// `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
+/// (the caller should abort the body and call `hegel_mark_complete`
+/// with `HEGEL_STATUS_OVERRUN`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_state_machine_next_rule(
+    tc: *mut HegelTestCase,
+    state_machine_id: i64,
+    out_rule_index: *mut i64,
+) -> c_int {
+    clear_last_error();
+    let tc = match unsafe { tc_mut(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_rule_index.is_null() {
+        set_last_error("hegel_state_machine_next_rule: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.ds.state_machine_next_rule(state_machine_id) {
+        Ok(index) => {
+            unsafe { *out_rule_index = index };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(e),
+    }
+}
+
+/// Draw a single boolean that is `true` with probability `p`. `p`
+/// must be in `[0.0, 1.0]`; `p = 0.0` always yields `false` and
+/// `p = 1.0` always yields `true` without consuming entropy.
+///
+/// When `has_forced` is `true` the result is forced to `forced`: the
+/// engine still records the choice (so replay and shrinking stay
+/// aligned) but consumes no entropy, and the shrinker will not flip it.
+/// Forcing `true` with `p = 0.0` or `false` with `p = 1.0` is
+/// contradictory and rejected.
+///
+/// On success writes the drawn value into `*out_value` and returns
+/// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice
+/// budget is exhausted for this test case (the caller should abort the
+/// body and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
+/// Returns `HEGEL_E_INVALID_ARG` for a NULL `out_value`, a `p` outside
+/// `[0.0, 1.0]` (including NaN), or a contradictory forced value; the
+/// diagnostic is in `hegel_last_error_message`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_primitive_boolean(
+    tc: *mut HegelTestCase,
+    p: f64,
+    forced: bool,
+    has_forced: bool,
+    out_value: *mut bool,
+) -> c_int {
+    clear_last_error();
+    let tc = match unsafe { tc_mut(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_value.is_null() {
+        set_last_error("hegel_primitive_boolean: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.ds.primitive_boolean(p, has_forced.then_some(forced)) {
+        Ok(v) => {
+            unsafe { *out_value = v };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(e),
+    }
+}
+
 /// Record a numeric observation under `label` for the engine's
 /// targeting phase to hill-climb toward. Higher values are "more
 /// interesting"; the engine biases later test cases toward inputs that
 /// produced higher observations under the same label. Has no effect
 /// unless `HEGEL_PHASE_TARGET` is enabled. `label` must be non-NULL
 /// and valid UTF-8.
+///
+/// Returns `HEGEL_E_INVALID_ARG` (with a diagnostic in
+/// `hegel_last_error_message`) if `value` is not finite, or if `label`
+/// has already been observed on this test case — each label may be
+/// recorded at most once per case.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_target(
     tc: *mut HegelTestCase,
@@ -1340,8 +1656,10 @@ pub unsafe extern "C" fn hegel_target(
             return HEGEL_E_INVALID_ARG;
         }
     };
-    tc.ds.target_observation(value, label);
-    HEGEL_OK
+    match tc.ds.target_observation(value, label) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_ds_error(e),
+    }
 }
 
 /// Mark this test case complete with the given status.

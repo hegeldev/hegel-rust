@@ -1,3 +1,5 @@
+// ─── Public types ───────────────────────────────────────────────────────────
+
 /// Health checks that can be suppressed during test execution.
 ///
 /// Health checks detect common issues with test configuration that would
@@ -12,29 +14,6 @@ pub enum HealthCheck {
     TestCasesTooLarge,
     /// The smallest natural input is very large.
     LargeInitialTestCase,
-}
-
-impl HealthCheck {
-    /// Returns all health check variants.
-    ///
-    /// Useful for suppressing all health checks at once:
-    ///
-    /// ```no_run
-    /// use hegel::HealthCheck;
-    ///
-    /// #[hegel::test(suppress_health_check = HealthCheck::all())]
-    /// fn my_test(tc: hegel::TestCase) {
-    ///     // ...
-    /// }
-    /// ```
-    pub const fn all() -> [HealthCheck; 4] {
-        [
-            HealthCheck::FilterTooMuch,
-            HealthCheck::TooSlow,
-            HealthCheck::TestCasesTooLarge,
-            HealthCheck::LargeInitialTestCase,
-        ]
-    }
 }
 
 /// Controls which phases of the test lifecycle are executed.
@@ -110,37 +89,9 @@ pub enum Verbosity {
     Debug,
 }
 
-pub(crate) fn is_in_ci() -> bool {
-    const CI_VARS: &[(&str, Option<&str>)] = &[
-        ("CI", None),
-        ("TF_BUILD", Some("true")),
-        ("BUILDKITE", Some("true")),
-        ("CIRCLECI", Some("true")),
-        ("CIRRUS_CI", Some("true")),
-        ("CODEBUILD_BUILD_ID", None),
-        ("GITHUB_ACTIONS", Some("true")),
-        ("GITLAB_CI", None),
-        ("HEROKU_TEST_RUN_ID", None),
-        ("TEAMCITY_VERSION", None),
-        ("bamboo.buildKey", None),
-    ];
-
-    CI_VARS.iter().any(|(key, value)| match value {
-        None => std::env::var_os(key).is_some(),
-        Some(expected) => std::env::var(key).ok().as_deref() == Some(expected),
-    })
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Database {
-    Unset,
-    Disabled,
-    Path(String),
-}
-
 /// Configuration for a Hegel test run.
 ///
-/// Use builder methods to customize, then pass to [`crate::Hegel::settings`] or
+/// Use builder methods to customize, then pass to [`Hegel::settings`] or
 /// the `settings` parameter of `#[hegel::test]`.
 ///
 /// In CI environments (detected automatically), the database is disabled
@@ -156,7 +107,6 @@ pub struct Settings {
     pub(crate) suppress_health_check: Vec<HealthCheck>,
     pub(crate) phases: Vec<Phase>,
     pub(crate) report_multiple_failures: bool,
-    pub(crate) print_blob: bool,
     /// The randomness backend, or `None` to let it be chosen automatically
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
@@ -187,7 +137,6 @@ impl Settings {
                 Phase::Shrink,
             ],
             report_multiple_failures: true,
-            print_blob: false,
             backend: None,
         }
     }
@@ -206,6 +155,19 @@ impl Settings {
     pub fn backend(mut self, backend: Backend) -> Self {
         self.backend = Some(backend);
         self
+    }
+
+    /// Resolve the effective backend, given whether the process is running
+    /// inside Antithesis.
+    ///
+    /// An explicit [`Settings::backend`] always wins; otherwise urandom is
+    /// used under Antithesis and the default PRNG backend elsewhere.
+    pub(crate) fn resolved_backend(&self, in_antithesis: bool) -> Backend {
+        match self.backend {
+            Some(backend) => backend,
+            None if in_antithesis => Backend::Urandom,
+            None => Backend::Default,
+        }
     }
 
     /// Set the number of test cases to run (default: 100).
@@ -241,6 +203,23 @@ impl Settings {
         self
     }
 
+    /// Set which test lifecycle phases to run.
+    ///
+    /// Defaults to all phases: `[Phase::Explicit, Phase::Reuse, Phase::Generate, Phase::Target, Phase::Shrink]`.
+    ///
+    /// Example — skip shrinking (useful when you only need a witness, not a
+    /// minimal counterexample):
+    ///
+    /// ```ignore
+    /// use hegel::{Phase, Settings};
+    ///
+    /// let s = Settings::new().phases([Phase::Reuse, Phase::Generate]);
+    /// ```
+    pub fn phases(mut self, phases: impl IntoIterator<Item = Phase>) -> Self {
+        self.phases = phases.into_iter().collect();
+        self
+    }
+
     /// Suppress one or more health checks so they do not cause test failure.
     ///
     /// Health checks detect common issues like excessive filtering or slow
@@ -248,7 +227,7 @@ impl Settings {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```ignore
     /// use hegel::{HealthCheck, Verbosity};
     /// use hegel::generators as gs;
     ///
@@ -261,38 +240,6 @@ impl Settings {
     pub fn suppress_health_check(mut self, checks: impl IntoIterator<Item = HealthCheck>) -> Self {
         self.suppress_health_check.extend(checks);
         self
-    }
-
-    /// Set which test lifecycle phases to run.
-    ///
-    /// Defaults to all phases: `[Phase::Explicit, Phase::Reuse, Phase::Generate, Phase::Target, Phase::Shrink]`.
-    ///
-    /// Example — skip shrinking (useful when you only need a witness, not a
-    /// minimal counterexample):
-    ///
-    /// ```no_run
-    /// use hegel::{Phase, Settings};
-    ///
-    /// let s = Settings::new().phases([Phase::Reuse, Phase::Generate]);
-    /// ```
-    pub fn phases(mut self, phases: impl IntoIterator<Item = Phase>) -> Self {
-        self.phases = phases.into_iter().collect();
-        self
-    }
-
-    /// Print a copy-pasteable `#[hegel::reproduce_failure("…")]` line for the
-    /// counterexample when a test fails. Defaults to `false`.
-    ///
-    /// The reproduce blob is always *attached* to the failure. This setting only controls whether it is printed to
-    /// the failure output. Has effect only on the native backend.
-    pub fn print_blob(mut self, print_blob: bool) -> Self {
-        self.print_blob = print_blob;
-        self
-    }
-
-    /// Returns `true` if the given phase is enabled in these settings.
-    pub fn has_phase(&self, phase: Phase) -> bool {
-        self.phases.contains(&phase)
     }
 
     /// Control whether multi-bug runs report every distinct failing example
@@ -316,6 +263,34 @@ impl Default for Settings {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Database {
+    Unset,
+    Disabled,
+    Path(String),
+}
+
+fn is_in_ci() -> bool {
+    const CI_VARS: &[(&str, Option<&str>)] = &[
+        ("CI", None),
+        ("TF_BUILD", Some("true")),
+        ("BUILDKITE", Some("true")),
+        ("CIRCLECI", Some("true")),
+        ("CIRRUS_CI", Some("true")),
+        ("CODEBUILD_BUILD_ID", None),
+        ("GITHUB_ACTIONS", Some("true")),
+        ("GITLAB_CI", None),
+        ("HEROKU_TEST_RUN_ID", None),
+        ("TEAMCITY_VERSION", None),
+        ("bamboo.buildKey", None),
+    ];
+
+    CI_VARS.iter().any(|(key, value)| match value {
+        None => std::env::var_os(key).is_some(),
+        Some(expected) => std::env::var(key).ok().as_deref() == Some(expected),
+    })
 }
 
 #[cfg(test)]

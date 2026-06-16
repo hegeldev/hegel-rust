@@ -15,7 +15,6 @@ use crate::backend::{DataSource, DataSourceError, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{ChoiceNode, EngineError, ManyState, NativeTestCase, Span, Status};
 use crate::native::schema;
-use crate::test_case::invalid_argument;
 
 /// Per-test-case state shared between `NativeDataSource` and the engine
 /// that owns the handle.  The engine constructs both halves up-front,
@@ -154,6 +153,25 @@ impl NativeDataSource {
     }
 }
 
+/// Build the `InvalidArgument` error for a caller-supplied opaque id (a
+/// collection / pool / state-machine handle) that libhegel never issued.
+/// Returned rather than panicked so the C ABI stays panic-free on bad input
+/// (libhegel must remain correct under `panic = "abort"`; an invalid argument
+/// is not a bug).
+fn unknown_id_error(kind: &str, id: i64) -> EngineError {
+    EngineError::InvalidArgument(format!("unknown {kind} id: {id}"))
+}
+
+/// Validate a caller-supplied opaque id against the length of the `Vec` it
+/// indexes, returning its `usize` index or [`unknown_id_error`]. Rejects both
+/// negative ids and ids past the end.
+fn checked_id(kind: &str, id: i64, len: usize) -> Result<usize, EngineError> {
+    usize::try_from(id)
+        .ok()
+        .filter(|&idx| idx < len)
+        .ok_or_else(|| unknown_id_error(kind, id))
+}
+
 impl DataSource for NativeDataSource {
     fn generate(&self, schema: &Value) -> Result<Value, DataSourceError> {
         self.with_ntc(|ntc| schema::interpret_schema(ntc, schema))
@@ -185,7 +203,7 @@ impl DataSource for NativeDataSource {
             let mut state = ntc
                 .collections
                 .remove(&collection_id)
-                .expect("collection_more: unknown collection_id");
+                .ok_or_else(|| unknown_id_error("collection", collection_id))?;
             let result = schema::many_more(ntc, &mut state);
             ntc.collections.insert(collection_id, state);
             result
@@ -201,10 +219,66 @@ impl DataSource for NativeDataSource {
             let mut state = ntc
                 .collections
                 .remove(&collection_id)
-                .expect("collection_reject: unknown collection_id");
+                .ok_or_else(|| unknown_id_error("collection", collection_id))?;
             let result = schema::many_reject(ntc, &mut state);
             ntc.collections.insert(collection_id, state);
             result
+        })
+    }
+
+    fn new_state_machine(
+        &self,
+        rule_names: &[&str],
+        invariant_names: &[&str],
+    ) -> Result<i64, DataSourceError> {
+        if rule_names.is_empty() {
+            return Err(DataSourceError::InvalidArgument(
+                "cannot run a state machine with no rules".to_string(),
+            ));
+        }
+        let rules = rule_names.iter().map(|s| s.to_string()).collect();
+        let invariants = invariant_names.iter().map(|s| s.to_string()).collect();
+        self.with_ntc(|ntc| {
+            let id = ntc.state_machines.len() as i64;
+            ntc.state_machines
+                .push(crate::native::core::NativeStateMachine::new(
+                    rules, invariants,
+                ));
+            Ok(id)
+        })
+    }
+
+    fn state_machine_next_rule(&self, state_machine_id: i64) -> Result<i64, DataSourceError> {
+        self.with_ntc(|ntc| {
+            let idx = checked_id("state machine", state_machine_id, ntc.state_machines.len())?;
+            // Move the machine out of `ntc` so `next_rule` can borrow `ntc`
+            // mutably (same idea as the remove/insert dance in
+            // `collection_more`).
+            let mut machine = std::mem::take(&mut ntc.state_machines[idx]);
+            let result = machine.next_rule(ntc);
+            ntc.state_machines[idx] = machine;
+            result
+        })
+    }
+
+    fn primitive_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError> {
+        self.with_ntc(|ntc| {
+            if !(0.0..=1.0).contains(&p) {
+                return Err(EngineError::InvalidArgument(format!(
+                    "primitive_boolean(p = {p}) requires a probability in [0.0, 1.0]"
+                )));
+            }
+            if forced == Some(true) && p == 0.0 {
+                return Err(EngineError::InvalidArgument(
+                    "primitive_boolean: cannot force true when p = 0.0".to_string(),
+                ));
+            }
+            if forced == Some(false) && p == 1.0 {
+                return Err(EngineError::InvalidArgument(
+                    "primitive_boolean: cannot force false when p = 1.0".to_string(),
+                ));
+            }
+            ntc.weighted(p, forced)
         })
     }
 
@@ -218,12 +292,15 @@ impl DataSource for NativeDataSource {
     }
 
     fn pool_add(&self, pool_id: i64) -> Result<i64, DataSourceError> {
-        self.with_ntc(|ntc| Ok(ntc.variable_pools[pool_id as usize].next()))
+        self.with_ntc(|ntc| {
+            let idx = checked_id("variable pool", pool_id, ntc.variable_pools.len())?;
+            Ok(ntc.variable_pools[idx].next())
+        })
     }
 
     fn pool_generate(&self, pool_id: i64, consume: bool) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
-            let pool_idx = pool_id as usize;
+            let pool_idx = checked_id("variable pool", pool_id, ntc.variable_pools.len())?;
             let active = ntc.variable_pools[pool_idx].active();
             if active.is_empty() {
                 ntc.status = Some(Status::Invalid);
@@ -246,28 +323,29 @@ impl DataSource for NativeDataSource {
         })
     }
 
-    fn target_observation(&self, score: f64, label: &str) {
+    fn target_observation(&self, score: f64, label: &str) -> Result<(), DataSourceError> {
         // Mirror upstream `hypothesis.control.target`
-        // (`control.py:354-356,372-376`): the
-        // observation must be finite and each label may be observed at
-        // most once per test case. These are usage errors, not discovered
-        // counterexamples, so raise them via `invalid_argument!` for a clean
-        // abort instead of letting the lifecycle shrink them as a "failure".
+        // (`control.py:354-356,372-376`): the observation must be finite and
+        // each label may be observed at most once per test case. These are
+        // caller usage errors, not discovered counterexamples — surface them
+        // as `InvalidArgument` (→ `HEGEL_E_INVALID_ARG`) so libhegel stays
+        // panic-free on bad input (correct under `panic = "abort"`).
         if !score.is_finite() {
-            invalid_argument!(
+            return Err(DataSourceError::InvalidArgument(format!(
                 "tc.target({score}, label={label:?}) requires a finite score; \
                  got non-finite value"
-            );
+            )));
         }
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if inner.target_observations.contains_key(label) {
-            invalid_argument!(
+            return Err(DataSourceError::InvalidArgument(format!(
                 "tc.target({score}, label={label:?}) would overwrite previous \
                  tc.target(_, label={label:?}); each label can be observed at \
                  most once per test case"
-            );
+            )));
         }
         inner.target_observations.insert(label.to_string(), score);
+        Ok(())
     }
 
     fn mark_complete(&self, result: &TestCaseResult) {

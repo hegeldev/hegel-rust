@@ -203,6 +203,14 @@
 #define HEGEL_LABEL_ENUM_VARIANT 15
 
 /*
+ Span around one swarm-testing feature-flag draw. Emitted internally
+ by the engine's state-machine rule selection
+ (`hegel_state_machine_next_rule`); callers normally never open this
+ span themselves.
+ */
+#define HEGEL_LABEL_FEATURE_FLAG 16
+
+/*
  How the engine should treat the run: a full property-test loop or a
  single test case.
 
@@ -217,6 +225,26 @@ typedef enum {
     HEGEL_MODE_TEST_RUN = 0,
     HEGEL_MODE_SINGLE_TEST_CASE = 1,
 } hegel_mode_t;
+
+/*
+ Which source of randomness the engine draws from. Set via
+ `hegel_settings_backend`.
+
+ - `HEGEL_BACKEND_AUTO`: choose automatically (the default) —
+   `HEGEL_BACKEND_URANDOM` when running inside Antithesis, otherwise
+   `HEGEL_BACKEND_DEFAULT`.
+ - `HEGEL_BACKEND_DEFAULT`: expand a single seeded PRNG. Runs are
+   reproducible from the seed and shrinking / replay work as usual.
+ - `HEGEL_BACKEND_URANDOM`: read fresh entropy from `/dev/urandom` on
+   every draw (falling back to an OS-seeded PRNG on platforms without
+   it). Intended for running under Antithesis, whose fuzzer controls
+   `/dev/urandom`; you almost certainly don't want it otherwise.
+ */
+typedef enum {
+    HEGEL_BACKEND_AUTO = 0,
+    HEGEL_BACKEND_DEFAULT = 1,
+    HEGEL_BACKEND_URANDOM = 2,
+} hegel_backend_t;
 
 /*
  Verbosity of engine-emitted output (logs, per-case traces). Set via
@@ -356,6 +384,17 @@ void hegel_settings_free(hegel_settings_t *s);
  one test case. See `hegel_mode_t`.
  */
 void hegel_settings_mode(hegel_settings_t *s, hegel_mode_t mode);
+
+/*
+ Select the engine's randomness backend. See `hegel_backend_t`.
+
+ `HEGEL_BACKEND_AUTO` is the default and leaves the automatic choice in
+ place; `HEGEL_BACKEND_DEFAULT` / `HEGEL_BACKEND_URANDOM` pin an explicit
+ backend, overriding the automatic detection. Like the underlying setting,
+ pinning is one-way: there is no way to un-pin back to AUTO on a handle
+ once an explicit backend has been set.
+ */
+void hegel_settings_backend(hegel_settings_t *s, hegel_backend_t backend);
 
 /*
  Maximum number of valid test cases to run before declaring the
@@ -631,12 +670,84 @@ int hegel_pool_generate(hegel_test_case_t *tc,
                         int64_t *out_variable_id);
 
 /*
+ Register a *state machine* for engine-owned stateful (rule-based)
+ testing: `num_rules` rules and `num_invariants` invariants, each
+ identified by a NUL-terminated UTF-8 name. The engine owns rule
+ selection — including swarm testing, where each test case enables a
+ random subset of rules (at least one) and selection draws only from
+ that subset. The caller drives execution: it asks
+ `hegel_state_machine_next_rule` which rule to run at each step and
+ applies it.
+
+ On success writes the new machine's id into `*out_state_machine_id`
+ and returns `HEGEL_OK`. The id is opaque; pass it to subsequent
+ `hegel_state_machine_next_rule` calls on the *same* test case.
+ Returns `HEGEL_E_INVALID_ARG` if `num_rules` is zero, or on null /
+ non-UTF-8 names.
+ */
+int hegel_new_state_machine(hegel_test_case_t *tc,
+                            const char *const *rule_names,
+                            size_t num_rules,
+                            const char *const *invariant_names,
+                            size_t num_invariants,
+                            int64_t *out_state_machine_id);
+
+/*
+ Draw the index of the next rule to run, in `[0, num_rules)`, letting
+ the engine choose (and shrink) the rule sequence. Swarm testing is
+ applied per test case: a random subset of rules is enabled on the
+ first call and selection is restricted to that subset for the rest
+ of the test case, with restrictions that shrink away in minimal
+ counterexamples.
+
+ On success writes the chosen rule index into `*out_rule_index` and
+ returns `HEGEL_OK`. `state_machine_id` must be an id returned by
+ `hegel_new_state_machine` on this test case. Returns
+ `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
+ (the caller should abort the body and call `hegel_mark_complete`
+ with `HEGEL_STATUS_OVERRUN`).
+ */
+int hegel_state_machine_next_rule(hegel_test_case_t *tc,
+                                  int64_t state_machine_id,
+                                  int64_t *out_rule_index);
+
+/*
+ Draw a single boolean that is `true` with probability `p`. `p`
+ must be in `[0.0, 1.0]`; `p = 0.0` always yields `false` and
+ `p = 1.0` always yields `true` without consuming entropy.
+
+ When `has_forced` is `true` the result is forced to `forced`: the
+ engine still records the choice (so replay and shrinking stay
+ aligned) but consumes no entropy, and the shrinker will not flip it.
+ Forcing `true` with `p = 0.0` or `false` with `p = 1.0` is
+ contradictory and rejected.
+
+ On success writes the drawn value into `*out_value` and returns
+ `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice
+ budget is exhausted for this test case (the caller should abort the
+ body and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
+ Returns `HEGEL_E_INVALID_ARG` for a NULL `out_value`, a `p` outside
+ `[0.0, 1.0]` (including NaN), or a contradictory forced value; the
+ diagnostic is in `hegel_last_error_message`.
+ */
+int hegel_primitive_boolean(hegel_test_case_t *tc,
+                            double p,
+                            bool forced,
+                            bool has_forced,
+                            bool *out_value);
+
+/*
  Record a numeric observation under `label` for the engine's
  targeting phase to hill-climb toward. Higher values are "more
  interesting"; the engine biases later test cases toward inputs that
  produced higher observations under the same label. Has no effect
  unless `HEGEL_PHASE_TARGET` is enabled. `label` must be non-NULL
  and valid UTF-8.
+
+ Returns `HEGEL_E_INVALID_ARG` (with a diagnostic in
+ `hegel_last_error_message`) if `value` is not finite, or if `label`
+ has already been observed on this test case — each label may be
+ recorded at most once per case.
  */
 int hegel_target(hegel_test_case_t *tc, double value, const char *label);
 

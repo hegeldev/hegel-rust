@@ -220,18 +220,16 @@ pub mod backend;
 pub(crate) mod cbor_utils;
 pub(crate) mod cli;
 pub(crate) mod control;
-pub mod embed;
 pub mod explicit_test_case;
 pub mod extras;
+pub(crate) mod ffi;
 pub mod generators;
-pub(crate) mod native;
 #[doc(hidden)]
 pub mod run_lifecycle;
 pub(crate) mod runner;
 pub(crate) mod settings;
 pub mod stateful;
 mod test_case;
-pub(crate) mod unicodedata;
 #[doc(hidden)]
 pub use control::currently_in_test_context;
 pub use explicit_test_case::ExplicitTestCase;
@@ -252,37 +250,13 @@ pub use test_case::{
 #[doc(hidden)]
 pub use antithesis::TestLocation;
 
-// Internal re-exports for benches/. Gated on the private `__bench` feature so
-// the items remain `pub(crate)` for normal builds; the bench harness opts in
-// with `--features __bench`. Functions are wrapped (rather than re-exported)
-// because the originals are `pub(crate)` in `native::core::state`.
+// Internal re-exports for benches/. The engine lives in the `hegel-c` crate
+// now, so the bench harness reaches its internals through that crate's own
+// `__bench` module; both are gated on the private `__bench` feature (hegeltest's
+// forwards to hegel-c's) so they stay out of normal builds.
 #[doc(hidden)]
 #[cfg(feature = "__bench")]
-pub mod __bench {
-    pub use crate::native::bignum::BigInt;
-    pub use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, StringChoice};
-    pub use crate::native::intervalsets::IntervalSet;
-    pub use crate::native::rng::EngineRng;
-
-    pub fn biased_integer_sample(
-        ic: &IntegerChoice,
-        rng: &mut EngineRng,
-    ) -> crate::native::bignum::BigInt {
-        crate::native::core::state::biased_integer_sample(ic, rng)
-    }
-
-    pub fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Vec<u32> {
-        crate::native::core::state::biased_string_sample(sc, rng)
-    }
-
-    pub fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<u8> {
-        crate::native::core::state::biased_bytes_sample(bc, rng)
-    }
-
-    pub fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 {
-        crate::native::core::state::biased_float_sample(fc, rng)
-    }
-}
+pub use hegel_c::__bench;
 
 /// Derive a generator for a struct or enum.
 ///

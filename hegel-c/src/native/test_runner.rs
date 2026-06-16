@@ -160,60 +160,9 @@ impl TestRunner for NativeTestRunner {
     }
 }
 
-/// [`TestRunner`] that replays a single failing example encoded as a base64
-/// failure blob, instead of generating fresh test cases.
-///
-/// Selected by [`Hegel::reproduce_failure`](crate::Hegel::reproduce_failure)
-/// in place of [`NativeTestRunner`]. Exploration just decodes the blob into
-/// one counterexample for the caller to replay; `mode`, `phases`, and the
-/// test-case budget are ignored.
-///
-/// An **undecodable** blob is invalid *input*, so [`explore`](TestRunner::explore)
-/// panics outright; a blob that decodes but **no longer reproduces** the
-/// failure surfaces as [`RunError::StaleBlob`] from
-/// [`replay_final`](TestRunner::replay_final).
-pub(crate) struct ReproduceRunner {
-    pub(crate) blob: String,
-}
-
-impl TestRunner for ReproduceRunner {
-    type Counterexample = ShrunkCounterexample;
-
-    fn explore(
-        &self,
-        _settings: &Settings,
-        _database_key: Option<&str>,
-        _run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
-    ) -> Result<Exploration<ShrunkCounterexample>, RunError> {
-        let Some(choices) = crate::native::blob::decode_failure(&self.blob) else {
-            panic!(
-                "reproduce_failure: the supplied failure blob could not be decoded. \
-                 It may be corrupt or from an incompatible Hegel version."
-            );
-        };
-        Ok(Exploration::Counterexamples(vec![ShrunkCounterexample {
-            choices,
-            nodes: None,
-            blob: self.blob.clone(),
-        }]))
-    }
-
-    /// The blob decoded but the test no longer fails on it: a stale blob.
-    fn replay_final(
-        &self,
-        counterexample: ShrunkCounterexample,
-        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
-    ) -> Result<Failure, RunError> {
-        replay_counterexample(counterexample, run_case).ok_or_else(|| {
-            RunError::StaleBlob(
-                "reproduce_failure: the supplied failure blob no longer \
-                 reproduces a failure. The failure may have been fixed, or \
-                 the blob is stale."
-                    .to_string(),
-            )
-        })
-    }
-}
+// (The old `ReproduceRunner` TestRunner lived here. Blob replay now goes
+// through the C ABI's `hegel_test_case_from_blob` / `data_source_for_blob`,
+// driven by hegeltest's `drive_blob_replay`, so the runner is gone.)
 
 /// Run one test case (used by `Mode::SingleTestCase`) and return its
 /// failure, if any.
@@ -1578,7 +1527,8 @@ impl<'a> Engine<'a> {
 fn create_rng(settings: &Settings, database_key: Option<&str>) -> EngineRng {
     // The urandom backend reads fresh OS entropy on every draw, so the seed /
     // derandomize knobs (which only control a PRNG seed) don't apply to it.
-    if settings.resolved_backend(crate::antithesis::is_running_in_antithesis()) == Backend::Urandom
+    if settings.resolved_backend(crate::antithesis_detect::is_running_in_antithesis())
+        == Backend::Urandom
     {
         return EngineRng::urandom();
     }
