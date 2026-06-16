@@ -23,8 +23,7 @@ pub(crate) mod value;
 
 #[doc(hidden)]
 pub use crate::test_case::{
-    Collection, DataSourceError, TestCase, deserialize_value, generate_from_schema, generate_raw,
-    labels,
+    Collection, TestCase, deserialize_value, generate_from_schema, generate_raw, labels,
 };
 
 // public api

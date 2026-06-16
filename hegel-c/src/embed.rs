@@ -12,7 +12,7 @@
 //! lets them drive it directly. That's what [`run_native`] is for.
 
 use crate::backend::{DataSource, RunError, TestRunResult, TestRunner, collect_failures};
-use crate::runner::{Settings, Verbosity};
+use crate::settings::{Settings, Verbosity};
 
 /// Drive the native test runner against a callback that receives the raw
 /// data source for each test case.
@@ -45,7 +45,7 @@ pub fn run_native(
 ) -> Result<TestRunResult, RunError> {
     // A single test case bypasses the TestRunner machinery: its one case is
     // final from the start.
-    if settings.mode == crate::runner::Mode::SingleTestCase {
+    if settings.mode == crate::settings::Mode::SingleTestCase {
         let failure =
             crate::native::test_runner::run_single_case(settings, database_key, &mut |ds| {
                 run_case(ds, true)

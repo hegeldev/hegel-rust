@@ -64,7 +64,7 @@ use crate::TestCase;
 use crate::control::{AssumeFailed, StopTest, raise_control};
 use crate::generators::integers;
 use crate::runner::Mode;
-use crate::test_case::panic_on_data_source_error;
+use crate::test_case::raise_for_rc;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -96,7 +96,7 @@ impl<T> Variables<T> {
     fn pool_generate(&self, consume: bool) -> i64 {
         match self
             .tc
-            .with_data_source(|ds| ds.pool_generate(self.pool_id, consume))
+            .with_ctc(|ctc| ctc.pool_generate(self.pool_id, consume))
         {
             Ok(id) => id,
             Err(_) => raise_control(StopTest),
@@ -115,7 +115,7 @@ impl<T> Variables<T> {
 
     /// Add a value to the pool.
     pub fn add(&mut self, v: T) {
-        let variable_id: i64 = match self.tc.with_data_source(|ds| ds.pool_add(self.pool_id)) {
+        let variable_id: i64 = match self.tc.with_ctc(|ctc| ctc.pool_add(self.pool_id)) {
             Ok(id) => id,
             Err(_) => raise_control(StopTest), // nocov
         };
@@ -146,7 +146,7 @@ impl<T> Variables<T> {
 
 /// Create a new variable pool for stateful tests.
 pub fn variables<T>(tc: &TestCase) -> Variables<T> {
-    let pool_id = match tc.with_data_source(|ds| ds.new_pool()) {
+    let pool_id = match tc.with_ctc(|ctc| ctc.new_pool()) {
         Ok(id) => id,
         Err(_) => raise_control(StopTest), // nocov
     };
@@ -183,11 +183,10 @@ pub fn run(mut m: impl StateMachine, tc: TestCase) {
     let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
     let invariants = m.invariants();
     let invariant_names: Vec<&str> = invariants.iter().map(|r| r.name.as_str()).collect();
-    let machine_id =
-        match tc.with_data_source(|ds| ds.new_state_machine(&rule_names, &invariant_names)) {
-            Ok(id) => id,
-            Err(e) => panic_on_data_source_error(e),
-        };
+    let machine_id = match tc.with_ctc(|ctc| ctc.new_state_machine(&rule_names, &invariant_names)) {
+        Ok(id) => id,
+        Err(rc) => raise_for_rc(rc),
+    };
 
     tc.note("Initial invariant check.");
     check_invariants(&mut m, &tc);
@@ -212,9 +211,9 @@ pub fn run(mut m: impl StateMachine, tc: TestCase) {
             || (steps_run_successfully == 0 && steps_attempted < 1000))
     {
         step += 1;
-        let rule_index = match tc.with_data_source(|ds| ds.state_machine_next_rule(machine_id)) {
+        let rule_index = match tc.with_ctc(|ctc| ctc.state_machine_next_rule(machine_id)) {
             Ok(i) => i as usize,
-            Err(e) => panic_on_data_source_error(e),
+            Err(rc) => raise_for_rc(rc),
         };
         let rule = &rules[rule_index];
         tc.note(&format!("Step {}: {}", step, rule.name));

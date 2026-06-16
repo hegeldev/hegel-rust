@@ -1,6 +1,3 @@
-use crate::antithesis::TestLocation;
-use crate::test_case::TestCase;
-
 // ─── Public types ───────────────────────────────────────────────────────────
 
 /// Health checks that can be suppressed during test execution.
@@ -17,29 +14,6 @@ pub enum HealthCheck {
     TestCasesTooLarge,
     /// The smallest natural input is very large.
     LargeInitialTestCase,
-}
-
-impl HealthCheck {
-    /// Returns all health check variants.
-    ///
-    /// Useful for suppressing all health checks at once:
-    ///
-    /// ```no_run
-    /// use hegel::HealthCheck;
-    ///
-    /// #[hegel::test(suppress_health_check = HealthCheck::all())]
-    /// fn my_test(tc: hegel::TestCase) {
-    ///     // ...
-    /// }
-    /// ```
-    pub const fn all() -> [HealthCheck; 4] {
-        [
-            HealthCheck::FilterTooMuch,
-            HealthCheck::TooSlow,
-            HealthCheck::TestCasesTooLarge,
-            HealthCheck::LargeInitialTestCase,
-        ]
-    }
 }
 
 /// Controls which phases of the test lifecycle are executed.
@@ -133,7 +107,6 @@ pub struct Settings {
     pub(crate) suppress_health_check: Vec<HealthCheck>,
     pub(crate) phases: Vec<Phase>,
     pub(crate) report_multiple_failures: bool,
-    pub(crate) print_blob: bool,
     /// The randomness backend, or `None` to let it be chosen automatically
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
@@ -164,7 +137,6 @@ impl Settings {
                 Phase::Shrink,
             ],
             report_multiple_failures: true,
-            print_blob: false,
             backend: None,
         }
     }
@@ -183,6 +155,19 @@ impl Settings {
     pub fn backend(mut self, backend: Backend) -> Self {
         self.backend = Some(backend);
         self
+    }
+
+    /// Resolve the effective backend, given whether the process is running
+    /// inside Antithesis.
+    ///
+    /// An explicit [`Settings::backend`] always wins; otherwise urandom is
+    /// used under Antithesis and the default PRNG backend elsewhere.
+    pub(crate) fn resolved_backend(&self, in_antithesis: bool) -> Backend {
+        match self.backend {
+            Some(backend) => backend,
+            None if in_antithesis => Backend::Urandom,
+            None => Backend::Default,
+        }
     }
 
     /// Set the number of test cases to run (default: 100).
@@ -225,23 +210,13 @@ impl Settings {
     /// Example — skip shrinking (useful when you only need a witness, not a
     /// minimal counterexample):
     ///
-    /// ```no_run
+    /// ```ignore
     /// use hegel::{Phase, Settings};
     ///
     /// let s = Settings::new().phases([Phase::Reuse, Phase::Generate]);
     /// ```
     pub fn phases(mut self, phases: impl IntoIterator<Item = Phase>) -> Self {
         self.phases = phases.into_iter().collect();
-        self
-    }
-
-    /// Print a copy-pasteable `#[hegel::reproduce_failure("…")]` line for the
-    /// counterexample when a test fails. Defaults to `false`.
-    ///
-    /// The reproduce blob is always *attached* to the failure. This setting only controls whether it is printed to
-    /// the failure output. Has effect only on the native backend.
-    pub fn print_blob(mut self, print_blob: bool) -> Self {
-        self.print_blob = print_blob;
         self
     }
 
@@ -252,7 +227,7 @@ impl Settings {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```ignore
     /// use hegel::{HealthCheck, Verbosity};
     /// use hegel::generators as gs;
     ///
@@ -265,11 +240,6 @@ impl Settings {
     pub fn suppress_health_check(mut self, checks: impl IntoIterator<Item = HealthCheck>) -> Self {
         self.suppress_health_check.extend(checks);
         self
-    }
-
-    /// Returns `true` if the given phase is enabled in these settings.
-    pub fn has_phase(&self, phase: Phase) -> bool {
-        self.phases.contains(&phase)
     }
 
     /// Control whether multi-bug runs report every distinct failing example
@@ -302,17 +272,6 @@ pub(crate) enum Database {
     Path(String),
 }
 
-// ─── Hegel test builder ─────────────────────────────────────────────────────
-
-// internal use only
-#[doc(hidden)]
-pub fn hegel<F>(test_fn: F)
-where
-    F: FnMut(TestCase),
-{
-    Hegel::new(test_fn).run();
-}
-
 fn is_in_ci() -> bool {
     const CI_VARS: &[(&str, Option<&str>)] = &[
         ("CI", None),
@@ -334,101 +293,6 @@ fn is_in_ci() -> bool {
     })
 }
 
-// internal use only
-#[doc(hidden)]
-pub struct Hegel<F> {
-    test_fn: F,
-    database_key: Option<String>,
-    test_location: Option<TestLocation>,
-    settings: Settings,
-    reproduce_failure: Option<String>,
-}
-
-impl<F> Hegel<F>
-where
-    F: FnMut(TestCase),
-{
-    /// Create a new test builder with default settings.
-    pub fn new(test_fn: F) -> Self {
-        Self {
-            test_fn,
-            database_key: None,
-            settings: Settings::new(),
-            test_location: None,
-            reproduce_failure: None,
-        }
-    }
-
-    /// Override the default settings.
-    pub fn settings(mut self, settings: Settings) -> Self {
-        self.settings = settings;
-        self
-    }
-
-    #[doc(hidden)]
-    pub fn __database_key(mut self, key: String) -> Self {
-        self.database_key = Some(key);
-        self
-    }
-
-    #[doc(hidden)]
-    pub fn test_location(mut self, location: TestLocation) -> Self {
-        self.test_location = Some(location);
-        self
-    }
-
-    /// Replay a single failing example from a base64 failure blob instead of
-    /// generating fresh test cases.
-    ///
-    /// A failure blob encodes the choice sequence of a counterexample.
-    /// Enable [`print_blob`](Settings::print_blob) to have a native failure
-    /// print one. When set, [`run`](Self::run) decodes it and runs exactly
-    /// that one example — bypassing generation and shrinking — so you can
-    /// reproduce a CI failure locally and deterministically.
-    ///
-    /// First-wins: if a blob is already set, further calls are ignored.
-    /// Stacked `#[hegel::reproduce_failure]` attributes lower to repeated
-    /// calls here, so only the first attribute replays; the rest are
-    /// bookkeeping to be deleted one by one as the failures are fixed.
-    pub fn reproduce_failure(mut self, blob: impl Into<String>) -> Self {
-        if self.reproduce_failure.is_none() {
-            self.reproduce_failure = Some(blob.into());
-        }
-        self
-    }
-
-    /// Run the property-based tests.
-    ///
-    /// Panics if any test case fails.
-    pub fn run(self) {
-        // A blob replay is a single deterministic case — no generation,
-        // targeting, or shrinking — so it is phase-agnostic and takes
-        // precedence over the normal run.
-        if let Some(blob) = self.reproduce_failure {
-            crate::run_lifecycle::drive_blob_replay(
-                self.test_fn,
-                &self.settings,
-                self.database_key.as_deref(),
-                &blob,
-                self.test_location.as_ref(),
-            );
-            return;
-        }
-
-        // Everything else — including `Mode::SingleTestCase`, which the engine
-        // handles from the settings — drives the engine through the C ABI.
-        // There is no early-out when `Phase::Generate` is absent: the phases
-        // are independent (e.g. `phases = [Phase::Reuse]` must still replay
-        // stored counterexamples), and the engine skips whatever is disabled.
-        crate::run_lifecycle::drive(
-            self.test_fn,
-            &self.settings,
-            self.database_key.as_deref(),
-            self.test_location.as_ref(),
-        );
-    }
-}
-
 #[cfg(test)]
-#[path = "../tests/embedded/runner_tests.rs"]
+#[path = "../tests/embedded/settings_tests.rs"]
 mod tests;

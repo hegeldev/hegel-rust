@@ -50,7 +50,10 @@ fn zero_p_disabled_enables_every_rule() {
     assert_eq!(ntc.nodes[2].value, ChoiceValue::Boolean(false));
     // The check is wrapped in a FEATURE_FLAG span.
     assert_eq!(ntc.spans.len(), 1);
-    assert_eq!(ntc.spans[0usize].label, labels::FEATURE_FLAG.to_string());
+    assert_eq!(
+        ntc.spans[0usize].label,
+        crate::HEGEL_LABEL_FEATURE_FLAG.to_string()
+    );
     assert!(!ntc.spans[0usize].discarded);
 }
 
@@ -256,7 +259,10 @@ fn overrun_inside_is_enabled_leaves_the_span_open_until_freeze() {
     // closes intervals left open by the overrun.
     ntc.freeze();
     assert_eq!(ntc.spans.len(), 1);
-    assert_eq!(ntc.spans[0usize].label, labels::FEATURE_FLAG.to_string());
+    assert_eq!(
+        ntc.spans[0usize].label,
+        crate::HEGEL_LABEL_FEATURE_FLAG.to_string()
+    );
     assert_eq!(ntc.spans[0usize].start, 2);
     assert_eq!(ntc.spans[0usize].end, 2);
 }

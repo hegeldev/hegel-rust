@@ -10,25 +10,12 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 }
 
 #[test]
-fn raise_internal_error_panics_directly_outside_a_test_context() {
-    // Outside a run there is no lifecycle to catch a control payload, so
-    // the message (with location and bug-report framing) panics directly.
+fn raise_internal_error_panics_with_location_and_bug_report_framing() {
     let payload = catch_unwind(|| raise_internal_error(format_args!("boom: {}", 7))).unwrap_err();
     let msg = panic_message(payload);
     assert!(msg.contains("Internal error in hegel at "), "{msg}");
     assert!(msg.contains("boom: 7"), "{msg}");
     assert!(msg.contains("bug in hegel"), "{msg}");
-}
-
-#[test]
-fn raise_internal_error_unwinds_as_a_typed_payload_inside_a_test_context() {
-    let payload = with_test_context(|| {
-        catch_unwind(|| raise_internal_error(format_args!("inner"))).unwrap_err()
-    });
-    let internal = payload
-        .downcast_ref::<InternalError>()
-        .expect("expected an InternalError control payload");
-    assert!(internal.0.contains("inner"), "{}", internal.0);
 }
 
 #[test]
@@ -60,6 +47,40 @@ fn internal_assert_eq_reports_both_values() {
     hegel_internal_assert_eq!(2 + 2, 4);
 }
 
-// The `_ne` and `debug_*` assert macros were engine-only; they live with the
-// engine in hegel-c now. The frontend keeps only `hegel_internal_assert`,
-// `hegel_internal_assert_eq`, and `hegel_internal_error`.
+#[test]
+fn internal_assert_ne_reports_the_shared_value() {
+    let payload = catch_unwind(AssertUnwindSafe(|| {
+        hegel_internal_assert_ne!(2 + 2, 4);
+    }))
+    .unwrap_err();
+    let msg = panic_message(payload);
+    assert!(msg.contains("2 + 2 != 4"), "{msg}");
+    assert!(msg.contains("both: 4"), "{msg}");
+    hegel_internal_assert_ne!(2 + 2, 5);
+}
+
+#[test]
+fn internal_debug_asserts_follow_debug_assertions() {
+    let fired = catch_unwind(AssertUnwindSafe(|| {
+        hegel_internal_debug_assert!(false);
+    }))
+    .is_err();
+    assert_eq!(fired, cfg!(debug_assertions));
+
+    let fired = catch_unwind(AssertUnwindSafe(|| {
+        hegel_internal_debug_assert_eq!(1, 2);
+    }))
+    .is_err();
+    assert_eq!(fired, cfg!(debug_assertions));
+
+    let fired = catch_unwind(AssertUnwindSafe(|| {
+        hegel_internal_debug_assert_ne!(1, 1);
+    }))
+    .is_err();
+    assert_eq!(fired, cfg!(debug_assertions));
+
+    // The passing direction is free either way.
+    hegel_internal_debug_assert!(true);
+    hegel_internal_debug_assert_eq!(1, 1);
+    hegel_internal_debug_assert_ne!(1, 2);
+}

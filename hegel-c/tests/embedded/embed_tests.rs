@@ -1,7 +1,7 @@
 use super::*;
 use crate::backend::TestCaseResult;
 use crate::cbor_utils::cbor_map;
-use crate::runner::{Database, Settings};
+use crate::settings::{Database, Settings};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn quiet_settings(test_cases: u64) -> Settings {
@@ -378,7 +378,7 @@ fn data_source_for_blob_logs_at_debug_verbosity() {
     // Same construction as above, with `Verbosity::Debug` exercising the
     // choice-count log line.
     let blob = discover_reproduce_blob();
-    let settings = quiet_settings(1).verbosity(crate::runner::Verbosity::Debug);
+    let settings = quiet_settings(1).verbosity(crate::settings::Verbosity::Debug);
     assert!(data_source_for_blob(&settings, &blob).is_some());
 }
 
@@ -393,7 +393,7 @@ fn run_native_single_test_case_reports_the_failure() {
     // final from the start and its failure comes back in the result.
     use crate::backend::Failure;
 
-    let settings = quiet_settings(1).mode(crate::runner::Mode::SingleTestCase);
+    let settings = quiet_settings(1).mode(crate::settings::Mode::SingleTestCase);
     let finals = AtomicUsize::new(0);
     let result = run_native(&settings, None, |ds, is_final| {
         if is_final {
@@ -417,7 +417,7 @@ fn run_native_single_test_case_reports_the_failure() {
 
 #[test]
 fn run_native_single_test_case_passes_cleanly() {
-    let settings = quiet_settings(1).mode(crate::runner::Mode::SingleTestCase);
+    let settings = quiet_settings(1).mode(crate::settings::Mode::SingleTestCase);
     let result = run_native(&settings, None, |ds, _is_final| {
         ds.mark_complete(&TestCaseResult::Valid);
     })
