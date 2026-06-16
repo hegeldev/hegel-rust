@@ -61,6 +61,7 @@ Adding new patterns to the allowlist could mask actual coverage gaps.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -421,13 +422,37 @@ def _merge_lcov(inputs: list[Path], output: Path) -> None:
             f.write("end_of_record\n")
 
 
+def _ensure_smoke_cdylib() -> None:
+    """Build the libhegel cdylib and point the dlopen smoke test at it.
+
+    `cargo llvm-cov` runs `cargo test`, which builds rlibs and test binaries
+    but *not* the standalone `cdylib` artifact. The hegel-c smoke test
+    (`hegel-c/tests/smoke.rs`) dlopens that cdylib, so without it every smoke
+    test fails to find `libhegel_c.so` and the whole coverage run errors out.
+
+    Build it into the default target dir (separate from
+    `target/llvm-cov-target`, so no instrumentation-flag thrash) and export
+    `HEGEL_C_LIB_DIR` so the smoke test loads it. A non-instrumented cdylib is
+    fine here: the engine's line coverage comes from the in-process tests
+    (hegeltest driving the C ABI plus hegel-c's embedded/`c_abi_inprocess`
+    tests), not from dlopening the library — the smoke test only exercises the
+    FFI boundary behaviourally.
+    """
+    print("  Building libhegel cdylib for the dlopen smoke test...")
+    result = subprocess.run(["cargo", "build", "-p", "hegeltest-c"])
+    if result.returncode != 0:
+        print("ERROR: failed to build the hegeltest-c cdylib", file=sys.stderr)
+        sys.exit(1)
+    os.environ["HEGEL_C_LIB_DIR"] = str((Path("target") / "debug").resolve())
+
+
 def run_coverage() -> Path:
     """Run coverage analysis and generate LCOV report.
 
     A single `--workspace` pass with every additive feature enabled. Running
     the whole workspace (rather than hegeltest alone) covers the engine in
     hegel-c/src — both through hegeltest driving it over the C ABI and through
-    hegel-c's own embedded/smoke tests — instead of excluding hegel-c as a mere
+    hegel-c's own embedded tests — instead of excluding hegel-c as a mere
     dependency, while still covering the hegeltest frontend.
 
     hegel-macros is excluded from the report. It's a proc-macro crate whose
@@ -441,6 +466,8 @@ def run_coverage() -> Path:
     print("Running coverage analysis...")
     lcov_path = Path("lcov.info")
     raw_lcov = Path("lcov-all.info")
+
+    _ensure_smoke_cdylib()
 
     _run_lcov_phase(
         cargo_args=[
