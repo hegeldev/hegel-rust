@@ -72,12 +72,42 @@ def set_version(cargo_toml: Path, new_version: str) -> None:
     cargo_toml.write_text(new_text)
 
 
-def set_dep_version(cargo_toml: Path, dep_name: str, new_version: str) -> None:
-    text = cargo_toml.read_text()
-    pattern = rf'{re.escape(dep_name)} = \{{ version = "=[^"]+"'
-    replacement = f'{dep_name} = {{ version = "={new_version}"'
-    new_text = re.sub(pattern, replacement, text, count=2)
-    cargo_toml.write_text(new_text)
+def bump_internal_path_deps(cargo_toml: Path, new_version: str) -> None:
+    """Bump every internal (path) dependency pinned with `=` to new_version.
+
+    Internal crates are pinned exactly (`version = "=X.Y.Z"`) and declared
+    with a `path = ...`. Deriving the set to bump from "has a path dep and an
+    exact pin" (rather than a hardcoded crate list) means a change in
+    dependency direction can't silently leave a stale pin behind — which is
+    exactly how the inversion refactor broke the release: the root crate
+    gained a `hegeltest-c` path dependency that the old hardcoded list never
+    touched.
+    """
+    lines = cargo_toml.read_text().splitlines(keepends=True)
+    out = []
+    for line in lines:
+        if "path =" in line and re.search(r'version = "=[^"]+"', line):
+            line = re.sub(
+                r'version = "=[^"]+"', f'version = "={new_version}"', line
+            )
+        out.append(line)
+    cargo_toml.write_text("".join(out))
+
+
+def apply_version_bump(root: Path, new_version: str) -> None:
+    """Rewrite every workspace manifest to new_version (package + path deps).
+
+    Pure file rewriting, factored out of `release()` so it can be tested
+    without the publish/git/gh machinery around it.
+    """
+    manifests = [
+        root / "Cargo.toml",
+        root / "hegel-macros" / "Cargo.toml",
+        root / "hegel-c" / "Cargo.toml",
+    ]
+    for manifest in manifests:
+        set_version(manifest, new_version)
+        bump_internal_path_deps(manifest, new_version)
 
 
 def add_changelog(path: Path, *, version: str, content: str) -> None:
@@ -151,11 +181,7 @@ def release() -> None:
     )
     new_version = bump_version(m.group(1), release_type)
 
-    set_version(ROOT / "Cargo.toml", new_version)
-    set_version(ROOT / "hegel-macros" / "Cargo.toml", new_version)
-    set_version(ROOT / "hegel-c" / "Cargo.toml", new_version)
-    set_dep_version(ROOT / "Cargo.toml", "hegeltest-macros", new_version)
-    set_dep_version(ROOT / "hegel-c" / "Cargo.toml", "hegeltest", new_version)
+    apply_version_bump(ROOT, new_version)
 
     # regenerate the lockfile after version bump
     subprocess.run(["cargo", "update", "--workspace"], check=True, cwd=ROOT)
