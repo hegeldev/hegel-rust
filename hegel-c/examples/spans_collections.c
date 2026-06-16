@@ -51,7 +51,7 @@ static int draw_bool_list(hegel_context_t *ctx, hegel_test_case_t *tc, uint64_t 
     int n = 0;
     for (;;) {
         bool more;
-        int rc = hegel_collection_more(ctx, tc, cid, &more);
+        hegel_result_t rc = hegel_collection_more(ctx, tc, cid, &more);
         if (rc != HEGEL_OK) {
             hegel_stop_span(ctx, tc, false);
             return -1;

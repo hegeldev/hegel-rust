@@ -27,7 +27,7 @@
 
 #![allow(clippy::missing_safety_doc)]
 
-use std::ffi::{CStr, CString, c_char, c_int};
+use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 use std::sync::Arc;
 use std::sync::Once;
@@ -94,49 +94,63 @@ use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult, TestR
 use crate::embed::{data_source_for_blob, run_native};
 use crate::settings::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};
 
-// ─── Error codes ────────────────────────────────────────────────────────────
-//
-// All `int`-returning entry points (the per-test-case primitives, etc.)
-// return one of these. Handle-returning entry points use NULL instead and
-// leave a description in `hegel_context_last_error()`.
+// ─── Result codes ───────────────────────────────────────────────────────────
 
-/// Success.
-pub const HEGEL_OK: c_int = 0;
+/// Result of a fallible libhegel call.
+///
+/// Every `int`-returning entry point (the per-test-case primitives, etc.)
+/// returns one of these. `HEGEL_OK` is zero; every error is negative, so
+/// `result != HEGEL_OK` (or `result < 0`) tests for failure. Handle-returning
+/// entry points signal failure with NULL instead. For the error variants that
+/// carry a diagnostic, the message is on the call's context — read it with
+/// `hegel_context_last_error()`.
+#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[allow(non_camel_case_types)]
+pub enum hegel_result_t {
+    /// Success.
+    HEGEL_OK = 0,
 
-/// The engine has exhausted its choice budget for this test case and
-/// wants the caller to abort the body and return. Treat the same as a
-/// validly-completed test case.
-pub const HEGEL_E_STOP_TEST: c_int = -1;
+    /// The engine has exhausted its choice budget for this test case and
+    /// wants the caller to abort the body and return. Treat the same as a
+    /// validly-completed test case.
+    HEGEL_E_STOP_TEST = -1,
 
-/// An `assume` / `reject` precondition failed. The current test case is
-/// invalid and should be discarded.
-pub const HEGEL_E_ASSUME: c_int = -2;
+    /// An `assume` / `reject` precondition failed. The current test case is
+    /// invalid and should be discarded.
+    HEGEL_E_ASSUME = -2,
 
-/// The underlying engine reported an error. See
-/// `hegel_context_last_error()` for the diagnostic.
-pub const HEGEL_E_BACKEND: c_int = -3;
+    /// The underlying engine reported an error. See
+    /// `hegel_context_last_error()` for the diagnostic.
+    HEGEL_E_BACKEND = -3,
 
-/// A handle pointer (`hegel_settings_t*`, `hegel_run_t*`,
-/// `hegel_test_case_t*`, …) was NULL where it must be non-NULL.
-pub const HEGEL_E_INVALID_HANDLE: c_int = -4;
+    /// A handle pointer (`hegel_settings_t*`, `hegel_run_t*`,
+    /// `hegel_test_case_t*`, …) was NULL where it must be non-NULL.
+    HEGEL_E_INVALID_HANDLE = -4,
 
-/// An argument other than a handle was invalid — NULL where a value was
-/// required, malformed CBOR, non-UTF-8 string, etc. See
-/// `hegel_context_last_error()` for specifics.
-pub const HEGEL_E_INVALID_ARG: c_int = -5;
+    /// An argument other than a handle was invalid — NULL where a value was
+    /// required, malformed CBOR, non-UTF-8 string, etc. See
+    /// `hegel_context_last_error()` for specifics.
+    HEGEL_E_INVALID_ARG = -5,
 
-/// `hegel_mark_complete` (or a primitive on the same handle) was called
-/// for a test case that has already been completed.
-pub const HEGEL_E_ALREADY_COMPLETE: c_int = -6;
+    /// `hegel_mark_complete` (or a primitive on the same handle) was called
+    /// for a test case that has already been completed.
+    HEGEL_E_ALREADY_COMPLETE = -6,
 
-/// `hegel_next_test_case` was called without first completing the
-/// previous test case with `hegel_mark_complete`.
-pub const HEGEL_E_NOT_COMPLETE: c_int = -7;
+    /// `hegel_next_test_case` was called without first completing the
+    /// previous test case with `hegel_mark_complete`.
+    HEGEL_E_NOT_COMPLETE = -7,
 
-/// An internal invariant failed inside libhegel (e.g. CBOR
-/// re-serialisation). Should not happen in practice; please file a
-/// bug. See `hegel_context_last_error()` for the diagnostic.
-pub const HEGEL_E_INTERNAL: c_int = -8;
+    /// An internal invariant failed inside libhegel (e.g. CBOR
+    /// re-serialisation). Should not happen in practice; please file a
+    /// bug. See `hegel_context_last_error()` for the diagnostic.
+    HEGEL_E_INTERNAL = -8,
+}
+
+// The result variants are used unqualified throughout this module (and match
+// the `int` codes the C ABI has always returned); glob-import them so the
+// bodies read as `HEGEL_OK` / `HEGEL_E_*` rather than the fully-qualified form.
+use hegel_result_t::*;
 
 // ─── Enums mirrored to C ────────────────────────────────────────────────────
 
@@ -253,116 +267,110 @@ pub enum hegel_verbosity_t {
     HEGEL_VERBOSITY_DEBUG = 3,
 }
 
-// ─── Phase bitmask ──────────────────────────────────────────────────────────
-//
-// Bitmask passed to `hegel_settings_phases` to enable / disable
-// individual phases of the property-test loop. The default
-// (`HEGEL_PHASE_ALL`) is almost always what you want; turning a phase
-// off is mainly useful for debugging or replay tooling.
+// ─── Phases ─────────────────────────────────────────────────────────────────
 
-/// Run hard-coded explicit examples (none today, reserved for future use).
-pub const HEGEL_PHASE_EXPLICIT: u32 = 1 << 0;
+/// A phase of the property-test loop, used as a bit flag for
+/// `hegel_settings_phases`.
+///
+/// `hegel_settings_phases` takes a bitwise OR of these values (e.g.
+/// `HEGEL_PHASE_GENERATE | HEGEL_PHASE_SHRINK`); the phases not included are
+/// disabled. The default is `HEGEL_PHASE_ALL`, which is almost always what you
+/// want — turning a phase off is mainly useful for debugging or replay tooling.
+#[repr(C)]
+#[derive(Copy, Clone)]
+#[allow(non_camel_case_types)]
+pub enum hegel_phase_t {
+    /// Run hard-coded explicit examples (none today, reserved for future use).
+    HEGEL_PHASE_EXPLICIT = 1 << 0,
+    /// Replay counterexamples persisted from previous runs (requires a
+    /// database path + `hegel_settings_database_key`).
+    HEGEL_PHASE_REUSE = 1 << 1,
+    /// Randomly generate fresh test cases up to the `test_cases` budget.
+    HEGEL_PHASE_GENERATE = 1 << 2,
+    /// Apply hill-climbing toward observed `hegel_target` scores between
+    /// generation rounds.
+    HEGEL_PHASE_TARGET = 1 << 3,
+    /// Shrink discovered failing examples toward minimal counterexamples.
+    HEGEL_PHASE_SHRINK = 1 << 4,
+    /// Convenience: all five phases enabled. This is the default.
+    HEGEL_PHASE_ALL = 0x1F,
+}
 
-/// Replay counterexamples persisted from previous runs (requires a
-/// database path + `hegel_settings_database_key`).
-pub const HEGEL_PHASE_REUSE: u32 = 1 << 1;
+// ─── Health checks ──────────────────────────────────────────────────────────
 
-/// Randomly generate fresh test cases up to the `test_cases` budget.
-pub const HEGEL_PHASE_GENERATE: u32 = 1 << 2;
-
-/// Apply hill-climbing toward observed `hegel_target` scores between
-/// generation rounds.
-pub const HEGEL_PHASE_TARGET: u32 = 1 << 3;
-
-/// Shrink discovered failing examples toward minimal counterexamples.
-pub const HEGEL_PHASE_SHRINK: u32 = 1 << 4;
-
-/// Convenience: all five phases enabled. This is the default.
-pub const HEGEL_PHASE_ALL: u32 = 0x1F;
-
-// ─── Health-check bitmask ───────────────────────────────────────────────────
-//
-// Bitmask passed to `hegel_settings_suppress_health_check` to *disable*
-// individual health checks. The default is "all enabled"; suppress only
-// when you understand why the check is firing and accept it.
-
-/// Suppress: aborts the run if too many draws are rejected via
-/// `assume` / `Invalid` (default threshold: 200 in a row with no valid
-/// case).
-pub const HEGEL_HC_FILTER_TOO_MUCH: u32 = 1 << 0;
-
-/// Suppress: aborts the run if individual test cases take so long that
-/// the overall run is impractical.
-pub const HEGEL_HC_TOO_SLOW: u32 = 1 << 1;
-
-/// Suppress: aborts the run if generated values are so large that
-/// retaining them for shrinking is impractical.
-pub const HEGEL_HC_TEST_CASES_TOO_LARGE: u32 = 1 << 2;
-
-/// Suppress: warns if the first generated test case is already
-/// disproportionately large.
-pub const HEGEL_HC_LARGE_INITIAL_TEST_CASE: u32 = 1 << 3;
+/// A health check, used as a bit flag for
+/// `hegel_settings_suppress_health_check`.
+///
+/// `hegel_settings_suppress_health_check` takes a bitwise OR of these values
+/// naming the checks to *disable*. The default is "all enabled"; suppress a
+/// check only when you understand why it is firing and accept the behavior.
+#[repr(C)]
+#[derive(Copy, Clone)]
+#[allow(non_camel_case_types)]
+pub enum hegel_health_check_t {
+    /// Aborts the run if too many draws are rejected via `assume` / `Invalid`
+    /// (default threshold: 200 in a row with no valid case).
+    HEGEL_HC_FILTER_TOO_MUCH = 1 << 0,
+    /// Aborts the run if individual test cases take so long that the overall
+    /// run is impractical.
+    HEGEL_HC_TOO_SLOW = 1 << 1,
+    /// Aborts the run if generated values are so large that retaining them for
+    /// shrinking is impractical.
+    HEGEL_HC_TEST_CASES_TOO_LARGE = 1 << 2,
+    /// Warns if the first generated test case is already disproportionately
+    /// large.
+    HEGEL_HC_LARGE_INITIAL_TEST_CASE = 1 << 3,
+}
 
 // ─── Span labels ────────────────────────────────────────────────────────────
-//
-// Identifiers passed to `hegel_start_span` so the shrinker knows what
-// kind of compound structure is being assembled. Pick whichever label
-// best describes the surrounding context; the engine uses these to
-// choose appropriate shrink moves (e.g. shortening lists vs. simplifying
-// individual list elements). Mirror `hegeltest::test_case::labels`.
 
-/// Outer span around a list / sequence.
-pub const HEGEL_LABEL_LIST: u64 = 1;
-
-/// One element of a list.
-pub const HEGEL_LABEL_LIST_ELEMENT: u64 = 2;
-
-/// Outer span around a set (unordered, no duplicates).
-pub const HEGEL_LABEL_SET: u64 = 3;
-
-/// One element of a set.
-pub const HEGEL_LABEL_SET_ELEMENT: u64 = 4;
-
-/// Outer span around a map / dictionary.
-pub const HEGEL_LABEL_MAP: u64 = 5;
-
-/// One (key, value) entry of a map.
-pub const HEGEL_LABEL_MAP_ENTRY: u64 = 6;
-
-/// Outer span around a tuple / fixed-arity record.
-pub const HEGEL_LABEL_TUPLE: u64 = 7;
-
-/// Outer span around a `one_of` / disjunction; useful so the shrinker
-/// can swap which branch is taken.
-pub const HEGEL_LABEL_ONE_OF: u64 = 8;
-
-/// Outer span around an `optional` (None vs Some(value)).
-pub const HEGEL_LABEL_OPTIONAL: u64 = 9;
-
-/// Outer span around a fixed-shape record (named fields known
-/// statically).
-pub const HEGEL_LABEL_FIXED_DICT: u64 = 10;
-
-/// Outer span around a `flat_map` / monadic dependent draw.
-pub const HEGEL_LABEL_FLAT_MAP: u64 = 11;
-
-/// Outer span around a `filter` / rejection-sampling wrapper.
-pub const HEGEL_LABEL_FILTER: u64 = 12;
-
-/// Outer span around a `map` / pure transformation.
-pub const HEGEL_LABEL_MAPPED: u64 = 13;
-
-/// Outer span around a `sampled_from` / pick-from-collection draw.
-pub const HEGEL_LABEL_SAMPLED_FROM: u64 = 14;
-
-/// Outer span around the variant discriminator of a sum-type draw.
-pub const HEGEL_LABEL_ENUM_VARIANT: u64 = 15;
-
-/// Span around one swarm-testing feature-flag draw. Emitted internally
-/// by the engine's state-machine rule selection
-/// (`hegel_state_machine_next_rule`); callers normally never open this
-/// span themselves.
-pub const HEGEL_LABEL_FEATURE_FLAG: u64 = 16;
+/// Identifies what kind of compound structure a span groups, passed to
+/// `hegel_start_span` so the shrinker can choose appropriate shrink moves
+/// (e.g. shortening lists vs. simplifying individual list elements). Pick
+/// whichever label best describes the surrounding context. Mirrors
+/// `hegeltest::test_case::labels`.
+#[repr(C)]
+#[derive(Copy, Clone)]
+#[allow(non_camel_case_types)]
+pub enum hegel_label_t {
+    /// Outer span around a list / sequence.
+    HEGEL_LABEL_LIST = 1,
+    /// One element of a list.
+    HEGEL_LABEL_LIST_ELEMENT = 2,
+    /// Outer span around a set (unordered, no duplicates).
+    HEGEL_LABEL_SET = 3,
+    /// One element of a set.
+    HEGEL_LABEL_SET_ELEMENT = 4,
+    /// Outer span around a map / dictionary.
+    HEGEL_LABEL_MAP = 5,
+    /// One (key, value) entry of a map.
+    HEGEL_LABEL_MAP_ENTRY = 6,
+    /// Outer span around a tuple / fixed-arity record.
+    HEGEL_LABEL_TUPLE = 7,
+    /// Outer span around a `one_of` / disjunction; useful so the shrinker
+    /// can swap which branch is taken.
+    HEGEL_LABEL_ONE_OF = 8,
+    /// Outer span around an `optional` (None vs Some(value)).
+    HEGEL_LABEL_OPTIONAL = 9,
+    /// Outer span around a fixed-shape record (named fields known
+    /// statically).
+    HEGEL_LABEL_FIXED_DICT = 10,
+    /// Outer span around a `flat_map` / monadic dependent draw.
+    HEGEL_LABEL_FLAT_MAP = 11,
+    /// Outer span around a `filter` / rejection-sampling wrapper.
+    HEGEL_LABEL_FILTER = 12,
+    /// Outer span around a `map` / pure transformation.
+    HEGEL_LABEL_MAPPED = 13,
+    /// Outer span around a `sampled_from` / pick-from-collection draw.
+    HEGEL_LABEL_SAMPLED_FROM = 14,
+    /// Outer span around the variant discriminator of a sum-type draw.
+    HEGEL_LABEL_ENUM_VARIANT = 15,
+    /// Span around one swarm-testing feature-flag draw. Emitted internally
+    /// by the engine's state-machine rule selection
+    /// (`hegel_state_machine_next_rule`); callers normally never open this
+    /// span themselves.
+    HEGEL_LABEL_FEATURE_FLAG = 16,
+}
 
 // ─── Error-reporting context ────────────────────────────────────────────────
 
@@ -766,54 +774,55 @@ pub unsafe extern "C" fn hegel_settings_database_key(
     }
 }
 
-/// Enable a specific set of phases via a `HEGEL_PHASE_*` bitmask.
-/// Phases not listed in the bitmask are disabled. The default is
-/// `HEGEL_PHASE_ALL`. Setting this to 0 produces a run that does
-/// nothing.
+/// Enable a specific set of phases, given as a bitwise OR of `hegel_phase_t`
+/// values. Phases not included are disabled. The default is `HEGEL_PHASE_ALL`.
+/// Passing 0 produces a run that does nothing.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_settings_phases(s: *mut HegelSettings, phases: u32) {
+    use hegel_phase_t::*;
     let Some(inner) = (unsafe { settings_mut(s) }) else {
         return;
     };
     let mut v = Vec::new();
-    if phases & HEGEL_PHASE_EXPLICIT != 0 {
+    if phases & (HEGEL_PHASE_EXPLICIT as u32) != 0 {
         v.push(Phase::Explicit);
     }
-    if phases & HEGEL_PHASE_REUSE != 0 {
+    if phases & (HEGEL_PHASE_REUSE as u32) != 0 {
         v.push(Phase::Reuse);
     }
-    if phases & HEGEL_PHASE_GENERATE != 0 {
+    if phases & (HEGEL_PHASE_GENERATE as u32) != 0 {
         v.push(Phase::Generate);
     }
-    if phases & HEGEL_PHASE_TARGET != 0 {
+    if phases & (HEGEL_PHASE_TARGET as u32) != 0 {
         v.push(Phase::Target);
     }
-    if phases & HEGEL_PHASE_SHRINK != 0 {
+    if phases & (HEGEL_PHASE_SHRINK as u32) != 0 {
         v.push(Phase::Shrink);
     }
     *inner = inner.clone().phases(v);
 }
 
-/// Suppress (disable) the health checks listed in the `HEGEL_HC_*`
-/// bitmask. The default is "no suppression"; use this when you know a
-/// check is going to fire and accept the underlying behavior (e.g. you
-/// intentionally have a high rejection rate).
+/// Suppress (disable) a set of health checks, given as a bitwise OR of
+/// `hegel_health_check_t` values. The default is "no suppression"; use this
+/// when you know a check is going to fire and accept the underlying behavior
+/// (e.g. you intentionally have a high rejection rate).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_settings_suppress_health_check(s: *mut HegelSettings, checks: u32) {
+    use hegel_health_check_t::*;
     let Some(inner) = (unsafe { settings_mut(s) }) else {
         return;
     };
     let mut v = Vec::new();
-    if checks & HEGEL_HC_FILTER_TOO_MUCH != 0 {
+    if checks & (HEGEL_HC_FILTER_TOO_MUCH as u32) != 0 {
         v.push(HealthCheck::FilterTooMuch);
     }
-    if checks & HEGEL_HC_TOO_SLOW != 0 {
+    if checks & (HEGEL_HC_TOO_SLOW as u32) != 0 {
         v.push(HealthCheck::TooSlow);
     }
-    if checks & HEGEL_HC_TEST_CASES_TOO_LARGE != 0 {
+    if checks & (HEGEL_HC_TEST_CASES_TOO_LARGE as u32) != 0 {
         v.push(HealthCheck::TestCasesTooLarge);
     }
-    if checks & HEGEL_HC_LARGE_INITIAL_TEST_CASE != 0 {
+    if checks & (HEGEL_HC_LARGE_INITIAL_TEST_CASE as u32) != 0 {
         v.push(HealthCheck::LargeInitialTestCase);
     }
     *inner = inner.clone().suppress_health_check(v);
@@ -1198,7 +1207,7 @@ pub unsafe extern "C" fn hegel_test_case_free(ctx: *mut HegelContext, tc: *mut H
 
 // ─── Per-test-case primitives ───────────────────────────────────────────────
 
-unsafe fn tc_mut<'a>(tc: *mut HegelTestCase) -> Result<&'a mut HegelTestCase, c_int> {
+unsafe fn tc_mut<'a>(tc: *mut HegelTestCase) -> Result<&'a mut HegelTestCase, hegel_result_t> {
     let tc = unsafe { tc.as_mut() }.ok_or(HEGEL_E_INVALID_HANDLE)?;
     if tc.completed {
         return Err(HEGEL_E_ALREADY_COMPLETE);
@@ -1206,7 +1215,7 @@ unsafe fn tc_mut<'a>(tc: *mut HegelTestCase) -> Result<&'a mut HegelTestCase, c_
     Ok(tc)
 }
 
-fn translate_ds_error(ctx: *mut HegelContext, e: DataSourceError) -> c_int {
+fn translate_ds_error(ctx: *mut HegelContext, e: DataSourceError) -> hegel_result_t {
     match e {
         DataSourceError::StopTest => HEGEL_E_STOP_TEST,
         DataSourceError::Assume => HEGEL_E_ASSUME,
@@ -1247,7 +1256,7 @@ pub unsafe extern "C" fn hegel_generate(
     schema_len: usize,
     out_value_cbor: *mut *const u8,
     out_value_len: *mut usize,
-) -> c_int {
+) -> hegel_result_t {
     clear_last_error(ctx);
     let tc = match unsafe { tc_mut(tc) } {
         Ok(t) => t,
@@ -1302,13 +1311,17 @@ pub unsafe extern "C" fn hegel_generate(
 /// Open a labeled span around a group of draws so the shrinker can
 /// reason about them as a unit. Pair with exactly one
 /// `hegel_stop_span(tc, false)` call when the structure is complete.
-/// `label` is one of the `HEGEL_LABEL_*` constants.
+///
+/// `label` is a `hegel_label_t` value for one of the well-known structure
+/// kinds, but the type is `uint64_t` rather than the enum because the label
+/// space is open: callers may pass any stable `u64` to tag their own span
+/// kinds (the engine treats unrecognised labels as opaque grouping keys).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_start_span(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
     label: u64,
-) -> c_int {
+) -> hegel_result_t {
     clear_last_error(ctx);
     let tc = match unsafe { tc_mut(tc) } {
         Ok(t) => t,
@@ -1328,7 +1341,7 @@ pub unsafe extern "C" fn hegel_stop_span(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
     discard: bool,
-) -> c_int {
+) -> hegel_result_t {
     clear_last_error(ctx);
     let tc = match unsafe { tc_mut(tc) } {
         Ok(t) => t,
@@ -1355,7 +1368,7 @@ pub unsafe extern "C" fn hegel_new_collection(
     min_size: u64,
     max_size: u64,
     out_collection_id: *mut i64,
-) -> c_int {
+) -> hegel_result_t {
     clear_last_error(ctx);
     let tc = match unsafe { tc_mut(tc) } {
         Ok(t) => t,
@@ -1389,7 +1402,7 @@ pub unsafe extern "C" fn hegel_collection_more(
     tc: *mut HegelTestCase,
     collection_id: i64,
     out_more: *mut bool,
-) -> c_int {
+) -> hegel_result_t {
     clear_last_error(ctx);
     let tc = match unsafe { tc_mut(tc) } {
         Ok(t) => t,
@@ -1418,7 +1431,7 @@ pub unsafe extern "C" fn hegel_collection_reject(
     tc: *mut HegelTestCase,
     collection_id: i64,
     why: *const c_char,
-) -> c_int {
+) -> hegel_result_t {
     clear_last_error(ctx);
     let tc = match unsafe { tc_mut(tc) } {
         Ok(t) => t,
@@ -1457,7 +1470,7 @@ pub unsafe extern "C" fn hegel_new_pool(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
     out_pool_id: *mut i64,
-) -> c_int {
+) -> hegel_result_t {
     clear_last_error(ctx);
     let tc = match unsafe { tc_mut(tc) } {
         Ok(t) => t,
@@ -1488,7 +1501,7 @@ pub unsafe extern "C" fn hegel_pool_add(
     tc: *mut HegelTestCase,
     pool_id: i64,
     out_variable_id: *mut i64,
-) -> c_int {
+) -> hegel_result_t {
     clear_last_error(ctx);
     let tc = match unsafe { tc_mut(tc) } {
         Ok(t) => t,
@@ -1525,7 +1538,7 @@ pub unsafe extern "C" fn hegel_pool_generate(
     pool_id: i64,
     consume: bool,
     out_variable_id: *mut i64,
-) -> c_int {
+) -> hegel_result_t {
     clear_last_error(ctx);
     let tc = match unsafe { tc_mut(tc) } {
         Ok(t) => t,
@@ -1554,7 +1567,7 @@ unsafe fn names_from_c_array(
     what: &str,
     names: *const *const c_char,
     len: usize,
-) -> Result<Vec<String>, c_int> {
+) -> Result<Vec<String>, hegel_result_t> {
     if names.is_null() && len > 0 {
         set_last_error(ctx, &format!("{func}: {what} pointer is null"));
         return Err(HEGEL_E_INVALID_ARG);
@@ -1604,7 +1617,7 @@ pub unsafe extern "C" fn hegel_new_state_machine(
     invariant_names: *const *const c_char,
     num_invariants: usize,
     out_state_machine_id: *mut i64,
-) -> c_int {
+) -> hegel_result_t {
     clear_last_error(ctx);
     let tc = match unsafe { tc_mut(tc) } {
         Ok(t) => t,
@@ -1668,7 +1681,7 @@ pub unsafe extern "C" fn hegel_state_machine_next_rule(
     tc: *mut HegelTestCase,
     state_machine_id: i64,
     out_rule_index: *mut i64,
-) -> c_int {
+) -> hegel_result_t {
     clear_last_error(ctx);
     let tc = match unsafe { tc_mut(tc) } {
         Ok(t) => t,
@@ -1712,7 +1725,7 @@ pub unsafe extern "C" fn hegel_primitive_boolean(
     forced: bool,
     has_forced: bool,
     out_value: *mut bool,
-) -> c_int {
+) -> hegel_result_t {
     clear_last_error(ctx);
     let tc = match unsafe { tc_mut(tc) } {
         Ok(t) => t,
@@ -1748,7 +1761,7 @@ pub unsafe extern "C" fn hegel_target(
     tc: *mut HegelTestCase,
     value: f64,
     label: *const c_char,
-) -> c_int {
+) -> hegel_result_t {
     clear_last_error(ctx);
     let tc = match unsafe { tc_mut(tc) } {
         Ok(t) => t,
@@ -1797,7 +1810,7 @@ pub unsafe extern "C" fn hegel_mark_complete(
     tc: *mut HegelTestCase,
     status: hegel_status_t,
     origin: *const c_char,
-) -> c_int {
+) -> hegel_result_t {
     clear_last_error(ctx);
     let tc = match unsafe { tc.as_mut() } {
         Some(t) => t,

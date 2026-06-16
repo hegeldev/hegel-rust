@@ -88,7 +88,7 @@ int main(void) {
     while ((tc = hegel_next_test_case(ctx, run)) != NULL) {
         const uint8_t *value;
         size_t value_len;
-        int rc = hegel_generate(ctx, tc, INTEGER_SCHEMA, sizeof(INTEGER_SCHEMA), &value, &value_len);
+        hegel_result_t rc = hegel_generate(ctx, tc, INTEGER_SCHEMA, sizeof(INTEGER_SCHEMA), &value, &value_len);
         if (rc == HEGEL_E_STOP_TEST) {
             hegel_mark_complete(ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             continue;

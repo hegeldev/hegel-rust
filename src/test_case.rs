@@ -9,7 +9,6 @@ use ciborium::Value;
 use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::os::raw::c_int;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 
@@ -68,9 +67,9 @@ macro_rules! invalid_argument {
 }
 pub(crate) use invalid_argument;
 
-/// Translate a non-`HEGEL_OK` libhegel return code into the matching
+/// Translate a non-`HEGEL_OK` libhegel result code into the matching
 /// control-flow unwind. Mirrors the previous `DataSourceError` mapping, but
-/// over the C ABI's `c_int` codes:
+/// over the C ABI's `hegel_result_t` codes:
 ///
 /// - `HEGEL_E_STOP_TEST` — the engine ran out of data for this case.
 /// - `HEGEL_E_ASSUME` — the engine rejected the draw (an assumption failed).
@@ -80,14 +79,15 @@ pub(crate) use invalid_argument;
 /// - anything else — an engine/framework invariant we don't expect on the hot
 ///   path; treat it as an internal error rather than a shrinkable failure.
 #[track_caller]
-pub(crate) fn raise_for_rc(rc: c_int) -> ! {
+pub(crate) fn raise_for_rc(rc: hegel_c::hegel_result_t) -> ! {
+    use hegel_c::hegel_result_t::*;
     match rc {
-        hegel_c::HEGEL_E_STOP_TEST => raise_control(StopTest),
-        hegel_c::HEGEL_E_ASSUME => raise_control(AssumeFailed), // nocov
-        hegel_c::HEGEL_E_INVALID_ARG => invalid_argument!("{}", crate::ffi::last_error_string()),
+        HEGEL_E_STOP_TEST => raise_control(StopTest),
+        HEGEL_E_ASSUME => raise_control(AssumeFailed), // nocov
+        HEGEL_E_INVALID_ARG => invalid_argument!("{}", crate::ffi::last_error_string()),
         other => hegel_internal_error!(
             "libhegel returned unexpected code {}: {}",
-            other,
+            other as i32,
             crate::ffi::last_error_string()
         ),
     }
@@ -717,7 +717,7 @@ impl TestCase {
             // nocov start
             hegel_internal_error!(
                 "hegel_mark_complete failed: rc={} {}",
-                rc,
+                rc as i32,
                 crate::ffi::last_error_string()
             );
             // nocov end

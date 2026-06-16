@@ -52,7 +52,7 @@ fn zero_p_disabled_enables_every_rule() {
     assert_eq!(ntc.spans.len(), 1);
     assert_eq!(
         ntc.spans[0usize].label,
-        crate::HEGEL_LABEL_FEATURE_FLAG.to_string()
+        (crate::hegel_label_t::HEGEL_LABEL_FEATURE_FLAG as u64).to_string()
     );
     assert!(!ntc.spans[0usize].discarded);
 }
@@ -261,7 +261,7 @@ fn overrun_inside_is_enabled_leaves_the_span_open_until_freeze() {
     assert_eq!(ntc.spans.len(), 1);
     assert_eq!(
         ntc.spans[0usize].label,
-        crate::HEGEL_LABEL_FEATURE_FLAG.to_string()
+        (crate::hegel_label_t::HEGEL_LABEL_FEATURE_FLAG as u64).to_string()
     );
     assert_eq!(ntc.spans[0usize].start, 2);
     assert_eq!(ntc.spans[0usize].end, 2);

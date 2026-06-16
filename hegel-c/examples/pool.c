@@ -116,7 +116,7 @@ int main(void) {
             size_t len;
 
             /* Decide push vs pop. */
-            int rc = hegel_generate(ctx, tc, BOOLEAN_SCHEMA, sizeof(BOOLEAN_SCHEMA), &bytes, &len);
+            hegel_result_t rc = hegel_generate(ctx, tc, BOOLEAN_SCHEMA, sizeof(BOOLEAN_SCHEMA), &bytes, &len);
             if (rc != HEGEL_OK) { overran = true; break; }
             bool push = decode_bool(bytes, len);
 

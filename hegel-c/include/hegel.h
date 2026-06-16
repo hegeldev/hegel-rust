@@ -3,6 +3,21 @@
  *
  * This header is generated from hegel-c/src/lib.rs by cbindgen. Do not
  * edit it directly; re-run `just c-header` after changing the Rust source.
+ *
+ * Pointer ownership
+ * -----------------
+ * Every pointer you pass *into* a libhegel function stays owned by you: the
+ * library reads it during the call and copies out whatever it needs to keep,
+ * so you may free or reuse the memory as soon as the call returns. This
+ * applies to strings (char*), CBOR byte buffers, and arrays of strings alike.
+ *
+ * Pointers libhegel returns *to* you are borrows into a handle and are only
+ * valid until a stated point — each function documents its own lifetime (e.g.
+ * the bytes from hegel_generate are invalidated by the next call on that test
+ * case; result strings live until hegel_run_free). Copy them if you need them
+ * longer. Opaque handles (hegel_context_t*, hegel_settings_t*, hegel_run_t*,
+ * hegel_test_case_t* from hegel_test_case_from_blob) are owned by you and must
+ * be released with the matching hegel_*_free function.
  */
 
 #ifndef HEGEL_H
@@ -11,204 +26,6 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
-
-/*
- Success.
- */
-#define HEGEL_OK 0
-
-/*
- The engine has exhausted its choice budget for this test case and
- wants the caller to abort the body and return. Treat the same as a
- validly-completed test case.
- */
-#define HEGEL_E_STOP_TEST -1
-
-/*
- An `assume` / `reject` precondition failed. The current test case is
- invalid and should be discarded.
- */
-#define HEGEL_E_ASSUME -2
-
-/*
- The underlying engine reported an error. See
- `hegel_context_last_error()` for the diagnostic.
- */
-#define HEGEL_E_BACKEND -3
-
-/*
- A handle pointer (`hegel_settings_t*`, `hegel_run_t*`,
- `hegel_test_case_t*`, …) was NULL where it must be non-NULL.
- */
-#define HEGEL_E_INVALID_HANDLE -4
-
-/*
- An argument other than a handle was invalid — NULL where a value was
- required, malformed CBOR, non-UTF-8 string, etc. See
- `hegel_context_last_error()` for specifics.
- */
-#define HEGEL_E_INVALID_ARG -5
-
-/*
- `hegel_mark_complete` (or a primitive on the same handle) was called
- for a test case that has already been completed.
- */
-#define HEGEL_E_ALREADY_COMPLETE -6
-
-/*
- `hegel_next_test_case` was called without first completing the
- previous test case with `hegel_mark_complete`.
- */
-#define HEGEL_E_NOT_COMPLETE -7
-
-/*
- An internal invariant failed inside libhegel (e.g. CBOR
- re-serialisation). Should not happen in practice; please file a
- bug. See `hegel_context_last_error()` for the diagnostic.
- */
-#define HEGEL_E_INTERNAL -8
-
-/*
- Run hard-coded explicit examples (none today, reserved for future use).
- */
-#define HEGEL_PHASE_EXPLICIT (1 << 0)
-
-/*
- Replay counterexamples persisted from previous runs (requires a
- database path + `hegel_settings_database_key`).
- */
-#define HEGEL_PHASE_REUSE (1 << 1)
-
-/*
- Randomly generate fresh test cases up to the `test_cases` budget.
- */
-#define HEGEL_PHASE_GENERATE (1 << 2)
-
-/*
- Apply hill-climbing toward observed `hegel_target` scores between
- generation rounds.
- */
-#define HEGEL_PHASE_TARGET (1 << 3)
-
-/*
- Shrink discovered failing examples toward minimal counterexamples.
- */
-#define HEGEL_PHASE_SHRINK (1 << 4)
-
-/*
- Convenience: all five phases enabled. This is the default.
- */
-#define HEGEL_PHASE_ALL 31
-
-/*
- Suppress: aborts the run if too many draws are rejected via
- `assume` / `Invalid` (default threshold: 200 in a row with no valid
- case).
- */
-#define HEGEL_HC_FILTER_TOO_MUCH (1 << 0)
-
-/*
- Suppress: aborts the run if individual test cases take so long that
- the overall run is impractical.
- */
-#define HEGEL_HC_TOO_SLOW (1 << 1)
-
-/*
- Suppress: aborts the run if generated values are so large that
- retaining them for shrinking is impractical.
- */
-#define HEGEL_HC_TEST_CASES_TOO_LARGE (1 << 2)
-
-/*
- Suppress: warns if the first generated test case is already
- disproportionately large.
- */
-#define HEGEL_HC_LARGE_INITIAL_TEST_CASE (1 << 3)
-
-/*
- Outer span around a list / sequence.
- */
-#define HEGEL_LABEL_LIST 1
-
-/*
- One element of a list.
- */
-#define HEGEL_LABEL_LIST_ELEMENT 2
-
-/*
- Outer span around a set (unordered, no duplicates).
- */
-#define HEGEL_LABEL_SET 3
-
-/*
- One element of a set.
- */
-#define HEGEL_LABEL_SET_ELEMENT 4
-
-/*
- Outer span around a map / dictionary.
- */
-#define HEGEL_LABEL_MAP 5
-
-/*
- One (key, value) entry of a map.
- */
-#define HEGEL_LABEL_MAP_ENTRY 6
-
-/*
- Outer span around a tuple / fixed-arity record.
- */
-#define HEGEL_LABEL_TUPLE 7
-
-/*
- Outer span around a `one_of` / disjunction; useful so the shrinker
- can swap which branch is taken.
- */
-#define HEGEL_LABEL_ONE_OF 8
-
-/*
- Outer span around an `optional` (None vs Some(value)).
- */
-#define HEGEL_LABEL_OPTIONAL 9
-
-/*
- Outer span around a fixed-shape record (named fields known
- statically).
- */
-#define HEGEL_LABEL_FIXED_DICT 10
-
-/*
- Outer span around a `flat_map` / monadic dependent draw.
- */
-#define HEGEL_LABEL_FLAT_MAP 11
-
-/*
- Outer span around a `filter` / rejection-sampling wrapper.
- */
-#define HEGEL_LABEL_FILTER 12
-
-/*
- Outer span around a `map` / pure transformation.
- */
-#define HEGEL_LABEL_MAPPED 13
-
-/*
- Outer span around a `sampled_from` / pick-from-collection draw.
- */
-#define HEGEL_LABEL_SAMPLED_FROM 14
-
-/*
- Outer span around the variant discriminator of a sum-type draw.
- */
-#define HEGEL_LABEL_ENUM_VARIANT 15
-
-/*
- Span around one swarm-testing feature-flag draw. Emitted internally
- by the engine's state-machine rule selection
- (`hegel_state_machine_next_rule`); callers normally never open this
- span themselves.
- */
-#define HEGEL_LABEL_FEATURE_FLAG 16
 
 /*
  How the engine should treat the run: a full property-test loop or a
@@ -265,6 +82,66 @@ typedef enum {
 } hegel_verbosity_t;
 
 /*
+ Result of a fallible libhegel call.
+
+ Every `int`-returning entry point (the per-test-case primitives, etc.)
+ returns one of these. `HEGEL_OK` is zero; every error is negative, so
+ `result != HEGEL_OK` (or `result < 0`) tests for failure. Handle-returning
+ entry points signal failure with NULL instead. For the error variants that
+ carry a diagnostic, the message is on the call's context — read it with
+ `hegel_context_last_error()`.
+ */
+typedef enum {
+    /*
+     Success.
+     */
+    HEGEL_OK = 0,
+    /*
+     The engine has exhausted its choice budget for this test case and
+     wants the caller to abort the body and return. Treat the same as a
+     validly-completed test case.
+     */
+    HEGEL_E_STOP_TEST = -1,
+    /*
+     An `assume` / `reject` precondition failed. The current test case is
+     invalid and should be discarded.
+     */
+    HEGEL_E_ASSUME = -2,
+    /*
+     The underlying engine reported an error. See
+     `hegel_context_last_error()` for the diagnostic.
+     */
+    HEGEL_E_BACKEND = -3,
+    /*
+     A handle pointer (`hegel_settings_t*`, `hegel_run_t*`,
+     `hegel_test_case_t*`, …) was NULL where it must be non-NULL.
+     */
+    HEGEL_E_INVALID_HANDLE = -4,
+    /*
+     An argument other than a handle was invalid — NULL where a value was
+     required, malformed CBOR, non-UTF-8 string, etc. See
+     `hegel_context_last_error()` for specifics.
+     */
+    HEGEL_E_INVALID_ARG = -5,
+    /*
+     `hegel_mark_complete` (or a primitive on the same handle) was called
+     for a test case that has already been completed.
+     */
+    HEGEL_E_ALREADY_COMPLETE = -6,
+    /*
+     `hegel_next_test_case` was called without first completing the
+     previous test case with `hegel_mark_complete`.
+     */
+    HEGEL_E_NOT_COMPLETE = -7,
+    /*
+     An internal invariant failed inside libhegel (e.g. CBOR
+     re-serialisation). Should not happen in practice; please file a
+     bug. See `hegel_context_last_error()` for the diagnostic.
+     */
+    HEGEL_E_INTERNAL = -8,
+} hegel_result_t;
+
+/*
  Outcome of a single test case. Passed to `hegel_mark_complete`.
 
  - `HEGEL_STATUS_VALID`: the test body ran to completion without
@@ -304,6 +181,154 @@ typedef enum {
     HEGEL_RUN_STATUS_FAILED = 1,
     HEGEL_RUN_STATUS_ERROR = 2,
 } hegel_run_status_t;
+
+/*
+ A phase of the property-test loop, used as a bit flag for
+ `hegel_settings_phases`.
+
+ `hegel_settings_phases` takes a bitwise OR of these values (e.g.
+ `HEGEL_PHASE_GENERATE | HEGEL_PHASE_SHRINK`); the phases not included are
+ disabled. The default is `HEGEL_PHASE_ALL`, which is almost always what you
+ want — turning a phase off is mainly useful for debugging or replay tooling.
+ */
+typedef enum {
+    /*
+     Run hard-coded explicit examples (none today, reserved for future use).
+     */
+    HEGEL_PHASE_EXPLICIT = (1 << 0),
+    /*
+     Replay counterexamples persisted from previous runs (requires a
+     database path + `hegel_settings_database_key`).
+     */
+    HEGEL_PHASE_REUSE = (1 << 1),
+    /*
+     Randomly generate fresh test cases up to the `test_cases` budget.
+     */
+    HEGEL_PHASE_GENERATE = (1 << 2),
+    /*
+     Apply hill-climbing toward observed `hegel_target` scores between
+     generation rounds.
+     */
+    HEGEL_PHASE_TARGET = (1 << 3),
+    /*
+     Shrink discovered failing examples toward minimal counterexamples.
+     */
+    HEGEL_PHASE_SHRINK = (1 << 4),
+    /*
+     Convenience: all five phases enabled. This is the default.
+     */
+    HEGEL_PHASE_ALL = 31,
+} hegel_phase_t;
+
+/*
+ A health check, used as a bit flag for
+ `hegel_settings_suppress_health_check`.
+
+ `hegel_settings_suppress_health_check` takes a bitwise OR of these values
+ naming the checks to *disable*. The default is "all enabled"; suppress a
+ check only when you understand why it is firing and accept the behavior.
+ */
+typedef enum {
+    /*
+     Aborts the run if too many draws are rejected via `assume` / `Invalid`
+     (default threshold: 200 in a row with no valid case).
+     */
+    HEGEL_HC_FILTER_TOO_MUCH = (1 << 0),
+    /*
+     Aborts the run if individual test cases take so long that the overall
+     run is impractical.
+     */
+    HEGEL_HC_TOO_SLOW = (1 << 1),
+    /*
+     Aborts the run if generated values are so large that retaining them for
+     shrinking is impractical.
+     */
+    HEGEL_HC_TEST_CASES_TOO_LARGE = (1 << 2),
+    /*
+     Warns if the first generated test case is already disproportionately
+     large.
+     */
+    HEGEL_HC_LARGE_INITIAL_TEST_CASE = (1 << 3),
+} hegel_health_check_t;
+
+/*
+ Identifies what kind of compound structure a span groups, passed to
+ `hegel_start_span` so the shrinker can choose appropriate shrink moves
+ (e.g. shortening lists vs. simplifying individual list elements). Pick
+ whichever label best describes the surrounding context. Mirrors
+ `hegeltest::test_case::labels`.
+ */
+typedef enum {
+    /*
+     Outer span around a list / sequence.
+     */
+    HEGEL_LABEL_LIST = 1,
+    /*
+     One element of a list.
+     */
+    HEGEL_LABEL_LIST_ELEMENT = 2,
+    /*
+     Outer span around a set (unordered, no duplicates).
+     */
+    HEGEL_LABEL_SET = 3,
+    /*
+     One element of a set.
+     */
+    HEGEL_LABEL_SET_ELEMENT = 4,
+    /*
+     Outer span around a map / dictionary.
+     */
+    HEGEL_LABEL_MAP = 5,
+    /*
+     One (key, value) entry of a map.
+     */
+    HEGEL_LABEL_MAP_ENTRY = 6,
+    /*
+     Outer span around a tuple / fixed-arity record.
+     */
+    HEGEL_LABEL_TUPLE = 7,
+    /*
+     Outer span around a `one_of` / disjunction; useful so the shrinker
+     can swap which branch is taken.
+     */
+    HEGEL_LABEL_ONE_OF = 8,
+    /*
+     Outer span around an `optional` (None vs Some(value)).
+     */
+    HEGEL_LABEL_OPTIONAL = 9,
+    /*
+     Outer span around a fixed-shape record (named fields known
+     statically).
+     */
+    HEGEL_LABEL_FIXED_DICT = 10,
+    /*
+     Outer span around a `flat_map` / monadic dependent draw.
+     */
+    HEGEL_LABEL_FLAT_MAP = 11,
+    /*
+     Outer span around a `filter` / rejection-sampling wrapper.
+     */
+    HEGEL_LABEL_FILTER = 12,
+    /*
+     Outer span around a `map` / pure transformation.
+     */
+    HEGEL_LABEL_MAPPED = 13,
+    /*
+     Outer span around a `sampled_from` / pick-from-collection draw.
+     */
+    HEGEL_LABEL_SAMPLED_FROM = 14,
+    /*
+     Outer span around the variant discriminator of a sum-type draw.
+     */
+    HEGEL_LABEL_ENUM_VARIANT = 15,
+    /*
+     Span around one swarm-testing feature-flag draw. Emitted internally
+     by the engine's state-machine rule selection
+     (`hegel_state_machine_next_rule`); callers normally never open this
+     span themselves.
+     */
+    HEGEL_LABEL_FEATURE_FLAG = 16,
+} hegel_label_t;
 
 /*
  Opaque error-reporting context.
@@ -499,18 +524,17 @@ void hegel_settings_database(hegel_context_t *ctx, hegel_settings_t *s, const ch
 void hegel_settings_database_key(hegel_context_t *ctx, hegel_settings_t *s, const char *key);
 
 /*
- Enable a specific set of phases via a `HEGEL_PHASE_*` bitmask.
- Phases not listed in the bitmask are disabled. The default is
- `HEGEL_PHASE_ALL`. Setting this to 0 produces a run that does
- nothing.
+ Enable a specific set of phases, given as a bitwise OR of `hegel_phase_t`
+ values. Phases not included are disabled. The default is `HEGEL_PHASE_ALL`.
+ Passing 0 produces a run that does nothing.
  */
 void hegel_settings_phases(hegel_settings_t *s, uint32_t phases);
 
 /*
- Suppress (disable) the health checks listed in the `HEGEL_HC_*`
- bitmask. The default is "no suppression"; use this when you know a
- check is going to fire and accept the underlying behavior (e.g. you
- intentionally have a high rejection rate).
+ Suppress (disable) a set of health checks, given as a bitwise OR of
+ `hegel_health_check_t` values. The default is "no suppression"; use this
+ when you know a check is going to fire and accept the underlying behavior
+ (e.g. you intentionally have a high rejection rate).
  */
 void hegel_settings_suppress_health_check(hegel_settings_t *s, uint32_t checks);
 
@@ -621,27 +645,31 @@ void hegel_test_case_free(hegel_context_t *ctx, hegel_test_case_t *tc);
  other argument errors; the diagnostic is in
  `hegel_context_last_error`.
  */
-int hegel_generate(hegel_context_t *ctx,
-                   hegel_test_case_t *tc,
-                   const uint8_t *schema_cbor,
-                   size_t schema_len,
-                   const uint8_t **out_value_cbor,
-                   size_t *out_value_len);
+hegel_result_t hegel_generate(hegel_context_t *ctx,
+                              hegel_test_case_t *tc,
+                              const uint8_t *schema_cbor,
+                              size_t schema_len,
+                              const uint8_t **out_value_cbor,
+                              size_t *out_value_len);
 
 /*
  Open a labeled span around a group of draws so the shrinker can
  reason about them as a unit. Pair with exactly one
  `hegel_stop_span(tc, false)` call when the structure is complete.
- `label` is one of the `HEGEL_LABEL_*` constants.
+
+ `label` is a `hegel_label_t` value for one of the well-known structure
+ kinds, but the type is `uint64_t` rather than the enum because the label
+ space is open: callers may pass any stable `u64` to tag their own span
+ kinds (the engine treats unrecognised labels as opaque grouping keys).
  */
-int hegel_start_span(hegel_context_t *ctx, hegel_test_case_t *tc, uint64_t label);
+hegel_result_t hegel_start_span(hegel_context_t *ctx, hegel_test_case_t *tc, uint64_t label);
 
 /*
  Close the most-recently opened span. Pass `discard = true` to mark
  the span as rejected (e.g. a `filter` predicate didn't hold and the
  engine should retry from before the span opened).
  */
-int hegel_stop_span(hegel_context_t *ctx, hegel_test_case_t *tc, bool discard);
+hegel_result_t hegel_stop_span(hegel_context_t *ctx, hegel_test_case_t *tc, bool discard);
 
 /*
  Start an engine-managed variable-length collection. The engine
@@ -653,11 +681,11 @@ int hegel_stop_span(hegel_context_t *ctx, hegel_test_case_t *tc, bool discard);
  and returns `HEGEL_OK`. The id is opaque; pass it to subsequent
  `hegel_collection_more` / `hegel_collection_reject` calls.
  */
-int hegel_new_collection(hegel_context_t *ctx,
-                         hegel_test_case_t *tc,
-                         uint64_t min_size,
-                         uint64_t max_size,
-                         int64_t *out_collection_id);
+hegel_result_t hegel_new_collection(hegel_context_t *ctx,
+                                    hegel_test_case_t *tc,
+                                    uint64_t min_size,
+                                    uint64_t max_size,
+                                    int64_t *out_collection_id);
 
 /*
  Ask whether the engine wants another element in this collection.
@@ -665,10 +693,10 @@ int hegel_new_collection(hegel_context_t *ctx,
  `HEGEL_OK`. Call in a loop until `*out_more` is `false`, drawing
  the next element each time.
  */
-int hegel_collection_more(hegel_context_t *ctx,
-                          hegel_test_case_t *tc,
-                          int64_t collection_id,
-                          bool *out_more);
+hegel_result_t hegel_collection_more(hegel_context_t *ctx,
+                                     hegel_test_case_t *tc,
+                                     int64_t collection_id,
+                                     bool *out_more);
 
 /*
  Tell the engine the last element it produced for this collection
@@ -676,10 +704,10 @@ int hegel_collection_more(hegel_context_t *ctx,
  should try a different one. `why` is an optional human-readable
  rejection reason (NULL is allowed).
  */
-int hegel_collection_reject(hegel_context_t *ctx,
-                            hegel_test_case_t *tc,
-                            int64_t collection_id,
-                            const char *why);
+hegel_result_t hegel_collection_reject(hegel_context_t *ctx,
+                                       hegel_test_case_t *tc,
+                                       int64_t collection_id,
+                                       const char *why);
 
 /*
  Create a new engine-managed *variable pool* for stateful testing.
@@ -694,7 +722,7 @@ int hegel_collection_reject(hegel_context_t *ctx,
  `HEGEL_OK`. The id is opaque; pass it to subsequent `hegel_pool_add`
  / `hegel_pool_generate` calls on the *same* test case.
  */
-int hegel_new_pool(hegel_context_t *ctx, hegel_test_case_t *tc, int64_t *out_pool_id);
+hegel_result_t hegel_new_pool(hegel_context_t *ctx, hegel_test_case_t *tc, int64_t *out_pool_id);
 
 /*
  Register a new variable in the pool. The engine assigns it a fresh
@@ -704,10 +732,10 @@ int hegel_new_pool(hegel_context_t *ctx, hegel_test_case_t *tc, int64_t *out_poo
  returns `HEGEL_OK`. `pool_id` must be an id returned by
  `hegel_new_pool` on this test case.
  */
-int hegel_pool_add(hegel_context_t *ctx,
-                   hegel_test_case_t *tc,
-                   int64_t pool_id,
-                   int64_t *out_variable_id);
+hegel_result_t hegel_pool_add(hegel_context_t *ctx,
+                              hegel_test_case_t *tc,
+                              int64_t pool_id,
+                              int64_t *out_variable_id);
 
 /*
  Draw a variable id from the pool, letting the engine choose (and
@@ -722,11 +750,11 @@ int hegel_pool_add(hegel_context_t *ctx,
  only draw when it knows it has added at least one variable) or treat
  it like any other budget-exhaustion outcome.
  */
-int hegel_pool_generate(hegel_context_t *ctx,
-                        hegel_test_case_t *tc,
-                        int64_t pool_id,
-                        bool consume,
-                        int64_t *out_variable_id);
+hegel_result_t hegel_pool_generate(hegel_context_t *ctx,
+                                   hegel_test_case_t *tc,
+                                   int64_t pool_id,
+                                   bool consume,
+                                   int64_t *out_variable_id);
 
 /*
  Register a *state machine* for engine-owned stateful (rule-based)
@@ -744,13 +772,13 @@ int hegel_pool_generate(hegel_context_t *ctx,
  Returns `HEGEL_E_INVALID_ARG` if `num_rules` is zero, or on null /
  non-UTF-8 names.
  */
-int hegel_new_state_machine(hegel_context_t *ctx,
-                            hegel_test_case_t *tc,
-                            const char *const *rule_names,
-                            size_t num_rules,
-                            const char *const *invariant_names,
-                            size_t num_invariants,
-                            int64_t *out_state_machine_id);
+hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
+                                       hegel_test_case_t *tc,
+                                       const char *const *rule_names,
+                                       size_t num_rules,
+                                       const char *const *invariant_names,
+                                       size_t num_invariants,
+                                       int64_t *out_state_machine_id);
 
 /*
  Draw the index of the next rule to run, in `[0, num_rules)`, letting
@@ -767,10 +795,10 @@ int hegel_new_state_machine(hegel_context_t *ctx,
  (the caller should abort the body and call `hegel_mark_complete`
  with `HEGEL_STATUS_OVERRUN`).
  */
-int hegel_state_machine_next_rule(hegel_context_t *ctx,
-                                  hegel_test_case_t *tc,
-                                  int64_t state_machine_id,
-                                  int64_t *out_rule_index);
+hegel_result_t hegel_state_machine_next_rule(hegel_context_t *ctx,
+                                             hegel_test_case_t *tc,
+                                             int64_t state_machine_id,
+                                             int64_t *out_rule_index);
 
 /*
  Draw a single boolean that is `true` with probability `p`. `p`
@@ -791,12 +819,12 @@ int hegel_state_machine_next_rule(hegel_context_t *ctx,
  `[0.0, 1.0]` (including NaN), or a contradictory forced value; the
  diagnostic is in `hegel_context_last_error`.
  */
-int hegel_primitive_boolean(hegel_context_t *ctx,
-                            hegel_test_case_t *tc,
-                            double p,
-                            bool forced,
-                            bool has_forced,
-                            bool *out_value);
+hegel_result_t hegel_primitive_boolean(hegel_context_t *ctx,
+                                       hegel_test_case_t *tc,
+                                       double p,
+                                       bool forced,
+                                       bool has_forced,
+                                       bool *out_value);
 
 /*
  Record a numeric observation under `label` for the engine's
@@ -811,7 +839,10 @@ int hegel_primitive_boolean(hegel_context_t *ctx,
  has already been observed on this test case — each label may be
  recorded at most once per case.
  */
-int hegel_target(hegel_context_t *ctx, hegel_test_case_t *tc, double value, const char *label);
+hegel_result_t hegel_target(hegel_context_t *ctx,
+                            hegel_test_case_t *tc,
+                            double value,
+                            const char *label);
 
 /*
  Mark this test case complete with the given status.
@@ -835,10 +866,10 @@ int hegel_target(hegel_context_t *ctx, hegel_test_case_t *tc, double value, cons
  assertion's message. hegel-rust's own panic-to-failure path does
  exactly this (see `src/run_lifecycle.rs`).
  */
-int hegel_mark_complete(hegel_context_t *ctx,
-                        hegel_test_case_t *tc,
-                        hegel_status_t status,
-                        const char *origin);
+hegel_result_t hegel_mark_complete(hegel_context_t *ctx,
+                                   hegel_test_case_t *tc,
+                                   hegel_status_t status,
+                                   const char *origin);
 
 /*
  True iff this test case is the engine's *final replay* of a

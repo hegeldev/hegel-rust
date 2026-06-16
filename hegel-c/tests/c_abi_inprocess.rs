@@ -8,18 +8,18 @@
 //! they hit are measured. The happy path is covered by hegeltest driving the
 //! engine over this same ABI.
 
+use hegel_c::hegel_result_t::*;
 use hegel_c::{
-    HEGEL_E_ALREADY_COMPLETE, HEGEL_E_INVALID_ARG, HEGEL_E_INVALID_HANDLE, HEGEL_OK, HegelContext,
-    HegelRun, HegelTestCase, hegel_backend_t, hegel_collection_more, hegel_collection_reject,
-    hegel_context_free, hegel_context_last_error, hegel_context_new, hegel_failure_origin,
-    hegel_failure_panic_message, hegel_failure_reproduction_blob, hegel_generate,
-    hegel_mark_complete, hegel_mode_t, hegel_new_collection, hegel_new_pool,
-    hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_generate,
-    hegel_primitive_boolean, hegel_run_free, hegel_run_result, hegel_run_result_error,
-    hegel_run_result_failure, hegel_run_result_failure_count, hegel_run_result_status,
-    hegel_run_start, hegel_run_status_t, hegel_settings_backend, hegel_settings_database,
-    hegel_settings_database_key, hegel_settings_free, hegel_settings_mode, hegel_settings_new,
-    hegel_settings_phases, hegel_settings_report_multiple_failures,
+    HegelContext, HegelRun, HegelTestCase, hegel_backend_t, hegel_collection_more,
+    hegel_collection_reject, hegel_context_free, hegel_context_last_error, hegel_context_new,
+    hegel_failure_origin, hegel_failure_panic_message, hegel_failure_reproduction_blob,
+    hegel_generate, hegel_label_t, hegel_mark_complete, hegel_mode_t, hegel_new_collection,
+    hegel_new_pool, hegel_new_state_machine, hegel_next_test_case, hegel_pool_add,
+    hegel_pool_generate, hegel_primitive_boolean, hegel_run_free, hegel_run_result,
+    hegel_run_result_error, hegel_run_result_failure, hegel_run_result_failure_count,
+    hegel_run_result_status, hegel_run_start, hegel_run_status_t, hegel_settings_backend,
+    hegel_settings_database, hegel_settings_database_key, hegel_settings_free, hegel_settings_mode,
+    hegel_settings_new, hegel_settings_phases, hegel_settings_report_multiple_failures,
     hegel_settings_suppress_health_check, hegel_start_span, hegel_state_machine_next_rule,
     hegel_status_t, hegel_stop_span, hegel_target, hegel_test_case_free, hegel_test_case_from_blob,
     hegel_test_case_is_final_replay, hegel_version,
@@ -599,7 +599,7 @@ fn primitives_after_overrun_all_report_stop_test() {
                 schema.len(),
                 &mut out_ptr,
                 &mut out_len,
-            ) == hegel_c::HEGEL_E_STOP_TEST
+            ) == HEGEL_E_STOP_TEST
             {
                 overran = true;
                 break;
@@ -609,26 +609,23 @@ fn primitives_after_overrun_all_report_stop_test() {
 
         // With the case aborted, each primitive now reports STOP_TEST.
         assert_eq!(
-            hegel_start_span(ctx, tc, hegel_c::HEGEL_LABEL_LIST),
-            hegel_c::HEGEL_E_STOP_TEST
+            hegel_start_span(ctx, tc, hegel_label_t::HEGEL_LABEL_LIST as u64),
+            HEGEL_E_STOP_TEST
         );
-        assert_eq!(hegel_stop_span(ctx, tc, false), hegel_c::HEGEL_E_STOP_TEST);
+        assert_eq!(hegel_stop_span(ctx, tc, false), HEGEL_E_STOP_TEST);
         let mut id = 0i64;
         assert_eq!(
             hegel_new_collection(ctx, tc, 0, 3, &mut id),
-            hegel_c::HEGEL_E_STOP_TEST
+            HEGEL_E_STOP_TEST
         );
         // collection_reject short-circuits on the aborted flag before it would
         // look up the (here nonexistent) collection id, so id 0 is safe.
         assert_eq!(
             hegel_collection_reject(ctx, tc, 0, ptr::null()),
-            hegel_c::HEGEL_E_STOP_TEST
+            HEGEL_E_STOP_TEST
         );
-        assert_eq!(hegel_new_pool(ctx, tc, &mut id), hegel_c::HEGEL_E_STOP_TEST);
-        assert_eq!(
-            hegel_pool_add(ctx, tc, 0, &mut id),
-            hegel_c::HEGEL_E_STOP_TEST
-        );
+        assert_eq!(hegel_new_pool(ctx, tc, &mut id), HEGEL_E_STOP_TEST);
+        assert_eq!(hegel_pool_add(ctx, tc, 0, &mut id), HEGEL_E_STOP_TEST);
 
         hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_OVERRUN, ptr::null());
         // Drain the rest.

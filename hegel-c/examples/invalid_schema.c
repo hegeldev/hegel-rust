@@ -66,7 +66,7 @@ int main(void) {
 
     const uint8_t *value;
     size_t value_len;
-    int rc = hegel_generate(ctx, tc, IPV4_TYPE_SCHEMA, sizeof(IPV4_TYPE_SCHEMA), &value, &value_len);
+    hegel_result_t rc = hegel_generate(ctx, tc, IPV4_TYPE_SCHEMA, sizeof(IPV4_TYPE_SCHEMA), &value, &value_len);
 
     int ok = 1;
     if (rc != HEGEL_E_INVALID_ARG) {

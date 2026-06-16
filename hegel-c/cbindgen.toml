@@ -5,6 +5,21 @@ header = """
  *
  * This header is generated from hegel-c/src/lib.rs by cbindgen. Do not
  * edit it directly; re-run `just c-header` after changing the Rust source.
+ *
+ * Pointer ownership
+ * -----------------
+ * Every pointer you pass *into* a libhegel function stays owned by you: the
+ * library reads it during the call and copies out whatever it needs to keep,
+ * so you may free or reuse the memory as soon as the call returns. This
+ * applies to strings (char*), CBOR byte buffers, and arrays of strings alike.
+ *
+ * Pointers libhegel returns *to* you are borrows into a handle and are only
+ * valid until a stated point — each function documents its own lifetime (e.g.
+ * the bytes from hegel_generate are invalidated by the next call on that test
+ * case; result strings live until hegel_run_free). Copy them if you need them
+ * longer. Opaque handles (hegel_context_t*, hegel_settings_t*, hegel_run_t*,
+ * hegel_test_case_t* from hegel_test_case_from_blob) are owned by you and must
+ * be released with the matching hegel_*_free function.
  */"""
 include_guard = "HEGEL_H"
 pragma_once = false
@@ -16,6 +31,16 @@ documentation = true
 documentation_style = "c"
 style = "type"
 usize_is_size_t = true
+
+# These enums name constants that are passed as plain integers, not as the
+# enum type, so cbindgen sees no signature referencing them and would omit
+# them. Force them into the header so the named values are still emitted as
+# proper enums:
+#   - hegel_phase_t / hegel_health_check_t: bitwise-OR'd into a uint32_t mask.
+#   - hegel_label_t: a uint64_t span label (the label space is open, so the
+#     parameter can't be the closed enum type).
+[export]
+include = ["hegel_phase_t", "hegel_health_check_t", "hegel_label_t"]
 
 [export.rename]
 "HegelContext" = "hegel_context_t"

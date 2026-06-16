@@ -3,20 +3,21 @@
 //! hegeltest drives the engine the same way every other language binding
 //! does: through the `hegel_*` C functions exported by the `hegel-c` crate
 //! (lib name `hegel_c`), passing CBOR bytes and opaque handles and reading
-//! back `c_int` error codes. This module is the single place that touches
+//! back `hegel_result_t` codes. This module is the single place that touches
 //! those raw functions; the rest of the frontend works against the safe
 //! wrappers here.
 //!
 //! The wrappers deliberately do *not* know about hegeltest's control-flow
-//! unwinds: the per-test-case methods return `Result<_, c_int>` and leave it
-//! to [`crate::test_case`] to translate a non-`HEGEL_OK` code into the right
-//! [`crate::control`] payload (a `StopTest` / `AssumeFailed` / invalid-argument
-//! unwind). Keeping that split means the unsafe boundary stays small and the
-//! control-flow policy stays with the test lifecycle.
+//! unwinds: the per-test-case methods return `Result<_, hegel_result_t>` and
+//! leave it to [`crate::test_case`] to translate a non-`HEGEL_OK` code into the
+//! right [`crate::control`] payload (a `StopTest` / `AssumeFailed` /
+//! invalid-argument unwind). Keeping that split means the unsafe boundary stays
+//! small and the control-flow policy stays with the test lifecycle.
 
 use crate::runner::{Backend, Database, HealthCheck, Mode, Phase, Settings, Verbosity};
+use hegel_c::hegel_result_t;
 use std::ffi::{CStr, CString};
-use std::os::raw::{c_char, c_int};
+use std::os::raw::c_char;
 use std::ptr;
 
 /// Owns a `*mut HegelContext` — libhegel's explicit per-call error channel —
@@ -263,7 +264,7 @@ impl CTestCase {
     /// Generate a CBOR value for `schema_cbor`, returning a fresh copy of the
     /// bytes (libhegel's buffer is invalidated by the next call on this
     /// handle, so we copy immediately).
-    pub(crate) fn generate(&self, schema_cbor: &[u8]) -> Result<Vec<u8>, c_int> {
+    pub(crate) fn generate(&self, schema_cbor: &[u8]) -> Result<Vec<u8>, hegel_result_t> {
         let mut out_ptr: *const u8 = ptr::null();
         let mut out_len: usize = 0;
         // SAFETY: schema bytes + out params are valid; on HEGEL_OK libhegel
@@ -278,7 +279,7 @@ impl CTestCase {
                 &mut out_len,
             )
         });
-        if rc != hegel_c::HEGEL_OK {
+        if rc != hegel_result_t::HEGEL_OK {
             return Err(rc);
         }
         // SAFETY: on success out_ptr/out_len describe a valid borrowed buffer.
@@ -286,13 +287,13 @@ impl CTestCase {
         Ok(bytes.to_vec())
     }
 
-    pub(crate) fn start_span(&self, label: u64) -> Result<(), c_int> {
+    pub(crate) fn start_span(&self, label: u64) -> Result<(), hegel_result_t> {
         rc_to_unit(with_context(|ctx| unsafe {
             hegel_c::hegel_start_span(ctx, self.raw, label)
         }))
     }
 
-    pub(crate) fn stop_span(&self, discard: bool) -> Result<(), c_int> {
+    pub(crate) fn stop_span(&self, discard: bool) -> Result<(), hegel_result_t> {
         rc_to_unit(with_context(|ctx| unsafe {
             hegel_c::hegel_stop_span(ctx, self.raw, discard)
         }))
@@ -302,7 +303,7 @@ impl CTestCase {
         &self,
         min_size: u64,
         max_size: Option<u64>,
-    ) -> Result<i64, c_int> {
+    ) -> Result<i64, hegel_result_t> {
         let mut id: i64 = 0;
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_new_collection(
@@ -316,7 +317,7 @@ impl CTestCase {
         rc_to_value(rc, id)
     }
 
-    pub(crate) fn collection_more(&self, collection_id: i64) -> Result<bool, c_int> {
+    pub(crate) fn collection_more(&self, collection_id: i64) -> Result<bool, hegel_result_t> {
         let mut more = false;
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_collection_more(ctx, self.raw, collection_id, &mut more)
@@ -328,7 +329,7 @@ impl CTestCase {
         &self,
         collection_id: i64,
         why: Option<&str>,
-    ) -> Result<(), c_int> {
+    ) -> Result<(), hegel_result_t> {
         let c_why = why.map(cstring_lossy);
         let why_ptr = c_why.as_ref().map_or(ptr::null(), |c| c.as_ptr());
         rc_to_unit(with_context(|ctx| unsafe {
@@ -336,20 +337,20 @@ impl CTestCase {
         }))
     }
 
-    pub(crate) fn new_pool(&self) -> Result<i64, c_int> {
+    pub(crate) fn new_pool(&self) -> Result<i64, hegel_result_t> {
         let mut id: i64 = 0;
         let rc = with_context(|ctx| unsafe { hegel_c::hegel_new_pool(ctx, self.raw, &mut id) });
         rc_to_value(rc, id)
     }
 
-    pub(crate) fn pool_add(&self, pool_id: i64) -> Result<i64, c_int> {
+    pub(crate) fn pool_add(&self, pool_id: i64) -> Result<i64, hegel_result_t> {
         let mut id: i64 = 0;
         let rc =
             with_context(|ctx| unsafe { hegel_c::hegel_pool_add(ctx, self.raw, pool_id, &mut id) });
         rc_to_value(rc, id)
     }
 
-    pub(crate) fn pool_generate(&self, pool_id: i64, consume: bool) -> Result<i64, c_int> {
+    pub(crate) fn pool_generate(&self, pool_id: i64, consume: bool) -> Result<i64, hegel_result_t> {
         let mut id: i64 = 0;
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_pool_generate(ctx, self.raw, pool_id, consume, &mut id)
@@ -361,7 +362,7 @@ impl CTestCase {
         &self,
         rule_names: &[&str],
         invariant_names: &[&str],
-    ) -> Result<i64, c_int> {
+    ) -> Result<i64, hegel_result_t> {
         // Keep the CStrings alive until the call returns; the pointer arrays
         // borrow into them.
         let rule_cstrings: Vec<CString> = rule_names.iter().map(|s| cstring_lossy(s)).collect();
@@ -385,7 +386,10 @@ impl CTestCase {
         rc_to_value(rc, id)
     }
 
-    pub(crate) fn state_machine_next_rule(&self, state_machine_id: i64) -> Result<i64, c_int> {
+    pub(crate) fn state_machine_next_rule(
+        &self,
+        state_machine_id: i64,
+    ) -> Result<i64, hegel_result_t> {
         let mut out: i64 = 0;
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_state_machine_next_rule(ctx, self.raw, state_machine_id, &mut out)
@@ -393,7 +397,7 @@ impl CTestCase {
         rc_to_value(rc, out)
     }
 
-    pub(crate) fn target(&self, score: f64, label: &str) -> Result<(), c_int> {
+    pub(crate) fn target(&self, score: f64, label: &str) -> Result<(), hegel_result_t> {
         let c_label = cstring_lossy(label);
         rc_to_unit(with_context(|ctx| unsafe {
             hegel_c::hegel_target(ctx, self.raw, score, c_label.as_ptr())
@@ -406,7 +410,7 @@ impl CTestCase {
         &self,
         status: hegel_c::hegel_status_t,
         origin: Option<&str>,
-    ) -> Result<(), c_int> {
+    ) -> Result<(), hegel_result_t> {
         let c_origin = origin.map(cstring_lossy);
         let origin_ptr = c_origin.as_ref().map_or(ptr::null(), |c| c.as_ptr());
         rc_to_unit(with_context(|ctx| unsafe {
@@ -479,16 +483,16 @@ pub(crate) struct Failure {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-fn rc_to_unit(rc: c_int) -> Result<(), c_int> {
-    if rc == hegel_c::HEGEL_OK {
+fn rc_to_unit(rc: hegel_result_t) -> Result<(), hegel_result_t> {
+    if rc == hegel_result_t::HEGEL_OK {
         Ok(())
     } else {
         Err(rc)
     }
 }
 
-fn rc_to_value<T>(rc: c_int, value: T) -> Result<T, c_int> {
-    if rc == hegel_c::HEGEL_OK {
+fn rc_to_value<T>(rc: hegel_result_t, value: T) -> Result<T, hegel_result_t> {
+    if rc == hegel_result_t::HEGEL_OK {
         Ok(value)
     } else {
         Err(rc)
@@ -533,11 +537,11 @@ fn phases_bitmask(phases: &[Phase]) -> u32 {
     let mut mask = 0;
     for phase in phases {
         mask |= match phase {
-            Phase::Explicit => hegel_c::HEGEL_PHASE_EXPLICIT,
-            Phase::Reuse => hegel_c::HEGEL_PHASE_REUSE,
-            Phase::Generate => hegel_c::HEGEL_PHASE_GENERATE,
-            Phase::Target => hegel_c::HEGEL_PHASE_TARGET,
-            Phase::Shrink => hegel_c::HEGEL_PHASE_SHRINK,
+            Phase::Explicit => hegel_c::hegel_phase_t::HEGEL_PHASE_EXPLICIT as u32,
+            Phase::Reuse => hegel_c::hegel_phase_t::HEGEL_PHASE_REUSE as u32,
+            Phase::Generate => hegel_c::hegel_phase_t::HEGEL_PHASE_GENERATE as u32,
+            Phase::Target => hegel_c::hegel_phase_t::HEGEL_PHASE_TARGET as u32,
+            Phase::Shrink => hegel_c::hegel_phase_t::HEGEL_PHASE_SHRINK as u32,
         };
     }
     mask
@@ -547,10 +551,16 @@ fn health_check_bitmask(checks: &[HealthCheck]) -> u32 {
     let mut mask = 0;
     for check in checks {
         mask |= match check {
-            HealthCheck::FilterTooMuch => hegel_c::HEGEL_HC_FILTER_TOO_MUCH,
-            HealthCheck::TooSlow => hegel_c::HEGEL_HC_TOO_SLOW,
-            HealthCheck::TestCasesTooLarge => hegel_c::HEGEL_HC_TEST_CASES_TOO_LARGE,
-            HealthCheck::LargeInitialTestCase => hegel_c::HEGEL_HC_LARGE_INITIAL_TEST_CASE,
+            HealthCheck::FilterTooMuch => {
+                hegel_c::hegel_health_check_t::HEGEL_HC_FILTER_TOO_MUCH as u32
+            }
+            HealthCheck::TooSlow => hegel_c::hegel_health_check_t::HEGEL_HC_TOO_SLOW as u32,
+            HealthCheck::TestCasesTooLarge => {
+                hegel_c::hegel_health_check_t::HEGEL_HC_TEST_CASES_TOO_LARGE as u32
+            }
+            HealthCheck::LargeInitialTestCase => {
+                hegel_c::hegel_health_check_t::HEGEL_HC_LARGE_INITIAL_TEST_CASE as u32
+            }
         };
     }
     mask

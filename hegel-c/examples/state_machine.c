@@ -61,7 +61,7 @@ int main(void) {
         bool bad = false;
         for (int step = 0; step < STEPS && !overran; step++) {
             int64_t rule;
-            int rc = hegel_state_machine_next_rule(ctx, tc, machine, &rule);
+            hegel_result_t rc = hegel_state_machine_next_rule(ctx, tc, machine, &rule);
             if (rc != HEGEL_OK) { overran = true; break; }
             if (rule >= NUM_RULES) { bad = true; break; }
             rule_counts[rule]++;
