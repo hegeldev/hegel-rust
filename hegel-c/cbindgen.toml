@@ -8,18 +8,32 @@ header = """
  *
  * Pointer ownership
  * -----------------
- * Every pointer you pass *into* a libhegel function stays owned by you: the
- * library reads it during the call and copies out whatever it needs to keep,
- * so you may free or reuse the memory as soon as the call returns. This
- * applies to strings (char*), CBOR byte buffers, and arrays of strings alike.
+ * Pointers you pass *into* a libhegel function are always yours. The library
+ * reads them during the call and copies whatever it needs to keep, so you may
+ * free or reuse the memory as soon as the call returns. This covers strings
+ * (char*), CBOR byte buffers, and arrays of strings alike.
  *
- * Pointers libhegel returns *to* you are borrows into a handle and are only
- * valid until a stated point — each function documents its own lifetime (e.g.
- * the bytes from hegel_generate are invalidated by the next call on that test
- * case; result strings live until hegel_run_free). Copy them if you need them
- * longer. Opaque handles (hegel_context_t*, hegel_settings_t*, hegel_run_t*,
- * hegel_test_case_t* from hegel_test_case_from_blob) are owned by you and must
- * be released with the matching hegel_*_free function.
+ * Of the pointers libhegel hands *back*, you own exactly the handles made by
+ * the four constructors, and must release each with its matching free:
+ *
+ *     hegel_context_new          ->  hegel_context_free
+ *     hegel_settings_new         ->  hegel_settings_free
+ *     hegel_run_start            ->  hegel_run_free
+ *     hegel_test_case_from_blob  ->  hegel_test_case_free
+ *
+ * Every *other* pointer libhegel returns is borrowed: libhegel still owns it,
+ * you must not free it, and it is valid only until a point that the returning
+ * function documents. Two cases are easy to trip over:
+ *
+ *   - The hegel_test_case_t* from hegel_next_test_case is borrowed from the
+ *     run and freed by hegel_run_free. Do NOT pass it to hegel_test_case_free
+ *     (that is only for a test case you made with hegel_test_case_from_blob).
+ *     Likewise the hegel_run_result_t* and hegel_failure_t* you read from a
+ *     run live until hegel_run_free.
+ *   - Returned strings and byte buffers (e.g. from hegel_generate,
+ *     hegel_context_last_error, hegel_run_result_error, the hegel_failure_*
+ *     getters) are transient — hegel_generate's bytes, for instance, are
+ *     invalidated by the next call on that test case. Copy them to keep them.
  */"""
 include_guard = "HEGEL_H"
 pragma_once = false
