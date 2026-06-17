@@ -1231,6 +1231,29 @@ pub unsafe extern "C" fn hegel_start_span(tc: *mut HegelTestCase, label: u64) ->
     }
 }
 
+/// Number of choices drawn so far in this test case (Hypothesis's
+/// `ConjectureData.length`). Writes the count into `*out_count` and returns
+/// `HEGEL_OK`; errors with `HEGEL_E_INVALID_ARG` if `tc` or `out_count` is
+/// NULL. Lets callers (e.g. the stateful driver) stop generating before the
+/// choice buffer overruns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_test_case_length(
+    tc: *mut HegelTestCase,
+    out_count: *mut usize,
+) -> c_int {
+    clear_last_error();
+    let tc = match unsafe { tc_mut(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_count.is_null() {
+        set_last_error("hegel_test_case_length: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_count = tc.ds.choice_count() };
+    HEGEL_OK
+}
+
 /// Close the most-recently opened span. Pass `discard = true` to mark
 /// the span as rejected (e.g. a `filter` predicate didn't hold and the
 /// engine should retry from before the span opened).

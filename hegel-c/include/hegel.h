@@ -589,6 +589,15 @@ int hegel_generate(hegel_test_case_t *tc,
 int hegel_start_span(hegel_test_case_t *tc, uint64_t label);
 
 /*
+ Number of choices drawn so far in this test case (Hypothesis's
+ `ConjectureData.length`). Writes the count into `*out_count` and returns
+ `HEGEL_OK`; errors with `HEGEL_E_INVALID_ARG` if `tc` or `out_count` is
+ NULL. Lets callers (e.g. the stateful driver) stop generating before the
+ choice buffer overruns.
+ */
+int hegel_test_case_length(hegel_test_case_t *tc, size_t *out_count);
+
+/*
  Close the most-recently opened span. Pass `discard = true` to mark
  the span as rejected (e.g. a `filter` predicate didn't hold and the
  engine should retry from before the span opened).

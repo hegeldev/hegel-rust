@@ -103,6 +103,13 @@ pub trait DataSource: Send + Sync {
     /// non-finite or the label has already been observed this test case.
     fn target_observation(&self, score: f64, label: &str) -> Result<(), DataSourceError>;
 
+    /// Number of choices drawn so far in this test case (the analog of
+    /// Hypothesis's `ConjectureData.length`). Lets callers gauge how close the
+    /// test case is to the engine's choice-buffer limit — e.g. the stateful
+    /// driver stops generating steps once it nears the cap rather than
+    /// overrunning. Never errors.
+    fn choice_count(&self) -> usize;
+
     /// Signal that the test case is complete and report its outcome.
     ///
     /// Called exactly once per test case, after the test body has finished

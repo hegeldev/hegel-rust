@@ -348,6 +348,15 @@ impl DataSource for NativeDataSource {
         Ok(())
     }
 
+    fn choice_count(&self) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .ntc
+            .nodes
+            .len()
+    }
+
     fn mark_complete(&self, result: &TestCaseResult) {
         // Record the outcome on the shared handle so the engine can read
         // it via `take_outcome` after the test body returns.  This is the
