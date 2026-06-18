@@ -243,7 +243,7 @@ impl<'a> Shrinker<'a> {
         if sort_key(nodes) == sort_key(&self.current_nodes) {
             return Ok(true);
         }
-        // ported from Hypothesis's `cached_test_function` (shrinker.py): 
+        // ported from Hypothesis's `cached_test_function` (shrinker.py):
         // compare the candidate against the current target over
         // the target's length window (truncating a candidate longer than the
         // target — extra trailing nodes can't make it shortlex-smaller). If the
