@@ -137,8 +137,10 @@ impl BooleanChoice {
         false
     }
 
+    /// Misalignment fallback for a replayed boolean (see [`ChoiceKind::unit`]).
+    /// `false`, matching Hypothesis's simplest choice for booleans
     pub fn unit(&self) -> bool {
-        true
+        false
     }
 
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
